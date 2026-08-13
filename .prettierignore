@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+out/
+coverage/
+.turbo/
+pnpm-lock.yaml
+
+# Not ours to format: read-only source from the previous build, the plan, the
+# credential vault, the agent brief, and local editor/agent config.
+reference/
+docs/
+secrets/
+CLAUDE.md
+.claude/

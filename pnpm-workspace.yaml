@@ -1,0 +1,11 @@
+# The workspace is exactly the two build trees. `reference/` is read-only source
+# from the previous build (see CLAUDE.md) and must never resolve as a package.
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# One version of each tool for every workspace project. Bump here, not in ten
+# package.json files.
+catalog:
+  typescript: ^5.7.2
+  vitest: ^3.0.0

@@ -1,0 +1,18 @@
+{
+  "name": "@nusantara/instagram",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Graph API client for Instagram",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config ../../vitest.config.ts"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
