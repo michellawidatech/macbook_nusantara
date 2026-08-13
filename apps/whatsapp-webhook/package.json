@@ -1,0 +1,15 @@
+{
+  "name": "@nusantara/whatsapp-webhook",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Meta webhook receiver + agent (:3001)",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config ../../vitest.config.ts"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
