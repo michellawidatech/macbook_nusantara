@@ -1,0 +1,28 @@
+# Secrets — MUST stay first. secrets/webhook-credentials.env depends on this.
+*.env
+.env*.local
+!*.env.example
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+out/
+.turbo/
+coverage/
+*.tsbuildinfo
+
+# Prisma generated client
+packages/db/generated/
+
+# OS / editor
+.DS_Store
+.idea/
+*.swp
+
+docs/rebuild/*
+docs/erd-pos-chatbot.drawio
+
