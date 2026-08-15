@@ -1,0 +1,46 @@
+/* Global resets and the one focus-ring rule the whole app inherits. */
+
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--t-md);
+  line-height: var(--lh-normal);
+  color: var(--c-ink);
+  background: var(--c-surface-sunken);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * 01 §5: "Every interactive element has a visible focus ring. No `outline:
+ * none` without a replacement." Declared once, here, so no component has to
+ * remember — and :focus-visible keeps it off mouse clicks.
+ */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--r-sm);
+}
+
+/* Respect a user who has asked for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

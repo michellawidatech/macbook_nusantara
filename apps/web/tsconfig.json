@@ -1,4 +1,18 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["src", "test"]
+  "compilerOptions": {
+    // Deviations from the base config, and why (01 §1 says deviating is fine,
+    // deviating silently is not):
+    //   - DOM libs: this is the only project that runs in a browser.
+    //   - jsx react-jsx: React 19's automatic runtime, no React import needed.
+    //   - bundler resolution: Vite resolves, not Node, so extensionless and
+    //     .css imports must typecheck the way Vite actually loads them.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["vite/client"],
+    "noEmit": true
+  },
+  "include": ["src", "test", "vite.config.ts", "vitest.config.ts"]
 }
