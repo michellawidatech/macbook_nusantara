@@ -11,7 +11,7 @@
     "migrate": "prisma migrate dev",
     "generate": "prisma generate",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --config ../../vitest.config.ts"
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/pg": "^8.21.0",
@@ -21,6 +21,7 @@
     "vitest": "catalog:"
   },
   "dependencies": {
-    "@prisma/client": "^6"
+    "@prisma/client": "^6",
+    "@nusantara/domain": "workspace:*"
   }
 }

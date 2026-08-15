@@ -1010,10 +1010,12 @@ model WaMessage {
   coveredThreadMemories WaThreadMemory[]
 }
 
-/// Two writers, disjoint column sets (08 §7). The webhook summarizer owns
-/// summary*/coveredThrough*; POS staff own directive*. Neither may write the
-/// other's columns — that is what makes "the agent can never overwrite a staff
-/// directive" structural rather than conventional.
+/// Two writers, disjoint column sets (08 §7). The webhook summarizer owns the
+/// summary and coveredThrough columns; POS staff own the directive columns.
+/// Neither may write the other's columns — that is what makes "the agent can
+/// never overwrite a staff directive" structural rather than conventional.
+/// (Never write a comment terminator inside a /// doc comment here: Prisma
+/// copies it verbatim into the generated .d.ts and breaks the file.)
 model WaThreadMemory {
   id                String    @id @default(cuid())
   /// wa_id

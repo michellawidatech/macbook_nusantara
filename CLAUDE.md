@@ -83,6 +83,11 @@ resolve into it.
   the wrong server answering. Probe the port before debugging the router.
 - Never call a toast inside a React state updater or during render.
 - `BigInt` does not survive `JSON.stringify` — serialize money as a string.
+- In raw SQL, Prisma stores `DateTime` as `timestamp` **without** time zone
+  (holding UTC) but binds a JS `Date` as `timestamptz`. A bare `::timestamp`
+  cast renders it as Asia/Jakarta wall clock — a silent 7-hour shift. Write
+  `(${d}::timestamptz AT TIME ZONE 'UTC')`; convert the parameter, never the
+  column, so the index still applies.
 - Fail-closed webhook tests must NOT read a developer `.env`. Inject config.
 - Secrets live in `secrets/webhook-credentials.env` (gitignored, 600). Never
   print one, never commit one, never put one in a doc.
