@@ -14,6 +14,8 @@
     "test": "vitest run --config ../../vitest.config.ts"
   },
   "devDependencies": {
+    "@types/pg": "^8.21.0",
+    "pg": "^8.23.0",
     "prisma": "^6",
     "typescript": "catalog:",
     "vitest": "catalog:"

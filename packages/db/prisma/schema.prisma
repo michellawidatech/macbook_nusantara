@@ -69,7 +69,7 @@ model Supplier {
 
 model PurchaseOrder {
   id         String    @id @default(cuid())
-  code       String    @unique
+  code       String    @unique @default(dbgenerated("next_doc_code('PI'::text)"))
   supplierId String
   invoice    String?
   noInvoice  Boolean
@@ -162,7 +162,7 @@ model ArrivalPhoto {
 
 model SupplierReturn {
   id         String       @id @default(cuid())
-  code       String       @unique
+  code       String       @unique @default(dbgenerated("next_doc_code('SP'::text)"))
   supplierId String
   poId       String?
   status     ReturnStatus
@@ -429,7 +429,7 @@ model UnitNotePhoto {
 
 model OpnameSession {
   id         String        @id @default(cuid())
-  code       String        @unique
+  code       String        @unique @default(dbgenerated("next_doc_code('SO'::text)"))
   locationId String
   status     OpnameStatus
   startedAt  DateTime
@@ -482,7 +482,7 @@ model Customer {
 
 model Order {
   id           String      @id @default(cuid())
-  code         String      @unique
+  code         String      @unique @default(dbgenerated("next_doc_code('SI'::text)"))
   ts           DateTime
   customerId   String?
   custName     String?
@@ -715,7 +715,7 @@ model Shift {
 
 model Reservation {
   id           String            @id @default(cuid())
-  code         String            @unique
+  code         String            @unique @default(dbgenerated("next_doc_code('RV'::text)"))
   customerId   String?
   custName     String?
   phone        String?
@@ -795,7 +795,7 @@ model ShipmentEvent {
 
 model WarrantyClaim {
   id          String      @id @default(cuid())
-  code        String      @unique
+  code        String      @unique @default(dbgenerated("next_doc_code('SG'::text)"))
   unitId      String
   orderItemId String?
   supplierId  String?
