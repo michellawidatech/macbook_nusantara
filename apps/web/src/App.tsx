@@ -11,6 +11,7 @@ import { AppShell } from "./components/AppShell.js";
 import { useI18n } from "./lib/i18n.js";
 import { useSession } from "./lib/session.js";
 import { LoginPage } from "./routes/LoginPage.js";
+import { InventoriPage } from "./routes/InventoriPage.js";
 import { PlaceholderPage } from "./routes/PlaceholderPage.js";
 
 export function App() {
@@ -41,15 +42,7 @@ export function App() {
       <Route path="/masuk" element={<Navigate to="/inventori" replace />} />
       <Route element={<AppShell staff={staff} />}>
         <Route index element={<Navigate to="/inventori" replace />} />
-        <Route
-          path="/inventori"
-          element={
-            <PlaceholderPage
-              title={t("nav.inventori")}
-              next="Layar Inventori dibangun di sesi berikutnya (S9)."
-            />
-          }
-        />
+        <Route path="/inventori" element={<InventoriPage />} />
         <Route
           path="/penjualan"
           element={

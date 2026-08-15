@@ -18,6 +18,7 @@ import { requireAuth, requireOwner } from "./auth/middleware.js";
 import { createLoginLimiter, type LoginLimiter } from "./auth/rateLimit.js";
 import { idempotency } from "./middleware/idempotency.js";
 import { authRouter } from "./routes/auth.js";
+import { katalogRouter } from "./routes/katalog.js";
 
 export interface CreateAppDeps {
   readonly db: PrismaClient;
@@ -65,8 +66,10 @@ export function createApp(deps: CreateAppDeps): Express {
   api.use(requireAuth({ db, config }));
   api.use(idempotent);
 
-  // Business routers mount here in later increments. The owner-only guard is
-  // wired now so S6's tests can prove it rejects a STAFF token.
+  // 01 §2: one router per section, longer prefixes first.
+  api.use("/katalog", katalogRouter(db));
+
+  // The owner-only guard, wired since S6 so its rejection is provable.
   api.get("/kontrol/audit", requireOwner(logger), (_req, res) => {
     res.json({ entries: [] });
   });
