@@ -188,10 +188,9 @@ describe("08 §2 — the fifteen invariants", () => {
        VALUES ('sold1',$1,$2,$3,'MacBook',1,12000000,12000000,9000000,0)`,
       [ORDER, UNIT, SKU],
     );
-    await owner.query(
-      `UPDATE "Unit" SET status = 'TERJUAL' WHERE id = $1`,
-      [UNIT],
-    );
+    await owner.query(`UPDATE "Unit" SET status = 'TERJUAL' WHERE id = $1`, [
+      UNIT,
+    ]);
     await owner.query("COMMIT");
 
     // A second cashier reaching the same serial is stopped by the database,
@@ -309,7 +308,8 @@ describe("08 §2 — the fifteen invariants", () => {
 
     // And the backstop, if that statement is ever written wrongly.
     await rejectsWith(
-      () => owner.query(`UPDATE "Discount" SET used = used + 1 WHERE id = 'd1'`),
+      () =>
+        owner.query(`UPDATE "Discount" SET used = used + 1 WHERE id = 'd1'`),
       CHECK_VIOLATION,
     );
   });
@@ -348,7 +348,10 @@ describe("08 §2 — the fifteen invariants", () => {
     expect(po.rows[0].code).toMatch(/^PI-\d{4}\/\d{2}-\d{6}$/);
 
     await rejectsWith(
-      () => owner.query(`UPDATE "Order" SET code = $1 WHERE id = 'o2'`, [a.rows[0].code]),
+      () =>
+        owner.query(`UPDATE "Order" SET code = $1 WHERE id = 'o2'`, [
+          a.rows[0].code,
+        ]),
       UNIQUE_VIOLATION,
     );
   });
@@ -405,7 +408,10 @@ describe("08 §2 — the fifteen invariants", () => {
     );
     // ...but the directive column is not its to write.
     await rejectsWith(
-      () => agent.query(`UPDATE "WaThreadMemory" SET directive = 'hijacked' WHERE id = 'tm1'`),
+      () =>
+        agent.query(
+          `UPDATE "WaThreadMemory" SET directive = 'hijacked' WHERE id = 'tm1'`,
+        ),
       INSUFFICIENT_PRIVILEGE,
     );
 
@@ -414,7 +420,10 @@ describe("08 §2 — the fifteen invariants", () => {
       `UPDATE "WaThreadMemory" SET directive = 'jangan kasih diskon' WHERE id = 'tm1'`,
     );
     await rejectsWith(
-      () => app.query(`UPDATE "WaThreadMemory" SET summary = 'staff wrote this' WHERE id = 'tm1'`),
+      () =>
+        app.query(
+          `UPDATE "WaThreadMemory" SET summary = 'staff wrote this' WHERE id = 'tm1'`,
+        ),
       INSUFFICIENT_PRIVILEGE,
     );
 
@@ -446,7 +455,8 @@ describe("08 §2 — the fifteen invariants", () => {
 
     // ...and can do nothing else. "We can't", not "we don't".
     await rejectsWith(
-      () => app.query(`UPDATE "AuditLog" SET action = 'CREATE' WHERE id = 'a1'`),
+      () =>
+        app.query(`UPDATE "AuditLog" SET action = 'CREATE' WHERE id = 'a1'`),
       INSUFFICIENT_PRIVILEGE,
     );
     await rejectsWith(
@@ -454,7 +464,10 @@ describe("08 §2 — the fifteen invariants", () => {
       INSUFFICIENT_PRIVILEGE,
     );
     await rejectsWith(
-      () => app.query(`UPDATE "UnitEvent" SET "toStatus" = 'HILANG' WHERE id = 'ue1'`),
+      () =>
+        app.query(
+          `UPDATE "UnitEvent" SET "toStatus" = 'HILANG' WHERE id = 'ue1'`,
+        ),
       INSUFFICIENT_PRIVILEGE,
     );
     await rejectsWith(
@@ -465,7 +478,10 @@ describe("08 §2 — the fifteen invariants", () => {
 
   it("15. a unit always has a location", async () => {
     await rejectsWith(
-      () => owner.query(`UPDATE "Unit" SET "locationId" = NULL WHERE id = $1`, [UNIT]),
+      () =>
+        owner.query(`UPDATE "Unit" SET "locationId" = NULL WHERE id = $1`, [
+          UNIT,
+        ]),
       NOT_NULL_VIOLATION,
     );
     // ON DELETE RESTRICT: a location in use cannot be removed from under a unit.

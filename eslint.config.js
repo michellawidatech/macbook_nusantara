@@ -8,6 +8,8 @@ export default tseslint.config(
       "**/dist/**",
       "**/coverage/**",
       "**/.turbo/**",
+      // Prisma's generated client. Machine-written, gitignored, not ours to style.
+      "packages/db/generated/**",
       // Read-only source from the previous build (CLAUDE.md): not linted, not
       // built, never imported.
       "reference/**",
