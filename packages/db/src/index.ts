@@ -9,3 +9,5 @@ export * from "./withRetry.js";
 export * from "./withUnitLocks.js";
 export * from "./appendUnitEvent.js";
 export * from "./outbox.js";
+export * from "./reconcile.js";
+export * from "./seed.js";
