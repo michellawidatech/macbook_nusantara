@@ -1,0 +1,38 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "1701973881546032",
+      "time": 1755240000,
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "6281200000000",
+              "phone_number_id": "1200651716467039"
+            },
+            "contacts": [
+              {
+                "profile": { "name": "Budi Santoso" },
+                "wa_id": "6281234564321"
+              }
+            ],
+            "messages": [
+              {
+                "from": "6281234564321",
+                "id": "wamid.HBgNNjI4MTIzNDU2NDMyMRUCABIYFDNBMEE5RjJEQzYzQkQ4NUEwQzE5AA==",
+                "timestamp": "1755240000",
+                "type": "text",
+                "text": {
+                  "body": "Halo kak, MacBook Air M1 8/256 masih ada? Alamat saya Jl. Merdeka No. 10, Bandung. Nomor saya 081234564321"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
