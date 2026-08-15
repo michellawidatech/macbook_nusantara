@@ -47,7 +47,8 @@ resolve into it.
 - **Never invent schema.** Column names come from the ERD. If something is
   missing, stop and ask — do not add a field.
 - **No JSON columns** except: `WaRawEvent.payload`, `IgRawEvent.payload`,
-  `WaMessage.entities`, `AgentCache.value`, `AppleDbCache.models`. Everything
+  `WaMessage.entities`, `AgentCache.value`, `AppleDbCache.models`,
+  `Outbox.payload` (a send intent's shape varies by `OutboxKind`). Everything
   else gets a table.
 - **No loose string links.** Every relation is a declared FK with an explicit
   `onDelete`.
@@ -66,7 +67,7 @@ resolve into it.
 - `pnpm -r typecheck` — types
 - `pnpm --filter @nusantara/db migrate` — apply migrations
 - Ports: web 3000, api 4000, webhook 3001, monitor 4100
-- Database: `nusantara_pos_app` on `localhost:5432`, role `nusantara`
+- Database: `nusantara_pos_rebuild` on `localhost:5432`, role `nusantara`
 - Meta: App ID `2157052578394015`, WABA `1701973881546032`,
   `PHONE_NUMBER_ID` `1200651716467039`, Graph **v25.0** (one constant, both
   channels — never two env fallbacks)
@@ -75,6 +76,9 @@ resolve into it.
 
 - `prisma migrate status` **lies** in this project — a recorded-but-unapplied
   migration reports clean while the table is missing. Verify with a real query.
+- `nusantara_pos_app` is the **previous build's** database and is still live and
+  being written to. Never migrate, reset or drop it — the rebuild targets
+  `nusantara_pos_rebuild` (08 §8 keeps the old one read-only for a quarter).
 - Neighbouring projects squat on :3000 and :4000. A "missing route" is usually
   the wrong server answering. Probe the port before debugging the router.
 - Never call a toast inside a React state updater or during render.

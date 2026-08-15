@@ -8,11 +8,17 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "migrate": "prisma migrate dev",
+    "generate": "prisma generate",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config ../../vitest.config.ts"
   },
   "devDependencies": {
+    "prisma": "^6",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@prisma/client": "^6"
   }
 }
