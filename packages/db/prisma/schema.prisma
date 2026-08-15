@@ -596,6 +596,13 @@ model Payment {
 
 model OrderAdjustment {
   id      String     @id @default(cuid())
+  /// Document number. Only a RETUR adjustment carries one — SG-2026/08-000001,
+  /// the shop's "surat ganti" for a customer return — filled by the return
+  /// flow (Increment 4) from next_doc_code('SG'), not by a column default,
+  /// because a default cannot be conditional on `type`. VOID and REFUND stay
+  /// unnumbered by the owner's decision (S9 follow-up). ERD updated in the
+  /// same commit.
+  code    String?    @unique
   orderId String
   type    AdjustType
   amount  BigInt
