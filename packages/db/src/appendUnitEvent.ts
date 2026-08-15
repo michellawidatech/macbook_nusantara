@@ -43,6 +43,8 @@ export interface AppendedUnitEvent {
   readonly seq: number;
   readonly toStatus: string;
   readonly toLocationId: string | null;
+  /** The TX document number, on a transfer only. */
+  readonly code: string | null;
 }
 
 /**
@@ -100,6 +102,18 @@ export async function appendUnitEvent(
     input.toLocationId != null && input.toLocationId !== unit.locationId;
   const toLocationId = input.toLocationId ?? null;
 
+  // A stock transfer is the one movement the shop numbers by hand, so DIPINDAH
+  // — and only DIPINDAH — carries a TX document number. It comes from the
+  // database function, not the application, for the same reason every other
+  // code does (08 §2 invariant 10): the app must not be the thing counting.
+  let code: string | null = null;
+  if (input.type === "DIPINDAH") {
+    const [row] = await tx.$queryRaw<{ code: string }[]>(
+      Prisma.sql`SELECT next_doc_code('TX') AS code`,
+    );
+    code = row?.code ?? null;
+  }
+
   const event = await tx.unitEvent.create({
     data: {
       unitId: unit.id,
@@ -107,6 +121,7 @@ export async function appendUnitEvent(
       // later archived or repaired (08 §4).
       serial: unit.serial,
       seq,
+      code,
       type: input.type,
       at: input.at ?? new Date(),
       fromStatus: from,
@@ -142,5 +157,6 @@ export async function appendUnitEvent(
     seq,
     toStatus,
     toLocationId,
+    code,
   };
 }

@@ -306,6 +306,55 @@ describe("appendUnitEvent — 08 §1 and §4", () => {
     });
     expect(ev.fromLocationId).toBe(LOC);
     expect(ev.toLocationId).toBe(LOC2);
+    // A transfer is the one movement the shop numbers by hand.
+    expect(ev.code).toMatch(/^TX-\d{4}\/\d{2}-\d{6}$/);
+  });
+
+  it("numbers transfers and nothing else", async () => {
+    await intake("SER-A");
+
+    const note = await db.$transaction((tx) =>
+      appendUnitEvent(tx, { serial: "SER-A", type: "DICATAT", staffId: STAFF }),
+    );
+    expect(note.code).toBeNull();
+
+    const first = await db.$transaction((tx) =>
+      appendUnitEvent(tx, {
+        serial: "SER-A",
+        type: "DIPINDAH",
+        staffId: STAFF,
+        toLocationId: LOC2,
+      }),
+    );
+    const second = await db.$transaction((tx) =>
+      appendUnitEvent(tx, {
+        serial: "SER-B",
+        type: "DITERIMA",
+        staffId: STAFF,
+        toLocationId: LOC,
+      }),
+    );
+    expect(second.code).toBeNull();
+
+    await db.$transaction((tx) =>
+      appendUnitEvent(tx, {
+        serial: "SER-B",
+        type: "DIPINDAH",
+        staffId: STAFF,
+        toLocationId: LOC2,
+      }),
+    );
+
+    const codes = (
+      await db.unitEvent.findMany({
+        where: { code: { not: null } },
+        orderBy: { code: "asc" },
+      })
+    ).map((e) => e.code);
+
+    expect(codes).toHaveLength(2);
+    expect(new Set(codes).size).toBe(2);
+    expect(Number(codes[1]!.slice(-6))).toBe(Number(first.code!.slice(-6)) + 1);
   });
 
   it("carries the serial as an immutable copy", async () => {

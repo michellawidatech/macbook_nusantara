@@ -370,6 +370,13 @@ model UnitEvent {
   unitId           String
   /// immutable copy — history reads correctly even if Unit is archived (08 §4)
   serial           String
+  /// Document number, e.g. TX-2026/08-000001. Only a DIPINDAH event carries
+  /// one: a stock transfer is the one movement the shop numbers by hand, and
+  /// the ERD gives it no document of its own. Filled by the application from
+  /// next_doc_code('TX'), not by a column default, because a default cannot be
+  /// conditional on the event type. Added in S9 follow-up with the owner's
+  /// approval; docs/erd-pos-chatbot.drawio updated in the same commit.
+  code             String?   @unique
   seq              Int
   type             UnitEventType
   at               DateTime
@@ -796,7 +803,7 @@ model ShipmentEvent {
 
 model WarrantyClaim {
   id          String      @id @default(cuid())
-  code        String      @unique @default(dbgenerated("next_doc_code('SG'::text)"))
+  code        String      @unique @default(dbgenerated("next_doc_code('KG'::text)"))
   unitId      String
   orderItemId String?
   supplierId  String?
