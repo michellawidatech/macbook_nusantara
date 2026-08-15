@@ -19,6 +19,21 @@ export default tseslint.config(
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    rules: {
+      // A leading underscore means "required by the signature, deliberately
+      // unused" — Express error handlers must take four arguments to be
+      // recognised as error handlers at all.
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrors: "none",
+        },
+      ],
+    },
+  },
   // Last: turns off every rule Prettier already decides.
   prettier,
 );

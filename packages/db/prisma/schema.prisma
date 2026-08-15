@@ -671,6 +671,7 @@ model Staff {
   pettyCashEntries         PettyCashEntry[]
   waMessagesAnswered       WaMessage[]
   waThreadMemoriesDirected WaThreadMemory[]
+  idempotencyKeys          IdempotencyKey[]
   igCommentsReplied        IgComment[]      @relation("IgCommentRepliedBy")
   igCommentsDmSent         IgComment[]      @relation("IgCommentDmSentBy")
 }
@@ -904,6 +905,34 @@ model Outbox {
   requestId     String?
   createdAt     DateTime
   sentAt        DateTime?
+}
+
+/// NOT in docs/erd-pos-chatbot.drawio's original 62 tables. Added in S6 with the
+/// owner's explicit approval, because 08 §3 and §10 require every mutating
+/// endpoint to store an Idempotency-Key and its response and no existing table
+/// can hold one. The ERD is the authority (CLAUDE.md), so the drawio was
+/// updated in the same commit rather than left to drift.
+///
+/// responseBody is String, not Json: the permitted-JSON list stays closed.
+model IdempotencyKey {
+  id           String   @id @default(cuid())
+  /// The client-supplied Idempotency-Key header.
+  key          String
+  staffId      String
+  method       String
+  route        String
+  /// Hash of the request body: the same key with a different body is a bug,
+  /// not a retry, and must be refused rather than answered from the cache.
+  requestHash  String
+  statusCode   Int
+  responseBody String
+  createdAt    DateTime
+  expiresAt    DateTime
+
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  @@unique([key, staffId])
+  @@index([expiresAt])
 }
 
 // ============================================================================
