@@ -1,12 +1,14 @@
-/* Global resets and the one focus-ring rule the whole app inherits. */
-
-@import "./tokens.css";
-
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
+/*
+ * antd owns the reset. This file only holds what antd cannot: the document
+ * box, and the handful of phone behaviours that are browser quirks rather than
+ * design decisions.
+ *
+ * Mobile first, literally: every rule here is written for the small screen and
+ * the media query below only ever ADDS the phone-specific overrides — there is
+ * no desktop rule waiting to be un-done. The one media query is `md` (767px),
+ * the same boundary `useLayoutMode` calls `compact`. Two numbers for one idea
+ * is how a layout ends up half-switched.
+ */
 
 html,
 body,
@@ -15,32 +17,128 @@ body,
   margin: 0;
 }
 
+/* Light console by owner design brief; antd surfaces sit on this. */
 body {
-  font-family: var(--font-sans);
-  font-size: var(--t-md);
-  line-height: var(--lh-normal);
-  color: var(--c-ink);
-  background: var(--c-surface-sunken);
-  -webkit-font-smoothing: antialiased;
+  background: #f5f5f5;
+  /* Safari on iOS grows text in a rotated landscape column unless told not
+     to. It is not a zoom the user asked for. */
+  -webkit-text-size-adjust: 100%;
+  /* The grey flash antd's own :active states already replace. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 /*
- * 01 §5: "Every interactive element has a visible focus ring. No `outline:
- * none` without a replacement." Declared once, here, so no component has to
- * remember — and :focus-visible keeps it off mouse clicks.
+ * The layout is a sticky header over a scrolling column, so nothing here is
+ * allowed to widen the document itself: one over-wide table and the whole page
+ * pans sideways, taking the header's alignment with it. Wide content scrolls
+ * inside its own box (see DataTable's `scroll.x`), never in the body.
  */
-:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: var(--r-sm);
+body {
+  overflow-x: hidden;
 }
 
-/* Respect a user who has asked for less motion. */
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
+@media (max-width: 767px) {
+  /*
+   * iOS Safari zooms the viewport when a focused field's text is under 16px,
+   * and then leaves it zoomed — so on a phone, tapping the serial-number box
+   * silently breaks every subsequent layout decision this app makes. antd's
+   * base is 14px by design (dense console), which is right everywhere except
+   * inside a field a thumb is about to focus.
+   *
+   * !important because antd v6 injects its component CSS at runtime, so a
+   * plain class selector here wins or loses depending on injection order —
+   * which is not something a layout should depend on.
+   */
+  .ant-input,
+  .ant-input-outlined,
+  .ant-input-number-input,
+  .ant-select-single .ant-select-selector,
+  .ant-select-multiple .ant-select-selection-search-input,
+  .ant-picker-input > input,
+  textarea.ant-input {
+    font-size: 16px !important;
+  }
+
+  /*
+   * Filter and inline-form controls carry desktop widths at their call sites
+   * (a 340px search box, a 300px status select, a 260px label field). Those
+   * are right at 1440px and impossible at 375.
+   *
+   * The widths are inline styles on the controls themselves, and an inline
+   * style cannot be overridden by the parent component that lays them out —
+   * only by a stylesheet. So a container opts in by wearing this class and the
+   * widths are released here, in the one place that already knows what "phone"
+   * means, instead of every page branching on the breakpoint itself.
+   *
+   * The list is antd's control roots rather than `> *` because these controls
+   * are usually grandchildren: a `Form.Item` wraps them, and it is the `Input`
+   * inside that carries the width.
+   */
+  .responsive-controls > *,
+  .responsive-controls .ant-form-item,
+  .responsive-controls .ant-input,
+  .responsive-controls .ant-input-affix-wrapper,
+  .responsive-controls .ant-input-number,
+  .responsive-controls .ant-select,
+  .responsive-controls .ant-picker,
+  .responsive-controls .ant-btn {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+}
+
+/*
+ * Printing one invoice.
+ *
+ * The sheet is mounted inside an antd Modal, which is a portal at the end of
+ * <body> sitting on top of the whole app. Rather than build a second window or
+ * an off-screen iframe — a popup a shop laptop blocks, and an iframe whose
+ * styles have to be duplicated — everything is made invisible and the sheet is
+ * made visible again.
+ *
+ * `visibility`, not `display`, on purpose: hiding the ancestors with `display:
+ * none` would take the sheet down with them, because the sheet is INSIDE them.
+ * Visibility is the one property a descendant can un-inherit.
+ *
+ * The sheet is then pulled to the page origin, since a modal is positioned
+ * partway down a scrolled viewport and would otherwise print onto page three.
+ */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  .invoice-print-root,
+  .invoice-print-root * {
+    visibility: visible !important;
+  }
+
+  .invoice-print-root {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    box-shadow: none !important;
+  }
+
+  /* Buttons, modal chrome and the "what happens next" note are screen-only. */
+  .no-print,
+  .no-print * {
+    display: none !important;
+  }
+
+  /* A line item must not be split across two sheets of paper. */
+  .invoice-print-root tr,
+  .invoice-print-root table {
+    page-break-inside: avoid;
+  }
+
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
   }
 }

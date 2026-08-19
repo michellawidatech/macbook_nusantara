@@ -13,7 +13,10 @@ import {
 
 describe("08 §4 — the unit state machine", () => {
   it("intake is the only way in", () => {
-    expect(statusAfter(null, "DITERIMA")).toBe("TERSEDIA");
+    expect(statusAfter(null, "DITERIMA")).toBe("QC");
+    expect(statusAfter("QC", "QC_SELESAI")).toBe("TERSEDIA");
+    expect(statusAfter("QC", "RETUR_SUPPLIER")).toBe("RETUR_SUPPLIER");
+    expect(statusAfter("QC", "KOREKSI")).toBe("KOREKSI_KELUAR");
     expect(statusAfter(null, "TERJUAL")).toBeNull();
     // A unit that does not exist cannot be moved or noted.
     expect(statusAfter(null, "DIPINDAH")).toBeNull();
@@ -74,7 +77,10 @@ describe("08 §4 — the unit state machine", () => {
   });
 
   it("lists the legal next statuses", () => {
-    expect(legalTargets(null)).toEqual(["TERSEDIA"]);
+    expect(legalTargets(null)).toEqual(["QC"]);
+    expect(legalTargets("QC").sort()).toEqual(
+      ["KOREKSI_KELUAR", "RETUR_SUPPLIER", "TERSEDIA"].sort(),
+    );
     expect(legalTargets("TERSEDIA").sort()).toEqual(
       [
         "DIRESERVASI",
@@ -131,7 +137,8 @@ describe("08 §4 — the unit state machine", () => {
 
   it("returns the projected status on a legal transition", () => {
     expect(assertTransition("SER-001", "TERSEDIA", "TERJUAL")).toBe("TERJUAL");
-    expect(assertTransition("SER-001", null, "DITERIMA")).toBe("TERSEDIA");
+    expect(assertTransition("SER-001", null, "DITERIMA")).toBe("QC");
+    expect(assertTransition("SER-001", "QC", "QC_SELESAI")).toBe("TERSEDIA");
   });
 
   it("only ever names statuses the ERD declares", () => {

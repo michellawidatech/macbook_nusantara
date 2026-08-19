@@ -24,10 +24,13 @@
     "vitest": "catalog:"
   },
   "dependencies": {
+    "@ant-design/icons": "^6.3.2",
+    "@nusantara/domain": "workspace:*",
     "@tanstack/react-query": "^5.101.4",
+    "antd": "^6.6.0",
+    "dayjs": "^1.11.21",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-router-dom": "^7.18.2",
-    "@nusantara/domain": "workspace:*"
+    "react-router-dom": "^7.18.2"
   }
 }

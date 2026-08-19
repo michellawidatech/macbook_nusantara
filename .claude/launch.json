@@ -1,0 +1,35 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@nusantara/web",
+        "dev"
+      ],
+      "port": 3000
+    },
+    {
+      "name": "api",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@nusantara/api",
+        "dev"
+      ],
+      "port": 4000
+    },
+    {
+      "name": "webhook",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@nusantara/whatsapp-webhook",
+        "dev"
+      ],
+      "port": 3001
+    }
+  ]
+}

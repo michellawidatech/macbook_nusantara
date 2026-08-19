@@ -5,7 +5,7 @@
  * a bespoke context that a second copy could disagree with.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, ApiRequestError } from "./api.js";
 
 export interface Staff {
@@ -37,26 +37,24 @@ export function useSession() {
   });
 }
 
-export function useLogin() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (input: { username: string; password: string }) =>
-      api<{ staff: Staff }>("/api/auth/login", { method: "POST", body: input }),
-    onSuccess: ({ staff }) => {
-      // Seed the cache so the shell renders without a second round trip.
-      qc.setQueryData(sessionKey, staff);
-    },
-  });
-}
-
+/**
+ * Leave for Auth0.
+ *
+ * Both ends of the session are top-level redirects now, not fetches: signing in
+ * goes out to the tenant and comes back through `/auth/callback`, and signing
+ * out has to reach Auth0 too, or its SSO cookie survives and the next click on
+ * Sign in walks straight back into the same account. Neither can be an XHR.
+ *
+ * There is no cache to tidy on the way out — the document is being replaced,
+ * and `/auth/logout` revokes the session server-side before it redirects.
+ */
 export function useLogout() {
-  const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api<void>("/api/auth/logout", { method: "POST" }),
-    onSettled: () => {
-      qc.setQueryData(sessionKey, null);
-      // Section keys, never queryClient.clear() (01 §5).
-      void qc.invalidateQueries({ queryKey: ["auth"] });
+    mutationFn: () => {
+      window.location.assign("/auth/logout");
+      // Never settles; the page is on its way out. Keeps the button in its
+      // loading state instead of flashing back to idle mid-navigation.
+      return new Promise<void>(() => undefined);
     },
   });
 }

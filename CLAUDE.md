@@ -26,8 +26,12 @@ hard-deleted.
 - `08-data-integrity.md` — ACID, invariants, transactions, migration, security
 - `09-bootstrap-prompts.md` — build order for the skeleton
 
-`docs/erd-pos-chatbot.drawio` is the ERD. If code and ERD disagree, the ERD wins
-until a human changes it.
+The ERD (`docs/erd-pos-chatbot.drawio`) was deleted 2026-08-15 by owner
+decision — **`packages/db/prisma/schema.prisma` is now the source of truth.**
+Same date, superseding the docs where they disagree: UI is antd 6 styled after
+`~/claudeproject/xinchuan-cms/frontend` (packages/ui kit shelved), copy is
+English-first, and the nav is Stock / Return / Product / Finance / Chatbot /
+Customer / Settings.
 
 ## Reference code — read only, never imported
 
@@ -66,6 +70,10 @@ resolve into it.
 - `pnpm -r test` — everything
 - `pnpm -r typecheck` — types
 - `pnpm --filter @nusantara/db migrate` — apply migrations
+- `printf '%s' '<password>' | pnpm --filter @nusantara/api staff --username <u> --name '<n>' --role OWNER`
+  — create a staff login, or reset one. The seed writes an unusable hash for
+  every account, so this is the only way into a fresh database. Password on
+  stdin, never argv.
 - Ports: web 3000, api 4000, webhook 3001, monitor 4100
 - Database: `nusantara_pos_rebuild` on `localhost:5432`, role `nusantara`
 - Meta: App ID `2157052578394015`, WABA `1701973881546032`,

@@ -325,6 +325,11 @@ model Unit {
   locationId      String
   buy             BigInt
   landed          BigInt
+  /// Per-unit asking price, set at QC (owner decision 2026-08-15). Second-hand
+  /// units of one SKU differ, so the sellable price lives here; Sku.price
+  /// stays as the model/variant list price. NULL only while status = QC —
+  /// enforced by CHECK unit_price_set_when_sellable.
+  price           BigInt?
   grade           Grade?
   poItemId        String?
   soldOrderItemId String?
@@ -366,32 +371,32 @@ model UnitAttribute {
 /// transaction as the projection it updates (08 §1, §4). Never updated,
 /// never deleted — the app DB role has INSERT only (08 §9).
 model UnitEvent {
-  id               String        @id @default(cuid())
-  unitId           String
+  id              String        @id @default(cuid())
+  unitId          String
   /// immutable copy — history reads correctly even if Unit is archived (08 §4)
-  serial           String
+  serial          String
   /// Document number, e.g. TX-2026/08-000001. Only a DIPINDAH event carries
   /// one: a stock transfer is the one movement the shop numbers by hand, and
   /// the ERD gives it no document of its own. Filled by the application from
   /// next_doc_code('TX'), not by a column default, because a default cannot be
   /// conditional on the event type. Added in S9 follow-up with the owner's
   /// approval; docs/erd-pos-chatbot.drawio updated in the same commit.
-  code             String?   @unique
-  seq              Int
-  type             UnitEventType
-  at               DateTime
-  fromStatus       UnitStatus?
-  toStatus         UnitStatus
-  fromLocationId   String?
-  toLocationId     String?
-  orderId          String?
-  purchaseOrderId  String?
-  claimId          String?
-  opnameSessionId  String?
-  costDelta        BigInt
-  staffId          String
-  requestId        String?
-  note             String?
+  code            String?       @unique
+  seq             Int
+  type            UnitEventType
+  at              DateTime
+  fromStatus      UnitStatus?
+  toStatus        UnitStatus
+  fromLocationId  String?
+  toLocationId    String?
+  orderId         String?
+  purchaseOrderId String?
+  claimId         String?
+  opnameSessionId String?
+  costDelta       BigInt
+  staffId         String
+  requestId       String?
+  note            String?
 
   unit          Unit           @relation(fields: [unitId], references: [id], onDelete: Restrict)
   fromLocation  Location?      @relation("UnitEventFromLocation", fields: [fromLocationId], references: [id], onDelete: Restrict)
@@ -435,8 +440,8 @@ model UnitNotePhoto {
 // ============================================================================
 
 model OpnameSession {
-  id         String        @id @default(cuid())
-  code       String        @unique @default(dbgenerated("next_doc_code('SO'::text)"))
+  id         String       @id @default(cuid())
+  code       String       @unique @default(dbgenerated("next_doc_code('SO'::text)"))
   locationId String
   status     OpnameStatus
   startedAt  DateTime
@@ -468,18 +473,34 @@ model OpnameScan {
 // Customers and sales
 // ============================================================================
 
-model Customer {
+/// Where a customer or an order came from — "Instagram Ads", "Friends".
+/// A lookup table rather than an enum so staff can add rows without a
+/// migration (owner decision 2026-08-15). Never hard-deleted: deactivate.
+model ReferralSource {
   id        String   @id @default(cuid())
-  name      String
-  /// E.164
-  phone     String   @unique
-  email     String?
-  street    String?
-  zip       String?
-  note      String?
+  name      String   @unique
+  active    Boolean  @default(true)
   createdAt DateTime
 
-  postalCode PostalCode? @relation(fields: [zip], references: [zip], onDelete: Restrict)
+  customers Customer[]
+  orders    Order[]
+}
+
+model Customer {
+  id               String   @id @default(cuid())
+  name             String
+  /// E.164
+  phone            String   @unique
+  email            String?
+  street           String?
+  zip              String?
+  note             String?
+  /// How this customer first heard of the store.
+  referralSourceId String?
+  createdAt        DateTime
+
+  postalCode     PostalCode?     @relation(fields: [zip], references: [zip], onDelete: Restrict)
+  referralSource ReferralSource? @relation(fields: [referralSourceId], references: [id], onDelete: Restrict)
 
   orders           Order[]
   reservations     Reservation[]
@@ -488,40 +509,43 @@ model Customer {
 }
 
 model Order {
-  id           String      @id @default(cuid())
-  code         String      @unique @default(dbgenerated("next_doc_code('SI'::text)"))
-  ts           DateTime
-  customerId   String?
-  custName     String?
-  phone        String?
-  platform     Platform
-  fulfill      Fulfillment
-  status       OrderStatus
-  subtotal     BigInt
-  discountId   String?
-  discount     BigInt
-  extra        BigInt
-  extraNote    String?
-  total        BigInt
+  id               String      @id @default(cuid())
+  code             String      @unique @default(dbgenerated("next_doc_code('SI'::text)"))
+  ts               DateTime
+  customerId       String?
+  custName         String?
+  phone            String?
+  platform         Platform
+  fulfill          Fulfillment
+  status           OrderStatus
+  subtotal         BigInt
+  discountId       String?
+  discount         BigInt
+  extra            BigInt
+  extraNote        String?
+  total            BigInt
   /// = Σ Payment
-  paidTotal    BigInt
-  cogs         BigInt
-  tradeCredit  BigInt
-  belowFloor   Boolean
-  ovReason     String?
-  approvedById String?
-  soldById     String
-  shiftId      String?
-  locationId   String
+  paidTotal        BigInt
+  cogs             BigInt
+  tradeCredit      BigInt
+  belowFloor       Boolean
+  ovReason         String?
+  approvedById     String?
+  soldById         String
+  shiftId          String?
+  locationId       String
+  /// Which ad/channel drove this sale (owner decision 2026-08-15).
+  referralSourceId String?
 
-  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  customer       Customer?       @relation(fields: [customerId], references: [id], onDelete: Restrict)
   // Relation field is `discountRef` because the scalar column `discount`
   // (BigInt, the rupiah amount) already owns the name `discount`.
-  discountRef Discount? @relation(fields: [discountId], references: [id], onDelete: Restrict)
-  approvedBy  Staff?    @relation("OrderApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
-  soldBy      Staff     @relation("OrderSoldBy", fields: [soldById], references: [id], onDelete: Restrict)
-  shift       Shift?    @relation(fields: [shiftId], references: [id], onDelete: Restrict)
-  location    Location  @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  discountRef    Discount?       @relation(fields: [discountId], references: [id], onDelete: Restrict)
+  approvedBy     Staff?          @relation("OrderApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  soldBy         Staff           @relation("OrderSoldBy", fields: [soldById], references: [id], onDelete: Restrict)
+  shift          Shift?          @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  location       Location        @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  referralSource ReferralSource? @relation(fields: [referralSourceId], references: [id], onDelete: Restrict)
 
   items       OrderItem[]
   tradeIns    TradeIn[]
@@ -532,23 +556,23 @@ model Order {
 }
 
 model OrderItem {
-  id            String    @id @default(cuid())
-  orderId       String
-  unitId        String?
-  skuId         String
+  id           String    @id @default(cuid())
+  orderId      String
+  unitId       String?
+  skuId        String
   /// snapshot
-  name          String
+  name         String
   /// snapshot
-  variant       String?
-  qty           Int
-  price         BigInt
-  sub           BigInt
+  variant      String?
+  qty          Int
+  price        BigInt
+  sub          BigInt
   /// snapshot
-  cogs          BigInt
-  garansiUntil  DateTime?
-  returnedQty   Int
-  returnedAt    DateTime?
-  returnReason  String?
+  cogs         BigInt
+  garansiUntil DateTime?
+  returnedQty  Int
+  returnedAt   DateTime?
+  returnReason String?
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
   unit  Unit? @relation("OrderItemUnit", fields: [unitId], references: [id], onDelete: Restrict)
@@ -617,9 +641,13 @@ model OrderAdjustment {
 }
 
 model Discount {
-  id          String     @id @default(cuid())
-  code        String     @unique
-  pct         Int
+  id          String    @id @default(cuid())
+  code        String    @unique
+  /// PCT uses pct (+ optional maxRp cap); NOMINAL uses amountRp. Exactly one
+  /// side is populated — enforced by CHECK discount_type_fields.
+  type        DiscType
+  pct         Int?
+  amountRp    BigInt?
   maxRp       BigInt?
   minRp       BigInt?
   description String?
@@ -660,6 +688,9 @@ model Staff {
   canApprove   Boolean
   active       Boolean
   passwordHash String
+  /// Auth0 `sub` of the linked identity, or null for a password-only account.
+  /// Unique so one Auth0 identity can never map to two staff rows.
+  auth0Sub     String?   @unique
   lastLoginAt  DateTime?
   createdAt    DateTime
 
@@ -670,24 +701,25 @@ model Staff {
   unitEvents               UnitEvent[]
   unitNotes                UnitNote[]
   opnameSessions           OpnameSession[]
-  ordersApproved           Order[]          @relation("OrderApprovedBy")
-  ordersSold               Order[]          @relation("OrderSoldBy")
+  ordersApproved           Order[]           @relation("OrderApprovedBy")
+  ordersSold               Order[]           @relation("OrderSoldBy")
   payments                 Payment[]
   orderAdjustments         OrderAdjustment[]
   shifts                   Shift[]
   shipmentEvents           ShipmentEvent[]
   warrantyClaims           WarrantyClaim[]
-  priceLogs                PriceLog[]       @relation("PriceLogStaff")
-  priceLogsApproved        PriceLog[]       @relation("PriceLogApprovedBy")
-  priceReqsRequested       PriceReq[]       @relation("PriceReqRequestedBy")
-  priceReqsDecided         PriceReq[]       @relation("PriceReqDecidedBy")
+  priceLogs                PriceLog[]        @relation("PriceLogStaff")
+  priceLogsApproved        PriceLog[]        @relation("PriceLogApprovedBy")
+  priceReqsRequested       PriceReq[]        @relation("PriceReqRequestedBy")
+  priceReqsDecided         PriceReq[]        @relation("PriceReqDecidedBy")
   auditLogs                AuditLog[]
   pettyCashEntries         PettyCashEntry[]
   waMessagesAnswered       WaMessage[]
   waThreadMemoriesDirected WaThreadMemory[]
   idempotencyKeys          IdempotencyKey[]
-  igCommentsReplied        IgComment[]      @relation("IgCommentRepliedBy")
-  igCommentsDmSent         IgComment[]      @relation("IgCommentDmSentBy")
+  igCommentsReplied        IgComment[]       @relation("IgCommentRepliedBy")
+  igCommentsDmSent         IgComment[]       @relation("IgCommentDmSentBy")
+  agentKnowledge           AgentKnowledge[]
 }
 
 model StaffSession {
@@ -908,7 +940,7 @@ model AuditLog {
 /// worker claims it with FOR UPDATE SKIP LOCKED and sends. No network I/O
 /// ever happens inside a database transaction.
 model Outbox {
-  id            String        @id @default(cuid())
+  id            String       @id @default(cuid())
   kind          OutboxKind
   /// send intent — see the note on JSON columns at the top of this file
   payload       Json
@@ -1060,23 +1092,23 @@ model WaMessage {
 /// (Never write a comment terminator inside a /// doc comment here: Prisma
 /// copies it verbatim into the generated .d.ts and breaks the file.)
 model WaThreadMemory {
-  id                String    @id @default(cuid())
+  id               String    @id @default(cuid())
   /// wa_id
-  from              String    @unique
-  customerId        String?
+  from             String    @unique
+  customerId       String?
   /// agent-owned
-  summary           String?
-  summaryAt         DateTime?
-  summaryTurns      Int
-  coveredThroughAt  DateTime?
-  coveredThroughId  String?
+  summary          String?
+  summaryAt        DateTime?
+  summaryTurns     Int
+  coveredThroughAt DateTime?
+  coveredThroughId String?
   /// staff-owned
-  directive         String?
-  directiveAt       DateTime?
-  directiveById     String?
-  clarifyCount      Int
-  clarifyAt         DateTime?
-  updatedAt         DateTime
+  directive        String?
+  directiveAt      DateTime?
+  directiveById    String?
+  clarifyCount     Int
+  clarifyAt        DateTime?
+  updatedAt        DateTime
 
   customer       Customer?  @relation(fields: [customerId], references: [id], onDelete: Restrict)
   coveredThrough WaMessage? @relation(fields: [coveredThroughId], references: [id], onDelete: Restrict)
@@ -1093,6 +1125,22 @@ model AgentCache {
   createdAt DateTime
   expiresAt DateTime
   hits      Int
+}
+
+/// Staff-curated Q&A the agent may ground its replies in (owner decision
+/// 2026-08-15). Real columns, not JSON: each entry is one question with its
+/// approved answer. Deactivate instead of delete so past replies stay
+/// explainable.
+model AgentKnowledge {
+  id          String   @id @default(cuid())
+  question    String
+  answer      String
+  active      Boolean  @default(true)
+  createdById String
+  createdAt   DateTime
+  updatedAt   DateTime
+
+  createdBy Staff @relation(fields: [createdById], references: [id], onDelete: Restrict)
 }
 
 // ============================================================================
@@ -1191,6 +1239,10 @@ enum Grade {
 }
 
 enum UnitStatus {
+  /// Owner decision 2026-08-15: arrival no longer makes a unit sellable.
+  /// A unit lands in QC and only becomes TERSEDIA once staff record the
+  /// description (UnitNote), serial and a non-zero asking price (Unit.price).
+  QC
   TERSEDIA
   DIRESERVASI
   TERJUAL
@@ -1203,6 +1255,8 @@ enum UnitStatus {
 
 enum UnitEventType {
   DITERIMA
+  /// QC passed: description + price recorded, unit enters sellable stock.
+  QC_SELESAI
   DICATAT
   DIPINDAH
   DIRESERVASI
@@ -1254,6 +1308,10 @@ enum Platform {
   OFFLINE
   WA
   IG
+  /// Owner decision 2026-08-15: Shopee returns as a *sales source* only —
+  /// listings/marketplace sync stay out of scope. Settlement is a Payment
+  /// with method MARKETPLACE and status BELUM until withdrawal is confirmed.
+  SHOPEE
 }
 
 enum Fulfillment {
@@ -1272,6 +1330,9 @@ enum PayMethod {
   COD
   BAYAR_TOKO
   TEMPO
+  /// Marketplace escrow (Shopee). Created BELUM; flips LUNAS when the
+  /// withdrawal is confirmed by staff — that is the "pending balance" flow.
+  MARKETPLACE
 }
 
 enum PayDirection {
@@ -1320,6 +1381,11 @@ enum ClaimRes {
   STOK
   RETUR
   REFUND
+}
+
+enum DiscType {
+  PCT
+  NOMINAL
 }
 
 enum DiscScope {

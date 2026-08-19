@@ -9,6 +9,9 @@
  */
 
 export const UNIT_STATUSES = [
+  // Owner decision 2026-08-15: arrival is no longer sellable. A unit lands in
+  // QC and only becomes TERSEDIA once staff record description + asking price.
+  "QC",
   "TERSEDIA",
   "DIRESERVASI",
   "TERJUAL",
@@ -23,6 +26,7 @@ export type UnitStatus = (typeof UNIT_STATUSES)[number];
 
 export const UNIT_EVENT_TYPES = [
   "DITERIMA",
+  "QC_SELESAI",
   "DICATAT",
   "DIPINDAH",
   "DIRESERVASI",
@@ -76,7 +80,14 @@ export interface Transition {
 }
 
 export const TRANSITIONS: readonly Transition[] = [
-  { from: null, type: "DITERIMA", to: "TERSEDIA" },
+  { from: null, type: "DITERIMA", to: "QC" },
+
+  // QC exits: pass into stock, send back to the supplier, or write off.
+  // "On service" before entering stock is a QC hold with a DICATAT note —
+  // it is not a separate status (yet; revisit if staff need a queue for it).
+  { from: "QC", type: "QC_SELESAI", to: "TERSEDIA" },
+  { from: "QC", type: "RETUR_SUPPLIER", to: "RETUR_SUPPLIER" },
+  { from: "QC", type: "KOREKSI", to: "KOREKSI_KELUAR" },
 
   { from: "TERSEDIA", type: "DIRESERVASI", to: "DIRESERVASI" },
   { from: "TERSEDIA", type: "TERJUAL", to: "TERJUAL" },

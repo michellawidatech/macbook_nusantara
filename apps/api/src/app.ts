@@ -15,10 +15,20 @@ import { type Logger, requestLogger } from "@nusantara/logging";
 import type { ApiConfig } from "./config.js";
 import { errorHandler, notFoundHandler } from "./errors.js";
 import { requireAuth, requireOwner } from "./auth/middleware.js";
+import {
+  auth0LogoutCleanup,
+  auth0Middleware,
+  type Auth0Config,
+} from "./auth/auth0.js";
 import { createLoginLimiter, type LoginLimiter } from "./auth/rateLimit.js";
 import { idempotency } from "./middleware/idempotency.js";
+import { securityHeaders } from "./middleware/securityHeaders.js";
+import { cors } from "./middleware/cors.js";
 import { authRouter } from "./routes/auth.js";
 import { katalogRouter } from "./routes/katalog.js";
+import { chatRouter } from "./routes/chat.js";
+import { inboxRouter } from "./routes/inbox.js";
+import type { AnthropicEnv } from "@nusantara/agent";
 
 export interface CreateAppDeps {
   readonly db: PrismaClient;
@@ -26,6 +36,19 @@ export interface CreateAppDeps {
   readonly logger: Logger;
   /** Injectable so a test can drive the limiter's clock. */
   readonly limiter?: LoginLimiter;
+  /**
+   * Anthropic credentials for the chat agent. Passed in like everything else
+   * (01 §7) so a fail-closed test can prove the agent stays dormant without
+   * reading the developer's shell.
+   */
+  readonly anthropic?: AnthropicEnv;
+  /**
+   * Auth0 credentials. Absent means the hosted login is not mounted at all and
+   * the API behaves exactly as it did before it existed — which is also what
+   * every existing test relies on (01 §7: a fail-closed test must not pick up
+   * a developer's environment).
+   */
+  readonly auth0?: Auth0Config;
 }
 
 export function createApp(deps: CreateAppDeps): Express {
@@ -45,9 +68,42 @@ export function createApp(deps: CreateAppDeps): Express {
     typeof value === "bigint" ? value.toString() : value,
   );
 
+  // First, so every response carries them — including the 404 from
+  // notFoundHandler and the 500 from errorHandler (08 §9).
+  app.use(securityHeaders({ https: config.cookieSecure }));
+
   app.use(requestLogger({ logger }));
+
+  // Before the body parser: a preflight has no body worth reading, and a
+  // rejected cross-origin caller should not get as far as allocating one.
+  app.use(cors({ allowedOrigins: config.corsOrigin }));
+
   app.use(express.json({ limit: config.bodyLimit }));
   app.use(cookieParser());
+
+  // Auth0's /auth/login, /auth/logout and /auth/callback — distinct from the
+  // hand-rolled /api/auth router, which still serves password login. Mounted
+  // only when configured, and with authRequired off, so this guards nothing on
+  // its own — see auth/auth0.ts.
+  if (deps.auth0 !== undefined) {
+    // Before the SDK, so this app's own session is revoked on the way through
+    // to Auth0's /logout rather than being left live behind it.
+    app.use(
+      "/auth/logout",
+      auth0LogoutCleanup({ db, logger, cookieName: config.cookieName }),
+    );
+    app.use(
+      auth0Middleware({
+        auth0: deps.auth0,
+        db,
+        logger,
+        cookieName: config.cookieName,
+        sessionTtlMs: config.sessionTtlMs,
+        spaOrigin: config.corsOrigin.split(",")[0]?.trim() ?? "/",
+        cookieSecure: config.cookieSecure,
+      }),
+    );
+  }
 
   const api = Router();
 
@@ -68,6 +124,8 @@ export function createApp(deps: CreateAppDeps): Express {
 
   // 01 §2: one router per section, longer prefixes first.
   api.use("/katalog", katalogRouter(db));
+  api.use("/chat", chatRouter({ db, logger, anthropic: deps.anthropic ?? {} }));
+  api.use("/inbox", inboxRouter(db));
 
   // The owner-only guard, wired since S6 so its rejection is provable.
   api.get("/kontrol/audit", requireOwner(logger), (_req, res) => {

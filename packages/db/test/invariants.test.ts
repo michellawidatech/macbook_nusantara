@@ -89,9 +89,9 @@ async function seed() {
     [SKU, MODEL],
   );
   await owner.query(
-    `INSERT INTO "Unit" (id, serial, "skuId", status, "locationId", buy, landed, "intakeAt", version)
-     VALUES ($1,'SER-001',$3,'TERSEDIA',$4,9000000,9000000,now(),1),
-            ($2,'SER-002',$3,'TERSEDIA',$4,9000000,9000000,now(),1)`,
+    `INSERT INTO "Unit" (id, serial, "skuId", status, "locationId", buy, landed, price, "intakeAt", version)
+     VALUES ($1,'SER-001',$3,'TERSEDIA',$4,9000000,9000000,12000000,now(),1),
+            ($2,'SER-002',$3,'TERSEDIA',$4,9000000,9000000,12000000,now(),1)`,
     [UNIT, UNIT2, SKU, LOC],
   );
   // total = subtotal - discount + extra  →  12000000 - 0 + 0
@@ -132,8 +132,8 @@ describe("08 §2 — the fifteen invariants", () => {
     await rejectsWith(
       () =>
         owner.query(
-          `INSERT INTO "Unit" (id, serial, "skuId", status, "locationId", buy, landed, "intakeAt", version)
-           VALUES ('dupe','SER-001',$1,'TERSEDIA',$2,1,1,now(),1)`,
+          `INSERT INTO "Unit" (id, serial, "skuId", status, "locationId", buy, landed, price, "intakeAt", version)
+           VALUES ('dupe','SER-001',$1,'TERSEDIA',$2,1,1,1,now(),1)`,
           [SKU, LOC],
         ),
       UNIQUE_VIOLATION,
@@ -296,8 +296,8 @@ describe("08 §2 — the fifteen invariants", () => {
 
   it("9. a discount cannot be used past its limit", async () => {
     await owner.query(
-      `INSERT INTO "Discount" (id, code, pct, "usageLimit", used, active, scope)
-       VALUES ('d1','LEBARAN',10,2,2,true,'SEMUA')`,
+      `INSERT INTO "Discount" (id, code, type, pct, "usageLimit", used, active, scope)
+       VALUES ('d1','LEBARAN','PCT',10,2,2,true,'SEMUA')`,
     );
 
     // The live mechanism: the WHERE is the lock, so the update simply misses.

@@ -6,6 +6,13 @@ import react from "@vitejs/plugin-react";
 // behind one nginx — SameSite=Lax on a cross-origin dev setup would not.
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      // Components copied from xinchuan call react-i18next; this build is
+      // English-only, so a tiny shim interpolates their inline defaults.
+      "react-i18next": new URL("./src/i18n/shim.ts", import.meta.url).pathname,
+    },
+  },
   server: {
     port: 3000,
     // A neighbouring project squatting on :3000 must fail loudly rather than
@@ -13,6 +20,12 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/api": { target: "http://localhost:4000", changeOrigin: false },
+      // Auth0's login, logout and callback live on the API. Proxied for the
+      // same reason as /api: the redirect back from Auth0 must land on the
+      // SPA's own origin, or the session cookie is set somewhere else.
+      // changeOrigin stays false so the Host stays :3000 and matches
+      // AUTH0_BASE_URL.
+      "/auth": { target: "http://localhost:4000", changeOrigin: false },
     },
   },
 });

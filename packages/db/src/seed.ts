@@ -354,6 +354,9 @@ export async function seed(
       locationId: "loc_gudang",
       buy: sku.landed,
       landed: sku.landed,
+      // Sellable implies priced (Unit_price_set_when_sellable_check); the
+      // asking price starts as the SKU list price, as QC would set it.
+      price: sku.price,
       grade: sku.grade,
       intakeAt: now,
       version: 1,
@@ -389,6 +392,16 @@ export async function seed(
             toLocationId: "loc_gudang",
             costDelta: unit.landed,
             note: "backfill: migrasi",
+          });
+          n += 1;
+
+          // QC pass — arrival lands in QC now; the asking price the unit
+          // carries (set at createMany above) is what QC would have recorded.
+          await appendUnitEvent(tx, {
+            serial: unit.serial,
+            type: "QC_SELESAI",
+            staffId: SYSTEM_STAFF_ID,
+            note: "backfill: QC lulus",
           });
           n += 1;
 

@@ -12,7 +12,9 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "types": ["vite/client"],
-    "noEmit": true
+    "noEmit": true,
+    // Mirrors the vite alias: react-i18next is an English-only local shim.
+    "paths": { "react-i18next": ["./src/i18n/shim.ts"] }
   },
   "include": ["src", "test", "vite.config.ts", "vitest.config.ts"]
 }

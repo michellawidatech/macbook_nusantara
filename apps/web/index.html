@@ -1,8 +1,15 @@
 <!doctype html>
-<html lang="id">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- viewport-fit=cover is what makes env(safe-area-inset-*) report a real
+         number on a notched phone; without it the insets are always 0 and the
+         shell's bottom padding silently does nothing. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#059669" />
     <title>Nusantara POS</title>
   </head>
   <body>

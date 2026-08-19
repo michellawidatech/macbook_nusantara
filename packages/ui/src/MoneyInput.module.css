@@ -1,0 +1,46 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.label {
+  font-size: var(--t-sm);
+  font-weight: var(--fw-medium);
+  color: var(--c-ink-muted);
+}
+
+.inputWrap {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.prefix {
+  color: var(--c-ink-muted);
+  font-size: var(--t-sm);
+}
+
+.input,
+.inputInvalid {
+  flex: 1;
+  padding: var(--s-2) var(--s-3);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--c-ink);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-sm);
+}
+
+.inputInvalid {
+  border-color: var(--c-danger);
+}
+
+/* Reserved: the field must not jump when an error appears (02 §12). */
+.error {
+  min-height: 1.25rem;
+  font-size: var(--t-xs);
+  color: var(--c-danger);
+}

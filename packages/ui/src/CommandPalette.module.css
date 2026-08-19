@@ -1,0 +1,58 @@
+.input {
+  width: 100%;
+  padding: var(--s-3);
+  font: inherit;
+  color: var(--c-ink);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-sm);
+  margin-bottom: var(--s-3);
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.option,
+.optionActive {
+  border-radius: var(--r-sm);
+}
+
+.optionActive {
+  background: var(--c-accent-faint);
+}
+
+.optionButton {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s-3);
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  font: inherit;
+  font-size: var(--t-sm);
+  text-align: left;
+  color: var(--c-ink);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.hint {
+  font-size: var(--t-xs);
+  color: var(--c-ink-muted);
+}
+
+.empty {
+  padding: var(--s-3);
+  font-size: var(--t-sm);
+  color: var(--c-ink-muted);
+}
