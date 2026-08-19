@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+    # The only way into prod. Cutting a tag is the deliberate act that a
+    # required-reviewer gate would otherwise be (docs/environments.md).
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -10,7 +13,7 @@ on:
 # main is excluded so every commit that lands keeps a complete record.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: read
@@ -129,3 +132,54 @@ jobs:
       # mid-test and fail as a phantom concurrency bug.
       - name: Test
         run: pnpm test
+
+  # Which environment a commit has earned. A pull request clears dev, a merge
+  # to main clears stage, and a v* tag clears prod — the promotion model in
+  # docs/environments.md.
+  #
+  # This job deploys nothing, and says so. The four apps have no hosting target
+  # yet, and a placeholder step that reported success without shipping would be
+  # worse than an absent one. What it does do is real: referencing a GitHub
+  # Environment enforces that environment's branch policy (stage accepts only
+  # main, prod only v* tags), records the deployment, and is where per-
+  # environment secrets attach once there is something to deploy.
+  promote:
+    name: Promote
+    needs: [static, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      deployments: write
+    environment:
+      name: ${{ startsWith(github.ref, 'refs/tags/v') && 'prod' || github.ref == 'refs/heads/main' && 'stage' || 'dev' }}
+    steps:
+      - name: Record what cleared, and what did not happen
+        env:
+          # Source of truth is ENVIRONMENT_DATABASE in
+          # packages/db/src/environment.ts; this mirrors it for the summary
+          # only, and nothing here connects to a database.
+          TARGET: ${{ startsWith(github.ref, 'refs/tags/v') && 'prod' || github.ref == 'refs/heads/main' && 'stage' || 'dev' }}
+        run: |
+          case "$TARGET" in
+            dev)   database=nusantara_pos_rebuild ;;
+            stage) database=nusantara_pos_stage ;;
+            prod)  database=nusantara_pos_prod ;;
+          esac
+
+          {
+            echo "### Cleared for \`$TARGET\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Environment | \`$TARGET\` |"
+            echo "| Database | \`$database\` |"
+            echo "| Ref | \`${GITHUB_REF#refs/}\` |"
+            echo "| Commit | \`${GITHUB_SHA:0:7}\` |"
+            echo
+            echo "Static gates and the PostgreSQL suites both passed."
+            echo
+            echo "**Nothing was deployed.** There is no hosting target for the"
+            echo "four apps yet, so this job records the environment and stops."
+            echo "See \`docs/environments.md\`."
+          } >> "$GITHUB_STEP_SUMMARY"
