@@ -1,0 +1,89 @@
+/**
+ * Design tokens — docs/rebuild/01-conventions.md §5.
+ *
+ * "One tokens.css holds colour, spacing, radius, type scale and elevation.
+ * Components read tokens; they never hardcode a hex value. This is what makes
+ * a later visual change a token edit rather than a rewrite."
+ *
+ * This file is the ONLY place in apps/web where a hex value may appear. A test
+ * asserts that.
+ */
+
+:root {
+  /* --- palette ---------------------------------------------------------- */
+  --c-ink: #14181f;
+  --c-ink-muted: #5b6472;
+  --c-ink-faint: #8a93a1;
+  --c-ink-inverse: #ffffff;
+
+  --c-surface: #ffffff;
+  --c-surface-sunken: #f5f7fa;
+  --c-surface-raised: #ffffff;
+  --c-border: #dde2ea;
+  --c-border-strong: #c2cad6;
+
+  /* One accent, used for interaction — not decoration. */
+  --c-accent: #0b5cd5;
+  --c-accent-hover: #0a4fb5;
+  --c-accent-faint: #e8f0fd;
+
+  /* Status. Negative and zero states are visually distinct (02 §9). */
+  --c-danger: #b3261e;
+  --c-danger-faint: #fdecea;
+  --c-success: #1b6b33;
+  --c-success-faint: #e7f4ec;
+  --c-warning: #8a5a00;
+  --c-warning-faint: #fdf3e2;
+
+  /* --- spacing: a 4px scale, so nothing lands off-grid ------------------- */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.5rem;
+  --s-6: 2rem;
+  --s-7: 3rem;
+
+  /* --- radius ----------------------------------------------------------- */
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-full: 999px;
+
+  /* --- type ------------------------------------------------------------- */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --t-xs: 0.75rem;
+  --t-sm: 0.875rem;
+  --t-md: 1rem;
+  --t-lg: 1.25rem;
+  --t-xl: 1.5rem;
+
+  --lh-tight: 1.25;
+  --lh-normal: 1.5;
+
+  --fw-normal: 400;
+  --fw-medium: 500;
+  --fw-bold: 600;
+
+  /* --- elevation -------------------------------------------------------- */
+  --e-1: 0 1px 2px rgb(20 24 31 / 8%);
+  --e-2: 0 2px 8px rgb(20 24 31 / 10%);
+  --e-3: 0 8px 24px rgb(20 24 31 / 14%);
+
+  /* --- focus ------------------------------------------------------------ */
+  /* 01 §5: every interactive element has a visible focus ring. */
+  --focus-ring: 0 0 0 2px var(--c-surface), 0 0 0 4px var(--c-accent);
+  --focus-ring-width: 2px;
+
+  /* --- layout ----------------------------------------------------------- */
+  --shell-nav-width: 15rem;
+  --shell-header-height: 3.5rem;
+
+  --z-shell: 10;
+  --z-overlay: 100;
+  --z-toast: 1000;
+}

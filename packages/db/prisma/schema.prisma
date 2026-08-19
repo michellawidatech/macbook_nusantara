@@ -1,0 +1,1394 @@
+// Nusantara POS — database schema
+//
+// Source of truth: docs/erd-pos-chatbot.drawio (62 tables, 34 enums).
+// Contract:        docs/rebuild/08-data-integrity.md, docs/rebuild/01-conventions.md §6
+//
+// Rules this file obeys:
+//   - The serial number is the subject of this database. Every unit state
+//     change is an append-only UnitEvent row; Unit.status and Unit.locationId
+//     are projections written in the same transaction (08 §1, §4).
+//   - Every relation is a declared foreign key with an explicit onDelete.
+//     onDelete is Restrict everywhere, because nothing in this system is ever
+//     hard-deleted (01 §6, 08 §2 invariant 15). Cascade would be the mechanism
+//     by which rows do get deleted; SetNull would silently erase history.
+//   - Money is BigInt whole rupiah. Ids are String cuid. Calendar days are
+//     String "YYYY-MM-DD" (Asia/Jakarta).
+//
+// Constraints Prisma cannot express — CHECK, partial unique indexes, table
+// grants — are NOT in this file. They belong in a `--create-only` migration
+// (08 §2). Where the ERD marks one, it is noted in a comment below.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// Stock locations and suppliers
+// ============================================================================
+
+model Location {
+  id        String       @id @default(cuid())
+  code      String       @unique
+  name      String
+  kind      LocationKind
+  address   String?
+  active    Boolean
+  sortOrder Int
+
+  purchaseOrders PurchaseOrder[]
+  units          Unit[]
+  unitEventsFrom UnitEvent[]     @relation("UnitEventFromLocation")
+  unitEventsTo   UnitEvent[]     @relation("UnitEventToLocation")
+  opnameSessions OpnameSession[]
+  orders         Order[]
+  shifts         Shift[]
+}
+
+model Supplier {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  wa        String?
+  note      String?
+  active    Boolean
+  createdAt DateTime
+
+  purchaseOrders  PurchaseOrder[]
+  supplierReturns SupplierReturn[]
+  warrantyClaims  WarrantyClaim[]
+}
+
+// ============================================================================
+// Purchase orders and goods arrival
+// ============================================================================
+
+model PurchaseOrder {
+  id         String    @id @default(cuid())
+  code       String    @unique @default(dbgenerated("next_doc_code('PI'::text)"))
+  supplierId String
+  invoice    String?
+  noInvoice  Boolean
+  status     POStatus
+  orderedAt  DateTime
+  receivedAt DateTime?
+  subtotal   BigInt
+  feesTaxPct Decimal   @db.Decimal(5, 2)
+  feesTotal  BigInt
+  total      BigInt
+  locationId String
+  staffId    String
+  note       String?
+  createdAt  DateTime
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  location Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  staff    Staff    @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  items           PurchaseOrderItem[]
+  fees            PurchaseOrderFee[]
+  packages        PurchaseOrderPackage[]
+  arrivalPhotos   ArrivalPhoto[]
+  supplierReturns SupplierReturn[]
+  payments        Payment[]
+  unitEvents      UnitEvent[]
+}
+
+model PurchaseOrderItem {
+  id           String  @id @default(cuid())
+  poId         String
+  skuId        String?
+  produk       String
+  spec         String?
+  qty          Int
+  unitCost     BigInt
+  lineTotal    BigInt
+  allocatedFee BigInt
+
+  po  PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Restrict)
+  sku Sku?          @relation(fields: [skuId], references: [id], onDelete: Restrict)
+
+  serials PurchaseOrderItemSerial[]
+  units   Unit[]
+}
+
+model PurchaseOrderItemSerial {
+  id     String  @id @default(cuid())
+  itemId String
+  serial String
+  unitId String?
+
+  item PurchaseOrderItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  unit Unit?             @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@unique([itemId, serial])
+}
+
+model PurchaseOrderFee {
+  id     String  @id @default(cuid())
+  poId   String
+  label  String
+  kind   FeeKind
+  amount BigInt
+
+  po PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Restrict)
+}
+
+model PurchaseOrderPackage {
+  id         String  @id @default(cuid())
+  poId       String
+  label      String
+  qty        Int
+  weightGram Int?
+  note       String?
+
+  po PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Restrict)
+}
+
+model ArrivalPhoto {
+  id      String   @id @default(cuid())
+  poId    String
+  url     String
+  takenAt DateTime
+  staffId String
+
+  po    PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Restrict)
+  staff Staff         @relation(fields: [staffId], references: [id], onDelete: Restrict)
+}
+
+model SupplierReturn {
+  id         String       @id @default(cuid())
+  code       String       @unique @default(dbgenerated("next_doc_code('SP'::text)"))
+  supplierId String
+  poId       String?
+  status     ReturnStatus
+  reason     String?
+  staffId    String
+  createdAt  DateTime
+
+  supplier Supplier       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  po       PurchaseOrder? @relation(fields: [poId], references: [id], onDelete: Restrict)
+  staff    Staff          @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  items SupplierReturnItem[]
+}
+
+model SupplierReturnItem {
+  id       String  @id @default(cuid())
+  returnId String
+  unitId   String
+  amount   BigInt
+  note     String?
+
+  supplierReturn SupplierReturn @relation(fields: [returnId], references: [id], onDelete: Restrict)
+  unit           Unit           @relation(fields: [unitId], references: [id], onDelete: Restrict)
+}
+
+// ============================================================================
+// Catalogue: category → model → sku
+// ============================================================================
+
+model Category {
+  id         String     @id @default(cuid())
+  name       String     @unique
+  sortOrder  Int
+  marginMode MarginMode
+  marginMin  BigInt
+  marginMax  BigInt
+  createdAt  DateTime
+
+  attributes  CategoryAttribute[]
+  variantAxes CategoryVariantAxis[]
+  models      CatalogModel[]
+  discounts   Discount[]
+}
+
+model CategoryAttribute {
+  id         String   @id @default(cuid())
+  categoryId String
+  key        String
+  label      String
+  type       AttrType
+  unit       String?
+  sortOrder  Int
+
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  options        CategoryAttributeOption[]
+  unitAttributes UnitAttribute[]
+
+  @@unique([categoryId, key])
+}
+
+model CategoryAttributeOption {
+  id          String @id @default(cuid())
+  attributeId String
+  value       String
+  sortOrder   Int
+
+  attribute CategoryAttribute @relation(fields: [attributeId], references: [id], onDelete: Restrict)
+}
+
+model CategoryVariantAxis {
+  id         String @id @default(cuid())
+  categoryId String
+  name       String
+  sortOrder  Int
+
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+}
+
+model CatalogModel {
+  id         String   @id @default(cuid())
+  categoryId String
+  name       String
+  year       String?
+  archived   Boolean
+  createdAt  DateTime
+
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  axes   ModelAxis[]
+  photos ModelPhoto[]
+  skus   Sku[]
+
+  @@unique([categoryId, name, year])
+}
+
+model ModelAxis {
+  id        String @id @default(cuid())
+  modelId   String
+  name      String
+  sortOrder Int
+
+  model CatalogModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+
+  values ModelAxisValue[]
+}
+
+model ModelAxisValue {
+  id        String @id @default(cuid())
+  axisId    String
+  value     String
+  sortOrder Int
+
+  axis ModelAxis @relation(fields: [axisId], references: [id], onDelete: Restrict)
+}
+
+model ModelPhoto {
+  id        String @id @default(cuid())
+  modelId   String
+  url       String
+  sortOrder Int
+
+  model CatalogModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+}
+
+model Sku {
+  id           String   @id @default(cuid())
+  modelId      String
+  code         String   @unique
+  name         String
+  variantLabel String?
+  grade        Grade?
+  price        BigInt
+  landed       BigInt
+  archived     Boolean
+  createdAt    DateTime
+
+  model CatalogModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+
+  units            Unit[]
+  poItems          PurchaseOrderItem[]
+  orderItems       OrderItem[]
+  reservationItems ReservationItem[]
+  discountSkus     DiscountSku[]
+  priceLogs        PriceLog[]
+  priceReqs        PriceReq[]
+}
+
+// ============================================================================
+// Units — the subject of this database (08 §1)
+// ============================================================================
+
+model Unit {
+  id              String     @id @default(cuid())
+  serial          String     @unique
+  skuId           String
+  /// projection of the unit's event stream — never updated alone (08 §1)
+  status          UnitStatus
+  /// projection of the unit's event stream — never updated alone (08 §1)
+  locationId      String
+  buy             BigInt
+  landed          BigInt
+  grade           Grade?
+  poItemId        String?
+  soldOrderItemId String?
+  intakeAt        DateTime
+  archivedAt      DateTime?
+  /// optimistic lock
+  version         Int
+
+  sku           Sku                @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  location      Location           @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  poItem        PurchaseOrderItem? @relation(fields: [poItemId], references: [id], onDelete: Restrict)
+  soldOrderItem OrderItem?         @relation("UnitSoldOrderItem", fields: [soldOrderItemId], references: [id], onDelete: Restrict)
+
+  attributes          UnitAttribute[]
+  events              UnitEvent[]
+  notes               UnitNote[]
+  poItemSerials       PurchaseOrderItemSerial[]
+  supplierReturnItems SupplierReturnItem[]
+  opnameScans         OpnameScan[]
+  orderItems          OrderItem[]               @relation("OrderItemUnit")
+  tradeIns            TradeIn[]
+  reservationItems    ReservationItem[]
+  warrantyClaims      WarrantyClaim[]
+}
+
+model UnitAttribute {
+  id          String @id @default(cuid())
+  unitId      String
+  attributeId String
+  value       String
+
+  unit      Unit              @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  attribute CategoryAttribute @relation(fields: [attributeId], references: [id], onDelete: Restrict)
+
+  @@unique([unitId, attributeId])
+}
+
+/// Append-only ledger. One row per unit state change, written in the same
+/// transaction as the projection it updates (08 §1, §4). Never updated,
+/// never deleted — the app DB role has INSERT only (08 §9).
+model UnitEvent {
+  id               String        @id @default(cuid())
+  unitId           String
+  /// immutable copy — history reads correctly even if Unit is archived (08 §4)
+  serial           String
+  /// Document number, e.g. TX-2026/08-000001. Only a DIPINDAH event carries
+  /// one: a stock transfer is the one movement the shop numbers by hand, and
+  /// the ERD gives it no document of its own. Filled by the application from
+  /// next_doc_code('TX'), not by a column default, because a default cannot be
+  /// conditional on the event type. Added in S9 follow-up with the owner's
+  /// approval; docs/erd-pos-chatbot.drawio updated in the same commit.
+  code             String?   @unique
+  seq              Int
+  type             UnitEventType
+  at               DateTime
+  fromStatus       UnitStatus?
+  toStatus         UnitStatus
+  fromLocationId   String?
+  toLocationId     String?
+  orderId          String?
+  purchaseOrderId  String?
+  claimId          String?
+  opnameSessionId  String?
+  costDelta        BigInt
+  staffId          String
+  requestId        String?
+  note             String?
+
+  unit          Unit           @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  fromLocation  Location?      @relation("UnitEventFromLocation", fields: [fromLocationId], references: [id], onDelete: Restrict)
+  toLocation    Location?      @relation("UnitEventToLocation", fields: [toLocationId], references: [id], onDelete: Restrict)
+  order         Order?         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  claim         WarrantyClaim? @relation(fields: [claimId], references: [id], onDelete: Restrict)
+  opnameSession OpnameSession? @relation(fields: [opnameSessionId], references: [id], onDelete: Restrict)
+  staff         Staff          @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  @@unique([unitId, seq])
+}
+
+model UnitNote {
+  id      String   @id @default(cuid())
+  unitId  String
+  /// immutable copy
+  serial  String
+  body    String
+  tag     String?
+  staffId String
+  at      DateTime
+
+  unit  Unit  @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  photos UnitNotePhoto[]
+}
+
+model UnitNotePhoto {
+  id        String @id @default(cuid())
+  noteId    String
+  url       String
+  sortOrder Int
+
+  note UnitNote @relation(fields: [noteId], references: [id], onDelete: Restrict)
+}
+
+// ============================================================================
+// Stock opname
+// ============================================================================
+
+model OpnameSession {
+  id         String        @id @default(cuid())
+  code       String        @unique @default(dbgenerated("next_doc_code('SO'::text)"))
+  locationId String
+  status     OpnameStatus
+  startedAt  DateTime
+  closedAt   DateTime?
+  staffId    String
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  staff    Staff    @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  scans      OpnameScan[]
+  unitEvents UnitEvent[]
+}
+
+model OpnameScan {
+  id        String     @id @default(cuid())
+  sessionId String
+  serial    String
+  unitId    String?
+  result    ScanResult
+  at        DateTime
+
+  session OpnameSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  unit    Unit?         @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@unique([sessionId, serial])
+}
+
+// ============================================================================
+// Customers and sales
+// ============================================================================
+
+model Customer {
+  id        String   @id @default(cuid())
+  name      String
+  /// E.164
+  phone     String   @unique
+  email     String?
+  street    String?
+  zip       String?
+  note      String?
+  createdAt DateTime
+
+  postalCode PostalCode? @relation(fields: [zip], references: [zip], onDelete: Restrict)
+
+  orders           Order[]
+  reservations     Reservation[]
+  waMessages       WaMessage[]
+  waThreadMemories WaThreadMemory[]
+}
+
+model Order {
+  id           String      @id @default(cuid())
+  code         String      @unique @default(dbgenerated("next_doc_code('SI'::text)"))
+  ts           DateTime
+  customerId   String?
+  custName     String?
+  phone        String?
+  platform     Platform
+  fulfill      Fulfillment
+  status       OrderStatus
+  subtotal     BigInt
+  discountId   String?
+  discount     BigInt
+  extra        BigInt
+  extraNote    String?
+  total        BigInt
+  /// = Σ Payment
+  paidTotal    BigInt
+  cogs         BigInt
+  tradeCredit  BigInt
+  belowFloor   Boolean
+  ovReason     String?
+  approvedById String?
+  soldById     String
+  shiftId      String?
+  locationId   String
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  // Relation field is `discountRef` because the scalar column `discount`
+  // (BigInt, the rupiah amount) already owns the name `discount`.
+  discountRef Discount? @relation(fields: [discountId], references: [id], onDelete: Restrict)
+  approvedBy  Staff?    @relation("OrderApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  soldBy      Staff     @relation("OrderSoldBy", fields: [soldById], references: [id], onDelete: Restrict)
+  shift       Shift?    @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  location    Location  @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  items       OrderItem[]
+  tradeIns    TradeIn[]
+  payments    Payment[]
+  adjustments OrderAdjustment[]
+  shipments   Shipment[]
+  unitEvents  UnitEvent[]
+}
+
+model OrderItem {
+  id            String    @id @default(cuid())
+  orderId       String
+  unitId        String?
+  skuId         String
+  /// snapshot
+  name          String
+  /// snapshot
+  variant       String?
+  qty           Int
+  price         BigInt
+  sub           BigInt
+  /// snapshot
+  cogs          BigInt
+  garansiUntil  DateTime?
+  returnedQty   Int
+  returnedAt    DateTime?
+  returnReason  String?
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  unit  Unit? @relation("OrderItemUnit", fields: [unitId], references: [id], onDelete: Restrict)
+  sku   Sku   @relation(fields: [skuId], references: [id], onDelete: Restrict)
+
+  unitsSold      Unit[]          @relation("UnitSoldOrderItem")
+  shipmentItems  ShipmentItem[]
+  warrantyClaims WarrantyClaim[]
+}
+
+model TradeIn {
+  id      String  @id @default(cuid())
+  orderId String
+  label   String
+  serial  String?
+  value   BigInt
+  unitId  String?
+  note    String?
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  unit  Unit? @relation(fields: [unitId], references: [id], onDelete: Restrict)
+}
+
+/// CHECK (amount > 0) and CHECK ((orderId IS NULL) <> (poId IS NULL)) —
+/// invariants 6 and 7 — are hand-written in a --create-only migration (08 §2).
+model Payment {
+  id        String       @id @default(cuid())
+  orderId   String?
+  poId      String?
+  direction PayDirection
+  method    PayMethod
+  amount    BigInt
+  status    PayStatus
+  paidAt    DateTime?
+  dueAt     DateTime?
+  ref       String?
+  staffId   String
+  shiftId   String?
+
+  order Order?         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  po    PurchaseOrder? @relation(fields: [poId], references: [id], onDelete: Restrict)
+  staff Staff          @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  shift Shift?         @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+}
+
+model OrderAdjustment {
+  id      String     @id @default(cuid())
+  orderId String
+  type    AdjustType
+  amount  BigInt
+  reason  String
+  at      DateTime
+  staffId String
+  shiftId String?
+
+  order Order  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  staff Staff  @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  shift Shift? @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+}
+
+model Discount {
+  id          String     @id @default(cuid())
+  code        String     @unique
+  pct         Int
+  maxRp       BigInt?
+  minRp       BigInt?
+  description String?
+  usageLimit  Int?
+  used        Int
+  fromDate    DateTime?
+  toDate      DateTime?
+  active      Boolean
+  scope       DiscScope
+  categoryId  String?
+
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  skus   DiscountSku[]
+  orders Order[]
+}
+
+model DiscountSku {
+  id         String @id @default(cuid())
+  discountId String
+  skuId      String
+
+  discount Discount @relation(fields: [discountId], references: [id], onDelete: Restrict)
+  sku      Sku      @relation(fields: [skuId], references: [id], onDelete: Restrict)
+
+  @@unique([discountId, skuId])
+}
+
+// ============================================================================
+// Staff, sessions, shifts
+// ============================================================================
+
+model Staff {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  name         String
+  role         Role
+  canApprove   Boolean
+  active       Boolean
+  passwordHash String
+  lastLoginAt  DateTime?
+  createdAt    DateTime
+
+  sessions                 StaffSession[]
+  purchaseOrders           PurchaseOrder[]
+  arrivalPhotos            ArrivalPhoto[]
+  supplierReturns          SupplierReturn[]
+  unitEvents               UnitEvent[]
+  unitNotes                UnitNote[]
+  opnameSessions           OpnameSession[]
+  ordersApproved           Order[]          @relation("OrderApprovedBy")
+  ordersSold               Order[]          @relation("OrderSoldBy")
+  payments                 Payment[]
+  orderAdjustments         OrderAdjustment[]
+  shifts                   Shift[]
+  shipmentEvents           ShipmentEvent[]
+  warrantyClaims           WarrantyClaim[]
+  priceLogs                PriceLog[]       @relation("PriceLogStaff")
+  priceLogsApproved        PriceLog[]       @relation("PriceLogApprovedBy")
+  priceReqsRequested       PriceReq[]       @relation("PriceReqRequestedBy")
+  priceReqsDecided         PriceReq[]       @relation("PriceReqDecidedBy")
+  auditLogs                AuditLog[]
+  pettyCashEntries         PettyCashEntry[]
+  waMessagesAnswered       WaMessage[]
+  waThreadMemoriesDirected WaThreadMemory[]
+  idempotencyKeys          IdempotencyKey[]
+  igCommentsReplied        IgComment[]      @relation("IgCommentRepliedBy")
+  igCommentsDmSent         IgComment[]      @relation("IgCommentDmSentBy")
+}
+
+model StaffSession {
+  id        String    @id @default(cuid())
+  staffId   String
+  tokenHash String    @unique
+  issuedAt  DateTime
+  expiresAt DateTime
+  revokedAt DateTime?
+  ip        String?
+  userAgent String?
+
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Restrict)
+}
+
+model Shift {
+  id         String      @id @default(cuid())
+  staffId    String
+  locationId String
+  status     ShiftStatus
+  openedAt   DateTime
+  closedAt   DateTime?
+  openFloat  BigInt
+  expected   BigInt
+  declared   BigInt
+  variance   BigInt
+
+  staff    Staff    @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  location Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  orders           Order[]
+  payments         Payment[]
+  adjustments      OrderAdjustment[]
+  pettyCashEntries PettyCashEntry[]
+}
+
+// ============================================================================
+// Reservations
+// ============================================================================
+
+model Reservation {
+  id           String            @id @default(cuid())
+  code         String            @unique @default(dbgenerated("next_doc_code('RV'::text)"))
+  customerId   String?
+  custName     String?
+  phone        String?
+  scheduledFor DateTime?
+  status       ReservationStatus
+  source       ResSource
+  note         String?
+  createdAt    DateTime
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  items ReservationItem[]
+}
+
+model ReservationItem {
+  id            String  @id @default(cuid())
+  reservationId String
+  skuId         String?
+  unitId        String?
+  qty           Int
+  note          String?
+
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  sku         Sku?        @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  unit        Unit?       @relation(fields: [unitId], references: [id], onDelete: Restrict)
+}
+
+// ============================================================================
+// Shipping
+// ============================================================================
+
+model Shipment {
+  id        String         @id @default(cuid())
+  code      String         @unique
+  orderId   String
+  courier   String?
+  service   String?
+  street    String?
+  zip       String?
+  resi      String?
+  status    ShipmentStatus
+  cost      BigInt
+  createdAt DateTime
+
+  order      Order       @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  postalCode PostalCode? @relation(fields: [zip], references: [zip], onDelete: Restrict)
+
+  items  ShipmentItem[]
+  events ShipmentEvent[]
+}
+
+model ShipmentItem {
+  id          String @id @default(cuid())
+  shipmentId  String
+  orderItemId String
+  qty         Int
+
+  shipment  Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+}
+
+model ShipmentEvent {
+  id         String         @id @default(cuid())
+  shipmentId String
+  at         DateTime
+  status     ShipmentStatus
+  note       String?
+  staffId    String?
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  staff    Staff?   @relation(fields: [staffId], references: [id], onDelete: Restrict)
+}
+
+// ============================================================================
+// Warranty
+// ============================================================================
+
+model WarrantyClaim {
+  id          String      @id @default(cuid())
+  code        String      @unique @default(dbgenerated("next_doc_code('KG'::text)"))
+  unitId      String
+  orderItemId String?
+  supplierId  String?
+  status      ClaimStatus
+  resolution  ClaimRes?
+  openedAt    DateTime
+  resolvedAt  DateTime?
+  staffId     String
+  note        String?
+
+  unit      Unit       @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  orderItem OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  supplier  Supplier?  @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  staff     Staff      @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  unitEvents UnitEvent[]
+}
+
+// ============================================================================
+// Reference data
+// ============================================================================
+
+model PostalCode {
+  zip         String @id
+  province    String
+  city        String
+  district    String
+  subdistrict String
+
+  customers Customer[]
+  shipments Shipment[]
+}
+
+// ============================================================================
+// Pricing
+// ============================================================================
+
+model PriceLog {
+  id           String   @id @default(cuid())
+  skuId        String
+  before       BigInt
+  after        BigInt
+  at           DateTime
+  staffId      String
+  below        Boolean
+  approvedById String?
+  reason       String?
+
+  sku        Sku    @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  staff      Staff  @relation("PriceLogStaff", fields: [staffId], references: [id], onDelete: Restrict)
+  approvedBy Staff? @relation("PriceLogApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+}
+
+model PriceReq {
+  id            String    @id @default(cuid())
+  skuId         String
+  before        BigInt
+  after         BigInt
+  at            DateTime
+  requestedById String
+  status        ReqStatus
+  decidedById   String?
+  decidedAt     DateTime?
+  reason        String?
+
+  sku         Sku    @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  requestedBy Staff  @relation("PriceReqRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  decidedBy   Staff? @relation("PriceReqDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
+}
+
+// ============================================================================
+// Audit and outbox
+// ============================================================================
+
+/// Never updated, never deleted — the app DB role has INSERT only (08 §9).
+/// `entity`/`entityId` are deliberately untyped: an audit row must survive the
+/// table it points at, so this is the one place a link is not an FK (ERD).
+model AuditLog {
+  id        String      @id @default(cuid())
+  at        DateTime
+  staffId   String?
+  entity    String
+  entityId  String
+  action    AuditAction
+  field     String?
+  before    String?
+  after     String?
+  requestId String?
+  ip        String?
+
+  staff Staff? @relation(fields: [staffId], references: [id], onDelete: Restrict)
+}
+
+/// Crossing the transaction boundary (08 §5): the txn writes the row, the
+/// worker claims it with FOR UPDATE SKIP LOCKED and sends. No network I/O
+/// ever happens inside a database transaction.
+model Outbox {
+  id            String        @id @default(cuid())
+  kind          OutboxKind
+  /// send intent — see the note on JSON columns at the top of this file
+  payload       Json
+  status        OutboxStatus
+  attempts      Int
+  nextAttemptAt DateTime
+  lastError     String?
+  requestId     String?
+  createdAt     DateTime
+  sentAt        DateTime?
+}
+
+/// NOT in docs/erd-pos-chatbot.drawio's original 62 tables. Added in S6 with the
+/// owner's explicit approval, because 08 §3 and §10 require every mutating
+/// endpoint to store an Idempotency-Key and its response and no existing table
+/// can hold one. The ERD is the authority (CLAUDE.md), so the drawio was
+/// updated in the same commit rather than left to drift.
+///
+/// responseBody is String, not Json: the permitted-JSON list stays closed.
+model IdempotencyKey {
+  id           String   @id @default(cuid())
+  /// The client-supplied Idempotency-Key header.
+  key          String
+  staffId      String
+  method       String
+  route        String
+  /// Hash of the request body: the same key with a different body is a bug,
+  /// not a retry, and must be refused rather than answered from the cache.
+  requestHash  String
+  statusCode   Int
+  responseBody String
+  createdAt    DateTime
+  expiresAt    DateTime
+
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  @@unique([key, staffId])
+  @@index([expiresAt])
+}
+
+// ============================================================================
+// Finance
+// ============================================================================
+
+/// singleton row
+model FinSettings {
+  id        String   @id
+  cash      BigInt
+  equipment BigInt
+  updatedAt DateTime
+}
+
+model OpexItem {
+  id        String   @id @default(cuid())
+  label     String
+  amount    BigInt
+  kind      OpexKind
+  recurring Boolean
+  active    Boolean
+}
+
+/// singleton row
+model PettyCash {
+  id        String   @id
+  opening   BigInt
+  updatedAt DateTime
+}
+
+model PettyCashEntry {
+  id       String   @id @default(cuid())
+  ts       DateTime
+  category String
+  note     String?
+  /// signed
+  amount   BigInt
+  staffId  String
+  shiftId  String?
+
+  staff Staff  @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  shift Shift? @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+}
+
+// ============================================================================
+// Quotas and external caches
+// ============================================================================
+
+model DailyQuota {
+  key   String
+  /// YYYY-MM-DD (Asia/Jakarta)
+  day   String
+  count Int
+
+  @@id([key, day])
+}
+
+/// singleton row, id = "main"
+model AppleDbCache {
+  id        String   @id
+  /// external payload — shape not ours
+  models    Json
+  fetchedAt DateTime
+}
+
+// ============================================================================
+// WhatsApp
+// ============================================================================
+
+/// Persisted verbatim before Meta is acked, so a crash mid-pipeline loses
+/// nothing (08 §5).
+model WaRawEvent {
+  id          String    @id @default(cuid())
+  /// verbatim Meta payload — shape not ours
+  payload     Json
+  signatureOk Boolean
+  receivedAt  DateTime
+  processedAt DateTime?
+}
+
+model WaMessage {
+  id              String      @id @default(cuid())
+  waMessageId     String      @unique
+  /// wa_id
+  from            String
+  customerId      String?
+  name            String?
+  text            String?
+  msgType         String
+  ts              DateTime
+  direction       WaDirection
+  status          WaMsgStatus
+  intent          String?
+  /// LLM extraction — shape not ours
+  entities        Json
+  replyText       String?
+  answeredByAgent Boolean
+  answeredById    String?
+  answeredAt      DateTime?
+
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  answeredBy Staff?    @relation(fields: [answeredById], references: [id], onDelete: Restrict)
+
+  coveredThreadMemories WaThreadMemory[]
+}
+
+/// Two writers, disjoint column sets (08 §7). The webhook summarizer owns the
+/// summary and coveredThrough columns; POS staff own the directive columns.
+/// Neither may write the other's columns — that is what makes "the agent can
+/// never overwrite a staff directive" structural rather than conventional.
+/// (Never write a comment terminator inside a /// doc comment here: Prisma
+/// copies it verbatim into the generated .d.ts and breaks the file.)
+model WaThreadMemory {
+  id                String    @id @default(cuid())
+  /// wa_id
+  from              String    @unique
+  customerId        String?
+  /// agent-owned
+  summary           String?
+  summaryAt         DateTime?
+  summaryTurns      Int
+  coveredThroughAt  DateTime?
+  coveredThroughId  String?
+  /// staff-owned
+  directive         String?
+  directiveAt       DateTime?
+  directiveById     String?
+  clarifyCount      Int
+  clarifyAt         DateTime?
+  updatedAt         DateTime
+
+  customer       Customer?  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  coveredThrough WaMessage? @relation(fields: [coveredThroughId], references: [id], onDelete: Restrict)
+  directiveBy    Staff?     @relation(fields: [directiveById], references: [id], onDelete: Restrict)
+}
+
+model AgentCache {
+  id        String   @id @default(cuid())
+  /// sha256(kind + q)
+  key       String   @unique
+  kind      String
+  /// decision only — shape not ours
+  value     Json
+  createdAt DateTime
+  expiresAt DateTime
+  hits      Int
+}
+
+// ============================================================================
+// Instagram
+// ============================================================================
+
+/// Persisted verbatim before Meta is acked (08 §5).
+model IgRawEvent {
+  id          String    @id @default(cuid())
+  /// verbatim Meta payload — shape not ours
+  payload     Json
+  signatureOk Boolean
+  receivedAt  DateTime
+  processedAt DateTime?
+}
+
+model IgMedia {
+  id           String    @id @default(cuid())
+  igMediaId    String    @unique
+  caption      String?
+  mediaType    String?
+  permalink    String?
+  thumbnailUrl String?
+  timestamp    DateTime?
+  fetchedAt    DateTime
+
+  comments IgComment[]
+}
+
+model IgComment {
+  id             String          @id @default(cuid())
+  igCommentId    String          @unique
+  mediaId        String
+  /// IGSID
+  fromId         String
+  fromUsername   String?
+  text           String?
+  /// external IG comment id — not an FK (ERD)
+  parentId       String?
+  ts             DateTime
+  status         IgCommentStatus
+  replyText      String?
+  replyCommentId String?
+  repliedByAgent Boolean
+  repliedById    String?
+  repliedAt      DateTime?
+  dmText         String?
+  dmSentById     String?
+  dmSentAt       DateTime?
+
+  media     IgMedia @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+  repliedBy Staff?  @relation("IgCommentRepliedBy", fields: [repliedById], references: [id], onDelete: Restrict)
+  dmSentBy  Staff?  @relation("IgCommentDmSentBy", fields: [dmSentById], references: [id], onDelete: Restrict)
+}
+
+/// singleton row
+model IgSettings {
+  id            String   @id
+  autoReply     Boolean
+  replyTemplate String
+  dmTemplate    String
+  updatedAt     DateTime
+}
+
+// ============================================================================
+// Enums (34)
+// ============================================================================
+
+enum Role {
+  OWNER
+  STAFF
+}
+
+enum LocationKind {
+  TOKO
+  GUDANG
+  SERVIS
+  TRANSIT
+}
+
+enum MarginMode {
+  PCT
+  RP
+}
+
+enum AttrType {
+  TEXT
+  NUMBER
+  SELECT
+}
+
+enum Grade {
+  A
+  B
+  C
+}
+
+enum UnitStatus {
+  TERSEDIA
+  DIRESERVASI
+  TERJUAL
+  KLAIM_GARANSI
+  RETUR_SUPPLIER
+  REFUND_KLAIM
+  HILANG
+  KOREKSI_KELUAR
+}
+
+enum UnitEventType {
+  DITERIMA
+  DICATAT
+  DIPINDAH
+  DIRESERVASI
+  RESERVASI_BATAL
+  TERJUAL
+  RETUR_PELANGGAN
+  RETUR_SUPPLIER
+  KLAIM_DIBUKA
+  KLAIM_SELESAI
+  REFUND
+  OPNAME_HILANG
+  OPNAME_DITEMUKAN
+  KOREKSI
+  DIARSIPKAN
+}
+
+enum POStatus {
+  DRAF
+  DIPESAN
+  SEBAGIAN
+  DITERIMA
+  BATAL
+}
+
+enum FeeKind {
+  ONGKIR
+  PAJAK
+  BEACUKAI
+  LAIN
+}
+
+enum ReturnStatus {
+  DIAJUKAN
+  DIKIRIM
+  SELESAI
+  DITOLAK
+}
+
+enum OrderStatus {
+  LUNAS
+  BELUM
+  APPROVAL
+  BATAL
+  RETUR
+  RETUR_SEBAGIAN
+}
+
+enum Platform {
+  OFFLINE
+  WA
+  IG
+}
+
+enum Fulfillment {
+  PICKUP
+  SHIP
+  NONE
+}
+
+enum PayMethod {
+  TUNAI
+  QRIS
+  TRANSFER
+  DEBIT
+  KARTU_KREDIT
+  CICILAN
+  COD
+  BAYAR_TOKO
+  TEMPO
+}
+
+enum PayDirection {
+  MASUK
+  KELUAR
+}
+
+enum PayStatus {
+  LUNAS
+  TEMPO
+  BELUM
+  GAGAL
+}
+
+enum AdjustType {
+  VOID
+  REFUND
+  RETUR
+}
+
+enum ReservationStatus {
+  TERJADWAL
+  SELESAI
+  BATAL
+}
+
+enum ResSource {
+  STAF
+  AGEN
+}
+
+enum ShipmentStatus {
+  PERLU_RESI
+  DIPROSES
+  DIKIRIM
+  DITERIMA
+  RETUR
+}
+
+enum ClaimStatus {
+  OPEN
+  SELESAI
+}
+
+enum ClaimRes {
+  STOK
+  RETUR
+  REFUND
+}
+
+enum DiscScope {
+  SEMUA
+  KATEGORI
+  PRODUK
+}
+
+enum ReqStatus {
+  PENDING
+  DISETUJUI
+  DITOLAK
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  ARCHIVE
+  LOGIN
+  LOGIN_GAGAL
+  EKSPOR
+}
+
+enum OpnameStatus {
+  BERJALAN
+  DIPOSTING
+  BATAL
+}
+
+enum ScanResult {
+  COCOK
+  TIDAK_DIKENAL
+  SALAH_LOKASI
+}
+
+enum ShiftStatus {
+  BUKA
+  TUTUP
+}
+
+enum OpexKind {
+  TETAP
+  VARIABEL
+  NONCASH
+}
+
+enum OutboxKind {
+  WA_REPLY
+  IG_REPLY
+  IG_DM
+  ALERT
+}
+
+enum OutboxStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+}
+
+enum WaDirection {
+  IN
+  OUT
+}
+
+enum WaMsgStatus {
+  BARU
+  DIJAWAB_AGEN
+  PERLU_STAF
+  DIJAWAB_STAF
+}
+
+enum IgCommentStatus {
+  NEW
+  REPLIED
+  DMED
+  DONE
+  HIDDEN
+}

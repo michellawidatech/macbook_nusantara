@@ -1,0 +1,146 @@
+.shell {
+  display: grid;
+  grid-template-columns: var(--shell-nav-width) 1fr;
+  grid-template-rows: var(--shell-header-height) 1fr;
+  grid-template-areas:
+    "header header"
+    "nav main";
+  height: 100%;
+}
+
+.skip {
+  position: absolute;
+  left: var(--s-2);
+  top: -3rem;
+  z-index: var(--z-toast);
+  padding: var(--s-2) var(--s-4);
+  color: var(--c-ink-inverse);
+  background: var(--c-accent);
+  border-radius: var(--r-sm);
+  text-decoration: none;
+  transition: top 120ms ease;
+}
+
+/* Visible the moment it is focused, and only then. */
+.skip:focus-visible {
+  top: var(--s-2);
+}
+
+.header {
+  grid-area: header;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding: 0 var(--s-4);
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
+  z-index: var(--z-shell);
+}
+
+.brand {
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.01em;
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+}
+
+.langToggle {
+  padding: var(--s-1) var(--s-3);
+  font: inherit;
+  font-size: var(--t-xs);
+  font-weight: var(--fw-medium);
+  color: var(--c-ink-muted);
+  background: var(--c-surface-sunken);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-full);
+  cursor: pointer;
+}
+
+.account {
+  display: flex;
+  flex-direction: column;
+  line-height: var(--lh-tight);
+}
+
+.accountName {
+  font-size: var(--t-sm);
+  font-weight: var(--fw-medium);
+}
+
+.accountRole {
+  font-size: var(--t-xs);
+  color: var(--c-ink-faint);
+}
+
+.logout {
+  padding: var(--s-2) var(--s-3);
+  font: inherit;
+  font-size: var(--t-sm);
+  color: var(--c-ink);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.logout:hover:not(:disabled) {
+  background: var(--c-surface-sunken);
+}
+
+.logout:disabled {
+  color: var(--c-ink-faint);
+  cursor: progress;
+}
+
+.nav {
+  grid-area: nav;
+  padding: var(--s-4) var(--s-2);
+  background: var(--c-surface);
+  border-right: 1px solid var(--c-border);
+  overflow-y: auto;
+}
+
+.navList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.navLink {
+  display: block;
+  padding: var(--s-2) var(--s-3);
+  color: var(--c-ink-muted);
+  font-size: var(--t-sm);
+  font-weight: var(--fw-medium);
+  text-decoration: none;
+  border-radius: var(--r-sm);
+}
+
+.navLink:hover {
+  background: var(--c-surface-sunken);
+  color: var(--c-ink);
+}
+
+.navLinkActive {
+  color: var(--c-accent);
+  background: var(--c-accent-faint);
+}
+
+.main {
+  grid-area: main;
+  padding: var(--s-5);
+  overflow-y: auto;
+}
+
+/* The shell owns focus placement, so a programmatic focus here shows no ring. */
+.main:focus {
+  outline: none;
+}

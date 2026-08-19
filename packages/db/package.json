@@ -8,11 +8,21 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "migrate": "prisma migrate dev",
+    "generate": "prisma generate",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --config ../../vitest.config.ts"
+    "test": "vitest run",
+    "seed": "tsx src/seed-cli.ts"
   },
   "devDependencies": {
+    "@types/pg": "^8.21.0",
+    "pg": "^8.23.0",
+    "prisma": "^6",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@prisma/client": "^6",
+    "@nusantara/domain": "workspace:*"
   }
 }
