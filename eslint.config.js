@@ -30,6 +30,11 @@ export default tseslint.config(
           argsIgnorePattern: "^_",
           varsIgnorePattern: "^_",
           caughtErrors: "none",
+          // `const { sortValue, ...rest } = col` is how a wrapper strips its own
+          // props before spreading what is left onto a third-party component.
+          // The named siblings are the point of the statement, not an oversight,
+          // so naming them must not require renaming them.
+          ignoreRestSiblings: true,
         },
       ],
     },

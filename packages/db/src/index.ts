@@ -4,6 +4,7 @@
 // transaction that touches more than one Unit goes through withUnitLocks.
 // See docs/rebuild/08-data-integrity.md §1, §3 and §5.
 
+export * from "./environment.js";
 export * from "./client.js";
 export * from "./withRetry.js";
 export * from "./withUnitLocks.js";

@@ -1,0 +1,36 @@
+name: Setup workspace
+description: >-
+  Node, pnpm, a frozen-lockfile install and the generated Prisma client — the
+  four steps every job in this repo needs before it can run anything.
+
+inputs:
+  node-version:
+    description: Node major to run on. Must satisfy the root package.json engines field.
+    required: false
+    default: "24"
+
+runs:
+  using: composite
+  steps:
+    # No version pinned here on purpose: action-setup reads the
+    # `packageManager` field in the root package.json, so the lockfile and CI
+    # can never drift onto different pnpm majors.
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+
+    - name: Install Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    # packages/db/generated/ is gitignored, so the Prisma client does not exist
+    # on a fresh checkout. Every typecheck, test and build that touches
+    # @nusantara/db fails without this step.
+    - name: Generate the Prisma client
+      shell: bash
+      run: pnpm --filter @nusantara/db exec prisma generate
