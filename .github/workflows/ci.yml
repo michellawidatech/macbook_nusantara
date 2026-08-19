@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first one's answer worthless.
+# main is excluded so every commit that lands keeps a complete record.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Format, lint, types, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      # Each gate runs even when an earlier one failed: one push should report
+      # every problem it introduced, not just the first.
+      - name: Format (prettier --check)
+        run: pnpm format
+
+      - name: Lint (eslint)
+        if: ${{ !cancelled() }}
+        run: pnpm lint
+
+      - name: Typecheck
+        if: ${{ !cancelled() }}
+        run: pnpm typecheck
+
+      - name: Build
+        if: ${{ !cancelled() }}
+        run: pnpm build
+
+  test:
+    name: Tests (PostgreSQL 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Not a mock. 01 §7 and 08 §2: the invariants under test are CHECK
+    # constraints, column-level grants and real concurrency, and none of those
+    # exist in a fake. 16 matches the developer cluster.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      SUPERUSER_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      # The DSN the suites fall back to is a local trust-auth socket, so CI has
+      # to name its own. Not a secret: it reaches a throwaway container that
+      # lives and dies with this job.
+      TEST_DATABASE_URL: postgresql://nusantara:nusantara@localhost:5432/nusantara_pos_test
+      DATABASE_URL: postgresql://nusantara:nusantara@localhost:5432/nusantara_pos_test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      # `nusantara` owns the schema but is deliberately not a superuser and
+      # cannot mint roles — that separation is what makes 08 §9 mean anything,
+      # so CI reproduces it rather than running everything as postgres.
+      - name: Create the owner role and the test database
+        run: |
+          psql "$SUPERUSER_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nusantara') THEN
+              CREATE ROLE nusantara LOGIN PASSWORD 'nusantara';
+            END IF;
+          END
+          $$;
+          SQL
+          psql "$SUPERUSER_URL" -v ON_ERROR_STOP=1 \
+            -c 'CREATE DATABASE "nusantara_pos_test" OWNER nusantara'
+
+      # roles.sql is not a migration by design: the grants migration aborts with
+      # "missing database role(s)" unless these three already exist.
+      - name: Create the application roles (roles.sql, as superuser)
+        run: psql "$SUPERUSER_URL" -v ON_ERROR_STOP=1 -f packages/db/prisma/roles.sql
+
+      - name: Apply migrations
+        run: pnpm --filter @nusantara/db exec prisma migrate deploy
+
+      # `prisma migrate status` lies in this project: a recorded-but-unapplied
+      # migration reports clean while the table is missing. The only honest
+      # check is a real query, so ask the database what it actually has.
+      - name: Verify the schema is really there
+        run: |
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE
+            missing text;
+          BEGIN
+            SELECT string_agg(t, ', ')
+              INTO missing
+              FROM unnest(ARRAY['Unit', 'UnitEvent', 'Outbox', 'IdempotencyKey']) AS t
+             WHERE to_regclass(format('public.%I', t)) IS NULL;
+
+            IF missing IS NOT NULL THEN
+              RAISE EXCEPTION 'migrations reported success but these tables are missing: %', missing;
+            END IF;
+          END
+          $$;
+          SQL
+
+      # `pnpm test` is `turbo run test --concurrency=1`, and the serialisation is
+      # load-bearing: apps/api truncates the whole public schema of this same
+      # database between cases, so a parallel suite would lose its fixtures
+      # mid-test and fail as a phantom concurrency bug.
+      - name: Test
+        run: pnpm test
