@@ -351,6 +351,19 @@ model Unit {
   /// (owner decision 2026-08-27). Two units of one variant ask the same money
   /// whatever their grade.
   grade           Grade?
+  /// What QC saw: a comma-joined list of phrases, each picked from
+  /// `QcDescription` or free-typed. FREE TEXT and staying that way — a machine
+  /// turns up with a mark nobody has seen before, and `QcDescription` is the
+  /// suggestion list that field offers, not a controlled vocabulary. Making it
+  /// one, so Inventory could filter on "has a dent", is a separate owner
+  /// decision (CLAUDE.md).
+  ///
+  /// Nullable because sealed stock has nothing to describe: a New unit needs no
+  /// description and the QC grid does not ask for one (owner decision
+  /// 2026-08-28). For a second-hand unit the description is what gates
+  /// acceptance, and that rule lives in `lib/inboundQc.ts`, not in a NOT NULL —
+  /// the column also has to hold the pre-2026-09-02 units, which have none.
+  description     String?
   poItemId        String?
   soldOrderItemId String?
   intakeAt        DateTime
