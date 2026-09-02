@@ -22,6 +22,11 @@
   # decides the project is npm, and the install fails on `workspace:*`.
   # pnpm sets `--frozen-lockfile` on its own under CI.
   command = "pnpm --filter @nusantara/web build && node apps/web/scripts/netlify-redirects.mjs"
+  # Stated rather than left to the default, because the default is relative to
+  # the base directory and the base here is the repo root, not `apps/web`.
+  # netlify/functions/keep-warm.mts is a scheduled function, not an HTTP one —
+  # its own docblock explains what it is for and why it runs in a window.
+  functions = "netlify/functions"
 
 [build.environment]
   # 20 is the floor this repo declares; 22 is what the API image runs, and one
