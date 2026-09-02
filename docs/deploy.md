@@ -23,12 +23,35 @@ Oregon is a ~200 ms round trip and to Singapore ~30 ms; a page in this app is
 7–8 ms of PostgreSQL, so the default region would put twenty-five times the
 query into the network, on every serial lookup with a customer standing there.
 
-## What it costs
+## What it costs, and the date to remember
 
-Worth reading before creating the Blueprint, because Render bills per instance
-rather than by usage.
+Everything is on Render's **free** tier (owner decision 2026-09-02), so this
+deploy costs nothing. Two consequences, and the second one has a date on it.
 
-| resource | plan in `render.yaml` | |
+**Free services sleep.** A free web service spins down after 15 minutes of
+inactivity and takes 30–60 s to wake. On a quiet afternoon the first sale after
+the lull waits at the till, and Meta gets a timeout rather than a 200 on the
+first message after a quiet spell — it retries, so nothing is lost, but the
+first reply is late.
+
+**⚠️ Render deletes a free PostgreSQL database 30 days after it is created.**
+
+Free was the right plan on the day it was created, because the database held
+nothing then: a fresh schema and a seed. It is the wrong plan the moment the
+shop's real ledger is in it. This application's first rule is that nothing is
+ever hard-deleted and that `UnitEvent` is the record of every machine the shop
+has handled; a host that erases it on a timer contradicts the premise of the
+schema.
+
+**Created 2026-09-02, so the deletion date is 2026-10-02.** Before that date,
+either move the database to a paid plan — a dropdown on the Render dashboard,
+no change to `render.yaml` — or accept losing it and recreate.
+
+If it ever goes paid, the sizes below are the ones to pick. They are small
+because this app is small: 99 MB RSS for the API under load, 52–59 MB for the
+worker, 7–8 ms per page query.
+
+| resource | paid plan | |
 |---|---|---|
 | API | `0.5c-512mb` | $7/mo |
 | worker | `0.5c-512mb` | $7/mo |
@@ -36,22 +59,8 @@ rather than by usage.
 | PostgreSQL | `0.1c-256mb` | ~$7/mo |
 | Netlify | free tier | $0 |
 
-Roughly **$28/month**. The sizes are not the reason — this app is measured at
-99 MB RSS for the API under load and 52–59 MB for the worker, so `0.5c-512mb`
-is already generous and a larger plan would buy nothing. The count is the
-reason: three services and a database, each billed whole.
-
-**`free` is a real option for the two web services** and costs nothing; they
-spin down after 15 minutes of inactivity and take 30–60 s to wake. For a till
-that is quiet between customers, that is a wait at the counter. For the webhook
-it is worse in a different way: Meta gets a timeout instead of a 200, and
-retries into a service that is still starting.
-
-**`free` is not a real option for the database.** Render deletes a free
-PostgreSQL instance 30 days after it is created. This application's first rule
-is that nothing is ever hard-deleted and that the `UnitEvent` ledger is the
-record of every machine the shop has handled; a host that erases it on a timer
-is not a place to keep it.
+Render bills per instance rather than by usage, so the count is what costs, not
+the sizes — a larger plan for any of these would buy nothing.
 
 ## Why Netlify and not GitHub Pages
 

@@ -27,10 +27,19 @@ databases:
     # and none of the services connects as this one.
     user: nusantara
     postgresMajorVersion: "16"
-    # ⚠️ `free` here is a database Render DELETES after 30 days. See
-    # docs/deploy.md — for this app that is the wrong default, because nothing
-    # in it is ever hard-deleted and the ledger is the point.
-    plan: 0.1c-256mb
+    # ⚠️⚠️ RENDER DELETES A FREE DATABASE 30 DAYS AFTER IT IS CREATED. ⚠️⚠️
+    #
+    # Chosen deliberately (owner decision 2026-09-02) because on the day it was
+    # created this database held nothing: a fresh schema and a seed. Free is the
+    # right plan for standing the deploy up and trying it.
+    #
+    # It stops being the right plan the moment the shop's real ledger is in
+    # here. This application's first rule is that nothing is ever hard-deleted
+    # and that `UnitEvent` is the record of every machine the shop has handled —
+    # a host that erases it on a timer contradicts the premise of the schema.
+    # Moving to a paid plan is a dropdown on the Render dashboard and does not
+    # change one line of this file. docs/deploy.md carries the date.
+    plan: free
 
 services:
   # ---------------------------------------------------------------------------
@@ -40,7 +49,7 @@ services:
     type: web
     runtime: docker
     region: singapore
-    plan: 0.5c-512mb
+    plan: free
     repo: https://github.com/michellawidatech/macbook_nusantara
     branch: rebuild/inc1-interaction-kit
     dockerfilePath: ./Dockerfile
@@ -91,7 +100,7 @@ services:
     type: worker
     runtime: docker
     region: singapore
-    plan: 0.5c-512mb
+    plan: free
     repo: https://github.com/michellawidatech/macbook_nusantara
     branch: rebuild/inc1-interaction-kit
     dockerfilePath: ./Dockerfile
@@ -121,7 +130,7 @@ services:
     type: web
     runtime: docker
     region: singapore
-    plan: 0.5c-512mb
+    plan: free
     repo: https://github.com/michellawidatech/macbook_nusantara
     branch: rebuild/inc1-interaction-kit
     dockerfilePath: ./Dockerfile
