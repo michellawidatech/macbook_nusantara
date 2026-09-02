@@ -26,6 +26,7 @@ import { securityHeaders } from "./middleware/securityHeaders.js";
 import { cors } from "./middleware/cors.js";
 import { authRouter } from "./routes/auth.js";
 import { katalogRouter } from "./routes/katalog.js";
+import { inboundRouter } from "./routes/inbound.js";
 import { chatRouter } from "./routes/chat.js";
 import { inboxRouter } from "./routes/inbox.js";
 import { reservationsRouter } from "./routes/reservations.js";
@@ -129,11 +130,15 @@ export function createApp(deps: CreateAppDeps): Express {
   api.use("/chat", chatRouter({ db, logger, anthropic: deps.anthropic ?? {} }));
   api.use("/inbox", inboxRouter(db));
   api.use("/reservations", reservationsRouter(db));
+  api.use("/inbound", inboundRouter(db));
 
   // Owner-only, and the guard is passed in rather than applied here so the
   // mount keeps saying who may reach it. Wired since S6 for the rejection; the
   // body answered a hardcoded empty list until the router behind it was real.
-  api.use("/kontrol", kontrolRouter({ db, requireOwner: requireOwner(logger) }));
+  api.use(
+    "/kontrol",
+    kontrolRouter({ db, requireOwner: requireOwner(logger) }),
+  );
 
   app.use("/api", api);
   app.use(notFoundHandler);

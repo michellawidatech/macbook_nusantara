@@ -32,6 +32,17 @@ import { resolveDatabaseUrl, type ResolvedDatabase } from "./environment.js";
 
 export { Prisma, PrismaClient };
 
+/**
+ * The schema's own enums, re-exported so callers outside this package can pin
+ * a literal list to one — `["NEW","A","B","C"] satisfies readonly Grade[]` is
+ * what stops an API route inventing a grade the database has never heard of.
+ */
+export type {
+  Grade,
+  UnitStatus,
+  UnitEventType,
+} from "../generated/client/index.js";
+
 /** A transaction handle: the client, minus the things you cannot call inside one. */
 export type Tx = Prisma.TransactionClient;
 
