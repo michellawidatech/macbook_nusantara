@@ -53,6 +53,22 @@ Two things it is worth checking never regress:
   worker listens on nothing, so it has no health check and Railway should not be
   given a port for it.
 
+## The `railway*.json` files are on a deadline
+
+Railway's CLI warns that Config as Code — `railway.json` / `railway.toml` — is
+deprecated in favour of Infrastructure as Code, a `.railway/railway.ts` the CLI
+reads instead, and that **existing files keep working until 2026-12-01**.
+
+They are still what this repo carries, for one reason: the three services are
+described accurately by them today, and the replacement could not be written
+against a real project to check, because the account's trial had expired before
+one could be created. Guessing at an API and committing it unrun is how a deploy
+file becomes a thing nobody trusts.
+
+When the project exists, `railway config migrate` translates all three, and
+`railway config plan` shows what it would change before anything is applied.
+Until then these files work and the date is the reminder.
+
 ## Creating the database
 
 Railway's PostgreSQL arrives as one superuser and a database called `railway`.

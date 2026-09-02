@@ -24,3 +24,6 @@ packages/db/generated/
 *.swp
 
 
+
+# Local Netlify folder
+.netlify
