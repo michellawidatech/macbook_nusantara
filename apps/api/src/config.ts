@@ -42,7 +42,12 @@ export function loadConfig(env: Record<string, string | undefined>): ApiConfig {
   const nodeEnv = env["NODE_ENV"] ?? "development";
   return {
     env: nodeEnv,
-    port: int(env["API_PORT"], 4000),
+    // `API_PORT` is this repo's own name and wins, so nothing about local
+    // development changes. `PORT` is the fallback because every PaaS — Railway
+    // included — assigns the port at runtime and injects it under that name;
+    // without this the container would bind 4000, the platform would health-check
+    // the port it assigned, and the deploy would fail as "no response".
+    port: int(env["API_PORT"] ?? env["PORT"], 4000),
     cookieName: env["SESSION_COOKIE_NAME"] ?? "nusantara_token",
     // Secure by default; only an explicit opt-out turns it off, so a
     // misconfigured production cannot quietly serve cookies over HTTP.

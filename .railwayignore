@@ -1,0 +1,22 @@
+# What `railway up` must not upload from this machine.
+#
+# The CLI already honours .gitignore, and `*.env` is the first rule there, so
+# secrets/webhook-credentials.env is excluded twice over. It is named again here
+# for the same reason .dockerignore names it: the file is on the disk whatever
+# git thinks, this is an upload to a third party, and a rule that only exists
+# somewhere else is a rule one refactor away from not existing.
+secrets/
+
+.git/
+.github/
+.claude/
+.turbo/
+node_modules/
+**/node_modules/
+**/dist/
+**/coverage/
+**/*.tsbuildinfo
+packages/db/generated/
+docs/
+reference/
+.DS_Store

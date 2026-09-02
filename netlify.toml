@@ -1,0 +1,59 @@
+# The SPA on Netlify. The API and the database are on Railway; see docs/deploy.md.
+#
+# Netlify rather than GitHub Pages, and the reason is the session cookie.
+# `/api` and `/auth` have to answer on the SPA's own origin — that is what makes
+# `SameSite=Lax` work and what lets the OIDC redirect chain land back where it
+# started (apps/api/src/auth/auth0.ts says the same about the dev proxy). Pages
+# serves static files and cannot rewrite to another host, so on Pages the SPA
+# would have to call Railway cross-origin: `SameSite=None`, a CORS allowance,
+# and the session cookie attached to every third-party request to that host.
+# The redirects themselves are generated at build time from `API_ORIGIN` —
+# apps/web/scripts/netlify-redirects.mjs explains why they are not in this file.
+
+[build]
+  # The repository root: this is a pnpm workspace, and `apps/web` depends on
+  # `@nusantara/domain` through it. A base of "apps/web" installs one project
+  # against a lockfile written for eleven and fails resolving the workspace link.
+  base = "."
+  publish = "apps/web/dist"
+  # No `pnpm install` here: Netlify runs one itself when it finds a
+  # `pnpm-lock.yaml` in the base directory, which is why the base is the root
+  # and not `apps/web` — set to the sub-directory, Netlify finds no lockfile,
+  # decides the project is npm, and the install fails on `workspace:*`.
+  # pnpm sets `--frozen-lockfile` on its own under CI.
+  command = "pnpm --filter @nusantara/web build && node apps/web/scripts/netlify-redirects.mjs"
+
+[build.environment]
+  # 20 is the floor this repo declares; 22 is what the API image runs, and one
+  # version across both is one fewer difference between the two halves.
+  NODE_VERSION = "22"
+  # pnpm's own version is NOT set here. Netlify runs Corepack, which reads
+  # package.json's `packageManager` field — pnpm@9.15.0, the version the
+  # lockfile was written by. Naming it a second time is a second place to
+  # forget when it is bumped.
+
+# Hashed filenames, so the content at a given URL can never change.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# The one unhashed file. Without this it is cached and a deploy ships new assets
+# that nobody's browser asks for.
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    # No Content-Security-Policy here, deliberately. antd 6 injects component
+    # styles as <style> elements at runtime, so any policy worth having needs a
+    # nonce or 'unsafe-inline', and the second is a policy that permits what it
+    # exists to prevent. The API sets its own headers on its own responses
+    # (apps/api/src/middleware/securityHeaders.ts); adding a guessed one here
+    # would break the app in production and nowhere else.

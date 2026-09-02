@@ -76,11 +76,17 @@ promotion; the environments are where per-environment secrets live.
 
 ## What is deliberately missing
 
-**There are no deploy steps.** The four apps (`api` :4000, `web` :3000,
-`whatsapp-webhook` :3001, `worker`) have no hosting target yet — no Dockerfile,
-no compose file, no PaaS config, no server. Rather than a placeholder job that
-reports green without shipping anything, the environments exist and the deploy
-step is absent until there is somewhere to deploy to.
+**Only `monitor` still has no hosting target.** The other four got one on
+2026-09-02 and `docs/deploy.md` describes them: `web` on Netlify, and `api`,
+`worker` and `whatsapp-webhook` on Railway as three services off one image, with
+a `Dockerfile`, a `netlify.toml` and three `railway*.json` files at the root.
+`monitor` is a package with a typecheck and no server to start.
+
+**CI still does not deploy.** `.github/workflows/ci.yml` records a deployment
+against the matching GitHub Environment and stops there — the gates are the
+promotion, and pushing the image is a command somebody runs. Same reasoning as
+the migrations: `prisma migrate status` lies in this project, so the step that
+would report a bad deploy is the one that cannot be trusted to.
 
 **`prod` has no required-reviewer gate.** That protection rule needs a paid plan
 on a private repository, and this one is GitHub Free. What stands in for it is
