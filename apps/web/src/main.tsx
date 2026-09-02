@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App.js";
+import { LocaleProvider } from "./i18n/LocaleProvider";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import "./styles/global.css";
 
@@ -18,11 +19,25 @@ if (root === null) throw new Error("#root not found");
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <BrowserRouter>
-          <App />
-        </BrowserRouter>
-      </ThemeProvider>
+      {/* Above ThemeProvider, not beside it: ThemeProvider calls
+          useAntdLocale() in its own body to feed the app's one
+          ConfigProvider, and that hook reads this context. */}
+      <LocaleProvider>
+        <ThemeProvider>
+          {/* No ErrorBoundary here, and the omission is the point.
+
+              One around the router catches the same throws and answers them the
+              worst possible way: the fallback replaces the sidebar, the account
+              menu and the router itself, so a bad row on Inventory takes every
+              other page with it and the only way out is a manual reload. The
+              boundary belongs where the page is — `AppLayout` wraps its
+              `Outlet` in one and feeds it the pathname as a reset key, so the
+              shell survives, and navigating away is enough to recover. */}
+          <BrowserRouter>
+            <App />
+          </BrowserRouter>
+        </ThemeProvider>
+      </LocaleProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

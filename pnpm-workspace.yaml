@@ -1,5 +1,4 @@
-# The workspace is exactly the two build trees. `reference/` is read-only source
-# from the previous build (see CLAUDE.md) and must never resolve as a package.
+# The workspace is exactly the two build trees.
 packages:
   - "apps/*"
   - "packages/*"

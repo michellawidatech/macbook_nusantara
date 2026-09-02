@@ -12,7 +12,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "../src/client.js";
-import { seed, SYSTEM_STAFF_ID } from "../src/seed.js";
+import { AGENT_STAFF_ID, seed, SYSTEM_STAFF_ID } from "../src/seed.js";
 import { isClean, reconcile } from "../src/reconcile.js";
 
 const URL =
@@ -59,6 +59,22 @@ describe("the seeded shop", () => {
     });
     // 08 §8: backfilled events are attributable and the account cannot be used.
     expect(system.active).toBe(false);
+  });
+
+  it("keeps the chat agent's own principal, which it would otherwise truncate away", async () => {
+    // The migration inserts this row so it exists in production, where the
+    // seed never runs. But `seed()` truncates every table, so without the same
+    // row here a seeded database has no principal for the agent to attribute a
+    // reservation hold to, and every booking fails on a foreign key.
+    const agent = await db.staff.findUniqueOrThrow({
+      where: { id: AGENT_STAFF_ID },
+    });
+    expect(agent.username).toBe("agent");
+    // Never logs in, never offered in a staff picker.
+    expect(agent.active).toBe(false);
+    // And it is NOT the system row: a report must be able to tell a bot's
+    // action apart from reconstructed history.
+    expect(AGENT_STAFF_ID).not.toBe(SYSTEM_STAFF_ID);
   });
 
   it("gives every unit an arrival event", async () => {

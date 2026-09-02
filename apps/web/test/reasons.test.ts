@@ -83,6 +83,8 @@ describe("ensureReason", () => {
       reasonId,
       at: new Date().toISOString(),
       staff: "Michella",
+      kind: "OUT",
+      batchId: "adjb-test",
     });
 
     // Every adjustment resolves to a real reason — no orphans.

@@ -1,5 +1,6 @@
 import { Button, Card, Flex, Typography } from "antd";
 import { LoginOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 
 /**
  * Sign in.
@@ -12,16 +13,20 @@ import { LoginOutlined } from "@ant-design/icons";
  * `/auth/login` is proxied to the API in development (apps/web/vite.config.ts)
  * and served by the same origin in production, which is what keeps the session
  * cookie same-origin.
+ *
+ * There is deliberately no language switch here. It lives in the account menu,
+ * and nobody picks a language before they have signed in.
  */
 export function LoginPage() {
+  const { t } = useTranslation();
   return (
     <Flex align="center" justify="center" style={{ minHeight: "100vh" }}>
       <Card style={{ width: 360 }}>
         <Typography.Title level={4} style={{ marginTop: 0 }}>
-          Nusantara POS
+          {t("app.name", "Macbook Nusantara")}
         </Typography.Title>
         <Typography.Paragraph type="secondary">
-          Sign in with your staff account.
+          {t("login.subtitle", "Sign in with your staff account.")}
         </Typography.Paragraph>
         <Button
           type="primary"
@@ -29,7 +34,7 @@ export function LoginPage() {
           block
           href="/auth/login"
         >
-          Sign in
+          {t("login.signIn", "Sign in")}
         </Button>
       </Card>
     </Flex>

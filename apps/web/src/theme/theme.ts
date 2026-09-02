@@ -1,11 +1,14 @@
 import { theme, type ThemeConfig } from "antd";
 import {
+  BRAND_DEEP,
   FONT_FAMILY,
   FONT_FAMILY_CODE,
   LAYOUT,
+  NAV,
   RADIUS,
   SEED,
   SPACE,
+  SURFACE,
   TYPE,
   WEIGHT,
   type ResolvedColorScheme,
@@ -60,7 +63,18 @@ function seedTokens(): ThemeConfig["token"] {
 export function buildTheme(scheme: ResolvedColorScheme): ThemeConfig {
   const algorithm =
     scheme === "dark" ? theme.darkAlgorithm : theme.defaultAlgorithm;
-  const base: ThemeConfig = { token: seedTokens(), algorithm };
+  const surface = SURFACE[scheme];
+  const base: ThemeConfig = {
+    token: {
+      ...seedTokens(),
+      // The page behind the cards, tinted to the mark's hue — see SURFACE.
+      // Set on the SEED layer rather than as a Layout component override so
+      // that everything antd derives from it (the alternate fill a table
+      // header composites, Empty's illustration ground) follows it.
+      colorBgLayout: surface.layout,
+    },
+    algorithm,
+  };
 
   // Resolve the base theme so the component layer below can refer to derived
   // colours by role. `getDesignToken` is antd's supported way to read tokens
@@ -71,20 +85,29 @@ export function buildTheme(scheme: ResolvedColorScheme): ThemeConfig {
     ...base,
     components: {
       /**
-       * The shell. Ant Design Pro puts the nav on the same surface as the
-       * content and separates them with a hairline rather than a colour
-       * change — calmer than antd's default navy sider, and it survives the
-       * flip to dark mode without a second set of colours.
+       * The shell, in three tiers: nav, page, content.
+       *
+       * The nav is the mark's own dark green (owner ask 2026-09-01). It was a
+       * 4%-saturation tint of that green from 2026-08-26, and the note here
+       * used to argue against going the whole way: "a Menu token changed for
+       * the sider is a Menu token changed for every dropdown in the app". That
+       * hazard is real and is still respected — it is simply not solved here.
+       * `AppLayout` wraps the nav `<Menu>` alone in a nested `ConfigProvider`
+       * built from `NAV` in tokens.ts, so the dark treatment reaches that one
+       * element and nothing else. This block only paints the ground.
+       *
+       * `triggerColor` follows the ground rather than `colorText`: on a dark
+       * sider the body colour is near-black on near-black.
        */
       Layout: {
         headerHeight: LAYOUT.headerHeight,
-        headerBg: t.colorBgContainer,
+        headerBg: surface.sider,
         headerPadding: 0,
-        siderBg: t.colorBgContainer,
-        lightSiderBg: t.colorBgContainer,
-        bodyBg: t.colorBgLayout,
-        triggerBg: t.colorBgContainer,
-        triggerColor: t.colorText,
+        siderBg: surface.sider,
+        lightSiderBg: surface.sider,
+        bodyBg: surface.layout,
+        triggerBg: surface.sider,
+        triggerColor: NAV.text,
       },
 
       /**
@@ -141,6 +164,64 @@ export function buildTheme(scheme: ResolvedColorScheme): ThemeConfig {
       Table: {
         headerSplitColor: "transparent",
         borderRadiusLG: RADIUS.surface,
+      },
+    },
+  };
+}
+
+/**
+ * The nav Menu's theme, for the nested `ConfigProvider` around it alone.
+ *
+ * The owner asked for a dark green nav with a white selected pill and dark
+ * green text in it (2026-09-01). Every value it takes is a Menu token, and
+ * that is exactly the hazard `buildTheme` warns about: a Menu token set in the
+ * app theme is a Menu token set for every Dropdown, Select and context menu in
+ * the app, all of which sit on white cards where light-on-green would be
+ * invisible.
+ *
+ * So the override is scoped by the tree instead of by the token. `AppLayout`
+ * puts this on a `ConfigProvider` wrapping the nav `<Menu>` element and
+ * nothing else — deliberately not the whole Sider, because the account
+ * Dropdown that lives in the sider's foot renders a Menu of its own on a
+ * white popup surface, and it must keep the app theme.
+ *
+ * Returned as a whole `ThemeConfig` rather than merged into the caller's:
+ * antd's nested ConfigProvider already inherits everything not restated, so
+ * the component layer here is the entire delta.
+ */
+export function navTheme(): ThemeConfig {
+  return {
+    components: {
+      Menu: {
+        itemBg: "transparent",
+        subMenuItemBg: "transparent",
+        itemBorderRadius: RADIUS.control,
+        itemMarginInline: SPACE.sm,
+        itemHeight: 40,
+        collapsedWidth: LAYOUT.siderCollapsedWidth,
+        activeBarWidth: 0,
+        iconSize: TYPE.md,
+
+        // The inversion the owner asked for: a white pill with the mark's
+        // green on it. 8.6:1 — the highest-contrast pairing in the app, which
+        // is right for the one control that says where you are.
+        itemSelectedBg: NAV.selectedBg,
+        itemSelectedColor: BRAND_DEEP,
+
+        // White at 85% rather than a neutral grey. A grey over a saturated
+        // green reads as dirt; this reads as "not selected".
+        itemColor: NAV.text,
+        itemHoverBg: NAV.hoverBg,
+        itemHoverColor: NAV.textStrong,
+
+        // A collapsed section whose child is the current page. antd would
+        // paint it `colorPrimary`, which on this ground is green on green.
+        subMenuItemSelectedColor: NAV.textStrong,
+
+        // The expand/collapse chevron, and the ground behind an open section's
+        // children. Left to the app theme, both are drawn for a light sider.
+        itemDisabledColor: "rgba(255, 255, 255, 0.35)",
+        popupBg: BRAND_DEEP,
       },
     },
   };

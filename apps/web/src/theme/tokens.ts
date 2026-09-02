@@ -91,8 +91,17 @@ export const LAYOUT = {
    * on a dense console spends height that the content wants.
    */
   headerHeight: 56,
-  /** 208px expanded sider — Pro's width, wide enough for a two-word nav label. */
-  siderWidth: 208,
+  /**
+   * 224px expanded sider.
+   *
+   * Was 208 — Ant Design Pro's width — until the brand mark landed beside the
+   * product name on 2026-08-26 and left 125px for a wordmark that needs 153.
+   * The extra 16px also un-truncates the longest nav leaf, "Inventory & Stock
+   * Movement", which had been rendering as "Inventory & Stock…" since the
+   * merge. `--nusantara-content-left` is published from this constant, so the
+   * footer toolbar follows it without being told.
+   */
+  siderWidth: 224,
   /** 48px collapsed sider — icons only, matching Pro. */
   siderCollapsedWidth: 48,
   /** Width past which content stops stretching and starts centring. */
@@ -107,6 +116,39 @@ export const LAYOUT = {
    * literals in two files the phone layout was where they drifted.
    */
   contentPadding: { compact: 16, comfortable: 24 },
+  /**
+   * How wide a form is allowed to get, and the measure every one of them is
+   * centred within.
+   *
+   * Owner decision 2026-08-26: "make all forms centered, don't stick to left".
+   * Every form on this app was capped at some width between 420 and 720 and
+   * then left flush against the left edge of a 1600px column, so on a shop
+   * laptop a settings panel was a narrow strip in the corner with two thirds of
+   * the screen empty beside it.
+   *
+   * 720 rather than the widest of the old values: a form is read top to bottom
+   * and a line of input much past that is one the eye has to travel along. The
+   * caps that were NARROWER than this stay narrow — this is a ceiling and a
+   * centring rule, not a resize.
+   *
+   * Pair it with `FORM_CENTRE` below, which is what a caller actually spreads
+   * onto a style. Both exist because a couple of callers need only the width.
+   */
+  formMaxWidth: 720,
+} as const;
+
+/**
+ * The style that centres a form. Spread onto the `<Form>` or the `<Card>` that
+ * wraps it.
+ *
+ * `width: 100%` matters as much as the auto margins: without it the box shrinks
+ * to its content on a short form and the "centring" centres something that is
+ * already only as wide as one field.
+ */
+export const FORM_CENTRE = {
+  maxWidth: LAYOUT.formMaxWidth,
+  width: "100%",
+  marginInline: "auto",
 } as const;
 
 /**
@@ -149,14 +191,128 @@ export const Z = {
  */
 export const SEED = {
   /**
-   * antd v6's blue. Ant Design Pro still ships v4's `#1890ff`; we take v6's
-   * value so the CMS matches the component library it is actually built on.
+   * Emerald 700.
+   *
+   * Was emerald 600 (`#059669`) until the owner asked for "a bit darker"
+   * (2026-09-01). One step down the same ramp rather than a new hue: the
+   * whole app's greens are derived from this seed, so moving it moves the
+   * button, the tags, the links and the selected states together — which is
+   * the point of it being a seed. It also buys contrast the old value did not
+   * have: white on `#047857` measures 5.3:1, clearing AA for body text, where
+   * emerald 600 sat at 3.9:1 and only ever cleared the large-text bar.
    */
-  primary: "#059669",
+  primary: "#047857",
   success: "#52c41a",
   warning: "#faad14",
   error: "#ff4d4f",
-  info: "#059669",
+  info: "#047857",
+} as const;
+
+/**
+ * The gold accent, and the two ends of the primary button's gradient.
+ *
+ * Deliberately NOT antd seeds. A seed is something antd derives eight steps
+ * from, and neither of these is: the gradient is a decoration painted over
+ * `colorPrimary` in global.css, and the gold is a spot colour, never a
+ * surface. Feeding either to `ConfigProvider` would generate hover and border
+ * steps nothing asks for.
+ *
+ * The gold is `#ffcd30` by owner decision (2026-08-24) and is only ever used
+ * ON the green — as the focus ring on a primary button, where it clears 3:1
+ * against the button beneath it. On the white page it measures about 1.7:1,
+ * far under AA, which is why the owner's "never body text" rule is not just a
+ * preference: there is no size at which gold text on this background is
+ * readable.
+ */
+export const ACCENT = {
+  gold: "#ffcd30",
+  /** Emerald 600 → 800, so the gradient still runs through `SEED.primary`. */
+  gradientFrom: "#059669",
+  gradientTo: "#065f46",
+} as const;
+
+/**
+ * The mark's own green. The browser chrome, the mark's ground — and, since
+ * 2026-09-01, the nav column itself.
+ */
+export const BRAND_DEEP = "#0f5648";
+
+/**
+ * The surfaces, and the reason this app is not white-on-grey.
+ *
+ * Owner decision 2026-08-26: "make the UI less white-grey and add more of the
+ * green, or make it very clean with a light grey background." These do both at
+ * once rather than choosing, because the thing that made the old palette feel
+ * flat was not the lightness — it was that every neutral was a pure grey with
+ * no relation to the brand at all, so the only colour on screen was one green
+ * button.
+ *
+ * Every value here is the SAME hue as the mark's green (about 165°), pulled
+ * down to a saturation between 2% and 6%. That is low enough to read as a
+ * neutral and high enough that the page feels warmed by the brand rather than
+ * printed on newsprint. The green button and the gold mark now sit on ground
+ * that belongs to them.
+ *
+ * `sider` is deliberately a shade DEEPER than `layout`, and content cards stay
+ * pure white. That gives three tiers — chrome, page, content — where there
+ * used to be two, so the nav reads as a frame instead of as more page.
+ *
+ * Dark mode is nudged, not rebuilt: antd's dark algorithm already produces the
+ * depth, and these only tint its near-blacks the same 165° so the two schemes
+ * are recognisably the same product.
+ */
+export const SURFACE = {
+  light: {
+    /** The page behind the cards. */
+    layout: "#f1f5f3",
+    /** The nav column. Dark green since 2026-09-01 — see NAV. */
+    sider: BRAND_DEEP,
+    /** Table headers and other "alternate row" fills. */
+    alt: "#f4f8f6",
+  },
+  dark: {
+    layout: "#0d1412",
+    /** One step darker than the light sider, so the two schemes still differ. */
+    sider: "#0b3f35",
+    alt: "#16211d",
+  },
+} as const;
+
+/**
+ * The nav column's own colours (owner ask 2026-09-01).
+ *
+ * ## Why this exists as a separate block
+ *
+ * `theme.ts` used to argue against a dark sider, and the argument was about
+ * blast radius rather than taste: "a Menu token changed for the sider is a
+ * Menu token changed for every dropdown in the app". That is still true, and
+ * it is why none of this reaches `buildTheme`'s component layer. `AppLayout`
+ * wraps the nav `<Menu>` — that element alone, not the sider, and not the
+ * account Dropdown hanging off it — in a nested `ConfigProvider` built from
+ * these values. Everything else in the app keeps the light Menu.
+ *
+ * ## The values
+ *
+ * The ground is the mark's own green, so the sider finally carries the brand
+ * rather than a 4%-saturation hint of it. The selected item inverts — white
+ * pill, dark green label — which is the owner's ask and also the only
+ * treatment that clears AA on this ground: `BRAND_DEEP` on white measures
+ * 8.6:1, where a tinted pill with light text sat under 3:1.
+ *
+ * The idle label is white at 85%, not a grey: a neutral grey over a saturated
+ * green reads as dirt. 85% on `BRAND_DEEP` is 7.2:1, comfortably AA.
+ */
+export const NAV = {
+  /** Idle label and icon. */
+  text: "rgba(255, 255, 255, 0.85)",
+  /** Hover label, and the brand wordmark at the top of the column. */
+  textStrong: "#ffffff",
+  /** The line under the brand and above the account foot. */
+  border: "rgba(255, 255, 255, 0.16)",
+  /** Hover ground — a lift off the green rather than a second colour. */
+  hoverBg: "rgba(255, 255, 255, 0.12)",
+  /** The selected pill, and the New Transaction button beside the account. */
+  selectedBg: "#ffffff",
 } as const;
 
 /**

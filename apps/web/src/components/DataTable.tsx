@@ -1,18 +1,22 @@
 /**
- * The app's one list surface: a table that loads as you scroll, and stops
- * being a table on a phone.
+ * The app's one list surface: a paginated table that stops being a table on a
+ * phone.
  *
  * Two problems this solves, both of which every list page had independently.
  *
- * 1. **Pagination.** antd's default pager puts a numbered footer under every
- *    table. On a phone that footer is a row of 32px tap targets a thumb misses,
- *    and it makes "how much stock do we hold" a paging exercise. This renders a
- *    growing window instead: `pageSize` rows, then another `pageSize` each time
- *    a sentinel below the last row enters the viewport. The rows already
- *    rendered stay rendered — this is progressive disclosure, not
- *    virtualisation, which is the right trade at our row counts (the mock seed
- *    is 5 000 units, and 5 000 DOM rows is a real cost only if you ever scroll
- *    to them).
+ * 1. **Pagination.** This used to render a growing window — `pageSize` rows,
+ *    then another `pageSize` each time a sentinel scrolled into view. It was
+ *    replaced on 2026-08-26 (owner decision) by an ordinary pager with a page
+ *    size the user picks. The scroll window was pleasant to use and hopeless to
+ *    work with: there was no way to say "show me 100 at a time", no way to tell
+ *    how far through a list you were, and no way to get back to a row you had
+ *    scrolled past except scrolling past it again. A pager answers all three,
+ *    and `showTotal` puts the count on screen where it used to take a scroll to
+ *    the end to learn.
+ *
+ *    The page and the page size live HERE rather than in antd's Table, because
+ *    the card layout below has no Table to keep them in and the two modes must
+ *    not disagree about which page you are on when a tablet rotates.
  *
  * 2. **Columns on a 375px screen.** A seven-column stock table on a phone can
  *    either scroll sideways — which hides the columns that matter behind a
@@ -24,30 +28,42 @@
  *    Nothing is declared twice, so a column added for the desktop table shows
  *    up on the phone without anyone remembering to add it there.
  *
- * A caller keeps writing ordinary antd `columns`. Pages that need a real grid
- * on a phone — the line-item editors inside the stock forms, where the columns
- * ARE the form — keep using `<Table>` directly and are unaffected.
+ * A caller keeps writing ordinary antd `columns`. A table whose columns ARE the
+ * form — the line-item editors inside the stock and inbound screens — wants
+ * `EditableTable` instead: same idea, but the stacked layout is labelled
+ * full-width FIELDS rather than label/value readings, and it owns the add-row
+ * button and its keyboard shortcut. The two share `tableCells.ts`.
  *
- * Known limit: a column's `sorter` and `filters` are the TABLE's controls —
- * they live in its header — so they do nothing in card mode. A list whose
- * filtering matters on a phone should filter above the list, in a `FilterBar`,
- * where the control exists in both layouts.
+ * Known limit: a column's `sorter` and `filters` are the TABLE's controls — they
+ * live in its header — so they do nothing in card mode. `ProTable` is what
+ * handles that: it filters the rows itself and hands this component a list that
+ * is already narrowed, so a filter picked on a desktop survives a rotation to
+ * cards.
  */
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type Key,
-  type ReactNode,
-} from "react";
-import { Card, Empty, Flex, Spin, Table, Typography, theme } from "antd";
+import { useEffect, useMemo, useState } from "react";
+import { Card, Empty, Flex, Pagination, Table, Typography, theme } from "antd";
 import type { TableProps } from "antd";
 import { SPACE, TYPE, WEIGHT } from "../theme/tokens";
 import { useLayoutMode } from "../layouts/useLayoutMode";
+import {
+  cellContent,
+  isActionColumn,
+  keyOf,
+  leafColumns,
+  titleText,
+  type AntColumns,
+} from "./tableCells";
+import { useTranslation } from "react-i18next";
 
-type AntColumns<T> = NonNullable<TableProps<T>["columns"]>;
-type AntColumn<T> = AntColumns<T>[number];
+/**
+ * What the size changer offers.
+ *
+ * 10 is a screenful on a phone, 20 fills a laptop, and 100 is the "just show me
+ * everything" option a stock take wants. 500 is deliberately absent: these
+ * tables render every cell, and five hundred rows of `MoneyInput` is a visible
+ * pause on the shop's own hardware.
+ */
+export const PAGE_SIZES = [10, 20, 50, 100] as const;
 
 export interface DataTableProps<T> extends Omit<
   TableProps<T>,
@@ -56,20 +72,20 @@ export interface DataTableProps<T> extends Omit<
   dataSource: readonly T[];
   columns: AntColumns<T>;
   /**
-   * Rows per load. 25 fills a laptop viewport and roughly two phone screens,
-   * so the first scroll is what triggers the second load rather than the
-   * sentinel being visible on arrival.
+   * Rows per page before the user changes it. 20 fills a laptop viewport
+   * without making the pager feel like it is doing nothing.
    */
   pageSize?: number;
+  /** Hide the pager entirely — for a table that is a form, not a list. */
+  paginated?: boolean;
   /**
-   * Change this to send the window back to the first page — a search string, a
-   * filter value. Without it the window only ever grows, which is right when
-   * the underlying data changed under the user and wrong when the user asked a
-   * new question.
+   * Change this to send the pager back to page one — a search string, a filter
+   * value. Without it, narrowing a list while on page 7 leaves you on a page
+   * that no longer exists.
    *
    * Deliberately NOT derived from `dataSource` identity: most callers build
    * their rows with an inline `.filter()`, so identity changes on every render
-   * of the parent and a reset keyed on it would snap the list back to the top
+   * of the parent and a reset keyed on it would snap the list back to page one
    * every time anything in the store moved.
    */
   resetKey?: unknown;
@@ -80,72 +96,11 @@ export interface DataTableProps<T> extends Omit<
   cards?: boolean;
 }
 
-/** Reads a column's raw cell value, honouring antd's array dataIndex form. */
-function cellValue<T>(record: T, dataIndex: unknown): unknown {
-  if (dataIndex === undefined || dataIndex === null) return undefined;
-  const path = Array.isArray(dataIndex) ? dataIndex : [dataIndex];
-  return path.reduce<unknown>(
-    (acc, k) =>
-      acc == null ? undefined : (acc as Record<string, unknown>)[String(k)],
-    record,
-  );
-}
-
-/**
- * What a column would paint in this row.
- *
- * `render` may return either a node or antd's `{ children, props }` cell
- * descriptor (the rowSpan/colSpan form). The descriptor is meaningless outside
- * a grid, so card mode keeps the children and drops the spans.
- */
-function cellContent<T>(
-  col: AntColumn<T>,
-  record: T,
-  index: number,
-): ReactNode {
-  const c = col as {
-    dataIndex?: unknown;
-    render?: (v: unknown, r: T, i: number) => unknown;
-  };
-  const value = cellValue(record, c.dataIndex);
-  const out = c.render ? c.render(value, record, index) : value;
-  if (
-    out != null &&
-    typeof out === "object" &&
-    !Array.isArray(out) &&
-    "children" in out
-  ) {
-    return (out as { children?: ReactNode }).children ?? null;
-  }
-  return out as ReactNode;
-}
-
-/** Column groups have no meaning in a card; flatten to the leaves. */
-function leafColumns<T>(columns: AntColumns<T>): AntColumn<T>[] {
-  return columns.flatMap((c) =>
-    "children" in c && Array.isArray(c.children)
-      ? (c.children as AntColumn<T>[])
-      : [c],
-  );
-}
-
-function keyOf<T>(
-  record: T,
-  index: number,
-  rowKey: TableProps<T>["rowKey"],
-): Key {
-  if (typeof rowKey === "function") return rowKey(record, index);
-  if (typeof rowKey === "string") {
-    const k = cellValue(record, rowKey);
-    if (k != null) return String(k);
-  }
-  return index;
-}
-
 export function DataTable<T extends object>({
   dataSource,
   columns,
-  pageSize = 25,
+  pageSize: initialPageSize = 20,
+  paginated = true,
   resetKey,
   cards = true,
   rowKey,
@@ -154,75 +109,89 @@ export function DataTable<T extends object>({
   ...rest
 }: DataTableProps<T>) {
   const { compact } = useLayoutMode();
+  const { t } = useTranslation();
   const {
     token: { colorTextSecondary, colorBorderSecondary },
   } = theme.useToken();
 
-  const [limit, setLimit] = useState(pageSize);
-  const sentinel = useRef<HTMLDivElement>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(initialPageSize);
 
   useEffect(() => {
-    setLimit(pageSize);
-  }, [resetKey, pageSize]);
+    setPage(1);
+  }, [resetKey]);
 
-  const rows = useMemo(() => dataSource.slice(0, limit), [dataSource, limit]);
-  const more = dataSource.length > rows.length;
+  // A page that no longer exists — the list shrank under a filter while the
+  // user was on page 7 — shows nothing at all, with a pager that offers no way
+  // back. Clamping during render rather than in an effect avoids painting that
+  // empty frame first.
+  const lastPage = Math.max(1, Math.ceil(dataSource.length / pageSize));
+  const current = Math.min(page, lastPage);
 
-  // `limit` is a dependency on purpose. Re-observing after each load re-fires
-  // the callback while the sentinel is STILL in view, which is what keeps a
-  // tall viewport filling instead of stalling one page in: an observer left
-  // attached only reports intersection *changes*, and appending rows below a
-  // sentinel that never left the screen is not one. It terminates because
-  // every pass adds `pageSize` rows to a finite list, and `more` gates it.
-  useEffect(() => {
-    const el = sentinel.current;
-    if (!el || !more) return;
-    // jsdom and older WebViews have no observer. Showing everything beats
-    // showing the first 25 rows with no way to reach row 26.
-    if (typeof IntersectionObserver === "undefined") {
-      setLimit(dataSource.length);
-      return;
-    }
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting))
-          setLimit((n) => n + pageSize);
-      },
-      // Start the next load a screenful early, so the rows are there before
-      // the user scrolls to where they would have been missing.
-      { rootMargin: "300px" },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [more, limit, pageSize, dataSource.length]);
+  const rows = useMemo(
+    () =>
+      paginated
+        ? dataSource.slice((current - 1) * pageSize, current * pageSize)
+        : dataSource.slice(),
+    [dataSource, current, pageSize, paginated],
+  );
 
   const leaves = useMemo(() => leafColumns(columns), [columns]);
 
   // A column with no title is this codebase's actions column. In a card those
   // belong at the bottom, unlabelled — a "" label above a row of buttons reads
   // as a rendering bug.
-  const titled = leaves.filter((c) => c.title !== undefined && c.title !== "");
-  const untitled = leaves.filter(
-    (c) => c.title === undefined || c.title === "",
-  );
+  const titled = leaves.filter((c) => !isActionColumn(c));
+  const untitled = leaves.filter(isActionColumn);
   const [heading, ...fields] = titled;
 
-  const footer = (
-    // The sentinel must stay mounted while `more` is true — it is what the
-    // observer watches. The count line replaces it once the list is whole, so
-    // the end of a list is a statement rather than an absence.
-    <div ref={sentinel} style={{ paddingBlock: SPACE.md, textAlign: "center" }}>
-      {more ? (
-        <Spin size="small" />
-      ) : dataSource.length > pageSize ? (
-        <Typography.Text
-          style={{ fontSize: TYPE.sm, color: colorTextSecondary }}
-        >
-          {dataSource.length} rows — that's all of them
-        </Typography.Text>
-      ) : null}
-    </div>
-  );
+  const onPageChange = (next: number, nextSize: number) => {
+    // antd fires this for a size change too, with a `next` it has already
+    // rebased. Trusting it keeps the first visible row roughly where it was
+    // rather than jumping to the top on every size change.
+    setPage(next);
+    setPageSize(nextSize);
+  };
+
+  /**
+   * The pager, shared by both layouts so the two cannot drift.
+   *
+   * `showTotal` is the reason the old scroll window's "N rows" line is not
+   * missed: the count is on screen at all times instead of only once the list
+   * has been scrolled to its end.
+   */
+  const pager = paginated ? (
+    <Flex
+      justify="flex-end"
+      style={{ marginTop: SPACE.md }}
+      // The pager wraps to two lines on a phone rather than pushing the size
+      // changer off the right edge.
+      wrap
+      gap={SPACE.sm}
+    >
+      <Pagination
+        current={current}
+        pageSize={pageSize}
+        total={dataSource.length}
+        onChange={onPageChange}
+        // The whole point of the change: the user picks how many.
+        showSizeChanger
+        pageSizeOptions={PAGE_SIZES as unknown as number[]}
+        // No quick-jump on a phone — it is a text field between two arrows on
+        // a 375px line, and the arrows are what a thumb wants.
+        showQuickJumper={!compact}
+        size={compact ? "small" : undefined}
+        showTotal={(total, [from, to]) =>
+          t("dataTable.range", "{{from}}–{{to}} of {{total}}", {
+            from,
+            to,
+            total,
+          })
+        }
+        responsive
+      />
+    </Flex>
+  ) : null;
 
   // An expandable table's detail row has nowhere to go in a card — there is no
   // second level to expand INTO — so a table that uses one keeps its grid and
@@ -258,7 +227,7 @@ export function DataTable<T extends object>({
                         flexShrink: 0,
                       }}
                     >
-                      {col.title as ReactNode}
+                      {titleText(col)}
                     </Typography.Text>
                     {/* minWidth: 0 lets a long description shrink and wrap
                         instead of pushing its own label off the card. */}
@@ -288,26 +257,26 @@ export function DataTable<T extends object>({
             </Card>
           ))}
         </Flex>
-        {footer}
+        {pager}
       </>
     );
   }
 
   return (
-    <>
-      <Table
-        {...rest}
-        rowKey={rowKey}
-        columns={columns}
-        dataSource={rows as T[]}
-        pagination={false}
-        size={size ?? "middle"}
-        // A tablet is wide enough for a grid and still too narrow for eight
-        // columns, so the desktop table keeps its own horizontal scroll rather
-        // than compressing every cell to a two-character column.
-        scroll={scroll ?? { x: "max-content" }}
-      />
-      {footer}
-    </>
+    <Table
+      {...rest}
+      rowKey={rowKey}
+      columns={columns}
+      // Already sliced above. antd is handed one page and told not to paginate,
+      // so the page state has exactly one home — see this file's docblock.
+      dataSource={rows as T[]}
+      pagination={false}
+      size={size ?? "middle"}
+      // A tablet is wide enough for a grid and still too narrow for eight
+      // columns, so the desktop table keeps its own horizontal scroll rather
+      // than compressing every cell to a two-character column.
+      scroll={scroll ?? { x: "max-content" }}
+      footer={paginated ? () => pager : undefined}
+    />
   );
 }

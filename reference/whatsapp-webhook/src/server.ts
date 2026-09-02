@@ -1,5 +1,5 @@
 /**
- * Nusantara POS — WhatsApp Cloud API webhook service (Express).
+ * Macbook Nusantara — WhatsApp Cloud API webhook service (Express).
  *
  *  GET  /webhook   → verification handshake (hub.mode / hub.verify_token / hub.challenge)
  *  POST /webhook   → inbound events; verifies X-Hub-Signature-256, responds 200

@@ -1,0 +1,482 @@
+/**
+ * Adjustments — money moved by hand, in either direction.
+ *
+ * ## Why this replaced "Add expense" (owner ask 2026-09-01)
+ *
+ * The page could only ever record money going OUT. Money coming in was
+ * derived from sales, which is right for a shop that sells everything through
+ * its own till and wrong for this one: takings from before the app existed, a
+ * machine sold off-app, a float topped up from the owner's account. None of
+ * those is a sale — inventing an `Order` to hold one would put a receipt in
+ * Transaction History for a transaction that never happened, with serials on
+ * it that do not exist — and none of them could be recorded at all.
+ *
+ * So the button is *Add adjustment* and the dialog asks the direction first.
+ * The rest of the form is the same five questions either way; only the reason
+ * list changes, because "Payroll" is not a way for money to arrive and
+ * "Account transfer" is not a way for it to leave.
+ *
+ * ## A modal, not a drawer (owner ask 2026-09-01)
+ *
+ * It was a right-hand drawer. Six short fields is not a side panel's worth of
+ * form, and a drawer slides the page out of the way to show them — which is
+ * the wrong gesture for a dialog you open, fill and dismiss without needing
+ * anything behind it.
+ *
+ * ## Where the money lands
+ *
+ * An expense adjustment writes an `Expense`, exactly as before, so the
+ * marketing scorecard above keeps reading the same rows. An income adjustment
+ * writes a `ManualIncome` — a separate list, because it genuinely is a
+ * different thing. ⚠️ Mock-only: prisma has neither a manual-income table nor
+ * a nullable `Expense.label`.
+ */
+import { useState } from "react";
+import dayjs, { type Dayjs } from "dayjs";
+import {
+  App,
+  Button,
+  Card,
+  DatePicker,
+  Flex,
+  Form,
+  Input,
+  Modal,
+  Segmented,
+  Select,
+  Table,
+  Tag,
+  Typography,
+} from "antd";
+import { QuestionCircleOutlined } from "@ant-design/icons";
+import { ProTable } from "../../components/ProTable";
+import { LongText } from "../../components/LongText";
+import { MoneyInput } from "../../components/MoneyInput";
+import { useTranslation } from "react-i18next";
+import { useLayoutMode } from "../../layouts/useLayoutMode";
+import { fmtRp, fmtDate } from "../../lib/format.js";
+import { useDb, mutate, nextId } from "../../mock/store.js";
+import {
+  EXPENSE_CATEGORIES,
+  INCOME_REASONS,
+  type ExpenseKind,
+  type IncomeReason,
+} from "../../mock/seed.js";
+import { labelOf } from "../../i18n/enumLabels.js";
+
+/** Derived, not duplicated: `seed.ts` stays the one list of categories. */
+const EXPENSE_KIND: Record<string, string> = Object.fromEntries(
+  EXPENSE_CATEGORIES.map((c) => [c.value, c.label]),
+);
+const INCOME_REASON: Record<string, string> = Object.fromEntries(
+  INCOME_REASONS.map((r) => [r.value, r.label]),
+);
+
+/** Which way the money went. The first question the dialog asks. */
+type Direction = "INCOME" | "EXPENSE";
+
+interface Values {
+  direction: Direction;
+  reason: string;
+  date: Dayjs;
+  amount: number;
+  note?: string;
+  referralSourceId?: string;
+}
+
+/** One row of the history table, from either list. */
+interface Row {
+  key: string;
+  direction: Direction;
+  /** The reason, spelled for a human. What the facet filters on. */
+  reason: string;
+  /** What it was for, where a row carries one. See `Expense.label`. */
+  label?: string;
+  amount: number;
+  date: string;
+  note?: string;
+  channel?: string;
+}
+
+export function AdjustmentPanel({
+  addOpen,
+  onCloseAdd,
+}: {
+  addOpen: boolean;
+  onCloseAdd: () => void;
+}) {
+  const db = useDb();
+  const { t } = useTranslation();
+  const { message } = App.useApp();
+  const { compact } = useLayoutMode();
+  const [form] = Form.useForm<Values>();
+  /**
+   * Held in state as well as in the form, because two other controls read it:
+   * the reason list swaps entirely, and the marketing channel field only
+   * exists on one branch of one of them.
+   */
+  const [direction, setDirection] = useState<Direction>("EXPENSE");
+  const [reason, setReason] = useState<string>("OPERATIONAL");
+  const [guideOpen, setGuideOpen] = useState(false);
+
+  /**
+   * Switching direction resets the reason.
+   *
+   * It has to: the two lists share no values, so leaving "PAYROLL" selected
+   * while the list shows Sales and Account transfer would submit a reason that
+   * is not on offer. Defaulting to the first of the new list is the same
+   * choice the form makes on open.
+   */
+  const pickDirection = (next: Direction) => {
+    const first = next === "INCOME" ? INCOME_REASONS[0].value : "OPERATIONAL";
+    setDirection(next);
+    setReason(first);
+    form.setFieldsValue({ direction: next, reason: first });
+  };
+
+  const close = () => {
+    onCloseAdd();
+    form.resetFields();
+    setDirection("EXPENSE");
+    setReason("OPERATIONAL");
+  };
+
+  const save = () =>
+    form.validateFields().then((v) => {
+      const date = v.date.format("YYYY-MM-DD");
+      mutate((d) => {
+        if (v.direction === "INCOME") {
+          d.incomes.unshift({
+            id: nextId("mi"),
+            reason: v.reason as IncomeReason,
+            amount: v.amount,
+            date,
+            ...(v.note ? { note: v.note } : {}),
+          });
+          return;
+        }
+        d.expenses.unshift({
+          id: nextId("e"),
+          kind: v.reason as ExpenseKind,
+          amount: v.amount,
+          date,
+          ...(v.note ? { note: v.note } : {}),
+          // Marketing only, and only when one was named. The scorecard above
+          // reads this field to attribute spend to the customers a channel
+          // brought in.
+          ...(v.reason === "MARKETING" && v.referralSourceId
+            ? { referralSourceId: v.referralSourceId }
+            : {}),
+        });
+      });
+      message.success(
+        v.direction === "INCOME"
+          ? t("adjust.incomeRecorded", "Income recorded.")
+          : t("adjust.expenseRecorded", "Expense recorded."),
+      );
+      close();
+    });
+
+  /**
+   * Both halves of the ledger in one table.
+   *
+   * One table rather than two, because the question it answers — "what did
+   * somebody type in by hand, and when" — does not split by direction. The
+   * Type column carries that, and it is a facet, so the expenses-only view the
+   * old table was is one click away.
+   */
+  const rows: Row[] = [
+    ...db.incomes.map((i) => ({
+      key: `i-${i.id}`,
+      direction: "INCOME" as const,
+      reason: labelOf(INCOME_REASON, i.reason, t),
+      amount: i.amount,
+      date: i.date,
+      ...(i.note ? { note: i.note } : {}),
+    })),
+    ...db.expenses.map((e) => ({
+      key: `e-${e.id}`,
+      direction: "EXPENSE" as const,
+      reason: labelOf(EXPENSE_KIND, e.kind, t),
+      ...(e.label ? { label: e.label } : {}),
+      amount: e.amount,
+      date: e.date,
+      ...(e.note ? { note: e.note } : {}),
+      ...(e.referralSourceId
+        ? {
+            channel:
+              db.referralSources.find((r) => r.id === e.referralSourceId)
+                ?.name ?? "—",
+          }
+        : {}),
+    })),
+  ];
+
+  /**
+   * The reason list for the chosen direction.
+   *
+   * Widened to `string` deliberately: the two source lists are `as const`
+   * tuples with disjoint literal types, and a union of two option arrays is
+   * not a type antd's `options` can take. The narrowing that matters happens
+   * at the write, where `save` casts to the enum the branch it is in expects —
+   * and it is sound there because `pickDirection` resets the reason whenever
+   * the direction changes, so the two can never disagree.
+   */
+  const reasonOptions: { value: string; label: string }[] =
+    direction === "INCOME"
+      ? INCOME_REASONS.map((r) => ({ value: r.value, label: t(r.label) }))
+      : EXPENSE_CATEGORIES.map((c) => ({ value: c.value, label: t(c.label) }));
+
+  return (
+    <>
+      <Card title={t("adjust.history", "Adjustment history")}>
+        <ProTable
+          rowKey="key"
+          dataSource={rows}
+          searchPlaceholder={t(
+            "adjust.searchReasonOrNote",
+            "Search a reason or a note",
+          )}
+          columns={[
+            {
+              title: t("adjust.date", "Date"),
+              dataIndex: "date",
+              defaultSortOrder: "descend",
+              render: fmtDate,
+            },
+            {
+              // Narrow on purpose: antd draws a column's own filter and sort
+              // controls at the right edge of its header cell, so a wide
+              // column parks them a long way from the word they belong to.
+              title: t("adjust.type", "Type"),
+              dataIndex: "direction",
+              width: 130,
+              facet: true,
+              facetLabel: t("adjust.type", "Type"),
+              sortValue: (r: Row) => r.direction,
+              render: (v: string) =>
+                v === "INCOME" ? (
+                  <Tag color="green">{t("adjust.income", "Income")}</Tag>
+                ) : (
+                  <Tag color="volcano">{t("adjust.expense", "Expense")}</Tag>
+                ),
+            },
+            {
+              title: t("adjust.reason", "Reason"),
+              dataIndex: "reason",
+              width: 210,
+              facet: true,
+              facetLabel: t("adjust.reason", "Reason"),
+              searchable: true,
+              sortValue: (r: Row) => r.reason,
+              render: (v: string) => <Tag>{v}</Tag>,
+            },
+            {
+              // Blank for anything typed through the adjustment dialog, which
+              // asks for a reason and a note and no third name for the same
+              // thing. Rows that predate it still carry one.
+              title: t("adjust.what", "What"),
+              dataIndex: "label",
+              searchable: true,
+              render: (v?: string) => v ?? "—",
+            },
+            {
+              title: t("adjust.channel", "Channel"),
+              dataIndex: "channel",
+              facet: true,
+              sortValue: (r: Row) => r.channel ?? "—",
+              render: (v?: string) => v ?? "—",
+            },
+            {
+              title: t("adjust.amount", "Amount"),
+              key: "amount",
+              align: "right",
+              sortValue: (r: Row) => r.amount,
+              render: (_: unknown, r: Row) => (
+                <Typography.Text
+                  type={r.direction === "INCOME" ? "success" : undefined}
+                >
+                  {r.direction === "INCOME" ? "+" : "−"}
+                  {fmtRp(r.amount)}
+                </Typography.Text>
+              ),
+            },
+            {
+              title: t("adjust.note", "Note"),
+              dataIndex: "note",
+              searchable: true,
+              width: 320,
+              render: (v?: string) => <LongText>{v}</LongText>,
+            },
+          ]}
+        />
+      </Card>
+
+      {/*
+       * The dialog. Five questions, in the order the owner listed them —
+       * direction, reason, date, amount, note — because that is also the order
+       * somebody holding a receipt can answer them in.
+       */}
+      <Modal
+        open={addOpen}
+        title={t("adjust.addAdjustment", "Add adjustment")}
+        okText={t("adjust.record", "Record it")}
+        onCancel={close}
+        onOk={save}
+        // Wide enough for the two-across row the amount and date share, and no
+        // wider: this is a short form and a 720px dialog around it would be
+        // mostly gutter.
+        width={compact ? "100%" : 520}
+        destroyOnHidden
+      >
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={{
+            direction: "EXPENSE",
+            reason: "OPERATIONAL",
+            date: dayjs(),
+          }}
+        >
+          {/* Segmented rather than a Select: two mutually exclusive options
+              that change the form under them should show both at once, so the
+              consequence of switching is visible before it is taken. */}
+          <Form.Item name="direction" label={t("adjust.type", "Type")}>
+            <Segmented
+              block
+              value={direction}
+              onChange={(v) => pickDirection(v as Direction)}
+              options={[
+                { value: "INCOME", label: t("adjust.income", "Income") },
+                { value: "EXPENSE", label: t("adjust.expense", "Expense") },
+              ]}
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="reason"
+            label={t("adjust.reason", "Reason")}
+            rules={[
+              {
+                required: true,
+                message: t("adjust.pickAReason", "Pick a reason."),
+              },
+            ]}
+            // The "?" is on the field whose question it answers — "which of
+            // these six do I pick" is asked here, not in the page header.
+            extra={
+              direction === "EXPENSE" ? (
+                <Button
+                  size="small"
+                  type="link"
+                  icon={<QuestionCircleOutlined />}
+                  style={{ paddingInline: 0 }}
+                  onClick={() => setGuideOpen(true)}
+                >
+                  {t("adjust.whatGoesWhere", "What goes in each category?")}
+                </Button>
+              ) : (
+                t(
+                  "adjust.incomeReasonHint",
+                  "A transfer raises the balance without being revenue.",
+                )
+              )
+            }
+          >
+            <Select options={reasonOptions} onChange={setReason} />
+          </Form.Item>
+
+          {direction === "EXPENSE" && reason === "MARKETING" && (
+            <Form.Item
+              name="referralSourceId"
+              label={t("adjust.whichChannel", "Which channel?")}
+              tooltip={t(
+                "adjust.linksThisSpend",
+                "Links this spend to the customers who said they came from that channel",
+              )}
+            >
+              <Select
+                allowClear
+                placeholder={t("adjust.whichChannel", "Which channel?")}
+                options={db.referralSources
+                  .filter((r) => r.active)
+                  .map((r) => ({ value: r.id, label: r.name }))}
+              />
+            </Form.Item>
+          )}
+
+          <Flex gap={12} wrap>
+            <Form.Item
+              name="date"
+              label={t("adjust.date", "Date")}
+              style={{ flex: "1 1 200px" }}
+              rules={[
+                {
+                  required: true,
+                  message: t("adjust.pickADate", "Pick the date."),
+                },
+              ]}
+            >
+              <DatePicker format="DD MMM YYYY" style={{ width: "100%" }} />
+            </Form.Item>
+            <Form.Item
+              name="amount"
+              label={t("adjust.amountRp", "Amount (Rp)")}
+              style={{ flex: "1 1 200px" }}
+              rules={[
+                {
+                  required: true,
+                  message: t("adjust.enterTheAmount", "Enter the amount."),
+                },
+              ]}
+            >
+              <MoneyInput style={{ width: "100%" }} />
+            </Form.Item>
+          </Flex>
+
+          <Form.Item name="note" label={t("adjust.note", "Note")}>
+            <Input.TextArea
+              rows={2}
+              placeholder={t(
+                "adjust.notePlaceholder",
+                "Optional — what this was, in your own words",
+              )}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={t("adjust.whatGoesInEach", "What goes in each category")}
+        open={guideOpen}
+        onCancel={() => setGuideOpen(false)}
+        footer={null}
+        width={compact ? "100%" : 640}
+      >
+        <Table
+          rowKey="value"
+          size="small"
+          pagination={false}
+          showHeader={false}
+          // Both lists, because the dialog offers both and a guide that only
+          // covered the expense half would send anyone asking about "Account
+          // transfer" away empty-handed.
+          dataSource={[...EXPENSE_CATEGORIES, ...INCOME_REASONS]}
+          columns={[
+            {
+              title: t("adjust.reason", "Reason"),
+              width: 200,
+              render: (_, c) => (
+                <Typography.Text strong>{t(c.label)}</Typography.Text>
+              ),
+            },
+            {
+              title: t("adjust.guide", "Guide"),
+              render: (_, c) => t(c.guide),
+            },
+          ]}
+        />
+      </Modal>
+    </>
+  );
+}

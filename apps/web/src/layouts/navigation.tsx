@@ -1,15 +1,34 @@
 /**
- * The single source of truth for the sidebar, the breadcrumb and the router.
- * Owner IA of 2026-08-15: Stock / Return / Product / Discount / Finance /
- * Chatbot / Customer / Settings.
+ * The single source of truth for the sidebar and the router.
+ *
+ * Owner IA of 2026-08-15, amended 2026-08-20, 2026-08-24 and again 2026-08-26:
+ * Stock / Product / Financial & Report / Chatbot / Customer / Settings.
+ *
+ * The 2026-08-26 round is a flattening. Reservation and Return had each been
+ * promoted to a top-level section; both went back under Stock, because with
+ * nine sections the sidebar had stopped being a list anyone could take in at a
+ * glance and both name a movement of stock. Discount joined Product for the
+ * same reason, and the two finance screens took the name the owner uses for
+ * them out loud — "Financial & Report".
+ *
+ * Two merges also land here, and they are why the leaf list is shorter than
+ * the page list:
+ *
+ * - **Inventory & Stock Movement** is one screen. It was two views of one
+ *   question — how many do we have, and which serials are they — and the
+ *   answer now lives in one table that expands from the product to its
+ *   serials.
+ * - **Chatbot** is one screen. The inbox and the knowledge base were two menu
+ *   items for one job: what the bot said, and what it knows to say.
+ *
+ * Every path either merge retired still resolves — App.tsx redirects it —
+ * because a bookmark should not break on an IA change.
  */
 import type { ReactNode } from "react";
 import {
   AppstoreOutlined,
   CommentOutlined,
   DollarOutlined,
-  PercentageOutlined,
-  RollbackOutlined,
   SettingOutlined,
   DatabaseOutlined,
   TeamOutlined,
@@ -34,57 +53,51 @@ export const NAV_SECTIONS: readonly NavSection[] = [
     label: "Stock",
     icon: <DatabaseOutlined />,
     children: [
-      { path: "/stock/po", label: "Purchase Order" },
-      { path: "/stock/in", label: "Stock In (QC)" },
-      { path: "/stock/out", label: "Stock Out" },
-      { path: "/stock/reservations", label: "Reservations" },
+      // Intake first, in the order stock actually moves through the shop:
+      // it arrives, it is sold, it is counted. One entry for the whole intake
+      // job — Purchase Order and Stock In (QC) were two menu items for two
+      // halves of it, which left "where is that order up to?" with no screen
+      // that could answer it.
+      { path: "/inbound", label: "Inbound & QC" },
+      // The owner's own word for the till. "Point of Sale" named the software
+      // category; "New Transaction" names what the button does.
+      { path: "/stock/out", label: "New Transaction" },
+      // The merge of 2026-08-26. See this file's docblock.
+      { path: "/stock/inventory", label: "Inventory & Stock Movement" },
       { path: "/stock/opname", label: "Stock Opname" },
-      { path: "/stock/adjustment", label: "Stock Adjustment" },
       { path: "/stock/history", label: "S/N Tracking" },
-    ],
-  },
-  {
-    key: "return",
-    label: "Return",
-    icon: <RollbackOutlined />,
-    children: [
-      { path: "/return/customer", label: "From Customer" },
-      { path: "/return/supplier", label: "To Supplier" },
+      // Back under Stock on 2026-08-26 after four days as sections of their
+      // own. Both are a unit moving: onto hold, or back out of the shop.
+      { path: "/reservations", label: "Reservation" },
+      { path: "/returns", label: "Return" },
     ],
   },
   {
     key: "products",
     label: "Product",
     icon: <AppstoreOutlined />,
-    path: "/products",
-  },
-  {
-    key: "discount",
-    label: "Discount",
-    icon: <PercentageOutlined />,
     children: [
-      { path: "/discounts/new", label: "Add Discount" },
-      { path: "/discounts", label: "Manage Discounts" },
+      { path: "/products", label: "Master Product" },
+      { path: "/discounts", label: "Discount" },
     ],
   },
   {
     key: "finance",
-    label: "Finance",
+    label: "Financial & Report",
     icon: <DollarOutlined />,
     children: [
-      { path: "/finance/expense", label: "Expenses" },
-      { path: "/finance/cashflow", label: "Cashflow" },
+      // History first: chasing a receipt is the daily job, and reading the
+      // ledger is the monthly one.
       { path: "/finance/transactions", label: "Transaction History" },
+      { path: "/finance/income-expense", label: "Income & Expense" },
     ],
   },
   {
+    // One leaf since the inbox and the knowledge base merged (2026-08-26).
     key: "chatbot",
     label: "Chatbot",
     icon: <CommentOutlined />,
-    children: [
-      { path: "/chat", label: "Chat Inbox" },
-      { path: "/chat/knowledge", label: "Knowledge" },
-    ],
+    path: "/chat",
   },
   {
     key: "customers",
@@ -100,7 +113,16 @@ export const NAV_SECTIONS: readonly NavSection[] = [
   },
 ];
 
-/** Longest-prefix match so /discounts/new highlights Add, not Manage. */
+/**
+ * Longest-prefix match, so a child route highlights the section that owns it —
+ * /discounts/new lights up Discount rather than nothing.
+ *
+ * This is the only consumer of the nav tree outside the sidebar itself. The
+ * breadcrumb that used to read it was removed on 2026-08-26 (owner decision):
+ * with the deepest route two levels down, every crumb trail restated the
+ * highlighted sidebar item and the page's own title, and spent a line of
+ * vertical space saying nothing the screen did not already say twice.
+ */
 export function matchLeaf(
   pathname: string,
 ): { section: NavSection; leaf?: NavLeaf } | null {
@@ -121,11 +143,4 @@ export function matchLeaf(
     }
   }
   return best && { section: best.section, leaf: best.leaf };
-}
-
-/** Breadcrumb labels for a path the sidebar owns; [] otherwise. */
-export function navTrail(pathname: string): string[] {
-  const m = matchLeaf(pathname);
-  if (!m) return [];
-  return m.leaf ? [m.section.label, m.leaf.label] : [m.section.label];
 }

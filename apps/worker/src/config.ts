@@ -14,7 +14,13 @@
  */
 
 import { readFileSync } from "node:fs";
-import type { AnthropicEnv } from "@nusantara/agent";
+import {
+  MAX_WAIT_MS,
+  MIN_WAIT_MS,
+  SUMMARY_EVERY_TURNS,
+  type AnthropicEnv,
+  type WaitProfile,
+} from "@nusantara/agent";
 import type { WhatsAppCredentials } from "@nusantara/whatsapp";
 
 /**
@@ -40,6 +46,16 @@ export const WORKER_ENV_KEYS = [
   "ANTHROPIC_AUTH_TOKEN",
   "WORKER_POLL_MS",
   "WORKER_DEBOUNCE_MS",
+  "WORKER_DEBOUNCE_MIN_MS",
+  "WORKER_DEBOUNCE_MAX_MS",
+  "WORKER_SUMMARY_EVERY_TURNS",
+  "WORKER_SUMMARY_QUIET_MS",
+  "WORKER_MAX_SUMMARIES",
+  "WORKER_MAX_BATCH",
+  "WORKER_RESERVATION_GRACE_MS",
+  "WORKER_RESERVATION_TTL_MS",
+  "WORKER_MAX_EXPIRIES",
+  "WORKER_AGENT_STAFF_ID",
   "WORKER_MAX_DRAFTS",
   "WORKER_MAX_SENDS",
 ] as const;
@@ -93,6 +109,25 @@ export interface WorkerConfig {
   readonly maxDraftsPerTick: number;
   /** Outbox rows sent per tick. */
   readonly maxSendsPerTick: number;
+  /** The adaptive wait windows the debounce picks between. */
+  readonly waits: WaitProfile;
+  /** Messages one reply may cover, so a huge backlog becomes several replies. */
+  readonly maxBatch: number;
+  /** Answered turns that must pile up before a thread's note is refreshed. */
+  readonly summaryEveryTurns: number;
+  /** Or how long the thread must be quiet, with turns still uncovered. */
+  readonly summaryQuietMs: number;
+  readonly maxSummariesPerTick: number;
+  /** How long after a missed appointment an agent hold is released. */
+  readonly reservationGraceMs: number;
+  /** How long a booking with no appointment may hold a unit. */
+  readonly reservationTtlMs: number;
+  readonly maxExpiriesPerTick: number;
+  /**
+   * The Staff row a bot-created UnitEvent is attributed to. Inserted by the
+   * migration, so it exists in every environment.
+   */
+  readonly agentStaffId: string;
 }
 
 function int(raw: string | undefined, fallback: number): number {
@@ -116,7 +151,25 @@ export function loadWorkerConfig(
     },
     idlePollMs: int(env["WORKER_POLL_MS"], 2_000),
     debounceMs: int(env["WORKER_DEBOUNCE_MS"], 8_000),
+    // The base window is the middle of a range now. A direct question is
+    // answered sooner and "nanti saya kabarin" waits far longer; see
+    // `computeWaitMs`.
+    waits: {
+      minMs: int(env["WORKER_DEBOUNCE_MIN_MS"], MIN_WAIT_MS),
+      baseMs: int(env["WORKER_DEBOUNCE_MS"], 8_000),
+      maxMs: int(env["WORKER_DEBOUNCE_MAX_MS"], MAX_WAIT_MS),
+    },
     maxDraftsPerTick: int(env["WORKER_MAX_DRAFTS"], 5),
+    maxBatch: int(env["WORKER_MAX_BATCH"], 30),
     maxSendsPerTick: int(env["WORKER_MAX_SENDS"], 20),
+    summaryEveryTurns: int(env["WORKER_SUMMARY_EVERY_TURNS"], SUMMARY_EVERY_TURNS),
+    summaryQuietMs: int(env["WORKER_SUMMARY_QUIET_MS"], 900_000),
+    maxSummariesPerTick: int(env["WORKER_MAX_SUMMARIES"], 3),
+    // Four hours late is a customer who is not coming. Two days is a booking
+    // that never had a time in the first place.
+    reservationGraceMs: int(env["WORKER_RESERVATION_GRACE_MS"], 4 * 3_600_000),
+    reservationTtlMs: int(env["WORKER_RESERVATION_TTL_MS"], 48 * 3_600_000),
+    maxExpiriesPerTick: int(env["WORKER_MAX_EXPIRIES"], 10),
+    agentStaffId: env["WORKER_AGENT_STAFF_ID"]?.trim() || "staff_agent",
   };
 }

@@ -1,6 +1,21 @@
 /**
  * A multi-series line chart, drawn as inline SVG.
  *
+ * ## Nothing imports this today (2026-09-01)
+ *
+ * Its only caller was the "Money over time" card on the Income & Expense page,
+ * removed at the owner's request — the header of `routes/finance/CashflowPage.tsx`
+ * carries the reasoning. This file is kept rather than deleted, because that
+ * call was a judgement about one page's data (a handful of sales a day leaves
+ * the daily buckets mostly zero) and not about this component, and because it
+ * is the only charting primitive in the app — there is no chart library in
+ * `apps/web`, by the deliberate choice described below. Keeping it costs
+ * nothing: an unimported module is tree-shaken out of the bundle, and `tsc`
+ * still checks it against the theme tokens, so it cannot rot unnoticed. The
+ * props are generic — categories, series, a formatter — so the next report
+ * screen that wants a line can take it as it stands. If that screen never
+ * arrives, delete the file; the history has it.
+ *
  * No charting library. Recharts, AntV G2 and the rest are 150–400kB for one
  * chart on one page, and every one of them wants its own theme configuration
  * beside antd's. This draws four polylines and an axis; that is a hundred lines

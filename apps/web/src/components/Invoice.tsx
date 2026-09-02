@@ -30,15 +30,40 @@ import type { CSSProperties } from "react";
 import { Button, Modal, Typography } from "antd";
 import { PrinterOutlined } from "@ant-design/icons";
 import { fmtRp } from "../lib/format.js";
+// No `t` on purpose: the faktur is a print template and is deliberately
+// outside the language switch, so it takes the English label.
+import { labelOf, ORDER_SOURCE } from "../i18n/enumLabels.js";
 import type { MockDb, Order } from "../mock/seed.js";
 
-/** Header block. Hard-coded for now — Settings does not own shop identity yet. */
-const SHOP = {
+/**
+ * What the header prints when the shop has not said otherwise.
+ *
+ * Settings owns shop identity as of 2026-09-02 (`AppSettings.shopName` and its
+ * three siblings, mirroring the `shop.*` keys in `AppSetting`). These are the
+ * exact strings that used to be hard-coded here, kept as the fallback rather
+ * than dropped: a faktur is the wrong surface on which to discover that a
+ * setting is missing, and a receipt with no shop name on it looks like a
+ * printer fault rather than a configuration one.
+ */
+const SHOP_FALLBACK = {
   name: "NUSANTARA",
   tagline: "Second-hand Apple — sales, trade-in and service",
   address: "Jakarta, Indonesia",
   contact: "WhatsApp +62 811 2233 44 · @nusantara",
 } as const;
+
+/** The header block, as the shop has set it. Blank fields fall back. */
+function shopOf(db: MockDb) {
+  const s = db.settings;
+  const or = (value: string | undefined, fallback: string) =>
+    value !== undefined && value.trim() !== "" ? value : fallback;
+  return {
+    name: or(s.shopName, SHOP_FALLBACK.name),
+    tagline: or(s.shopTagline, SHOP_FALLBACK.tagline),
+    address: or(s.shopAddress, SHOP_FALLBACK.address),
+    contact: or(s.shopContact, SHOP_FALLBACK.contact),
+  };
+}
 
 export interface InvoiceProps {
   readonly db: MockDb;
@@ -73,6 +98,7 @@ function billedTo(
  */
 export function InvoiceSheet({ db, order }: InvoiceProps) {
   const to = billedTo(db, order);
+  const shop = shopOf(db);
   const salesman = db.salesmen.find((s) => s.id === order.salesmanId);
   const subtotal = order.serials.reduce(
     (t, s) => t + (order.prices[s] ?? 0),
@@ -125,11 +151,11 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
       >
         <div>
           <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 1.5 }}>
-            {SHOP.name}
+            {shop.name}
           </div>
-          <div style={{ fontSize: 11, color: "#555" }}>{SHOP.tagline}</div>
-          <div style={{ fontSize: 11, color: "#555" }}>{SHOP.address}</div>
-          <div style={{ fontSize: 11, color: "#555" }}>{SHOP.contact}</div>
+          <div style={{ fontSize: 11, color: "#555" }}>{shop.tagline}</div>
+          <div style={{ fontSize: 11, color: "#555" }}>{shop.address}</div>
+          <div style={{ fontSize: 11, color: "#555" }}>{shop.contact}</div>
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: 3 }}>
@@ -180,7 +206,8 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
         </div>
         <div style={{ textAlign: "right", color: "#444" }}>
           <div>
-            <span style={{ color: "#666" }}>Channel</span> {order.source}
+            <span style={{ color: "#666" }}>Channel</span>{" "}
+            {labelOf(ORDER_SOURCE, order.source)}
           </div>
           <div>
             <span style={{ color: "#666" }}>Payment</span> {order.payMethod}
@@ -328,7 +355,8 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
         </div>
         {!order.settled && (
           <div style={{ marginTop: 4, fontWeight: 700, color: "#8a6100" }}>
-            Payment pending — {order.source} has not released the funds yet.
+            Payment pending — {labelOf(ORDER_SOURCE, order.source)} has not
+            released the funds yet.
           </div>
         )}
       </div>

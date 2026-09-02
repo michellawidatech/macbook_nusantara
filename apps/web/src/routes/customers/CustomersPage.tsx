@@ -4,15 +4,17 @@ import {
   App,
   Button,
   Card,
-  Drawer,
   Descriptions,
+  Drawer,
+  Flex,
   Form,
   Input,
   Modal,
   Select,
   Tag,
+  Tooltip,
 } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { EditOutlined, HistoryOutlined, PlusOutlined } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { DataTable } from "../../components/DataTable";
 import { FilterBar } from "../../components/FilterBar";
@@ -20,8 +22,10 @@ import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { fmtRp, fmtDateTime } from "../../lib/format.js";
 import { useDb, mutate, nextId } from "../../mock/store.js";
 import type { Customer } from "../../mock/seed.js";
+import { useTranslation } from "react-i18next";
 
 export function CustomersPage() {
+  const { t } = useTranslation();
   const db = useDb();
   const { message } = App.useApp();
   const { compact } = useLayoutMode();
@@ -59,11 +63,11 @@ export function CustomersPage() {
 
   return (
     <PageContainer
-      title="Customers"
+      title={t("customers.customers", "Customers")}
       actions={[
         {
           key: "add",
-          label: "Add customer",
+          label: t("customers.addCustomer", "Add customer"),
           icon: <PlusOutlined />,
           type: "primary",
           onClick: () => {
@@ -76,7 +80,10 @@ export function CustomersPage() {
       <Card>
         <FilterBar>
           <Input.Search
-            placeholder="Search name or phone"
+            placeholder={t(
+              "customers.searchNameOrPhone",
+              "Search name or phone",
+            )}
             style={{ width: 320 }}
             allowClear
             onChange={(e) => setQ(e.target.value)}
@@ -89,16 +96,16 @@ export function CustomersPage() {
           // page rather than answering it with 200 rows already loaded.
           resetKey={q}
           columns={[
-            { title: "Name", dataIndex: "name" },
-            { title: "Phone", dataIndex: "phone" },
+            { title: t("customers.name", "Name"), dataIndex: "name" },
+            { title: t("customers.phone", "Phone"), dataIndex: "phone" },
             {
-              title: "Address",
+              title: t("customers.address", "Address"),
               dataIndex: "address",
               ellipsis: true,
               render: (v) => v || "—",
             },
             {
-              title: "Knows us from",
+              title: t("customers.knowsUsFrom", "Knows us from"),
               render: (_, c) =>
                 refName(c.referralSourceId) ? (
                   <Tag>{refName(c.referralSourceId)}</Tag>
@@ -106,35 +113,53 @@ export function CustomersPage() {
                   "—"
                 ),
             },
-            { title: "Orders", render: (_, c) => ordersOf(c.id).length },
             {
-              title: "Total spend",
+              title: t("customers.orders", "Orders"),
+              render: (_, c) => ordersOf(c.id).length,
+            },
+            {
+              title: t("customers.totalSpend", "Total spend"),
               align: "right",
               render: (_, c) =>
                 fmtRp(ordersOf(c.id).reduce((t, o) => t + o.total, 0)),
             },
             {
+              // Icons, not words (owner decision 2026-08-26). Two labelled
+              // buttons repeated down every row is a column of the same two
+              // words over and over; the tooltip and the `aria-label` say more
+              // than the text did, because they name the customer.
               title: "",
-              width: 140,
+              width: 96,
               render: (_, c) => (
-                <>
-                  <Button
-                    size="small"
-                    onClick={() => setViewing(c)}
-                    style={{ marginRight: 8 }}
-                  >
-                    History
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      setEditing(c);
-                      form.setFieldsValue(c);
-                    }}
-                  >
-                    Edit
-                  </Button>
-                </>
+                <Flex gap={4} justify="end">
+                  <Tooltip title={t("customers.history", "History")}>
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<HistoryOutlined />}
+                      aria-label={t(
+                        "customers.historyAria",
+                        "Purchase history for {{name}}",
+                        { name: c.name },
+                      )}
+                      onClick={() => setViewing(c)}
+                    />
+                  </Tooltip>
+                  <Tooltip title={t("customers.edit", "Edit")}>
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<EditOutlined />}
+                      aria-label={t("customers.editAria", "Edit {{name}}", {
+                        name: c.name,
+                      })}
+                      onClick={() => {
+                        setEditing(c);
+                        form.setFieldsValue(c);
+                      }}
+                    />
+                  </Tooltip>
+                </Flex>
               ),
             },
           ]}
@@ -155,15 +180,19 @@ export function CustomersPage() {
             <Descriptions
               column={1}
               items={[
-                { key: "p", label: "Phone", children: viewing.phone },
+                {
+                  key: "p",
+                  label: t("customers.phone", "Phone"),
+                  children: viewing.phone,
+                },
                 {
                   key: "a",
-                  label: "Address",
+                  label: t("customers.address", "Address"),
                   children: viewing.address || "—",
                 },
                 {
                   key: "r",
-                  label: "Referral",
+                  label: t("customers.referral", "Referral"),
                   children: refName(viewing.referralSourceId) ?? "—",
                 },
               ]}
@@ -174,16 +203,23 @@ export function CustomersPage() {
               style={{ marginTop: 16 }}
               dataSource={ordersOf(viewing.id)}
               columns={[
-                { title: "Order", dataIndex: "code" },
-                { title: "When", dataIndex: "ts", render: fmtDateTime },
-                { title: "Serials", render: (_, o) => o.serials.join(", ") },
+                { title: t("customers.order", "Order"), dataIndex: "code" },
                 {
-                  title: "Total",
+                  title: t("customers.when", "When"),
+                  dataIndex: "ts",
+                  render: fmtDateTime,
+                },
+                {
+                  title: t("customers.serials", "Serials"),
+                  render: (_, o) => o.serials.join(", "),
+                },
+                {
+                  title: t("customers.total", "Total"),
                   align: "right",
                   render: (_, o) => fmtRp(o.total),
                 },
                 {
-                  title: "Money",
+                  title: t("customers.money", "Money"),
                   render: (_, o) =>
                     o.settled ? (
                       <Tag color="green">settled</Tag>
@@ -204,22 +240,29 @@ export function CustomersPage() {
         onOk={save}
       >
         <Form form={form} layout="vertical">
-          <Form.Item name="name" label="Name" rules={[{ required: true }]}>
+          <Form.Item
+            name="name"
+            label={t("customers.name", "Name")}
+            rules={[{ required: true }]}
+          >
             <Input />
           </Form.Item>
           <Form.Item
             name="phone"
-            label="Phone number"
+            label={t("customers.phoneNumber", "Phone number")}
             rules={[{ required: true }]}
           >
             <Input placeholder="+62…" />
           </Form.Item>
-          <Form.Item name="address" label="Address">
+          <Form.Item name="address" label={t("customers.address", "Address")}>
             <Input.TextArea rows={2} />
           </Form.Item>
           <Form.Item
             name="referralSourceId"
-            label="Where do they know the store from?"
+            label={t(
+              "customers.whereDoTheyKnowThe",
+              "Where do they know the store from?",
+            )}
           >
             <Select
               allowClear

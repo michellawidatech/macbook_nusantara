@@ -67,7 +67,7 @@ export interface MultiFillNumberProps {
   onClearSelection?: () => void;
   disabled?: boolean;
   /**
-   * Makes this a money cell: thousands separators in the box and an "NT$"
+   * Makes this a money cell: thousands separators in the box and an "Rp"
    * addon outside it, both from `components/MoneyInput`. A flag rather than a
    * `prefix` string — which is all this ever carried — because the currency
    * label and the grouping are one decision, and splitting them across two
@@ -287,7 +287,7 @@ export function MultiFillNumber({
 }
 
 /**
- * Attaches the "NT$" addon, or gets out of the way.
+ * Attaches the "Rp" addon, or gets out of the way.
  *
  * Split out only so the `InputNumber` above is written once — a money cell and
  * a plain one differ by a wrapper, and forking the whole element on `money`

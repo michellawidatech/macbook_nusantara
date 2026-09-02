@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { Form, InputNumber, Space } from "antd";
-import { TWD_SYMBOL, moneyFormatter, moneyParser } from "./money";
+import { RP_SYMBOL, moneyFormatter, moneyParser } from "./money";
 
 export interface MoneyAddonProps {
   /** Greys the addon out with the input it is attached to. */
@@ -8,7 +8,7 @@ export interface MoneyAddonProps {
 }
 
 /**
- * The "NT$" box that sits OUTSIDE the editable area.
+ * The "Rp" box that sits OUTSIDE the editable area.
  *
  * `Space.Compact` + `Space.Addon` rather than `InputNumber`'s `addonBefore`:
  * both addon props are deprecated in antd v6 and warn on every render, telling
@@ -24,7 +24,7 @@ export interface MoneyAddonProps {
  * ⚠️ Must be rendered INSIDE a `Form.Item`. `useStatus` warns in dev when it
  * is not, because outside one the context carries no status at all. A money
  * figure that is not a form field — a read-only total in a table, say — wants
- * `TWD.format` from `domain/stock.ts`, not this.
+ * `fmtRp` from `lib/format.ts`, not this.
  */
 export function MoneyAddon({ disabled }: MoneyAddonProps) {
   const { status } = Form.Item.useStatus();
@@ -40,7 +40,7 @@ export function MoneyAddon({ disabled }: MoneyAddonProps) {
       disabled={disabled}
       status={status === "error" || status === "warning" ? status : undefined}
     >
-      {TWD_SYMBOL}
+      {RP_SYMBOL}
     </Space.Addon>
   );
 }
@@ -57,10 +57,20 @@ export interface MoneyInputProps {
   placeholder?: string;
   /** Applied to the wrapper, not the input: the addon is part of the control. */
   style?: CSSProperties;
+  /**
+   * A name for the field, where there is no visible label to borrow one from.
+   *
+   * Declared rather than left to pass through, and that distinction matters:
+   * TypeScript does not check hyphenated JSX attributes against a component's
+   * props, so an `aria-label` on this component compiled silently and reached
+   * nothing at all. Every money box in a table cell or a card row was
+   * anonymous to a screen reader, and the type checker had no way to say so.
+   */
+  "aria-label"?: string;
 }
 
 /**
- * A whole-dollar money field: thousands separators inside, "NT$" outside.
+ * A whole-rupiah money field: thousands separators inside, "Rp" outside.
  *
  * The one place either of those is decided, together with `./money.ts`. The
  * fill-grid cells cannot use this component — `MultiFillNumber` wraps its own
@@ -70,9 +80,9 @@ export interface MoneyInputProps {
  * formatter/parser pair and assemble the same three pieces. Change the
  * currency or the grouping in those two files and both kinds of cell follow.
  *
- * `precision={0}` is not a prop: every `_twd` column in the schema is a bigint
- * of whole New Taiwan dollars (see `domain/stock.ts`), so there is no money
- * field in this app that takes cents.
+ * `precision={0}` is not a prop: every money column in the schema is a
+ * BigInt of whole rupiah, so there is no money field in this app that takes
+ * sen.
  */
 export function MoneyInput({
   value,
@@ -82,6 +92,7 @@ export function MoneyInput({
   disabled,
   placeholder,
   style,
+  "aria-label": ariaLabel,
 }: MoneyInputProps) {
   return (
     <Space.Compact block style={style}>
@@ -96,6 +107,7 @@ export function MoneyInput({
         parser={moneyParser}
         placeholder={placeholder}
         disabled={disabled}
+        aria-label={ariaLabel}
         // The addon is sized by its text; the input takes what is left, which
         // is what makes this fill a table cell or a Col the way the plain
         // `width: 100%` it replaces used to.

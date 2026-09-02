@@ -45,10 +45,13 @@ const UNROUTABLE: Record<string, string> = {
   AUTH0_DOMAIN: "tenant.invalid",
 };
 
-function build(auth0?: Auth0Config): Express {
+function build(
+  auth0?: Auth0Config,
+  env: Record<string, string | undefined> = { SESSION_COOKIE_INSECURE: "1" },
+): Express {
   return createApp({
     db: {} as PrismaClient,
-    config: loadConfig({ NODE_ENV: "test", SESSION_COOKIE_INSECURE: "1" }),
+    config: loadConfig({ NODE_ENV: "test", ...env }),
     logger: createLogger({ app: "api", env: "test", destination: sink }),
     auth0,
   });
@@ -120,6 +123,25 @@ describe("mounting", () => {
       .get("/api/health")
       .expect(200);
     expect(res.body).toMatchObject({ ok: true, app: "api" });
+  });
+
+  /**
+   * `cookieSecure` defaults to ON, and local development is http. A `Secure`
+   * cookie is never sent over http, so that pair produces a session the browser
+   * silently drops — the SDK refuses to build it at all, which crashed the API
+   * at startup rather than at login. The default env is used deliberately here:
+   * every other case sets SESSION_COOKIE_INSECURE and would not catch it.
+   */
+  it("starts with the default cookie policy on an http base URL", () => {
+    expect(() => build(readAuth0Env(UNROUTABLE), {})).not.toThrow();
+  });
+
+  it("keeps Secure cookies when the base URL is https", () => {
+    const https = readAuth0Env({
+      ...UNROUTABLE,
+      AUTH0_BASE_URL: "https://pos.example",
+    });
+    expect(() => build(https, {})).not.toThrow();
   });
 
   it("still rejects an unauthenticated API call the same way", async () => {

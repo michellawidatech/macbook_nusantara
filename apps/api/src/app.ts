@@ -28,6 +28,8 @@ import { authRouter } from "./routes/auth.js";
 import { katalogRouter } from "./routes/katalog.js";
 import { chatRouter } from "./routes/chat.js";
 import { inboxRouter } from "./routes/inbox.js";
+import { reservationsRouter } from "./routes/reservations.js";
+import { kontrolRouter } from "./routes/kontrol.js";
 import type { AnthropicEnv } from "@nusantara/agent";
 
 export interface CreateAppDeps {
@@ -126,11 +128,12 @@ export function createApp(deps: CreateAppDeps): Express {
   api.use("/katalog", katalogRouter(db));
   api.use("/chat", chatRouter({ db, logger, anthropic: deps.anthropic ?? {} }));
   api.use("/inbox", inboxRouter(db));
+  api.use("/reservations", reservationsRouter(db));
 
-  // The owner-only guard, wired since S6 so its rejection is provable.
-  api.get("/kontrol/audit", requireOwner(logger), (_req, res) => {
-    res.json({ entries: [] });
-  });
+  // Owner-only, and the guard is passed in rather than applied here so the
+  // mount keeps saying who may reach it. Wired since S6 for the rejection; the
+  // body answered a hardcoded empty list until the router behind it was real.
+  api.use("/kontrol", kontrolRouter({ db, requireOwner: requireOwner(logger) }));
 
   app.use("/api", api);
   app.use(notFoundHandler);

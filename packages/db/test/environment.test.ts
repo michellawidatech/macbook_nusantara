@@ -20,6 +20,7 @@ import {
   resolveAppEnvironment,
   resolveDatabaseUrl,
 } from "../src/environment.js";
+import { resolveConnection } from "../src/client.js";
 
 const dsn = (database: string) =>
   `postgresql://nusantara@localhost:5432/${database}`;
@@ -137,5 +138,61 @@ describe("resolveDatabaseUrl", () => {
       url,
       database: "nusantara_pos_test",
     });
+  });
+});
+
+/**
+ * The guard's wiring, not its rules.
+ *
+ * `resolveDatabaseUrl` was written, tested and never called — `db()` was a bare
+ * `new PrismaClient()`, so the refusal above protected nothing at runtime.
+ * `resolveConnection` is the seam that fixes that, and it has one job the
+ * resolver cannot do alone: agree with Prisma about WHERE the URL comes from.
+ *
+ * Prisma Client 6 reads `packages/db/.env` by itself when the shell is silent
+ * (verified against the real client, not assumed). A guard that read only the
+ * environment would pass a process whose connection then came from the file.
+ * So these cases are about precedence and coverage, not about the four
+ * refusals — those are already covered above.
+ */
+describe("resolveConnection", () => {
+  it("checks the shell's URL when there is one", () => {
+    const url = dsn("nusantara_pos_test");
+    expect(resolveConnection({ DATABASE_URL: url })).toEqual({
+      environment: "dev",
+      url,
+      database: "nusantara_pos_test",
+    });
+  });
+
+  it("refuses the retired database from the shell", () => {
+    expect(() =>
+      resolveConnection({ DATABASE_URL: dsn(RETIRED_DATABASE) }),
+    ).toThrow(DatabaseEnvironmentError);
+  });
+
+  it("falls back to packages/db/.env, which is what Prisma would have read", () => {
+    // Not asserting a particular database: this is a developer's file and it
+    // is allowed to differ. What must hold is that the fallback RESOLVES —
+    // i.e. the file is found and parsed — because before this seam a silent
+    // shell meant Prisma opened that file's database unchecked.
+    const resolved = resolveConnection({});
+    expect(resolved.url).toMatch(/^postgres(ql)?:\/\//);
+    expect(resolved.database).not.toBe(RETIRED_DATABASE);
+  });
+
+  it("prefers the shell over the file, the order Prisma itself applies", () => {
+    const url = dsn("nusantara_pos_test");
+    expect(resolveConnection({ DATABASE_URL: url }).url).toBe(url);
+    expect(resolveConnection({}).url).not.toBe(url);
+  });
+
+  it("treats a blank shell value as absent rather than as a broken DSN", () => {
+    // `DATABASE_URL=` in a shell profile is how a variable gets unset by
+    // accident. Reading it literally would fail with "not a connection string"
+    // and send somebody hunting a typo in a URL that is not there.
+    expect(resolveConnection({ DATABASE_URL: "   " })).toEqual(
+      resolveConnection({}),
+    );
   });
 });

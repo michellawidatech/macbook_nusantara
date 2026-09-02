@@ -25,9 +25,18 @@ import { ProTable } from "../../components/ProTable";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { fmtRp, fmtDate, fmtDateTime } from "../../lib/format.js";
 import { describeDiscount } from "../../lib/pricing.js";
+import { describeDiscountText } from "../../lib/discountText.js";
 import { useDb, mutate } from "../../mock/store.js";
 import type { Discount } from "../../mock/seed.js";
+import { useTranslation } from "react-i18next";
 
+/**
+ * The state a discount is in.
+ *
+ * A plain function, not a hook, so there is no `t` here — the labels stay
+ * English and ARE their own catalogue keys, which the caller runs through
+ * `t()`. Same arrangement as the nav labels; `i18n/catalogue.ts` says why.
+ */
 function statusOf(d: Discount): { label: string; color: string } {
   const today = new Date().toISOString().slice(0, 10);
   if (!d.active) return { label: "Off", color: "default" };
@@ -41,6 +50,7 @@ function statusOf(d: Discount): { label: string; color: string } {
 }
 
 export function DiscountsPage() {
+  const { t } = useTranslation();
   const db = useDb();
   const navigate = useNavigate();
   const { compact } = useLayoutMode();
@@ -57,11 +67,11 @@ export function DiscountsPage() {
 
   return (
     <PageContainer
-      title="Manage Discounts"
+      title={t("discounts.discount", "Discount")}
       actions={[
         {
           key: "add",
-          label: "Add discount",
+          label: t("discounts.addDiscount", "Add discount"),
           icon: <PlusOutlined />,
           type: "primary",
           onClick: () => navigate("/discounts/new"),
@@ -72,7 +82,10 @@ export function DiscountsPage() {
         <ProTable
           rowKey="id"
           dataSource={db.discounts}
-          searchPlaceholder="Search name, code or scope"
+          searchPlaceholder={t(
+            "discounts.searchNameCodeOrScope",
+            "Search name, code or scope",
+          )}
           // The whole row opens the history — a discount's name is the thing
           // you would click, and making only one cell clickable is a target
           // people miss. The switch stops propagation so toggling it on or off
@@ -83,7 +96,7 @@ export function DiscountsPage() {
           })}
           columns={[
             {
-              title: "Discount",
+              title: t("discounts.discount", "Discount"),
               key: "name",
               searchable: true,
               sortValue: (d) => d.name,
@@ -98,7 +111,7 @@ export function DiscountsPage() {
               ),
             },
             {
-              title: "Takes off",
+              title: t("discounts.takesOff", "Takes off"),
               key: "value",
               // A bundle has no single "amount off" to sort by — what it saves
               // depends on the basket — so it sorts on the bundle price, which
@@ -107,10 +120,10 @@ export function DiscountsPage() {
                 d.type === "PCT"
                   ? (d.pct ?? 0)
                   : (d.amountRp ?? d.bundlePriceRp ?? 0),
-              render: (_, d) => describeDiscount(d),
+              render: (_, d) => describeDiscountText(describeDiscount(d), t),
             },
             {
-              title: "Kind",
+              title: t("discounts.kind", "Kind"),
               key: "kind",
               facet: true,
               width: 110,
@@ -131,14 +144,14 @@ export function DiscountsPage() {
               ),
             },
             {
-              title: "Used",
+              title: t("discounts.used", "Used"),
               key: "used",
               sortValue: (d) => d.used,
               render: (_, d) =>
                 `${d.used}${d.usageLimit ? ` / ${d.usageLimit}` : ""}`,
             },
             {
-              title: "Duration",
+              title: t("discounts.duration", "Duration"),
               key: "duration",
               sortValue: (d) => d.fromDate ?? "",
               render: (_, d) =>
@@ -147,24 +160,26 @@ export function DiscountsPage() {
                   : "Always",
             },
             {
-              title: "Applies to",
+              title: t("discounts.appliesTo", "Applies to"),
               dataIndex: "scope",
               facet: true,
               searchable: true,
               render: (v) => <Tag>{v}</Tag>,
             },
             {
-              title: "Status",
+              title: t("discounts.status", "Status"),
               key: "status",
               facet: true,
-              sortValue: (d) => statusOf(d).label,
+              // Translated at the call site — `statusOf` has no hook in scope
+              // and returns the English, which is its own catalogue key.
+              sortValue: (d) => t(statusOf(d).label),
               render: (_, d) => {
                 const s = statusOf(d);
-                return <Tag color={s.color}>{s.label}</Tag>;
+                return <Tag color={s.color}>{t(s.label)}</Tag>;
               },
             },
             {
-              title: "On",
+              title: t("discounts.on", "On"),
               key: "on",
               width: 60,
               render: (_, d) => (
@@ -203,18 +218,22 @@ export function DiscountsPage() {
               items={[
                 {
                   key: "c",
-                  label: "Code",
+                  label: t("discounts.code", "Code"),
                   children: <Tag>{discount.code}</Tag>,
                 },
                 {
                   key: "v",
-                  label: "Takes off",
-                  children: describeDiscount(discount),
+                  label: t("discounts.takesOff", "Takes off"),
+                  children: describeDiscountText(describeDiscount(discount), t),
                 },
-                { key: "s", label: "Applies to", children: discount.scope },
+                {
+                  key: "s",
+                  label: t("discounts.appliesTo", "Applies to"),
+                  children: discount.scope,
+                },
                 {
                   key: "w",
-                  label: "Active period",
+                  label: t("discounts.activePeriod", "Active period"),
                   children: discount.fromDate
                     ? `${fmtDate(discount.fromDate)} – ${discount.toDate ? fmtDate(discount.toDate) : "…"}`
                     : "Always",
@@ -224,7 +243,7 @@ export function DiscountsPage() {
             <Flex gap={16} wrap>
               <Card size="small" style={{ flex: 1, minWidth: 180 }}>
                 <Statistic
-                  title="Times redeemed"
+                  title={t("discounts.timesRedeemed", "Times redeemed")}
                   value={discount.used}
                   suffix={
                     discount.usageLimit ? `/ ${discount.usageLimit}` : undefined
@@ -232,10 +251,16 @@ export function DiscountsPage() {
                 />
               </Card>
               <Card size="small" style={{ flex: 1, minWidth: 180 }}>
-                <Statistic title="Given away" value={fmtRp(redeemed)} />
+                <Statistic
+                  title={t("discounts.givenAway", "Given away")}
+                  value={fmtRp(redeemed)}
+                />
               </Card>
               <Card size="small" style={{ flex: 1, minWidth: 180 }}>
-                <Statistic title="Sales it appears on" value={usage.length} />
+                <Statistic
+                  title={t("discounts.salesItAppearsOn", "Sales it appears on")}
+                  value={usage.length}
+                />
               </Card>
             </Flex>
 
@@ -252,23 +277,35 @@ export function DiscountsPage() {
             )}
 
             {usage.length === 0 ? (
-              <Empty description="Not redeemed on any sale yet." />
+              <Empty
+                description={t(
+                  "discounts.notRedeemedOnAnySale",
+                  "Not redeemed on any sale yet.",
+                )}
+              />
             ) : (
               <ProTable
                 rowKey="id"
                 dataSource={usage}
-                searchPlaceholder="Search order code or customer"
+                searchPlaceholder={t(
+                  "discounts.searchOrderCodeOrCustomer",
+                  "Search order code or customer",
+                )}
                 cards={false}
                 columns={[
-                  { title: "Order", dataIndex: "code", searchable: true },
                   {
-                    title: "When",
+                    title: t("discounts.order", "Order"),
+                    dataIndex: "code",
+                    searchable: true,
+                  },
+                  {
+                    title: t("discounts.when", "When"),
                     dataIndex: "ts",
                     defaultSortOrder: "descend",
                     render: fmtDateTime,
                   },
                   {
-                    title: "Customer",
+                    title: t("discounts.customer", "Customer"),
                     key: "customer",
                     searchable: true,
                     sortValue: (o) =>
@@ -279,26 +316,26 @@ export function DiscountsPage() {
                       "Walk-in",
                   },
                   {
-                    title: "Channel",
+                    title: t("discounts.channel", "Channel"),
                     dataIndex: "source",
                     facet: true,
                     render: (v) => <Tag>{v}</Tag>,
                   },
                   {
-                    title: "Units",
+                    title: t("discounts.units", "Units"),
                     key: "units",
                     sortValue: (o) => o.serials.length,
                     render: (_, o) => o.serials.join(", "),
                   },
                   {
-                    title: "Taken off",
+                    title: t("discounts.takenOff", "Taken off"),
                     key: "off",
                     align: "right",
                     sortValue: (o) => o.discount,
                     render: (_, o) => fmtRp(o.discount),
                   },
                   {
-                    title: "Order total",
+                    title: t("discounts.orderTotal", "Order total"),
                     key: "total",
                     align: "right",
                     sortValue: (o) => o.total,

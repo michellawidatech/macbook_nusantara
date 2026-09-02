@@ -29,8 +29,32 @@ interface AppleDbDevice {
   type?: string;
   soc?: string;
   released?: string | string[];
-  info?: { type?: string; RAM?: string[]; Storage?: string[] }[];
+  /**
+   * `RAM`/`Storage` are an array on most rows and a bare string on some — a
+   * single-configuration model arrives as `RAM: "16GB"`. Both shapes are real
+   * data in the live feed; `specList` normalises them.
+   */
+  info?: {
+    type?: string;
+    RAM?: string[] | string;
+    Storage?: string[] | string;
+  }[];
   key?: string;
+}
+
+/**
+ * One spec field as a list, whichever shape AppleDB sent it in.
+ *
+ * A bare string must NOT be spread: `[..."16GB"]` is `["1","6","G","B"]`, and
+ * that is exactly how "1, 6, G, B" reached the import screen — `.length` on
+ * the string was truthy, so the array branch ran on it.
+ */
+function specList(value: string[] | string | undefined): string[] {
+  if (Array.isArray(value)) {
+    return value.map((v) => String(v).trim()).filter(Boolean);
+  }
+  if (typeof value === "string" && value.trim() !== "") return [value.trim()];
+  return [];
 }
 
 export interface ImportCandidate {
@@ -181,12 +205,10 @@ function specsFor(
   specSource: ImportCandidate["specSource"];
 } {
   const memory = device.info?.find((i) => i.type === "Memory");
-  if (memory?.RAM?.length && memory?.Storage?.length) {
-    return {
-      ram: [...memory.RAM],
-      ssd: [...memory.Storage],
-      specSource: "appledb",
-    };
+  const ram = specList(memory?.RAM);
+  const ssd = specList(memory?.Storage);
+  if (ram.length > 0 && ssd.length > 0) {
+    return { ram, ssd, specSource: "appledb" };
   }
   const curated = FALLBACK_SPECS[identifier];
   if (curated) return { ...curated, specSource: "curated" };

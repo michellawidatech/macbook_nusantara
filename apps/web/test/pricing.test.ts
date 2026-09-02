@@ -29,10 +29,14 @@ const gearup = (d: MockDb) => d.discounts.find((x) => x.code === "GEARUP2")!;
 function lineFor(d: MockDb, modelId: string): BasketLine {
   const skuIds = d.skus.filter((s) => s.modelId === modelId).map((s) => s.id);
   const unit = d.units.find(
-    (u) =>
-      skuIds.includes(u.skuId) && u.status === "TERSEDIA" && u.price !== null,
+    (u) => skuIds.includes(u.skuId) && u.status === "TERSEDIA",
   )!;
-  return { serial: unit.serial, price: unit.price! };
+  // The variant's price, since 2026-08-27. Every available unit of a SKU
+  // quotes it, so "the cheapest one" is now a question about SKUs.
+  return {
+    serial: unit.serial,
+    price: d.skus.find((s) => s.id === unit.skuId)!.price,
+  };
 }
 
 beforeEach(() => {
@@ -207,9 +211,11 @@ describe("recommendFor", () => {
   it("keeps offering accessories once one is on the sale, and flags the bundle", () => {
     const sleeve = lineFor(db, "m-sleeve");
     const addons = recommendFor(db, [sleeve]).filter((r) => r.kind === "ADDON");
-    const accessories = addons.filter((a) => a.bundleNote !== undefined);
+    const accessories = addons.filter((a) => a.bundle !== undefined);
     expect(accessories.length).toBeGreaterThan(0);
-    expect(accessories[0]!.bundleNote).toContain("GEARUP2");
+    // The code, not a sentence about it: the phrasing moved to the call
+    // site so it can go through `t()` — see `WhyReason`.
+    expect(accessories[0]!.bundle?.code).toBe("GEARUP2");
   });
 
   it("only ever recommends serials that are actually in stock", () => {
@@ -217,7 +223,9 @@ describe("recommendFor", () => {
     for (const r of recommendFor(db, [air])) {
       const unit = db.units.find((u) => u.serial === r.serial)!;
       expect(unit.status).toBe("TERSEDIA");
-      expect(unit.price).not.toBeNull();
+      // The price is the variant's, and a SKU always has one — so "in stock"
+      // is now the whole claim, where it used to need "and priced" beside it.
+      expect(db.skus.find((s) => s.id === unit.skuId)!.price).toBeGreaterThan(0);
     }
   });
 

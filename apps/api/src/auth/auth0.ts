@@ -122,6 +122,42 @@ export interface Auth0MiddlewareDeps {
 }
 
 /**
+ * Whether the Auth0 session cookie may carry `Secure`, saying so out loud when
+ * it may not.
+ *
+ * A `Secure` cookie is not sent over http, so pairing one with an http
+ * `baseURL` produces a session that silently never arrives; the SDK used to
+ * refuse the combination outright, which is a good failure on a laptop and an
+ * unmissable one in a deploy. Relaxing it for local dev is right, but a bare
+ * `&&` turns the same misconfiguration in production into an unlogged
+ * downgrade — the deployment that most needs the warning is the one nobody is
+ * reading the boot output of, so the line has to be worth finding.
+ *
+ * Not fatal: `cookieSecure` is itself an operator's opt-out
+ * (`SESSION_COOKIE_INSECURE=1`), and refusing to boot over a derived value
+ * would take the shop offline for a setting that has a legitimate off state.
+ */
+function secureAuth0Cookie(deps: {
+  readonly cookieSecure: boolean;
+  readonly baseUrl: string;
+  readonly logger: Logger;
+}): boolean {
+  if (!deps.cookieSecure) return false;
+  if (deps.baseUrl.startsWith("https://")) return true;
+  deps.logger.warn(
+    {
+      evt: "auth0.cookie.secure_downgraded",
+      ctx: { baseUrl: deps.baseUrl },
+    },
+    "AUTH0_BASE_URL is not https, so the Auth0 session cookie is being issued " +
+      "WITHOUT Secure and can travel in cleartext. Expected on a laptop. In " +
+      "production behind a TLS-terminating proxy, set AUTH0_BASE_URL to the " +
+      "public https origin — the browser is where the scheme matters.",
+  );
+  return false;
+}
+
+/**
  * The SDK's middleware, mounted app-wide.
  *
  * It serves `/login`, `/logout` and `/callback`, and populates `req.oidc` on
@@ -175,7 +211,20 @@ export function auth0Middleware(deps: Auth0MiddlewareDeps): RequestHandler {
       cookie: {
         httpOnly: true,
         sameSite: "Lax",
-        secure: cookieSecure,
+        // Never stricter than the scheme can carry. `cookieSecure` defaults to
+        // on, but a `Secure` cookie is not sent over http, so combining it with
+        // an http base URL yields a session that silently never arrives — the
+        // SDK refuses the pair outright rather than let that ship. Production
+        // is https and keeps `Secure`; local dev over http does not.
+        //
+        // The downgrade is announced, and that is the point of the warning
+        // above it. A boot that quietly drops `Secure` because AUTH0_BASE_URL
+        // was set to an internal `http://api:4000` behind a TLS-terminating
+        // proxy looks identical to a correct one — while `config.cookieSecure`
+        // stays true, so HSTS and this app's own session cookie go on claiming
+        // https. What used to be a refusal the operator could not miss must at
+        // least be a line the operator can find.
+        secure: secureAuth0Cookie({ cookieSecure, baseUrl: auth0.baseUrl, logger }),
       },
     },
 

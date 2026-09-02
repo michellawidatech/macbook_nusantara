@@ -12,11 +12,11 @@ import {
   Flex,
   Form,
   Input,
+  Modal,
   Select,
   Tag,
   Typography,
 } from "antd";
-import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { MoneyInput } from "../../components/MoneyInput";
 import { fmtRp, fmtDate } from "../../lib/format.js";
@@ -27,11 +27,21 @@ import {
   docCode,
   appendEvent,
 } from "../../mock/store.js";
+import type { ReturnRec } from "../../mock/seed.js";
+import { FORM_CENTRE } from "../../theme/tokens";
+import { useTranslation } from "react-i18next";
 
 /** The label that turns on the "specify" field. Matched case-insensitively. */
 const OTHER = "other";
 
-export function SupplierReturnPage() {
+export function SupplierReturnPanel({
+  addOpen,
+  onCloseAdd,
+}: {
+  addOpen: boolean;
+  onCloseAdd: () => void;
+}) {
+  const { t } = useTranslation();
   const db = useDb();
   const { message } = App.useApp();
   const [form] = Form.useForm();
@@ -86,92 +96,147 @@ export function SupplierReturnPage() {
   };
 
   return (
-    <PageContainer title="Return to Supplier">
+    <>
       <Flex vertical gap={16}>
-        <Card title="New supplier return">
-          <Form
-            form={form}
-            layout="vertical"
-            style={{ maxWidth: 640 }}
-            onFinish={submit}
-          >
-            <Form.Item
-              name="serial"
-              label="Unit in inventory"
-              rules={[{ required: true }]}
+        {/*
+         * The form is a modal, not a side drawer (owner decision 2026-08-26).
+         *
+         * Recording a return is a form with its own beginning and end — pick a
+         * unit, say why, save — and nothing on the history table behind it
+         * informs a single field. A drawer is for work you do WHILE reading
+         * what is underneath; this is work you do INSTEAD. Centring it also
+         * puts the fields under the reader's eye rather than out at the right
+         * margin of a wide screen, which is the same reasoning that centred
+         * every other form in this app.
+         */}
+        <Modal
+          open={addOpen}
+          onCancel={onCloseAdd}
+          width={720}
+          title={t("returnSupplier.recordAReturn", "Record a return")}
+          destroyOnHidden
+          // The form owns its own submit button, at the foot of the fields
+          // where it already was. A second one in the modal's chrome would be
+          // two Save buttons for one form.
+          footer={null}
+        >
+          <>
+            <Form
+              form={form}
+              layout="vertical"
+              style={{ ...FORM_CENTRE, maxWidth: 640 }}
+              onFinish={submit}
             >
-              <Select
-                showSearch
-                optionFilterProp="label"
-                placeholder="Search serial"
-                options={returnable.map((u) => ({
-                  value: u.serial,
-                  label: label(u.serial),
-                }))}
-                onChange={(serial: string) => {
-                  const u = db.units.find((x) => x.serial === serial);
-                  const sup = db.pos.find((p) => p.id === u?.poId)?.supplierId;
-                  form.setFieldsValue({ supplierId: sup, credit: u?.buy });
-                }}
-              />
-            </Form.Item>
-            <Form.Item
-              name="supplierId"
-              label="Supplier"
-              rules={[{ required: true }]}
-            >
-              <Select
-                showSearch
-                optionFilterProp="label"
-                options={db.suppliers.map((s) => ({
-                  value: s.id,
-                  label: s.name,
-                }))}
-              />
-            </Form.Item>
-            <Form.Item
-              name="reason"
-              label="Reason"
-              tooltip="Managed in Settings → Reasons per activity"
-              rules={[{ required: true }]}
-            >
-              <Select
-                showSearch
-                optionFilterProp="label"
-                placeholder="Pick or search a reason"
-                options={reasons.map((r) => ({
-                  value: r.label,
-                  label: r.label,
-                }))}
-                onChange={setReason}
-              />
-            </Form.Item>
-            {needsDetail && (
               <Form.Item
-                name="reasonDetail"
-                label="Specify the reason"
-                rules={[
-                  {
-                    required: true,
-                    message: "Say what is actually wrong with it",
-                  },
-                ]}
+                name="serial"
+                label={t("returnSupplier.unitInInventory", "Unit in inventory")}
+                rules={[{ required: true }]}
               >
-                <Input.TextArea
-                  rows={2}
-                  placeholder="e.g. dead pixel cluster, hinge play"
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder={t(
+                    "returnSupplier.searchSerial",
+                    "Search serial",
+                  )}
+                  options={returnable.map((u) => ({
+                    value: u.serial,
+                    label: label(u.serial),
+                  }))}
+                  onChange={(serial: string) => {
+                    const u = db.units.find((x) => x.serial === serial);
+                    const sup = db.pos.find(
+                      (p) => p.id === u?.poId,
+                    )?.supplierId;
+                    form.setFieldsValue({ supplierId: sup, credit: u?.buy });
+                  }}
                 />
               </Form.Item>
-            )}
-            <Form.Item name="credit" label="Expected credit">
-              <MoneyInput />
-            </Form.Item>
-            <Button type="primary" htmlType="submit">
-              Record supplier return
-            </Button>
-          </Form>
-        </Card>
-        <Card title="Supplier return history">
+              <Form.Item
+                name="supplierId"
+                label={t("returnSupplier.supplier", "Supplier")}
+                rules={[{ required: true }]}
+              >
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  options={db.suppliers.map((s) => ({
+                    value: s.id,
+                    label: s.name,
+                  }))}
+                />
+              </Form.Item>
+              <Form.Item
+                name="reason"
+                label={t("returnSupplier.reason", "Reason")}
+                tooltip={t(
+                  "returnSupplier.managedInSettingsReasonsPer",
+                  "Managed in Settings → Reasons per activity",
+                )}
+                rules={[{ required: true }]}
+              >
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder={t(
+                    "returnSupplier.pickOrSearchAReason",
+                    "Pick or search a reason",
+                  )}
+                  options={reasons.map((r) => ({
+                    value: r.label,
+                    label: r.label,
+                  }))}
+                  onChange={setReason}
+                />
+              </Form.Item>
+              {needsDetail && (
+                <Form.Item
+                  name="reasonDetail"
+                  label={t(
+                    "returnSupplier.specifyTheReason",
+                    "Specify the reason",
+                  )}
+                  rules={[
+                    {
+                      required: true,
+                      message: t(
+                        "returnSupplier.sayWhatIsActuallyWrong",
+                        "Say what is actually wrong with it",
+                      ),
+                    },
+                  ]}
+                >
+                  <Input.TextArea
+                    rows={2}
+                    placeholder={t(
+                      "returnSupplier.eGDeadPixelCluster",
+                      "e.g. dead pixel cluster, hinge play",
+                    )}
+                  />
+                </Form.Item>
+              )}
+              <Form.Item
+                name="credit"
+                label={t("returnSupplier.expectedCredit", "Expected credit")}
+              >
+                <MoneyInput />
+              </Form.Item>
+              <Button type="primary" htmlType="submit">
+                {t(
+                  "returnSupplier.recordSupplierReturn",
+                  "Record supplier return",
+                )}
+              </Button>
+            </Form>
+          </>
+        </Modal>
+
+        <Card
+          title={t(
+            "returnSupplier.supplierReturnHistory",
+            "Supplier return history",
+          )}
+        >
           <Typography.Paragraph type="secondary">
             Includes units rejected at QC — those are opened by the Stock In
             page, not this form.
@@ -179,12 +244,23 @@ export function SupplierReturnPage() {
           <ProTable
             rowKey="id"
             dataSource={db.returns.filter((r) => r.kind === "SUPPLIER")}
-            searchPlaceholder="Search code, serial, supplier or reason"
+            searchPlaceholder={t(
+              "returnSupplier.searchCodeSerialSupplierOr",
+              "Search code, serial, supplier or reason",
+            )}
             columns={[
-              { title: "Code", dataIndex: "code", searchable: true },
-              { title: "Serial", dataIndex: "serial", searchable: true },
               {
-                title: "Product",
+                title: t("returnSupplier.code", "Code"),
+                dataIndex: "code",
+                searchable: true,
+              },
+              {
+                title: t("returnSupplier.serial", "Serial"),
+                dataIndex: "serial",
+                searchable: true,
+              },
+              {
+                title: t("returnSupplier.product", "Product"),
                 key: "product",
                 facet: true,
                 sortValue: (r) => {
@@ -199,7 +275,7 @@ export function SupplierReturnPage() {
                 },
               },
               {
-                title: "Supplier",
+                title: t("returnSupplier.supplier", "Supplier"),
                 key: "supplier",
                 facet: true,
                 searchable: true,
@@ -209,7 +285,7 @@ export function SupplierReturnPage() {
                   db.suppliers.find((s) => s.id === r.supplierId)?.name ?? "—",
               },
               {
-                title: "Reason",
+                title: t("returnSupplier.reason", "Reason"),
                 key: "reason",
                 facet: true,
                 searchable: true,
@@ -225,7 +301,7 @@ export function SupplierReturnPage() {
               {
                 // The owner's ask: a QC rejection is a different kind of event
                 // from a considered return, and the two were indistinguishable.
-                title: "Origin",
+                title: t("returnSupplier.origin", "Origin"),
                 key: "origin",
                 facet: true,
                 sortValue: (r) =>
@@ -238,28 +314,38 @@ export function SupplierReturnPage() {
                   ),
               },
               {
-                title: "Date",
+                title: t("returnSupplier.date", "Date"),
                 dataIndex: "date",
                 defaultSortOrder: "descend",
                 render: fmtDate,
               },
               {
-                title: "Expected credit",
+                title: t("returnSupplier.expectedCredit", "Expected credit"),
                 key: "credit",
                 align: "right",
                 sortValue: (r) => r.expectedCredit ?? 0,
                 render: (_, r) => fmtRp(r.expectedCredit ?? 0),
               },
               {
-                title: "Status",
+                title: t("returnSupplier.status", "Status"),
                 dataIndex: "status",
                 facet: true,
-                render: (v) => <Tag color="green">{v}</Tag>,
+                // Coloured by what it says, not green for everything. A claim
+                // the shop withdrew — a QC rejection reopened because it was
+                // the wrong machine (2026-08-27) — reading as a green DONE is
+                // the shop telling itself it is owed money it has given up on.
+                render: (v: ReturnRec["status"]) => (
+                  <Tag color={v === "CANCELLED" ? "default" : "green"}>
+                    {v === "CANCELLED"
+                      ? t("returnSupplier.withdrawn", "Withdrawn")
+                      : v}
+                  </Tag>
+                ),
               },
             ]}
           />
         </Card>
       </Flex>
-    </PageContainer>
+    </>
   );
 }

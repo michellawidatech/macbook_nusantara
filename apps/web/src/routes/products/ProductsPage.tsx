@@ -9,13 +9,13 @@ import {
   Alert,
   Button,
   Card,
-  Drawer,
   Flex,
   Form,
   Input,
   InputNumber,
   Modal,
   Select,
+  Switch,
   Table,
   Tag,
   Tooltip,
@@ -24,17 +24,21 @@ import {
 import {
   CloudDownloadOutlined,
   DeleteOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
   PlusOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
+import { EditableTable } from "../../components/EditableTable";
 import { MoneyInput } from "../../components/MoneyInput";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { fmtRp } from "../../lib/format.js";
 import { fetchMacModels, type ImportCandidate } from "../../lib/appledb.js";
 import { useDb, mutate, nextId } from "../../mock/store.js";
-import type { CatalogModel } from "../../mock/seed.js";
+import type { CatalogModel, Sku } from "../../mock/seed.js";
+import { useTranslation } from "react-i18next";
 
 function combos(axes: { name: string; values: string[] }[]): string[] {
   return axes.reduce<string[]>(
@@ -54,6 +58,7 @@ const SPEC_SOURCE_TAG: Record<
 };
 
 export function ProductsPage() {
+  const { t } = useTranslation();
   const db = useDb();
   const { message, modal } = App.useApp();
   const { compact } = useLayoutMode();
@@ -65,6 +70,16 @@ export function ProductsPage() {
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<ImportCandidate[]>([]);
+  /**
+   * Show the hidden models instead of the visible ones.
+   *
+   * A switch between two views rather than a "include hidden" that mixes them,
+   * because the two are read for different reasons: the normal list is "what
+   * could we add?", and this one is "did we skip something we should not
+   * have?". Mixing them puts the second question's rows in the way of the
+   * first, which is the thing hiding was asked for.
+   */
+  const [showHidden, setShowHidden] = useState(false);
 
   const [addOpen, setAddOpen] = useState(false);
   const [addForm] = Form.useForm<{
@@ -80,6 +95,38 @@ export function ProductsPage() {
   const [variantForm] = Form.useForm<{ variantLabel: string; price: number }>();
 
   const model = editing && db.models.find((m) => m.id === editing.id);
+
+  /**
+   * AppleDB models the shop has hidden (owner revision 2026-08-28).
+   *
+   * It was a "not selling" MARK, which dimmed the row and left it in the
+   * table. Hiding takes it out. AppleDB's feed is thousands of models and this
+   * shop sells a few dozen, so a list where every rejected model is still
+   * there — merely greyer — is still a list nobody can read; the point of
+   * saying "not this one" is that you stop being shown it.
+   *
+   * Nothing is lost. `showHidden` puts them all back on screen, where each one
+   * can be unhidden from the same button that hid it. Keyed on AppleDB's
+   * stable `key`, so it survives a re-fetch AND a rename — which is what makes
+   * next year's feed readable: the deliberate skips are already out of the
+   * way, and what is left is what is genuinely new.
+   */
+  const hidden = new Set(db.appleDbHidden);
+  const toggleHidden = (c: ImportCandidate) => {
+    const wasHidden = hidden.has(c.key);
+    mutate((d) => {
+      d.appleDbHidden = wasHidden
+        ? d.appleDbHidden.filter((k) => k !== c.key)
+        : [...d.appleDbHidden, c.key];
+    });
+    message.success(
+      wasHidden
+        ? t("products.unhiddenToast", "{{name}} is back on the list.", {
+            name: c.name,
+          })
+        : t("products.hiddenToast", "{{name}} hidden.", { name: c.name }),
+    );
+  };
 
   const generate = (mode: "APPEND" | "REPLACE") => {
     const m = model!;
@@ -263,18 +310,18 @@ export function ProductsPage() {
 
   return (
     <PageContainer
-      title="Products"
+      title={t("products.masterProduct", "Master Product")}
       actions={[
         {
           key: "add",
-          label: "Add product",
+          label: t("products.addProduct", "Add product"),
           icon: <PlusOutlined />,
           type: "primary",
           onClick: () => setAddOpen(true),
         },
         {
           key: "import",
-          label: "Import from AppleDB",
+          label: t("products.importFromAppledb", "Import from AppleDB"),
           icon: <CloudDownloadOutlined />,
           onClick: openImport,
         },
@@ -287,7 +334,10 @@ export function ProductsPage() {
         <ProTable
           rowKey="id"
           dataSource={db.models}
-          searchPlaceholder="Search model, category or Apple identifier"
+          searchPlaceholder={t(
+            "products.searchModelCategoryOrApple",
+            "Search model, category or Apple identifier",
+          )}
           expandable={{
             expandedRowRender: (m) => (
               <Table
@@ -297,21 +347,29 @@ export function ProductsPage() {
                 dataSource={db.skus.filter((s) => s.modelId === m.id)}
                 columns={[
                   { title: "SKU", dataIndex: "code" },
-                  { title: "Variant", dataIndex: "variantLabel" },
                   {
-                    title: "List price",
+                    title: t("products.variant", "Variant"),
+                    dataIndex: "variantLabel",
+                  },
+                  {
+                    title: t("products.listPrice", "List price"),
                     align: "right",
                     render: (_, s) =>
                       s.price > 0 ? (
                         fmtRp(s.price)
                       ) : (
-                        <Tooltip title="Imported from AppleDB, which carries no prices">
+                        <Tooltip
+                          title={t(
+                            "products.importedFromAppledbWhichCarries",
+                            "Imported from AppleDB, which carries no prices",
+                          )}
+                        >
                           <Tag color="orange">not priced</Tag>
                         </Tooltip>
                       ),
                   },
                   {
-                    title: "In stock",
+                    title: t("products.inStock", "In stock"),
                     render: (_, s) =>
                       db.units.filter(
                         (u) =>
@@ -324,27 +382,31 @@ export function ProductsPage() {
             ),
           }}
           columns={[
-            { title: "Model", dataIndex: "name", searchable: true },
             {
-              title: "Category",
+              title: t("products.model", "Model"),
+              dataIndex: "name",
+              searchable: true,
+            },
+            {
+              title: t("products.category", "Category"),
               dataIndex: "category",
               facet: true,
               searchable: true,
               render: (v) => <Tag>{v}</Tag>,
             },
             {
-              title: "Release year",
+              title: t("products.releaseYear", "Release year"),
               dataIndex: "releaseYear",
               defaultSortOrder: "descend",
             },
             {
-              title: "Apple ID",
+              title: t("products.appleId", "Apple ID"),
               dataIndex: "identifier",
               searchable: true,
               render: (v) => v ?? "—",
             },
             {
-              title: "Source",
+              title: t("products.source", "Source"),
               key: "source",
               facet: true,
               sortValue: (m) => (m.source === "APPLEDB" ? "AppleDB" : "Manual"),
@@ -356,14 +418,14 @@ export function ProductsPage() {
                 ),
             },
             {
-              title: "Variant axes",
+              title: t("products.variants", "Variants"),
               key: "axes",
               sortValue: (m) => m.axes.length,
               render: (_, m) =>
                 m.axes.map((a) => `${a.name} (${a.values.length})`).join(" · "),
             },
             {
-              title: "Variants",
+              title: t("products.variants", "Variants"),
               key: "variants",
               sortValue: (m) =>
                 db.skus.filter((s) => s.modelId === m.id).length,
@@ -375,7 +437,7 @@ export function ProductsPage() {
               key: "actions",
               width: 60,
               render: (_, m) => (
-                <Tooltip title="Variants and axes">
+                <Tooltip title={t("products.variants", "Variants")}>
                   <Button
                     aria-label={`Variants for ${m.name}`}
                     icon={<SettingOutlined />}
@@ -390,17 +452,24 @@ export function ProductsPage() {
       </Card>
 
       <Modal
-        title="Import from AppleDB"
+        title={t("products.importFromAppledb", "Import from AppleDB")}
         open={importOpen}
         onCancel={() => setImportOpen(false)}
         footer={null}
-        width={compact ? "100%" : 980}
+        // As wide as the ten columns actually need, capped to the viewport
+        // (owner ask 2026-08-27) — 980 forced the table into its own sideways
+        // scroll on every laptop. The ceiling is the columns' own sum plus the
+        // modal's gutters; the viewport term is what keeps it responsive.
+        width={compact ? "100%" : "min(1480px, calc(100vw - 32px))"}
       >
         {importError ? (
           <Alert
             type="error"
             showIcon
-            title="Could not reach AppleDB"
+            title={t(
+              "products.couldNotReachAppledb",
+              "Could not reach AppleDB",
+            )}
             description={
               <>
                 <div>{importError}</div>
@@ -418,7 +487,7 @@ export function ProductsPage() {
                   void openImport();
                 }}
               >
-                Try again
+                {t("products.tryAgain", "Try again")}
               </Button>
             }
           />
@@ -426,14 +495,39 @@ export function ProductsPage() {
           <>
             <Typography.Paragraph type="secondary">
               Live from api.appledb.dev. Pick the models you sell — each one
-              arrives with its RAM and SSD options as variant axes. AppleDB
-              carries no prices, so imported variants start at Rp 0.
+              arrives with its RAM and SSD options as variants. AppleDB carries
+              no prices, so imported variants start at Rp 0.
             </Typography.Paragraph>
             <ProTable
               rowKey="key"
               loading={importing}
-              dataSource={candidates}
-              searchPlaceholder="Search model name, chip or Apple identifier"
+              // Hidden rows LEAVE the list — that is the whole of the owner's
+              // 2026-08-28 revision. The switch beside the search box is the
+              // way back to them.
+              dataSource={candidates.filter(
+                (c) => hidden.has(c.key) === showHidden,
+              )}
+              // A new data source is a new set of pages; without this the
+              // table can be left showing page 4 of a two-page list.
+              resetKey={String(showHidden)}
+              searchPlaceholder={t(
+                "products.searchModelNameChipOr",
+                "Search model name, chip or Apple identifier",
+              )}
+              toolbar={
+                <Flex align="center" gap={8}>
+                  <Switch
+                    checked={showHidden}
+                    onChange={setShowHidden}
+                    aria-label={t("products.showHidden", "Show hidden")}
+                  />
+                  <Typography.Text type="secondary">
+                    {t("products.showHiddenN", "Show hidden ({{count}})", {
+                      count: hidden.size,
+                    })}
+                  </Typography.Text>
+                </Flex>
+              }
               selectable
               cards={false}
               pageSize={20}
@@ -451,21 +545,29 @@ export function ProductsPage() {
                 </Button>
               )}
               columns={[
-                { title: "Model", dataIndex: "name", searchable: true },
-                { title: "Category", dataIndex: "category", facet: true },
                 {
-                  title: "Year",
+                  title: t("products.model", "Model"),
+                  dataIndex: "name",
+                  searchable: true,
+                },
+                {
+                  title: t("products.category", "Category"),
+                  dataIndex: "category",
+                  facet: true,
+                },
+                {
+                  title: t("products.year", "Year"),
                   dataIndex: "releaseYear",
                   defaultSortOrder: "descend",
                 },
                 {
-                  title: "Chip",
+                  title: t("products.chip", "Chip"),
                   dataIndex: "chip",
                   facet: true,
                   render: (v) => v ?? "—",
                 },
                 {
-                  title: "Apple ID",
+                  title: t("products.appleId", "Apple ID"),
                   dataIndex: "identifier",
                   searchable: true,
                 },
@@ -482,7 +584,7 @@ export function ProductsPage() {
                   render: (_, c) => c.ssd.join(", "),
                 },
                 {
-                  title: "Specs",
+                  title: t("products.specs", "Specs"),
                   key: "specSource",
                   facet: true,
                   sortValue: (c) => SPEC_SOURCE_TAG[c.specSource].text,
@@ -495,7 +597,7 @@ export function ProductsPage() {
                             ? "RAM and SSD options came from AppleDB"
                             : c.specSource === "curated"
                               ? "AppleDB has no specs for this model; these are Apple's published build-to-order options"
-                              : "AppleDB has no specs for this model and it is not in our table — check the axes after importing"
+                              : "AppleDB has no specs for this model and it is not in our table — check the variants after importing"
                         }
                       >
                         <Tag color={tag.color}>{tag.text}</Tag>
@@ -504,13 +606,72 @@ export function ProductsPage() {
                   },
                 },
                 {
-                  title: "",
-                  key: "in",
-                  width: 90,
+                  // Only "Imported" is left here. A "Hidden" tag would say
+                  // what the list already says — every row in the hidden view
+                  // is hidden, and none in the normal one is.
+                  title: t("products.status", "Status"),
+                  key: "state",
+                  width: 130,
+                  facet: true,
+                  sortValue: (c) =>
+                    db.models.some((m) => m.identifier === c.identifier)
+                      ? t("products.imported", "Imported")
+                      : undefined,
                   render: (_, c) =>
                     db.models.some((m) => m.identifier === c.identifier) ? (
-                      <Tag color="green">imported</Tag>
-                    ) : null,
+                      <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                        {t("products.imported", "Imported")}
+                      </Tag>
+                    ) : (
+                      <Typography.Text type="secondary">—</Typography.Text>
+                    ),
+                },
+                {
+                  // Anchored to the right edge (owner ask 2026-08-27), so the
+                  // control is reachable without scrolling whatever the table
+                  // is scrolled to.
+                  title: "",
+                  key: "actions",
+                  width: 120,
+                  fixed: "right",
+                  render: (_, c) => {
+                    const off = hidden.has(c.key);
+                    return (
+                      <Tooltip
+                        title={
+                          off
+                            ? t(
+                                "products.unhideHint",
+                                "Put it back on the import list",
+                              )
+                            : t(
+                                "products.hideHint",
+                                "Take a model this shop does not sell off the list, so the next AppleDB update reads at a glance. Nothing is deleted — the switch above brings the hidden ones back.",
+                              )
+                        }
+                      >
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={off ? <EyeOutlined /> : <EyeInvisibleOutlined />}
+                          aria-label={
+                            off
+                              ? t("products.unhideAria", "Unhide {{name}}", {
+                                  name: c.name,
+                                })
+                              : t("products.hideAria", "Hide {{name}}", {
+                                  name: c.name,
+                                })
+                          }
+                          onClick={() => toggleHidden(c)}
+                        >
+                          {off
+                            ? t("products.unhide", "Unhide")
+                            : t("products.hide", "Hide")}
+                        </Button>
+                      </Tooltip>
+                    );
+                  },
                 },
               ]}
             />
@@ -519,11 +680,14 @@ export function ProductsPage() {
       </Modal>
 
       <Modal
-        title="Add product"
+        title={t("products.addProduct", "Add product")}
         open={addOpen}
         onCancel={() => setAddOpen(false)}
         onOk={submitAdd}
-        okText="Create product and variants"
+        okText={t(
+          "products.createProductAndVariants",
+          "Create product and variants",
+        )}
       >
         <Form
           form={addForm}
@@ -536,19 +700,21 @@ export function ProductsPage() {
         >
           <Form.Item
             name="name"
-            label="Model name"
+            label={t("products.modelName", "Model name")}
             rules={[{ required: true }]}
           >
-            <Input placeholder="e.g. MacBook Air M4" />
+            <Input
+              placeholder={t("products.eGMacbookAirM4", "e.g. MacBook Air M4")}
+            />
           </Form.Item>
           <Form.Item
             name="category"
-            label="Category"
+            label={t("products.category", "Category")}
             rules={[{ required: true }]}
           >
             <Select
               showSearch
-              placeholder="MacBook Air"
+              placeholder={t("products.macbookAir", "MacBook Air")}
               options={[
                 ...new Set([
                   ...db.models.map((m) => m.category),
@@ -563,7 +729,7 @@ export function ProductsPage() {
           </Form.Item>
           <Form.Item
             name="releaseYear"
-            label="Release year"
+            label={t("products.releaseYear", "Release year")}
             rules={[{ required: true }]}
           >
             <InputNumber min={2006} max={2100} style={{ width: 160 }} />
@@ -572,45 +738,62 @@ export function ProductsPage() {
               the model actually shipped with, and that changes every year. */}
           <Form.Item
             name="ram"
-            label="RAM options"
-            rules={[{ required: true, message: "At least one" }]}
+            label={t("products.ramOptions", "RAM options")}
+            rules={[{ required: true, message: t("form.atLeastOne", "At least one") }]}
           >
             <Select
               mode="tags"
-              placeholder="8GB, 16GB…"
+              placeholder={t("products.8gb16gb", "8GB, 16GB…")}
               open={false}
               suffixIcon={null}
             />
           </Form.Item>
           <Form.Item
             name="ssd"
-            label="SSD options"
-            rules={[{ required: true, message: "At least one" }]}
+            label={t("products.ssdOptions", "SSD options")}
+            rules={[{ required: true, message: t("form.atLeastOne", "At least one") }]}
           >
             <Select
               mode="tags"
-              placeholder="256GB, 512GB…"
+              placeholder={t("products.256gb512gb", "256GB, 512GB…")}
               open={false}
               suffixIcon={null}
             />
           </Form.Item>
           <Form.Item
             name="price"
-            label="Starting list price"
-            tooltip="Applied to every generated variant; adjust each one afterwards"
+            label={t("products.startingListPrice", "Starting list price")}
+            tooltip={t(
+              "products.appliedToEveryGeneratedVariant",
+              "Applied to every generated variant; adjust each one afterwards",
+            )}
           >
             <MoneyInput />
           </Form.Item>
         </Form>
       </Modal>
 
-      <Drawer
+      {/*
+       * Configuring a product is a modal, not a side drawer (owner decision
+       * 2026-08-26).
+       *
+       * A drawer says "keep the list in view while you work"; nothing in this
+       * panel is read against the row behind it, and the panel itself is a
+       * table of variants with its own scroll — two scrolling surfaces side by
+       * side, one of them squeezed into a 378px column. Centred and given the
+       * page's width, the variant table has room to be a table.
+       */}
+      <Modal
         title={model ? `${model.name} — variants` : ""}
         open={editing !== null}
-        size={compact ? "large" : "default"}
-        onClose={() => setEditing(null)}
-        extra={
-          model && (
+        width={compact ? "calc(100vw - 24px)" : 980}
+        onCancel={() => setEditing(null)}
+        // Nothing here is saved on an OK: every control writes straight to the
+        // store, so the only honest chrome is a way out.
+        footer={null}
+      >
+        {model && (
+          <Flex justify="flex-end" style={{ marginBottom: 12 }}>
             <Button
               type="primary"
               icon={<PlusOutlined />}
@@ -619,11 +802,10 @@ export function ProductsPage() {
                 setVariantOpen(true);
               }}
             >
-              Add variant
+              {t("products.addVariant", "Add variant")}
             </Button>
-          )
-        }
-      >
+          </Flex>
+        )}
         {model && (
           <Flex vertical gap={16}>
             {model.axes.map((a) => (
@@ -649,7 +831,7 @@ export function ProductsPage() {
                   <Input
                     size="small"
                     style={{ width: 120 }}
-                    placeholder="Add a value"
+                    placeholder={t("products.addAValue", "Add a value")}
                     value={newValue[a.name] ?? ""}
                     onChange={(e) =>
                       setNewValue({ ...newValue, [a.name]: e.target.value })
@@ -671,7 +853,10 @@ export function ProductsPage() {
             ))}
             <Flex gap={8}>
               <Input
-                placeholder="New axis, e.g. Touchpad"
+                placeholder={t(
+                  "products.newVariantEGTouch",
+                  "New variant, e.g. Touch Bar",
+                )}
                 value={newAxis}
                 onChange={(e) => setNewAxis(e.target.value)}
                 style={{ width: 220 }}
@@ -689,7 +874,7 @@ export function ProductsPage() {
                   setNewAxis("");
                 }}
               >
-                Add axis
+                {t("products.addAxis", "Add axis")}
               </Button>
             </Flex>
             <Typography.Text type="secondary">
@@ -697,33 +882,72 @@ export function ProductsPage() {
             </Typography.Text>
             <Flex gap={8}>
               <Button type="primary" onClick={() => generate("APPEND")}>
-                Append missing variants
+                {t("products.appendMissingVariants", "Append missing variants")}
               </Button>
               <Button danger onClick={() => generate("REPLACE")}>
-                Replace all
+                {t("products.replaceAll", "Replace all")}
               </Button>
             </Flex>
 
-            <Card size="small" title="Variants on this model">
-              <Table
+            <Card
+              size="small"
+              title={t(
+                "products.variantsOnThisModel",
+                "Variants on this model",
+              )}
+            >
+              <EditableTable<Sku>
                 rowKey="id"
                 size="small"
-                pagination={false}
                 dataSource={db.skus.filter((s) => s.modelId === model.id)}
+                // A price box is a cell you fill in, so this is an editor and
+                // not a list: the columns hold their widths rather than being
+                // divided up, and below `md` a variant becomes a card with its
+                // price field at full width instead of a 60px stub.
+                rowTitle={(s) => s.variantLabel}
                 columns={[
-                  { title: "Variant", dataIndex: "variantLabel" },
                   {
-                    title: "Price",
+                    title: t("products.variant", "Variant"),
+                    dataIndex: "variantLabel",
+                    width: 240,
+                    responsive: ["md" as const],
+                  },
+                  {
+                    /**
+                     * Editable here, and only here, since 2026-08-27.
+                     *
+                     * The asking price used to be set per serial at QC and
+                     * corrected per serial from Inventory. It is the variant's
+                     * now, so this is where a reprice happens — and leaving
+                     * this column read-only after that move would have meant
+                     * an existing variant's price could never be changed at
+                     * all, only set once when the variant was created.
+                     *
+                     * Inline rather than a dialog: it is one number, and the
+                     * table beside it is the context that makes the number
+                     * mean something. Committing on change matches the QC
+                     * bench's money box, which is the idiom staff already know.
+                     */
+                    title: t("products.price", "Price"),
+                    key: "price",
                     align: "right",
-                    render: (_, s) =>
-                      s.price > 0 ? (
-                        fmtRp(s.price)
-                      ) : (
-                        <Tag color="orange">not priced</Tag>
-                      ),
+                    width: 190,
+                    render: (_, s) => (
+                      <MoneyInput
+                        value={s.price > 0 ? s.price : undefined}
+                        aria-label={t("products.price", "Price")}
+                        placeholder={t("products.notPriced", "not priced")}
+                        onChange={(v) =>
+                          mutate((d) => {
+                            d.skus.find((k) => k.id === s.id)!.price = v ?? 0;
+                          })
+                        }
+                      />
+                    ),
                   },
                   {
                     title: "",
+                    key: "remove",
                     width: 46,
                     render: (_, s) => {
                       const held = db.units.some((u) => u.skuId === s.id);
@@ -745,8 +969,10 @@ export function ProductsPage() {
                             onClick={() =>
                               modal.confirm({
                                 title: `Remove ${s.variantLabel}?`,
-                                content:
+                                content: t(
+                                  "products.noStockHasEverBeen",
                                   "No stock has ever been on it, so nothing is lost.",
+                                ),
                                 okButtonProps: { danger: true },
                                 onOk: () => {
                                   mutate((d) => {
@@ -768,25 +994,28 @@ export function ProductsPage() {
             </Card>
           </Flex>
         )}
-      </Drawer>
+      </Modal>
 
       <Modal
         title={`Add variant to ${model?.name ?? ""}`}
         open={variantOpen}
         onCancel={() => setVariantOpen(false)}
         onOk={submitVariant}
-        okText="Add variant"
+        okText={t("products.addVariant", "Add variant")}
       >
         <Form form={variantForm} layout="vertical">
           <Form.Item
             name="variantLabel"
-            label="Variant"
-            tooltip="How it is written everywhere else, e.g. 16GB / 512GB"
+            label={t("products.variant", "Variant")}
+            tooltip={t(
+              "products.howItIsWrittenEverywhere",
+              "How it is written everywhere else, e.g. 16GB / 512GB",
+            )}
             rules={[{ required: true }]}
           >
-            <Input placeholder="16GB / 512GB" />
+            <Input placeholder={t("products.16gb512gb", "16GB / 512GB")} />
           </Form.Item>
-          <Form.Item name="price" label="List price">
+          <Form.Item name="price" label={t("products.listPrice", "List price")}>
             <MoneyInput />
           </Form.Item>
         </Form>

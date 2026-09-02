@@ -1,35 +1,47 @@
 /**
- * The app's standard list: a search box, per-column value filters, per-column
- * sorting, and optional row selection with bulk actions — Ant Design Pro's
- * ProTable arrangement, built on this codebase's own `DataTable`.
+ * The app's standard list: a search box, per-column filters in the column
+ * headers, per-column sorting, and optional row selection with bulk actions —
+ * Ant Design Pro's ProTable arrangement, built on this codebase's own
+ * `DataTable`.
  *
  * Why not `@ant-design/pro-components`: its peer range is `antd ^4 || ^5` and
  * this app is on antd 6. Pulling it in would run two different antd component
  * trees against one ConfigProvider. So the *arrangement* is Pro's and the
- * *components* are the ones already here — which also means every list keeps
- * `DataTable`'s two hard-won behaviours: scroll-to-load instead of a pager, and
- * cards instead of a grid on a phone.
+ * *components* are the ones already here.
  *
- * What a caller declares, and what this derives from it:
+ * ## Where the filters live, and why this file does the filtering
  *
- * - `searchable: true` on a column puts that column's text into the one search
- *   box above the table. Nothing else needs saying; the box knows what it
- *   searches because the columns said so.
- * - `facet: true` turns a column into a multi-select filter in the toolbar,
- *   with its options built from the values actually present in the data. antd's
- *   own header `filters` do this too — but they live IN the table header, and
- *   `DataTable` replaces the header with cards on a phone, so a header filter
- *   is a control that silently disappears on the device it is most needed on.
- *   The toolbar exists in both layouts.
- * - `sortValue` makes a column sortable. A column with a `dataIndex` and no
- *   `sorter` gets a generic one for free, because "sortable per column" is the
- *   house rule and opting in one column at a time is how half a table ends up
- *   unsortable.
+ * Until 2026-08-26 a filterable column rendered a multi-select in a toolbar
+ * ROW above the table. The owner asked for the control to sit in the column
+ * header instead, which is where antd puts it and where a reader looks for it.
+ * That is what `facet: true` now renders — antd's own funnel icon, checkbox
+ * list and Reset/OK.
  *
- * Selection is grid-only by the same logic as antd's header filters: antd
- * renders its checkbox column inside the table, which a phone does not draw.
- * `bulkActions` therefore only appears on a wide viewport, and a page whose
- * primary flow is a bulk action needs a per-card button too.
+ * The catch that shapes the rest of this file: `DataTable` replaces the header
+ * with cards on a phone, so a header-only filter would be a control that
+ * silently disappears on the device it is most needed on. The fix is that the
+ * header dropdown is only ever a CONTROL — this component holds the filter
+ * state and does the filtering itself:
+ *
+ * - `filters` + `filteredValue` are passed to the column, so antd paints the
+ *   dropdown and ticks the right boxes;
+ * - `onFilter` is deliberately NOT passed, so antd does not also filter, which
+ *   would apply the same predicate twice;
+ * - `onChange` reports what the user picked and the state lands here.
+ *
+ * On a phone the same state is driven by selects in the toolbar instead. One
+ * filter state, two controls — so a filter picked on a desktop survives a
+ * tablet rotating into card mode.
+ *
+ * Sorting works the same way and for a sharper reason: `DataTable` paginates,
+ * and a `sorter` function left to antd would sort only the rows on the current
+ * page. `sorter: true` renders the arrows without antd sorting anything, and
+ * the comparison happens here, over the whole list, before it is paged.
+ *
+ * Selection is grid-only by the same logic: antd renders its checkbox column
+ * inside the table, which a phone does not draw. `bulkActions` therefore only
+ * appears on a wide viewport, and a page whose primary flow is a bulk action
+ * needs a per-card button too.
  */
 import { useMemo, useState, type Key, type ReactNode } from "react";
 import { Button, Flex, Input, Select, Space, Typography, theme } from "antd";
@@ -37,21 +49,39 @@ import type { TableProps } from "antd";
 import { SPACE, TYPE } from "../theme/tokens";
 import { useLayoutMode } from "../layouts/useLayoutMode";
 import { DataTable, type DataTableProps } from "./DataTable";
+import { useTranslation } from "react-i18next";
 
 type AntColumns<T> = NonNullable<TableProps<T>["columns"]>;
 type AntColumn<T> = AntColumns<T>[number];
+type SortOrder = "ascend" | "descend" | null;
+
+/**
+ * How many distinct values a column may offer before its dropdown grows a
+ * search box of its own. Twelve is about a screenful of checkboxes; past that,
+ * scanning the list is slower than typing the first three letters.
+ */
+const FILTER_SEARCH_THRESHOLD = 12;
 
 export type ProColumn<T> = AntColumn<T> & {
   /** Fold this column's text into the search box above the table. */
   searchable?: boolean;
   /**
-   * Offer this column as a multi-select filter in the toolbar. The options are
-   * the distinct values present in `dataSource`, so a filter can never offer a
+   * Give this column a filter dropdown in its header. The options are the
+   * distinct values present in `dataSource`, so a filter can never offer a
    * value that would return nothing.
    */
   facet?: boolean;
-  /** Label for the facet control. Defaults to the column's `title`. */
+  /** Label for the phone-layout filter control. Defaults to the column's `title`. */
   facetLabel?: string;
+  /**
+   * What this column offers as filter options, when they are not its own
+   * values. A number column is the case that needs it: battery health sorts as
+   * a number and must, but faceting on the raw reading would offer four hundred
+   * one-unit options — so the column sorts on `sortValue` and filters on a band
+   * from here. Rows whose facet value is undefined are filtered OUT while that
+   * filter has anything picked, exactly as an unset `sortValue` is.
+   */
+  facetValue?: (record: T) => string | undefined | null;
   /**
    * The comparable/filterable value for a row. Required when the column has no
    * `dataIndex` (a column rendered from several fields), optional otherwise.
@@ -69,7 +99,7 @@ export interface ProTableProps<T> extends Omit<
   /** Placeholder for the search box. Omit the box entirely with `search={false}`. */
   searchPlaceholder?: string;
   search?: boolean;
-  /** Extra controls dropped into the toolbar, after the facets. */
+  /** Extra controls dropped into the toolbar, after the search box. */
   toolbar?: ReactNode;
   /** Right-hand side of the toolbar — a primary action, a count, a segmented view switch. */
   extra?: ReactNode;
@@ -101,6 +131,16 @@ function valueOf<T>(col: ProColumn<T>, record: T): string | number | undefined {
   return typeof v === "number" ? v : String(v);
 }
 
+/** What a column's filter dropdown lists, and filters on. */
+function facetOf<T>(col: ProColumn<T>, record: T): string | undefined {
+  if (col.facetValue) {
+    const v = col.facetValue(record);
+    return v == null ? undefined : String(v);
+  }
+  const v = valueOf(col, record);
+  return v === undefined ? undefined : String(v);
+}
+
 function compare(
   a: string | number | undefined,
   b: string | number | undefined,
@@ -114,7 +154,7 @@ function compare(
   return String(a).localeCompare(String(b), undefined, { numeric: true });
 }
 
-/** A stable key for a column, used for facet state and React keys. */
+/** A stable key for a column, used for filter state and React keys. */
 function colKey<T>(col: ProColumn<T>, index: number): string {
   const withKey = col as { key?: Key; dataIndex?: unknown };
   if (withKey.key !== undefined) return String(withKey.key);
@@ -125,7 +165,7 @@ function colKey<T>(col: ProColumn<T>, index: number): string {
 export function ProTable<T extends object>({
   columns,
   dataSource,
-  searchPlaceholder = "Search",
+  searchPlaceholder,
   search = true,
   toolbar,
   extra,
@@ -136,25 +176,59 @@ export function ProTable<T extends object>({
   ...rest
 }: ProTableProps<T>) {
   const { compact } = useLayoutMode();
+  const { t } = useTranslation();
   const {
     token: { colorTextSecondary, colorFillTertiary, colorBorderSecondary },
   } = theme.useToken();
   const [query, setQuery] = useState("");
-  const [facets, setFacets] = useState<Record<string, string[]>>({});
+  const [filters, setFilters] = useState<Record<string, string[]>>({});
   const [selectedKeys, setSelectedKeys] = useState<Key[]>([]);
+  /**
+   * Which column is sorted, and which way.
+   *
+   * Seeded from whichever column declared `defaultSortOrder`, so a list that
+   * wants to open newest-first still does. antd would normally own this, but
+   * it cannot: it only ever sees one page (see the docblock).
+   */
+  const [sort, setSort] = useState<{ key: string; order: SortOrder }>(() => {
+    const i = columns.findIndex((c) => c.defaultSortOrder);
+    return i < 0
+      ? { key: "", order: null }
+      : {
+          key: colKey(columns[i]!, i),
+          order: columns[i]!.defaultSortOrder as SortOrder,
+        };
+  });
 
   const searchCols = columns.filter((c) => c.searchable);
-  const facetCols = columns.filter((c) => c.facet);
+  /**
+   * The filterable columns, each keyed by its index in `columns` — NOT by its
+   * index among the filterable ones.
+   *
+   * That distinction is the whole reason this is a list of pairs. `colKey`
+   * falls back to `col-${index}` for a column carrying neither `key` nor
+   * `dataIndex` (a derived column with only `facetValue` and `render`), and
+   * `filters` is one flat map shared by three readers: the desktop header, the
+   * phone toolbar and the row filter. The header numbered such a column by its
+   * position in `columns` while the other two numbered it by its position
+   * here, so the options were stored under one key and read under another —
+   * the header quietly dropped the dropdown, and two colliding fallbacks would
+   * have filtered the table on the wrong field entirely.
+   *
+   * One key per column, computed once, and every consumer reads it from here.
+   */
+  const facetCols = columns
+    .map((col, index) => ({ col, key: colKey(col, index) }))
+    .filter((c) => c.col.facet);
 
-  /** Distinct values per facet column, in first-seen order. */
+  /** Distinct values per filterable column, in alphabetical order. */
   const facetOptions = useMemo(() => {
     const out: Record<string, string[]> = {};
-    facetCols.forEach((col, i) => {
-      const key = colKey(col, i);
+    facetCols.forEach(({ col, key }) => {
       const seen = new Set<string>();
       for (const row of dataSource) {
-        const v = valueOf(col, row);
-        if (v !== undefined && v !== "") seen.add(String(v));
+        const v = facetOf(col, row);
+        if (v !== undefined && v !== "") seen.add(v);
       }
       out[key] = [...seen].sort((a, b) =>
         a.localeCompare(b, undefined, { numeric: true }),
@@ -163,18 +237,22 @@ export function ProTable<T extends object>({
     return out;
     // `facetCols` is rebuilt each render from `columns`; keying the memo on the
     // array identity would defeat it, so it keys on what actually decides the
-    // options: the rows, and which columns are facets.
-  }, [dataSource, facetCols.map((c, i) => colKey(c, i)).join("|")]);
+    // options: the rows, and which columns are filterable.
+  }, [dataSource, facetCols.map((c) => c.key).join("|")]);
 
+  /**
+   * Search, then filters, then sort — over the WHOLE list, before `DataTable`
+   * cuts it into pages.
+   */
   const rows = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return dataSource.filter((row) => {
-      for (const [key, picked] of Object.entries(facets)) {
+    const kept = dataSource.filter((row) => {
+      for (const [key, picked] of Object.entries(filters)) {
         if (!picked.length) continue;
-        const col = facetCols.find((c, i) => colKey(c, i) === key);
+        const col = facetCols.find((c) => c.key === key)?.col;
         if (!col) continue;
-        const v = valueOf(col, row);
-        if (v === undefined || !picked.includes(String(v))) return false;
+        const v = facetOf(col, row);
+        if (v === undefined || !picked.includes(v)) return false;
       }
       if (!needle) return true;
       // No column opted into search → search everything with a dataIndex,
@@ -185,36 +263,63 @@ export function ProTable<T extends object>({
         return text != null && String(text).toLowerCase().includes(needle);
       });
     });
-  }, [dataSource, query, facets, columns]);
+
+    if (!sort.order) return kept;
+    const i = columns.findIndex((c, n) => colKey(c, n) === sort.key);
+    const col = i < 0 ? undefined : columns[i];
+    if (!col) return kept;
+    const dir = sort.order === "ascend" ? 1 : -1;
+    // `slice()` first: `kept` may be `dataSource` itself when nothing is
+    // filtered, and sorting a prop array in place mutates the caller's data.
+    return kept
+      .slice()
+      .sort((a, b) => dir * compare(valueOf(col, a), valueOf(col, b)));
+  }, [dataSource, query, filters, sort, columns]);
 
   /**
-   * Every column becomes sortable. A column that already declared a `sorter`
-   * keeps it; the rest get one built from `sortValue`/`dataIndex`. Columns with
-   * neither — an actions column — are left alone, since there is nothing to
-   * compare.
+   * Every column gets its header controls: sort arrows, and a filter dropdown
+   * if it asked for one. Neither does any work — see this file's docblock —
+   * they only report what was clicked.
    */
-  const sortedColumns = useMemo(
+  const tableColumns = useMemo(
     () =>
-      columns.map((col) => {
+      columns.map((col, i) => {
         const {
           searchable,
           facet,
           facetLabel,
+          facetValue,
           sortValue,
           searchValue,
+          defaultSortOrder,
           ...antCol
         } = col;
+        const key = colKey(col, i);
         const sortable =
           sortValue !== undefined ||
           (antCol as { dataIndex?: unknown }).dataIndex !== undefined;
-        if ((antCol as { sorter?: unknown }).sorter !== undefined || !sortable)
-          return antCol;
+        const options = facetOptions[key] ?? [];
         return {
           ...antCol,
-          sorter: (a: T, b: T) => compare(valueOf(col, a), valueOf(col, b)),
+          key,
+          ...(sortable
+            ? {
+                // `true`, not a comparator: it draws the arrows and reports
+                // the click without antd sorting the one page it can see.
+                sorter: true,
+                sortOrder: sort.key === key ? sort.order : null,
+              }
+            : {}),
+          ...(facet && options.length > 0
+            ? {
+                filters: options.map((v) => ({ text: v, value: v })),
+                filteredValue: filters[key] ?? null,
+                filterSearch: options.length > FILTER_SEARCH_THRESHOLD,
+              }
+            : {}),
         };
       }) as AntColumns<T>,
-    [columns],
+    [columns, facetOptions, filters, sort],
   );
 
   const selected = useMemo(() => {
@@ -226,13 +331,17 @@ export function ProTable<T extends object>({
 
   const clear = () => setSelectedKeys([]);
 
-  const activeFacetCount = Object.values(facets).reduce(
+  const activeFilterCount = Object.values(filters).reduce(
     (n, v) => n + v.length,
     0,
   );
+  // The phone layout has no column headers to hang a filter on, so the selects
+  // come back there — driving the very same state. See the docblock.
+  const showToolbarFilters = compact && facetCols.length > 0;
   const hasToolbar =
     search ||
-    facetCols.length > 0 ||
+    showToolbarFilters ||
+    activeFilterCount > 0 ||
     toolbar !== undefined ||
     extra !== undefined;
 
@@ -258,36 +367,46 @@ export function ProTable<T extends object>({
             {search && (
               <Input.Search
                 allowClear
-                placeholder={searchPlaceholder}
+                placeholder={
+                  searchPlaceholder ?? t("proTable.search", "Search")
+                }
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                style={{ width: 320 }}
+                style={{ width: compact ? undefined : 320 }}
               />
             )}
-            {facetCols.map((col, i) => {
-              const key = colKey(col, i);
-              return (
-                <Select
-                  key={key}
-                  mode="multiple"
-                  allowClear
-                  maxTagCount="responsive"
-                  value={facets[key] ?? []}
-                  placeholder={
-                    col.facetLabel ?? (col.title as string) ?? "Filter"
-                  }
-                  options={(facetOptions[key] ?? []).map((v) => ({
-                    value: v,
-                    label: v,
-                  }))}
-                  onChange={(v) => setFacets((f) => ({ ...f, [key]: v }))}
-                  style={{ minWidth: 200 }}
-                />
-              );
-            })}
-            {activeFacetCount > 0 && (
-              <Button type="link" size="small" onClick={() => setFacets({})}>
-                Clear filters
+            {showToolbarFilters &&
+              facetCols.map(({ col, key }) => {
+                return (
+                  <Select
+                    key={key}
+                    mode="multiple"
+                    allowClear
+                    maxTagCount="responsive"
+                    value={filters[key] ?? []}
+                    placeholder={
+                      col.facetLabel ??
+                      (typeof col.title === "string" ? col.title : undefined) ??
+                      t("proTable.filter", "Filter")
+                    }
+                    options={(facetOptions[key] ?? []).map((v) => ({
+                      value: v,
+                      label: v,
+                    }))}
+                    onChange={(v) => setFilters((f) => ({ ...f, [key]: v }))}
+                    style={{ minWidth: 200 }}
+                  />
+                );
+              })}
+            {/* Shown in BOTH layouts. On a desktop the header funnels are easy
+                to set and easy to forget — one lit icon among nine columns —
+                so the one control that clears them all has to be visible from
+                outside the header. */}
+            {activeFilterCount > 0 && (
+              <Button type="link" size="small" onClick={() => setFilters({})}>
+                {t("proTable.clearFilters", "Clear filters ({{count}})", {
+                  count: activeFilterCount,
+                })}
               </Button>
             )}
             {toolbar}
@@ -322,12 +441,14 @@ export function ProTable<T extends object>({
           }}
         >
           <Typography.Text style={{ fontSize: TYPE.sm }}>
-            {selected.length} selected
+            {t("proTable.selected", "{{count}} selected", {
+              count: selected.length,
+            })}
           </Typography.Text>
           <Space>
             {bulkActions?.(selected, clear)}
             <Button size="small" type="text" onClick={clear}>
-              Clear
+              {t("proTable.clearSelection", "Clear")}
             </Button>
           </Space>
         </Flex>
@@ -336,11 +457,33 @@ export function ProTable<T extends object>({
       <DataTable
         {...rest}
         rowKey={rowKey}
-        columns={sortedColumns}
+        columns={tableColumns}
         dataSource={rows}
-        // Search and facets are new questions, so both send the growing window
-        // back to the first page — see DataTable's `resetKey`.
-        resetKey={`${String(resetKey ?? "")}|${query}|${JSON.stringify(facets)}`}
+        // Search and filters are new questions, so both send the pager back to
+        // page one — see DataTable's `resetKey`.
+        resetKey={`${String(resetKey ?? "")}|${query}|${JSON.stringify(filters)}`}
+        /**
+         * Where a header click lands. antd hands back the whole filter map and
+         * the sorter it just changed; both become this component's state, and
+         * the next render feeds them back down as `filteredValue`/`sortOrder`.
+         */
+        onChange={(_pagination, nextFilters, sorter) => {
+          setFilters(
+            Object.fromEntries(
+              Object.entries(nextFilters).map(([k, v]) => [
+                k,
+                (v ?? []).map(String),
+              ]),
+            ),
+          );
+          // Never an array here: `multiple` is not set on any sorter in this
+          // app, so antd reports a single object.
+          const s = Array.isArray(sorter) ? sorter[0] : sorter;
+          setSort({
+            key: s?.columnKey === undefined ? "" : String(s.columnKey),
+            order: (s?.order ?? null) as SortOrder,
+          });
+        }}
         rowSelection={
           selectable && !compact
             ? {
@@ -355,7 +498,10 @@ export function ProTable<T extends object>({
         <Typography.Text
           style={{ fontSize: TYPE.sm, color: colorTextSecondary }}
         >
-          Showing {rows.length} of {dataSource.length}
+          {t("proTable.narrowed", "Showing {{shown}} of {{total}}", {
+            shown: rows.length,
+            total: dataSource.length,
+          })}
         </Typography.Text>
       )}
     </>

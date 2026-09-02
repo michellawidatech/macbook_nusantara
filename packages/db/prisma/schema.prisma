@@ -1,4 +1,4 @@
-// Nusantara POS — database schema
+// Macbook Nusantara — database schema
 //
 // Source of truth: docs/erd-pos-chatbot.drawio (62 tables, 34 enums).
 // Contract:        docs/rebuild/08-data-integrity.md, docs/rebuild/01-conventions.md §6
@@ -76,6 +76,14 @@ model PurchaseOrder {
   status     POStatus
   orderedAt  DateTime
   receivedAt DateTime?
+  /// When somebody said this invoice is finished with (owner revision
+  /// 2026-08-27). Separate from `status`, which is about the GOODS: an order
+  /// can be fully received and still open because the ongkir has not been
+  /// settled, and it can be closed with a line the supplier never sent.
+  /// Closing makes the order read-only and takes it out of the shop's live
+  /// work. Reversible on purpose — it is a filing decision, not a state
+  /// change, and an intake screen must never make a mistake permanent.
+  closedAt   DateTime?
   subtotal   BigInt
   feesTaxPct Decimal   @db.Decimal(5, 2)
   feesTotal  BigInt
@@ -247,6 +255,14 @@ model CatalogModel {
   categoryId String
   name       String
   year       String?
+  /// Short line code for the printed label — "PRO", "AIR". Model-level because
+  /// it is what the model *is*, unlike chip or touch bar, which differ between
+  /// units of one model and are therefore variant axes (owner decision
+  /// 2026-08-24). Null for anything with no line distinction, like an iPad.
+  line       String?
+  /// Screen size in inches, for the label. Decimal because the older Pros are
+  /// genuinely 13.3", not 13 — rendered with the trailing .0 trimmed.
+  sizeInch   Decimal? @db.Decimal(3, 1)
   archived   Boolean
   createdAt  DateTime
 
@@ -295,6 +311,8 @@ model Sku {
   name         String
   variantLabel String?
   grade        Grade?
+  /// The sellable price, and since 2026-08-27 the only one. Every unit of this
+  /// variant asks this. Nothing on Unit overrides it.
   price        BigInt
   landed       BigInt
   archived     Boolean
@@ -323,13 +341,15 @@ model Unit {
   status          UnitStatus
   /// projection of the unit's event stream — never updated alone (08 §1)
   locationId      String
+  /// What this machine cost the shop, and what it cost landed. Per-serial and
+  /// staying that way: the asking price moved to Sku.price on 2026-08-27, but
+  /// what was PAID for one particular unit is what every margin is computed
+  /// against and is a fact about the serial, not about the variant.
   buy             BigInt
   landed          BigInt
-  /// Per-unit asking price, set at QC (owner decision 2026-08-15). Second-hand
-  /// units of one SKU differ, so the sellable price lives here; Sku.price
-  /// stays as the model/variant list price. NULL only while status = QC —
-  /// enforced by CHECK unit_price_set_when_sellable.
-  price           BigInt?
+  /// Recorded at QC, shown in Inventory, and deliberately NOT a price input
+  /// (owner decision 2026-08-27). Two units of one variant ask the same money
+  /// whatever their grade.
   grade           Grade?
   poItemId        String?
   soldOrderItemId String?
@@ -393,6 +413,14 @@ model UnitEvent {
   purchaseOrderId String?
   claimId         String?
   opnameSessionId String?
+  /// Which hold this event belongs to, on DIRESERVASI and RESERVASI_BATAL.
+  ///
+  /// Without it the S/N timeline re-joins a hold to an event by serial and
+  /// takes the first match, so a machine held, released, then held again by a
+  /// different customer narrates the wrong person on both events. It is also
+  /// what makes "which hold is holding this unit" answerable from the ledger
+  /// rather than from a second copy on ReservationItem that would go stale.
+  reservationId   String?
   costDelta       BigInt
   staffId         String
   requestId       String?
@@ -405,9 +433,11 @@ model UnitEvent {
   purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
   claim         WarrantyClaim? @relation(fields: [claimId], references: [id], onDelete: Restrict)
   opnameSession OpnameSession? @relation(fields: [opnameSessionId], references: [id], onDelete: Restrict)
+  reservation   Reservation?   @relation(fields: [reservationId], references: [id], onDelete: Restrict)
   staff         Staff          @relation(fields: [staffId], references: [id], onDelete: Restrict)
 
   @@unique([unitId, seq])
+  @@index([reservationId])
 }
 
 model UnitNote {
@@ -442,6 +472,10 @@ model UnitNotePhoto {
 model OpnameSession {
   id         String       @id @default(cuid())
   code       String       @unique @default(dbgenerated("next_doc_code('SO'::text)"))
+  /// What staff typed to tell two counts of one warehouse apart — "rak A-C,
+  /// shift pagi". Nullable because `code` is the identifier; this is only a
+  /// human hint (owner decision 2026-08-24).
+  label      String?
   locationId String
   status     OpnameStatus
   startedAt  DateTime
@@ -472,6 +506,30 @@ model OpnameScan {
 // ============================================================================
 // Customers and sales
 // ============================================================================
+
+/// A phrase QC reaches for when describing a machine — "Mulus", "Lecet di
+/// casing bawah", "Fullset dus" (owner revision 2026-08-27).
+///
+/// A lookup table for the same reason `ReferralSource` is one: the shop adds a
+/// phrase without waiting for a migration. Never hard-deleted — deactivate.
+///
+/// ⚠️ Nothing has a foreign key to this, and that is deliberate rather than an
+/// oversight of 01 §6. `Unit.description` is FREE TEXT and has to stay free
+/// text: a second-hand machine turns up with a mark nobody has seen before and
+/// the person grading it has to be able to say so. This table is the
+/// suggestion list that field offers — one row per phrase the shop has
+/// actually used, joined by the application with ", " into the sentence the
+/// column stores — so there is no link here to declare, loose or otherwise.
+/// Making descriptions a controlled vocabulary (a Unit↔QcDescription join, so
+/// Inventory could filter on "has a dent") is a bigger change and a separate
+/// owner decision.
+model QcDescription {
+  id        String   @id @default(cuid())
+  label     String   @unique
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime
+}
 
 /// Where a customer or an order came from — "Instagram Ads", "Friends".
 /// A lookup table rather than an enum so staff can add rows without a
@@ -603,8 +661,21 @@ model Payment {
   orderId   String?
   poId      String?
   direction PayDirection
-  method    PayMethod
+  methodId  String
   amount    BigInt
+  /// Which part of the bill this transfer settles (owner revision
+  /// 2026-08-27). Shipping is usually a different party from the supplier — a
+  /// forwarder paid on its own day — and tax is a third, so one
+  /// undifferentiated "paid" figure could not answer the only question the
+  /// Purchase card is ever asked: *has the ongkir been settled?*
+  ///
+  /// Defaults to BARANG, and the default is the honest reading of history
+  /// rather than a placeholder: shipping and tax were separate figures on an
+  /// order long before anyone could pay them separately, so every payment
+  /// recorded before this column existed was against the goods. A customer
+  /// paying at the till is BARANG too — the buckets only differ on the
+  /// supplier side.
+  appliedTo PayTarget    @default(BARANG)
   status    PayStatus
   paidAt    DateTime?
   dueAt     DateTime?
@@ -612,10 +683,41 @@ model Payment {
   staffId   String
   shiftId   String?
 
-  order Order?         @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  po    PurchaseOrder? @relation(fields: [poId], references: [id], onDelete: Restrict)
-  staff Staff          @relation(fields: [staffId], references: [id], onDelete: Restrict)
-  shift Shift?         @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  order  Order?         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  po     PurchaseOrder? @relation(fields: [poId], references: [id], onDelete: Restrict)
+  staff  Staff          @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  shift  Shift?         @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  method PaymentMethod  @relation(fields: [methodId], references: [id], onDelete: Restrict)
+
+  // Declared, not just created in SQL: an index that exists in the database
+  // but not here is one Prisma emits a DROP for on the next migration.
+  @@index([methodId])
+}
+
+/// How money moved. A lookup table rather than an enum for the same reason
+/// ReferralSource is one: the shop adds a method without waiting for a
+/// migration (owner decision 2026-08-24). Never hard-deleted — deactivate.
+///
+/// `builtIn` marks a row the application reasons about by `code` rather than
+/// by label: MARKETPLACE is what puts Shopee money in escrow until a
+/// withdrawal is confirmed. Staff may rename or deactivate a built-in, never
+/// delete it, so that logic can never be left pointing at nothing.
+///
+/// `forPo` and `forSale` are separate because the two sides genuinely differ:
+/// a supplier is paid in cash, card or deposit, while a customer can also pay
+/// by QRIS or leave the money in a marketplace escrow.
+model PaymentMethod {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  label     String
+  builtIn   Boolean
+  forPo     Boolean
+  forSale   Boolean
+  active    Boolean
+  sortOrder Int
+  createdAt DateTime
+
+  payments Payment[]
 }
 
 model OrderAdjustment {
@@ -715,11 +817,14 @@ model Staff {
   auditLogs                AuditLog[]
   pettyCashEntries         PettyCashEntry[]
   waMessagesAnswered       WaMessage[]
-  waThreadMemoriesDirected WaThreadMemory[]
+  waThreadMemoriesDirected WaThreadMemory[]  @relation("WaThreadMemoryDirectedBy")
+  waThreadMemoriesToggled  WaThreadMemory[]  @relation("WaThreadMemoryAutoReplyBy")
   idempotencyKeys          IdempotencyKey[]
   igCommentsReplied        IgComment[]       @relation("IgCommentRepliedBy")
   igCommentsDmSent         IgComment[]       @relation("IgCommentDmSentBy")
   agentKnowledge           AgentKnowledge[]
+  personas                 Persona[]
+  agentCorrections         AgentCorrection[]
 }
 
 model StaffSession {
@@ -760,21 +865,49 @@ model Shift {
 // Reservations
 // ============================================================================
 
+/// Which channel a hold came in over — Instagram, WhatsApp, TikTok, Shopee,
+/// Tokopedia, Walk-in. A managed list, edited in Settings.
+///
+/// NOT `ReferralSource`, which answers "which ad drove this" (Instagram Ads,
+/// Friends) for a customer and for an order — "Walk-in" is never an answer to
+/// that question. And NOT `ResSource`, which answers "did a person or the bot
+/// create this hold". Three different questions; conflating any two of them
+/// loses information the shop uses (owner decision 2026-08-28).
+model ReservationSource {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  active    Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime
+
+  reservations Reservation[]
+}
+
 model Reservation {
-  id           String            @id @default(cuid())
-  code         String            @unique @default(dbgenerated("next_doc_code('RV'::text)"))
-  customerId   String?
-  custName     String?
-  phone        String?
-  scheduledFor DateTime?
-  status       ReservationStatus
-  source       ResSource
-  note         String?
-  createdAt    DateTime
+  id                  String            @id @default(cuid())
+  code                String            @unique @default(dbgenerated("next_doc_code('RV'::text)"))
+  customerId          String?
+  custName            String?
+  phone               String?
+  scheduledFor        DateTime?
+  status              ReservationStatus
+  source              ResSource
+  /// The channel the customer contacted the shop over. Nullable: holds created
+  /// by the agent have no channel list entry, and rows predate the column.
+  reservationSourceId String?
+  note                String?
+  createdAt           DateTime
 
-  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  customer          Customer?          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  reservationSource ReservationSource? @relation(fields: [reservationSourceId], references: [id], onDelete: Restrict)
 
-  items ReservationItem[]
+  items      ReservationItem[]
+  unitEvents UnitEvent[]
+
+  /// The agent's duplicate guard and the phone-scoped cancel both read
+  /// (phone, status) on every booking attempt.
+  @@index([phone, status])
+  @@index([reservationSourceId])
 }
 
 model ReservationItem {
@@ -788,6 +921,11 @@ model ReservationItem {
   reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Restrict)
   sku         Sku?        @relation(fields: [skuId], references: [id], onDelete: Restrict)
   unit        Unit?       @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  /// Every hold read traverses items — the list, the release, the projection,
+  /// the expiry sweep. Prisma does not index a foreign key on Postgres, and
+  /// this table had no index at all.
+  @@index([reservationId])
 }
 
 // ============================================================================
@@ -934,6 +1072,14 @@ model AuditLog {
   ip        String?
 
   staff Staff? @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  /// The three questions the audit reader asks, newest-first in all three:
+  /// what happened lately, what happened to this row, what did this person do.
+  /// Added when GET /api/kontrol/audit stopped returning a hardcoded empty
+  /// list — until then nothing had ever SELECTed this table.
+  @@index([at(sort: Desc)])
+  @@index([entity, entityId, at(sort: Desc)])
+  @@index([staffId, at(sort: Desc)])
 }
 
 /// Crossing the transaction boundary (08 §5): the txn writes the row, the
@@ -1000,6 +1146,22 @@ model OpexItem {
   kind      OpexKind
   recurring Boolean
   active    Boolean
+}
+
+/// Staff-editable knobs too small to deserve a table each — the battery-health
+/// band thresholds are the first (owner decision 2026-08-24).
+///
+/// `value` is TEXT, not Json: the no-JSON-columns rule has a closed allowlist
+/// and this is not on it. Callers parse. Keep keys dotted and namespaced
+/// (`battery.goodMin`) so a future group is greppable.
+///
+/// Bands are stored as two thresholds rather than three ranges, deliberately:
+/// three hand-entered ranges can overlap or leave a gap, two cannot. Good is
+/// >= goodMin, fair is >= fairMin, anything below fairMin is bad.
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime
 }
 
 /// singleton row
@@ -1083,10 +1245,22 @@ model WaMessage {
   answeredBy Staff?    @relation(fields: [answeredById], references: [id], onDelete: Restrict)
 
   coveredThreadMemories WaThreadMemory[]
+  corrections           AgentCorrection[]
+
+  // Declared here because they exist in the database. Both were hand-written
+  // into 20260820002832 without a matching @@index, so every `migrate dev`
+  // since has diffed them as strays and emitted a DROP for them — a silent
+  // de-indexing of the inbox one migration after another. The third index on
+  // this table, WaMessage_pending_idx, stays hand-written on purpose: it is
+  // partial (WHERE direction = 'IN' AND status = 'BARU') and Prisma has no
+  // syntax for that, which is also why the differ leaves it alone.
+  @@index([from, ts])
+  @@index([from, answeredAt])
 }
 
 /// Two writers, disjoint column sets (08 §7). The webhook summarizer owns the
-/// summary and coveredThrough columns; POS staff own the directive columns.
+/// summary and coveredThrough columns; POS staff own the directive columns and
+/// the autoReply switch — whether the bot answers this customer at all.
 /// Neither may write the other's columns — that is what makes "the agent can
 /// never overwrite a staff directive" structural rather than conventional.
 /// (Never write a comment terminator inside a /// doc comment here: Prisma
@@ -1106,13 +1280,21 @@ model WaThreadMemory {
   directive        String?
   directiveAt      DateTime?
   directiveById    String?
+  /// staff-owned. False hands this one thread to a person: the worker's draft
+  /// pass skips it entirely and answers every other thread as before. Defaults
+  /// true, so a number nobody has ruled on is answered by the bot — the
+  /// behaviour every thread had before this column existed.
+  autoReply        Boolean   @default(true)
+  autoReplyAt      DateTime?
+  autoReplyById    String?
   clarifyCount     Int
   clarifyAt        DateTime?
   updatedAt        DateTime
 
   customer       Customer?  @relation(fields: [customerId], references: [id], onDelete: Restrict)
   coveredThrough WaMessage? @relation(fields: [coveredThroughId], references: [id], onDelete: Restrict)
-  directiveBy    Staff?     @relation(fields: [directiveById], references: [id], onDelete: Restrict)
+  directiveBy    Staff?     @relation("WaThreadMemoryDirectedBy", fields: [directiveById], references: [id], onDelete: Restrict)
+  autoReplyBy    Staff?     @relation("WaThreadMemoryAutoReplyBy", fields: [autoReplyById], references: [id], onDelete: Restrict)
 }
 
 model AgentCache {
@@ -1141,6 +1323,41 @@ model AgentKnowledge {
   updatedAt   DateTime
 
   createdBy Staff @relation(fields: [createdById], references: [id], onDelete: Restrict)
+}
+
+/// The agent's voice. Exactly one row is active, enforced by a partial unique
+/// index rather than by convention — see the migration.
+model Persona {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  blurb       String?
+  /// The prompt text itself. Free text a staff member wrote.
+  prompt      String
+  active      Boolean
+  /// A built-in cannot be deleted by staff, only deactivated.
+  builtIn     Boolean
+  createdById String?
+  createdAt   DateTime
+  updatedAt   DateTime
+
+  createdBy Staff? @relation(fields: [createdById], references: [id], onDelete: Restrict)
+}
+
+/// A staff rewrite of something the agent sent, replayed to it as house style.
+/// This is the learning loop: nothing is fine-tuned, the model simply reads its
+/// own past mistakes before it writes the next line.
+model AgentCorrection {
+  id          String   @id @default(cuid())
+  /// The reply that was rewritten, when it came from a real thread.
+  messageId   String?
+  original    String
+  corrected   String
+  note        String?
+  createdById String
+  createdAt   DateTime
+
+  message   WaMessage? @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  createdBy Staff      @relation(fields: [createdById], references: [id], onDelete: Restrict)
 }
 
 // ============================================================================
@@ -1232,10 +1449,16 @@ enum AttrType {
   SELECT
 }
 
+/// Condition, not just cosmetic wear. A/B/C grade a preloved unit; NEW marks
+/// factory-sealed stock (owner decision 2026-08-24, when the shop started
+/// buying new alongside preloved). NEW is what lets intake skip QC: the unit
+/// takes `Sku.price` and lands sellable, which `Unit_price_set_when_sellable`
+/// already permits without a constraint change.
 enum Grade {
   A
   B
   C
+  NEW
 }
 
 enum UnitStatus {
@@ -1270,6 +1493,17 @@ enum UnitEventType {
   OPNAME_HILANG
   OPNAME_DITEMUKAN
   KOREKSI
+  /// A QC decision taken back (owner revision 2026-08-27). Staff accept the
+  /// wrong machine into stock, or send the wrong one back to the supplier, and
+  /// the ledger has to be able to say so: the decision that was wrong STAYS on
+  /// the timeline and this arrow follows it, putting the unit back in QC.
+  ///
+  /// Its own type rather than KOREKSI, for two reasons. A timeline reading
+  /// "Adjustment" does not tell the next person what happened, and KOREKSI
+  /// already has an arrow out of both QC and TERSEDIA — to KOREKSI_KELUAR —
+  /// so a second meaning for the same (from, type) pair would make
+  /// `statusAfter` ambiguous.
+  QC_DIBUKA
   DIARSIPKAN
 }
 
@@ -1279,6 +1513,17 @@ enum POStatus {
   SEBAGIAN
   DITERIMA
   BATAL
+}
+
+/// What a payment is against. Three buckets and no more: each is a figure the
+/// order already carries, and a bucket with nothing to owe against would be a
+/// choice that can never be right. Deliberately NOT `FeeKind` — that one names
+/// kinds of FEE (BEACUKAI, LAIN) and has no member for the goods themselves,
+/// which is what most money is for.
+enum PayTarget {
+  BARANG
+  ONGKIR
+  PAJAK
 }
 
 enum FeeKind {
@@ -1318,21 +1563,6 @@ enum Fulfillment {
   PICKUP
   SHIP
   NONE
-}
-
-enum PayMethod {
-  TUNAI
-  QRIS
-  TRANSFER
-  DEBIT
-  KARTU_KREDIT
-  CICILAN
-  COD
-  BAYAR_TOKO
-  TEMPO
-  /// Marketplace escrow (Shopee). Created BELUM; flips LUNAS when the
-  /// withdrawal is confirmed by staff — that is the "pending balance" flow.
-  MARKETPLACE
 }
 
 enum PayDirection {

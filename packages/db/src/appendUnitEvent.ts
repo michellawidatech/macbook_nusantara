@@ -31,6 +31,8 @@ export interface AppendUnitEventInput {
   readonly purchaseOrderId?: string | null;
   readonly claimId?: string | null;
   readonly opnameSessionId?: string | null;
+  /** The hold this event belongs to, on DIRESERVASI and RESERVASI_BATAL. */
+  readonly reservationId?: string | null;
   readonly costDelta?: bigint;
   readonly requestId?: string | null;
   readonly note?: string | null;
@@ -132,6 +134,7 @@ export async function appendUnitEvent(
       purchaseOrderId: input.purchaseOrderId ?? null,
       claimId: input.claimId ?? null,
       opnameSessionId: input.opnameSessionId ?? null,
+      reservationId: input.reservationId ?? null,
       costDelta: input.costDelta ?? 0n,
       staffId: input.staffId,
       requestId: input.requestId ?? null,

@@ -26,8 +26,10 @@ import { PageContainer } from "../../components/PageContainer";
 import { FooterToolbar } from "../../components/FooterToolbar";
 import { MoneyInput } from "../../components/MoneyInput";
 import { useDb, mutate, nextId } from "../../mock/store.js";
+import { useTranslation } from "react-i18next";
 
 export function DiscountFormPage() {
+  const { t } = useTranslation();
   const db = useDb();
   const navigate = useNavigate();
   const { message } = App.useApp();
@@ -77,14 +79,14 @@ export function DiscountFormPage() {
   };
 
   return (
-    <PageContainer title="Add Discount">
+    <PageContainer title={t("discount.addDiscount", "Add Discount")}>
       <Form form={form} layout="vertical" onFinish={submit} style={{ flex: 1 }}>
         <Flex vertical gap={16}>
-          <Card title="The discount">
+          <Card title={t("discount.theDiscount", "The discount")}>
             <Flex gap={16} wrap>
               <Form.Item
                 name="name"
-                label="Name"
+                label={t("discount.name", "Name")}
                 rules={[{ required: true }]}
                 style={{ width: 320 }}
               >
@@ -94,21 +96,32 @@ export function DiscountFormPage() {
               </Form.Item>
               <Form.Item
                 name="code"
-                label="Code"
+                label={t("discount.code", "Code")}
                 rules={[{ required: true }]}
                 style={{ width: 240 }}
               >
-                <Input placeholder="SUMMER25" />
+                <Input placeholder={t("discount.summer25", "SUMMER25")} />
               </Form.Item>
             </Flex>
-            <Form.Item label="How it is worked out">
+            <Form.Item
+              label={t("discount.howItIsWorkedOut", "How it is worked out")}
+            >
               <Segmented
                 value={type}
                 onChange={(v) => setType(v as "PCT" | "NOMINAL" | "BUNDLE")}
                 options={[
-                  { value: "PCT", label: "Percentage off" },
-                  { value: "NOMINAL", label: "Fixed amount off" },
-                  { value: "BUNDLE", label: "Bundle price" },
+                  {
+                    value: "PCT",
+                    label: t("discount.percentageOff", "Percentage off"),
+                  },
+                  {
+                    value: "NOMINAL",
+                    label: t("discount.fixedAmountOff", "Fixed amount off"),
+                  },
+                  {
+                    value: "BUNDLE",
+                    label: t("discount.bundlePrice", "Bundle price"),
+                  },
                 ]}
               />
             </Form.Item>
@@ -117,7 +130,7 @@ export function DiscountFormPage() {
                 <>
                   <Form.Item
                     name="pct"
-                    label="Percentage off"
+                    label={t("discount.percentageOff", "Percentage off")}
                     rules={[{ required: true }]}
                     style={{ width: 200 }}
                   >
@@ -125,17 +138,19 @@ export function DiscountFormPage() {
                   </Form.Item>
                   <Form.Item
                     name="maxRp"
-                    label="Cap the amount at"
+                    label={t("discount.capTheAmountAt", "Cap the amount at")}
                     style={{ width: 260 }}
                   >
-                    <MoneyInput placeholder="No ceiling" />
+                    <MoneyInput
+                      placeholder={t("discount.noCeiling", "No ceiling")}
+                    />
                   </Form.Item>
                 </>
               )}
               {type === "NOMINAL" && (
                 <Form.Item
                   name="amountRp"
-                  label="Amount off"
+                  label={t("discount.amountOff", "Amount off")}
                   rules={[{ required: true }]}
                   style={{ width: 260 }}
                 >
@@ -146,20 +161,26 @@ export function DiscountFormPage() {
                 <>
                   <Form.Item
                     name="bundleQty"
-                    label="Buy this many"
+                    label={t("discount.buyThisMany", "Buy this many")}
                     initialValue={2}
                     rules={[{ required: true }]}
                     style={{ width: 180 }}
-                    tooltip="How many units from the scope below make up one bundle"
+                    tooltip={t(
+                      "discount.howManyUnitsFromThe",
+                      "How many units from the scope below make up one bundle",
+                    )}
                   >
                     <Input type="number" min={2} max={20} suffix="units" />
                   </Form.Item>
                   <Form.Item
                     name="bundlePriceRp"
-                    label="…for this price"
+                    label={t("discount.forThisPrice", "…for this price")}
                     rules={[{ required: true }]}
                     style={{ width: 260 }}
-                    tooltip="What the whole bundle costs, instead of the sum of its units"
+                    tooltip={t(
+                      "discount.whatTheWholeBundleCosts",
+                      "What the whole bundle costs, instead of the sum of its units",
+                    )}
                   >
                     <MoneyInput />
                   </Form.Item>
@@ -167,10 +188,14 @@ export function DiscountFormPage() {
               )}
               <Form.Item
                 name="usageLimit"
-                label="Max uses"
+                label={t("discount.maxUses", "Max uses")}
                 style={{ width: 160 }}
               >
-                <Input type="number" min={1} placeholder="Unlimited" />
+                <Input
+                  type="number"
+                  min={1}
+                  placeholder={t("discount.unlimited", "Unlimited")}
+                />
               </Form.Item>
             </Flex>
             {type === "BUNDLE" && (
@@ -183,20 +208,31 @@ export function DiscountFormPage() {
               </Typography.Text>
             )}
           </Card>
-          <Card title="When and what it applies to">
+          <Card
+            title={t(
+              "discount.whenAndWhatItApplies",
+              "When and what it applies to",
+            )}
+          >
             <Flex gap={16} wrap>
-              <Form.Item name="range" label="Active period">
+              <Form.Item
+                name="range"
+                label={t("discount.activePeriod", "Active period")}
+              >
                 <DatePicker.RangePicker format="DD MMM YYYY" />
               </Form.Item>
               <Form.Item
                 name="scope"
-                label="Applies to"
+                label={t("discount.appliesTo", "Applies to")}
                 initialValue="All products"
                 style={{ width: 280 }}
               >
                 <Select
                   options={[
-                    { value: "All products", label: "All products" },
+                    {
+                      value: "All products",
+                      label: t("discount.allProducts", "All products"),
+                    },
                     ...db.models.map((m) => ({ value: m.name, label: m.name })),
                     ...[...new Set(db.models.map((m) => m.category))].map(
                       (c) => ({
@@ -217,7 +253,7 @@ export function DiscountFormPage() {
           <FooterToolbar>
             <Button onClick={() => navigate("/discounts")}>Cancel</Button>
             <Button type="primary" htmlType="submit">
-              Save discount
+              {t("discount.saveDiscount", "Save discount")}
             </Button>
           </FooterToolbar>
         </Flex>

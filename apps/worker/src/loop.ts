@@ -16,6 +16,8 @@ import type { Logger } from "@nusantara/logging";
 import type { WorkerConfig } from "./config.js";
 import { draftPass } from "./draft.js";
 import { sendPass } from "./send.js";
+import { expirePass } from "./expire.js";
+import { summaryPass } from "./summarise.js";
 
 export interface TickDeps {
   readonly db: PrismaClient;
@@ -29,6 +31,9 @@ export interface TickResult {
   readonly escalated: number;
   readonly sent: number;
   readonly failed: number;
+  readonly summarised: number;
+  /** Agent bookings nobody came for, released back into stock. */
+  readonly expired: number;
 }
 
 /** One pass of each. Exported so a test — or the CLI — can run exactly one. */
@@ -39,8 +44,10 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     db,
     logger,
     anthropic: config.anthropic,
-    debounceMs: config.debounceMs,
+    waits: config.waits,
     maxDraftsPerTick: config.maxDraftsPerTick,
+    maxBatch: config.maxBatch,
+    agentStaffId: config.agentStaffId,
   });
 
   const send = await sendPass({
@@ -51,11 +58,35 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
   });
 
+  // Third, and last on purpose: the reply is already on the wire, so keeping
+  // the thread's note current costs the customer nothing.
+  const summary = await summaryPass({
+    db,
+    logger,
+    anthropic: config.anthropic,
+    everyTurns: config.summaryEveryTurns,
+    quietMs: config.summaryQuietMs,
+    maxPerTick: config.maxSummariesPerTick,
+  });
+
+  // Last. A held unit that nobody came for is costing the shop a sale right
+  // now, but not as urgently as an unanswered customer.
+  const expiry = await expirePass({
+    db,
+    logger,
+    agentStaffId: config.agentStaffId,
+    graceMs: config.reservationGraceMs,
+    ttlMs: config.reservationTtlMs,
+    maxPerTick: config.maxExpiriesPerTick,
+  });
+
   return {
     drafted: draft.drafted,
     escalated: draft.escalated,
     sent: send.sent,
     failed: send.failed,
+    summarised: summary.refreshed,
+    expired: expiry.expired,
   };
 }
 
@@ -85,7 +116,10 @@ export async function run(options: RunOptions): Promise<void> {
     let busy = false;
     try {
       const result = await tick(options);
-      busy = result.drafted > 0 || result.sent > 0;
+      // A summary backlog counts as busy, so it drains at API speed rather
+      // than one thread every poll interval.
+      busy =
+        result.drafted > 0 || result.sent > 0 || result.summarised > 0;
       if (busy || result.escalated > 0 || result.failed > 0) {
         logger.info({ evt: "worker.tick", ctx: { ...result } }, "worker tick");
       }

@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --config ../../vitest.config.ts",
+    "test": "vitest run",
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts"
   },

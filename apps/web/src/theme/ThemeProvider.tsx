@@ -5,11 +5,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { App as AntdApp, ConfigProvider } from "antd";
+import { App as AntdApp, ConfigProvider, theme as antdTheme } from "antd";
 import { useAntdLocale } from "../i18n/antdLocale";
 import { ColorSchemeContext, type ColorSchemeContextValue } from "./context";
 import { renderRequiredMark } from "./requiredMark";
 import { buildTheme } from "./theme";
+import { ACCENT, NAV } from "./tokens";
 import type { ColorSchemePreference, ResolvedColorScheme } from "./tokens";
 
 const STORAGE_KEY = "xinchuan-cms.color-scheme";
@@ -97,7 +98,60 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     document.documentElement.style.colorScheme = resolved;
   }, [resolved]);
 
+  /**
+   * Publishes the spot colours that global.css needs.
+   *
+   * They are not antd tokens — the gradient is painted over `colorPrimary` and
+   * the gold is never a surface — so `ConfigProvider` has no way to expose
+   * them, and writing the hexes into the stylesheet would fork them from
+   * `tokens.ts`.
+   *
+   * No CSS fallbacks are needed for the frame before this runs: a
+   * `linear-gradient()` referring to an undefined custom property is an
+   * invalid declaration, so the browser drops it and the button keeps antd's
+   * solid primary. It degrades to the old design rather than to nothing.
+   */
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--nusantara-gold", ACCENT.gold);
+    root.style.setProperty("--nusantara-gradient-from", ACCENT.gradientFrom);
+    root.style.setProperty("--nusantara-gradient-to", ACCENT.gradientTo);
+    // The nav column's own colours, for the `.nusantara-nav-foot` rules in
+    // global.css. Same argument as the gold: they are not antd tokens — the
+    // nav Menu gets them through a nested ConfigProvider — so nothing else
+    // could publish them, and a literal in the stylesheet would be a second
+    // definition of the same three values.
+    root.style.setProperty("--nusantara-nav-text", NAV.text);
+    root.style.setProperty("--nusantara-nav-text-strong", NAV.textStrong);
+    root.style.setProperty("--nusantara-nav-hover", NAV.hoverBg);
+  }, []);
+
   const themeConfig = useMemo(() => buildTheme(resolved), [resolved]);
+
+  /**
+   * The two colours `global.css` mixes the "over quota" row tint from.
+   *
+   * Published rather than written into the stylesheet for the same reason the
+   * gold above is: they are theme tokens, and a literal `#fff1f0` in the CSS
+   * would be a second definition that does not follow the algorithm — and, in
+   * dark mode, a near-white block with white text on it. They are re-published
+   * whenever the scheme changes, which is what makes the tint follow the flip.
+   *
+   * Deliberately not antd's own `--ant-*` variables: those exist only while
+   * `cssVar` is on, which is a ConfigProvider setting this app does not set and
+   * could turn off tomorrow without anyone connecting it to a table row going
+   * transparent.
+   */
+  useEffect(() => {
+    const t = antdTheme.getDesignToken(themeConfig);
+    const root = document.documentElement;
+    root.style.setProperty("--nusantara-error", t.colorError);
+    root.style.setProperty("--nusantara-surface", t.colorBgContainer);
+    // Published for the till's total panel and the catalogue's hover, both of
+    // which tint with the brand colour rather than picking a green of their
+    // own — see `.pos-total` and `.pos-shelf-row` in global.css.
+    root.style.setProperty("--nusantara-primary", t.colorPrimary);
+  }, [themeConfig]);
 
   const value = useMemo<ColorSchemeContextValue>(
     () => ({ preference, resolved, setPreference }),

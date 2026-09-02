@@ -73,6 +73,12 @@ async function seed() {
      VALUES ($1,'kasir','Kasir','STAFF',false,true,'x',now())`,
     [STAFF],
   );
+  // Payment.method became an FK to this table on 2026-08-24, so a fixture that
+  // records a payment needs the method to exist first.
+  await owner.query(
+    `INSERT INTO "PaymentMethod" (id, code, label, "builtIn", "forPo", "forSale", active, "sortOrder", "createdAt")
+     VALUES ('pm_tunai','TUNAI','Cash',true,true,true,true,1,now())`,
+  );
   await owner.query(
     `INSERT INTO "Category" (id, name, "sortOrder", "marginMode", "marginMin", "marginMax", "createdAt")
      VALUES ($1,'Laptop',1,'PCT',10,50,now())`,
@@ -89,9 +95,9 @@ async function seed() {
     [SKU, MODEL],
   );
   await owner.query(
-    `INSERT INTO "Unit" (id, serial, "skuId", status, "locationId", buy, landed, price, "intakeAt", version)
-     VALUES ($1,'SER-001',$3,'TERSEDIA',$4,9000000,9000000,12000000,now(),1),
-            ($2,'SER-002',$3,'TERSEDIA',$4,9000000,9000000,12000000,now(),1)`,
+    `INSERT INTO "Unit" (id, serial, "skuId", status, "locationId", buy, landed, "intakeAt", version)
+     VALUES ($1,'SER-001',$3,'TERSEDIA',$4,9000000,9000000,now(),1),
+            ($2,'SER-002',$3,'TERSEDIA',$4,9000000,9000000,now(),1)`,
     [UNIT, UNIT2, SKU, LOC],
   );
   // total = subtotal - discount + extra  →  12000000 - 0 + 0
@@ -132,8 +138,8 @@ describe("08 §2 — the fifteen invariants", () => {
     await rejectsWith(
       () =>
         owner.query(
-          `INSERT INTO "Unit" (id, serial, "skuId", status, "locationId", buy, landed, price, "intakeAt", version)
-           VALUES ('dupe','SER-001',$1,'TERSEDIA',$2,1,1,1,now(),1)`,
+          `INSERT INTO "Unit" (id, serial, "skuId", status, "locationId", buy, landed, "intakeAt", version)
+           VALUES ('dupe','SER-001',$1,'TERSEDIA',$2,1,1,now(),1)`,
           [SKU, LOC],
         ),
       UNIQUE_VIOLATION,
@@ -224,16 +230,16 @@ describe("08 §2 — the fifteen invariants", () => {
     await rejectsWith(
       () =>
         owner.query(
-          `INSERT INTO "Payment" (id, "orderId", direction, method, amount, status, "staffId")
-           VALUES ('p0',$1,'MASUK','TUNAI',0,'LUNAS',$2)`,
+          `INSERT INTO "Payment" (id, "orderId", direction, "methodId", amount, status, "staffId")
+           VALUES ('p0',$1,'MASUK','pm_tunai',0,'LUNAS',$2)`,
           [ORDER, STAFF],
         ),
       CHECK_VIOLATION,
     );
 
     await owner.query(
-      `INSERT INTO "Payment" (id, "orderId", direction, method, amount, status, "staffId")
-       VALUES ('p1',$1,'MASUK','TUNAI',12000000,'LUNAS',$2)`,
+      `INSERT INTO "Payment" (id, "orderId", direction, "methodId", amount, status, "staffId")
+       VALUES ('p1',$1,'MASUK','pm_tunai',12000000,'LUNAS',$2)`,
       [ORDER, STAFF],
     );
     // The txn-level half of invariant 6: overpayment is detectable in the same
@@ -249,8 +255,8 @@ describe("08 §2 — the fifteen invariants", () => {
   it("7. a payment belongs to exactly one parent", async () => {
     const pay = (id: string, orderId: string | null, poId: string | null) =>
       owner.query(
-        `INSERT INTO "Payment" (id, "orderId", "poId", direction, method, amount, status, "staffId")
-         VALUES ($1,$2,$3,'MASUK','TUNAI',1000,'LUNAS',$4)`,
+        `INSERT INTO "Payment" (id, "orderId", "poId", direction, "methodId", amount, status, "staffId")
+         VALUES ($1,$2,$3,'MASUK','pm_tunai',1000,'LUNAS',$4)`,
         [id, orderId, poId, STAFF],
       );
 

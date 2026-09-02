@@ -13,7 +13,14 @@
 
 import { Router } from "express";
 import { z } from "zod";
-import { Prisma, type PrismaClient } from "@nusantara/db";
+import {
+  searchUnits,
+  unitTimeline,
+  Prisma,
+  type PrismaClient,
+  type TimelineEvent,
+  type UnitCard,
+} from "@nusantara/db";
 import { ApiError } from "../errors.js";
 
 /** A comma-separated multi-select, as it appears in the URL. */
@@ -83,6 +90,29 @@ export interface InventoriRow {
   /** attributeId → value, for the columns derived from CategoryAttribute. */
   readonly attrs: Record<string, string>;
 }
+
+/** A serial is at most 15 characters (Inbound & QC). */
+const serialParam = z.string().trim().min(1).max(15);
+
+const pickerQuery = z.object({
+  q: z.string().trim().max(64).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+/**
+ * Dates go out as ISO strings. Money stays a BigInt here and is stringified by
+ * the app-wide JSON replacer (app.ts) — one replacer so no route can forget.
+ */
+const unitJson = (u: UnitCard) => ({
+  ...u,
+  intakeAt: u.intakeAt.toISOString(),
+  archivedAt: u.archivedAt?.toISOString() ?? null,
+});
+
+const eventJson = (e: TimelineEvent) => ({
+  ...e,
+  at: e.at.toISOString(),
+});
 
 export function katalogRouter(db: PrismaClient): Router {
   const router = Router();
@@ -237,6 +267,54 @@ export function katalogRouter(db: PrismaClient): Router {
               count: g._count.grade,
             })),
         });
+      } catch (error) {
+        next(error);
+      }
+    })();
+  });
+
+  /**
+   * One serial's whole life — S/N Tracking.
+   *
+   * Longer prefixes first (01 §2): this sits above nothing, but it is declared
+   * before the picker below so the shape of the section reads top-down.
+   */
+  router.get("/unit/:serial", (req, res, next) => {
+    void (async () => {
+      try {
+        const parsed = serialParam.safeParse(req.params["serial"]);
+        if (!parsed.success) {
+          next(
+            new ApiError(400, "VALIDASI", "Nomor seri tidak valid.", {
+              field: "serial",
+            }),
+          );
+          return;
+        }
+        // UnknownSerialError from the service becomes a 404 naming the serial,
+        // translated centrally in errorHandler.
+        const { unit, events } = await unitTimeline(db, parsed.data);
+        res.json({ unit: unitJson(unit), events: events.map(eventJson) });
+      } catch (error) {
+        next(error);
+      }
+    })();
+  });
+
+  /** Serials to offer in the tracker's picker — searched and capped server-side. */
+  router.get("/unit", (req, res, next) => {
+    void (async () => {
+      try {
+        const parsed = pickerQuery.safeParse(req.query);
+        if (!parsed.success) {
+          next(
+            new ApiError(400, "VALIDASI", "Pencarian tidak valid.", {
+              field: "q",
+            }),
+          );
+          return;
+        }
+        res.json({ units: await searchUnits(db, parsed.data) });
       } catch (error) {
         next(error);
       }

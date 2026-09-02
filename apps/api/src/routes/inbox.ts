@@ -17,6 +17,13 @@
  * one inbound bubble per row, each optionally followed by the outbound bubble
  * hanging off it, and "has this been answered" is a column rather than a join.
  *
+ * ## The per-thread bot switch
+ *
+ * `WaThreadMemory.autoReply` decides whether the worker answers this customer
+ * unattended. It is staff-owned, defaults true, and gates the worker's draft
+ * pass and nothing else — the inbox, the drafting button and the reply box all
+ * behave identically either way, because none of them send without a person.
+ *
  * ## The 24-hour window
  *
  * 06 §11: free-form text delivers only within 24 hours of the customer's last
@@ -31,6 +38,7 @@ import { z } from "zod";
 import { Prisma, enqueueOutbox, type PrismaClient } from "@nusantara/db";
 import { currentRequestId } from "@nusantara/logging";
 import { isWithinWindow, windowClosesAt } from "@nusantara/whatsapp";
+import { phoneForms } from "@nusantara/agent";
 import { ApiError, notFound } from "../errors.js";
 
 /**
@@ -49,6 +57,11 @@ const replyBody = z.object({
   text: z.string().trim().min(1).max(4_000),
 });
 
+const autoReplyBody = z.object({
+  /** True: the bot answers this customer. False: a person does. */
+  enabled: z.boolean(),
+});
+
 /** One row of the thread list, as the SQL below returns it. */
 interface ThreadRow {
   phone: string;
@@ -59,6 +72,8 @@ interface ThreadRow {
   lastReply: string | null;
   pending: number;
   lastInboundAt: Date | null;
+  /** False only where staff have taken this one thread off the bot. */
+  autoReply: boolean;
 }
 
 export function inboxRouter(db: PrismaClient): Router {
@@ -89,8 +104,13 @@ export function inboxRouter(db: PrismaClient): Router {
                m."status"::text AS "lastStatus",
                m."replyText"   AS "lastReply",
                agg."pending"   AS "pending",
-               agg."lastInboundAt" AS "lastInboundAt"
+               agg."lastInboundAt" AS "lastInboundAt",
+               -- COALESCE rather than the bare column: most threads have
+               -- no memory row at all, and no row means the bot answers —
+               -- the same answer the column's DEFAULT gives.
+               COALESCE(mem."autoReply", true) AS "autoReply"
           FROM "WaMessage" m
+          LEFT JOIN "WaThreadMemory" mem ON mem."from" = m."from"
           JOIN (
                  SELECT "from",
                         COUNT(*) FILTER (
@@ -116,6 +136,8 @@ export function inboxRouter(db: PrismaClient): Router {
           /** Waiting on a person or on the bot — the inbox's only sort that matters. */
           needsReply: r.pending > 0,
           pending: r.pending,
+          /** False means a person is handling this one, not the bot. */
+          autoReply: r.autoReply,
           /** Null once the window has closed, so the UI can disable the reply box. */
           windowClosesAt:
             r.lastInboundAt && isWithinWindow(r.lastInboundAt, now)
@@ -168,6 +190,63 @@ export function inboxRouter(db: PrismaClient): Router {
 
       if (messages.length === 0) throw notFound("Percakapan");
 
+      // The agent's own rolling note on this thread, and who the shop knows
+      // this number to be. Both are read here rather than from a second
+      // endpoint because the Chat page needs them at exactly the moment it
+      // opens a conversation, and a second round trip would only make the
+      // panel populate later than the messages beside it.
+      const [memory, customer] = await Promise.all([
+        db.waThreadMemory.findUnique({
+          where: { from: phone.data },
+          select: {
+            summary: true,
+            summaryAt: true,
+            directive: true,
+            autoReply: true,
+            autoReplyAt: true,
+            autoReplyBy: { select: { name: true } },
+          },
+        }),
+        // `WaMessage.customerId` is never written by any code in this build,
+        // so a thread is matched to a customer by number. `Customer.phone` is
+        // E.164 and a wa_id is bare digits, hence both forms — two exact
+        // values, so the unique index still applies.
+        db.customer.findFirst({
+          where: { phone: { in: phoneForms(phone.data) } },
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            createdAt: true,
+            referralSource: { select: { name: true } },
+          },
+        }),
+      ]);
+
+      // Counts rather than rows: the panel says "3 pesanan", and shipping the
+      // orders themselves would be a second, larger payload nobody reads.
+      const [orderCount, lastOrder, openReservations] = customer
+        ? await Promise.all([
+            db.order.count({
+              where: {
+                customerId: customer.id,
+                status: { in: ["LUNAS", "BELUM", "RETUR", "RETUR_SEBAGIAN"] },
+              },
+            }),
+            db.order.findFirst({
+              where: {
+                customerId: customer.id,
+                status: { in: ["LUNAS", "BELUM", "RETUR", "RETUR_SEBAGIAN"] },
+              },
+              select: { code: true, ts: true, total: true },
+              orderBy: { ts: "desc" },
+            }),
+            db.reservation.count({
+              where: { customerId: customer.id, status: "TERJADWAL" },
+            }),
+          ])
+        : [0, null, 0];
+
       const lastInboundAt = messages.reduce<Date | null>(
         (acc, m) => (m.direction === "IN" && (!acc || m.ts > acc) ? m.ts : acc),
         null,
@@ -184,6 +263,57 @@ export function inboxRouter(db: PrismaClient): Router {
           lastInboundAt && open
             ? windowClosesAt(lastInboundAt).toISOString()
             : null,
+        /**
+         * The agent's rolling note, written by the worker's summary pass. Null
+         * until a thread has had enough answered turns to be worth
+         * summarising — the page says so rather than inventing one.
+         */
+        summary: memory?.summary
+          ? {
+              text: memory.summary,
+              at: memory.summaryAt?.toISOString() ?? null,
+            }
+          : null,
+        /** A standing instruction staff left about this customer. */
+        directive: memory?.directive ?? null,
+        /**
+         * Whether the bot answers this customer unattended.
+         *
+         * `?? true` for a thread with no memory row, which is most of them:
+         * no row means nobody has ruled on this number, and the bot answers.
+         * `by`/`at` are null until somebody has actually flipped it, so the
+         * page can say "on by default" rather than naming a person who never
+         * touched it.
+         */
+        autoReply: {
+          enabled: memory?.autoReply ?? true,
+          by: memory?.autoReplyBy?.name ?? null,
+          at: memory?.autoReplyAt?.toISOString() ?? null,
+        },
+        /**
+         * Who the shop knows this number to be. Null for a number that has
+         * never bought anything, which the page must say plainly rather than
+         * filling in with guesses.
+         */
+        customer: customer
+          ? {
+              id: customer.id,
+              name: customer.name,
+              phone: customer.phone,
+              since: customer.createdAt.toISOString(),
+              referralSource: customer.referralSource?.name ?? null,
+              orderCount,
+              openReservations,
+              lastOrder: lastOrder
+                ? {
+                    code: lastOrder.code,
+                    at: lastOrder.ts.toISOString(),
+                    // BigInt does not survive JSON.stringify.
+                    total: lastOrder.total.toString(),
+                  }
+                : null,
+            }
+          : null,
         messages: messages.map((m) => ({
           id: m.id,
           waMessageId: m.waMessageId,
@@ -306,6 +436,97 @@ export function inboxRouter(db: PrismaClient): Router {
         // happened yet. Saying "queued" rather than "sent" is the difference
         // 06 §11 insists on.
         status: "QUEUED",
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * PUT /api/inbox/:phone/auto-reply — hand one customer to a person, or back.
+   *
+   * Scope worth being exact about: this governs the UNATTENDED path only. The
+   * worker's draft pass skips a thread with `autoReply = false`
+   * (apps/worker/src/draft.ts) and nothing else changes — staff can still open
+   * the thread, still press "Ask the bot to draft", still send. Nothing is ever
+   * sent from the Chat page without a person pressing Send, so the button that
+   * writes a draft into the reply box was never the thing to gate.
+   *
+   * `PUT` rather than `POST`: the body carries the state wanted, not a change
+   * to apply, so pressing the switch twice on a flaky connection lands the
+   * customer where the staff member left it rather than back where they
+   * started.
+   *
+   * ## Why the upsert names its columns one at a time
+   *
+   * `WaThreadMemory` is the two-writer table (08 §7) and Postgres enforces the
+   * split with column-level UPDATE grants. This role owns the directive columns
+   * and now the autoReply columns; it does not own `summary`, `summaryAt`,
+   * `summaryTurns` or the `coveredThrough` pair, and the update branch must not
+   * name them.
+   *
+   * The create branch is the exception the grants cannot express, and it is
+   * deliberate: `summaryTurns` and `clarifyCount` are NOT NULL with no default,
+   * so a row created from this side has to initialise them. Initialising a
+   * counter on a row that did not exist a moment ago is not overwriting the
+   * summariser's work — there was none — and it is the only column of the
+   * agent's this endpoint can touch, on the one path where nothing can be lost.
+   */
+  router.put("/:phone/auto-reply", async (req, res, next) => {
+    try {
+      const phone = phoneParam.safeParse(req.params["phone"]);
+      if (!phone.success)
+        throw new ApiError(400, "VALIDASI", "Nomor WhatsApp tidak valid.");
+
+      const parsed = autoReplyBody.safeParse(req.body);
+      if (!parsed.success) {
+        throw new ApiError(400, "VALIDASI", "Nilai saklar tidak valid.", {
+          field: "enabled",
+        });
+      }
+
+      const staff = req.staff;
+      if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
+
+      // A thread is every WaMessage sharing a `from`, so a number nobody has
+      // ever written from is not a thread. Without this the endpoint would
+      // create memory rows for arbitrary numbers typed into the URL.
+      const exists = await db.waMessage.findFirst({
+        where: { from: phone.data },
+        select: { id: true },
+      });
+      if (!exists) throw notFound("Percakapan");
+
+      const now = new Date();
+      const saved = await db.waThreadMemory.upsert({
+        where: { from: phone.data },
+        update: {
+          autoReply: parsed.data.enabled,
+          autoReplyAt: now,
+          autoReplyById: staff.id,
+          updatedAt: now,
+        },
+        create: {
+          from: phone.data,
+          autoReply: parsed.data.enabled,
+          autoReplyAt: now,
+          autoReplyById: staff.id,
+          // NOT NULL, no default, and the summariser has written nothing here.
+          summaryTurns: 0,
+          clarifyCount: 0,
+          updatedAt: now,
+        },
+        select: {
+          autoReply: true,
+          autoReplyAt: true,
+          autoReplyBy: { select: { name: true } },
+        },
+      });
+
+      res.json({
+        enabled: saved.autoReply,
+        by: saved.autoReplyBy?.name ?? null,
+        at: saved.autoReplyAt?.toISOString() ?? null,
       });
     } catch (err) {
       next(err);

@@ -23,6 +23,4 @@ packages/db/generated/
 .idea/
 *.swp
 
-docs/rebuild/*
-docs/erd-pos-chatbot.drawio
 

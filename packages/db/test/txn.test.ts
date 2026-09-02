@@ -127,7 +127,6 @@ beforeEach(async () => {
       locationId: LOC,
       buy: 9_000_000n,
       landed: 9_000_000n,
-      price: 12_000_000n,
       intakeAt: new Date(),
       version: 1,
     })),

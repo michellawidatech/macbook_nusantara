@@ -22,14 +22,74 @@ export {
   type KnowledgeEntry,
   type PromptInput,
 } from "./prompt.js";
-export { ANTHROPIC_TOOLS, dispatchTool } from "./tools.js";
+export {
+  ANTHROPIC_TOOLS,
+  MAX_BOOKING_DAYS,
+  READ_TOOLS,
+  STORE_HOURS,
+  WRITE_TOOLS,
+  dispatchTool,
+  jakartaDate,
+  jakartaTime,
+  jakartaWeekday,
+  parseJakarta,
+  phoneForms,
+  storeOpenAt,
+  toE164,
+  toolJson,
+  toolsFor,
+  type ToolContext,
+} from "./tools.js";
+export {
+  BASE_WAIT_MS,
+  DEFAULT_WAITS,
+  FILLER_FACTOR,
+  MAX_WAIT_MS,
+  MIN_WAIT_MS,
+  classifyWait,
+  computeWaitMs,
+  type WaitDecision,
+  type WaitProfile,
+  type WaitReason,
+} from "./debounce.js";
+export {
+  MAX_EMOJI,
+  detectLanguage,
+  hasForbiddenFormatting,
+  stripFormatting,
+  type Language,
+} from "./sanitise.js";
 export {
   AGENT_MODEL,
   MAX_STEPS,
   MAX_TOKENS,
+  TEMPERATURE,
   converse,
+  type AgentClient,
+  type CreateArgs,
   type ConverseInput,
   type ConverseResult,
   type ConverseTurn,
 } from "./converse.js";
 export { DEFAULT_PERSONA } from "./persona.js";
+export {
+  emptyThreadMemory,
+  loadThreadMemory,
+  markSummaryAttempt,
+  saveSummary,
+  type SummaryUpdate,
+  type ThreadMemory,
+} from "./memory.js";
+export {
+  SUMMARY_EVERY_TURNS,
+  SUMMARY_INPUT_LIMIT,
+  SUMMARY_MAX_CHARS,
+  SUMMARY_MAX_TOKENS,
+  SUMMARY_MODEL,
+  SUMMARY_NOTHING,
+  SUMMARY_SYSTEM,
+  renderTranscript,
+  summarize,
+  type SummarizeInput,
+  type SummaryTurn,
+} from "./summarize.js";

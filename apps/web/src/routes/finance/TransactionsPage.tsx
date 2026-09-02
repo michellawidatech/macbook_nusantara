@@ -7,10 +7,15 @@
  * while this one is the ledger you open when a customer rings up about a
  * receipt from three weeks ago.
  *
- * Sales and expenses share one list rather than sitting in two tabs, because
- * the questions people actually bring here — "what happened on the 12th",
- * "what did Ayu sell in August", "find the Rp2.400.000 one" — cut across both.
- * The Type facet separates them for anyone who wants them separate.
+ * Sales ONLY, since 2026-08-24. Expenses moved to Income & Expense, which is
+ * now the one ledger carrying every movement of money — sales and purchases
+ * posting into it automatically, manual lines on top.
+ *
+ * The split is by what the screen is FOR rather than by where the data lives.
+ * This is the receipt-finder: a customer rings up about something they bought
+ * three weeks ago, and every column here — serial, salesperson, channel,
+ * payment — narrows towards one sale. Expenses answered none of those questions
+ * and only made the Type facet necessary.
  *
  * Selection exists for a reason beyond ticking boxes: the selected rows get
  * totalled, and can be exported. Reconciling a bank statement against a shop's
@@ -35,7 +40,8 @@ import { InvoiceModal } from "../../components/Invoice";
 import { fmtRp, fmtDateTime } from "../../lib/format.js";
 import { useDb } from "../../mock/store.js";
 import type { Order } from "../../mock/seed.js";
-import { EXPENSE_CATEGORIES } from "../../mock/seed.js";
+import { SPACE, TYPE } from "../../theme/tokens";
+import { useTranslation } from "react-i18next";
 
 /**
  * One line of the ledger.
@@ -44,12 +50,37 @@ import { EXPENSE_CATEGORIES } from "../../mock/seed.js";
  * rendered by a per-kind branch in every column: a column that has to ask "is
  * this a sale?" five times is a column that will disagree with itself once.
  */
+/**
+ * One product on one sale, and the machine it was.
+ *
+ * A sale of three things used to render as every product name joined by
+ * commas, a `·`, then every serial joined by commas — which left the reader
+ * pairing the first name with the first serial by counting along two lists
+ * (owner report 2026-08-26). They are pairs in the data, so they are pairs on
+ * screen.
+ */
+interface MovementLine {
+  /** Null when no unit in the system carries this serial — see the mapper. */
+  readonly product: string | null;
+  readonly serial: string;
+}
+
 interface Movement {
   readonly key: string;
-  readonly kind: "Sale" | "Expense";
   readonly at: string;
   readonly reference: string;
+  /**
+   * Everything on the sale as one flat string.
+   *
+   * Still built, and still the ONLY thing search, sort and the CSV read: a
+   * spreadsheet cell holds one string, and searching "which sale was this
+   * serial on" has to match across every product and serial at once. `lines`
+   * is the same content shaped for the screen; neither is derived from the
+   * other at render time, so they cannot disagree mid-row.
+   */
   readonly detail: string;
+  /** The same sale as product/serial pairs. Empty for a row with no units. */
+  readonly lines: readonly MovementLine[];
   readonly counterparty: string;
   readonly salesperson: string;
   readonly channel: string;
@@ -65,7 +96,6 @@ interface Movement {
 function toCsv(rows: readonly Movement[]): string {
   const header = [
     "When",
-    "Kind",
     "Reference",
     "Detail",
     "Counterparty",
@@ -80,7 +110,6 @@ function toCsv(rows: readonly Movement[]): string {
   const lines = rows.map((r) =>
     [
       r.at,
-      r.kind,
       r.reference,
       r.detail,
       r.counterparty,
@@ -98,32 +127,34 @@ function toCsv(rows: readonly Movement[]): string {
 }
 
 export function TransactionsPage() {
+  const { t } = useTranslation();
   const db = useDb();
   const { message } = App.useApp();
   const [reprint, setReprint] = useState<Order | null>(null);
 
   const movements = useMemo<Movement[]>(() => {
-    const expenseLabel = (kind: string) =>
-      EXPENSE_CATEGORIES.find((c) => c.value === kind)?.label ?? kind;
-
     const sales: Movement[] = db.orders.map((o) => {
       const customer = db.customers.find((c) => c.id === o.customerId);
-      const units = o.serials
-        .map((serial) => {
-          const unit = db.units.find((u) => u.serial === serial);
-          const sku = unit && db.skus.find((k) => k.id === unit.skuId);
-          return sku ? `${sku.name} ${sku.variantLabel}` : serial;
-        })
-        .join(", ");
+      const lines: MovementLine[] = o.serials.map((serial) => {
+        const unit = db.units.find((u) => u.serial === serial);
+        const sku = unit && db.skus.find((k) => k.id === unit.skuId);
+        // Null rather than the serial repeated: a unit whose product the
+        // catalogue no longer knows should show its serial once, not twice.
+        return {
+          product: sku ? `${sku.name} ${sku.variantLabel}` : null,
+          serial,
+        };
+      });
+      const units = lines.map((l) => l.product ?? l.serial).join(", ");
       return {
         key: `o-${o.id}`,
-        kind: "Sale",
         at: o.ts,
         reference: o.code,
         // Serials go in the searchable detail on purpose: "which sale was this
         // serial on" is the question this shop asks most, and it is the one the
         // unit's own timeline answers slowest.
         detail: `${units} · ${o.serials.join(", ")}`,
+        lines,
         counterparty: customer?.name ?? "Walk-in",
         salesperson:
           db.salesmen.find((s) => s.id === o.salesmanId)?.name ?? "—",
@@ -136,27 +167,7 @@ export function TransactionsPage() {
       };
     });
 
-    const expenses: Movement[] = db.expenses.map((e) => ({
-      key: `e-${e.id}`,
-      kind: "Expense",
-      // Expenses carry a date, not a timestamp. Noon keeps them in the middle
-      // of their own day when the list sorts by time, rather than at midnight
-      // where they would sort ahead of everything that actually happened first.
-      at: `${e.date}T12:00:00.000Z`,
-      reference: e.id.toUpperCase(),
-      detail: e.label,
-      counterparty: expenseLabel(e.kind),
-      salesperson: "—",
-      channel:
-        db.referralSources.find((r) => r.id === e.referralSourceId)?.name ??
-        "—",
-      payment: "—",
-      status: "Paid",
-      moneyIn: 0,
-      moneyOut: e.amount,
-    }));
-
-    return [...sales, ...expenses].sort((a, b) => b.at.localeCompare(a.at));
+    return [...sales].sort((a, b) => b.at.localeCompare(a.at));
   }, [
     db.orders,
     db.expenses,
@@ -190,21 +201,32 @@ export function TransactionsPage() {
   };
 
   return (
-    <PageContainer title="Transaction History">
+    <PageContainer
+      title={t("transactions.transactionHistory", "Transaction History")}
+    >
       <Flex vertical gap={16}>
         <Flex gap={16} wrap>
           <Card style={{ flex: 1, minWidth: 200 }}>
-            <Statistic title="Transactions" value={movements.length} />
-          </Card>
-          <Card style={{ flex: 1, minWidth: 200 }}>
-            <Statistic title="Money in (settled)" value={fmtRp(totalIn)} />
-          </Card>
-          <Card style={{ flex: 1, minWidth: 200 }}>
-            <Statistic title="Money out" value={fmtRp(totalOut)} />
+            <Statistic
+              title={t("transactions.transactions", "Transactions")}
+              value={movements.length}
+            />
           </Card>
           <Card style={{ flex: 1, minWidth: 200 }}>
             <Statistic
-              title="Still pending"
+              title={t("transactions.moneyInSettled", "Money in (settled)")}
+              value={fmtRp(totalIn)}
+            />
+          </Card>
+          <Card style={{ flex: 1, minWidth: 200 }}>
+            <Statistic
+              title={t("transactions.moneyOut", "Money out")}
+              value={fmtRp(totalOut)}
+            />
+          </Card>
+          <Card style={{ flex: 1, minWidth: 200 }}>
+            <Statistic
+              title={t("transactions.stillPending", "Still pending")}
               value={fmtRp(pendingTotal)}
               styles={{ content: { color: "#d48806" } }}
             />
@@ -215,14 +237,17 @@ export function TransactionsPage() {
           <ProTable
             rowKey="key"
             dataSource={movements}
-            searchPlaceholder="Search a code, serial, product, customer or expense"
+            searchPlaceholder={t(
+              "transactions.searchACodeSerialProduct",
+              "Search a code, serial, product, customer or expense",
+            )}
             selectable
             extra={
               <Button
                 icon={<DownloadOutlined />}
                 onClick={() => exportCsv(movements)}
               >
-                Export all
+                {t("transactions.exportAll", "Export all")}
               </Button>
             }
             bulkActions={(selected, clear) => {
@@ -242,69 +267,98 @@ export function TransactionsPage() {
                       clear();
                     }}
                   >
-                    Export selected
+                    {t("transactions.exportSelected", "Export selected")}
                   </Button>
                 </>
               );
             }}
             columns={[
               {
-                title: "When",
+                title: t("transactions.when", "When"),
                 dataIndex: "at",
                 width: 150,
                 defaultSortOrder: "descend",
                 render: (v: string) => fmtDateTime(v),
               },
               {
-                title: "Kind",
-                dataIndex: "kind",
-                facet: true,
-                width: 100,
-                render: (v: string) => (
-                  <Tag color={v === "Sale" ? "green" : "volcano"}>{v}</Tag>
-                ),
-              },
-              {
-                title: "Reference",
+                title: t("transactions.reference", "Reference"),
                 dataIndex: "reference",
                 searchable: true,
                 width: 170,
               },
               {
-                title: "Detail",
+                title: t("transactions.detail", "Detail"),
                 key: "detail",
                 searchable: true,
                 sortValue: (m) => m.detail,
                 render: (_, m) => (
-                  <>
-                    <div>{m.detail}</div>
-                    <Typography.Text type="secondary">
+                  <Flex vertical gap={SPACE.xs}>
+                    {/*
+                     * One row per product, with the serial beside it. The old
+                     * single line joined every name, then every serial, which
+                     * meant pairing them by counting along two lists.
+                     *
+                     * `wrap` on each pair rather than truncation: a serial is
+                     * the thing someone is here to read, so on a narrow column
+                     * it drops under its product instead of being cut off.
+                     */}
+                    {m.lines.length > 0 ? (
+                      m.lines.map((line) => (
+                        <Flex
+                          key={line.serial}
+                          gap={SPACE.sm}
+                          align="baseline"
+                          wrap
+                        >
+                          {line.product !== null && (
+                            <Typography.Text>{line.product}</Typography.Text>
+                          )}
+                          <Typography.Text
+                            type="secondary"
+                            style={{
+                              fontFamily: "monospace",
+                              fontSize: TYPE.sm,
+                            }}
+                          >
+                            {line.serial}
+                          </Typography.Text>
+                        </Flex>
+                      ))
+                    ) : (
+                      <Typography.Text>{m.detail}</Typography.Text>
+                    )}
+                    {/* The customer, separated from the lines above by its own
+                        gap so it does not read as a fourth product. */}
+                    <Typography.Text
+                      type="secondary"
+                      style={{ marginTop: SPACE.xs }}
+                    >
                       {m.counterparty}
                     </Typography.Text>
-                  </>
+                  </Flex>
                 ),
               },
               {
-                title: "Salesperson",
+                title: t("transactions.salesperson", "Salesperson"),
                 dataIndex: "salesperson",
                 facet: true,
                 searchable: true,
                 width: 140,
               },
               {
-                title: "Channel",
+                title: t("transactions.channel", "Channel"),
                 dataIndex: "channel",
                 facet: true,
                 width: 120,
               },
               {
-                title: "Payment",
+                title: t("transactions.payment", "Payment"),
                 dataIndex: "payment",
                 facet: true,
                 width: 130,
               },
               {
-                title: "Status",
+                title: t("transactions.status", "Status"),
                 dataIndex: "status",
                 facet: true,
                 width: 110,
@@ -313,7 +367,7 @@ export function TransactionsPage() {
                 ),
               },
               {
-                title: "In",
+                title: t("transactions.in", "In"),
                 key: "in",
                 align: "right",
                 width: 140,
@@ -321,7 +375,7 @@ export function TransactionsPage() {
                 render: (_, m) => (m.moneyIn ? fmtRp(m.moneyIn) : "—"),
               },
               {
-                title: "Out",
+                title: t("transactions.out", "Out"),
                 key: "out",
                 align: "right",
                 width: 140,
@@ -334,7 +388,12 @@ export function TransactionsPage() {
                 width: 56,
                 render: (_, m) =>
                   m.order ? (
-                    <Tooltip title="Print this invoice again">
+                    <Tooltip
+                      title={t(
+                        "transactions.printThisInvoiceAgain",
+                        "Print this invoice again",
+                      )}
+                    >
                       <Button
                         size="small"
                         aria-label={`Print invoice ${m.reference}`}

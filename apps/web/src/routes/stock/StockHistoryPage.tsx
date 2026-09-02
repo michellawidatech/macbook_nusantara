@@ -9,126 +9,157 @@
  * what was written and this stays a reading of it. The raw ledger card is the
  * unembellished truth, and it is deliberately still on the page.
  */
-import { useMemo } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
+  Alert,
+  Button,
   Card,
   Descriptions,
   Empty,
   Flex,
+  Result,
   Select,
-  Tag,
+  Skeleton,
   Timeline,
   Typography,
 } from "antd";
+import { PrinterOutlined } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
+import { LongText } from "../../components/LongText";
+import { EnumTag } from "../../components/EnumTag";
+import { GradeTag } from "../../components/GradeTag";
 import { FilterBar } from "../../components/FilterBar";
+import { PrintLabelsModal } from "../../components/LabelSheet";
 import { fmtRp, fmtDateTime } from "../../lib/format.js";
-import { useDb } from "../../mock/store.js";
-import type { MockDb, UnitEvent } from "../../mock/seed.js";
+import { useQuery } from "@tanstack/react-query";
+import {
+  getUnitTimeline,
+  searchUnits,
+  unitPickerKey,
+  unitTimelineKey,
+  type TimelineContext,
+  type TimelineEvent,
+} from "../../lib/unitsApi.js";
+import { describeApiError } from "../../i18n/apiErrors.js";
+import { ApiRequestError } from "../../lib/api.js";
+import { useScanTarget } from "../../hooks/useScanTarget.js";
+import { labelOf, UNIT_EVENT, UNIT_STATUS } from "../../i18n/enumLabels.js";
 
-const EVENT_LABEL: Record<string, string> = {
-  // Owner's wording: a unit that has just arrived has NOT been through QC yet,
-  // so calling this "received into QC" claimed a step that had not happened.
-  DITERIMA: "Pending to QC",
-  QC_SELESAI: "QC passed — entered inventory",
-  DICATAT: "Note",
-  DIPINDAH: "Moved",
-  DIRESERVASI: "Reserved",
-  RESERVASI_BATAL: "Reservation cancelled",
-  TERJUAL: "Sold",
-  RETUR_PELANGGAN: "Returned by customer",
-  RETUR_SUPPLIER: "Returned to supplier",
-  OPNAME_HILANG: "Missing at opname",
-  OPNAME_DITEMUKAN: "Found at opname",
-  KOREKSI: "Adjustment",
-};
-
-const SOURCE_LABEL: Record<string, string> = {
-  OFFLINE: "in store",
-  SHOPEE: "on Shopee",
-  INSTAGRAM: "via Instagram",
-  WHATSAPP: "via WhatsApp",
-};
 
 /**
- * The one-line context for an event, joined from whatever table actually knows
- * it. Returns null when there is nothing to add, so the timeline does not grow
- * a row of empty grey text under every entry.
+ * The one-line context for an event, rendered from what the server joined.
+ *
+ * The enrichment itself moved to `packages/db`'s `unitTimeline`, where every
+ * join is an id the EVENT carries — `orderId`, `reservationId`,
+ * `purchaseOrderId`. This page used to search each mock table for a row
+ * mentioning the serial and take the first match, so a machine held, released,
+ * and held again by a different customer narrated the wrong person on both
+ * events. It could not have known better: nothing recorded which hold an event
+ * belonged to until `UnitEvent.reservationId` shipped.
+ *
+ * What stays here is the WORDING, because it is user-facing copy and has to go
+ * through the catalogue. Returns null when there is nothing to add, so the
+ * timeline does not grow a row of empty grey text under every entry.
  */
-function contextFor(db: MockDb, e: UnitEvent, serial: string): string | null {
-  if (e.type === "TERJUAL") {
-    const order = db.orders.find((o) => o.serials.includes(serial));
-    if (!order) return null;
-    const who = db.customers.find((c) => c.id === order.customerId)?.name;
-    const paid = order.prices[serial];
+function contextLine(
+  ctx: TimelineContext | null,
+  t: (k: string, d: string, v?: Record<string, unknown>) => string,
+): string | null {
+  if (!ctx) return null;
+  if (ctx.kind === "SALE") {
     return [
-      `Sold ${SOURCE_LABEL[order.source] ?? order.source.toLowerCase()}`,
-      who && `to ${who}`,
-      paid != null && `for ${fmtRp(paid)}`,
-      `on ${order.code}`,
-      !order.settled && "— money not withdrawn yet",
+      t("snTracking.ctxSold", "Sold on {{code}}", { code: ctx.orderCode }),
+      ctx.customerName &&
+        t("snTracking.ctxSoldTo", "to {{who}}", { who: ctx.customerName }),
+      ctx.price != null &&
+        t("snTracking.ctxSoldFor", "for {{amount}}", {
+          amount: fmtRp(Number(ctx.price)),
+        }),
     ]
       .filter(Boolean)
       .join(" ");
   }
-  if (e.type === "DIRESERVASI") {
-    const rsv = db.reservations.find((r) => r.serial === serial);
-    if (!rsv) return null;
-    const who = db.customers.find((c) => c.id === rsv.customerId)?.name;
-    const channel = db.reservationSources.find(
-      (s) => s.id === rsv.sourceId,
-    )?.name;
-    return ["Held", who && `for ${who}`, channel && `— came in from ${channel}`]
+  if (ctx.kind === "HOLD") {
+    return [
+      ctx.customerName
+        ? t("snTracking.ctxHeldFor", "Held for {{who}}", {
+            who: ctx.customerName,
+          })
+        : t("snTracking.ctxHeld", "Held"),
+      ctx.channelName &&
+        t("snTracking.ctxCameFrom", "— came in from {{channel}}", {
+          channel: ctx.channelName,
+        }),
+    ]
       .filter(Boolean)
       .join(" ");
   }
-  if (e.type === "RESERVASI_BATAL") {
-    const rsv = db.reservations.find((r) => r.serial === serial);
-    const who = rsv && db.customers.find((c) => c.id === rsv.customerId)?.name;
-    return who ? `Hold for ${who} released — back in sellable stock` : null;
+  if (ctx.kind === "SUPPLIER_RETURN") {
+    return t("snTracking.ctxReturned", "{{code}} → {{supplier}}", {
+      code: ctx.returnCode,
+      supplier: ctx.supplierName,
+    });
   }
-  if (e.type === "RETUR_SUPPLIER" || e.type === "RETUR_PELANGGAN") {
-    const ret = db.returns.find((r) => r.serial === serial);
-    if (!ret) return null;
-    const sup = db.suppliers.find((s) => s.id === ret.supplierId)?.name;
-    return [ret.code, sup && `→ ${sup}`, ret.fromQc && "— rejected at QC"]
-      .filter(Boolean)
-      .join(" ");
+  if (ctx.kind === "ARRIVAL") {
+    return t("snTracking.ctxArrived", "Waiting for QC — arrived from {{supplier}}", {
+      supplier: ctx.supplierName,
+    });
   }
-  if (e.type === "DITERIMA") {
-    const unit = db.units.find((u) => u.serial === serial);
-    const po = db.pos.find((p) => p.id === unit?.poId);
-    const sup = db.suppliers.find((s) => s.id === po?.supplierId)?.name;
-    return sup ? `Waiting for QC — arrived from ${sup}` : "Waiting for QC";
-  }
-  if (e.type === "QC_SELESAI") {
-    const unit = db.units.find((u) => u.serial === serial);
-    const rack = db.racks.find((r) => r.id === unit?.rackId)?.name;
-    const wh = db.warehouses.find((w) => w.id === unit?.locationId)?.name;
-    return [wh, rack].filter(Boolean).join(" · ") || null;
-  }
-  return null;
+  return ctx.locationName;
 }
 
 export function StockHistoryPage() {
-  const db = useDb();
+  const [printing, setPrinting] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState("");
+  const { t } = useTranslation();
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const serial = params.get("serial") ?? undefined;
 
-  const unit = db.units.find((u) => u.serial === serial);
-  const sku = unit && db.skus.find((s) => s.id === unit.skuId);
-  const events = useMemo(
-    () =>
-      db.events
-        .filter((e) => e.serial === serial)
-        .sort((a, b) => b.seq - a.seq),
-    [db.events, serial],
-  );
+  // A scan jumps straight to the serial rather than going through the picker.
+  // The picker is a `Select`, so it can only ever hold a serial that already
+  // exists — which is exactly the case a scan needs to survive.
+  useScanTarget((scanned) => {
+    const clean = scanned.trim().toUpperCase();
+    if (clean) setParams({ serial: clean });
+  });
+
+  /**
+   * The serial's whole life, in one round trip.
+   *
+   * `enabled` rather than a conditional hook: with no serial chosen there is
+   * nothing to ask for, and the page shows its empty state.
+   */
+  const timeline = useQuery({
+    queryKey: unitTimelineKey(serial ?? ""),
+    queryFn: ({ signal }) => getUnitTimeline(serial!, signal),
+    enabled: serial !== undefined,
+    // A serial that does not exist is an ANSWER, not a failure to retry — the
+    // page has a recoverable 404 state for exactly that.
+    retry: false,
+    staleTime: 10_000,
+  });
+
+  /** The picker's options, searched server-side rather than over every unit. */
+  const picker = useQuery({
+    queryKey: unitPickerKey(pickerQuery),
+    queryFn: ({ signal }) => searchUnits(pickerQuery, signal),
+    staleTime: 30_000,
+  });
+
+  const unit = timeline.data?.unit;
+  const events: readonly TimelineEvent[] = timeline.data?.events ?? [];
+  /** A 404 is "no such serial", which this page answers rather than reports. */
+  const missing =
+    timeline.isError &&
+    timeline.error instanceof ApiRequestError &&
+    timeline.error.status === 404;
 
   return (
-    <PageContainer title="S/N Tracking">
+    <PageContainer title={t("snTracking.sNTracking", "S/N Tracking")}>
       <Flex vertical gap={16}>
         <Card>
           <FilterBar>
@@ -137,27 +168,93 @@ export function StockHistoryPage() {
               allowClear
               style={{ width: 480 }}
               value={serial}
-              placeholder="Search a serial number to see its full lifecycle"
+              placeholder={t(
+                "snTracking.searchASerialNumberTo",
+                "Search a serial number to see its full lifecycle",
+              )}
               optionFilterProp="label"
-              options={db.units.map((u) => {
-                const k = db.skus.find((s) => s.id === u.skuId)!;
-                return {
-                  value: u.serial,
-                  label: `${u.serial} — ${k.name} ${k.variantLabel}`,
-                };
-              })}
+              filterOption={false}
+              loading={picker.isPending}
+              onSearch={setPickerQuery}
+              notFoundContent={picker.isPending ? "…" : null}
+              options={(picker.data?.units ?? []).map((u) => ({
+                value: u.serial,
+                label: `${u.serial} — ${u.productName} ${u.variantLabel ?? ""}`.trim(),
+              }))}
               onChange={(v) => setParams(v ? { serial: v } : {})}
             />
           </FilterBar>
         </Card>
-        {!unit && (
+        {!unit && serial === undefined && (
           <Card>
-            <Empty description="Pick a serial — every unit is tracked from the day it arrives, forever." />
+            <Empty
+              description={t(
+                "snTracking.pickASerialEveryUnit",
+                "Pick a serial — every unit is tracked from the day it arrives, forever.",
+              )}
+            />
           </Card>
         )}
-        {unit && sku && (
+        {/* First load. A skeleton rather than a spinner: the shape of what is
+            coming is known, and this page is mostly one tall card. */}
+        {serial !== undefined && timeline.isPending && (
+          <Card>
+            <Skeleton active paragraph={{ rows: 6 }} />
+          </Card>
+        )}
+        {/* A real failure — not a missing serial — renders as a warning rather
+            than as the 404 below, which would tell the operator something
+            false about their serial. */}
+        {timeline.isError && !missing && (
+          <Alert
+            type="warning"
+            showIcon
+            message={describeApiError(timeline.error, t)}
+          />
+        )}
+        {/* A serial that was asked for and does not exist is a recoverable
+            state, not an error: the value stays on screen, and the two things
+            worth doing next are one click away. */}
+        {missing && (
+          <Card>
+            <Result
+              status="404"
+              title={serial}
+              subTitle={t(
+                "snTracking.noUnitWithThisSerial",
+                "No unit with this serial is in the system. If it has just arrived, it may still be waiting at intake.",
+              )}
+              extra={[
+                <Button
+                  key="intake"
+                  type="primary"
+                  onClick={() => navigate("/stock/in")}
+                >
+                  {t("snTracking.checkIntake", "Check intake")}
+                </Button>,
+                <Button key="clear" onClick={() => setParams({})}>
+                  {t("snTracking.clear", "Clear")}
+                </Button>,
+              ]}
+            />
+          </Card>
+        )}
+        {unit && (
           <>
-            <Card title={`${unit.serial} — ${sku.name} ${sku.variantLabel}`}>
+            <Card
+              title={`${unit.serial} — ${unit.productName} ${unit.variantLabel ?? ""}`.trim()}
+              // The one screen that shows a single serial in full is the one
+              // where a staff member has already found the unit they want a
+              // sticker for, so the action belongs in the card's own corner.
+              extra={
+                <Button
+                  icon={<PrinterOutlined />}
+                  onClick={() => setPrinting(true)}
+                >
+                  {t("snTracking.printLabel", "Print label")}
+                </Button>
+              }
+            >
               <Descriptions
                 // Facts about one unit: three across on a desktop, two on a
                 // tablet, and one per line on a phone, where a three-column
@@ -166,46 +263,68 @@ export function StockHistoryPage() {
                 items={[
                   {
                     key: "st",
-                    label: "Status",
-                    children: <Tag>{unit.status}</Tag>,
+                    label: t("snTracking.status", "Status"),
+                    children: <EnumTag map={UNIT_STATUS} value={unit.status} />,
                   },
                   {
                     key: "wh",
-                    label: "Warehouse",
-                    children: db.warehouses.find(
-                      (w) => w.id === unit.locationId,
-                    )?.name,
+                    label: t("snTracking.warehouse", "Warehouse"),
+                    children: unit.locationName ?? "—",
                   },
                   {
                     key: "rk",
-                    label: "Location",
-                    children:
-                      db.racks.find((r) => r.id === unit.rackId)?.name ?? "—",
+                    label: t("snTracking.location", "Location"),
+                    // Always "—" for now: there is no Rack model in the
+                    // schema, so a warehouse and a shelf cannot both be
+                    // stored. The row stays because the answer "we do not
+                    // record that" is different from the row not existing.
+                    children: unit.rackName ?? "—",
                   },
-                  { key: "b", label: "Buy price", children: fmtRp(unit.buy) },
+                  {
+                    // New or a letter (owner ask 2026-08-28). This is the one
+                    // screen that shows a single machine in full, and it is
+                    // also where a regrade lands: a unit that went out sealed
+                    // and came back second-hand is graded at the return desk,
+                    // and this is where somebody looks it up afterwards.
+                    key: "g",
+                    label: t("snTracking.grade", "Grade"),
+                    children: <GradeTag grade={unit.grade} />,
+                  },
+                  {
+                    key: "b",
+                    label: t("snTracking.buyPrice", "Buy price"),
+                    // Money crosses the wire as a decimal string of whole
+                    // rupiah; `fmtRp` still takes a number.
+                    children: fmtRp(Number(unit.buy)),
+                  },
                   {
                     key: "p",
-                    label: "Selling price",
-                    children: fmtRp(unit.price),
+                    label: t("snTracking.sellingPrice", "Selling price"),
+                    // The variant's price. This machine has no price of its
+                    // own to show since 2026-08-27, and what it eventually
+                    // SOLD for is on the order, not here.
+                    children: fmtRp(Number(unit.price)),
                   },
                   {
                     key: "d",
-                    label: "Description",
-                    children: unit.description || "—",
+                    label: t("snTracking.description", "Description"),
+                    // Always "—" for now: `Unit` has no description column,
+                    // and the schema's own docblocks disagree about whether
+                    // `UnitNote` is its home. An owner decision.
+                    children: unit.description ?? "—",
                   },
                   {
                     key: "po",
-                    label: "From PO",
-                    children:
-                      db.pos.find((p) => p.id === unit.poId)?.code ?? "—",
+                    label: t("snTracking.fromPo", "From PO"),
+                    children: unit.purchaseOrderCode ?? "—",
                   },
                 ]}
               />
             </Card>
-            <Card title="Lifecycle">
+            <Card title={t("snTracking.lifecycle", "Lifecycle")}>
               <Timeline
                 items={events.map((e) => {
-                  const context = contextFor(db, e, unit.serial);
+                  const context = contextLine(e.context, t);
                   return {
                     color:
                       e.type === "TERJUAL"
@@ -221,10 +340,10 @@ export function StockHistoryPage() {
                     children: (
                       <>
                         <Typography.Text strong>
-                          {EVENT_LABEL[e.type] ?? e.type}
+                          {labelOf(UNIT_EVENT, e.type, t)}
                         </Typography.Text>{" "}
                         <Typography.Text type="secondary">
-                          · {fmtDateTime(e.at)} · {e.staff}
+                          · {fmtDateTime(e.at)} · {e.staffName}
                           {e.refCode ? ` · ${e.refCode}` : ""}
                         </Typography.Text>
                         {context && <div>{context}</div>}
@@ -242,44 +361,92 @@ export function StockHistoryPage() {
                 })}
               />
             </Card>
-            <Card title="Raw ledger (append-only)">
+            <Card
+              title={t(
+                "snTracking.rawLedgerAppendOnly",
+                "Raw ledger (append-only)",
+              )}
+            >
               <ProTable
                 rowKey="id"
                 size="small"
                 dataSource={events}
-                searchPlaceholder="Search event, note or reference"
+                searchPlaceholder={t(
+                  "snTracking.searchEventNoteOrReference",
+                  "Search event, note or reference",
+                )}
                 // One unit's whole life. Long-lived serials run to dozens of
                 // events, so the ledger loads in pages like every other list.
                 resetKey={serial}
                 columns={[
                   { title: "#", dataIndex: "seq", width: 50 },
-                  { title: "When", dataIndex: "at", render: fmtDateTime },
                   {
-                    title: "Event",
+                    title: t("snTracking.when", "When"),
+                    dataIndex: "at",
+                    render: fmtDateTime,
+                  },
+                  {
+                    title: t("snTracking.event", "Event"),
                     dataIndex: "type",
                     facet: true,
                     searchable: true,
-                    sortValue: (e) => EVENT_LABEL[e.type] ?? e.type,
-                    render: (v) => EVENT_LABEL[v] ?? v,
+                    sortValue: (e) => labelOf(UNIT_EVENT, e.type, t),
+                    render: (v) => labelOf(UNIT_EVENT, v, t),
                   },
-                  { title: "From", dataIndex: "fromStatus", facet: true },
-                  { title: "To", dataIndex: "toStatus", facet: true },
                   {
-                    title: "Ref",
+                    title: t("snTracking.from", "From"),
+                    dataIndex: "fromStatus",
+                    facet: true,
+                  },
+                  {
+                    title: t("snTracking.to", "To"),
+                    dataIndex: "toStatus",
+                    facet: true,
+                  },
+                  {
+                    title: t("snTracking.ref", "Ref"),
                     dataIndex: "refCode",
                     searchable: true,
                     render: (v) => v ?? "—",
                   },
                   {
-                    title: "Note",
+                    title: t("snTracking.note", "Note"),
                     dataIndex: "note",
                     searchable: true,
-                    ellipsis: true,
+                    width: 340,
+                    render: (v: string | undefined) => <LongText>{v}</LongText>,
                   },
-                  { title: "By", dataIndex: "staff", facet: true },
+                  {
+                    title: t("snTracking.by", "By"),
+                    dataIndex: "staff",
+                    facet: true,
+                  },
                 ]}
               />
             </Card>
+
+            <PrintLabelsModal
+              open={printing}
+              onClose={() => setPrinting(false)}
+              // `labelFor`'s structured-axis path needs `ModelAxisValue`
+              // rows, and nothing in the codebase writes any — so the server
+              // has none to serve and this is exactly the documented fallback:
+              // the model line, then the variant as the shop wrote it.
+              labels={[
+                {
+                  serial: unit.serial,
+                  // The bare serial, which is `LabelDatum.barcode`'s documented
+                  // fallback. This page is API-backed and the unit it serves
+                  // carries a supplier NAME but no origin code, so there is
+                  // nothing here to derive a store barcode from — and inventing
+                  // one from a name would print a sticker that scans as
+                  // nothing. Reprint from Inventory to get the store form.
+                  barcode: unit.serial,
+                  line1: unit.modelName ?? unit.productName,
+                  line2: unit.variantLabel ?? "",
+                },
+              ]}
+            />
           </>
         )}
       </Flex>

@@ -74,6 +74,9 @@ const MODEL_NAMES: Record<string, readonly string[]> = {
     "Pro 14 M3 Pro",
     "Pro 16 M2 Max",
     "Pro 16 M3 Max",
+    "Pro 13 2016",
+    "Pro 15 2016",
+    "12 Retina 2016",
   ],
   iPhone: [
     "11",
@@ -142,7 +145,114 @@ const LOCATIONS = [
   },
 ];
 
+/**
+ * Payment methods, recreated by every seed.
+ *
+ * The ids are fixed rather than generated so a fixture can name one — the
+ * migration that introduced this table inserted the same rows under the same
+ * ids. Deliberately restated here rather than read from the database: a
+ * migration is a historical snapshot and never changes again, while this list
+ * is the live one, and several test files truncate the whole schema before
+ * calling `seed()`.
+ *
+ * `forPo` is true only for the three the owner named for supplier payments;
+ * `builtIn` marks the rows application code reads by `code` (MARKETPLACE
+ * drives Shopee escrow), which staff may rename or deactivate but never drop.
+ */
+export /**
+ * Where a hold came in from. Mirrors the rows migration 20260828120000 inserts,
+ * ids included, so a seeded database and a migrated one agree.
+ */
+const RESERVATION_SOURCES = [
+  "Instagram",
+  "WhatsApp",
+  "TikTok",
+  "Shopee",
+  "Tokopedia",
+  "Walk-in",
+] as const;
+
+const RESERVATION_SOURCE_IDS = [
+  "rsv-src-ig",
+  "rsv-src-wa",
+  "rsv-src-tiktok",
+  "rsv-src-shopee",
+  "rsv-src-tokopedia",
+  "rsv-src-walkin",
+] as const;
+
+const PAYMENT_METHODS = [
+  { id: "pm_tunai", code: "TUNAI", label: "Cash", forPo: true, forSale: true },
+  {
+    id: "pm_kartu_kredit",
+    code: "KARTU_KREDIT",
+    label: "Credit card",
+    forPo: true,
+    forSale: true,
+  },
+  {
+    id: "pm_deposit",
+    code: "DEPOSIT",
+    label: "Deposit",
+    forPo: true,
+    forSale: false,
+  },
+  { id: "pm_qris", code: "QRIS", label: "QRIS", forPo: false, forSale: true },
+  {
+    id: "pm_transfer",
+    code: "TRANSFER",
+    label: "Bank transfer",
+    forPo: false,
+    forSale: true,
+  },
+  {
+    id: "pm_debit",
+    code: "DEBIT",
+    label: "Debit card",
+    forPo: false,
+    forSale: true,
+  },
+  {
+    id: "pm_cicilan",
+    code: "CICILAN",
+    label: "Instalment",
+    forPo: false,
+    forSale: true,
+  },
+  {
+    id: "pm_cod",
+    code: "COD",
+    label: "Cash on delivery",
+    forPo: false,
+    forSale: true,
+  },
+  {
+    id: "pm_bayar_toko",
+    code: "BAYAR_TOKO",
+    label: "Pay in store",
+    forPo: false,
+    forSale: true,
+  },
+  {
+    id: "pm_tempo",
+    code: "TEMPO",
+    label: "Terms",
+    forPo: false,
+    forSale: true,
+  },
+  {
+    id: "pm_marketplace",
+    code: "MARKETPLACE",
+    label: "Marketplace escrow",
+    forPo: false,
+    forSale: true,
+  },
+] as const;
+
 export const SYSTEM_STAFF_ID = "staff_system";
+
+/** The chat agent's principal, so a bot-created UnitEvent is attributable. */
+export const AGENT_STAFF_ID = "staff_agent";
 
 /**
  * A placeholder Argon2id hash.
@@ -195,6 +305,56 @@ export async function seed(
     data: LOCATIONS.map((l) => ({ ...l, active: true })),
   });
 
+  // Same lesson as PaymentMethod: several test files truncate the whole schema
+  // before calling this, so reference data cannot assume it survived.
+  await db.appSetting.createMany({
+    data: [
+      { key: "battery.goodMin", value: "80", updatedAt: now },
+      { key: "battery.fairMin", value: "76", updatedAt: now },
+      // Who the shop is, as printed at the top of every faktur. These were a
+      // `const SHOP` in the web app's Invoice component until 2026-09-02 —
+      // dotted and namespaced here per AppSetting's own docblock, so the group
+      // is greppable. Changing premises is now a settings edit, not a deploy.
+      { key: "shop.name", value: "NUSANTARA", updatedAt: now },
+      {
+        key: "shop.tagline",
+        value: "Second-hand Apple — sales, trade-in and service",
+        updatedAt: now,
+      },
+      { key: "shop.address", value: "Jakarta, Indonesia", updatedAt: now },
+      {
+        key: "shop.contact",
+        value: "WhatsApp +62 811 2233 44 · @nusantara",
+        updatedAt: now,
+      },
+    ],
+  });
+
+  await db.paymentMethod.createMany({
+    data: PAYMENT_METHODS.map((m, i) => ({
+      ...m,
+      builtIn: true,
+      active: true,
+      sortOrder: i + 1,
+      createdAt: now,
+    })),
+  });
+
+  // Same lesson again. These six rows are INSERTed by migration
+  // 20260828120000, and `Reservation.reservationSourceId` is a Restrict FK at
+  // them — so a schema that has been truncated cannot record which channel a
+  // hold came in over, and every create fails the foreign key instead.
+  // Reference data that lives only in a migration does not survive a seed.
+  await db.reservationSource.createMany({
+    data: RESERVATION_SOURCES.map((name, i) => ({
+      id: RESERVATION_SOURCE_IDS[i]!,
+      name,
+      active: true,
+      sortOrder: i + 1,
+      createdAt: now,
+    })),
+  });
+
   await db.staff.createMany({
     data: [
       {
@@ -214,6 +374,26 @@ export async function seed(
         role: "STAFF",
         canApprove: false,
         active: true,
+        passwordHash: UNUSABLE_HASH,
+        createdAt: now,
+      },
+      {
+        // The chat agent's principal. `UnitEvent.staffId` is NOT NULL, so a
+        // reservation hold the bot creates needs a row to point at — and it
+        // must NOT be SYSTEM_STAFF_ID, which is reserved for backfilled
+        // history and would stop a report separating the two.
+        //
+        // The migration inserts this row as well, so it exists in production
+        // where the seed never runs. It is repeated here because `seed()`
+        // truncates every table, which would otherwise destroy it and leave
+        // every booking failing on a foreign key.
+        id: AGENT_STAFF_ID,
+        username: "agent",
+        name: "Agen WhatsApp",
+        role: "STAFF",
+        canApprove: false,
+        // Never logs in, never appears in a staff picker.
+        active: false,
         passwordHash: UNUSABLE_HASH,
         createdAt: now,
       },
@@ -285,7 +465,13 @@ export async function seed(
   await db.catalogModel.createMany({
     data: models.map((mm, i) => ({
       ...mm,
-      year: String(2019 + (i % 6)),
+      // A name that already ends in a year owns it. The rotation below is a
+      // filler for the generated names that carry no year of their own, and
+      // letting it overwrite "Pro 15 2016" with 2021 would put a visible lie
+      // in the catalogue.
+      year: /\b(19|20)\d{2}$/.test(mm.name)
+        ? mm.name.slice(-4)
+        : String(2019 + (i % 6)),
       archived: false,
       createdAt: now,
     })),
@@ -354,9 +540,9 @@ export async function seed(
       locationId: "loc_gudang",
       buy: sku.landed,
       landed: sku.landed,
-      // Sellable implies priced (Unit_price_set_when_sellable_check); the
-      // asking price starts as the SKU list price, as QC would set it.
-      price: sku.price,
+      // No asking price here since 2026-08-27: the price is `Sku.price` and
+      // every unit of a variant quotes it. Grade is recorded and does not
+      // change what the shop asks.
       grade: sku.grade,
       intakeAt: now,
       version: 1,
@@ -473,7 +659,7 @@ export async function seed(
               data: {
                 orderId: order.id,
                 direction: "MASUK",
-                method: cash ? "TUNAI" : "TRANSFER",
+                methodId: cash ? "pm_tunai" : "pm_transfer",
                 amount: total,
                 status: "LUNAS",
                 paidAt: now,

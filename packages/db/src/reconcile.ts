@@ -49,16 +49,21 @@ export async function reconcile(db: PrismaClient): Promise<CheckReport[]> {
           returnedAt: true,
         },
       }),
-      db.payment.findMany({
-        select: {
-          orderId: true,
-          shiftId: true,
-          amount: true,
-          status: true,
-          method: true,
-          direction: true,
-        },
-      }),
+      // `method` is a relation now, but the domain checks compare it against
+      // "TUNAI" as a plain string — and packages/domain may not import Prisma.
+      // So the code crosses the boundary, not the row.
+      db.payment
+        .findMany({
+          select: {
+            orderId: true,
+            shiftId: true,
+            amount: true,
+            status: true,
+            method: { select: { code: true } },
+            direction: true,
+          },
+        })
+        .then((rows) => rows.map((r) => ({ ...r, method: r.method.code }))),
       db.shift.findMany({
         select: { id: true, openFloat: true, expected: true },
       }),

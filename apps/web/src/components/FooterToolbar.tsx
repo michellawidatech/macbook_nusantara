@@ -19,30 +19,27 @@ export interface FooterToolbarProps {
  * right, and a translucent background so content scrolling underneath is
  * visibly *under* it rather than cut off.
  *
- * Pro positions its toolbar `fixed` with `left` hard-set to the sidebar width.
- * This one is `sticky` inside the content column instead: our sider collapses
- * between two widths, and a fixed bar would need to be told about that — a
- * second place for the layout to be described, and the one that goes stale.
- * Sticky needs to know nothing, because the content column already knows.
+ * Pro positions its toolbar `fixed` with `left` hard-set to the sidebar width,
+ * and so, now, does this one — but without hard-setting anything. The sider's
+ * width reaches here as `--nusantara-content-left`, published by AppLayout from
+ * the same constant the Sider is sized by. The old objection to `fixed` was
+ * that it meant describing the layout a second time; reading the first
+ * description answers it.
  *
- * The negative inline margins bleed the bar out to the edges of `Content`'s
- * padding, which is what makes it read as a bar spanning the page rather than
- * a floating card, and the negative bottom margin sits it flush with the
- * viewport edge.
+ * It was `sticky` before, and the reason it changed is worth keeping: sticky
+ * only pins an element to the viewport bottom while its CONTAINING BLOCK still
+ * extends below the viewport. That made the bar's position depend on an
+ * unbroken chain of full-height flex ancestors, and any caller that wrapped it
+ * in a column sized to its own content — a short wizard step, a Tabs panel —
+ * got a bar floating mid-page instead. The Purchase Order wizard was exactly
+ * that: four ancestors between the bar and Content, one of them a Tabs panel
+ * that cannot pass height through. Fixed positioning depends on nothing above
+ * it, so every caller behaves the same whether its content is one field or
+ * fifty.
  *
- * `position: sticky` only pins an element to the viewport bottom while its
- * CONTAINING BLOCK still extends below the viewport. A short wizard step used
- * to break exactly this: `<form>` sized to `height: auto` stopped as soon as
- * its content did, so on first open the bar rendered mid-page instead of at
- * the bottom. `marginTop: auto` below is the other half of the fix: inside a
- * flex column with leftover main-axis space, an `auto` margin absorbs all of
- * it and pushes this bar to the very end of the box — which is what finally
- * gives sticky a containing block tall enough to pin against. Only
- * ProductFormPage.tsx's `<Form>` currently offers that leftover space (it
- * sets `flex: 1` and is itself stretched full-height by PageContainer.tsx and
- * AppLayout.tsx). Every other caller wraps this bar in a flex column sized to
- * `auto` — exactly as tall as its own content, with nothing left over — so
- * the same `auto` margin resolves to 0 there and changes nothing.
+ * Because a fixed bar leaves the document flow, a spacer of the same height
+ * renders in its place. Without it the last row of a form sits underneath the
+ * bar, reachable only by scrolling past the end of the page.
  */
 export function FooterToolbar({ info, children }: FooterToolbarProps) {
   const { compact } = useLayoutMode();
@@ -58,43 +55,43 @@ export function FooterToolbar({ info, children }: FooterToolbarProps) {
     : LAYOUT.contentPadding.comfortable;
 
   return (
-    <Flex
-      align="center"
-      justify="space-between"
-      gap={SPACE.md}
-      // On a phone the totals and both buttons do not fit on one 375px line,
-      // so the bar grows to two rows rather than clipping. minHeight, not
-      // height, is what lets it.
-      wrap={compact}
-      style={{
-        position: "sticky",
-        bottom: 0,
-        // Drops the bar to the bottom of the flex column that wraps it,
-        // PROVIDED that column has leftover height to give — see this file's
-        // docblock. Every caller but ProductFormPage wraps a column sized to
-        // its own content, where this resolves to 0 and changes nothing.
-        marginTop: "auto",
-        // Bleed past Content's padding so the bar spans the full column, and
-        // — for marginBottom specifically — so it can reach the true
-        // viewport edge once it is actually stuck: a negative margin here
-        // extends the sticky constraint rectangle past Content's own bottom
-        // padding. Remove it and the bar rests one gutter short, independently
-        // of the flex chain marginTop relies on above.
-        marginInline: -gutter,
-        marginBottom: -gutter,
-        paddingInline: gutter,
-        paddingBlock: compact ? SPACE.sm : 0,
-        minHeight: LAYOUT.footerToolbarHeight,
-        background: colorBgElevated,
-        borderTop: `1px solid ${colorBorderSecondary}`,
-        // Above the page's own content and below the fixed header. Those two
-        // CAN now meet — the header is pinned rather than scrolling away — so
-        // the order is stated in tokens instead of assumed.
-        zIndex: Z.footerToolbar,
-      }}
-    >
-      <div>{info}</div>
-      {/* `flex: 1` + `justify="end"` rather than leaning on the parent's
+    <>
+      {/* Holds the bar's height open in the flow it no longer occupies. */}
+      <div
+        aria-hidden="true"
+        style={{ flex: "0 0 auto", height: LAYOUT.footerToolbarHeight }}
+      />
+      <Flex
+        align="center"
+        justify="space-between"
+        gap={SPACE.md}
+        // On a phone the totals and both buttons do not fit on one 375px line,
+        // so the bar grows to two rows rather than clipping. minHeight, not
+        // height, is what lets it.
+        wrap={compact}
+        style={{
+          position: "fixed",
+          bottom: 0,
+          // The sider's width on a desktop, 0 on a phone — see the docblock.
+          // The fallback keeps the bar full-width if the variable is ever
+          // missing, which is the harmless failure of the two.
+          left: "var(--nusantara-content-left, 0px)",
+          right: 0,
+          paddingInline: gutter,
+          // Clears the home indicator rather than sitting under it.
+          paddingBottom: "env(safe-area-inset-bottom)",
+          paddingBlock: compact ? SPACE.sm : 0,
+          minHeight: LAYOUT.footerToolbarHeight,
+          background: colorBgElevated,
+          borderTop: `1px solid ${colorBorderSecondary}`,
+          // Above the page's own content and below the fixed header. Those two
+          // CAN now meet — the header is pinned rather than scrolling away — so
+          // the order is stated in tokens instead of assumed.
+          zIndex: Z.footerToolbar,
+        }}
+      >
+        <div>{info}</div>
+        {/* `flex: 1` + `justify="end"` rather than leaning on the parent's
           space-between, because space-between does nothing for a flex line
           holding a SINGLE item: once `info` is long enough to wrap the actions
           onto their own row, that row has one child, and it sits flush LEFT.
@@ -102,14 +99,15 @@ export function FooterToolbar({ info, children }: FooterToolbarProps) {
           action at the bottom right in both cases — wrapped and not. Compact
           only: the desktop bar never wraps, and every existing page's spacing
           there is tuned against the space-between behaviour. */}
-      <Flex
-        align="center"
-        gap={SPACE.sm}
-        flex={compact ? 1 : undefined}
-        justify={compact ? "end" : undefined}
-      >
-        {children}
+        <Flex
+          align="center"
+          gap={SPACE.sm}
+          flex={compact ? 1 : undefined}
+          justify={compact ? "end" : undefined}
+        >
+          {children}
+        </Flex>
       </Flex>
-    </Flex>
+    </>
   );
 }

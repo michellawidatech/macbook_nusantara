@@ -30,6 +30,7 @@ import {
   converse,
   hasCredential,
   usingOAuth,
+  DEFAULT_PERSONA,
   MAX_CORRECTIONS,
   type AnthropicEnv,
 } from "@nusantara/agent";
@@ -55,9 +56,34 @@ const correctionSchema = z.object({
 const replySchema = z.object({
   // A persona is free text a staff member wrote, so it is length-capped rather
   // than validated: there is no such thing as a wrong voice, only a long one.
-  persona: z.string().trim().min(1).max(4_000),
+  // Optional now that personas are persisted: the Chat page sends one only
+  // when a staff member is previewing an edit they have not saved.
+  persona: z.string().trim().min(1).max(4_000).optional(),
   turns: z.array(turnSchema).min(1).max(60),
   corrections: z.array(correctionSchema).max(MAX_CORRECTIONS).default([]),
+  // Which thread this draft is for, so the grounding tools can look the
+  // customer up. Optional: a persona preview with no thread still works, and
+  // simply finds no customer rather than finding the wrong one.
+  waId: z
+    .string()
+    .trim()
+    .regex(/^\d{6,20}$/)
+    .optional(),
+});
+
+const personaSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  blurb: z.string().trim().max(200).optional(),
+  // Free text a staff member wrote. Length-capped rather than validated:
+  // there is no such thing as a wrong voice, only a long one.
+  prompt: z.string().trim().min(1).max(4_000),
+});
+
+const correctionSaveSchema = z.object({
+  messageId: z.string().trim().min(1).max(40).optional(),
+  original: z.string().trim().min(1).max(4_000),
+  corrected: z.string().trim().min(1).max(4_000),
+  note: z.string().trim().max(500).optional(),
 });
 
 export interface ChatRouterDeps {
@@ -106,17 +132,37 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
         );
       }
 
-      const knowledge = await db.agentKnowledge.findMany({
-        where: { active: true },
-        select: { question: true, answer: true },
-        orderBy: { updatedAt: "desc" },
-        take: 40,
-      });
+      const [knowledge, persona, stored] = await Promise.all([
+        db.agentKnowledge.findMany({
+          where: { active: true },
+          select: { question: true, answer: true },
+          orderBy: { updatedAt: "desc" },
+          take: 40,
+        }),
+        db.persona.findFirst({
+          where: { active: true },
+          select: { prompt: true },
+        }),
+        db.agentCorrection.findMany({
+          select: { original: true, corrected: true, note: true },
+          orderBy: { createdAt: "desc" },
+          take: MAX_CORRECTIONS,
+        }),
+      ]);
 
       const systemPrompt = buildSystemPrompt({
-        persona: parsed.data.persona,
+        // Body first so an unsaved edit can be previewed, then the stored
+        // voice, then the compiled-in one. The same order the worker uses,
+        // minus the preview it has no way to receive.
+        persona: parsed.data.persona ?? persona?.prompt ?? DEFAULT_PERSONA,
         knowledge,
-        corrections: parsed.data.corrections,
+        corrections: parsed.data.corrections.length
+          ? parsed.data.corrections
+          : [...stored].reverse().map((c) => ({
+              original: c.original,
+              corrected: c.corrected,
+              note: c.note ?? undefined,
+            })),
         today: new Date(),
       });
 
@@ -124,6 +170,14 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
       const result = await converse({
         client,
         db,
+        // No `reserve` capability, deliberately. Pressing Draft should propose
+        // a sentence for a staff member to send, not book a reservation and
+        // hold a unit — they have the POS for that. This is also what keeps the
+        // write path down to exactly one caller, the worker.
+        ctx: {
+          from: parsed.data.waId ?? "",
+          now: new Date(),
+        },
         systemPrompt,
         turns: parsed.data.turns,
         onError: (err) => {
@@ -164,6 +218,210 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
         "agent drafted a reply",
       );
       res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * The voices the shop can wear.
+   *
+   * Personas were browser-only until now, which meant editing one changed what
+   * a staff member drafted and not one word of what the bot said unattended.
+   * Reading them from here is what closes that.
+   */
+  router.get("/personas", async (_req, res, next) => {
+    try {
+      const personas = await db.persona.findMany({
+        select: {
+          id: true,
+          name: true,
+          blurb: true,
+          prompt: true,
+          active: true,
+          builtIn: true,
+          updatedAt: true,
+        },
+        orderBy: [{ builtIn: "desc" }, { name: "asc" }],
+      });
+      res.json({ personas });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post("/personas", async (req, res, next) => {
+    try {
+      const parsed = personaSchema.safeParse(req.body);
+      if (!parsed.success) {
+        throw new ApiError(400, "VALIDASI", "The persona was not understood.");
+      }
+      const staff = req.staff;
+      if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
+
+      const now = new Date();
+      const persona = await db.persona.create({
+        data: {
+          name: parsed.data.name,
+          blurb: parsed.data.blurb ?? null,
+          prompt: parsed.data.prompt,
+          // Never active on creation. Making a new voice live is a separate,
+          // deliberate act, so writing one cannot silently change what the
+          // bot is saying to customers right now.
+          active: false,
+          builtIn: false,
+          createdById: staff.id,
+          createdAt: now,
+          updatedAt: now,
+        },
+        select: { id: true, name: true, active: true },
+      });
+      res.status(201).json({ persona });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.put("/personas/:id", async (req, res, next) => {
+    try {
+      const parsed = personaSchema.safeParse(req.body);
+      if (!parsed.success) {
+        throw new ApiError(400, "VALIDASI", "The persona was not understood.");
+      }
+      const id = String(req.params["id"]);
+      const existing = await db.persona.findUnique({
+        where: { id },
+        select: { builtIn: true },
+      });
+      if (!existing) {
+        throw new ApiError(404, "TIDAK_DITEMUKAN", "Persona tidak ditemukan.");
+      }
+      // The shop's default voice is read-only, and this is the guard the
+      // `builtIn` column exists for. Without it the row could be overwritten
+      // and there would be nothing left to fall back to — a persona is the
+      // one setting in this app with no compiled-in copy in the database.
+      // Copy it and edit the copy; `POST /personas` is one call away.
+      if (existing.builtIn) {
+        throw new ApiError(
+          409,
+          "KONFLIK",
+          "Persona bawaan tidak bisa diubah. Salin dulu, lalu ubah salinannya.",
+        );
+      }
+
+      const persona = await db.persona.update({
+        where: { id },
+        data: {
+          name: parsed.data.name,
+          blurb: parsed.data.blurb ?? null,
+          prompt: parsed.data.prompt,
+          updatedAt: new Date(),
+        },
+        select: { id: true, name: true, active: true },
+      });
+      res.json({ persona });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * Make one persona the live voice.
+   *
+   * The order inside the transaction is load-bearing. A partial unique index
+   * (`Persona_active_key ON ("active") WHERE "active"`) permits exactly one
+   * active row, so activating before deactivating trips it. Deactivate first,
+   * then activate, and the constraint is what guarantees the shop can never
+   * end up with two voices and no way to say which is real.
+   */
+  router.post("/personas/:id/activate", async (req, res, next) => {
+    try {
+      const id = String(req.params["id"]);
+      const target = await db.persona.findUnique({
+        where: { id },
+        select: { id: true },
+      });
+      if (!target) {
+        throw new ApiError(404, "TIDAK_DITEMUKAN", "Persona tidak ditemukan.");
+      }
+
+      const now = new Date();
+      await db.$transaction(async (tx) => {
+        await tx.persona.updateMany({
+          where: { active: true },
+          data: { active: false, updatedAt: now },
+        });
+        await tx.persona.update({
+          where: { id },
+          data: { active: true, updatedAt: now },
+        });
+      });
+
+      res.json({ status: "ACTIVE", id });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * File a staff rewrite of something the agent sent.
+   *
+   * This is the learning loop, and it is cheap on purpose: nothing is
+   * fine-tuned, the model simply reads its own past mistakes before it writes
+   * the next line, so one correction costs one correction.
+   */
+  router.get("/corrections", async (_req, res, next) => {
+    try {
+      const corrections = await db.agentCorrection.findMany({
+        select: {
+          id: true,
+          messageId: true,
+          original: true,
+          corrected: true,
+          note: true,
+          createdAt: true,
+          createdBy: { select: { name: true } },
+        },
+        orderBy: { createdAt: "desc" },
+        take: MAX_CORRECTIONS,
+      });
+      res.json({ corrections });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post("/corrections", async (req, res, next) => {
+    try {
+      const parsed = correctionSaveSchema.safeParse(req.body);
+      if (!parsed.success) {
+        throw new ApiError(400, "VALIDASI", "The correction was not understood.");
+      }
+      const staff = req.staff;
+      if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
+
+      // A rewrite identical to the original teaches nothing and would still
+      // occupy one of the twelve slots the prompt has room for.
+      if (parsed.data.corrected.trim() === parsed.data.original.trim()) {
+        throw new ApiError(
+          400,
+          "VALIDASI",
+          "The rewrite is the same as what was sent.",
+        );
+      }
+
+      const correction = await db.agentCorrection.create({
+        data: {
+          messageId: parsed.data.messageId ?? null,
+          original: parsed.data.original,
+          corrected: parsed.data.corrected,
+          note: parsed.data.note ?? null,
+          createdById: staff.id,
+          createdAt: new Date(),
+        },
+        select: { id: true },
+      });
+      res.status(201).json({ correction });
     } catch (err) {
       next(err);
     }

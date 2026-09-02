@@ -94,6 +94,10 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await db.outbox.deleteMany({});
+  // Before the messages: `WaThreadMemory.coveredThroughId` is an FK to
+  // WaMessage with onDelete Restrict, and `from` is unique, so a leftover row
+  // would both block the delete and collide with the next test's fixture.
+  await db.waThreadMemory.deleteMany({});
   await db.waMessage.deleteMany({});
 });
 
@@ -285,5 +289,284 @@ describe("POST /api/inbox/:phone/reply", () => {
       .set("Cookie", cookie)
       .send({ text: "   " });
     expect(res.status).toBe(400);
+  });
+});
+
+/**
+ * What the staff context panel reads.
+ *
+ * All of it comes from rows the system already keeps: the agent's own rolling
+ * note in `WaThreadMemory`, and `Customer` matched on the number. Nothing here
+ * is composed in the browser and nothing is inferred — an unknown number has
+ * to come back as unknown, because a plausible-looking empty profile is worse
+ * than an honest blank.
+ */
+describe("GET /api/inbox/:phone — the context panel", () => {
+  const PHONE = "628111000424";
+
+  it("returns no summary and no customer for a number the shop has never seen", async () => {
+    await inbound({ id: "ctx.1", from: PHONE, text: "halo" });
+
+    const res = await get(`/${PHONE}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.summary).toBeNull();
+    expect(res.body.customer).toBeNull();
+    expect(res.body.directive).toBeNull();
+  });
+
+  it("returns the note the agent wrote, and when it wrote it", async () => {
+    await inbound({ id: "ctx.2", from: PHONE, text: "mau macbook" });
+    await db.waThreadMemory.create({
+      data: {
+        from: PHONE,
+        summary: "Cari MacBook buat kuliah. Budget belum disebut.",
+        summaryAt: new Date("2026-08-20T03:00:00.000Z"),
+        summaryTurns: 3,
+        clarifyCount: 0,
+        updatedAt: new Date(),
+      },
+    });
+
+    const res = await get(`/${PHONE}`);
+
+    expect(res.body.summary.text).toContain("Budget belum disebut");
+    expect(res.body.summary.at).toBe("2026-08-20T03:00:00.000Z");
+  });
+
+  it("finds the customer from the bare number even though the shop stores E.164", async () => {
+    await inbound({ id: "ctx.3", from: PHONE, text: "halo" });
+    await db.customer.create({
+      data: {
+        id: "cust_ctx",
+        name: "Budi",
+        phone: `+${PHONE}`,
+        createdAt: new Date("2025-03-14T00:00:00.000Z"),
+      },
+    });
+
+    const res = await get(`/${PHONE}`);
+
+    expect(res.body.customer).toMatchObject({
+      name: "Budi",
+      phone: `+${PHONE}`,
+      orderCount: 0,
+      openReservations: 0,
+      lastOrder: null,
+    });
+    expect(res.body.customer.since).toBe("2025-03-14T00:00:00.000Z");
+
+    await db.customer.deleteMany({ where: { id: "cust_ctx" } });
+  });
+
+  it("never returns a customer's address, email or internal note", async () => {
+    // A WhatsApp number changes hands, and the panel is read by whoever is on
+    // shift. Name and history only.
+    await inbound({ id: "ctx.4", from: PHONE, text: "halo" });
+    await db.customer.create({
+      data: {
+        id: "cust_pii",
+        name: "Budi",
+        phone: `+${PHONE}`,
+        email: "rahasia@example.com",
+        street: "Jalan Rahasia No 1",
+        note: "catatan internal staf",
+        createdAt: new Date(),
+      },
+    });
+
+    const body = JSON.stringify((await get(`/${PHONE}`)).body);
+
+    expect(body).not.toContain("rahasia@example.com");
+    expect(body).not.toContain("Jalan Rahasia");
+    expect(body).not.toContain("catatan internal staf");
+
+    await db.customer.deleteMany({ where: { id: "cust_pii" } });
+  });
+
+  it("carries a staff directive through, so the panel can show what the bot was told", async () => {
+    await inbound({ id: "ctx.5", from: PHONE, text: "boleh nego?" });
+    await db.waThreadMemory.create({
+      data: {
+        from: PHONE,
+        directive: "kasih diskon 200rb kalau nawar",
+        directiveAt: new Date(),
+        summaryTurns: 0,
+        clarifyCount: 0,
+        updatedAt: new Date(),
+      },
+    });
+
+    expect((await get(`/${PHONE}`)).body.directive).toBe(
+      "kasih diskon 200rb kalau nawar",
+    );
+  });
+
+  it("still answers the conversation when there is no summary to show", async () => {
+    // Summary generation must never be able to break the inbox.
+    await inbound({ id: "ctx.6", from: PHONE, text: "halo" });
+
+    const res = await get(`/${PHONE}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toHaveLength(1);
+  });
+});
+
+/**
+ * The per-thread bot switch.
+ *
+ * `WaThreadMemory.autoReply` decides whether the worker answers this ONE
+ * customer unattended. The cases worth pinning down are the ones that are
+ * silently wrong rather than loudly broken: a thread with no memory row must
+ * read as on (or the whole inbox reads as switched off the day this shipped),
+ * flipping it must not disturb the summariser's columns, and it must not be
+ * possible to create memory rows for numbers that were never customers.
+ */
+describe("PUT /api/inbox/:phone/auto-reply", () => {
+  const put = (path: string, body: unknown) =>
+    request(app)
+      .put(`/api/inbox${path}`)
+      .set("Cookie", cookie)
+      .send(body as object);
+
+  it("requires a session", async () => {
+    const res = await request(app)
+      .put(`/api/inbox/${PHONE}/auto-reply`)
+      .send({ enabled: false });
+    expect(res.status).toBe(401);
+  });
+
+  it("reads as on for a thread nobody has ruled on", async () => {
+    await inbound({ id: "sw.1", from: PHONE, text: "halo" });
+
+    const res = await get(`/${PHONE}`);
+
+    expect(res.body.autoReply).toEqual({ enabled: true, by: null, at: null });
+  });
+
+  it("lists a thread as on when it has no memory row", async () => {
+    await inbound({ id: "sw.2", from: PHONE, text: "halo" });
+
+    const res = await get("");
+
+    expect(res.body.threads[0].autoReply).toBe(true);
+  });
+
+  it("switches one thread off and records who did it", async () => {
+    await inbound({ id: "sw.3", from: PHONE, text: "mau nego" });
+
+    const res = await put(`/${PHONE}/auto-reply`, { enabled: false });
+
+    expect(res.status).toBe(200);
+    expect(res.body.enabled).toBe(false);
+    expect(res.body.by).toBe("Inbox Tester");
+    expect(res.body.at).toEqual(expect.any(String));
+
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: PHONE },
+    });
+    expect(memo.autoReply).toBe(false);
+    expect(memo.autoReplyById).not.toBeNull();
+  });
+
+  it("shows the switch and its provenance on the conversation afterwards", async () => {
+    await inbound({ id: "sw.4", from: PHONE, text: "halo" });
+    await put(`/${PHONE}/auto-reply`, { enabled: false });
+
+    const res = await get(`/${PHONE}`);
+
+    expect(res.body.autoReply.enabled).toBe(false);
+    expect(res.body.autoReply.by).toBe("Inbox Tester");
+    expect((await get("")).body.threads[0].autoReply).toBe(false);
+  });
+
+  it("switches back on without losing who touched it last", async () => {
+    await inbound({ id: "sw.5", from: PHONE, text: "halo" });
+    await put(`/${PHONE}/auto-reply`, { enabled: false });
+
+    const res = await put(`/${PHONE}/auto-reply`, { enabled: true });
+
+    expect(res.body.enabled).toBe(true);
+    expect(res.body.by).toBe("Inbox Tester");
+  });
+
+  it("is idempotent, so a double press is not a double flip", async () => {
+    await inbound({ id: "sw.6", from: PHONE, text: "halo" });
+
+    await put(`/${PHONE}/auto-reply`, { enabled: false });
+    const second = await put(`/${PHONE}/auto-reply`, { enabled: false });
+
+    expect(second.body.enabled).toBe(false);
+    expect(await db.waThreadMemory.count({ where: { from: PHONE } })).toBe(1);
+  });
+
+  it("leaves the summariser's columns alone", async () => {
+    // 08 §7: two writers, disjoint column sets. Flipping the switch must not
+    // be a way for staff to blank a summary the agent wrote — the column-level
+    // grants say so in the database, and this says so from the outside.
+    await inbound({ id: "sw.7", from: PHONE, text: "halo" });
+    await db.waThreadMemory.create({
+      data: {
+        from: PHONE,
+        summary: "Cari MacBook buat kuliah.",
+        summaryAt: new Date("2026-08-20T03:00:00.000Z"),
+        summaryTurns: 3,
+        clarifyCount: 2,
+        updatedAt: new Date(),
+      },
+    });
+
+    await put(`/${PHONE}/auto-reply`, { enabled: false });
+
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: PHONE },
+    });
+    expect(memo.summary).toBe("Cari MacBook buat kuliah.");
+    expect(memo.summaryTurns).toBe(3);
+    expect(memo.clarifyCount).toBe(2);
+    expect(memo.autoReply).toBe(false);
+  });
+
+  it("keeps a staff directive on the same row", async () => {
+    await inbound({ id: "sw.8", from: PHONE, text: "boleh nego?" });
+    await db.waThreadMemory.create({
+      data: {
+        from: PHONE,
+        directive: "kasih diskon 200rb kalau nawar",
+        directiveAt: new Date(),
+        summaryTurns: 0,
+        clarifyCount: 0,
+        updatedAt: new Date(),
+      },
+    });
+
+    await put(`/${PHONE}/auto-reply`, { enabled: false });
+
+    expect((await get(`/${PHONE}`)).body.directive).toBe(
+      "kasih diskon 200rb kalau nawar",
+    );
+  });
+
+  it("404s a number that has never written in, rather than inventing a thread", async () => {
+    const res = await put("/628111000111/auto-reply", { enabled: false });
+
+    expect(res.status).toBe(404);
+    expect(await db.waThreadMemory.count()).toBe(0);
+  });
+
+  it("rejects anything that is not a wa_id", async () => {
+    expect((await put("/not-a-number/auto-reply", { enabled: false })).status).toBe(
+      400,
+    );
+  });
+
+  it("rejects a body that does not say which way", async () => {
+    await inbound({ id: "sw.9", from: PHONE, text: "halo" });
+
+    expect((await put(`/${PHONE}/auto-reply`, {})).status).toBe(400);
+    expect((await put(`/${PHONE}/auto-reply`, { enabled: "off" })).status).toBe(
+      400,
+    );
   });
 });

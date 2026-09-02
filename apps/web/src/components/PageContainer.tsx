@@ -1,20 +1,11 @@
-import type { ReactNode } from "react";
-import { useLocation } from "react-router-dom";
-import {
-  Breadcrumb,
-  Button,
-  FloatButton,
-  Flex,
-  Space,
-  Typography,
-  theme,
-} from "antd";
-import { MoreOutlined } from "@ant-design/icons";
-import type { BreadcrumbProps, ButtonProps } from "antd";
+import type { CSSProperties, ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
+import { Button, FloatButton, Flex, Space, Typography, theme } from "antd";
+import { ArrowLeftOutlined, MoreOutlined } from "@ant-design/icons";
+import type { ButtonProps } from "antd";
 import { useTranslation } from "react-i18next";
-import { SPACE, TYPE, WEIGHT } from "../theme/tokens";
+import { LAYOUT, SPACE, TYPE, WEIGHT, Z } from "../theme/tokens";
 import { useLayoutMode } from "../layouts/useLayoutMode";
-import { navTrail } from "../layouts/navigation";
 
 /**
  * A page-level action.
@@ -37,7 +28,7 @@ export interface PageAction {
 }
 
 export interface PageContainerProps {
-  /** The page title. Also the last breadcrumb crumb. */
+  /** The page title. The only heading a page renders. */
   title: string;
   /**
    * Primary page actions.
@@ -74,16 +65,52 @@ export interface PageContainerProps {
    */
   extra?: ReactNode;
   /**
-   * Overrides the trail derived from the route. Pass this on pages that sit
-   * deeper than the nav knows about — a record detail page, say, where the
-   * route carries an id the sidebar has never heard of.
+   * Where the back arrow beside the title goes. Omit on a page the sidebar
+   * itself can reach.
+   *
+   * This replaces what the breadcrumb used to do for the three detail pages —
+   * an inbound order, an opname session, a discount — that sit below a route
+   * the nav knows about. Those pages are reached by clicking a row, so
+   * without a crumb there was no way back up except the browser button, and a
+   * console that needs the browser chrome to be navigable is not navigable.
+   * An arrow says the same thing in one glyph instead of a line of text.
    */
-  breadcrumb?: BreadcrumbProps["items"];
+  backTo?: string;
   children: ReactNode;
+  /**
+   * Fill the viewport instead of growing with content.
+   *
+   * For a page that manages its own scrolling — the Chat Inbox, where three
+   * panes scroll independently and the window must not. It sets `minHeight: 0`
+   * so this flex column can actually be bounded by Content, and
+   * `overflow: hidden` so nothing escapes it. A page passing this is
+   * responsible for giving its own children `flex: 1` and `minHeight: 0` the
+   * rest of the way down.
+   *
+   * Ordinary pages leave it off and scroll inside Content as before.
+   */
+  fill?: boolean;
+  /**
+   * Pin the title row to the top of the scroll area (owner ask 2026-09-01,
+   * for Income & Expense's *Add adjustment*).
+   *
+   * Opt-in rather than the default, because it costs something on every page
+   * that does not need it: a sticky bar eats the top of a long table's
+   * viewport, and most pages here put their primary action in a toolbar or a
+   * footer that is already reachable. It earns its place on a page you scroll
+   * a long way down and then want to add a row to — which is this one.
+   *
+   * The bar paints `colorBgLayout` and bleeds into the content gutter, so
+   * cards pass UNDER it rather than showing through a transparent strip.
+   * ⚠️ Ignored when `fill` is set: a fill page owns its own scrolling and this
+   * column never scrolls, so `position: sticky` here would have nothing to
+   * stick to.
+   */
+  stickyHeader?: boolean;
 }
 
 /**
- * The standard frame for a page: breadcrumb, title, actions, then content.
+ * The standard frame for a page: title, actions, then content.
  *
  * Modelled on Ant Design Pro's PageContainer, and the reason pages don't each
  * invent their own heading. A page that renders a bare `<Typography.Title>` is
@@ -106,26 +133,45 @@ export function PageContainer({
   title,
   actions,
   extra,
-  breadcrumb,
+  backTo,
   children,
+  fill = false,
+  stickyHeader = false,
 }: PageContainerProps) {
-  const { pathname } = useLocation();
+  const navigate = useNavigate();
   const { compact } = useLayoutMode();
   const { t } = useTranslation();
   const {
-    token: { lineHeightHeading3 },
+    token: { lineHeightHeading3, colorBgLayout },
   } = theme.useToken();
-
-  // The trail mirrors the sidebar: root, then the section the page sits in if
-  // it has one, then the page. `navTrail` is empty for a path the sidebar does
-  // not own, in which case the title is the more honest crumb.
-  const trail = navTrail(pathname);
-  const items: BreadcrumbProps["items"] = breadcrumb ?? [
-    { title: t("app.name", "Xinchuan CMS") },
-    ...(trail.length > 0
-      ? trail.map((key) => ({ title: t(key) }))
-      : [{ title }]),
-  ];
+  const gutter = compact
+    ? LAYOUT.contentPadding.compact
+    : LAYOUT.contentPadding.comfortable;
+  /**
+   * The pinned title row.
+   *
+   * `top: -gutter` rather than `0`: Content's own padding is INSIDE the scroll
+   * box, so an element stuck at 0 leaves that padding-worth of page scrolling
+   * visibly above it. Pulling the stick point up by the gutter and paying the
+   * same amount back as padding puts the bar flush against the top edge.
+   *
+   * The negative inline margin is the same trick `FooterToolbar` uses and for
+   * the same reason — the bar has to span the full column, gutters included,
+   * or a card scrolling under it shows through at the sides.
+   */
+  const stickyStyle: CSSProperties | undefined =
+    stickyHeader && !fill
+      ? {
+          position: "sticky",
+          top: -gutter,
+          zIndex: Z.footerToolbar,
+          background: colorBgLayout,
+          marginInline: -gutter,
+          paddingInline: gutter,
+          paddingBlock: gutter,
+          marginBlockStart: -gutter,
+        }
+      : undefined;
 
   const hasActions = actions !== undefined && actions.length > 0;
 
@@ -144,27 +190,54 @@ export function PageContainer({
       // card — Content already painted that background there before this
       // change, so nothing here is visibly new.
       flex={1}
+      style={
+        fill
+          ? // The two properties that make a nested scroll area possible at
+            // all. Without `minHeight: 0` this column inherits the flex
+            // default of `min-height: auto`, refuses to shrink below its
+            // content, and every `overflow: auto` beneath it is inert.
+            { minHeight: 0, overflow: "hidden" }
+          : undefined
+      }
     >
-      <Flex vertical gap={SPACE.sm}>
-        {/* Hidden on a phone: a compact viewport needs its vertical space for
-            content, and the trail duplicates what the page title already
-            says one level up. `>` replaces antd's default `/` separator on
-            desktop — the sidebar's own between-level glyph, so the crumb
-            reads as the same hierarchy the nav shows. */}
-        {!compact && <Breadcrumb items={items} separator=">" />}
-
+      {/* No breadcrumb. Removed on 2026-08-26 by owner decision: with the
+          deepest route two levels down, every trail restated the highlighted
+          sidebar item and then the page title directly beneath it, spending a
+          line of vertical space to say nothing the screen was not already
+          saying twice. `navigation.tsx` records the same decision from the
+          other end. */}
+      <Flex vertical gap={SPACE.sm} style={stickyStyle}>
         <Flex align="flex-start" justify="space-between" gap={SPACE.md} wrap>
-          <Typography.Title
-            level={4}
-            style={{
-              margin: 0,
-              fontSize: TYPE.xl,
-              fontWeight: WEIGHT.strong,
-              lineHeight: lineHeightHeading3,
-            }}
-          >
-            {title}
-          </Typography.Title>
+          <Flex align="center" gap={SPACE.sm} style={{ minWidth: 0 }}>
+            {backTo !== undefined && (
+              <Button
+                type="text"
+                shape="circle"
+                icon={<ArrowLeftOutlined />}
+                aria-label={t("page.back", "Back")}
+                onClick={() => navigate(backTo)}
+                // Pulled into the gutter so the title still starts on the
+                // same vertical line as every other page's. A heading that
+                // shifts 40px right on detail pages reads as a different
+                // layout rather than the same one with an arrow.
+                style={{ marginInlineStart: -SPACE.sm }}
+              />
+            )}
+            <Typography.Title
+              level={4}
+              style={{
+                margin: 0,
+                fontSize: TYPE.xl,
+                fontWeight: WEIGHT.strong,
+                lineHeight: lineHeightHeading3,
+              }}
+            >
+              {/* Translated here rather than at 20 call sites. Every page hands
+                this an English source string and gets its own language's H1
+                back — see i18n/catalogue.ts on why the English IS the key. */}
+              {t(title)}
+            </Typography.Title>
+          </Flex>
 
           {(extra || (hasActions && !compact)) && (
             <Flex gap={SPACE.sm}>
