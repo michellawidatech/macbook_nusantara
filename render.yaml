@@ -93,34 +93,53 @@ services:
         sync: false
 
   # ---------------------------------------------------------------------------
-  # The worker. Drafts replies and drains the outbox. Listens on nothing, so it
-  # has no health check and no URL.
+  # THE WORKER IS COMMENTED OUT, and this is not an oversight.
+  #
+  # Render has no free instance type for a background worker — `type: worker`
+  # starts at $7/mo. `render blueprints validate` ACCEPTS `plan: free` on one
+  # anyway, because it checks the shape of the YAML and not what the account's
+  # tier may create; applying this Blueprint on 2026-09-02 produced the database
+  # and both web services and silently dropped this. A declaration Render
+  # ignores is worse than no declaration: it reads like the worker is deployed.
+  #
+  # What is lost while it is out: the chatbot does not answer. The webhook still
+  # receives, verifies and stores every inbound message, and the Chat page still
+  # shows the threads and lets staff draft and send by hand — the worker is the
+  # unattended pass (`WaThreadMemory.autoReply`) and the outbox drain. So the
+  # queue fills and nothing leaves on its own.
+  #
+  # To turn it on: uncomment, change `plan: free` to `0.5c-512mb`, re-sync the
+  # Blueprint, and give it the same DATABASE_URL as the other two.
   # ---------------------------------------------------------------------------
-  - name: nusantara-worker
-    type: worker
-    runtime: docker
-    region: singapore
-    plan: free
-    repo: https://github.com/michellawidatech/macbook_nusantara
-    branch: rebuild/inc1-interaction-kit
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
-    dockerCommand: pnpm exec tsx apps/worker/src/main.ts
-    autoDeployTrigger: commit
-    envVars:
-      - key: APP_ENV
-        value: prod
-      - key: DATABASE_URL
-        sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: WHATSAPP_TOKEN
-        sync: false
-      - key: PHONE_NUMBER_ID
-        sync: false
-      # GRAPH_API_VERSION is deliberately absent. v25.0 is one constant in the
-      # code for both channels, and CLAUDE.md's rule is never two env
-      # fallbacks — setting it here is how the two channels start to drift.
+  # # ---------------------------------------------------------------------------
+  # # The worker. Drafts replies and drains the outbox. Listens on nothing, so it
+  # # has no health check and no URL.
+  # # ---------------------------------------------------------------------------
+  # - name: nusantara-worker
+  #   type: worker
+  #   runtime: docker
+  #   region: singapore
+  #   plan: free
+  #   repo: https://github.com/michellawidatech/macbook_nusantara
+  #   branch: rebuild/inc1-interaction-kit
+  #   dockerfilePath: ./Dockerfile
+  #   dockerContext: .
+  #   dockerCommand: pnpm exec tsx apps/worker/src/main.ts
+  #   autoDeployTrigger: commit
+  #   envVars:
+  #     - key: APP_ENV
+  #       value: prod
+  #     - key: DATABASE_URL
+  #       sync: false
+  #     - key: ANTHROPIC_API_KEY
+  #       sync: false
+  #     - key: WHATSAPP_TOKEN
+  #       sync: false
+  #     - key: PHONE_NUMBER_ID
+  #       sync: false
+  #     # GRAPH_API_VERSION is deliberately absent. v25.0 is one constant in the
+  #     # code for both channels, and CLAUDE.md's rule is never two env
+  #     # fallbacks — setting it here is how the two channels start to drift.
 
   # ---------------------------------------------------------------------------
   # The Meta webhook receiver. Public, and fail-closed: with no APP_SECRET it

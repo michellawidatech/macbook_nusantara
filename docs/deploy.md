@@ -9,7 +9,7 @@ they run.
 |---|---|---|---|
 | `apps/web` | Netlify | the built SPA, plus a proxy for `/api` and `/auth` | `netlify.toml` |
 | `apps/api` | Render | `tsx apps/api/src/server.ts` | `render.yaml`, `Dockerfile` |
-| `apps/worker` | Render | `tsx apps/worker/src/main.ts`, no port | `render.yaml` |
+| `apps/worker` | — | **not deployed** — Render has no free background worker | `render.yaml`, commented |
 | `apps/whatsapp-webhook` | Render | `tsx apps/whatsapp-webhook/src/server.ts` | `render.yaml` |
 | database | Render | PostgreSQL 16, `nusantara_pos_prod` | `packages/db/prisma/bootstrap-managed.sql` |
 
@@ -61,6 +61,29 @@ worker, 7–8 ms per page query.
 
 Render bills per instance rather than by usage, so the count is what costs, not
 the sizes — a larger plan for any of these would buy nothing.
+
+## The worker is not deployed, and the validator did not say so
+
+Render has **no free instance type for a background worker**; `type: worker`
+starts at $7/mo. `render blueprints validate` accepts `plan: free` on one
+regardless — it checks the shape of the YAML, not what the account's tier is
+allowed to create. Applying the Blueprint on 2026-09-02 produced the database
+and both web services and silently dropped the worker, with no error anywhere.
+
+So it is commented out in `render.yaml` rather than left declared. A
+declaration Render ignores is worse than none: it reads like the worker is
+deployed. `render blueprints validate` now reports `totalActions: 0`, which is
+the check worth keeping — it means the file and the account agree.
+
+**What that costs:** the chatbot does not answer on its own. The webhook still
+receives, verifies and stores every inbound message, and the Chat page still
+shows the threads and lets staff draft and send by hand. The worker is the
+unattended draft pass — the one `WaThreadMemory.autoReply` gates — and the
+outbox drain. Without it the queue fills and nothing leaves unless a person
+sends it.
+
+Turning it on is $7/mo: uncomment the block, set `plan: 0.5c-512mb`, re-sync,
+and give it the same `DATABASE_URL` as the other two.
 
 ## Why Netlify and not GitHub Pages
 
