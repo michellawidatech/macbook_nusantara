@@ -81,10 +81,26 @@ export interface InventoriRow {
   readonly serial: string;
   readonly status: string;
   readonly grade: string | null;
+  /** What QC saw. Null for sealed stock, which has nothing to describe. */
+  readonly description: string | null;
+  /**
+   * The ids, not only the labels. Inventory groups a row per PRODUCT and
+   * expands to the serials behind it, so it needs something to group BY that
+   * survives two variants sharing a display name — and the till needs an id to
+   * put in a basket.
+   */
+  readonly skuId: string;
   readonly skuCode: string;
   readonly skuName: string;
+  readonly variantLabel: string | null;
+  /** What the shop asks for this variant today. Price is per variant. */
+  readonly skuPrice: bigint;
+  readonly kategoriId: string;
   readonly kategori: string;
+  readonly lokasiId: string;
   readonly lokasi: string;
+  /** What this machine cost, and what it cost landed — per-serial facts. */
+  readonly buy: bigint;
   readonly landed: bigint;
   readonly intakeAt: Date;
   /** attributeId → value, for the columns derived from CategoryAttribute. */
@@ -165,9 +181,11 @@ export function katalogRouter(db: PrismaClient): Router {
             (Omit<InventoriRow, "attrs"> & { kategoriId: string })[]
           >(Prisma.sql`
             SELECT u.id, u.serial, u.status::text AS status, u.grade::text AS grade,
-                   s.code AS "skuCode", s.name AS "skuName",
+                   u.description,
+                   s.id AS "skuId", s.code AS "skuCode", s.name AS "skuName",
+                   s.price AS "skuPrice", s."variantLabel" AS "variantLabel",
                    c.name AS kategori, c.id AS "kategoriId",
-                   l.name AS lokasi, u.landed, u."intakeAt"
+                   l.id AS "lokasiId", l.name AS lokasi, u.landed, u.buy, u."intakeAt"
             ${from}
              ORDER BY ${ORDER_BY[sort](dir)}
              LIMIT ${perPage} OFFSET ${(page - 1) * perPage}`),
@@ -234,6 +252,123 @@ export function katalogRouter(db: PrismaClient): Router {
   });
 
   /** The multi-select filter options, so the UI never hardcodes a list. */
+  /**
+   * The variant picker: what Inbound & QC and the till put on a line.
+   *
+   * Returns SKUs, not models, because price is per VARIANT (owner revision
+   * 2026-08-27) and a line has to name the thing that has a price. `archived`
+   * variants are excluded — the shop stopped selling them, and offering one on
+   * a new invoice is how a dead variant comes back.
+   */
+  router.get("/produk", (req, res, next) => {
+    void (async () => {
+      try {
+        const parsed = pickerQuery.safeParse(req.query);
+        if (!parsed.success) {
+          next(
+            new ApiError(400, "VALIDASI", "Filter tidak valid.", {
+              field: "q",
+            }),
+          );
+          return;
+        }
+        const { q, limit } = parsed.data;
+        const rows = await db.sku.findMany({
+          where: {
+            archived: false,
+            ...(q === undefined || q === ""
+              ? {}
+              : {
+                  OR: [
+                    { code: { contains: q, mode: "insensitive" } },
+                    { name: { contains: q, mode: "insensitive" } },
+                    { model: { name: { contains: q, mode: "insensitive" } } },
+                  ],
+                }),
+          },
+          orderBy: [{ name: "asc" }],
+          take: limit,
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            variantLabel: true,
+            price: true,
+            landed: true,
+            grade: true,
+            model: {
+              select: {
+                id: true,
+                name: true,
+                categoryId: true,
+                category: { select: { name: true } },
+              },
+            },
+          },
+        });
+
+        res.json(
+          rows.map((r) => ({
+            id: r.id,
+            code: r.code,
+            name: r.name,
+            variantLabel: r.variantLabel,
+            price: r.price,
+            landed: r.landed,
+            grade: r.grade,
+            modelId: r.model.id,
+            modelName: r.model.name,
+            kategoriId: r.model.categoryId,
+            kategori: r.model.category.name,
+          })),
+        );
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
+  /** Who the shop buys from. Active only — an inactive supplier is one it stopped using. */
+  router.get("/supplier", (_req, res, next) => {
+    void (async () => {
+      try {
+        const rows = await db.supplier.findMany({
+          where: { active: true },
+          orderBy: { name: "asc" },
+          select: { id: true, name: true, wa: true, note: true },
+        });
+        // ⚠️ No `code`: the two-letter origin code the store barcode is built
+        // from is still a schema gap (CLAUDE.md). Said here rather than
+        // silently omitted, because the label dialog looks for it.
+        res.json(rows.map((r) => ({ ...r, originCode: null })));
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
+  /** How the shop pays. `forPo` separates supplier payments from till payments. */
+  router.get("/pembayaran", (_req, res, next) => {
+    void (async () => {
+      try {
+        const rows = await db.paymentMethod.findMany({
+          where: { active: true },
+          orderBy: { sortOrder: "asc" },
+          select: {
+            id: true,
+            code: true,
+            label: true,
+            forPo: true,
+            forSale: true,
+          },
+        });
+        res.json(rows);
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
   router.get("/inventori/filters", (_req, res, next) => {
     void (async () => {
       try {

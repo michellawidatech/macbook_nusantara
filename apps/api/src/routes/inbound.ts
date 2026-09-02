@@ -30,9 +30,14 @@ import { Router } from "express";
 import { z } from "zod";
 import {
   acceptUnits,
+  listPurchaseOrders,
+  MAX_PO_PER_PAGE,
+  purchaseOrderDetail,
   receiveUnit,
+  setPurchaseOrderClosed,
   TXN_TIMEOUTS,
   type Grade,
+  type POStatus,
   type PrismaClient,
 } from "@nusantara/db";
 import { currentRequestId } from "@nusantara/logging";
@@ -65,6 +70,42 @@ const rupiah = z
   .string()
   .regex(/^\d+$/, "Nilai rupiah harus bilangan bulat.")
   .transform((s) => BigInt(s));
+
+const PO_STATUSES = [
+  "DRAF",
+  "DIPESAN",
+  "SEBAGIAN",
+  "DITERIMA",
+  "BATAL",
+] as const satisfies readonly POStatus[];
+
+/** A comma-separated multi-select, as it appears in the URL. */
+const csvStatus = z
+  .string()
+  .optional()
+  .transform((v) =>
+    v === undefined || v === ""
+      ? []
+      : v
+          .split(",")
+          .map((x) => x.trim())
+          .filter((x) => x !== ""),
+  )
+  .pipe(z.array(z.enum(PO_STATUSES)));
+
+const listQuery = z.object({
+  q: z.string().trim().max(64).optional(),
+  status: csvStatus,
+  // Tri-state on purpose: absent is "both", which is not the same as either.
+  closed: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
+  page: z.coerce.number().int().min(1).default(1),
+  perPage: z.coerce.number().int().min(1).max(MAX_PO_PER_PAGE).default(20),
+});
+
+const closeBody = z.object({ closed: z.boolean() });
 
 const receiveBody = z.object({
   serial,
@@ -109,6 +150,96 @@ const acceptBody = z.object({
 
 export function inboundRouter(db: PrismaClient): Router {
   const router = Router();
+
+  /**
+   * The invoice list — what /inbound opens on.
+   *
+   * `closed` is its own filter rather than a `status` value, because closing is
+   * a filing decision and `status` is about the GOODS: an order can be fully
+   * received and still open because the ongkir has not been settled.
+   */
+  router.get("/", (req, res, next) => {
+    void (async () => {
+      try {
+        const parsed = listQuery.safeParse(req.query);
+        if (!parsed.success) {
+          next(
+            badRequest(
+              String(parsed.error.issues[0]?.path[0] ?? "q"),
+              "Filter tidak valid.",
+            ),
+          );
+          return;
+        }
+        const { q, status, closed, page, perPage } = parsed.data;
+        const result = await listPurchaseOrders(db, {
+          ...(q === undefined ? {} : { q }),
+          ...(status.length === 0 ? {} : { status }),
+          ...(closed === undefined ? {} : { closed }),
+          page,
+          perPage,
+        });
+        res.json({ rows: result.rows, total: result.total, page, perPage });
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
+  /**
+   * One invoice, with its lines and the machines identified against them.
+   *
+   * The QC grid is NOT returned, and that is the point: a slot — a machine the
+   * invoice says is here that nobody has identified — lives in the page, not in
+   * the database. The page counts `qty` against the units it gets back.
+   */
+  router.get("/:poId", (req, res, next) => {
+    void (async () => {
+      try {
+        const poId = String(req.params["poId"] ?? "");
+        const po = await purchaseOrderDetail(db, poId);
+        if (po === null) {
+          next(new ApiError(404, "TIDAK_DITEMUKAN", "Faktur tidak ditemukan."));
+          return;
+        }
+        res.json(po);
+      } catch (e) {
+        next(e);
+      }
+    })();
+  });
+
+  /**
+   * Close the invoice, or reopen it.
+   *
+   * Never refuses. An outstanding balance or an ungraded machine is a WARNING
+   * the page shows before it asks — that judgement is the operator's, and an
+   * intake screen must not make a mistake permanent.
+   */
+  router.post("/:poId/close", async (req, res, next) => {
+    try {
+      const parsed = closeBody.safeParse(req.body);
+      if (!parsed.success) throw badRequest("closed", "Nilai tidak valid.");
+      if (!req.staff) throw unauthenticated();
+
+      const poId = String(req.params["poId"] ?? "");
+      const existing = await db.purchaseOrder.findUnique({
+        where: { id: poId },
+        select: { id: true },
+      });
+      if (existing === null)
+        throw new ApiError(404, "TIDAK_DITEMUKAN", "Faktur tidak ditemukan.");
+
+      const result = await db.$transaction(
+        (tx) =>
+          setPurchaseOrderClosed(tx, { id: poId, closed: parsed.data.closed }),
+        TXN_TIMEOUTS,
+      );
+      res.json(result);
+    } catch (e) {
+      next(e);
+    }
+  });
 
   /** A serial has been read off a case: the unit comes into existence, in QC. */
   router.post("/unit", async (req, res, next) => {

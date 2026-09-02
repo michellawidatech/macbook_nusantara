@@ -39,6 +39,9 @@ export { Prisma, PrismaClient };
  */
 export type {
   Grade,
+  POStatus,
+  PayStatus,
+  PayTarget,
   UnitStatus,
   UnitEventType,
 } from "../generated/client/index.js";
