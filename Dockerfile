@@ -1,7 +1,7 @@
 # The three server-side apps as ONE container — the first hosting target this
 # repo has had. `CMD` starts the API; the worker and the webhook are the same
 # image with the start command overridden, which is how they are deployed as
-# separate Railway services (docs/deploy.md).
+# separate Render services (docs/deploy.md).
 #
 # ## Why one image and not three
 #
@@ -96,7 +96,7 @@ ENV NODE_OPTIONS=--max-old-space-size=384
 # on nothing at all.
 EXPOSE 4000
 
-# The API. The other two override this in their Railway service settings:
+# The API. The other two override this with `dockerCommand` in render.yaml:
 #
 #   worker   pnpm exec tsx apps/worker/src/main.ts
 #   webhook  pnpm exec tsx apps/whatsapp-webhook/src/server.ts

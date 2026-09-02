@@ -25,7 +25,7 @@
  * keeps `/api` and `/auth` on the SPA's origin, so `SameSite=Lax` behaves in
  * production exactly as it does behind Vite's dev proxy — and the OIDC chain,
  * which is top-level redirects through the tenant and back, lands on the origin
- * the browser started from. Pointing the SPA at the Railway hostname directly
+ * the browser started from. Pointing the SPA at the Render hostname directly
  * would need `SameSite=None` and a CORS allowance, and would send the session
  * cookie on every third-party request the browser makes to that host.
  */
@@ -42,8 +42,8 @@ const origin = process.env["API_ORIGIN"]?.trim();
 if (origin === undefined || origin === "") {
   console.error(
     "\nAPI_ORIGIN is not set.\n\n" +
-      "It is the public origin of the API on Railway, with a scheme and no\n" +
-      "trailing slash — for example https://nusantara-api-production.up.railway.app\n\n" +
+      "It is the public origin of the API service, with a scheme and no\n" +
+      "trailing slash — for example https://nusantara-api.onrender.com\n\n" +
       "Set it in Netlify under Site configuration -> Environment variables.\n" +
       "Without it the SPA builds and deploys, and then cannot sign anybody in:\n" +
       "every /api call falls through to the catch-all and returns index.html.\n",

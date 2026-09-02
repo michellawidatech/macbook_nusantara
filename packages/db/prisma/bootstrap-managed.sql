@@ -1,4 +1,4 @@
--- Roles and the database, on a MANAGED PostgreSQL (Railway, RDS, Neon…).
+-- Roles and the database, on a MANAGED PostgreSQL (Render, RDS, Neon…).
 --
 -- `roles.sql` is the local-cluster version of this and stays the one to read
 -- first: it explains why the three roles exist and why creating them is not a
@@ -9,25 +9,78 @@
 --      one is reachable from the internet and authenticates by password, so a
 --      passwordless LOGIN role is either unusable or — worse, on a cluster set
 --      to `trust` — usable by anyone who can reach the port.
---   2. **The owner role has to be created too.** roles.sql assumes `nusantara`
---      already exists, because on the developer's cluster it is the role the
---      database was created under years of `migrate dev` ago. On a fresh
---      managed instance there is one superuser and nothing else.
+--   2. **The owner role may have to be created too.** roles.sql assumes
+--      `nusantara` already exists, because on the developer's cluster it is the
+--      role the database was created under years of `migrate dev` ago.
 --
--- Run ONCE per instance, as the superuser, against the maintenance database:
+-- Every statement below is skipped when what it would create is already there,
+-- so ONE file covers both kinds of managed instance:
 --
---     psql "$SUPERUSER_URL" \
+--   * **The platform gave you a superuser and nothing else** — it creates all
+--     four roles and the database. Run against the maintenance database.
+--
+--   * **The platform made the database and its owner for you** (Render, where
+--     `render.yaml` declares `databaseName: nusantara_pos_prod` and
+--     `user: nusantara`) — the owner and the database already exist, so it
+--     creates only the three application roles. Run as that owner, against
+--     that database; there is no maintenance database to reach.
+--
+-- Run ONCE per instance:
+--
+--     psql "$ADMIN_URL" \
 --       -v owner_password="$OWNER_PW" \
 --       -v app_password="$APP_PW" \
 --       -v agent_password="$AGENT_PW" \
 --       -v readonly_password="$READONLY_PW" \
 --       -f packages/db/prisma/bootstrap-managed.sql
 --
+-- All four are still required by psql even where a role already exists and the
+-- password will go unused; `-v owner_password=unused` is the honest value there.
+--
 -- Passwords go in the shell that invokes psql and then into the platform's
 -- secret store — never into this file, and never into secrets/*.env, which is
 -- for a shell and is not read by the apps (docs/environments.md).
 
 \set ON_ERROR_STOP on
+
+-- ---------------------------------------------------------------------------
+-- Preflight: can this connection do the job at all?
+-- ---------------------------------------------------------------------------
+-- A managed platform's database user owns its database but is usually NOT a
+-- superuser, and owning a database does not confer CREATEROLE. Without it every
+-- CREATE ROLE below fails with a bare "permission denied to create role", which
+-- reads like a bug in this file rather than the one thing it is: the wrong
+-- connection.
+--
+-- The failure matters because it is silent later, not here. The three roles are
+-- not decoration — the migrations GRANT to them by name, and a migration that
+-- cannot find `nusantara_app` fails halfway through a schema. So this refuses
+-- up front, and says which of the two fixes applies.
+DO $$
+DECLARE
+  missing text[];
+BEGIN
+  SELECT array_agg(r) INTO missing
+  FROM unnest(ARRAY['nusantara_app', 'nusantara_agent', 'nusantara_readonly']) AS r
+  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r);
+
+  -- Nothing to create: re-run, or a platform that made them. Fine either way.
+  IF missing IS NULL THEN RETURN; END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_roles
+    WHERE rolname = current_user AND (rolcreaterole OR rolsuper)
+  ) THEN
+    RAISE EXCEPTION
+      'connected as %, which can neither create roles nor is a superuser, and % still need creating.',
+      current_user, array_to_string(missing, ', ')
+      USING HINT =
+        'Connect as the instance admin, or create the three roles through the '
+        'platform (Render exposes a "Create PostgreSQL User" API and dashboard '
+        'control) and re-run this to take the GRANTs.';
+  END IF;
+END
+$$;
 
 -- ---------------------------------------------------------------------------
 -- The roles.

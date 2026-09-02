@@ -78,8 +78,9 @@ promotion; the environments are where per-environment secrets live.
 
 **Only `monitor` still has no hosting target.** The other four got one on
 2026-09-02 and `docs/deploy.md` describes them: `web` on Netlify, and `api`,
-`worker` and `whatsapp-webhook` on Railway as three services off one image, with
-a `Dockerfile`, a `netlify.toml` and three `railway*.json` files at the root.
+`worker` and `whatsapp-webhook` on Render as three services off one image,
+declared together in a `render.yaml` Blueprint, with a `Dockerfile` and a
+`netlify.toml` beside it.
 `monitor` is a package with a typecheck and no server to start.
 
 **CI still does not deploy.** `.github/workflows/ci.yml` records a deployment
