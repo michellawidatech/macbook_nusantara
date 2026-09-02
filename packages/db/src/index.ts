@@ -12,6 +12,7 @@ export * from "./appendUnitEvent.js";
 export * from "./errors.js";
 export * from "./reservations.js";
 export * from "./units.js";
+export * from "./inbound.js";
 export * from "./outbox.js";
 export * from "./reconcile.js";
 export * from "./seed.js";
