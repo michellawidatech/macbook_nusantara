@@ -47,6 +47,22 @@ export interface PurchaseOrderRow {
   readonly identified: number;
   /** Of those, the ones QC has passed. */
   readonly accepted: number;
+  /**
+   * The identified machines still in QC, and how many of those somebody has
+   * written a description for.
+   *
+   * Both are here because the list's stage rule needs them and cannot derive
+   * them from the totals: a machine with a serial and nothing else has had
+   * nothing DONE to it (ARRIVED), and one with a description is being worked on
+   * (IN_QC). Counting them server-side keeps the rule client-side — the page
+   * still decides what the counts mean, which is where `poStage` belongs,
+   * because that reading has changed twice on owner revisions.
+   */
+  readonly inQc: number;
+  readonly describedInQc: number;
+  /** Sent back to the supplier, and away being repaired. Never "accepted". */
+  readonly returned: number;
+  readonly onService: number;
 }
 
 const ROW_INCLUDE = {
@@ -54,7 +70,7 @@ const ROW_INCLUDE = {
   items: {
     select: {
       qty: true,
-      units: { select: { status: true } },
+      units: { select: { status: true, description: true } },
     },
   },
   payments: { select: { amount: true, status: true } },
@@ -84,7 +100,10 @@ function toRow(po: {
   locationId: string;
   total: bigint;
   supplier: { id: string; name: string };
-  items: readonly { qty: number; units: readonly { status: string }[] }[];
+  items: readonly {
+    qty: number;
+    units: readonly { status: string; description: string | null }[];
+  }[];
   payments: readonly { amount: bigint; status: string }[];
 }): PurchaseOrderRow {
   const units = po.items.flatMap((i) => i.units);
@@ -106,8 +125,20 @@ function toRow(po: {
     identified: units.length,
     // Anything past QC has been accepted — including a machine already sold,
     // which is why this is not `=== "TERSEDIA"`. An invoice does not become
-    // un-accepted because its stock moved on.
-    accepted: units.filter((u) => u.status !== "QC").length,
+    // un-accepted because its stock moved on. Returned and on-service machines
+    // are subtracted: they went the other way out of QC.
+    accepted: units.filter(
+      (u) =>
+        u.status !== "QC" &&
+        u.status !== "RETUR_SUPPLIER" &&
+        u.status !== "SERVIS",
+    ).length,
+    inQc: units.filter((u) => u.status === "QC").length,
+    describedInQc: units.filter(
+      (u) => u.status === "QC" && (u.description ?? "").trim() !== "",
+    ).length,
+    returned: units.filter((u) => u.status === "RETUR_SUPPLIER").length,
+    onService: units.filter((u) => u.status === "SERVIS").length,
   };
 }
 

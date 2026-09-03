@@ -5,6 +5,7 @@ import {
   paymentFor,
   poClosed,
   poStage,
+  poStageFromCounts,
   poTotals,
   unitStage,
 } from "../src/lib/inbound.js";
@@ -338,5 +339,96 @@ describe("canReopenQc", () => {
     expect(canReopenQc(unit({ status: "DIRESERVASI" }))).toBe(false);
     expect(canReopenQc(unit({ status: "TERJUAL" }))).toBe(false);
     expect(canReopenQc(unit({ status: "HILANG" }))).toBe(false);
+  });
+});
+
+describe("poStageFromCounts — the same rule, from the API's counts", () => {
+  const row = (
+    over: Partial<Parameters<typeof poStageFromCounts>[0]> = {},
+  ) => ({
+    status: "DITERIMA",
+    closedAt: null,
+    qty: 2,
+    identified: 2,
+    accepted: 2,
+    inQc: 0,
+    describedInQc: 0,
+    returned: 0,
+    onService: 0,
+    ...over,
+  });
+
+  it("answers CLOSED before anything derived", () => {
+    // Closing is a statement ABOUT the derived answer: somebody looked at
+    // whatever this would have said and filed the order anyway.
+    expect(
+      poStageFromCounts(
+        row({
+          closedAt: "2026-09-01T00:00:00.000Z",
+          identified: 0,
+          accepted: 0,
+        }),
+      ),
+    ).toBe("CLOSED");
+  });
+
+  it("is PENDING until the goods are marked received", () => {
+    expect(poStageFromCounts(row({ status: "DIPESAN" }))).toBe("PENDING");
+    expect(poStageFromCounts(row({ status: "DRAF" }))).toBe("PENDING");
+  });
+
+  it("is PENDING when received with nothing on it — story 3", () => {
+    expect(poStageFromCounts(row({ qty: 0, identified: 0, accepted: 0 }))).toBe(
+      "PENDING",
+    );
+  });
+
+  it("is ARRIVED while any expected machine has no serial", () => {
+    // Quantities, not lines: one graded unit does not satisfy a line of two.
+    expect(poStageFromCounts(row({ qty: 2, identified: 1, accepted: 1 }))).toBe(
+      "ARRIVED",
+    );
+  });
+
+  it("is ARRIVED while a machine in QC has no description", () => {
+    // A serial and nothing else is a machine nobody has looked at.
+    expect(
+      poStageFromCounts(row({ accepted: 0, inQc: 2, describedInQc: 0 })),
+    ).toBe("ARRIVED");
+  });
+
+  it("is IN_QC once every machine in QC has been described", () => {
+    expect(
+      poStageFromCounts(row({ accepted: 0, inQc: 2, describedInQc: 2 })),
+    ).toBe("IN_QC");
+  });
+
+  it("takes the LEAST-far machine, not the furthest", () => {
+    // Nine graded and one still in its box is not a finished order — showing
+    // it as "In inventory" is how the tenth machine gets forgotten.
+    expect(
+      poStageFromCounts(
+        row({
+          qty: 10,
+          identified: 10,
+          accepted: 9,
+          inQc: 1,
+          describedInQc: 0,
+        }),
+      ),
+    ).toBe("ARRIVED");
+  });
+
+  it("reports a returned or serviced machine over an accepted one", () => {
+    expect(poStageFromCounts(row({ accepted: 1, returned: 1 }))).toBe(
+      "REJECTED",
+    );
+    expect(poStageFromCounts(row({ accepted: 1, onService: 1 }))).toBe(
+      "ON_SERVICE",
+    );
+  });
+
+  it("is IN_INVENTORY only when every machine is through", () => {
+    expect(poStageFromCounts(row())).toBe("IN_INVENTORY");
   });
 });

@@ -179,6 +179,53 @@ export function poStage(po: Po, units: readonly Unit[]): InboundStage {
   return worst;
 }
 
+/**
+ * The same rule as {@link poStage}, computed from the API's counts.
+ *
+ * A second function rather than a shared one, because the two have genuinely
+ * different inputs: `poStage` reads a whole `Po` and every `Unit` in the shop
+ * out of the browser mock, and this reads a row the server already aggregated.
+ * Making one serve both would mean shipping every unit to the client purely so
+ * the mock's signature could be honoured — which is the opposite of the reason
+ * the list moved to the API.
+ *
+ * The reading is the one `poStage`'s docblock argues for, unchanged: the stage
+ * of the LEAST-far machine, because the question the column answers is "is this
+ * order finished with?", and an order with nine graded units and one still in
+ * its box is not finished.
+ */
+export function poStageFromCounts(row: {
+  readonly status: string;
+  readonly closedAt: string | null;
+  readonly qty: number;
+  readonly identified: number;
+  readonly accepted: number;
+  readonly inQc: number;
+  readonly describedInQc: number;
+  readonly returned: number;
+  readonly onService: number;
+}): InboundStage {
+  // Before anything derived: closing is a statement ABOUT the derived answer.
+  if (row.closedAt !== null && row.closedAt !== "") return "CLOSED";
+  // DITERIMA is what says the goods physically turned up, and since 2026-08-26
+  // it is the only thing that can — an order can sit on the bench with every
+  // serial still unread, and asking the units would call that "nothing has
+  // turned up" for the whole of the job it is describing.
+  if (row.status !== "DITERIMA") return "PENDING";
+  // Received, and nobody has said what it was for.
+  if (row.qty === 0 && row.identified === 0) return "PENDING";
+
+  // Least-far wins, so the checks run from the least far forward.
+  if (row.onService > 0) return "ON_SERVICE";
+  if (row.returned > 0) return "REJECTED";
+  // A machine the invoice expects that has no serial yet has had nothing done
+  // to it at all, and one with a serial and no description is the same.
+  if (row.identified < row.qty) return "ARRIVED";
+  if (row.inQc > row.describedInQc) return "ARRIVED";
+  if (row.inQc > 0) return "IN_QC";
+  return "IN_INVENTORY";
+}
+
 /** Whether somebody has filed this order away. See `Po.closedAt`. */
 export function poClosed(po: Po): boolean {
   return typeof po.closedAt === "string" && po.closedAt !== "";
