@@ -22,12 +22,12 @@ import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { OrphanQcCard } from "../../components/OrphanQcCard";
 import { fmtRp, fmtDate } from "../../lib/format.js";
-import { useQuery } from "@tanstack/react-query";
-import { listPurchaseOrders, poListKey } from "../../lib/inboundApi.js";
+import { useDb } from "../../mock/store.js";
 import {
   INBOUND_STAGE_COLOR,
   INBOUND_STAGE_LABEL,
-  poStageFromCounts,
+  poStage,
+  poTotals,
   type InboundStage,
 } from "../../lib/inbound.js";
 import { useTranslation } from "react-i18next";
@@ -49,42 +49,36 @@ interface Row {
 
 export function InboundPage() {
   const { t } = useTranslation();
+  const db = useDb();
   const navigate = useNavigate();
-
-  // The server sorts, so the page does not. It orders by `orderedAt` desc and
-  // then by code, which the mock could not do — a string compare on a date is
-  // only a sort while every date is the same length.
-  const query = useQuery({
-    queryKey: poListKey("", undefined),
-    queryFn: ({ signal }) => listPurchaseOrders({ perPage: 100 }, signal),
-  });
 
   const rows = useMemo<Row[]>(
     () =>
-      (query.data?.rows ?? []).map((po) => {
-        const stage = poStageFromCounts(po);
-        return {
-          id: po.id,
-          code: po.code,
-          supplier: po.supplierName,
-          // The escape hatch the owner kept: an invoice number, or an
-          // explicit "none", never a silently blank cell.
-          invoice: po.noInvoice ? "No invoice" : (po.invoice ?? ""),
-          date: po.orderedAt.slice(0, 10),
-          stage,
-          stageLabel: INBOUND_STAGE_LABEL[stage],
-          // Machines, not lines. A line of qty 3 is three machines to account
-          // for, and the column has always meant the work outstanding.
-          lines: po.qty,
-          // Money arrives as decimal strings of whole rupiah; this table's Row
-          // is numeric, so the conversion happens here where it is visible.
-          total: Number(po.total),
-          paid: Number(po.paid),
-          outstanding: Number(po.total) - Number(po.paid),
-          warehouse: po.locationId,
-        };
-      }),
-    [query.data],
+      [...db.pos]
+        .sort((a, b) => b.date.localeCompare(a.date))
+        .map((po) => {
+          const t = poTotals(po);
+          const stage = poStage(po, db.units);
+          return {
+            id: po.id,
+            code: po.code,
+            supplier:
+              db.suppliers.find((s) => s.id === po.supplierId)?.name ?? "—",
+            // The escape hatch the owner kept: an invoice number, or an
+            // explicit "none", never a silently blank cell.
+            invoice: po.noInvoice ? "No invoice" : po.invoice,
+            date: po.date,
+            stage,
+            stageLabel: INBOUND_STAGE_LABEL[stage],
+            lines: po.items.length,
+            total: t.total,
+            paid: t.paid,
+            outstanding: t.outstanding,
+            warehouse:
+              db.warehouses.find((w) => w.id === po.locationId)?.name ?? "—",
+          };
+        }),
+    [db],
   );
 
   return (
