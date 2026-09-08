@@ -51,6 +51,20 @@ WORKDIR /app
 # and one that is missing from the build context reads as an outdated lockfile
 # rather than as a project to skip. The filter on the install below is what
 # decides which of them actually get their dependencies fetched.
+#
+# ⚠️ A manifest missing from this list does NOT fail the build, whatever the
+# paragraph above hoped. `@nusantara/fixture` was added to the workspace on
+# 2026-09-07 and not to this list: the install succeeded, the image built, and
+# the container then died at startup with
+#
+#   Cannot find package '@nusantara/domain'
+#     imported from /app/packages/fixture/src/catalogue.ts
+#
+# — because `COPY packages packages` below brings the SOURCE of a project pnpm
+# never linked, so it has no `node_modules` of its own. The failure is a
+# runtime one, it names the dependency rather than the missing manifest, and
+# Render reports it as a healthy build and a failed deploy. When a package is
+# added to `pnpm-workspace.yaml`, it is added here in the same commit.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json apps/api/
 COPY apps/monitor/package.json apps/monitor/
@@ -60,6 +74,7 @@ COPY apps/worker/package.json apps/worker/
 COPY packages/agent/package.json packages/agent/
 COPY packages/db/package.json packages/db/
 COPY packages/domain/package.json packages/domain/
+COPY packages/fixture/package.json packages/fixture/
 COPY packages/instagram/package.json packages/instagram/
 COPY packages/logging/package.json packages/logging/
 COPY packages/ui/package.json packages/ui/
