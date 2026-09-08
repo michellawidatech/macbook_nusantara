@@ -479,6 +479,25 @@ Decisions that outlived those documents:
   - What stays mock-only is what prisma has no table for — grading rules, the
     chat inbox, expenses, opname, the AppleDB import list, adjustment reasons,
     racks, `Supplier.code`. Each is marked ⚠️ where it is declared.
+- **A read may not migrate ahead of its writes, 2026-09-07.** S/N Tracking was
+  moved onto `GET /api/katalog/unit` while every screen that WRITES a unit —
+  Inbound & QC above all — still wrote the browser store. So a machine accepted
+  at QC never appeared in the tracker: not late, never (owner report: *"when I
+  accept a product into the inventory it did not load immediately in the serial
+  tracker"*). It reads the store again, and it goes back over with Inbound & QC,
+  which is the same rule the three inbound pages were reverted under.
+  - `lib/unitsApi.ts`, `GET /api/katalog/unit(/:serial)` and `packages/db`'s
+    `unitTimeline` all STAY, tested and dormant. Nothing about them was wrong.
+  - The timeline's context now resolves through **`UnitEvent.refCode`**, the
+    document code every screen that appends an event already passes. A code is
+    unique across SI/RV/PI/SP, so a machine held, released and held again by a
+    different customer narrates the right person on all three rows — the
+    mis-narration the server-side join was built to fix, fixed the same way on
+    this side. An event naming no document falls back to its location.
+  - Four things improve by being on the store, all of them visible at the
+    counter: the rack (no `Rack` model in prisma), the QC description, the
+    store barcode on a reprint (no `Supplier.code` in prisma), and a machine
+    appearing the moment it is accepted.
 - Lists paginate with a page size the user picks, and a filterable column puts
   its filter in the **column header**. `ProTable` holds the filter/sort state
   and does the work itself — the header control only reports clicks — because

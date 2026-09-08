@@ -7,6 +7,14 @@
  * "Sold to Budi on SI-…" would be shipping untranslatable English.
  *
  * Money crosses as decimal strings (whole rupiah). Dates cross as ISO strings.
+ *
+ * ⚠️ **Dormant since 2026-09-07, deliberately, and not dead.** S/N Tracking
+ * was the only caller and it reads the browser store again: the page had been
+ * migrated ahead of every screen that WRITES a unit, so a machine accepted at
+ * Inbound & QC never appeared in the tracker at all. This client, the route it
+ * calls and `packages/db`'s `unitTimeline` behind it are all tested and stay
+ * exactly as they are — pages sharing an id space move together, and this one
+ * goes back over with Inbound & QC.
  */
 import { api } from "./api.js";
 

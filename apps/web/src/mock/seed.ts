@@ -1396,18 +1396,49 @@ export function buildSeed(): MockDb {
     ...(u.grade === undefined ? {} : { grade: u.grade }),
     ...(u.battery === undefined ? {} : { batteryHealth: u.battery }),
   }));
-  const events: UnitEvent[] = shop.events.map((e, i) => ({
-    id: `sev-${i + 1}`,
-    serial: e.serial,
-    seq: e.seq,
-    type: e.type,
-    at: isoOf(e.at, shop.now),
-    fromStatus: e.fromStatus ?? "-",
-    toStatus: e.toStatus,
-    locationId: e.toLocationId,
-    ...(e.note === undefined ? {} : { note: e.note }),
-    staff: shop.staff.find((s) => s.id === e.staffId)?.name ?? "Michella",
-  }));
+  /*
+   * The document each event belongs to, as its CODE.
+   *
+   * `refCode` rather than three nullable id columns, because a code is unique
+   * across every document the shop numbers — SI, RV, PI, SP — and because it
+   * is what every screen that appends an event already passes. S/N Tracking
+   * resolves an event's context through it, so a machine held, released and
+   * held again by a different customer narrates the right person on both: the
+   * hold is named by the event rather than guessed at by searching for a
+   * reservation that mentions the serial.
+   */
+  const docCodeOf = (e: (typeof shop.events)[number]): string | undefined => {
+    if (e.orderId !== undefined) {
+      return shop.orders.find((o) => o.id === e.orderId)?.code;
+    }
+    if (e.reservationId !== undefined) {
+      return shop.reservations.find((r) => r.id === e.reservationId)?.code;
+    }
+    if (e.type === "RETUR_SUPPLIER") {
+      const ret = shop.supplierReturns.find((r) => r.serial === e.serial);
+      if (ret !== undefined) return ret.code;
+    }
+    if (e.purchaseOrderId !== undefined) {
+      return shop.purchaseOrders.find((p) => p.id === e.purchaseOrderId)?.code;
+    }
+    return undefined;
+  };
+  const events: UnitEvent[] = shop.events.map((e, i) => {
+    const refCode = docCodeOf(e);
+    return {
+      id: `sev-${i + 1}`,
+      serial: e.serial,
+      seq: e.seq,
+      type: e.type,
+      at: isoOf(e.at, shop.now),
+      fromStatus: e.fromStatus ?? "-",
+      toStatus: e.toStatus,
+      locationId: e.toLocationId,
+      ...(e.note === undefined ? {} : { note: e.note }),
+      ...(refCode === undefined ? {} : { refCode }),
+      staff: shop.staff.find((s) => s.id === e.staffId)?.name ?? "Michella",
+    };
+  });
   for (const po of pos) {
     const built = shop.purchaseOrders.find((p) => p.id === po.id)!;
     po.items = built.lines.map((l) => ({
