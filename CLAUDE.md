@@ -498,6 +498,19 @@ Decisions that outlived those documents:
     counter: the rack (no `Rack` model in prisma), the QC description, the
     store barcode on a reprint (no `Supplier.code` in prisma), and a machine
     appearing the moment it is accepted.
+  - **`/reservations` came back the same way on 2026-09-08, and it was worse
+    than a stale read.** A hold booked there marked a POSTGRES unit
+    `DIRESERVASI` while the store's copy of that machine stayed `TERSEDIA` —
+    so the till sold it out from under the customer it was being held for. A
+    hold that does not hold anything is worse than a hold nobody can see.
+    Create, release and cancel are one `mutate` each now, writing the header,
+    the `DIRESERVASI`/`RESERVASI_BATAL` ledger rows and the projection
+    together, exactly as the till does.
+    ⚠️ The cost: a hold the WhatsApp agent books is a real `Reservation` row
+    and the page cannot see it. That is theoretical today —
+    `packages/agent`'s `reserve` capability has ONE caller, the worker, and the
+    worker is not deployed; `apps/api`'s chat route withholds the capability on
+    purpose. When the worker ships, this page and the till move over together.
 - Lists paginate with a page size the user picks, and a filterable column puts
   its filter in the **column header**. `ProTable` holds the filter/sort state
   and does the work itself — the header control only reports clicks — because

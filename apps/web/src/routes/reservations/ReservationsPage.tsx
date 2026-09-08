@@ -42,10 +42,8 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import {
-  Alert,
   App,
   Button,
   Card,
@@ -56,7 +54,6 @@ import {
   Input,
   Modal,
   Select,
-  Skeleton,
   Switch,
   Table,
   Tag,
@@ -72,21 +69,16 @@ import { ProTable } from "../../components/ProTable";
 import { EnumTag } from "../../components/EnumTag";
 import { GradeTag } from "../../components/GradeTag";
 import { LongText } from "../../components/LongText";
-import { api } from "../../lib/api.js";
 import { fmtDateTime } from "../../lib/format.js";
-import {
-  cancelHold,
-  createHold,
-  holdsKey,
-  holdSourcesKey,
-  listHoldSources,
-  listHolds,
-  releaseHold,
-  type Hold,
-  type HoldItem,
-  type HoldState,
+import { itemState, reprojectHolds } from "../../lib/reservations.js";
+import { appendEvent, docCode, mutate, nextId, useDb } from "../../mock/store.js";
+// Types only, and on purpose: the view model below is the SERVER's shape, so
+// the render layer does not change when this page goes back to the API.
+import type {
+  Hold,
+  HoldItem,
+  HoldState,
 } from "../../lib/reservationsApi.js";
-import { describeApiError } from "../../i18n/apiErrors.js";
 import { tagOf, RESERVATION_STATUS } from "../../i18n/enumLabels.js";
 
 /** Machines still waiting to be collected on this hold. */
@@ -100,15 +92,6 @@ const holdProgress = (r: Hold) => ({
   released: r.items.filter((i) => i.state === "RELEASED").length,
   total: r.items.length,
 });
-
-/**
- * A key that is stable for one attempt and new for the next.
- *
- * `Idempotency-Key` is what turns a double-clicked Reserve on a slow
- * connection into one hold instead of one hold plus a puzzling "that unit is
- * not available" for the hold you just made.
- */
-const newKey = () => crypto.randomUUID();
 
 /**
  * One machine's state, said in the same words as the whole hold's.
@@ -145,7 +128,6 @@ interface HoldForm {
 
 export function ReservationsPage() {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { message, modal } = App.useApp();
   const [form] = Form.useForm<HoldForm>();
@@ -171,114 +153,184 @@ export function ReservationsPage() {
   const [releaseRest, setReleaseRest] = useState(false);
 
   /**
-   * The holds themselves — server data, so TanStack Query owns it (01 §5)
-   * rather than a bespoke store a second copy could disagree with.
+   * The holds themselves, read off the store.
    *
-   * The rows arrive pre-joined: every item already carries its product name,
-   * grade, unit status and derived state, so this screen does no lookups and
-   * no N+1. That matters here more than most: the old version ran a
-   * `db.units.find` per serial per column per render.
+   * ## Why this is not the API any more (2026-09-08)
+   *
+   * It was, and the migration was right about what it fixed. What it could not
+   * fix on its own is that the MACHINES a hold claims live in the store: the
+   * till reads `db.units`, and so does Inventory, and so does QC. So a hold
+   * created here marked a Postgres unit `DIRESERVASI` while the store's copy
+   * of that same machine stayed `TERSEDIA` — and the till sold it, cheerfully,
+   * out from under the customer it was being held for. A hold that does not
+   * hold anything is worse than a hold nobody can see.
+   *
+   * That is the rule S/N Tracking came back under a day earlier: a screen may
+   * not read from somewhere its own writes do not reach. This one writes units,
+   * so it belongs where the units are until they move together.
+   *
+   * ⚠️ What this costs, stated plainly: a hold the WhatsApp agent books is a
+   * real `Reservation` row and is invisible here. Today that is theoretical —
+   * `packages/agent`'s `reserve` capability has exactly one caller, the worker,
+   * and the worker is not deployed (Render has no free background worker; see
+   * docs/deploy.md). The day it ships, this page and the till move to the API
+   * together, and `lib/reservationsApi.ts` is still here, tested, for it.
+   *
+   * The view model is deliberately the SERVER's shape — `Hold` and `HoldItem`
+   * are imported as types from `lib/reservationsApi.ts` — so the render layer
+   * below is untouched and the move back is a change to this block alone.
    */
-  const holds = useQuery({
-    queryKey: holdsKey,
-    queryFn: ({ signal }) => listHolds(signal),
-    staleTime: 10_000,
-  });
+  const db = useDb();
 
-  /** The channel list, from the table the migration created. */
-  const sources = useQuery({
-    queryKey: holdSourcesKey,
-    queryFn: ({ signal }) => listHoldSources(signal),
-    staleTime: 5 * 60_000,
-  });
+  const rows = useMemo((): Hold[] => {
+    const holds = db.reservations.map((r): Hold => {
+      const customer = db.customers.find((c) => c.id === r.customerId);
+      const channel = db.reservationSources.find((s) => s.id === r.sourceId);
+      return {
+        id: r.id,
+        code: r.code,
+        customerId: r.customerId,
+        customerName: customer?.name ?? "—",
+        phone: customer?.phone ?? null,
+        scheduledFor: r.when,
+        note: r.note === "" ? null : r.note,
+        // The header projection `lib/reservations.ts` derives. Mapped to the
+        // schema's own vocabulary, which is what the tags are keyed on.
+        status:
+          r.status === "ACTIVE"
+            ? "TERJADWAL"
+            : r.status === "DONE"
+              ? "SELESAI"
+              : "BATAL",
+        source: "STAF",
+        reservationSourceId: r.sourceId ?? null,
+        channelName: channel?.name ?? null,
+        createdAt: r.when,
+        items: r.items.map((i): HoldItem => {
+          const unit = db.units.find((u) => u.serial === i.serial);
+          const sku = db.skus.find((s) => s.id === unit?.skuId);
+          return {
+            id: i.id,
+            serial: i.serial,
+            productName: sku?.name ?? i.serial,
+            variantLabel: sku?.variantLabel ?? null,
+            grade: unit?.grade ?? null,
+            unitStatus: unit?.status ?? null,
+            // Never stored: whether a machine is held, bought or let go is a
+            // fact about the MACHINE, and a second copy is the one that goes
+            // stale. `itemState` is the same derivation the till uses.
+            state: itemState(db, i),
+          };
+        }),
+      };
+    });
+    return holds.sort(
+      // Newest conversation first, and holds that still want something ahead
+      // of ones that are finished with — a finished hold is a receipt, and a
+      // receipt does not belong at the top of a work list.
+      (a, b) =>
+        Number(b.status === "TERJADWAL") - Number(a.status === "TERJADWAL") ||
+        (b.scheduledFor ?? b.createdAt).localeCompare(
+          a.scheduledFor ?? a.createdAt,
+        ),
+    );
+  }, [db]);
+
+  /** The channel list, from the same table the API's `/sources` reads. */
+  const sourceOptions = useMemo(
+    () =>
+      db.reservationSources
+        .filter((s) => s.active)
+        .map((s) => ({ value: s.id, label: s.name })),
+    [db.reservationSources],
+  );
 
   /**
    * Sellable machines to offer in the create form.
    *
-   * The inventory endpoint already answers this — serial, product and grade,
-   * filtered and paginated server-side — so there is no second endpoint for it.
-   *
-   * ## The search is the SERVER's, not the Select's
-   *
-   * `perPage` is capped at 200, and it used to be the only thing between this
-   * picker and the whole shelf: antd filtered those 200 options in the browser,
-   * so a machine sitting at position 201 could not be found by typing its
-   * serial and could not be reserved at all. Nothing said so — an empty
-   * dropdown reads as "we do not have that", which is the one answer that was
-   * certainly wrong.
-   *
-   * So `q` goes to the server, `filterOption` is off, and the page count below
-   * is what the dropdown says when there is more than it is showing.
+   * Filtered over the store and capped, rather than asked of the inventory
+   * endpoint. The cap is why the search is applied BEFORE it and not by the
+   * `Select`: a machine past the cap could otherwise not be found by typing
+   * its serial and could not be reserved at all, and an empty dropdown reads
+   * as "we do not have that" — the one answer that is certainly wrong.
    */
   const [unitQuery, setUnitQuery] = useState("");
-  const availableUnits = useQuery({
-    queryKey: ["katalog", "inventori", "tersedia", unitQuery],
-    queryFn: ({ signal }) =>
-      api<{
-        rows: { serial: string; skuName: string }[];
-        total: number;
-      }>(
-        `/api/katalog/inventori?status=TERSEDIA&perPage=200${
-          unitQuery.trim() === ""
-            ? ""
-            : `&q=${encodeURIComponent(unitQuery.trim())}`
-        }`,
-        { signal },
-      ),
-    staleTime: 10_000,
-    // The previous page stays on screen while the next one is fetched, so the
-    // dropdown does not blink empty between keystrokes.
-    placeholderData: (prev) => prev,
-  });
-  /** How many sellable machines the search matched but this page cannot show. */
+  const availableMatches = useMemo(() => {
+    const q = unitQuery.trim().toLowerCase();
+    return db.units
+      .filter((u) => u.status === "TERSEDIA")
+      .map((u) => ({ unit: u, sku: db.skus.find((s) => s.id === u.skuId) }))
+      .filter(({ unit, sku }) => {
+        if (q === "") return true;
+        return (
+          unit.serial.toLowerCase().includes(q) ||
+          (sku?.name ?? "").toLowerCase().includes(q) ||
+          (sku?.variantLabel ?? "").toLowerCase().includes(q)
+        );
+      });
+  }, [db.units, db.skus, unitQuery]);
+  const UNIT_PICKER_CAP = 200;
+  const unitOptions = availableMatches
+    .slice(0, UNIT_PICKER_CAP)
+    .map(({ unit, sku }) => ({
+      value: unit.serial,
+      label: `${unit.serial} — ${sku?.name ?? ""} ${sku?.variantLabel ?? ""}`.trim(),
+    }));
+  /** How many sellable machines the search matched but the list cannot show. */
   const unitsBeyondPage = Math.max(
     0,
-    (availableUnits.data?.total ?? 0) - (availableUnits.data?.rows.length ?? 0),
-  );
-
-  const refresh = () => queryClient.invalidateQueries({ queryKey: holdsKey });
-
-  const rows = useMemo(
-    () =>
-      [...(holds.data?.rows ?? [])].sort(
-        // Newest conversation first, and holds that still want something ahead
-        // of ones that are finished with — a finished hold is a receipt, and a
-        // receipt does not belong at the top of a work list.
-        (a, b) =>
-          Number(b.status === "TERJADWAL") - Number(a.status === "TERJADWAL") ||
-          (b.scheduledFor ?? b.createdAt).localeCompare(
-            a.scheduledFor ?? a.createdAt,
-          ),
-      ),
-    [holds.data],
+    availableMatches.length - unitOptions.length,
   );
 
   /**
    * Put machines aside.
    *
-   * Everything authoritative happens on the server now: the RV number comes
-   * from `next_doc_code`, the ledger's `seq` from the ledger, the actor from
-   * the session, and the availability check from inside the same transaction
-   * that writes the hold. This screen sends what the person typed and renders
-   * the answer.
+   * One `mutate`, so the reservation, the ledger rows and the header
+   * projection land together — the same rule the till follows. A hold written
+   * without the `DIRESERVASI` events would be a hold that holds nothing, which
+   * is precisely the bug this page came back to the store to fix.
    */
-  const add = useMutation({
-    mutationFn: (v: HoldForm) =>
-      createHold(
-        {
-          serials: v.serials,
-          phone: v.phone.trim(),
-          name: v.name.trim(),
-          scheduledFor: v.when.toISOString(),
-          reservationSourceId: v.sourceId,
-          ...(v.note?.trim() ? { note: v.note.trim() } : {}),
-        },
-        newKey(),
-      ),
-    onSuccess: async (_res, v) => {
-      await refresh();
-      await queryClient.invalidateQueries({
-        queryKey: ["katalog", "inventori", "tersedia"],
+  const [saving, setSaving] = useState(false);
+  const addHold = (v: HoldForm) => {
+    setSaving(true);
+    try {
+      const code = docCode("RV");
+      mutate((d) => {
+        const phone = v.phone.trim();
+        const name = v.name.trim();
+        // Upsert on the number, matching what the create service does: a
+        // cashier may put aside a machine for somebody the shop has never met.
+        let customer = d.customers.find((c) => c.phone === phone);
+        if (!customer) {
+          customer = {
+            id: nextId("c"),
+            name: name === "" ? phone : name,
+            phone,
+            createdAt: new Date().toISOString(),
+          };
+          d.customers.push(customer);
+        }
+        d.reservations.push({
+          id: nextId("rsv"),
+          code,
+          customerId: customer.id,
+          when: v.when.toISOString(),
+          note: v.note?.trim() ?? "",
+          sourceId: v.sourceId,
+          items: v.serials.map((serial) => ({
+            id: nextId("rsvi"),
+            serial,
+          })),
+          status: "ACTIVE",
+        });
+        for (const serial of v.serials) {
+          appendEvent(d, serial, {
+            type: "DIRESERVASI",
+            toStatus: "DIRESERVASI",
+            refCode: code,
+          });
+        }
+        reprojectHolds(d, v.serials);
       });
       message.success(
         t("reservations.heldN", "{{count}} unit(s) are now on hold.", {
@@ -287,45 +339,39 @@ export function ReservationsPage() {
       );
       form.resetFields();
       setAdding(false);
-    },
-    // The server's message is already Indonesian and already names the serial
-    // that moved, so it is shown as written rather than replaced with a guess.
-    onError: (e) => message.error(describeApiError(e, t)),
-  });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   /**
-   * Release machines from a hold.
+   * Let machines go.
    *
-   * Passing every held serial is what the row-level Cancel does, and the
-   * endpoint for that is `/cancel` — one call, so a hold cannot be left
-   * half-released if the connection drops between two of them.
+   * Every held serial at once is what the row-level Cancel does, and it is one
+   * mutation either way — so a hold cannot be left half-released by a failure
+   * between two of them.
    */
-  const releasing = useMutation({
-    mutationFn: ({ r, serials }: { r: Hold; serials: readonly string[] }) =>
-      serials.length === heldOf(r).length
-        ? cancelHold(r.id, newKey())
-        : releaseHold(r.id, serials, newKey()),
-    onSuccess: async (_res, { r, serials }) => {
-      await refresh();
-      await queryClient.invalidateQueries({
-        queryKey: ["katalog", "inventori", "tersedia"],
-      });
-      setPicked((p) => ({ ...p, [r.id]: [] }));
-      setManaging(null);
-      message.success(
-        t("reservations.releasedN", "{{count}} unit(s) back in stock.", {
-          count: serials.length,
-        }),
-      );
-    },
-    onError: (e) => message.error(describeApiError(e, t)),
-  });
-
-  /** Fire and wait, so a caller can navigate only after the write landed. */
-  const releaseNow = (r: Hold, serials: readonly string[]) =>
-    serials.length === 0
-      ? Promise.resolve()
-      : releasing.mutateAsync({ r, serials }).catch(() => undefined);
+  const releaseNow = (r: Hold, serials: readonly string[]) => {
+    if (serials.length === 0) return Promise.resolve();
+    mutate((d) => {
+      for (const serial of serials) {
+        appendEvent(d, serial, {
+          type: "RESERVASI_BATAL",
+          toStatus: "TERSEDIA",
+          refCode: r.code,
+        });
+      }
+      reprojectHolds(d, serials);
+    });
+    setPicked((p) => ({ ...p, [r.id]: [] }));
+    setManaging(null);
+    message.success(
+      t("reservations.releasedN", "{{count}} unit(s) back in stock.", {
+        count: serials.length,
+      }),
+    );
+    return Promise.resolve();
+  };
 
   const release = (r: Hold, serials: readonly string[]) => {
     if (serials.length === 0) return;
@@ -509,20 +555,7 @@ export function ReservationsPage() {
       ]}
     >
       <Flex vertical gap={16}>
-        {/* A failed refresh renders BESIDE the data, never instead of it: a
-            cashier mid-conversation must not lose the list on one bad
-            response. The server's message is already Indonesian. */}
-        {holds.isError && (
-          <Alert
-            type="warning"
-            showIcon
-            message={describeApiError(holds.error, t)}
-          />
-        )}
         <Card title={t("reservations.reservations", "Reservations")}>
-          {holds.isPending ? (
-            <Skeleton active paragraph={{ rows: 4 }} />
-          ) : (
           <ProTable<Hold>
             rowKey="id"
             dataSource={rows}
@@ -680,7 +713,6 @@ export function ReservationsPage() {
               },
             ]}
           />
-          )}
         </Card>
       </Flex>
 
@@ -808,7 +840,7 @@ export function ReservationsPage() {
         open={adding}
         onCancel={() => setAdding(false)}
         onOk={() => form.submit()}
-        okButtonProps={{ loading: add.isPending }}
+        okButtonProps={{ loading: saving }}
         okText={t("reservations.reserve", "Reserve")}
         title={t("reservations.addReservation", "Add reservation")}
         width={640}
@@ -818,7 +850,7 @@ export function ReservationsPage() {
           form={form}
           layout="vertical"
           initialValues={{ when: dayjs().add(1, "day") }}
-          onFinish={(v) => add.mutate(v)}
+          onFinish={addHold}
         >
           {/* The number is the customer's identity: `Customer.phone` is unique,
               and the service upserts on it — create-only, so a hold made at the
@@ -854,22 +886,17 @@ export function ReservationsPage() {
             <Select
               mode="multiple"
               showSearch
-              // Searched on the server — see `availableUnits`. antd must not
-              // also filter, or it would narrow the page the server just
-              // chose and hide rows that genuinely matched.
+              // Filtered before the cap — see `availableMatches`. antd must
+              // not filter as well, or it would narrow a list that has already
+              // been narrowed and hide rows that genuinely matched.
               filterOption={false}
               onSearch={setUnitQuery}
               placeholder={t("reservations.availableUnit", "Available unit")}
-              loading={availableUnits.isFetching}
-              options={(availableUnits.data?.rows ?? []).map((u) => ({
-                value: u.serial,
-                label: `${u.serial} — ${u.skuName}`,
-              }))}
-              notFoundContent={
-                availableUnits.isFetching
-                  ? undefined
-                  : t("reservations.noUnitMatch", "No machine matches that.")
-              }
+              options={unitOptions}
+              notFoundContent={t(
+                "reservations.noUnitMatch",
+                "No machine matches that.",
+              )}
               popupRender={(menu) => (
                 <>
                   {menu}
@@ -900,11 +927,7 @@ export function ReservationsPage() {
                 showSearch
                 optionFilterProp="label"
                 placeholder={t("reservations.cameFrom", "Came from")}
-                loading={sources.isPending}
-                options={(sources.data?.sources ?? []).map((s) => ({
-                  value: s.id,
-                  label: s.name,
-                }))}
+                options={sourceOptions}
               />
             </Form.Item>
             <Form.Item

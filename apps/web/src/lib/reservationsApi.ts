@@ -1,10 +1,24 @@
 /**
  * Holds, as the SPA sees them. See apps/api/src/routes/reservations.ts.
  *
- * These are real rows out of `Reservation`, not the mock store. The page used
- * to read `useDb().reservations`, which meant a hold one cashier made was
- * invisible to the next — and a hold the WhatsApp agent made, which has been
- * writing real rows all along, was invisible to everybody.
+ * ⚠️ **Dormant since 2026-09-08, deliberately, and not dead.** The page reads
+ * the store again, and the reason is the one S/N Tracking came back under a
+ * day earlier: the MACHINES a hold claims live in the store — the till reads
+ * `db.units`, and so do Inventory and QC — so a hold booked through this
+ * client marked a Postgres unit `DIRESERVASI` while the store's copy of the
+ * same machine stayed `TERSEDIA`, and the till sold it out from under the
+ * customer it was being held for. A hold that does not hold anything is worse
+ * than a hold nobody can see.
+ *
+ * What that costs, stated plainly: a hold the WhatsApp agent books is a real
+ * `Reservation` row and the page cannot see it. Today that is theoretical —
+ * `packages/agent`'s `reserve` capability has exactly one caller, the worker,
+ * and the worker is not deployed (Render has no free background worker; see
+ * docs/deploy.md). The day it ships, this page and the till move over
+ * together, and everything here is still tested and waiting for them.
+ *
+ * The types below are still imported by the page: its view model is
+ * deliberately this shape, so moving back is a change to one block.
  *
  * Money would cross as strings; a hold carries none. Dates cross as ISO
  * strings and are parsed at the render edge.

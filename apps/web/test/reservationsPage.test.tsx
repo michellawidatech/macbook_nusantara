@@ -13,25 +13,24 @@
  * is the right seam — Stock Out has its own tests, and what this page owes it
  * is the right serials.
  *
- * ## Why this no longer touches the mock store
+ * ## Where the seam is
  *
- * The page reads `/api/reservations` now. The seam moved with it: the API
- * client module is stubbed, so these tests still assert what the OPERATOR
- * does — which checkbox, which switch, which button — and now also assert what
- * the page ASKS THE SERVER TO DO, which is the thing that was previously only
- * observable as a mutation of a shared object. "Leaves the rest on hold" used
- * to mean "that unit is still DIRESERVASI in the store"; it now means "the page
- * did not ask for it to be released", which is the same promise stated where
- * the page is actually responsible for it.
+ * The store, again (2026-09-08). The page briefly read `/api/reservations`
+ * while the MACHINES it holds stayed in the store, so a hold marked a Postgres
+ * unit `DIRESERVASI` and the till sold the store's copy of the same machine
+ * anyway. "Leaves the rest on hold" is therefore once more a statement about a
+ * unit's status rather than about a request that was not sent — and that is
+ * the stronger of the two promises, because the unit is what the customer is
+ * waiting for.
  */
 import { App as AntdApp } from "antd";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ReservationsPage } from "../src/routes/reservations/ReservationsPage.js";
-import type { Hold } from "../src/lib/reservationsApi.js";
+import { mutate } from "../src/mock/store.js";
+import type { MockDb } from "../src/mock/seed.js";
 
 // Same budget and the same reason as inboundQcPage: this renders a whole page
 // into jsdom and queries it by accessible name, so the cost tracks how busy
@@ -39,85 +38,73 @@ import type { Hold } from "../src/lib/reservationsApi.js";
 vi.setConfig({ testTimeout: 60_000 });
 
 /** The hold this file works on: two machines, both still waiting. */
-const HOLD = "rsv-2";
-const CODE = "RV-2026/08-000002";
+const HOLD = "rsv-tst-1";
+const CODE = "RV-2026/09-000771";
+const SERIALS = ["SC02RS1111111", "SC02RS2222222"] as const;
 
-let hold: Hold;
-
-function makeHold(note = ""): Hold {
-  return {
-    id: HOLD,
-    code: CODE,
-    customerId: "cust-1",
-    customerName: "Budi Santoso",
-    phone: "+628111000321",
-    scheduledFor: "2026-08-21T08:00:00.000Z",
-    note,
-    status: "TERJADWAL",
-    source: "STAF",
-    reservationSourceId: "rsv-src-wa",
-    channelName: "WhatsApp",
-    createdAt: "2026-08-20T03:00:00.000Z",
-    items: [
-      {
-        id: "it-1",
-        serial: "NUS0001111",
-        productName: "MacBook Air M2 256GB",
-        variantLabel: "8/256",
-        grade: "A",
-        unitStatus: "DIRESERVASI",
-        state: "HELD",
-      },
-      {
-        id: "it-2",
-        serial: "NUS0002222",
-        productName: "MacBook Pro 14 M3",
-        variantLabel: "16/512",
-        grade: "B",
-        unitStatus: "DIRESERVASI",
-        state: "HELD",
-      },
-    ],
-  };
+/** The store, read through the one door it has. */
+function snapshot(): MockDb {
+  let seen!: MockDb;
+  act(() => {
+    mutate((d) => {
+      seen = d;
+    });
+  });
+  return seen;
 }
 
-// The spies OWN what they return, so a case can hand back a promise that has
-// not settled yet and assert on what the page does while it is in flight.
-type Spy = (...a: unknown[]) => Promise<{ reservation: Hold }>;
-const createHold = vi.fn<Spy>(() => Promise.resolve({ reservation: hold }));
-const releaseHold = vi.fn<Spy>(() => Promise.resolve({ reservation: hold }));
-const cancelHold = vi.fn<Spy>(() => Promise.resolve({ reservation: hold }));
+const unitOf = (serial: string) =>
+  snapshot().units.find((u) => u.serial === serial);
 
-vi.mock("../src/lib/reservationsApi.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../src/lib/reservationsApi.js")
-  >("../src/lib/reservationsApi.js");
-  return {
-    ...actual,
-    listHolds: () =>
-      Promise.resolve({
-        rows: [hold],
-        page: 1,
-        perPage: 200,
-        total: 1,
-        totalUnfiltered: 1,
-      }),
-    listHoldSources: () =>
-      Promise.resolve({ sources: [{ id: "rsv-src-wa", name: "WhatsApp" }] }),
-    createHold: (...a: unknown[]) => createHold(...a),
-    releaseHold: (...a: unknown[]) => releaseHold(...a),
-    cancelHold: (...a: unknown[]) => cancelHold(...a),
-  };
-});
+const holdRow = () => snapshot().reservations.find((r) => r.id === HOLD);
 
-/** The sellable-units picker asks the inventory endpoint directly. */
-vi.mock("../src/lib/api.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../src/lib/api.js")>(
-      "../src/lib/api.js",
-    );
-  return { ...actual, api: () => Promise.resolve({ rows: [] }) };
-});
+/**
+ * Two machines put aside for one customer, on top of the seeded shop.
+ *
+ * Written the way the page writes one — a reservation row AND a `DIRESERVASI`
+ * on each machine — because a fixture that set only the header would be
+ * testing against a hold that holds nothing, which is exactly the bug this
+ * page came back to the store to fix.
+ */
+function makeHold(note = "") {
+  mutate((d) => {
+    const sku = d.skus[0]!;
+    for (const serial of SERIALS) {
+      d.units.push({
+        serial,
+        skuId: sku.id,
+        status: "DIRESERVASI",
+        locationId: "wh-1",
+        buy: 9_000_000,
+        description: "Mulus, Fullset dus",
+        poId: "po-1",
+        grade: "A",
+      });
+      d.events.push({
+        id: `rs-ev-${serial}`,
+        serial,
+        seq: 1,
+        type: "DIRESERVASI",
+        at: "2026-09-05T03:00:00.000Z",
+        fromStatus: "TERSEDIA",
+        toStatus: "DIRESERVASI",
+        locationId: "wh-1",
+        refCode: CODE,
+        staff: "Michella",
+      });
+    }
+    d.reservations.push({
+      id: HOLD,
+      code: CODE,
+      customerId: d.customers[0]!.id,
+      when: "2026-09-21T08:00:00.000Z",
+      note,
+      sourceId: "rsv-src-wa",
+      items: SERIALS.map((serial, i) => ({ id: `rs-it-${i}`, serial })),
+      status: "ACTIVE",
+    });
+  });
+}
 
 /** Where `checkOut` sent us, or null if it never navigated. */
 let navigatedTo: string | null = null;
@@ -136,20 +123,14 @@ vi.mock("react-router-dom", async () => {
 });
 
 function renderPage() {
-  // retry:false — a test must see a failure, not a backoff.
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
   return render(
-    <QueryClientProvider client={client}>
-      <AntdApp>
-        <MemoryRouter initialEntries={["/reservations"]}>
-          <Routes>
-            <Route path="/reservations" element={<ReservationsPage />} />
-          </Routes>
-        </MemoryRouter>
-      </AntdApp>
-    </QueryClientProvider>,
+    <AntdApp>
+      <MemoryRouter initialEntries={["/reservations"]}>
+        <Routes>
+          <Route path="/reservations" element={<ReservationsPage />} />
+        </Routes>
+      </MemoryRouter>
+    </AntdApp>,
   );
 }
 
@@ -158,9 +139,9 @@ const settle = () =>
     await new Promise((r) => setTimeout(r, 40));
   });
 
-/** Its still-held serials, read from the fixture rather than hard-coded. */
+/** Its still-held serials, read from the units rather than from the header. */
 const heldSerials = (): string[] =>
-  hold.items.filter((i) => i.state === "HELD").map((i) => i.serial!);
+  SERIALS.filter((s) => unitOf(s)?.status === "DIRESERVASI");
 
 /** Open the units dialog on that hold, and hand back its element. */
 async function openDialog() {
@@ -173,10 +154,16 @@ async function openDialog() {
 
 beforeEach(() => {
   navigatedTo = null;
-  hold = makeHold();
-  createHold.mockClear();
-  releaseHold.mockClear();
-  cancelHold.mockClear();
+  // The store is a module singleton, so this file removes exactly what it
+  // adds — otherwise the second case inherits the first case's released
+  // machines and "still on hold" passes for the wrong reason.
+  mutate((d) => {
+    const mine = new Set<string>(SERIALS);
+    d.units = d.units.filter((u) => !mine.has(u.serial));
+    d.events = d.events.filter((e) => !mine.has(e.serial));
+    d.reservations = d.reservations.filter((r) => r.id !== HOLD);
+  });
+  makeHold();
 });
 
 describe("the row", () => {
@@ -228,9 +215,11 @@ describe("the units dialog", () => {
 
     expect(navigatedTo).toContain(`reservation=${HOLD}`);
     for (const serial of held) expect(navigatedTo).toContain(serial);
-    // Buy all never has a rest, so nothing is let go on the way.
-    expect(releaseHold).not.toHaveBeenCalled();
-    expect(cancelHold).not.toHaveBeenCalled();
+    // Buy all never has a rest, so nothing is let go on the way: both machines
+    // are still held, and the till is what will mark them sold.
+    for (const serial of held) {
+      expect(unitOf(serial)?.status, serial).toBe("DIRESERVASI");
+    }
   });
 
   it("checks out only what was ticked, and leaves the rest on hold", async () => {
@@ -250,9 +239,8 @@ describe("the units dialog", () => {
     expect(navigatedTo).toContain(first!);
     expect(navigatedTo).not.toContain(second!);
     // Untouched: the switch was left alone, so the second machine is still
-    // somebody's — and the page never asked the server to let it go.
-    expect(releaseHold).not.toHaveBeenCalled();
-    expect(cancelHold).not.toHaveBeenCalled();
+    // being held for this customer and nobody else can be sold it.
+    expect(unitOf(second!)?.status).toBe("DIRESERVASI");
   });
 
   it("releases the rest when the switch is on", async () => {
@@ -278,27 +266,19 @@ describe("the units dialog", () => {
     await settle();
 
     expect(navigatedTo).toContain(first!);
-    // Exactly the rest, and nothing else.
-    expect(releaseHold).toHaveBeenCalledTimes(1);
-    expect(releaseHold.mock.calls[0]![0]).toBe(HOLD);
-    expect(releaseHold.mock.calls[0]![1]).toEqual([second]);
+    // Exactly the rest, and nothing else: the second machine is sellable
+    // again, and the one on its way to the till is still held until it sells.
+    expect(unitOf(second!)?.status).toBe("TERSEDIA");
+    expect(unitOf(first!)?.status).toBe("DIRESERVASI");
   });
 
-  it("waits for the release before leaving the page", async () => {
-    // The release is a network call now. Navigating first would leave a
-    // refusal landing on a page that has already gone, with the customer's
-    // other machines silently still held.
-    let settleRelease!: () => void;
-    releaseHold.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          settleRelease = () => resolve({ reservation: hold });
-        }),
-    );
-
+  it("writes the release before it leaves the page", async () => {
+    // Navigation is the last thing that happens. If it were not, a release
+    // that failed would land on a page that has already gone, with the
+    // customer's other machines silently still held.
     renderPage();
     await settle();
-    const [first] = heldSerials();
+    const [first, second] = heldSerials();
     const dialog = await openDialog();
 
     await userEvent.click(
@@ -314,12 +294,14 @@ describe("the units dialog", () => {
     );
     await settle();
 
-    expect(navigatedTo).toBeNull();
-    await act(async () => {
-      settleRelease();
-      await new Promise((r) => setTimeout(r, 40));
-    });
     expect(navigatedTo).toContain(first!);
+    // The ledger says so too, and says which hold let it go — the timeline is
+    // what somebody reads a week later asking why this machine came back.
+    const released = snapshot().events.filter(
+      (e) => e.serial === second && e.type === "RESERVASI_BATAL",
+    );
+    expect(released).toHaveLength(1);
+    expect(released[0]?.refCode).toBe(CODE);
   });
 
   it("offers no switch until there is a rest for it to govern", async () => {
@@ -344,12 +326,44 @@ describe("the units dialog", () => {
 
   it("shows the hold's own note, not one per machine", async () => {
     const note = "Collecting Saturday, wants the charger checked";
-    hold = makeHold(note);
+    mutate((d) => {
+      const r = d.reservations.find((x) => x.id === HOLD);
+      if (r) r.note = note;
+    });
     renderPage();
     await settle();
     const dialog = await openDialog();
 
     // Once, above the table — not repeated against each machine.
     expect(within(dialog).getAllByText(note)).toHaveLength(1);
+  });
+});
+
+describe("cancelling a whole hold", () => {
+  /**
+   * The reason this page belongs with the units: a hold that does not move
+   * the machine is a hold the till will sell out from under the customer.
+   */
+  it("puts every machine back on the shelf and closes the hold", async () => {
+    renderPage();
+    await settle();
+    const held = heldSerials();
+    const dialog = await openDialog();
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /Cancel the hold/ }),
+    );
+    await settle();
+    // The confirm is the consent — releasing every machine on a hold is the
+    // one action here nobody should be able to take by mis-clicking.
+    await userEvent.click(screen.getByRole("button", { name: /^Release$/ }));
+    await settle();
+
+    for (const serial of held) {
+      expect(unitOf(serial)?.status, serial).toBe("TERSEDIA");
+    }
+    // The header is a PROJECTION of its machines, written in the same mutation
+    // — never a column somebody remembered to set.
+    expect(holdRow()?.status).toBe("CANCELLED");
   });
 });
