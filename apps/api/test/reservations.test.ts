@@ -15,7 +15,7 @@ import { Writable } from "node:stream";
 import type { Express } from "express";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { PrismaClient, appendUnitEvent } from "@nusantara/db";
+import { PrismaClient, appendUnitEvent, truncateAll } from "@nusantara/db";
 import { dispatchTool, type ToolContext } from "@nusantara/agent";
 import { createLogger } from "@nusantara/logging";
 import { createApp } from "../src/app.js";
@@ -52,24 +52,17 @@ afterAll(async () => {
   await db.$disconnect();
 });
 
-/** Everything a hold touches, cleared in FK-safe order. */
+/**
+ * Empty the schema before this file writes its own fixtures.
+ *
+ * Was a hand-written chain of `deleteMany` calls in child-before-parent order.
+ * That order is a property of the whole schema rather than of this file, and
+ * it fell over the moment the seed grew a table the chain had not listed — a
+ * `PurchaseOrderItem` holding the SKU it was trying to delete. `truncateAll`
+ * asks Postgres to empty the schema instead, so it cannot fall behind it.
+ */
 async function clear() {
-  // The middleware stores any response under 500, including a 400 — so a key
-  // reused across runs would replay whatever the last run answered. That is
-  // deliberate in production (a client bug is not retried into a success) and
-  // simply has to be cleaned up between cases.
-  await db.idempotencyKey.deleteMany({});
-  await db.reservationItem.deleteMany({});
-  // Before the reservations: a DIRESERVASI event names the hold it belongs to.
-  await db.unitEvent.deleteMany({});
-  await db.reservation.deleteMany({});
-  await db.unit.deleteMany({});
-  await db.sku.deleteMany({});
-  await db.catalogModel.deleteMany({});
-  await db.category.deleteMany({});
-  await db.customer.deleteMany({});
-  await db.staffSession.deleteMany({});
-  await db.location.deleteMany({});
+  await truncateAll(db);
 }
 
 /**

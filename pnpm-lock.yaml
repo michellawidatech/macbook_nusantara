@@ -68,6 +68,9 @@ importers:
       '@nusantara/domain':
         specifier: workspace:^
         version: link:../../packages/domain
+      '@nusantara/fixture':
+        specifier: workspace:*
+        version: link:../../packages/fixture
       '@nusantara/logging':
         specifier: workspace:^
         version: link:../../packages/logging
@@ -126,6 +129,9 @@ importers:
       '@nusantara/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@nusantara/fixture':
+        specifier: workspace:*
+        version: link:../../packages/fixture
       '@tanstack/react-query':
         specifier: ^5.101.4
         version: 5.101.4(react@19.2.8)
@@ -259,6 +265,9 @@ importers:
       '@nusantara/domain':
         specifier: workspace:*
         version: link:../domain
+      '@nusantara/fixture':
+        specifier: workspace:*
+        version: link:../fixture
       '@prisma/client':
         specifier: ^6
         version: 6.19.3(prisma@6.19.3(magicast@0.3.5)(typescript@5.9.3))(typescript@5.9.3)
@@ -284,6 +293,19 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^3.2.7
         version: 3.2.7(vitest@3.2.7(@types/node@20.19.43)(jiti@2.7.0)(jsdom@30.0.1(@noble/hashes@1.8.0))(lightningcss@1.33.0)(tsx@4.23.12))
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.7(@types/node@20.19.43)(jiti@2.7.0)(jsdom@30.0.1(@noble/hashes@1.8.0))(lightningcss@1.33.0)(tsx@4.23.12)
+
+  packages/fixture:
+    dependencies:
+      '@nusantara/domain':
+        specifier: workspace:*
+        version: link:../domain
+    devDependencies:
       typescript:
         specifier: 'catalog:'
         version: 5.9.3

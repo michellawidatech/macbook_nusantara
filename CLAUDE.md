@@ -444,6 +444,41 @@ Decisions that outlived those documents:
   takes every row whose own Accept is enabled, in one mutation, behind a
   confirm. Same `qcReady` gate, so a row still owing a description is neither
   counted nor touched. "Battery" is "Battery Health".
+- **One shop, two projections — `packages/fixture`, 2026-09-07.** The demo data
+  is defined ONCE, in `@nusantara/fixture`, and both seeds project it:
+  `apps/web/src/mock/seed.ts` renders it in the browser and
+  `packages/db/src/seed.ts` writes it into Postgres. Before this each invented
+  its own, and the deployed app therefore disagreed with itself — 26 of the 31
+  screens read the browser mock and 3 read the API, so Inventory listed
+  `SC02…` serials that S/N Tracking had never heard of. The Postgres side was
+  also nonsense on its own terms: `NUS0000001` fails the app's `validateSerial`,
+  and "MacBook Air M1 129GB · 24/180" is a machine Apple never made.
+  - The fixture is pure — no Prisma, no React, no I/O, no clock (`buildShop`
+    takes `now`) — the same rule `packages/domain` follows. `productCode` moved
+    to `packages/domain` so both seeds derive a SKU code the same way;
+    `apps/web/src/lib/productCode.ts` re-exports it.
+  - **The id spaces now agree**, which is the blocker the mock→API migration
+    named: a SKU is `m-air-m2-v1` on both sides, a machine is one serial, a
+    purchase order is `po-1`. A page can now be moved onto the API without its
+    neighbours, which was impossible while `sku_0` and `m-air-m2-v1` were the
+    same variant.
+  - **`test/shop.test.ts` is the seed's own review.** Every serial passes the
+    shape rule, every description is phrases from the QC vocabulary, a grade
+    agrees with the words beside it, a "Baterai lemah" machine reads under the
+    76% floor, every sold serial is on exactly one receipt, and every total is
+    `subtotal - discount + extra`. A seed that produces incoherent data is
+    worse than none: every screen built on it inherits the incoherence and the
+    bug reads as a bug in the screen.
+  - **`seedVolume` is the old generator, renamed and demoted.** It exists only
+    for the load tests that assert on five thousand rows, it now builds them
+    out of the fixture's real catalogue with serials the app would accept, and
+    it writes no invoices, holds or returns. It is a pile, not a shop. Never
+    point a demo or a deployment at it.
+  - Dates are offsets from "now", so the shop is always a shop that traded this
+    week, and document numbers are derived from each document's own date.
+  - What stays mock-only is what prisma has no table for — grading rules, the
+    chat inbox, expenses, opname, the AppleDB import list, adjustment reasons,
+    racks, `Supplier.code`. Each is marked ⚠️ where it is declared.
 - Lists paginate with a page size the user picks, and a filterable column puts
   its filter in the **column header**. `ProTable` holds the filter/sort state
   and does the work itself — the header control only reports clicks — because

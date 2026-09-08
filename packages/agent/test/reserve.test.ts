@@ -18,7 +18,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { PrismaClient, appendUnitEvent } from "@nusantara/db";
+import { PrismaClient, appendUnitEvent, truncateAll } from "@nusantara/db";
 import { dispatchTool, type ToolContext } from "../src/index.js";
 
 const URL =
@@ -44,25 +44,17 @@ afterAll(async () => {
   await db.$disconnect();
 });
 
-/** Everything a booking touches, cleared in FK-safe order. */
+/**
+ * Empty the schema before this file writes its own fixtures.
+ *
+ * Was a hand-written chain of `deleteMany` calls in child-before-parent order.
+ * That order is a property of the whole schema rather than of this file, and
+ * it fell over the moment the seed grew a table the chain had not listed — a
+ * `PurchaseOrderItem` holding the SKU it was trying to delete. `truncateAll`
+ * asks Postgres to empty the schema instead, so it cannot fall behind it.
+ */
 async function clear() {
-  // Orders first. This suite does not create any, but `packages/db`'s seed
-  // tests share this database and leave some behind, and
-  // `Order_locationId_fkey` then blocks `location.deleteMany()` below — the
-  // same trap crm.test.ts already documents. A test owns its own fixtures.
-  await db.orderItem.deleteMany({});
-  await db.order.deleteMany({});
-  await db.reservationItem.deleteMany({});
-  // Before the reservations: a DIRESERVASI event names the hold it belongs to
-  // (UnitEvent.reservationId, Restrict), so the ledger goes first.
-  await db.unitEvent.deleteMany({});
-  await db.reservation.deleteMany({});
-  await db.unit.deleteMany({});
-  await db.sku.deleteMany({});
-  await db.catalogModel.deleteMany({});
-  await db.category.deleteMany({});
-  await db.customer.deleteMany({});
-  await db.location.deleteMany({});
+  await truncateAll(db);
 }
 
 /**

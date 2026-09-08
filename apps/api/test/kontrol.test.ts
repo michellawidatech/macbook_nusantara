@@ -49,7 +49,7 @@ beforeAll(async () => {
   await db.$connect();
 
   // Shape only — this suite is about AuditLog, which the seed does not fill.
-  await seed(db, { units: 20, skus: 8, models: 4 });
+  await seed(db, { referenceOnly: true });
 
   const owner = await db.staff.update({
     where: { username: "pemilik" },

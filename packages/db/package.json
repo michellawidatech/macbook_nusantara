@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6",
-    "@nusantara/domain": "workspace:*"
+    "@nusantara/domain": "workspace:*",
+    "@nusantara/fixture": "workspace:*"
   }
 }

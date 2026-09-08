@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { productCode, productCodeLines } from "../src/lib/productCode.js";
+import { productCode, productCodeLines } from "../src/productCode.js";
 
 describe("productCode", () => {
   it("builds the owner's example exactly", () => {

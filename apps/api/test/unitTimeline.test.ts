@@ -13,7 +13,13 @@ import { Writable } from "node:stream";
 import type { Express } from "express";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { PrismaClient, appendUnitEvent, createHold, releaseHold } from "@nusantara/db";
+import {
+  PrismaClient,
+  appendUnitEvent,
+  createHold,
+  releaseHold,
+  truncateAll,
+} from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
@@ -48,18 +54,17 @@ afterAll(async () => {
   await db.$disconnect();
 });
 
+/**
+ * Empty the schema before this file writes its own fixtures.
+ *
+ * Was a hand-written chain of `deleteMany` calls in child-before-parent order.
+ * That order is a property of the whole schema rather than of this file, and
+ * it fell over the moment the seed grew a table the chain had not listed — a
+ * `PurchaseOrderItem` holding the SKU it was trying to delete. `truncateAll`
+ * asks Postgres to empty the schema instead, so it cannot fall behind it.
+ */
 async function clear() {
-  await db.idempotencyKey.deleteMany({});
-  await db.reservationItem.deleteMany({});
-  await db.unitEvent.deleteMany({});
-  await db.reservation.deleteMany({});
-  await db.unit.deleteMany({});
-  await db.sku.deleteMany({});
-  await db.catalogModel.deleteMany({});
-  await db.category.deleteMany({});
-  await db.customer.deleteMany({});
-  await db.staffSession.deleteMany({});
-  await db.location.deleteMany({});
+  await truncateAll(db);
 }
 
 const SERIAL = "TLA0000001";

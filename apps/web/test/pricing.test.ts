@@ -78,19 +78,19 @@ describe("bundleProgress", () => {
   });
 
   it("takes the dearest qualifying units first when the basket has a spare", () => {
-    // 1.450.000 + 950.000 + 175.000. One bundle of two at Rp1.000.000 should
-    // pair the keyboard with the mouse — 1.400.000 off — and leave the sleeve
-    // at full price. Pairing the two cheapest would save only Rp125.000.
-    const basket = [
-      lineFor(db, "m-magic-keyboard"),
-      lineFor(db, "m-magic-mouse"),
-      lineFor(db, "m-sleeve"),
-    ];
+    // A keyboard, a mouse and a sleeve. One bundle of two at Rp1.000.000
+    // should pair the two DEAREST and leave the sleeve at full price; pairing
+    // the two cheapest would save a fraction of that. The figures come off the
+    // seed rather than being written out, because what is being tested is
+    // which two it picks, not what a Magic Keyboard costs this month.
+    const keyboard = lineFor(db, "m-magic-keyboard");
+    const mouse = lineFor(db, "m-magic-mouse");
+    const basket = [keyboard, mouse, lineFor(db, "m-sleeve")];
     const p = bundleProgress(db, gearup(db), basket);
     expect(p.qualifying).toBe(3);
     expect(p.complete).toBe(1);
     expect(p.shortBy).toBe(1);
-    expect(p.saving).toBe(1_400_000);
+    expect(p.saving).toBe(keyboard.price + mouse.price - 1_000_000);
   });
 
   it("never turns a bundle into a surcharge when the units are cheaper anyway", () => {
@@ -132,11 +132,11 @@ describe("discountAmount", () => {
   });
 
   it("routes a bundle through the bundle rule", () => {
-    const basket = [
-      lineFor(db, "m-magic-keyboard"),
-      lineFor(db, "m-magic-mouse"),
-    ];
-    expect(discountAmount(db, gearup(db), basket)).toBe(1_400_000);
+    const keyboard = lineFor(db, "m-magic-keyboard");
+    const mouse = lineFor(db, "m-magic-mouse");
+    expect(discountAmount(db, gearup(db), [keyboard, mouse])).toBe(
+      keyboard.price + mouse.price - 1_000_000,
+    );
   });
 
   it("is zero for no discount at all", () => {

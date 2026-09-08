@@ -1,34 +1,72 @@
 /**
- * Seed — realistic data for developing and demoing against.
+ * Seed — the shop, written into Postgres.
  *
- * Two rules shape the whole file:
+ * ## What changed on 2026-09-07, and why
+ *
+ * This file used to GENERATE a shop: 5 000 units with serials like
+ * `NUS0000001`, SKUs called "MacBook Air M1 129GB" with a variant label of
+ * "24/180", and customers named "Pelanggan 1" through "Pelanggan 125". None of
+ * it was wrong in a way a test could see — the ledger was gapless, the totals
+ * added up, all eight reconciliation checks passed — and all of it was wrong
+ * in the way that matters: Apple has never made a 24GB/180GB MacBook Air, an
+ * M1 was priced at five times an M3, and `NUS0000001` is a string the
+ * application's own `validateSerial` refuses.
+ *
+ * It was also a DIFFERENT shop from the one the browser showed. `apps/web`
+ * renders a hand-written fixture and only three of its screens read this
+ * database, so the deployed app disagreed with itself: Inventory listed
+ * `SC02…` serials and S/N Tracking, asking the API, could not find a single
+ * one of them. That is the bug this rewrite fixes, and the fix is not better
+ * generation — it is one shop, defined once, in `@nusantara/fixture`, and
+ * projected twice.
+ *
+ * ## The two rules that did not change
  *
  *   1. **Every unit's history is written through `appendUnitEvent`.** Nothing
- *      here inserts a UnitEvent or sets Unit.status directly. That is not
- *      pedantry: it means the seeded data is coherent by construction rather
- *      than by a developer remembering to keep two columns in step, and it
- *      exercises the S4 helpers on 5 000 units before any screen does.
+ *      here inserts a `UnitEvent` or sets `Unit.status` directly. The seeded
+ *      data is coherent by construction rather than by a developer keeping two
+ *      columns in step, and the S4 helpers are exercised before any screen is.
  *   2. **Re-running resets cleanly.** The seed truncates first, so it is
  *      idempotent in the only sense that matters — the same command twice
  *      leaves the same database.
  *
- * Randomness is a seeded PRNG, never Math.random: the same seed produces the
- * same shop, so a bug found against seeded data can be reproduced.
+ * ## `seedVolume`
+ *
+ * The generator survives, renamed, at the bottom of this file. It exists for
+ * the load tests that need five thousand rows and assert on the count, and it
+ * now builds them out of the fixture's real catalogue with serials the app
+ * would accept. It is a PILE, not a shop: no purchase orders, no holds, no
+ * returns. Never point a demo or a deployment at it.
  */
 
+import {
+  DISCOUNTS,
+  REFERRAL_SOURCES,
+  RESERVATION_SOURCES,
+  buildShop,
+  dateOf,
+  type BuiltShop,
+  type FixtureMoment,
+} from "@nusantara/fixture";
 import { appendUnitEvent } from "./appendUnitEvent.js";
 import { type PrismaClient, type Tx } from "./client.js";
 
 export interface SeedOptions {
-  /** 5 000 in the real seed; smaller in tests that only need shape. */
-  readonly units?: number;
-  readonly skus?: number;
-  readonly models?: number;
-  readonly seed?: number;
+  /**
+   * Reference data only — locations, the catalogue, staff and the lookup
+   * lists — with no units, no orders and no ledger.
+   *
+   * That is what a real shop starts from: its stock arrives through Inbound &
+   * QC rather than out of a fixture, and thirty-seven invented serials in a
+   * live database are thirty-seven things somebody has to know to ignore.
+   */
+  readonly referenceOnly?: boolean;
+  /** Pin the clock. The fixture's dates are all relative to it. */
+  readonly now?: number;
   readonly onProgress?: (message: string) => void;
 }
 
-/** mulberry32 — small, fast, and deterministic given a seed. */
+/** mulberry32 — small, fast, and deterministic given a seed. Volume only. */
 function rng(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -38,112 +76,6 @@ function rng(seed: number): () => number {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-
-const CATEGORIES = [
-  {
-    name: "MacBook",
-    axes: ["RAM", "Penyimpanan"],
-    attrs: ["prosesor", "layar", "siklus"],
-  },
-  {
-    name: "iPhone",
-    axes: ["Penyimpanan", "Warna"],
-    attrs: ["baterai", "imei", "kondisi"],
-  },
-  {
-    name: "iPad",
-    axes: ["Penyimpanan", "Konektivitas"],
-    attrs: ["generasi", "layar"],
-  },
-  {
-    name: "Apple Watch",
-    axes: ["Ukuran", "Konektivitas"],
-    attrs: ["baterai", "casing"],
-  },
-  { name: "Aksesori", axes: ["Warna"], attrs: ["garansi"] },
-] as const;
-
-const MODEL_NAMES: Record<string, readonly string[]> = {
-  MacBook: [
-    "Air M1",
-    "Air M2",
-    "Air M3",
-    "Pro 13 M1",
-    "Pro 13 M2",
-    "Pro 14 M1 Pro",
-    "Pro 14 M3 Pro",
-    "Pro 16 M2 Max",
-    "Pro 16 M3 Max",
-    "Pro 13 2016",
-    "Pro 15 2016",
-    "12 Retina 2016",
-  ],
-  iPhone: [
-    "11",
-    "12",
-    "12 Pro",
-    "13",
-    "13 Pro",
-    "14",
-    "14 Pro",
-    "15",
-    "15 Pro",
-    "16",
-  ],
-  iPad: [
-    "Air 4",
-    "Air 5",
-    "Air 6",
-    "Pro 11",
-    "Pro 12.9",
-    "Gen 9",
-    "Gen 10",
-    "mini 6",
-  ],
-  "Apple Watch": [
-    "SE",
-    "SE 2",
-    "Series 6",
-    "Series 7",
-    "Series 8",
-    "Series 9",
-    "Ultra",
-    "Ultra 2",
-  ],
-  Aksesori: [
-    "Magic Keyboard",
-    "Magic Mouse",
-    "Apple Pencil 2",
-    "AirPods Pro 2",
-    "AirPods 4",
-    "Adapter 67W",
-    "Adapter 96W",
-  ],
-};
-
-const LOCATIONS = [
-  {
-    id: "loc_toko",
-    code: "TOKO-1",
-    name: "Toko Bandung",
-    kind: "TOKO" as const,
-    sortOrder: 1,
-  },
-  {
-    id: "loc_gudang",
-    code: "GDG-1",
-    name: "Gudang Pusat",
-    kind: "GUDANG" as const,
-    sortOrder: 2,
-  },
-  {
-    id: "loc_servis",
-    code: "SRV-1",
-    name: "Meja Servis",
-    kind: "SERVIS" as const,
-    sortOrder: 3,
-  },
-];
 
 /**
  * Payment methods, recreated by every seed.
@@ -159,28 +91,6 @@ const LOCATIONS = [
  * `builtIn` marks the rows application code reads by `code` (MARKETPLACE
  * drives Shopee escrow), which staff may rename or deactivate but never drop.
  */
-export /**
- * Where a hold came in from. Mirrors the rows migration 20260828120000 inserts,
- * ids included, so a seeded database and a migrated one agree.
- */
-const RESERVATION_SOURCES = [
-  "Instagram",
-  "WhatsApp",
-  "TikTok",
-  "Shopee",
-  "Tokopedia",
-  "Walk-in",
-] as const;
-
-const RESERVATION_SOURCE_IDS = [
-  "rsv-src-ig",
-  "rsv-src-wa",
-  "rsv-src-tiktok",
-  "rsv-src-shopee",
-  "rsv-src-tokopedia",
-  "rsv-src-walkin",
-] as const;
-
 const PAYMENT_METHODS = [
   { id: "pm_tunai", code: "TUNAI", label: "Cash", forPo: true, forSale: true },
   {
@@ -264,6 +174,23 @@ export const AGENT_STAFF_ID = "staff_agent";
 const UNUSABLE_HASH =
   "$argon2id$v=19$m=19456,t=2,p=1$c2VlZGVkbm9sb2dpbnNhbHQ$Zm9yY2VkdG9mYWlsdmVyaWZpY2F0aW9u";
 
+
+const PAYMENT_METHOD_ID = new Map<string, string>(
+  PAYMENT_METHODS.map((m) => [m.code, m.id]),
+);
+
+function methodId(code: string): string {
+  const id = PAYMENT_METHOD_ID.get(code);
+  if (id === undefined) throw new Error(`seed: no PaymentMethod ${code}`);
+  return id;
+}
+
+const SHIFT_ID = "shift_1";
+const OPEN_FLOAT = 500_000n;
+
+/** Whole rupiah as the schema stores it. Money is never a JS number here. */
+const rp = (n: number): bigint => BigInt(Math.round(n));
+
 export interface SeedResult {
   readonly units: number;
   readonly events: number;
@@ -271,57 +198,75 @@ export interface SeedResult {
   readonly ms: number;
 }
 
-export async function seed(
-  db: PrismaClient,
-  options: SeedOptions = {},
-): Promise<SeedResult> {
-  const unitCount = options.units ?? 5_000;
-  const skuCount = options.skus ?? 300;
-  const modelCount = options.models ?? 40;
-  const log = options.onProgress ?? (() => undefined);
-  const rand = rng(options.seed ?? 20260815);
-  const started = Date.now();
-
-  const pick = <T>(xs: readonly T[]): T =>
-    xs[Math.floor(rand() * xs.length)] as T;
-  const between = (lo: number, hi: number): number =>
-    lo + Math.floor(rand() * (hi - lo + 1));
-
-  // --- reset ---------------------------------------------------------------
-  // TRUNCATE rather than DELETE: it is the only thing that resets cleanly in
-  // the presence of the FK graph, and the seed runs as the owner role.
+/**
+ * Empty every table.
+ *
+ * TRUNCATE rather than DELETE, and that is not an optimisation: every foreign
+ * key in this schema is `onDelete: Restrict` because nothing here is ever
+ * hard-deleted, so "delete the reference data" means "delete it and everything
+ * hanging off it, in an order that is a property of the whole schema". Several
+ * test files used to write that order by hand, and every one of them fell over
+ * the first time the fixture grew a table they had not listed — a purchase
+ * order line, in September 2026, holding a SKU they were trying to delete.
+ * Asking Postgres to empty the schema cannot fall behind the schema.
+ *
+ * Exported for exactly those tests. It runs as the owner role; the API's role
+ * cannot truncate, which is the point of the three roles.
+ *
+ * ⚠️ It empties EVERY table. Never call it against a database holding a shop's
+ * real ledger.
+ */
+export async function truncateAll(db: PrismaClient): Promise<void> {
   const tables = await db.$queryRaw<{ t: string }[]>`
     SELECT quote_ident(tablename) AS t FROM pg_tables
      WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'`;
   await db.$executeRawUnsafe(
     `TRUNCATE TABLE ${tables.map((r) => r.t).join(", ")} RESTART IDENTITY CASCADE`,
   );
-  log("reset");
+}
 
-  // --- reference data ------------------------------------------------------
-  const now = new Date();
-
+/**
+ * Everything a shop has before it has any stock.
+ *
+ * Shared by both entry points, because a load test and a demo need the same
+ * catalogue — that is the whole reason the pile stopped inventing its own.
+ */
+async function writeReference(
+  db: PrismaClient,
+  shop: BuiltShop,
+  now: Date,
+): Promise<void> {
   await db.location.createMany({
-    data: LOCATIONS.map((l) => ({ ...l, active: true })),
+    data: shop.locations.map((l) => ({
+      id: l.id,
+      code: l.code,
+      name: l.name,
+      kind: l.kind,
+      address: l.address ?? null,
+      active: true,
+      sortOrder: l.sortOrder,
+    })),
   });
 
-  // Same lesson as PaymentMethod: several test files truncate the whole schema
-  // before calling this, so reference data cannot assume it survived.
   await db.appSetting.createMany({
     data: [
+      // The battery bands Inventory filters on. 80 and up is healthy, 76–79
+      // fair, below that tired — and the fixture's readings are chosen to sit
+      // either side of those lines on purpose.
       { key: "battery.goodMin", value: "80", updatedAt: now },
       { key: "battery.fairMin", value: "76", updatedAt: now },
-      // Who the shop is, as printed at the top of every faktur. These were a
-      // `const SHOP` in the web app's Invoice component until 2026-09-02 —
-      // dotted and namespaced here per AppSetting's own docblock, so the group
-      // is greppable. Changing premises is now a settings edit, not a deploy.
+      // Who the shop is, as printed at the top of every faktur.
       { key: "shop.name", value: "NUSANTARA", updatedAt: now },
       {
         key: "shop.tagline",
         value: "Second-hand Apple — sales, trade-in and service",
         updatedAt: now,
       },
-      { key: "shop.address", value: "Jakarta, Indonesia", updatedAt: now },
+      {
+        key: "shop.address",
+        value: "Jl. Boulevard Raya Blok C2, Jakarta Utara",
+        updatedAt: now,
+      },
       {
         key: "shop.contact",
         value: "WhatsApp +62 811 2233 44 · @nusantara",
@@ -330,6 +275,10 @@ export async function seed(
     ],
   });
 
+  // Several test files truncate the whole schema before calling this, so
+  // reference data cannot assume it survived — including the rows that arrived
+  // in a migration. `Reservation.reservationSourceId` is a Restrict FK at
+  // these, so without them a hold cannot record which channel it came in over.
   await db.paymentMethod.createMany({
     data: PAYMENT_METHODS.map((m, i) => ({
       ...m,
@@ -340,59 +289,47 @@ export async function seed(
     })),
   });
 
-  // Same lesson again. These six rows are INSERTed by migration
-  // 20260828120000, and `Reservation.reservationSourceId` is a Restrict FK at
-  // them — so a schema that has been truncated cannot record which channel a
-  // hold came in over, and every create fails the foreign key instead.
-  // Reference data that lives only in a migration does not survive a seed.
   await db.reservationSource.createMany({
-    data: RESERVATION_SOURCES.map((name, i) => ({
-      id: RESERVATION_SOURCE_IDS[i]!,
-      name,
+    data: RESERVATION_SOURCES.map((s, i) => ({
+      id: s.id,
+      name: s.name,
       active: true,
       sortOrder: i + 1,
       createdAt: now,
     })),
   });
 
+  await db.referralSource.createMany({
+    data: REFERRAL_SOURCES.map((s) => ({
+      id: s.id,
+      name: s.name,
+      active: true,
+      createdAt: now,
+    })),
+  });
+
   await db.staff.createMany({
     data: [
-      {
-        id: "staff_owner",
-        username: "pemilik",
-        name: "Pemilik Toko",
-        role: "OWNER",
-        canApprove: true,
+      ...shop.staff.map((s) => ({
+        id: s.id,
+        username: s.username,
+        name: s.name,
+        role: s.role,
+        canApprove: s.canApprove,
         active: true,
         passwordHash: UNUSABLE_HASH,
         createdAt: now,
-      },
-      {
-        id: "staff_kasir",
-        username: "kasir",
-        name: "Kasir Toko",
-        role: "STAFF",
-        canApprove: false,
-        active: true,
-        passwordHash: UNUSABLE_HASH,
-        createdAt: now,
-      },
+      })),
       {
         // The chat agent's principal. `UnitEvent.staffId` is NOT NULL, so a
-        // reservation hold the bot creates needs a row to point at — and it
-        // must NOT be SYSTEM_STAFF_ID, which is reserved for backfilled
-        // history and would stop a report separating the two.
-        //
-        // The migration inserts this row as well, so it exists in production
-        // where the seed never runs. It is repeated here because `seed()`
-        // truncates every table, which would otherwise destroy it and leave
-        // every booking failing on a foreign key.
+        // reservation the bot creates needs a row to point at — and it must
+        // NOT be SYSTEM_STAFF_ID, which is reserved for backfilled history and
+        // would stop a report separating the two.
         id: AGENT_STAFF_ID,
         username: "agent",
         name: "Agen WhatsApp",
-        role: "STAFF",
+        role: "STAFF" as const,
         canApprove: false,
-        // Never logs in, never appears in a staff picker.
         active: false,
         passwordHash: UNUSABLE_HASH,
         createdAt: now,
@@ -403,7 +340,7 @@ export async function seed(
         id: SYSTEM_STAFF_ID,
         username: "system",
         name: "Sistem (migrasi)",
-        role: "STAFF",
+        role: "STAFF" as const,
         canApprove: false,
         active: false,
         passwordHash: UNUSABLE_HASH,
@@ -412,16 +349,13 @@ export async function seed(
     ],
   });
 
-  // --- catalogue -----------------------------------------------------------
-  const categoryIds: string[] = [];
-  for (const [i, c] of CATEGORIES.entries()) {
-    const id = `cat_${i}`;
-    categoryIds.push(id);
+  // --- the catalogue -------------------------------------------------------
+  for (const [i, c] of shop.categories.entries()) {
     await db.category.create({
       data: {
-        id,
+        id: c.id,
         name: c.name,
-        sortOrder: i + 1,
+        sortOrder: c.sortOrder,
         marginMode: "PCT",
         marginMin: 8n,
         marginMax: 25n,
@@ -429,340 +363,115 @@ export async function seed(
       },
     });
     await db.categoryAttribute.createMany({
-      data: c.attrs.map((key, j) => ({
+      data: c.attributes.map((key, j) => ({
         id: `attr_${i}_${j}`,
-        categoryId: id,
+        categoryId: c.id,
         key,
         label: key[0]!.toUpperCase() + key.slice(1),
-        type: "TEXT" as const,
+        // Battery health is a number and Inventory bands it, so saying so here
+        // is what lets the column sort as one.
+        type: key === "baterai" ? ("NUMBER" as const) : ("TEXT" as const),
+        unit: key === "baterai" ? "%" : null,
         sortOrder: j + 1,
       })),
     });
+    // The axes this category's models actually vary along, de-duplicated —
+    // an Intel Pro adds Chip and Touch Bar to the RAM x SSD every Mac has.
+    const axes = [
+      ...new Set(
+        shop.models
+          .filter((m) => m.categoryId === c.id)
+          .flatMap((m) => m.axes.map((a) => a.name)),
+      ),
+    ];
     await db.categoryVariantAxis.createMany({
-      data: c.axes.map((name, j) => ({
+      data: axes.map((name, j) => ({
         id: `axis_${i}_${j}`,
-        categoryId: id,
+        categoryId: c.id,
         name,
         sortOrder: j + 1,
       })),
     });
   }
-  log("kategori");
 
-  const models: { id: string; categoryId: string; name: string }[] = [];
-  let m = 0;
-  outer: for (const [i, c] of CATEGORIES.entries()) {
-    for (const name of MODEL_NAMES[c.name] ?? []) {
-      if (m >= modelCount) break outer;
-      models.push({
-        id: `model_${m}`,
-        categoryId: `cat_${i}`,
-        name: `${c.name} ${name}`,
-      });
-      m += 1;
-    }
-  }
   await db.catalogModel.createMany({
-    data: models.map((mm, i) => ({
-      ...mm,
-      // A name that already ends in a year owns it. The rotation below is a
-      // filler for the generated names that carry no year of their own, and
-      // letting it overwrite "Pro 15 2016" with 2021 would put a visible lie
-      // in the catalogue.
-      year: /\b(19|20)\d{2}$/.test(mm.name)
-        ? mm.name.slice(-4)
-        : String(2019 + (i % 6)),
+    data: shop.models.map((m) => ({
+      id: m.id,
+      categoryId: m.categoryId,
+      name: m.name,
+      year: String(m.releaseYear),
+      line: m.line ?? null,
+      sizeInch: m.sizeInch ?? null,
       archived: false,
       createdAt: now,
     })),
   });
 
-  const skus = Array.from({ length: skuCount }, (_, i) => {
-    const model = models[i % models.length]!;
-    const landed = BigInt(between(2_000, 28_000) * 1_000);
-    return {
-      id: `sku_${i}`,
-      modelId: model.id,
-      code: `SKU-${String(i + 1).padStart(4, "0")}`,
-      name: `${model.name} ${between(128, 512)}GB`,
-      variantLabel: `${between(8, 32)}/${between(128, 512)}`,
-      grade: pick(["A", "B", "C"] as const),
-      // Price above landed, so margins are positive and the CHECKs hold.
-      price: landed + BigInt(between(500, 4_000) * 1_000),
-      landed,
-      archived: false,
-      createdAt: now,
-    };
-  });
-  await db.sku.createMany({ data: skus });
-  log(`katalog: ${models.length} model, ${skus.length} sku`);
-
-  // --- customers and a shift ----------------------------------------------
-  const customers = Array.from(
-    { length: Math.max(20, Math.floor(unitCount / 40)) },
-    (_, i) => ({
-      id: `cust_${i}`,
-      name: `Pelanggan ${i + 1}`,
-      phone: `+62812${String(10_000_000 + i).padStart(8, "0")}`,
-      createdAt: now,
-    }),
-  );
-  await db.customer.createMany({ data: customers });
-
-  const SHIFT_ID = "shift_1";
-  const OPEN_FLOAT = 500_000n;
-  await db.shift.create({
-    data: {
-      id: SHIFT_ID,
-      staffId: "staff_kasir",
-      locationId: "loc_toko",
-      status: "TUTUP",
-      openedAt: new Date(now.getTime() - 8 * 3_600_000),
-      closedAt: now,
-      openFloat: OPEN_FLOAT,
-      // Filled in once the sales are known — it must equal what the till saw.
-      expected: 0n,
-      declared: 0n,
-      variance: 0n,
-    },
-  });
-
-  // --- units, and their histories -----------------------------------------
-  const units = Array.from({ length: unitCount }, (_, i) => {
-    const sku = skus[i % skus.length]!;
-    return {
-      id: `unit_${i}`,
-      // Zero-padded so ascending string order matches creation order, which
-      // keeps the ordered-locking story easy to reason about.
-      serial: `NUS${String(i + 1).padStart(7, "0")}`,
-      skuId: sku.id,
-      status: "TERSEDIA" as const,
-      locationId: "loc_gudang",
-      buy: sku.landed,
-      landed: sku.landed,
-      // No asking price here since 2026-08-27: the price is `Sku.price` and
-      // every unit of a variant quotes it. Grade is recorded and does not
-      // change what the shop asks.
-      grade: sku.grade,
-      intakeAt: now,
-      version: 1,
-    };
-  });
-  await db.unit.createMany({ data: units });
-  log(`unit: ${units.length}`);
-
-  let events = 0;
-  let orders = 0;
-  let cashIn = 0n;
-
-  // Batched: one transaction per chunk rather than per unit. Per-unit
-  // transactions would spend most of the runtime on transaction overhead, and
-  // per-run would hold 5 000 row locks at once.
-  const CHUNK = 200;
-
-  for (let start = 0; start < units.length; start += CHUNK) {
-    const chunk = units.slice(start, start + CHUNK);
-
-    const written = await db.$transaction(
-      async (tx: Tx) => {
-        let n = 0;
-        let ordersHere = 0;
-        let cashHere = 0n;
-
-        for (const unit of chunk) {
-          // Arrival. Every unit has one, so check 6 (orphan units) is clean.
-          await appendUnitEvent(tx, {
-            serial: unit.serial,
-            type: "DITERIMA",
-            staffId: SYSTEM_STAFF_ID,
-            toLocationId: "loc_gudang",
-            costDelta: unit.landed,
-            note: "backfill: migrasi",
-          });
-          n += 1;
-
-          // QC pass — arrival lands in QC now; the asking price the unit
-          // carries (set at createMany above) is what QC would have recorded.
-          await appendUnitEvent(tx, {
-            serial: unit.serial,
-            type: "QC_SELESAI",
-            staffId: SYSTEM_STAFF_ID,
-            note: "backfill: QC lulus",
-          });
-          n += 1;
-
-          const roll = rand();
-
-          // ~45% move to the shop floor before anything else happens.
-          const onFloor = roll < 0.45;
-          if (onFloor) {
-            await appendUnitEvent(tx, {
-              serial: unit.serial,
-              type: "DIPINDAH",
-              staffId: "staff_kasir",
-              toLocationId: "loc_toko",
-            });
-            n += 1;
-          }
-
-          // ~35% of the stock has sold.
-          if (roll < 0.35) {
-            const sku = skus.find((s) => s.id === unit.skuId)!;
-            const price = sku.price;
-            const discount =
-              rand() < 0.15 ? BigInt(between(50, 400) * 1_000) : 0n;
-            const extra = 0n;
-            const total = price - discount + extra;
-            const cash = rand() < 0.55;
-
-            const order = await tx.order.create({
-              data: {
-                ts: now,
-                customerId: pick(customers).id,
-                platform: pick(["OFFLINE", "WA", "IG"] as const),
-                fulfill: "PICKUP",
-                status: "LUNAS",
-                subtotal: price,
-                discount,
-                extra,
-                // 08 §2 invariant 5: total is derived, never taken on trust.
-                total,
-                paidTotal: total,
-                cogs: unit.landed,
-                tradeCredit: 0n,
-                belowFloor: false,
-                soldById: "staff_kasir",
-                shiftId: SHIFT_ID,
-                locationId: "loc_toko",
-              },
-              select: { id: true },
-            });
-            ordersHere += 1;
-
-            await tx.orderItem.create({
-              data: {
-                orderId: order.id,
-                unitId: unit.id,
-                skuId: sku.id,
-                name: sku.name,
-                variant: sku.variantLabel,
-                qty: 1,
-                price,
-                sub: price,
-                cogs: unit.landed,
-                garansiUntil: new Date(now.getTime() + 90 * 86_400_000),
-                returnedQty: 0,
-              },
-            });
-
-            await tx.payment.create({
-              data: {
-                orderId: order.id,
-                direction: "MASUK",
-                methodId: cash ? "pm_tunai" : "pm_transfer",
-                amount: total,
-                status: "LUNAS",
-                paidAt: now,
-                staffId: "staff_kasir",
-                shiftId: cash ? SHIFT_ID : null,
-              },
-            });
-            if (cash) cashHere += total;
-
-            await appendUnitEvent(tx, {
-              serial: unit.serial,
-              type: "TERJUAL",
-              staffId: "staff_kasir",
-              orderId: order.id,
-            });
-            n += 1;
-
-            // ~4% of sold units come back under warranty and are resolved to
-            // stock, which exercises the longest path in the state machine.
-            if (rand() < 0.04) {
-              const claim = await tx.warrantyClaim.create({
-                data: {
-                  unitId: unit.id,
-                  status: "SELESAI",
-                  resolution: "STOK",
-                  openedAt: now,
-                  resolvedAt: now,
-                  staffId: "staff_kasir",
-                },
-                select: { id: true },
-              });
-              await appendUnitEvent(tx, {
-                serial: unit.serial,
-                type: "KLAIM_DIBUKA",
-                staffId: "staff_kasir",
-                claimId: claim.id,
-                toLocationId: "loc_servis",
-              });
-              await appendUnitEvent(tx, {
-                serial: unit.serial,
-                type: "KLAIM_SELESAI",
-                resolution: "STOK",
-                staffId: "staff_kasir",
-                claimId: claim.id,
-                toLocationId: "loc_toko",
-              });
-              n += 2;
-
-              // The unit is back in stock, so its sale must be released or
-              // invariant 3 would see one serial on two open lines later.
-              await tx.orderItem.updateMany({
-                where: { unitId: unit.id, returnedAt: null },
-                data: {
-                  returnedAt: now,
-                  returnedQty: 1,
-                  returnReason: "Klaim garansi",
-                },
-              });
-            }
-          } else if (roll > 0.97) {
-            // A couple of units are missing at the last opname.
-            await appendUnitEvent(tx, {
-              serial: unit.serial,
-              type: "OPNAME_HILANG",
-              staffId: "staff_kasir",
-            });
-            n += 1;
-          }
-        }
-
-        return { n, ordersHere, cashHere };
-      },
-      // Seeding is a bulk job, not a checkout: the production 10 s ceiling
-      // (08 §3) is deliberately not applied here.
-      { maxWait: 10_000, timeout: 120_000 },
-    );
-
-    events += written.n;
-    orders += written.ordersHere;
-    cashIn += written.cashHere;
-
-    if ((start / CHUNK) % 5 === 0)
-      log(`riwayat: ${start + chunk.length}/${units.length}`);
+  for (const m of shop.models) {
+    for (const [j, axis] of m.axes.entries()) {
+      const axisId = `maxis_${m.id}_${j}`;
+      await db.modelAxis.create({
+        data: { id: axisId, modelId: m.id, name: axis.name, sortOrder: j + 1 },
+      });
+      await db.modelAxisValue.createMany({
+        data: axis.values.map((value, k) => ({
+          id: `${axisId}_${k}`,
+          axisId,
+          value,
+          sortOrder: k + 1,
+        })),
+      });
+    }
   }
 
-  // The till must reconcile: check 8 compares expected against float + net cash.
-  await db.shift.update({
-    where: { id: SHIFT_ID },
-    data: {
-      expected: OPEN_FLOAT + cashIn,
-      declared: OPEN_FLOAT + cashIn,
-      variance: 0n,
-    },
+  await db.sku.createMany({
+    data: shop.skus.map((s) => ({
+      id: s.id,
+      modelId: s.modelId,
+      code: s.code,
+      name: s.name,
+      variantLabel: s.variantLabel,
+      // No grade on the variant: since 2026-08-27 the grade is a fact about a
+      // SERIAL, and `Sku.price` is the only sellable price.
+      grade: null,
+      price: rp(s.price),
+      landed: rp(s.landed),
+      archived: false,
+      createdAt: now,
+    })),
   });
 
-  // Singletons.
+  await db.customer.createMany({
+    data: shop.customers.map((c) => ({
+      id: c.id,
+      name: c.name,
+      phone: c.phone,
+      street: c.address ?? null,
+      referralSourceId: c.referralSourceId,
+      createdAt: dateOf(c.since, shop.now),
+    })),
+  });
+
+  await db.discount.createMany({
+    data: DISCOUNTS.map((d) => ({
+      id: d.id,
+      code: d.code,
+      type: d.type,
+      pct: d.pct ?? null,
+      amountRp: d.amountRp === undefined ? null : rp(d.amountRp),
+      maxRp: d.maxRp === undefined ? null : rp(d.maxRp),
+      description: d.name,
+      usageLimit: d.usageLimit,
+      used: d.used,
+      fromDate: dateOf(d.from, shop.now),
+      toDate: dateOf(d.to, shop.now),
+      active: true,
+      scope: "SEMUA" as const,
+    })),
+  });
+
   await db.finSettings.create({
-    data: {
-      id: "singleton",
-      cash: cashIn,
-      equipment: 25_000_000n,
-      updatedAt: now,
-    },
+    data: { id: "singleton", cash: 0n, equipment: 25_000_000n, updatedAt: now },
   });
   await db.pettyCash.create({
     data: { id: "singleton", opening: 1_000_000n, updatedAt: now },
@@ -776,9 +485,621 @@ export async function seed(
       updatedAt: now,
     },
   });
+}
+
+/**
+ * The shop, written into Postgres.
+ *
+ * Order matters and is driven by the foreign keys: an invoice before the
+ * machines on it, the machines before the sale that names them, the sale
+ * before the ledger row that points at it. The ledger is replayed LAST, per
+ * machine and in sequence, because `appendUnitEvent` derives each transition
+ * from the one before it — which is exactly the property that makes the
+ * seeded history coherent rather than merely consistent.
+ */
+export async function seed(
+  db: PrismaClient,
+  options: SeedOptions = {},
+): Promise<SeedResult> {
+  const log = options.onProgress ?? (() => undefined);
+  const started = Date.now();
+  const shop = buildShop(options.now ?? Date.now());
+  const now = new Date(shop.now);
+  const when = (m: FixtureMoment) => dateOf(m, shop.now);
+
+  await truncateAll(db);
+  log("reset");
+
+  await writeReference(db, shop, now);
+  log(
+    `referensi: ${shop.locations.length} lokasi, ${shop.models.length} model, ${shop.skus.length} sku`,
+  );
+
+  if (options.referenceOnly === true) {
+    const ms = Date.now() - started;
+    log(`selesai dalam ${ms} ms`);
+    return { units: 0, events: 0, orders: 0, ms };
+  }
+
+  // --- suppliers and their invoices ----------------------------------------
+  await db.supplier.createMany({
+    data: shop.suppliers.map((s) => ({
+      id: s.id,
+      name: s.name,
+      wa: s.phone ?? null,
+      // ⚠️ `Supplier.code` does not exist in prisma. The two-letter origin code
+      // the store barcode is built from lives in the fixture and in the
+      // browser mock only; carrying it here needs a migration and an owner
+      // decision (CLAUDE.md, 2026-09-01).
+      note: s.address ?? null,
+      active: true,
+      createdAt: now,
+    })),
+  });
+
+  for (const po of shop.purchaseOrders) {
+    await db.purchaseOrder.create({
+      data: {
+        id: po.id,
+        code: po.code,
+        supplierId: po.supplierId,
+        invoice: po.invoice,
+        noInvoice: false,
+        status: po.status,
+        orderedAt: when(po.ordered),
+        receivedAt: po.received === undefined ? null : when(po.received),
+        closedAt: po.closed === undefined ? null : when(po.closed),
+        subtotal: rp(po.subtotal),
+        feesTaxPct: 0,
+        feesTotal: rp(po.feesTotal),
+        total: rp(po.total),
+        locationId: po.locationId,
+        staffId: "staff_owner",
+        note: po.note ?? null,
+        createdAt: when(po.ordered),
+      },
+    });
+    await db.purchaseOrderItem.createMany({
+      data: po.lines.map((l) => ({
+        id: l.id,
+        poId: po.id,
+        skuId: l.skuId,
+        produk: l.produk,
+        spec: l.spec,
+        qty: l.qty,
+        unitCost: rp(l.unitCost),
+        lineTotal: rp(l.lineTotal),
+        allocatedFee: rp(l.allocatedFee),
+      })),
+    });
+    const fees = [
+      ...(po.shippingFee > 0
+        ? [{ label: "Ongkir", kind: "ONGKIR" as const, amount: po.shippingFee }]
+        : []),
+      ...(po.taxFee > 0
+        ? [{ label: "Pajak", kind: "PAJAK" as const, amount: po.taxFee }]
+        : []),
+    ];
+    await db.purchaseOrderFee.createMany({
+      data: fees.map((f, i) => ({
+        id: `${po.id}-fee-${i + 1}`,
+        poId: po.id,
+        label: f.label,
+        kind: f.kind,
+        amount: rp(f.amount),
+      })),
+    });
+  }
+  log(`pembelian: ${shop.purchaseOrders.length} faktur`);
+
+  // --- the machines ---------------------------------------------------------
+  //
+  // Created in QC at the invoice's own location, because that is where every
+  // one of them genuinely started. The ledger replay below moves each to where
+  // it actually is; `Unit.status` is a projection and never written by hand.
+  await db.unit.createMany({
+    data: shop.units.map((u) => ({
+      id: `u_${u.ref}`,
+      serial: u.serial,
+      skuId: u.skuId,
+      status: "QC" as const,
+      locationId: shop.purchaseOrders.find((p) => p.id === u.poId)!.locationId,
+      buy: rp(u.buy),
+      landed: rp(u.landed),
+      grade: u.grade ?? null,
+      description: u.description === "" ? null : u.description,
+      poItemId: u.poLineId,
+      intakeAt: when(u.intakeAt),
+      version: 1,
+    })),
+  });
+
+  // The serial as the invoice line recorded it — what a receiving clerk typed
+  // or scanned against that line, and what ties a machine to the paper.
+  await db.purchaseOrderItemSerial.createMany({
+    data: shop.units.map((u) => ({
+      id: `pois_${u.ref}`,
+      itemId: u.poLineId,
+      serial: u.serial,
+      unitId: `u_${u.ref}`,
+    })),
+  });
+
+  // Battery health, as a per-unit value of the category's own attribute. It
+  // has no column on `Unit` — `CategoryAttribute` is where a fact that only
+  // some categories have belongs, which is also what makes it a column
+  // Inventory can render without anything being hardcoded.
+  const batteryAttr = await db.categoryAttribute.findMany({
+    where: { key: "baterai" },
+    select: { id: true, categoryId: true },
+  });
+  const batteryByCategory = new Map(
+    batteryAttr.map((a) => [a.categoryId, a.id]),
+  );
+  const categoryOfSku = new Map(
+    shop.skus.map((s) => [
+      s.id,
+      shop.models.find((m) => m.id === s.modelId)!.categoryId,
+    ]),
+  );
+  await db.unitAttribute.createMany({
+    data: shop.units.flatMap((u) => {
+      if (u.battery === undefined) return [];
+      const attrId = batteryByCategory.get(categoryOfSku.get(u.skuId)!);
+      if (attrId === undefined) return [];
+      return [
+        {
+          id: `uattr_${u.ref}_bat`,
+          unitId: `u_${u.ref}`,
+          attributeId: attrId,
+          value: String(u.battery),
+        },
+      ];
+    }),
+  });
+  log(`unit: ${shop.units.length}`);
+
+  // --- the till, open since this morning -----------------------------------
+  await db.shift.create({
+    data: {
+      id: SHIFT_ID,
+      staffId: "staff_kasir",
+      locationId: "wh-1",
+      status: "BUKA",
+      openedAt: when({ daysAgo: 0, hour: 8 }),
+      closedAt: null,
+      openFloat: OPEN_FLOAT,
+      // Filled in once the sales are known — check 8 compares this against the
+      // float plus the cash that actually passed through.
+      expected: OPEN_FLOAT,
+      declared: 0n,
+      variance: 0n,
+    },
+  });
+
+  // --- holds ----------------------------------------------------------------
+  for (const r of shop.reservations) {
+    const customer = shop.customers.find((c) => c.id === r.customerId)!;
+    await db.reservation.create({
+      data: {
+        id: r.id,
+        code: r.code,
+        customerId: r.customerId,
+        custName: customer.name,
+        phone: customer.phone,
+        scheduledFor: when(r.scheduledFor),
+        status: "TERJADWAL",
+        source: "STAF",
+        reservationSourceId: r.sourceId,
+        note: r.note,
+        createdAt: when(r.created),
+      },
+    });
+    await db.reservationItem.createMany({
+      data: r.serials.map((serial, i) => {
+        const unit = shop.units.find((u) => u.serial === serial)!;
+        return {
+          id: `${r.id}-item-${i + 1}`,
+          reservationId: r.id,
+          skuId: unit.skuId,
+          unitId: `u_${unit.ref}`,
+          qty: 1,
+        };
+      }),
+    });
+  }
+  log(`reservasi: ${shop.reservations.length}`);
+
+  // --- sales ----------------------------------------------------------------
+  let cashIn = 0n;
+  for (const o of shop.orders) {
+    const customer = shop.customers.find((c) => c.id === o.customerId)!;
+    const staff = shop.staff.find((s) => s.salesmanId === o.salesmanId)!;
+    // Only today's sales pass through the open till; the older ones were rung
+    // up on shifts that have long since been counted and closed.
+    const onShift = o.at.daysAgo === 0;
+    await db.order.create({
+      data: {
+        id: o.id,
+        code: o.code,
+        ts: when(o.at),
+        customerId: o.customerId,
+        custName: customer.name,
+        phone: customer.phone,
+        platform:
+          o.channel === "INSTAGRAM"
+            ? "IG"
+            : o.channel === "WHATSAPP"
+              ? "WA"
+              : o.channel,
+        fulfill: o.fulfil,
+        status: o.status,
+        subtotal: rp(o.subtotal),
+        discountId: o.discountId ?? null,
+        discount: rp(o.discount),
+        extra: rp(o.extra ?? 0),
+        extraNote: o.extraNote ?? null,
+        total: rp(o.total),
+        paidTotal: rp(o.paidTotal),
+        cogs: rp(o.cogs),
+        tradeCredit: 0n,
+        belowFloor: false,
+        soldById: staff.id,
+        shiftId: onShift ? SHIFT_ID : null,
+        locationId: "wh-1",
+        referralSourceId: o.referralSourceId,
+      },
+    });
+
+    for (const l of o.builtLines) {
+      const unit = shop.units.find((u) => u.serial === l.serial)!;
+      await db.orderItem.create({
+        data: {
+          id: l.id,
+          orderId: o.id,
+          unitId: `u_${unit.ref}`,
+          skuId: l.skuId,
+          name: l.name,
+          variant: l.variant,
+          qty: 1,
+          price: rp(l.price),
+          sub: rp(l.sub),
+          cogs: rp(l.cogs),
+          garansiUntil:
+            l.warrantyUntil === undefined ? null : when(l.warrantyUntil),
+          // A returned line is closed on the way back in, so invariant 3 never
+          // sees one serial on two open lines.
+          returnedQty: o.returnedAt === undefined ? 0 : 1,
+          returnedAt: o.returnedAt === undefined ? null : when(o.returnedAt),
+          returnReason: o.returnReason ?? null,
+        },
+      });
+      // Only a machine that is actually gone points at the line that took it.
+      if (o.returnedAt === undefined) {
+        await db.unit.update({
+          where: { id: `u_${unit.ref}` },
+          data: { soldOrderItemId: l.id },
+        });
+      }
+    }
+
+    for (const p of o.payments) {
+      const cash = p.method === "TUNAI";
+      await db.payment.create({
+        data: {
+          id: p.id,
+          orderId: o.id,
+          direction: p.direction,
+          methodId: methodId(p.method),
+          amount: rp(p.amount),
+          status: p.status,
+          paidAt: p.status === "LUNAS" ? when(p.at) : null,
+          staffId: staff.id,
+          shiftId: onShift && cash ? SHIFT_ID : null,
+        },
+      });
+      if (onShift && cash && p.status === "LUNAS") {
+        cashIn += p.direction === "KELUAR" ? -rp(p.amount) : rp(p.amount);
+      }
+    }
+  }
+  log(`penjualan: ${shop.orders.length} order`);
+
+  // --- what was paid to suppliers ------------------------------------------
+  for (const po of shop.purchaseOrders) {
+    for (const p of po.payments) {
+      await db.payment.create({
+        data: {
+          id: p.id,
+          poId: po.id,
+          direction: "KELUAR",
+          methodId: methodId(p.method),
+          amount: rp(p.rupiah),
+          appliedTo: p.appliedTo,
+          status: "LUNAS",
+          paidAt: when(p.at),
+          staffId: "staff_owner",
+        },
+      });
+    }
+  }
+
+  // --- what went back to a supplier ----------------------------------------
+  for (const r of shop.supplierReturns) {
+    const unit = shop.units.find((u) => u.serial === r.serial)!;
+    await db.supplierReturn.create({
+      data: {
+        id: r.id,
+        code: r.code,
+        supplierId: r.supplierId,
+        poId: r.poId,
+        status: "SELESAI",
+        reason: r.reason,
+        staffId: "staff_owner",
+        createdAt: when(r.at),
+      },
+    });
+    await db.supplierReturnItem.create({
+      data: {
+        id: `${r.id}-item-1`,
+        returnId: r.id,
+        unitId: `u_${unit.ref}`,
+        amount: rp(r.amount),
+        note: r.reason,
+      },
+    });
+  }
+
+  // --- the ledger, replayed ------------------------------------------------
+  //
+  // Small transactions on purpose. Each `appendUnitEvent` is several round
+  // trips — a row lock, a MAX(seq), an insert and the projection — and the
+  // production ceiling is ten seconds. A few machines per transaction is what
+  // makes this survivable over the internet, which is the only way a hosted
+  // database ever gets this fixture.
+  const CHUNK = 2;
+  let events = 0;
+  for (let start = 0; start < shop.units.length; start += CHUNK) {
+    const chunk = shop.units.slice(start, start + CHUNK);
+    const written = await db.$transaction(
+      async (tx: Tx) => {
+        let n = 0;
+        for (const unit of chunk) {
+          for (const e of shop.events.filter(
+            (x) => x.serial === unit.serial,
+          )) {
+            await appendUnitEvent(tx, {
+              serial: e.serial,
+              type: e.type as Parameters<typeof appendUnitEvent>[1]["type"],
+              staffId: e.staffId,
+              at: when(e.at),
+              toLocationId: e.toLocationId,
+              orderId: e.orderId ?? null,
+              purchaseOrderId: e.purchaseOrderId ?? null,
+              reservationId: e.reservationId ?? null,
+              // What the machine cost the shop, recorded once, on arrival.
+              costDelta: e.type === "DITERIMA" ? rp(unit.landed) : 0n,
+              note: e.note ?? null,
+            });
+            n += 1;
+          }
+        }
+        return n;
+      },
+      // Seeding is a bulk job, not a checkout: the production ceiling is
+      // deliberately not applied here.
+      { maxWait: 10_000, timeout: 120_000 },
+    );
+    events += written;
+    if ((start / CHUNK) % 5 === 0) {
+      log(`riwayat: ${Math.min(start + CHUNK, shop.units.length)}/${shop.units.length}`);
+    }
+  }
+
+  // The till must reconcile: check 8 compares expected against float plus net
+  // cash. Nothing has been counted yet, so `declared` and `variance` stay at
+  // zero — this shift is open.
+  await db.shift.update({
+    where: { id: SHIFT_ID },
+    data: { expected: OPEN_FLOAT + cashIn },
+  });
+  await db.finSettings.update({
+    where: { id: "singleton" },
+    data: { cash: OPEN_FLOAT + cashIn },
+  });
 
   const ms = Date.now() - started;
   log(`selesai dalam ${ms} ms`);
+  return {
+    units: shop.units.length,
+    events,
+    orders: shop.orders.length,
+    ms,
+  };
+}
 
+export interface VolumeOptions {
+  /** How many machines to pile up. */
+  readonly units?: number;
+  readonly seed?: number;
+  readonly now?: number;
+  readonly onProgress?: (message: string) => void;
+}
+
+/**
+ * A pile of stock, for the tests that need thousands of rows.
+ *
+ * This is NOT a shop and must never be what a demo or a deployment holds. It
+ * has no purchase orders, no holds, no returns and no supplier — it exists so
+ * that pagination, sorting and filtering can be exercised at the scale the
+ * Inventory screen states, which thirty-seven machines cannot do.
+ *
+ * What it no longer does is invent a catalogue. It draws its variants from
+ * `@nusantara/fixture`, so a machine in the pile is a machine Apple made at a
+ * price the shop might ask, and its serial is one the application would
+ * accept. A load fixture full of impossible products is how a demo ends up
+ * showing a 24GB/180GB MacBook Air.
+ */
+export async function seedVolume(
+  db: PrismaClient,
+  options: VolumeOptions = {},
+): Promise<SeedResult> {
+  const log = options.onProgress ?? (() => undefined);
+  const started = Date.now();
+  const count = options.units ?? 5_000;
+  const rand = rng(options.seed ?? 20260815);
+  const shop = buildShop(options.now ?? Date.now());
+  const now = new Date(shop.now);
+
+  await truncateAll(db);
+  await writeReference(db, shop, now);
+  log(`referensi: ${shop.skus.length} sku`);
+
+  await db.shift.create({
+    data: {
+      id: SHIFT_ID,
+      staffId: "staff_kasir",
+      locationId: "wh-1",
+      status: "TUTUP",
+      openedAt: new Date(now.getTime() - 8 * 3_600_000),
+      closedAt: now,
+      openFloat: OPEN_FLOAT,
+      expected: OPEN_FLOAT,
+      declared: OPEN_FLOAT,
+      variance: 0n,
+    },
+  });
+
+  const GRADES = ["A", "B", "C", "NEW"] as const;
+  const units = Array.from({ length: count }, (_, i) => {
+    const sku = shop.skus[i % shop.skus.length]!;
+    return {
+      id: `unit_${i}`,
+      // A different band from the shop's own serials, so a pile and a fixture
+      // can never be confused for one another — and still `S` plus twelve, so
+      // the app would scan it.
+      serial: `SC03${String(i + 1).padStart(7, "0")}${["JK", "LM", "QX", "PN"][i % 4]!}`,
+      skuId: sku.id,
+      status: "QC" as const,
+      // Every location carries stock: the inventory filter tests take the
+      // first two rows of `Location` and expect both to be non-empty.
+      locationId: shop.locations[i % shop.locations.length]!.id,
+      buy: rp(sku.landed),
+      landed: rp(sku.landed),
+      grade: GRADES[i % GRADES.length]!,
+      description: null,
+      intakeAt: now,
+      version: 1,
+    };
+  });
+  await db.unit.createMany({ data: units });
+  log(`unit: ${units.length}`);
+
+  let events = 0;
+  let orders = 0;
+  const CHUNK = 200;
+  for (let start = 0; start < units.length; start += CHUNK) {
+    const chunk = units.slice(start, start + CHUNK);
+    const written = await db.$transaction(
+      async (tx: Tx) => {
+        let n = 0;
+        let sales = 0;
+        for (const unit of chunk) {
+          await appendUnitEvent(tx, {
+            serial: unit.serial,
+            type: "DITERIMA",
+            staffId: SYSTEM_STAFF_ID,
+            toLocationId: unit.locationId,
+            costDelta: unit.landed,
+            note: "backfill: migrasi",
+          });
+          await appendUnitEvent(tx, {
+            serial: unit.serial,
+            type: "QC_SELESAI",
+            staffId: SYSTEM_STAFF_ID,
+            note: "backfill: QC lulus",
+          });
+          n += 2;
+
+          // A third of the pile has sold, so the status filter has something
+          // to filter and the order checks have something to check.
+          if (rand() < 0.35) {
+            const sku = shop.skus.find((s) => s.id === unit.skuId)!;
+            const price = rp(sku.price);
+            const order = await tx.order.create({
+              data: {
+                ts: now,
+                customerId: shop.customers[sales % shop.customers.length]!.id,
+                platform: "OFFLINE",
+                fulfill: "PICKUP",
+                status: "LUNAS",
+                subtotal: price,
+                discount: 0n,
+                extra: 0n,
+                // Invariant 5: total is derived, never taken on trust.
+                total: price,
+                paidTotal: price,
+                cogs: unit.landed,
+                tradeCredit: 0n,
+                belowFloor: false,
+                soldById: "staff_kasir",
+                locationId: unit.locationId,
+              },
+              select: { id: true },
+            });
+            const item = await tx.orderItem.create({
+              data: {
+                orderId: order.id,
+                unitId: unit.id,
+                skuId: sku.id,
+                name: sku.name,
+                variant: sku.variantLabel,
+                qty: 1,
+                price,
+                sub: price,
+                cogs: unit.landed,
+                garansiUntil: new Date(now.getTime() + 90 * 86_400_000),
+                returnedQty: 0,
+              },
+              select: { id: true },
+            });
+            await tx.payment.create({
+              data: {
+                orderId: order.id,
+                direction: "MASUK",
+                methodId: methodId("TRANSFER"),
+                amount: price,
+                status: "LUNAS",
+                paidAt: now,
+                staffId: "staff_kasir",
+              },
+            });
+            await appendUnitEvent(tx, {
+              serial: unit.serial,
+              type: "TERJUAL",
+              staffId: "staff_kasir",
+              orderId: order.id,
+            });
+            await tx.unit.update({
+              where: { id: unit.id },
+              data: { soldOrderItemId: item.id },
+            });
+            n += 1;
+            sales += 1;
+          }
+        }
+        return { n, sales };
+      },
+      { maxWait: 10_000, timeout: 120_000 },
+    );
+    events += written.n;
+    orders += written.sales;
+    if ((start / CHUNK) % 5 === 0) {
+      log(`riwayat: ${start + chunk.length}/${units.length}`);
+    }
+  }
+
+  const ms = Date.now() - started;
+  log(`selesai dalam ${ms} ms`);
   return { units: units.length, events, orders, ms };
 }

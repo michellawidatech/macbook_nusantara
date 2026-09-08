@@ -1,9 +1,31 @@
-/** Deterministic demo data. All money = whole rupiah numbers. */
-import { productCode } from "../lib/productCode.js";
+/**
+ * The demo shop, as the browser sees it.
+ *
+ * The shop ITSELF lives in `@nusantara/fixture` — locations, the catalogue,
+ * the invoices, the machines, the ledger, the sales and the holds — because
+ * `packages/db`'s seed writes the same rows into Postgres and the two must be
+ * the same shop. Before 2026-09-07 they were not, and that is exactly what the
+ * bug looked like from the outside: Inventory reads this store, S/N Tracking
+ * reads the API, and neither had heard of the other's serials.
+ *
+ * What is still written out here is everything Postgres has no table for —
+ * grading rules, the chatbot inbox, expenses, stock opname, the AppleDB import
+ * list, adjustment reasons. Each of those is marked ⚠️ mock-only where it is
+ * declared, and each is a schema gap CLAUDE.md already names.
+ *
+ * All money = whole rupiah numbers.
+ */
+import {
+  REFERRAL_SOURCES,
+  STOCK_TAKE_AT,
+  buildShop,
+  docCode,
+  isoOf,
+} from "@nusantara/fixture";
+import { holdsFunds, marketplacePayMethod } from "../lib/channels.js";
 import type { SaleSource } from "../lib/channels.js";
 import type { GradingCriterion, GradingRule } from "../lib/grading.js";
 import type { UnitCondition } from "../lib/condition.js";
-import { SCAN_PREFIX } from "../lib/serialScan.js";
 
 export type UnitStatus =
   | "QC"
@@ -1035,74 +1057,46 @@ export interface MockDb {
   myWarehouseId: string;
 }
 
-/**
- * Battery readings the seed hands out, in order.
- *
- * Weighted the way a second-hand shop's stock actually is — mostly healthy, a
- * few tired — while still visiting all three bands so the Inventory filter has
- * something to filter. See the use site for why this is a ladder, not
- * arithmetic.
- *
- * Interleaved rather than sorted, and that ordering is load-bearing: only a
- * handful of seeded units get a reading at all, so a descending ladder would
- * hand out nothing but healthy values and never reach the tired end. As
- * written, all three bands appear within the first five readings.
- */
-const BATTERY_LADDER = [
-  98, 92, 79, 88, 74, 95, 77, 84, 68, 90, 76, 71,
-] as const;
-
-/**
- * The condition grades the seed hands out, in order. Mirrors prisma's `Grade`.
- *
- * Weighted toward A because that is what a shop that grades its own intake
- * ends up holding — the C machines are the ones that sell first or go to the
- * bench — while still visiting every value, so the till's serial chooser and
- * Inventory's filter both have something to show. `NEW` is in here for sealed
- * stock, which this shop does carry (the accessories).
- *
- * Independent of `BATTERY_LADDER` on purpose. Grade is a judgement about the
- * case and the screen; battery health is a number off the machine. Correlating
- * them in demo data would hide every screen that shows one without the other.
- */
-const GRADE_LADDER = ["A", "A", "B", "A", "C", "A", "B", "NEW"] as const;
-
 const iso = (daysAgo: number, h = 10) =>
   new Date(
     Date.now() - daysAgo * 86_400_000 + h * 3_600_000 - 10 * 3_600_000,
   ).toISOString();
 
 export function buildSeed(): MockDb {
-  // Four warehouses by owner decision; the names are editable in Settings.
-  const warehouses: Warehouse[] = [
-    { id: "wh-1", name: "Warehouse 1", active: true },
-    { id: "wh-2", name: "Warehouse 2", active: true },
-    { id: "wh-3", name: "Warehouse 3", active: true },
-    { id: "wh-4", name: "Warehouse 4", active: true },
-  ];
-  const racks: RackLocation[] = warehouses.flatMap((w) =>
-    ["Rack 1", "Rack 2", "Rack 3"].map((name, i) => ({
-      id: `${w.id}-rack-${i + 1}`,
-      warehouseId: w.id,
-      name,
-      active: true,
-    })),
-  );
-  const suppliers: Supplier[] = [
-    {
-      id: "sup-1",
-      name: "PT Mac Jaya",
-      phone: "+62215550101",
-      address: "Jl. Gajah Mada 40, Jakarta",
-      code: "MJ",
-    },
-    // The owner's own worked example: Apel Segar is AS, so `SBJ347203KLM`
-    // scans in as `ASBJ347203KLM`.
-    { id: "sup-2", name: "CV Apel Segar", phone: "+62225550188", code: "AS" },
-    // Deliberately left without one, so the screen that has to cope with a
-    // supplier that predates the scheme is a screen somebody can actually see.
-    { id: "sup-3", name: "Batam Importir" },
-  ];
+  /*
+   * Everything below comes from `@nusantara/fixture`, which is the shop
+   * itself — the same rows `packages/db`'s seed writes into Postgres.
+   *
+   * It used to be written out here, and Postgres generated its own. That is
+   * why the deployed app disagreed with itself: 26 of the 31 screens read this
+   * store and three read the API, so Inventory listed serials S/N Tracking had
+   * never heard of. One definition, two projections, and the two agree by
+   * construction rather than by two people remembering to.
+   *
+   * What stays hand-written in this file is everything the fixture cannot
+   * carry, because the schema has no table for it: grading rules, the chat
+   * inbox, expenses, opname sessions, the AppleDB import list. Those are
+   * marked ⚠️ mock-only where they are declared.
+   */
+  const shop = buildShop();
+  const warehouses: Warehouse[] = shop.locations.map((l) => ({
+    id: l.id,
+    name: l.name,
+    active: true,
+  }));
+  const racks: RackLocation[] = shop.racks.map((r) => ({
+    id: r.id,
+    warehouseId: r.locationId,
+    name: r.name,
+    active: true,
+  }));
+  const suppliers: Supplier[] = shop.suppliers.map((s) => ({
+    id: s.id,
+    name: s.name,
+    ...(s.phone === undefined ? {} : { phone: s.phone }),
+    ...(s.address === undefined ? {} : { address: s.address }),
+    ...(s.code === undefined ? {} : { code: s.code }),
+  }));
   const reasons: Reason[] = [
     // Seeded by owner decision. A free-typed reason joins this list before it
     // is ever referenced by an adjustment — see `ensureReason` in store.ts.
@@ -1122,6 +1116,15 @@ export function buildSeed(): MockDb {
       id: "rsn-adj-service",
       activity: "ADJUSTMENT",
       label: "On Service",
+      active: true,
+    },
+    {
+      // What a posted stock take writes its shortfall out under. The seeded
+      // count uses it, which is also the only way a managed list demonstrates
+      // the usage counter Settings shows beside each reason.
+      id: "rsn-adj-opname",
+      activity: "ADJUSTMENT",
+      label: "Selisih Stock Opname",
       active: true,
     },
     {
@@ -1307,1002 +1310,334 @@ export function buildSeed(): MockDb {
     { id: "rsv-src-tokopedia", name: "Tokopedia", active: true },
     { id: "rsv-src-walkin", name: "Walk-in", active: true },
   ];
-  // Three by owner decision; the list is managed in Settings.
-  const salesmen: Salesman[] = [
-    { id: "sm-1", name: "Michella", active: true },
-    { id: "sm-2", name: "Dimas Pratama", active: true },
-    { id: "sm-3", name: "Ayu Lestari", active: true },
-  ];
-  const models: CatalogModel[] = [
-    {
-      id: "m-air-m2",
-      name: "MacBook Air M2",
-      category: "MacBook Air",
-      releaseYear: 2022,
-      line: "AIR",
-      sizeInch: 13,
-      source: "MANUAL",
-      axes: [
-        { name: "RAM", values: ["8GB", "16GB"] },
-        { name: "SSD", values: ["256GB", "512GB"] },
-      ],
-    },
-    {
-      id: "m-pro14-m1",
-      name: "MacBook Pro 14 M1 Pro",
-      category: "MacBook Pro",
-      releaseYear: 2021,
-      line: "PRO",
-      sizeInch: 14,
-      source: "MANUAL",
-      axes: [
-        { name: "RAM", values: ["16GB", "32GB"] },
-        { name: "SSD", values: ["512GB", "1TB"] },
-      ],
-    },
-    {
-      id: "m-pro13-m1",
-      name: "MacBook Pro 13 M1",
-      category: "MacBook Pro",
-      releaseYear: 2020,
-      line: "PRO",
-      sizeInch: 13,
-      source: "MANUAL",
-      axes: [
-        { name: "RAM", values: ["8GB", "16GB"] },
-        { name: "SSD", values: ["256GB", "512GB"] },
-      ],
-    },
-    // The 2016s, added 2026-08-24. One axis each has a single value because
-    // that is how these actually shipped: the 15-inch came 16GB or not at all,
-    // and the 12-inch never offered a RAM choice worth listing. The generator
-    // below handles a one-value axis without special casing — it just yields
-    // fewer variants, which is the honest catalogue.
-    {
-      id: "m-pro13-2016",
-      name: "MacBook Pro 13 2016",
-      category: "MacBook Pro",
-      releaseYear: 2016,
-      line: "PRO",
-      sizeInch: 13,
-      source: "MANUAL",
-      // Four axes, not two. This is the model the owner's example code
-      // describes, and it is the one that genuinely shipped in both chips and
-      // both touch-bar configurations — which is why chip and touch bar are
-      // axes rather than columns.
-      axes: [
-        { name: "Chip", values: ["i5", "i7"] },
-        { name: "RAM", values: ["8GB", "16GB"] },
-        { name: "SSD", values: ["128GB", "256GB"] },
-        { name: "Touch Bar", values: ["NTB", "TB"] },
-      ],
-    },
-    {
-      id: "m-pro15-2016",
-      name: "MacBook Pro 15 2016",
-      category: "MacBook Pro",
-      releaseYear: 2016,
-      line: "PRO",
-      sizeInch: 15,
-      source: "MANUAL",
-      axes: [
-        { name: "RAM", values: ["16GB"] },
-        { name: "SSD", values: ["256GB", "512GB"] },
-      ],
-    },
-    {
-      // The only member of its category so far. "MacBook" unqualified is the
-      // 12-inch Retina line and nothing else, so it cannot live under Air or
-      // Pro without misfiling it.
-      id: "m-mb12-2016",
-      name: "MacBook 12 Retina 2016",
-      category: "MacBook",
-      releaseYear: 2016,
-      line: "MB",
-      sizeInch: 12,
-      source: "MANUAL",
-      axes: [
-        { name: "RAM", values: ["8GB"] },
-        { name: "SSD", values: ["256GB", "512GB"] },
-      ],
-    },
-    /*
-     * Older machines, added 2026-08-26 at the owner's request.
-     *
-     * The catalogue jumped from 2016 to 2020 and had nothing in between, which
-     * is the opposite of what a second-hand shop actually turns over — the
-     * 2015 Airs and the last Intel Pros are the volume, and the M-series are
-     * the ones that arrive occasionally and leave quickly. A demo catalogue
-     * that only holds the expensive end teaches the wrong shape of screen.
-     *
-     * 13.3 rather than 13 on the Intel bodies is not fussiness: these really
-     * are 13.3", `sizeInch` is a Decimal(3,1) in the schema for that reason,
-     * and `productCode` prints the decimal only when there is one.
-     */
-    {
-      id: "m-air-2015",
-      name: "MacBook Air 13 2015",
-      category: "MacBook Air",
-      releaseYear: 2015,
-      line: "AIR",
-      sizeInch: 13.3,
-      source: "MANUAL",
-      axes: [
-        { name: "Chip", values: ["i5"] },
-        { name: "RAM", values: ["4GB", "8GB"] },
-        { name: "SSD", values: ["128GB", "256GB"] },
-      ],
-    },
-    {
-      id: "m-air-2017",
-      name: "MacBook Air 13 2017",
-      category: "MacBook Air",
-      releaseYear: 2017,
-      line: "AIR",
-      sizeInch: 13.3,
-      source: "MANUAL",
-      axes: [
-        { name: "Chip", values: ["i5"] },
-        { name: "RAM", values: ["8GB"] },
-        { name: "SSD", values: ["128GB", "256GB"] },
-      ],
-    },
-    {
-      id: "m-pro13-2015",
-      name: "MacBook Pro 13 2015",
-      category: "MacBook Pro",
-      releaseYear: 2015,
-      line: "PRO",
-      sizeInch: 13.3,
-      source: "MANUAL",
-      axes: [
-        { name: "Chip", values: ["i5", "i7"] },
-        { name: "RAM", values: ["8GB", "16GB"] },
-        { name: "SSD", values: ["128GB", "256GB"] },
-      ],
-    },
-    {
-      id: "m-air-m1",
-      name: "MacBook Air M1",
-      category: "MacBook Air",
-      releaseYear: 2020,
-      line: "AIR",
-      sizeInch: 13,
-      source: "MANUAL",
-      axes: [
-        { name: "RAM", values: ["8GB", "16GB"] },
-        { name: "SSD", values: ["256GB", "512GB"] },
-      ],
-    },
-    /*
-     * iPads, added 2026-08-26.
-     *
-     * Their axes are the first in this catalogue that are neither RAM nor SSD:
-     * an iPad varies by storage and by whether it has a SIM, and calling the
-     * storage axis "SSD" to fit the existing loop would put a word on the
-     * Products screen that is wrong about the hardware. The SKU builder reads
-     * `Storage` alongside `SSD` instead — see the loop below — which is the
-     * same accommodation `Chip` and `Touch Bar` already got in 2026-08-24.
-     */
-    {
-      id: "m-ipad-9",
-      name: "iPad 9",
-      category: "iPad",
-      releaseYear: 2021,
-      line: "IPAD",
-      sizeInch: 10.2,
-      source: "MANUAL",
-      axes: [
-        { name: "Storage", values: ["64GB", "256GB"] },
-        { name: "Connectivity", values: ["WiFi", "Cellular"] },
-      ],
-    },
-    {
-      id: "m-ipad-air-4",
-      name: "iPad Air 4",
-      category: "iPad",
-      releaseYear: 2020,
-      line: "IPAD AIR",
-      sizeInch: 10.9,
-      source: "MANUAL",
-      axes: [
-        { name: "Storage", values: ["64GB", "256GB"] },
-        { name: "Connectivity", values: ["WiFi", "Cellular"] },
-      ],
-    },
-    {
-      id: "m-ipad-pro11-m1",
-      name: "iPad Pro 11 M1",
-      category: "iPad",
-      releaseYear: 2021,
-      line: "IPAD PRO",
-      sizeInch: 11,
-      source: "MANUAL",
-      axes: [
-        { name: "Storage", values: ["128GB", "256GB", "512GB"] },
-        { name: "Connectivity", values: ["WiFi", "Cellular"] },
-      ],
-    },
-    {
-      id: "m-ipad-mini-6",
-      name: "iPad mini 6",
-      category: "iPad",
-      releaseYear: 2021,
-      line: "IPAD MINI",
-      sizeInch: 8.3,
-      source: "MANUAL",
-      axes: [
-        { name: "Storage", values: ["64GB", "256GB"] },
-        { name: "Connectivity", values: ["WiFi", "Cellular"] },
-      ],
-    },
-  ];
-  /**
-   * Every combination of a model's axes.
-   *
-   * Was two nested loops over `axes[0]` and `axes[1]`, which quietly assumed
-   * every model has exactly RAM and SSD. The Intel-era Pros also vary by chip
-   * and by touch bar, and those are axes too (owner decision 2026-08-24), so
-   * the shape has to come from the data rather than from the loop.
-   */
-  const combinations = (
-    axes: readonly { name: string; values: string[] }[],
-  ): Record<string, string>[] =>
-    axes.reduce<Record<string, string>[]>(
-      (acc, axis) =>
-        acc.flatMap((partial) =>
-          axis.values.map((v) => ({ ...partial, [axis.name]: v })),
-        ),
-      [{}],
-    );
+  // The shop's three people. One list with `staff` in the fixture, because
+  // `Staff` in prisma is a LOGIN and this is who gets credited on a sale —
+  // two lists for the same three humans is how a timeline ends up attributing
+  // a sale to "Kasir Toko" while the commission report credits Dimas Pratama.
+  const salesmen: Salesman[] = shop.staff.map((s) => ({
+    id: s.salesmanId,
+    name: s.name,
+    active: true,
+  }));
+  const models: CatalogModel[] = shop.models.map((m) => ({
+    id: m.id,
+    name: m.name,
+    category: shop.categories.find((c) => c.id === m.categoryId)!.name,
+    releaseYear: m.releaseYear,
+    ...(m.line === undefined ? {} : { line: m.line }),
+    ...(m.sizeInch === undefined ? {} : { sizeInch: m.sizeInch }),
+    source: "MANUAL",
+    axes: m.axes.map((a) => ({ name: a.name, values: [...a.values] })),
+  }));
+  const skus: Sku[] = shop.skus.map((s) => ({
+    id: s.id,
+    modelId: s.modelId,
+    code: s.code,
+    name: s.name,
+    variantLabel: s.variantLabel,
+    axisValues: { ...s.axisValues },
+    price: s.price,
+  }));
 
-  const skus: Sku[] = [];
-  // Not a sticker price: the loop below adds 2.5jt for a 16GB-or-more RAM tier
-  // and 1.5jt for the larger SSD, so this is the floor variant's price minus
-  // those steps. The 2016 bases look low for that reason — a 15-inch 2016 with
-  // 16GB lands at 6.8jt, and the 12-inch at 4.2jt.
-  const basePrice: Record<string, number> = {
-    "m-air-m2": 11_500_000,
-    "m-pro14-m1": 16_500_000,
-    "m-pro13-m1": 9_800_000,
-    "m-pro13-2016": 3_000_000,
-    "m-pro15-2016": 4_300_000,
-    "m-mb12-2016": 4_200_000,
-    // The older machines and the iPads, added 2026-08-26.
-    "m-air-2015": 3_200_000,
-    "m-air-2017": 4_100_000,
-    "m-pro13-2015": 4_500_000,
-    "m-air-m1": 8_900_000,
-    "m-ipad-9": 3_400_000,
-    "m-ipad-air-4": 5_600_000,
-    "m-ipad-pro11-m1": 9_500_000,
-    "m-ipad-mini-6": 5_900_000,
+  const PO_PAYMENT_TARGET: Record<string, PoPaymentFor> = {
+    BARANG: "ORDER",
+    ONGKIR: "SHIPPING",
+    PAJAK: "TAX",
   };
-  /**
-   * What an iPad's storage tier adds over its floor variant.
-   *
-   * A table rather than another clause in the sum below, because an iPad's
-   * ladder is not a Mac's: the jump from 64 to 256 is most of the price
-   * difference between two otherwise identical tablets, while the same jump on
-   * a Mac is the smaller of its two options. Kept separate from the SSD step so
-   * that adding it did not move a single existing Mac price.
-   */
-  const STORAGE_STEP: Record<string, number> = {
-    "64GB": 0,
-    "128GB": 0,
-    "256GB": 900_000,
-    "512GB": 2_400_000,
-  };
-  for (const m of models) {
-    let i = 0;
-    for (const axisValues of combinations(m.axes)) {
-      i += 1;
-      const ram = axisValues["RAM"] ?? "";
-      const ssd = axisValues["SSD"] ?? "";
-      // An iPad calls it Storage; a Mac calls it SSD. The label prints
-      // whichever the model actually has — see the iPad models above.
-      const storage = axisValues["Storage"] ?? "";
-      skus.push({
-        id: `${m.id}-v${i}`,
-        modelId: m.id,
-        code: productCode({
-          line: m.line,
-          sizeInch: m.sizeInch,
-          year: String(m.releaseYear),
-          chip: axisValues["Chip"],
-          ram,
-          ssd: ssd || storage,
-          // Whatever else separates two otherwise identical units. On an
-          // Intel Pro that is the touch bar; on an iPad it is the SIM.
-          extra: axisValues["Touch Bar"] ?? axisValues["Connectivity"],
-        }),
-        name: m.name,
-        variantLabel: Object.values(axisValues).join(" / "),
-        axisValues,
-        price:
-          basePrice[m.id]! +
-          (ram.startsWith("1") || ram.startsWith("3") ? 2_500_000 : 0) +
-          (ssd === "512GB" || ssd === "1TB" ? 1_500_000 : 0) +
-          (axisValues["Chip"] === "i7" ? 1_200_000 : 0) +
-          (STORAGE_STEP[storage] ?? 0) +
-          // A cellular iPad costs more new and holds it second-hand.
-          (axisValues["Connectivity"] === "Cellular" ? 1_100_000 : 0),
-      });
-    }
-  }
+  const pos: Po[] = shop.purchaseOrders.map((p) => ({
+    id: p.id,
+    code: p.code,
+    supplierId: p.supplierId,
+    invoice: p.invoice,
+    date: isoOf(p.ordered, shop.now).slice(0, 10),
+    locationId: p.locationId,
+    // Filled in below, as the machines are read off the fixture — the same
+    // order the shop itself learns them in.
+    items: [],
+    payments: p.payments.map((pay) => ({
+      id: pay.id,
+      method: pay.method,
+      amount: pay.rupiah,
+      at: isoOf(pay.at, shop.now),
+      appliedTo: PO_PAYMENT_TARGET[pay.appliedTo]!,
+    })),
+    shippingFee: p.shippingFee,
+    taxFee: p.taxFee,
+    // No PO-level discount in the fixture: `PurchaseOrder` in prisma has no
+    // column for one, so a number here would be money only the browser knows
+    // about. See the fixture's own note.
+    discount: 0,
+    status: p.status === "DIPESAN" ? "ORDERED" : "RECEIVED",
+    ...(p.closed === undefined
+      ? {}
+      : { closedAt: isoOf(p.closed, shop.now) }),
+  }));
 
-  /**
-   * Accessories.
-   *
-   * Built here rather than through the loop above because an accessory has one
-   * axis (a colour, a layout), not the RAM x SSD grid every Mac has — and they
-   * exist at all because "what else can this customer be sold" has no answer in
-   * a catalogue that contains only laptops.
-   */
-  const accessoryModels: CatalogModel[] = [
-    {
-      id: "m-magic-mouse",
-      name: "Magic Mouse",
-      category: "Accessory",
-      releaseYear: 2021,
-      source: "MANUAL",
-      axes: [{ name: "Colour", values: ["White", "Black"] }],
-    },
-    {
-      id: "m-magic-keyboard",
-      name: "Magic Keyboard",
-      category: "Accessory",
-      releaseYear: 2021,
-      source: "MANUAL",
-      axes: [{ name: "Layout", values: ["US", "US with Touch ID"] }],
-    },
-    {
-      id: "m-usbc-hub",
-      name: "USB-C Hub 7-in-1",
-      category: "Accessory",
-      releaseYear: 2023,
-      source: "MANUAL",
-      axes: [{ name: "Colour", values: ["Space Grey"] }],
-    },
-    {
-      id: "m-sleeve",
-      name: 'Laptop Sleeve 13-14"',
-      category: "Accessory",
-      releaseYear: 2024,
-      source: "MANUAL",
-      axes: [{ name: "Colour", values: ["Grey"] }],
-    },
-  ];
-  const accessoryPrice: Record<string, number> = {
-    "m-magic-mouse": 950_000,
-    "m-magic-keyboard": 1_450_000,
-    "m-usbc-hub": 385_000,
-    "m-sleeve": 175_000,
-  };
-  for (const m of accessoryModels) {
-    m.axes[0]!.values.forEach((value, i) => {
-      skus.push({
-        id: `${m.id}-v${i + 1}`,
-        modelId: m.id,
-        code: `${m.id.toUpperCase().replace(/-/g, "")}${i + 1}`,
-        name: m.name,
-        variantLabel: value,
-        axisValues: { [m.axes[0]!.name]: value },
-        price: accessoryPrice[m.id]!,
-      });
-    });
-  }
-  models.push(...accessoryModels);
-
-  /**
-   * Three arrived orders, plus one of each awkward case the owner described:
-   * paid before anyone knew what it bought, and goods that did not match the
-   * invoice. Both exist in the seed so the Inbound list shows every stage
-   * without anyone having to create one by hand.
-   */
-  const pos: Po[] = [
-    {
-      id: "po-1",
-      code: "PI-2026/08-000041",
-      supplierId: "sup-1",
-      invoice: "INV/MJ/0812",
-      date: iso(9).slice(0, 10),
-      locationId: "wh-1",
-      items: [],
-      payments: [
-        // Two transfers on the same order, because that is how it goes: the
-        // supplier is paid for the machines and the forwarder is paid for the
-        // box they came in. Splitting them here is what gives the Purchase
-        // card something to show for `appliedTo`.
-        {
-          id: "pp-1",
-          method: "TUNAI",
-          amount: 24_000_000,
-          at: iso(9),
-          appliedTo: "ORDER",
-        },
-        {
-          id: "pp-1b",
-          method: "TUNAI",
-          amount: 250_000,
-          at: iso(8),
-          appliedTo: "SHIPPING",
-        },
-      ],
-      shippingFee: 250_000,
-      taxFee: 0,
-      discount: 0,
-      status: "RECEIVED",
-    },
-    {
-      id: "po-2",
-      code: "PI-2026/08-000042",
-      supplierId: "sup-2",
-      invoice: "AS-118",
-      date: iso(2).slice(0, 10),
-      locationId: "wh-1",
-      items: [],
-      payments: [],
-      shippingFee: 0,
-      taxFee: 0,
-      discount: 0,
-      status: "RECEIVED",
-    },
-    {
-      id: "po-3",
-      code: "PI-2026/08-000043",
-      supplierId: "sup-3",
-      invoice: "BTM-77",
-      date: iso(1).slice(0, 10),
-      locationId: "wh-2",
-      items: [],
-      payments: [],
-      shippingFee: 0,
-      taxFee: 0,
-      discount: 0,
-      status: "RECEIVED",
-    },
-    {
-      // Story 3: the owner wired money against an invoice and told nobody what
-      // it was for. No lines, no units, a real payment. The Inbound list must
-      // show this as Pending rather than as an empty order.
-      id: "po-4",
-      code: "PI-2026/08-000044",
-      supplierId: "sup-1",
-      invoice: "INV/MJ/0871",
-      date: iso(0).slice(0, 10),
-      locationId: "wh-1",
-      items: [],
-      payments: [
-        { id: "pp-2", method: "KARTU_KREDIT", amount: 18_500_000, at: iso(0) },
-      ],
-      shippingFee: 0,
-      taxFee: 0,
-      discount: 0,
-      status: "ORDERED",
-    },
-    {
-      // Story 2: lines were entered from the invoice, a deposit was paid, and
-      // one line will never turn up. Outstanding balance is what makes the
-      // partial payment visible.
-      id: "po-5",
-      code: "PI-2026/08-000045",
-      supplierId: "sup-2",
-      invoice: "AS-124",
-      date: iso(0).slice(0, 10),
-      locationId: "wh-1",
-      items: [
-        {
-          id: "poi-x1",
-          skuId: "m-pro13-2016-v1",
-          serial: null,
-          qty: 1,
-          unitCost: 4_100_000,
-        },
-        {
-          id: "poi-x2",
-          skuId: "m-mb12-2016-v1",
-          serial: null,
-          qty: 1,
-          unitCost: 3_900_000,
-          notReceived: true,
-        },
-      ],
-      payments: [
-        {
-          id: "pp-3",
-          method: "DEPOSIT",
-          amount: 2_000_000,
-          at: iso(0),
-          appliedTo: "ORDER",
-        },
-      ],
-      shippingFee: 150_000,
-      taxFee: 0,
-      discount: 100_000,
-      status: "ORDERED",
-    },
-  ];
-
-  const units: Unit[] = [];
-  const events: UnitEvent[] = [];
-  const stockIns: StockInRec[] = [];
-  let seq = 0;
-  // Counts only the units that actually get a battery reading, so the ladder
-  // is walked densely. Indexing by `seq` skipped entries — accessories and
-  // units still in QC take no reading — and the skipped ones were exactly the
-  // tired end of the ladder.
-  let measured = 0;
-  /** Walks `GRADE_LADDER`, counting only the units that actually get one. */
-  let graded = 0;
-  const addUnit = (
-    skuId: string,
-    status: UnitStatus,
-    poId: string,
-    daysAgo: number,
-    desc: string,
-  ) => {
-    seq += 1;
-    /*
-     * `S` + twelve, which is the shape every serial in this app must now have
-     * (owner correction 2026-09-01) — see `ORIGINAL_PATTERN`. The demo data
-     * used to start `C02…` with no marker, and under the new rules not one of
-     * those serials would have been accepted by the screen that created them.
-     *
-     * The two-letter tails avoid `I` and `O` on purpose: Apple prints neither,
-     * so a scanner reading one is misreading a `1` or a `0`, and seeded data
-     * that tripped that rule would be data the app refuses to re-scan.
-     */
-    const serial = `${SCAN_PREFIX}C02${String(7_400_000 + seq * 137).slice(0, 7)}${["JK", "LM", "QX", "PN"][seq % 4]}`;
-    const sku = skus.find((s) => s.id === skuId)!;
-    const buy = Math.round(sku.price * 0.82);
-    const inStock = status !== "QC";
-    const po = pos.find((p) => p.id === poId)!;
-    const locationId = po.locationId;
-    const rackId = inStock ? `${locationId}-rack-${(seq % 3) + 1}` : undefined;
-    // Accessories have no battery, so they have no reading — the `undefined`
-    // here is the case every battery column and filter has to survive.
-    //
-    // The Macs walk a fixed ladder rather than a modulo of `seq`. An arithmetic
-    // spread looks like it covers the range and does not: with this few units
-    // the earlier `100 - (seq * 37) % 35` landed on eight values and never once
-    // hit the four-point-wide fair band, so the demo data hid a feature the app
-    // has. The ladder visits every band on purpose, and stays deterministic so
-    // a screenshot of this data is the same screenshot tomorrow.
-    const isAccessory =
-      models.find((m) => m.id === sku.modelId)?.category === "Accessory";
-    const batteryHealth = isAccessory
-      ? undefined
-      : status === "QC"
-        ? undefined
-        : BATTERY_LADDER[measured++ % BATTERY_LADDER.length]!;
-    units.push({
-      serial,
-      skuId,
-      status,
-      locationId,
-      rackId,
-      buy,
-      description: inStock ? desc : "",
-      poId,
-      batteryHealth,
-      // Recorded at QC, so a unit still IN QC has not got one yet — which is
-      // the case the till's serial chooser and Inventory both have to render.
-      // A ladder rather than a modulo, for the reason the battery one gives:
-      // the point of demo data is that every branch of the screen has
-      // something to draw. Weighted the way a second-hand shop's stock
-      // actually is, mostly good with a few tired ones.
-      ...(inStock
-        ? { grade: GRADE_LADDER[graded++ % GRADE_LADDER.length]! }
-        : {}),
-    });
-    po.items.push({ id: `poi-${seq}`, skuId, serial, qty: 1, unitCost: buy });
-    let s = 0;
-    const ev = (type: string, from: string, to: string, note?: string) =>
-      events.push({
-        id: `sev-${seq}-${++s}`,
-        serial,
-        seq: s,
-        type,
-        at: iso(daysAgo, 9 + s),
-        fromStatus: from,
-        toStatus: to,
-        locationId,
-        note,
-        staff: "Michella",
-      });
-    ev("DITERIMA", "-", "QC", `Arrived on ${po.code}`);
-    if (inStock) {
-      ev("QC_SELESAI", "QC", "TERSEDIA", desc);
-      stockIns.push({
-        id: `si-${seq}`,
-        serial,
-        skuId,
-        poId,
-        locationId,
-        rackId,
-        decision: "ACCEPTED",
-        buy,
-        description: desc,
-        batteryHealth,
-        at: iso(daysAgo, 10),
-        staff: "Michella",
-      });
-    }
-    if (status === "TERJUAL") ev("TERJUAL", "TERSEDIA", "TERJUAL");
-    if (status === "DIRESERVASI") ev("DIRESERVASI", "TERSEDIA", "DIRESERVASI");
-    if (status === "RETUR_SUPPLIER") {
-      ev("RETUR_SUPPLIER", "TERSEDIA", "RETUR_SUPPLIER", "Dead pixel cluster");
-      stockIns.push({
-        id: `si-${seq}-r`,
-        serial,
-        skuId,
-        poId,
-        locationId,
-        decision: "REJECTED",
-        rejectKind: "SUPPLIER",
-        reason: "Rejected at QC",
-        buy,
-        at: iso(daysAgo, 11),
-        staff: "Michella",
-      });
-    }
-    return serial;
-  };
-
-  // PO-1 (older): fully QC'd; a mix of sold / reserved / available.
-  const s1 = addUnit(
-    "m-air-m2-v1",
-    "TERSEDIA",
-    "po-1",
-    9,
-    "Mulus 95%, battery 91%, fullset box",
-  );
-  addUnit(
-    "m-air-m2-v2",
-    "TERSEDIA",
-    "po-1",
-    9,
-    "Mulus, battery 88%, unit only",
-  );
-  const s3 = addUnit(
-    "m-pro14-m1-v2",
-    "TERJUAL",
-    "po-1",
-    8,
-    "Like new, battery 96%, fullset",
-  );
-  const s4 = addUnit(
-    "m-pro14-m1-v1",
-    "TERJUAL",
-    "po-1",
-    8,
-    "Minor scratch lid, battery 93%",
-  );
-  const s5 = addUnit(
-    "m-pro13-m1-v1",
-    "DIRESERVASI",
-    "po-1",
-    7,
-    "Mulus, battery 85%",
-  );
-  // Two more on hold, both for one customer (reservation rsv-2) — a batch is
-  // the ordinary case, not the exotic one.
-  const s6 = addUnit(
-    "m-pro13-m1-v2",
-    "DIRESERVASI",
-    "po-1",
-    7,
-    "Dent kiri bawah, battery 90%",
-  );
-  const sHold2 = addUnit(
-    "m-air-m2-v4",
-    "DIRESERVASI",
-    "po-1",
-    7,
-    "Mulus, battery 87%, fullset box",
-  );
-  const s7 = addUnit("m-air-m2-v3", "RETUR_SUPPLIER", "po-1", 6, "");
-  // Accessories, all on PO-1 alongside the machines they get sold with. Some
-  // already sold so "bought together" has history to read; the rest on the
-  // shelf so there is something to recommend.
-  const aMouseSold = addUnit(
-    "m-magic-mouse-v1",
-    "TERJUAL",
-    "po-1",
-    8,
-    "Fullset box, like new",
-  );
-  addUnit(
-    "m-magic-mouse-v2",
-    "TERSEDIA",
-    "po-1",
-    5,
-    "Fullset box, light scuff underside",
-  );
-  addUnit(
-    "m-magic-keyboard-v2",
-    "TERSEDIA",
-    "po-1",
-    5,
-    "Touch ID, fullset box",
-  );
-  // Sold on Tokopedia — see order o-4, which is the seed's second marketplace.
-  const aKeyboardSold = addUnit(
-    "m-magic-keyboard-v1",
-    "TERJUAL",
-    "po-1",
-    4,
-    "Fullset box, keys clean",
-  );
-  const aHubSold = addUnit("m-usbc-hub-v1", "TERJUAL", "po-1", 6, "Sealed");
-  addUnit("m-usbc-hub-v1", "TERSEDIA", "po-1", 3, "Sealed");
-  const aSleeveSold = addUnit("m-sleeve-v1", "TERJUAL", "po-1", 6, "New");
-  const sAirSold = addUnit(
-    "m-air-m2-v2",
-    "TERJUAL",
-    "po-1",
-    7,
-    "Mulus, battery 92%, fullset",
-  );
-  addUnit("m-sleeve-v1", "TERSEDIA", "po-1", 3, "New");
   /*
-   * The older Macs and the iPads, on the shelf (2026-08-26).
+   * The machines, their PO lines, their ledgers and their QC decisions — all
+   * read off the fixture rather than minted here.
    *
-   * Stock, not just catalogue rows: Inventory opens on "In stock" and hides a
-   * product nothing is held of, so a model added without a unit behind it is
-   * a model that appears to have failed to save. Spread across warehouses and
-   * conditions so the filters have something to filter — a 4GB 2015 Air with a
-   * tired battery is exactly the row the battery band exists to surface.
+   * The grade, the battery reading and the description are ONE description of
+   * one machine and they agree with each other. They used to come from three
+   * independent sources: a description typed into this file, a grade off a
+   * rotating ladder and a battery figure off another, so a unit could read
+   * "battery 91%" beside a stored 98 and be graded A while described as worn.
+   * Every screen that shows two of the three showed a contradiction.
    */
-  addUnit(
-    "m-air-2015-v1",
-    "TERSEDIA",
-    "po-1",
-    12,
-    "Body mulus, engsel kencang, battery sudah lemah",
-  );
-  addUnit(
-    "m-air-2015-v4",
-    "TERSEDIA",
-    "po-1",
-    11,
-    "Fullset dus, sedikit baret di palmrest",
-  );
-  addUnit(
-    "m-air-2017-v2",
-    "TERSEDIA",
-    "po-1",
-    10,
-    "Mulus, keyboard responsif, unit only",
-  );
-  addUnit(
-    "m-pro13-2015-v3",
-    "TERSEDIA",
-    "po-1",
-    10,
-    "Layar bersih, ada dent kecil di sudut kanan",
-  );
-  addUnit(
-    "m-pro13-2015-v6",
-    "TERSEDIA",
-    "po-1",
-    9,
-    "Kondisi rapi, sudah ganti battery tahun lalu",
-  );
-  addUnit(
-    "m-air-m1-v1",
-    "TERSEDIA",
-    "po-1",
-    5,
-    "Seperti baru, fullset dus dan charger asli",
-  );
-  addUnit(
-    "m-air-m1-v3",
-    "TERSEDIA",
-    "po-1",
-    5,
-    "Mulus, pemakaian ringan, ada garansi toko",
-  );
-  addUnit(
-    "m-ipad-9-v1",
-    "TERSEDIA",
-    "po-1",
-    8,
-    "Fullset dus, layar tanpa baret",
-  );
-  addUnit(
-    "m-ipad-9-v4",
-    "TERSEDIA",
-    "po-1",
-    8,
-    "Cellular aktif, body ada baret halus di belakang",
-  );
-  addUnit(
-    "m-ipad-air-4-v3",
-    "TERSEDIA",
-    "po-1",
-    6,
-    "Mulus, sudah pakai anti gores dari awal",
-  );
-  addUnit(
-    "m-ipad-mini-6-v1",
-    "TERSEDIA",
-    "po-1",
-    6,
-    "Unit only, kondisi bagus",
-  );
-  // PO-2 and PO-3 (fresh): still waiting for QC, in two different warehouses,
-  // which is what gives the Stock In page more than one accordion section.
-  addUnit("m-ipad-pro11-m1-v3", "QC", "po-2", 1, "");
-  addUnit("m-air-m2-v1", "QC", "po-2", 1, "");
-  addUnit("m-air-m2-v4", "QC", "po-2", 1, "");
-  addUnit("m-pro14-m1-v3", "QC", "po-2", 1, "");
-  addUnit("m-pro13-m1-v3", "QC", "po-3", 1, "");
-  addUnit("m-pro13-m1-v4", "QC", "po-3", 1, "");
+  const units: Unit[] = shop.units.map((u) => ({
+    serial: u.serial,
+    skuId: u.skuId,
+    status: u.status as UnitStatus,
+    locationId: u.locationId,
+    ...(u.rackId === undefined ? {} : { rackId: u.rackId }),
+    buy: u.buy,
+    description: u.description,
+    poId: u.poId,
+    ...(u.grade === undefined ? {} : { grade: u.grade }),
+    ...(u.battery === undefined ? {} : { batteryHealth: u.battery }),
+  }));
+  const events: UnitEvent[] = shop.events.map((e, i) => ({
+    id: `sev-${i + 1}`,
+    serial: e.serial,
+    seq: e.seq,
+    type: e.type,
+    at: isoOf(e.at, shop.now),
+    fromStatus: e.fromStatus ?? "-",
+    toStatus: e.toStatus,
+    locationId: e.toLocationId,
+    ...(e.note === undefined ? {} : { note: e.note }),
+    staff: shop.staff.find((s) => s.id === e.staffId)?.name ?? "Michella",
+  }));
+  for (const po of pos) {
+    const built = shop.purchaseOrders.find((p) => p.id === po.id)!;
+    po.items = built.lines.map((l) => ({
+      id: l.id,
+      skuId: l.skuId,
+      serial: l.serials[0] ?? null,
+      qty: l.qty,
+      unitCost: l.unitCost,
+      ...(l.notReceived ? { notReceived: true } : {}),
+    }));
+  }
+  /*
+   * The QC decision behind every machine that has one.
+   *
+   * Derived from the ledger rather than written beside it: a `QC_SELESAI` is
+   * an acceptance and a `RETUR_SUPPLIER` raised from QC is a rejection, and
+   * those events are the record. Writing this list by hand was how the old
+   * seed ended up with stock-in rows for machines whose timeline said
+   * something else.
+   */
+  const stockIns: StockInRec[] = shop.units.flatMap((u): StockInRec[] => {
+    const mine = shop.events.filter((e) => e.serial === u.serial);
+    const accepted = mine.find((e) => e.type === "QC_SELESAI");
+    const rejected = mine.find((e) => e.type === "RETUR_SUPPLIER");
+    const staff = (id: string) =>
+      shop.staff.find((s) => s.id === id)?.name ?? "Michella";
+    if (accepted !== undefined) {
+      return [
+        {
+          id: `si-${u.ref}`,
+          serial: u.serial,
+          skuId: u.skuId,
+          poId: u.poId,
+          locationId: u.locationId,
+          ...(u.rackId === undefined ? {} : { rackId: u.rackId }),
+          decision: "ACCEPTED" as const,
+          buy: u.buy,
+          description: u.description,
+          ...(u.battery === undefined ? {} : { batteryHealth: u.battery }),
+          at: isoOf(accepted.at, shop.now),
+          staff: staff(accepted.staffId),
+        },
+      ];
+    }
+    if (rejected !== undefined) {
+      return [
+        {
+          id: `si-${u.ref}`,
+          serial: u.serial,
+          skuId: u.skuId,
+          poId: u.poId,
+          locationId: u.locationId,
+          decision: "REJECTED" as const,
+          rejectKind: "SUPPLIER" as const,
+          reason: u.description,
+          buy: u.buy,
+          at: isoOf(rejected.at, shop.now),
+          staff: staff(rejected.staffId),
+        },
+      ];
+    }
+    return [];
+  });
 
-  const referralSources: ReferralSource[] = [
-    { id: "ref_instagram_ads", name: "Instagram Ads", active: true },
-    { id: "ref_shopee_ads", name: "Shopee Ads", active: true },
-    { id: "ref_facebook_ads", name: "Facebook Ads", active: true },
-    { id: "ref_tiktok_ads", name: "TikTok Ads", active: true },
-    { id: "ref_tokopedia_ads", name: "Tokopedia Ads", active: true },
-    { id: "ref_friends", name: "Friends", active: true },
-  ];
-  const customers: Customer[] = [
+  const referralSources: ReferralSource[] = REFERRAL_SOURCES.map((r) => ({
+    id: r.id,
+    name: r.name,
+    active: true,
+  }));
+  const customers: Customer[] = shop.customers.map((c) => ({
+    id: c.id,
+    name: c.name,
+    phone: c.phone,
+    ...(c.address === undefined
+      ? {}
+      : {
+          address: c.address,
+          addresses: [{ id: `${c.id}-addr-1`, label: "Rumah", line: c.address }],
+        }),
+    referralSourceId: c.referralSourceId,
+    createdAt: isoOf(c.since, shop.now),
+  }));
+  /**
+   * What the shop accepts, matching `PaymentMethod` in the schema by `code`.
+   *
+   * Hoisted out of the returned object so a seeded sale can quote a LABEL —
+   * an invoice printing "MARKETPLACE" where it should read "Shopee (escrow)"
+   * is the till's own vocabulary leaking out of the database's.
+   */
+  const paymentMethods: PaymentMethodRec[] = [
     {
-      id: "c-1",
-      name: "Andi Wijaya",
-      phone: "+62811223344",
-      address: "Jl. Sudirman 12, Jakarta",
-      referralSourceId: "ref_instagram_ads",
-      createdAt: iso(30),
+      id: "pm_tunai",
+      code: "TUNAI",
+      label: "Cash",
+      builtIn: true,
+      forPo: true,
+      forSale: true,
+      active: true,
     },
     {
-      id: "c-2",
-      name: "Sari Puspita",
-      phone: "+62812998877",
-      referralSourceId: "ref_friends",
-      createdAt: iso(20),
+      id: "pm_kartu_kredit",
+      code: "KARTU_KREDIT",
+      label: "Credit card",
+      builtIn: true,
+      forPo: true,
+      forSale: true,
+      active: true,
     },
     {
-      id: "c-3",
-      name: "Budi Santoso",
-      phone: "+62813334455",
-      address: "Jl. Diponegoro 8, Bandung",
-      referralSourceId: "ref_shopee_ads",
-      createdAt: iso(6),
+      id: "pm_deposit",
+      code: "DEPOSIT",
+      label: "Deposit",
+      builtIn: true,
+      forPo: true,
+      forSale: false,
+      active: true,
     },
     {
-      id: "c-4",
-      name: "Rina Kartika",
-      phone: "+62815667788",
-      referralSourceId: "ref_tiktok_ads",
-      createdAt: iso(3),
-    },
-  ];
-  const skuOf = (serial: string) =>
-    skus.find((k) => k.id === units.find((u) => u.serial === serial)!.skuId)!;
-  const orders: Order[] = [
-    {
-      id: "o-1",
-      code: "SI-2026/08-000201",
-      ts: iso(5, 14),
-      customerId: "c-1",
-      // A machine and a mouse on one receipt: this is the row the add-on
-      // recommender reads to learn that the two go together.
-      serials: [s3, aMouseSold],
-      prices: { [s3]: skuOf(s3).price, [aMouseSold]: skuOf(aMouseSold).price },
-      discount: 300_000,
-      discountId: "d-1",
-      source: "OFFLINE",
-      salesmanId: "sm-1",
-      referralSourceId: "ref_instagram_ads",
-      payMethod: "QRIS",
-      settled: true,
-      total: skuOf(s3).price + skuOf(aMouseSold).price - 300_000,
+      id: "pm_qris",
+      code: "QRIS",
+      label: "QRIS",
+      builtIn: true,
+      forPo: false,
+      forSale: true,
+      active: true,
     },
     {
-      id: "o-2",
-      code: "SI-2026/08-000202",
-      ts: iso(1, 13),
-      customerId: "c-3",
-      serials: [s4],
-      prices: { [s4]: skuOf(s4).price - 200_000 },
-      discount: 0,
-      source: "SHOPEE",
-      salesmanId: "sm-2",
-      referralSourceId: "ref_shopee_ads",
-      shippingAddress: "Jl. Diponegoro 8, Bandung",
-      payMethod: "Shopee (escrow)",
-      settled: false,
-      total: skuOf(s4).price - 200_000,
+      id: "pm_transfer",
+      code: "TRANSFER",
+      label: "Bank transfer",
+      builtIn: true,
+      forPo: false,
+      forSale: true,
+      active: true,
     },
     {
-      id: "o-3",
-      code: "SI-2026/08-000203",
-      ts: iso(4, 11),
-      customerId: "c-4",
-      serials: [sAirSold, aSleeveSold, aHubSold],
-      prices: {
-        [sAirSold]: skuOf(sAirSold).price,
-        [aSleeveSold]: skuOf(aSleeveSold).price,
-        [aHubSold]: skuOf(aHubSold).price,
-      },
-      discount: 0,
-      source: "INSTAGRAM",
-      salesmanId: "sm-3",
-      referralSourceId: "ref_tiktok_ads",
-      payMethod: "Transfer",
-      settled: true,
-      total:
-        skuOf(sAirSold).price +
-        skuOf(aSleeveSold).price +
-        skuOf(aHubSold).price,
-    },
-    {
-      // Tokopedia settles exactly as Shopee does (owner decision 2026-08-26),
-      // and this row is here so the pending-by-channel breakdown on Income &
-      // Expense has a second channel to break down. A list that only ever
-      // shows one heading is a list nobody notices is grouped.
-      id: "o-4",
-      code: "SI-2026/08-000204",
-      ts: iso(2, 16),
-      customerId: "c-2",
-      serials: [aKeyboardSold],
-      prices: { [aKeyboardSold]: skuOf(aKeyboardSold).price },
-      discount: 0,
-      source: "TOKOPEDIA",
-      salesmanId: "sm-1",
-      referralSourceId: "ref_tokopedia_ads",
-      shippingAddress: "Jl. Kebon Jeruk 12, Jakarta",
-      payMethod: "Tokopedia (escrow)",
-      settled: false,
-      total: skuOf(aKeyboardSold).price,
+      id: "pm_marketplace",
+      code: "MARKETPLACE",
+      label: "Marketplace escrow",
+      builtIn: true,
+      forPo: false,
+      forSale: true,
+      active: true,
     },
   ];
+  const payLabel = (code: string) =>
+    paymentMethods.find((m) => m.code === code)?.label ?? code;
+
+  const orders: Order[] = shop.orders.map((o) => ({
+    id: o.id,
+    code: o.code,
+    ts: isoOf(o.at, shop.now),
+    customerId: o.customerId,
+    serials: o.builtLines.map((l) => l.serial),
+    prices: Object.fromEntries(o.builtLines.map((l) => [l.serial, l.price])),
+    // The snapshot the salesperson's report reads: what the shop was asking on
+    // the day, so a repricing later cannot invent a bargain that never was.
+    listPrices: Object.fromEntries(
+      o.builtLines.map((l) => [l.serial, l.listPrice]),
+    ),
+    discount: o.discount,
+    ...(o.discountId === undefined ? {} : { discountId: o.discountId }),
+    source: o.channel as SaleSource,
+    salesmanId: o.salesmanId,
+    referralSourceId: o.referralSourceId,
+    ...(o.shippingAddress === undefined
+      ? {}
+      : { shippingAddress: o.shippingAddress }),
+    // The till writes a human label here, not a `PaymentMethod` code, and a
+    // marketplace writes its own escrow wording — so the seed does too.
+    payMethod: holdsFunds(o.channel as SaleSource)
+      ? marketplacePayMethod(o.channel)
+      : payLabel(o.payMethod),
+    settled: o.settled,
+    ...(o.extra === undefined
+      ? {}
+      : {
+          extra: o.extra,
+          extraNote: o.extraNote ?? "Delivery",
+          fees: [
+            { id: `${o.id}-fee-1`, label: o.extraNote ?? "Delivery", amount: o.extra },
+          ],
+        }),
+    total: o.total,
+  }));
+  /*
+   * What came back, and from whom.
+   *
+   * Both kinds, because they are genuinely different jobs: a supplier return
+   * is a machine that failed QC and never reached the shelf, and a customer
+   * return is one that did, went out, and came back to be graded again.
+   */
   const returns: ReturnRec[] = [
-    {
-      id: "r-1",
-      code: "SP-2026/08-000007",
-      kind: "SUPPLIER",
-      serial: s7,
-      reason: "Rejected at QC",
-      date: iso(6).slice(0, 10),
-      status: "DONE",
+    ...shop.supplierReturns.map((r) => ({
+      id: r.id,
+      code: r.code,
+      kind: "SUPPLIER" as const,
+      serial: r.serial,
+      reason: r.reason,
+      date: isoOf(r.at, shop.now).slice(0, 10),
+      status: "DONE" as const,
       fromQc: true,
-      supplierId: "sup-1",
-      expectedCredit: Math.round(skuOf(s7).price * 0.82),
-    },
+      supplierId: r.supplierId,
+      expectedCredit: r.amount,
+    })),
+    ...shop.orders
+      .filter((o) => o.returnedAt !== undefined)
+      .map((o, i) => ({
+        id: `ret-c-${i + 1}`,
+        code: docCode("SR", o.returnedAt!, 3 + i, shop.now),
+        kind: "CUSTOMER" as const,
+        serial: o.builtLines[0]!.serial,
+        reason: o.returnReason ?? "Retur pelanggan",
+        date: isoOf(o.returnedAt!, shop.now).slice(0, 10),
+        status: "DONE" as const,
+      })),
   ];
-  const reservations: Reservation[] = [
-    {
-      id: "rsv-1",
-      code: "RV-2026/08-000001",
-      customerId: "c-2",
-      when: iso(-1, 15),
-      note: "Will pick up after payday — wants the charger checked before collection.",
-      sourceId: "rsv-src-wa",
-      items: [{ id: "rsvi-1", serial: s5 }],
-      status: "ACTIVE",
-    },
-    {
-      // Two machines held for one customer in one conversation — the shape the
-      // flat one-row-per-serial model could not express, and the reason the
-      // page groups by customer now.
-      id: "rsv-2",
-      code: "RV-2026/08-000002",
-      customerId: "c-1",
-      when: iso(-2, 11),
-      note: "Buying for the office. Wants both invoiced together, collecting Saturday.",
-      sourceId: "rsv-src-ig",
-      items: [
-        { id: "rsvi-2", serial: s6 },
-        { id: "rsvi-3", serial: sHold2 },
-      ],
-      status: "ACTIVE",
-    },
-  ];
+  const reservations: Reservation[] = shop.reservations.map((r) => ({
+    id: r.id,
+    code: r.code,
+    customerId: r.customerId,
+    when: isoOf(r.scheduledFor, shop.now),
+    note: r.note,
+    sourceId: r.sourceId,
+    items: r.serials.map((serial, i) => ({
+      id: `${r.id}-item-${i + 1}`,
+      serial,
+    })),
+    status: "ACTIVE" as const,
+  }));
   const discounts: Discount[] = [
     {
       id: "d-1",
@@ -2550,33 +1885,57 @@ export function buildSeed(): MockDb {
       staff: "Michella",
     },
   ];
+  /*
+   * The one stock movement in this shop with no document behind it.
+   *
+   * Everything else that moved a machine has a purchase order, a receipt, a
+   * hold or a supplier return to point at — which is the shape a shop's ledger
+   * should have. What is left is the write-out after a stock take found a
+   * machine missing, and that is genuinely an adjustment: nothing sold it and
+   * nobody returned it, it simply was not on the rack. The opname below is the
+   * same count, so the two agree about which machine and when.
+   */
+  const missingSerial = shop.serialOfRef.get("ipad9-missing")!;
   const adjustments: Adjustment[] = [
     {
       id: "adj-1",
-      serial: s1,
-      description: "Mulus 95%, battery 91%, fullset box",
-      reasonId: "rsn-adj-internal",
-      at: iso(2, 11),
+      serial: missingSerial,
+      description: "Lecet halus, Unit only",
+      reasonId: "rsn-adj-opname",
+      at: isoOf(STOCK_TAKE_AT, shop.now),
       staff: "Michella",
       kind: "OUT",
       batchId: "adjb-1",
     },
   ];
+  /*
+   * The count that lost the iPad.
+   *
+   * Scoped to the Serpong warehouse, so what it EXPECTED to find is every
+   * machine shelved there — and `counted` is exactly that list minus the one
+   * that was not on the rack. A posted count whose counted list was one
+   * hand-picked serial could not demonstrate the thing the screen exists for,
+   * which is the difference between what the shelves hold and what the
+   * database thinks they hold.
+   */
+  const opnameScope = shop.units.filter(
+    (u) => u.locationId === "wh-2" && u.rackId !== undefined,
+  );
   const opnames: OpnameRec[] = [
     {
       id: "op-1",
-      code: "SO-2026/08-000001",
-      label: "Rak A–C, shift pagi",
-      locationIds: ["wh-1"],
+      code: docCode("SO", STOCK_TAKE_AT, 1, shop.now),
+      label: "Gudang Serpong, shift pagi",
+      locationIds: ["wh-2"],
       rackIds: [],
       categories: [],
       conditions: [],
-      date: iso(3, 18).slice(0, 10),
-      at: iso(3, 18),
-      counted: [s1],
-      missing: [],
+      date: isoOf(STOCK_TAKE_AT, shop.now).slice(0, 10),
+      at: isoOf(STOCK_TAKE_AT, shop.now),
+      counted: opnameScope.map((u) => u.serial),
+      missing: [missingSerial],
       unknown: [],
-      notes: {},
+      notes: { [missingSerial]: "Tidak ada di rak, sudah dicari dua kali." },
       surplus: {},
       status: "POSTED",
     },
@@ -2588,65 +1947,10 @@ export function buildSeed(): MockDb {
       batteryFairMin: 76,
       shopName: "NUSANTARA",
       shopTagline: "Second-hand Apple — sales, trade-in and service",
-      shopAddress: "Jakarta, Indonesia",
+      shopAddress: "Jl. Boulevard Raya Blok C2, Jakarta Utara",
       shopContact: "WhatsApp +62 811 2233 44 · @nusantara",
     },
-    paymentMethods: [
-      {
-        id: "pm_tunai",
-        code: "TUNAI",
-        label: "Cash",
-        builtIn: true,
-        forPo: true,
-        forSale: true,
-        active: true,
-      },
-      {
-        id: "pm_kartu_kredit",
-        code: "KARTU_KREDIT",
-        label: "Credit card",
-        builtIn: true,
-        forPo: true,
-        forSale: true,
-        active: true,
-      },
-      {
-        id: "pm_deposit",
-        code: "DEPOSIT",
-        label: "Deposit",
-        builtIn: true,
-        forPo: true,
-        forSale: false,
-        active: true,
-      },
-      {
-        id: "pm_qris",
-        code: "QRIS",
-        label: "QRIS",
-        builtIn: true,
-        forPo: false,
-        forSale: true,
-        active: true,
-      },
-      {
-        id: "pm_transfer",
-        code: "TRANSFER",
-        label: "Bank transfer",
-        builtIn: true,
-        forPo: false,
-        forSale: true,
-        active: true,
-      },
-      {
-        id: "pm_marketplace",
-        code: "MARKETPLACE",
-        label: "Marketplace escrow",
-        builtIn: true,
-        forPo: false,
-        forSale: true,
-        active: true,
-      },
-    ],
+    paymentMethods,
     warehouses,
     racks,
     suppliers,

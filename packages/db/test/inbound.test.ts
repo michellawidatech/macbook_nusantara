@@ -31,13 +31,13 @@ beforeAll(async () => {
   db = new PrismaClient({ datasourceUrl: URL });
   await db.$connect();
   // Reference data only: these tests are about units this file creates, and a
-  // fixture that already contains 300 of them would hide a query returning the
-  // wrong row.
-  await seed(db, { units: 0, skus: 20, models: 10 });
+  // fixture that already contains three dozen of them would hide a query
+  // returning the wrong row.
+  await seed(db, { referenceOnly: true });
   skuId = (await db.sku.findFirstOrThrow({ select: { id: true } })).id;
   locationId = (
     await db.location.findFirstOrThrow({
-      where: { code: "GDG-1" },
+      where: { code: "GDG-SRP" },
       select: { id: true },
     })
   ).id;

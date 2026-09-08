@@ -10,7 +10,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { PrismaClient } from "@nusantara/db";
+import { PrismaClient, truncateAll } from "@nusantara/db";
 import { dispatchTool, type ToolContext } from "../src/index.js";
 
 const URL =
@@ -30,14 +30,11 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await db.reservationItem.deleteMany({});
-  await db.reservation.deleteMany({});
-  await db.unitEvent.deleteMany({});
-  await db.unit.deleteMany({});
-  await db.sku.deleteMany({});
-  await db.catalogModel.deleteMany({});
-  await db.category.deleteMany({});
-  await db.location.deleteMany({});
+  // The whole schema, not a hand-written chain of deleteMany in
+  // child-before-parent order: that order is a property of the schema rather
+  // than of this file, and it fell over as soon as the seed grew a table it
+  // had not listed — a purchase order line holding the Sku being deleted.
+  await truncateAll(db);
 
   await db.location.create({
     data: { id: "loc_s", code: "S1", name: "Toko", kind: "TOKO", active: true, sortOrder: 1 },

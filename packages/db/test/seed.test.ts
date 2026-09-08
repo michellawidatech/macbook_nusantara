@@ -13,18 +13,22 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "../src/client.js";
 import { AGENT_STAFF_ID, seed, SYSTEM_STAFF_ID } from "../src/seed.js";
+import { INTAKE, LOCATIONS, ORDERS, SKUS } from "@nusantara/fixture";
 import { isClean, reconcile } from "../src/reconcile.js";
 
 const URL =
   process.env["TEST_DATABASE_URL"] ??
   "postgresql://nusantara@localhost:5432/nusantara_pos_test";
 
+/** The fixture's dates are relative, so the clock is pinned for the suite. */
+const NOW = Date.parse("2026-09-07T03:00:00.000Z");
+
 let db: PrismaClient;
 
 beforeAll(async () => {
   db = new PrismaClient({ datasourceUrl: URL });
   await db.$connect();
-  await seed(db, { units: 300, skus: 60, models: 20 });
+  await seed(db, { now: NOW });
 }, 120_000);
 
 afterAll(async () => {
@@ -44,12 +48,36 @@ describe("the seeded shop", () => {
     expect(isClean(reports)).toBe(true);
   });
 
-  it("has the shape the plan asks for", async () => {
-    expect(await db.location.count()).toBe(3);
+  it("writes exactly the shop the fixture describes", async () => {
+    expect(await db.location.count()).toBe(LOCATIONS.length);
     expect(await db.category.count()).toBe(5);
-    expect(await db.unit.count()).toBe(300);
+    expect(await db.unit.count()).toBe(INTAKE.length);
+    expect(await db.sku.count()).toBe(SKUS.length);
+    expect(await db.order.count()).toBe(ORDERS.length);
     expect(await db.categoryVariantAxis.count()).toBeGreaterThan(0);
     expect(await db.categoryAttribute.count()).toBeGreaterThan(0);
+  });
+
+  it("gives every machine a serial the application would accept", async () => {
+    // `ORIGINAL_PATTERN` in apps/web/src/lib/serialScan.ts: `S` then 10–12,
+    // no I and no O. A seeded serial that fails this cannot be scanned at the
+    // counter or printed on a label, which is what the old `NUS0000001` did.
+    const units = await db.unit.findMany({ select: { serial: true } });
+    for (const u of units) {
+      expect(u.serial, u.serial).toMatch(/^S[A-HJ-NP-Z0-9]{10,12}$/);
+    }
+  });
+
+  it("sells a machine the browser mock is showing the same serial for", async () => {
+    // The whole reason `@nusantara/fixture` exists: S/N Tracking reads this
+    // database and Inventory reads the mock, and before 2026-09-07 the two
+    // held different shops.
+    const serials = new Set(
+      (await db.unit.findMany({ select: { serial: true } })).map(
+        (u) => u.serial,
+      ),
+    );
+    expect(serials.size).toBe(INTAKE.length);
   });
 
   it("has one OWNER, one STAFF and a reserved system row", async () => {
@@ -137,7 +165,7 @@ describe("the seeded shop", () => {
       select: { serial: true, status: true, locationId: true },
     });
 
-    await seed(db, { units: 300, skus: 60, models: 20 });
+    await seed(db, { now: NOW });
 
     const second = await db.unit.findMany({
       orderBy: { serial: "asc" },
@@ -149,8 +177,8 @@ describe("the seeded shop", () => {
 
   it("resets cleanly rather than piling up", async () => {
     // The previous test already re-ran it; the counts must not have doubled.
-    expect(await db.unit.count()).toBe(300);
-    expect(await db.location.count()).toBe(3);
+    expect(await db.unit.count()).toBe(INTAKE.length);
+    expect(await db.location.count()).toBe(LOCATIONS.length);
   });
 });
 
@@ -178,11 +206,11 @@ describe("08 §6 — the checks themselves can fail", () => {
 
   it("catches a drifted location projection", async () => {
     const unit = await db.unit.findFirstOrThrow({
-      where: { locationId: "loc_gudang" },
+      where: { locationId: "wh-2" },
     });
     await db.unit.update({
       where: { id: unit.id },
-      data: { locationId: "loc_servis" },
+      data: { locationId: "wh-4" },
     });
 
     const check = (await reconcile(db)).find(
@@ -192,7 +220,7 @@ describe("08 §6 — the checks themselves can fail", () => {
 
     await db.unit.update({
       where: { id: unit.id },
-      data: { locationId: "loc_gudang" },
+      data: { locationId: "wh-2" },
     });
   });
 

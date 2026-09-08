@@ -171,6 +171,26 @@ async function seedShop() {
 
 /** One invoice: two of a variant, nothing identified against it yet. */
 async function seedPurchaseOrder() {
+  // The one row this file needs but does not own. Payment methods arrive with
+  // the seed, and two neighbouring suites now empty the schema outright rather
+  // than deleting a hand-written list of tables — so whether `pm_tunai` exists
+  // when this file runs depends on the file order, which is not a thing a test
+  // should depend on.
+  await db.paymentMethod.upsert({
+    where: { id: "pm_tunai" },
+    update: {},
+    create: {
+      id: "pm_tunai",
+      code: "TUNAI",
+      label: "Cash",
+      builtIn: true,
+      forPo: true,
+      forSale: true,
+      active: true,
+      sortOrder: 1,
+      createdAt: NOW,
+    },
+  });
   await db.supplier.upsert({
     where: { id: SUPPLIER },
     update: {},

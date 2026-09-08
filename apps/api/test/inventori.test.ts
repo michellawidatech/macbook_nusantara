@@ -11,7 +11,8 @@ import { Writable } from "node:stream";
 import type { Express } from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { PrismaClient, seed } from "@nusantara/db";
+import { PrismaClient, seedVolume } from "@nusantara/db";
+import { CATEGORIES, LOCATIONS } from "@nusantara/fixture";
 import { createLogger } from "@nusantara/logging";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
@@ -33,8 +34,10 @@ beforeAll(async () => {
   db = new PrismaClient({ datasourceUrl: URL });
   await db.$connect();
 
-  // The full 5 000 — this is the screen's stated scale.
-  await seed(db, { units: 5_000 });
+  // The full 5 000 — this is the screen's stated scale, and more machines
+  // than the demo shop has. `seedVolume` is the pile that exists for exactly
+  // this: real variants out of the fixture catalogue, in quantity.
+  await seedVolume(db, { units: 5_000 });
 
   // The seed's staff carry an unusable hash on purpose, so give one a password.
   await db.staff.update({
@@ -206,8 +209,10 @@ describe("GET /api/katalog/inventori/filters", () => {
       .set("Cookie", cookie);
 
     expect(res.status).toBe(200);
-    expect(res.body.lokasi).toHaveLength(3);
-    expect(res.body.kategori).toHaveLength(5);
+    // Every room the shop has, and every category — read off the fixture so
+    // that adding a warehouse is one edit rather than one edit and a puzzle.
+    expect(res.body.lokasi).toHaveLength(LOCATIONS.length);
+    expect(res.body.kategori).toHaveLength(CATEGORIES.length);
     expect(res.body.status.length).toBeGreaterThan(0);
     expect(res.body.status[0]).toHaveProperty("count");
   });

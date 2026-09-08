@@ -6,3 +6,4 @@ export * from "./reservationState.js";
 export * from "./money.js";
 export * from "./fees.js";
 export * from "./checks.js";
+export * from "./productCode.js";

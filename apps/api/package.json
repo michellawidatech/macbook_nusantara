@@ -30,6 +30,7 @@
     "cookie-parser": "^1.4.7",
     "express": "^5.2.1",
     "express-openid-connect": "^3.4.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@nusantara/fixture": "workspace:*"
   }
 }

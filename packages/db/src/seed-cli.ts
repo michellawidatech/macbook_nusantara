@@ -6,23 +6,34 @@
  * produces incoherent data is worse than no seed: every screen built on it
  * inherits the incoherence.
  *
- * ## SEED_UNITS
+ * ## What it writes
  *
- * `SEED_UNITS=0` seeds the REFERENCE data and stops: locations, categories, the
- * catalogue, SKUs, payment methods, staff and the lookup lists — and no units,
- * no orders, no ledger. That is what a real shop starts from, because its stock
- * arrives through Inbound & QC rather than out of a fixture, and five thousand
- * invented serials in a live database are five thousand things somebody has to
- * know to ignore.
+ * The shop in `@nusantara/fixture` — the same one `apps/web`'s browser mock
+ * renders. That is the point of the package: S/N Tracking reads this database
+ * and Inventory reads the mock, so if the two are not the same shop then the
+ * deployed app cannot agree with itself, which is exactly the bug this
+ * replaced (2026-09-07).
  *
- * It is also the only mode that can be run against a REMOTE database. The unit
- * pass wraps two hundred units per transaction, each costing several round
- * trips, against `TXN_TIMEOUTS`' ten-second limit — comfortable over loopback
- * and impossible over the internet, where it dies with P2028 partway through
- * and leaves units carrying no event. The timeout is not the bug; it is the
- * rule that a checkout which cannot finish in ten seconds must fail loudly. To
- * get the FULL fixture onto a remote database, seed a local one and ship the
- * result with pg_dump.
+ * ## SEED_REFERENCE_ONLY
+ *
+ * `SEED_REFERENCE_ONLY=1` seeds the REFERENCE data and stops: locations,
+ * categories, the catalogue, SKUs, payment methods, staff and the lookup lists
+ * — and no units, no orders, no ledger. That is what a real shop starts from,
+ * because its stock arrives through Inbound & QC rather than out of a fixture.
+ *
+ * ## Seeding a remote database
+ *
+ * This is now safe to do. The old fixture wrapped two hundred units per
+ * transaction, each costing several round trips, against `TXN_TIMEOUTS`' ten
+ * second limit — comfortable over loopback and impossible over the internet,
+ * where it died with P2028 partway through and left units carrying no event.
+ * The shop is three dozen machines written two at a time, so the largest
+ * transaction is a handful of round trips:
+ *
+ *     DATABASE_URL="$OWNER_URL" pnpm --filter @nusantara/db seed
+ *
+ * ⚠️ It TRUNCATES every table first. Never point it at a database holding a
+ * shop's real ledger.
  */
 
 import { db, disconnect } from "./client.js";
@@ -30,33 +41,27 @@ import { seed } from "./seed.js";
 import { formatReports, isClean, reconcile } from "./reconcile.js";
 
 /**
- * `SEED_UNITS`, or undefined to leave the seed's own default alone.
+ * Whether `SEED_REFERENCE_ONLY` asks for the catalogue and nothing else.
  *
- * Deliberately distinguishes "not set" from "set to 0": `Number(undefined)` is
- * NaN and `Number("")` is 0, so a bare `Number(env)` would turn an unset
- * variable into a request for zero units and quietly seed a shop with no stock.
+ * Anything but an unset or empty value counts, EXCEPT the three spellings of
+ * no — `0`, `false` and `no`. A variable set to "0" meaning "yes please" is
+ * the kind of switch somebody flips once and never trusts again.
  */
-function unitCount(raw: string | undefined): number | undefined {
-  if (raw === undefined || raw.trim() === "") return undefined;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 0) {
-    throw new Error(
-      `SEED_UNITS must be a whole number >= 0 — got ${JSON.stringify(raw)}`,
-    );
-  }
-  return n;
+function referenceOnly(raw: string | undefined): boolean {
+  const v = (raw ?? "").trim().toLowerCase();
+  return v !== "" && v !== "0" && v !== "false" && v !== "no";
 }
 
 async function main(): Promise<void> {
   const client = db();
-  const units = unitCount(process.env["SEED_UNITS"]);
-  if (units === 0) {
+  const bare = referenceOnly(process.env["SEED_REFERENCE_ONLY"]);
+  if (bare) {
     console.log(
-      "SEED_UNITS=0 — reference data only, no units, orders or events\n",
+      "SEED_REFERENCE_ONLY — catalogue only, no units, orders or events\n",
     );
   }
   const result = await seed(client, {
-    ...(units === undefined ? {} : { units }),
+    referenceOnly: bare,
     onProgress: (m) => console.log(`  ${m}`),
   });
 
