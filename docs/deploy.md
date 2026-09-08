@@ -85,6 +85,43 @@ sends it.
 Turning it on is $7/mo: uncomment the block, set `plan: 0.5c-512mb`, re-sync,
 and give it the same `DATABASE_URL` as the other two.
 
+## ⚠️ Netlify is NOT wired to git — the SPA is deployed by hand
+
+Render is: `render.yaml` sets `autoDeployTrigger: commit` on
+`rebuild/inc1-interaction-kit`, so a push to that branch rebuilds the API and
+the webhook. Netlify is not, and the two behave differently in a way that has
+already cost an afternoon.
+
+The site's production branch is **`main`**, the branch this project is not
+developed on, and it has no build command configured. Every deploy it has ever
+had was pushed from a laptop. So a push to `rebuild/inc1-interaction-kit`
+rebuilds the API and leaves the SPA exactly where it was — silently, with no
+failed build to notice, because no build was ever queued.
+
+Until that is reconciled — either point the site at this branch, or merge to
+`main` — the SPA ships like this, from the repository root:
+
+```bash
+API_ORIGIN="https://nusantara-api.onrender.com" pnpm --filter @nusantara/web build
+API_ORIGIN="https://nusantara-api.onrender.com" node apps/web/scripts/netlify-redirects.mjs
+NETLIFY_SITE_ID=6f9daa75-e65d-4130-b184-2b94937abd58 \
+  netlify deploy --prod --filter @nusantara/web --dir apps/web/dist --no-build
+```
+
+`--filter` is not optional: without it the CLI finds eleven workspace projects
+and stops to ask which one, which in a non-interactive shell is a crash rather
+than a prompt. `API_ORIGIN` has to be set for the second command as well as the
+first — it is a Netlify build variable, and nothing on a laptop reads it.
+
+Verify by content length rather than by eye: Vite names the bundle after its
+own contents, so a `content-length` on
+`/assets/index-<hash>.js` equal to the local file is proof the deploy is the
+build.
+
+```bash
+curl -sI https://macbook-nusantara.netlify.app/assets/index-<hash>.js | grep -i content-length
+```
+
 ## Why Netlify and not GitHub Pages
 
 The session is a cookie the API sets, and the OIDC sign-in is a chain of
