@@ -59,13 +59,34 @@ export const UNIT_EVENT: Record<string, string> = {
 };
 
 /** `Reservation.status`. */
+/**
+ * A hold's state — in BOTH vocabularies, because this codebase has two.
+ *
+ * `Reservation.status` in `schema.prisma` is `TERJADWAL | SELESAI | BATAL`;
+ * the browser store's is `ACTIVE | DONE | CANCELLED`. One concept, two spellings,
+ * and this map is the only place either becomes words a person reads — so it
+ * answers to both rather than making every caller translate first.
+ *
+ * That is not a nicety. The reservations screen rendered "Tidak dikenal" on
+ * every status tag from the day it moved to the API (2026-09-05) until
+ * 2026-09-08, because it fed the schema's spelling to a map that only knew the
+ * store's, and `tagOf` correctly refuses to guess: an unmapped SCREAMING_CASE
+ * token is "Unknown", never a colour borrowed from a status it might have been.
+ * The map was right and the coverage was missing.
+ *
+ * A reservation that turned into a sale reads as "Bought", not "Done" — the
+ * status the owner asked for, and the one that distinguishes a hold that
+ * completed from a hold that merely stopped.
+ */
 export const RESERVATION_STATUS: Record<string, TagLabel> = {
-  // A reservation that turned into a sale reads as "Bought", not "Done" — the
-  // status the owner asked for, and the one that distinguishes a hold that
-  // completed from a hold that merely stopped.
+  // The store's spelling.
   ACTIVE: { label: "On hold", color: "gold" },
   DONE: { label: "Bought", color: "green" },
   CANCELLED: { label: "Cancelled", color: "default" },
+  // The schema's, which is what `Hold` carries and what the API returns.
+  TERJADWAL: { label: "On hold", color: "gold" },
+  SELESAI: { label: "Bought", color: "green" },
+  BATAL: { label: "Cancelled", color: "default" },
 };
 
 /**

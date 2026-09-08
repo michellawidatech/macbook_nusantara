@@ -179,6 +179,18 @@ describe("the row", () => {
     ).toBeNull();
   });
 
+  it("says what the hold's status IS, not 'Unknown'", async () => {
+    // For three days this tag read "Tidak dikenal" — the page handed the
+    // schema's spelling of the status to a map that only knew the store's.
+    // Asserted here as well as in enumLabels.test.ts because this is the
+    // screen somebody actually looks at.
+    renderPage();
+    await settle();
+
+    expect(screen.getAllByText("On hold").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Unknown")).toBeNull();
+  });
+
   it("still lists the products and serials on the hold", async () => {
     renderPage();
     await settle();

@@ -14,6 +14,34 @@ import { makeT } from "../src/i18n/translate.js";
 const PLAIN = [UNIT_EVENT, ORDER_SOURCE, ORDER_SOURCE_PHRASE];
 const TAGGED = [UNIT_STATUS, RESERVATION_STATUS];
 
+describe("a hold's status, in both vocabularies", () => {
+  /**
+   * The bug this pins: `/reservations` rendered "Tidak dikenal" on every
+   * status tag — the hold's and each machine's — for three days, because the
+   * page fed the SCHEMA's spelling to a map that only knew the STORE's.
+   *
+   * `tagOf` was right to refuse: an unmapped SCREAMING_CASE token is "Unknown"
+   * rather than a colour borrowed from a status it might have been. What was
+   * missing was coverage, and coverage is a thing a test can hold.
+   */
+  const SCHEMA = ["TERJADWAL", "SELESAI", "BATAL"] as const;
+  const STORE = ["ACTIVE", "DONE", "CANCELLED"] as const;
+
+  it("names every value either side can hand it", () => {
+    for (const v of [...SCHEMA, ...STORE]) {
+      expect(tagOf(RESERVATION_STATUS, v).label, v).not.toBe("Unknown");
+    }
+  });
+
+  it("says the same thing in both, so a migration cannot change the words", () => {
+    SCHEMA.forEach((schema, i) => {
+      expect(tagOf(RESERVATION_STATUS, schema)).toEqual(
+        tagOf(RESERVATION_STATUS, STORE[i]!),
+      );
+    });
+  });
+});
+
 describe("enum labels", () => {
   it("never lets a SCREAMING_CASE token through as its own label", () => {
     const labels = [
