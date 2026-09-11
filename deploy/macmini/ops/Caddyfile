@@ -1,0 +1,44 @@
+# Nusantara POS — ONE origin for the SPA, /api and /auth, which is what Vite's
+# dev proxy and Netlify both arrange: the session cookie is SameSite=Lax, and
+# the Auth0 callback has to land on the SPA's own origin.
+#
+# Plain HTTP on loopback only. HTTPS is Cloudflare Tunnel's job, and nothing on
+# the shop's network can reach this port directly.
+{
+	auto_https off
+	servers {
+		# cloudflared connects from loopback; trusting it is what lets its
+		# X-Forwarded-Proto: https reach the API.
+		trusted_proxies static 127.0.0.1/32 ::1/128
+	}
+}
+
+:8080 {
+	bind 127.0.0.1 [::1]
+	encode zstd gzip
+
+	@backend path /api /api/* /auth /auth/*
+	handle @backend {
+		reverse_proxy 127.0.0.1:4000
+	}
+
+	handle {
+		root * /opt/nusantara/current/web
+		# Every client-side route is index.html.
+		try_files {path} /index.html
+		file_server
+
+		header {
+			X-Content-Type-Options nosniff
+			X-Frame-Options DENY
+			Referrer-Policy strict-origin-when-cross-origin
+		}
+		# Hashed names never change content. Everything else — index.html above
+		# all — must be revalidated, or a new release ships assets nobody's
+		# browser asks for.
+		@hashed path /assets/*
+		header @hashed Cache-Control "public, max-age=31536000, immutable"
+		@unhashed not path /assets/*
+		header @unhashed Cache-Control "no-cache"
+	}
+}

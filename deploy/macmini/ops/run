@@ -1,0 +1,44 @@
+#!/bin/zsh
+# Start one Nusantara process. launchd calls this for api, webhook and worker;
+# a person calls it for the staff CLI:
+#
+#   printf '%s' "$PW" | sudo -u _nusantara /opt/nusantara/current/ops/run staff \
+#     --username owner@example.com --name 'Owner' --role OWNER
+#
+# Configuration comes from $NUSANTARA_HOME/etc (default /opt/nusantara/etc):
+# common.env for everything plus one file per process, so the API never holds
+# the webhook's APP_SECRET — the same split render.yaml keeps.
+setopt err_exit no_unset pipe_fail
+
+home=${NUSANTARA_HOME:-/opt/nusantara}
+release=${0:A:h:h}   # the release this script shipped in, symlinks resolved
+proc=${1:-}
+(( $# )) && shift
+
+die() { print -u2 -- "nusantara/run: $*"; exit 78 }   # 78 = EX_CONFIG
+
+load() {
+  [[ -r $1 ]] || die "cannot read $1"
+  set -a; source $1; set +a
+}
+
+case $proc in
+  api)     envfile=api.env;     heap=384 ;;
+  webhook) envfile=webhook.env; heap=256 ;;
+  worker)  envfile=worker.env;  heap=256 ;;
+  staff)   envfile=;            heap=256 ;;
+  *) print -u2 "usage: run api|webhook|worker|staff [args…]"; exit 64 ;;
+esac
+
+load $home/etc/common.env
+[[ -n $envfile ]] && load $home/etc/$envfile
+
+# Prisma's engine and argon2 are native code for one CPU. Say so here rather
+# than as a dlopen error three frames deep.
+built=$(sed -n 's/^arch=//p' $release/RELEASE)
+[[ $built == $(uname -m) ]] || die "this release was built for $built; this machine is $(uname -m)"
+
+export NODE_ENV=production
+export NODE_OPTIONS="--max-old-space-size=$heap"
+cd $release
+exec ${NODE_BIN:-node} app/$proc.mjs "$@"

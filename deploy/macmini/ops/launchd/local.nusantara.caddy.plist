@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Caddy on 127.0.0.1:8080: the SPA, plus /api and /auth proxied to the API.
+  Its config ships inside each release, so it moves with the code it serves.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>local.nusantara.caddy</string>
+	<key>UserName</key>
+	<string>_nusantara</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/homebrew/bin/caddy</string>
+		<string>run</string>
+		<string>--config</string>
+		<string>/opt/nusantara/current/ops/Caddyfile</string>
+		<string>--adapter</string>
+		<string>caddyfile</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/opt/nusantara/var</string>
+		<key>XDG_DATA_HOME</key>
+		<string>/opt/nusantara/var</string>
+		<key>XDG_CONFIG_HOME</key>
+		<string>/opt/nusantara/var</string>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/opt/nusantara</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>StandardOutPath</key>
+	<string>/opt/nusantara/logs/caddy.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/nusantara/logs/caddy.log</string>
+</dict>
+</plist>
