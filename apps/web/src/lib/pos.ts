@@ -15,19 +15,22 @@
  * the model is agreed, where a serial's grade, battery and shelf are worth
  * reading. That is the owner's answer of 2026-08-27: *always ask which one*.
  *
- * ## One price per row
+ * ## A price RANGE per row
  *
- * A variant has one asking price (owner revision 2026-08-27, reversing
- * 2026-08-15). Two machines of one variant in different condition ask the same
- * money; the grade is recorded, shown, and does not move the number. The row
- * therefore carries `Sku.price` and the grades of the machines behind it, so a
- * cashier can see there is an A and a B without the screen implying they cost
- * different amounts.
+ * A variant had one asking price between 2026-08-27 and 2026-09-08, and does
+ * not any more: the price is per serial again (owner revision), because two
+ * machines of one variant in different condition are not worth the same money.
+ * So the row carries a RANGE and the grades behind it, and the chooser says
+ * what each particular machine asks. A cashier who sees "Rp7.900.000 –
+ * Rp9.400.000" beside an A and a B knows there is a decision to make; the same
+ * row showing one number would have them quote whichever machine came out of
+ * the dialog first.
  *
  * Pure: no React, no store. The page renders what this returns.
  */
 import type { MockDb, Sku, Unit } from "../mock/seed.js";
 import { gradeRank } from "./condition.js";
+import { priceOf, priceRange, type PriceRange } from "./unitPrice.js";
 
 /** One row of the till's catalogue: a variant, and what is left of it. */
 export interface ShelfRow {
@@ -45,6 +48,15 @@ export interface ShelfRow {
   readonly remaining: number;
   /** The grades present among what is left, deduped, best first. */
   readonly grades: readonly string[];
+  /**
+   * What the machines left on this row ask (owner revision 2026-09-08).
+   *
+   * A RANGE, because the price is per serial again. `sku.price` is still on
+   * the row — it is what the shop asks for the variant, and what an unpriced
+   * machine quotes — but it is no longer what anything is sold at, so a
+   * catalogue showing only that number would misquote every haggled shelf.
+   */
+  readonly price: PriceRange;
   /** True when a machine of this variant is on hold for somebody. */
   readonly anyReserved: boolean;
 }
@@ -158,6 +170,11 @@ export function shelfRows(
       grades: [...new Set(left.map((u) => u.grade).filter(Boolean))]
         .sort((a, b) => gradeRank(a) - gradeRank(b))
         .map(String),
+      // Over what is LEFT, not over every machine of the variant: a row's
+      // price has to be a price a customer could still be quoted, and a
+      // basket that has already taken the cheap one must not go on advertising
+      // it.
+      price: priceRange(left.map((u) => priceOf(u, sku.price))),
       anyReserved: left.some((u) => u.status === "DIRESERVASI"),
     });
   }

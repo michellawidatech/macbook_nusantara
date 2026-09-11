@@ -87,7 +87,8 @@ function rng(seed: number): () => number {
  * is the live one, and several test files truncate the whole schema before
  * calling `seed()`.
  *
- * `forPo` is true only for the three the owner named for supplier payments;
+ * `forPo` is true for the owner's three ways of paying a supplier — cash, a
+ * transfer and a card (2026-09-09);
  * `builtIn` marks the rows application code reads by `code` (MARKETPLACE
  * drives Shopee escrow), which staff may rename or deactivate but never drop.
  */
@@ -100,19 +101,17 @@ const PAYMENT_METHODS = [
     forPo: true,
     forSale: true,
   },
-  {
-    id: "pm_deposit",
-    code: "DEPOSIT",
-    label: "Deposit",
-    forPo: true,
-    forSale: false,
-  },
+  // DEPOSIT was a row here until 2026-09-09 (owner decision): a deposit is the
+  // RESULT of a payment, not a way of making one. Money paid in advance is
+  // paid by cash, transfer or card, and the allocation that later puts it
+  // against an invoice carries that same method.
   { id: "pm_qris", code: "QRIS", label: "QRIS", forPo: false, forSale: true },
   {
+    // `forPo`, because a supplier deposit is nearly always a transfer.
     id: "pm_transfer",
     code: "TRANSFER",
     label: "Bank transfer",
-    forPo: false,
+    forPo: true,
     forSale: true,
   },
   {
@@ -190,6 +189,20 @@ const OPEN_FLOAT = 500_000n;
 
 /** Whole rupiah as the schema stores it. Money is never a JS number here. */
 const rp = (n: number): bigint => BigInt(Math.round(n));
+
+/**
+ * The category attributes that hold a NUMBER, and what that number is in.
+ *
+ * Three of them since the battery split of 2026-09-08 — a percentage, a charge
+ * count and a capacity in mAh — because `CategoryAttribute` is where a fact
+ * that only some categories have belongs, and a machine's battery is exactly
+ * that. Anything not named here is text.
+ */
+const NUMERIC_ATTRS: Readonly<Record<string, string | null>> = {
+  baterai: "%",
+  siklus: null,
+  kapasitas: "mAh",
+};
 
 export interface SeedResult {
   readonly units: number;
@@ -368,10 +381,14 @@ async function writeReference(
         categoryId: c.id,
         key,
         label: key[0]!.toUpperCase() + key.slice(1),
-        // Battery health is a number and Inventory bands it, so saying so here
-        // is what lets the column sort as one.
-        type: key === "baterai" ? ("NUMBER" as const) : ("TEXT" as const),
-        unit: key === "baterai" ? "%" : null,
+        // The three battery attributes are numbers and Inventory bands them,
+        // so saying so here is what lets each column sort as one. Their units
+        // differ, which is the whole point of the 2026-09-08 split: a
+        // percentage, a count, and a capacity in mAh.
+        type: NUMERIC_ATTRS[key] === undefined
+          ? ("TEXT" as const)
+          : ("NUMBER" as const),
+        unit: NUMERIC_ATTRS[key] ?? null,
         sortOrder: j + 1,
       })),
     });
@@ -625,16 +642,27 @@ export async function seed(
     })),
   });
 
-  // Battery health, as a per-unit value of the category's own attribute. It
-  // has no column on `Unit` — `CategoryAttribute` is where a fact that only
-  // some categories have belongs, which is also what makes it a column
-  // Inventory can render without anything being hardcoded.
+  /*
+   * A machine's battery, as per-unit values of its category's attributes.
+   *
+   * It has no column on `Unit` — `CategoryAttribute` is where a fact that only
+   * some categories have belongs, which is also what makes it a column
+   * Inventory can render without anything being hardcoded. That turns out to
+   * be exactly the right shape for the 2026-09-08 era split: a 2020-or-earlier
+   * machine writes `siklus` and `kapasitas`, a later one writes `baterai`, and
+   * neither needs a migration.
+   *
+   * ⚠️ This wrote NOTHING at all until 2026-09-08. The lookup asked for the
+   * key `baterai` and the fixture's categories declared `siklus`, so the query
+   * matched no attribute and every unit silently got no reading. Both sides
+   * now name all three.
+   */
   const batteryAttr = await db.categoryAttribute.findMany({
-    where: { key: "baterai" },
-    select: { id: true, categoryId: true },
+    where: { key: { in: ["baterai", "siklus", "kapasitas"] } },
+    select: { id: true, categoryId: true, key: true },
   });
-  const batteryByCategory = new Map(
-    batteryAttr.map((a) => [a.categoryId, a.id]),
+  const attrIdOf = new Map(
+    batteryAttr.map((a) => [`${a.categoryId}/${a.key}`, a.id]),
   );
   const categoryOfSku = new Map(
     shop.skus.map((s) => [
@@ -644,17 +672,25 @@ export async function seed(
   );
   await db.unitAttribute.createMany({
     data: shop.units.flatMap((u) => {
-      if (u.battery === undefined) return [];
-      const attrId = batteryByCategory.get(categoryOfSku.get(u.skuId)!);
-      if (attrId === undefined) return [];
-      return [
-        {
-          id: `uattr_${u.ref}_bat`,
-          unitId: `u_${u.ref}`,
-          attributeId: attrId,
-          value: String(u.battery),
-        },
+      const category = categoryOfSku.get(u.skuId)!;
+      const readings: [string, number | undefined][] = [
+        ["baterai", u.battery],
+        ["siklus", u.cycleCount],
+        ["kapasitas", u.fcc],
       ];
+      return readings.flatMap(([key, value]) => {
+        if (value === undefined) return [];
+        const attributeId = attrIdOf.get(`${category}/${key}`);
+        if (attributeId === undefined) return [];
+        return [
+          {
+            id: `uattr_${u.ref}_${key}`,
+            unitId: `u_${u.ref}`,
+            attributeId,
+            value: String(value),
+          },
+        ];
+      });
     }),
   });
   log(`unit: ${shop.units.length}`);

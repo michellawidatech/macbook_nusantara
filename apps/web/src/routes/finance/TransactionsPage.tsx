@@ -33,13 +33,25 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { DownloadOutlined, PrinterOutlined } from "@ant-design/icons";
+import {
+  DownloadOutlined,
+  PrinterOutlined,
+  WalletOutlined,
+} from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { InvoiceModal } from "../../components/Invoice";
 import { fmtRp, fmtDateTime } from "../../lib/format.js";
-import { useDb } from "../../mock/store.js";
+import { mutate, nextId, useDb } from "../../mock/store.js";
 import type { Order } from "../../mock/seed.js";
+import { PaymentsModal } from "../../components/PaymentsModal";
+import { diffPayments } from "../../lib/paymentEdits.js";
+import {
+  isSettled,
+  paymentsOf,
+  saleBalance,
+  type SalePayment,
+} from "../../lib/salePayments.js";
 import { SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
 
@@ -59,6 +71,12 @@ import { useTranslation } from "react-i18next";
  * (owner report 2026-08-26). They are pairs in the data, so they are pairs on
  * screen.
  */
+/**
+ * What a sale's money is doing. Four answers since 2026-09-08 — see
+ * `statusOf` for why two were not enough.
+ */
+type MovementStatus = "Settled" | "Part paid" | "Pending" | "Owed" | "Unpaid";
+
 interface MovementLine {
   /** Null when no unit in the system carries this serial — see the mapper. */
   readonly product: string | null;
@@ -85,7 +103,7 @@ interface Movement {
   readonly salesperson: string;
   readonly channel: string;
   readonly payment: string;
-  readonly status: "Settled" | "Pending" | "Paid";
+  readonly status: MovementStatus;
   readonly moneyIn: number;
   readonly moneyOut: number;
   /** Present on a sale, so the row can reprint its invoice. */
@@ -126,11 +144,81 @@ function toCsv(rows: readonly Movement[]): string {
   return [header.map(cell).join(","), ...lines].join("\r\n");
 }
 
+/**
+ * What a sale's money is doing, in one word.
+ *
+ * Four rather than the two `settled` could express (owner ask 2026-09-08). A
+ * marketplace sitting on a payout, a customer who has not paid, and a bill
+ * half collected are three different situations, and the shop acts differently
+ * on each: press a button on Shopee, telephone a person, or neither.
+ *
+ * Order matters. "Owed" wins over "Pending" when both are true, because a
+ * customer debt is the one with a deadline and a person to ring.
+ */
+function statusOf(order: Order): MovementStatus {
+  const b = saleBalance(order.total, paymentsOf(order));
+  if (b.fullySettled) return "Settled";
+  if (b.customerOwes > 0) return "Owed";
+  if (b.pending > 0) return "Pending";
+  return b.settled > 0 ? "Part paid" : "Unpaid";
+}
+
 export function TransactionsPage() {
   const { t } = useTranslation();
   const db = useDb();
+  /**
+   * A `PaymentMethod` code, spelled for a person.
+   *
+   * `Order.payMethod` holds a code since 2026-09-09, so this column would
+   * otherwise read "KARTU_KREDIT". Which marketplace a sale came from is the
+   * channel column's job, so this one does not repeat it.
+   */
+  const methodLabel = (code: string) =>
+    db.paymentMethods.find((m) => m.code === code)?.label ?? code;
   const { message } = App.useApp();
   const [reprint, setReprint] = useState<Order | null>(null);
+  /** Null when the payment editor is shut; the sale it is about when open. */
+  const [editingPay, setEditingPay] = useState<Order | null>(null);
+
+  /**
+   * Save a correction, and the log rows that make it safe (owner ask
+   * 2026-09-08).
+   *
+   * One `mutate`: the payments, the `settled` projection over them and every
+   * log row go together, exactly as a unit's event and its projection do. A
+   * correction half-written — the amount changed and the log row missing — is
+   * the one state this feature must never be able to reach, because it is
+   * indistinguishable from the amount having always been that.
+   */
+  const savePayments = (
+    order: Order,
+    next: SalePayment[],
+    reason: string,
+  ) => {
+    const before = paymentsOf(order);
+    const rows = diffPayments(before, next, {
+      at: new Date().toISOString(),
+      staff: "Michella",
+      ...(reason ? { reason } : {}),
+    });
+    mutate((d) => {
+      const o = d.orders.find((x) => x.id === order.id);
+      if (!o) return;
+      o.payments = next;
+      o.settled = isSettled(o.total, next);
+      for (const row of rows) {
+        d.paymentLog.push({ id: nextId("plog"), ...row });
+      }
+    });
+    setEditingPay(null);
+    message.success(
+      rows.length === 0
+        ? t("transactions.payUnchanged", "Nothing changed.")
+        : t("transactions.payLogged", "{{n}} change(s) recorded.", {
+            n: rows.length,
+          }),
+    );
+  };
 
   const movements = useMemo<Movement[]>(() => {
     const sales: Movement[] = db.orders.map((o) => {
@@ -159,8 +247,17 @@ export function TransactionsPage() {
         salesperson:
           db.salesmen.find((s) => s.id === o.salesmanId)?.name ?? "—",
         channel: o.source,
-        payment: o.payMethod,
-        status: o.settled ? "Settled" : "Pending",
+        payment: methodLabel(o.payMethod),
+        /*
+         * Three answers, not two (owner ask 2026-09-08).
+         *
+         * `settled ? "Settled" : "Pending"` could not tell a marketplace
+         * sitting on a payout from a customer who has not paid — and the shop
+         * chases a different party for each. A sale that is part collected
+         * says so too, because "how much of this have we actually had?" is the
+         * question somebody opens this screen to answer.
+         */
+        status: statusOf(o),
         moneyIn: o.total,
         moneyOut: 0,
         order: o,
@@ -178,13 +275,31 @@ export function TransactionsPage() {
     db.referralSources,
   ]);
 
-  const totalIn = movements
-    .filter((m) => m.status !== "Pending")
-    .reduce((t, m) => t + m.moneyIn, 0);
+  /*
+   * Summed over the PAYMENTS, not over the sale totals (owner ask
+   * 2026-09-08).
+   *
+   * A split bill lands in two of these cards at once — half in the shop's
+   * hands and half with Shopee — and the old arithmetic, which put a whole
+   * sale in exactly one bucket by its `settled` flag, could not put it in two.
+   * It counted the split example as Rp10jt pending when Rp5jt of it was in the
+   * till.
+   */
+  const money = useMemo(() => {
+    let settled = 0;
+    let pending = 0;
+    let owed = 0;
+    for (const o of db.orders) {
+      const b = saleBalance(o.total, paymentsOf(o));
+      settled += b.settled;
+      pending += b.pending;
+      owed += b.customerOwes;
+    }
+    return { settled, pending, owed };
+  }, [db.orders]);
+  const totalIn = money.settled;
   const totalOut = movements.reduce((t, m) => t + m.moneyOut, 0);
-  const pendingTotal = movements
-    .filter((m) => m.status === "Pending")
-    .reduce((t, m) => t + m.moneyIn, 0);
+  const pendingTotal = money.pending;
 
   const exportCsv = (rows: readonly Movement[]) => {
     const blob = new Blob([toCsv(rows)], { type: "text/csv;charset=utf-8;" });
@@ -226,9 +341,20 @@ export function TransactionsPage() {
           </Card>
           <Card style={{ flex: 1, minWidth: 200 }}>
             <Statistic
-              title={t("transactions.stillPending", "Still pending")}
+              title={t("transactions.stillPending", "With a marketplace")}
               value={fmtRp(pendingTotal)}
               styles={{ content: { color: "#d48806" } }}
+            />
+          </Card>
+          {/* Kept apart from the card beside it, which is the whole point of
+              the 2026-09-08 split: a marketplace holding a payout is not a
+              customer failing to pay, and one figure covering both is a figure
+              nobody can act on. */}
+          <Card style={{ flex: 1, minWidth: 200 }}>
+            <Statistic
+              title={t("transactions.customersOwe", "Customers owe")}
+              value={fmtRp(money.owed)}
+              styles={{ content: { color: "#cf1322" } }}
             />
           </Card>
         </Flex>
@@ -363,7 +489,34 @@ export function TransactionsPage() {
                 facet: true,
                 width: 110,
                 render: (v: string) => (
-                  <Tag color={v === "Pending" ? "orange" : "default"}>{v}</Tag>
+                  /*
+                   * Amber for money somebody else is holding, red for money a
+                   * customer owes — the shop acts differently on each.
+                   *
+                   * Translated in a switch rather than through a lookup, so
+                   * `test/i18n.test.ts` can review the words: it finds copy by
+                   * reading the source for literal two-argument `t()` calls,
+                   * and a table indexed by a variable is invisible to it.
+                   */
+                  <Tag
+                    color={
+                      v === "Owed" || v === "Unpaid"
+                        ? "red"
+                        : v === "Pending" || v === "Part paid"
+                          ? "orange"
+                          : "default"
+                    }
+                  >
+                    {v === "Settled"
+                      ? t("transactions.stSettled", "Settled")
+                      : v === "Part paid"
+                        ? t("transactions.stPartPaid", "Part paid")
+                        : v === "Pending"
+                          ? t("transactions.stPending", "With a marketplace")
+                          : v === "Owed"
+                            ? t("transactions.stOwed", "Owed")
+                            : t("transactions.stUnpaid", "Unpaid")}
+                  </Tag>
                 ),
               },
               {
@@ -385,28 +538,71 @@ export function TransactionsPage() {
               {
                 title: "",
                 key: "actions",
-                width: 56,
+                width: 96,
                 render: (_, m) =>
                   m.order ? (
-                    <Tooltip
-                      title={t(
-                        "transactions.printThisInvoiceAgain",
-                        "Print this invoice again",
-                      )}
-                    >
-                      <Button
-                        size="small"
-                        aria-label={`Print invoice ${m.reference}`}
-                        icon={<PrinterOutlined />}
-                        onClick={() => setReprint(m.order!)}
-                      />
-                    </Tooltip>
+                    <Flex gap={4}>
+                      <Tooltip
+                        title={t(
+                          "transactions.editPayments",
+                          "What was paid, and correcting it",
+                        )}
+                      >
+                        <Button
+                          size="small"
+                          aria-label={t(
+                            "transactions.editPaymentsAria",
+                            "Payments on {{code}}",
+                            { code: m.reference },
+                          )}
+                          icon={<WalletOutlined />}
+                          onClick={() => setEditingPay(m.order!)}
+                        />
+                      </Tooltip>
+                      <Tooltip
+                        title={t(
+                          "transactions.printThisInvoiceAgain",
+                          "Print this invoice again",
+                        )}
+                      >
+                        <Button
+                          size="small"
+                          aria-label={`Print invoice ${m.reference}`}
+                          icon={<PrinterOutlined />}
+                          onClick={() => setReprint(m.order!)}
+                        />
+                      </Tooltip>
+                    </Flex>
                   ) : null,
               },
             ]}
           />
         </Card>
       </Flex>
+
+      <PaymentsModal
+        open={editingPay !== null}
+        code={editingPay?.code ?? ""}
+        total={editingPay?.total ?? 0}
+        payments={editingPay ? paymentsOf(editingPay) : []}
+        log={
+          editingPay
+            ? db.paymentLog
+                .filter((e) =>
+                  paymentsOf(editingPay).some((p) => p.id === e.paymentId),
+                )
+                .slice()
+                .sort((a, b) => b.at.localeCompare(a.at))
+            : []
+        }
+        methods={db.paymentMethods
+          .filter((m) => m.forSale && m.active)
+          .map((m) => ({ value: m.code, label: m.label }))}
+        onClose={() => setEditingPay(null)}
+        onSave={(next, reason) =>
+          editingPay && savePayments(editingPay, next, reason)
+        }
+      />
 
       <InvoiceModal
         db={db}

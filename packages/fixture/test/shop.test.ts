@@ -16,8 +16,13 @@ import {
   RESERVATIONS,
   SKUS,
   SUPPLIER_RETURNS,
+  CYCLE_ERA_MAX_YEAR,
+  askingPriceOf,
   buildShop,
+  cyclesForHealth,
+  modelOf,
   serialAt,
+  skuOf,
   type FixtureSku,
 } from "../src/index.js";
 
@@ -137,6 +142,166 @@ describe("condition", () => {
     for (const u of shop.units) {
       if (u.grade !== "NEW") continue;
       expect(u.battery, u.serial).toBeUndefined();
+      expect(u.cycleCount, u.serial).toBeUndefined();
+    }
+  });
+
+  /*
+   * The 2026-09-08 split. A machine records the reading its own era reports,
+   * and never both — a row carrying a percentage AND a cycle count would let
+   * two columns disagree about one battery.
+   */
+  it("records each machine's battery in its own era's units", () => {
+    for (const u of shop.units) {
+      const year = modelOf(skuOf(u.skuId).modelId).releaseYear;
+      if (year <= CYCLE_ERA_MAX_YEAR) {
+        expect(u.battery, u.serial).toBeUndefined();
+      } else {
+        expect(u.cycleCount, u.serial).toBeUndefined();
+        expect(u.fcc, u.serial).toBeUndefined();
+      }
+    }
+  });
+
+  it("puts a cycles machine in the band its health would have put it in", () => {
+    // Same story, different units. `cyclesForHealth` is the translation; these
+    // are the boundaries the app's default thresholds use.
+    expect(cyclesForHealth(100)).toBe(0);
+    expect(cyclesForHealth(80)).toBe(400);
+    expect(cyclesForHealth(76)).toBe(800);
+    expect(cyclesForHealth(68)).toBeGreaterThan(800);
+    // Monotone, so sorting a mixed shelf by battery cannot swap two machines.
+    for (let h = 60; h < 100; h += 1) {
+      expect(cyclesForHealth(h), `${h}%`).toBeGreaterThan(cyclesForHealth(h + 1));
+    }
+  });
+
+  it("gives every cycles machine a capacity, except where there is no cell", () => {
+    for (const u of shop.units) {
+      if (u.cycleCount === undefined) continue;
+      // Every category the shop grades has a cell. A capacity of zero would
+      // be a screen printing "0 mAh" beside a working battery.
+      expect(u.fcc, u.serial).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("what one machine is worth", () => {
+  /*
+   * The per-serial price of 2026-09-08. What is checked here is that the
+   * fixture's numbers agree with its own words — a C is cheaper than an A of
+   * the same variant, and no machine is priced before it has been graded.
+   */
+  it("prices a graded machine and leaves one in QC unpriced", () => {
+    for (const u of shop.units) {
+      if (u.status === "QC") expect(u.price, u.serial).toBeUndefined();
+      else expect(u.price, u.serial).toBeGreaterThan(0);
+    }
+  });
+
+  it("asks less for a worse grade of the same variant", () => {
+    const price = (grade: "A" | "B" | "C") =>
+      askingPriceOf(20_000_000, grade, 90);
+    expect(price("A")).toBeGreaterThan(price("B"));
+    expect(price("B")).toBeGreaterThan(price("C"));
+    // Sealed asks the full price, which is what sealed means.
+    expect(askingPriceOf(20_000_000, "NEW", undefined)).toBe(20_000_000);
+  });
+
+  it("asks less for a tired battery within one grade", () => {
+    // The spread Inventory's per-variant-per-grade range exists to show. A
+    // fixture where every A costs the same renders every range as one figure.
+    expect(askingPriceOf(20_000_000, "A", 95)).toBeGreaterThan(
+      askingPriceOf(20_000_000, "A", 70),
+    );
+  });
+
+  it("stocks more than one machine of some variants, at different prices", () => {
+    /*
+     * The shape a second-hand shop actually has, and a guard on the demo
+     * rather than on the logic. Until 2026-09-08 the fixture held exactly one
+     * machine of every variant — tidy, and it taught every screen the wrong
+     * lesson: Inventory shows a price RANGE per variant-grade, and a shelf of
+     * one-offs renders every range as a single figure.
+     */
+    const bySku = new Map<string, number[]>();
+    for (const u of shop.units) {
+      if (u.price === undefined) continue;
+      if (u.status !== "TERSEDIA" && u.status !== "DIRESERVASI") continue;
+      bySku.set(u.skuId, [...(bySku.get(u.skuId) ?? []), u.price]);
+    }
+    const spreads = [...bySku.values()].filter(
+      (ps) => ps.length > 1 && Math.min(...ps) !== Math.max(...ps),
+    );
+    expect(spreads.length, "no variant on the shelf spans a price range").
+      toBeGreaterThan(0);
+
+    // …and within ONE grade, which is the case the range actually exists for:
+    // two A-grade machines differing only by their batteries.
+    const byGrade = new Map<string, number[]>();
+    for (const u of shop.units) {
+      if (u.price === undefined || u.grade === undefined) continue;
+      if (u.status !== "TERSEDIA" && u.status !== "DIRESERVASI") continue;
+      const key = `${u.skuId}/${u.grade}`;
+      byGrade.set(key, [...(byGrade.get(key) ?? []), u.price]);
+    }
+    expect(
+      [...byGrade.values()].some(
+        (ps) => ps.length > 1 && Math.min(...ps) !== Math.max(...ps),
+      ),
+      "no variant-and-grade on the shelf spans a price range",
+    ).toBe(true);
+  });
+
+  it("never asks more than the variant's own asking price", () => {
+    for (const u of shop.units) {
+      if (u.price === undefined) continue;
+      expect(u.price, u.serial).toBeLessThanOrEqual(skuOf(u.skuId).price);
+    }
+  });
+});
+
+describe("how a bill was paid", () => {
+  /*
+   * The split of 2026-09-08. What is guarded here is that the parts add up to
+   * the bill — a demo shop whose money does not balance teaches every finance
+   * screen the wrong lesson — and that the demo contains at least one of each
+   * interesting shape, or the screens have nothing to demonstrate.
+   */
+  it("accounts for every rupiah of every bill", () => {
+    for (const o of shop.orders) {
+      const paid = o.parts.reduce((n, p) => n + p.amount, 0);
+      expect(paid, o.code).toBe(o.total);
+    }
+  });
+
+  it("holds a split, a promise and a marketplace payout", () => {
+    const states = shop.orders.flatMap((o) => o.parts.map((p) => p.state));
+    expect(states).toContain("SETTLED");
+    expect(states).toContain("PENDING");
+    expect(states).toContain("DUE");
+    // …and one sale that is genuinely split across two methods, which is the
+    // owner's own example and the case a single method cannot describe.
+    expect(shop.orders.some((o) => o.parts.length > 1)).toBe(true);
+  });
+
+  it("dates a promise and nothing else", () => {
+    for (const o of shop.orders) {
+      for (const p of o.parts) {
+        if (p.state === "DUE") continue;
+        expect(p.dueAt, `${o.code} ${p.id}`).toBeUndefined();
+      }
+    }
+  });
+
+  it("names the marketplace holding each pending part", () => {
+    // Without it "Rp23jt pending" is a figure nobody can act on: withdrawing
+    // is a per-channel errand.
+    for (const o of shop.orders) {
+      for (const p of o.parts) {
+        if (p.state !== "PENDING") continue;
+        expect(p.channel, `${o.code} ${p.id}`).toBeTruthy();
+      }
     }
   });
 });

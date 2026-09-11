@@ -390,20 +390,40 @@ body {
 }
 
 /*
- * The Serials & QC grid, tightened (owner revision 2026-08-27).
+ * The Serials & QC grid.
  *
- * antd's `small` table is still sized for reading — 8px of block padding
- * around a control that already has its own — and this table is not read, it
- * is filled in. Every row is a machine somebody is holding, and the fewer of
- * them that fit on screen the more often the person grading has to scroll away
- * from the pile in front of them.
+ * Tightened on 2026-08-27 to 6px, and loosened again on 2026-09-09 at the
+ * owner's report: *"the spacing now is a bit odd (too dense, spacing and
+ * fields are not aligned)"*. Both readings were right about different grids.
+ * The 2026-08-27 one held a serial, a description and a status; this one holds
+ * a serial, a condition toggle, a description, one or two battery boxes, a
+ * service fee, TWO price boxes with captions, a grade, a photo, a status and
+ * two buttons — and at 6px those stopped reading as separate fields and
+ * started reading as one wall of controls.
  *
- * Padding only. Nothing here touches font size, because the cell that matters
- * most is a twelve-character serial being checked against a sticker.
+ * 10px is antd `small`'s own 8 plus two: enough that a box has a margin of
+ * quiet around it, still tight enough that the machines waiting on the bench
+ * fit on a screen, which is what the tightening was for.
+ *
+ * `vertical-align: middle` is the alignment half of the same report. A cell's
+ * default is `baseline`, which lines up the first line of text in each cell —
+ * so a column holding one input sat level with the FIRST of a column holding
+ * two, and every row stepped down to the right. Centring makes a row read as
+ * one band whatever each cell contains, which is what "aligned" means to
+ * somebody looking at the grid rather than at the box model.
+ *
+ * Nothing here touches font size: the cell that matters most is a serial being
+ * checked against a sticker.
  */
 .qc-table .ant-table-cell {
-  padding-block: 6px !important;
-  padding-inline: 8px !important;
+  padding-block: 10px !important;
+  padding-inline: 10px !important;
+  vertical-align: middle;
+}
+/* The header sits on the same rhythm as the rows it names. */
+.qc-table .ant-table-thead > tr > th {
+  padding-block: 8px !important;
+  padding-inline: 10px !important;
 }
 /*
  * The two anchored columns and the anchored action column need a surface of

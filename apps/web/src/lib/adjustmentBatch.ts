@@ -16,7 +16,15 @@
  * the real schema refuses to store. Stock In is where a unit gets its price,
  * so that is where a unit in QC is dealt with.
  */
-import { isBatteryHealthInRange } from "./battery.js";
+import {
+  CYCLE_COUNT_MAX,
+  CYCLE_COUNT_MIN,
+  FCC_MAX,
+  FCC_MIN,
+  isBatteryHealthInRange,
+  isCycleCountInRange,
+  isFccInRange,
+} from "./battery.js";
 import { HELD_STATUSES } from "./inventory.js";
 import type { AdjustmentKind, Unit } from "../mock/seed.js";
 
@@ -27,8 +35,15 @@ export interface BatchLine {
   serial: string;
   /** The product staff picked for a serial the system does not carry. */
   skuId?: string;
-  /** Percentage of original capacity, if anyone read one off the machine. */
+  /**
+   * Percentage of original capacity, if anyone read one off the machine.
+   * A 2021-or-later machine's reading — see `batteryEra` in lib/battery.ts.
+   */
   batteryHealth?: number;
+  /** Charge cycles, for a 2020-or-earlier machine. */
+  cycleCount?: number;
+  /** Full charge capacity in mAh, beside the cycle count. */
+  fcc?: number;
 }
 
 export interface BatchInput {
@@ -76,6 +91,16 @@ export function batchProblems(
     if (!isBatteryHealthInRange(line.batteryHealth)) {
       out.push(
         `${serial} has a battery health of ${line.batteryHealth}% — a reading is 0 to 100.`,
+      );
+    }
+    if (!isCycleCountInRange(line.cycleCount)) {
+      out.push(
+        `${serial} has a cycle count of ${line.cycleCount} — a count is ${CYCLE_COUNT_MIN} to ${CYCLE_COUNT_MAX}.`,
+      );
+    }
+    if (!isFccInRange(line.fcc)) {
+      out.push(
+        `${serial} has a capacity of ${line.fcc} mAh — a capacity is ${FCC_MIN} to ${FCC_MAX}.`,
       );
     }
 

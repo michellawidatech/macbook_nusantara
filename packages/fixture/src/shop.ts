@@ -43,6 +43,7 @@ import {
   MODELS,
   SKUS,
   isAccessory,
+  modelOf,
   skuOf,
   type FixtureCategory,
   type FixtureModel,
@@ -625,7 +626,20 @@ export interface FixtureIntake {
   readonly rack?: 1 | 2 | 3;
   /** `Grade` in the schema. Absent while a machine is still in QC. */
   readonly grade?: "A" | "B" | "C" | "NEW";
-  /** Percent of original capacity, read off the machine at QC. */
+  /**
+   * How healthy the battery is, as a percentage of original capacity.
+   *
+   * The AUTHORED fact, and the only one written here even for a machine whose
+   * era does not record percentages. A fixture entry is one description of one
+   * machine — the grade, the words and the battery agree — and asking whoever
+   * writes the next entry to also know that a 2017 Air is a cycles machine and
+   * to invent a cycle count in the right band would be asking them to keep
+   * that agreement by hand.
+   *
+   * `buildShop` translates it: a 2020-or-earlier machine comes out carrying
+   * `cycleCount` and `fcc` and no percentage, a 2021-or-later one carries the
+   * percentage. See `cyclesForHealth`.
+   */
   readonly battery?: number;
   /** Comma-joined phrases from the QC vocabulary. Empty while in QC. */
   readonly description?: string;
@@ -678,6 +692,37 @@ export const INTAKE: readonly FixtureIntake[] = [
     grade: "A",
     battery: 91,
     description: "Mulus, Fullset dus, Charger original",
+  },
+  /*
+   * Three of one variant, and this is the shape a second-hand shop actually
+   * has (owner ask 2026-09-08). Until this the fixture held exactly one
+   * machine of every variant, which was tidy and taught every screen the
+   * wrong lesson: with a price per serial, Inventory shows a RANGE per
+   * variant-grade, and a shelf of one-offs renders every range as a single
+   * figure and demonstrates nothing.
+   *
+   * Two As at different battery health and one B, so the row spreads WITHIN a
+   * grade as well as between grades — which is the case the range exists for.
+   */
+  {
+    ref: "air17-clean-2",
+    skuId: "m-air-2017-v2",
+    poId: "po-1",
+    fate: "SHELF",
+    rack: 1,
+    grade: "A",
+    battery: 95,
+    description: "Mulus, Fullset dus",
+  },
+  {
+    ref: "air17-clean-3",
+    skuId: "m-air-2017-v2",
+    poId: "po-1",
+    fate: "SHELF",
+    rack: 2,
+    grade: "B",
+    battery: 83,
+    description: "Lecet halus, Unit only",
   },
   {
     ref: "air17-returned",
@@ -758,6 +803,29 @@ export const INTAKE: readonly FixtureIntake[] = [
     grade: "A",
     battery: 96,
     description: "Mulus, Fullset dus, Charger original",
+  },
+  {
+    // The same duplication one era up, so the health side of the shelf has a
+    // range too. `airm2-hold` is an A at 96; this one is an A at 88, and the
+    // two ask different money.
+    ref: "airm2-13-second",
+    skuId: "m-air-m2-v1",
+    poId: "po-1",
+    fate: "SHELF",
+    rack: 1,
+    grade: "A",
+    battery: 88,
+    description: "Mulus, Unit only",
+  },
+  {
+    ref: "airm2-13-third",
+    skuId: "m-air-m2-v1",
+    poId: "po-1",
+    fate: "SHELF",
+    rack: 1,
+    grade: "B",
+    battery: 84,
+    description: "Lecet di casing bawah, Fullset dus",
   },
   {
     ref: "airm2-sold",
@@ -879,13 +947,17 @@ export const INTAKE: readonly FixtureIntake[] = [
     description: "Mulus, Fullset dus",
   },
   {
+    // Deliberately in the FAIR band, and deliberately a 2021 body: the health
+    // filter needs something to find, and after the 2026-09-08 era split every
+    // pre-2021 machine answers the cycle filter instead. A shelf whose fair
+    // band is populated only by 2017 Airs demonstrates half the feature.
     ref: "ipad9-cell",
     skuId: "m-ipad-9-v4",
     poId: "po-2",
     fate: "SHELF",
     rack: 1,
     grade: "B",
-    battery: 86,
+    battery: 78,
     description: "Lecet halus, Unit only",
   },
   {
@@ -902,14 +974,18 @@ export const INTAKE: readonly FixtureIntake[] = [
     movedTo: { locationId: "wh-1", at: at(5, 15) },
   },
   {
+    // The poor end of the health era, for the same reason as `ipad9-cell`. A
+    // heavily-used 2021 iPad really does read here, and the words say so —
+    // `shop.test.ts` holds the grade, the description and the reading to one
+    // story.
     ref: "ipadmini-shelf",
     skuId: "m-ipad-mini-6-v1",
     poId: "po-2",
     fate: "SHELF",
     rack: 1,
-    grade: "B",
-    battery: 87,
-    description: "Lecet di casing bawah, Unit only",
+    grade: "C",
+    battery: 71,
+    description: "Baterai lemah, Lecet di casing bawah, Unit only",
   },
   {
     ref: "pro13-2016-i7",
@@ -1003,6 +1079,21 @@ export interface FixtureOrderLine {
   readonly price?: number;
 }
 
+/** One part of a split bill. See `FixtureOrder.split`. */
+export interface FixtureSplitPart {
+  /** A `PaymentMethod` code — TUNAI, TRANSFER, QRIS, MARKETPLACE. */
+  readonly method: string;
+  /** Whole rupiah. Omit on exactly one part to give it the remainder. */
+  readonly amount?: number;
+  /** SETTLED = the shop has it, PENDING = a marketplace does, DUE = unpaid. */
+  readonly state: "SETTLED" | "PENDING" | "DUE";
+  /** PENDING only: which marketplace is holding it. */
+  readonly channel?: string;
+  /** DUE only: how many days from the sale the customer promised to pay. */
+  readonly dueInDays?: number;
+  readonly note?: string;
+}
+
 export interface FixtureOrder {
   readonly id: string;
   readonly seq: number;
@@ -1028,6 +1119,21 @@ export interface FixtureOrder {
   readonly payMethod: string;
   /** False while a marketplace still holds the money. */
   readonly settled: boolean;
+  /**
+   * How the bill was actually paid, in parts (owner ask 2026-09-08).
+   *
+   * Absent means the whole bill in one payment, in the state `settled`
+   * implies — which is what every order here meant before this existed. A
+   * split sale, a deposit with a promise, or a marketplace payout that has not
+   * landed all say so here instead.
+   *
+   * Whole rupiah, and ONE part may leave `amount` off: that one takes the
+   * remainder of the bill. It is written that way because a fixture with
+   * hand-added parts stops summing to the total the first time a price
+   * changes, and a demo shop whose payments do not add up to its bills is
+   * worse than one with no payments at all.
+   */
+  readonly split?: readonly FixtureSplitPart[];
   readonly shippingAddress?: string;
   /** Set when the whole sale came back. See `RETURNS`. */
   readonly returnedAt?: FixtureMoment;
@@ -1072,6 +1178,10 @@ export const ORDERS: readonly FixtureOrder[] = [
     returnReason: "Ganti ke model yang lebih baru",
   },
   {
+    // The owner's own split example (2026-09-08): part of the bill in cash at
+    // the counter, the rest on Shopee PayLater. The cash is the shop's today
+    // and the PayLater money is with Shopee — which is exactly why one method
+    // and one flag could not describe this sale.
     id: "o-3",
     seq: 203,
     at: at(6, 11),
@@ -1083,7 +1193,16 @@ export const ORDERS: readonly FixtureOrder[] = [
     salesmanId: "sm-3",
     referralSourceId: "ref_tiktok_ads",
     payMethod: "TRANSFER",
-    settled: true,
+    settled: false,
+    split: [
+      { method: "TUNAI", amount: 5_000_000, state: "SETTLED" },
+      {
+        method: "MARKETPLACE",
+        state: "PENDING",
+        channel: "SHOPEE",
+        note: "Shopee PayLater",
+      },
+    ],
   },
   {
     // Shopee still holds the money: `settled: false` is what puts this on the
@@ -1119,7 +1238,13 @@ export const ORDERS: readonly FixtureOrder[] = [
     salesmanId: "sm-1",
     referralSourceId: "ref_friends",
     payMethod: "TRANSFER",
-    settled: true,
+    // A deposit and a promise — the other half of the 2026-09-08 ask. The
+    // shop is owed the rest, and Customer management has to be able to say so.
+    settled: false,
+    split: [
+      { method: "TRANSFER", amount: 500_000, state: "SETTLED", note: "DP" },
+      { method: "TRANSFER", state: "DUE", dueInDays: 10 },
+    ],
     shippingAddress: "Jl. Kebon Jeruk 12, Jakarta Barat",
   },
   {
@@ -1294,8 +1419,31 @@ export interface BuiltUnit {
   readonly poLineId: string;
   readonly status: FixtureUnitStatus;
   readonly grade?: "A" | "B" | "C" | "NEW";
+  /**
+   * Health percentage. Present only on a **2021-or-later** machine, since
+   * 2026-09-08 — those are the ones whose batteries report one.
+   */
   readonly battery?: number;
+  /** Charge cycles. Present only on a **2020-or-earlier** machine. */
+  readonly cycleCount?: number;
+  /** Full charge capacity in mAh, beside the cycle count. Same machines. */
+  readonly fcc?: number;
   readonly description: string;
+  /**
+   * What the shop asks for THIS machine (owner revision 2026-09-08).
+   *
+   * Derived from the variant's asking price, the grade and the battery, so the
+   * fixture's prices tell the same story its words do: the C with the tired
+   * battery is the cheap one, and two A-grade machines of one variant can
+   * still differ because one of them has a better cell. That within-grade
+   * spread is deliberate — Inventory shows a RANGE per variant-grade, and a
+   * fixture where every A costs the same would render every range as a single
+   * figure and demonstrate nothing.
+   *
+   * Absent on a machine still in QC: nothing has been priced until somebody
+   * has looked at it.
+   */
+  readonly price?: number;
   /** What this machine cost. Whole rupiah. */
   readonly buy: number;
   /** Cost plus its share of the freight on its invoice. Whole rupiah. */
@@ -1363,6 +1511,18 @@ export interface BuiltOrderLine {
   readonly warrantyUntil?: FixtureMoment;
 }
 
+/** One part of a bill, with its amount resolved and its dates real. */
+export interface BuiltSalePayment {
+  readonly id: string;
+  readonly method: string;
+  readonly amount: number;
+  readonly state: "SETTLED" | "PENDING" | "DUE";
+  readonly channel?: string;
+  readonly at: FixtureMoment;
+  readonly dueAt?: FixtureMoment;
+  readonly note?: string;
+}
+
 export interface BuiltPayment {
   readonly id: string;
   readonly direction: "MASUK" | "KELUAR";
@@ -1381,6 +1541,8 @@ export interface BuiltOrder extends FixtureOrder {
   readonly paidTotal: number;
   readonly cogs: number;
   readonly payments: readonly BuiltPayment[];
+  /** The bill in parts. One entry unless the order declares a `split`. */
+  readonly parts: readonly BuiltSalePayment[];
 }
 
 export interface BuiltReservation extends FixtureReservation {
@@ -1435,6 +1597,157 @@ function allocate(total: number, count: number): number[] {
  * `Date.now()`. Nothing here reads the clock on its own — this package has no
  * I/O and no ambient time, the same rule `packages/domain` follows.
  */
+/**
+ * The last model year recorded as cycles rather than health (owner ask
+ * 2026-09-08).
+ *
+ * Duplicated from `apps/web/src/lib/battery.ts` rather than imported, because
+ * this package imports nothing — it is the shop, and both the browser seed and
+ * the Postgres seed project it. `test/shop.test.ts` asserts the two agree.
+ */
+export const CYCLE_ERA_MAX_YEAR = 2020;
+
+/**
+ * Nominal design capacity in mAh, by category, for deriving a plausible FCC.
+ *
+ * Round numbers in the right neighbourhood rather than Apple's exact figures
+ * per body — this is demo data, and what a screen has to show is a capacity
+ * that shrinks with the battery beside it, not a spec sheet. Zero means the
+ * category has no cell to report one, and such a machine comes out with a
+ * cycle count and no capacity rather than with a capacity of nothing.
+ */
+const DESIGN_MAH: Readonly<Record<string, number>> = {
+  "cat-macbook-air": 5200,
+  "cat-macbook-pro": 6800,
+  "cat-macbook": 5000,
+  "cat-ipad": 7600,
+  "cat-accessory": 0,
+};
+
+/**
+ * A cycle count that lands in the same band the health percentage does.
+ *
+ * Piecewise-linear through the band boundaries the app's defaults use — 80%
+ * meets 400 cycles, 76% meets 800 — so a machine the fixture calls healthy
+ * reads good in either era and one described "Baterai lemah" reads poor in
+ * either. That agreement is the point: `test/shop.test.ts` checks the words,
+ * the grade and the battery tell one story, and it has to keep checking it now
+ * that half the shelf tells that story in different units.
+ *
+ * Monotone decreasing, so no two machines swap places when the shelf is sorted
+ * by battery.
+ */
+export function cyclesForHealth(health: number): number {
+  if (health >= 80) return Math.round((400 * (100 - health)) / 20);
+  if (health >= 76) return 400 + Math.round((400 * (80 - health)) / 4);
+  return 800 + Math.round((76 - health) * 40);
+}
+
+/** The capacity a battery of this health would report, for this category. */
+export function fccForHealth(health: number, categoryId: string): number {
+  const design = DESIGN_MAH[categoryId] ?? 0;
+  if (design === 0) return 0;
+  return Math.round((design * health) / 100);
+}
+
+/**
+ * What the shop asks for one machine, from what the fixture says about it.
+ *
+ * `Sku.price` is the ASKING price of the variant — what a customer is quoted
+ * before anybody picks a machine — and this is what one particular machine is
+ * worth against it. Two factors, both of them things a customer can see:
+ *
+ * - the **grade**, which is the shop's summary of the body, and
+ * - the **battery**, because a tired cell is the one fault a buyer will
+ *   discover on the first afternoon.
+ *
+ * Sealed stock asks the full price, which is what sealed means.
+ *
+ * Deterministic, and it has to be: the fixture is projected into two databases
+ * and a test asserts they agree.
+ */
+export function askingPriceOf(
+  skuPrice: number,
+  grade: "A" | "B" | "C" | "NEW" | undefined,
+  health: number | undefined,
+): number {
+  const byGrade = { NEW: 1, A: 0.98, B: 0.92, C: 0.82 } as const;
+  const g = byGrade[grade ?? "A"];
+  // A healthy battery costs nothing; a poor one costs up to a tenth. Linear
+  // between the two so that two A-grade machines with different cells land on
+  // different numbers, which is the spread Inventory's range exists to show.
+  const b =
+    health === undefined ? 1 : 1 - Math.min(0.1, Math.max(0, (92 - health) / 200));
+  // Sealed stock in perfect health asks the catalogue price EXACTLY, rather
+  // than the catalogue price rounded — a variant priced at Rp7.990.000 must
+  // not become Rp8.000.000 just because its unit went through here.
+  if (g * b === 1) return skuPrice;
+  // Floored, never rounded: a machine may ask less than the variant's asking
+  // price and must never ask more, and rounding to the nearest 50k can push a
+  // 98% factor back over 100%.
+  return Math.floor((skuPrice * g * b) / 50_000) * 50_000;
+}
+
+/**
+ * One machine's battery, in whichever units its era reports.
+ *
+ * Spread into the unit rather than returned as a value, so a machine with no
+ * battery at all — an accessory, a machine still in QC — carries no key
+ * instead of three undefined ones.
+ */
+function batteryOf(
+  it: FixtureIntake,
+): { battery?: number } | { cycleCount?: number; fcc?: number } {
+  if (it.battery === undefined) return {};
+  const model = modelOf(skuOf(it.skuId).modelId);
+  if (model.releaseYear > CYCLE_ERA_MAX_YEAR) return { battery: it.battery };
+  const fcc = fccForHealth(it.battery, model.categoryId);
+  return {
+    cycleCount: cyclesForHealth(it.battery),
+    ...(fcc === 0 ? {} : { fcc }),
+  };
+}
+
+/**
+ * A bill in parts, with the remainder resolved.
+ *
+ * Exactly one part may leave its amount off, and it takes whatever the bill
+ * does not otherwise account for. Written that way so the fixture's payments
+ * still add up to its bills after a price changes — a demo shop whose money
+ * does not balance teaches every finance screen the wrong lesson.
+ *
+ * An order with no `split` gets the one payment it always had: the whole bill,
+ * in the state `settled` implies.
+ */
+function partsOf(o: FixtureOrder, total: number): BuiltSalePayment[] {
+  if (!o.split || o.split.length === 0) {
+    return [
+      {
+        id: `${o.id}-part-1`,
+        method: o.payMethod,
+        amount: total,
+        state: o.settled ? "SETTLED" : "PENDING",
+        ...(o.settled ? {} : { channel: o.channel }),
+        at: o.at,
+      },
+    ];
+  }
+  const named = o.split.reduce((n, p) => n + (p.amount ?? 0), 0);
+  const rest = Math.max(0, total - named);
+  return o.split.map((p, i) => ({
+    id: `${o.id}-part-${i + 1}`,
+    method: p.method,
+    amount: p.amount ?? rest,
+    state: p.state,
+    ...(p.channel === undefined ? {} : { channel: p.channel }),
+    at: o.at,
+    ...(p.dueInDays === undefined
+      ? {}
+      : { dueAt: at(o.at.daysAgo - p.dueInDays, 12) }),
+    ...(p.note === undefined ? {} : { note: p.note }),
+  }));
+}
+
 export function buildShop(now: number = Date.now()): BuiltShop {
   const serialOfRef = new Map<string, string>();
   const units: BuiltUnit[] = [];
@@ -1528,7 +1841,13 @@ export function buildShop(now: number = Date.now()): BuiltShop {
       poLineId: lineId,
       status: STATUS_OF_FATE[it.fate],
       ...(it.grade === undefined ? {} : { grade: it.grade }),
-      ...(it.battery === undefined ? {} : { battery: it.battery }),
+      // Priced at QC, so a machine still on the bench has no price.
+      ...(it.fate === "QC"
+        ? {}
+        : {
+            price: askingPriceOf(skuOf(it.skuId).price, it.grade, it.battery),
+          }),
+      ...batteryOf(it),
       description: it.description ?? "",
       buy: line.unitCost,
       landed: line.unitCost + line.allocatedFee,
@@ -1719,6 +2038,7 @@ export function buildShop(now: number = Date.now()): BuiltShop {
       paidTotal: o.settled && !returned ? total : 0,
       cogs: builtLines.reduce((n, l) => n + l.cogs, 0),
       payments,
+      parts: partsOf(o, total),
     };
   });
 

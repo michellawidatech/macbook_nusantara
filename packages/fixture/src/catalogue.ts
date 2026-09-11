@@ -61,18 +61,39 @@ export interface FixtureSku {
   readonly landed: number;
 }
 
+/**
+ * The three battery attributes every category with a cell carries.
+ *
+ * All three, on every such category, because a category spans BOTH eras: a
+ * MacBook Air is a 2015 body and an M2, and after the 2026-09-08 split the
+ * first is described by `siklus` + `kapasitas` and the second by `baterai`.
+ * Which of them a particular machine carries is a fact about the machine, and
+ * `UnitAttribute` is where a per-machine fact goes — so the category declares
+ * all three and each unit fills in the pair its era reports.
+ *
+ * `baterai` had been missing entirely until 2026-09-08, which made
+ * `packages/db`'s battery seeding a silent no-op: it looked the attribute up
+ * by that key, found nothing, and wrote no readings at all.
+ */
+const BATTERY_ATTRS = (own: readonly string[]): readonly string[] => [
+  ...own,
+  "siklus",
+  "kapasitas",
+  "baterai",
+];
+
 export const CATEGORIES: readonly FixtureCategory[] = [
   {
     id: "cat-macbook-air",
     name: "MacBook Air",
     sortOrder: 1,
-    attributes: ["prosesor", "layar", "siklus"],
+    attributes: BATTERY_ATTRS(["prosesor", "layar"]),
   },
   {
     id: "cat-macbook-pro",
     name: "MacBook Pro",
     sortOrder: 2,
-    attributes: ["prosesor", "layar", "siklus"],
+    attributes: BATTERY_ATTRS(["prosesor", "layar"]),
   },
   {
     // "MacBook" unqualified is the 12-inch Retina line and nothing else, so it
@@ -80,13 +101,13 @@ export const CATEGORIES: readonly FixtureCategory[] = [
     id: "cat-macbook",
     name: "MacBook",
     sortOrder: 3,
-    attributes: ["prosesor", "layar"],
+    attributes: BATTERY_ATTRS(["prosesor", "layar"]),
   },
   {
     id: "cat-ipad",
     name: "iPad",
     sortOrder: 4,
-    attributes: ["generasi", "layar"],
+    attributes: BATTERY_ATTRS(["generasi", "layar"]),
   },
   {
     id: "cat-accessory",

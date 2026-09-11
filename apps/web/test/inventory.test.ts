@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildSeed } from "../src/mock/seed.js";
+import { buildSeed, type Unit } from "../src/mock/seed.js";
 import { HELD_STATUSES, rollUpInventory } from "../src/lib/inventory.js";
-import { batteryBand, batteryBands } from "../src/lib/battery.js";
+import { priceOf } from "../src/lib/unitPrice.js";
+import {
+  BATTERY_BAND_LABEL,
+  batteryBandOf,
+  readUnitBattery,
+} from "../src/lib/battery.js";
 
 const db = buildSeed();
 const rows = rollUpInventory(db.units, db.skus, db.models);
@@ -37,16 +42,42 @@ describe("rollUpInventory", () => {
     }
   });
 
-  it("values only what is actually sellable, at the variant's price", () => {
-    // `fromPrice` — the cheapest unit a customer could walk out with — was the
-    // other half of this test until 2026-08-27. It went with the per-unit
-    // price: there is one number per row now, so a "from" would be inventing a
-    // range that does not exist.
+  it("values only what is actually sellable, at each machine's own price", () => {
+    // A SUM over the machines, not a count times the catalogue price (owner
+    // revision 2026-09-08). Multiplying would value a shelf of tired Cs at
+    // what a shelf of As is worth.
     for (const r of rows) {
       const sellable = r.units.filter((u) =>
         ["TERSEDIA", "DIRESERVASI"].includes(u.status),
       );
-      expect(r.value).toBe(sellable.length * r.listPrice);
+      expect(r.value).toBe(
+        sellable.reduce((t, u) => t + priceOf(u, r.listPrice), 0),
+      );
+    }
+  });
+
+  it("shows a range only where the machines actually disagree", () => {
+    for (const r of rows) {
+      const sellable = r.units.filter((u) =>
+        ["TERSEDIA", "DIRESERVASI"].includes(u.status),
+      );
+      const prices = sellable.map((u) => priceOf(u, r.listPrice));
+      expect(r.store.count).toBe(prices.length);
+      if (prices.length > 0) {
+        expect(r.store.min).toBe(Math.min(...prices));
+        expect(r.store.max).toBe(Math.max(...prices));
+        expect(r.store.single).toBe(r.store.min === r.store.max);
+      }
+    }
+    // The demo shelf has to contain at least one genuine range, or the feature
+    // renders as a column of single figures and demonstrates nothing.
+    expect(rows.some((r) => !r.store.single && r.store.count > 1)).toBe(true);
+  });
+
+  it("lists a marketplace price above the counter price", () => {
+    for (const r of rows) {
+      if (r.market.count === 0) continue;
+      expect(r.market.min).toBeGreaterThanOrEqual(r.store.min);
     }
   });
 
@@ -60,18 +91,19 @@ describe("rollUpInventory", () => {
     // when the catalogue gained a model and passed again when it gained
     // another. Picking the first band that is actually populated tests the
     // contract instead of the fixture.
-    const band = batteryBands()
-      .map((b) => b.label)
-      .find((label) =>
-        db.units.some((u) => batteryBand(u.batteryHealth) === label),
-      );
+    //
+    // Through `batteryBandOf` since 2026-09-08: the band is one vocabulary
+    // over both eras, which is exactly what lets the page keep ONE filter over
+    // a shelf holding 2017 bodies and M2s.
+    const bandOf = (u: Unit) => batteryBandOf(readUnitBattery(u, db));
+    const band = (["good", "fair", "bad"] as const)
+      .map((g) => BATTERY_BAND_LABEL[g])
+      .find((label) => db.units.some((u) => bandOf(u) === label));
     expect(
       band,
       "the seed should hold at least one measured battery",
     ).toBeDefined();
-    const narrowed = db.units.filter(
-      (u) => batteryBand(u.batteryHealth) === band,
-    );
+    const narrowed = db.units.filter((u) => bandOf(u) === band);
     expect(narrowed.length).toBeGreaterThan(0);
     const filtered = rollUpInventory(narrowed, db.skus, db.models);
     const held = filtered.reduce((t, r) => t + r.onHand, 0);
@@ -79,16 +111,18 @@ describe("rollUpInventory", () => {
       narrowed.filter((u) => HELD_STATUSES.includes(u.status)).length,
     );
     for (const r of filtered) {
-      expect(r.units.every((u) => batteryBand(u.batteryHealth) === band)).toBe(
-        true,
-      );
+      expect(r.units.every((u) => bandOf(u) === band)).toBe(true);
     }
   });
 
   it("reports the battery range held, and nothing when nobody has measured", () => {
     for (const r of rows) {
+      // In whichever units this row's era reports. A row is one variant, so
+      // one model, so one era — which is what makes a range meaningful at all.
       const counts = r.units
-        .map((u) => u.batteryHealth)
+        .map((u) =>
+          r.batteryEra === "CYCLES" ? u.cycleCount : u.batteryHealth,
+        )
         .filter((c): c is number => c != null);
       if (counts.length === 0) {
         expect(r.batteryMin).toBeUndefined();
@@ -115,18 +149,56 @@ describe("rollUpInventory", () => {
 });
 
 describe("the seeded battery readings", () => {
-  it("populate all three bands, so the filter has something to filter", () => {
-    // Guards the demo data, not the logic. The previous spread silently missed
-    // the middle band entirely — an arithmetic sequence over this few units
-    // looks like it covers the range and does not.
-    const seeded = buildSeed();
-    const present = new Set(
-      seeded.units
-        .filter((u) => u.batteryHealth != null)
-        .map((u) => batteryBand(u.batteryHealth)),
+  /*
+   * Guards the demo data, not the logic. The original spread silently missed
+   * the middle band entirely — an arithmetic sequence over this few units
+   * looks like it covers the range and does not.
+   *
+   * Across BOTH eras since 2026-09-08, and separately, because a shelf whose
+   * fair band is populated only by 2017 bodies would leave the health filter
+   * with nothing to demonstrate.
+   */
+  const seeded = buildSeed();
+  const bandsOf = (units: readonly Unit[]) =>
+    new Set(
+      units.map((u) => batteryBandOf(readUnitBattery(u, seeded))).values(),
     );
-    for (const { label } of batteryBands()) {
-      expect(present, `no seeded unit lands in "${label}"`).toContain(label);
+
+  it("populate all three bands in the health era", () => {
+    const present = bandsOf(
+      seeded.units.filter(
+        (u) =>
+          u.batteryHealth != null &&
+          readUnitBattery(u, seeded).era === "HEALTH",
+      ),
+    );
+    for (const grade of ["good", "fair", "bad"] as const) {
+      expect(present, `no 2021+ unit is ${grade}`).toContain(
+        BATTERY_BAND_LABEL[grade],
+      );
+    }
+  });
+
+  it("populate all three bands in the cycles era", () => {
+    const present = bandsOf(
+      seeded.units.filter(
+        (u) => u.cycleCount != null && readUnitBattery(u, seeded).era === "CYCLES",
+      ),
+    );
+    for (const grade of ["good", "fair", "bad"] as const) {
+      expect(present, `no pre-2021 unit is ${grade}`).toContain(
+        BATTERY_BAND_LABEL[grade],
+      );
+    }
+  });
+
+  it("never records a machine in the other era's units", () => {
+    // One battery, one set of numbers. A unit carrying both would let two
+    // columns disagree about the same machine.
+    for (const u of seeded.units) {
+      const era = readUnitBattery(u, seeded).era;
+      if (era === "CYCLES") expect(u.batteryHealth, u.serial).toBeUndefined();
+      else expect(u.cycleCount, u.serial).toBeUndefined();
     }
   });
 });

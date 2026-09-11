@@ -12,6 +12,7 @@ import { OpnameSessionPage } from "./routes/opname/OpnameSessionPage.js";
 import { InboundFormPage } from "./routes/inbound/InboundFormPage.js";
 import { InboundDetailPage } from "./routes/inbound/InboundDetailPage.js";
 import { StockOutPage } from "./routes/stock/StockOutPage.js";
+import { ServicePage } from "./routes/stock/ServicePage.js";
 import { ReservationsPage } from "./routes/reservations/ReservationsPage.js";
 import { StockHistoryPage } from "./routes/stock/StockHistoryPage.js";
 import { ProductsPage } from "./routes/products/ProductsPage.js";
@@ -19,8 +20,10 @@ import { DiscountFormPage } from "./routes/discounts/DiscountFormPage.js";
 import { DiscountsPage } from "./routes/discounts/DiscountsPage.js";
 import { IncomeExpensePage } from "./routes/finance/CashflowPage.js";
 import { TransactionsPage } from "./routes/finance/TransactionsPage.js";
+import { ReceivablesPage } from "./routes/finance/ReceivablesPage.js";
 import { ChatbotPage } from "./routes/chatbot/ChatbotPage.js";
 import { CustomersPage } from "./routes/customers/CustomersPage.js";
+import { SuppliersPage } from "./routes/suppliers/SuppliersPage.js";
 import { SettingsPage } from "./routes/settings/SettingsPage.js";
 
 export function App() {
@@ -75,6 +78,10 @@ export function App() {
           element={<Navigate to="/stock/inventory" replace />}
         />
         <Route path="/stock/history" element={<StockHistoryPage />} />
+        {/* The service bench (owner ask 2026-09-08). A machine at a repairer
+            is stock the shop owns, cannot sell, and is paying for — none of
+            which Inventory can show as a queue. */}
+        <Route path="/stock/service" element={<ServicePage />} />
         {/* One page, both directions (2026-08-24). The old leaf paths still
             resolve so bookmarks survive the merge. */}
         <Route path="/returns" element={<ReturnsPage />} />
@@ -101,6 +108,10 @@ export function App() {
           element={<Navigate to="/finance/income-expense" replace />}
         />
         <Route path="/finance/transactions" element={<TransactionsPage />} />
+        {/* Pending marketplace money and customer debts, split apart (owner
+            ask 2026-09-08). `Order.settled` used to cover both with one
+            boolean, so nobody could answer either question. */}
+        <Route path="/finance/receivables" element={<ReceivablesPage />} />
         {/* The inbox and the knowledge base are two tabs of one page since
             2026-08-26. The old leaf path still resolves. */}
         <Route path="/chat" element={<ChatbotPage />} />
@@ -109,6 +120,10 @@ export function App() {
           element={<Navigate to="/chat" replace />}
         />
         <Route path="/customers" element={<CustomersPage />} />
+        {/* Suppliers left Settings on 2026-09-08 (owner ask): what the shop
+            owes them, what it has deposited, and which invoice a deposit
+            settles are not settings. Settings keeps the contact details. */}
+        <Route path="/suppliers" element={<SuppliersPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/stock/inventory" replace />} />
       </Route>

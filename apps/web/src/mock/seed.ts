@@ -22,9 +22,19 @@ import {
   docCode,
   isoOf,
 } from "@nusantara/fixture";
-import { holdsFunds, marketplacePayMethod } from "../lib/channels.js";
+import { holdsFunds } from "../lib/channels.js";
 import type { SaleSource } from "../lib/channels.js";
 import type { GradingCriterion, GradingRule } from "../lib/grading.js";
+import type {
+  PaymentLogEntry,
+  SalePayment,
+} from "../lib/salePayments.js";
+import type {
+  Settlement,
+  SettlementLogEntry,
+} from "../lib/marketplace.js";
+import type { ServiceRec } from "../lib/service.js";
+import type { SupplierDeposit } from "../lib/supplierLedger.js";
 import type { UnitCondition } from "../lib/condition.js";
 
 export type UnitStatus =
@@ -40,6 +50,14 @@ export interface Warehouse {
   id: string;
   name: string;
   active: boolean;
+  /**
+   * `Location.kind` in the schema — TOKO, GUDANG, SERVIS, TRANSIT.
+   *
+   * Carried since 2026-09-08 because the service bench has to be findable by
+   * KIND rather than by id: `wh-4` is this shop's service location and the
+   * next shop's will not be. See `serviceLocationOf` in lib/service.ts.
+   */
+  kind?: string;
 }
 /**
  * A shelf inside a warehouse. Owner asked for "Rack 1/2/3", editable in
@@ -80,6 +98,22 @@ export interface Supplier {
    * tables.
    */
   code?: string;
+  /**
+   * What the shop owed this supplier before this system existed (owner ask
+   * 2026-09-08).
+   *
+   * *"Per supplier we might have an unpaid transaction from years ago, so make
+   * sure we can input how much we owe them."* There is no invoice here for
+   * those and there never will be. Stated once, added to what the invoices
+   * say — deliberately NOT a fake purchase order, which would put phantom
+   * stock in the ledger and be counted by every report that walks orders.
+   *
+   * ⚠️ Mock-only. Prisma's `Supplier` has no such column; it wants a
+   * `BigInt @default(0)`, plus an owner decision.
+   */
+  openingBalance?: number;
+  /** When that balance was stated, so the card can say how old it is. */
+  openingBalanceAt?: string;
 }
 /**
  * The activities that keep a managed list of reasons. Every reason a user can
@@ -207,8 +241,71 @@ export interface Unit {
    * "not measured" and is not the same fact as a low one — 0% is a dead
    * battery someone actually looked at. `batteryGrade` in lib/battery.ts is
    * what turns this into something filterable.
+   *
+   * **2021 and later only**, since 2026-09-08. An older machine records
+   * `cycleCount` and `fcc` instead — see `batteryEra` in lib/battery.ts.
    */
   batteryHealth?: number;
+  /**
+   * What the shop asks for THIS machine over the counter (owner revision
+   * 2026-09-08, reversing 2026-08-27).
+   *
+   * Per serial, and set right after QC. A second-hand Mac is not fungible with
+   * the next one off the same pallet — two 2017 Airs of one variant can differ
+   * by a dented lid, a tired battery and Rp1.500.000 — so `Sku.price` is the
+   * ASKING price a new unit starts from rather than the price anything is
+   * sold at. See `lib/unitPrice.ts`.
+   *
+   * Optional, and the fallback matters: a machine still in QC has no price
+   * yet, and every machine taken in before this revision has none either.
+   * Those quote the variant's price. A missing price is NOT zero — zero is a
+   * giveaway somebody chose.
+   *
+   * ⚠️ Schema gap, and a familiar one: prisma's `Unit` HAD a `price` with a
+   * CHECK, and the 2026-08-27 migration dropped both. Bringing it back is an
+   * owner decision plus a migration.
+   */
+  price?: number;
+  /**
+   * What it is listed at on Shopee/Tokopedia, when somebody overrode the rule.
+   *
+   * Absent means "use the rule" — store price plus
+   * `AppSettings.marketplaceMarkupPct` — so a repricing over the counter moves
+   * the marketplace figure with it and leaves an overridden one alone, which
+   * is exactly what an override is for. Stored as the number rather than as a
+   * flag beside one: a unit either carries its own marketplace price or it
+   * does not, and that is one fact.
+   *
+   * ⚠️ Mock-only. Prisma has no marketplace price column at all.
+   */
+  marketPrice?: number;
+  /**
+   * Charge cycles, as System Information prints them (owner ask 2026-09-08).
+   *
+   * The reading for a machine released in 2020 or earlier, where the single
+   * "Battery Health: 91%" figure the bench reads off a modern Mac does not
+   * exist. Optional in exactly the way `batteryHealth` is: an accessory has no
+   * battery, and a machine can reach the shelf before anybody opened System
+   * Information. **0 is a real reading** — a battery replaced last week — so
+   * every consumer null-checks rather than testing falsiness.
+   *
+   * ⚠️ Schema gap: prisma's `Unit` has no cycle column. It had one before
+   * 2026-08-24 and the migration that replaced it with battery health dropped
+   * it; bringing it back is an owner decision plus a migration, on the same
+   * footing as `Supplier.code`.
+   */
+  cycleCount?: number;
+  /**
+   * Full charge capacity in mAh — the other half of an older machine's reading.
+   *
+   * Kept beside the cycle count rather than converted into a percentage,
+   * because converting needs a design capacity this app does not hold and
+   * three people remembering three different ones is three answers about one
+   * battery. The bench types what the machine says.
+   *
+   * ⚠️ Schema gap, as `cycleCount`.
+   */
+  fcc?: number;
 }
 /**
  * A photograph attached to a note about one machine. Mirrors `UnitNotePhoto`.
@@ -286,7 +383,7 @@ export interface PoItem {
  */
 export interface PoPayment {
   id: string;
-  /** A `PaymentMethod` code — TUNAI, KARTU_KREDIT, DEPOSIT. */
+  /** A `PaymentMethod` code — TUNAI, TRANSFER, KARTU_KREDIT. */
   method: string;
   amount: number;
   at: string;
@@ -309,6 +406,21 @@ export interface PoPayment {
    * before the API can carry it.
    */
   appliedTo?: PoPaymentFor;
+  /**
+   * The deposit this payment came out of, when it came out of one (owner ask
+   * 2026-09-09: *"deposit is the result of the payment, instead of a payment
+   * method"*).
+   *
+   * `method` says how the money MOVED, which for an allocation is whatever the
+   * deposit itself was paid by — a transfer stays a transfer no matter which
+   * invoice somebody later decides it settled. This says where it came FROM,
+   * and it is what stops the balance spending the money twice: the pot was
+   * emptied on the day of the deposit, and an allocation moves nothing.
+   *
+   * ⚠️ Mock-only. Prisma's `Payment` has no allocation link; it wants a
+   * nullable FK to the deposit row that does not exist there yet either.
+   */
+  fromDepositId?: string;
 }
 
 /**
@@ -383,6 +495,10 @@ export interface StockInRec {
   description?: string;
   /** Battery health % read off the machine while grading it. Accepts only. */
   batteryHealth?: number;
+  /** Charge cycles, for a 2020-or-earlier machine. See `Unit.cycleCount`. */
+  cycleCount?: number;
+  /** Full charge capacity in mAh, for the same machines. See `Unit.fcc`. */
+  fcc?: number;
   at: string;
   staff: string;
 }
@@ -515,8 +631,37 @@ export interface Order {
    * Which channels those are is `holdsFunds` in lib/channels.ts, not a list of
    * `=== "SHOPEE"` comparisons — Tokopedia and TikTok settle the same way
    * (owner decision 2026-08-26).
+   *
+   * A PROJECTION over `payments` since 2026-09-08, written in the same
+   * mutation as whatever changed them — the same rule `Unit.status` follows.
+   * It means what it always meant, applied to every rupiah of the bill rather
+   * than only to the marketplace case: the money is in the shop's hands.
    */
   settled: boolean;
+  /**
+   * What the customer actually handed over, in parts (owner ask 2026-09-08).
+   *
+   * *"Customer can do a split payment … 5jt in cash and 5jt more in tokopedia,
+   * so we need to track different payment handling and reflect it on
+   * invoice."* One method and one flag could not express that: the cash is in
+   * the till today and the PayLater money is with Shopee, and which half is
+   * which is the only question the finance screens ever ask of it.
+   *
+   * Also where a PART payment and its due date live, which is the other half
+   * of the same ask — a customer who pays Rp2jt now and promises the rest on
+   * the 30th has two rows here, one SETTLED and one DUE.
+   *
+   * Absent on every order written before this, and `paymentsOf` reads those as
+   * one payment for the whole bill in the state `settled` implies. See
+   * `lib/salePayments.ts`.
+   *
+   * ⚠️ Mock-only as a list. Prisma HAS a `Payment` table with `orderId`,
+   * `amount`, `status`, `paidAt` and `dueAt` — most of this shape is already
+   * there. What it cannot carry is `channel`: nothing on `Payment` says which
+   * marketplace is holding one part, because until now that was a fact about
+   * the order.
+   */
+  payments?: SalePayment[];
   /**
    * A charge the shop is adding — delivery, almost always (owner revision
    * 2026-08-27). Mirrors `Order.extra` / `Order.extraNote`.
@@ -737,6 +882,15 @@ export interface ManualIncome {
   amount: number;
   date: string;
   note?: string;
+  /**
+   * How the money arrived — and therefore which balance it raised (owner ask
+   * 2026-09-09). A `PaymentMethod` code from `ADJUSTMENT_METHOD_CODES`.
+   *
+   * Required of anything typed since, because the two balances cannot be kept
+   * apart by a movement that will not say which pot it went into.
+   * `lib/accounts.ts` maps the code to the pot.
+   */
+  method: string;
 }
 
 export interface Expense {
@@ -760,6 +914,12 @@ export interface Expense {
    * money spent can be scored against the customers it brought in.
    */
   referralSourceId?: string;
+  /**
+   * How the money left — and therefore which balance it lowered (owner ask
+   * 2026-09-09). See `ManualIncome.method`; the same field for the same
+   * reason, on the other side of the ledger.
+   */
+  method: string;
 }
 export interface ChatMsg {
   id: string;
@@ -831,8 +991,12 @@ export interface Adjustment {
    * act rather than four coincidences a second apart.
    */
   batchId: string;
-  /** Cycle count recorded on the unit as part of this adjustment. */
+  /** Battery health % recorded on the unit as part of this adjustment. */
   batteryHealth?: number;
+  /** Charge cycles, for a 2020-or-earlier machine. See `Unit.cycleCount`. */
+  cycleCount?: number;
+  /** Full charge capacity in mAh, beside the cycles. See `Unit.fcc`. */
+  fcc?: number;
   /**
    * Set when this row's serial was NOT in stock and the adjustment created the
    * unit. The distinction outlives the moment: an audit asking where a serial
@@ -938,15 +1102,62 @@ export interface AppSettings {
   batteryGoodMin: number;
   batteryFairMin: number;
   /**
-   * The cash the business held before this app recorded anything — what the
-   * Income & Expense balance starts counting from (owner ask 2026-08-27).
-   * Unset until somebody enters it; the seed leaves it unset so the "add the
-   * current balance" path is visible. Mirrors an `AppSetting` row, so no new
-   * table — but the KEY does not exist there yet: owner decision + migration
-   * before the API can carry it.
+   * The cycle-count bands, for machines released in 2020 or earlier (owner ask
+   * 2026-09-08).
+   *
+   * Ceilings where the health pair are floors — fewer cycles is a better
+   * battery — and two numbers for the same reason: three hand-written ranges
+   * can overlap and can leave a gap, two thresholds cannot. See
+   * `CycleThresholds` in lib/battery.ts.
+   *
+   * ⚠️ The `AppSetting` table is key/value, so these need no migration — but
+   * the two KEYS do not exist there yet.
    */
-  openingBalance?: number;
-  /** When the opening balance was entered, so the card can say so. */
+  cycleGoodMax?: number;
+  cycleFairMax?: number;
+  /**
+   * How far above the store price a marketplace listing sits, as a percentage
+   * (owner ask 2026-09-08).
+   *
+   * One number for the shop rather than one per channel: Shopee, Tokopedia and
+   * TikTok are within a point of each other, and a shop that has to maintain
+   * three price lists maintains none. See `lib/unitPrice.ts`.
+   *
+   * ⚠️ The `AppSetting` table is key/value, so this needs no migration — the
+   * KEY does not exist there yet.
+   */
+  marketplaceMarkupPct?: number;
+  /**
+   * What each marketplace charges, as a percentage of the sale (owner ask
+   * 2026-09-08: *"a fixed fee from the marketplace, let's say 10%"*).
+   *
+   * Keyed by `SaleSource`. A channel with no entry answers
+   * `DEFAULT_COMMISSION_PCT` — see `lib/marketplace.ts`. Per channel because
+   * the rates genuinely differ and the shop knows its own; the additional
+   * charges (a bank transfer fee, a campaign) are typed per withdrawal,
+   * because those are the ones that are *"often times"* rather than always.
+   *
+   * ⚠️ Mock-only. `AppSetting` is key/value so this needs no migration, but
+   * the keys do not exist there yet.
+   */
+  marketplaceFees?: Record<string, number>;
+  /**
+   * What the business held before this app recorded anything — what the
+   * Income & Expense balance starts counting from (owner ask 2026-08-27),
+   * in the two pots it is actually kept in (owner revision 2026-09-09).
+   *
+   * TWO numbers, not one, for the same reason the balance itself is now two:
+   * the drawer and the bank answer different questions, and a single opening
+   * figure could only be apportioned by guessing. Either may be entered on its
+   * own — a shop that keeps no float leaves the cash box empty — and both
+   * being unset is what the "add the current balance" path is for.
+   *
+   * Mirrors `AppSetting` rows, so no new table; the KEYS do not exist there
+   * yet: owner decision + migration before the API can carry them.
+   */
+  openingCash?: number;
+  openingBank?: number;
+  /** When the opening balances were entered, so the card can say so. */
   openingBalanceAt?: string;
   /**
    * Who the shop is, as printed at the top of every faktur.
@@ -1045,6 +1256,44 @@ export interface MockDb {
   expenses: Expense[];
   /** Money in, entered by hand. See `ManualIncome`. ⚠️ Mock-only. */
   incomes: ManualIncome[];
+  /**
+   * Every change ever made to a payment (owner ask 2026-09-08).
+   *
+   * *"We should also be able to edit how much the user have paid, for error
+   * handling, but keep a log for it."* The log is the point: the reason to
+   * allow an edit at all is that somebody typed Rp5.000.000 when they meant
+   * Rp500.000, and what finds that three weeks later is the number BEFORE the
+   * edit — the one thing an in-place correction destroys.
+   *
+   * ⚠️ Mock-only. Prisma's `AuditLog` is where this belongs when the API
+   * carries it: a general before/after table that needs no new column.
+   */
+  paymentLog: PaymentLogEntry[];
+  /**
+   * Marketplace withdrawals, itemised. See `lib/marketplace.ts`.
+   *
+   * ⚠️ Mock-only. A `PaymentFee` table on the same footing as `OrderFee`.
+   */
+  settlements: Settlement[];
+  /** Every change to a settlement. *"It is editable and logged."* ⚠️ Mock-only. */
+  settlementLog: SettlementLogEntry[];
+  /**
+   * Machines at the repairer, and what each visit cost (owner ask
+   * 2026-09-08). See `lib/service.ts`.
+   *
+   * ⚠️ Mock-only. Prisma has the PLACE — `Location.kind = SERVIS` and
+   * `UnitStatus.SERVIS` — and no table for a visit or its fees.
+   */
+  services: ServiceRec[];
+  /**
+   * Money paid to a supplier before anybody decided which invoice it settles
+   * (owner ask 2026-09-08). See `lib/supplierLedger.ts`.
+   *
+   * ⚠️ Mock-only. Prisma's `Payment` has a nullable `poId`, so a deposit is
+   * ALMOST expressible — but nothing there records which supplier it was paid
+   * to, and nothing records an allocation.
+   */
+  deposits: SupplierDeposit[];
   chats: ChatThread[];
   knowledge: Knowledge[];
   corrections: Correction[];
@@ -1083,6 +1332,7 @@ export function buildSeed(): MockDb {
     id: l.id,
     name: l.name,
     active: true,
+    kind: l.kind,
   }));
   const racks: RackLocation[] = shop.racks.map((r) => ({
     id: r.id,
@@ -1096,7 +1346,47 @@ export function buildSeed(): MockDb {
     ...(s.phone === undefined ? {} : { phone: s.phone }),
     ...(s.address === undefined ? {} : { address: s.address }),
     ...(s.code === undefined ? {} : { code: s.code }),
+    // One supplier carries a debt from before this system, so the "how much do
+    // we owe them?" card has something to demonstrate (owner ask 2026-09-08).
+    ...(s.id === shop.suppliers[1]?.id
+      ? { openingBalance: 7_500_000, openingBalanceAt: iso(60, 9) }
+      : {}),
   }));
+  /**
+   * A deposit with money still on it, and an old debt (owner ask 2026-09-08).
+   *
+   * ⚠️ Mock-only, and hand-written here rather than in `@nusantara/fixture`
+   * for the reason every other mock-only row is: prisma has no table for
+   * either, so the Postgres seed cannot project them and the two projections
+   * would stop being the same shop.
+   *
+   * The shape is the one the owner described: one transfer to a supplier who
+   * sends several invoices a month, part of it put against the oldest and the
+   * rest still unallocated. A screen that only ever showed fully-spent
+   * deposits could not demonstrate the one thing this feature is for.
+   */
+  const deposits: SupplierDeposit[] = [
+    {
+      id: "dep-1",
+      supplierId: shop.suppliers[0]!.id,
+      amount: 30_000_000,
+      method: "TRANSFER",
+      at: iso(9, 10),
+      note: "Transfer awal bulan",
+      staff: "Michella",
+      allocations: [
+        {
+          id: "dep-1-a1",
+          poId: "po-1",
+          amount: 18_000_000,
+          at: iso(8, 11),
+          staff: "Michella",
+          note: "Sebagian ke invoice tertua",
+        },
+      ],
+    },
+  ];
+
   const reasons: Reason[] = [
     // Seeded by owner decision. A free-typed reason joins this list before it
     // is ever referenced by an adjustment — see `ensureReason` in store.ts.
@@ -1394,7 +1684,10 @@ export function buildSeed(): MockDb {
     description: u.description,
     poId: u.poId,
     ...(u.grade === undefined ? {} : { grade: u.grade }),
+    ...(u.price === undefined ? {} : { price: u.price }),
     ...(u.battery === undefined ? {} : { batteryHealth: u.battery }),
+    ...(u.cycleCount === undefined ? {} : { cycleCount: u.cycleCount }),
+    ...(u.fcc === undefined ? {} : { fcc: u.fcc }),
   }));
   /*
    * The document each event belongs to, as its CODE.
@@ -1524,9 +1817,9 @@ export function buildSeed(): MockDb {
   /**
    * What the shop accepts, matching `PaymentMethod` in the schema by `code`.
    *
-   * Hoisted out of the returned object so a seeded sale can quote a LABEL —
-   * an invoice printing "MARKETPLACE" where it should read "Shopee (escrow)"
-   * is the till's own vocabulary leaking out of the database's.
+   * Three ways money moves plus the two a customer has that a supplier does
+   * not. `lib/accounts.ts` is what says which of them is cash and which is
+   * bank; nothing here needs to, because a method's pot follows from its code.
    */
   const paymentMethods: PaymentMethodRec[] = [
     {
@@ -1547,15 +1840,15 @@ export function buildSeed(): MockDb {
       forSale: true,
       active: true,
     },
-    {
-      id: "pm_deposit",
-      code: "DEPOSIT",
-      label: "Deposit",
-      builtIn: true,
-      forPo: true,
-      forSale: false,
-      active: true,
-    },
+    /*
+     * DEPOSIT was a row here until 2026-09-09 and is not one any more (owner
+     * decision): *"deposit is the result of the payment, instead of a payment
+     * method"*. It made "how was this invoice paid?" answerable with
+     * "deposit", which says when the money was DECIDED about and nothing about
+     * how it moved — and it put supplier money in neither the cash balance nor
+     * the bank one. An allocation now carries the deposit's own method plus
+     * `PoPayment.fromDepositId`.
+     */
     {
       id: "pm_qris",
       code: "QRIS",
@@ -1566,11 +1859,15 @@ export function buildSeed(): MockDb {
       active: true,
     },
     {
+      // `forPo` since 2026-09-09: the owner's three for money going out are
+      // cash, transfer and card, and a supplier deposit is a transfer nine
+      // times in ten. The deposit dialog defaulted to TRANSFER while this said
+      // `forPo: false`, so the default was not among its own options.
       id: "pm_transfer",
       code: "TRANSFER",
       label: "Bank transfer",
       builtIn: true,
-      forPo: false,
+      forPo: true,
       forSale: true,
       active: true,
     },
@@ -1584,9 +1881,6 @@ export function buildSeed(): MockDb {
       active: true,
     },
   ];
-  const payLabel = (code: string) =>
-    paymentMethods.find((m) => m.code === code)?.label ?? code;
-
   const orders: Order[] = shop.orders.map((o) => ({
     id: o.id,
     code: o.code,
@@ -1607,12 +1901,30 @@ export function buildSeed(): MockDb {
     ...(o.shippingAddress === undefined
       ? {}
       : { shippingAddress: o.shippingAddress }),
-    // The till writes a human label here, not a `PaymentMethod` code, and a
-    // marketplace writes its own escrow wording — so the seed does too.
+    // A `PaymentMethod` CODE, as the field says and as the fixture holds it.
+    // It used to be projected to a label here, on the argument that the till
+    // wrote labels and an invoice reading "MARKETPLACE" is the database's
+    // vocabulary leaking onto a receipt. The second half of that is right and
+    // is now solved where it belongs — every screen that SHOWS a method looks
+    // its label up. The first half stopped being true on 2026-09-09: the till
+    // writes codes, because the cash-and-bank balance sorts a movement by its
+    // method and a renamed label belongs to no pot.
     payMethod: holdsFunds(o.channel as SaleSource)
-      ? marketplacePayMethod(o.channel)
-      : payLabel(o.payMethod),
+      ? "MARKETPLACE"
+      : o.payMethod,
     settled: o.settled,
+    // The bill in parts (owner ask 2026-09-08). One part unless the fixture
+    // declares a split; `Order.settled` above is the projection over these.
+    payments: o.parts.map((p) => ({
+      id: p.id,
+      method: p.method,
+      amount: p.amount,
+      state: p.state,
+      ...(p.channel === undefined ? {} : { channel: p.channel }),
+      at: isoOf(p.at),
+      ...(p.dueAt === undefined ? {} : { dueAt: isoOf(p.dueAt) }),
+      ...(p.note === undefined ? {} : { note: p.note }),
+    })),
     ...(o.extra === undefined
       ? {}
       : {
@@ -1717,11 +2029,14 @@ export function buildSeed(): MockDb {
    * point: a transfer raises the balance without being revenue.
    */
   const incomes: ManualIncome[] = [
+    // One into each pot, deliberately: the drawer and the bank both have to
+    // have something in them for the split balance to be worth looking at.
     {
       id: "mi-1",
       reason: "SALES",
       amount: 4_250_000,
       date: iso(6).slice(0, 10),
+      method: "TUNAI",
       note: "Walk-in paid cash while the till was down",
     },
     {
@@ -1729,6 +2044,7 @@ export function buildSeed(): MockDb {
       reason: "TRANSFER",
       amount: 15_000_000,
       date: iso(11).slice(0, 10),
+      method: "TRANSFER",
       note: "Topped up the shop float from the owner's account",
     },
   ];
@@ -1736,6 +2052,7 @@ export function buildSeed(): MockDb {
   const expenses: Expense[] = [
     {
       id: "e-1",
+      method: "TRANSFER",
       label: "Store rent August",
       kind: "RENT",
       amount: 7_500_000,
@@ -1743,6 +2060,7 @@ export function buildSeed(): MockDb {
     },
     {
       id: "e-2",
+      method: "TUNAI",
       label: "Cleaning kit + thermal paste",
       kind: "OPERATIONAL",
       amount: 240_000,
@@ -1750,6 +2068,7 @@ export function buildSeed(): MockDb {
     },
     {
       id: "e-3",
+      method: "KARTU_KREDIT",
       label: "Instagram ads — August push",
       kind: "MARKETING",
       amount: 2_400_000,
@@ -1758,6 +2077,7 @@ export function buildSeed(): MockDb {
     },
     {
       id: "e-4",
+      method: "KARTU_KREDIT",
       label: "Shopee ads credit",
       kind: "MARKETING",
       amount: 1_100_000,
@@ -1766,6 +2086,7 @@ export function buildSeed(): MockDb {
     },
     {
       id: "e-5",
+      method: "KARTU_KREDIT",
       label: "TikTok ads trial",
       kind: "MARKETING",
       amount: 900_000,
@@ -1774,6 +2095,7 @@ export function buildSeed(): MockDb {
     },
     {
       id: "e-6",
+      method: "TRANSFER",
       label: "Staff salaries August",
       kind: "PAYROLL",
       amount: 12_000_000,
@@ -1781,6 +2103,7 @@ export function buildSeed(): MockDb {
     },
     {
       id: "e-7",
+      method: "TRANSFER",
       label: "Accountant retainer",
       kind: "PROFESSIONAL",
       amount: 1_500_000,
@@ -1788,6 +2111,7 @@ export function buildSeed(): MockDb {
     },
     {
       id: "e-8",
+      method: "KARTU_KREDIT",
       label: "Cloud hosting + POS licence",
       kind: "SOFTWARE",
       amount: 650_000,
@@ -2008,6 +2332,11 @@ export function buildSeed(): MockDb {
     discounts,
     expenses,
     incomes,
+    paymentLog: [],
+    settlements: [],
+    settlementLog: [],
+    services: [],
+    deposits,
     chats,
     knowledge,
     corrections,

@@ -83,9 +83,8 @@ import { InvoiceModal } from "../../components/Invoice";
 import { fmtRp, fmtDate, fmtDateTime } from "../../lib/format.js";
 import {
   BATTERY_GRADE_COLOR,
-  batteryGrade,
-  fmtBatteryHealth,
-  thresholdsFrom,
+  batterySettingsFrom,
+  readUnitBattery,
 } from "../../lib/battery.js";
 import {
   bundleProgress,
@@ -131,12 +130,18 @@ import {
 import {
   SALE_CHANNELS,
   holdsFunds,
-  marketplacePayMethod,
   channelOf,
   type SaleSource,
 } from "../../lib/channels.js";
 import { gradeForCondition } from "../../lib/condition.js";
-import { resolveScannedSerial } from "../../lib/serialScan.js";
+import { resolveSerialQuery } from "../../lib/serialInput.js";
+import { priceOf as unitListPrice } from "../../lib/unitPrice.js";
+import {
+  isSettled,
+  type SalePayment,
+} from "../../lib/salePayments.js";
+import { PaymentsPanel } from "../../components/PaymentsPanel.js";
+import { costOfUnit } from "../../lib/service.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
 import { useLayoutMode } from "../../layouts/useLayoutMode.js";
 import { TradeInDialog } from "./TradeInDialog.js";
@@ -387,7 +392,32 @@ export function StockOutPage() {
    * comma was the kecamatan is exactly the mess the parts form exists to end.
    */
   const [savedAddressId, setSavedAddressId] = useState<string>();
-  const [payMethod, setPayMethod] = useState("Cash");
+  /**
+   * How the customer is paying, as a `PaymentMethod` CODE.
+   *
+   * A code and not a label since 2026-09-09. It held the label — "Cash",
+   * "Bank transfer" — which read fine on a receipt and made the field a
+   * different type from the one `Order.payMethod` documents, from the one the
+   * fixture writes, and from the one prisma's `Payment.methodId` resolves to.
+   * The cash-and-bank balance is what made that cost something: it sorts a
+   * movement by its method, and a method spelled the way a person renamed it
+   * in Settings belongs to no pot at all. The label is looked up wherever one
+   * is shown, which is what every other code in this app already does.
+   */
+  const [payMethod, setPayMethod] = useState("TUNAI");
+  /** The chosen method, spelled for a person. Labels live in Settings. */
+  const payMethodLabel =
+    db.paymentMethods.find((m) => m.code === payMethod)?.label ?? payMethod;
+  /**
+   * Is this bill being paid in more than one way (owner ask 2026-09-08)?
+   *
+   * Off by default, and the chips above are the fast path. Most sales are one
+   * payment and putting a payment GRID in front of every one of them would
+   * make the common case pay for the rare one — which is the mistake the
+   * accordion till of 2026-09-01 was reverted for.
+   */
+  const [splitting, setSplitting] = useState(false);
+  const [splitParts, setSplitParts] = useState<SalePayment[]>([]);
   const [salesmanId, setSalesmanId] = useState<string>();
   /**
    * Which of the till's two steps is on screen (owner revision 2026-09-01).
@@ -484,7 +514,7 @@ export function StockOutPage() {
    * One is always shown and the other is offered.
    */
   const [recorded, setRecorded] = useState<Order | null>(null);
-  const thresholds = thresholdsFrom(db.settings);
+  const batterySettings = batterySettingsFrom(db.settings);
   /**
    * The sale that was just recorded, held only so its invoice can be offered.
    * Cleared when the modal closes — the order itself lives in the store, and
@@ -595,14 +625,28 @@ export function StockOutPage() {
   }, [reservationParam]);
 
   /**
-   * What this serial is LISTED at — the price of its variant, since
-   * 2026-08-27.
+   * What this serial is LISTED at — the price of the MACHINE, since
+   * 2026-09-08.
+   *
+   * Per serial again (owner revision), falling back to the variant's asking
+   * price for a machine nobody has priced. It matters most here: two 2017 Airs
+   * of one variant can differ by Rp1.500.000, and a till quoting the catalogue
+   * figure for both would report every sale of the good one as a bargain and
+   * every sale of the tired one as an upsell.
    *
    * The per-line override is a different thing entirely and is what makes a
-   * bargain: this is what the shop asks, and the override is what it settled
-   * for once, on this sale, with this customer.
+   * bargain: this is what the shop asks for THIS machine, and the override is
+   * what it settled for once, on this sale, with this customer.
    */
-  const priceOf = (serial?: string) => skuOf(serial)?.price ?? undefined;
+  const listedPriceOf = (serial?: string) => {
+    const unit = serial
+      ? db.units.find((u) => u.serial === serial)
+      : undefined;
+    const sku = skuOf(serial);
+    if (!sku) return undefined;
+    return unit ? unitListPrice(unit, sku.price) : sku.price;
+  };
+  const priceOf = listedPriceOf;
 
   /**
    * The basket, resolved to the prices that will actually be charged.
@@ -657,16 +701,42 @@ export function StockOutPage() {
       saleTotals({
         prices: basket.map((l) => l.price),
         listPrices: basket.map((l) => priceOf(l.serial) ?? l.price),
-        costs: basket.map(
-          (l) => db.units.find((u) => u.serial === l.serial)?.buy ?? 0,
-        ),
+        // What each machine ACTUALLY cost the shop: what it was bought for,
+        // plus every repair charged against it (owner ask 2026-09-08 — *"the
+        // service will be included to count the COGS"*). A machine bought at
+        // Rp4jt and repaired for Rp800k is a Rp4.8jt machine, and a margin
+        // that ignores the repair flatters every unit that has been to the
+        // bench.
+        costs: basket.map((l) => {
+          const u = db.units.find((x) => x.serial === l.serial);
+          return u ? costOfUnit(u, db.services) : 0;
+        }),
         discount: discountValue,
         extra: liveFees,
         tradeIns,
       }),
-    [basket, db.units, db.skus, discountValue, liveFees, tradeIns],
+    [basket, db.units, db.skus, db.services, discountValue, liveFees, tradeIns],
   );
   const total = totals.total;
+
+  /**
+   * The one payment the chips describe — what an unsplit sale records.
+   *
+   * PENDING on a marketplace channel and SETTLED otherwise, which is exactly
+   * what `Order.settled` meant before this and exactly what `holdsFunds`
+   * decides. Nothing about the common sale changes; the fact is simply stored
+   * as a row that can be corrected rather than as a boolean that cannot.
+   */
+  const defaultParts = (): SalePayment[] => [
+    {
+      id: `${Date.now()}-1`,
+      method: holdsFunds(source) ? "MARKETPLACE" : payMethod,
+      amount: totals.order.total,
+      state: holdsFunds(source) ? "PENDING" : "SETTLED",
+      ...(holdsFunds(source) ? { channel: source } : {}),
+      at: new Date().toISOString(),
+    },
+  ];
 
   /** The catalogue, and the chips above it. */
   const catalogue = useMemo(
@@ -740,7 +810,9 @@ export function StockOutPage() {
     if (!l.serial) return false;
     const unit = db.units.find((u) => u.serial === l.serial);
     const asking = l.price ?? priceOf(l.serial) ?? 0;
-    return unit !== undefined && asking > 0 && asking < unit.buy;
+    return (
+      unit !== undefined && asking > 0 && asking < costOfUnit(unit, db.services)
+    );
   });
 
   const submit = () => {
@@ -803,6 +875,8 @@ export function StockOutPage() {
       // repriced variant would otherwise rewrite history. See `Order.listPrices`.
       listPrices[l.serial!] = listed;
     }
+    // Split or not, the sale is a list of payments from here on.
+    const parts = splitting && splitParts.length > 0 ? splitParts : defaultParts();
     const order: Order = {
       id: nextId("o"),
       code,
@@ -820,8 +894,18 @@ export function StockOutPage() {
       shippingAddress: shipped ? composeAddress(address) : undefined,
       // A marketplace sale has no payment method to pick — the customer paid
       // the marketplace — so the field records which one is holding it.
-      payMethod: holdsFunds(source) ? marketplacePayMethod(source) : payMethod,
-      settled: !holdsFunds(source),
+      payMethod: holdsFunds(source) ? "MARKETPLACE" : payMethod,
+      /*
+       * The bill in parts, and `settled` as a projection over them (owner ask
+       * 2026-09-08).
+       *
+       * A sale nobody split records exactly the one payment it always did —
+       * `defaultParts()` builds it from the chips — so nothing changes for the
+       * common case except that the fact is now stored as a row rather than as
+       * a boolean, and the same row can be corrected later.
+       */
+      payments: parts,
+      settled: isSettled(totals.order.total, parts),
       extra: totals.extra || undefined,
       /*
        * `extra` above is the TOTAL and this is its label; `fees` below is the
@@ -861,7 +945,10 @@ export function StockOutPage() {
         // Measured against the variant's asking price. The ledger note is the
         // same promise as before: this sale went out at a different number and
         // here is what it was, on the serial that left the shop.
-        const asking = d.skus.find((k) => k.id === unit.skuId)?.price;
+        const asking = unitListPrice(
+          unit,
+          d.skus.find((k) => k.id === unit.skuId)?.price ?? 0,
+        );
         if (asking !== undefined && price !== asking) {
           /*
            * Translated at the moment it is WRITTEN, and that is the trade.
@@ -1081,14 +1168,22 @@ export function StockOutPage() {
    * on this sale. None of them is a dialog — the next scan has to work.
    */
   const scanOntoSale = (raw: string) => {
-    // Resolved rather than merely upper-cased: the machine in the customer's
-    // hands carries the shop's own label AND Apple's, and until 2026-08-31 a
-    // scan of the second one answered "not a unit we know" about a laptop on
-    // the counter. The answer is still always a stored serial — see
-    // `resolveScannedSerial`, which finds one or hands the scan straight back.
-    const serial = resolveScannedSerial(
+    /*
+     * Resolved rather than merely upper-cased: the machine in the customer's
+     * hands carries the shop's own label AND Apple's, and until 2026-08-31 a
+     * scan of the second one answered "not a unit we know" about a laptop on
+     * the counter. The answer is still always a stored serial — see
+     * `resolveSerialQuery`, which finds one or hands the input straight back.
+     *
+     * Through `resolveSerialQuery` since 2026-09-08, which also puts the
+     * marker back on a bare read. The till's box is typed into constantly —
+     * a customer reads their serial down the phone — and the number they read
+     * off the case has no marker on it.
+     */
+    const serial = resolveSerialQuery(
       raw,
       db.units.map((u) => u.serial),
+      db.suppliers.map((x) => x.code).filter((c): c is string => !!c),
     );
     if (!serial) return;
 
@@ -1295,8 +1390,15 @@ export function StockOutPage() {
                       })}
                 </Typography.Text>
 
+                {/* A RANGE since 2026-09-08: the price is per serial, so a
+                    row holding an A and a C quotes two numbers. `single`
+                    collapses it where the machines agree. */}
                 <Typography.Text strong style={{ whiteSpace: "nowrap" }}>
-                  {fmtRp(row.sku.price)}
+                  {row.price.count === 0
+                    ? fmtRp(row.sku.price)
+                    : row.price.single
+                      ? fmtRp(row.price.min)
+                      : `${fmtRp(row.price.min)} – ${fmtRp(row.price.max)}`}
                 </Typography.Text>
               </Flex>
             );
@@ -2091,7 +2193,7 @@ export function StockOutPage() {
                   channelOf(source)?.label ?? source,
                   holdsFunds(source)
                     ? t("pos.escrow", "escrow")
-                    : payMethod,
+                    : payMethodLabel,
                 ].join(" · ")}
               </Typography.Text>
         }
@@ -2140,13 +2242,72 @@ export function StockOutPage() {
                             key={m.code}
                             size="small"
                             shape="round"
-                            type={payMethod === m.label ? "primary" : "default"}
-                            onClick={() => setPayMethod(m.label)}
+                            type={payMethod === m.code ? "primary" : "default"}
+                            onClick={() => setPayMethod(m.code)}
                           >
                             {m.label}
                           </Button>
                         ))}
                     </Flex>
+                  )}
+                </Flex>
+
+                {/*
+                  * Split payment (owner ask 2026-09-08).
+                  *
+                  * *"Customer can do a split payment … 5jt in cash and 5jt more
+                  * in tokopedia."* The chips above stay: they are the fast
+                  * path, and the fast path is most sales. This opens when the
+                  * bill is not one payment — and once it is open, the chips
+                  * describe the FIRST part rather than the whole sale.
+                  *
+                  * The parts are what get written; the chips are what they are
+                  * seeded from. A sale nobody splits records exactly the one
+                  * payment it always did.
+                  */}
+                <Flex vertical gap={6}>
+                  <Flex justify="space-between" align="center" wrap gap={6}>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {t("pos.splitUpper", "SPLIT THIS BILL")}
+                    </Typography.Text>
+                    {!splitting && (
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          setSplitting(true);
+                          setSplitParts(defaultParts());
+                        }}
+                      >
+                        {t("pos.splitIt", "Pay in parts")}
+                      </Button>
+                    )}
+                  </Flex>
+                  {splitting ? (
+                    <Flex vertical gap={6}>
+                      <PaymentsPanel
+                        total={totals.total}
+                        value={splitParts}
+                        onChange={setSplitParts}
+                        methods={db.paymentMethods
+                          .filter((m) => m.forSale && m.active)
+                          .map((m) => ({ value: m.code, label: m.label }))}
+                      />
+                      <Button
+                        size="small"
+                        type="text"
+                        onClick={() => setSplitting(false)}
+                        style={{ alignSelf: "flex-start" }}
+                      >
+                        {t("pos.splitCancel", "One payment after all")}
+                      </Button>
+                    </Flex>
+                  ) : (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {t(
+                        "pos.splitHint",
+                        "Cash now and the rest on a marketplace, a deposit with a due date — anything that is not one payment.",
+                      )}
+                    </Typography.Text>
                   )}
                 </Flex>
               </Flex>
@@ -2556,9 +2717,13 @@ export function StockOutPage() {
           (() => {
             const sku = skuOf(inspected.serial);
             const unit = db.units.find((u) => u.serial === inspected.serial);
-            const listed = sku?.price ?? 0;
+            const listed = unit
+              ? unitListPrice(unit, sku?.price ?? 0)
+              : (sku?.price ?? 0);
             const charged = inspected.price ?? listed;
-            const cost = unit?.buy ?? 0;
+            // Bought plus repaired, so a machine that went to the bench does
+            // not show a margin it has not earned.
+            const cost = unit ? costOfUnit(unit, db.services) : 0;
             const margin = charged > 0 ? ((charged - cost) / charged) * 100 : null;
             const move = charged - listed;
             return (
@@ -2671,7 +2836,7 @@ export function StockOutPage() {
           return (
             <Flex vertical gap={12}>
               <Typography.Text type="secondary">
-                {row.sku.name} {row.sku.variantLabel} · {fmtRp(row.sku.price)}
+                {row.sku.name} {row.sku.variantLabel}
               </Typography.Text>
               {/* What this dialog has already put on the sale, so somebody
                   taking three of a kind can see how many they have without
@@ -2699,7 +2864,9 @@ export function StockOutPage() {
                 </Typography.Text>
               )}
               {left.map((u) => {
-                const grade = batteryGrade(u.batteryHealth, thresholds);
+                // In whichever units this machine's era reports — a 2017
+                // body says "312 cycles", an M2 says "94%".
+                const battery = readUnitBattery(u, db, batterySettings);
                 const held = u.status === "DIRESERVASI";
                 return (
                   <Flex
@@ -2721,11 +2888,18 @@ export function StockOutPage() {
                       </Typography.Text>
                     </Flex>
                     <GradeTag grade={u.grade} />
-                    {grade !== null && (
-                      <Tag color={BATTERY_GRADE_COLOR[grade]}>
-                        {fmtBatteryHealth(u.batteryHealth)}
+                    {battery.grade !== null && (
+                      <Tag color={BATTERY_GRADE_COLOR[battery.grade]}>
+                        {battery.text}
                       </Tag>
                     )}
+                    {/* What THIS machine asks (owner revision 2026-09-08).
+                        The whole reason the chooser exists is that the
+                        machines differ; before this it listed the difference
+                        in condition and hid the difference in price. */}
+                    <Typography.Text strong style={{ whiteSpace: "nowrap" }}>
+                      {fmtRp(unitListPrice(u, row.sku.price))}
+                    </Typography.Text>
                     {held && (
                       <Tooltip
                         title={t(
@@ -2894,7 +3068,7 @@ export function StockOutPage() {
                 label: t("pos.paymentUpper", "PAYMENT"),
                 children: holdsFunds(source)
                   ? t("pos.escrow", "escrow")
-                  : payMethod,
+                  : payMethodLabel,
               },
               ...(customer
                 ? [

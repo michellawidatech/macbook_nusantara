@@ -52,6 +52,8 @@ import { ProTable } from "../../components/ProTable";
 import { MoneyInput } from "../../components/MoneyInput";
 import { AdjustmentPanel } from "./AdjustmentPanel";
 import { fmtRp, fmtDateTime, fmtDate } from "../../lib/format.js";
+import { balancesOf, type Movement } from "../../lib/accounts.js";
+import { paymentsOf } from "../../lib/salePayments.js";
 import { useDb, mutate } from "../../mock/store.js";
 import {
   EXPENSE_CATEGORIES,
@@ -59,6 +61,7 @@ import {
   type Order,
 } from "../../mock/seed.js";
 import { labelOf } from "../../i18n/enumLabels.js";
+import { SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
 
 /**
@@ -90,7 +93,7 @@ export function IncomeExpensePage() {
   const [addAdjustment, setAddAdjustment] = useState(false);
   /** The opening-balance dialog. See `balance` below. */
   const [balanceOpen, setBalanceOpen] = useState(false);
-  const [balanceForm] = Form.useForm<{ amount: number }>();
+  const [balanceForm] = Form.useForm<{ cash?: number; bank?: number }>();
   /**
    * The window the period card reads: 0 = today, N = the last N days, -1 =
    * the custom range picked on the calendar (owner ask 2026-08-27).
@@ -106,37 +109,65 @@ export function IncomeExpensePage() {
   const pendingTotal = pending.reduce((t, o) => t + o.total, 0);
 
   /**
-   * The running balance (owner ask 2026-08-27): what came before the app plus
-   * everything it has recorded since. `openingBalance` is what the shop held
-   * on day one — entered once, from this card — and pending marketplace money
-   * is deliberately NOT in here: it is not in the bank yet, which is what a
-   * balance claims to be.
+   * The running balance, in the two pots the shop actually keeps it in (owner
+   * ask 2026-09-09): what came before the app plus everything it has recorded
+   * since, sorted into the drawer and the bank by how each movement moved.
+   *
+   * ## Why it is built from PAYMENTS and not from order totals
+   *
+   * It used to be `Σ total of every settled order`, which was the best a
+   * boolean could do. A sale is a list of payments now (2026-09-08), and a
+   * customer who pays Rp5jt cash and Rp5jt by transfer has put money in both
+   * pots off one receipt — a fact `o.total` cannot express whichever pot you
+   * assign it to. Summing the payments also drops escrow for free: money a
+   * marketplace is holding is a PENDING payment, so it never becomes a
+   * movement at all, which is exactly what "not in the bank yet" means.
+   *
+   * The three opening figures below and `lib/accounts.ts` are the whole of the
+   * arithmetic; this page only decides what counts as a movement.
    */
-  const settledIncome = db.orders
-    .filter((o) => o.settled)
-    .reduce((t, o) => t + o.total, 0);
-  /**
-   * Money in that no sale accounts for — the income half of an adjustment
-   * (owner ask 2026-09-01). It counts towards the balance exactly as a settled
-   * sale does, because it is money the business has; it is kept a separate
-   * term only so this line says out loud that the balance is not just sales.
-   */
-  const manualIncome = db.incomes.reduce((t, i) => t + i.amount, 0);
-  const spentTotal = db.expenses.reduce((t, e) => t + e.amount, 0);
-  const openingBalance = db.settings.openingBalance;
-  const balance =
-    (openingBalance ?? 0) + settledIncome + manualIncome - spentTotal;
+  const settledMovements = useMemo<Movement[]>(() => {
+    const rows: Movement[] = [];
+    for (const o of db.orders) {
+      for (const p of paymentsOf(o)) {
+        if (p.state === "SETTLED") {
+          rows.push({ method: p.method, amount: p.amount });
+        }
+      }
+    }
+    // Money in that no sale accounts for, and money out — both carry the
+    // method staff picked, which is the only reason either can be sorted.
+    for (const i of db.incomes) rows.push({ method: i.method, amount: i.amount });
+    for (const e of db.expenses) {
+      rows.push({ method: e.method, amount: -e.amount });
+    }
+    return rows;
+  }, [db.orders, db.incomes, db.expenses]);
+
+  const openingCash = db.settings.openingCash;
+  const openingBank = db.settings.openingBank;
+  /** True once either pot has been stated. Both unset is the empty state. */
+  const hasOpening = openingCash !== undefined || openingBank !== undefined;
+  const opened = (openingCash ?? 0) + (openingBank ?? 0);
+  const balances = useMemo(
+    () => balancesOf(settledMovements, { cash: openingCash, bank: openingBank }),
+    [settledMovements, openingCash, openingBank],
+  );
+  const balance = balances.total;
   /** Nothing recorded at all — the state the "add the balance" button owns. */
   const noDataYet =
     db.orders.length === 0 &&
     db.expenses.length === 0 &&
     db.incomes.length === 0 &&
-    openingBalance === undefined;
+    !hasOpening;
 
   const saveOpeningBalance = () =>
     balanceForm.validateFields().then((v) => {
       mutate((d) => {
-        d.settings.openingBalance = v.amount;
+        // Written even when zero: "we keep no float" is an answer, and an
+        // undefined pot would put the card back into its empty state.
+        d.settings.openingCash = v.cash ?? 0;
+        d.settings.openingBank = v.bank ?? 0;
         d.settings.openingBalanceAt = new Date().toISOString();
       });
       setBalanceOpen(false);
@@ -164,10 +195,27 @@ export function IncomeExpensePage() {
   })();
   const inPeriod = (iso: string) =>
     period !== null && iso >= period[0] && iso <= period[1];
+  /*
+   * The same rule as the balance above, over a window: settled PAYMENTS, not
+   * the totals of orders flagged settled.
+   *
+   * The two have to agree or the card under the balance contradicts it — a
+   * half-cash, half-Shopee sale would raise this figure by the whole bill
+   * while the balance took only the cash. Dated by the ORDER, because a
+   * period on this card means "what did these days do", and a sale belongs to
+   * the day it was made.
+   */
   const periodIncome =
     db.orders
-      .filter((o) => o.settled && inPeriod(o.ts.slice(0, 10)))
-      .reduce((t, o) => t + o.total, 0) +
+      .filter((o) => inPeriod(o.ts.slice(0, 10)))
+      .reduce(
+        (t, o) =>
+          t +
+          paymentsOf(o)
+            .filter((p) => p.state === "SETTLED")
+            .reduce((n, p) => n + p.amount, 0),
+        0,
+      ) +
     db.incomes
       .filter((i) => inPeriod(i.date))
       .reduce((t, i) => t + i.amount, 0);
@@ -404,13 +452,58 @@ export function IncomeExpensePage() {
                     },
                   }}
                 />
-                {openingBalance !== undefined ? (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {/*
+                 * The two pots (owner ask 2026-09-09).
+                 *
+                 * Under the total rather than instead of it: the sum is what
+                 * somebody asks of a business and the split is what they act
+                 * on, and a card that showed only the halves would make the
+                 * commonest question an addition. Side by side and evenly
+                 * divided, because neither is the footnote of the other.
+                 */}
+                <Flex gap={SPACE.md} style={{ marginBlock: 4 }}>
+                  {(
+                    [
+                      ["cash", t("finance.cash", "Cash"), balances.cash],
+                      ["bank", t("finance.bank", "Bank"), balances.bank],
+                    ] as const
+                  ).map(([key, label, value]) => (
+                    <Flex key={key} vertical gap={0} style={{ flex: 1, minWidth: 0 }}>
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: TYPE.sm }}
+                      >
+                        {label}
+                      </Typography.Text>
+                      <Typography.Text
+                        strong
+                        type={value < 0 ? "danger" : undefined}
+                      >
+                        {fmtRp(value)}
+                      </Typography.Text>
+                    </Flex>
+                  ))}
+                </Flex>
+                {balances.unassigned !== 0 && (
+                  // A method nobody has mapped to a pot. Said out loud rather
+                  // than folded into either, because a figure that quietly
+                  // joins the wrong balance is worse than one that asks a
+                  // question.
+                  <Typography.Text type="warning" style={{ fontSize: TYPE.sm }}>
+                    {t(
+                      "finance.unassignedMoney",
+                      "{{amount}} moved through a method that belongs to neither pot.",
+                      { amount: fmtRp(balances.unassigned) },
+                    )}
+                  </Typography.Text>
+                )}
+                {hasOpening ? (
+                  <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
                     {t(
                       "finance.includesOpening",
                       "Includes the {{amount}} starting balance recorded {{date}}.",
                       {
-                        amount: fmtRp(openingBalance),
+                        amount: fmtRp(opened),
                         date: fmtDate(db.settings.openingBalanceAt ?? ""),
                       },
                     )}
@@ -825,19 +918,25 @@ export function IncomeExpensePage() {
         <Typography.Paragraph type="secondary">
           {t(
             "finance.startingBalanceBody",
-            "What the business holds right now, before anything this app has recorded. Every income and expense from here on moves it.",
+            "What the business holds right now, before anything this app has recorded. Count the drawer and the bank separately — every income and expense from here on moves one or the other.",
           )}
         </Typography.Paragraph>
         <Form form={balanceForm} layout="vertical">
+          {/*
+           * Two boxes, and neither is required on its own: a shop that keeps
+           * no float leaves the drawer empty, and one that banks nothing
+           * leaves the other. What must not happen is a single figure being
+           * apportioned by guesswork, which is what one box would force.
+           */}
           <Form.Item
-            name="amount"
-            label={t("finance.currentBalance", "Current balance")}
-            rules={[
-              {
-                required: true,
-                message: t("finance.enterTheBalance", "Enter the balance"),
-              },
-            ]}
+            name="cash"
+            label={t("finance.openingCash", "In the cash drawer")}
+          >
+            <MoneyInput />
+          </Form.Item>
+          <Form.Item
+            name="bank"
+            label={t("finance.openingBank", "In the bank")}
           >
             <MoneyInput />
           </Form.Item>

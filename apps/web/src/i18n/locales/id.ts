@@ -207,6 +207,354 @@ export const id: Record<string, string> = {
   "proTable.clearSelection": "Batal pilih",
   "dataTable.allRows": "{{count}} baris — sudah semua",
 
+  // ── Suppliers — the account, not the address book (owner ask 2026-09-08) ─
+  // "Supplier" is the word the shop uses in Indonesian too. "Deposit" likewise
+  // — it is what appears on the transfer slip. What needed translating is the
+  // vocabulary around them: "belum dialokasikan" for money paid in advance and
+  // not yet put against an invoice, which is the whole point of the screen.
+  Supplier: "Supplier",
+  "supplier.title": "Supplier",
+  "supplier.accounts": "Rekening supplier",
+  "supplier.name": "Supplier",
+  "supplier.owedTotal": "Utang ke supplier",
+  "supplier.owedHint":
+    "Invoice yang belum lunas dan utang lama, dikurangi deposit yang sudah ada.",
+  "supplier.onDeposit": "Deposit belum dialokasikan",
+  "supplier.onDepositHint":
+    "Sudah dibayar di muka dan belum ditempelkan ke invoice mana pun.",
+  "supplier.onDepositCol": "Deposit",
+  "supplier.openInvoices": "Invoice terbuka",
+  "supplier.invoiced": "Ditagih",
+  "supplier.paid": "Dibayar",
+  "supplier.netOwed": "Utang sekarang",
+  "supplier.inCredit": "Lebih bayar {{amount}}",
+  "supplier.oldestSince": "tertua sejak {{date}}",
+  "supplier.oldDebt": "Utang lama",
+  "supplier.addOldDebt": "Isi",
+  "supplier.invoices": "Invoice",
+  "supplier.invoice": "Invoice",
+  "supplier.noInvoices": "Tidak ada invoice terbuka.",
+  "supplier.date": "Tanggal",
+  "supplier.total": "Total",
+  "supplier.outstanding": "Sisa",
+  "supplier.settledTag": "Lunas",
+  "supplier.deposits": "Deposit",
+  "supplier.noDeposits": "Belum ada pembayaran di muka.",
+  "supplier.addDeposit": "Catat deposit",
+  "supplier.addDepositAria": "Catat deposit untuk {{name}}",
+  "supplier.when": "Tanggal",
+  "supplier.note": "Catatan",
+  "supplier.notePlaceholder": "Opsional",
+  "supplier.amount": "Jumlah",
+  "supplier.method": "Cara",
+  "supplier.left": "Belum dialokasikan",
+  "supplier.allSpent": "Habis terpakai",
+  "supplier.allocateHint": "Tempelkan ke invoice",
+  "supplier.allocateAria": "Alokasikan deposit ini",
+  "supplier.spreadHint": "Sebar ke invoice tertua",
+  "supplier.spreadAria": "Sebar deposit ini ke invoice tertua",
+  "supplier.depositTitle": "Deposit ke {{name}}",
+  "supplier.depositOk": "Catat",
+  "supplier.depositHint":
+    "Uang yang dibayar di muka. Tersimpan atas nama supplier sampai diputuskan invoice mana yang dilunasi.",
+  "supplier.depositSaved": "{{amount}} dicatat untuk {{name}}.",
+  "supplier.allocateTitle": "Tempelkan deposit ini ke invoice",
+  "supplier.allocateOk": "Alokasikan",
+  "supplier.allocateHave":
+    "{{amount}} belum dialokasikan, dibayar {{when}} lewat {{method}}.",
+  "supplier.stillOwed": "masih kurang",
+  "supplier.allocated": "{{amount}} ditempelkan ke {{code}}.",
+  "supplier.spread": "Disebar ke {{n}} invoice.",
+  "supplier.nothingToAllocate": "Tidak ada sisa tagihan untuk ditempeli.",
+  // Alokasi ke DAFTAR invoice, dan menambah supplier di sini (2026-09-09).
+  "supplier.allocateNothing": "Isi jumlahnya di setidaknya satu invoice.",
+  "supplier.allocateTooMuch": "Melebihi sisa deposit ini.",
+  "supplier.allocatedAcross":
+    "{{amount}} ditempelkan ke {{n}} invoice untuk {{name}}.",
+  "supplier.allocating": "Dialokasikan",
+  "supplier.ofRemaining": "{{put}} dari {{left}}",
+  "supplier.putAgainst": "Ditempelkan",
+  "supplier.putAgainstAria": "Jumlah yang ditempelkan ke {{code}}",
+  "supplier.fillRow": "Isi sisa tagihannya",
+  "supplier.fillRowAria": "Isi sisa tagihan {{code}}",
+  "supplier.nothingOutstanding": "Tidak ada sisa tagihan untuk ditempeli.",
+  "supplier.forInvoice": "Untuk invoice tertentu?",
+  "supplier.forInvoiceHint":
+    "Kosongkan kalau belum diputuskan — uangnya tersimpan atas nama supplier sampai ada keputusan.",
+  "supplier.notDecidedYet": "Belum diputuskan",
+  "supplier.depositSavedFor":
+    "{{amount}} dicatat untuk {{name}}, {{put}} di antaranya untuk {{code}}.",
+  "supplier.noInvoiceNo": "Tanpa invoice",
+  "supplier.noInvoiceNoYet": "Nomor belum diisi",
+  // Menambah supplier beserta utang lamanya.
+  "supplier.addSupplier": "Tambah supplier",
+  "supplier.addTitle": "Tambah supplier",
+  "supplier.addOk": "Tambah supplier",
+  "supplier.added": "{{name}} ditambahkan.",
+  "supplier.nameLabel": "Nama",
+  "supplier.namePlaceholder": "CV Apel Segar",
+  "supplier.nameTaken": "Supplier dengan nama itu sudah ada.",
+  "supplier.codeLabel": "Kode asal",
+  "supplier.codeHint":
+    "Dua huruf kapital. Kode ini menempel di depan setiap barcode toko untuk unit dari supplier ini, jadi serialnya menunjukkan asal palletnya.",
+  "supplier.codeShape": "Kode supplier tepat dua huruf kapital.",
+  "supplier.codeTaken": "{{code}} sudah dipakai supplier lain.",
+  "supplier.phone": "Telepon",
+  "supplier.address": "Alamat",
+  "supplier.oldDebtLabel": "Utang kita yang sudah ada",
+  "supplier.oldDebtHint":
+    "Tagihan yang belum dibayar dari sebelum aplikasi ini. Tidak ada invoice di sini yang mewakilinya, jadi dicatat sekali dan ditambahkan ke total tagihan.",
+  // Riwayat transaksi satu supplier — bukan cuma depositnya (2026-09-09).
+  "supplier.history": "Riwayat transaksi",
+  "supplier.noHistory": "Belum ada transaksi di rekening ini.",
+  "supplier.what": "Jenis",
+  "supplier.reference": "Referensi",
+  "supplier.undated": "Tanpa tanggal",
+  "supplier.entryInvoice": "Invoice",
+  "supplier.entryPayment": "Pembayaran",
+  "supplier.entryDeposit": "Deposit",
+  "supplier.entryAllocation": "Deposit dipakai",
+  "supplier.entryOpening": "Utang lama",
+  "supplier.openingTitle": "Utang lama ke {{name}}",
+  "supplier.openingOk": "Simpan",
+  "supplier.openingSaved": "Saldo awal disimpan.",
+  "supplier.openingHint":
+    "Tagihan yang belum dibayar dari sebelum aplikasi ini. Tidak ada invoice di sini yang mewakilinya, jadi dicatat sekali dan ditambahkan ke total tagihan.",
+
+  // ── Service bench — machines away at a repairer (owner ask 2026-09-08) ─
+  // "Servis" is the shop's own word and the one on the warehouse itself
+  // ("Meja Servis"). The screen answers one question every morning: how long
+  // has that been gone.
+  Service: "Servis",
+  "service.title": "Meja servis",
+  "service.away": "Unit di luar",
+  "service.spent": "Biaya servis",
+  "service.spentHint":
+    "Ditambahkan ke modal tiap unit, supaya marginnya jujur.",
+  "service.bench": "Lokasi servis",
+  "service.onTheBench": "Sedang diservis",
+  // Yang masih di jalan, dan konfirmasi kedatangannya (2026-09-09).
+  "service.expected": "Ditunggu di meja servis",
+  "service.expectedCount": "{{n}} dalam perjalanan",
+  "service.expectedHint":
+    "Sudah dikirim, belum ditandatangani. Konfirmasi kalau unitnya sudah di tangan — itu yang mencatatnya masuk {{bench}}.",
+  "service.markArrived": "Sudah sampai — mulai servis",
+  "service.arrivedOk": "{{serial}} sudah di meja servis. Pengerjaan bisa mulai.",
+  "service.sentWhen": "Dikirim",
+  "service.nDaysAgo": "{{n}} hari lalu",
+  "service.quoted": "Perkiraan sejauh ini",
+  "service.nothingAway": "Tidak ada unit yang sedang diservis.",
+  "service.serial": "Serial",
+  "service.grade": "Grade",
+  "service.problem": "Keluhan",
+  "service.sentFrom": "Dikirim dari",
+  "service.days": "Lama",
+  "service.nDays": "{{n}} hari",
+  "service.cost": "Biaya sejauh ini",
+  "service.total": "Modal sekarang",
+  "service.wasBought": "beli {{amount}}",
+  "service.unknownProduct": "Produk tidak dikenal",
+  "service.addFee": "Tambah biaya",
+  "service.addFeeAria": "Tambah biaya untuk {{serial}}",
+  "service.addChargeTo": "Biaya untuk {{serial}}",
+  "service.feeKind": "Jenis biaya",
+  "service.feeLabel": "Untuk apa",
+  "service.feeLabelPlaceholder": "Ganti keyboard, ongkir ke Bandung…",
+  "service.feeAmount": "Jumlah",
+  "service.feeWhen": "Tanggal",
+  "service.record": "Catat",
+  "service.feeAdded": "{{amount}} dicatat untuk {{serial}}.",
+  // Mengoreksi biaya yang sudah dicatat (2026-09-09).
+  "service.editFee": "Ubah biaya ini",
+  "service.editFeeAria": "Ubah biaya {{amount}} pada {{serial}}",
+  "service.editChargeOn": "Ubah biaya pada {{serial}}",
+  "service.editChargeHint":
+    "Sebelumnya {{amount}}. Angka lamanya tetap tercatat di riwayat unit.",
+  "service.saveCharge": "Simpan perubahan",
+  "service.feeEdited": "Biaya {{serial}} sekarang {{amount}}.",
+  "service.sendBack": "Kembalikan ke stok",
+  "service.sendBackAria": "Kembalikan {{serial}} ke stok",
+  "service.backTitle": "Kembalikan {{serial}} ke stok",
+  "service.backOk": "Kembali ke stok",
+  "service.backTo": "Ke gudang mana",
+  "service.transferFee": "Biaya memindahkannya",
+  "service.transferFeeHint":
+    "Ongkir baliknya, kalau ada. Ikut dihitung sebagai biaya servis unit ini.",
+  "service.transferLabel": "Pindah keluar",
+  "service.backNote": "Apa yang dikerjakan",
+  "service.backInStock": "{{serial}} sudah kembali ke stok.",
+
+  // ── Customer management — what a person still owes (2026-09-08) ──────
+  // Two figures kept apart on purpose: "piutang" is this person's debt and
+  // "ditahan marketplace" is not. Ringing somebody about the second loses them.
+  "customers.owes": "Piutang",
+  "customers.pendingWith": "{{amount}} di marketplace",
+  "customers.dueOn": "jatuh tempo {{date}}",
+  // Mencatat pembayaran pada transaksi tertentu (2026-09-09).
+  "customers.recordPayment": "Catat pembayaran",
+  "customers.recordPaymentAria": "Catat pembayaran untuk {{code}}",
+  "customers.payUnchanged": "Tidak ada yang berubah.",
+  "customers.payLogged": "{{n}} perubahan tercatat.",
+  "customers.moneySettled": "Lunas",
+  "customers.moneyOwed": "Kurang {{amount}}",
+  "customers.moneyPending": "{{amount}} di marketplace",
+
+  // ── Pending & Receivables — the piutang screen (owner ask 2026-09-08) ─
+  // "Piutang" is the owner's own word and the accounting one, so the page is
+  // named that in both languages. The two tables are deliberately different
+  // words: money a marketplace holds is "ditahan", money a customer owes is
+  // "piutang pelanggan".
+  "Pending & Receivables": "Saldo Tertahan & Piutang",
+  "piutang.title": "Saldo tertahan & piutang",
+  "piutang.withMarketplaces": "Ditahan marketplace",
+  "piutang.withMarketplacesHint":
+    "Sudah dibayar pelanggan. Tarik dari masing-masing platform.",
+  "piutang.customersOwe": "Piutang pelanggan",
+  "piutang.customersOweHint": "Belum dibayar sama sekali. Perlu ditagih.",
+  "piutang.marketplaceMoney": "Menunggu di marketplace",
+  "piutang.customerDebts": "Piutang pelanggan",
+  "piutang.withdrawals": "Penarikan yang tercatat",
+  "piutang.channel": "Kanal",
+  "piutang.sales": "Transaksi",
+  "piutang.sale": "Transaksi",
+  "piutang.customer": "Pelanggan",
+  "piutang.walkIn": "Pelanggan umum",
+  "piutang.when": "Tanggal",
+  "piutang.amount": "Jumlah",
+  "piutang.gross": "Bruto",
+  "piutang.billed": "Tagihan",
+  "piutang.owed": "Masih kurang",
+  "piutang.due": "Dijanjikan",
+  "piutang.noDate": "Tanggal belum disepakati",
+  "piutang.overdueOn": "Lewat tempo — {{date}}",
+  "piutang.expected": "Perkiraan masuk",
+  "piutang.afterPct": "setelah {{pct}}%",
+  "piutang.deducted": "Potongan",
+  "piutang.landed": "Yang masuk",
+  "piutang.markDone": "Tandai sudah masuk",
+  "piutang.settled": "{{amount}} dicatat dari {{channel}}.",
+  "piutang.noPending": "Semua marketplace sudah mencairkan.",
+  "piutang.noDebts": "Tidak ada pelanggan yang berutang.",
+  "piutang.openInHistory": "Koreksi pembayarannya",
+  "piutang.amend": "Koreksi pencairan ini",
+  "piutang.amendAria": "Koreksi pencairan dari {{channel}}",
+  "piutang.amended": "Pencairan dikoreksi.",
+  "piutang.openInHistoryAria": "Buka {{code}} di Riwayat Transaksi",
+
+  // ── SettleModal — recording one marketplace withdrawal ───────────────
+  "settle.title": "Pencairan dari {{channel}}",
+  "settle.covering": "{{count}} transaksi, total {{gross}}.",
+  "settle.feeKind": "Yang dipotong",
+  "settle.feeKindFor": "Jenis potongan",
+  "settle.feeLabel": "Namanya di rekening koran",
+  "settle.feeLabelFor": "Nama di rekening koran",
+  "settle.feeLabelPlaceholder": "Opsional",
+  "settle.feeAmount": "Jumlah",
+  "settle.feeAmountFor": "Jumlah potongan",
+  "settle.addFee": "Tambah potongan",
+  "settle.removeFee": "Hapus potongan ini",
+  "settle.noFees": "Belum ada potongan yang dicatat.",
+  "settle.expected": "Seharusnya masuk",
+  "settle.received": "Yang benar-benar masuk",
+  "settle.receivedFor": "Yang benar-benar masuk",
+  // The received figure is the only one anybody can check against a statement,
+  // so it is the one everything downstream believes.
+  "settle.receivedHint": "Sesuai rekening koran.",
+  "settle.mark": "Tandai sudah masuk",
+  "settle.short": "{{amount}} lebih sedikit dari yang dijelaskan potongan.",
+  "settle.over": "{{amount}} lebih banyak dari yang dijelaskan potongan.",
+  "settle.reasonFor": "Kenapa angkanya beda",
+  "settle.useDefault": "Pakai “{{reason}}”",
+
+  // ── PaymentsPanel — a bill paid in parts (owner ask 2026-09-08) ──────
+  // The three states are three different facts and the words keep them apart:
+  // "Diterima" is money the shop has, "Ditahan marketplace" is money Shopee is
+  // sitting on, and "Belum dibayar" is a customer debt. Merging any two of
+  // them is exactly the bug this replaces.
+  "pay.state": "Status",
+  "pay.stateFor": "Status pembayaran ini",
+  "pay.settled": "Diterima",
+  "pay.pending": "Ditahan marketplace",
+  "pay.due": "Belum dibayar pelanggan",
+  "pay.method": "Metode",
+  "pay.methodFor": "Cara pembayarannya",
+  "pay.channelFor": "Marketplace yang menahan",
+  "pay.amount": "Jumlah",
+  "pay.amountFor": "Jumlah",
+  "pay.dueDate": "Jatuh tempo",
+  "pay.dueFor": "Kapan dijanjikan",
+  "pay.note": "Catatan",
+  "pay.noteFor": "Catatan",
+  "pay.notePlaceholder": "DP, sisa, …",
+  "pay.add": "Tambah pembayaran",
+  "pay.remove": "Hapus pembayaran ini",
+  "pay.none": "Belum ada pembayaran yang dicatat untuk tagihan ini.",
+  "pay.received": "Diterima {{amount}}",
+  "pay.pendingAmount": "Ditahan marketplace {{amount}}",
+  "pay.owed": "Pelanggan masih kurang {{amount}}",
+
+  // ── PaymentsModal — correcting what was paid, and the log ────────────
+  "payEdit.title": "Pembayaran — {{code}}",
+  "payEdit.bill": "Tagihannya {{total}}.",
+  "payEdit.save": "Simpan koreksi",
+  "payEdit.unaccounted": "{{amount}} dari tagihan ini belum ada pembayarannya.",
+  "payEdit.unaccountedHint":
+    "Itu tidak sama dengan utang yang dijanjikan — tambahkan baris yang menyebut siapa yang berutang dan kapan.",
+  "payEdit.why": "Kenapa dikoreksi?",
+  "payEdit.whyAria": "Alasan koreksi",
+  "payEdit.whyPlaceholder":
+    "Kelebihan satu nol, pelanggan melunasi sisanya tunai…",
+  // The reason this is kept at all: it is what answers a customer disputing
+  // the balance next month.
+  "payEdit.whyHint":
+    "Disimpan selamanya di samping angka lamanya. Ini yang menjawab kalau pelanggan menyanggah saldo ini bulan depan.",
+  "payEdit.history": "Riwayat pembayaran transaksi ini",
+  "payEdit.noHistory": "Belum ada koreksi pada transaksi ini.",
+  "payEdit.added": "Ditambah {{amount}}",
+  "payEdit.removed": "Dihapus {{amount}}",
+  "payEdit.amended": "{{from}} → {{to}}",
+
+  // ── The till — splitting a bill ──────────────────────────────────────
+  "pos.splitUpper": "BAGI TAGIHAN INI",
+  "pos.splitIt": "Bayar terpisah",
+  "pos.splitCancel": "Jadi satu pembayaran saja",
+  "pos.splitHint":
+    "Tunai sekarang lalu sisanya di marketplace, DP dengan jatuh tempo — apa pun yang bukan satu pembayaran.",
+
+  // ── PriceEditorModal — repricing a shelf (owner ask 2026-09-08) ──────
+  // The per-serial price. "Harga toko" and "Harga marketplace" are what the
+  // shop says out loud; "marketplace" is not translated because the platforms
+  // are called that here too.
+  "price.editTitle": "Harga — {{what}}",
+  "price.save": "Simpan harga",
+  "price.serial": "Serial",
+  "price.grade": "Grade",
+  "price.cost": "Modal",
+  "price.store": "Harga toko",
+  "price.market": "Harga marketplace",
+  "price.storeFor": "Harga toko untuk {{serial}}",
+  "price.marketFor": "Harga marketplace untuk {{serial}}",
+  "price.fill": "Isi ke bawah",
+  "price.fillDown": "Salin baris teratas ke seluruh kolom",
+  "price.marketHint":
+    "Kosongkan harga marketplace untuk mengikuti aturan: harga toko plus {{pct}}%.",
+  "price.outOfRange": "{{n}} di antaranya bukan harga.",
+  "price.belowCost": "Di bawah modal",
+  "price.followsRule": "ikut aturan",
+  "price.overridden": "diisi manual",
+  "price.overriddenAt": "diisi manual · {{pct}}%",
+  "price.notAPrice": "Bukan harga",
+
+  // ── BatteryFields — the boxes every QC desk asks a battery through ───
+  // The 2026-09-08 split: a machine from 2020 or earlier is described by its
+  // charge cycles and its full charge capacity, a later one by a percentage.
+  // "Siklus" and "mAh" are what the bench reads off the machine.
+  "battery.health": "Kesehatan baterai",
+  "battery.cycleCount": "Jumlah siklus",
+  "battery.fcc": "Kapasitas isi penuh",
+  "battery.cyclesAndCapacity": "Siklus & kapasitas",
+  "battery.range": "Hanya {{lo}}–{{hi}}",
+
   // ── Inbound & QC — the order detail screen ───────────────────────────
   "inbound.accept": "Terima",
   "inbound.acceptAria": "Terima {{serial}}",
@@ -219,9 +567,37 @@ export const id: Record<string, string> = {
   "inbound.awaitingSerial": "Menunggu serial",
   "inbound.backToInbound": "Kembali ke Barang Masuk",
   "inbound.battery": "Baterai",
-  "inbound.batteryRange": "Hanya 0–100%",
+  // Both take their bounds from the field, since 2026-09-08: one box wants a
+  // percentage and the other a cycle count, so a message naming 0–100 would be
+  // wrong on half the shelf.
+  "inbound.batteryRange": "Hanya {{lo}}–{{hi}}",
+  // The per-serial price, back on the QC grid since 2026-09-08.
+  "inbound.price": "Harga",
+  // Mengirim unit ke servis — dialog dengan ongkir dan biaya (2026-09-09).
+  "inbound.serviceBody":
+    "{{serial}} berhenti bisa dijual sekarang. Keputusan ini bisa dibatalkan dari barisnya.",
+  "inbound.serviceFee": "Biaya servis",
+  "inbound.serviceFeeFor": "Biaya servis untuk {{serial}}",
+  "inbound.serviceFeeHint": "Kalau sudah tahu",
+  "inbound.serviceFeeHint2":
+    "Isi hanya kalau sudah tahu. Tagihan tukang servis berikutnya ditambahkan di meja servis, dan di sana juga bisa dikoreksi.",
+  "inbound.serviceFeeRaised": "Dicatat saat QC",
+  "inbound.serviceProblem": "Keluhannya apa",
+  "inbound.serviceProblemHint": "Opsional — yang perlu dicek meja servis",
+  "inbound.serviceSentHere": "{{serial}} sudah ada di meja servis.",
+  "inbound.serviceSentShipping":
+    "{{serial}} dalam perjalanan ke {{bench}}. Konfirmasi di sana setelah barangnya sampai.",
+  "inbound.serviceShip": "Kirim ke {{bench}}",
+  "inbound.serviceShipHint":
+    "Matikan kalau unitnya sudah ada di meja servis, atau kalau tukang servisnya yang menjemput. Kedatangannya tetap dikonfirmasi sebelum pengerjaan dimulai.",
+  "inbound.serviceShipLabel": "Kirim ke meja servis",
+  "inbound.serviceShippingFee": "Ongkir ke sana",
+  "inbound.serviceShippingFeeHint":
+    "Ongkir antar gudang. Ikut dihitung sebagai modal unit ini.",
+  "inbound.priceRefused": "{{value}} bukan harga.",
+  "inbound.weAsk": "Kami jual {{price}}",
   "inbound.batteryRefused":
-    "{{value}}% bukan angka kesehatan baterai — hanya 0 sampai 100.",
+    "{{value}} bukan angka yang diterima kotak ini — hanya {{lo}} sampai {{hi}}.",
   "inbound.bucketPartly": "{{paid}} dibayar, {{owed}} masih kurang",
   "inbound.bucketSettled": "lunas",
   "inbound.bucketUnpaid": "belum dibayar",
@@ -440,6 +816,10 @@ export const id: Record<string, string> = {
   "stock.anyBatteryHealth": "Semua kesehatan baterai",
   "stock.batteryHealth": "Kesehatan baterai",
   "stock.batteryRange": "Hanya 0–100%",
+  // One column over both eras since 2026-09-08 — see `battery.*` above.
+  "stock.battery": "Baterai",
+  "stock.anyBattery": "Semua baterai",
+  "stock.batteryOutOfRange": "Salah satu angka ini di luar rentang.",
   "stock.conditionBatteryHealthCompleteness":
     "Kondisi, kesehatan baterai, kelengkapan…",
   "stock.description": "Deskripsi",
@@ -476,6 +856,21 @@ export const id: Record<string, string> = {
   "stock.when": "Waktu",
   "stock.whyThisChange": "Kenapa diubah?",
   "stock.writtenIntoTheAppendOnly": "Ditulis ke log yang hanya bisa ditambah",
+
+  // ── Inventory — the per-serial price (owner ask 2026-09-08) ──────────
+  "inventory.storePrice": "Harga toko",
+  "inventory.marketPrice": "Marketplace",
+  "inventory.marketOne": "marketplace {{price}}",
+  "inventory.marketRange": "marketplace {{from}} – {{to}}",
+  "inventory.notPricedYet": "belum dihargai",
+  "inventory.inclRepair": "termasuk servis {{amount}}",
+  "inventory.setByHand": "diisi manual",
+  "inventory.fromRule": "+{{pct}}%",
+  "inventory.ungraded": "Belum digrade",
+  "inventory.editPricesN": "Ubah {{count}} harga",
+  "inventory.editPricesFor": "Ubah harga untuk {{what}}",
+  "inventory.nothingToPrice": "Tidak ada unit untuk dihargai",
+  "inventory.repriced": "{{n}} harga diperbarui.",
 
   // ── Inventory & Stock Movement — the product table ───────────────────
   "inventory.adjustAria": "Sesuaikan {{serial}}",
@@ -990,6 +1385,9 @@ export const id: Record<string, string> = {
   "finance.addCurrentBalance": "Tambah saldo saat ini",
   "finance.balance": "Saldo",
   "finance.balanceForPeriod": "Saldo per periode",
+  // Dua kantong, sejak 2026-09-09: laci kas dan bank.
+  "finance.bank": "Bank",
+  "finance.cash": "Tunai",
   "finance.currentBalance": "Saldo saat ini",
   "finance.customRange": "Kustom",
   "finance.enterTheBalance": "Masukkan saldonya",
@@ -997,6 +1395,8 @@ export const id: Record<string, string> = {
     "Termasuk saldo awal {{amount}} yang dicatat {{date}}.",
   "finance.noMoneyRecorded":
     "Belum ada yang tercatat. Mulai pembukuan dari uang yang dipegang usaha hari ini.",
+  "finance.openingBank": "Di bank",
+  "finance.openingCash": "Di laci kas",
   "finance.openingBalanceSaved":
     "Saldo awal tercatat — kartunya menghitung dari sana sekarang.",
   "finance.pendingChannelCount":
@@ -1009,9 +1409,11 @@ export const id: Record<string, string> = {
   "finance.setStartingBalance":
     "Tambah uang yang dipegang usaha sebelum aplikasi ini",
   "finance.startingBalanceBody":
-    "Uang yang dipegang usaha saat ini, sebelum apa pun yang dicatat aplikasi ini. Setiap pemasukan dan pengeluaran setelahnya akan menggesernya.",
+    "Uang yang dipegang usaha saat ini, sebelum apa pun yang dicatat aplikasi ini. Hitung laci kas dan bank secara terpisah — setiap pemasukan dan pengeluaran setelahnya menggeser salah satunya.",
   "finance.startingBalanceTitle": "Catat saldo saat ini",
   "finance.today": "Hari ini",
+  "finance.unassignedMoney":
+    "{{amount}} berpindah lewat metode yang bukan tunai maupun bank.",
 
   // ── Financial & Report — recording a spend ───────────────────────────
   "expense.add": "Tambah",
@@ -1032,6 +1434,18 @@ export const id: Record<string, string> = {
   "expense.whichChannel": "Kanal mana?",
 
   // ── Financial & Report — transaction history ─────────────────────────
+  // The 2026-09-08 split: money a marketplace holds and money a customer owes
+  // are different facts and the shop chases a different party for each.
+  "transactions.customersOwe": "Piutang pelanggan",
+  "transactions.stSettled": "Lunas",
+  "transactions.stPartPaid": "Dibayar sebagian",
+  "transactions.stPending": "Ditahan marketplace",
+  "transactions.stOwed": "Kurang bayar",
+  "transactions.stUnpaid": "Belum dibayar",
+  "transactions.editPayments": "Pembayarannya, dan cara mengoreksinya",
+  "transactions.editPaymentsAria": "Pembayaran pada {{code}}",
+  "transactions.payLogged": "{{n}} perubahan dicatat.",
+  "transactions.payUnchanged": "Tidak ada yang berubah.",
   "transactions.channel": "Kanal",
   "transactions.detail": "Rincian",
   "transactions.exportAll": "Ekspor semua",
@@ -1168,7 +1582,33 @@ export const id: Record<string, string> = {
   "settings.add": "Tambah",
   "settings.address": "Alamat",
   "settings.addressOptional": "Alamat (opsional)",
+  "settings.batteryBands": "Rentang baterai",
   "settings.batteryHealthBands": "Rentang kesehatan baterai",
+  // The 2026-09-08 split. "Siklus" is the word the bench already uses for a
+  // charge cycle — it is what System Information prints in Indonesian too.
+  "settings.batteryEraHint":
+    "Model 2020 ke bawah dicatat dengan siklus; 2021 ke atas dengan kesehatan.",
+  "settings.cycleBands": "Rentang siklus baterai",
+  "settings.cycleBandsHint":
+    "Semakin sedikit siklus semakin bagus baterainya, jadi ini batas atas.",
+  "settings.cyclesUnit": "siklus",
+
+  // Marketplace pricing and fees (owner ask 2026-09-08). Two percentages
+  // pointing opposite ways: one goes ON TOP of the store price to make a
+  // listing, the other comes OFF a payout.
+  "settings.tabMarketplace": "Marketplace",
+  "settings.marketplace": "Harga & potongan marketplace",
+  "settings.listingMarkup": "Markup listing",
+  "settings.listingMarkupHint":
+    "Ditambahkan ke harga toko untuk mengusulkan harga marketplace. Bisa ditimpa per unit.",
+  "settings.commissions": "Potongan tiap marketplace",
+  "settings.commissionsHint":
+    "Dipotong dari pencairan. Form pencairan terbuka dengan angka ini; potongan lain diketik.",
+  "settings.commissionFor": "Potongan {{channel}}",
+  // Settings keeps the address book; the money moved to its own page.
+  "settings.supplierAccounts": "Invoice, deposit & utang",
+  "settings.goodUpTo": "Bagus sampai",
+  "settings.fairUpTo": "Cukup sampai",
   // Shop identity — printed on every faktur. Moved out of Invoice.tsx's
   // hard-coded `const SHOP` on 2026-09-02; the placeholders are the values the
   // receipt printed before and still falls back to, so they stay as written.
@@ -1818,10 +2258,14 @@ export const id: Record<string, string> = {
   "adjust.incomeRecorded": "Pemasukan tercatat.",
   "adjust.linksThisSpend":
     "Menghubungkan pengeluaran ini dengan pelanggan yang bilang datang dari kanal tersebut",
+  "adjust.method": "Cara uang berpindah",
+  "adjust.methodHint":
+    "Tunai menggeser laci kas; transfer atau kartu menggeser bank.",
   "adjust.note": "Catatan",
   "adjust.notePlaceholder":
     "Opsional — ini untuk apa, dengan kata-kata Anda sendiri",
   "adjust.pickADate": "Pilih tanggalnya.",
+  "adjust.pickAMethod": "Pilih cara uang berpindah.",
   "adjust.pickAReason": "Pilih alasannya.",
   "adjust.reason": "Alasan",
   "adjust.record": "Catat",
@@ -2097,6 +2541,8 @@ export const id: Record<string, string> = {
   "trade.seeStock": "Lihat unit-unit di baliknya",
   "trade.seeWhatWePaid": "Lihat modal tiap unitnya",
   "trade.serialRequired": "Scan atau ketik serial mesinnya.",
+  "trade.serialScanNoMarker":
+    "Itu bukan barcode nomor seri — satu Mac punya beberapa barcode. Cari yang tercetak di bawah huruf S.",
   "trade.serialShape":
     "“{{serial}}” bukan serial. Ketik {{min}}–{{max}} karakter yang tercetak di mesinnya, atau scan barcode-nya.",
   "trade.unit": "Unit",

@@ -125,7 +125,13 @@ export function unitStage(unit: Unit): InboundStage {
   // serial. It does not any more — the price is the variant's and is set on the
   // Product — so what marks a box as opened is what somebody wrote ABOUT this
   // particular machine: its condition, or a battery reading off the screen.
-  const started = unit.description.trim() !== "" || unit.batteryHealth != null;
+  // Either era's reading counts as work: a 2017 body is measured in cycles
+  // and a 2023 one in percent, and a box opened is a box opened.
+  const started =
+    unit.description.trim() !== "" ||
+    unit.batteryHealth != null ||
+    unit.cycleCount != null ||
+    unit.fcc != null;
   return started ? "IN_QC" : "ARRIVED";
 }
 

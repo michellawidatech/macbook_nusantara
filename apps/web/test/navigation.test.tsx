@@ -10,18 +10,23 @@ const leaves = NAV_SECTIONS.flatMap((s) =>
 );
 
 describe("navigation", () => {
-  it("has six top-level sections, in the owner's order", () => {
+  it("has seven top-level sections, in the owner's order", () => {
     // The 2026-08-26 flattening: Reservation, Return and Discount stopped
     // being top-level and went back under the section whose job they are part
     // of. Nine sections was more than the sidebar could show without
     // scrolling, which is what made the accordion necessary in the first
     // place.
+    //
+    // Supplier joined on 2026-09-08, beside Customer, because it is Customer's
+    // mirror: money out against money in. Seven is inside the budget the
+    // flattening bought.
     expect(NAV_SECTIONS.map((s) => s.label)).toEqual([
       "Stock",
       "Product",
       "Financial & Report",
       "Chatbot",
       "Customer",
+      "Supplier",
       "Settings",
     ]);
   });
@@ -34,6 +39,10 @@ describe("navigation", () => {
       "Inventory & Stock Movement",
       "Stock Opname",
       "S/N Tracking",
+      // Machines away at a repairer (owner ask 2026-09-08). Between tracking
+      // and the two movements because that is where it sits in the day: you
+      // look a serial up, then you look at what is out of the building.
+      "Service",
       "Reservation",
       "Return",
     ]);

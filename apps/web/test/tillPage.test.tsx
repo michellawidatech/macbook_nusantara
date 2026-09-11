@@ -17,6 +17,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StockOutPage } from "../src/routes/stock/StockOutPage.js";
 import { mutate } from "../src/mock/store.js";
+import { __resetScanner, __setScannerClock } from "../src/lib/scanner.js";
 import { bargainOn, upsellOn } from "../src/lib/pos.js";
 import type { MockDb } from "../src/mock/seed.js";
 
@@ -57,6 +58,24 @@ async function dialog() {
 }
 
 beforeEach(() => {
+  /*
+   * Every keystroke in this file is a HAND, and the clock says so.
+   *
+   * The trade-in dialog asks `wasScannedText` since 2026-09-08 — a scan must
+   * carry its `S` and a typed serial has one added — and the only evidence
+   * either way is how fast the characters arrived. `userEvent` types faster
+   * than any person, so without this the whole file's typing is a burst, and
+   * whether it is depends on how loaded the machine is: these tests passed
+   * alone and failed in the full suite.
+   *
+   * A clock that jumps a second per reading makes every gap far too long to be
+   * a scanner, which is exactly what these tests mean. A test that wants the
+   * scanned path says so by delivering a scan.
+   */
+  __resetScanner();
+  let now = 0;
+  __setScannerClock(() => (now += 1000));
+
   // One variant with two machines of different grades, and nothing else on the
   // shelf, so the catalogue is one row and the chooser has a real choice.
   mutate((d) => {
@@ -322,6 +341,66 @@ describe("charging for delivery", () => {
     expect(order.extra).toBe(150_000);
     expect(order.extraNote).toBe("Ongkir JNE");
     expect(order.total).toBe(10_150_000);
+  });
+});
+
+describe("paying a bill in more than one way", () => {
+  /*
+   * The owner's own example (2026-09-08): part of the bill in cash at the
+   * counter, the rest on a marketplace. One method and one flag could not
+   * describe it — the cash is in the till today and the marketplace money is
+   * not — and which half is which is the only question the finance screens
+   * ever ask of a sale.
+   */
+  it("records one payment for a sale nobody splits", async () => {
+    // The common case has to be untouched: the chips still describe the whole
+    // bill and the split grid is never opened.
+    renderTill();
+    await pickFirstMachine();
+    await payAndFinish();
+
+    const order = snapshot().orders[0]!;
+    expect(order.payments).toHaveLength(1);
+    expect(order.payments![0]).toMatchObject({
+      amount: order.total,
+      state: "SETTLED",
+    });
+    expect(order.settled).toBe(true);
+  });
+
+  it("records a split, and is not settled while a marketplace holds half", async () => {
+    renderTill();
+    await pickFirstMachine();
+    await goToPayment();
+
+    await userEvent.click(screen.getByRole("button", { name: /Pay in parts/ }));
+    // The grid opens on the one payment the chips describe, so splitting is
+    // "add the second half" rather than "describe the whole bill again".
+    const amounts = screen.getAllByLabelText("Amount") as HTMLInputElement[];
+    await userEvent.tripleClick(amounts[0]!);
+    await userEvent.paste("5000000");
+    await userEvent.click(
+      screen.getByRole("button", { name: /Add a payment/ }),
+    );
+
+    // The new row takes the GAP by default — a deposit and then the rest is
+    // one press and no arithmetic.
+    const states = screen.getAllByLabelText(
+      "State of this payment",
+    ) as HTMLElement[];
+    expect(states).toHaveLength(2);
+
+    await payAndFinish();
+
+    const order = snapshot().orders[0]!;
+    expect(order.payments).toHaveLength(2);
+    expect(order.payments!.reduce((n, p) => n + p.amount, 0)).toBe(
+      order.total,
+    );
+    expect(order.payments![0]!.amount).toBe(5_000_000);
+    // Every rupiah is accounted for, and all of it is the shop's, so the sale
+    // IS settled — the projection is over the parts, not over the channel.
+    expect(order.settled).toBe(true);
   });
 });
 

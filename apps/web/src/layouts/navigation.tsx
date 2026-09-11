@@ -31,6 +31,7 @@ import {
   DollarOutlined,
   SettingOutlined,
   DatabaseOutlined,
+  ShopOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
 
@@ -66,6 +67,10 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       { path: "/stock/inventory", label: "Inventory & Stock Movement" },
       { path: "/stock/opname", label: "Stock Opname" },
       { path: "/stock/history", label: "S/N Tracking" },
+      // Machines away at a repairer (owner ask 2026-09-08). Under Stock
+      // because that is what they are: stock the shop owns, cannot sell, and
+      // is spending money on.
+      { path: "/stock/service", label: "Service" },
       // Back under Stock on 2026-08-26 after four days as sections of their
       // own. Both are a unit moving: onto hold, or back out of the shop.
       { path: "/reservations", label: "Reservation" },
@@ -89,6 +94,12 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       // History first: chasing a receipt is the daily job, and reading the
       // ledger is the monthly one.
       { path: "/finance/transactions", label: "Transaction History" },
+      // Money the shop is owed, by whoever is holding it (owner ask
+      // 2026-09-08). Its own leaf and not a tab of Income & Expense: chasing a
+      // marketplace payout and chasing a customer are daily jobs with their
+      // own rhythm, and burying them a click inside the monthly screen is how
+      // a Rp23jt payout sits unwithdrawn for a fortnight.
+      { path: "/finance/receivables", label: "Pending & Receivables" },
       { path: "/finance/income-expense", label: "Income & Expense" },
     ],
   },
@@ -104,6 +115,21 @@ export const NAV_SECTIONS: readonly NavSection[] = [
     label: "Customer",
     icon: <TeamOutlined />,
     path: "/customers",
+  },
+  {
+    /*
+     * Suppliers, as an account rather than an address book (owner ask
+     * 2026-09-08).
+     *
+     * Top level, beside Customer, because it is Customer's mirror: one is
+     * money coming in and the other money going out, and the shop reads both
+     * before deciding what to transfer. It sat in Settings, which is where a
+     * supplier's PHONE NUMBER belongs and not where a Rp30jt deposit does.
+     */
+    key: "suppliers",
+    label: "Supplier",
+    icon: <ShopOutlined />,
+    path: "/suppliers",
   },
   {
     key: "settings",

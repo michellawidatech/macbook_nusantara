@@ -44,7 +44,6 @@ import {
   Flex,
   Form,
   Input,
-  InputNumber,
   Modal,
   Segmented,
   Select,
@@ -61,19 +60,28 @@ import {
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { EditableTable } from "../../components/EditableTable";
-import { CountInput } from "../../components/CountInput";
 import { InventoryTable } from "./InventoryTable";
 import { EnumTag } from "../../components/EnumTag";
 import { LongText } from "../../components/LongText";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { fmtDateTime } from "../../lib/format.js";
 import {
-  BATTERY_HEALTH_MAX,
-  BATTERY_HEALTH_MIN,
-  batteryBand,
-  fmtBatteryHealth,
-  isBatteryHealthInRange,
+  BATTERY_CYCLE_ERA_MAX_YEAR,
+  batteryBandOf,
+  batteryDraftOf,
+  batteryEra,
+  batteryPatch,
+  batterySettingsFrom,
+  isBatteryDraftInRange,
+  readBattery,
+  releaseYearOfSku,
+  type BatteryDraft,
+  type BatteryEra,
 } from "../../lib/battery.js";
+import {
+  BatteryFields,
+  batteryFieldsLabel,
+} from "../../components/BatteryFields.js";
 import { HELD_STATUSES } from "../../lib/inventory.js";
 import { reprojectHolds } from "../../lib/reservations.js";
 import {
@@ -92,6 +100,7 @@ import {
 import { tagOf, UNIT_STATUS } from "../../i18n/enumLabels.js";
 import { SPACE, TYPE } from "../../theme/tokens";
 import type {
+  Adjustment,
   AdjustmentKind,
   MockDb,
   Unit,
@@ -123,9 +132,52 @@ interface BatchRow {
   /** Only for a serial no unit carries: what staff say the machine is. */
   modelId?: string;
   skuId?: string;
+  /** A 2021-or-later machine's reading. See `batteryEra` in lib/battery.ts. */
   batteryHealth?: number;
+  /** A 2020-or-earlier machine's, in cycles… */
+  cycleCount?: number;
+  /** …and its capacity in mAh. */
+  fcc?: number;
   description: string;
 }
+
+/**
+ * `BatteryFields` as an antd form field.
+ *
+ * antd injects `value` and `onChange` into a `Form.Item`'s single child, and
+ * `BatteryFields` already takes exactly those — but it requires them, and a
+ * form's first render passes neither. This fills in the blanks rather than
+ * making them optional on the component, which every other caller does supply.
+ */
+function BatteryFieldsField({
+  era,
+  value,
+  onChange,
+}: {
+  era: BatteryEra;
+  value?: BatteryDraft;
+  onChange?: (next: BatteryDraft) => void;
+}) {
+  return (
+    <BatteryFields
+      era={era}
+      size="middle"
+      idPrefix="unit-edit-battery"
+      value={value ?? {}}
+      onChange={(next) => onChange?.(next)}
+    />
+  );
+}
+
+/**
+ * A year in each era, for the few places that hold an era and need to ask
+ * `readBattery` — which takes a release year, because everywhere else that is
+ * what the caller actually has.
+ */
+const YEAR_OF_ERA: Record<BatteryEra, number> = {
+  CYCLES: BATTERY_CYCLE_ERA_MAX_YEAR,
+  HEALTH: BATTERY_CYCLE_ERA_MAX_YEAR + 1,
+};
 
 let rowSeq = 0;
 const blankRow = (): BatchRow => ({
@@ -140,6 +192,8 @@ const touched = (r: BatchRow) =>
   r.serial.trim() !== "" ||
   r.description.trim() !== "" ||
   r.batteryHealth != null ||
+  r.cycleCount != null ||
+  r.fcc != null ||
   r.skuId !== undefined;
 
 export function InventoryPage() {
@@ -152,7 +206,7 @@ export function InventoryPage() {
   const [form] = Form.useForm<{
     locationId: string;
     description: string;
-    batteryHealth?: number;
+    battery: BatteryDraft;
     reason: string;
   }>();
 
@@ -182,7 +236,41 @@ export function InventoryPage() {
    */
   const submitted = useRef(false);
 
+  const batterySettings = batterySettingsFrom(db.settings);
   const skuOf = (skuId: string) => db.skus.find((s) => s.id === skuId);
+  /**
+   * The battery an adjustment recorded, in the units its machine reports.
+   *
+   * Reads the era off the UNIT, because the adjustment carries the numbers and
+   * the unit carries the model that says which of them mean anything. A row
+   * whose serial has since been renamed away falls back to health, which is
+   * the reading the column showed before the split.
+   */
+  const adjustmentBattery = (a: Adjustment) =>
+    readBattery(
+      a,
+      releaseYearOfSku(
+        db,
+        db.units.find((u) => u.serial === a.serial)?.skuId ?? "",
+      ),
+      batterySettings,
+    );
+
+  /**
+   * The era of one row of the batch editor.
+   *
+   * A row for a serial the shop already carries takes it from that unit; a row
+   * for an unknown serial takes it from the product being chosen on the row
+   * itself. Both can be absent while somebody is still typing, and the default
+   * is health — the reading the box asked for before the split.
+   */
+  const batchEraOf = (r: BatchRow) => {
+    const known = db.units.find(
+      (u) => u.serial === r.serial.trim().toUpperCase(),
+    );
+    const skuId = known?.skuId ?? r.skuId;
+    return batteryEra(skuId ? releaseYearOfSku(db, skuId) : undefined);
+  };
   const unitOf = (serial: string) =>
     db.units.find((u) => u.serial === normalise(serial));
   const warehouseOf = (id: string) =>
@@ -200,7 +288,7 @@ export function InventoryPage() {
     form.setFieldsValue({
       locationId: u.locationId,
       description: u.description,
-      batteryHealth: u.batteryHealth,
+      battery: batteryDraftOf(u),
       reason: "",
     });
   };
@@ -226,17 +314,26 @@ export function InventoryPage() {
           });
           u.description = v.description;
         }
-        // `!=` against null on purpose: an emptied number input gives back
-        // `null`, and clearing a reading is a real edit — it was wrong and is
-        // now nobody's guess. 0% is a genuine reading, of a dead battery, and
-        // is not cleared.
-        const nextHealth = v.batteryHealth ?? undefined;
-        if (nextHealth !== u.batteryHealth) {
+        // An emptied number input gives back `null`, and clearing a reading
+        // is a real edit — it was wrong and is now nobody's guess. Zero is a
+        // genuine reading in both eras (a dead battery, a replaced one) and is
+        // never cleared, which is why every comparison here is against
+        // `undefined` rather than falsiness.
+        const year = releaseYearOfSku(db, u.skuId);
+        const next = batteryPatch(v.battery ?? {}, batteryEra(year));
+        const before = readBattery(u, year, batterySettings).text;
+        if (
+          next.batteryHealth !== u.batteryHealth ||
+          next.cycleCount !== u.cycleCount ||
+          next.fcc !== u.fcc
+        ) {
+          u.batteryHealth = next.batteryHealth;
+          u.cycleCount = next.cycleCount;
+          u.fcc = next.fcc;
           appendEvent(d, u.serial, {
             type: "KOREKSI",
-            note: `Battery health ${fmtBatteryHealth(u.batteryHealth)} → ${fmtBatteryHealth(nextHealth)} — ${v.reason || "adjustment"}`,
+            note: `Battery ${before} → ${readBattery(u, year, batterySettings).text} — ${v.reason || "adjustment"}`,
           });
-          u.batteryHealth = nextHealth;
         }
       });
       message.success("Adjustment logged on the unit's timeline.");
@@ -300,6 +397,8 @@ export function InventoryPage() {
       // records where four machines went — is a reason and four scans.
       description: unit?.description ?? "",
       batteryHealth: unit?.batteryHealth,
+      cycleCount: unit?.cycleCount,
+      fcc: unit?.fcc,
     });
     message.success(
       unit
@@ -385,7 +484,10 @@ export function InventoryPage() {
             buy: 0,
             description,
             poId: null,
-            batteryHealth: r.batteryHealth,
+            ...batteryPatch(
+              { health: r.batteryHealth, cycleCount: r.cycleCount, fcc: r.fcc },
+              batteryEra(releaseYearOfSku(d, sku.id)),
+            ),
           });
           // The adjustment IS this unit's intake. Its timeline starts with the
           // correction that created it, not with the DITERIMA of a purchase
@@ -407,12 +509,46 @@ export function InventoryPage() {
           created += 1;
         } else {
           if (description) existing.description = description;
-          if (r.batteryHealth != null) existing.batteryHealth = r.batteryHealth;
+          // Only the fields somebody actually typed. An untouched box must
+          // not clear a reading the machine already carries — a batch that
+          // records where four machines went is a reason and four scans.
+          const era = batteryEra(releaseYearOfSku(d, existing.skuId));
+          const typed = batteryPatch(
+            { health: r.batteryHealth, cycleCount: r.cycleCount, fcc: r.fcc },
+            era,
+          );
+          if (typed.batteryHealth != null)
+            existing.batteryHealth = typed.batteryHealth;
+          if (typed.cycleCount != null) existing.cycleCount = typed.cycleCount;
+          if (typed.fcc != null) existing.fcc = typed.fcc;
+          // What the note will say about the battery, if anything was typed.
+          const reading = readBattery(typed, YEAR_OF_ERA[era], batterySettings);
           if (kind === "IN" && existing.locationId !== locationId) {
             // Same reasoning as the single-unit move above: the rack it was
             // filed on belongs to the warehouse it is leaving.
             existing.rackId = undefined;
           }
+          /*
+           * A machine adjusted out to SERVICE opens a visit at the bench,
+           * exactly as one rejected at QC does (owner ask 2026-09-08).
+           *
+           * Without this the two doors into service disagreed: QC opened a
+           * visit while an adjustment changed a status and nothing else — so
+           * the machine never appeared on the bench and its repair cost
+           * nothing.
+           *
+           * It does NOT move the machine (owner revision 2026-09-09). The
+           * bench signs a machine in when it has it in its hands, and that
+           * confirmation is what writes the location; until then the machine
+           * is honestly still where it was, on the Expected table. The rack
+           * goes now, because the machine comes off the shelf when it is
+           * picked up.
+           */
+          const goingToService = kind === "OUT" && outStatus === "SERVIS";
+          // Read BEFORE the event, which writes the projection — the visit has
+          // to record where the machine set out from.
+          const cameFrom = existing.locationId;
+          if (goingToService) existing.rackId = undefined;
           appendEvent(d, serial, {
             type: "KOREKSI",
             toStatus: kind === "IN" ? "TERSEDIA" : outStatus,
@@ -421,11 +557,23 @@ export function InventoryPage() {
               `${kind === "IN" ? "Adjusted in" : "Adjusted out"} — ${label}`,
               kind === "OUT" ? statusLabel(outStatus) : undefined,
               description,
-              r.batteryHealth != null ? `${r.batteryHealth}%` : undefined,
+              reading.grade === null ? undefined : reading.text,
             ]
               .filter(Boolean)
               .join(" — "),
           });
+          if (kind === "OUT" && outStatus === "SERVIS") {
+            d.services.push({
+              id: nextId("svc"),
+              serial,
+              fromLocationId: cameFrom,
+              openedAt: at,
+              fees: [],
+              ...(description ? { note: description } : {}),
+              raisedBy: "ADJUSTMENT",
+              staff: "Michella",
+            });
+          }
           // A unit that has left stock cannot stay on hold for a customer. The
           // reservation is closed in the same transaction as the event, or the
           // Reservation page goes on offering a machine that is not there.
@@ -454,6 +602,8 @@ export function InventoryPage() {
           kind,
           batchId,
           batteryHealth: r.batteryHealth,
+          cycleCount: r.cycleCount,
+          fcc: r.fcc,
           newUnit: isNew,
         });
       }
@@ -581,15 +731,23 @@ export function InventoryPage() {
             render: (v) => <LongText>{v}</LongText>,
           },
           {
-            title: t("stock.batteryHealth", "Battery health"),
+            /*
+             * The reading recorded by this adjustment, in whichever units the
+             * machine's era reports (2026-09-08).
+             *
+             * Read through the UNIT rather than off the adjustment alone,
+             * because an adjustment carries the numbers and the unit carries
+             * the model that says which of them mean anything.
+             */
+            title: t("stock.battery", "Battery"),
             key: "battery",
-            width: 130,
+            width: 140,
             align: "right",
-            sortValue: (a) => a.batteryHealth,
+            sortValue: (a) => a.batteryHealth ?? a.cycleCount,
             facet: true,
-            facetLabel: t("stock.anyBatteryHealth", "Any battery health"),
-            facetValue: (a) => batteryBand(a.batteryHealth),
-            render: (_, a) => fmtBatteryHealth(a.batteryHealth),
+            facetLabel: t("stock.anyBattery", "Any battery"),
+            facetValue: (a) => batteryBandOf(adjustmentBattery(a)),
+            render: (_, a) => adjustmentBattery(a).text,
           },
           {
             title: t("stock.reason", "Reason"),
@@ -863,6 +1021,8 @@ export function InventoryPage() {
                             serial: v,
                             description: picked?.description ?? "",
                             batteryHealth: picked?.batteryHealth,
+                            cycleCount: picked?.cycleCount,
+                            fcc: picked?.fcc,
                           });
                         }}
                         // `label` is the serial and only the serial, because
@@ -981,49 +1141,44 @@ export function InventoryPage() {
                 },
               },
               {
-                title: t("stock.batteryHealth", "Battery health"),
+                /*
+                 * The battery, in whichever units the row's machine reports
+                 * (2026-09-08).
+                 *
+                 * A row for a serial the shop already carries takes its era
+                 * from that unit; a row for an unknown serial takes it from
+                 * the product being chosen two columns to the left, and starts
+                 * on the health box until one is picked. Nothing is lost by
+                 * that default — a reading typed against the wrong era is
+                 * dropped by `batchProblems`, not filed.
+                 */
+                // Neutral, unlike the QC grid's: that page groups by product
+                // so a block is one era, while this grid is whatever four
+                // machines somebody happens to be adjusting at once.
+                title: t("stock.battery", "Battery"),
                 key: "battery",
-                width: 140,
+                width: 150,
                 render: (_, r) => {
-                  // 10,000 stood here until 2026-08-26, left over from when
-                  // this column was a cycle count. It is a percentage of
-                  // original capacity now, so 100 is a new battery and there
-                  // is nothing above it.
-                  const bad = !isBatteryHealthInRange(r.batteryHealth);
-                  const rangeId = `battery-range-${r.key}`;
+                  const era = batchEraOf(r);
                   return (
-                    <Flex vertical gap={2}>
-                      <CountInput
-                        value={r.batteryHealth}
-                        // No `min`/`max`: antd's bounds do not refuse an
-                        // out-of-range number, they snap it to the bound when
-                        // the box is left, which files a reading nobody took.
-                        // `batchProblems` refuses the line instead, and the OK
-                        // button reports it with everything else wrong.
-                        aria-valuemin={BATTERY_HEALTH_MIN}
-                        aria-valuemax={BATTERY_HEALTH_MAX}
-                        precision={0}
-                        placeholder="—"
-                        status={bad ? "error" : undefined}
-                        aria-invalid={bad || undefined}
-                        aria-describedby={bad ? rangeId : undefined}
-                        aria-label={t("stock.batteryHealth", "Battery health")}
-                        // Empty is "not measured", which is not the same fact as 0.
-                        onChange={(v) =>
-                          setRow(r.key, { batteryHealth: v ?? undefined })
-                        }
-                        style={{ width: "100%" }}
-                      />
-                      {bad && (
-                        <Typography.Text
-                          id={rangeId}
-                          type="danger"
-                          style={{ fontSize: 12 }}
-                        >
-                          {t("stock.batteryRange", "0–100% only")}
-                        </Typography.Text>
-                      )}
-                    </Flex>
+                    <BatteryFields
+                      era={era}
+                      idPrefix={`batch-battery-${r.key}`}
+                      value={{
+                        health: r.batteryHealth ?? null,
+                        cycleCount: r.cycleCount ?? null,
+                        fcc: r.fcc ?? null,
+                      }}
+                      // No `onCommit`: the grid validates every row at OK
+                      // (`batchProblems`), so there is nothing to do per box.
+                      onChange={(next) =>
+                        setRow(r.key, {
+                          batteryHealth: next.health ?? undefined,
+                          cycleCount: next.cycleCount ?? undefined,
+                          fcc: next.fcc ?? undefined,
+                        })
+                      }
+                    />
                   );
                 },
               },
@@ -1112,33 +1267,53 @@ export function InventoryPage() {
             <Input.TextArea rows={2} />
           </Form.Item>
           <Form.Item
-            name="batteryHealth"
-            label={t("stock.batteryHealth", "Battery health")}
+            name="battery"
+            label={
+              editing
+                ? batteryFieldsLabel(
+                    batteryEra(releaseYearOfSku(db, editing.skuId)),
+                    t,
+                  )
+                : t("stock.battery", "Battery")
+            }
             tooltip={t(
               "stock.leaveEmptyWhenNobodyHas",
               "Leave empty when nobody has read it off the machine — that is not the same as zero",
             )}
-            // A rule rather than the input's own `max`, for the reason the
+            // A rule rather than each input's own `max`, for the reason the
             // batch grid gives: a bound snaps the number and says nothing,
             // while a rule refuses it and shows why under the field. Empty
             // still passes — nobody has measured it.
             rules={[
               {
-                validator: (_, value: number | null | undefined) =>
-                  isBatteryHealthInRange(value)
+                validator: (_, value: BatteryDraft | undefined) =>
+                  !editing ||
+                  isBatteryDraftInRange(
+                    value ?? {},
+                    batteryEra(releaseYearOfSku(db, editing.skuId)),
+                  )
                     ? Promise.resolve()
                     : Promise.reject(
-                        new Error(t("stock.batteryRange", "0–100% only")),
+                        new Error(
+                          t(
+                            "stock.batteryOutOfRange",
+                            "One of these readings is out of range.",
+                          ),
+                        ),
                       ),
               },
             ]}
           >
-            <InputNumber
-              aria-valuemin={BATTERY_HEALTH_MIN}
-              aria-valuemax={BATTERY_HEALTH_MAX}
-              precision={0}
-              placeholder="—"
-              style={{ width: "100%" }}
+            {/* antd hands a `Form.Item`'s single child `value`/`onChange`, so
+                the shared component slots in as a field of its own — the whole
+                reading is one form value rather than two or three that a
+                validator would have to reassemble. */}
+            <BatteryFieldsField
+              era={
+                editing
+                  ? batteryEra(releaseYearOfSku(db, editing.skuId))
+                  : "HEALTH"
+              }
             />
           </Form.Item>
           <Form.Item

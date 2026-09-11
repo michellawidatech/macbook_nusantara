@@ -29,7 +29,9 @@
 import type { CSSProperties } from "react";
 import { Button, Modal, Typography } from "antd";
 import { PrinterOutlined } from "@ant-design/icons";
-import { fmtRp } from "../lib/format.js";
+import { fmtRp, fmtDate } from "../lib/format.js";
+import { paymentsOf, saleBalance } from "../lib/salePayments.js";
+import { marketplacePayMethod } from "../lib/channels.js";
 // No `t` on purpose: the faktur is a print template and is deliberately
 // outside the language switch, so it takes the English label.
 import { labelOf, ORDER_SOURCE } from "../i18n/enumLabels.js";
@@ -99,7 +101,22 @@ function billedTo(
 export function InvoiceSheet({ db, order }: InvoiceProps) {
   const to = billedTo(db, order);
   const shop = shopOf(db);
+  /*
+   * The method, spelled the way the shop spells it.
+   *
+   * `Order.payMethod` and `SalePayment.method` hold `PaymentMethod` CODES
+   * since 2026-09-09 — see seed.ts — so a receipt that printed the field raw
+   * would say "KARTU_KREDIT". A marketplace sale gets its channel's own
+   * escrow wording, which is what the customer's own order confirmation says.
+   */
+  const methodLabel = (code: string) =>
+    code === "MARKETPLACE"
+      ? marketplacePayMethod(order.source)
+      : (db.paymentMethods.find((m) => m.code === code)?.label ?? code);
   const salesman = db.salesmen.find((s) => s.id === order.salesmanId);
+  /** The bill in parts, and what it comes to. See `lib/salePayments.ts`. */
+  const parts = paymentsOf(order);
+  const balance = saleBalance(order.total, parts);
   const subtotal = order.serials.reduce(
     (t, s) => t + (order.prices[s] ?? 0),
     0,
@@ -209,9 +226,37 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
             <span style={{ color: "#666" }}>Channel</span>{" "}
             {labelOf(ORDER_SOURCE, order.source)}
           </div>
-          <div>
-            <span style={{ color: "#666" }}>Payment</span> {order.payMethod}
-          </div>
+          {/*
+            * The bill's parts, since 2026-09-08 (owner ask: *"we need to track
+            * different payment handling and reflect it on invoice"*).
+            *
+            * A sale paid one way prints exactly the line it always printed —
+            * `paymentsOf` gives a single-payment order one part — so nothing
+            * changes for the common receipt. A split one prints a line each,
+            * because a customer who paid Rp5jt in cash and Rp5jt on PayLater
+            * needs a receipt that says so, and one that reads "Payment
+            * Transfer" is a receipt they cannot use to argue with either
+            * party.
+            */}
+          {parts.length === 1 ? (
+            <div>
+              <span style={{ color: "#666" }}>Payment</span>{" "}
+              {methodLabel(order.payMethod)}
+            </div>
+          ) : (
+            parts.map((p) => (
+              <div key={p.id}>
+                <span style={{ color: "#666" }}>
+                  {p.state === "PENDING"
+                    ? `${p.channel ?? "Marketplace"} (pending)`
+                    : p.state === "DUE"
+                      ? "Due"
+                      : methodLabel(p.method)}
+                </span>{" "}
+                {fmtRp(p.amount)}
+              </div>
+            ))
+          )}
           {salesman && (
             <div>
               <span style={{ color: "#666" }}>Salesperson</span> {salesman.name}
@@ -353,10 +398,23 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
           numbers are recorded against this sale and cannot be exchanged for
           another unit.
         </div>
-        {!order.settled && (
+        {/*
+          * Two different warnings, because they are about two different
+          * people. A marketplace holding the money is the shop's problem; an
+          * unpaid balance is the customer's, and the receipt they walk out
+          * with has to say what they still owe and when.
+          */}
+        {balance.pending > 0 && (
           <div style={{ marginTop: 4, fontWeight: 700, color: "#8a6100" }}>
-            Payment pending — {labelOf(ORDER_SOURCE, order.source)} has not
-            released the funds yet.
+            {fmtRp(balance.pending)} pending —{" "}
+            {labelOf(ORDER_SOURCE, order.source)} has not released the funds
+            yet.
+          </div>
+        )}
+        {balance.customerOwes > 0 && (
+          <div style={{ marginTop: 4, fontWeight: 700, color: "#a8071a" }}>
+            Balance due {fmtRp(balance.customerOwes)}
+            {balance.nextDueAt ? ` by ${fmtDate(balance.nextDueAt)}` : ""}.
           </div>
         )}
       </div>

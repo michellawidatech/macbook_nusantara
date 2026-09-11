@@ -55,6 +55,7 @@ import { PrintLabelsModal } from "../../components/LabelSheet";
 import { fmtRp, fmtDateTime } from "../../lib/format.js";
 import { labelFor } from "../../lib/labels.js";
 import { useDb } from "../../mock/store.js";
+import { resolveSerialQuery } from "../../lib/serialInput.js";
 import type { MockDb, UnitEvent } from "../../mock/seed.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
 import { labelOf, UNIT_EVENT, UNIT_STATUS } from "../../i18n/enumLabels.js";
@@ -198,9 +199,32 @@ export function StockHistoryPage() {
   const [params, setParams] = useSearchParams();
   const serial = params.get("serial") ?? undefined;
 
-  // A scan jumps straight to the serial rather than going through the picker.
+  /** Every origin code the shop has issued, for reading a store barcode. */
+  const supplierCodes = useMemo(
+    () => db.suppliers.map((x) => x.code).filter((c): c is string => !!c),
+    [db.suppliers],
+  );
+  /** Every serial the store holds — what a query is resolved against. */
+  const knownSerials = useMemo(
+    () => db.units.map((u) => u.serial),
+    [db.units],
+  );
+
+  /*
+   * A scan jumps straight to the serial rather than going through the picker,
+   * and it is resolved first (owner ask 2026-09-08).
+   *
+   * A machine carries both barcodes and the counter reads whichever faces
+   * them, so a scan of the shop's own sticker has to have its origin code
+   * taken off before it can find anything. `resolveSerialQuery` also puts the
+   * marker back on a bare read, which is the case a plain lookup missed: the
+   * store holds `SC02740137JKM` and the case prints `C02740137JKM`.
+   */
+  const resolve = (raw: string) =>
+    resolveSerialQuery(raw, knownSerials, supplierCodes);
+
   useScanTarget((scanned) => {
-    const clean = scanned.trim().toUpperCase();
+    const clean = resolve(scanned);
     if (clean) setParams({ serial: clean });
   });
 
@@ -228,13 +252,26 @@ export function StockHistoryPage() {
    * dropdown on every keystroke.
    */
   const options = useMemo(() => {
-    const q = pickerQuery.trim().toLowerCase();
+    const typed = pickerQuery.trim();
+    /*
+     * Matched against BOTH what was typed and what it resolves to.
+     *
+     * Somebody typing the number off the case types `C02740…`, which is not a
+     * substring of anything the store holds only because the marker is
+     * missing from the front — so a substring search alone finds nothing and
+     * the picker looks empty. Resolving first means the machine appears while
+     * the marker is still absent from the box.
+     */
+    const q = typed.toLowerCase();
+    const hit = typed === "" ? "" : resolve(typed).toLowerCase();
     return db.units
       .filter((u) => {
         if (q === "") return true;
         const s = db.skus.find((k) => k.id === u.skuId);
+        const serial = u.serial.toLowerCase();
         return (
-          u.serial.toLowerCase().includes(q) ||
+          serial.includes(q) ||
+          serial === hit ||
           (s?.name ?? "").toLowerCase().includes(q) ||
           (s?.variantLabel ?? "").toLowerCase().includes(q)
         );
@@ -247,7 +284,11 @@ export function StockHistoryPage() {
           label: `${u.serial} — ${s?.name ?? ""} ${s?.variantLabel ?? ""}`.trim(),
         };
       });
-  }, [db.units, db.skus, pickerQuery]);
+    // `resolve` closes over the store, which changes identity every render;
+    // the query and the serials are what actually decide this list. This
+    // project's eslint config has no exhaustive-deps rule to disable, so the
+    // reason is stated rather than suppressed.
+  }, [db.units, db.skus, pickerQuery, knownSerials, supplierCodes]);
 
   /** A serial that was asked for and is not in the store. */
   const missing = serial !== undefined && unit === undefined;

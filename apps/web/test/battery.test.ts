@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   BATTERY_UNKNOWN,
   DEFAULT_BATTERY_THRESHOLDS,
+  DEFAULT_CYCLE_THRESHOLDS,
   batteryBand,
+  batteryBandOf,
   batteryBands,
+  batteryEra,
   batteryGrade,
   batteryGuide,
+  batterySettingsFrom,
+  cycleGrade,
   fmtBatteryHealth,
   isBatteryHealthInRange,
+  readBattery,
 } from "../src/lib/battery.js";
 
 describe("batteryGrade", () => {
@@ -131,5 +137,107 @@ describe("batteryGuide", () => {
     const strict = batteryGuide({ goodMin: 90, fairMin: 85 });
     expect(strict).toContain("90%");
     expect(strict).toContain("85");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * The two eras (owner ask 2026-09-08)
+ * ──────────────────────────────────────────────────────────────────────────*/
+
+describe("batteryEra", () => {
+  it("puts 2020 and earlier on cycles and 2021 and later on health", () => {
+    expect(batteryEra(2015)).toBe("CYCLES");
+    expect(batteryEra(2020)).toBe("CYCLES");
+    expect(batteryEra(2021)).toBe("HEALTH");
+    expect(batteryEra(2024)).toBe("HEALTH");
+  });
+
+  it("reads an unknown year as health", () => {
+    // The cheaper mistake: one field asking for a number the machine does not
+    // show, rather than two.
+    expect(batteryEra(undefined)).toBe("HEALTH");
+    expect(batteryEra(null)).toBe("HEALTH");
+    expect(batteryEra(Number.NaN)).toBe("HEALTH");
+  });
+});
+
+describe("cycleGrade", () => {
+  it("bands on ceilings, not floors — fewer cycles is better", () => {
+    expect(cycleGrade(0)).toBe("good");
+    expect(cycleGrade(400)).toBe("good");
+    expect(cycleGrade(401)).toBe("fair");
+    expect(cycleGrade(800)).toBe("fair");
+    expect(cycleGrade(801)).toBe("bad");
+  });
+
+  it("keeps 0 a reading and a missing count not one", () => {
+    // The same trap as battery health, inverted: a replaced battery really
+    // does read zero cycles.
+    expect(cycleGrade(0)).toBe("good");
+    expect(cycleGrade(undefined)).toBeNull();
+    expect(cycleGrade(null)).toBeNull();
+  });
+
+  it("refuses to band a count outside the range", () => {
+    expect(cycleGrade(-1)).toBeNull();
+    expect(cycleGrade(50_000)).toBeNull();
+  });
+
+  it("honours thresholds it is given", () => {
+    const t = { goodMax: 100, fairMax: 200 };
+    expect(cycleGrade(100, t)).toBe("good");
+    expect(cycleGrade(150, t)).toBe("fair");
+    expect(cycleGrade(201, t)).toBe("bad");
+  });
+});
+
+describe("readBattery", () => {
+  const old = { batteryHealth: 91, cycleCount: 312, fcc: 4800 };
+
+  it("reads a pre-2021 machine as cycles and ignores a stray percentage", () => {
+    const r = readBattery(old, 2017);
+    expect(r.era).toBe("CYCLES");
+    expect(r.cycleCount).toBe(312);
+    expect(r.fcc).toBe(4800);
+    expect(r.health).toBeUndefined();
+    expect(r.grade).toBe("good");
+    expect(r.text).toContain("cycles");
+  });
+
+  it("reads a 2021-or-later machine as health and ignores a stray count", () => {
+    const r = readBattery(old, 2023);
+    expect(r.era).toBe("HEALTH");
+    expect(r.health).toBe(91);
+    expect(r.cycleCount).toBeUndefined();
+    expect(r.grade).toBe("good");
+    expect(r.text).toBe("91%");
+  });
+
+  it("says nothing was measured when nothing was", () => {
+    expect(readBattery({}, 2017).grade).toBeNull();
+    expect(readBattery({}, 2017).text).toBe("—");
+    expect(readBattery({}, 2023).grade).toBeNull();
+  });
+
+  it("bands the two eras into one vocabulary", () => {
+    // The whole reason Inventory can keep ONE battery facet over a mixed
+    // shelf: a good 2017 battery and a good 2023 battery are both "Good".
+    expect(batteryBandOf(readBattery({ cycleCount: 200 }, 2017))).toBe("Good");
+    expect(batteryBandOf(readBattery({ batteryHealth: 95 }, 2023))).toBe("Good");
+    expect(batteryBandOf(readBattery({}, 2017))).toBe(BATTERY_UNKNOWN);
+  });
+});
+
+describe("batterySettingsFrom", () => {
+  it("falls back to the defaults", () => {
+    const s = batterySettingsFrom({});
+    expect(s.health).toEqual(DEFAULT_BATTERY_THRESHOLDS);
+    expect(s.cycles).toEqual(DEFAULT_CYCLE_THRESHOLDS);
+  });
+
+  it("clamps a fair ceiling below the good one", () => {
+    // The mirror of the health clamp: the fair band must not be empty.
+    expect(batterySettingsFrom({ cycleGoodMax: 500, cycleFairMax: 200 }).cycles)
+      .toEqual({ goodMax: 500, fairMax: 500 });
   });
 });

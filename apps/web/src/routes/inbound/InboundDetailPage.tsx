@@ -30,12 +30,14 @@ import {
   Descriptions,
   Empty,
   Flex,
+  Form,
   Input,
   InputNumber,
   Modal,
   Result,
   Segmented,
   Select,
+  Switch,
   Table,
   Tag,
   Tooltip,
@@ -66,16 +68,31 @@ import { UnitPhotos } from "../../components/UnitPhotos";
 import { GradeTag } from "../../components/GradeTag";
 import { GradingModal } from "../../components/GradingModal";
 import { StoreLabelTag } from "../../components/StoreLabelTag";
+import {
+  BatteryFields,
+  batteryFieldsLabel,
+} from "../../components/BatteryFields.js";
+import {
+  PriceFields,
+  type PriceDraft,
+} from "../../components/PriceFields.js";
+import {
+  DEFAULT_MARKETPLACE_MARKUP_PCT,
+  isPriceInRange,
+} from "../../lib/unitPrice.js";
 import { labelsFor, type LabelDatum } from "../../lib/labels.js";
 import { fmtRp, fmtDate } from "../../lib/format.js";
 import {
-  fmtBatteryHealth,
   BATTERY_GRADE_COLOR,
-  BATTERY_HEALTH_MAX,
-  BATTERY_HEALTH_MIN,
-  batteryGrade,
-  isBatteryHealthInRange,
-  thresholdsFrom,
+  batteryDraftOf,
+  batteryEra,
+  batteryPatch,
+  batterySettingsFrom,
+  isBatteryDraftInRange,
+  readBattery,
+  BATTERY_FIELD_RANGE,
+  type BatteryDraft,
+  type BatteryEra,
 } from "../../lib/battery.js";
 import {
   INBOUND_STAGE_COLOR,
@@ -109,15 +126,14 @@ import {
   CODE128_HINT,
   BASE_MAX_LENGTH,
   BASE_MIN_LENGTH,
-  isStoreBarcode,
   normaliseScan,
-  markTypedSerial,
   STORE_MAX_LENGTH,
   readBarcode,
-  SUPPLIER_CODE_LENGTH,
-  validateSerial,
   type ScanRejection,
 } from "../../lib/serialScan.js";
+import { readSerialInput } from "../../lib/serialInput.js";
+import { serviceLocationOf } from "../../lib/service.js";
+import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import {
   planSerialFill,
   type FillPlan,
@@ -229,7 +245,43 @@ export function InboundDetailPage() {
    * could not hold it. `identify` carries the reading onto the unit, and
    * `reslotDrafts` keeps the rest on the rows they were typed into.
    */
-  const [battery, setBattery] = useState<Record<string, number | null>>({});
+  const [battery, setBattery] = useState<Record<string, BatteryDraft>>({});
+  /**
+   * The price given to a row, before it is committed (owner ask 2026-09-08).
+   *
+   * The fifth draft map, and it exists for the reason the other four do: every
+   * column on this grid is typable before the serial is, and a slot has no
+   * unit to write onto. `identify` carries the price onto the machine it
+   * creates and `reslotDrafts` keeps the rest on the rows they were typed
+   * into.
+   *
+   * A price used to be asked for here, then stopped being (2026-08-27, when
+   * the price moved to the variant), and is asked for again now that each
+   * machine carries its own. See `lib/unitPrice.ts` for why the pendulum
+   * lands here.
+   */
+  const [prices, setPrices] = useState<Record<string, PriceDraft>>({});
+  /**
+   * The machine the Send-to-service dialog is open on, or null.
+   *
+   * The charges it asks for used to be a COLUMN in the grid (2026-09-08), on
+   * the argument that the courier's number is on the desk at the moment
+   * somebody decides a machine needs a repair. That argument survives; what
+   * did not is asking for the number twice. The owner's 2026-09-09 revision
+   * put both fees in the confirmation dialog — *"add a field so that they can
+   * add additional fee like shipping fee from warehouse 1 to warehouse 4. If
+   * the user can already know the service fee, they can add it to"* — which is
+   * the same moment, on the screen that is already asking the question, and it
+   * gave a column of empty Rp boxes back to a grid the owner had just called
+   * too dense.
+   */
+  const [sendingToService, setSendingToService] = useState<string | null>(null);
+  const [serviceForm] = Form.useForm<{
+    ship: boolean;
+    shippingFee?: number;
+    serviceFee?: number;
+    note?: string;
+  }>();
   /**
    * Grades given to rows that are not machines yet, keyed by row.
    *
@@ -256,7 +308,9 @@ export function InboundDetailPage() {
 
   const po = db.pos.find((p) => p.id === poId);
   const units = useMemo(() => (po ? unitsOfPo(db, po.id) : []), [db, po]);
-  const thresholds = thresholdsFrom(db.settings);
+  const batterySettings = batterySettingsFrom(db.settings);
+  const markupPct =
+    db.settings.marketplaceMarkupPct ?? DEFAULT_MARKETPLACE_MARKUP_PCT;
 
   /**
    * The QC rows: machines this order has identified, and the ones it is still
@@ -369,6 +423,20 @@ export function InboundDetailPage() {
     return sku ? `${sku.name} ${sku.variantLabel}` : "—";
   };
 
+  /**
+   * Which battery reading this machine's model reports (owner ask 2026-09-08).
+   *
+   * Off the MODEL's release year, not off which fields happen to be filled in:
+   * a 2017 body is a cycles machine whether or not somebody once typed a
+   * percentage onto it. Every group on this page is one variant, so the whole
+   * block shares an era and the column can say what it is asking for.
+   */
+  const eraOfSku = (skuId: string): BatteryEra => {
+    const sku = db.skus.find((s) => s.id === skuId);
+    const model = sku && db.models.find((m) => m.id === sku.modelId);
+    return batteryEra(model?.releaseYear);
+  };
+
   /** The product category behind a row — what picks its grading checklist. */
   const categoryOfSku = (skuId: string) => {
     const sku = db.skus.find((s) => s.id === skuId);
@@ -406,7 +474,8 @@ export function InboundDetailPage() {
      */
     pending?: {
       description?: readonly string[];
-      batteryHealth?: number | null;
+      battery?: BatteryDraft;
+      price?: PriceDraft;
       grade?: string;
     },
   ) => {
@@ -417,7 +486,11 @@ export function InboundDetailPage() {
         .map((phrase) => ensureQcDescription(d, phrase))
         .filter(Boolean),
     );
-    const reading = pending?.batteryHealth ?? null;
+    // In the units this machine's own era reports — see `batteryEra`. A
+    // refused reading never reaches a draft (see `commitBattery`), so
+    // `batteryPatch` dropping an out-of-range one is belt and braces against
+    // a value arriving by some other door.
+    const reading = batteryPatch(pending?.battery ?? {}, eraOfSku(skuId));
     d.units.push({
       serial,
       skuId,
@@ -426,11 +499,29 @@ export function InboundDetailPage() {
       buy: unitCost,
       description: described,
       poId: order.id,
-      // A refused reading never reaches a draft (see `commitBattery`), so this
-      // is belt and braces against a value arriving some other way.
-      batteryHealth: isBatteryHealthInRange(reading)
-        ? (reading ?? undefined)
-        : undefined,
+      ...(reading.batteryHealth === undefined
+        ? {}
+        : { batteryHealth: reading.batteryHealth }),
+      ...(reading.cycleCount === undefined
+        ? {}
+        : { cycleCount: reading.cycleCount }),
+      ...(reading.fcc === undefined ? {} : { fcc: reading.fcc }),
+      /*
+       * Priced from the moment the machine exists.
+       *
+       * The variant's asking price is the fallback, and it is not a default
+       * nobody chose: it is what this shop asks for this model, and QC's job
+       * is to move it where the machine deserves. A unit reaching the shelf
+       * with no price at all is one the till would quote the catalogue figure
+       * for anyway — this makes that explicit and editable instead.
+       */
+      price:
+        pending?.price?.price ??
+        d.skus.find((x) => x.id === skuId)?.price ??
+        0,
+      ...(pending?.price?.marketPrice == null
+        ? {}
+        : { marketPrice: pending.price.marketPrice }),
       ...(pending?.grade ? { grade: pending.grade } : {}),
     });
     appendEvent(d, serial, {
@@ -707,7 +798,8 @@ export function InboundDetailPage() {
       // the pile with the scanner; the readings must not be left behind.
       identify(d, target.skuId, target.unitCost, serial, {
         description: notes[target.key] ?? [],
-        batteryHealth: battery[target.key],
+        battery: battery[target.key] ?? {},
+        price: prices[target.key] ?? {},
         ...(gradeDrafts[target.key] ? { grade: gradeDrafts[target.key] } : {}),
       });
       out.moved = {
@@ -728,6 +820,7 @@ export function InboundDetailPage() {
       setSerialFault(shift);
       setNotes(shift);
       setBattery(shift);
+      setPrices(shift);
       setGradeDrafts(shift);
     }
 
@@ -799,7 +892,11 @@ export function InboundDetailPage() {
    * outside 0–100 is a typo, so it is named and dropped, exactly as a serial
    * another unit already owns is.
    */
-  const commitBattery = (row: QcRow, value: number | null) => {
+  const commitBattery = (
+    row: QcRow,
+    field: keyof BatteryDraft,
+    value: number | null,
+  ) => {
     /** Give the box back to what the store says. */
     const revert = () =>
       setBattery((d) => {
@@ -809,12 +906,15 @@ export function InboundDetailPage() {
         return rest;
       });
 
-    if (!isBatteryHealthInRange(value)) {
+    const era = eraOfSku(row.skuId);
+    const draft = { ...(battery[row.key] ?? {}), [field]: value };
+    if (!isBatteryDraftInRange(draft, era)) {
+      const [lo, hi] = BATTERY_FIELD_RANGE[field];
       message.error(
         t(
           "inbound.batteryRefused",
-          "{{value}}% is not a battery reading — 0 to 100 only.",
-          { value },
+          "{{value}} is not a reading this box takes — {{lo}} to {{hi}} only.",
+          { value, lo, hi },
         ),
       );
       return revert();
@@ -824,44 +924,104 @@ export function InboundDetailPage() {
     // clearing it here is what would empty the box under somebody's hand.
     if (row.kind === "slot") return;
     revert();
-    const next = value ?? undefined;
-    if (next === row.unit.batteryHealth) return;
-    const serial = row.unit.serial;
+    const next = batteryPatch(draft, era);
+    const unit = row.unit;
+    if (
+      next.batteryHealth === unit.batteryHealth &&
+      next.cycleCount === unit.cycleCount &&
+      next.fcc === unit.fcc
+    ) {
+      return;
+    }
+    const serial = unit.serial;
     mutate((d) => {
-      d.units.find((u) => u.serial === serial)!.batteryHealth = next;
+      const u = d.units.find((x) => x.serial === serial)!;
+      u.batteryHealth = next.batteryHealth;
+      u.cycleCount = next.cycleCount;
+      u.fcc = next.fcc;
+    });
+  };
+
+  /**
+   * Write a price the moment the box is left.
+   *
+   * Committed on blur rather than per keystroke, for the reason the battery
+   * boxes are: a price is typed a digit at a time, so committing per keystroke
+   * would file Rp9, Rp95, Rp950 … on the way to Rp9.500.000, and every one of
+   * those is a number somebody could have meant.
+   *
+   * An out-of-range figure is refused and named rather than clamped — the same
+   * bargain the serial and the battery strike.
+   */
+  const commitPrice = (
+    row: QcRow,
+    field: keyof PriceDraft,
+    value: number | null,
+  ) => {
+    const revert = () =>
+      setPrices((d) => {
+        if (!(row.key in d)) return d;
+        const rest = { ...d };
+        delete rest[row.key];
+        return rest;
+      });
+
+    if (!isPriceInRange(value)) {
+      message.error(
+        t("inbound.priceRefused", "{{value}} is not a price.", { value }),
+      );
+      return revert();
+    }
+    // A slot has nowhere to file it yet — the draft IS the price until a
+    // serial turns the row into a machine.
+    if (row.kind === "slot") return;
+    revert();
+    const serial = row.unit.serial;
+    const next = value ?? undefined;
+    if (field === "price" && next === row.unit.price) return;
+    if (field === "marketPrice" && next === row.unit.marketPrice) return;
+    mutate((d) => {
+      const u = d.units.find((x) => x.serial === serial)!;
+      if (field === "price") {
+        // Never left blank on a machine that exists: an empty box means "back
+        // to what the shop asks", not "unpriced".
+        u.price = next ?? d.skus.find((x) => x.id === u.skuId)?.price ?? 0;
+      } else {
+        u.marketPrice = next;
+      }
     });
   };
 
   const commitSerial = (row: QcRow, raw: string) => {
     const typed = normaliseScan(raw);
     /*
-     * The field takes EITHER barcode, exactly as the scanner does.
+     * One reader for every serial box in the app (owner ask 2026-09-08).
      *
-     * Somebody re-keying a machine reads whichever label is facing them, and
-     * on a machine that has already been through QC that is usually the shop's
-     * own sticker. Refusing it — "does not begin with S", about a string that
-     * plainly does, two characters in — was the single most confusing thing
-     * this field could say. A store barcode is converted to the serial inside
-     * it; anything else is left alone for the shape rule below to judge.
-     */
-    const codes = db.suppliers.map((x) => x.code ?? "");
-    const inner = isStoreBarcode(typed, codes)
-      ? typed.slice(SUPPLIER_CODE_LENGTH)
-      : typed;
-    /*
-     * The marker goes back on a TYPED serial, and never on a scanned one
-     * (owner ask 2026-09-01, second revision).
+     * This desk had the rule written out inline, and it was the only desk that
+     * had it: the till, S/N Tracking, Stock Opname and the trade-in dialog
+     * each did something slightly different with the same characters.
+     * `readSerialInput` is that logic moved somewhere a test reads it, and
+     * what it does is exactly what stood here —
      *
-     * The `S` is printed under the bars, not on the case, so somebody copying
-     * the number off the underside of a Mac has no reason to type one — the
-     * field used to refuse the number the machine actually shows. A scan is
-     * the opposite: a barcode carries its marker, so a burst that arrives
-     * without one was aimed at the regulatory code or the part number beside
-     * it, which is the misread this desk exists to catch. `wasScannedText`
-     * tells them apart the only way a keyboard-wedge scanner can be told
-     * apart — by how fast the characters came.
+     * - either barcode is accepted, because somebody re-keying a graded
+     *   machine reads whichever label faces them and on a graded one that is
+     *   the shop's own sticker;
+     * - a TYPED serial with no marker has one put back, because the `S` is
+     *   printed under the bars and not on the case;
+     * - a SCANNED one with no marker is refused, because a barcode carries its
+     *   marker and a burst without one was aimed at the regulatory code or the
+     *   part number beside it — the misread this desk exists to catch.
+     *
+     * `wasScannedText` tells the two apart the only way a keyboard-wedge
+     * scanner can be told apart: by how fast the characters came.
      */
-    const serial = wasScannedText(typed) ? inner : markTypedSerial(inner);
+    const read = readSerialInput(typed, {
+      scanned: wasScannedText(typed),
+      supplierCodes: db.suppliers
+        .map((x) => x.code)
+        .filter((c): c is string => !!c),
+    });
+    const serial = read.ok ? read.serial : typed;
     const stored = row.kind === "unit" ? row.unit.serial : "";
     /** Give the box back to what the store says. */
     const revert = () =>
@@ -890,20 +1050,20 @@ export function InboundDetailPage() {
      * 2026-09-01): *"if any barcode is not adhering to this rule then do not
      * accept"*.
      *
-     * This is a real change. The old rules deliberately let a hand-keyed
-     * serial through on the grounds that a person can see the machine, and
-     * only checked its length. That was defensible while a malformed serial
-     * was merely unfindable; it stopped being defensible once the sticker is
-     * DERIVED from the serial, because `storeBarcodeOf` refuses to build one
-     * from a serial that is not a valid original barcode — so a machine keyed
-     * in wrongly would silently end up with no label at all.
+     * The old rules deliberately let a hand-keyed serial through on the
+     * grounds that a person can see the machine, and only checked its length.
+     * That was defensible while a malformed serial was merely unfindable; it
+     * stopped being defensible once the sticker is DERIVED from the serial,
+     * because `storeBarcodeOf` refuses to build one from a serial that is not
+     * a valid original barcode — so a machine keyed in wrongly would silently
+     * end up with no label at all.
      *
-     * The `I`/`O` rule is not applied here and that is deliberate — see
-     * `validateSerial`.
+     * The `I`/`O` rule is not applied to a typed serial and that is deliberate
+     * — see `validateSerial`.
      */
-    const fault = validateSerial(serial);
-    if (fault !== null) {
-      const scanned = wasScannedText(typed);
+    if (!read.ok) {
+      const fault = read.reason;
+      const scanned = read.source === "scan";
       message.error(serialFaultText(fault, serial, scanned));
       /*
        * The text STAYS. This is the one refusal that must not clear the box.
@@ -949,7 +1109,8 @@ export function InboundDetailPage() {
       // typed into this row while it was still waiting for a serial.
       const carry = {
         description: notes[row.key] ?? [],
-        batteryHealth: battery[row.key],
+        battery: battery[row.key] ?? {},
+        price: prices[row.key] ?? {},
         ...(gradeDrafts[row.key] ? { grade: gradeDrafts[row.key] } : {}),
       };
       const shape: { before: QcRow[]; after: QcRow[] } = {
@@ -970,6 +1131,7 @@ export function InboundDetailPage() {
       setSerialFault(move);
       setNotes(move);
       setBattery(move);
+      setPrices(move);
       setGradeDrafts(move);
       message.success(
         t("inbound.serialRecorded", "{{serial}} recorded.", { serial }),
@@ -1055,21 +1217,24 @@ export function InboundDetailPage() {
    */
   const overQuota = rows.filter((r) => r.kind === "unit" && r.overQuota).length;
 
+  const bench = serviceLocationOf(db.warehouses);
+  const benchName =
+    db.warehouses.find((w) => w.id === bench)?.name ?? bench ?? "";
+
   /**
-   * A unit that fails QC.
+   * A unit that fails QC, and goes back to whoever sold it.
    *
    * Carried over from the Stock In screen rather than dropped in the merge:
-   * refusing a unit is half of what QC is for. A supplier rejection opens a
-   * supplier return so the money is chased; a service rejection just moves the
-   * unit to the bench. Both write the managed reason FIRST, so nothing ever
-   * points at a reason Settings has not heard of.
+   * refusing a unit is half of what QC is for. It writes the managed reason
+   * FIRST, so nothing ever points at a reason Settings has not heard of.
+   *
+   * A confirm rather than a form, unlike the service half below: there is
+   * nothing to ask. The machine goes back, the claim is opened at what the
+   * invoice says it cost, and the decision can be taken back from the row.
    */
-  const reject = (serial: string, kind: "SUPPLIER" | "SERVICE") => {
+  const rejectToSupplier = (serial: string) => {
     modal.confirm({
-      title:
-        kind === "SUPPLIER"
-          ? t("inbound.rejectTitle", "Return this unit to the supplier?")
-          : t("inbound.serviceTitle", "Send this unit to service?"),
+      title: t("inbound.rejectTitle", "Return this unit to the supplier?"),
       // Says the decision is reversible, because it now is. Staff who believe
       // a click is final either hesitate over every one of them or hide the
       // mistake afterwards, and both are worse than the mistake.
@@ -1078,52 +1243,140 @@ export function InboundDetailPage() {
         "{{serial}} will not enter inventory. Its history stays tracked either way, and you can take this back from the row afterwards.",
         { serial },
       ),
-      okText:
-        kind === "SUPPLIER"
-          ? t("inbound.rejectOk", "Return to supplier")
-          : t("inbound.serviceOk", "Send to service"),
+      okText: t("inbound.rejectOk", "Return to supplier"),
       onOk: () =>
         mutate((d) => {
           const u = d.units.find((x) => x.serial === serial)!;
-          const reasonLabel =
-            kind === "SUPPLIER" ? "Rejected at QC" : "On Service";
-          ensureReason(
-            d,
-            kind === "SUPPLIER" ? "RETURN_SUPPLIER" : "ADJUSTMENT",
-            reasonLabel,
-          );
-          if (kind === "SUPPLIER") {
-            const code = docCode("SP");
-            d.returns.unshift({
-              id: nextId("r"),
-              code,
-              kind: "SUPPLIER",
-              serial,
-              reason: reasonLabel,
-              date: new Date().toISOString().slice(0, 10),
-              status: "DONE",
-              fromQc: true,
-              supplierId: d.pos.find((p) => p.id === u.poId)?.supplierId,
-              expectedCredit: u.buy,
-            });
-            appendEvent(d, serial, {
-              type: "RETUR_SUPPLIER",
-              toStatus: "RETUR_SUPPLIER",
-              // `refCode` is the return document, not the order. It is what a
-              // reopen reads to know which claim to withdraw, and what the
-              // machine's own timeline needs to explain where it went.
-              refCode: code,
-              note: reasonLabel,
-            });
-          } else {
-            appendEvent(d, serial, {
-              type: "DICATAT",
-              toStatus: "SERVIS",
-              refCode: po.code,
-              note: "Sent to service from QC",
-            });
-          }
+          const reasonLabel = "Rejected at QC";
+          ensureReason(d, "RETURN_SUPPLIER", reasonLabel);
+          const code = docCode("SP");
+          d.returns.unshift({
+            id: nextId("r"),
+            code,
+            kind: "SUPPLIER",
+            serial,
+            reason: reasonLabel,
+            date: new Date().toISOString().slice(0, 10),
+            status: "DONE",
+            fromQc: true,
+            supplierId: d.pos.find((p) => p.id === u.poId)?.supplierId,
+            expectedCredit: u.buy,
+          });
+          appendEvent(d, serial, {
+            type: "RETUR_SUPPLIER",
+            toStatus: "RETUR_SUPPLIER",
+            // `refCode` is the return document, not the order. It is what a
+            // reopen reads to know which claim to withdraw, and what the
+            // machine's own timeline needs to explain where it went.
+            refCode: code,
+            note: reasonLabel,
+          });
         }),
+    });
+  };
+
+  /**
+   * A unit that needs a repair (owner revision 2026-09-09).
+   *
+   * > *"When the staff press the service button, asks a confirmation modal
+   * > that this unit will be sent/not to warehouse 4 for service, then add a
+   * > field so that they can add additional fee like shipping fee from
+   * > warehouse 1 to warehouse 4. If the user can already know the service
+   * > fee, they can add it to."*
+   *
+   * Three questions, and the first one governs the other two: does the machine
+   * have to travel? The shop's warehouses are separate buildings, so sending
+   * one to the bench is a courier job with a courier's price — but a machine
+   * already IN warehouse 4, or one a repairer collects, travels nowhere and
+   * should not be asked what the journey cost.
+   *
+   * ## The machine does not arrive by being sent
+   *
+   * This used to move the unit to the bench in the same breath as the status,
+   * so `wh-4` showed a machine that was still in a van. The location now moves
+   * when somebody at the bench confirms it turned up — see `arrivedAt` in
+   * lib/service.ts and the Expected table on /stock/service. What DOES happen
+   * immediately is the status: a machine promised to a repairer is not
+   * sellable from the moment it is promised, whatever shelf it is on.
+   */
+  const sendToService = () => {
+    const serial = sendingToService!;
+    serviceForm.validateFields().then((v) => {
+      const now = new Date().toISOString();
+      mutate((d) => {
+        const u = d.units.find((x) => x.serial === serial)!;
+        const reasonLabel = "On Service";
+        ensureReason(d, "ADJUSTMENT", reasonLabel);
+        // A journey only happens when there is a bench to travel to. A shop
+        // whose locations include no service location keeps the machine where
+        // it is, which is exactly the behaviour before any of this existed.
+        const travelling = v.ship && bench !== undefined && bench !== u.locationId;
+        appendEvent(d, serial, {
+          type: "DICATAT",
+          toStatus: "SERVIS",
+          refCode: po.code,
+          note: travelling
+            ? `Sent to service — on its way to ${benchName}`
+            : "Sent to service",
+        });
+        // The rack belongs to the warehouse it is leaving, and it leaves the
+        // shelf the moment it is picked up rather than when it arrives.
+        if (travelling) u.rackId = undefined;
+        const fees = [];
+        if (travelling && (v.shippingFee ?? 0) > 0) {
+          fees.push({
+            id: nextId("svcf"),
+            kind: "SHIPPING" as const,
+            // Translated where it is WRITTEN, which is the trade
+            // `UnitEvent.note` already makes on this page: the string is
+            // stored and is frozen in whatever language the bench happened to
+            // be in. The alternative is a structured label the reader phrases,
+            // and there is no column for one.
+            label: t("inbound.serviceShipLabel", "Transfer to the bench"),
+            amount: v.shippingFee!,
+            at: now,
+            staff: "Michella",
+          });
+        }
+        if ((v.serviceFee ?? 0) > 0) {
+          fees.push({
+            id: nextId("svcf2"),
+            kind: "LABOUR" as const,
+            label: t("inbound.serviceFeeRaised", "Quoted at QC"),
+            amount: v.serviceFee!,
+            at: now,
+            staff: "Michella",
+          });
+        }
+        d.services.push({
+          id: nextId("svc"),
+          serial,
+          fromLocationId: u.locationId,
+          openedAt: now,
+          // A machine that travels has to be signed for at the other end; one
+          // that does not is already there, so nothing is waiting to be
+          // confirmed and the bench can start work.
+          ...(travelling ? {} : { arrivedAt: now }),
+          fees,
+          ...(v.note ? { note: v.note } : {}),
+          raisedBy: "QC",
+          poId: po.id,
+          staff: "Michella",
+        });
+      });
+      setSendingToService(null);
+      serviceForm.resetFields();
+      message.success(
+        v.ship && bench
+          ? t(
+              "inbound.serviceSentShipping",
+              "{{serial}} is on its way to {{bench}}. Confirm it there when it arrives.",
+              { serial, bench: benchName },
+            )
+          : t("inbound.serviceSentHere", "{{serial}} is at the service bench.", {
+              serial,
+            }),
+      );
     });
   };
 
@@ -1253,6 +1506,28 @@ export function InboundDetailPage() {
               claim.status = "CANCELLED";
               withdrawn = claim.code;
             }
+          }
+          /*
+           * A machine coming back from a service decision has to come off the
+           * bench's list as well (2026-09-09).
+           *
+           * The visit is CLOSED rather than removed — nothing here is hard-
+           * deleted, and a courier charge already incurred is still a cost
+           * against the machine whatever anybody decided afterwards. It closes
+           * back to where it set out from, which is where it still is: a visit
+           * with no `arrivedAt` is one nobody has signed for. Without this the
+           * bench would go on expecting a machine that is back on the QC grid.
+           */
+          const visit = d.services.findIndex(
+            (r) => r.serial === serial && r.closedAt === undefined,
+          );
+          if (visit >= 0) {
+            const rec = d.services[visit]!;
+            d.services[visit] = {
+              ...rec,
+              closedAt: new Date().toISOString(),
+              toLocationId: rec.fromLocationId,
+            };
           }
           appendEvent(d, serial, {
             // The schema's own word for it since the migration of 2026-08-27.
@@ -1966,7 +2241,7 @@ export function InboundDetailPage() {
    * is left is exactly the things that differ per machine, which is what a row
    * was always supposed to be.
    */
-  const qcColumns = () => [
+  const qcColumns = (era: BatteryEra) => [
     {
       // Which machine of the group this is. The grid used to say "2 of 3
       // expected" inside the Product cell of every waiting row; as a column it
@@ -2260,71 +2535,114 @@ export function InboundDetailPage() {
       },
     },
     {
-      title: t("inbound.batteryHealth", "Battery Health"),
+      /*
+       * The battery, in whichever units this product's era reports (owner ask
+       * 2026-09-08).
+       *
+       * A 2020-or-earlier machine shows two boxes — charge cycles and full
+       * charge capacity — and a 2021-or-later one shows the percentage it has
+       * always shown. The title says which, because a column headed "Battery
+       * Health" over a box wanting a cycle count is a column that gets a
+       * percentage typed into it.
+       *
+       * The one column definition per group that DOES vary, against the rule
+       * in `qcColumns`' docblock. The width does not, which is what that rule
+       * was protecting: the blocks still line up as one grid.
+       */
+      title: batteryFieldsLabel(era, t),
       key: "battery",
-      width: 120,
+      width: era === "CYCLES" ? 150 : 120,
       render: (_: unknown, r: QcRow) => {
         if (r.kind === "unit" && r.unit.status !== "QC") {
-          const g = batteryGrade(r.unit.batteryHealth, thresholds);
-          return g === null ? (
+          const read = readBattery(
+            r.unit,
+            db.models.find(
+              (m) => m.id === db.skus.find((x) => x.id === r.skuId)?.modelId,
+            )?.releaseYear,
+            batterySettings,
+          );
+          return read.grade === null ? (
             "—"
           ) : (
-            <Tag color={BATTERY_GRADE_COLOR[g]}>
-              {fmtBatteryHealth(r.unit.batteryHealth)}
-            </Tag>
+            <Tag color={BATTERY_GRADE_COLOR[read.grade]}>{read.text}</Tag>
           );
         }
         const stored =
-          r.kind === "unit" ? (r.unit.batteryHealth ?? null) : null;
-        const typed = battery[r.key];
-        const shown = typed === undefined ? stored : typed;
-        // Said while the number is still in the box, rather than only once it
-        // has been left: a percentage is three keystrokes, and the person is
-        // still looking at the cell.
-        const bad = !isBatteryHealthInRange(shown);
-        const rangeId = `battery-range-${r.key}`;
+          r.kind === "unit" ? batteryDraftOf(r.unit) : ({} as BatteryDraft);
+        const draft = battery[r.key] ?? {};
+        // The draft wins per FIELD, not per row: somebody who typed a cycle
+        // count and has not touched the capacity should still see the
+        // capacity the store holds.
+        const shown: BatteryDraft = {
+          health: draft.health === undefined ? stored.health : draft.health,
+          cycleCount:
+            draft.cycleCount === undefined
+              ? stored.cycleCount
+              : draft.cycleCount,
+          fcc: draft.fcc === undefined ? stored.fcc : draft.fcc,
+        };
         return (
-          <Flex vertical gap={2}>
-            <InputNumber
-              size="small"
-              style={{ width: "100%" }}
-              disabled={closed}
-              /*
-               * No `min`/`max`, on purpose.
-               *
-               * antd's range props do not refuse an out-of-range number, they
-               * hide it: the change is swallowed while you type and the box
-               * snaps to 100 when you leave it, with nothing said.
-               * `commitBattery` refuses it out loud instead. The bound still
-               * reaches assistive tech, which is the other thing `max` was
-               * doing.
-               */
-              aria-valuemin={BATTERY_HEALTH_MIN}
-              aria-valuemax={BATTERY_HEALTH_MAX}
-              // `suffix`, not `addonAfter`: antd 6 deprecates the addon, and
-              // the sign belongs inside the box in a column this narrow — the
-              // same way the order form writes a discount percentage.
-              suffix="%"
-              status={bad ? "error" : undefined}
-              aria-invalid={bad || undefined}
-              aria-describedby={bad ? rangeId : undefined}
-              value={shown}
-              aria-label={t("inbound.batteryHealth", "Battery Health")}
-              onChange={(v) => setBattery((d) => ({ ...d, [r.key]: v }))}
-              // Both commit, as the serial field's do.
-              onPressEnter={() => commitBattery(r, shown)}
-              onBlur={() => commitBattery(r, shown)}
-            />
-            {bad && (
-              <Typography.Text
-                id={rangeId}
-                type="danger"
-                style={{ fontSize: 12 }}
-              >
-                {t("inbound.batteryRange", "0–100% only")}
-              </Typography.Text>
-            )}
-          </Flex>
+          <BatteryFields
+            era={era}
+            value={shown}
+            disabled={closed}
+            idPrefix={`battery-${r.key}`}
+            onChange={(next) =>
+              setBattery((d) => ({ ...d, [r.key]: next }))
+            }
+            // Both commit, as the serial field's do.
+            onCommit={(field, value) => commitBattery(r, field, value)}
+          />
+        );
+      },
+    },
+    {
+      /*
+       * What this machine will be asked for (owner ask 2026-09-08).
+       *
+       * *"Price should be set per serial … and will be determined right after
+       * QC."* So it is a column here, which it was until 2026-08-27 and then
+       * was not: the price moved to the variant for eight days and has come
+       * back to the serial, because two 2017 Airs off one pallet are not worth
+       * the same money.
+       *
+       * The store box starts at what the shop asks for the variant — visible
+       * in the block's heading — so the common case is confirming a number
+       * rather than inventing one. The marketplace box follows the rule until
+       * somebody overrides it.
+       */
+      title: t("inbound.price", "Price"),
+      key: "price",
+      // Wider since the two boxes started saying which is which (2026-09-09).
+      // "Marketplace price" over an Rp box needs the room, and a caption that
+      // wraps onto two lines is a caption that has stopped being a label.
+      width: 200,
+      render: (_: unknown, r: QcRow) => {
+        const sku = db.skus.find((x) => x.id === r.skuId);
+        const stored: PriceDraft =
+          r.kind === "unit"
+            ? {
+                price: r.unit.price ?? sku?.price ?? null,
+                marketPrice: r.unit.marketPrice ?? null,
+              }
+            : { price: sku?.price ?? null, marketPrice: null };
+        const draft = prices[r.key] ?? {};
+        const shown: PriceDraft = {
+          price: draft.price === undefined ? stored.price : draft.price,
+          marketPrice:
+            draft.marketPrice === undefined
+              ? stored.marketPrice
+              : draft.marketPrice,
+        };
+        return (
+          <PriceFields
+            value={shown}
+            markupPct={markupPct}
+            disabled={closed}
+            idPrefix={`qc-price-${r.key}`}
+            onChange={(next) => setPrices((d) => ({ ...d, [r.key]: next }))}
+            onCommit={(field, value) => commitPrice(r, field, value)}
+          />
         );
       },
     },
@@ -2565,7 +2883,7 @@ export function InboundDetailPage() {
                   "Send {{serial}} to service",
                   { serial },
                 )}
-                onClick={() => reject(serial, "SERVICE")}
+                onClick={() => setSendingToService(serial)}
               />
             </Tooltip>
             <Tooltip
@@ -2584,7 +2902,7 @@ export function InboundDetailPage() {
                   "Reject {{serial}} back to the supplier",
                   { serial },
                 )}
-                onClick={() => reject(serial, "SUPPLIER")}
+                onClick={() => rejectToSupplier(serial)}
               />
             </Tooltip>
             {/*
@@ -2871,15 +3189,21 @@ export function InboundDetailPage() {
                     {groupProgress(g)}
                   </Flex>
                 }
-                // Shown, not asked for, since 2026-08-27. QC used to price
-                // each serial; the price is the variant's now and is set on
-                // the Product, so its job here is to tell the person grading
-                // what this machine will be listed at — once, above the
-                // machines it applies to, rather than repeated down a column.
+                /*
+                 * The variant's ASKING price, said once above the machines it
+                 * applies to.
+                 *
+                 * It was the price for eight days (2026-08-27 to 2026-09-08)
+                 * and is the starting point again: every row's price box
+                 * begins here, and the grading moves it. Kept in the heading
+                 * rather than repeated down a column, because it is a fact
+                 * about the variant and the column now holds facts about
+                 * machines.
+                 */
                 extra={
                   sku && (
                     <Typography.Text type="secondary">
-                      {t("inbound.listedAt", "Listed at {{price}}", {
+                      {t("inbound.weAsk", "We ask {{price}}", {
                         price: fmtRp(sku.price),
                       })}
                     </Typography.Text>
@@ -2916,7 +3240,7 @@ export function InboundDetailPage() {
                   rowClassName={(r) =>
                     r.kind === "unit" && r.overQuota ? "row-over-quota" : ""
                   }
-                  columns={qcColumns()}
+                  columns={qcColumns(eraOfSku(g.skuId))}
                 />
               </Card>
             );
@@ -2982,6 +3306,114 @@ export function InboundDetailPage() {
         {products}
         {qc}
       </Flex>
+
+      {/*
+       * Sending a machine for a repair (owner revision 2026-09-09).
+       *
+       * A form rather than a `modal.confirm`, because there are now three
+       * things to say and one of them changes the other two: whether the
+       * machine has to travel to the bench decides whether a courier's charge
+       * makes any sense to ask for. See `sendToService`.
+       */}
+      <Modal
+        open={sendingToService !== null}
+        title={t("inbound.serviceTitle", "Send this unit to service?")}
+        okText={t("inbound.serviceOk", "Send to service")}
+        onCancel={() => {
+          setSendingToService(null);
+          serviceForm.resetFields();
+        }}
+        onOk={sendToService}
+        destroyOnHidden
+      >
+        <Form
+          form={serviceForm}
+          layout="vertical"
+          // Shipped by default, because the common case is the one that costs
+          // money: the bench is a different building, and a machine graded in
+          // warehouse 1 has to get there.
+          initialValues={{ ship: bench !== undefined }}
+        >
+          <Typography.Paragraph type="secondary">
+            {t(
+              "inbound.serviceBody",
+              "{{serial}} stops being sellable now. You can take this back from the row afterwards.",
+              { serial: sendingToService ?? "" },
+            )}
+          </Typography.Paragraph>
+          {bench && (
+            <Form.Item
+              name="ship"
+              valuePropName="checked"
+              label={t("inbound.serviceShip", "Send it to {{bench}}", {
+                bench: benchName,
+              })}
+              tooltip={t(
+                "inbound.serviceShipHint",
+                "Leave this off if the machine is already at the bench, or if the repairer collects it. The bench confirms the arrival either way before work starts.",
+              )}
+            >
+              <Switch />
+            </Form.Item>
+          )}
+          <Form.Item
+            noStyle
+            shouldUpdate={(a, b) => a.ship !== b.ship}
+          >
+            {({ getFieldValue }) =>
+              bench && getFieldValue("ship") ? (
+                <Form.Item
+                  name="shippingFee"
+                  label={t("inbound.serviceShippingFee", "Cost of getting it there")}
+                  tooltip={t(
+                    "inbound.serviceShippingFeeHint",
+                    "The courier between the two warehouses. It joins what this machine has cost the shop.",
+                  )}
+                >
+                  <InputNumber
+                    min={0}
+                    precision={0}
+                    prefix={RP_SYMBOL}
+                    formatter={moneyFormatter}
+                    parser={moneyParser}
+                    style={{ width: "100%" }}
+                  />
+                </Form.Item>
+              ) : null
+            }
+          </Form.Item>
+          <Form.Item
+            name="serviceFee"
+            label={t("inbound.serviceFee", "Service fee")}
+            tooltip={t(
+              "inbound.serviceFeeHint2",
+              "Only if you already know it. Anything the repairer bills later is added at the bench, where it can also be corrected.",
+            )}
+          >
+            <InputNumber
+              min={0}
+              precision={0}
+              prefix={RP_SYMBOL}
+              formatter={moneyFormatter}
+              parser={moneyParser}
+              placeholder={t("inbound.serviceFeeHint", "If you know it")}
+              style={{ width: "100%" }}
+            />
+          </Form.Item>
+          <Form.Item
+            name="note"
+            label={t("inbound.serviceProblem", "What is wrong with it")}
+          >
+            <Input.TextArea
+              rows={2}
+              placeholder={t(
+                "inbound.serviceProblemHint",
+                "Optional — what the bench should look at",
+              )}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <Modal
         open={payOpen}
@@ -3139,7 +3571,7 @@ export function InboundDetailPage() {
                   onClick={() => {
                     const serial = grading.unit.serial;
                     finish();
-                    reject(serial, "SUPPLIER");
+                    rejectToSupplier(serial);
                   }}
                 >
                   {t("inbound.rejectOk", "Return to supplier")}
@@ -3149,7 +3581,7 @@ export function InboundDetailPage() {
                   onClick={() => {
                     const serial = grading.unit.serial;
                     finish();
-                    reject(serial, "SERVICE");
+                    setSendingToService(serial);
                   }}
                 >
                   {t("inbound.serviceOk", "Send to service")}

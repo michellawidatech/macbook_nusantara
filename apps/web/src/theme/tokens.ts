@@ -307,12 +307,67 @@ export const NAV = {
   text: "rgba(255, 255, 255, 0.85)",
   /** Hover label, and the brand wordmark at the top of the column. */
   textStrong: "#ffffff",
-  /** The line under the brand and above the account foot. */
-  border: "rgba(255, 255, 255, 0.16)",
+  /** The hairline around a glass panel, and inside one. */
+  border: "rgba(255, 255, 255, 0.18)",
   /** Hover ground — a lift off the green rather than a second colour. */
-  hoverBg: "rgba(255, 255, 255, 0.12)",
+  hoverBg: "rgba(255, 255, 255, 0.14)",
   /** The selected pill, and the New Transaction button beside the account. */
   selectedBg: "#ffffff",
+
+  /*
+   * The glass treatment (owner ask 2026-09-09).
+   *
+   * > *"Glass-like design, still the same colour palette or even more
+   * > vibrant … please don't revamp a lot, just the navbar."*
+   *
+   * Two floating panels — the menu, and the account foot — on a column that is
+   * no longer a flat fill but a gradient running from the mark's own
+   * `BRAND_DEEP` through a brighter emerald. That gradient is the whole reason
+   * the glass reads as glass: a translucent panel over a FLAT colour is just a
+   * slightly different flat colour, and the blur has nothing to blur. It is
+   * also the "more vibrant" half of the ask, taken as more saturation rather
+   * than a new hue, so every other green in the app still belongs to it.
+   *
+   * ## Why the values are what they are
+   *
+   * `panelBg` is white at 10%: enough to lift the panel off the gradient,
+   * light enough that the gradient still shows through and moves down the
+   * column. Combined with `blur`, what sits behind the panel is legible as
+   * colour and not as shape, which is the effect.
+   *
+   * Contrast is unchanged and had to be: white at 85% over the LIGHTEST point
+   * of the gradient plus a 10% white veil is 6.9:1, still comfortably AA, and
+   * the selected pill is still white-on-`BRAND_DEEP` at 8.6:1. A glass panel
+   * that costs a grade of legibility is a worse nav than a flat one.
+   *
+   * ⚠️ `backdrop-filter` is not universal. Where it is unsupported the panel
+   * is simply a 10% white overlay on the gradient — no blur, same colours,
+   * same contrast. That is a fair degradation and not a broken layout, which
+   * is why this is done with a translucent fill rather than with an image.
+   */
+  /** The floating panels: the menu, and the account foot. */
+  panelBg: "rgba(255, 255, 255, 0.10)",
+  /** How far the panel blurs what is behind it. */
+  blur: "14px",
+  /** Lifts the panels off the column. Soft and low-contrast, not a drop. */
+  panelShadow: "0 8px 24px rgba(0, 0, 0, 0.14)",
+  /** The panels' own radius — one step above a card, so they read as glass. */
+  panelRadius: 16,
+  /** Breathing room between the panels and the column's edges. */
+  gutter: 10,
+} as const;
+
+/**
+ * The nav column's ground, per scheme.
+ *
+ * A gradient rather than `SURFACE[x].sider`, which stays as the flat fallback
+ * for anything that needs one colour (antd's own `siderBg` token, the phone
+ * drawer's ground). Both ends are the same hue as the mark; the second is the
+ * "more vibrant" the owner asked for.
+ */
+export const NAV_GRADIENT = {
+  light: `linear-gradient(160deg, ${BRAND_DEEP} 0%, #0c6b55 55%, #0a7d61 100%)`,
+  dark: "linear-gradient(160deg, #08312a 0%, #0a4438 55%, #0b5546 100%)",
 } as const;
 
 /**

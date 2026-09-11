@@ -47,8 +47,8 @@ import {
   BRAND_DEEP,
   LAYOUT,
   NAV,
+  NAV_GRADIENT,
   SPACE,
-  SURFACE,
   TYPE,
   WEIGHT,
   Z,
@@ -73,14 +73,36 @@ export function AppLayout({ staff }: { staff: Staff }) {
   // preferences that belong to the person rather than to the shop, so both
   // live in the account menu and neither gets a settings page of its own.
   const { preference, resolved, setPreference } = useColorScheme();
-  /**
-   * The nav ground, read from the same place the Sider is painted from.
-   *
-   * `Layout.Sider` gets it through antd's `siderBg` token; a Drawer is not a
-   * Layout and has to be told. Reading `SURFACE[resolved]` rather than
-   * restating a hex is what keeps the two from drifting when dark mode is on.
+  /*
+   * The nav ground is `NAV_GRADIENT[resolved]` since 2026-09-09, and both the
+   * Sider and the Drawer are told it directly — antd's `siderBg` token takes
+   * one colour, and this is two. The token still holds the flat green and is
+   * still the right answer for anything that needs a single value; nothing in
+   * this component does any more, which is why `SURFACE` is no longer read
+   * here.
    */
-  const siderBg = SURFACE[resolved].sider;
+  /**
+   * One floating pane of the nav (owner ask 2026-09-09).
+   *
+   * A shared object rather than a class, because the two panels differ only in
+   * how they flex and every other value has to be identical — two panels with
+   * slightly different translucency is the one thing that would make the
+   * treatment read as an accident. `backdrop-filter` is prefixed for Safari,
+   * which still ships it behind `-webkit-`; where it is unsupported entirely
+   * the panel is a 10% white overlay on the gradient, which is a fair
+   * degradation rather than a broken one.
+   */
+  const glassPanel: CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    background: NAV.panelBg,
+    border: `1px solid ${NAV.border}`,
+    borderRadius: NAV.panelRadius,
+    boxShadow: NAV.panelShadow,
+    backdropFilter: `blur(${NAV.blur})`,
+    WebkitBackdropFilter: `blur(${NAV.blur})`,
+    overflow: "hidden",
+  };
   /**
    * The till, one click from anywhere (owner ask 2026-09-01).
    *
@@ -431,18 +453,22 @@ export function AppLayout({ staff }: { staff: Staff }) {
         <Layout.Sider
           width={LAYOUT.siderWidth}
           style={{
-            // No `background` here on purpose. It used to be
-            // `colorBgContainer`, and an inline style beats the `siderBg`
-            // token — so when the sider took a surface of its own on
-            // 2026-08-26 the theme changed and the sider did not, because this
-            // line was quietly overriding it. antd paints the sider from
-            // `siderBg`; theme.ts is where that now lives.
-            //
-            // The hairline is `NAV.border` rather than the app's own since the
-            // column went dark green: `colorBorderSecondary` is a near-white
-            // in light mode, which drew a bright line down the middle of the
-            // screen instead of an edge.
-            borderRight: `1px solid ${NAV.border}`,
+            /*
+             * A gradient, and no edge (owner ask 2026-09-09).
+             *
+             * `background` is set here again after being deliberately absent:
+             * antd's `siderBg` token takes one colour and this needs two, so
+             * the inline style is the only place a gradient can go. The token
+             * still holds the flat green and is still what the phone drawer
+             * and any single-colour reader get — see `siderBg` below.
+             *
+             * The 1px right edge is gone with it. It was there to stop a flat
+             * green column bleeding into a nearly-white page; a column whose
+             * panels float clear of its own edges already has a margin of
+             * colour doing that job, and a hairline over a gradient reads as
+             * a seam.
+             */
+            background: NAV_GRADIENT[resolved],
             position: "sticky",
             top: 0,
             height: "100vh",
@@ -475,26 +501,44 @@ export function AppLayout({ staff }: { staff: Staff }) {
               // auto` on the wrapper itself would scroll the foot away with
               // it, which is the one thing a pinned control must not do.
               overflow: "hidden",
+              // The gutter the two glass panels float inside (2026-09-09).
+              // On the column rather than on each panel, so the gap BETWEEN
+              // them and the gap around them are one number.
+              padding: NAV.gutter,
+              gap: NAV.gutter,
             },
           }}
         >
-          <Flex
-            align="center"
-            gap={SPACE.sm}
-            style={{
-              height: LAYOUT.headerHeight,
-              // One step tighter than the 24 the rest of the sider uses: the
-              // mark reads as the sider's own edge marker, and 24 on both
-              // sides of it left the wordmark no room to sit unabbreviated.
-              paddingInline: SPACE.md,
-              flex: "0 0 auto",
-            }}
-          >
-            {brand}
-          </Flex>
-          <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>{menu}</div>
           {/*
-           * Stacked, not side by side. Both want the full 208px: "Scanner
+           * Panel one: the mark and the menu.
+           *
+           * The brand moved INSIDE it. It used to sit above the sider's own
+           * hairline, which is the composition a flat column wants; a floating
+           * panel wants its own heading, or the mark is a caption for the
+           * whole window rather than for the nav.
+           */}
+          <div style={{ ...glassPanel, flex: 1, minHeight: 0 }}>
+            <Flex
+              align="center"
+              gap={SPACE.sm}
+              style={{
+                height: LAYOUT.headerHeight,
+                // One step tighter than the 24 the rest of the sider uses: the
+                // mark reads as the sider's own edge marker, and 24 on both
+                // sides of it left the wordmark no room to sit unabbreviated.
+                paddingInline: SPACE.md,
+                flex: "0 0 auto",
+              }}
+            >
+              {brand}
+            </Flex>
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>{menu}</div>
+          </div>
+          {/*
+           * Panel two: the account foot (owner ask 2026-09-09 — the reference
+           * shows it as a card of its own).
+           *
+           * Stacked, not side by side. Both want the full width: "Scanner
            * ready" is a fixed-width phrase and a sign-in address is longer
            * than the sider, so on one row the chip held its size and squeezed
            * the address down to a single character. Two rows give each the
@@ -508,10 +552,9 @@ export function AppLayout({ staff }: { staff: Staff }) {
             // text button's colour — for the dark ground. See global.css.
             className="nusantara-nav-foot"
             style={{
+              ...glassPanel,
               flex: "0 0 auto",
               padding: SPACE.sm,
-              paddingInline: SPACE.md,
-              borderTop: `1px solid ${NAV.border}`,
               // Clears the home indicator when the console is run full-screen
               // on a tablet.
               paddingBottom: `calc(${SPACE.sm}px + env(safe-area-inset-bottom))`,
@@ -542,13 +585,25 @@ export function AppLayout({ staff }: { staff: Staff }) {
         // place the treatment inverted itself.
         className="nusantara-nav-foot"
         styles={{
-          header: { background: siderBg, borderBottom: `1px solid ${NAV.border}` },
+          // The gradient, so the phone's nav is the same surface as the
+          // desktop's (2026-09-09). Not the glass panels: a drawer is already
+          // a floating pane over the page, and panels inside one would be
+          // glass on glass — two frames saying the same thing on a screen with
+          // no room for either.
+          header: {
+            background: "transparent",
+            borderBottom: `1px solid ${NAV.border}`,
+          },
           body: {
             padding: 0,
             display: "flex",
             flexDirection: "column",
-            background: siderBg,
+            background: "transparent",
           },
+          // `section`, not `content`: antd 6 renamed the slot and warns on the
+          // old name. This is the element the header and body sit inside, so
+          // painting it here is what lets both of them be transparent.
+          section: { background: NAV_GRADIENT[resolved] },
         }}
       >
         <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>{menu}</div>

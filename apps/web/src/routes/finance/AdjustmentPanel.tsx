@@ -63,6 +63,7 @@ import {
   type IncomeReason,
 } from "../../mock/seed.js";
 import { labelOf } from "../../i18n/enumLabels.js";
+import { ADJUSTMENT_METHOD_CODES } from "../../lib/accounts.js";
 
 /** Derived, not duplicated: `seed.ts` stays the one list of categories. */
 const EXPENSE_KIND: Record<string, string> = Object.fromEntries(
@@ -80,6 +81,8 @@ interface Values {
   reason: string;
   date: Dayjs;
   amount: number;
+  /** A `PaymentMethod` code. See `method` on the form below. */
+  method: string;
   note?: string;
   referralSourceId?: string;
 }
@@ -94,6 +97,8 @@ interface Row {
   label?: string;
   amount: number;
   date: string;
+  /** How the money moved, spelled for a human. */
+  method: string;
   note?: string;
   channel?: string;
 }
@@ -118,6 +123,22 @@ export function AdjustmentPanel({
   const [direction, setDirection] = useState<Direction>("EXPENSE");
   const [reason, setReason] = useState<string>("OPERATIONAL");
   const [guideOpen, setGuideOpen] = useState(false);
+
+  /**
+   * The three ways money moves, and the labels the shop calls them by.
+   *
+   * The CODES come from `lib/accounts.ts`, because that module is what sorts a
+   * movement into the cash or the bank balance and a fourth code appearing
+   * here would be money the balance could not place. The LABELS come from
+   * `db.paymentMethods`, so renaming "Bank transfer" in Settings renames it
+   * here too — the same trade every other method picker in the app makes.
+   */
+  const methodOptions = ADJUSTMENT_METHOD_CODES.map((code) => ({
+    value: code,
+    label: db.paymentMethods.find((m) => m.code === code)?.label ?? code,
+  }));
+  const methodLabel = (code: string) =>
+    db.paymentMethods.find((m) => m.code === code)?.label ?? code;
 
   /**
    * Switching direction resets the reason.
@@ -151,6 +172,7 @@ export function AdjustmentPanel({
             reason: v.reason as IncomeReason,
             amount: v.amount,
             date,
+            method: v.method,
             ...(v.note ? { note: v.note } : {}),
           });
           return;
@@ -160,6 +182,7 @@ export function AdjustmentPanel({
           kind: v.reason as ExpenseKind,
           amount: v.amount,
           date,
+          method: v.method,
           ...(v.note ? { note: v.note } : {}),
           // Marketing only, and only when one was named. The scorecard above
           // reads this field to attribute spend to the customers a channel
@@ -192,6 +215,7 @@ export function AdjustmentPanel({
       reason: labelOf(INCOME_REASON, i.reason, t),
       amount: i.amount,
       date: i.date,
+      method: methodLabel(i.method),
       ...(i.note ? { note: i.note } : {}),
     })),
     ...db.expenses.map((e) => ({
@@ -201,6 +225,7 @@ export function AdjustmentPanel({
       ...(e.label ? { label: e.label } : {}),
       amount: e.amount,
       date: e.date,
+      method: methodLabel(e.method),
       ...(e.note ? { note: e.note } : {}),
       ...(e.referralSourceId
         ? {
@@ -281,6 +306,17 @@ export function AdjustmentPanel({
               render: (v?: string) => v ?? "—",
             },
             {
+              // Which pot it moved, as a facet: "show me everything that came
+              // out of the drawer" is how a float is reconciled at closing.
+              title: t("adjust.method", "How the money moved"),
+              dataIndex: "method",
+              width: 170,
+              facet: true,
+              facetLabel: t("adjust.method", "How the money moved"),
+              sortValue: (r: Row) => r.method,
+              render: (v: string) => <Tag>{v}</Tag>,
+            },
+            {
               title: t("adjust.channel", "Channel"),
               dataIndex: "channel",
               facet: true,
@@ -336,6 +372,11 @@ export function AdjustmentPanel({
             direction: "EXPENSE",
             reason: "OPERATIONAL",
             date: dayjs(),
+            // Cash, because the adjustments this dialog exists for are the
+            // over-the-counter ones — a courier paid from the drawer, takings
+            // the till missed. Anything on a bank statement is usually already
+            // a sale or an invoice.
+            method: "TUNAI",
           }}
         >
           {/* Segmented rather than a Select: two mutually exclusive options
@@ -433,6 +474,33 @@ export function AdjustmentPanel({
               <MoneyInput style={{ width: "100%" }} />
             </Form.Item>
           </Flex>
+
+          {/*
+           * Which pot the money moved through (owner ask 2026-09-09).
+           *
+           * Required, and it has to be: the cash balance and the bank balance
+           * are exactly this answer added up, so an adjustment that will not
+           * say how the money moved is one neither balance can count. There
+           * are three, they are the owner's three, and a marketplace is not
+           * among them — money still with Shopee is not an adjustment, it is
+           * the pending table.
+           */}
+          <Form.Item
+            name="method"
+            label={t("adjust.method", "How the money moved")}
+            tooltip={t(
+              "adjust.methodHint",
+              "Cash moves the drawer; a transfer or a card moves the bank.",
+            )}
+            rules={[
+              {
+                required: true,
+                message: t("adjust.pickAMethod", "Pick how the money moved."),
+              },
+            ]}
+          >
+            <Select options={methodOptions} />
+          </Form.Item>
 
           <Form.Item name="note" label={t("adjust.note", "Note")}>
             <Input.TextArea

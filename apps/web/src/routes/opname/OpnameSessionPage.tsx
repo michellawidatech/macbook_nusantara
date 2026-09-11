@@ -99,7 +99,7 @@ import {
 } from "../../mock/store.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
 import { focusScanTarget } from "../../lib/scanner.js";
-import { resolveScannedSerial } from "../../lib/serialScan.js";
+import { resolveSerialQuery } from "../../lib/serialInput.js";
 import {
   inOpnameScope,
   scopeOf,
@@ -450,14 +450,24 @@ export function OpnameSessionPage() {
 
   /** One counted serial, however it arrived — typed, or scanned anywhere. */
   const countSerial = (raw: string) => {
-    // Resolved, not merely upper-cased. A machine on a shelf carries the shop's
-    // own label AND Apple's, and a counter working down a rack with a phone
-    // reads whichever faces them. The answer is always a serial the database
-    // holds — `resolveScannedSerial` finds one or hands the scan straight back,
-    // in which case it lands on the unknown list exactly as it did before.
-    const s = resolveScannedSerial(
+    /*
+    * Resolved, not merely upper-cased. A machine on a shelf carries the shop's
+    * own label AND Apple's, and a counter working down a rack with a phone
+    * reads whichever faces them. The answer is always a serial the database
+    * holds — `resolveSerialQuery` finds one or hands the input straight back,
+    * in which case it lands on the unknown list exactly as it did before.
+    *
+    * Through `resolveSerialQuery` since 2026-09-08 rather than
+    * `resolveScannedSerial`: this box is TYPED into as often as it is scanned
+    * into — a counter with no phone works down the rack keying serials off the
+    * cases — and the case prints the number with no marker. The old helper
+    * only ever stripped a store prefix, so every typed serial in a count
+    * landed on the unknown list.
+    */
+    const s = resolveSerialQuery(
       raw,
       db.units.map((u) => u.serial),
+      db.suppliers.map((x) => x.code).filter((c): c is string => !!c),
     );
     if (!s) return;
     if (posted) return;

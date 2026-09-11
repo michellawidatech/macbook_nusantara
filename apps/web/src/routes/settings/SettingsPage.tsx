@@ -13,6 +13,7 @@ import {
   App,
   Button,
   Card,
+  Divider,
   Empty,
   Flex,
   Form,
@@ -44,9 +45,16 @@ import { useDb, mutate, nextId } from "../../mock/store.js";
 import {
   BATTERY_GRADE_COLOR,
   batteryBands,
+  batterySettingsFrom,
+  cycleBands,
+  CYCLE_COUNT_MAX,
   thresholdsFrom,
 } from "../../lib/battery.js";
 import { FORM_CENTRE, SPACE } from "../../theme/tokens";
+import { Link } from "react-router-dom";
+import { SALE_CHANNELS } from "../../lib/channels.js";
+import { commissionPctOf } from "../../lib/marketplace.js";
+import { DEFAULT_MARKETPLACE_MARKUP_PCT } from "../../lib/unitPrice.js";
 import type { ReasonActivity, Supplier } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
 
@@ -402,7 +410,21 @@ export function SettingsPage() {
   const onSupplierOk = () => saveSupplierEdit().catch(() => undefined);
 
   const suppliers = (
-    <Card title={t("settings.suppliers", "Suppliers")}>
+    <Card
+      title={t("settings.suppliers", "Suppliers")}
+      /*
+       * The money moved out on 2026-09-08 (owner ask). What is left here is
+       * the address book — a name, a phone, a code — which is genuinely a
+       * setting: it changes once a year. What the shop OWES a supplier, and
+       * which invoice a deposit settles, is checked before every transfer, and
+       * a screen you visit annually is the wrong place for it.
+       */
+      extra={
+        <Link to="/suppliers">
+          {t("settings.supplierAccounts", "Invoices, deposits & what we owe")}
+        </Link>
+      }
+    >
       <Form
         form={supForm}
         layout={compact ? "vertical" : "inline"}
@@ -1203,18 +1225,38 @@ export function SettingsPage() {
   );
 
   /**
-   * Battery bands.
+   * Battery bands, for both eras (owner ask 2026-09-08).
    *
-   * Two numbers, not three ranges — the owner's original bands overlapped, and
-   * two thresholds make that unrepresentable. The preview below is built by the
-   * same function the Inventory column uses, so what is shown here is literally
-   * what the table will say rather than a description of it.
+   * Two numbers per era, not three ranges — the owner's original bands
+   * overlapped, and two thresholds make that unrepresentable. The previews
+   * below are built by the same functions the Inventory column uses, so what
+   * is shown here is literally what the table will say rather than a
+   * description of it.
+   *
+   * The two pairs run OPPOSITE ways and the card says so: a health percentage
+   * is a floor (higher is better) and a cycle count is a ceiling (fewer is
+   * better). A screen offering four boxes that all read "Good from" would get
+   * a cycle ceiling typed into it as if it were a floor.
    */
   const battery = (() => {
     const thresholds = thresholdsFrom(db.settings);
+    const cycles = batterySettingsFrom(db.settings).cycles;
     return (
-      <Card title={t("settings.batteryHealthBands", "Battery health bands")}>
-        <Flex gap={SPACE.lg} wrap align="flex-end">
+      <Card
+        title={t("settings.batteryBands", "Battery bands")}
+        extra={
+          <Typography.Text type="secondary">
+            {t(
+              "settings.batteryEraHint",
+              "2020 and earlier are recorded as cycles; 2021 and later as health.",
+            )}
+          </Typography.Text>
+        }
+      >
+        <Typography.Text strong>
+          {t("settings.batteryHealthBands", "Battery health bands")}
+        </Typography.Text>
+        <Flex gap={SPACE.lg} wrap align="flex-end" style={{ marginTop: SPACE.sm }}>
           <Flex vertical gap={SPACE.xs}>
             <Typography.Text type="secondary">Good from</Typography.Text>
             <InputNumber
@@ -1261,9 +1303,169 @@ export function SettingsPage() {
             ))}
           </Flex>
         </Flex>
+
+        <Divider />
+
+        <Typography.Text strong>
+          {t("settings.cycleBands", "Charge cycle bands")}
+        </Typography.Text>
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+          {t(
+            "settings.cycleBandsHint",
+            "Fewer cycles is a better battery, so these are ceilings.",
+          )}
+        </Typography.Paragraph>
+        <Flex
+          gap={SPACE.lg}
+          wrap
+          align="flex-end"
+          style={{ marginTop: SPACE.sm }}
+        >
+          <Flex vertical gap={SPACE.xs}>
+            <Typography.Text type="secondary">
+              {t("settings.goodUpTo", "Good up to")}
+            </Typography.Text>
+            <InputNumber
+              min={1}
+              max={CYCLE_COUNT_MAX}
+              addonAfter={t("settings.cyclesUnit", "cycles")}
+              value={cycles.goodMax}
+              onChange={(v: number | null) =>
+                v != null &&
+                mutate((d) => {
+                  d.settings.cycleGoodMax = v;
+                  // A fair ceiling at or below the good ceiling leaves the
+                  // fair band empty — the mirror of the health clamp above.
+                  if ((d.settings.cycleFairMax ?? 0) <= v)
+                    d.settings.cycleFairMax = v + 1;
+                })
+              }
+            />
+          </Flex>
+          <Flex vertical gap={SPACE.xs}>
+            <Typography.Text type="secondary">
+              {t("settings.fairUpTo", "Fair up to")}
+            </Typography.Text>
+            <InputNumber
+              min={cycles.goodMax + 1}
+              max={CYCLE_COUNT_MAX}
+              addonAfter={t("settings.cyclesUnit", "cycles")}
+              value={cycles.fairMax}
+              onChange={(v: number | null) =>
+                v != null &&
+                mutate((d) => {
+                  d.settings.cycleFairMax = Math.max(v, cycles.goodMax + 1);
+                })
+              }
+            />
+          </Flex>
+          <Flex gap={SPACE.sm} wrap>
+            {cycleBands(cycles).map((b) => (
+              <Tag key={b.grade} color={BATTERY_GRADE_COLOR[b.grade]}>
+                {b.label}
+              </Tag>
+            ))}
+          </Flex>
+        </Flex>
       </Card>
     );
   })();
+
+  /**
+   * The two percentages the marketplace features run on (owner ask
+   * 2026-09-08).
+   *
+   * They point in opposite directions and the card keeps them apart:
+   *
+   * - **The listing markup** goes ON TOP of a machine's counter price to make
+   *   its marketplace price, so the shop nets what the counter would have
+   *   taken. It is one number for every channel, because Shopee, Tokopedia and
+   *   TikTok are within a point of each other and a shop maintaining three
+   *   price lists maintains none.
+   * - **The commission** comes OFF a payout, and is per channel, because that
+   *   is what each platform actually publishes.
+   *
+   * Both are starting points a person overrides: a marketplace price can be
+   * typed per machine, and a withdrawal's fees are typed per payout. Neither
+   * is a rule the app enforces against what the bank says.
+   */
+  const marketplace = (
+    <Card title={t("settings.marketplace", "Marketplace pricing & fees")}>
+      <Flex vertical gap={SPACE.lg}>
+        <Flex vertical gap={SPACE.xs}>
+          <Typography.Text strong>
+            {t("settings.listingMarkup", "Listing markup")}
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            {t(
+              "settings.listingMarkupHint",
+              "Added to a machine's store price to suggest its marketplace price. Overridable per machine.",
+            )}
+          </Typography.Text>
+          <InputNumber
+            min={0}
+            max={100}
+            addonAfter="%"
+            style={{ width: 160 }}
+            aria-label={t("settings.listingMarkup", "Listing markup")}
+            value={
+              db.settings.marketplaceMarkupPct ??
+              DEFAULT_MARKETPLACE_MARKUP_PCT
+            }
+            onChange={(v: number | null) =>
+              v != null &&
+              mutate((d) => {
+                d.settings.marketplaceMarkupPct = v;
+              })
+            }
+          />
+        </Flex>
+
+        <Divider style={{ margin: 0 }} />
+
+        <Flex vertical gap={SPACE.xs}>
+          <Typography.Text strong>
+            {t("settings.commissions", "What each marketplace charges")}
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            {t(
+              "settings.commissionsHint",
+              "Deducted from a payout. A withdrawal opens with this figure and every other charge is typed.",
+            )}
+          </Typography.Text>
+          <Flex gap={SPACE.lg} wrap>
+            {SALE_CHANNELS.filter((c) => c.holdsFunds).map((c) => (
+              <Flex vertical gap={SPACE.xs} key={c.value}>
+                <Typography.Text type="secondary">{c.label}</Typography.Text>
+                <InputNumber
+                  min={0}
+                  max={100}
+                  addonAfter="%"
+                  style={{ width: 140 }}
+                  aria-label={t("settings.commissionFor", "{{channel}} fee", {
+                    channel: c.label,
+                  })}
+                  value={commissionPctOf(
+                    c.value,
+                    db.settings.marketplaceFees,
+                  )}
+                  onChange={(v: number | null) =>
+                    v != null &&
+                    mutate((d) => {
+                      d.settings.marketplaceFees = {
+                        ...(d.settings.marketplaceFees ?? {}),
+                        [c.value]: v,
+                      };
+                    })
+                  }
+                />
+              </Flex>
+            ))}
+          </Flex>
+        </Flex>
+      </Flex>
+    </Card>
+  );
 
   /**
    * Who the shop is, as printed at the top of every faktur.
@@ -1358,6 +1560,11 @@ export function SettingsPage() {
             key: "bat",
             label: t("settings.tabBattery", "Battery bands"),
             children: battery,
+          },
+          {
+            key: "mkt",
+            label: t("settings.tabMarketplace", "Marketplace"),
+            children: marketplace,
           },
           {
             key: "shop",

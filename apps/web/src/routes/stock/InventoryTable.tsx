@@ -41,6 +41,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  App,
   Button,
   Flex,
   Segmented,
@@ -55,6 +56,7 @@ import {
   EditOutlined,
   PrinterOutlined,
   QuestionCircleOutlined,
+  TagsOutlined,
 } from "@ant-design/icons";
 import { ProTable } from "../../components/ProTable";
 import { EnumTag } from "../../components/EnumTag";
@@ -65,17 +67,38 @@ import { labelsFor } from "../../lib/labels.js";
 import type { LabelDatum } from "../../lib/labels.js";
 import { fmtRp } from "../../lib/format.js";
 import {
+  BATTERY_BAND_LABEL,
   BATTERY_UNKNOWN,
-  batteryBand,
-  batteryBands,
-  batteryGrade,
   BATTERY_GRADE_COLOR,
-  batteryGuide,
+  batteryBandOf,
+  batteryEraGuide,
+  batterySettingsFrom,
+  batteryGrade,
+  cycleGrade,
   fmtBatteryHealth,
-  thresholdsFrom,
+  fmtCycleCount,
+  fmtFcc,
+  readUnitBattery,
 } from "../../lib/battery.js";
-import { rollUpInventory, type InventoryRow } from "../../lib/inventory.js";
-import { useDb } from "../../mock/store.js";
+import {
+  gradeGroupsOf,
+  rollUpInventory,
+  type GradeGroup,
+  type InventoryRow,
+} from "../../lib/inventory.js";
+import {
+  DEFAULT_MARKETPLACE_MARKUP_PCT,
+  isMarketPriceOverridden,
+  marketPriceOf,
+  priceOf,
+  type PriceRange,
+} from "../../lib/unitPrice.js";
+import {
+  PriceEditorModal,
+  type PriceEdit,
+} from "../../components/PriceEditorModal.js";
+import { appendEvent, mutate, useDb } from "../../mock/store.js";
+import { serviceCostOf } from "../../lib/service.js";
 import { UNIT_STATUS } from "../../i18n/enumLabels.js";
 import { SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
@@ -101,6 +124,7 @@ export interface InventoryTableProps {
 
 export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
   const db = useDb();
+  const { message } = App.useApp();
 
   /**
    * The origin code a unit's sticker carries — its purchase order's supplier.
@@ -124,7 +148,16 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
     token: { colorTextSecondary },
   } = theme.useToken();
   // The shop's thresholds, not the library defaults: Settings can move them.
-  const thresholds = thresholdsFrom(db.settings);
+  const batterySettings = batterySettingsFrom(db.settings);
+  const markupPct =
+    db.settings.marketplaceMarkupPct ?? DEFAULT_MARKETPLACE_MARKUP_PCT;
+  const skuPriceOf = (skuId: string) =>
+    db.skus.find((s) => s.id === skuId)?.price ?? 0;
+  /** Null when the price grid is shut; what it is repricing when it is open. */
+  const [repricing, setRepricing] = useState<{
+    title: string;
+    units: readonly Unit[];
+  } | null>(null);
 
   const warehouseName = (id: string) =>
     db.warehouses.find((w) => w.id === id)?.name ?? id;
@@ -136,14 +169,20 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
         (u) =>
           (warehouseIds.length === 0 || warehouseIds.includes(u.locationId)) &&
           (bands.length === 0 ||
-            bands.includes(batteryBand(u.batteryHealth, thresholds))),
+            bands.includes(
+              batteryBandOf(readUnitBattery(u, db, batterySettings)),
+            )),
       ),
     [db.units, warehouseIds, bands],
   );
 
   const all = useMemo(
-    () => rollUpInventory(units, db.skus, db.models),
-    [units, db.skus, db.models],
+    () =>
+      rollUpInventory(units, db.skus, db.models, {
+        markupPct,
+        battery: batterySettings,
+      }),
+    [units, db.skus, db.models, markupPct],
   );
   const rows = useMemo(
     () => (scope === "ALL" ? all : all.filter((r) => r.onHand > 0)),
@@ -169,13 +208,21 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
         mode="multiple"
         allowClear
         maxTagCount="responsive"
-        placeholder={t("inventory.anyBattery", "Any battery health")}
+        placeholder={t("inventory.anyBattery", "Any battery")}
         value={bands}
         onChange={setBands}
+        /*
+         * The band NAME, not its numbers (2026-09-08).
+         *
+         * One filter over a shelf that holds both eras: a "Good (80%+)" option
+         * beside a "Good (400 cycles or fewer)" one would split every search
+         * over a shop that sells 2017 Airs and M2s alike. The numbers still
+         * appear — in the column guide, and in Settings where they are set.
+         */
         options={[
-          ...batteryBands(thresholds).map((b) => ({
-            value: b.label,
-            label: b.label,
+          ...(["good", "fair", "bad"] as const).map((g) => ({
+            value: BATTERY_BAND_LABEL[g],
+            label: BATTERY_BAND_LABEL[g],
           })),
           { value: BATTERY_UNKNOWN, label: BATTERY_UNKNOWN },
         ]}
@@ -200,11 +247,102 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
    * one's page. A product with forty serials scrolls; that is the right cost
    * for the rarest row in the list.
    */
-  const serialsOf = (row: InventoryRow) => (
+  /**
+   * A price range as one cell: one figure, or a dash between two.
+   *
+   * `single` comes off `priceRange` rather than being recomputed here, so a
+   * row where every machine asks the same money reads as one number in every
+   * place this appears rather than as "Rp9.000.000–Rp9.000.000".
+   */
+  const Money = ({ range }: { range: PriceRange }) => {
+    if (range.count === 0) return <Typography.Text type="secondary">—</Typography.Text>;
+    return (
+      <Typography.Text>
+        {range.single
+          ? fmtRp(range.min)
+          : `${fmtRp(range.min)} – ${fmtRp(range.max)}`}
+      </Typography.Text>
+    );
+  };
+
+  /**
+   * Write a repricing: the units, and one ledger row each.
+   *
+   * One `mutate` for the whole grid, because that is what the dialog is — one
+   * decision about eleven machines — and eleven mutations would be eleven
+   * re-renders and eleven chances to stop halfway. The event is `DICATAT`
+   * rather than `KOREKSI`: nothing about the machine is being corrected, a
+   * price is being recorded, and the timeline should read as the shop
+   * deciding rather than as somebody fixing a mistake.
+   */
+  const applyPriceEdits = (edits: readonly PriceEdit[]) => {
+    if (edits.length === 0) return;
+    mutate((d) => {
+      for (const e of edits) {
+        const u = d.units.find((x) => x.serial === e.serial);
+        if (!u) continue;
+        const sku = d.skus.find((s) => s.id === u.skuId);
+        const before = priceOf(u, sku?.price ?? 0);
+        const beforeMarket = marketPriceOf(u, sku?.price ?? 0, markupPct);
+        u.price = e.price;
+        u.marketPrice = e.marketPrice;
+        const afterMarket = marketPriceOf(u, sku?.price ?? 0, markupPct);
+        appendEvent(d, e.serial, {
+          type: "DICATAT",
+          note: [
+            before === e.price
+              ? undefined
+              : `Price ${fmtRp(before)} → ${fmtRp(e.price)}`,
+            beforeMarket === afterMarket
+              ? undefined
+              : `Marketplace ${fmtRp(beforeMarket)} → ${fmtRp(afterMarket)}`,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        });
+      }
+    });
+    message.success(
+      t("inventory.repriced", "{{n}} prices updated.", { n: edits.length }),
+    );
+  };
+
+  /** The button that opens the price grid on a set of machines. */
+  const repriceButton = (title: string, units: readonly Unit[]) => (
+    <Tooltip
+      title={
+        units.length === 0
+          ? t("inventory.nothingToPrice", "No machines to price")
+          : t("inventory.editPricesN", "Edit {{count}} prices", {
+              count: units.length,
+            })
+      }
+    >
+      <Button
+        type="text"
+        icon={<TagsOutlined />}
+        disabled={units.length === 0}
+        aria-label={t("inventory.editPricesFor", "Edit prices for {{what}}", {
+          what: title,
+        })}
+        onClick={() => setRepricing({ title, units })}
+      />
+    </Tooltip>
+  );
+
+  /**
+   * The serials behind one grade of one product.
+   *
+   * A plain `<Table>`, not a `DataTable`: this is already two levels inside a
+   * row of one, and a nested pager would be a second set of page controls
+   * inside the first one's page. A grade with forty serials scrolls; that is
+   * the right cost for the rarest row in the list.
+   */
+  const serialsOf = (units: readonly Unit[]) => (
     <Table<Unit>
       size="small"
       rowKey="serial"
-      dataSource={row.units}
+      dataSource={units as Unit[]}
       pagination={false}
       // The expansion is the reason this whole component exists, so an empty
       // one has to say something rather than showing antd's bare "No data".
@@ -229,22 +367,29 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
           render: (v: string) => <EnumTag map={UNIT_STATUS} value={v} />,
         },
         {
-          // New or a letter — the owner's second ask of 2026-08-28. This is
-          // the list a person scrolls looking for a machine to sell, and
-          // "which of these four is the sealed one" was a question it could
-          // not answer. `GradeTag` is the one place that decides how a grade
-          // reads; see `lib/condition.ts` for what NEW means.
-          title: t("inventory.grade", "Grade"),
-          key: "grade",
-          width: 90,
-          render: (_: unknown, u: Unit) => <GradeTag grade={u.grade} />,
-        },
-        {
+          /*
+           * The battery, in whichever units this machine's era reports
+           * (2026-09-08). The capacity rides under the cycle count rather than
+           * taking a column of its own: it is context for the count, and on a
+           * 2021-or-later machine there is nothing to put in that column.
+           */
           title: t("inventory.battery", "Battery"),
           key: "battery",
-          width: 100,
+          width: 130,
           align: "right",
-          render: (_: unknown, u: Unit) => fmtBatteryHealth(u.batteryHealth),
+          render: (_: unknown, u: Unit) => {
+            const read = readUnitBattery(u, db, batterySettings);
+            return (
+              <Flex vertical align="flex-end" gap={0}>
+                <Typography.Text>{read.text}</Typography.Text>
+                {read.fcc !== undefined && (
+                  <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                    {fmtFcc(read.fcc)}
+                  </Typography.Text>
+                )}
+              </Flex>
+            );
+          },
         },
         {
           title: t("inventory.where", "Where"),
@@ -259,15 +404,81 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
           // staff write a sentence into; see `LongText`.
           title: t("inventory.description", "Description"),
           dataIndex: "description",
-          width: 320,
+          width: 280,
           render: (v: string) => <LongText>{v}</LongText>,
         },
         {
-          title: t("inventory.buy", "Buy"),
+          /*
+           * What the machine has COST, not only what it was bought for
+           * (owner ask 2026-09-08). A repair is a second cost against the
+           * same serial, and the second line says so when there is one —
+           * without it a machine that came back from the bench shows a margin
+           * it has not earned.
+           */
+          title: t("inventory.buy", "Cost"),
           key: "buy",
-          width: 130,
+          width: 140,
           align: "right",
-          render: (_: unknown, u: Unit) => fmtRp(u.buy),
+          render: (_: unknown, u: Unit) => {
+            const repair = serviceCostOf(u.serial, db.services);
+            return (
+              <Flex vertical align="flex-end" gap={0}>
+                <Typography.Text>{fmtRp(u.buy + repair)}</Typography.Text>
+                {repair > 0 && (
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: TYPE.sm }}
+                  >
+                    {t("inventory.inclRepair", "incl. {{amount}} repair", {
+                      amount: fmtRp(repair),
+                    })}
+                  </Typography.Text>
+                )}
+              </Flex>
+            );
+          },
+        },
+        {
+          /*
+           * What THIS machine asks (owner revision 2026-09-08). A machine that
+           * has not been priced quotes the variant's asking price and says so
+           * — "not priced yet" and "priced at the catalogue figure" are
+           * different facts, and only one of them is somebody's decision.
+           */
+          title: t("inventory.storePrice", "Store price"),
+          key: "price",
+          width: 140,
+          align: "right",
+          render: (_: unknown, u: Unit) => (
+            <Flex vertical align="flex-end" gap={0}>
+              <Typography.Text>
+                {fmtRp(priceOf(u, skuPriceOf(u.skuId)))}
+              </Typography.Text>
+              {u.price === undefined && (
+                <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                  {t("inventory.notPricedYet", "not priced yet")}
+                </Typography.Text>
+              )}
+            </Flex>
+          ),
+        },
+        {
+          title: t("inventory.marketPrice", "Marketplace"),
+          key: "market",
+          width: 140,
+          align: "right",
+          render: (_: unknown, u: Unit) => (
+            <Flex vertical align="flex-end" gap={0}>
+              <Typography.Text>
+                {fmtRp(marketPriceOf(u, skuPriceOf(u.skuId), markupPct))}
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                {isMarketPriceOverridden(u)
+                  ? t("inventory.setByHand", "set by hand")
+                  : t("inventory.fromRule", "+{{pct}}%", { pct: markupPct })}
+              </Typography.Text>
+            </Flex>
+          ),
         },
         {
           title: "",
@@ -285,6 +496,75 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
               />
             </Tooltip>
           ),
+        },
+      ]}
+    />
+  );
+
+  /**
+   * The grades behind one product row (owner ask 2026-09-08).
+   *
+   * A second rung, and the owner asked for it because with a price per serial
+   * "what does a MacBook Air M2 16/512 cost?" stopped having one answer. Grade
+   * is the axis that MAKES the answers differ — an A and a C are two products
+   * as far as a customer is concerned — so the price range is shown per grade,
+   * and within a grade it still spreads because a tired battery is worth less
+   * than a fresh one. That inner spread is what the range is actually for.
+   */
+  const gradesOf = (row: InventoryRow) => (
+    <Table<GradeGroup>
+      size="small"
+      rowKey={(g) => g.grade ?? "—"}
+      dataSource={gradeGroupsOf(row, skuPriceOf(row.skuId), markupPct)}
+      pagination={false}
+      expandable={{
+        expandedRowRender: (g) => serialsOf(g.units),
+        defaultExpandAllRows: false,
+      }}
+      columns={[
+        {
+          title: t("inventory.grade", "Grade"),
+          key: "grade",
+          width: 110,
+          render: (_: unknown, g: GradeGroup) => <GradeTag grade={g.grade} />,
+        },
+        {
+          title: t("inventory.qty", "Qty"),
+          key: "qty",
+          width: 170,
+          align: "right",
+          render: (_: unknown, g: GradeGroup) => (
+            <Flex vertical align="flex-end" gap={0}>
+              <Qty n={g.onHand} strong />
+              <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                {t("inventory.nAvailable", "{{n}} available", {
+                  n: g.available,
+                })}
+              </Typography.Text>
+            </Flex>
+          ),
+        },
+        {
+          title: t("inventory.storePrice", "Store price"),
+          key: "store",
+          align: "right",
+          render: (_: unknown, g: GradeGroup) => <Money range={g.store} />,
+        },
+        {
+          title: t("inventory.marketPrice", "Marketplace"),
+          key: "market",
+          align: "right",
+          render: (_: unknown, g: GradeGroup) => <Money range={g.market} />,
+        },
+        {
+          title: "",
+          key: "reprice",
+          width: 56,
+          render: (_: unknown, g: GradeGroup) =>
+            repriceButton(
+              `${row.product} ${row.specs} · ${g.grade ?? t("inventory.ungraded", "Ungraded")}`,
+              g.units,
+            ),
         },
       ]}
     />
@@ -317,7 +597,7 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
           </Button>
         )}
         expandable={{
-          expandedRowRender: serialsOf,
+          expandedRowRender: gradesOf,
           // A product with nothing in stock has nothing to open. Leaving the
           // caret there would promise a drill-down that renders an empty box.
           rowExpandable: (r) => r.onHand > 0,
@@ -467,11 +747,12 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
           {
             // The `?` explains the bands and names the current thresholds,
             // which is the only honest way to label a column whose meaning
-            // Settings can change underneath it.
+            // Settings can change underneath it — and since 2026-09-08 it also
+            // explains that there are two of them.
             title: (
               <Flex align="center" gap={SPACE.xs}>
-                {t("inventory.batteryHealth", "Battery health")}
-                <Tooltip title={batteryGuide(thresholds)}>
+                {t("inventory.batteryHealth", "Battery")}
+                <Tooltip title={batteryEraGuide(batterySettings)}>
                   <QuestionCircleOutlined
                     style={{ color: colorTextSecondary, cursor: "help" }}
                     aria-label={t(
@@ -483,25 +764,44 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
               </Flex>
             ),
             key: "battery",
-            width: 150,
-            // Sorts on the lowest reading held — "show me the tiredest
+            width: 160,
+            // Sorts on the WORST reading held — "show me the tiredest
             // batteries first" — and deliberately does NOT get a header
             // filter: the band select above the table is the honest one,
             // because it narrows UNITS and the quantities move with it. A
-            // second one here would filter rows on the lowest reading of a
+            // second one here would filter rows on the worst reading of a
             // range and leave "3 available" beside a filter only one of the
             // three meets.
-            sortValue: (r) => r.batteryMin,
+            //
+            // Worst is a different NUMBER in each era: the lowest percentage,
+            // but the highest cycle count. Sorting on the raw figure would
+            // interleave the two eras meaninglessly, so this sorts on the
+            // band, which is the one thing they share.
+            sortValue: (r) =>
+              r.batteryMin === undefined
+                ? 9
+                : ["good", "fair", "bad"].indexOf(
+                    (r.batteryEra === "CYCLES"
+                      ? cycleGrade(r.batteryMax, batterySettings.cycles)
+                      : batteryGrade(r.batteryMin, batterySettings.health)) ??
+                      "good",
+                  ),
             render: (_, r) => {
               if (r.batteryMin === undefined) return "—";
+              const fmt =
+                r.batteryEra === "CYCLES" ? fmtCycleCount : fmtBatteryHealth;
               const text =
                 r.batteryMin === r.batteryMax
-                  ? fmtBatteryHealth(r.batteryMin)
-                  : `${fmtBatteryHealth(r.batteryMin)}–${fmtBatteryHealth(r.batteryMax)}`;
+                  ? fmt(r.batteryMin)
+                  : `${fmt(r.batteryMin)}–${fmt(r.batteryMax)}`;
               // Coloured by the WORST reading in the range, not the best: a
               // product whose range spans a band boundary is one a buyer can
-              // still be handed the tired unit from.
-              const grade = batteryGrade(r.batteryMin, thresholds);
+              // still be handed the tired unit from. Which END is the worst
+              // flips with the era — fewer cycles is better, more percent is.
+              const grade =
+                r.batteryEra === "CYCLES"
+                  ? cycleGrade(r.batteryMax, batterySettings.cycles)
+                  : batteryGrade(r.batteryMin, batterySettings.health);
               return grade === null ? (
                 text
               ) : (
@@ -510,19 +810,51 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
             },
           },
           {
-            // One number since 2026-08-27. This column used to carry a range
-            // and a second line reconciling it against the list price, because
-            // each serial was priced at QC and usually differed. The price is
-            // the variant's now, so there is nothing left to reconcile — and a
-            // "from" on a row where every unit costs the same would be a lie.
+            /*
+             * A RANGE again (owner revision 2026-09-08), and for the reason
+             * this column carried one before 2026-08-27: each serial is priced
+             * at QC and they usually differ. What is different this time is
+             * the second line — the marketplace figure, which most of the
+             * shelf derives from the first by a rule.
+             *
+             * The variant's asking price is not shown here. It is the number a
+             * new machine STARTS from, not one anything is sold at, and a
+             * column showing both invited the reading that one of them is the
+             * real price.
+             */
             title: t("inventory.price", "Price"),
             key: "price",
-            width: 160,
+            width: 220,
             align: "right",
-            sortValue: (r) => r.listPrice,
+            sortValue: (r) => (r.store.count === 0 ? r.listPrice : r.store.min),
             render: (_, r) => (
-              <Typography.Text>{fmtRp(r.listPrice)}</Typography.Text>
+              <Flex vertical align="flex-end" gap={0}>
+                <Money range={r.store} />
+                {r.market.count > 0 && (
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: TYPE.sm }}
+                  >
+                    {r.market.single
+                      ? t("inventory.marketOne", "marketplace {{price}}", {
+                          price: fmtRp(r.market.min),
+                        })
+                      : t(
+                          "inventory.marketRange",
+                          "marketplace {{from}} – {{to}}",
+                          { from: fmtRp(r.market.min), to: fmtRp(r.market.max) },
+                        )}
+                  </Typography.Text>
+                )}
+              </Flex>
             ),
+          },
+          {
+            title: "",
+            key: "reprice",
+            width: 44,
+            render: (_, r) =>
+              repriceButton(`${r.product} ${r.specs}`, r.units),
           },
           {
             title: "",
@@ -564,6 +896,19 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
         open={printing !== null}
         labels={printing ?? []}
         onClose={() => setPrinting(null)}
+      />
+
+      <PriceEditorModal
+        open={repricing !== null}
+        units={repricing?.units ?? []}
+        skuPrice={skuPriceOf}
+        markupPct={markupPct}
+        title={repricing?.title ?? ""}
+        onClose={() => setRepricing(null)}
+        onSave={(edits) => {
+          applyPriceEdits(edits);
+          setRepricing(null);
+        }}
       />
     </>
   );

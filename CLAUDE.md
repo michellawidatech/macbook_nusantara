@@ -511,6 +511,247 @@ Decisions that outlived those documents:
     `packages/agent`'s `reserve` capability has ONE caller, the worker, and the
     worker is not deployed; `apps/api`'s chat route withholds the capability on
     purpose. When the worker ships, this page and the till move over together.
+- **A battery has two eras, 2026-09-08.** A machine released in **2020 or
+  earlier** is recorded as a **cycle count** and a **full charge capacity**;
+  **2021 and later** as a **health percentage**. Not a preference — a change of
+  question. macOS has always printed cycles and FCC in System Information; the
+  single "Battery Health: 91%" figure is a modern reading, and on an older Mac
+  the bench would have to divide FCC by a design capacity nobody has to hand.
+  Three people doing that arithmetic is three answers about one battery.
+  - `lib/battery.ts` holds both halves, function for function: two thresholds
+    per era (the health pair are FLOORS, the cycle pair are CEILINGS — fewer
+    cycles is better), and `readBattery` is the one function every column,
+    filter and QC box goes through. `components/BatteryFields.tsx` draws the
+    right boxes for an era; four desks use it.
+  - Inventory keeps **ONE battery facet** over a mixed shelf, because the band
+    NAME is the shared vocabulary — a "Good (80%+)" option beside a "Good (400
+    cycles or fewer)" one would split every search.
+  - **No migration needed on the Postgres side**, and finding that out fixed a
+    silent bug. A battery is a `CategoryAttribute` there, not a `Unit` column —
+    which is exactly the right shape for two eras, because a category spans
+    both. Each unit writes the pair its era reports: `siklus` + `kapasitas`, or
+    `baterai`. ⚠️ Until 2026-09-08 `packages/db`'s seed looked that attribute
+    up by the key `baterai` while the fixture's categories declared `siklus`,
+    so the query matched nothing and **every unit got no reading at all**. Both
+    sides now name all three.
+  - ⚠️ The BROWSER store still holds `cycleCount`/`fcc` on `Unit`, which prisma
+    has no column for — the same shape `batteryHealth` is in.
+- **Price is per serial again, 2026-09-08 — this REVERSES 2026-08-27.** *"Each
+  unit will have different price (store price and marketplace price)."* Two
+  2017 Airs off one pallet differ by a dented lid, a tired battery and
+  Rp1.500.000, and a shop quoting one price for both gives the good one away.
+  - `Sku.price` does not go away: it becomes the **asking price**, what a
+    machine starts from and what an unpriced one quotes. `Unit.price` is what
+    THIS machine asks, decided at QC — the grid has a price column again.
+  - **The marketplace price is derived until it is overridden.**
+    `Unit.marketPrice` absent means "store price + `marketplaceMarkupPct`", so
+    a repricing over the counter moves it and an overridden one stays. Stored
+    as the number rather than a flag beside one: a unit either carries its own
+    marketplace price or it does not, and that is one fact.
+  - Inventory expands **product → grade → serial**, and the price is a RANGE
+    per variant-grade (owner ask). Grade is the axis that MAKES them differ; the
+    spread WITHIN a grade is a tired battery, and that is what the range is for.
+  - `components/PriceEditorModal.tsx` reprices a whole shelf at once, with a
+    fill-down per column — repricing eleven machines one dialog at a time is
+    the thing that stops anybody repricing.
+  - ⚠️ Schema gap: prisma's `Unit.price` and its CHECK were dropped by the
+    2026-08-27 migration; `marketPrice` never existed.
+- **The serial rule is one module and every field uses it, 2026-09-08.** The
+  scanned/typed asymmetry was settled on 2026-09-01 and applied at exactly ONE
+  desk, written inline in `InboundDetailPage`'s `commitSerial`. Every other
+  serial box was stricter or looser than the bench: S/N Tracking matched
+  exactly, the till and Stock Opname used `resolveScannedSerial` (which strips
+  a store prefix and never ADDS a marker), and the trade-in dialog marked a
+  scan unconditionally — silently repairing the misread the marker exists to
+  catch.
+  - `lib/serialInput.ts` is that rule, once. `readSerialInput` judges a field
+    (a scan must carry its `S`, a typed serial has one added);
+    `resolveSerialQuery` is the SEARCH counterpart — it invents nothing and
+    refuses nothing, and tries the marked reading, which is the case
+    `resolveScannedSerial` never covered: the case prints `C02740137JKM` and
+    the store holds `SC02740137JKM`.
+  - `components/SerialInput.tsx` is the field. ⚠️ The refusal COPY lives at the
+    call sites as literal `t()` calls, not in a table — `test/i18n.test.ts`
+    finds copy by reading the source, and a table indexed by a variable is
+    invisible to it.
+  - ⚠️ `test/tillPage.test.tsx` pins the scanner clock so every keystroke is a
+    second apart. `userEvent` types faster than any person, so without it the
+    file's typing is a burst and the tests pass alone and fail in the suite.
+- **A sale is a LIST of payments, 2026-09-08.** *"Customer can do a split
+  payment … 5jt in cash and 5jt more in tokopedia."* One method and one flag
+  could not say that: the cash is in the till today and the PayLater money is
+  with Shopee, and which half is which is the only question the finance screens
+  ask. `Order.payments` is that list and `Order.settled` is a projection over
+  it, written in the same mutation — the rule `Unit.status` follows.
+  - **Three states, and merging any two is the bug this replaces.** SETTLED is
+    the shop's money; PENDING is money a MARKETPLACE holds — the customer HAS
+    paid; DUE is a customer debt and the only state with a date. A Shopee sale
+    awaiting withdrawal used to look exactly like a customer four weeks late.
+  - **Editable, and logged.** `components/PaymentsModal.tsx` corrects a sale's
+    money and `lib/paymentEdits.ts` diffs it; an amount change demands a
+    reason, because the number BEFORE the edit is what answers a customer
+    disputing a balance next month. A state change does not — training people
+    to type "x" is worse than not asking.
+  - `customerBalance` rolls it up per person for Customer management. `pending`
+    is reported and is NOT part of `owed`: a shop that rings a customer about
+    Shopee's payout loses the customer.
+  - ⚠️ Mock-only as a list, but prisma's `Payment` already has `orderId`,
+    `amount`, `status`, `paidAt` and `dueAt`. What it cannot carry is
+    `channel` — which marketplace holds one part.
+- **A withdrawal is a document, 2026-09-08.** *"The existing system don't keep
+  track of which fee is which and what the adjustment is for."* A Rp10jt sale
+  paying out Rp8.850.000 has a commission, a service fee and often a bank
+  charge inside that Rp1.150.000, and `Order.netReceived` lost all three.
+  - `lib/marketplace.ts`: gross − itemised fees = **expected**; what the bank
+    statement says is **received**, and it is the truth, because it is the only
+    figure anybody can check. The difference is a **discrepancy**, shown and
+    never absorbed, and it asks for a sentence — pre-filled with
+    "Marketplace fee adjustment" so the common case is still one press.
+  - `/finance/receivables` is the screen, and it is TWO tables because there
+    are two debtors: a marketplace you press a button at, and a person you
+    telephone. Grouped by channel, because withdrawing is a per-channel errand.
+  - `apportion` splits a payout back across its sales largest-remainder, so no
+    rupiah goes missing from every later reconciliation.
+  - ⚠️ Mock-only: `MockDb.settlements`, `settlementLog`, and
+    `AppSettings.marketplaceFees`.
+- **Service is a place, and it costs money, 2026-09-08.** `Unit.status = SERVIS`
+  said a machine was being repaired and nothing about where it was, so `wh-4`
+  — `Meja Servis`, in the fixture since the beginning — held nothing, ever.
+  - Sending a machine to service now MOVES it there, in the same transaction as
+    the status. Found by `Location.kind`, not by id: `wh-4` is this shop's
+    bench and the next shop's will not be.
+  - `/stock/service` is the bench: what each machine is costing, how long it
+    has been gone, and a *back in stock* that asks for the destination and one
+    last fee (the courier back).
+  - **`costOfUnit` = `Unit.buy` + every repair, and it is what every margin is
+    now computed against.** `Unit.buy` is untouched — it is on a supplier's
+    invoice, and rewriting it would make the two disagree forever. A machine
+    bought at Rp4jt and repaired for Rp800k is a Rp4.8jt machine.
+  - The QC grid gained a **Service fee** column, filled in before the machine
+    is sent, because the courier's number is on the desk at that moment and
+    never again.
+  - ⚠️ Mock-only: `MockDb.services`. Prisma has the PLACE and no table for a
+    visit or its fees.
+- **Suppliers left Settings, 2026-09-08.** *"One supplier sending 2-3 invoices a
+  month … then they will make a deposit, but they have not decided where the
+  deposit money should go."* Settings held a name, a phone and a code, which is
+  what a supplier was to this app: a label on a purchase order.
+  - `/suppliers` owns the money. Settings keeps the address book — a phone
+    number changes once a year, and a Rp30jt deposit is checked before every
+    transfer.
+  - **A deposit is money held against the SUPPLIER, not against an invoice.**
+    `PoPayment` hangs off one order, which is exactly what a deposit is not:
+    forcing the choice at the moment the money moves means guessing, and a
+    guess in a ledger is worse than an unallocated balance because it looks
+    like a fact. Allocating later writes an ordinary `PoPayment` with
+    `method: DEPOSIT` — what that method has always been for.
+  - **`Supplier.openingBalance` is debt from before this system**, stated once.
+    Deliberately NOT a fake purchase order: an invented invoice would put
+    phantom stock in the ledger and be counted by every report that walks
+    orders.
+  - ⚠️ Mock-only: `MockDb.deposits`, `Supplier.openingBalance`. Prisma's
+    `Payment` has a nullable `poId` so a deposit is ALMOST expressible, but
+    nothing records which supplier it was paid to, or an allocation.
+- **The balance is two pots, 2026-09-09.** *"We need to separate the cash
+  balance and the bank balance. So for the payment method for both income and
+  expense, it is: Cash, transfer (bank), and credit card."* One figure could
+  not answer the question asked every morning, which is not how much money the
+  shop has but how much is in the drawer.
+  - `lib/accounts.ts` is the mapping and the arithmetic: cash is the drawer, a
+    transfer / card / QRIS is the bank, and a method nobody has mapped is
+    reported separately rather than joining one silently. An adjustment now
+    asks how the money moved (`Expense.method`, `ManualIncome.method`), and
+    `AppSettings.openingBalance` became `openingCash` + `openingBank`.
+  - **The balance is built from PAYMENTS, not from order totals.** A sale has
+    been a list since 2026-09-08, and a customer paying half cash and half by
+    transfer fills both pots off one receipt. It also drops escrow for free: a
+    marketplace's money is a PENDING payment and never becomes a movement, so
+    "not in the bank yet" needs no special case. The period card follows the
+    same rule, or it would contradict the balance above it.
+  - **Deposit is the RESULT of a payment, not a payment method** (owner's
+    words). `pm_deposit` is gone from both seeds; allocating a deposit writes a
+    `PoPayment` carrying the deposit's own method plus `fromDepositId`, which
+    is what stops the balance spending the money twice. `TRANSFER` became
+    `forPo` at the same time — the deposit dialog defaulted to a method its own
+    list did not offer.
+  - ⚠️ **`Order.payMethod` and `SalePayment.method` hold CODES again.** The
+    till and the mock seed wrote LABELS ("Bank transfer"), which read fine on a
+    receipt and made the field a different type from the one the fixture,
+    prisma and every other reader use. Every screen that SHOWS a method looks
+    its label up now — `Invoice`, Transaction History, the till's own summary —
+    and `PaymentsPanel.methods` takes `{value, label}` rather than a flat list
+    of labels. Supplier payments are still not in the balance at all; that
+    predates this and is an owner decision.
+- **Serials & QC, loosened 2026-09-09.** *"The spacing now is a bit odd (too
+  dense, spacing and fields are not aligned). Specifically, in setting price,
+  we should not stack the store and marketplace field without specifying which
+  is which."* `.qc-table` goes back to 10px with `vertical-align: middle` — the
+  cell default is `baseline`, which lined up the first LINE of each cell, so a
+  one-input column sat level with the first of a two-input one and every row
+  stepped down to the right. `PriceFields` labels each box, and the Service fee
+  COLUMN is gone: the same number is asked for in the send-to-service dialog
+  below, and asking twice is what made the grid a wall.
+- **A machine does not arrive by being sent, 2026-09-09.** *"When the staff
+  press the service button, asks a confirmation modal that this unit will be
+  sent/not to warehouse 4 for service, then add a field so that they can add
+  additional fee like shipping fee from warehouse 1 to warehouse 4 … the user
+  need to confirm that it has arrived in warehouse 4."*
+  - The QC Service button opens a FORM: does it travel, what did the courier
+    cost, what is the repair quoted at, and what is wrong with it. The status
+    goes to `SERVIS` at once — a machine promised to a repairer is not sellable
+    from the moment it is promised — but `Unit.locationId` does not move.
+  - `ServiceRec.arrivedAt` is the confirmation. `/stock/service` is two tables:
+    **Expected at the bench** (sent, not signed for) and **On the bench**, and
+    *Arrived — start service* is what writes the location. Before this, sending
+    a machine put it in `wh-4` instantly and the bench had a list of machines
+    it could not find. A repair needing no journey opens already arrived.
+  - **Every charge is editable** (`editFee`) — *"not only add but also
+    reduce"*. There is no remove: nothing here is hard-deleted, and a charge
+    edited to zero says "quoted and not paid". Both figures go on the machine's
+    timeline.
+  - The Inventory adjustment door into service follows the same rule, and a QC
+    reopen CLOSES the open visit — otherwise the bench waits forever for a
+    machine that is back on the grid.
+  - ⚠️ `MockDb.services` is still seeded empty: a fixture machine with a SERVIS
+    fate would need `packages/fixture` and the Postgres seed to agree about it,
+    and the bench fills the first time a machine is sent from QC.
+- **Suppliers own their whole account, 2026-09-09.** *"In supplier tab, we
+  should be able to add supplier and how much we owe them, and all the
+  transaction history (now is deposit)."*
+  - **Add supplier here, with the old debt in the same form.** Settings can add
+    one and keeps the address book; it cannot state a debt, so a supplier the
+    shop already owed money to had to be created in one screen and corrected in
+    another.
+  - **`supplierHistory` is the account, not the deposits** — invoices,
+    payments, deposits, allocations and the opening balance in one list. An
+    allocation is NEUTRAL and a deposit-funded `PoPayment` is skipped, or the
+    history would say the shop paid twice.
+  - **A deposit may name an invoice when it is recorded** (optional — that is
+    the point), and allocating one afterwards is a LIST of invoices with a box
+    per row, so one transfer covering three bills is one dialog.
+  - The invoice tables show `Po.invoice` under `PI-XXX`: the shop's number says
+    where a link goes, the supplier's is the one quoted on the telephone.
+- **A customer's payment belongs to a sale, 2026-09-09.** *"We can add payment
+  (the user pay for the product, and the payment can link to specific
+  transaction history), and add a due date of payment."* The customer drawer's
+  order rows gained a Record-payment button opening the same `PaymentsModal`
+  Transaction History uses — deliberately the same dialog, because a payment
+  recorded from either place is the same event. The due date comes with it:
+  `PaymentsPanel` asks for one on any part marked DUE.
+- **The nav is glass, 2026-09-09.** *"Glass-inspired, but please don't revamp a
+  lot, just the navbar."* The sider is a gradient — `BRAND_DEEP` through a
+  brighter emerald, which is the "more vibrant" half — carrying two floating
+  translucent panels: the mark and the menu, then the account foot, as the
+  owner's reference shows them. The gradient is what makes the glass read: a
+  translucent panel over a FLAT colour is just another flat colour and the blur
+  has nothing to blur.
+  ⚠️ The Menu tokens are still scoped by the tree (`navTheme()`), unchanged.
+  Contrast is unchanged too and had to be — white at 85% over the lightest
+  point plus the veil is 6.9:1, the selected pill still 8.6:1. Where
+  `backdrop-filter` is unsupported the panel is a 10% white overlay on the
+  gradient: same colours, no blur, nothing broken. The phone drawer takes the
+  gradient and NOT the panels — a drawer is already a floating pane, and panels
+  inside one are two frames saying the same thing.
 - Lists paginate with a page size the user picks, and a filterable column puts
   its filter in the **column header**. `ProTable` holds the filter/sort state
   and does the work itself — the header control only reports clicks — because

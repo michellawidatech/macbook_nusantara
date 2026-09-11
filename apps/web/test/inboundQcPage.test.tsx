@@ -185,7 +185,16 @@ async function describeRow(index: number, phrase: string) {
   await userEvent.tab();
 }
 
-const batteries = () => screen.getAllByLabelText("Battery Health");
+/**
+ * The battery boxes of the grid.
+ *
+ * `po-5` carries a 2016 MacBook Pro, so since the era split of 2026-09-08 its
+ * rows ask for a CYCLE COUNT and a capacity rather than a percentage — which
+ * is the feature, not an accident of the fixture. The percentage box is
+ * exercised on its own further down, against an order whose product is new
+ * enough to report one.
+ */
+const batteries = () => screen.getAllByLabelText("Cycle count");
 
 /**
  * The confirm button of the dialog currently open, by its label.
@@ -213,6 +222,10 @@ beforeEach(() => {
   mutate((d) => {
     const po = d.pos.find((p) => p.id === ORDER)!;
     po.status = "RECEIVED";
+    // The store is a module singleton and the closed-invoice tests below file
+    // this order away. Left closed, every later test would drive a read-only
+    // page and fail on something that looks like a missing control.
+    delete po.closedAt;
     po.items = [
       { id: "poi-t1", skuId: SKU, serial: null, qty: 3, unitCost: 4_100_000 },
     ];
@@ -228,6 +241,10 @@ beforeEach(() => {
     // assertion about "one arrival event" would count two.
     const live = new Set(d.units.map((u) => u.serial));
     d.events = d.events.filter((e) => live.has(e.serial));
+    // Same for a service visit. The QC service tests below all send the same
+    // barcode, so without this the second one asserts against the first one's
+    // visit and reads its own charges as missing.
+    d.services = d.services.filter((r) => live.has(r.serial));
   });
 });
 
@@ -488,12 +505,12 @@ describe("what the scanner will not accept", () => {
   });
 });
 
-describe("recording battery health", () => {
-  /** The QC box on the first row — the one the scan below turns into a unit. */
+describe("recording a battery", () => {
+  /** The cycle box on the first row — the one the scan below turns into a unit. */
   const battery = () => batteries()[0] as HTMLInputElement;
 
-  const health = () =>
-    snapshot().units.find((u) => u.serial === SERIAL)!.batteryHealth;
+  const stored = () => snapshot().units.find((u) => u.serial === SERIAL)!;
+  const cycles = () => stored().cycleCount;
 
   it("never files a reading nobody could have taken", async () => {
     renderOrder();
@@ -501,36 +518,43 @@ describe("recording battery health", () => {
     await settle();
 
     await userEvent.click(battery());
-    await userEvent.keyboard("150");
+    await userEvent.keyboard("50000");
 
     // Said while the number is still in the box.
     expect(battery()).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByText("0–100% only")).toBeTruthy();
-    expect(health()).toBeUndefined();
+    expect(screen.getByText("0–5000 only")).toBeTruthy();
+    expect(cycles()).toBeUndefined();
 
     await userEvent.tab();
 
-    // Refused, not clamped: antd's `max` would have stored 100 here, which is
-    // a claim about a new battery that nobody measured. And not stored as 15
-    // either — the digits on the way to a typo are not readings.
-    expect(health()).toBeUndefined();
+    // Refused, not clamped: antd's `max` would have stored 5000 here, which is
+    // a claim about a battery nobody counted. And not stored as 5 either — the
+    // digits on the way to a typo are not readings.
+    expect(cycles()).toBeUndefined();
     expect(battery().value).toBe("");
-    expect(screen.queryByText("0–100% only")).toBeNull();
+    expect(screen.queryByText("0–5000 only")).toBeNull();
   });
 
-  it("takes a real reading, 100 included, once the box is left", async () => {
+  it("takes a real reading, 0 included, once the box is left", async () => {
     renderOrder();
     scan(BARCODE);
     await settle();
 
     await userEvent.click(battery());
-    await userEvent.keyboard("100");
-    // Typing alone writes nothing: 1 and 10 are readings of a dying machine.
-    expect(health()).toBeUndefined();
+    await userEvent.keyboard("312");
+    // Typing alone writes nothing: 3 and 31 are counts of a different machine.
+    expect(cycles()).toBeUndefined();
 
     await userEvent.tab();
-    expect(health()).toBe(100);
+    expect(cycles()).toBe(312);
     expect(battery()).not.toHaveAttribute("aria-invalid");
+
+    // Zero is a REAL count — a battery replaced last week — and must survive
+    // every falsiness check between the box and the store.
+    await userEvent.tripleClick(battery());
+    await userEvent.keyboard("0");
+    await userEvent.tab();
+    expect(cycles()).toBe(0);
   });
 
   it("clears the refusal as soon as the number comes back in range", async () => {
@@ -539,16 +563,16 @@ describe("recording battery health", () => {
     await settle();
 
     await userEvent.click(battery());
-    await userEvent.keyboard("911");
-    expect(screen.getByText("0–100% only")).toBeTruthy();
+    await userEvent.keyboard("31200");
+    expect(screen.getByText("0–5000 only")).toBeTruthy();
 
     // The slipped digit, deleted. The cell has to recover while the caret is
     // still in it, not only when it is left.
     await userEvent.keyboard("{Backspace}");
-    expect(screen.queryByText("0–100% only")).toBeNull();
+    expect(screen.queryByText("0–5000 only")).toBeNull();
 
     await userEvent.tab();
-    expect(health()).toBe(91);
+    expect(cycles()).toBe(3120);
   });
 
   it("empties a reading that turns out to be wrong", async () => {
@@ -557,16 +581,38 @@ describe("recording battery health", () => {
     await settle();
 
     await userEvent.click(battery());
-    await userEvent.keyboard("91");
+    await userEvent.keyboard("312");
     await userEvent.tab();
-    expect(health()).toBe(91);
+    expect(cycles()).toBe(312);
 
     await userEvent.tripleClick(battery());
     await userEvent.keyboard("{Backspace}");
     await userEvent.tab();
 
-    // Blank is a state of the field, not a zero: nobody has measured it.
-    expect(health()).toBeUndefined();
+    // Blank is a state of the field, not a zero: nobody has counted it.
+    expect(cycles()).toBeUndefined();
+  });
+
+  it("records the capacity beside the count, and never a percentage", async () => {
+    renderOrder();
+    scan(BARCODE);
+    await settle();
+
+    await userEvent.click(battery());
+    await userEvent.keyboard("312");
+    await userEvent.tab();
+    const capacity = screen.getAllByLabelText(
+      "Full charge capacity",
+    )[0] as HTMLInputElement;
+    await userEvent.click(capacity);
+    await userEvent.keyboard("4800");
+    await userEvent.tab();
+
+    expect(stored()).toMatchObject({ cycleCount: 312, fcc: 4800 });
+    // A 2016 body reports no health figure, so the grid never offers a box
+    // that could file one.
+    expect(stored().batteryHealth).toBeUndefined();
+    expect(screen.queryAllByLabelText("Battery health")).toHaveLength(0);
   });
 });
 
@@ -617,8 +663,8 @@ describe("grading before the serial", () => {
 
     // A row with no serial takes both, and neither is a unit yet.
     await describeRow(0, "Mulus");
-    await userEvent.click(screen.getAllByLabelText("Battery Health")[0]!);
-    await userEvent.keyboard("91");
+    await userEvent.click(batteries()[0]!);
+    await userEvent.keyboard("312");
     expect(snapshot().units.filter((u) => u.poId === ORDER)).toHaveLength(0);
 
     // The serial arrives last, and the grading goes in with it — one push,
@@ -636,7 +682,7 @@ describe("grading before the serial", () => {
 
     expect(
       snapshot().units.find((u) => u.serial === "SC02AA111AAAX"),
-    ).toMatchObject({ description: "Mulus", batteryHealth: 91 });
+    ).toMatchObject({ description: "Mulus", cycleCount: 312 });
   });
 
   it("files a free-typed description in the suggestion list too", async () => {
@@ -1018,5 +1064,90 @@ describe("what a payment settles", () => {
     const cells = screen.getAllByRole("cell").map((el) => el.textContent);
     expect(cells).toContain("Shipping");
     expect(cells).toContain("Products");
+  });
+});
+
+/**
+ * Sending a machine for a repair — owner revision 2026-09-09.
+ *
+ * Three facts worth a rendered test, because none of them is visible from
+ * `lib/service.ts` alone: the dialog asks rather than confirms, the machine
+ * does not arrive by being sent, and the charges it asks for land on the visit
+ * it opens. The last one is what makes the margin honest, and it used to be a
+ * column in the grid that could be filled in and then never read.
+ */
+describe("sending a machine to service", () => {
+  async function graded(barcode = BARCODE, serial = SERIAL) {
+    renderOrder();
+    scan(barcode);
+    await settle();
+    act(() => {
+      mutate((d) => {
+        d.units.find((u) => u.serial === serial)!.description = "Mulus";
+      });
+    });
+    return serial;
+  }
+
+  it("opens a visit that has not arrived, and leaves the machine where it is", async () => {
+    const serial = await graded();
+    const before = snapshot().units.find((u) => u.serial === serial)!.locationId;
+
+    await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
+    await userEvent.click(await okButton("Send to service"));
+
+    const db = snapshot();
+    const unit = db.units.find((u) => u.serial === serial)!;
+    // Out of sellable stock the moment it is promised to a repairer...
+    expect(unit.status).toBe("SERVIS");
+    // ...but still on the shelf it was graded on, because nobody at the bench
+    // has signed for it. Warehouse 4 claiming to hold a machine that is in a
+    // van is the thing this replaced.
+    expect(unit.locationId).toBe(before);
+    const visit = db.services.find((r) => r.serial === serial)!;
+    expect(visit.arrivedAt).toBeUndefined();
+    expect(visit.raisedBy).toBe("QC");
+  });
+
+  it("puts the courier and the quote on the visit it opens", async () => {
+    const serial = await graded();
+    await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
+    await screen.findAllByRole("dialog");
+
+    const dialog = screen.getAllByRole("dialog").at(-1)!;
+    await userEvent.type(
+      within(dialog).getByLabelText(/Cost of getting it there/),
+      "150000",
+    );
+    await userEvent.type(
+      within(dialog).getByLabelText(/Service fee/),
+      "800000",
+    );
+    await userEvent.click(await okButton("Send to service"));
+
+    const visit = snapshot().services.find((r) => r.serial === serial)!;
+    // Two charges from two parties, not one number covering both — which is
+    // the whole reason a visit carries a list.
+    expect(
+      visit.fees.map((f) => [f.kind, f.amount]).sort(),
+    ).toEqual([
+      ["LABOUR", 800_000],
+      ["SHIPPING", 150_000],
+    ]);
+  });
+
+  it("takes the machine off the bench's list when the decision is reopened", async () => {
+    const serial = await graded();
+    await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
+    await userEvent.click(await okButton("Send to service"));
+
+    await userEvent.click(screen.getByLabelText(`Reopen QC for ${serial}`));
+    await userEvent.click(await okButton("Reopen QC"));
+
+    const db = snapshot();
+    expect(db.units.find((u) => u.serial === serial)!.status).toBe("QC");
+    // The visit is closed rather than removed — a courier charge already
+    // incurred is still a cost — but the bench stops waiting for it.
+    expect(db.services.find((r) => r.serial === serial)!.closedAt).toBeDefined();
   });
 });

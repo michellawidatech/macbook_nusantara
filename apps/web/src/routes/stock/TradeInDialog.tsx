@@ -73,13 +73,11 @@ import { fmtRp } from "../../lib/format.js";
 import {
   BASE_MAX_LENGTH,
   BASE_MIN_LENGTH,
-  isStoreBarcode,
   normaliseScan,
-  markTypedSerial,
   STORE_MAX_LENGTH,
-  SUPPLIER_CODE_LENGTH,
-  validateSerial,
 } from "../../lib/serialScan.js";
+import { readSerialInput } from "../../lib/serialInput.js";
+import { wasScannedText } from "../../lib/scanner.js";
 import { gradeForCondition, type UnitCondition } from "../../lib/condition.js";
 import type { GradingSelection } from "../../lib/grading.js";
 import type { MockDb } from "../../mock/seed.js";
@@ -216,24 +214,38 @@ export function TradeInDialog({
    */
   const serialOf = (raw: string | undefined): string => {
     const typed = normaliseScan(raw ?? "");
-    const codes = db.suppliers.map((x) => x.code ?? "");
-    const inner = isStoreBarcode(typed, codes)
-      ? typed.slice(SUPPLIER_CODE_LENGTH)
-      : typed;
     /*
-     * Always the typed route here, unlike Inbound & QC.
+     * The same reader as every other serial box (owner ask 2026-09-08).
      *
-     * The owner's 2026-09-01 rule marks a typed serial and refuses an unmarked
-     * scan, and telling the two apart is a question about typing speed — which
-     * is worth asking at the bench, where a scanner is registered and a burst
-     * is how machines actually arrive. This dialog has no scan target: a
-     * customer's machine turns up with no paperwork and no sticker, its serial
-     * is read off the case, and every other field in the form has to be
-     * answered by hand anyway. Nothing is lost by not asking — a scanned
-     * barcode carries its own `S`, so `markTypedSerial` leaves it exactly as
-     * it found it.
+     * This dialog used to take the typed route unconditionally, on the
+     * grounds that it registers no scan target and a scanned barcode carries
+     * its own `S` anyway — so marking one would be a no-op. That was true of
+     * the marking and false of the REFUSING: a burst aimed at the regulatory
+     * code beside the serial's arrives here with no marker, gets one put on
+     * it, and mints a unit under a serial no scan of the machine will ever
+     * match. A trade-in mints a unit exactly as intake does, so it is judged
+     * exactly as intake judges.
      */
-    return markTypedSerial(inner);
+    const read = readSerialInput(typed, {
+      scanned: wasScannedText(typed),
+      supplierCodes: db.suppliers
+        .map((x) => x.code)
+        .filter((c): c is string => !!c),
+    });
+    return read.ok ? read.serial : typed;
+  };
+
+  /** Why a serial was refused, or null. Drives the field's own message. */
+  const serialFaultOf = (raw: string | undefined) => {
+    const typed = normaliseScan(raw ?? "");
+    if (typed === "") return null;
+    const read = readSerialInput(typed, {
+      scanned: wasScannedText(typed),
+      supplierCodes: db.suppliers
+        .map((x) => x.code)
+        .filter((c): c is string => !!c),
+    });
+    return read.ok ? null : read;
   };
 
   const submit = () =>
@@ -446,18 +458,31 @@ export function TradeInDialog({
                     // `required` above owns the empty case. Saying it twice
                     // would stack two messages under one field.
                     if (serial === "") return Promise.resolve();
-                    if (validateSerial(serial) !== null) {
+                    const bad = serialFaultOf(value);
+                    if (bad !== null) {
+                      /*
+                       * A scan and a hand are told different things, because
+                       * the remedy differs: aim at another barcode, versus
+                       * check what you typed. Written out rather than looked
+                       * up, so `test/i18n.test.ts` can review the copy — see
+                       * the note in `lib/serialInput.ts`.
+                       */
                       return Promise.reject(
                         new Error(
-                          t(
-                            "trade.serialShape",
-                            "“{{serial}}” is not a serial. Type the {{min}}–{{max}} characters printed on the machine, or scan the barcode.",
-                            {
-                              serial,
-                              min: BASE_MIN_LENGTH,
-                              max: BASE_MAX_LENGTH,
-                            },
-                          ),
+                          bad.reason === "no-marker" && bad.source === "scan"
+                            ? t(
+                                "trade.serialScanNoMarker",
+                                "That is not the serial barcode — a Mac carries several. Look for the one printed under an S.",
+                              )
+                            : t(
+                                "trade.serialShape",
+                                "“{{serial}}” is not a serial. Type the {{min}}–{{max}} characters printed on the machine, or scan the barcode.",
+                                {
+                                  serial,
+                                  min: BASE_MIN_LENGTH,
+                                  max: BASE_MAX_LENGTH,
+                                },
+                              ),
                         ),
                       );
                     }
@@ -482,10 +507,14 @@ export function TradeInDialog({
                 { min: BASE_MIN_LENGTH, max: BASE_MAX_LENGTH },
               )}
             >
+              {/* Capitals whatever the keyboard is doing (owner 2026-09-01):
+                  the value is upper-cased on commit either way, and a box
+                  showing `sc02aa` while `SC02AA` gets filed is a field
+                  disagreeing with itself. */}
               <Input
                 maxLength={STORE_MAX_LENGTH}
                 placeholder={t("trade.scanOrType", "Scan or type it")}
-                style={{ fontFamily: "monospace" }}
+                style={{ fontFamily: "monospace", textTransform: "uppercase" }}
               />
             </Form.Item>
           </Flex>
