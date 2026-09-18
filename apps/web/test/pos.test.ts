@@ -202,7 +202,13 @@ describe("what a machine costs the till", () => {
       shippingFee: 300_000,
       taxFee: 100_000,
       items: [
-        { id: "it-1", skuId: "sku-air", serial: null, qty: 2, unitCost: 8_000_000 },
+        {
+          id: "it-1",
+          skuId: "sku-air",
+          serial: null,
+          qty: 2,
+          unitCost: 8_000_000,
+        },
       ],
       ...over,
     }) as unknown as Po;

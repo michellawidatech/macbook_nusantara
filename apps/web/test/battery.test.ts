@@ -223,7 +223,9 @@ describe("readBattery", () => {
     // The whole reason Inventory can keep ONE battery facet over a mixed
     // shelf: a good 2017 battery and a good 2023 battery are both "Good".
     expect(batteryBandOf(readBattery({ cycleCount: 200 }, 2017))).toBe("Good");
-    expect(batteryBandOf(readBattery({ batteryHealth: 95 }, 2023))).toBe("Good");
+    expect(batteryBandOf(readBattery({ batteryHealth: 95 }, 2023))).toBe(
+      "Good",
+    );
     expect(batteryBandOf(readBattery({}, 2017))).toBe(BATTERY_UNKNOWN);
   });
 });
@@ -237,7 +239,8 @@ describe("batterySettingsFrom", () => {
 
   it("clamps a fair ceiling below the good one", () => {
     // The mirror of the health clamp: the fair band must not be empty.
-    expect(batterySettingsFrom({ cycleGoodMax: 500, cycleFairMax: 200 }).cycles)
-      .toEqual({ goodMax: 500, fairMax: 500 });
+    expect(
+      batterySettingsFrom({ cycleGoodMax: 500, cycleFairMax: 200 }).cycles,
+    ).toEqual({ goodMax: 500, fairMax: 500 });
   });
 });

@@ -83,7 +83,12 @@ describe("supplierAccount", () => {
     // "Per supplier we might have an unpaid transaction from years ago." It is
     // stated once and added — never invented as a purchase order, which would
     // put phantom stock in the ledger.
-    const a = supplierAccount("sup-1", [inv({ total: 0, paid: 0 })], [], 7_500_000);
+    const a = supplierAccount(
+      "sup-1",
+      [inv({ total: 0, paid: 0 })],
+      [],
+      7_500_000,
+    );
     expect(a.openingBalance).toBe(7_500_000);
     expect(a.owed).toBe(7_500_000);
   });
@@ -264,7 +269,9 @@ describe("supplierHistory", () => {
     // Newest first — this list is read from the top.
     expect(rows[0]!.at).toBe("2026-09-04");
     // The supplier's own number rides along, for the telephone call.
-    expect(rows.find((r) => r.kind === "INVOICE")!.note).toBe("INV/2026/IX/041");
+    expect(rows.find((r) => r.kind === "INVOICE")!.note).toBe(
+      "INV/2026/IX/041",
+    );
   });
 
   it("signs a charge and a payment opposite ways", () => {

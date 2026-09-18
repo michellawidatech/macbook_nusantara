@@ -49,7 +49,10 @@ let db: PrismaClient;
 
 /** The demo shop, loaded from the web app without teaching tsc to follow it. */
 async function demoShop(): Promise<Record<string, unknown>> {
-  const path = new globalThis.URL("../../../apps/web/src/mock/seed.ts", import.meta.url).href;
+  const path = new globalThis.URL(
+    "../../../apps/web/src/mock/seed.ts",
+    import.meta.url,
+  ).href;
   const mod = (await import(/* @vite-ignore */ path)) as {
     buildSeed: () => Record<string, unknown>;
   };
@@ -138,7 +141,9 @@ describe("the demo shop, through PostgreSQL and back", () => {
       const want = new Map(
         ((shop[name] as Row[]) ?? []).map((r) => [keyOf(name, r), r]),
       );
-      const got = new Map(((back[name] as Row[]) ?? []).map((r) => [keyOf(name, r), r]));
+      const got = new Map(
+        ((back[name] as Row[]) ?? []).map((r) => [keyOf(name, r), r]),
+      );
       for (const [key, row] of want) {
         const other = got.get(key);
         if (other === undefined) {
@@ -153,14 +158,24 @@ describe("the demo shop, through PostgreSQL and back", () => {
         if (!want.has(key)) mismatches.push(`${name} ${key}: unexpected`);
       }
       if (COLLECTIONS[name].ordered) {
-        const wantOrder = ((shop[name] as Row[]) ?? []).map((r) => keyOf(name, r));
-        const gotOrder = ((back[name] as Row[]) ?? []).map((r) => keyOf(name, r));
+        const wantOrder = ((shop[name] as Row[]) ?? []).map((r) =>
+          keyOf(name, r),
+        );
+        const gotOrder = ((back[name] as Row[]) ?? []).map((r) =>
+          keyOf(name, r),
+        );
         if (comparable(wantOrder) !== comparable(gotOrder)) {
-          mismatches.push(`${name}: order ${gotOrder.join(",")} ≠ ${wantOrder.join(",")}`);
+          mismatches.push(
+            `${name}: order ${gotOrder.join(",")} ≠ ${wantOrder.join(",")}`,
+          );
         }
       }
     }
-    for (const name of ["settings", "appleDbHidden", "myWarehouseId"] as const) {
+    for (const name of [
+      "settings",
+      "appleDbHidden",
+      "myWarehouseId",
+    ] as const) {
       if (comparable(shop[name]) !== comparable(back[name])) {
         mismatches.push(
           `${name}:\n   want ${comparable(shop[name])}\n   got  ${comparable(back[name])}`,
@@ -182,27 +197,35 @@ describe("a till's commit", () => {
     await commitStore(db, { staffId: ACTOR, changes: first });
     // Same base, different edit — the base is stale now.
     const second = encodeChangeset(
-      diffStore({ customers: [customer] }, { customers: [{ ...customer, name: "Ketiga" }] }),
+      diffStore(
+        { customers: [customer] },
+        { customers: [{ ...customer, name: "Ketiga" }] },
+      ),
     );
-    await expect(commitStore(db, { staffId: ACTOR, changes: second })).rejects.toBeInstanceOf(
-      StoreConflictError,
-    );
+    await expect(
+      commitStore(db, { staffId: ACTOR, changes: second }),
+    ).rejects.toBeInstanceOf(StoreConflictError);
   }, 180_000);
 
   it("never lets an event be edited", async () => {
     const shop = await loadDemo();
     const event = (shop["events"] as Row[])[0]!;
     const changes = encodeChangeset(
-      diffStore({ events: [event] }, { events: [{ ...event, note: "diubah" }] }),
+      diffStore(
+        { events: [event] },
+        { events: [{ ...event, note: "diubah" }] },
+      ),
     );
-    await expect(commitStore(db, { staffId: ACTOR, changes })).rejects.toBeInstanceOf(
-      StoreValidationError,
-    );
+    await expect(
+      commitStore(db, { staffId: ACTOR, changes }),
+    ).rejects.toBeInstanceOf(StoreValidationError);
   }, 180_000);
 
   it("refuses a status change that no event explains", async () => {
     const shop = await loadDemo();
-    const unit = (shop["units"] as Row[]).find((u) => u["status"] === "TERSEDIA")!;
+    const unit = (shop["units"] as Row[]).find(
+      (u) => u["status"] === "TERSEDIA",
+    )!;
     const changes = encodeChangeset(
       diffStore({ units: [unit] }, { units: [{ ...unit, status: "TERJUAL" }] }),
     );
@@ -213,9 +236,13 @@ describe("a till's commit", () => {
 
   it("numbers a new document and rewrites the provisional code everywhere", async () => {
     const shop = await loadDemo();
-    const unit = (shop["units"] as Row[]).find((u) => u["status"] === "TERSEDIA")!;
+    const unit = (shop["units"] as Row[]).find(
+      (u) => u["status"] === "TERSEDIA",
+    )!;
     const serial = unit["serial"] as string;
-    const events = (shop["events"] as Row[]).filter((e) => e["serial"] === serial);
+    const events = (shop["events"] as Row[]).filter(
+      (e) => e["serial"] === serial,
+    );
     const code = "SI-2026/09-Tabc1234";
     const sale = {
       id: "o_store_test",
@@ -229,7 +256,13 @@ describe("a till's commit", () => {
       payMethod: "TUNAI",
       settled: true,
       payments: [
-        { id: "p_store_test", method: "TUNAI", amount: 5_000_000, state: "SETTLED", at: NOW.toISOString() },
+        {
+          id: "p_store_test",
+          method: "TUNAI",
+          amount: 5_000_000,
+          state: "SETTLED",
+          at: NOW.toISOString(),
+        },
       ],
       total: 5_000_000,
     };
@@ -258,7 +291,9 @@ describe("a till's commit", () => {
     expect(real).toMatch(/^SI-\d{4}\/\d{2}-\d{6}$/);
     const order = (result.rows.orders as Row[])[0]!;
     expect(order["code"]).toBe(real);
-    const written = (result.rows.events as Row[]).find((e) => e["id"] === "ev_store_test")!;
+    const written = (result.rows.events as Row[]).find(
+      (e) => e["id"] === "ev_store_test",
+    )!;
     expect(written["refCode"]).toBe(real);
     expect(written["note"]).toBe(`Sold on ${real}`);
     // The row is attributed to the session, not to the name the browser typed.
@@ -279,7 +314,9 @@ describe("a till's commit", () => {
     const changes = encodeChangeset(diffStore({ pos: [po] }, { pos: [next] }));
     const result = await commitStore(db, { staffId: ACTOR, changes });
     const back = decodeRow("pos", (result.rows.pos as Row[])[0]!);
-    expect((back["items"] as Row[]).find((i) => i["id"] === "poi_blank")).toMatchObject({
+    expect(
+      (back["items"] as Row[]).find((i) => i["id"] === "poi_blank"),
+    ).toMatchObject({
       skuId: "",
       qty: 1,
     });
@@ -355,11 +392,17 @@ describe("a till's commit", () => {
 
   it("cancels a draft stock take instead of deleting it", async () => {
     const shop = await loadDemo();
-    const draft = (shop["opnames"] as Row[]).find((o) => o["status"] === "DRAFT");
+    const draft = (shop["opnames"] as Row[]).find(
+      (o) => o["status"] === "DRAFT",
+    );
     if (draft === undefined) return;
-    const changes = encodeChangeset(diffStore({ opnames: [draft] }, { opnames: [] }));
+    const changes = encodeChangeset(
+      diffStore({ opnames: [draft] }, { opnames: [] }),
+    );
     await commitStore(db, { staffId: ACTOR, changes });
-    const row = await db.opnameSession.findUnique({ where: { id: draft["id"] as string } });
+    const row = await db.opnameSession.findUnique({
+      where: { id: draft["id"] as string },
+    });
     expect(row?.status).toBe("BATAL");
   }, 180_000);
 });

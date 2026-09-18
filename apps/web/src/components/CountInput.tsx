@@ -79,10 +79,7 @@ export interface CountInputProps {
  * `MoneyInput` is the money equivalent and is NOT this — a rupiah figure is
  * seven digits with grouping and wants an "Rp" outside the box.
  */
-export function CountInput({
-  className,
-  ...rest
-}: CountInputProps) {
+export function CountInput({ className, ...rest }: CountInputProps) {
   return (
     <InputNumber<number>
       {...rest}
@@ -90,7 +87,9 @@ export function CountInput({
       // the two mean the same thing to a stepper, and null is what a cleared
       // box hands back.
       value={rest.value ?? undefined}
-      className={className ? `${COUNT_INPUT_CLASS} ${className}` : COUNT_INPUT_CLASS}
+      className={
+        className ? `${COUNT_INPUT_CLASS} ${className}` : COUNT_INPUT_CLASS
+      }
     />
   );
 }

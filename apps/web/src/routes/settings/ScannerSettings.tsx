@@ -74,9 +74,7 @@ export function ScannerSettings() {
         codes,
       )
     : "";
-  const matched = db.units.some((u) => u.serial === resolved)
-    ? resolved
-    : null;
+  const matched = db.units.some((u) => u.serial === resolved) ? resolved : null;
   /** The origin code the matched unit's own sticker would carry. */
   const supplierCodeOfSerial = (serial: string) => {
     const unit = db.units.find((u) => u.serial === serial);

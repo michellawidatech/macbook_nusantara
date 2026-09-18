@@ -89,7 +89,13 @@ import {
   type ServiceFee,
   type ServiceFeeKind,
 } from "../../lib/service.js";
-import { appendEvent, mutate, nextId, useDb, currentStaffName } from "../../mock/store.js";
+import {
+  appendEvent,
+  mutate,
+  nextId,
+  useDb,
+  currentStaffName,
+} from "../../mock/store.js";
 import { SPACE, TYPE } from "../../theme/tokens";
 
 export function ServicePage() {
@@ -127,8 +133,7 @@ export function ServicePage() {
   );
   const { expected, onBench } = useMemo(() => splitBench(rows), [rows]);
 
-  const unitOf = (serial: string) =>
-    db.units.find((u) => u.serial === serial);
+  const unitOf = (serial: string) => db.units.find((u) => u.serial === serial);
   const skuOf = (serial: string) => {
     const u = unitOf(serial);
     return u && db.skus.find((k) => k.id === u.skuId);
@@ -471,39 +476,30 @@ export function ServicePage() {
                       title: t("service.feeKind", "Charge"),
                       key: "kind",
                       width: 140,
-                      render: (
-                        _: unknown,
-                        f: (typeof r.rec.fees)[number],
-                      ) =>
+                      render: (_: unknown, f: (typeof r.rec.fees)[number]) =>
                         SERVICE_FEE_KINDS.find((k) => k.value === f.kind)
                           ?.label ?? f.kind,
                     },
                     {
                       title: t("service.feeLabel", "What for"),
                       key: "label",
-                      render: (
-                        _: unknown,
-                        f: (typeof r.rec.fees)[number],
-                      ) => f.label ?? "—",
+                      render: (_: unknown, f: (typeof r.rec.fees)[number]) =>
+                        f.label ?? "—",
                     },
                     {
                       title: t("service.feeWhen", "When"),
                       key: "at",
                       width: 140,
-                      render: (
-                        _: unknown,
-                        f: (typeof r.rec.fees)[number],
-                      ) => fmtDate(f.at),
+                      render: (_: unknown, f: (typeof r.rec.fees)[number]) =>
+                        fmtDate(f.at),
                     },
                     {
                       title: t("service.feeAmount", "Amount"),
                       key: "amount",
                       width: 150,
                       align: "right",
-                      render: (
-                        _: unknown,
-                        f: (typeof r.rec.fees)[number],
-                      ) => fmtRp(f.amount),
+                      render: (_: unknown, f: (typeof r.rec.fees)[number]) =>
+                        fmtRp(f.amount),
                     },
                     {
                       /*
@@ -516,10 +512,7 @@ export function ServicePage() {
                       title: "",
                       key: "edit",
                       width: 56,
-                      render: (
-                        _: unknown,
-                        f: (typeof r.rec.fees)[number],
-                      ) => (
+                      render: (_: unknown, f: (typeof r.rec.fees)[number]) => (
                         <Tooltip
                           title={t("service.editFee", "Change this charge")}
                         >

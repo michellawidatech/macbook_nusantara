@@ -107,7 +107,9 @@ describe("the summariser's own prompt", () => {
     // The summary is the ONE place customer-derived text is promoted into a
     // later system prompt, so the injection guard belongs at both ends.
     expect(SUMMARY_SYSTEM).toMatch(/the customer asked/i);
-    expect(SUMMARY_SYSTEM).toMatch(/not an instruction|never restate it as a command/i);
+    expect(SUMMARY_SYSTEM).toMatch(
+      /not an instruction|never restate it as a command/i,
+    );
   });
 
   it("asks for plain text, so a bulleted note cannot teach the bot to write bullets", () => {
@@ -135,7 +137,9 @@ describe("renderTranscript", () => {
 describe("summarize", () => {
   it("rewrites the note from the previous one plus the new turns", async () => {
     const model = scriptedClient([
-      says("Mau MacBook Air M2 256GB, budget 15jt, buat kuliah. Harga sudah dikasih."),
+      says(
+        "Mau MacBook Air M2 256GB, budget 15jt, buat kuliah. Harga sudah dikasih.",
+      ),
     ]);
     const out = await summarize({
       client: model.client,
@@ -245,7 +249,9 @@ describe("thread memory", () => {
     );
     expect(ok).toBe(true);
 
-    const memo = await db.waThreadMemory.findUniqueOrThrow({ where: { from: FROM } });
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
     expect(memo.summary).toBe("Mau Air M2, budget 15jt.");
     expect(memo.summaryTurns).toBe(1);
     expect(memo.clarifyCount).toBe(0);
@@ -274,7 +280,9 @@ describe("thread memory", () => {
       ANCHOR,
     );
 
-    const memo = await db.waThreadMemory.findUniqueOrThrow({ where: { from: FROM } });
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
     expect(memo.directive).toBeNull();
     expect(memo.directiveAt).toBeNull();
     expect(memo.directiveById).toBeNull();
@@ -310,7 +318,9 @@ describe("thread memory", () => {
       ANCHOR,
     );
 
-    const memo = await db.waThreadMemory.findUniqueOrThrow({ where: { from: FROM } });
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
     expect(memo.summary).toBe("Sedang menawar.");
     // The whole point of invariant 13, asserted on our side of it.
     expect(memo.directive).toBe("kasih diskon 200rb kalau nawar");
@@ -353,7 +363,12 @@ describe("thread memory", () => {
     await saveSummary(
       db,
       FROM,
-      { summary: null, turns: 1, coveredThroughAt: ANCHOR, coveredThroughId: turn.id },
+      {
+        summary: null,
+        turns: 1,
+        coveredThroughAt: ANCHOR,
+        coveredThroughId: turn.id,
+      },
       ANCHOR,
     );
 
@@ -384,7 +399,9 @@ describe("thread memory", () => {
     const later = new Date(ANCHOR.getTime() + 60_000);
     await markSummaryAttempt(db, FROM, later);
 
-    const memo = await db.waThreadMemory.findUniqueOrThrow({ where: { from: FROM } });
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
     // The attempt clock moved; nothing else did.
     expect(memo.summaryAt).toEqual(later);
     expect(memo.summary).toBe("Tanya stok.");
@@ -394,7 +411,9 @@ describe("thread memory", () => {
   it("records an attempt on a thread with no memory row yet, rather than failing", async () => {
     const ok = await markSummaryAttempt(db, FROM, ANCHOR);
     expect(ok).toBe(true);
-    const memo = await db.waThreadMemory.findUniqueOrThrow({ where: { from: FROM } });
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
     expect(memo.summaryAt).toEqual(ANCHOR);
     expect(memo.summary).toBeNull();
   });

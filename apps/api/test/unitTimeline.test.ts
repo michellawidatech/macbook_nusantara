@@ -72,8 +72,20 @@ const SERIAL = "TLA0000001";
 async function seedShop(): Promise<void> {
   await db.reservationSource.createMany({
     data: [
-      { id: "rsv-src-wa", name: "WhatsApp", sortOrder: 2, active: true, createdAt: NOW },
-      { id: "rsv-src-ig", name: "Instagram", sortOrder: 1, active: true, createdAt: NOW },
+      {
+        id: "rsv-src-wa",
+        name: "WhatsApp",
+        sortOrder: 2,
+        active: true,
+        createdAt: NOW,
+      },
+      {
+        id: "rsv-src-ig",
+        name: "Instagram",
+        sortOrder: 1,
+        active: true,
+        createdAt: NOW,
+      },
     ],
     skipDuplicates: true,
   });
@@ -81,39 +93,88 @@ async function seedShop(): Promise<void> {
     where: { id: STAFF },
     update: { passwordHash: await hashPassword(PASSWORD), active: true },
     create: {
-      id: STAFF, username: "kasir_tl", name: "Kasir Timeline", role: "STAFF",
-      canApprove: false, active: true,
-      passwordHash: await hashPassword(PASSWORD), createdAt: NOW,
+      id: STAFF,
+      username: "kasir_tl",
+      name: "Kasir Timeline",
+      role: "STAFF",
+      canApprove: false,
+      active: true,
+      passwordHash: await hashPassword(PASSWORD),
+      createdAt: NOW,
     },
   });
   await db.location.create({
-    data: { id: "loc_tl", code: "T1", name: "Gudang Utama", kind: "GUDANG", active: true, sortOrder: 1 },
+    data: {
+      id: "loc_tl",
+      code: "T1",
+      name: "Gudang Utama",
+      kind: "GUDANG",
+      active: true,
+      sortOrder: 1,
+    },
   });
   await db.category.create({
     data: {
-      id: "cat_tl", name: "MacBook", sortOrder: 1, marginMode: "PCT",
-      marginMin: 5n, marginMax: 30n, createdAt: NOW,
+      id: "cat_tl",
+      name: "MacBook",
+      sortOrder: 1,
+      marginMode: "PCT",
+      marginMin: 5n,
+      marginMax: 30n,
+      createdAt: NOW,
     },
   });
   await db.catalogModel.create({
-    data: { id: "mdl_tl", categoryId: "cat_tl", name: "MacBook Air M2", archived: false, createdAt: NOW },
+    data: {
+      id: "mdl_tl",
+      categoryId: "cat_tl",
+      name: "MacBook Air M2",
+      archived: false,
+      createdAt: NOW,
+    },
   });
   await db.sku.create({
     data: {
-      id: "sku_tl", modelId: "mdl_tl", code: "AIR-M2-8-256", name: "MacBook Air M2 256GB",
-      variantLabel: "8/256", grade: "A", price: 15_500_000n, landed: 12_000_000n,
-      archived: false, createdAt: NOW,
+      id: "sku_tl",
+      modelId: "mdl_tl",
+      code: "AIR-M2-8-256",
+      name: "MacBook Air M2 256GB",
+      variantLabel: "8/256",
+      grade: "A",
+      price: 15_500_000n,
+      landed: 12_000_000n,
+      archived: false,
+      createdAt: NOW,
     },
   });
   await db.unit.create({
     data: {
-      id: "u_tl", serial: SERIAL, skuId: "sku_tl", status: "QC", locationId: "loc_tl",
-      buy: 12_000_000n, landed: 12_400_000n, grade: "A", intakeAt: NOW, version: 1,
+      id: "u_tl",
+      serial: SERIAL,
+      skuId: "sku_tl",
+      status: "QC",
+      locationId: "loc_tl",
+      buy: 12_000_000n,
+      landed: 12_400_000n,
+      grade: "A",
+      intakeAt: NOW,
+      version: 1,
     },
   });
   await db.$transaction(async (tx) => {
-    await appendUnitEvent(tx, { serial: SERIAL, type: "DITERIMA", staffId: STAFF, at: NOW, toLocationId: "loc_tl" });
-    await appendUnitEvent(tx, { serial: SERIAL, type: "QC_SELESAI", staffId: STAFF, at: NOW });
+    await appendUnitEvent(tx, {
+      serial: SERIAL,
+      type: "DITERIMA",
+      staffId: STAFF,
+      at: NOW,
+      toLocationId: "loc_tl",
+    });
+    await appendUnitEvent(tx, {
+      serial: SERIAL,
+      type: "QC_SELESAI",
+      staffId: STAFF,
+      at: NOW,
+    });
   });
 }
 
@@ -157,7 +218,9 @@ async function holdThenRelease(phone: string, name: string, channel: string) {
 
 describe("GET /api/katalog/unit/:serial", () => {
   it("requires a session", async () => {
-    expect((await request(app).get(`/api/katalog/unit/${SERIAL}`)).status).toBe(401);
+    expect((await request(app).get(`/api/katalog/unit/${SERIAL}`)).status).toBe(
+      401,
+    );
   });
 
   it("returns the machine's card with the variant's asking price", async () => {
@@ -199,8 +262,13 @@ describe("GET /api/katalog/unit/:serial", () => {
 
   it("says where a machine was shelved when it passed QC", async () => {
     const res = await get(`/unit/${SERIAL}`);
-    const qc = res.body.events.find((e: { type: string }) => e.type === "QC_SELESAI");
-    expect(qc.context).toMatchObject({ kind: "SHELVED", locationName: "Gudang Utama" });
+    const qc = res.body.events.find(
+      (e: { type: string }) => e.type === "QC_SELESAI",
+    );
+    expect(qc.context).toMatchObject({
+      kind: "SHELVED",
+      locationName: "Gudang Utama",
+    });
   });
 
   it("names the customer and the channel on a hold", async () => {
@@ -216,7 +284,9 @@ describe("GET /api/katalog/unit/:serial", () => {
     );
 
     const res = await get(`/unit/${SERIAL}`);
-    const held = res.body.events.find((e: { type: string }) => e.type === "DIRESERVASI");
+    const held = res.body.events.find(
+      (e: { type: string }) => e.type === "DIRESERVASI",
+    );
     expect(held.context).toMatchObject({
       kind: "HOLD",
       customerName: "Budi Santoso",
@@ -247,8 +317,16 @@ describe("GET /api/katalog/unit/:serial", () => {
    * in the array — and the release narrated them too.
    */
   it("tells two customers' holds apart on one machine", async () => {
-    const first = await holdThenRelease("+628111000111", "Budi Santoso", "rsv-src-wa");
-    const second = await holdThenRelease("+628111000222", "Siti Rahayu", "rsv-src-ig");
+    const first = await holdThenRelease(
+      "+628111000111",
+      "Budi Santoso",
+      "rsv-src-wa",
+    );
+    const second = await holdThenRelease(
+      "+628111000222",
+      "Siti Rahayu",
+      "rsv-src-ig",
+    );
     expect(first.code).not.toBe(second.code);
 
     const res = await get(`/unit/${SERIAL}`);
@@ -280,12 +358,17 @@ describe("GET /api/katalog/unit/:serial", () => {
   it("adds no context to an event that names nothing, rather than guessing", async () => {
     await db.$transaction((tx) =>
       appendUnitEvent(tx, {
-        serial: SERIAL, type: "DICATAT", staffId: STAFF, at: NOW,
+        serial: SERIAL,
+        type: "DICATAT",
+        staffId: STAFF,
+        at: NOW,
         note: "Charger checked",
       }),
     );
     const res = await get(`/unit/${SERIAL}`);
-    const noted = res.body.events.find((e: { type: string }) => e.type === "DICATAT");
+    const noted = res.body.events.find(
+      (e: { type: string }) => e.type === "DICATAT",
+    );
     expect(noted.context).toBeNull();
     expect(noted.note).toBe("Charger checked");
   });
@@ -296,7 +379,11 @@ describe("GET /api/katalog/unit", () => {
     const res = await get("/unit?q=TLA");
     expect(res.status).toBe(200);
     expect(res.body.units).toEqual([
-      { serial: SERIAL, productName: "MacBook Air M2 256GB", variantLabel: "8/256" },
+      {
+        serial: SERIAL,
+        productName: "MacBook Air M2 256GB",
+        variantLabel: "8/256",
+      },
     ]);
   });
 

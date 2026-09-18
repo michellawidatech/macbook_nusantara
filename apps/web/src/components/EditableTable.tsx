@@ -77,7 +77,7 @@ const ROW_ATTR: typeof EDITABLE_ROW_ATTR = "data-editable-row";
 
 /** What counts as somewhere a caret can go. */
 const FOCUSABLE =
-  'input:not([disabled]), textarea:not([disabled]), select:not([disabled]),' +
+  "input:not([disabled]), textarea:not([disabled]), select:not([disabled])," +
   ' button:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
@@ -175,11 +175,10 @@ function rowMarker(row: number): Record<string, unknown> {
   return { [ROW_ATTR]: row };
 }
 
-export interface EditableTableProps<T>
-  extends Omit<
-    TableProps<T>,
-    "pagination" | "dataSource" | "columns" | "footer"
-  > {
+export interface EditableTableProps<T> extends Omit<
+  TableProps<T>,
+  "pagination" | "dataSource" | "columns" | "footer"
+> {
   dataSource: readonly T[];
   columns: AntColumns<T>;
   /**
@@ -308,7 +307,12 @@ export function EditableTable<T extends object>({
       : t("editableTable.line", "Line {{n}}", { n: index + 1 });
 
   const adder = onAdd ? (
-    <Flex vertical align="center" gap={SPACE.xs} style={{ marginTop: SPACE.sm }}>
+    <Flex
+      vertical
+      align="center"
+      gap={SPACE.xs}
+      style={{ marginTop: SPACE.sm }}
+    >
       <Button
         type="dashed"
         block
@@ -336,9 +340,7 @@ export function EditableTable<T extends object>({
   const empty = (
     <Empty
       image={Empty.PRESENTED_IMAGE_SIMPLE}
-      description={
-        emptyText ?? t("editableTable.empty", "Nothing here yet.")
-      }
+      description={emptyText ?? t("editableTable.empty", "Nothing here yet.")}
     />
   );
 

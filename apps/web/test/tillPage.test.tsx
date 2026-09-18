@@ -273,9 +273,7 @@ async function goToPayment() {
 async function payAndFinish() {
   const cont = screen.queryByRole("button", { name: /^Continue$/ });
   if (cont) await userEvent.click(cont);
-  await userEvent.click(
-    screen.getByRole("button", { name: /^Pay & finish$/ }),
-  );
+  await userEvent.click(screen.getByRole("button", { name: /^Pay & finish$/ }));
   // The dialog holding the confirmation, not merely the last one mounted: the
   // catalogue's chooser stays in the DOM behind it on the phone layout, which
   // every test gets unless it asks for a desktop viewport.
@@ -414,9 +412,7 @@ describe("paying a bill in more than one way", () => {
 
     const order = snapshot().orders[0]!;
     expect(order.payments).toHaveLength(2);
-    expect(order.payments!.reduce((n, p) => n + p.amount, 0)).toBe(
-      order.total,
-    );
+    expect(order.payments!.reduce((n, p) => n + p.amount, 0)).toBe(order.total);
     expect(order.payments![0]!.amount).toBe(5_000_000);
     // Every rupiah is accounted for, and all of it is the shop's, so the sale
     // IS settled — the projection is over the parts, not over the channel.

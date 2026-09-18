@@ -15,7 +15,11 @@ import { describe, expect, it, vi } from "vitest";
 import { CustomersPage } from "../src/routes/customers/CustomersPage.js";
 import { ReceivablesPage } from "../src/routes/finance/ReceivablesPage.js";
 import { fmtRp } from "../src/lib/format.js";
-import { customerBalance, paymentsOf, saleBalance } from "../src/lib/salePayments.js";
+import {
+  customerBalance,
+  paymentsOf,
+  saleBalance,
+} from "../src/lib/salePayments.js";
 import { getDb, mutate } from "../src/mock/store.js";
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -54,8 +58,13 @@ describe("a debt from before this app", () => {
   });
 
   it("is in the customer's balance on Customers", async () => {
-    const customer = getDb().customers.find((c) => c.openingBalance) ?? oweFromBefore();
-    const owed = customerBalance(customer.id, getDb().orders, customer.openingBalance).owed;
+    const customer =
+      getDb().customers.find((c) => c.openingBalance) ?? oweFromBefore();
+    const owed = customerBalance(
+      customer.id,
+      getDb().orders,
+      customer.openingBalance,
+    ).owed;
     expect(owed).toBeGreaterThanOrEqual(OLD_DEBT);
     page(<CustomersPage />);
     expect((await screen.findAllByText(fmtRp(owed))).length).toBeGreaterThan(0);

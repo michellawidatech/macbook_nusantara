@@ -25,14 +25,8 @@ import {
 import { holdsFunds } from "../lib/channels.js";
 import type { SaleSource } from "../lib/channels.js";
 import type { GradingCriterion, GradingRule } from "../lib/grading.js";
-import type {
-  PaymentLogEntry,
-  SalePayment,
-} from "../lib/salePayments.js";
-import type {
-  Settlement,
-  SettlementLogEntry,
-} from "../lib/marketplace.js";
+import type { PaymentLogEntry, SalePayment } from "../lib/salePayments.js";
+import type { Settlement, SettlementLogEntry } from "../lib/marketplace.js";
 import type { ServiceRec } from "../lib/service.js";
 import type { SupplierDeposit } from "../lib/supplierLedger.js";
 import type { UnitCondition } from "../lib/condition.js";
@@ -1613,10 +1607,7 @@ export function buildSeed(): MockDb {
         conditions: [
           {
             criterionId: `gc-${pref}-screen`,
-            optionIds: [
-              `gco-${pref}-screen-new`,
-              `gco-${pref}-screen-scratch`,
-            ],
+            optionIds: [`gco-${pref}-screen-new`, `gco-${pref}-screen-scratch`],
           },
           {
             criterionId: `gc-${pref}-body`,
@@ -1703,9 +1694,7 @@ export function buildSeed(): MockDb {
     // about. See the fixture's own note.
     discount: 0,
     status: p.status === "DIPESAN" ? "ORDERED" : "RECEIVED",
-    ...(p.closed === undefined
-      ? {}
-      : { closedAt: isoOf(p.closed, shop.now) }),
+    ...(p.closed === undefined ? {} : { closedAt: isoOf(p.closed, shop.now) }),
   }));
 
   /*
@@ -1854,7 +1843,9 @@ export function buildSeed(): MockDb {
       ? {}
       : {
           address: c.address,
-          addresses: [{ id: `${c.id}-addr-1`, label: "Rumah", line: c.address }],
+          addresses: [
+            { id: `${c.id}-addr-1`, label: "Rumah", line: c.address },
+          ],
         }),
     referralSourceId: c.referralSourceId,
     createdAt: isoOf(c.since, shop.now),
@@ -1981,7 +1972,11 @@ export function buildSeed(): MockDb {
           extra: o.extra,
           extraNote: o.extraNote ?? "Delivery",
           fees: [
-            { id: `${o.id}-fee-1`, label: o.extraNote ?? "Delivery", amount: o.extra },
+            {
+              id: `${o.id}-fee-1`,
+              label: o.extraNote ?? "Delivery",
+              amount: o.extra,
+            },
           ],
         }),
     total: o.total,

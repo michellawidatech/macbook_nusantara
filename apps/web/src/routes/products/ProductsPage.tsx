@@ -653,7 +653,9 @@ export function ProductsPage() {
                         <Button
                           size="small"
                           type="text"
-                          icon={off ? <EyeOutlined /> : <EyeInvisibleOutlined />}
+                          icon={
+                            off ? <EyeOutlined /> : <EyeInvisibleOutlined />
+                          }
                           aria-label={
                             off
                               ? t("products.unhideAria", "Unhide {{name}}", {
@@ -739,7 +741,9 @@ export function ProductsPage() {
           <Form.Item
             name="ram"
             label={t("products.ramOptions", "RAM options")}
-            rules={[{ required: true, message: t("form.atLeastOne", "At least one") }]}
+            rules={[
+              { required: true, message: t("form.atLeastOne", "At least one") },
+            ]}
           >
             <Select
               mode="tags"
@@ -751,7 +755,9 @@ export function ProductsPage() {
           <Form.Item
             name="ssd"
             label={t("products.ssdOptions", "SSD options")}
-            rules={[{ required: true, message: t("form.atLeastOne", "At least one") }]}
+            rules={[
+              { required: true, message: t("form.atLeastOne", "At least one") },
+            ]}
           >
             <Select
               mode="tags"

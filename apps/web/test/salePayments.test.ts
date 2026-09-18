@@ -157,10 +157,20 @@ describe("customerBalance", () => {
         pay({ id: "b", amount: 6_000_000, state: "DUE", dueAt: "2026-09-30" }),
       ]),
       order("o2", 5_000_000, [
-        pay({ id: "c", amount: 5_000_000, state: "PENDING", channel: "SHOPEE" }),
+        pay({
+          id: "c",
+          amount: 5_000_000,
+          state: "PENDING",
+          channel: "SHOPEE",
+        }),
       ]),
       // Somebody else's sale, which must not land on this customer.
-      order("o3", 9_000_000, [pay({ id: "d", amount: 0, state: "DUE" })], "c-2"),
+      order(
+        "o3",
+        9_000_000,
+        [pay({ id: "d", amount: 0, state: "DUE" })],
+        "c-2",
+      ),
     ];
     const b = customerBalance("c-1", orders);
     expect(b.billed).toBe(15_000_000);
@@ -201,9 +211,9 @@ describe("isOverdue", () => {
 
   it("is never true of money a marketplace is holding", () => {
     // A platform sitting on a payout is not a customer failing to pay.
-    expect(
-      isOverdue(pay({ state: "PENDING", dueAt: "2026-01-01" }), now),
-    ).toBe(false);
+    expect(isOverdue(pay({ state: "PENDING", dueAt: "2026-01-01" }), now)).toBe(
+      false,
+    );
   });
 
   it("is never true of a promise with no date", () => {

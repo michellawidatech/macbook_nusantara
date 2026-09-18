@@ -1085,7 +1085,9 @@ describe("sending a machine to service", () => {
 
   it("opens a visit that has not arrived, and leaves the machine where it is", async () => {
     const serial = await graded();
-    const before = snapshot().units.find((u) => u.serial === serial)!.locationId;
+    const before = snapshot().units.find(
+      (u) => u.serial === serial,
+    )!.locationId;
 
     await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
     await userEvent.click(await okButton("Send to service"));
@@ -1122,9 +1124,7 @@ describe("sending a machine to service", () => {
     const visit = snapshot().services.find((r) => r.serial === serial)!;
     // Two charges from two parties, not one number covering both — which is
     // the whole reason a visit carries a list.
-    expect(
-      visit.fees.map((f) => [f.kind, f.amount]).sort(),
-    ).toEqual([
+    expect(visit.fees.map((f) => [f.kind, f.amount]).sort()).toEqual([
       ["LABOUR", 800_000],
       ["SHIPPING", 150_000],
     ]);
@@ -1142,6 +1142,8 @@ describe("sending a machine to service", () => {
     expect(db.units.find((u) => u.serial === serial)!.status).toBe("QC");
     // The visit is closed rather than removed — a courier charge already
     // incurred is still a cost — but the bench stops waiting for it.
-    expect(db.services.find((r) => r.serial === serial)!.closedAt).toBeDefined();
+    expect(
+      db.services.find((r) => r.serial === serial)!.closedAt,
+    ).toBeDefined();
   });
 });

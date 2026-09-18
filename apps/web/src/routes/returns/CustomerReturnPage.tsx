@@ -32,14 +32,8 @@ import { MoneyInput } from "../../components/MoneyInput";
 import { GradeTag } from "../../components/GradeTag";
 import { GradingModal } from "../../components/GradingModal";
 import { fmtRp, fmtDate } from "../../lib/format.js";
-import {
-  joinDescription,
-  splitDescription,
-} from "../../lib/inboundQc.js";
-import {
-  gradeForCondition,
-  secondHandOnReturn,
-} from "../../lib/condition.js";
+import { joinDescription, splitDescription } from "../../lib/inboundQc.js";
+import { gradeForCondition, secondHandOnReturn } from "../../lib/condition.js";
 import {
   useDb,
   mutate,
@@ -80,7 +74,9 @@ export function CustomerReturnPanel({
   /** The condition phrases being picked, per return. */
   const [describing, setDescribing] = useState<Record<string, string[]>>({});
   /** A regrade chosen in the checklist, per return. */
-  const [regrade, setRegrade] = useState<Record<string, string | undefined>>({});
+  const [regrade, setRegrade] = useState<Record<string, string | undefined>>(
+    {},
+  );
   /** The return whose grading dialog is open. */
   const [gradingId, setGradingId] = useState<string | null>(null);
 
@@ -90,8 +86,7 @@ export function CustomerReturnPanel({
   const needsDetail = (reason ?? "").trim().toLowerCase() === OTHER;
 
   const soldUnits = db.units.filter((u) => u.status === "TERJUAL");
-  const unitOf = (serial: string) =>
-    db.units.find((u) => u.serial === serial);
+  const unitOf = (serial: string) => db.units.find((u) => u.serial === serial);
   /** What the machine IS — product and variant, without the order code. */
   const productLabel = (serial: string) => {
     const sku = db.skus.find((s) => s.id === unitOf(serial)?.skuId);
@@ -474,7 +469,13 @@ export function CustomerReturnPanel({
                     "Specify the reason",
                   )}
                   rules={[
-                    { required: true, message: t("form.sayWhatHappened", "Say what actually happened") },
+                    {
+                      required: true,
+                      message: t(
+                        "form.sayWhatHappened",
+                        "Say what actually happened",
+                      ),
+                    },
                   ]}
                 >
                   <Input.TextArea

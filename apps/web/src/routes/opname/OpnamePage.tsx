@@ -325,7 +325,10 @@ export function OpnamePage() {
               render: (_, r) =>
                 r.status === "DRAFT" ? (
                   <Tooltip
-                    title={t("opnameList.deleteHint", "Delete this draft count")}
+                    title={t(
+                      "opnameList.deleteHint",
+                      "Delete this draft count",
+                    )}
                   >
                     <Button
                       type="text"

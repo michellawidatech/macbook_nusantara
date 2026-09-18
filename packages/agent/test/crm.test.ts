@@ -65,29 +65,60 @@ beforeEach(async () => {
   await truncateAll(db);
 
   await db.location.create({
-    data: { id: "loc_c", code: "C1", name: "Toko", kind: "TOKO", active: true, sortOrder: 1 },
+    data: {
+      id: "loc_c",
+      code: "C1",
+      name: "Toko",
+      kind: "TOKO",
+      active: true,
+      sortOrder: 1,
+    },
   });
   await db.staff.create({
     data: {
-      id: "staff_crm", username: "crm_kasir", name: "Kasir", role: "STAFF",
-      canApprove: false, active: true, passwordHash: "unusable", createdAt: NOW,
+      id: "staff_crm",
+      username: "crm_kasir",
+      name: "Kasir",
+      role: "STAFF",
+      canApprove: false,
+      active: true,
+      passwordHash: "unusable",
+      createdAt: NOW,
     },
   });
   // `OrderItem.skuId` is required, so a purchase needs a real catalogue behind
   // it even when the test only cares about the money.
   await db.category.create({
     data: {
-      id: "cat_c", name: "MacBook", sortOrder: 1, marginMode: "PCT",
-      marginMin: 5n, marginMax: 30n, createdAt: NOW,
+      id: "cat_c",
+      name: "MacBook",
+      sortOrder: 1,
+      marginMode: "PCT",
+      marginMin: 5n,
+      marginMax: 30n,
+      createdAt: NOW,
     },
   });
   await db.catalogModel.create({
-    data: { id: "mdl_c", categoryId: "cat_c", name: "MacBook Air M2", archived: false, createdAt: NOW },
+    data: {
+      id: "mdl_c",
+      categoryId: "cat_c",
+      name: "MacBook Air M2",
+      archived: false,
+      createdAt: NOW,
+    },
   });
   await db.sku.create({
     data: {
-      id: "sku_c", modelId: "mdl_c", code: "SKU-C1", name: "MacBook Air M2 256GB",
-      grade: "A", price: 15_500_000n, landed: 12_000_000n, archived: false, createdAt: NOW,
+      id: "sku_c",
+      modelId: "mdl_c",
+      code: "SKU-C1",
+      name: "MacBook Air M2 256GB",
+      grade: "A",
+      price: 15_500_000n,
+      landed: 12_000_000n,
+      archived: false,
+      createdAt: NOW,
     },
   });
 });
@@ -95,10 +126,17 @@ beforeEach(async () => {
 const ctx = (from = SENDER): ToolContext => ({ from, now: NOW });
 
 const lookup = (from = SENDER) =>
-  dispatchTool(db, "lookup_customer", {}, ctx(from)) as Promise<Record<string, unknown>>;
+  dispatchTool(db, "lookup_customer", {}, ctx(from)) as Promise<
+    Record<string, unknown>
+  >;
 
 /** A customer with everything the shop might store, so PII leaks are visible. */
-async function customer(opts: { id: string; phone: string; name: string; since?: Date }) {
+async function customer(opts: {
+  id: string;
+  phone: string;
+  name: string;
+  since?: Date;
+}) {
   return db.customer.create({
     data: {
       id: opts.id,
@@ -140,11 +178,18 @@ async function order(opts: {
       soldById: "staff_crm",
       locationId: "loc_c",
       items: {
-        create: [{
-          skuId: "sku_c", name: "MacBook Air M2 256GB", variant: "8/256",
-          qty: 1, price: opts.total ?? 15_500_000n, sub: opts.total ?? 15_500_000n,
-          cogs: 12_000_000n, returnedQty: 0,
-        }],
+        create: [
+          {
+            skuId: "sku_c",
+            name: "MacBook Air M2 256GB",
+            variant: "8/256",
+            qty: 1,
+            price: opts.total ?? 15_500_000n,
+            sub: opts.total ?? 15_500_000n,
+            cogs: 12_000_000n,
+            returnedQty: 0,
+          },
+        ],
       },
     },
   });
@@ -165,7 +210,9 @@ describe("finding the customer", () => {
 
   it("says how long they have been a customer, so the bot can greet them properly", async () => {
     await customer({
-      id: "c_3", phone: `+${SENDER}`, name: "Budi",
+      id: "c_3",
+      phone: `+${SENDER}`,
+      name: "Budi",
       since: new Date("2025-03-14T00:00:00.000Z"),
     });
     expect(await lookup()).toMatchObject({ customerSince: "2025-03-14" });
@@ -222,8 +269,16 @@ describe("what it must never hand over", () => {
 describe("their own history", () => {
   it("lists what they bought, newest first", async () => {
     await customer({ id: "c_8", phone: `+${SENDER}`, name: "Budi" });
-    await order({ id: "o_old", customerId: "c_8", ts: new Date(NOW.getTime() - 300 * DAY) });
-    await order({ id: "o_new", customerId: "c_8", ts: new Date(NOW.getTime() - 10 * DAY) });
+    await order({
+      id: "o_old",
+      customerId: "c_8",
+      ts: new Date(NOW.getTime() - 300 * DAY),
+    });
+    await order({
+      id: "o_new",
+      customerId: "c_8",
+      ts: new Date(NOW.getTime() - 10 * DAY),
+    });
 
     const out = (await lookup())["orders"] as Array<{ date: string }>;
     expect(out).toHaveLength(2);
@@ -253,27 +308,40 @@ describe("their own history", () => {
     await customer({ id: "c_11", phone: `+${SENDER}`, name: "Budi" });
     await db.reservation.create({
       data: {
-        customerId: "c_11", phone: `+${SENDER}`, status: "TERJADWAL", source: "AGEN",
-        scheduledFor: new Date("2026-08-21T08:00:00.000Z"), createdAt: NOW,
+        customerId: "c_11",
+        phone: `+${SENDER}`,
+        status: "TERJADWAL",
+        source: "AGEN",
+        scheduledFor: new Date("2026-08-21T08:00:00.000Z"),
+        createdAt: NOW,
       },
     });
-    const out = (await lookup())["reservations"] as Array<{ code: string; when: string }>;
+    const out = (await lookup())["reservations"] as Array<{
+      code: string;
+      when: string;
+    }>;
     expect(out).toHaveLength(1);
     expect(out[0]!.when).toContain("2026-08-21");
   });
 
   it("reads a customer without writing one", async () => {
     await customer({ id: "c_12", phone: `+${SENDER}`, name: "Budi" });
-    const before = await db.customer.findUniqueOrThrow({ where: { id: "c_12" } });
+    const before = await db.customer.findUniqueOrThrow({
+      where: { id: "c_12" },
+    });
     await lookup();
-    const after = await db.customer.findUniqueOrThrow({ where: { id: "c_12" } });
+    const after = await db.customer.findUniqueOrThrow({
+      where: { id: "c_12" },
+    });
     expect(after).toEqual(before);
   });
 });
 
 describe("check_order", () => {
   const check = (code: string, from = SENDER) =>
-    dispatchTool(db, "check_order", { code }, ctx(from)) as Promise<Record<string, unknown>>;
+    dispatchTool(db, "check_order", { code }, ctx(from)) as Promise<
+      Record<string, unknown>
+    >;
 
   it("finds the customer's own purchase by its code", async () => {
     await customer({ id: "c_13", phone: `+${SENDER}`, name: "Budi" });

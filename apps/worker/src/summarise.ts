@@ -120,7 +120,8 @@ export async function summaryPass(
   const inputLimit = deps.inputLimit ?? SUMMARY_INPUT_LIMIT;
 
   const client =
-    deps.client ?? (hasCredential(anthropic) ? anthropicClient(anthropic) : null);
+    deps.client ??
+    (hasCredential(anthropic) ? anthropicClient(anthropic) : null);
   if (!client) return { refreshed: 0, failed: 0, dormant: true };
 
   const at = now();

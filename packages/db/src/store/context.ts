@@ -97,12 +97,18 @@ export class WriteContext {
    * write — where its next event starts from. Filled by the commit after it
    * locks the units.
    */
-  readonly unitsBefore = new Map<string, { id: string; status: string; locationId: string }>();
+  readonly unitsBefore = new Map<
+    string,
+    { id: string; status: string; locationId: string }
+  >();
   /**
    * Each unit's status and location after the events this commit appended.
    * The commit refuses to finish unless the unit row says the same thing.
    */
-  readonly ledgerAfter = new Map<string, { status: string; locationId: string }>();
+  readonly ledgerAfter = new Map<
+    string,
+    { status: string; locationId: string }
+  >();
   /** Units whose row this commit wrote, to be checked against their ledger. */
   readonly unitsWritten = new Set<string>();
   /** Serials archived by this commit; their events' removal is not a ledger edit. */
@@ -174,7 +180,9 @@ export class WriteContext {
       select: { id: true },
     });
     if (row === null) {
-      throw new StoreValidationError(`Metode pembayaran "${code}" tidak dikenal.`);
+      throw new StoreValidationError(
+        `Metode pembayaran "${code}" tidak dikenal.`,
+      );
     }
     this.methodIds.set(code, row.id);
     return row.id;
@@ -187,7 +195,8 @@ export class WriteContext {
    */
   async categoryId(name: string): Promise<string> {
     const clean = name.trim();
-    if (clean === "") throw new StoreValidationError("Kategori tidak boleh kosong.");
+    if (clean === "")
+      throw new StoreValidationError("Kategori tidak boleh kosong.");
     const cached = this.categoryIds.get(clean);
     if (cached !== undefined) return cached;
     const found = await this.tx.category.findUnique({
@@ -196,7 +205,9 @@ export class WriteContext {
     });
     let id = found?.id;
     if (id === undefined) {
-      const max = await this.tx.category.aggregate({ _max: { sortOrder: true } });
+      const max = await this.tx.category.aggregate({
+        _max: { sortOrder: true },
+      });
       const created = await this.tx.category.create({
         data: {
           name: clean,
@@ -228,7 +239,11 @@ export class WriteContext {
   async unitId(serial: string): Promise<string> {
     const id = await this.findUnitId(serial);
     if (id === undefined) {
-      throw new StoreValidationError(`Unit ${serial} tidak ditemukan.`, "units", serial);
+      throw new StoreValidationError(
+        `Unit ${serial} tidak ditemukan.`,
+        "units",
+        serial,
+      );
     }
     return id;
   }
@@ -315,7 +330,10 @@ export async function recordStoreChanges(
   tx: Tx,
   entries: Iterable<readonly [string, string]>,
 ): Promise<void> {
-  const data = [...entries].map(([collection, rowKey]) => ({ collection, rowKey }));
+  const data = [...entries].map(([collection, rowKey]) => ({
+    collection,
+    rowKey,
+  }));
   if (data.length === 0) return;
   await tx.storeChange.createMany({ data });
 }
@@ -339,13 +357,15 @@ export function dayOf(date: Date): string {
 /** Midnight in Jakarta on that day, as an instant. */
 export function dateOfDay(day: string): Date {
   const d = new Date(`${day}T00:00:00+07:00`);
-  if (Number.isNaN(d.getTime())) throw new StoreValidationError(`Tanggal tidak valid: ${day}`);
+  if (Number.isNaN(d.getTime()))
+    throw new StoreValidationError(`Tanggal tidak valid: ${day}`);
   return d;
 }
 
 export function instantOf(iso: string): Date {
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) throw new StoreValidationError(`Waktu tidak valid: ${iso}`);
+  if (Number.isNaN(d.getTime()))
+    throw new StoreValidationError(`Waktu tidak valid: ${iso}`);
   return d;
 }
 
@@ -394,13 +414,17 @@ export const STATE_OF_PAY_STATUS: Record<PayStatus, PaymentState> = {
   GAGAL: "PENDING",
 };
 
-export const PO_STATUS_OF: Record<"DRAFT" | "ORDERED" | "RECEIVED", POStatus> = {
-  DRAFT: "DRAF",
-  ORDERED: "DIPESAN",
-  RECEIVED: "DITERIMA",
-};
+export const PO_STATUS_OF: Record<"DRAFT" | "ORDERED" | "RECEIVED", POStatus> =
+  {
+    DRAFT: "DRAF",
+    ORDERED: "DIPESAN",
+    RECEIVED: "DITERIMA",
+  };
 
-export const PO_STATUS_FROM: Record<POStatus, "DRAFT" | "ORDERED" | "RECEIVED"> = {
+export const PO_STATUS_FROM: Record<
+  POStatus,
+  "DRAFT" | "ORDERED" | "RECEIVED"
+> = {
   DRAF: "DRAFT",
   DIPESAN: "ORDERED",
   SEBAGIAN: "ORDERED",
@@ -414,11 +438,12 @@ export const PAY_TARGET_OF: Record<"ORDER" | "TAX" | "SHIPPING", PayTarget> = {
   SHIPPING: "ONGKIR",
 };
 
-export const PAY_TARGET_FROM: Record<PayTarget, "ORDER" | "TAX" | "SHIPPING"> = {
-  BARANG: "ORDER",
-  PAJAK: "TAX",
-  ONGKIR: "SHIPPING",
-};
+export const PAY_TARGET_FROM: Record<PayTarget, "ORDER" | "TAX" | "SHIPPING"> =
+  {
+    BARANG: "ORDER",
+    PAJAK: "TAX",
+    ONGKIR: "SHIPPING",
+  };
 
 export const RESERVATION_STATUS_OF: Record<
   "ACTIVE" | "DONE" | "CANCELLED",
@@ -438,7 +463,10 @@ export const RESERVATION_STATUS_FROM: Record<
   BATAL: "CANCELLED",
 };
 
-export const OPNAME_STATUS_FROM: Record<OpnameStatus, "DRAFT" | "POSTED" | null> = {
+export const OPNAME_STATUS_FROM: Record<
+  OpnameStatus,
+  "DRAFT" | "POSTED" | null
+> = {
   BERJALAN: "DRAFT",
   DIPOSTING: "POSTED",
   BATAL: null,
@@ -449,7 +477,10 @@ export const OPNAME_STATUS_FROM: Record<OpnameStatus, "DRAFT" | "POSTED" | null>
 // ---------------------------------------------------------------------------
 
 /** A removal of something this system never deletes. */
-export function refuseRemoval(collection: CollectionName, key: string): StoreValidationError {
+export function refuseRemoval(
+  collection: CollectionName,
+  key: string,
+): StoreValidationError {
   return new StoreValidationError(
     `Data ini tidak bisa dihapus — nonaktifkan saja (${collection} ${key}).`,
     collection,
@@ -458,7 +489,10 @@ export function refuseRemoval(collection: CollectionName, key: string): StoreVal
 }
 
 /** A change to a row that is written once and never again. */
-export function refuseEdit(collection: CollectionName, key: string): StoreValidationError {
+export function refuseEdit(
+  collection: CollectionName,
+  key: string,
+): StoreValidationError {
   return new StoreValidationError(
     `Catatan ini tidak bisa diubah setelah tersimpan (${collection} ${key}).`,
     collection,
@@ -467,7 +501,10 @@ export function refuseEdit(collection: CollectionName, key: string): StoreValida
 }
 
 /** Where a key sits in a new order, when there is one. */
-export function indexIn(order: readonly string[] | undefined, key: string): number | undefined {
+export function indexIn(
+  order: readonly string[] | undefined,
+  key: string,
+): number | undefined {
   if (order === undefined) return undefined;
   const i = order.indexOf(key);
   return i === -1 ? undefined : i;

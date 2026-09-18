@@ -161,7 +161,10 @@ async function syncAxes(
   }
   for (const a of left.values()) {
     if (a.removedAt === null) {
-      await tx.modelAxis.update({ where: { id: a.id }, data: { removedAt: ctx.now } });
+      await tx.modelAxis.update({
+        where: { id: a.id },
+        data: { removedAt: ctx.now },
+      });
     }
   }
 }
@@ -178,7 +181,10 @@ export const models: Adapter<"models"> = {
           where: { removedAt: null },
           orderBy: { sortOrder: "asc" },
           include: {
-            values: { where: { removedAt: null }, orderBy: { sortOrder: "asc" } },
+            values: {
+              where: { removedAt: null },
+              orderBy: { sortOrder: "asc" },
+            },
           },
         },
       },
@@ -190,7 +196,10 @@ export const models: Adapter<"models"> = {
       releaseYear: Number.parseInt(m.year ?? "", 10) || 0,
       line: m.line ?? undefined,
       sizeInch: m.sizeInch === null ? undefined : m.sizeInch.toNumber(),
-      axes: m.axes.map((a) => ({ name: a.name, values: a.values.map((v) => v.value) })),
+      axes: m.axes.map((a) => ({
+        name: a.name,
+        values: a.values.map((v) => v.value),
+      })),
       identifier: m.identifier ?? undefined,
       source: m.source ?? undefined,
     }));
@@ -250,7 +259,10 @@ async function syncAxisValues(
   }
   for (const v of left.values()) {
     if (v.removedAt === null) {
-      await tx.skuAxisValue.update({ where: { id: v.id }, data: { removedAt: ctx.now } });
+      await tx.skuAxisValue.update({
+        where: { id: v.id },
+        data: { removedAt: ctx.now },
+      });
     }
   }
 }
@@ -262,7 +274,10 @@ export const skus: Adapter<"skus"> = {
       where: { ...byId(keys), archived: false },
       orderBy: [{ createdAt: "asc" }, { code: "asc" }],
       include: {
-        axisValues: { where: { removedAt: null }, orderBy: { sortOrder: "asc" } },
+        axisValues: {
+          where: { removedAt: null },
+          orderBy: { sortOrder: "asc" },
+        },
       },
     });
     return rows.map((s) => ({
@@ -364,9 +379,14 @@ export const gradingCriteria: Adapter<"gradingCriteria"> = {
         ctx.touch("gradingCriteria", r.key);
         continue;
       }
-      const data = { categoryId: await ctx.categoryId(n.category), name: n.name };
+      const data = {
+        categoryId: await ctx.categoryId(n.category),
+        name: n.name,
+      };
       if (r.base === undefined) {
-        const max = await tx.gradingCriterion.aggregate({ _max: { sortOrder: true } });
+        const max = await tx.gradingCriterion.aggregate({
+          _max: { sortOrder: true },
+        });
         await tx.gradingCriterion.create({
           data: {
             id: n.id,
@@ -379,7 +399,9 @@ export const gradingCriteria: Adapter<"gradingCriteria"> = {
         await tx.gradingCriterion.update({ where: { id: n.id }, data });
       }
       if (r.base === undefined || !deepEqual(r.base.options, n.options)) {
-        const existing = await tx.gradingOption.findMany({ where: { criterionId: n.id } });
+        const existing = await tx.gradingOption.findMany({
+          where: { criterionId: n.id },
+        });
         const left = new Map(existing.map((o) => [o.id, o]));
         for (const [sortOrder, o] of n.options.entries()) {
           if (left.has(o.id)) {
@@ -406,7 +428,10 @@ export const gradingCriteria: Adapter<"gradingCriteria"> = {
       ctx.touch("gradingCriteria", n.id);
     }
     for (const [sortOrder, id] of (order ?? []).entries()) {
-      await tx.gradingCriterion.updateMany({ where: { id }, data: { sortOrder } });
+      await tx.gradingCriterion.updateMany({
+        where: { id },
+        data: { sortOrder },
+      });
       ctx.touch("gradingCriteria", id);
     }
   },
@@ -447,13 +472,21 @@ export const gradingRules: Adapter<"gradingRules"> = {
     for (const r of rows) {
       const n = r.next;
       if (n === undefined) {
-        await tx.gradingRule.update({ where: { id: r.key }, data: { archivedAt: ctx.now } });
+        await tx.gradingRule.update({
+          where: { id: r.key },
+          data: { archivedAt: ctx.now },
+        });
         ctx.touch("gradingRules", r.key);
         continue;
       }
-      const data = { categoryId: await ctx.categoryId(n.category), grade: n.grade };
+      const data = {
+        categoryId: await ctx.categoryId(n.category),
+        grade: n.grade,
+      };
       if (r.base === undefined) {
-        const max = await tx.gradingRule.aggregate({ _max: { sortOrder: true } });
+        const max = await tx.gradingRule.aggregate({
+          _max: { sortOrder: true },
+        });
         await tx.gradingRule.create({
           data: {
             id: n.id,
@@ -466,7 +499,9 @@ export const gradingRules: Adapter<"gradingRules"> = {
         await tx.gradingRule.update({ where: { id: n.id }, data });
       }
       if (r.base === undefined || !deepEqual(r.base.conditions, n.conditions)) {
-        const existing = await tx.gradingRuleOption.findMany({ where: { ruleId: n.id } });
+        const existing = await tx.gradingRuleOption.findMany({
+          where: { ruleId: n.id },
+        });
         const left = new Map(existing.map((o) => [o.optionId, o]));
         for (const [ci, condition] of n.conditions.entries()) {
           for (const [oi, optionId] of condition.optionIds.entries()) {

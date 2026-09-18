@@ -58,7 +58,8 @@ export function encodeChangeset(change: Changeset): Changeset {
       ...(r.base === undefined ? {} : { base: encodeRow(name, r.base) }),
       ...(r.next === undefined ? {} : { next: encodeRow(name, r.next) }),
     }));
-    collections[name] = c.order === undefined ? { rows } : { rows, order: c.order };
+    collections[name] =
+      c.order === undefined ? { rows } : { rows, order: c.order };
   }
   const singletons: Changeset["singletons"] = {};
   for (const [name, s] of Object.entries(change.singletons)) {

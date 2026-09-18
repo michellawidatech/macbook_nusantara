@@ -23,7 +23,16 @@
  * the whole reason edits are logged is that the wrong one of those is what
  * somebody has to find later.
  */
-import { Button, DatePicker, Flex, Input, InputNumber, Select, Table, Typography } from "antd";
+import {
+  Button,
+  DatePicker,
+  Flex,
+  Input,
+  InputNumber,
+  Select,
+  Table,
+  Typography,
+} from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { useTranslation } from "react-i18next";
@@ -50,7 +59,10 @@ export interface PaymentsPanelProps {
    * sorts a movement by exactly that field, so a renamed method quietly
    * belonged to neither pot.
    */
-  readonly methods: readonly { readonly value: string; readonly label: string }[];
+  readonly methods: readonly {
+    readonly value: string;
+    readonly label: string;
+  }[];
   readonly disabled?: boolean;
   /** Hides the add/remove controls — a read-only view on a closed receipt. */
   readonly readOnly?: boolean;
@@ -123,7 +135,8 @@ export function PaymentsPanel({
                     // A state change clears what the other states meant. A
                     // date on a settled payment or a channel on a debt are
                     // both fields nobody can act on.
-                    channel: v === "PENDING" ? (p.channel ?? "SHOPEE") : undefined,
+                    channel:
+                      v === "PENDING" ? (p.channel ?? "SHOPEE") : undefined,
                     dueAt: v === "DUE" ? p.dueAt : undefined,
                   })
                 }

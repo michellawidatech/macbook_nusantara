@@ -1331,9 +1331,7 @@ export function InventoryPage() {
                 validator would have to reassemble. */}
             <BatteryFieldsField
               fallback={
-                editing
-                  ? defaultBatteryModeOfSku(db, editing.skuId)
-                  : "HEALTH"
+                editing ? defaultBatteryModeOfSku(db, editing.skuId) : "HEALTH"
               }
             />
           </Form.Item>

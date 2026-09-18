@@ -69,7 +69,9 @@ describe("tiling on a sheet", () => {
 
 describe("tiling on a roll", () => {
   it("makes the label the page", () => {
-    const t = tiling(setup({ mode: "ROLL", labelWidthMm: 50, labelHeightMm: 25 }));
+    const t = tiling(
+      setup({ mode: "ROLL", labelWidthMm: 50, labelHeightMm: 25 }),
+    );
     expect(t.perPage).toBe(1);
     expect(t.pageWidthMm).toBe(50);
     expect(t.pageHeightMm).toBe(25);

@@ -221,7 +221,10 @@ export function GradingModal({
             <Select
               allowClear
               value={override}
-              placeholder={t("grading.useCalculated", "Use the calculated grade")}
+              placeholder={t(
+                "grading.useCalculated",
+                "Use the calculated grade",
+              )}
               aria-label={t("grading.override", "Overwrite")}
               options={GRADES.map((g) => ({ value: g, label: g }))}
               onChange={(v?: string) => setOverride(v)}

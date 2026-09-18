@@ -110,15 +110,40 @@ const pass = (client: AgentClient, over: Record<string, unknown> = {}) =>
 
 /** Three answered turns, recent enough not to trip the quiet trigger. */
 async function threeTurns() {
-  await turn({ id: "t.1", text: "ada m2?", reply: "ada kak", answeredAt: ago(60_000) });
-  await turn({ id: "t.2", text: "berapa?", reply: "15.500.000", answeredAt: ago(40_000) });
-  return turn({ id: "t.3", text: "grade A?", reply: "iya kak", answeredAt: ago(20_000) });
+  await turn({
+    id: "t.1",
+    text: "ada m2?",
+    reply: "ada kak",
+    answeredAt: ago(60_000),
+  });
+  await turn({
+    id: "t.2",
+    text: "berapa?",
+    reply: "15.500.000",
+    answeredAt: ago(40_000),
+  });
+  return turn({
+    id: "t.3",
+    text: "grade A?",
+    reply: "iya kak",
+    answeredAt: ago(20_000),
+  });
 }
 
 describe("when a summary is due", () => {
   it("does nothing before enough turns have piled up", async () => {
-    await turn({ id: "u.1", text: "ada m2?", reply: "ada kak", answeredAt: ago(60_000) });
-    await turn({ id: "u.2", text: "berapa?", reply: "15.500.000", answeredAt: ago(40_000) });
+    await turn({
+      id: "u.1",
+      text: "ada m2?",
+      reply: "ada kak",
+      answeredAt: ago(60_000),
+    });
+    await turn({
+      id: "u.2",
+      text: "berapa?",
+      reply: "15.500.000",
+      answeredAt: ago(40_000),
+    });
 
     const model = scripted(["catatan"]);
     const result = await pass(model.client);
@@ -134,7 +159,9 @@ describe("when a summary is due", () => {
     const result = await pass(scripted(["Mau Air M2, budget 15jt."]).client);
 
     expect(result.refreshed).toBe(1);
-    const memo = await db.waThreadMemory.findUniqueOrThrow({ where: { from: FROM } });
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
     // The stored note loses its final full stop for the same reason a reply
     // does: `summarize` runs it through `stripFormatting`, and a note that
     // ends in one teaches the model to end its next message in one.
@@ -145,8 +172,18 @@ describe("when a summary is due", () => {
   it("refreshes a conversation that went quiet even though it never reached three turns", async () => {
     // Two turns and then silence is the shape of most real threads. Without
     // this trigger they would never be summarised at all.
-    await turn({ id: "q.1", text: "ada m2?", reply: "ada kak", answeredAt: ago(3_600_000) });
-    await turn({ id: "q.2", text: "oke", reply: "siap kak", answeredAt: ago(3_500_000) });
+    await turn({
+      id: "q.1",
+      text: "ada m2?",
+      reply: "ada kak",
+      answeredAt: ago(3_600_000),
+    });
+    await turn({
+      id: "q.2",
+      text: "oke",
+      reply: "siap kak",
+      answeredAt: ago(3_500_000),
+    });
 
     const result = await pass(scripted(["Tanya Air M2, belum lanjut."]).client);
     expect(result.refreshed).toBe(1);
@@ -162,7 +199,9 @@ describe("when a summary is due", () => {
 
     expect(result.refreshed).toBe(0);
     expect(model.calls).toHaveLength(0);
-    const memo = await db.waThreadMemory.findUniqueOrThrow({ where: { from: FROM } });
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
     expect(memo.coveredThroughId).toBe(third.id);
   });
 
@@ -170,9 +209,24 @@ describe("when a summary is due", () => {
     await threeTurns();
     await pass(scripted(["Mau Air M2."]).client);
 
-    await turn({ id: "t.4", text: "bisa besok?", reply: "bisa kak", answeredAt: ago(10_000) });
-    await turn({ id: "t.5", text: "jam 3", reply: "oke", answeredAt: ago(9_000) });
-    await turn({ id: "t.6", text: "makasih", reply: "sama sama", answeredAt: ago(8_000) });
+    await turn({
+      id: "t.4",
+      text: "bisa besok?",
+      reply: "bisa kak",
+      answeredAt: ago(10_000),
+    });
+    await turn({
+      id: "t.5",
+      text: "jam 3",
+      reply: "oke",
+      answeredAt: ago(9_000),
+    });
+    await turn({
+      id: "t.6",
+      text: "makasih",
+      reply: "sama sama",
+      answeredAt: ago(8_000),
+    });
 
     const model = scripted(["Mau Air M2, mau datang besok jam 3."]);
     await pass(model.client);
@@ -193,7 +247,9 @@ describe("failure, and why the cursor matters", () => {
 
     expect(result.failed).toBe(1);
     expect(result.refreshed).toBe(0);
-    const memo = await db.waThreadMemory.findUniqueOrThrow({ where: { from: FROM } });
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
     expect(memo.summary).toBeNull();
     // The cursor did NOT move. Had it moved, those three turns would never be
     // folded into any later summary.
@@ -207,7 +263,9 @@ describe("failure, and why the cursor matters", () => {
 
     const result = await pass(scripted(["Mau Air M2."]).client);
     expect(result.refreshed).toBe(1);
-    const memo = await db.waThreadMemory.findUniqueOrThrow({ where: { from: FROM } });
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
     expect(memo.summary).toBe("Mau Air M2");
   });
 
@@ -217,7 +275,9 @@ describe("failure, and why the cursor matters", () => {
     const result = await pass(scripted(["NOTHING YET"]).client);
 
     expect(result.refreshed).toBe(1);
-    const memo = await db.waThreadMemory.findUniqueOrThrow({ where: { from: FROM } });
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
     expect(memo.summary).toBeNull();
     expect(memo.coveredThroughAt).not.toBeNull();
   });
@@ -228,14 +288,34 @@ describe("failure, and why the cursor matters", () => {
     await threeTurns();
     await pass(scripted([new Error("boom")]).client);
 
-    await turn({ id: "o.1", from: OTHER, text: "halo", reply: "halo kak", answeredAt: ago(50_000) });
-    await turn({ id: "o.2", from: OTHER, text: "ada ipad?", reply: "ada kak", answeredAt: ago(40_000) });
-    await turn({ id: "o.3", from: OTHER, text: "berapa?", reply: "8jt", answeredAt: ago(30_000) });
+    await turn({
+      id: "o.1",
+      from: OTHER,
+      text: "halo",
+      reply: "halo kak",
+      answeredAt: ago(50_000),
+    });
+    await turn({
+      id: "o.2",
+      from: OTHER,
+      text: "ada ipad?",
+      reply: "ada kak",
+      answeredAt: ago(40_000),
+    });
+    await turn({
+      id: "o.3",
+      from: OTHER,
+      text: "berapa?",
+      reply: "8jt",
+      answeredAt: ago(30_000),
+    });
 
     const result = await pass(scripted(["catatan"]).client, { maxPerTick: 1 });
 
     expect(result.refreshed).toBe(1);
-    const other = await db.waThreadMemory.findUniqueOrThrow({ where: { from: OTHER } });
+    const other = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: OTHER },
+    });
     expect(other.summary).toBe("catatan");
   });
 
@@ -254,7 +334,9 @@ describe("failure, and why the cursor matters", () => {
 
     await pass(scripted(["Mau Air M2."]).client);
 
-    const memo = await db.waThreadMemory.findUniqueOrThrow({ where: { from: FROM } });
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
     expect(memo.summary).toBe("Mau Air M2");
     expect(memo.directive).toBe("kasih diskon 200rb kalau nawar");
   });
@@ -282,8 +364,12 @@ describe("draining a backlog", () => {
     expect(sent).not.toContain("pesan 4");
 
     // The cursor sits on the last turn actually read, not on the newest row.
-    const memo = await db.waThreadMemory.findUniqueOrThrow({ where: { from: FROM } });
-    const fourth = await db.waMessage.findFirstOrThrow({ where: { waMessageId: "bk.3" } });
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
+    const fourth = await db.waMessage.findFirstOrThrow({
+      where: { waMessageId: "bk.3" },
+    });
     expect(memo.coveredThroughId).toBe(fourth.id);
   });
 
@@ -307,7 +393,12 @@ describe("draining a backlog", () => {
   });
 
   it("caps how many threads it refreshes in one tick", async () => {
-    for (const who of ["6281110001", "6281110002", "6281110003", "6281110004"]) {
+    for (const who of [
+      "6281110001",
+      "6281110002",
+      "6281110003",
+      "6281110004",
+    ]) {
       for (let i = 0; i < 3; i += 1) {
         await turn({
           id: `${who}.${i}`,

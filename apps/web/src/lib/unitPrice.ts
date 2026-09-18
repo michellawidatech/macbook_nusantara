@@ -119,7 +119,9 @@ export function marketPriceOf(
   skuPrice: number,
   markupPct: number = DEFAULT_MARKETPLACE_MARKUP_PCT,
 ): number {
-  return unit.marketPrice ?? derivedMarketPrice(priceOf(unit, skuPrice), markupPct);
+  return (
+    unit.marketPrice ?? derivedMarketPrice(priceOf(unit, skuPrice), markupPct)
+  );
 }
 
 /** Is this machine's marketplace price a number somebody typed? */
@@ -156,7 +158,10 @@ export function priceRange(prices: readonly number[]): PriceRange {
 }
 
 /** The percentage a marketplace price sits above a store price, for display. */
-export function markupOf(storePrice: number, marketPrice: number): number | null {
+export function markupOf(
+  storePrice: number,
+  marketPrice: number,
+): number | null {
   if (storePrice <= 0) return null;
   return ((marketPrice - storePrice) / storePrice) * 100;
 }

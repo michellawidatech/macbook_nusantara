@@ -182,9 +182,13 @@ function contextLine(
       supplier: ctx.supplierName,
     });
   }
-  return t("snTracking.ctxArrived", "Waiting for QC — arrived from {{supplier}}", {
-    supplier: ctx.supplierName,
-  });
+  return t(
+    "snTracking.ctxArrived",
+    "Waiting for QC — arrived from {{supplier}}",
+    {
+      supplier: ctx.supplierName,
+    },
+  );
 }
 
 /** How many serials the picker offers before it asks for a narrower search. */
@@ -205,10 +209,7 @@ export function StockHistoryPage() {
     [db.suppliers],
   );
   /** Every serial the store holds — what a query is resolved against. */
-  const knownSerials = useMemo(
-    () => db.units.map((u) => u.serial),
-    [db.units],
-  );
+  const knownSerials = useMemo(() => db.units.map((u) => u.serial), [db.units]);
 
   /*
    * A scan jumps straight to the serial rather than going through the picker,
@@ -281,7 +282,8 @@ export function StockHistoryPage() {
         const s = db.skus.find((k) => k.id === u.skuId);
         return {
           value: u.serial,
-          label: `${u.serial} — ${s?.name ?? ""} ${s?.variantLabel ?? ""}`.trim(),
+          label:
+            `${u.serial} — ${s?.name ?? ""} ${s?.variantLabel ?? ""}`.trim(),
         };
       });
     // `resolve` closes over the store, which changes identity every render;

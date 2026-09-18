@@ -227,11 +227,17 @@ export function suggestedAllocation(
  */
 export function spreadOldestFirst(
   remaining: number,
-  invoices: readonly { readonly id: string; readonly date: string; readonly outstanding: number }[],
+  invoices: readonly {
+    readonly id: string;
+    readonly date: string;
+    readonly outstanding: number;
+  }[],
 ): { readonly poId: string; readonly amount: number }[] {
   let left = Math.max(0, remaining);
   const out: { poId: string; amount: number }[] = [];
-  for (const inv of [...invoices].sort((a, b) => a.date.localeCompare(b.date))) {
+  for (const inv of [...invoices].sort((a, b) =>
+    a.date.localeCompare(b.date),
+  )) {
     if (left <= 0) break;
     const amount = Math.min(left, Math.max(0, inv.outstanding));
     if (amount <= 0) continue;

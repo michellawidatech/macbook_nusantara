@@ -162,7 +162,10 @@ export function enterFieldKind(el: Element | null): EnterField | null {
   if (el === null || !isTextLikeInput(el) || isSearchBox(el)) return null;
   if (el.getAttribute("role") === "combobox") return "combobox";
   if (el.closest(".ant-picker")) return "picker";
-  if (el.getAttribute("role") === "spinbutton" || el.closest(".ant-input-number")) {
+  if (
+    el.getAttribute("role") === "spinbutton" ||
+    el.closest(".ant-input-number")
+  ) {
     return "number";
   }
   return "text";
@@ -210,7 +213,11 @@ export function isVisible(el: Element): boolean {
     if (el.getClientRects().length === 0) return false;
     return doc.defaultView?.getComputedStyle(el).visibility !== "hidden";
   }
-  for (let node: Element | null = el; node !== null; node = node.parentElement) {
+  for (
+    let node: Element | null = el;
+    node !== null;
+    node = node.parentElement
+  ) {
     if (
       node instanceof HTMLElement &&
       (node.style.display === "none" || node.style.visibility === "hidden")
@@ -271,7 +278,9 @@ export function isFieldTarget(el: Element): el is HTMLElement {
 }
 
 export function fieldsIn(root: Element): HTMLElement[] {
-  return Array.from(root.querySelectorAll(FIELD_SELECTOR)).filter(isFieldTarget);
+  return Array.from(root.querySelectorAll(FIELD_SELECTOR)).filter(
+    isFieldTarget,
+  );
 }
 
 function pageRoot(el: Element): HTMLElement {
@@ -289,15 +298,22 @@ export interface Surface {
 }
 
 export function surfaceOf(el: Element): Surface {
-  const layer = el.closest<HTMLElement>(`${MODAL_SELECTOR}, ${DRAWER_SELECTOR}`);
+  const layer = el.closest<HTMLElement>(
+    `${MODAL_SELECTOR}, ${DRAWER_SELECTOR}`,
+  );
   if (layer !== null) {
-    return { kind: layer.matches(MODAL_SELECTOR) ? "modal" : "drawer", root: layer };
+    return {
+      kind: layer.matches(MODAL_SELECTOR) ? "modal" : "drawer",
+      root: layer,
+    };
   }
   return { kind: "page", root: pageRoot(el) };
 }
 
 function follows(a: Node, b: Node): boolean {
-  return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  return (
+    (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+  );
 }
 
 /**
@@ -305,7 +321,10 @@ function follows(a: Node, b: Node): boolean {
  * layer — a field on a page that sits outside `<main>` must not "next" into a
  * dialog that happens to be later in `<body>`.
  */
-export function nextFieldAfter(root: Element, from: Element): HTMLElement | null {
+export function nextFieldAfter(
+  root: Element,
+  from: Element,
+): HTMLElement | null {
   const layer = surfaceOf(from).root;
   for (const candidate of Array.from(root.querySelectorAll(FIELD_SELECTOR))) {
     if (candidate === from || !follows(from, candidate)) continue;
@@ -325,7 +344,9 @@ const PRIMARY_SELECTOR =
   " button[type='submit'], input[type='submit']";
 
 function primaryButtons(root: Element, layer: HTMLElement): HTMLElement[] {
-  return Array.from(root.querySelectorAll<HTMLElement>(PRIMARY_SELECTOR)).filter(
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(PRIMARY_SELECTOR),
+  ).filter(
     (button) =>
       surfaceOf(button).root === layer &&
       !isInsidePopup(button) &&
@@ -363,10 +384,13 @@ export function planEnter(from: HTMLElement): EnterPlan | null {
   const surface = surfaceOf(from);
   if (surface.kind === "modal") {
     // A form inside a dialog can be followed by more of the dialog.
-    const later = scope === surface.root ? null : nextFieldAfter(surface.root, from);
+    const later =
+      scope === surface.root ? null : nextFieldAfter(surface.root, from);
     if (later !== null) return { kind: "focus", target: later };
     const ok = primaryAfter(surface.root, from);
-    return ok !== null && isButtonReady(ok) ? { kind: "click", target: ok } : null;
+    return ok !== null && isButtonReady(ok)
+      ? { kind: "click", target: ok }
+      : null;
   }
 
   let button = primaryAfter(scope, from);
@@ -430,7 +454,8 @@ export type Caret = "select" | "end";
  */
 export function focusControl(el: HTMLElement, caret: Caret = "select"): void {
   el.focus();
-  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
+  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement))
+    return;
   if (el.readOnly) return;
   try {
     if (caret === "select") el.select();
@@ -488,7 +513,10 @@ const HORIZONTAL_OWNERS =
   " [role='radiogroup'], [role='tablist'], [role='slider']";
 
 function ownsHorizontalArrows(el: Element): boolean {
-  if (el instanceof HTMLInputElement && (el.type === "radio" || el.type === "range")) {
+  if (
+    el instanceof HTMLInputElement &&
+    (el.type === "radio" || el.type === "range")
+  ) {
     return true;
   }
   return el.closest(HORIZONTAL_OWNERS) !== null;
@@ -509,7 +537,9 @@ export function controlsIn(container: Element): HTMLElement[] {
     isControl,
   );
   // A focusable wrapper around a focusable control is one stop, not two.
-  return all.filter((el) => !all.some((other) => other !== el && el.contains(other)));
+  return all.filter(
+    (el) => !all.some((other) => other !== el && el.contains(other)),
+  );
 }
 
 function gridRows(root: Element): HTMLElement[] {
@@ -534,7 +564,11 @@ function cellBelow(
   step: 1 | -1,
 ): HTMLElement | null {
   const cell = from.closest("td");
-  if (!(row instanceof HTMLTableRowElement) || cell === null || cell.parentElement !== row) {
+  if (
+    !(row instanceof HTMLTableRowElement) ||
+    cell === null ||
+    cell.parentElement !== row
+  ) {
     return null;
   }
   const rows = gridRows(root);
@@ -574,16 +608,25 @@ export function gridArrowTarget(
   const vertical = e.key === "ArrowUp" || e.key === "ArrowDown";
   if (!vertical && e.key !== "ArrowLeft" && e.key !== "ArrowRight") return null;
   if (hasCommandModifier(e) || e.shiftKey || isComposing(e)) return null;
-  if (e.defaultPrevented === true || !(from instanceof HTMLElement)) return null;
+  if (e.defaultPrevented === true || !(from instanceof HTMLElement))
+    return null;
   const row = from.closest<HTMLElement>(`[${EDITABLE_ROW_ATTR}]`);
-  if (row === null || row.closest(`.${EDITABLE_TABLE_CLASS}`) !== root) return null;
-  if (from.closest(NAV_OFF_SELECTOR) || isInsidePopup(from) || isPopupOpen(from)) {
+  if (row === null || row.closest(`.${EDITABLE_TABLE_CLASS}`) !== root)
+    return null;
+  if (
+    from.closest(NAV_OFF_SELECTOR) ||
+    isInsidePopup(from) ||
+    isPopupOpen(from)
+  ) {
     return null;
   }
 
   if (vertical) {
     const up = e.key === "ArrowUp";
-    if (from instanceof HTMLTextAreaElement && !caretAt(from, up ? "start" : "end")) {
+    if (
+      from instanceof HTMLTextAreaElement &&
+      !caretAt(from, up ? "start" : "end")
+    ) {
       return null;
     }
     return cellBelow(root, row, from, up ? -1 : 1);
@@ -591,7 +634,8 @@ export function gridArrowTarget(
 
   const back = e.key === "ArrowLeft";
   if (ownsHorizontalArrows(from)) return null;
-  if (isEditableText(from) && !caretAt(from, back ? "start" : "end")) return null;
+  if (isEditableText(from) && !caretAt(from, back ? "start" : "end"))
+    return null;
   const controls = controlsIn(row);
   const at = controls.indexOf(from);
   if (at < 0) return null;
@@ -603,12 +647,17 @@ export function gridArrowTarget(
 // ---------------------------------------------------------------------------
 
 /** ↑ ↓ Home End between a list's focusable rows. No wrapping at either end. */
-export function listRowTarget(key: string, row: HTMLElement): HTMLElement | null {
+export function listRowTarget(
+  key: string,
+  row: HTMLElement,
+): HTMLElement | null {
   const parent = row.parentElement;
   if (parent === null) return null;
   const rows = Array.from(parent.children).filter(
     (r): r is HTMLElement =>
-      r instanceof HTMLElement && r.hasAttribute(KEYBOARD_ROW_ATTR) && isVisible(r),
+      r instanceof HTMLElement &&
+      r.hasAttribute(KEYBOARD_ROW_ATTR) &&
+      isVisible(r),
   );
   const at = rows.indexOf(row);
   let target: HTMLElement | undefined;
@@ -655,7 +704,9 @@ export function pageSearchBox(doc: Document): HTMLInputElement | null {
   const root: Element =
     layers[layers.length - 1] ?? doc.querySelector("main") ?? doc.body;
   for (const selector of SEARCH_SELECTORS) {
-    for (const box of Array.from(root.querySelectorAll<HTMLInputElement>(selector))) {
+    for (const box of Array.from(
+      root.querySelectorAll<HTMLInputElement>(selector),
+    )) {
       if (isEnabled(box) && !isInsidePopup(box) && isVisible(box)) return box;
     }
   }
@@ -691,7 +742,8 @@ export interface FieldLocator {
 
 function keyedRows(rows: Element): HTMLElement[] {
   return Array.from(rows.children).filter(
-    (r): r is HTMLElement => r instanceof HTMLElement && r.hasAttribute(ROW_KEY_ATTR),
+    (r): r is HTMLElement =>
+      r instanceof HTMLElement && r.hasAttribute(ROW_KEY_ATTR),
   );
 }
 
@@ -704,7 +756,9 @@ export function locateField(el: HTMLElement): FieldLocator {
     rows,
     rowKey: row?.getAttribute(ROW_KEY_ATTR) ?? null,
     rowKeys:
-      rows === null ? [] : keyedRows(rows).map((r) => r.getAttribute(ROW_KEY_ATTR) ?? ""),
+      rows === null
+        ? []
+        : keyedRows(rows).map((r) => r.getAttribute(ROW_KEY_ATTR) ?? ""),
     ordinal: row === null ? -1 : controlsIn(row).indexOf(el),
     scope,
     fieldIndex: fields.indexOf(el),

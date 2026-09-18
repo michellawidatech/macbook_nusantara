@@ -255,7 +255,8 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
    * place this appears rather than as "Rp9.000.000–Rp9.000.000".
    */
   const Money = ({ range }: { range: PriceRange }) => {
-    if (range.count === 0) return <Typography.Text type="secondary">—</Typography.Text>;
+    if (range.count === 0)
+      return <Typography.Text type="secondary">—</Typography.Text>;
     return (
       <Typography.Text>
         {range.single
@@ -383,7 +384,10 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
               <Flex vertical align="flex-end" gap={0}>
                 <Typography.Text>{read.text}</Typography.Text>
                 {read.fcc !== undefined && (
-                  <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: TYPE.sm }}
+                  >
                     {fmtFcc(read.fcc)}
                   </Typography.Text>
                 )}
@@ -587,7 +591,9 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
             icon={<PrinterOutlined />}
             onClick={() => {
               const picked = selected.flatMap((r) => r.units);
-              setPrinting(labelsFor(picked, db.skus, db.models, supplierCodeOf));
+              setPrinting(
+                labelsFor(picked, db.skus, db.models, supplierCodeOf),
+              );
               clear();
             }}
           >
@@ -842,7 +848,10 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
                       : t(
                           "inventory.marketRange",
                           "marketplace {{from}} – {{to}}",
-                          { from: fmtRp(r.market.min), to: fmtRp(r.market.max) },
+                          {
+                            from: fmtRp(r.market.min),
+                            to: fmtRp(r.market.max),
+                          },
                         )}
                   </Typography.Text>
                 )}
@@ -853,8 +862,7 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
             title: "",
             key: "reprice",
             width: 44,
-            render: (_, r) =>
-              repriceButton(`${r.product} ${r.specs}`, r.units),
+            render: (_, r) => repriceButton(`${r.product} ${r.specs}`, r.units),
           },
           {
             title: "",
@@ -883,7 +891,9 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
                     { product: r.product },
                   )}
                   onClick={() =>
-                    setPrinting(labelsFor(r.units, db.skus, db.models, supplierCodeOf))
+                    setPrinting(
+                      labelsFor(r.units, db.skus, db.models, supplierCodeOf),
+                    )
                   }
                 />
               </Tooltip>

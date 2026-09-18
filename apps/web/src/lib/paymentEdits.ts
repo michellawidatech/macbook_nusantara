@@ -28,7 +28,11 @@ export type PendingLogEntry = Omit<PaymentLogEntry, "id">;
 export function diffPayments(
   before: readonly SalePayment[],
   after: readonly SalePayment[],
-  ctx: { readonly at: string; readonly staff: string; readonly reason?: string },
+  ctx: {
+    readonly at: string;
+    readonly staff: string;
+    readonly reason?: string;
+  },
 ): PendingLogEntry[] {
   const was = new Map(before.map((p) => [p.id, p]));
   const now = new Map(after.map((p) => [p.id, p]));

@@ -225,7 +225,9 @@ describe("recommendFor", () => {
       expect(unit.status).toBe("TERSEDIA");
       // The price is the variant's, and a SKU always has one — so "in stock"
       // is now the whole claim, where it used to need "and priced" beside it.
-      expect(db.skus.find((s) => s.id === unit.skuId)!.price).toBeGreaterThan(0);
+      expect(db.skus.find((s) => s.id === unit.skuId)!.price).toBeGreaterThan(
+        0,
+      );
     }
   });
 

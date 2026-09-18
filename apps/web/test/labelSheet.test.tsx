@@ -104,13 +104,13 @@ describe("LabelSheet", () => {
     const { container } = render(
       <LabelSheet
         labels={[
-            {
-              serial: "SB1234567890",
-              barcode: "ASSB1234567890",
-              line1: "Magic Mouse",
-              line2: "",
-            },
-          ]}
+          {
+            serial: "SB1234567890",
+            barcode: "ASSB1234567890",
+            line1: "Magic Mouse",
+            line2: "",
+          },
+        ]}
       />,
     );
     const cell = cells(container)[0]!;
@@ -173,7 +173,11 @@ describe("LabelSheet", () => {
       const { container } = render(
         <LabelSheet
           labels={Array.from({ length: 3 }, (_, i) => label(`S${i}`))}
-          setup={withSetup({ mode: "ROLL", labelWidthMm: 50, labelHeightMm: 25 })}
+          setup={withSetup({
+            mode: "ROLL",
+            labelWidthMm: 50,
+            labelHeightMm: 25,
+          })}
         />,
       );
       expect(pages(container).length).toBe(3);
@@ -184,7 +188,10 @@ describe("LabelSheet", () => {
   describe("the page rule", () => {
     it("sizes the named page to the chosen paper", () => {
       const { container } = render(
-        <LabelSheet labels={[label("S1")]} setup={withSetup({ paperId: "F4" })} />,
+        <LabelSheet
+          labels={[label("S1")]}
+          setup={withSetup({ paperId: "F4" })}
+        />,
       );
       // F4 is 215 × 330 and no browser knows the name, which is exactly why
       // the rule is emitted in millimetres.
@@ -195,7 +202,11 @@ describe("LabelSheet", () => {
       const { container } = render(
         <LabelSheet
           labels={[label("S1")]}
-          setup={withSetup({ mode: "ROLL", labelWidthMm: 50, labelHeightMm: 25 })}
+          setup={withSetup({
+            mode: "ROLL",
+            labelWidthMm: 50,
+            labelHeightMm: 25,
+          })}
         />,
       );
       expect(pageCss(container)).toContain("50mm 25mm");

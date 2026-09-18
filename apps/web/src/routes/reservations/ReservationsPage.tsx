@@ -71,14 +71,16 @@ import { GradeTag } from "../../components/GradeTag";
 import { LongText } from "../../components/LongText";
 import { fmtDateTime } from "../../lib/format.js";
 import { itemState, reprojectHolds } from "../../lib/reservations.js";
-import { appendEvent, docCode, mutate, nextId, useDb } from "../../mock/store.js";
+import {
+  appendEvent,
+  docCode,
+  mutate,
+  nextId,
+  useDb,
+} from "../../mock/store.js";
 // Types only, and on purpose: the view model below is the SERVER's shape, so
 // the render layer does not change when this page goes back to the API.
-import type {
-  Hold,
-  HoldItem,
-  HoldState,
-} from "../../lib/reservationsApi.js";
+import type { Hold, HoldItem, HoldState } from "../../lib/reservationsApi.js";
 import { tagOf, RESERVATION_STATUS } from "../../i18n/enumLabels.js";
 
 /** Machines still waiting to be collected on this hold. */
@@ -274,7 +276,8 @@ export function ReservationsPage() {
     .slice(0, UNIT_PICKER_CAP)
     .map(({ unit, sku }) => ({
       value: unit.serial,
-      label: `${unit.serial} — ${sku?.name ?? ""} ${sku?.variantLabel ?? ""}`.trim(),
+      label:
+        `${unit.serial} — ${sku?.name ?? ""} ${sku?.variantLabel ?? ""}`.trim(),
     }));
   /** How many sellable machines the search matched but the list cannot show. */
   const unitsBeyondPage = Math.max(
@@ -485,9 +488,13 @@ export function ReservationsPage() {
                   // already bought is history; one released is somebody
                   // else's to sell.
                   disabled={state !== "HELD" || serial === null}
-                  aria-label={t("reservations.selectAria", "Select {{serial}}", {
-                    serial: serial ?? "—",
-                  })}
+                  aria-label={t(
+                    "reservations.selectAria",
+                    "Select {{serial}}",
+                    {
+                      serial: serial ?? "—",
+                    },
+                  )}
                   onChange={(e) =>
                     setPicked((p) => {
                       const now = p[r.id] ?? [];
@@ -521,9 +528,7 @@ export function ReservationsPage() {
             title: t("reservations.grade", "Grade"),
             key: "grade",
             width: 90,
-            render: (_, item) => (
-              <GradeTag grade={item.grade ?? undefined} />
-            ),
+            render: (_, item) => <GradeTag grade={item.grade ?? undefined} />,
           },
           {
             title: t("reservations.status", "Status"),
@@ -594,8 +599,7 @@ export function ReservationsPage() {
                 key: "product",
                 width: 240,
                 searchable: true,
-                searchValue: (r) =>
-                  r.items.map((i) => i.productName).join(" "),
+                searchValue: (r) => r.items.map((i) => i.productName).join(" "),
                 sortValue: (r) => r.items[0]?.productName ?? "",
                 render: (_, r) => (
                   <Flex vertical gap={2}>
@@ -632,11 +636,7 @@ export function ReservationsPage() {
                 facet: true,
                 sortValue: (r) => r.channelName ?? "—",
                 render: (_, r) =>
-                  r.channelName ? (
-                    <Tag>{r.channelName}</Tag>
-                  ) : (
-                    "—"
-                  ),
+                  r.channelName ? <Tag>{r.channelName}</Tag> : "—",
               },
               {
                 title: t("reservations.note", "Note"),
@@ -684,7 +684,9 @@ export function ReservationsPage() {
                 key: "actions",
                 width: 100,
                 render: (_, r) => {
-                  const held = heldOf(r).flatMap((i) => (i.serial ? [i.serial] : []));
+                  const held = heldOf(r).flatMap((i) =>
+                    i.serial ? [i.serial] : [],
+                  );
                   if (held.length === 0) return null;
                   return (
                     // One button, and it opens the dialog rather than doing
@@ -717,14 +719,14 @@ export function ReservationsPage() {
       </Flex>
 
       {/**
-        * The units on one hold — the only place they can be picked among.
-        *
-        * Everything an operator can do to a hold lives here, which is the
-        * point of the 2026-08-27 revision: the row shows what is on the hold
-        * and this decides what happens to it. Three actions, in the order a
-        * counter actually uses them — take everything, take some, or let it
-        * all go.
-        */}
+       * The units on one hold — the only place they can be picked among.
+       *
+       * Everything an operator can do to a hold lives here, which is the
+       * point of the 2026-08-27 revision: the row shows what is on the hold
+       * and this decides what happens to it. Three actions, in the order a
+       * counter actually uses them — take everything, take some, or let it
+       * all go.
+       */}
       <Modal
         open={managing !== null}
         onCancel={() => setManaging(null)}
@@ -790,7 +792,10 @@ export function ReservationsPage() {
                 )}
 
                 <Flex gap={8} wrap align="center" justify="flex-end">
-                  <Typography.Text type="secondary" style={{ marginRight: "auto" }}>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ marginRight: "auto" }}
+                  >
                     {t(
                       "reservations.pickedCount",
                       "{{picked}} of {{held}} still-held unit(s) selected",
@@ -822,9 +827,7 @@ export function ReservationsPage() {
                     type="primary"
                     icon={<ShoppingCartOutlined />}
                     disabled={chosen.length === 0}
-                    onClick={() =>
-                      checkOut(r, chosen, releaseRest ? rest : [])
-                    }
+                    onClick={() => checkOut(r, chosen, releaseRest ? rest : [])}
                   >
                     {t("reservations.checkOutSelected", "Check out {{count}}", {
                       count: chosen.length,
@@ -860,7 +863,12 @@ export function ReservationsPage() {
             <Form.Item
               name="phone"
               label={t("customers.phone", "Phone")}
-              rules={[{ required: true, message: t("form.pickCustomer", "Pick a customer") }]}
+              rules={[
+                {
+                  required: true,
+                  message: t("form.pickCustomer", "Pick a customer"),
+                },
+              ]}
               style={{ flex: "1 1 220px" }}
             >
               <Input placeholder="+62812..." maxLength={20} />
@@ -868,7 +876,12 @@ export function ReservationsPage() {
             <Form.Item
               name="name"
               label={t("customers.name", "Name")}
-              rules={[{ required: true, message: t("form.pickCustomer", "Pick a customer") }]}
+              rules={[
+                {
+                  required: true,
+                  message: t("form.pickCustomer", "Pick a customer"),
+                },
+              ]}
               style={{ flex: "1 1 220px" }}
             >
               <Input maxLength={120} />
@@ -881,7 +894,12 @@ export function ReservationsPage() {
           <Form.Item
             name="serials"
             label={t("reservations.units", "Units")}
-            rules={[{ required: true, message: t("form.pickUnit", "Pick at least one unit") }]}
+            rules={[
+              {
+                required: true,
+                message: t("form.pickUnit", "Pick at least one unit"),
+              },
+            ]}
           >
             <Select
               mode="multiple"
@@ -920,7 +938,12 @@ export function ReservationsPage() {
             <Form.Item
               name="sourceId"
               label={t("reservations.cameFrom", "Came from")}
-              rules={[{ required: true, message: t("form.pickSource", "Where did this come from?") }]}
+              rules={[
+                {
+                  required: true,
+                  message: t("form.pickSource", "Where did this come from?"),
+                },
+              ]}
               style={{ flex: "1 1 220px" }}
             >
               <Select
@@ -933,7 +956,9 @@ export function ReservationsPage() {
             <Form.Item
               name="when"
               label={t("reservations.holdUntil", "Hold until")}
-              rules={[{ required: true, message: t("form.pickTime", "Pick a time") }]}
+              rules={[
+                { required: true, message: t("form.pickTime", "Pick a time") },
+              ]}
               style={{ flex: "1 1 220px" }}
             >
               <DatePicker

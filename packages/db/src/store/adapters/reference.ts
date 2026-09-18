@@ -68,7 +68,9 @@ export const paymentMethods: Adapter<"paymentMethods"> = {
         active: n.active,
       };
       if (r.base === undefined) {
-        const max = await tx.paymentMethod.aggregate({ _max: { sortOrder: true } });
+        const max = await tx.paymentMethod.aggregate({
+          _max: { sortOrder: true },
+        });
         await tx.paymentMethod.create({
           data: {
             id: n.id,
@@ -166,7 +168,11 @@ export const racks: Adapter<"racks"> = {
     for (const r of rows) {
       const n = r.next;
       if (n === undefined) throw refuseRemoval("racks", r.key);
-      const data = { locationId: n.warehouseId, name: n.name, active: n.active };
+      const data = {
+        locationId: n.warehouseId,
+        name: n.name,
+        active: n.active,
+      };
       if (r.base === undefined) {
         const max = await tx.rack.aggregate({ _max: { sortOrder: true } });
         await tx.rack.create({
@@ -225,7 +231,9 @@ export const suppliers: Adapter<"suppliers"> = {
         code: n.code ?? null,
         openingBalance: n.openingBalance ?? null,
         openingBalanceAt:
-          n.openingBalanceAt === undefined ? null : instantOf(n.openingBalanceAt),
+          n.openingBalanceAt === undefined
+            ? null
+            : instantOf(n.openingBalanceAt),
       };
       if (r.base === undefined) {
         await tx.supplier.create({
@@ -263,7 +271,11 @@ export const reasons: Adapter<"reasons"> = {
     for (const r of rows) {
       const n = r.next;
       if (n === undefined) throw refuseRemoval("reasons", r.key);
-      const data = { activity: n.activity, label: n.label.trim(), active: n.active };
+      const data = {
+        activity: n.activity,
+        label: n.label.trim(),
+        active: n.active,
+      };
       if (r.base === undefined) {
         const max = await tx.reason.aggregate({ _max: { sortOrder: true } });
         await tx.reason.create({
@@ -303,7 +315,9 @@ export const qcDescriptions: Adapter<"qcDescriptions"> = {
       if (n === undefined) throw refuseRemoval("qcDescriptions", r.key);
       const data = { label: n.label.trim(), active: n.active };
       if (r.base === undefined) {
-        const max = await tx.qcDescription.aggregate({ _max: { sortOrder: true } });
+        const max = await tx.qcDescription.aggregate({
+          _max: { sortOrder: true },
+        });
         await tx.qcDescription.create({
           data: {
             id: n.id,
@@ -341,7 +355,9 @@ export const reservationSources: Adapter<"reservationSources"> = {
       if (n === undefined) throw refuseRemoval("reservationSources", r.key);
       const data = { name: n.name.trim(), active: n.active };
       if (r.base === undefined) {
-        const max = await tx.reservationSource.aggregate({ _max: { sortOrder: true } });
+        const max = await tx.reservationSource.aggregate({
+          _max: { sortOrder: true },
+        });
         await tx.reservationSource.create({
           data: {
             id: n.id,
@@ -356,7 +372,10 @@ export const reservationSources: Adapter<"reservationSources"> = {
       ctx.touch("reservationSources", n.id);
     }
     for (const [sortOrder, id] of (order ?? []).entries()) {
-      await tx.reservationSource.updateMany({ where: { id }, data: { sortOrder } });
+      await tx.reservationSource.updateMany({
+        where: { id },
+        data: { sortOrder },
+      });
       ctx.touch("reservationSources", id);
     }
   },
@@ -407,7 +426,9 @@ export const salesmen: Adapter<"salesmen"> = {
       if (n === undefined) throw refuseRemoval("salesmen", r.key);
       const data = { name: n.name.trim(), active: n.active };
       if (r.base === undefined) {
-        const max = await tx.salesperson.aggregate({ _max: { sortOrder: true } });
+        const max = await tx.salesperson.aggregate({
+          _max: { sortOrder: true },
+        });
         await tx.salesperson.create({
           data: {
             id: n.id,
@@ -461,7 +482,12 @@ export const knowledge: Adapter<"knowledge"> = {
       };
       if (r.base === undefined) {
         await tx.agentKnowledge.create({
-          data: { id: n.id, ...data, createdById: ctx.staffId, createdAt: ctx.now },
+          data: {
+            id: n.id,
+            ...data,
+            createdById: ctx.staffId,
+            createdAt: ctx.now,
+          },
         });
       } else {
         await tx.agentKnowledge.update({ where: { id: n.id }, data });
@@ -486,7 +512,12 @@ async function syncAddresses(
   const existing = await tx.customerAddress.findMany({ where: { customerId } });
   const left = new Map(existing.map((a) => [a.id, a]));
   for (const [sortOrder, a] of list.entries()) {
-    const data = { label: a.label ?? null, line: a.line, sortOrder, removedAt: null };
+    const data = {
+      label: a.label ?? null,
+      line: a.line,
+      sortOrder,
+      removedAt: null,
+    };
     if (left.has(a.id)) {
       await tx.customerAddress.update({ where: { id: a.id }, data });
       left.delete(a.id);
@@ -513,7 +544,10 @@ export const customers: Adapter<"customers"> = {
       where: byId(keys),
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       include: {
-        addresses: { where: { removedAt: null }, orderBy: { sortOrder: "asc" } },
+        addresses: {
+          where: { removedAt: null },
+          orderBy: { sortOrder: "asc" },
+        },
       },
     });
     return rows.map((c) => ({
@@ -548,7 +582,9 @@ export const customers: Adapter<"customers"> = {
         referralSourceId: n.referralSourceId ?? null,
         openingBalance: n.openingBalance ?? null,
         openingBalanceAt:
-          n.openingBalanceAt === undefined ? null : instantOf(n.openingBalanceAt),
+          n.openingBalanceAt === undefined
+            ? null
+            : instantOf(n.openingBalanceAt),
       };
       if (r.base === undefined) {
         await tx.customer.create({
@@ -575,7 +611,11 @@ export const ALL_PRODUCTS = "All products";
 async function scopeOf(
   tx: Tx,
   label: string,
-): Promise<{ scope: DiscScope; categoryId: string | null; modelId: string | null }> {
+): Promise<{
+  scope: DiscScope;
+  categoryId: string | null;
+  modelId: string | null;
+}> {
   const clean = label.trim();
   if (clean === "" || clean === ALL_PRODUCTS) {
     return { scope: "SEMUA", categoryId: null, modelId: null };

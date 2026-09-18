@@ -20,7 +20,10 @@ import type { TFunction } from "../i18n/translate.js";
 import { fmtRp } from "./format.js";
 import type { DiscountShape } from "./pricing.js";
 
-export function describeDiscountText(shape: DiscountShape, t: TFunction): string {
+export function describeDiscountText(
+  shape: DiscountShape,
+  t: TFunction,
+): string {
   if (shape.kind === "PCT") {
     return shape.maxRp === undefined
       ? t("discounts.shapePct", "{{pct}}%", { pct: shape.pct })

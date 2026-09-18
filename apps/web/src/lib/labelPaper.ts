@@ -147,13 +147,7 @@ export interface LabelTiling {
  * a formula without the correction would say three fit where four do.
  */
 export function tiling(setup: LabelSetup): LabelTiling {
-  const {
-    labelWidthMm,
-    labelHeightMm,
-    gapMm,
-    marginMm,
-    mode,
-  } = setup;
+  const { labelWidthMm, labelHeightMm, gapMm, marginMm, mode } = setup;
 
   if (mode === "ROLL") {
     // On a roll the label IS the page. One per page, no margin, no gap: the

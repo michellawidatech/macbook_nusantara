@@ -104,7 +104,8 @@ export interface UnitPickerRow {
 
 export const unitTimelineKey = (serial: string) =>
   ["katalog", "unit", serial] as const;
-export const unitPickerKey = (q: string) => ["katalog", "unit", "search", q] as const;
+export const unitPickerKey = (q: string) =>
+  ["katalog", "unit", "search", q] as const;
 
 export const getUnitTimeline = (serial: string, signal?: AbortSignal) =>
   api<UnitTimeline>(

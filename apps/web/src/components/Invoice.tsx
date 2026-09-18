@@ -227,17 +227,17 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
             {labelOf(ORDER_SOURCE, order.source)}
           </div>
           {/*
-            * The bill's parts, since 2026-09-08 (owner ask: *"we need to track
-            * different payment handling and reflect it on invoice"*).
-            *
-            * A sale paid one way prints exactly the line it always printed —
-            * `paymentsOf` gives a single-payment order one part — so nothing
-            * changes for the common receipt. A split one prints a line each,
-            * because a customer who paid Rp5jt in cash and Rp5jt on PayLater
-            * needs a receipt that says so, and one that reads "Payment
-            * Transfer" is a receipt they cannot use to argue with either
-            * party.
-            */}
+           * The bill's parts, since 2026-09-08 (owner ask: *"we need to track
+           * different payment handling and reflect it on invoice"*).
+           *
+           * A sale paid one way prints exactly the line it always printed —
+           * `paymentsOf` gives a single-payment order one part — so nothing
+           * changes for the common receipt. A split one prints a line each,
+           * because a customer who paid Rp5jt in cash and Rp5jt on PayLater
+           * needs a receipt that says so, and one that reads "Payment
+           * Transfer" is a receipt they cannot use to argue with either
+           * party.
+           */}
           {parts.length === 1 ? (
             <div>
               <span style={{ color: "#666" }}>Payment</span>{" "}
@@ -399,11 +399,11 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
           another unit.
         </div>
         {/*
-          * Two different warnings, because they are about two different
-          * people. A marketplace holding the money is the shop's problem; an
-          * unpaid balance is the customer's, and the receipt they walk out
-          * with has to say what they still owe and when.
-          */}
+         * Two different warnings, because they are about two different
+         * people. A marketplace holding the money is the shop's problem; an
+         * unpaid balance is the customer's, and the receipt they walk out
+         * with has to say what they still owe and when.
+         */}
         {balance.pending > 0 && (
           <div style={{ marginTop: 4, fontWeight: 700, color: "#8a6100" }}>
             {fmtRp(balance.pending)} pending —{" "}

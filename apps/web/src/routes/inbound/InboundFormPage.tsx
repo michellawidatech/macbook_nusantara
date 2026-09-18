@@ -96,11 +96,10 @@ export function InboundFormPage() {
    * `lib/inboundDraft.ts` for why auto-save and *Save draft* are two different
    * things.
    */
-  const [stored, setStored, clearStored] = usePersistentState<
-    InboundDraft | null
-  >(INBOUND_DRAFT_KEY, null, (raw) =>
-    raw === null ? null : parseInboundDraft(raw),
-  );
+  const [stored, setStored, clearStored] =
+    usePersistentState<InboundDraft | null>(INBOUND_DRAFT_KEY, null, (raw) =>
+      raw === null ? null : parseInboundDraft(raw),
+    );
   // Read at mount and never again: `stored` changes on every keystroke once
   // the mirror below starts writing, and re-seeding from it would fight the
   // person typing.

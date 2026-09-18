@@ -77,9 +77,33 @@ const LATER =
  * repeated letters, so "hmmm" folds to "hm" and "okeee" to "oke".
  */
 const FILLER = new Set([
-  "hm", "em", "eh", "oh", "ah", "ok", "oke", "okay", "sip", "sep", "siap",
-  "y", "ya", "iya", "yoi", "he", "bentar", "sebentar", "sbentar", "bntr",
-  "tunggu", "wait", "hold", "loading", "cek", "eh bentar", "oh ya",
+  "hm",
+  "em",
+  "eh",
+  "oh",
+  "ah",
+  "ok",
+  "oke",
+  "okay",
+  "sip",
+  "sep",
+  "siap",
+  "y",
+  "ya",
+  "iya",
+  "yoi",
+  "he",
+  "bentar",
+  "sebentar",
+  "sbentar",
+  "bntr",
+  "tunggu",
+  "wait",
+  "hold",
+  "loading",
+  "cek",
+  "eh bentar",
+  "oh ya",
 ]);
 
 /** Collapse runs of one character, so "hmmm" and "hmm" fold together. */

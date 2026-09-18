@@ -116,7 +116,10 @@ export function worstBatteryGrade(
   let worst: BatteryGrade | null = null;
   for (const g of grades) {
     if (g === null) continue;
-    if (worst === null || BATTERY_GRADES.indexOf(g) > BATTERY_GRADES.indexOf(worst)) {
+    if (
+      worst === null ||
+      BATTERY_GRADES.indexOf(g) > BATTERY_GRADES.indexOf(worst)
+    ) {
       worst = g;
     }
   }
@@ -302,7 +305,9 @@ function knownYear(year: number | null | undefined): number | undefined {
  * Blind to the chip, so a 2020 M1 comes out `CYCLES` here. Ask
  * `defaultBatteryMode` wherever the model is to hand.
  */
-export function batteryEra(releaseYear: number | null | undefined): BatteryMode {
+export function batteryEra(
+  releaseYear: number | null | undefined,
+): BatteryMode {
   const year = knownYear(releaseYear);
   if (year === undefined) return "HEALTH";
   return year <= BATTERY_CYCLE_ERA_MAX_YEAR ? "CYCLES" : "HEALTH";
@@ -654,7 +659,11 @@ export function batterySettingsFrom(settings: {
  */
 export function batteryEraGuide(
   settings: BatterySettings,
-  t: (key: string, defaultValue: string, vars?: Record<string, unknown>) => string,
+  t: (
+    key: string,
+    defaultValue: string,
+    vars?: Record<string, unknown>,
+  ) => string,
 ): string {
   const { goodMin, fairMin } = settings.health;
   const { goodMax, fairMax } = settings.cycles;
@@ -720,7 +729,10 @@ export const BATTERY_FIELDS: Record<BatteryMode, readonly BatteryField[]> = {
 };
 
 /** The bounds of one field, for the message that names them. */
-export const BATTERY_FIELD_RANGE: Record<BatteryField, readonly [number, number]> = {
+export const BATTERY_FIELD_RANGE: Record<
+  BatteryField,
+  readonly [number, number]
+> = {
   health: [BATTERY_HEALTH_MIN, BATTERY_HEALTH_MAX],
   cycleCount: [CYCLE_COUNT_MIN, CYCLE_COUNT_MAX],
   fcc: [FCC_MIN, FCC_MAX],
@@ -802,7 +814,11 @@ export function batteryPatch(
   if (batteryDraftMode(draft, fallback) === "HEALTH") {
     return all.batteryHealth === undefined
       ? all
-      : { batteryHealth: all.batteryHealth, cycleCount: undefined, fcc: undefined };
+      : {
+          batteryHealth: all.batteryHealth,
+          cycleCount: undefined,
+          fcc: undefined,
+        };
   }
   return all.cycleCount === undefined && all.fcc === undefined
     ? all

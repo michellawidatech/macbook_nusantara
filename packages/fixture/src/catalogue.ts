@@ -128,8 +128,9 @@ export const CATEGORIES: readonly FixtureCategory[] = [
 ];
 
 /** Category id by the name the models carry. */
-export const CATEGORY_ID: Readonly<Record<string, string>> =
-  Object.fromEntries(CATEGORIES.map((c) => [c.name, c.id]));
+export const CATEGORY_ID: Readonly<Record<string, string>> = Object.fromEntries(
+  CATEGORIES.map((c) => [c.name, c.id]),
+);
 
 /**
  * The machines.
@@ -472,9 +473,7 @@ export const costOf = (price: number): number =>
  * The shape comes from the data rather than from the loop: the Intel-era Pros
  * vary by chip and by touch bar, and those are axes too.
  */
-function combinations(
-  axes: readonly FixtureAxis[],
-): Record<string, string>[] {
+function combinations(axes: readonly FixtureAxis[]): Record<string, string>[] {
   return axes.reduce<Record<string, string>[]>(
     (acc, axis) =>
       acc.flatMap((partial) =>
@@ -503,10 +502,7 @@ function priceOf(model: FixtureModel, axisValues: Record<string, string>) {
     doublingsAbove(axis("RAM"), axisValues["RAM"]) * RAM_STEP +
     doublingsAbove(axis("SSD"), axisValues["SSD"]) * SSD_STEP +
     (storage === undefined ? 0 : (STORAGE_STEP[storage] ?? 0)) +
-    Object.values(axisValues).reduce(
-      (n, v) => n + (VARIANT_PREMIUM[v] ?? 0),
-      0,
-    )
+    Object.values(axisValues).reduce((n, v) => n + (VARIANT_PREMIUM[v] ?? 0), 0)
   );
 }
 

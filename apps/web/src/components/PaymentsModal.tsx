@@ -54,7 +54,10 @@ export interface PaymentsModalProps {
   /** This sale's log, newest first. */
   readonly log: readonly PaymentLogEntry[];
   /** Codes and labels, as `PaymentsPanel` takes them. */
-  readonly methods: readonly { readonly value: string; readonly label: string }[];
+  readonly methods: readonly {
+    readonly value: string;
+    readonly label: string;
+  }[];
   readonly onClose: () => void;
   readonly onSave: (next: SalePayment[], reason: string) => void;
 }
@@ -200,7 +203,10 @@ export function PaymentsModal({
                             to: fmtRp(e.after?.amount ?? 0),
                           })}
                   </Typography.Text>
-                  <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: TYPE.sm }}
+                  >
                     {[fmtDateTime(e.at), e.staff, e.reason]
                       .filter(Boolean)
                       .join(" · ")}

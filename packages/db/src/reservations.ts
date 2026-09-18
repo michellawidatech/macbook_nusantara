@@ -61,7 +61,10 @@ export type HoldSource = "STAF" | "AGEN";
  * nothing changes for it. One implementation, two configurations.
  */
 export interface HoldPolicy {
-  readonly storeHours?: { readonly openHour: number; readonly closeHour: number };
+  readonly storeHours?: {
+    readonly openHour: number;
+    readonly closeHour: number;
+  };
   readonly maxBookingDays?: number;
   readonly requireFuture?: boolean;
 }
@@ -150,7 +153,10 @@ function assertSchedule(
 ): void {
   if (policy === undefined || scheduledFor == null) return;
 
-  if (policy.requireFuture === true && scheduledFor.getTime() <= now.getTime()) {
+  if (
+    policy.requireFuture === true &&
+    scheduledFor.getTime() <= now.getTime()
+  ) {
     throw new BookingInPastError(scheduledFor);
   }
   if (policy.maxBookingDays !== undefined) {
@@ -374,7 +380,8 @@ async function resolveTarget(
       },
       select: { code: true, status: true },
     });
-    if (settled) throw new HoldAlreadySettledError(settled.code, settled.status);
+    if (settled)
+      throw new HoldAlreadySettledError(settled.code, settled.status);
     throw new HoldNotFoundError(target.code);
   }
   if (open.length > 1 && target.code === undefined) {
@@ -387,7 +394,9 @@ async function resolveTarget(
 async function itemsOf(
   tx: Tx,
   reservationId: string,
-): Promise<{ unitId: string | null; serial: string | null; status: UnitStatus | null }[]> {
+): Promise<
+  { unitId: string | null; serial: string | null; status: UnitStatus | null }[]
+> {
   const rows = await tx.reservationItem.findMany({
     where: { reservationId },
     select: { unitId: true, unit: { select: { serial: true, status: true } } },
@@ -417,7 +426,9 @@ async function heldByThisHold(
   unitIds: readonly string[],
 ): Promise<Set<string>> {
   if (unitIds.length === 0) return new Set();
-  const rows = await tx.$queryRaw<{ unitId: string; reservationId: string | null }[]>(
+  const rows = await tx.$queryRaw<
+    { unitId: string; reservationId: string | null }[]
+  >(
     Prisma.sql`
       SELECT DISTINCT ON (e."unitId") e."unitId", e."reservationId"
         FROM "UnitEvent" e
@@ -428,7 +439,9 @@ async function heldByThisHold(
   );
   return new Set(
     rows
-      .filter((r) => r.reservationId === null || r.reservationId === reservationId)
+      .filter(
+        (r) => r.reservationId === null || r.reservationId === reservationId,
+      )
       .map((r) => r.unitId),
   );
 }
@@ -456,14 +469,19 @@ export async function releaseHold(
 
   // 3. Lock the header BEFORE any unit, and decide from the locked row.
   //    Prisma has no FOR UPDATE, so raw — same pattern as withUnitLocks.
-  const [locked] = await tx.$queryRaw<{ id: string; code: string; status: ReservationStatus }[]>(
+  const [locked] = await tx.$queryRaw<
+    { id: string; code: string; status: ReservationStatus }[]
+  >(
     Prisma.sql`
       SELECT id, code, status FROM "Reservation" WHERE id = ${target.id} FOR UPDATE
     `,
   );
   if (!locked) throw new HoldNotFoundError(target.code);
 
-  if (input.expectStatus !== undefined && locked.status !== input.expectStatus) {
+  if (
+    input.expectStatus !== undefined &&
+    locked.status !== input.expectStatus
+  ) {
     // Somebody dealt with this since we read. Their decision stands.
     return { skipped: true, code: locked.code };
   }
@@ -566,7 +584,9 @@ export async function reprojectHolds(
 ): Promise<number> {
   if (input.serials.length === 0) return 0;
   const touched = await tx.reservation.findMany({
-    where: { items: { some: { unit: { serial: { in: [...input.serials] } } } } },
+    where: {
+      items: { some: { unit: { serial: { in: [...input.serials] } } } },
+    },
     select: { id: true },
   });
   for (const r of touched) await reprojectHold(tx, r.id);
@@ -669,7 +689,9 @@ const HOLD_INCLUDE = {
   },
 } as const;
 
-type HoldWithJoins = Prisma.ReservationGetPayload<{ include: typeof HOLD_INCLUDE }>;
+type HoldWithJoins = Prisma.ReservationGetPayload<{
+  include: typeof HOLD_INCLUDE;
+}>;
 
 function toRow(r: HoldWithJoins): HoldRow {
   return {
@@ -739,11 +761,15 @@ export async function listHolds(
             { code: { contains: q, mode: "insensitive" as const } },
             { custName: { contains: q, mode: "insensitive" as const } },
             { phone: { contains: q } },
-            { customer: { name: { contains: q, mode: "insensitive" as const } } },
+            {
+              customer: { name: { contains: q, mode: "insensitive" as const } },
+            },
             {
               items: {
                 some: {
-                  unit: { serial: { contains: q, mode: "insensitive" as const } },
+                  unit: {
+                    serial: { contains: q, mode: "insensitive" as const },
+                  },
                 },
               },
             },
@@ -757,7 +783,10 @@ export async function listHolds(
   const orderBy: Prisma.ReservationOrderByWithRelationInput[] =
     sort === "customer"
       ? [{ custName: dir }, { code: "asc" }]
-      : [{ [sort]: dir } as Prisma.ReservationOrderByWithRelationInput, { code: "asc" }];
+      : [
+          { [sort]: dir } as Prisma.ReservationOrderByWithRelationInput,
+          { code: "asc" },
+        ];
 
   const [rows, total, totalUnfiltered] = await Promise.all([
     db.reservation.findMany({

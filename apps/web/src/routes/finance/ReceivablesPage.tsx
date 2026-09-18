@@ -59,7 +59,13 @@ import {
   saleBalance,
   type SalePayment,
 } from "../../lib/salePayments.js";
-import { appendEvent, mutate, nextId, useDb, currentStaffName } from "../../mock/store.js";
+import {
+  appendEvent,
+  mutate,
+  nextId,
+  useDb,
+  currentStaffName,
+} from "../../mock/store.js";
 import type { MockDb, Order } from "../../mock/seed.js";
 import { SPACE, TYPE } from "../../theme/tokens";
 
@@ -213,9 +219,7 @@ export function ReceivablesPage() {
         const o = d.orders.find((x) => x.id === r.order.id);
         if (!o) return;
         const parts = (o.payments ?? paymentsOf(r.order)).map((p) =>
-          p.id === r.payment.id
-            ? { ...p, state: "SETTLED" as const, at }
-            : p,
+          p.id === r.payment.id ? { ...p, state: "SETTLED" as const, at } : p,
         );
         o.payments = parts;
         o.settled = parts.every((p) => p.state === "SETTLED");
@@ -303,7 +307,9 @@ export function ReceivablesPage() {
           ...d.settlements[i]!,
           fees: result.fees,
           received: result.received,
-          ...(result.reason ? { reason: result.reason } : { reason: undefined }),
+          ...(result.reason
+            ? { reason: result.reason }
+            : { reason: undefined }),
         };
       }
       d.settlementLog.push({
@@ -322,9 +328,7 @@ export function ReceivablesPage() {
   };
 
   return (
-    <PageContainer
-      title={t("piutang.title", "Pending balance & receivables")}
-    >
+    <PageContainer title={t("piutang.title", "Pending balance & receivables")}>
       <Flex vertical gap={SPACE.md}>
         <Flex gap={SPACE.md} wrap>
           <Card style={{ flex: 1, minWidth: 220 }}>
@@ -355,9 +359,7 @@ export function ReceivablesPage() {
           </Card>
         </Flex>
 
-        <Card
-          title={t("piutang.marketplaceMoney", "Waiting at a marketplace")}
-        >
+        <Card title={t("piutang.marketplaceMoney", "Waiting at a marketplace")}>
           <Table<ChannelRow>
             size="small"
             rowKey="key"
@@ -560,7 +562,10 @@ export function ReceivablesPage() {
                 render: (_, r) =>
                   r.order === undefined ? (
                     <Tooltip
-                      title={t("piutang.editOldDebt", "Correct it on the customer")}
+                      title={t(
+                        "piutang.editOldDebt",
+                        "Correct it on the customer",
+                      )}
                     >
                       <Link to="/customers">
                         <Button
@@ -575,21 +580,24 @@ export function ReceivablesPage() {
                       </Link>
                     </Tooltip>
                   ) : (
-                  <Tooltip
-                    title={t("piutang.openInHistory", "Correct what was paid")}
-                  >
-                    <Link to="/finance/transactions">
-                      <Button
-                        size="small"
-                        icon={<EditOutlined />}
-                        aria-label={t(
-                          "piutang.openInHistoryAria",
-                          "Open {{code}} in Transaction History",
-                          { code: r.order.code },
-                        )}
-                      />
-                    </Link>
-                  </Tooltip>
+                    <Tooltip
+                      title={t(
+                        "piutang.openInHistory",
+                        "Correct what was paid",
+                      )}
+                    >
+                      <Link to="/finance/transactions">
+                        <Button
+                          size="small"
+                          icon={<EditOutlined />}
+                          aria-label={t(
+                            "piutang.openInHistoryAria",
+                            "Open {{code}} in Transaction History",
+                            { code: r.order.code },
+                          )}
+                        />
+                      </Link>
+                    </Tooltip>
                   ),
               },
             ]}
@@ -646,7 +654,9 @@ export function ReceivablesPage() {
                           style={{ fontSize: TYPE.sm }}
                         >
                           {s.fees
-                            .map((f) => `${f.label ?? f.kind} ${fmtRp(f.amount)}`)
+                            .map(
+                              (f) => `${f.label ?? f.kind} ${fmtRp(f.amount)}`,
+                            )
                             .join(" · ")}
                         </Typography.Text>
                       </Flex>
@@ -689,8 +699,7 @@ export function ReceivablesPage() {
                           "piutang.amendAria",
                           "Correct the withdrawal from {{channel}}",
                           {
-                            channel:
-                              channelOf(s.channel)?.label ?? s.channel,
+                            channel: channelOf(s.channel)?.label ?? s.channel,
                           },
                         )}
                         onClick={() => setAmending(s)}
@@ -745,10 +754,7 @@ export function ReceivablesPage() {
  * afterwards, which is the kind of error that costs an afternoon each time
  * somebody notices it.
  */
-export function apportion(
-  total: number,
-  weights: readonly number[],
-): number[] {
+export function apportion(total: number, weights: readonly number[]): number[] {
   const sum = weights.reduce((n, w) => n + w, 0);
   if (sum <= 0) return weights.map(() => 0);
   const exact = weights.map((w) => (total * w) / sum);

@@ -60,7 +60,8 @@ export function storeRouter(db: PrismaClient): Router {
     try {
       const staff = req.staff;
       if (!staff) throw unauthenticated();
-      const after = typeof req.query["after"] === "string" ? req.query["after"] : "0";
+      const after =
+        typeof req.query["after"] === "string" ? req.query["after"] : "0";
       const delta = await storeChangesSince(db, { staffId: staff.id }, after);
       if (delta === "RESET") {
         throw new ApiError(
@@ -80,7 +81,10 @@ export function storeRouter(db: PrismaClient): Router {
     try {
       const staff = req.staff;
       if (!staff) throw unauthenticated();
-      const result = await commitStore(db, { staffId: staff.id, changes: req.body });
+      const result = await commitStore(db, {
+        staffId: staff.id,
+        changes: req.body,
+      });
       res.json(result);
     } catch (e) {
       next(toApiError(e));

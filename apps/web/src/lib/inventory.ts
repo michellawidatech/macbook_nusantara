@@ -152,7 +152,11 @@ export function rollUpInventory(
     // cycle-count dash.
     const battery = mine
       .map((u) => {
-        const r = readBattery(u, model?.releaseYear, opts.battery ?? DEFAULT_BATTERY_SETTINGS);
+        const r = readBattery(
+          u,
+          model?.releaseYear,
+          opts.battery ?? DEFAULT_BATTERY_SETTINGS,
+        );
         return r.mode === "CYCLES" ? r.cycleCount : r.health;
       })
       .filter((c): c is number => c != null && Number.isFinite(c));

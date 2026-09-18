@@ -102,22 +102,47 @@ async function seedShop(count = 2): Promise<string[]> {
     },
   });
   await db.location.create({
-    data: { id: "loc_r", code: "R1", name: "Toko", kind: "TOKO", active: true, sortOrder: 1 },
+    data: {
+      id: "loc_r",
+      code: "R1",
+      name: "Toko",
+      kind: "TOKO",
+      active: true,
+      sortOrder: 1,
+    },
   });
   await db.category.create({
     data: {
-      id: "cat_r", name: "MacBook", sortOrder: 1, marginMode: "PCT",
-      marginMin: 5n, marginMax: 30n, createdAt: NOW,
+      id: "cat_r",
+      name: "MacBook",
+      sortOrder: 1,
+      marginMode: "PCT",
+      marginMin: 5n,
+      marginMax: 30n,
+      createdAt: NOW,
     },
   });
   await db.catalogModel.create({
-    data: { id: "mdl_r", categoryId: "cat_r", name: "MacBook Air M2", archived: false, createdAt: NOW },
+    data: {
+      id: "mdl_r",
+      categoryId: "cat_r",
+      name: "MacBook Air M2",
+      archived: false,
+      createdAt: NOW,
+    },
   });
   await db.sku.create({
     data: {
-      id: "sku_r", modelId: "mdl_r", code: "SKU-R1", name: "MacBook Air M2 256GB",
-      variantLabel: "8/256", grade: "A", price: 15_500_000n, landed: 12_000_000n,
-      archived: false, createdAt: NOW,
+      id: "sku_r",
+      modelId: "mdl_r",
+      code: "SKU-R1",
+      name: "MacBook Air M2 256GB",
+      variantLabel: "8/256",
+      grade: "A",
+      price: 15_500_000n,
+      landed: 12_000_000n,
+      archived: false,
+      createdAt: NOW,
     },
   });
 
@@ -127,14 +152,33 @@ async function seedShop(count = 2): Promise<string[]> {
     serials.push(serial);
     await db.unit.create({
       data: {
-        id: `ur_${i}`, serial, skuId: "sku_r", status: "QC", locationId: "loc_r",
-        buy: 12_000_000n, landed: 12_000_000n, grade: "A", intakeAt: NOW, version: 1,
+        id: `ur_${i}`,
+        serial,
+        skuId: "sku_r",
+        status: "QC",
+        locationId: "loc_r",
+        buy: 12_000_000n,
+        landed: 12_000_000n,
+        grade: "A",
+        intakeAt: NOW,
+        version: 1,
       },
     });
     // A unit reaches TERSEDIA through the ledger, never by an UPDATE.
     await db.$transaction(async (tx) => {
-      await appendUnitEvent(tx, { serial, type: "DITERIMA", staffId: STAFF, at: NOW, toLocationId: "loc_r" });
-      await appendUnitEvent(tx, { serial, type: "QC_SELESAI", staffId: STAFF, at: NOW });
+      await appendUnitEvent(tx, {
+        serial,
+        type: "DITERIMA",
+        staffId: STAFF,
+        at: NOW,
+        toLocationId: "loc_r",
+      });
+      await appendUnitEvent(tx, {
+        serial,
+        type: "QC_SELESAI",
+        staffId: STAFF,
+        at: NOW,
+      });
     });
   }
   return serials;
@@ -191,7 +235,10 @@ describe("POST /api/reservations", () => {
   });
 
   it("takes the document number from the database, never from the client", async () => {
-    const res = await post("/", newHold(["RSV0"], { code: "RV-9999/99-999999" }));
+    const res = await post(
+      "/",
+      newHold(["RSV0"], { code: "RV-9999/99-999999" }),
+    );
     expect(res.status).toBe(201);
     expect(res.body.reservation.code).toMatch(/^RV-\d{4}\/\d{2}-\d{6}$/);
     expect(res.body.reservation.code).not.toBe("RV-9999/99-999999");
@@ -233,11 +280,17 @@ describe("POST /api/reservations", () => {
     it("an empty serial list, naming the field", async () => {
       const res = await post("/", newHold([]));
       expect(res.status).toBe(400);
-      expect(res.body.error).toMatchObject({ code: "VALIDASI", field: "serials" });
+      expect(res.body.error).toMatchObject({
+        code: "VALIDASI",
+        field: "serials",
+      });
     });
 
     it("more machines than one transaction should hold", async () => {
-      const res = await post("/", newHold(Array.from({ length: 21 }, (_, i) => `X${i}`)));
+      const res = await post(
+        "/",
+        newHold(Array.from({ length: 21 }, (_, i) => `X${i}`)),
+      );
       expect(res.status).toBe(400);
       expect(res.body.error.field).toBe("serials");
     });
@@ -255,13 +308,18 @@ describe("POST /api/reservations", () => {
       expect(res.body.error.message).toContain("NOSUCH");
       // Nothing was written: the whole hold is one transaction.
       expect(await db.reservation.count()).toBe(0);
-      const unit = await db.unit.findUniqueOrThrow({ where: { serial: "RSV0" } });
+      const unit = await db.unit.findUniqueOrThrow({
+        where: { serial: "RSV0" },
+      });
       expect(unit.status).toBe("TERSEDIA");
     });
 
     it("a machine somebody is already holding", async () => {
       await post("/", newHold(["RSV0"]));
-      const res = await post("/", newHold(["RSV0"], { phone: "+628111000888" }));
+      const res = await post(
+        "/",
+        newHold(["RSV0"], { phone: "+628111000888" }),
+      );
       expect(res.status).toBe(409);
       expect(res.body.error.code).toBe("KONFLIK");
       expect(res.body.error.message).toContain("RSV0");
@@ -269,7 +327,10 @@ describe("POST /api/reservations", () => {
 
     it("names EVERY unavailable machine, not just the first", async () => {
       await post("/", newHold(["RSV0", "RSV1"]));
-      const res = await post("/", newHold(["RSV0", "RSV1"], { phone: "+628111000888" }));
+      const res = await post(
+        "/",
+        newHold(["RSV0", "RSV1"], { phone: "+628111000888" }),
+      );
       expect(res.status).toBe(409);
       expect(res.body.error.message).toContain("RSV0");
       expect(res.body.error.message).toContain("RSV1");
@@ -291,7 +352,9 @@ describe("two cashiers at once", () => {
     const codes = [a.status, b.status].sort();
     expect(codes).toEqual([201, 409]);
     expect(await db.reservation.count()).toBe(1);
-    expect(await db.unitEvent.count({ where: { type: "DIRESERVASI" } })).toBe(1);
+    expect(await db.unitEvent.count({ where: { type: "DIRESERVASI" } })).toBe(
+      1,
+    );
   });
 
   it("cannot both hold overlapping baskets", async () => {
@@ -327,8 +390,12 @@ describe("releasing", () => {
     expect(res.status).toBe(200);
     expect(res.body.reservation.status).toBe("TERJADWAL");
 
-    expect((await db.unit.findUniqueOrThrow({ where: { serial: "RSV0" } })).status).toBe("TERSEDIA");
-    expect((await db.unit.findUniqueOrThrow({ where: { serial: "RSV1" } })).status).toBe("DIRESERVASI");
+    expect(
+      (await db.unit.findUniqueOrThrow({ where: { serial: "RSV0" } })).status,
+    ).toBe("TERSEDIA");
+    expect(
+      (await db.unit.findUniqueOrThrow({ where: { serial: "RSV1" } })).status,
+    ).toBe("DIRESERVASI");
   });
 
   it("closes the hold when the last machine goes", async () => {
@@ -349,7 +416,9 @@ describe("releasing", () => {
     expect(res.status).toBe(200);
     expect(res.body.reservation.status).toBe("BATAL");
     expect(await db.unit.count({ where: { status: "TERSEDIA" } })).toBe(3);
-    expect(await db.unitEvent.count({ where: { type: "RESERVASI_BATAL" } })).toBe(2);
+    expect(
+      await db.unitEvent.count({ where: { type: "RESERVASI_BATAL" } }),
+    ).toBe(2);
   });
 
   it("is idempotent — a second cancel is not an error", async () => {
@@ -361,7 +430,9 @@ describe("releasing", () => {
     expect(again.status).toBe(200);
     expect(again.body.reservation.status).toBe("BATAL");
     // And it did not append a second release to the ledger.
-    expect(await db.unitEvent.count({ where: { type: "RESERVASI_BATAL" } })).toBe(1);
+    expect(
+      await db.unitEvent.count({ where: { type: "RESERVASI_BATAL" } }),
+    ).toBe(1);
   });
 
   it("404s on a hold that does not exist", async () => {
@@ -381,14 +452,23 @@ describe("releasing", () => {
     const id = created.body.reservation.id;
 
     await db.$transaction(async (tx) => {
-      await appendUnitEvent(tx, { serial: "RSV0", type: "TERJUAL", staffId: STAFF, at: NOW });
+      await appendUnitEvent(tx, {
+        serial: "RSV0",
+        type: "TERJUAL",
+        staffId: STAFF,
+        at: NOW,
+      });
     });
 
     const res = await post(`/${id}/cancel`);
     expect(res.status).toBe(200);
     // The sold one stayed sold; the other went back to stock.
-    expect((await db.unit.findUniqueOrThrow({ where: { serial: "RSV0" } })).status).toBe("TERJUAL");
-    expect((await db.unit.findUniqueOrThrow({ where: { serial: "RSV1" } })).status).toBe("TERSEDIA");
+    expect(
+      (await db.unit.findUniqueOrThrow({ where: { serial: "RSV0" } })).status,
+    ).toBe("TERJUAL");
+    expect(
+      (await db.unit.findUniqueOrThrow({ where: { serial: "RSV1" } })).status,
+    ).toBe("TERSEDIA");
     // Something on it sold, so the hold reads collected rather than cancelled.
     expect(res.body.reservation.status).toBe("SELESAI");
   });
@@ -398,12 +478,18 @@ describe("releasing", () => {
    * projection would read the NEW holder's status and resurrect the old hold.
    */
   it("does not resurrect a cancelled hold when its machine is held again by somebody else", async () => {
-    const first = await post("/", newHold(["RSV0"], { phone: "+628111000111" }));
+    const first = await post(
+      "/",
+      newHold(["RSV0"], { phone: "+628111000111" }),
+    );
     const firstId = first.body.reservation.id;
     await post(`/${firstId}/cancel`);
 
     // Somebody else takes the same machine.
-    const second = await post("/", newHold(["RSV0"], { phone: "+628111000222" }));
+    const second = await post(
+      "/",
+      newHold(["RSV0"], { phone: "+628111000222" }),
+    );
     expect(second.status).toBe(201);
 
     // Touching the old hold again must not read the new holder's unit status.
@@ -411,7 +497,9 @@ describe("releasing", () => {
     expect(again.body.reservation.status).toBe("BATAL");
 
     // And it certainly must not release the other customer's machine.
-    expect((await db.unit.findUniqueOrThrow({ where: { serial: "RSV0" } })).status).toBe("DIRESERVASI");
+    expect(
+      (await db.unit.findUniqueOrThrow({ where: { serial: "RSV0" } })).status,
+    ).toBe("DIRESERVASI");
     const holder = await db.reservation.findUniqueOrThrow({
       where: { id: second.body.reservation.id },
     });
@@ -470,7 +558,9 @@ describe("GET /api/reservations", () => {
   it("serves the channel list the create form needs", async () => {
     const res = await get("/sources");
     expect(res.status).toBe(200);
-    expect(res.body.sources.map((s: { name: string }) => s.name)).toContain("Walk-in");
+    expect(res.body.sources.map((s: { name: string }) => s.name)).toContain(
+      "Walk-in",
+    );
   });
 });
 
@@ -530,7 +620,9 @@ describe("one hold, two callers", () => {
     const res = await post(`/${id}/cancel`);
     expect(res.status).toBe(200);
     expect(res.body.reservation.status).toBe("BATAL");
-    expect((await db.unit.findUniqueOrThrow({ where: { serial: "RSV0" } })).status).toBe("TERSEDIA");
+    expect(
+      (await db.unit.findUniqueOrThrow({ where: { serial: "RSV0" } })).status,
+    ).toBe("TERSEDIA");
   });
 
   it("refuses at the counter a machine the agent is already holding", async () => {

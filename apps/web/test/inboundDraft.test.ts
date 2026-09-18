@@ -83,7 +83,9 @@ describe("inboundDraftHasContent", () => {
   });
 
   it("says yes to anything a person had to decide", () => {
-    expect(inboundDraftHasContent(draft({ supplier: "Apel Segar" }))).toBe(true);
+    expect(inboundDraftHasContent(draft({ supplier: "Apel Segar" }))).toBe(
+      true,
+    );
     expect(inboundDraftHasContent(draft({ invoice: "INV-9" }))).toBe(true);
     expect(inboundDraftHasContent(draft({ noInvoice: true }))).toBe(true);
     expect(inboundDraftHasContent(draft({ paid: 1 }))).toBe(true);

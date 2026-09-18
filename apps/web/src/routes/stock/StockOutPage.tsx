@@ -136,10 +136,7 @@ import {
 import { gradeForCondition } from "../../lib/condition.js";
 import { resolveSerialQuery } from "../../lib/serialInput.js";
 import { priceOf as unitListPrice } from "../../lib/unitPrice.js";
-import {
-  isSettled,
-  type SalePayment,
-} from "../../lib/salePayments.js";
+import { isSettled, type SalePayment } from "../../lib/salePayments.js";
 import { PaymentsPanel } from "../../components/PaymentsPanel.js";
 import { costIndex } from "../../lib/service.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
@@ -639,9 +636,7 @@ export function StockOutPage() {
    * what it settled for once, on this sale, with this customer.
    */
   const listedPriceOf = (serial?: string) => {
-    const unit = serial
-      ? db.units.find((u) => u.serial === serial)
-      : undefined;
+    const unit = serial ? db.units.find((u) => u.serial === serial) : undefined;
     const sku = skuOf(serial);
     if (!sku) return undefined;
     return unit ? unitListPrice(unit, sku.price) : sku.price;
@@ -883,7 +878,8 @@ export function StockOutPage() {
       listPrices[l.serial!] = listed;
     }
     // Split or not, the sale is a list of payments from here on.
-    const parts = splitting && splitParts.length > 0 ? splitParts : defaultParts();
+    const parts =
+      splitting && splitParts.length > 0 ? splitParts : defaultParts();
     const order: Order = {
       id: nextId("o"),
       code,
@@ -1258,28 +1254,28 @@ export function StockOutPage() {
           })}
       extra={
         compact ? undefined : (
-        <Tooltip
-          title={
-            activeReservations.length
-              ? t(
-                  "pos.loadFromHold",
-                  "Load a unit and customer from a reservation",
-                )
-              : t("pos.nothingOnHold", "Nothing is on hold right now")
-          }
-        >
-          <span>
-            <Button
-              icon={<ClockCircleOutlined />}
-              disabled={activeReservations.length === 0}
-              onClick={() => setReservationPickerOpen(true)}
-            >
-              {t("pos.fromReservations", "Reservations ({{count}})", {
-                count: activeReservations.length,
-              })}
-            </Button>
-          </span>
-        </Tooltip>
+          <Tooltip
+            title={
+              activeReservations.length
+                ? t(
+                    "pos.loadFromHold",
+                    "Load a unit and customer from a reservation",
+                  )
+                : t("pos.nothingOnHold", "Nothing is on hold right now")
+            }
+          >
+            <span>
+              <Button
+                icon={<ClockCircleOutlined />}
+                disabled={activeReservations.length === 0}
+                onClick={() => setReservationPickerOpen(true)}
+              >
+                {t("pos.fromReservations", "Reservations ({{count}})", {
+                  count: activeReservations.length,
+                })}
+              </Button>
+            </span>
+          </Tooltip>
         )
       }
     >
@@ -1459,9 +1455,13 @@ export function StockOutPage() {
               <Button
                 type="text"
                 size="small"
-                aria-label={t("pos.inspectAria", "Price detail for {{serial}}", {
-                  serial: l.serial ?? "",
-                })}
+                aria-label={t(
+                  "pos.inspectAria",
+                  "Price detail for {{serial}}",
+                  {
+                    serial: l.serial ?? "",
+                  },
+                )}
                 icon={<EyeOutlined />}
                 disabled={!l.serial}
                 onClick={() => setInspecting(i)}
@@ -1822,85 +1822,85 @@ export function StockOutPage() {
           </Button>
         </Flex>
       )}
-        {fromReservations.length > 0 && (
-          <Alert
-            type="info"
-            showIcon
-            title={t(
-              "pos.closesHolds",
-              "This sale closes {{count}} reservation(s).",
-              { count: fromReservations.length },
-            )}
-            description={t(
-              "pos.recordingItMarksThoseUnits",
-              "Recording it marks those units as bought and releases the hold.",
-            )}
-            closable
-            onClose={() => setFromReservations([])}
-          />
-        )}
-
-        {missedBundles.map(({ discount, progress }) => (
-          <Alert
-            key={discount.id}
-            type="success"
-            showIcon
-            icon={<GiftOutlined />}
-            title={t("pos.qualifiesFor", "This basket qualifies for {{code}}", {
-              code: discount.code,
-            })}
-            description={t(
-              "pos.bundleWorth",
-              "{{count}} bundle(s) of {{per}}, worth {{saving}} off. Not applied yet.",
-              {
-                count: progress.complete,
-                per: progress.perBundle,
-                saving: fmtRp(progress.saving),
-              },
-            )}
-            action={
-              <Button
-                size="small"
-                type="primary"
-                onClick={() => setDiscountId(discount.id)}
-              >
-                {t("pos.applyIt", "Apply it")}
-              </Button>
-            }
-          />
-        ))}
-
-        <Card
-          title={
-            <Flex align="center" gap={8}>
-              <ShoppingCartOutlined />
-              <span>{t("pos.basket", "Basket")}</span>
-            </Flex>
-          }
-          extra={
-            <Typography.Text type="secondary">
-              {t("pos.itemCount", "{{count}} item(s)", {
-                count: basket.length,
-              })}
-            </Typography.Text>
-          }
-          styles={{ body: { paddingBottom: 12 } }}
-        >
-          {basket.length === 0 ? (
-            <Typography.Text type="secondary">
-              {t(
-                "pos.basketEmpty",
-                "Nothing in the basket. Pick a product on the left, or scan a serial.",
-              )}
-            </Typography.Text>
-          ) : (
-            <Flex vertical gap={16}>
-              {lines.map((l, i) => (l.serial ? cartLine(l, i) : null))}
-            </Flex>
+      {fromReservations.length > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          title={t(
+            "pos.closesHolds",
+            "This sale closes {{count}} reservation(s).",
+            { count: fromReservations.length },
           )}
-        </Card>
+          description={t(
+            "pos.recordingItMarksThoseUnits",
+            "Recording it marks those units as bought and releases the hold.",
+          )}
+          closable
+          onClose={() => setFromReservations([])}
+        />
+      )}
 
-        {suggestionCard}
+      {missedBundles.map(({ discount, progress }) => (
+        <Alert
+          key={discount.id}
+          type="success"
+          showIcon
+          icon={<GiftOutlined />}
+          title={t("pos.qualifiesFor", "This basket qualifies for {{code}}", {
+            code: discount.code,
+          })}
+          description={t(
+            "pos.bundleWorth",
+            "{{count}} bundle(s) of {{per}}, worth {{saving}} off. Not applied yet.",
+            {
+              count: progress.complete,
+              per: progress.perBundle,
+              saving: fmtRp(progress.saving),
+            },
+          )}
+          action={
+            <Button
+              size="small"
+              type="primary"
+              onClick={() => setDiscountId(discount.id)}
+            >
+              {t("pos.applyIt", "Apply it")}
+            </Button>
+          }
+        />
+      ))}
+
+      <Card
+        title={
+          <Flex align="center" gap={8}>
+            <ShoppingCartOutlined />
+            <span>{t("pos.basket", "Basket")}</span>
+          </Flex>
+        }
+        extra={
+          <Typography.Text type="secondary">
+            {t("pos.itemCount", "{{count}} item(s)", {
+              count: basket.length,
+            })}
+          </Typography.Text>
+        }
+        styles={{ body: { paddingBottom: 12 } }}
+      >
+        {basket.length === 0 ? (
+          <Typography.Text type="secondary">
+            {t(
+              "pos.basketEmpty",
+              "Nothing in the basket. Pick a product on the left, or scan a serial.",
+            )}
+          </Typography.Text>
+        ) : (
+          <Flex vertical gap={16}>
+            {lines.map((l, i) => (l.serial ? cartLine(l, i) : null))}
+          </Flex>
+        )}
+      </Card>
+
+      {suggestionCard}
     </>
   );
 
@@ -2000,11 +2000,7 @@ export function StockOutPage() {
        * width and natural height is what the owner asked for: *"all the
        * section should be full span in mobile"*.
        */
-      style={
-        compact
-          ? { width: "100%" }
-          : { flex: "1 1 520px", minWidth: 0 }
-      }
+      style={compact ? { width: "100%" } : { flex: "1 1 520px", minWidth: 0 }}
     >
       <Typography.Text type="secondary">
         {t(
@@ -2017,94 +2013,85 @@ export function StockOutPage() {
         title={t("pos.moneyOffTheBill", "Discount & trade-in")}
         extra={
           <Typography.Text type="secondary">
-                {totals.discount + totals.tradeCredit > 0
-                  ? t("pos.comingOff", "−{{amount}}", {
-                      amount: fmtRp(totals.discount + totals.tradeCredit),
-                    })
-                  : t("pos.nothingOff", "Nothing off")}
-              </Typography.Text>
+            {totals.discount + totals.tradeCredit > 0
+              ? t("pos.comingOff", "−{{amount}}", {
+                  amount: fmtRp(totals.discount + totals.tradeCredit),
+                })
+              : t("pos.nothingOff", "Nothing off")}
+          </Typography.Text>
         }
       >
         <Flex vertical gap={16}>
-                <Flex vertical gap={8}>
-                  <Flex justify="space-between" align="center" gap={8}>
-                    <Typography.Text strong>
-                      {t("pos.storeDiscount", "Store discount")}
-                    </Typography.Text>
-                    <Typography.Text strong>
-                      −{fmtRp(totals.discount)}
-                    </Typography.Text>
-                  </Flex>
-                  <Button block onClick={() => setDiscountOpen(true)}>
-                    {rule
-                      ? rule.code
-                      : t("pos.addDiscount", "Pick a discount code")}
-                  </Button>
-                  {rule && (
-                    <Button
-                      type="link"
-                      size="small"
-                      style={{ alignSelf: "flex-start", paddingInline: 0 }}
-                      onClick={() => setDiscountId(undefined)}
-                    >
-                      {t("pos.clearDiscount", "Take the code off")}
-                    </Button>
-                  )}
-                  {/* Said here rather than left to be discovered: the manual
+          <Flex vertical gap={8}>
+            <Flex justify="space-between" align="center" gap={8}>
+              <Typography.Text strong>
+                {t("pos.storeDiscount", "Store discount")}
+              </Typography.Text>
+              <Typography.Text strong>
+                −{fmtRp(totals.discount)}
+              </Typography.Text>
+            </Flex>
+            <Button block onClick={() => setDiscountOpen(true)}>
+              {rule ? rule.code : t("pos.addDiscount", "Pick a discount code")}
+            </Button>
+            {rule && (
+              <Button
+                type="link"
+                size="small"
+                style={{ alignSelf: "flex-start", paddingInline: 0 }}
+                onClick={() => setDiscountId(undefined)}
+              >
+                {t("pos.clearDiscount", "Take the code off")}
+              </Button>
+            )}
+            {/* Said here rather than left to be discovered: the manual
                       percentage and amount boxes were removed on 2026-09-01,
                       and somebody who used them needs to know where that
                       conversation now lives. */}
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {t(
-                      "pos.negotiateOnTheLine",
-                      "Agreeing a price at the counter is not a discount — type it on the line in the basket, and it books as a bargain.",
-                    )}
-                  </Typography.Text>
-                </Flex>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {t(
+                "pos.negotiateOnTheLine",
+                "Agreeing a price at the counter is not a discount — type it on the line in the basket, and it books as a bargain.",
+              )}
+            </Typography.Text>
+          </Flex>
 
-                <Flex vertical gap={8}>
+          <Flex vertical gap={8}>
+            <Button
+              block
+              type="dashed"
+              icon={<SwapOutlined />}
+              onClick={() => setTradeOpen(true)}
+            >
+              {t("pos.tradeIn", "Trade-in (take the customer's machine)")}
+            </Button>
+            {tradeIns.map((x) => (
+              <Flex key={x.id} justify="space-between" align="center" gap={8}>
+                <Typography.Text ellipsis style={{ minWidth: 0 }}>
+                  {x.label}
+                  {x.serial ? ` · ${x.serial}` : ""}
+                </Typography.Text>
+                <Flex align="center" gap={4}>
+                  <Typography.Text>−{fmtRp(x.value)}</Typography.Text>
                   <Button
-                    block
-                    type="dashed"
-                    icon={<SwapOutlined />}
-                    onClick={() => setTradeOpen(true)}
-                  >
-                    {t("pos.tradeIn", "Trade-in (take the customer's machine)")}
-                  </Button>
-                  {tradeIns.map((x) => (
-                    <Flex
-                      key={x.id}
-                      justify="space-between"
-                      align="center"
-                      gap={8}
-                    >
-                      <Typography.Text ellipsis style={{ minWidth: 0 }}>
-                        {x.label}
-                        {x.serial ? ` · ${x.serial}` : ""}
-                      </Typography.Text>
-                      <Flex align="center" gap={4}>
-                        <Typography.Text>−{fmtRp(x.value)}</Typography.Text>
-                        <Button
-                          type="text"
-                          danger
-                          size="small"
-                          aria-label={t(
-                            "pos.removeTradeIn",
-                            "Remove trade-in {{label}}",
-                            { label: x.label },
-                          )}
-                          icon={<DeleteOutlined />}
-                          onClick={() =>
-                            setTradeIns((prev) =>
-                              prev.filter((y) => y.id !== x.id),
-                            )
-                          }
-                        />
-                      </Flex>
-                    </Flex>
-                  ))}
+                    type="text"
+                    danger
+                    size="small"
+                    aria-label={t(
+                      "pos.removeTradeIn",
+                      "Remove trade-in {{label}}",
+                      { label: x.label },
+                    )}
+                    icon={<DeleteOutlined />}
+                    onClick={() =>
+                      setTradeIns((prev) => prev.filter((y) => y.id !== x.id))
+                    }
+                  />
                 </Flex>
               </Flex>
+            ))}
+          </Flex>
+        </Flex>
       </Card>
       <Card
         key="charge"
@@ -2196,416 +2183,408 @@ export function StockOutPage() {
         title={t("pos.channelAndPayment", "Channel & payment method")}
         extra={
           <Typography.Text type="secondary">
-                {[
-                  channelOf(source)?.label ?? source,
-                  holdsFunds(source)
-                    ? t("pos.escrow", "escrow")
-                    : payMethodLabel,
-                ].join(" · ")}
-              </Typography.Text>
+            {[
+              channelOf(source)?.label ?? source,
+              holdsFunds(source) ? t("pos.escrow", "escrow") : payMethodLabel,
+            ].join(" · ")}
+          </Typography.Text>
         }
       >
         <Flex vertical gap={16}>
-                {/* The one field every sale must answer. Chips rather than a
+          {/* The one field every sale must answer. Chips rather than a
                     select: six channels, and the answer is the same all
                     afternoon. */}
-                <Flex vertical gap={6}>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {t("pos.channel", "CHANNEL")}
-                  </Typography.Text>
-                  <Flex gap={6} wrap>
-                    {SALE_CHANNELS.map((c) => (
-                      <Button
-                        key={c.value}
-                        size="small"
-                        shape="round"
-                        type={source === c.value ? "primary" : "default"}
-                        onClick={() => setSource(c.value)}
-                      >
-                        {t(c.label)}
-                      </Button>
-                    ))}
-                  </Flex>
-                </Flex>
+          <Flex vertical gap={6}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {t("pos.channel", "CHANNEL")}
+            </Typography.Text>
+            <Flex gap={6} wrap>
+              {SALE_CHANNELS.map((c) => (
+                <Button
+                  key={c.value}
+                  size="small"
+                  shape="round"
+                  type={source === c.value ? "primary" : "default"}
+                  onClick={() => setSource(c.value)}
+                >
+                  {t(c.label)}
+                </Button>
+              ))}
+            </Flex>
+          </Flex>
 
-                <Flex vertical gap={6}>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {t("pos.paymentUpper", "PAYMENT")}
-                  </Typography.Text>
-                  {holdsFunds(source) ? (
-                    <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                      {t(
-                        "pos.marketplaceHolds",
-                        "{{channel}} is holding the money — confirm it in Income & Expense once it lands.",
-                        { channel: channelOf(source)?.label ?? source },
-                      )}
-                    </Typography.Text>
-                  ) : (
-                    <Flex gap={6} wrap>
-                      {db.paymentMethods
-                        .filter((m) => m.forSale && m.active)
-                        .map((m) => (
-                          <Button
-                            key={m.code}
-                            size="small"
-                            shape="round"
-                            type={payMethod === m.code ? "primary" : "default"}
-                            onClick={() => setPayMethod(m.code)}
-                          >
-                            {m.label}
-                          </Button>
-                        ))}
-                    </Flex>
-                  )}
-                </Flex>
-
-                {/*
-                  * Split payment (owner ask 2026-09-08).
-                  *
-                  * *"Customer can do a split payment … 5jt in cash and 5jt more
-                  * in tokopedia."* The chips above stay: they are the fast
-                  * path, and the fast path is most sales. This opens when the
-                  * bill is not one payment — and once it is open, the chips
-                  * describe the FIRST part rather than the whole sale.
-                  *
-                  * The parts are what get written; the chips are what they are
-                  * seeded from. A sale nobody splits records exactly the one
-                  * payment it always did.
-                  */}
-                <Flex vertical gap={6}>
-                  <Flex justify="space-between" align="center" wrap gap={6}>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {t("pos.splitUpper", "SPLIT THIS BILL")}
-                    </Typography.Text>
-                    {!splitting && (
-                      <Button
-                        size="small"
-                        onClick={() => {
-                          setSplitting(true);
-                          setSplitParts(defaultParts());
-                        }}
-                      >
-                        {t("pos.splitIt", "Pay in parts")}
-                      </Button>
-                    )}
-                  </Flex>
-                  {splitting ? (
-                    <Flex vertical gap={6}>
-                      <PaymentsPanel
-                        total={totals.total}
-                        value={splitParts}
-                        onChange={setSplitParts}
-                        methods={db.paymentMethods
-                          .filter((m) => m.forSale && m.active)
-                          .map((m) => ({ value: m.code, label: m.label }))}
-                      />
-                      <Button
-                        size="small"
-                        type="text"
-                        onClick={() => setSplitting(false)}
-                        style={{ alignSelf: "flex-start" }}
-                      >
-                        {t("pos.splitCancel", "One payment after all")}
-                      </Button>
-                    </Flex>
-                  ) : (
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {t(
-                        "pos.splitHint",
-                        "Cash now and the rest on a marketplace, a deposit with a due date — anything that is not one payment.",
-                      )}
-                    </Typography.Text>
-                  )}
-                </Flex>
+          <Flex vertical gap={6}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {t("pos.paymentUpper", "PAYMENT")}
+            </Typography.Text>
+            {holdsFunds(source) ? (
+              <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                {t(
+                  "pos.marketplaceHolds",
+                  "{{channel}} is holding the money — confirm it in Income & Expense once it lands.",
+                  { channel: channelOf(source)?.label ?? source },
+                )}
+              </Typography.Text>
+            ) : (
+              <Flex gap={6} wrap>
+                {db.paymentMethods
+                  .filter((m) => m.forSale && m.active)
+                  .map((m) => (
+                    <Button
+                      key={m.code}
+                      size="small"
+                      shape="round"
+                      type={payMethod === m.code ? "primary" : "default"}
+                      onClick={() => setPayMethod(m.code)}
+                    >
+                      {m.label}
+                    </Button>
+                  ))}
               </Flex>
+            )}
+          </Flex>
+
+          {/*
+           * Split payment (owner ask 2026-09-08).
+           *
+           * *"Customer can do a split payment … 5jt in cash and 5jt more
+           * in tokopedia."* The chips above stay: they are the fast
+           * path, and the fast path is most sales. This opens when the
+           * bill is not one payment — and once it is open, the chips
+           * describe the FIRST part rather than the whole sale.
+           *
+           * The parts are what get written; the chips are what they are
+           * seeded from. A sale nobody splits records exactly the one
+           * payment it always did.
+           */}
+          <Flex vertical gap={6}>
+            <Flex justify="space-between" align="center" wrap gap={6}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {t("pos.splitUpper", "SPLIT THIS BILL")}
+              </Typography.Text>
+              {!splitting && (
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setSplitting(true);
+                    setSplitParts(defaultParts());
+                  }}
+                >
+                  {t("pos.splitIt", "Pay in parts")}
+                </Button>
+              )}
+            </Flex>
+            {splitting ? (
+              <Flex vertical gap={6}>
+                <PaymentsPanel
+                  total={totals.total}
+                  value={splitParts}
+                  onChange={setSplitParts}
+                  methods={db.paymentMethods
+                    .filter((m) => m.forSale && m.active)
+                    .map((m) => ({ value: m.code, label: m.label }))}
+                />
+                <Button
+                  size="small"
+                  type="text"
+                  onClick={() => setSplitting(false)}
+                  style={{ alignSelf: "flex-start" }}
+                >
+                  {t("pos.splitCancel", "One payment after all")}
+                </Button>
+              </Flex>
+            ) : (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {t(
+                  "pos.splitHint",
+                  "Cash now and the rest on a marketplace, a deposit with a due date — anything that is not one payment.",
+                )}
+              </Typography.Text>
+            )}
+          </Flex>
+        </Flex>
       </Card>
       <Card
         key="delivery"
         title={t("pos.customerDetail", "Customer detail")}
         extra={
           <Typography.Text type="secondary">
-                {customer
-                  ? `${customer.name} · ${customer.phone}`
-                  : t("pos.noCustomer", "Not recorded")}
-              </Typography.Text>
+            {customer
+              ? `${customer.name} · ${customer.phone}`
+              : t("pos.noCustomer", "Not recorded")}
+          </Typography.Text>
         }
       >
         <Form layout="vertical">
-                <Flex gap={12} align="end" wrap>
-                  <Form.Item
-                    label={t("pos.customer", "Customer")}
-                    style={{ flex: "1 1 320px", marginBottom: 12 }}
-                  >
-                    <Select
-                      showSearch
-                      allowClear
-                      value={customerId}
-                      optionFilterProp="label"
-                      placeholder={t(
-                        "pos.searchNameOrPhone",
-                        "Search name or phone",
-                      )}
-                      options={db.customers.map((c) => ({
-                        value: c.id,
-                        label: `${c.name} · ${c.phone}`,
-                      }))}
-                      onChange={(v) => {
-                        setCustomerId(v);
-                        // A saved address belongs to the person who saved it.
-                        setSavedAddressId(undefined);
-                      }}
-                    />
-                  </Form.Item>
-                  <Form.Item style={{ marginBottom: 12 }}>
-                    <Button
-                      icon={<UserAddOutlined />}
-                      onClick={() => setNewCustomerOpen(true)}
-                    >
-                      {t("pos.addCustomer", "Add customer")}
-                    </Button>
-                  </Form.Item>
-                </Flex>
+          <Flex gap={12} align="end" wrap>
+            <Form.Item
+              label={t("pos.customer", "Customer")}
+              style={{ flex: "1 1 320px", marginBottom: 12 }}
+            >
+              <Select
+                showSearch
+                allowClear
+                value={customerId}
+                optionFilterProp="label"
+                placeholder={t("pos.searchNameOrPhone", "Search name or phone")}
+                options={db.customers.map((c) => ({
+                  value: c.id,
+                  label: `${c.name} · ${c.phone}`,
+                }))}
+                onChange={(v) => {
+                  setCustomerId(v);
+                  // A saved address belongs to the person who saved it.
+                  setSavedAddressId(undefined);
+                }}
+              />
+            </Form.Item>
+            <Form.Item style={{ marginBottom: 12 }}>
+              <Button
+                icon={<UserAddOutlined />}
+                onClick={() => setNewCustomerOpen(true)}
+              >
+                {t("pos.addCustomer", "Add customer")}
+              </Button>
+            </Form.Item>
+          </Flex>
 
-                {customer && (
-                  <Descriptions
-                    size="small"
-                    column={{ xs: 1, sm: 2 }}
-                    style={{ marginBottom: 12 }}
-                    items={[
-                      {
-                        key: "n",
-                        label: t("pos.name", "Name"),
-                        children: customer.name,
-                      },
-                      {
-                        key: "p",
-                        label: t("pos.phoneNumber", "Phone number"),
-                        children: customer.phone,
-                      },
-                    ]}
-                  />
-                )}
+          {customer && (
+            <Descriptions
+              size="small"
+              column={{ xs: 1, sm: 2 }}
+              style={{ marginBottom: 12 }}
+              items={[
+                {
+                  key: "n",
+                  label: t("pos.name", "Name"),
+                  children: customer.name,
+                },
+                {
+                  key: "p",
+                  label: t("pos.phoneNumber", "Phone number"),
+                  children: customer.phone,
+                },
+              ]}
+            />
+          )}
 
-                <Checkbox
-                  checked={shipped}
-                  onChange={(e) => {
-                    const on = e.target.checked;
-                    setShipped(on);
-                    /*
-                     * A courier costs money on every shipped sale, so ticking
-                     * this offers the charge — the amount is left blank for
-                     * whatever the courier actually quoted.
-                     *
-                     * Only when there is no shipping row already. A cashier
-                     * who has typed one is not asking for a second, and now
-                     * that fees are a list a blind append would give them one
-                     * per tick of the box.
-                     */
-                    const word = t("Shipping");
-                    if (on && !fees.some((f) => f.label.trim() === word)) {
-                      setFees((prev) => [
-                        ...prev,
-                        { id: nextId("fee"), label: word, amount: 0 },
-                      ]);
-                    }
-                  }}
+          <Checkbox
+            checked={shipped}
+            onChange={(e) => {
+              const on = e.target.checked;
+              setShipped(on);
+              /*
+               * A courier costs money on every shipped sale, so ticking
+               * this offers the charge — the amount is left blank for
+               * whatever the courier actually quoted.
+               *
+               * Only when there is no shipping row already. A cashier
+               * who has typed one is not asking for a second, and now
+               * that fees are a list a blind append would give them one
+               * per tick of the box.
+               */
+              const word = t("Shipping");
+              if (on && !fees.some((f) => f.label.trim() === word)) {
+                setFees((prev) => [
+                  ...prev,
+                  { id: nextId("fee"), label: word, amount: 0 },
+                ]);
+              }
+            }}
+          >
+            {t("pos.thisOrderIsShipped", "This order is shipped")}
+          </Checkbox>
+
+          {!shipped && (
+            <Typography.Paragraph
+              type="secondary"
+              style={{ marginTop: 8, marginBottom: 0 }}
+            >
+              {t(
+                "pos.theCustomerIsTakingIt",
+                "The customer is taking it with them — no address needed.",
+              )}
+            </Typography.Paragraph>
+          )}
+
+          {shipped && (
+            <Flex vertical gap={12} style={{ marginTop: 16 }}>
+              {/*
+               * A customer's saved addresses (owner ask 2026-09-01).
+               *
+               * A person has a home and an office, and the shop delivers
+               * to whichever they say this time. Picking one fills the
+               * street box with the whole composed line and clears the
+               * rest — deliberately, because `composeAddress` is one-way
+               * and splitting a stored line back into six fields by
+               * guessing which comma was the kecamatan is exactly the
+               * mess the parts form exists to end. What is picked is
+               * what gets shipped to.
+               */}
+              {(customer?.addresses?.length ?? 0) > 0 && (
+                <Form.Item
+                  label={t("pos.savedAddress", "Saved address")}
+                  style={{ marginBottom: 0 }}
+                  extra={t(
+                    "pos.savedAddressHint",
+                    "Or leave it and fill the fields below for somewhere new.",
+                  )}
                 >
-                  {t("pos.thisOrderIsShipped", "This order is shipped")}
-                </Checkbox>
-
-                {!shipped && (
-                  <Typography.Paragraph
-                    type="secondary"
-                    style={{ marginTop: 8, marginBottom: 0 }}
-                  >
-                    {t(
-                      "pos.theCustomerIsTakingIt",
-                      "The customer is taking it with them — no address needed.",
+                  <Select
+                    allowClear
+                    value={savedAddressId}
+                    placeholder={t(
+                      "pos.pickASavedAddress",
+                      "Deliver to an address on file",
                     )}
-                  </Typography.Paragraph>
-                )}
+                    options={(customer?.addresses ?? []).map((a) => ({
+                      value: a.id,
+                      label: a.label ? `${a.label} — ${a.line}` : a.line,
+                    }))}
+                    onChange={(id) => {
+                      setSavedAddressId(id);
+                      const picked = customer?.addresses?.find(
+                        (a) => a.id === id,
+                      );
+                      setAddress(
+                        picked
+                          ? { ...EMPTY_ADDRESS, street: picked.line }
+                          : EMPTY_ADDRESS,
+                      );
+                    }}
+                  />
+                </Form.Item>
+              )}
 
-                {shipped && (
-                  <Flex vertical gap={12} style={{ marginTop: 16 }}>
-                    {/*
-                     * A customer's saved addresses (owner ask 2026-09-01).
-                     *
-                     * A person has a home and an office, and the shop delivers
-                     * to whichever they say this time. Picking one fills the
-                     * street box with the whole composed line and clears the
-                     * rest — deliberately, because `composeAddress` is one-way
-                     * and splitting a stored line back into six fields by
-                     * guessing which comma was the kecamatan is exactly the
-                     * mess the parts form exists to end. What is picked is
-                     * what gets shipped to.
-                     */}
-                    {(customer?.addresses?.length ?? 0) > 0 && (
-                      <Form.Item
-                        label={t("pos.savedAddress", "Saved address")}
-                        style={{ marginBottom: 0 }}
-                        extra={t(
-                          "pos.savedAddressHint",
-                          "Or leave it and fill the fields below for somewhere new.",
-                        )}
-                      >
-                        <Select
-                          allowClear
-                          value={savedAddressId}
-                          placeholder={t(
-                            "pos.pickASavedAddress",
-                            "Deliver to an address on file",
-                          )}
-                          options={(customer?.addresses ?? []).map((a) => ({
-                            value: a.id,
-                            label: a.label ? `${a.label} — ${a.line}` : a.line,
-                          }))}
-                          onChange={(id) => {
-                            setSavedAddressId(id);
-                            const picked = customer?.addresses?.find(
-                              (a) => a.id === id,
-                            );
-                            setAddress(
-                              picked
-                                ? { ...EMPTY_ADDRESS, street: picked.line }
-                                : EMPTY_ADDRESS,
-                            );
-                          }}
-                        />
-                      </Form.Item>
-                    )}
-
-                    {/* Two per row on a wide screen, one on a phone. The fields
+              {/* Two per row on a wide screen, one on a phone. The fields
                         come from ADDRESS_FIELDS so the form, the composed line
                         and the completeness check cannot drift apart. */}
-                    <Flex gap={12} wrap>
-                      {ADDRESS_FIELDS.map((field) => (
-                        <Form.Item
-                          key={field.key}
-                          label={field.label}
-                          required={field.required}
-                          style={{
-                            flex: field.long ? "1 1 100%" : "1 1 220px",
-                            marginBottom: 0,
-                          }}
-                        >
-                          {field.long ? (
-                            <Input.TextArea
-                              rows={2}
-                              placeholder={field.placeholder}
-                              value={address[field.key]}
-                              onChange={(e) =>
-                                setAddress((a) => ({
-                                  ...a,
-                                  [field.key]: e.target.value,
-                                }))
-                              }
-                            />
-                          ) : (
-                            <Input
-                              placeholder={field.placeholder}
-                              value={address[field.key]}
-                              onChange={(e) =>
-                                setAddress((a) => ({
-                                  ...a,
-                                  [field.key]: e.target.value,
-                                }))
-                              }
-                            />
-                          )}
-                        </Form.Item>
-                      ))}
-                    </Flex>
+              <Flex gap={12} wrap>
+                {ADDRESS_FIELDS.map((field) => (
+                  <Form.Item
+                    key={field.key}
+                    label={field.label}
+                    required={field.required}
+                    style={{
+                      flex: field.long ? "1 1 100%" : "1 1 220px",
+                      marginBottom: 0,
+                    }}
+                  >
+                    {field.long ? (
+                      <Input.TextArea
+                        rows={2}
+                        placeholder={field.placeholder}
+                        value={address[field.key]}
+                        onChange={(e) =>
+                          setAddress((a) => ({
+                            ...a,
+                            [field.key]: e.target.value,
+                          }))
+                        }
+                      />
+                    ) : (
+                      <Input
+                        placeholder={field.placeholder}
+                        value={address[field.key]}
+                        onChange={(e) =>
+                          setAddress((a) => ({
+                            ...a,
+                            [field.key]: e.target.value,
+                          }))
+                        }
+                      />
+                    )}
+                  </Form.Item>
+                ))}
+              </Flex>
 
-                    {/* The one line that actually gets stored and printed,
+              {/* The one line that actually gets stored and printed,
                         shown as it is built. Six boxes with no preview is six
                         boxes nobody can check against the courier's form. */}
-                    <Typography.Paragraph
-                      type="secondary"
-                      style={{ marginBottom: 0 }}
-                    >
-                      {t("pos.willBeSavedAs", "Will be saved as:")}{" "}
-                      <Typography.Text>
-                        {composeAddress(address) || "—"}
-                      </Typography.Text>
-                    </Typography.Paragraph>
-                    {customerId && (
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        {t(
-                          "pos.addressWillBeRemembered",
-                          "A new address is saved to this customer when the sale is recorded.",
-                        )}
-                      </Typography.Text>
-                    )}
-                  </Flex>
-                )}
-              </Form>
+              <Typography.Paragraph
+                type="secondary"
+                style={{ marginBottom: 0 }}
+              >
+                {t("pos.willBeSavedAs", "Will be saved as:")}{" "}
+                <Typography.Text>
+                  {composeAddress(address) || "—"}
+                </Typography.Text>
+              </Typography.Paragraph>
+              {customerId && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {t(
+                    "pos.addressWillBeRemembered",
+                    "A new address is saved to this customer when the sale is recorded.",
+                  )}
+                </Typography.Text>
+              )}
+            </Flex>
+          )}
+        </Form>
       </Card>
       <Card
         key="sales"
         title={t("pos.salesDetail", "Sales detail")}
         extra={
           <Typography.Text type="secondary">
-                {db.salesmen.find((x) => x.id === salesmanId)?.name ??
-                  t("pos.unattributed", "Nobody named")}
-              </Typography.Text>
+            {db.salesmen.find((x) => x.id === salesmanId)?.name ??
+              t("pos.unattributed", "Nobody named")}
+          </Typography.Text>
         }
       >
         <Form layout="vertical">
-                <Flex gap={12} wrap>
-                  <Form.Item
-                    label={t("pos.salesperson", "Salesperson")}
-                    style={{ flex: "1 1 260px", marginBottom: 0 }}
-                    tooltip={t(
-                      "pos.whoGetsCreditForThis",
-                      "Who gets credit for this sale. Managed in Settings → Salespeople.",
-                    )}
-                  >
-                    <Select
-                      showSearch
-                      allowClear
-                      value={salesmanId}
-                      optionFilterProp="label"
-                      placeholder={t(
-                        "pos.whoMadeThisSale",
-                        "Who made this sale?",
-                      )}
-                      options={db.salesmen
-                        .filter((x) => x.active)
-                        .map((x) => ({ value: x.id, label: x.name }))}
-                      onChange={setSalesmanId}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    label={t("pos.referral", "Referral")}
-                    style={{ flex: "1 1 220px", marginBottom: 0 }}
-                  >
-                    <Select
-                      allowClear
-                      value={referralId}
-                      placeholder={t(
-                        "pos.whereDidTheyHearOf",
-                        "Where did they hear of us?",
-                      )}
-                      options={db.referralSources
-                        .filter((r) => r.active)
-                        .map((r) => ({ value: r.id, label: r.name }))}
-                      onChange={setReferralId}
-                    />
-                  </Form.Item>
-                </Flex>
-                {totals.upsell > 0 && salesmanId && (
-                  <Typography.Text
-                    type="success"
-                    style={{ fontSize: 12, display: "block", marginTop: 12 }}
-                  >
-                    {t(
-                      "pos.upsellCredit",
-                      "{{amount}} above the list price on this sale is credited to them.",
-                      { amount: fmtRp(totals.upsell) },
-                    )}
-                  </Typography.Text>
+          <Flex gap={12} wrap>
+            <Form.Item
+              label={t("pos.salesperson", "Salesperson")}
+              style={{ flex: "1 1 260px", marginBottom: 0 }}
+              tooltip={t(
+                "pos.whoGetsCreditForThis",
+                "Who gets credit for this sale. Managed in Settings → Salespeople.",
+              )}
+            >
+              <Select
+                showSearch
+                allowClear
+                value={salesmanId}
+                optionFilterProp="label"
+                placeholder={t("pos.whoMadeThisSale", "Who made this sale?")}
+                options={db.salesmen
+                  .filter((x) => x.active)
+                  .map((x) => ({ value: x.id, label: x.name }))}
+                onChange={setSalesmanId}
+              />
+            </Form.Item>
+            <Form.Item
+              label={t("pos.referral", "Referral")}
+              style={{ flex: "1 1 220px", marginBottom: 0 }}
+            >
+              <Select
+                allowClear
+                value={referralId}
+                placeholder={t(
+                  "pos.whereDidTheyHearOf",
+                  "Where did they hear of us?",
                 )}
-              </Form>
+                options={db.referralSources
+                  .filter((r) => r.active)
+                  .map((r) => ({ value: r.id, label: r.name }))}
+                onChange={setReferralId}
+              />
+            </Form.Item>
+          </Flex>
+          {totals.upsell > 0 && salesmanId && (
+            <Typography.Text
+              type="success"
+              style={{ fontSize: 12, display: "block", marginTop: 12 }}
+            >
+              {t(
+                "pos.upsellCredit",
+                "{{amount}} above the list price on this sale is credited to them.",
+                { amount: fmtRp(totals.upsell) },
+              )}
+            </Typography.Text>
+          )}
+        </Form>
       </Card>
     </Flex>
   );
@@ -2741,7 +2720,8 @@ export function StockOutPage() {
               ? costOf(unit)
               : { buy: 0, shippingTax: 0, repair: 0, total: 0 };
             const cost = paid.total;
-            const margin = charged > 0 ? ((charged - cost) / charged) * 100 : null;
+            const margin =
+              charged > 0 ? ((charged - cost) / charged) * 100 : null;
             const move = charged - listed;
             return (
               <Flex vertical gap={12}>
@@ -3205,11 +3185,7 @@ export function StockOutPage() {
             >
               {t("pos.printInvoice", "Print the invoice")}
             </Button>,
-            <Button
-              key="next"
-              type="primary"
-              onClick={() => setRecorded(null)}
-            >
+            <Button key="next" type="primary" onClick={() => setRecorded(null)}>
               {t("pos.nextSale", "Next sale")}
             </Button>,
           ]}

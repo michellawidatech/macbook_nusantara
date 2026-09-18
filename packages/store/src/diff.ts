@@ -132,7 +132,11 @@ export function diffStore(before: StoreShape, after: StoreShape): Changeset {
   const collections: Partial<Record<CollectionName, CollectionChange>> = {};
   for (const name of COLLECTION_NAMES) {
     if (before[name] === after[name]) continue;
-    const change = diffCollection(name, rowsOf(before, name), rowsOf(after, name));
+    const change = diffCollection(
+      name,
+      rowsOf(before, name),
+      rowsOf(after, name),
+    );
     if (change !== undefined) collections[name] = change;
   }
 

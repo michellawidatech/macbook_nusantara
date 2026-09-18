@@ -75,10 +75,7 @@ import {
   BatteryFields,
   batteryFieldsLabel,
 } from "../../components/BatteryFields.js";
-import {
-  PriceFields,
-  type PriceDraft,
-} from "../../components/PriceFields.js";
+import { PriceFields, type PriceDraft } from "../../components/PriceFields.js";
 import {
   DEFAULT_MARKETPLACE_MARKUP_PCT,
   isPriceInRange,
@@ -140,10 +137,7 @@ import {
   type ScanRejection,
 } from "../../lib/serialScan.js";
 import { readSerialInput } from "../../lib/serialInput.js";
-import {
-  countedSerial,
-  skuTracksSerial,
-} from "../../lib/serialTracking.js";
+import { countedSerial, skuTracksSerial } from "../../lib/serialTracking.js";
 import { serviceLocationOf } from "../../lib/service.js";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import {
@@ -570,9 +564,7 @@ export function InboundDetailPage() {
        * for anyway — this makes that explicit and editable instead.
        */
       price:
-        pending?.price?.price ??
-        d.skus.find((x) => x.id === skuId)?.price ??
-        0,
+        pending?.price?.price ?? d.skus.find((x) => x.id === skuId)?.price ?? 0,
       ...(pending?.price?.marketPrice == null
         ? {}
         : { marketPrice: pending.price.marketPrice }),
@@ -1404,7 +1396,8 @@ export function InboundDetailPage() {
         // A journey only happens when there is a bench to travel to. A shop
         // whose locations include no service location keeps the machine where
         // it is, which is exactly the behaviour before any of this existed.
-        const travelling = v.ship && bench !== undefined && bench !== u.locationId;
+        const travelling =
+          v.ship && bench !== undefined && bench !== u.locationId;
         appendEvent(d, serial, {
           type: "DICATAT",
           toStatus: "SERVIS",
@@ -1467,9 +1460,13 @@ export function InboundDetailPage() {
               "{{serial}} is on its way to {{bench}}. Confirm it there when it arrives.",
               { serial, bench: benchName },
             )
-          : t("inbound.serviceSentHere", "{{serial}} is at the service bench.", {
-              serial,
-            }),
+          : t(
+              "inbound.serviceSentHere",
+              "{{serial}} is at the service bench.",
+              {
+                serial,
+              },
+            ),
       );
     });
   };
@@ -2243,10 +2240,7 @@ export function InboundDetailPage() {
                                 );
                               });
                               message.success(
-                                t(
-                                  "inbound.paymentDeleted",
-                                  "Payment deleted.",
-                                ),
+                                t("inbound.paymentDeleted", "Payment deleted."),
                               );
                             },
                           })
@@ -2986,9 +2980,7 @@ export function InboundDetailPage() {
             value={shown}
             disabled={closed}
             idPrefix={`battery-${r.key}`}
-            onChange={(next) =>
-              setBattery((d) => ({ ...d, [r.key]: next }))
-            }
+            onChange={(next) => setBattery((d) => ({ ...d, [r.key]: next }))}
             // Both commit, as the serial field's do.
             onCommit={(field, value) => commitBattery(r, field, value)}
             // The switch has no blur to wait for, and flicking it is what
@@ -3187,9 +3179,13 @@ export function InboundDetailPage() {
             <Button
               size="small"
               icon={<PlusOutlined />}
-              aria-label={t("inbound.takeInCountedAria", "Take in one {{product}}", {
-                product: skuLabel(r.skuId),
-              })}
+              aria-label={t(
+                "inbound.takeInCountedAria",
+                "Take in one {{product}}",
+                {
+                  product: skuLabel(r.skuId),
+                },
+              )}
               onClick={() => {
                 const serial = freeCountedSerial(r.skuId);
                 // What the bench typed into the row while it was still a
@@ -3198,15 +3194,16 @@ export function InboundDetailPage() {
                   description: notes[r.key] ?? [],
                   battery: battery[r.key] ?? {},
                   price: prices[r.key] ?? {},
-                  ...(gradeDrafts[r.key]
-                    ? { grade: gradeDrafts[r.key] }
-                    : {}),
+                  ...(gradeDrafts[r.key] ? { grade: gradeDrafts[r.key] } : {}),
                 };
                 mutate((d) => {
                   identify(d, r.skuId, r.unitCost, serial, carry);
                 });
                 message.success(
-                  t("inbound.takenIn", "Taken in. Accept it when you are done."),
+                  t(
+                    "inbound.takenIn",
+                    "Taken in. Accept it when you are done.",
+                  ),
                 );
               }}
             >
@@ -3802,15 +3799,15 @@ export function InboundDetailPage() {
               <Switch />
             </Form.Item>
           )}
-          <Form.Item
-            noStyle
-            shouldUpdate={(a, b) => a.ship !== b.ship}
-          >
+          <Form.Item noStyle shouldUpdate={(a, b) => a.ship !== b.ship}>
             {({ getFieldValue }) =>
               bench && getFieldValue("ship") ? (
                 <Form.Item
                   name="shippingFee"
-                  label={t("inbound.serviceShippingFee", "Cost of getting it there")}
+                  label={t(
+                    "inbound.serviceShippingFee",
+                    "Cost of getting it there",
+                  )}
                   tooltip={t(
                     "inbound.serviceShippingFeeHint",
                     "The courier between the two warehouses. It joins what this machine has cost the shop.",
@@ -3962,9 +3959,7 @@ export function InboundDetailPage() {
               placeholder={t("inbound.pickMethod", "How the money moved")}
               aria-label={t("inbound.method", "Method")}
               options={db.paymentMethods
-                .filter(
-                  (m) => (m.forPo && m.active) || m.code === payMethod,
-                )
+                .filter((m) => (m.forPo && m.active) || m.code === payMethod)
                 .map((m) => ({ value: m.code, label: m.label }))}
             />
             {payAmount !== undefined && payAmount > 0 && !payMethod && (

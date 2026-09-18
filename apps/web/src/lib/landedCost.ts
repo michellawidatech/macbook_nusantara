@@ -113,9 +113,7 @@ export function rowKey(itemId: string, piece: number): string {
  * fee's does — money coming back from a forwarder is a credit, and its own
  * document.
  */
-export function invoiceCharges(
-  po: Pick<Po, "shippingFee" | "taxFee">,
-): number {
+export function invoiceCharges(po: Pick<Po, "shippingFee" | "taxFee">): number {
   return wholeRupiah(po.shippingFee) + wholeRupiah(po.taxFee);
 }
 
@@ -274,15 +272,14 @@ function place(
   const shares =
     positions === 0
       ? []
-      : allocateFees(new Array<bigint>(positions).fill(1n), BigInt(charges)).map(
-          Number,
-        );
+      : allocateFees(
+          new Array<bigint>(positions).fill(1n),
+          BigInt(charges),
+        ).map(Number);
   return {
     positions,
     byRow: new Map(rows.map((row, p) => [row.key, shares[p] ?? 0])),
-    bySerial: new Map(
-      [...seat].map(([serial, p]) => [serial, shares[p] ?? 0]),
-    ),
+    bySerial: new Map([...seat].map(([serial, p]) => [serial, shares[p] ?? 0])),
   };
 }
 

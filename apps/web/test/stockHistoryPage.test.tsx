@@ -164,7 +164,12 @@ describe("a serial nobody has", () => {
 });
 
 describe("the timeline's context", () => {
-  function hold(id: string, code: string, customerId: string, sourceId: string) {
+  function hold(
+    id: string,
+    code: string,
+    customerId: string,
+    sourceId: string,
+  ) {
     mutate((d) => {
       d.reservations.push({
         id,

@@ -68,7 +68,11 @@ import { PrinterOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import QRCode from "qrcode";
 import type { LabelDatum } from "../lib/labels.js";
-import { code128Bars, code128Width, QUIET_ZONE_MODULES } from "../lib/code128.js";
+import {
+  code128Bars,
+  code128Width,
+  QUIET_ZONE_MODULES,
+} from "../lib/code128.js";
 import {
   inspectStoredSerial,
   isPrintableSerial,
@@ -256,7 +260,11 @@ function Label({
   const barsHeightMm = Math.max(6, innerH * 0.5);
 
   const encoded = (
-    <Flex vertical align="center" style={{ flex: bars ? undefined : "0 0 auto" }}>
+    <Flex
+      vertical
+      align="center"
+      style={{ flex: bars ? undefined : "0 0 auto" }}
+    >
       {bars ? (
         <Barcode
           value={datum.barcode}
@@ -678,11 +686,7 @@ function useFaultText() {
  * the whole point: a sheet of stickers cannot be un-printed, and a roll of
  * thermal stock is a real cost. See `inspectStoredSerial`.
  */
-function SerialWarnings({
-  labels,
-}: {
-  labels: readonly LabelDatum[];
-}) {
+function SerialWarnings({ labels }: { labels: readonly LabelDatum[] }) {
   const { t } = useTranslation();
   const faultText = useFaultText();
   // Errors first: they are the ones stopping the print, so they are the ones
@@ -692,8 +696,8 @@ function SerialWarnings({
   const rank = (level: "error" | "warning") => (level === "error" ? 0 : 1);
   const flagged = labels
     .map((l) => ({ serial: l.serial, issue: inspectStoredSerial(l.serial) }))
-    .filter((x): x is { serial: string; issue: SerialInspection } =>
-      x.issue !== null,
+    .filter(
+      (x): x is { serial: string; issue: SerialInspection } => x.issue !== null,
     )
     .sort((a, b) => rank(a.issue.level) - rank(b.issue.level));
   if (flagged.length === 0) return null;
@@ -710,7 +714,9 @@ function SerialWarnings({
           ? t(
               "labels.cannotPrintTitle",
               "{{count}} of these cannot be printed",
-              { count: flagged.filter((x) => x.issue.level === "error").length },
+              {
+                count: flagged.filter((x) => x.issue.level === "error").length,
+              },
             )
           : t("labels.checkTitle", "{{count}} serial(s) look wrong", {
               count: flagged.length,
@@ -724,7 +730,9 @@ function SerialWarnings({
                 color={x.issue.level === "error" ? "error" : "warning"}
                 style={{ fontFamily: "monospace", marginInlineEnd: 0 }}
               >
-                {x.serial === "" ? t("labels.blankSerial", "(blank)") : x.serial}
+                {x.serial === ""
+                  ? t("labels.blankSerial", "(blank)")
+                  : x.serial}
               </Tag>
               <Typography.Text type="secondary">
                 {faultText(x.issue.fault)}

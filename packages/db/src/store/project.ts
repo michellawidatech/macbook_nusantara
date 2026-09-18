@@ -52,7 +52,10 @@ export async function projectSingleton(
 ): Promise<unknown> {
   switch (name) {
     case "settings":
-      return z.encode(serverSchemas.singletons.settings, await projectSettings(tx));
+      return z.encode(
+        serverSchemas.singletons.settings,
+        await projectSettings(tx),
+      );
     case "appleDbHidden":
       return projectAppleDbHidden(tx);
     case "myWarehouseId":
@@ -88,7 +91,8 @@ export async function projectDelta(
     }
   }
   const single: Partial<Record<SingletonName, unknown>> = {};
-  for (const name of singletons) single[name] = await projectSingleton(tx, ctx, name);
+  for (const name of singletons)
+    single[name] = await projectSingleton(tx, ctx, name);
   return { rows, removed, order, singletons: single };
 }
 

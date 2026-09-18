@@ -646,7 +646,10 @@ export interface FixtureIntake {
   /** What this one cost. Defaults to the variant's landed cost. */
   readonly buy?: number;
   /** Moved after grading — a DIPINDAH on the timeline. */
-  readonly movedTo?: { readonly locationId: string; readonly at: FixtureMoment };
+  readonly movedTo?: {
+    readonly locationId: string;
+    readonly at: FixtureMoment;
+  };
 }
 
 /**
@@ -1492,7 +1495,9 @@ export interface BuiltPo extends FixturePurchaseOrder {
   readonly subtotal: number;
   readonly feesTotal: number;
   readonly total: number;
-  readonly payments: readonly (FixturePoPayment & { readonly rupiah: number })[];
+  readonly payments: readonly (FixturePoPayment & {
+    readonly rupiah: number;
+  })[];
 }
 
 export interface BuiltOrderLine {
@@ -1677,7 +1682,9 @@ export function askingPriceOf(
   // between the two so that two A-grade machines with different cells land on
   // different numbers, which is the spread Inventory's range exists to show.
   const b =
-    health === undefined ? 1 : 1 - Math.min(0.1, Math.max(0, (92 - health) / 200));
+    health === undefined
+      ? 1
+      : 1 - Math.min(0.1, Math.max(0, (92 - health) / 200));
   // Sealed stock in perfect health asks the catalogue price EXACTLY, rather
   // than the catalogue price rounded — a variant priced at Rp7.990.000 must
   // not become Rp8.000.000 just because its unit went through here.
@@ -1901,9 +1908,10 @@ export function buildShop(now: number = Date.now()): BuiltShop {
         purchaseOrderId: po.id,
         // A returned machine's first grading described the machine as it was
         // then; the RETUR_PELANGGAN below carries the re-grade.
-        note: it.ref === "air17-returned"
-          ? "Mulus, Fullset dus, Charger original"
-          : it.description,
+        note:
+          it.ref === "air17-returned"
+            ? "Mulus, Fullset dus, Charger original"
+            : it.description,
       });
     }
 
@@ -1912,32 +1920,52 @@ export function buildShop(now: number = Date.now()): BuiltShop {
         "DIPINDAH",
         "TERSEDIA",
         it.movedTo.at,
-        { note: `Pindah ke ${LOCATIONS.find((l) => l.id === it.movedTo!.locationId)!.name}` },
+        {
+          note: `Pindah ke ${LOCATIONS.find((l) => l.id === it.movedTo!.locationId)!.name}`,
+        },
         it.movedTo.locationId,
       );
     }
 
     if (it.fate === "LOST") {
-      push("OPNAME_HILANG", "HILANG", STOCK_TAKE_AT, {
-        note: "Tidak ditemukan saat stock opname",
-      }, home);
+      push(
+        "OPNAME_HILANG",
+        "HILANG",
+        STOCK_TAKE_AT,
+        {
+          note: "Tidak ditemukan saat stock opname",
+        },
+        home,
+      );
     }
 
     const hold = holdOfRef.get(it.ref);
     if (hold !== undefined) {
-      push("DIRESERVASI", "DIRESERVASI", hold.created, {
-        reservationId: hold.id,
-      }, home);
+      push(
+        "DIRESERVASI",
+        "DIRESERVASI",
+        hold.created,
+        {
+          reservationId: hold.id,
+        },
+        home,
+      );
     }
 
     const order = orderOfRef.get(it.ref);
     if (order !== undefined) {
       push("TERJUAL", "TERJUAL", order.at, { orderId: order.id }, home);
       if (order.returnedAt !== undefined) {
-        push("RETUR_PELANGGAN", "TERSEDIA", order.returnedAt, {
-          orderId: order.id,
-          note: `Retur pelanggan — dinilai ulang: ${it.description}`,
-        }, home);
+        push(
+          "RETUR_PELANGGAN",
+          "TERSEDIA",
+          order.returnedAt,
+          {
+            orderId: order.id,
+            note: `Retur pelanggan — dinilai ulang: ${it.description}`,
+          },
+          home,
+        );
       }
     }
   });
@@ -1949,7 +1977,9 @@ export function buildShop(now: number = Date.now()): BuiltShop {
     const lines = linesByPo.get(po.id)!;
     const subtotal = lines.reduce((n, l) => n + l.lineTotal, 0);
     const feesTotal = po.shippingFee + po.taxFee;
-    const received = lines.filter((l) => !l.notReceived && l.serials.length > 0);
+    const received = lines.filter(
+      (l) => !l.notReceived && l.serials.length > 0,
+    );
     return {
       ...po,
       code: docCode("PI", po.ordered, po.seq, now),
@@ -1980,7 +2010,9 @@ export function buildShop(now: number = Date.now()): BuiltShop {
     const builtLines: BuiltOrderLine[] = o.lines.map((l, i) => {
       const unit = unitOfRef.get(l.ref);
       if (unit === undefined) {
-        throw new Error(`fixture: order ${o.id} names unknown machine ${l.ref}`);
+        throw new Error(
+          `fixture: order ${o.id} names unknown machine ${l.ref}`,
+        );
       }
       const sku = skuOf(unit.skuId);
       const price = l.price ?? sku.price;

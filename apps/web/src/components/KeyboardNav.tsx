@@ -90,7 +90,9 @@ export function installKeyboardNav({ onHelp }: KeyboardNavOptions): () => void {
     const now = performance.now();
     const scan = getScannerStatus().lastScan;
     const endsScan =
-      scan !== null && scan !== seenScan && now - lastKeyAt <= SCAN_ENTER_WINDOW_MS;
+      scan !== null &&
+      scan !== seenScan &&
+      now - lastKeyAt <= SCAN_ENTER_WINDOW_MS;
     seenScan = scan;
     lastKeyAt = now;
     pending = null;

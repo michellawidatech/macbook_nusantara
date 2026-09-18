@@ -247,7 +247,8 @@ describe("08 §6 — 6. orphan units", () => {
 
   it("counts a machine a stock take found as arrived", () => {
     expect(
-      checkOrphanUnits([unit()], [event({ type: "OPNAME_DITEMUKAN" })]).findings,
+      checkOrphanUnits([unit()], [event({ type: "OPNAME_DITEMUKAN" })])
+        .findings,
     ).toEqual([]);
   });
 

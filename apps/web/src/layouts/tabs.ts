@@ -342,14 +342,12 @@ export function readStoredTabs(
     byRecency.filter((tab) => survivors.has(tab)).map((tab, i) => [tab, i + 1]),
   );
 
-  const records = restored.map(
-    (tab, i): TabRecord => ({
-      id: `tab-${i + 1}`,
-      leaf: tab.leaf,
-      location: tab.location,
-      used: rank.get(tab) ?? 0,
-    }),
-  );
+  const records = restored.map((tab, i): TabRecord => ({
+    id: `tab-${i + 1}`,
+    leaf: tab.leaf,
+    location: tab.location,
+    used: rank.get(tab) ?? 0,
+  }));
   const activeIndex = restored.findIndex((tab) => tab.wasActive);
   return {
     tabs: records,

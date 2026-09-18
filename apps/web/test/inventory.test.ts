@@ -182,7 +182,8 @@ describe("the seeded battery readings", () => {
   it("populate all three bands in the cycles era", () => {
     const present = bandsOf(
       seeded.units.filter(
-        (u) => u.cycleCount != null && readUnitBattery(u, seeded).mode === "CYCLES",
+        (u) =>
+          u.cycleCount != null && readUnitBattery(u, seeded).mode === "CYCLES",
       ),
     );
     for (const grade of ["good", "fair", "bad"] as const) {

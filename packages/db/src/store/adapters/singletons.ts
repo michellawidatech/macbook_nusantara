@@ -165,7 +165,10 @@ export async function writeAppleDbHidden(
 // The signed-in person's warehouse
 // ---------------------------------------------------------------------------
 
-export async function projectMyWarehouse(tx: Tx, ctx: ProjectContext): Promise<string> {
+export async function projectMyWarehouse(
+  tx: Tx,
+  ctx: ProjectContext,
+): Promise<string> {
   const staff = await tx.staff.findUnique({
     where: { id: ctx.staffId },
     select: { defaultLocationId: true },
@@ -177,16 +180,29 @@ export async function projectMyWarehouse(tx: Tx, ctx: ProjectContext): Promise<s
       orderBy: { sortOrder: "asc" },
       select: { id: true },
     })) ??
-    (await tx.location.findFirst({ orderBy: { sortOrder: "asc" }, select: { id: true } }));
+    (await tx.location.findFirst({
+      orderBy: { sortOrder: "asc" },
+      select: { id: true },
+    }));
   return shop?.id ?? "";
 }
 
-export async function writeMyWarehouse(ctx: WriteContext, next: string): Promise<void> {
+export async function writeMyWarehouse(
+  ctx: WriteContext,
+  next: string,
+): Promise<void> {
   const { tx } = ctx;
   if (next !== "") {
-    const exists = await tx.location.findUnique({ where: { id: next }, select: { id: true } });
+    const exists = await tx.location.findUnique({
+      where: { id: next },
+      select: { id: true },
+    });
     if (exists === null) {
-      throw new StoreValidationError(`Gudang ${next} tidak ditemukan.`, "warehouses", next);
+      throw new StoreValidationError(
+        `Gudang ${next} tidak ditemukan.`,
+        "warehouses",
+        next,
+      );
     }
   }
   await tx.staff.update({
@@ -201,12 +217,17 @@ export async function writeMyWarehouse(ctx: WriteContext, next: string): Promise
 // ---------------------------------------------------------------------------
 
 export async function projectActivePersona(tx: Tx): Promise<string> {
-  const row = await tx.persona.findFirst({ where: { active: true }, select: { id: true } });
+  const row = await tx.persona.findFirst({
+    where: { active: true },
+    select: { id: true },
+  });
   return row?.id ?? "";
 }
 
 const readOnly = (name: string) => async () => {
-  throw new StoreValidationError(`${name} diubah lewat halaman Chatbot, bukan di sini.`);
+  throw new StoreValidationError(
+    `${name} diubah lewat halaman Chatbot, bukan di sini.`,
+  );
 };
 
 export const personas: Adapter<"personas"> = {

@@ -17,8 +17,7 @@ import type { MockDb, Order, Po, Unit, UnitEvent } from "../src/mock/seed.js";
 
 /** A fixed clock, so the age signal is a fact about the fixture. */
 const NOW = new Date("2026-09-01T00:00:00.000Z").getTime();
-const daysAgo = (n: number) =>
-  new Date(NOW - n * 86_400_000).toISOString();
+const daysAgo = (n: number) => new Date(NOW - n * 86_400_000).toISOString();
 
 const unit = (over: Partial<Unit> & Pick<Unit, "serial" | "skuId">): Unit => ({
   status: "TERSEDIA",
@@ -307,10 +306,7 @@ describe("recommendFor", () => {
         unit({ serial: "M-NEW", skuId: "sku-mouse", buy: 600_000 }),
         unit({ serial: "M-OLD", skuId: "sku-mouse", buy: 600_000 }),
       ],
-      events: [
-        intake("M-NEW", daysAgo(2)),
-        intake("M-OLD", daysAgo(180)),
-      ],
+      events: [intake("M-NEW", daysAgo(2)), intake("M-OLD", daysAgo(180))],
     });
     const addons = recommendFor(store, basketOf("A1", 10_000_000), NOW).filter(
       (r) => r.kind === "ADDON",

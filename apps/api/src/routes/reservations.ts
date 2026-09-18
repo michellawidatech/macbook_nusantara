@@ -54,7 +54,12 @@ const listQuery = z.object({
   sort: z.enum(HOLD_SORTS).default("createdAt"),
   dir: z.enum(["asc", "desc"]).default("desc"),
   page: z.coerce.number().int().min(1).default(1),
-  perPage: z.coerce.number().int().min(1).max(MAX_HOLD_PER_PAGE).default(MAX_HOLD_PER_PAGE),
+  perPage: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_HOLD_PER_PAGE)
+    .default(MAX_HOLD_PER_PAGE),
 });
 
 /**

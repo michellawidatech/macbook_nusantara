@@ -84,22 +84,47 @@ async function seedShop(count = 2): Promise<string[]> {
     },
   });
   await db.location.create({
-    data: { id: "loc_t", code: "T1", name: "Toko", kind: "TOKO", active: true, sortOrder: 1 },
+    data: {
+      id: "loc_t",
+      code: "T1",
+      name: "Toko",
+      kind: "TOKO",
+      active: true,
+      sortOrder: 1,
+    },
   });
   await db.category.create({
     data: {
-      id: "cat_t", name: "MacBook", sortOrder: 1, marginMode: "PCT",
-      marginMin: 5n, marginMax: 30n, createdAt: NOW,
+      id: "cat_t",
+      name: "MacBook",
+      sortOrder: 1,
+      marginMode: "PCT",
+      marginMin: 5n,
+      marginMax: 30n,
+      createdAt: NOW,
     },
   });
   await db.catalogModel.create({
-    data: { id: "mdl_t", categoryId: "cat_t", name: "MacBook Air M2", archived: false, createdAt: NOW },
+    data: {
+      id: "mdl_t",
+      categoryId: "cat_t",
+      name: "MacBook Air M2",
+      archived: false,
+      createdAt: NOW,
+    },
   });
   await db.sku.create({
     data: {
-      id: "sku_t", modelId: "mdl_t", code: "SKU-T1", name: "MacBook Air M2 256GB",
-      variantLabel: "8/256", grade: "A", price: 15_500_000n, landed: 12_000_000n,
-      archived: false, createdAt: NOW,
+      id: "sku_t",
+      modelId: "mdl_t",
+      code: "SKU-T1",
+      name: "MacBook Air M2 256GB",
+      variantLabel: "8/256",
+      grade: "A",
+      price: 15_500_000n,
+      landed: 12_000_000n,
+      archived: false,
+      createdAt: NOW,
     },
   });
 
@@ -109,8 +134,14 @@ async function seedShop(count = 2): Promise<string[]> {
     serials.push(serial);
     await db.unit.create({
       data: {
-        id: `u_${i}`, serial, skuId: "sku_t", status: "QC", locationId: "loc_t",
-        buy: 12_000_000n, landed: 12_000_000n, grade: "A",
+        id: `u_${i}`,
+        serial,
+        skuId: "sku_t",
+        status: "QC",
+        locationId: "loc_t",
+        buy: 12_000_000n,
+        landed: 12_000_000n,
+        grade: "A",
         // Staggered so "oldest first" is observable.
         intakeAt: new Date(NOW.getTime() - (count - i) * 86_400_000),
         version: 1,
@@ -118,8 +149,19 @@ async function seedShop(count = 2): Promise<string[]> {
     });
     // A unit reaches TERSEDIA through the ledger, never by an UPDATE.
     await db.$transaction(async (tx) => {
-      await appendUnitEvent(tx, { serial, type: "DITERIMA", staffId: AGENT_STAFF, at: NOW, toLocationId: "loc_t" });
-      await appendUnitEvent(tx, { serial, type: "QC_SELESAI", staffId: AGENT_STAFF, at: NOW });
+      await appendUnitEvent(tx, {
+        serial,
+        type: "DITERIMA",
+        staffId: AGENT_STAFF,
+        at: NOW,
+        toLocationId: "loc_t",
+      });
+      await appendUnitEvent(tx, {
+        serial,
+        type: "QC_SELESAI",
+        staffId: AGENT_STAFF,
+        at: NOW,
+      });
     });
   }
   return serials;
@@ -144,7 +186,9 @@ const ctx = (over: Partial<ToolContext> = {}): ToolContext => ({
 });
 
 const book = (args: Record<string, unknown>, c: ToolContext = ctx()) =>
-  dispatchTool(db, "create_reservation", args, c) as Promise<Record<string, unknown>>;
+  dispatchTool(db, "create_reservation", args, c) as Promise<
+    Record<string, unknown>
+  >;
 
 describe("holding a unit", () => {
   it("books a visit and holds the unit in one transaction", async () => {
@@ -155,7 +199,9 @@ describe("holding a unit", () => {
     expect(out).toMatchObject({ ok: true });
     expect(String(out["code"])).toMatch(/^RV-\d{4}\/\d{2}-\d{6}$/);
 
-    const unit = await db.unit.findUniqueOrThrow({ where: { serial: serial! } });
+    const unit = await db.unit.findUniqueOrThrow({
+      where: { serial: serial! },
+    });
     expect(unit.status).toBe("DIRESERVASI");
 
     const event = await db.unitEvent.findFirstOrThrow({
@@ -169,7 +215,11 @@ describe("holding a unit", () => {
   it("takes the reservation code from the database, never from the model", async () => {
     const [serial] = await seedShop(1);
     // A model that hallucinates a code is passing a key nobody reads.
-    const out = await book({ when: TOMORROW_3PM, serial, code: "RV-9999/99-999999" });
+    const out = await book({
+      when: TOMORROW_3PM,
+      serial,
+      code: "RV-9999/99-999999",
+    });
     expect(out["code"]).not.toBe("RV-9999/99-999999");
   });
 
@@ -239,7 +289,9 @@ describe("holding a unit", () => {
   it("writes shop-composed attribution onto the ledger, not the customer's words", async () => {
     const [serial] = await seedShop(1);
     await book({ when: TOMORROW_3PM, serial, note: "bawa dus ya" });
-    const ev = await db.unitEvent.findFirstOrThrow({ where: { type: "DIRESERVASI" } });
+    const ev = await db.unitEvent.findFirstOrThrow({
+      where: { type: "DIRESERVASI" },
+    });
     expect(ev.note).toBe("Reservasi agen untuk +628111000321");
     expect(ev.note).not.toContain("bawa dus");
   });
@@ -265,7 +317,12 @@ describe("who the booking is for", () => {
   it("reuses an existing customer rather than making a second row for one number", async () => {
     const [serial] = await seedShop(1);
     await db.customer.create({
-      data: { id: "c_x", name: "Budi Santoso", phone: `+${SENDER}`, createdAt: NOW },
+      data: {
+        id: "c_x",
+        name: "Budi Santoso",
+        phone: `+${SENDER}`,
+        createdAt: NOW,
+      },
     });
     await book({ when: TOMORROW_3PM, serial, custName: "Budi" });
     expect(await db.customer.count()).toBe(1);
@@ -276,7 +333,12 @@ describe("who the booking is for", () => {
     // message they send.
     const [serial] = await seedShop(1);
     await db.customer.create({
-      data: { id: "c_y", name: "Budi Santoso", phone: `+${SENDER}`, createdAt: NOW },
+      data: {
+        id: "c_y",
+        name: "Budi Santoso",
+        phone: `+${SENDER}`,
+        createdAt: NOW,
+      },
     });
     await book({ when: TOMORROW_3PM, serial, custName: "bebas" });
     const c = await db.customer.findFirstOrThrow();
@@ -290,36 +352,50 @@ describe("what it refuses", () => {
     const out = await book({ when: "2026-08-21T03:00", serial });
     expect(out).toMatchObject({ closedThen: true });
     expect(await db.reservation.count()).toBe(0);
-    expect((await db.unit.findUniqueOrThrow({ where: { serial: serial! } })).status).toBe("TERSEDIA");
+    expect(
+      (await db.unit.findUniqueOrThrow({ where: { serial: serial! } })).status,
+    ).toBe("TERSEDIA");
   });
 
   it("accepts the last hour before closing and refuses the first after", async () => {
     const serials = await seedShop(2);
-    expect(await book({ when: "2026-08-21T19:30", serial: serials[0]! })).toMatchObject({ ok: true });
-    expect(await book({ when: "2026-08-21T20:30", serial: serials[1]! }, ctx())).toMatchObject({
+    expect(
+      await book({ when: "2026-08-21T19:30", serial: serials[0]! }),
+    ).toMatchObject({ ok: true });
+    expect(
+      await book({ when: "2026-08-21T20:30", serial: serials[1]! }, ctx()),
+    ).toMatchObject({
       closedThen: true,
     });
   });
 
   it("refuses a date in the past", async () => {
     const [serial] = await seedShop(1);
-    expect(await book({ when: "2026-08-19T15:00", serial })).toMatchObject({ pastDate: true });
+    expect(await book({ when: "2026-08-19T15:00", serial })).toMatchObject({
+      pastDate: true,
+    });
   });
 
   it("refuses a booking absurdly far ahead", async () => {
     const [serial] = await seedShop(1);
-    expect(await book({ when: "2027-08-21T15:00", serial })).toMatchObject({ tooFarAhead: true });
+    expect(await book({ when: "2027-08-21T15:00", serial })).toMatchObject({
+      tooFarAhead: true,
+    });
   });
 
   it("refuses free text where a date belongs, rather than storing the words", async () => {
     const [serial] = await seedShop(1);
-    expect(await book({ when: "besok jam 3", serial })).toMatchObject({ needWhen: true });
+    expect(await book({ when: "besok jam 3", serial })).toMatchObject({
+      needWhen: true,
+    });
     expect(await db.reservation.count()).toBe(0);
   });
 
   it("refuses an impossible date rather than rolling it into the next month", async () => {
     const [serial] = await seedShop(1);
-    expect(await book({ when: "2026-02-30T15:00", serial })).toMatchObject({ needWhen: true });
+    expect(await book({ when: "2026-02-30T15:00", serial })).toMatchObject({
+      needWhen: true,
+    });
   });
 
   it("says it could not book without inventing a reason it was never given", async () => {
@@ -348,7 +424,10 @@ describe("what it refuses", () => {
   it("will not book at all on a channel with no reserve capability", async () => {
     // The staff Draft page passes none, so pressing Draft proposes a sentence.
     const [serial] = await seedShop(1);
-    const out = await book({ when: TOMORROW_3PM, serial }, ctx({ reserve: undefined }));
+    const out = await book(
+      { when: TOMORROW_3PM, serial },
+      ctx({ reserve: undefined }),
+    );
     expect(out).toMatchObject({ error: expect.any(String) });
     expect(await db.reservation.count()).toBe(0);
   });
@@ -365,16 +444,20 @@ describe("not booking twice", () => {
     expect(second).toMatchObject({ alreadyBooked: true });
     expect(await db.reservation.count()).toBe(1);
     // And the second unit was never touched.
-    expect((await db.unit.findUniqueOrThrow({ where: { serial: serials[1]! } })).status).toBe(
-      "TERSEDIA",
-    );
+    expect(
+      (await db.unit.findUniqueOrThrow({ where: { serial: serials[1]! } }))
+        .status,
+    ).toBe("TERSEDIA");
   });
 
   it("returns the existing booking on a later turn too, rather than holding a second unit", async () => {
     const serials = await seedShop(2);
     const first = await book({ when: TOMORROW_3PM, serial: serials[0]! });
     // A fresh turn: new context, empty write budget.
-    const second = await book({ when: TOMORROW_3PM, serial: serials[1]! }, ctx());
+    const second = await book(
+      { when: TOMORROW_3PM, serial: serials[1]! },
+      ctx(),
+    );
 
     expect(second).toMatchObject({ alreadyBooked: true, code: first["code"] });
     expect(await db.reservation.count()).toBe(1);
@@ -383,7 +466,9 @@ describe("not booking twice", () => {
 
 describe("cancelling", () => {
   const cancel = (args: Record<string, unknown>, c: ToolContext = ctx()) =>
-    dispatchTool(db, "cancel_reservation", args, c) as Promise<Record<string, unknown>>;
+    dispatchTool(db, "cancel_reservation", args, c) as Promise<
+      Record<string, unknown>
+    >;
 
   it("releases the held unit back into stock", async () => {
     const [serial] = await seedShop(1);
@@ -392,10 +477,14 @@ describe("cancelling", () => {
     const out = await cancel({});
 
     expect(out).toMatchObject({ ok: true, released: 1 });
-    const unit = await db.unit.findUniqueOrThrow({ where: { serial: serial! } });
+    const unit = await db.unit.findUniqueOrThrow({
+      where: { serial: serial! },
+    });
     expect(unit.status).toBe("TERSEDIA");
     // And the release is justified by the ledger, like every other move.
-    await db.unitEvent.findFirstOrThrow({ where: { serial: serial!, type: "RESERVASI_BATAL" } });
+    await db.unitEvent.findFirstOrThrow({
+      where: { serial: serial!, type: "RESERVASI_BATAL" },
+    });
   });
 
   it("marks the booking cancelled and never completed", async () => {
@@ -418,9 +507,9 @@ describe("cancelling", () => {
 
     expect(out).toMatchObject({ notFound: true });
     expect((await db.reservation.findFirstOrThrow()).status).toBe("TERJADWAL");
-    expect((await db.unit.findUniqueOrThrow({ where: { serial: serial! } })).status).toBe(
-      "DIRESERVASI",
-    );
+    expect(
+      (await db.unit.findUniqueOrThrow({ where: { serial: serial! } })).status,
+    ).toBe("DIRESERVASI");
   });
 
   it("says there is nothing to cancel rather than erroring", async () => {

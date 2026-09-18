@@ -135,9 +135,9 @@ describe("poRowShares — before any serial exists", () => {
     });
     expect(poRowShares(po).size).toBe(6);
     expect(
-      shippingTaxShares(store({ pos: [po], units: [unit("SAIR00000001")] })).get(
-        "SAIR00000001",
-      ),
+      shippingTaxShares(
+        store({ pos: [po], units: [unit("SAIR00000001")] }),
+      ).get("SAIR00000001"),
     ).toBe(100_000);
   });
 });
@@ -155,7 +155,11 @@ describe("which row a machine stands in", () => {
         line("r3", { serial: "SAAA0000001" }),
       ],
     });
-    const units = [unit("SAAA0000001"), unit("SBBB0000001"), unit("SCCC0000001")];
+    const units = [
+      unit("SAAA0000001"),
+      unit("SBBB0000001"),
+      unit("SCCC0000001"),
+    ];
     const shares = shippingTaxShares(
       store({
         pos: [po],
@@ -219,7 +223,10 @@ describe("which row a machine stands in", () => {
     // Two rows, four Airs: four positions. Rp100.003 leaves three leftover
     // rupiah for positions 1–3, so the third machine received carries one and
     // the fourth does not, whatever their serials say.
-    const po = invoice({ shippingFee: 100_003, items: [line("airs", { qty: 2 })] });
+    const po = invoice({
+      shippingFee: 100_003,
+      items: [line("airs", { qty: 2 })],
+    });
     const units = [
       unit("SAAA0000001"),
       unit("SBBB0000001"),
@@ -250,7 +257,10 @@ describe("which row a machine stands in", () => {
     // The rows are Airs and the machine is a Pro. It does not take an Air's
     // row, and the rows share with it rather than quoting a share the unit
     // cannot also be quoted.
-    const po = invoice({ shippingFee: 300_000, items: [line("airs", { qty: 2 })] });
+    const po = invoice({
+      shippingFee: 300_000,
+      items: [line("airs", { qty: 2 })],
+    });
     const units = [unit("SPRO0000001", { skuId: "sku-pro" })];
     expect(machinesOnInvoice(po, units)).toBe(3);
     expect(
@@ -291,7 +301,10 @@ describe("entering a serial later", () => {
 
   it("changes nobody's share as the machines of a quantity line are registered", () => {
     // Rp100.000 over three pieces is 33.334 + 33.333 + 33.333.
-    const po = invoice({ shippingFee: 100_000, items: [line("airs", { qty: 3 })] });
+    const po = invoice({
+      shippingFee: 100_000,
+      items: [line("airs", { qty: 3 })],
+    });
     const first = [unit("SBBB0000001"), unit("SCCC0000001")];
     const firstIn = [intake("SBBB0000001", 3), intake("SCCC0000001", 4)];
     const before = shippingTaxShares(
@@ -328,7 +341,9 @@ describe("a machine with no invoice", () => {
       ],
     });
     expect(shippingTaxShares(s).size).toBe(0);
-    expect(shippingTaxShareOf({ serial: "STRADEIN0001", poId: null }, s)).toBe(0);
+    expect(shippingTaxShareOf({ serial: "STRADEIN0001", poId: null }, s)).toBe(
+      0,
+    );
     expect(
       shippingTaxShareOf({ serial: "SGONE0000001", poId: "po-missing" }, s),
     ).toBe(0);
@@ -342,7 +357,10 @@ describe("shippingTaxShareOf", () => {
         invoice({
           shippingFee: 100_000,
           taxFee: 1,
-          items: [line("airs", { qty: 2 }), line("r3", { serial: "SCCC0000001" })],
+          items: [
+            line("airs", { qty: 2 }),
+            line("r3", { serial: "SCCC0000001" }),
+          ],
         }),
         invoice({ id: "po-2", shippingFee: 50_000, items: [line("r1")] }),
       ],

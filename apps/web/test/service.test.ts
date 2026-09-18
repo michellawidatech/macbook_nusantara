@@ -33,7 +33,10 @@ const visit = (over: Partial<ServiceRec>): ServiceRec => ({
   ...over,
 });
 
-const fee = (amount: number, kind: ServiceRec["fees"][number]["kind"] = "LABOUR") => ({
+const fee = (
+  amount: number,
+  kind: ServiceRec["fees"][number]["kind"] = "LABOUR",
+) => ({
   id: `f-${amount}`,
   kind,
   amount,
@@ -211,7 +214,11 @@ describe("benchRows", () => {
       shop({
         services: [
           visit({ id: "v1", openedAt: "2026-09-06T03:00:00.000Z" }),
-          visit({ id: "v2", serial: "B", openedAt: "2026-09-01T03:00:00.000Z" }),
+          visit({
+            id: "v2",
+            serial: "B",
+            openedAt: "2026-09-01T03:00:00.000Z",
+          }),
           visit({ id: "v3", serial: "C", closedAt: "2026-09-07" }),
         ],
       }),
@@ -297,7 +304,11 @@ describe("splitBench", () => {
       shop({
         services: [
           visit({ id: "v1" }),
-          visit({ id: "v2", serial: "B", arrivedAt: "2026-09-02T03:00:00.000Z" }),
+          visit({
+            id: "v2",
+            serial: "B",
+            arrivedAt: "2026-09-02T03:00:00.000Z",
+          }),
         ],
       }),
     );
@@ -351,7 +362,9 @@ describe("editFee", () => {
   it("refuses a negative charge rather than netting it off", () => {
     // Money coming back from a repairer is a credit and is its own document.
     const rec = visit({ fees: [fee(900_000)] });
-    expect(editFee(rec, "f-900000", { amount: -50_000 }).fees[0]!.amount).toBe(0);
+    expect(editFee(rec, "f-900000", { amount: -50_000 }).fees[0]!.amount).toBe(
+      0,
+    );
   });
 
   it("does nothing at all when the id is not on the visit", () => {

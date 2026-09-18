@@ -251,14 +251,16 @@ export function SuppliersPage() {
               : [],
         });
         if (po && put > 0) {
-          d.pos.find((p) => p.id === po.id)?.payments.push({
-            id: nextId("pp"),
-            method: v.method,
-            amount: put,
-            at,
-            appliedTo: "ORDER",
-            fromDepositId: depositId,
-          });
+          d.pos
+            .find((p) => p.id === po.id)
+            ?.payments.push({
+              id: nextId("pp"),
+              method: v.method,
+              amount: put,
+              at,
+              appliedTo: "ORDER",
+              fromDepositId: depositId,
+            });
         }
       });
       setDepositTo(null);
@@ -295,7 +297,9 @@ export function SuppliersPage() {
     addForm.validateFields().then((v) => {
       const name = v.name.trim();
       const code = (v.code ?? "").trim().toUpperCase();
-      if (db.suppliers.some((x) => x.name.toLowerCase() === name.toLowerCase())) {
+      if (
+        db.suppliers.some((x) => x.name.toLowerCase() === name.toLowerCase())
+      ) {
         message.error(
           t("supplier.nameTaken", "A supplier with that name already exists."),
         );
@@ -303,15 +307,22 @@ export function SuppliersPage() {
       }
       if (code !== "" && !/^[A-Z]{2}$/.test(code)) {
         message.error(
-          t("supplier.codeShape", "A supplier code is exactly two capital letters."),
+          t(
+            "supplier.codeShape",
+            "A supplier code is exactly two capital letters.",
+          ),
         );
         return;
       }
       if (code !== "" && db.suppliers.some((x) => x.code === code)) {
         message.error(
-          t("supplier.codeTaken", "{{code}} already belongs to another supplier.", {
-            code,
-          }),
+          t(
+            "supplier.codeTaken",
+            "{{code}} already belongs to another supplier.",
+            {
+              code,
+            },
+          ),
         );
         return;
       }
@@ -361,14 +372,20 @@ export function SuppliersPage() {
       .filter((a) => a.amount > 0);
     if (plan.length === 0) {
       message.error(
-        t("supplier.allocateNothing", "Put an amount against at least one invoice."),
+        t(
+          "supplier.allocateNothing",
+          "Put an amount against at least one invoice.",
+        ),
       );
       return;
     }
     const asked = plan.reduce((n, a) => n + a.amount, 0);
     if (asked > remainingOf(deposit)) {
       message.error(
-        t("supplier.allocateTooMuch", "That is more than this deposit has left."),
+        t(
+          "supplier.allocateTooMuch",
+          "That is more than this deposit has left.",
+        ),
       );
       return;
     }
@@ -408,24 +425,30 @@ export function SuppliersPage() {
         };
       }
       for (const a of plan) {
-        d.pos.find((p) => p.id === a.poId)?.payments.push({
-          id: nextId("pp"),
-          method: deposit.method,
-          amount: a.amount,
-          at,
-          appliedTo: "ORDER",
-          fromDepositId: deposit.id,
-        });
+        d.pos
+          .find((p) => p.id === a.poId)
+          ?.payments.push({
+            id: nextId("pp"),
+            method: deposit.method,
+            amount: a.amount,
+            at,
+            appliedTo: "ORDER",
+            fromDepositId: deposit.id,
+          });
       }
     });
     setAllocating(null);
     setAllocDraft({});
     message.success(
-      t("supplier.allocatedAcross", "{{amount}} put against {{n}} invoice(s) for {{name}}.", {
-        amount: fmtRp(asked),
-        n: plan.length,
-        name: supplier.name,
-      }),
+      t(
+        "supplier.allocatedAcross",
+        "{{amount}} put against {{n}} invoice(s) for {{name}}.",
+        {
+          amount: fmtRp(asked),
+          n: plan.length,
+          name: supplier.name,
+        },
+      ),
     );
   };
 
@@ -543,19 +566,17 @@ export function SuppliersPage() {
     db.paymentMethods.find((m) => m.code === code)?.label ?? code;
 
   /** What one history row is called, and the colour it carries. */
-  const ENTRY: Record<
-    LedgerEntry["kind"],
-    { label: string; color?: string }
-  > = {
-    INVOICE: { label: t("supplier.entryInvoice", "Invoice"), color: "blue" },
-    PAYMENT: { label: t("supplier.entryPayment", "Payment"), color: "green" },
-    DEPOSIT: { label: t("supplier.entryDeposit", "Deposit"), color: "gold" },
-    ALLOCATION: {
-      label: t("supplier.entryAllocation", "Deposit used"),
-      color: "default",
-    },
-    OPENING: { label: t("supplier.entryOpening", "From before") },
-  };
+  const ENTRY: Record<LedgerEntry["kind"], { label: string; color?: string }> =
+    {
+      INVOICE: { label: t("supplier.entryInvoice", "Invoice"), color: "blue" },
+      PAYMENT: { label: t("supplier.entryPayment", "Payment"), color: "green" },
+      DEPOSIT: { label: t("supplier.entryDeposit", "Deposit"), color: "gold" },
+      ALLOCATION: {
+        label: t("supplier.entryAllocation", "Deposit used"),
+        color: "default",
+      },
+      OPENING: { label: t("supplier.entryOpening", "From before") },
+    };
 
   return (
     <PageContainer
@@ -619,7 +640,10 @@ export function SuppliersPage() {
                       dataSource={posOf(r.supplier.id)}
                       pagination={false}
                       locale={{
-                        emptyText: t("supplier.noInvoices", "No open invoices."),
+                        emptyText: t(
+                          "supplier.noInvoices",
+                          "No open invoices.",
+                        ),
                       }}
                       columns={[
                         {
@@ -641,9 +665,15 @@ export function SuppliersPage() {
                                 style={{ fontSize: TYPE.sm }}
                               >
                                 {po.noInvoice
-                                  ? t("supplier.noInvoiceNo", "No invoice issued")
+                                  ? t(
+                                      "supplier.noInvoiceNo",
+                                      "No invoice issued",
+                                    )
                                   : po.invoice ||
-                                    t("supplier.noInvoiceNoYet", "No number yet")}
+                                    t(
+                                      "supplier.noInvoiceNoYet",
+                                      "No number yet",
+                                    )}
                               </Typography.Text>
                             </Flex>
                           ),
@@ -909,12 +939,12 @@ export function SuppliersPage() {
                             return (
                               <Flex vertical gap={0}>
                                 {po ? (
-                                  <Link to={`/inbound/${po.id}`}>{po.code}</Link>
+                                  <Link to={`/inbound/${po.id}`}>
+                                    {po.code}
+                                  </Link>
                                 ) : (
                                   <Typography.Text>
-                                    {e.method
-                                      ? methodLabel(e.method)
-                                      : "—"}
+                                    {e.method ? methodLabel(e.method) : "—"}
                                   </Typography.Text>
                                 )}
                                 {(e.note || (po && e.method)) && (
@@ -1223,7 +1253,9 @@ export function SuppliersPage() {
             label={t("supplier.nameLabel", "Name")}
             rules={[{ required: true }]}
           >
-            <Input placeholder={t("supplier.namePlaceholder", "CV Apel Segar")} />
+            <Input
+              placeholder={t("supplier.namePlaceholder", "CV Apel Segar")}
+            />
           </Form.Item>
           <Form.Item
             name="code"

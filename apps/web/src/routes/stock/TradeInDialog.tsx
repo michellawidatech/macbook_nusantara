@@ -776,9 +776,13 @@ export function TradeInDialog({
                         )}
                       {c.shippingTax > 0 &&
                         part(
-                          t("trade.shippingTaxLine", "shipping & tax {{amount}}", {
-                            amount: fmtRp(c.shippingTax),
-                          }),
+                          t(
+                            "trade.shippingTaxLine",
+                            "shipping & tax {{amount}}",
+                            {
+                              amount: fmtRp(c.shippingTax),
+                            },
+                          ),
                         )}
                       {c.repair > 0 &&
                         part(

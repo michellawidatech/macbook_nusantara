@@ -622,7 +622,9 @@ export function AppLayout({ staff }: { staff: Staff }) {
                 style={{ color: NAV.textStrong, flex: "0 0 auto" }}
               />
             </Flex>
-            <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>{menu}</div>
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+              {menu}
+            </div>
           </div>
           {/*
            * Panel two: the account foot (owner ask 2026-09-09 — the reference

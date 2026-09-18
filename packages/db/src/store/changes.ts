@@ -27,16 +27,27 @@ export async function storeChangesSince(
   ctx: ProjectContext,
   after: string,
 ): Promise<StoreDelta | "RESET"> {
-  if (!/^\d+$/.test(after)) throw new StoreValidationError("Kursor perubahan tidak valid.");
+  if (!/^\d+$/.test(after))
+    throw new StoreValidationError("Kursor perubahan tidak valid.");
   const afterId = BigInt(after);
   return db.$transaction(
     async (tx) => {
-      const bounds = await tx.storeChange.aggregate({ _min: { id: true }, _max: { id: true } });
+      const bounds = await tx.storeChange.aggregate({
+        _min: { id: true },
+        _max: { id: true },
+      });
       const max = bounds._max.id ?? 0n;
       if (afterId > max) return "RESET" as const;
-      if (bounds._min.id !== null && afterId < bounds._min.id - 1n) return "RESET" as const;
+      if (bounds._min.id !== null && afterId < bounds._min.id - 1n)
+        return "RESET" as const;
       if (afterId === max) {
-        return { cursor: max.toString(), rows: {}, removed: {}, order: {}, singletons: {} };
+        return {
+          cursor: max.toString(),
+          rows: {},
+          removed: {},
+          order: {},
+          singletons: {},
+        };
       }
       const changes = await tx.storeChange.findMany({
         where: { id: { gt: afterId, lte: max } },
@@ -73,5 +84,8 @@ export async function storePhoto(
     select: { data: true, contentType: true },
   });
   if (row === null || row.data === null) return null;
-  return { data: row.data, contentType: row.contentType ?? "application/octet-stream" };
+  return {
+    data: row.data,
+    contentType: row.contentType ?? "application/octet-stream",
+  };
 }

@@ -118,8 +118,7 @@ export async function run(options: RunOptions): Promise<void> {
       const result = await tick(options);
       // A summary backlog counts as busy, so it drains at API speed rather
       // than one thread every poll interval.
-      busy =
-        result.drafted > 0 || result.sent > 0 || result.summarised > 0;
+      busy = result.drafted > 0 || result.sent > 0 || result.summarised > 0;
       if (busy || result.escalated > 0 || result.failed > 0) {
         logger.info({ evt: "worker.tick", ctx: { ...result } }, "worker tick");
       }

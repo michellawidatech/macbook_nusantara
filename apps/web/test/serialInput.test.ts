@@ -6,10 +6,7 @@
  * the one at Inbound & QC. See `lib/serialInput.ts`.
  */
 import { describe, expect, it } from "vitest";
-import {
-  readSerialInput,
-  resolveSerialQuery,
-} from "../src/lib/serialInput.js";
+import { readSerialInput, resolveSerialQuery } from "../src/lib/serialInput.js";
 
 /** `CV Apel Segar`. The one code the seeded shop has issued. */
 const CODES = ["AS"];
@@ -97,8 +94,9 @@ describe("a typed serial", () => {
   });
 
   it("takes a lower-case, space-padded read", () => {
-    expect(readSerialInput(`  ${BARE.toLowerCase()} `, { scanned: false }).ok)
-      .toBe(true);
+    expect(
+      readSerialInput(`  ${BARE.toLowerCase()} `, { scanned: false }).ok,
+    ).toBe(true);
   });
 
   it("keeps the looser alphabet a person is allowed", () => {

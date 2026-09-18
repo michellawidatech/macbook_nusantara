@@ -109,7 +109,8 @@ describe("personas", () => {
 
   it("makes one live, and only one", async () => {
     const a = (await post("/personas", VOICE)).body.persona.id;
-    const b = (await post("/personas", { ...VOICE, name: "Formal" })).body.persona.id;
+    const b = (await post("/personas", { ...VOICE, name: "Formal" })).body
+      .persona.id;
 
     expect((await post(`/personas/${a}/activate`, {})).status).toBe(200);
     expect((await post(`/personas/${b}/activate`, {})).status).toBe(200);
@@ -133,7 +134,10 @@ describe("personas", () => {
     const a = (await post("/personas", VOICE)).body.persona.id;
     await post(`/personas/${a}/activate`, {});
 
-    const res = await put(`/personas/${a}`, { ...VOICE, prompt: "Lebih singkat." });
+    const res = await put(`/personas/${a}`, {
+      ...VOICE,
+      prompt: "Lebih singkat.",
+    });
 
     expect(res.status).toBe(200);
     const row = await db.persona.findUniqueOrThrow({ where: { id: a } });
@@ -170,7 +174,9 @@ describe("personas", () => {
   });
 
   it("refuses a persona with no prompt rather than storing an empty voice", async () => {
-    expect((await post("/personas", { name: "Kosong", prompt: "" })).status).toBe(400);
+    expect(
+      (await post("/personas", { name: "Kosong", prompt: "" })).status,
+    ).toBe(400);
   });
 
   it("refuses two personas with the same name", async () => {
@@ -186,7 +192,9 @@ describe("personas", () => {
   it("refuses everything to someone who is not logged in", async () => {
     // The voice decides what the shop says to customers. It is not public.
     expect((await request(app).get("/api/chat/personas")).status).toBe(401);
-    expect((await request(app).post("/api/chat/personas").send(VOICE)).status).toBe(401);
+    expect(
+      (await request(app).post("/api/chat/personas").send(VOICE)).status,
+    ).toBe(401);
   });
 });
 
@@ -202,7 +210,11 @@ describe("corrections", () => {
     expect(res.status).toBe(201);
 
     const row = await db.agentCorrection.findFirstOrThrow({
-      select: { corrected: true, note: true, createdBy: { select: { username: true } } },
+      select: {
+        corrected: true,
+        note: true,
+        createdBy: { select: { username: true } },
+      },
     });
     expect(row.corrected).toBe(FIX.corrected);
     expect(row.createdBy.username).toBe("persona-test");
@@ -233,7 +245,9 @@ describe("corrections", () => {
   });
 
   it("refuses a correction from someone who is not logged in", async () => {
-    expect((await request(app).post("/api/chat/corrections").send(FIX)).status).toBe(401);
+    expect(
+      (await request(app).post("/api/chat/corrections").send(FIX)).status,
+    ).toBe(401);
   });
 });
 

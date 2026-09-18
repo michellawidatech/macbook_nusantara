@@ -61,38 +61,87 @@ async function seedShop() {
     where: { id: AGENT_STAFF },
     update: {},
     create: {
-      id: AGENT_STAFF, username: "agent", name: "Agen WhatsApp", role: "STAFF",
-      canApprove: false, active: false, passwordHash: "unusable", createdAt: NOW,
+      id: AGENT_STAFF,
+      username: "agent",
+      name: "Agen WhatsApp",
+      role: "STAFF",
+      canApprove: false,
+      active: false,
+      passwordHash: "unusable",
+      createdAt: NOW,
     },
   });
   await db.location.create({
-    data: { id: "loc_e", code: "E1", name: "Toko", kind: "TOKO", active: true, sortOrder: 1 },
+    data: {
+      id: "loc_e",
+      code: "E1",
+      name: "Toko",
+      kind: "TOKO",
+      active: true,
+      sortOrder: 1,
+    },
   });
   await db.category.create({
     data: {
-      id: "cat_e", name: "MacBook", sortOrder: 1, marginMode: "PCT",
-      marginMin: 5n, marginMax: 30n, createdAt: NOW,
+      id: "cat_e",
+      name: "MacBook",
+      sortOrder: 1,
+      marginMode: "PCT",
+      marginMin: 5n,
+      marginMax: 30n,
+      createdAt: NOW,
     },
   });
   await db.catalogModel.create({
-    data: { id: "mdl_e", categoryId: "cat_e", name: "MacBook Air M2", archived: false, createdAt: NOW },
+    data: {
+      id: "mdl_e",
+      categoryId: "cat_e",
+      name: "MacBook Air M2",
+      archived: false,
+      createdAt: NOW,
+    },
   });
   await db.sku.create({
     data: {
-      id: "sku_e", modelId: "mdl_e", code: "SKU-E1", name: "MacBook Air M2 256GB",
-      grade: "A", price: 15_500_000n, landed: 12_000_000n, archived: false, createdAt: NOW,
+      id: "sku_e",
+      modelId: "mdl_e",
+      code: "SKU-E1",
+      name: "MacBook Air M2 256GB",
+      grade: "A",
+      price: 15_500_000n,
+      landed: 12_000_000n,
+      archived: false,
+      createdAt: NOW,
     },
   });
   await db.unit.create({
     data: {
-      id: "u_e", serial: "EXP1", skuId: "sku_e", status: "QC", locationId: "loc_e",
-      buy: 12_000_000n, landed: 12_000_000n, grade: "A",
-      intakeAt: ago(10 * HOUR), version: 1,
+      id: "u_e",
+      serial: "EXP1",
+      skuId: "sku_e",
+      status: "QC",
+      locationId: "loc_e",
+      buy: 12_000_000n,
+      landed: 12_000_000n,
+      grade: "A",
+      intakeAt: ago(10 * HOUR),
+      version: 1,
     },
   });
   await db.$transaction(async (tx) => {
-    await appendUnitEvent(tx, { serial: "EXP1", type: "DITERIMA", staffId: AGENT_STAFF, at: ago(9 * HOUR), toLocationId: "loc_e" });
-    await appendUnitEvent(tx, { serial: "EXP1", type: "QC_SELESAI", staffId: AGENT_STAFF, at: ago(9 * HOUR) });
+    await appendUnitEvent(tx, {
+      serial: "EXP1",
+      type: "DITERIMA",
+      staffId: AGENT_STAFF,
+      at: ago(9 * HOUR),
+      toLocationId: "loc_e",
+    });
+    await appendUnitEvent(tx, {
+      serial: "EXP1",
+      type: "QC_SELESAI",
+      staffId: AGENT_STAFF,
+      at: ago(9 * HOUR),
+    });
   });
 }
 
@@ -106,7 +155,10 @@ async function booking(opts: {
   if (opts.hold !== false) {
     await db.$transaction(async (tx) => {
       await appendUnitEvent(tx, {
-        serial: "EXP1", type: "DIRESERVASI", staffId: AGENT_STAFF, at: opts.createdAt,
+        serial: "EXP1",
+        type: "DIRESERVASI",
+        staffId: AGENT_STAFF,
+        at: opts.createdAt,
       });
     });
   }
@@ -137,7 +189,11 @@ const sweep = (over: Record<string, unknown> = {}) =>
 
 describe("a hold that has run out", () => {
   it("releases a unit whose appointment passed hours ago", async () => {
-    await booking({ source: "AGEN", scheduledFor: ago(6 * HOUR), createdAt: ago(30 * HOUR) });
+    await booking({
+      source: "AGEN",
+      scheduledFor: ago(6 * HOUR),
+      createdAt: ago(30 * HOUR),
+    });
 
     const result = await sweep();
 
@@ -150,7 +206,11 @@ describe("a hold that has run out", () => {
   it("writes the event that says why the unit came back", async () => {
     // A status flipped without a ledger entry is exactly the drift the
     // append-only rule exists to prevent.
-    await booking({ source: "AGEN", scheduledFor: ago(6 * HOUR), createdAt: ago(30 * HOUR) });
+    await booking({
+      source: "AGEN",
+      scheduledFor: ago(6 * HOUR),
+      createdAt: ago(30 * HOUR),
+    });
     await sweep();
 
     const event = await db.unitEvent.findFirstOrThrow({
@@ -163,12 +223,16 @@ describe("a hold that has run out", () => {
 
   it("leaves an appointment still inside its grace period alone", async () => {
     // They may simply be late.
-    await booking({ source: "AGEN", scheduledFor: ago(1 * HOUR), createdAt: ago(30 * HOUR) });
+    await booking({
+      source: "AGEN",
+      scheduledFor: ago(1 * HOUR),
+      createdAt: ago(30 * HOUR),
+    });
 
     expect(await sweep()).toEqual({ expired: 0, released: 0 });
-    expect((await db.unit.findUniqueOrThrow({ where: { serial: "EXP1" } })).status).toBe(
-      "DIRESERVASI",
-    );
+    expect(
+      (await db.unit.findUniqueOrThrow({ where: { serial: "EXP1" } })).status,
+    ).toBe("DIRESERVASI");
   });
 
   it("leaves a future appointment alone", async () => {
@@ -181,12 +245,20 @@ describe("a hold that has run out", () => {
   });
 
   it("ages out a booking that never got an appointment at all", async () => {
-    await booking({ source: "AGEN", scheduledFor: null, createdAt: ago(72 * HOUR) });
+    await booking({
+      source: "AGEN",
+      scheduledFor: null,
+      createdAt: ago(72 * HOUR),
+    });
     expect(await sweep()).toEqual({ expired: 1, released: 1 });
   });
 
   it("gives an appointment-less booking its full time first", async () => {
-    await booking({ source: "AGEN", scheduledFor: null, createdAt: ago(10 * HOUR) });
+    await booking({
+      source: "AGEN",
+      scheduledFor: null,
+      createdAt: ago(10 * HOUR),
+    });
     expect(await sweep()).toEqual({ expired: 0, released: 0 });
   });
 });
@@ -195,29 +267,43 @@ describe("whose booking it is", () => {
   it("never expires a booking a member of staff made", async () => {
     // A colleague spoke to this customer and decided to hold the unit.
     // Overruling that automatically is not the sweeper's call.
-    await booking({ source: "STAF", scheduledFor: ago(100 * HOUR), createdAt: ago(200 * HOUR) });
+    await booking({
+      source: "STAF",
+      scheduledFor: ago(100 * HOUR),
+      createdAt: ago(200 * HOUR),
+    });
 
     expect(await sweep()).toEqual({ expired: 0, released: 0 });
     expect((await db.reservation.findFirstOrThrow()).status).toBe("TERJADWAL");
-    expect((await db.unit.findUniqueOrThrow({ where: { serial: "EXP1" } })).status).toBe(
-      "DIRESERVASI",
-    );
+    expect(
+      (await db.unit.findUniqueOrThrow({ where: { serial: "EXP1" } })).status,
+    ).toBe("DIRESERVASI");
   });
 
   it("leaves a booking a customer already turned up for", async () => {
     const made = await booking({
-      source: "AGEN", scheduledFor: ago(6 * HOUR), createdAt: ago(30 * HOUR),
+      source: "AGEN",
+      scheduledFor: ago(6 * HOUR),
+      createdAt: ago(30 * HOUR),
     });
-    await db.reservation.update({ where: { id: made.id }, data: { status: "SELESAI" } });
+    await db.reservation.update({
+      where: { id: made.id },
+      data: { status: "SELESAI" },
+    });
 
     expect(await sweep()).toEqual({ expired: 0, released: 0 });
   });
 
   it("does not touch a booking already cancelled", async () => {
     const made = await booking({
-      source: "AGEN", scheduledFor: ago(6 * HOUR), createdAt: ago(30 * HOUR),
+      source: "AGEN",
+      scheduledFor: ago(6 * HOUR),
+      createdAt: ago(30 * HOUR),
     });
-    await db.reservation.update({ where: { id: made.id }, data: { status: "BATAL" } });
+    await db.reservation.update({
+      where: { id: made.id },
+      data: { status: "BATAL" },
+    });
 
     expect(await sweep()).toEqual({ expired: 0, released: 0 });
   });
@@ -228,7 +314,10 @@ describe("safety", () => {
     // Staff released the unit through the POS but left the booking open. The
     // sweeper should still tidy the booking and not try to release twice.
     await booking({
-      source: "AGEN", scheduledFor: ago(6 * HOUR), createdAt: ago(30 * HOUR), hold: false,
+      source: "AGEN",
+      scheduledFor: ago(6 * HOUR),
+      createdAt: ago(30 * HOUR),
+      hold: false,
     });
 
     const result = await sweep();
@@ -239,16 +328,25 @@ describe("safety", () => {
   });
 
   it("caps how many it releases in one tick", async () => {
-    await booking({ source: "AGEN", scheduledFor: ago(6 * HOUR), createdAt: ago(30 * HOUR) });
+    await booking({
+      source: "AGEN",
+      scheduledFor: ago(6 * HOUR),
+      createdAt: ago(30 * HOUR),
+    });
     await db.reservation.create({
       data: {
-        phone: "+628111000999", status: "TERJADWAL", source: "AGEN",
-        scheduledFor: ago(6 * HOUR), createdAt: ago(29 * HOUR),
+        phone: "+628111000999",
+        status: "TERJADWAL",
+        source: "AGEN",
+        scheduledFor: ago(6 * HOUR),
+        createdAt: ago(29 * HOUR),
       },
     });
 
     expect((await sweep({ maxPerTick: 1 })).expired).toBe(1);
-    expect(await db.reservation.count({ where: { status: "TERJADWAL" } })).toBe(1);
+    expect(await db.reservation.count({ where: { status: "TERJADWAL" } })).toBe(
+      1,
+    );
   });
 
   it("does nothing at all when there is nothing stale", async () => {

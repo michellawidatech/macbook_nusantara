@@ -313,7 +313,13 @@ export function mutate(fn: (draft: MockDb) => void): Promise<boolean> {
     return Promise.resolve(true);
   }
   return new Promise<boolean>((resolve) => {
-    queue.push({ key: randomToken(24), fn, change, attempts: 0, done: resolve });
+    queue.push({
+      key: randomToken(24),
+      fn,
+      change,
+      attempts: 0,
+      done: resolve,
+    });
     setStatus({ pending: queue.length });
     void pump();
   });
@@ -578,7 +584,11 @@ function applyChange(store: MockDb, change: Changeset): MockDb {
     for (const r of c.rows) {
       if (r.next === undefined) removed.push(r.key);
       else if (existing.has(r.key)) updates.push(r.next);
-      else inserts.push({ row: r.next, index: r.index ?? Number.MAX_SAFE_INTEGER });
+      else
+        inserts.push({
+          row: r.next,
+          index: r.index ?? Number.MAX_SAFE_INTEGER,
+        });
     }
     let list = applyRows(name, listOf(out, name), updates, removed);
     inserts.sort((a, b) => a.index - b.index);
@@ -602,7 +612,11 @@ function applyChange(store: MockDb, change: Changeset): MockDb {
  * that `unshift`ed the newest order would find it last. Rows the screen already
  * showed keep their places; rows new to this browser go after them.
  */
-function keepPositions(view: MockDb, previous: MockDb, delta: StoreDelta): MockDb {
+function keepPositions(
+  view: MockDb,
+  previous: MockDb,
+  delta: StoreDelta,
+): MockDb {
   const touched = new Set([
     ...Object.keys(delta.rows ?? {}),
     ...Object.keys(delta.removed ?? {}),

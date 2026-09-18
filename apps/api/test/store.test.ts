@@ -62,7 +62,14 @@ async function shop(): Promise<void> {
     },
   });
   await db.location.create({
-    data: { id: "wh-api", code: "WH-API", name: "Toko", kind: "TOKO", active: true, sortOrder: 0 },
+    data: {
+      id: "wh-api",
+      code: "WH-API",
+      name: "Toko",
+      kind: "TOKO",
+      active: true,
+      sortOrder: 0,
+    },
   });
   await db.paymentMethod.create({
     data: {
@@ -183,7 +190,10 @@ describe("/api/store", () => {
     const res = await request(app).get("/api/store").set("Cookie", cookie);
     expect(res.status).toBe(200);
     expect(res.body.cursor).toBe("0");
-    expect(res.body.db.skus[0]).toMatchObject({ id: "sku-api", price: "9000000" });
+    expect(res.body.db.skus[0]).toMatchObject({
+      id: "sku-api",
+      price: "9000000",
+    });
     expect(res.body.db.settings).toMatchObject({ batteryGoodMin: 80 });
     expect(res.body.db.myWarehouseId).toBe("wh-api");
   });
@@ -191,9 +201,17 @@ describe("/api/store", () => {
   it("commits a machine's arrival, attributed to the session", async () => {
     const res = await commit(ARRIVAL, "arrival-1");
     expect(res.status).toBe(200);
-    expect(res.body.rows.units[0]).toMatchObject({ serial: "SC02API000001", buy: "7500000" });
-    expect(res.body.rows.events[0]).toMatchObject({ staff: "Kasir Toko", fromStatus: "-" });
-    const stored = await db.unitEvent.findFirstOrThrow({ where: { id: "ev_api_1" } });
+    expect(res.body.rows.units[0]).toMatchObject({
+      serial: "SC02API000001",
+      buy: "7500000",
+    });
+    expect(res.body.rows.events[0]).toMatchObject({
+      staff: "Kasir Toko",
+      fromStatus: "-",
+    });
+    const stored = await db.unitEvent.findFirstOrThrow({
+      where: { id: "ev_api_1" },
+    });
     expect(stored.staffId).toBe("staff_store_api");
   });
 
@@ -210,7 +228,9 @@ describe("/api/store", () => {
     const res = await commit({
       collections: {
         events: {
-          rows: [{ key: event.id, base: event, next: { ...event, note: "diubah" } }],
+          rows: [
+            { key: event.id, base: event, next: { ...event, note: "diubah" } },
+          ],
         },
       },
     });
@@ -225,14 +245,22 @@ describe("/api/store", () => {
       phone: "",
       createdAt: NOW.toISOString(),
     };
-    await commit({ collections: { customers: { rows: [{ key: "c-api", next: customer }] } } });
+    await commit({
+      collections: { customers: { rows: [{ key: "c-api", next: customer }] } },
+    });
     const renamed = { ...customer, name: "Andi W" };
     await commit({
-      collections: { customers: { rows: [{ key: "c-api", base: customer, next: renamed }] } },
+      collections: {
+        customers: { rows: [{ key: "c-api", base: customer, next: renamed }] },
+      },
     });
     const stale = await commit({
       collections: {
-        customers: { rows: [{ key: "c-api", base: customer, next: { ...customer, name: "X" } }] },
+        customers: {
+          rows: [
+            { key: "c-api", base: customer, next: { ...customer, name: "X" } },
+          ],
+        },
       },
     });
     expect(stale.status).toBe(409);
@@ -246,9 +274,9 @@ describe("/api/store", () => {
       .get(`/api/store/changes?after=${before.body.cursor}`)
       .set("Cookie", cookie);
     expect(res.status).toBe(200);
-    expect(res.body.rows.units.map((u: { serial: string }) => u.serial)).toEqual([
-      "SC02API000001",
-    ]);
+    expect(
+      res.body.rows.units.map((u: { serial: string }) => u.serial),
+    ).toEqual(["SC02API000001"]);
     expect(Number(res.body.cursor)).toBeGreaterThan(Number(before.body.cursor));
 
     const ahead = await request(app)
@@ -287,8 +315,12 @@ describe("/api/store", () => {
       },
     });
     expect(res.status).toBe(200);
-    expect(res.body.rows.unitNotes[0].photos[0].url).toBe("/api/store/photos/ph-api");
-    const photo = await request(app).get("/api/store/photos/ph-api").set("Cookie", cookie);
+    expect(res.body.rows.unitNotes[0].photos[0].url).toBe(
+      "/api/store/photos/ph-api",
+    );
+    const photo = await request(app)
+      .get("/api/store/photos/ph-api")
+      .set("Cookie", cookie);
     expect(photo.status).toBe(200);
     expect(photo.headers["content-type"]).toBe("image/png");
     expect(Buffer.from(photo.body as Buffer).equals(png)).toBe(true);

@@ -147,8 +147,7 @@ describe("adding a row", () => {
     // `compareDocumentPosition` rather than a screenshot: what the owner asked
     // for is an ORDER, and order is a fact about the document.
     expect(
-      grid.compareDocumentPosition(button) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      grid.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -221,9 +220,7 @@ describe("what a column is allowed to take from its neighbour", () => {
   it("gives the count column room for three digits and its arrows", () => {
     render(<Editor initial={[{ name: "a", qty: 1 }]} />);
     const cols = [...document.querySelectorAll("colgroup col")];
-    expect(cols[1]!.getAttribute("style")).toContain(
-      `${COUNT_COLUMN_WIDTH}px`,
-    );
+    expect(cols[1]!.getAttribute("style")).toContain(`${COUNT_COLUMN_WIDTH}px`);
     // The floor under the input itself, for a caller who forgets the column.
     // The rule is a `min-width` in `ch`, in global.css.
     expect(
@@ -375,7 +372,9 @@ describe("a product label that will not fit on one line", () => {
     // The card's heading, so a stacked row still says which line it is.
     expect(screen.getByText(first!.name)).toBeInTheDocument();
     // Every cell is still there and still typable, now at full width.
-    expect(screen.getAllByRole("combobox", { name: "Product" })).toHaveLength(2);
+    expect(screen.getAllByRole("combobox", { name: "Product" })).toHaveLength(
+      2,
+    );
     expect(screen.getAllByLabelText("Quantity")).toHaveLength(2);
     expect(screen.getAllByLabelText("Unit cost")).toHaveLength(2);
   });

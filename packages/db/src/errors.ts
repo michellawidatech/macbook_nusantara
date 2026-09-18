@@ -76,7 +76,9 @@ export class AmbiguousHoldError extends Error {
   readonly codes: readonly string[];
 
   constructor(codes: readonly string[]) {
-    super(`Ada beberapa reservasi aktif: ${codes.join(", ")}. Sebutkan kodenya.`);
+    super(
+      `Ada beberapa reservasi aktif: ${codes.join(", ")}. Sebutkan kodenya.`,
+    );
     this.name = "AmbiguousHoldError";
     this.codes = codes;
   }

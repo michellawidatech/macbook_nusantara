@@ -229,10 +229,7 @@ export function SettleModal({
           icon={<PlusOutlined />}
           style={{ alignSelf: "flex-start" }}
           onClick={() =>
-            setFees((f) => [
-              ...f,
-              { id: newId(), kind: "TRANSFER", amount: 0 },
-            ])
+            setFees((f) => [...f, { id: newId(), kind: "TRANSFER", amount: 0 }])
           }
         >
           {t("settle.addFee", "Add a deduction")}
@@ -270,12 +267,20 @@ export function SettleModal({
             showIcon
             message={
               totals.discrepancy < 0
-                ? t("settle.short", "{{amount}} less arrived than the fees explain.", {
-                    amount: fmtRp(-totals.discrepancy),
-                  })
-                : t("settle.over", "{{amount}} more arrived than the fees explain.", {
-                    amount: fmtRp(totals.discrepancy),
-                  })
+                ? t(
+                    "settle.short",
+                    "{{amount}} less arrived than the fees explain.",
+                    {
+                      amount: fmtRp(-totals.discrepancy),
+                    },
+                  )
+                : t(
+                    "settle.over",
+                    "{{amount}} more arrived than the fees explain.",
+                    {
+                      amount: fmtRp(totals.discrepancy),
+                    },
+                  )
             }
             description={
               <Flex vertical gap={SPACE.xs} style={{ marginTop: SPACE.xs }}>

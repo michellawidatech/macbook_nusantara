@@ -131,4 +131,3 @@ globalThis.fetch = (async (input: RequestInfo | URL) => {
       `for this page, the way test/reservationsPage.test.tsx does.`,
   );
 }) as typeof globalThis.fetch;
-

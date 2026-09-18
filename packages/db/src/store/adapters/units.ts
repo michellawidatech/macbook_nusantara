@@ -75,11 +75,16 @@ async function batteryAttributeIds(
     select: { model: { select: { categoryId: true } } },
   });
   if (sku === null) {
-    throw new StoreValidationError(`Varian ${skuId} tidak ditemukan.`, "skus", skuId);
+    throw new StoreValidationError(
+      `Varian ${skuId} tidak ditemukan.`,
+      "skus",
+      skuId,
+    );
   }
   const categoryId = sku.model.categoryId;
   const memoKey = `battery:${categoryId}`;
-  const cached = ctx.memo.get(memoKey) as Record<BatteryKey, string> | undefined;
+  const cached = ctx.memo.get(memoKey) as
+    Record<BatteryKey, string> | undefined;
   if (cached !== undefined) return { categoryId, ids: cached };
 
   const existing = await tx.categoryAttribute.findMany({
@@ -94,7 +99,10 @@ async function batteryAttributeIds(
     _max: { sortOrder: true },
   });
   let next = (max._max.sortOrder ?? 0) + 1;
-  for (const [key, spec] of Object.entries(BATTERY_KEYS) as [BatteryKey, (typeof BATTERY_KEYS)[BatteryKey]][]) {
+  for (const [key, spec] of Object.entries(BATTERY_KEYS) as [
+    BatteryKey,
+    (typeof BATTERY_KEYS)[BatteryKey],
+  ][]) {
     if (ids[key] !== undefined) continue;
     const created = await tx.categoryAttribute.create({
       data: {
@@ -144,7 +152,10 @@ async function syncBattery(
   await tx.unitAttribute.updateMany({
     where: {
       unitId,
-      attribute: { key: { in: Object.keys(BATTERY_KEYS) }, NOT: { categoryId } },
+      attribute: {
+        key: { in: Object.keys(BATTERY_KEYS) },
+        NOT: { categoryId },
+      },
       NOT: { value: "" },
     },
     data: { value: "" },
@@ -230,7 +241,9 @@ export const units: Adapter<"units"> = {
     });
     return rows.map((u) => {
       const reading = (key: BatteryKey): number | undefined => {
-        const hit = u.attributes.find((a) => a.attribute.key === key && a.value !== "");
+        const hit = u.attributes.find(
+          (a) => a.attribute.key === key && a.value !== "",
+        );
         if (hit === undefined) return undefined;
         const n = Number(hit.value);
         return Number.isFinite(n) ? n : undefined;
@@ -338,19 +351,39 @@ async function documentLink(
   const prefix = code.split("-")[0];
   let link: Record<string, string> | undefined;
   if (prefix === "SI") {
-    const row = await tx.order.findUnique({ where: { code }, select: { id: true } });
+    const row = await tx.order.findUnique({
+      where: { code },
+      select: { id: true },
+    });
     if (row !== null) link = { orderId: row.id };
   } else if (prefix === "PI") {
-    const row = await tx.purchaseOrder.findUnique({ where: { code }, select: { id: true } });
+    const row = await tx.purchaseOrder.findUnique({
+      where: { code },
+      select: { id: true },
+    });
     if (row !== null) link = { purchaseOrderId: row.id };
   } else if (prefix === "RV") {
-    const row = await tx.reservation.findUnique({ where: { code }, select: { id: true } });
+    const row = await tx.reservation.findUnique({
+      where: { code },
+      select: { id: true },
+    });
     if (row !== null) link = { reservationId: row.id };
   } else if (prefix === "SO") {
-    const row = await tx.opnameSession.findUnique({ where: { code }, select: { id: true } });
+    const row = await tx.opnameSession.findUnique({
+      where: { code },
+      select: { id: true },
+    });
     if (row !== null) link = { opnameSessionId: row.id };
-  } else if (prefix === "SG" || prefix === "SP" || prefix === "SR" || prefix === "PR") {
-    const row = await tx.unitReturn.findUnique({ where: { code }, select: { id: true } });
+  } else if (
+    prefix === "SG" ||
+    prefix === "SP" ||
+    prefix === "SR" ||
+    prefix === "PR"
+  ) {
+    const row = await tx.unitReturn.findUnique({
+      where: { code },
+      select: { id: true },
+    });
     if (row !== null) link = { unitReturnId: row.id };
   }
   if (link === undefined) {
@@ -425,7 +458,9 @@ export const events: Adapter<"events"> = {
     }
     return out.sort(
       (a, b) =>
-        a.at.localeCompare(b.at) || a.serial.localeCompare(b.serial) || a.seq - b.seq,
+        a.at.localeCompare(b.at) ||
+        a.serial.localeCompare(b.serial) ||
+        a.seq - b.seq,
     );
   },
   lock: (tx, keys) => lockRows(tx, "UnitEvent", "id", keys),
@@ -433,13 +468,18 @@ export const events: Adapter<"events"> = {
     const { tx } = ctx;
     const fresh: EventRow[] = [];
     for (const r of rows) {
-      if (r.next !== undefined && r.base !== undefined) throw refuseEdit("events", r.key);
+      if (r.next !== undefined && r.base !== undefined)
+        throw refuseEdit("events", r.key);
       if (r.next === undefined) {
         if (r.base !== undefined && ctx.archivedSerials.has(r.base.serial)) {
           ctx.touch("events", r.key);
           continue;
         }
-        throw new StoreValidationError("Riwayat unit tidak bisa dihapus.", "events", r.key);
+        throw new StoreValidationError(
+          "Riwayat unit tidak bisa dihapus.",
+          "events",
+          r.key,
+        );
       }
       fresh.push(r.next);
     }
@@ -457,14 +497,20 @@ export const events: Adapter<"events"> = {
       select: { id: true, serial: true },
     });
     const unitIdOf = new Map(unitRows.map((u) => [u.serial, u.id]));
-    const lasts = await lastEvents(tx, unitRows.map((u) => u.id));
+    const lasts = await lastEvents(
+      tx,
+      unitRows.map((u) => u.id),
+    );
 
     const data: Prisma.UnitEventCreateManyInput[] = [];
     const returned: { unitId: string; at: Date }[] = [];
     for (const [serial, list] of bySerial) {
       const unitId = unitIdOf.get(serial);
       if (unitId === undefined) {
-        throw new StoreValidationError(`Unit ${serial} tidak ditemukan.`, "events");
+        throw new StoreValidationError(
+          `Unit ${serial} tidak ditemukan.`,
+          "events",
+        );
       }
       list.sort((a, b) => a.seq - b.seq);
       const last = lasts.get(unitId);
@@ -505,13 +551,17 @@ export const events: Adapter<"events"> = {
           staffId: await ctx.staffFor(e.staff),
           ...(await documentLink(ctx, e.refCode)),
         });
-        if (e.type === "RETUR_PELANGGAN") returned.push({ unitId, at: instantOf(e.at) });
+        if (e.type === "RETUR_PELANGGAN")
+          returned.push({ unitId, at: instantOf(e.at) });
         seq = e.seq;
         status = e.toStatus;
         location = e.locationId;
         ctx.touch("events", e.id);
       }
-      ctx.ledgerAfter.set(serial, { status: status ?? "", locationId: location ?? "" });
+      ctx.ledgerAfter.set(serial, {
+        status: status ?? "",
+        locationId: location ?? "",
+      });
     }
 
     for (let i = 0; i < data.length; i += 1000) {
@@ -532,7 +582,11 @@ export const events: Adapter<"events"> = {
       const ids = open.map((i) => i.id);
       await tx.orderItem.updateMany({
         where: { id: { in: ids } },
-        data: { returnedAt: at, returnedQty: 1, returnReason: "Retur pelanggan" },
+        data: {
+          returnedAt: at,
+          returnedQty: 1,
+          returnReason: "Retur pelanggan",
+        },
       });
       await tx.unit.updateMany({
         where: { id: unitId, soldOrderItemId: { in: ids } },
@@ -546,10 +600,17 @@ export const events: Adapter<"events"> = {
 export async function lastEvents(
   tx: Tx,
   unitIds: readonly string[],
-): Promise<Map<string, { seq: number; toStatus: string; toLocationId: string | null }>> {
+): Promise<
+  Map<string, { seq: number; toStatus: string; toLocationId: string | null }>
+> {
   if (unitIds.length === 0) return new Map();
   const rows = await tx.$queryRaw<
-    { unitId: string; seq: number; toStatus: string; toLocationId: string | null }[]
+    {
+      unitId: string;
+      seq: number;
+      toStatus: string;
+      toLocationId: string | null;
+    }[]
   >`SELECT DISTINCT ON ("unitId") "unitId", seq, "toStatus"::text AS "toStatus", "toLocationId"
       FROM "UnitEvent"
      WHERE "unitId" = ANY(${[...unitIds]}::text[])
@@ -576,7 +637,10 @@ function photoBytes(
       ? Buffer.from(decodeURIComponent(payload), "utf8")
       : Buffer.from(payload, "base64");
   if (decoded.length > MAX_PHOTO_BYTES) {
-    throw new StoreValidationError("Foto terlalu besar (maksimal 8 MB).", "unitNotes");
+    throw new StoreValidationError(
+      "Foto terlalu besar (maksimal 8 MB).",
+      "unitNotes",
+    );
   }
   return { data: new Uint8Array(decoded), contentType };
 }
@@ -617,7 +681,11 @@ export const unitNotes: Adapter<"unitNotes"> = {
         });
         if (note === null) continue;
         if (note.tag !== QC_TAG) {
-          throw new StoreValidationError("Catatan unit tidak bisa dihapus.", "unitNotes", r.key);
+          throw new StoreValidationError(
+            "Catatan unit tidak bisa dihapus.",
+            "unitNotes",
+            r.key,
+          );
         }
         // CLAUDE.md's sanctioned exception: QC photographs, row and file.
         await tx.unitNotePhoto.deleteMany({ where: { noteId: r.key } });
@@ -678,9 +746,15 @@ export const unitNotes: Adapter<"unitNotes"> = {
       }
       if (left.size > 0) {
         if ((n.tag ?? null) !== QC_TAG) {
-          throw new StoreValidationError("Foto catatan ini tidak bisa dihapus.", "unitNotes", n.id);
+          throw new StoreValidationError(
+            "Foto catatan ini tidak bisa dihapus.",
+            "unitNotes",
+            n.id,
+          );
         }
-        await tx.unitNotePhoto.deleteMany({ where: { id: { in: [...left.keys()] } } });
+        await tx.unitNotePhoto.deleteMany({
+          where: { id: { in: [...left.keys()] } },
+        });
       }
       ctx.touch("unitNotes", n.id);
     }

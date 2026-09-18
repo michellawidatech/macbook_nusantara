@@ -120,9 +120,7 @@ export interface SummarizeInput {
  * distinct on purpose and the caller treats them differently: only `null`
  * leaves the cursor where it was.
  */
-export async function summarize(
-  input: SummarizeInput,
-): Promise<string | null> {
+export async function summarize(input: SummarizeInput): Promise<string | null> {
   const transcript = renderTranscript(input.turns);
   if (!transcript) return null;
 

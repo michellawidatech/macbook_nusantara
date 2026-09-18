@@ -28,7 +28,15 @@
  * also what lets the ledger record a repricing as one act.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Button, Flex, InputNumber, Modal, Table, Tooltip, Typography } from "antd";
+import {
+  Button,
+  Flex,
+  InputNumber,
+  Modal,
+  Table,
+  Tooltip,
+  Typography,
+} from "antd";
 import { useTranslation } from "react-i18next";
 import { GradeTag } from "./GradeTag";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "./money";
@@ -235,9 +243,16 @@ export function PriceEditorModal({
               <Flex align="center" gap={SPACE.xs} justify="flex-end">
                 {t("price.store", "Store price")}
                 <Tooltip
-                  title={t("price.fillDown", "Copy the top row down the column")}
+                  title={t(
+                    "price.fillDown",
+                    "Copy the top row down the column",
+                  )}
                 >
-                  <Button size="small" type="link" onClick={() => fillDown("price")}>
+                  <Button
+                    size="small"
+                    type="link"
+                    onClick={() => fillDown("price")}
+                  >
                     {t("price.fill", "Fill down")}
                   </Button>
                 </Tooltip>
@@ -260,9 +275,13 @@ export function PriceEditorModal({
                     style={{ width: "100%" }}
                     status={badRow ? "error" : undefined}
                     aria-invalid={badRow || undefined}
-                    aria-label={t("price.storeFor", "Store price for {{serial}}", {
-                      serial: u.serial,
-                    })}
+                    aria-label={t(
+                      "price.storeFor",
+                      "Store price for {{serial}}",
+                      {
+                        serial: u.serial,
+                      },
+                    )}
                     value={r.price}
                     formatter={moneyFormatter}
                     parser={moneyParser}
@@ -274,7 +293,10 @@ export function PriceEditorModal({
                     // The one warning worth the vertical space: a machine
                     // priced under what it cost is a loss somebody should have
                     // meant. It does not block — the shop does clear stock.
-                    <Typography.Text type="warning" style={{ fontSize: TYPE.sm }}>
+                    <Typography.Text
+                      type="warning"
+                      style={{ fontSize: TYPE.sm }}
+                    >
                       {t("price.belowCost", "Below cost")}
                     </Typography.Text>
                   )}
@@ -287,9 +309,16 @@ export function PriceEditorModal({
               <Flex align="center" gap={SPACE.xs} justify="flex-end">
                 {t("price.market", "Marketplace")}
                 <Tooltip
-                  title={t("price.fillDown", "Copy the top row down the column")}
+                  title={t(
+                    "price.fillDown",
+                    "Copy the top row down the column",
+                  )}
                 >
-                  <Button size="small" type="link" onClick={() => fillDown("market")}>
+                  <Button
+                    size="small"
+                    type="link"
+                    onClick={() => fillDown("market")}
+                  >
                     {t("price.fill", "Fill down")}
                   </Button>
                 </Tooltip>
@@ -330,7 +359,10 @@ export function PriceEditorModal({
                     prefix={RP_SYMBOL}
                     onChange={(v) => set(u.serial, { market: v })}
                   />
-                  <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: TYPE.sm }}
+                  >
                     {r.market == null
                       ? t("price.followsRule", "follows the rule")
                       : up === null

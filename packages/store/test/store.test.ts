@@ -31,7 +31,9 @@ describe("diffStore", () => {
     const before = { units };
     expect(isEmptyChangeset(diffStore(before, { units }))).toBe(true);
     // A new array holding the same rows is still no change.
-    expect(isEmptyChangeset(diffStore(before, { units: [...units] }))).toBe(true);
+    expect(isEmptyChangeset(diffStore(before, { units: [...units] }))).toBe(
+      true,
+    );
   });
 
   it("carries the base with a change, and nothing with an insert", () => {
@@ -51,7 +53,9 @@ describe("diffStore", () => {
   it("reports a removal with its base and no next", () => {
     const a = unit("SC02AAA11111");
     const change = diffStore({ units: [a] }, { units: [] });
-    expect(change.collections.units!.rows).toEqual([{ key: a.serial, base: a }]);
+    expect(change.collections.units!.rows).toEqual([
+      { key: a.serial, base: a },
+    ]);
   });
 
   it("does not call an identical copy a change", () => {
@@ -61,10 +65,26 @@ describe("diffStore", () => {
   });
 
   it("records a new order for an ordered list even when no row changed", () => {
-    const r1 = { id: "r1", category: "MacBook Air", grade: "A", conditions: [] };
-    const r2 = { id: "r2", category: "MacBook Air", grade: "C", conditions: [] };
-    const change = diffStore({ gradingRules: [r1, r2] }, { gradingRules: [r2, r1] });
-    expect(change.collections.gradingRules).toEqual({ rows: [], order: ["r2", "r1"] });
+    const r1 = {
+      id: "r1",
+      category: "MacBook Air",
+      grade: "A",
+      conditions: [],
+    };
+    const r2 = {
+      id: "r2",
+      category: "MacBook Air",
+      grade: "C",
+      conditions: [],
+    };
+    const change = diffStore(
+      { gradingRules: [r1, r2] },
+      { gradingRules: [r2, r1] },
+    );
+    expect(change.collections.gradingRules).toEqual({
+      rows: [],
+      order: ["r2", "r1"],
+    });
   });
 
   it("refuses two rows with one key", () => {
@@ -82,7 +102,9 @@ describe("diffStore", () => {
       { settings, myWarehouseId: "wh-1" },
       { settings, myWarehouseId: "wh-2" },
     );
-    expect(moved.singletons).toEqual({ myWarehouseId: { base: "wh-1", next: "wh-2" } });
+    expect(moved.singletons).toEqual({
+      myWarehouseId: { base: "wh-1", next: "wh-2" },
+    });
   });
 });
 
@@ -101,7 +123,9 @@ describe("the wire", () => {
   });
 
   it("refuses a field nobody mapped, rather than dropping it", () => {
-    expect(() => encodeRow("units", unit("SC02AAA11111", { colour: "gold" }))).toThrow();
+    expect(() =>
+      encodeRow("units", unit("SC02AAA11111", { colour: "gold" })),
+    ).toThrow();
   });
 
   it("carries a purchase line whose product has not been picked yet", () => {
@@ -145,7 +169,9 @@ describe("comparable", () => {
   });
 
   it("still sees a real change", () => {
-    expect(comparable({ active: true })).not.toBe(comparable({ active: false }));
+    expect(comparable({ active: true })).not.toBe(
+      comparable({ active: false }),
+    );
     expect(comparable({ total: "10" })).not.toBe(comparable({ total: "11" }));
   });
 });
@@ -155,7 +181,12 @@ describe("rows back into a list", () => {
     const a = unit("A0000000001");
     const b = unit("B0000000002");
     const c = unit("C0000000003");
-    const out = applyRows("units", [a, b], [{ ...a, status: "TERJUAL" }, c], [b.serial]);
+    const out = applyRows(
+      "units",
+      [a, b],
+      [{ ...a, status: "TERJUAL" }, c],
+      [b.serial],
+    );
     expect(out.map((u) => u["serial"])).toEqual([a.serial, c.serial]);
     expect(out[0]).toMatchObject({ status: "TERJUAL" });
   });

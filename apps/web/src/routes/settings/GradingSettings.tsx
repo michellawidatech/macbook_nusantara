@@ -297,10 +297,7 @@ export function GradingSettings() {
             </Typography.Text>
             <Select
               value={category || undefined}
-              placeholder={t(
-                "settings.gradingPickCategory",
-                "Pick a category",
-              )}
+              placeholder={t("settings.gradingPickCategory", "Pick a category")}
               aria-label={t("settings.gradingCategory", "Category")}
               options={categories.map((c) => ({
                 value: c,

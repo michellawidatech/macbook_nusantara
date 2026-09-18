@@ -251,9 +251,13 @@ export function CustomersPage() {
                         type="warning"
                         style={{ fontSize: TYPE.sm }}
                       >
-                        {t("customers.pendingWith", "{{amount}} at a marketplace", {
-                          amount: fmtRp(b.pending),
-                        })}
+                        {t(
+                          "customers.pendingWith",
+                          "{{amount}} at a marketplace",
+                          {
+                            amount: fmtRp(b.pending),
+                          },
+                        )}
                       </Typography.Text>
                     )}
                     {b.nextDueAt && (
@@ -346,11 +350,20 @@ export function CustomersPage() {
                   ? [
                       {
                         key: "o",
-                        label: t("customers.oldDebt", "Owed from before this app"),
-                        children: t("customers.oldDebtSince", "{{amount}} as of {{date}}", {
-                          amount: fmtRp(viewing.openingBalance),
-                          date: fmtDate(viewing.openingBalanceAt ?? viewing.createdAt),
-                        }),
+                        label: t(
+                          "customers.oldDebt",
+                          "Owed from before this app",
+                        ),
+                        children: t(
+                          "customers.oldDebtSince",
+                          "{{amount}} as of {{date}}",
+                          {
+                            amount: fmtRp(viewing.openingBalance),
+                            date: fmtDate(
+                              viewing.openingBalanceAt ?? viewing.createdAt,
+                            ),
+                          },
+                        ),
                       },
                     ]
                   : []),
@@ -404,9 +417,13 @@ export function CustomersPage() {
                         )}
                         {b.pending > 0 && (
                           <Tag color="orange">
-                            {t("customers.moneyPending", "{{amount}} at a marketplace", {
-                              amount: fmtRp(b.pending),
-                            })}
+                            {t(
+                              "customers.moneyPending",
+                              "{{amount}} at a marketplace",
+                              {
+                                amount: fmtRp(b.pending),
+                              },
+                            )}
                           </Tag>
                         )}
                         {/*

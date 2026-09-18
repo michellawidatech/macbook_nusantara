@@ -141,8 +141,11 @@ export function IncomeExpensePage() {
     // morning (2026-09-13): three years of B2Soft takings as money in hand.
     const from = openedAt === undefined ? undefined : Date.parse(openedAt);
     const fromDay =
-      openedAt === undefined ? undefined : JAKARTA_DAY.format(new Date(openedAt));
-    const since = (iso: string) => from === undefined || Date.parse(iso) >= from;
+      openedAt === undefined
+        ? undefined
+        : JAKARTA_DAY.format(new Date(openedAt));
+    const since = (iso: string) =>
+      from === undefined || Date.parse(iso) >= from;
     const sinceDay = (day: string) => fromDay === undefined || day >= fromDay;
     const rows: Movement[] = [];
     for (const o of db.orders) {
@@ -169,7 +172,8 @@ export function IncomeExpensePage() {
   const hasOpening = openingCash !== undefined || openingBank !== undefined;
   const opened = (openingCash ?? 0) + (openingBank ?? 0);
   const balances = useMemo(
-    () => balancesOf(settledMovements, { cash: openingCash, bank: openingBank }),
+    () =>
+      balancesOf(settledMovements, { cash: openingCash, bank: openingBank }),
     [settledMovements, openingCash, openingBank],
   );
   const balance = balances.total;
@@ -276,9 +280,7 @@ export function IncomeExpensePage() {
    * showing what is left everywhere, not an empty table headed Shopee. Derived
    * rather than stored so no effect is needed to keep the two in step.
    */
-  const channelHasPending = pendingByChannel.some(
-    ([c]) => c === channelFilter,
-  );
+  const channelHasPending = pendingByChannel.some(([c]) => c === channelFilter);
   const activeChannel = channelHasPending ? channelFilter : "ALL";
   const shownPending =
     activeChannel === "ALL"
@@ -393,9 +395,7 @@ export function IncomeExpensePage() {
       // day's sales rather than always above them. It carries a date and no
       // time, and pretending it happened at 00:00 is a claim it does not make.
       at: `${i.date}T12:00:00.000Z`,
-      what:
-        i.note?.trim() ||
-        labelOf(INCOME_REASON, i.reason, t),
+      what: i.note?.trim() || labelOf(INCOME_REASON, i.reason, t),
       kind: t("finance.kindIncome", "Income"),
       in: i.amount,
       out: 0,
@@ -487,7 +487,12 @@ export function IncomeExpensePage() {
                       ["bank", t("finance.bank", "Bank"), balances.bank],
                     ] as const
                   ).map(([key, label, value]) => (
-                    <Flex key={key} vertical gap={0} style={{ flex: 1, minWidth: 0 }}>
+                    <Flex
+                      key={key}
+                      vertical
+                      gap={0}
+                      style={{ flex: 1, minWidth: 0 }}
+                    >
                       <Typography.Text
                         type="secondary"
                         style={{ fontSize: TYPE.sm }}
@@ -517,7 +522,10 @@ export function IncomeExpensePage() {
                   </Typography.Text>
                 )}
                 {hasOpening ? (
-                  <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: TYPE.sm }}
+                  >
                     {t(
                       "finance.includesOpening",
                       "Includes the {{amount}} starting balance recorded {{date}}.",
@@ -983,7 +991,10 @@ export function IncomeExpensePage() {
               "This replaces the sale amount everywhere on this page, because it is what the business actually got",
             )}
             rules={[
-              { required: true, message: t("form.enterReceived", "Enter what was received") },
+              {
+                required: true,
+                message: t("form.enterReceived", "Enter what was received"),
+              },
               {
                 validator: (_, v: number) =>
                   v > (withdrawing?.total ?? 0)

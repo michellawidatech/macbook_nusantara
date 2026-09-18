@@ -190,11 +190,7 @@ export function TransactionsPage() {
    * the one state this feature must never be able to reach, because it is
    * indistinguishable from the amount having always been that.
    */
-  const savePayments = (
-    order: Order,
-    next: SalePayment[],
-    reason: string,
-  ) => {
+  const savePayments = (order: Order, next: SalePayment[], reason: string) => {
     const before = paymentsOf(order);
     const rows = diffPayments(before, next, {
       at: new Date().toISOString(),

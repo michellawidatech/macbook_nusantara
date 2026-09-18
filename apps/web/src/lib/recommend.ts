@@ -81,12 +81,7 @@ export interface Signal {
 }
 
 export type SignalKey =
-  | "confidence"
-  | "lift"
-  | "margin"
-  | "age"
-  | "fit"
-  | "bundle";
+  "confidence" | "lift" | "margin" | "age" | "fit" | "bundle";
 
 /**
  * Why a row is on the list — as a tagged value, not as a sentence.
@@ -538,7 +533,9 @@ const pct = (n: number) => `${Math.round(n * 100)}%`;
  */
 function combine(
   weights: Readonly<Record<string, number>>,
-  values: Readonly<Partial<Record<SignalKey, { value: number; detail?: string }>>>,
+  values: Readonly<
+    Partial<Record<SignalKey, { value: number; detail?: string }>>
+  >,
 ): { score: number; signals: Signal[] } {
   const signals: Signal[] = [];
   let score = 0;
@@ -691,7 +688,9 @@ export function recommendFor(
         ...(found
           ? {
               detail: `${pct(found.rule.confidence)} of ${
-                found.level === "model" ? "receipts for this model" : "receipts in this category"
+                found.level === "model"
+                  ? "receipts for this model"
+                  : "receipts in this category"
               } (${found.rule.support})`,
             }
           : {}),

@@ -64,10 +64,7 @@ export const PLACEHOLDER_PREFIX = "TBD-";
  * `validateSerial` is what actually judges a typed serial; these two only size
  * the box.
  */
-export {
-  SERIAL_MAX_LENGTH,
-  SERIAL_MIN_LENGTH,
-} from "./serialScan.js";
+export { SERIAL_MAX_LENGTH, SERIAL_MIN_LENGTH } from "./serialScan.js";
 
 export function isPlaceholderSerial(serial: string): boolean {
   return serial.startsWith(PLACEHOLDER_PREFIX);

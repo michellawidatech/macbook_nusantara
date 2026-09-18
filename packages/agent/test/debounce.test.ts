@@ -81,7 +81,9 @@ describe("computeWaitMs", () => {
   it("reads the latest message, not the whole burst", () => {
     // The customer opened with filler and ended with a question. The question
     // is what they are waiting on an answer to.
-    expect(computeWaitMs(burst("hm", "bentar", "ada m2 ga?"))).toBe(MIN_WAIT_MS);
+    expect(computeWaitMs(burst("hm", "bentar", "ada m2 ga?"))).toBe(
+      MIN_WAIT_MS,
+    );
     // And the reverse: a question followed by "bentar" means more is coming.
     expect(computeWaitMs(burst("ada m2 ga?", "eh bentar"))).toBe(
       Math.round(BASE_WAIT_MS * FILLER_FACTOR),

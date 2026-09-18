@@ -116,7 +116,12 @@ export const SETTLEMENT_LOG_ACTIONS = [
   "AMENDED",
   "REOPENED",
 ] as const;
-export const SERVICE_FEE_KINDS = ["LABOUR", "PART", "SHIPPING", "OTHER"] as const;
+export const SERVICE_FEE_KINDS = [
+  "LABOUR",
+  "PART",
+  "SHIPPING",
+  "OTHER",
+] as const;
 export const SERVICE_RAISED_BY = ["QC", "ADJUSTMENT", "RETURN"] as const;
 export const ADJUSTMENT_KINDS = ["IN", "OUT"] as const;
 export const OPNAME_STATUSES = ["DRAFT", "POSTED"] as const;
@@ -151,7 +156,10 @@ export const moneyAsNumber = z.codec(
   z
     .string()
     .regex(MONEY_PATTERN, "Nilai rupiah harus bilangan bulat.")
-    .refine((s) => Number.isSafeInteger(Number(s)), "Nilai rupiah terlalu besar."),
+    .refine(
+      (s) => Number.isSafeInteger(Number(s)),
+      "Nilai rupiah terlalu besar.",
+    ),
   z.number(),
   {
     decode: (s) => Number(s),
@@ -164,7 +172,10 @@ export type MoneyCodec = typeof moneyAsBigInt | typeof moneyAsNumber;
 /** An instant, ISO-8601. Parsed by the server, not trusted. */
 const instant = z
   .string()
-  .refine((s) => s !== "" && !Number.isNaN(Date.parse(s)), "Waktu tidak valid.");
+  .refine(
+    (s) => s !== "" && !Number.isNaN(Date.parse(s)),
+    "Waktu tidak valid.",
+  );
 
 /** A calendar day, `YYYY-MM-DD` (Asia/Jakarta) — the schema's convention. */
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Tanggal tidak valid.");
@@ -223,7 +234,10 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     name: z.string().min(1),
     phone: text.optional(),
     address: text.optional(),
-    code: z.string().regex(/^[A-Z]{2}$/).optional(),
+    code: z
+      .string()
+      .regex(/^[A-Z]{2}$/)
+      .optional(),
     openingBalance: z.optional(money),
     openingBalanceAt: instant.optional(),
   });
@@ -241,7 +255,11 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     active: z.boolean(),
   });
 
-  const named = z.strictObject({ id, name: z.string().min(1), active: z.boolean() });
+  const named = z.strictObject({
+    id,
+    name: z.string().min(1),
+    active: z.boolean(),
+  });
 
   /**
    * A product category, and the one fact about it the app branches on
@@ -321,7 +339,9 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     tag: text.optional(),
     staff: text,
     at: instant,
-    photos: z.array(z.strictObject({ id, url: z.string().min(1), sortOrder: count })),
+    photos: z.array(
+      z.strictObject({ id, url: z.string().min(1), sortOrder: count }),
+    ),
   });
 
   const event = z.strictObject({
@@ -446,7 +466,9 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     payments: z.array(salePayment).optional(),
     extra: z.optional(money),
     extraNote: text.optional(),
-    fees: z.array(z.strictObject({ id, label: text, amount: money })).optional(),
+    fees: z
+      .array(z.strictObject({ id, label: text, amount: money }))
+      .optional(),
     tradeIns: z
       .array(
         z.strictObject({

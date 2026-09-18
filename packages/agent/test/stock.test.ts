@@ -37,22 +37,47 @@ beforeEach(async () => {
   await truncateAll(db);
 
   await db.location.create({
-    data: { id: "loc_s", code: "S1", name: "Toko", kind: "TOKO", active: true, sortOrder: 1 },
+    data: {
+      id: "loc_s",
+      code: "S1",
+      name: "Toko",
+      kind: "TOKO",
+      active: true,
+      sortOrder: 1,
+    },
   });
   await db.category.create({
     data: {
-      id: "cat_s", name: "MacBook", sortOrder: 1, marginMode: "PCT",
-      marginMin: 5n, marginMax: 30n, createdAt: NOW,
+      id: "cat_s",
+      name: "MacBook",
+      sortOrder: 1,
+      marginMode: "PCT",
+      marginMin: 5n,
+      marginMax: 30n,
+      createdAt: NOW,
     },
   });
   await db.catalogModel.create({
-    data: { id: "mdl_s", categoryId: "cat_s", name: "MacBook Air M2", archived: false, createdAt: NOW },
+    data: {
+      id: "mdl_s",
+      categoryId: "cat_s",
+      name: "MacBook Air M2",
+      archived: false,
+      createdAt: NOW,
+    },
   });
   await db.sku.create({
     data: {
-      id: "sku_s", modelId: "mdl_s", code: "SKU-S1", name: "MacBook Air M2 256GB",
-      variantLabel: "8/256", grade: "A", price: 15_500_000n, landed: 12_000_000n,
-      archived: false, createdAt: NOW,
+      id: "sku_s",
+      modelId: "mdl_s",
+      code: "SKU-S1",
+      name: "MacBook Air M2 256GB",
+      variantLabel: "8/256",
+      grade: "A",
+      price: 15_500_000n,
+      landed: 12_000_000n,
+      archived: false,
+      createdAt: NOW,
     },
   });
 });
@@ -66,9 +91,16 @@ async function unit(opts: {
 }) {
   return db.unit.create({
     data: {
-      id: opts.id, serial: opts.serial, skuId: "sku_s", status: opts.status,
-      locationId: "loc_s", buy: 12_000_000n, landed: 12_000_000n,
-      grade: "A", intakeAt: NOW, version: 1,
+      id: opts.id,
+      serial: opts.serial,
+      skuId: "sku_s",
+      status: opts.status,
+      locationId: "loc_s",
+      buy: 12_000_000n,
+      landed: 12_000_000n,
+      grade: "A",
+      intakeAt: NOW,
+      version: 1,
       archivedAt: opts.archivedAt ?? null,
     },
   });
@@ -76,7 +108,9 @@ async function unit(opts: {
 
 const ctx: ToolContext = { from: "628111000321", now: NOW };
 const search = (args: Record<string, unknown> = {}) =>
-  dispatchTool(db, "search_stock", args, ctx) as Promise<Record<string, unknown>>;
+  dispatchTool(db, "search_stock", args, ctx) as Promise<
+    Record<string, unknown>
+  >;
 
 describe("what counts as sellable", () => {
   it("lists only what can be bought today", async () => {
@@ -112,9 +146,16 @@ describe("what counts as sellable", () => {
     await unit({ id: "s7", serial: "MINT", status: "TERSEDIA" });
     await db.unit.create({
       data: {
-        id: "s8", serial: "SCUFFED", skuId: "sku_s", status: "TERSEDIA",
-        locationId: "loc_s", buy: 11_000_000n, landed: 11_000_000n,
-        grade: "C", intakeAt: NOW, version: 1,
+        id: "s8",
+        serial: "SCUFFED",
+        skuId: "sku_s",
+        status: "TERSEDIA",
+        locationId: "loc_s",
+        buy: 11_000_000n,
+        landed: 11_000_000n,
+        grade: "C",
+        intakeAt: NOW,
+        version: 1,
       },
     });
 
@@ -125,7 +166,12 @@ describe("what counts as sellable", () => {
   });
 
   it("never lists an archived unit", async () => {
-    await unit({ id: "s6", serial: "GONE", status: "TERSEDIA", archivedAt: NOW });
+    await unit({
+      id: "s6",
+      serial: "GONE",
+      status: "TERSEDIA",
+      archivedAt: NOW,
+    });
     expect(await search()).toMatchObject({ matched: 0 });
   });
 
@@ -148,7 +194,9 @@ describe("matching what a customer typed", () => {
   });
 
   it("requires every word to match, so an unrelated word narrows to nothing", async () => {
-    expect(await search({ query: "macbook iphone" })).toMatchObject({ matched: 0 });
+    expect(await search({ query: "macbook iphone" })).toMatchObject({
+      matched: 0,
+    });
   });
 
   it("narrows to nothing for a wildcard rather than listing the whole shop", async () => {
@@ -195,13 +243,19 @@ describe("what crosses to the model", () => {
   });
 
   it("honours a budget ceiling in whole rupiah", async () => {
-    expect(await search({ maxPrice: 15_000_000 })).toMatchObject({ matched: 0 });
-    expect(await search({ maxPrice: 16_000_000 })).toMatchObject({ matched: 1 });
+    expect(await search({ maxPrice: 15_000_000 })).toMatchObject({
+      matched: 0,
+    });
+    expect(await search({ maxPrice: 16_000_000 })).toMatchObject({
+      matched: 1,
+    });
   });
 
   it("ignores a nonsense budget rather than returning nothing", async () => {
     for (const bad of [0, -5, Number.NaN, "banyak"]) {
-      expect(await search({ maxPrice: bad }), String(bad)).toMatchObject({ matched: 1 });
+      expect(await search({ maxPrice: bad }), String(bad)).toMatchObject({
+        matched: 1,
+      });
     }
   });
 

@@ -108,9 +108,9 @@ describe("stripFormatting", () => {
 
   it("turns an excited greeting into something a shop admin would type", () => {
     // The bad example from the brief, run through the real sanitiser.
-    expect(stripFormatting("HALO KAK!!! 😊😊😊✨✨ Ada yang bisa saya bantu? 😍")).toBe(
-      "HALO KAK. 😊 Ada yang bisa saya bantu?",
-    );
+    expect(
+      stripFormatting("HALO KAK!!! 😊😊😊✨✨ Ada yang bisa saya bantu? 😍"),
+    ).toBe("HALO KAK. 😊 Ada yang bisa saya bantu?");
   });
 
   it("drops the full stop a line ends on, which nobody types on WhatsApp", () => {
@@ -137,7 +137,9 @@ describe("stripFormatting", () => {
   });
 
   it("leaves an ellipsis alone, since trailing off is how people do type", () => {
-    expect(stripFormatting("hmm gimana ya kak...")).toBe("hmm gimana ya kak...");
+    expect(stripFormatting("hmm gimana ya kak...")).toBe(
+      "hmm gimana ya kak...",
+    );
   });
 
   it("leaves a question mark alone, so a question still looks like one", () => {
@@ -171,9 +173,9 @@ describe("detectLanguage", () => {
 
   it("reads a code-switched sentence as mixed, not as one or the other", () => {
     // This is how most of the shop's customers actually write.
-    expect(detectLanguage("sorry kak, is it still available? mau yang fullset")).toBe(
-      "mix",
-    );
+    expect(
+      detectLanguage("sorry kak, is it still available? mau yang fullset"),
+    ).toBe("mix");
   });
 
   it("treats a bare product name as neutral, so 'MacBook Air M2' is not English", () => {

@@ -172,7 +172,9 @@ describe("condition", () => {
     expect(cyclesForHealth(68)).toBeGreaterThan(800);
     // Monotone, so sorting a mixed shelf by battery cannot swap two machines.
     for (let h = 60; h < 100; h += 1) {
-      expect(cyclesForHealth(h), `${h}%`).toBeGreaterThan(cyclesForHealth(h + 1));
+      expect(cyclesForHealth(h), `${h}%`).toBeGreaterThan(
+        cyclesForHealth(h + 1),
+      );
     }
   });
 
@@ -233,8 +235,10 @@ describe("what one machine is worth", () => {
     const spreads = [...bySku.values()].filter(
       (ps) => ps.length > 1 && Math.min(...ps) !== Math.max(...ps),
     );
-    expect(spreads.length, "no variant on the shelf spans a price range").
-      toBeGreaterThan(0);
+    expect(
+      spreads.length,
+      "no variant on the shelf spans a price range",
+    ).toBeGreaterThan(0);
 
     // …and within ONE grade, which is the case the range actually exists for:
     // two A-grade machines differing only by their batteries.
@@ -366,7 +370,10 @@ describe("stock", () => {
     for (const u of shop.units) {
       const po = shop.purchaseOrders.find((p) => p.id === u.poId);
       expect(po, u.serial).toBeDefined();
-      expect(po!.lines.some((l) => l.id === u.poLineId), u.serial).toBe(true);
+      expect(
+        po!.lines.some((l) => l.id === u.poLineId),
+        u.serial,
+      ).toBe(true);
     }
   });
 
@@ -451,7 +458,10 @@ describe("sales", () => {
     for (const o of shop.orders) {
       const cleared = o.payments
         .filter((p) => p.status === "LUNAS")
-        .reduce((n, p) => n + (p.direction === "KELUAR" ? -p.amount : p.amount), 0);
+        .reduce(
+          (n, p) => n + (p.direction === "KELUAR" ? -p.amount : p.amount),
+          0,
+        );
       expect(cleared, o.code).toBe(o.paidTotal);
     }
   });
@@ -474,8 +484,10 @@ describe("sales", () => {
 
   it("names a customer the shop has", () => {
     const known = new Set(CUSTOMERS.map((c) => c.id));
-    for (const o of shop.orders) expect(known.has(o.customerId), o.code).toBe(true);
-    for (const r of RESERVATIONS) expect(known.has(r.customerId), r.id).toBe(true);
+    for (const o of shop.orders)
+      expect(known.has(o.customerId), o.code).toBe(true);
+    for (const r of RESERVATIONS)
+      expect(known.has(r.customerId), r.id).toBe(true);
   });
 });
 
@@ -555,10 +567,12 @@ describe("money leaves and arrives through methods the shop has", () => {
   it("spends only through a declared payment method", () => {
     const known = new Set<string>(PAYMENT_METHOD_CODES);
     for (const po of shop.purchaseOrders) {
-      for (const p of po.payments) expect(known.has(p.method), po.id).toBe(true);
+      for (const p of po.payments)
+        expect(known.has(p.method), po.id).toBe(true);
     }
     for (const o of shop.orders) {
-      for (const p of o.payments) expect(known.has(p.method), o.code).toBe(true);
+      for (const p of o.payments)
+        expect(known.has(p.method), o.code).toBe(true);
     }
   });
 });
@@ -582,7 +596,9 @@ describe("the price grid", () => {
 
   const GB = (v: string): number | null => {
     const m = /^(\d+)\s*(GB|TB)$/i.exec(v);
-    return m === null ? null : Number(m[1]) * (m[2]!.toUpperCase() === "TB" ? 1024 : 1);
+    return m === null
+      ? null
+      : Number(m[1]) * (m[2]!.toUpperCase() === "TB" ? 1024 : 1);
   };
 
   it("charges more for more of anything measured in gigabytes", () => {
@@ -604,7 +620,8 @@ describe("the price grid", () => {
     }
     for (const [modelId, prices] of byModel) {
       // Accessories vary by colour, which is free — and rightly so.
-      if (modelId.startsWith("m-magic") || modelId.startsWith("m-usbc")) continue;
+      if (modelId.startsWith("m-magic") || modelId.startsWith("m-usbc"))
+        continue;
       if (modelId === "m-sleeve") continue;
       expect(new Set(prices).size, modelId).toBe(prices.length);
     }

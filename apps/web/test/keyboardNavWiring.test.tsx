@@ -66,9 +66,7 @@ function Grid() {
               value={r.qty}
               onChange={(v) =>
                 setRows((all) =>
-                  all.map((x) =>
-                    x.key === r.key ? { ...x, qty: v ?? 0 } : x,
-                  ),
+                  all.map((x) => (x.key === r.key ? { ...x, qty: v ?? 0 } : x)),
                 )
               }
             />

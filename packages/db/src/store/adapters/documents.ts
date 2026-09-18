@@ -304,7 +304,9 @@ async function cancelPo(ctx: WriteContext, id: string): Promise<void> {
         `Faktur ini masih punya unit (${left
           .slice(0, 3)
           .map((u) => u.serial)
-          .join(", ")}${left.length > 3 ? ", …" : ""}) — unit yang sudah keluar dari QC tidak ikut terhapus.`,
+          .join(
+            ", ",
+          )}${left.length > 3 ? ", …" : ""}) — unit yang sudah keluar dari QC tidak ikut terhapus.`,
         "pos",
         id,
       );

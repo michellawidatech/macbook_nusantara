@@ -162,7 +162,10 @@ export function loadWorkerConfig(
     maxDraftsPerTick: int(env["WORKER_MAX_DRAFTS"], 5),
     maxBatch: int(env["WORKER_MAX_BATCH"], 30),
     maxSendsPerTick: int(env["WORKER_MAX_SENDS"], 20),
-    summaryEveryTurns: int(env["WORKER_SUMMARY_EVERY_TURNS"], SUMMARY_EVERY_TURNS),
+    summaryEveryTurns: int(
+      env["WORKER_SUMMARY_EVERY_TURNS"],
+      SUMMARY_EVERY_TURNS,
+    ),
     summaryQuietMs: int(env["WORKER_SUMMARY_QUIET_MS"], 900_000),
     maxSummariesPerTick: int(env["WORKER_MAX_SUMMARIES"], 3),
     // Four hours late is a customer who is not coming. Two days is a booking

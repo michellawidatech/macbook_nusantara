@@ -199,7 +199,8 @@ export function AppTabs() {
   useEffect(() => {
     writeStoredTabs(state);
     for (const id of registries.current.keys()) {
-      if (!state.tabs.some((tab) => tab.id === id)) registries.current.delete(id);
+      if (!state.tabs.some((tab) => tab.id === id))
+        registries.current.delete(id);
     }
   }, [state]);
 

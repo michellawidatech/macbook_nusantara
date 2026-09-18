@@ -52,7 +52,10 @@ export function GradeTag({
     <Tooltip
       title={
         isNew(grade)
-          ? t("grade.newHint", "Sealed — never used, so there is nothing to inspect")
+          ? t(
+              "grade.newHint",
+              "Sealed — never used, so there is nothing to inspect",
+            )
           : t("grade.letterHint", "Condition grade from the QC checklist")
       }
     >

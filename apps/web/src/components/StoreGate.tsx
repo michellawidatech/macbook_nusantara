@@ -45,7 +45,9 @@ export function StoreGate({
   useEffect(
     () =>
       onStoreError((reason) => {
-        message.error(t("store.notSaved", "Not saved — {{reason}}", { reason }));
+        message.error(
+          t("store.notSaved", "Not saved — {{reason}}", { reason }),
+        );
       }),
     [message, t],
   );
