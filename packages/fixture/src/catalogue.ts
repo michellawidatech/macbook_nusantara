@@ -28,6 +28,13 @@ export interface FixtureCategory {
   readonly sortOrder: number;
   /** Free-text facts QC records per machine, not variant axes. */
   readonly attributes: readonly string[];
+  /**
+   * Are these machines identified one by one? Absent means yes.
+   *
+   * False for what the shop counts — accessories (owner ask 2026-09-15). See
+   * `Category.tracksSerial` in the schema for what it changes.
+   */
+  readonly tracksSerial?: boolean;
 }
 
 export interface FixtureAxis {
@@ -114,6 +121,9 @@ export const CATEGORIES: readonly FixtureCategory[] = [
     name: "Accessory",
     sortOrder: 5,
     attributes: ["garansi"],
+    // Counted, not tracked (owner ask 2026-09-15). A sleeve has no serial
+    // anybody would read, and a stock take of forty of them is a number.
+    tracksSerial: false,
   },
 ];
 

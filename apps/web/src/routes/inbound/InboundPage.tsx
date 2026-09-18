@@ -14,21 +14,23 @@
  * staff open the page for, and a form occupying the top of it is a form they
  * scroll past all day.
  */
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Card, Flex, Tag, Tooltip, Typography } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { App, Card, Dropdown, Flex, Tag, Tooltip, Typography } from "antd";
+import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { OrphanQcCard } from "../../components/OrphanQcCard";
 import { fmtRp, fmtDate } from "../../lib/format.js";
-import { useDb } from "../../mock/store.js";
+import { mutate, useDb } from "../../mock/store.js";
 import {
-  INBOUND_STAGE_COLOR,
-  INBOUND_STAGE_LABEL,
-  poStage,
+  PO_PAYMENT_STATUS_COLOR,
+  PO_PAYMENT_STATUS_LABEL,
+  PO_PAYMENT_STATUSES,
+  poDeletion,
+  poPaymentStatus,
   poTotals,
-  type InboundStage,
+  type PoPaymentStatus,
 } from "../../lib/inbound.js";
 import { useTranslation } from "react-i18next";
 
@@ -38,8 +40,9 @@ interface Row {
   readonly supplier: string;
   readonly invoice: string;
   readonly date: string;
-  readonly stage: InboundStage;
-  readonly stageLabel: string;
+  /** Where the MONEY stands — the column that replaced Stage (2026-09-15). */
+  readonly payment: PoPaymentStatus;
+  readonly paymentLabel: string;
   readonly lines: number;
   readonly total: number;
   readonly paid: number;
@@ -51,14 +54,89 @@ export function InboundPage() {
   const { t } = useTranslation();
   const db = useDb();
   const navigate = useNavigate();
+  const { message, modal } = App.useApp();
+  /**
+   * The row a right-click landed on, and where the pointer was (owner ask
+   * 2026-09-15: *"Make the inbound deletable. with right click and add modal
+   * popup confirmation"*).
+   *
+   * A controlled `Dropdown` anchored to the pointer rather than a menu
+   * declared per row: `ProTable` owns its rows, and a menu rendered inside
+   * every cell would be a thousand menus on a list of a thousand invoices.
+   * `null` is closed.
+   *
+   * The context-menu KEY fires the same DOM event, so this is reachable from
+   * the keyboard as well as from the mouse.
+   */
+  const [menu, setMenu] = useState<{
+    readonly id: string;
+    readonly x: number;
+    readonly y: number;
+  } | null>(null);
+
+  /**
+   * Delete an invoice — which means cancel it. See `poDeletion` for what goes
+   * with it and what refuses it.
+   */
+  const askDelete = (id: string) => {
+    const po = db.pos.find((p) => p.id === id);
+    if (po === undefined) return;
+    const { takes, blockers, allowed } = poDeletion(po, db.units);
+    if (!allowed) {
+      modal.info({
+        title: t(
+          "inboundList.cannotDeleteTitle",
+          "{{code}} cannot be deleted",
+          { code: po.code },
+        ),
+        content: t(
+          "inboundList.cannotDeleteBody",
+          "{{count}} machine(s) on it have already left QC: {{serials}}. An invoice is the only record of what a machine cost, so deal with those first — reopen them in QC, or adjust them out of stock.",
+          { count: blockers.length, serials: blockers.join(", ") },
+        ),
+      });
+      return;
+    }
+    modal.confirm({
+      title: t("inboundList.deleteTitle", "Delete {{code}}?", {
+        code: po.code,
+      }),
+      content:
+        takes.length === 0
+          ? t(
+              "inboundList.deleteBody",
+              "Its lines and its payments stop counting. Money already paid stays on the supplier's account.",
+            )
+          : t(
+              "inboundList.deleteBodyWithUnits",
+              "Its lines and its payments stop counting, and {{count}} machine(s) still waiting in QC go with it. Money already paid stays on the supplier's account.",
+              { count: takes.length },
+            ),
+      okText: t("inboundList.delete", "Delete"),
+      okButtonProps: { danger: true },
+      onOk: () => {
+        mutate((d) => {
+          // The units FIRST, in the same commit: an invoice that still names
+          // a machine is refused by the server, and a machine whose invoice
+          // has gone is one nothing explains.
+          const going = new Set(takes);
+          d.units = d.units.filter((u) => !going.has(u.serial));
+          d.pos = d.pos.filter((p) => p.id !== id);
+        });
+        message.success(
+          t("inboundList.deleted", "{{code}} deleted.", { code: po.code }),
+        );
+      },
+    });
+  };
 
   const rows = useMemo<Row[]>(
     () =>
       [...db.pos]
         .sort((a, b) => b.date.localeCompare(a.date))
         .map((po) => {
-          const t = poTotals(po);
-          const stage = poStage(po, db.units);
+          const totals = poTotals(po);
+          const payment = poPaymentStatus(po);
           return {
             id: po.id,
             code: po.code,
@@ -68,17 +146,21 @@ export function InboundPage() {
             // explicit "none", never a silently blank cell.
             invoice: po.noInvoice ? "No invoice" : po.invoice,
             date: po.date,
-            stage,
-            stageLabel: INBOUND_STAGE_LABEL[stage],
+            payment,
+            // Translated HERE rather than at the cell, because a facet and a
+            // sort both read this string: an untranslated label would give
+            // the filter English options on an Indonesian page, which is
+            // exactly the leak `test/i18n.test.ts` exists to catch.
+            paymentLabel: t(PO_PAYMENT_STATUS_LABEL[payment]),
             lines: po.items.length,
-            total: t.total,
-            paid: t.paid,
-            outstanding: t.outstanding,
+            total: totals.total,
+            paid: totals.paid,
+            outstanding: totals.outstanding,
             warehouse:
               db.warehouses.find((w) => w.id === po.locationId)?.name ?? "—",
           };
         }),
-    [db],
+    [db, t],
   );
 
   return (
@@ -101,6 +183,44 @@ export function InboundPage() {
        * is a record. See `components/OrphanQcCard.tsx`.
        */}
       <OrphanQcCard />
+      {/*
+       * Anchored to the pointer by a zero-size element, which is how antd
+       * positions a menu somewhere that is not a child of anything. It is
+       * `fixed` because the coordinates are the viewport's.
+       */}
+      <Dropdown
+        open={menu !== null}
+        onOpenChange={(open) => {
+          if (!open) setMenu(null);
+        }}
+        trigger={[]}
+        menu={{
+          items: [
+            {
+              key: "delete",
+              danger: true,
+              icon: <DeleteOutlined />,
+              label: t("inboundList.deleteOrder", "Delete this order"),
+            },
+          ],
+          onClick: () => {
+            const id = menu?.id;
+            setMenu(null);
+            if (id) askDelete(id);
+          },
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            position: "fixed",
+            left: menu?.x ?? 0,
+            top: menu?.y ?? 0,
+            width: 0,
+            height: 0,
+          }}
+        />
+      </Dropdown>
       <Card>
         <ProTable<Row>
           rowKey="id"
@@ -119,9 +239,20 @@ export function InboundPage() {
           // The whole row opens the order. A purchase order's code is the thing
           // you would click, and making one cell clickable is a target people
           // miss.
+          // The row is a control, so it is reachable from the keyboard
+          // (owner ask 2026-09-15): Tab lands on it, ↑ ↓ walk the list, Enter
+          // opens it. The label is what a screen reader reads instead of the
+          // row's cells run together.
+          keyboardRows={(r) =>
+            t("inboundList.openOrder", "Open {{code}}", { code: r.code })
+          }
           onRow={(r) => ({
             style: { cursor: "pointer" },
             onClick: () => navigate(`/inbound/${r.id}`),
+            onContextMenu: (e) => {
+              e.preventDefault();
+              setMenu({ id: r.id, x: e.clientX, y: e.clientY });
+            },
           })}
           columns={[
             {
@@ -160,12 +291,20 @@ export function InboundPage() {
               facet: true,
             },
             {
-              title: t("inboundList.stage", "Stage"),
-              dataIndex: "stageLabel",
+              /*
+               * Payment, not stage (owner revision 2026-09-15). What staff
+               * bring to this list is "who are we still paying?" — where the
+               * GOODS have got to is answered by the Products column beside
+               * it and by the order's own page. See `poPaymentStatus`.
+               */
+              title: t("inboundList.paymentStatus", "Payment status"),
+              dataIndex: "paymentLabel",
               facet: true,
-              sortValue: (r) => r.stageLabel,
+              sortValue: (r) => PO_PAYMENT_STATUSES.indexOf(r.payment),
               render: (_: unknown, r) => (
-                <Tag color={INBOUND_STAGE_COLOR[r.stage]}>{r.stageLabel}</Tag>
+                <Tag color={PO_PAYMENT_STATUS_COLOR[r.payment]}>
+                  {r.paymentLabel}
+                </Tag>
               ),
             },
             {

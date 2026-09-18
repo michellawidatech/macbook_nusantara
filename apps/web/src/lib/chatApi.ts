@@ -23,6 +23,13 @@ export interface AgentReply {
   /** Which grounding tools ran, so staff can see what the answer is based on. */
   toolsUsed: string[];
   steps: number;
+  /** What the reply rests on: approved-answer handles (K7), store, catalog, greeting. */
+  sources: string[];
+  /**
+   * Set when the bot would have handed this to a person (2026-09-18). `reply`
+   * is then its holding line, not an answer.
+   */
+  handoff?: { topic: string; summary: string };
 }
 
 export const agentStatus = () => api<AgentStatus>("/api/chat/status");

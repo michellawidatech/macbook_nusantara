@@ -50,6 +50,7 @@ import { SPACE, TYPE } from "../theme/tokens";
 import { useLayoutMode } from "../layouts/useLayoutMode";
 import { DataTable, type DataTableProps } from "./DataTable";
 import { useTranslation } from "react-i18next";
+import { PAGE_SEARCH_ATTR } from "../lib/keyboardNav";
 
 type AntColumns<T> = NonNullable<TableProps<T>["columns"]>;
 type AntColumn<T> = AntColumns<T>[number];
@@ -367,6 +368,11 @@ export function ProTable<T extends object>({
             {search && (
               <Input.Search
                 allowClear
+                // What `/` jumps to (owner ask 2026-09-15). Marked rather than
+                // found by shape: a page can hold several search-looking boxes
+                // — a Select's own filter, a dialog's — and this is the one
+                // that searches the PAGE. See `pageSearchBox`.
+                {...{ [PAGE_SEARCH_ATTR]: "" }}
                 placeholder={
                   searchPlaceholder ?? t("proTable.search", "Search")
                 }

@@ -632,3 +632,29 @@ body {
 .nusantara-editable-table .ant-table-cell {
   white-space: normal;
 }
+
+/*
+ * A list row that is a control (owner ask 2026-09-15 — *"All of the UI has to
+ * be keyboard friendly"*).
+ *
+ * `DataTable`'s `keyboardRows` puts a row in the tab order; this is what makes
+ * the focus visible. `:focus-visible` rather than `:focus`, so a row opened
+ * with the mouse does not paint a ring on the way out — the browser's own
+ * heuristic for "did this come from the keyboard" is better than any this
+ * could invent.
+ *
+ * `outline-offset` is negative because the ring is INSIDE the row: a table row
+ * has no padding of its own, and an outline drawn outside one is clipped by
+ * the row below it.
+ */
+.nusantara-keyboard-row:focus-visible {
+  outline: 2px solid var(--ant-color-primary, #047857);
+  outline-offset: -2px;
+}
+
+/* The phone's card layout of the same list. There the row IS a card, which has
+   its own radius, so the ring follows it. */
+.ant-card.nusantara-keyboard-row:focus-visible {
+  outline-offset: 1px;
+  border-radius: var(--ant-border-radius-lg, 8px);
+}

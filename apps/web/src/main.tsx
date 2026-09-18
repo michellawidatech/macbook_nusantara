@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App.js";
+import { KeyboardNav } from "./components/KeyboardNav";
 import { LocaleProvider } from "./i18n/LocaleProvider";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import "./styles/global.css";
@@ -24,6 +25,11 @@ createRoot(root).render(
           ConfigProvider, and that hook reads this context. */}
       <LocaleProvider>
         <ThemeProvider>
+          {/* Enter to the next field, `/` and `?`, for every screen at once
+              (owner ask 2026-09-15). Here rather than in the shell so no page
+              has to be wired to get it, and inside ThemeProvider so the
+              shortcuts dialog is themed and translated like the rest. */}
+          <KeyboardNav />
           {/* No ErrorBoundary here, and the omission is the point.
 
               One around the router catches the same throws and answers them the

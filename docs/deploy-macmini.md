@@ -3,18 +3,17 @@
 The POS on one Mac mini at the shop, shipped as **compiled output only**.
 `deploy/macmini/build-release.mjs` builds the release on your laptop;
 `deploy/macmini/ops/` is everything the Mac mini runs it with. This file is
-the order to do things in. `docs/deploy.md` is the Render + Netlify runbook,
-and nothing here changes that deployment.
+the order to do things in. The Mac mini is the only deployment: Render and
+Netlify were retired on 2026-09-18, and their runbook is in git history
+(`git show f6f5f3c:docs/deploy.md`).
 
 ## Read this first
 
-**The POS screens still keep their data in the browser.** 26 route files read
-`apps/web/src/mock/store.ts`, an in-memory store with no persistence: a reload
-resets it, and every device holds its own copy. Moving the app onto a Mac mini
-does not change that. What IS real on this deploy is what lives in PostgreSQL —
-sign-in, staff accounts and sessions, and the chat inbox. Until the remaining
-slices move onto the API, this is a pilot of the same app Netlify serves today,
-and the machine the migrated slices will land on.
+**Every POS screen reads PostgreSQL** (2026-09-13, `docs/store-on-postgres.md`).
+The browser loads the shop from `/api/store` after sign-in, commits each change
+there, and polls for what the other tills wrote. A screen shows "Loading the
+shop…" until the first load lands and an offline banner while changes wait for
+the connection. The shop's history comes from B2Soft (`docs/migration-b2soft.md`).
 
 **What "without the source" buys, and what it does not.** The release carries
 minified bundles, a Prisma client generated from a comment-free copy of the
@@ -39,11 +38,12 @@ you can, and give the shop a Standard account for everyday use.
 ## The shape
 
 ```
-browser ─https─▶ Cloudflare ─tunnel─▶ cloudflared ─▶ Caddy 127.0.0.1:8080 ─┬─ /            web/  (the SPA)
-                                                                           └─ /api, /auth  API :4000 ─▶ PostgreSQL 16
-Meta ───https─▶ Cloudflare ─tunnel─▶ cloudflared ─▶ webhook :3001     (optional)
-                                                    worker            (optional, no port)
-you ──Tailscale──▶ ssh                                                (updates, migrations)
+staff ─https─▶ tailscale serve :443 ─▶ Caddy 127.0.0.1:8080 ─┬─ /            web/  (the SPA)
+  (tailnet only)                                             └─ /api, /auth  API :4000 ─▶ PostgreSQL 16
+Meta ──https─▶ tailscale funnel :8443 ─▶ webhook :3001     (optional, public)
+                                         worker            (optional, no port)
+GitHub Actions ──tailnet, ssh :22──▶ nusantara-deploy      (releases, migrations — docs/deploy-pipeline.md)
+you ───────────tailnet, ssh :22──▶ your admin account      (everything else)
 ```
 
 Every process is a LaunchDaemon — it starts at boot with nobody logged in and
@@ -60,24 +60,29 @@ directory:
   var/       HOME for the services
 ```
 
-**HTTPS is not optional.** The session cookie is `Secure` unless told otherwise
-(`apps/api/src/config.ts`), and sign-in is Auth0's hosted page — `LoginPage` has
-no other control — whose callback must be the https origin the browser is on.
-Cloudflare Tunnel supplies that certificate without opening a port on the
-shop's router, works from outside the shop, and is the public URL Meta needs if
-WhatsApp moves here too. It needs a domain on Cloudflare; the free plan is
-enough. If the shop has no domain and wants none, Tailscale can do the same job
-(`tailscale serve` gives an https `*.ts.net` name), at the price of the
-Tailscale app on every staff device.
+**HTTPS is not optional.** Sign-in is the app's own form (since 2026-09-18;
+Auth0 is gone), and the session cookie it sets is `Secure` unless told
+otherwise (`apps/api/src/config.ts`) — a browser will not send it back over
+plain http. `tailscale serve` supplies that certificate — an https `*.ts.net` name —
+without opening a port on the shop's router, and reaches the POS only from
+devices on the tailnet: the price is the Tailscale app on every staff device.
+Meta cannot join a tailnet, so the webhook, if WhatsApp moves here, goes public
+through `tailscale funnel` on a port of its own (§8). A Cloudflare Tunnel on a
+domain the shop owns does the same jobs without the app on every device; it
+was this runbook's first design, and is in git history (`git show
+f6f5f3c:docs/deploy-macmini.md`).
 
 Assumed: an Apple Silicon Mac mini (every model since late 2020) on macOS 14 or
-later, and an Apple Silicon laptop to build on. The two native pieces — Prisma's
+later, and an Apple Silicon machine to build on — GitHub's `macos-15` runner
+for the pipeline, or your laptop by hand. The two native pieces — Prisma's
 query engine and argon2 — are built for the build machine's CPU, and `ops/run`
 refuses to start on a different one rather than failing inside `dlopen`.
 
 ## 1. Build the release — your laptop
 
-Commit first, so the version names a commit instead of ending in `-dirty`.
+The pipeline does this on GitHub whenever a `v*` tag is pushed
+(`docs/deploy-pipeline.md`); by hand, it is one command. Commit first, so the
+version names a commit instead of ending in `-dirty`.
 
 ```bash
 node deploy/macmini/build-release.mjs
@@ -115,7 +120,7 @@ on, for your admin account only. Then Homebrew (from brew.sh) and everything
 this deploy uses:
 
 ```bash
-brew install node@24 postgresql@16 caddy cloudflared tailscale
+brew install node@24 postgresql@16 caddy tailscale
 sudo brew services start tailscale
 sudo tailscale up        # open the URL it prints and approve the machine
 echo 'export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"' >> ~/.zprofile && source ~/.zprofile
@@ -165,7 +170,7 @@ It already listens on localhost only. Leave that alone.
 `openssl rand -hex 24` (hex, so nothing in a connection string needs escaping)
 for the owner, app, agent and read-only roles, put them in your password
 manager, and have them in your shell as `$OWNER_PW`, `$APP_PW`, `$AGENT_PW` and
-`$READONLY_PW`. Then run the same bootstrap Render was set up with; connected
+`$READONLY_PW`. Then run `packages/db/prisma/bootstrap-managed.sql`; connected
 as the cluster's superuser, it creates all four roles and `nusantara_pos_prod`:
 
 ```bash
@@ -236,7 +241,7 @@ sudo chown -R _nusantara:staff /opt/nusantara
 ```
 
 **Configuration.** One file per process plus a shared one, so the API never
-holds the webhook's secrets — the split `render.yaml` keeps:
+holds the webhook's secrets:
 
 ```bash
 for f in common api; do
@@ -244,7 +249,7 @@ for f in common api; do
 done
 sudo sh -c 'chmod 600 /opt/nusantara/etc/*.env'
 sudo nano /opt/nusantara/etc/common.env   # $APP_PW into DATABASE_URL
-sudo nano /opt/nusantara/etc/api.env      # the https address and Auth0 — step 5
+sudo nano /opt/nusantara/etc/api.env      # the https address — step 5
 ```
 
 And the backup's credentials — one line,
@@ -263,15 +268,43 @@ sudo -u _nusantara /opt/nusantara/current/ops/run api
 curl -s http://127.0.0.1:4000/api/health   # second terminal: {"ok":true,"app":"api","env":"production"}
 ```
 
-**The owner's account.** Sign-in is Auth0, and the first Auth0 login adopts the
-`Staff` row whose username is that email — so create it with the email the
-owner will sign in with. The SPA never asks for the local password, so make it
-random:
+**The accounts.** Sign-in is the app's own. Every account starts on the
+shop's initial password, `password`, and must choose its own at the first
+sign-in; the owner resets anybody back to it from Settings → Staff accounts
+(owner ask 2026-09-18). With the master data imported (docs/migration-b2soft.md
+§1), one command gives every salesperson a login and makes Ersen the owner:
 
 ```bash
-openssl rand -hex 16 | sudo -u _nusantara /opt/nusantara/current/ops/run staff \
-  --username owner@example.com --name 'Owner Name' --role OWNER
+sudo -u _nusantara /opt/nusantara/current/ops/run accounts --owner ersen
 ```
+
+Before any import, or for one person, `staff` does one account — `--initial`
+for the shop's initial password, or a password on stdin:
+
+```bash
+sudo -u _nusantara /opt/nusantara/current/ops/run staff \
+  --username ersen --name 'Ersen' --role OWNER --initial
+```
+
+Sign in as the owner straight away and choose a password: until each person
+has, anyone who knows a username can take that account.
+
+**The chatbot's answers.** The owner's answer sheet is
+`docs/chatbot/knowledge-2026-09-18.md`; copy it over and load it (it is also
+pasteable into /chat → Knowledge → Import from a document):
+
+```bash
+scp docs/chatbot/knowledge-2026-09-18.md <admin>@<mini>:/tmp/
+sudo -u _nusantara /opt/nusantara/current/ops/run knowledge /tmp/knowledge-2026-09-18.md --by ersen
+```
+
+**Moving from Auth0** (a Mac mini set up before 2026-09-18). The owner account
+this runbook used to create is named by an email and carries a random password
+nobody knows, and an account Auth0 created carries no password at all; neither
+can sign in now. Run `accounts --owner ersen` as above, sign in as Ersen, and
+switch the old ones off in Settings → Staff accounts (or reset one to the
+initial password there, if that person should keep it). The five `AUTH0_*`
+lines in `api.env` are read by nothing and can be deleted.
 
 **Start the services.**
 
@@ -288,37 +321,36 @@ curl -sI http://127.0.0.1:8080/ | head -1   # HTTP/1.1 200 OK
 macOS lists them under System Settings → General → Login Items → Allow in the
 Background. They must stay switched on there.
 
-## 5. The address — Cloudflare Tunnel and Auth0
+## 5. The address — Tailscale
 
-1. Put the shop's domain on Cloudflare (free plan).
-2. Cloudflare dashboard → Zero Trust → Networks → Tunnels → **Create a tunnel**
-   (Cloudflared), name it, choose macOS, and run the command it shows on the
-   Mac mini. It installs its own LaunchDaemon, so it survives a reboot too:
+Below, `<mini>.<tailnet>.ts.net` is the Mac mini's MagicDNS name —
+`tailscale status` on it prints it.
+
+1. Tailscale admin console → **DNS**: MagicDNS on, and **HTTPS Certificates**
+   enabled. `tailscale serve` cannot get a certificate without both.
+2. On the Mac mini, serve Caddy on that name. `--bg` keeps it across reboots:
 
    ```bash
-   sudo cloudflared service install <token>
+   sudo tailscale serve --bg http://127.0.0.1:8080
+   tailscale serve status   # https://<mini>.<tailnet>.ts.net → http://127.0.0.1:8080
    ```
 
-3. Add a public hostname: `pos.<domain>` → **HTTP** → `localhost:8080`.
-4. Auth0 → Applications → the POS application → Settings. Add, keeping the
-   Netlify entries while both deployments exist:
-   - Allowed Callback URLs — `https://pos.<domain>/auth/callback`
-   - Allowed Logout URLs — `https://pos.<domain>`
-   - Allowed Web Origins — `https://pos.<domain>`
-5. In `api.env`, `CORS_ORIGIN` and `AUTH0_BASE_URL` are both
-   `https://pos.<domain>`, beside the four `AUTH0_*` values. Then
+3. Admin console → **Machines** → the Mac mini → **Disable key expiry**.
+   Otherwise it leaves the tailnet every 180 days, and the till goes with it.
+4. In `api.env`, `CORS_ORIGIN` is `https://<mini>.<tailnet>.ts.net`. Then
    `sudo launchctl kickstart -k system/local.nusantara.api`.
-6. Open `https://pos.<domain>` on a phone that is off the shop's Wi-Fi, and sign
-   in as the owner.
+5. On a staff phone signed in to the tailnet, open that address and sign in as
+   `ersen` with the initial password. The app asks for a new one before
+   anything else.
 
-`AUTH0_BASE_URL` is the setting most likely to be wrong, and it fails at the
-redirect — after the person has already been sent to Auth0 — rather than at
-startup. If sign-in loops, check it first.
+If a sign-in that worked starts answering "too many attempts" for everybody at
+once, the API is seeing every client as one address: `TRUST_PROXY` must be
+`loopback` (the default) while tailscale serve and Caddy both run on the Mac
+mini.
 
-Optional, and worth it for a till on the public internet: a Cloudflare Access
-application on `pos.<domain>` with a one-time-PIN policy for the staff's
-emails, so nobody reaches even the login page without passing it. Never put
-Access in front of the webhook's hostname: Meta cannot pass it.
+Every staff device needs the Tailscale app, signed in to the shop's tailnet.
+That is also the POS's front door: a device that is not on the tailnet cannot
+reach even the login page.
 
 ## 6. Backups — check once, then leave them
 
@@ -344,7 +376,14 @@ psql -d restore_test -tAc 'select count(*) from "UnitEvent"' && dropdb restore_t
 
 ## 7. Updating
 
-On your laptop: build, then copy.
+**Push a `v*` tag.** The pipeline builds the release on GitHub, backs the
+database up, applies the migrations through the tunnel and checks them by
+query, installs the release, and switches back by itself if it does not come
+up. `docs/deploy-pipeline.md` is how to set it up, how to release, and how to
+roll back.
+
+What follows is the same thing by hand, for a day GitHub or the tailnet is not
+there. On your laptop: build, then copy.
 
 ```bash
 node deploy/macmini/build-release.mjs
@@ -352,8 +391,7 @@ scp build/macmini/nusantara-<version>.tar.gz <you>@<macmini>:/tmp/
 ```
 
 If the release brings migrations, apply them first, through the tunnel exactly
-as in step 3 — migrations before code, the order `docs/deploy.md` keeps. Then on
-the Mac mini:
+as in step 3 — migrations before code. Then on the Mac mini:
 
 ```bash
 v=nusantara-<version>
@@ -369,27 +407,52 @@ The SPA needs no restart: Caddy reads `current/web` on every request and
 only when the Caddyfile changed, and the worker and webhook if you run them. If
 a plist changed, `install` it again, then `bootout` and `bootstrap` it.
 
-**Rolling back** is the same symlink pointed at the previous release, and the
-same kickstart; old releases stay in `releases/` for exactly this. It is only
-safe when no migration came in between — pointing at older code does not undo
-a migration.
+**Rolling back** is `sudo /usr/local/libexec/nusantara-deploy rollback` once
+the pipeline is set up — it health-checks the release it goes back to. Without
+it, the same symlink pointed at the previous release and the same kickstart;
+old releases stay in `releases/` for exactly this. Either way it is only safe
+when no migration came in between that the older code cannot live with —
+pointing at older code does not undo a migration.
 
 ## 8. Optional — WhatsApp from the Mac mini
 
-Render has no free instance for the worker, so it is not deployed there; here
-it costs nothing, and it is what turns on the unattended replies.
+The worker is what turns on the unattended replies, and on this machine it
+costs nothing to run.
 
-1. A second public hostname on the tunnel: `wa.<domain>` → **HTTP** →
-   `localhost:3001`.
+Meta is not on the tailnet, so the webhook is the one thing on this machine
+the internet can reach. Funnel is set per port: the webhook goes public on
+8443, and the POS on 443 stays tailnet-only.
+
+1. Publish the webhook alone. The tailnet policy must give the Mac mini the
+   `funnel` attribute — the default policy gives it to every member's devices:
+
+   ```bash
+   sudo tailscale funnel --bg --https=8443 http://127.0.0.1:3001
+   ```
+
 2. `webhook.env` and `worker.env` from their examples, as in step 4, and the
-   same `chmod 600`.
+   same `chmod 600`. The worker needs `WHATSAPP_TOKEN`, `PHONE_NUMBER_ID` and
+   `ANTHROPIC_API_KEY`; without the last it stays dormant and every message
+   waits in the inbox for a person. Load the owner's answers first (§4, "The
+   chatbot's answers") — with none, the bot hands every question over.
 3. Install and bootstrap `local.nusantara.webhook` and `local.nusantara.worker`
-   the way step 4 did the others.
-4. `curl https://wa.<domain>/health`.
-5. Only then point Meta at `https://wa.<domain>/webhook`. **That is a change to
-   the shop's live WhatsApp channel:** from that moment, inbound messages stop
-   arriving wherever they arrive today. Do it as its own deliberate act, after
-   the verify handshake succeeds.
+   the way step 4 did the others. From then on the pipeline restarts and
+   health-checks them with every release.
+4. From a device OFF the tailnet:
+   `curl https://<mini>.<tailnet>.ts.net:8443/health`.
+5. Only then point Meta at `https://<mini>.<tailnet>.ts.net:8443/webhook`. Meta
+   asks for a valid public certificate — Funnel's is — and documents no port
+   rule; the verify handshake is the proof. **That is a change to the shop's
+   live WhatsApp channel:** from that moment, inbound messages stop arriving
+   wherever they arrive today. Do it as its own deliberate act, after the
+   verify handshake succeeds.
+
+**What the bot does** is docs/chatbot-rag.md. In short: while the shop runs
+this app beside B2Soft it answers only from the owner's approved answers and
+the shop's facts, and hands stock, prices, negotiation and anything else to a
+person — the Chat page lists those first, with the bot's note, and the bot
+stays out of that conversation until somebody replies or presses *Mark
+handled*.
 
 ## Day to day
 

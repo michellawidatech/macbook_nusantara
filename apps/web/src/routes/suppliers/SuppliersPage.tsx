@@ -94,7 +94,7 @@ import {
   type SupplierAccount,
   type SupplierDeposit,
 } from "../../lib/supplierLedger.js";
-import { mutate, nextId, useDb } from "../../mock/store.js";
+import { mutate, nextId, useDb, currentStaffName } from "../../mock/store.js";
 import type { Po, Supplier } from "../../mock/seed.js";
 import { SPACE, TYPE } from "../../theme/tokens";
 
@@ -236,7 +236,7 @@ export function SuppliersPage() {
           method: v.method,
           at,
           ...(v.note ? { note: v.note } : {}),
-          staff: "Michella",
+          staff: currentStaffName(),
           allocations:
             po && put > 0
               ? [
@@ -245,7 +245,7 @@ export function SuppliersPage() {
                     poId: po.id,
                     amount: put,
                     at,
-                    staff: "Michella",
+                    staff: currentStaffName(),
                   },
                 ]
               : [],
@@ -402,7 +402,7 @@ export function SuppliersPage() {
               poId: a.poId,
               amount: a.amount,
               at,
-              staff: "Michella",
+              staff: currentStaffName(),
             })),
           ],
         };
@@ -468,7 +468,7 @@ export function SuppliersPage() {
               poId: a.poId,
               amount: a.amount,
               at,
-              staff: "Michella",
+              staff: currentStaffName(),
             })),
           ],
         };

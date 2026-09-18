@@ -2,21 +2,29 @@
  * `pnpm --filter @nusantara/api staff` — create a staff account, or set the
  * password of one that already exists.
  *
- * The seed deliberately writes an unusable Argon2 hash for every account
- * (packages/db/src/seed.ts), so a fresh database has no way in. There is no
- * HTTP endpoint that creates staff either — 03 §Settings puts that behind an
- * owner session that does not exist yet. This is that missing first step, and
- * nothing more.
+ * The door that needs no session: the first owner of a fresh database, and an
+ * owner who has forgotten their own password. Everything else — adding people,
+ * resetting theirs — is the owner's account screen (routes/staff.ts), and
+ * giving every seeded person a first password is `accounts` (seed-accounts.ts).
  *
  * The password is read from stdin, never from argv: an argument is visible in
  * `ps` and lands in shell history.
  *
  *   printf '%s' 'the-password' | pnpm --filter @nusantara/api staff \
  *     --username admin --name 'Administrator' --role OWNER --approve
+ *
+ * Or `--initial` instead of a password on stdin: the shop's initial password
+ * (`INITIAL_PASSWORD`), which the person must replace at their next sign-in.
+ *
+ *   pnpm --filter @nusantara/api staff --username ersen --name Ersen --role OWNER --initial
+ *
+ * Either way every session of the account ends: whoever was signed in as it
+ * before this ran is signed in with a password that no longer exists.
  */
 
 import { createInterface } from "node:readline/promises";
-import { db, disconnect } from "@nusantara/db";
+import { db, disconnect, isServiceAccount } from "@nusantara/db";
+import { INITIAL_PASSWORD } from "@nusantara/domain";
 import { hashPassword } from "../auth/credentials.js";
 
 interface Args {
@@ -24,19 +32,27 @@ interface Args {
   readonly name: string;
   readonly role: "OWNER" | "STAFF";
   readonly canApprove: boolean;
+  /** Use the shop's initial password and require a change at next sign-in. */
+  readonly initial: boolean;
 }
 
-const USAGE = `usage: staff --username <name> [--name <full name>] [--role OWNER|STAFF] [--approve]
-       the password is read from stdin`;
+const USAGE = `usage: staff --username <name> [--name <full name>] [--role OWNER|STAFF] [--approve] [--initial]
+       the password is read from stdin, unless --initial gives the account the
+       shop's initial password (changed at the next sign-in)`;
 
 function parseArgs(argv: readonly string[]): Args {
   const flags = new Map<string, string>();
   let canApprove = false;
+  let initial = false;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i] ?? "";
     if (arg === "--approve") {
       canApprove = true;
+      continue;
+    }
+    if (arg === "--initial") {
+      initial = true;
       continue;
     }
     if (!arg.startsWith("--")) throw new Error(`argumen asing: ${arg}`);
@@ -50,6 +66,10 @@ function parseArgs(argv: readonly string[]): Args {
   const username = flags.get("username");
   if (username === undefined || username.length === 0)
     throw new Error("--username wajib diisi");
+  if (isServiceAccount(username))
+    throw new Error(
+      `${username} adalah akun sistem — tidak bisa diberi kata sandi`,
+    );
 
   const role = flags.get("role") ?? "STAFF";
   if (role !== "OWNER" && role !== "STAFF")
@@ -62,6 +82,7 @@ function parseArgs(argv: readonly string[]): Args {
     // An owner who cannot approve is a contradiction in 03 §Settings; every
     // approval gate there is "owner or canApprove".
     canApprove: canApprove || role === "OWNER",
+    initial,
   };
 }
 
@@ -92,7 +113,7 @@ async function readPassword(): Promise<string> {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  const password = await readPassword();
+  const password = args.initial ? INITIAL_PASSWORD : await readPassword();
 
   // The API's own login schema is the floor; anything it would reject at the
   // form is not worth storing.
@@ -121,6 +142,7 @@ async function main(): Promise<void> {
               canApprove: args.canApprove,
               active: true,
               passwordHash,
+              mustChangePassword: args.initial,
               createdAt: now,
             },
           })
@@ -132,8 +154,16 @@ async function main(): Promise<void> {
               canApprove: args.canApprove,
               active: true,
               passwordHash,
+              mustChangePassword: args.initial,
             },
           });
+
+    // A new password ends every old session, whoever was holding it (08 §9:
+    // rotate on a credential change).
+    await tx.staffSession.updateMany({
+      where: { staffId: row.id, revokedAt: null },
+      data: { revokedAt: now },
+    });
 
     // 08 §9: a credential change is auditable. staffId stays null — this ran
     // from a terminal, not from a session, and inventing an actor would be a
@@ -153,7 +183,10 @@ async function main(): Promise<void> {
   });
 
   console.log(
-    `${existing === null ? "dibuat" : "diperbarui"}: ${staff.username} (${staff.id}) role=${staff.role} canApprove=${String(staff.canApprove)}`,
+    `${existing === null ? "dibuat" : "diperbarui"}: ${staff.username} (${staff.id}) role=${staff.role} canApprove=${String(staff.canApprove)}` +
+      (args.initial
+        ? ` — kata sandi awal "${INITIAL_PASSWORD}", wajib diganti saat masuk`
+        : ""),
   );
 }
 

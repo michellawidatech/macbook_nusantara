@@ -47,6 +47,7 @@ import {
   UnitNotAvailableError,
   type UnavailableUnit,
 } from "./errors.js";
+import { recordStoreChanges } from "./store/context.js";
 
 /** Who created a hold — a person or the bot. Not the channel. */
 export type HoldSource = "STAF" | "AGEN";
@@ -241,6 +242,11 @@ export async function createHold(
           select: { id: true, name: true, phone: true },
         });
 
+  if (!("customerId" in input.customer)) {
+    // A customer the bot met for the first time is a row every till lists.
+    await recordStoreChanges(tx, [["customers", customer.id]]);
+  }
+
   // 7. The hold itself, BEFORE the events — they carry its id, and `UnitEvent`
   //    is INSERT-only, so an event written first could never be given one.
   const note = input.note?.trim();
@@ -265,6 +271,7 @@ export async function createHold(
     // `code` is never passed — next_doc_code('RV') is the column default.
     select: { id: true, code: true, scheduledFor: true },
   });
+  await recordStoreChanges(tx, [["reservations", reservation.id]]);
 
   // 8. The hold, on the ledger. Ascending, and the locks are already held.
   for (const unit of locked) {
@@ -537,6 +544,7 @@ export async function reprojectHold(
       where: { id: reservationId },
       data: { status: next },
     });
+    await recordStoreChanges(tx, [["reservations", reservationId]]);
   }
   return next;
 }

@@ -13,8 +13,8 @@
  * What that costs, stated plainly: a hold the WhatsApp agent books is a real
  * `Reservation` row and the page cannot see it. Today that is theoretical —
  * `packages/agent`'s `reserve` capability has exactly one caller, the worker,
- * and the worker is not deployed (Render has no free background worker; see
- * docs/deploy.md). The day it ships, this page and the till move over
+ * and the worker is not deployed (it is optional on the Mac mini; see
+ * docs/deploy-macmini.md §8). The day it ships, this page and the till move over
  * together, and everything here is still tested and waiting for them.
  *
  * The types below are still imported by the page: its view model is

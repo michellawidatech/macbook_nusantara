@@ -133,6 +133,7 @@ export function OpnamePage() {
         date: date.format("YYYY-MM-DD"),
         at: new Date().toISOString(),
         counted: [],
+        counts: {},
         missing: [],
         unknown: [],
         notes: {},
@@ -168,6 +169,9 @@ export function OpnamePage() {
             "opnameList.searchReferenceLabelOrWarehouse",
             "Search reference, label or warehouse",
           )}
+          keyboardRows={(r) =>
+            t("opnameList.openCount", "Open {{code}}", { code: r.code })
+          }
           onRow={(r) => ({
             style: { cursor: "pointer" },
             onClick: () => navigate(`/stock/opname/${r.id}`),

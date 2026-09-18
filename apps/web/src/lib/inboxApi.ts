@@ -8,6 +8,20 @@
  */
 import { api } from "./api.js";
 
+/**
+ * Why the bot gave a conversation to a person (2026-09-18) — see
+ * apps/api/src/routes/inbox.ts `readHandoff`.
+ */
+export interface Handoff {
+  /** packages/agent policy.ts `HANDOFF_TOPICS`, e.g. "stock", "price". */
+  topic: string;
+  /** The bot's one-line note for the colleague, or null. */
+  summary: string | null;
+  /** Set when the code rather than the model decided. */
+  forcedBy: string | null;
+  at: string | null;
+}
+
 export interface InboxThread {
   /** The customer's wa_id: digits only, country code first. */
   phone: string;
@@ -25,6 +39,8 @@ export interface InboxThread {
    * mark it. True for a thread nobody has ruled on, which is most of them.
    */
   autoReply: boolean;
+  /** Set while the bot has handed this thread to a person and nobody answered. */
+  handoff: Handoff | null;
   /**
    * ISO, or null once the 24-hour window has closed.
    *
@@ -51,6 +67,8 @@ export interface InboxMessage {
   direction: "IN" | "OUT";
   status: "BARU" | "DIJAWAB_AGEN" | "PERLU_STAF" | "DIJAWAB_STAF";
   msgType: string;
+  /** Why the bot gave this message to a person, when it did. */
+  handoff: Handoff | null;
   reply: InboxReply | null;
 }
 
@@ -68,6 +86,8 @@ export interface InboxConversation {
   summary: { text: string; at: string | null } | null;
   /** A standing instruction staff left about this customer, if any. */
   directive: string | null;
+  /** The open hand-over — null once a person has answered or marked it handled. */
+  handoff: Handoff | null;
   /** Whether the bot answers this customer unattended. */
   autoReply: AutoReplyState;
   /**
@@ -128,6 +148,15 @@ export const getConversation = (phone: string, signal?: AbortSignal) =>
     signal ? { signal } : {},
   );
 
+/**
+ * "Dealt with" without a reply — the customer was rung, or walked in. Closes
+ * the thread's waiting messages so the bot answers the next one.
+ */
+export const markHandled = (phone: string) =>
+  api<{ closed: number }>(`/api/inbox/${encodeURIComponent(phone)}/handled`, {
+    method: "POST",
+  });
+
 export const sendReply = (phone: string, text: string) =>
   api<QueuedReply>(`/api/inbox/${encodeURIComponent(phone)}/reply`, {
     method: "POST",
@@ -145,7 +174,7 @@ export const sendReply = (phone: string, text: string) =>
  * so a double press on a flaky connection is not a double flip.
  */
 export const setAutoReply = (phone: string, enabled: boolean) =>
-  api<AutoReplyState>(
-    `/api/inbox/${encodeURIComponent(phone)}/auto-reply`,
-    { method: "PUT", body: { enabled } },
-  );
+  api<AutoReplyState>(`/api/inbox/${encodeURIComponent(phone)}/auto-reply`, {
+    method: "PUT",
+    body: { enabled },
+  });

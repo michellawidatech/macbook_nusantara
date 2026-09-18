@@ -59,7 +59,7 @@ import {
   saleBalance,
   type SalePayment,
 } from "../../lib/salePayments.js";
-import { appendEvent, mutate, nextId, useDb } from "../../mock/store.js";
+import { appendEvent, mutate, nextId, useDb, currentStaffName } from "../../mock/store.js";
 import type { MockDb, Order } from "../../mock/seed.js";
 import { SPACE, TYPE } from "../../theme/tokens";
 
@@ -81,10 +81,11 @@ interface ChannelRow {
   readonly rows: readonly PendingRow[];
 }
 
-/** One customer debt, per sale. */
+/** One customer debt: a sale, or what they owed before this app. */
 interface OwedRow {
   readonly key: string;
-  readonly order: Order;
+  /** Absent for a debt from before this app (`Customer.openingBalance`). */
+  readonly order?: Order;
   readonly customer: string;
   readonly owed: number;
   readonly dueAt?: string;
@@ -147,6 +148,18 @@ export function ReceivablesPage() {
         owed: b.customerOwes,
         ...(b.nextDueAt === undefined ? {} : { dueAt: b.nextDueAt }),
         overdue,
+      });
+    }
+    // What a customer owed before this app — B2Soft's balance that no invoice
+    // explains (owner answer 2026-09-13: receivables "need to combine all").
+    // No sale and no promise date: a name to ring and a figure.
+    for (const c of db.customers) {
+      if (!c.openingBalance || c.openingBalance <= 0) continue;
+      out.push({
+        key: `opening-${c.id}`,
+        customer: c.name,
+        owed: c.openingBalance,
+        overdue: false,
       });
     }
     // Overdue first, then by the nearest promise: this is a call list.
@@ -234,13 +247,13 @@ export function ReceivablesPage() {
         received: result.received,
         ...(result.reason ? { reason: result.reason } : {}),
         at,
-        staff: "Michella",
+        staff: currentStaffName(),
       });
       d.settlementLog.push({
         id: nextId("slog"),
         settlementId,
         at,
-        staff: "Michella",
+        staff: currentStaffName(),
         action: "RECORDED",
         after: { received: result.received, deducted: totals.deducted },
         ...(result.reason ? { reason: result.reason } : {}),
@@ -297,7 +310,7 @@ export function ReceivablesPage() {
         id: nextId("slog"),
         settlementId: existing.id,
         at,
-        staff: "Michella",
+        staff: currentStaffName(),
         action: "AMENDED",
         before: { received: before.received, deducted: before.deducted },
         after: { received: after.received, deducted: after.deducted },
@@ -497,7 +510,8 @@ export function ReceivablesPage() {
                       type="secondary"
                       style={{ fontSize: TYPE.sm }}
                     >
-                      {r.order.code}
+                      {r.order?.code ??
+                        t("piutang.fromBefore", "From before this app")}
                     </Typography.Text>
                   </Flex>
                 ),
@@ -507,7 +521,7 @@ export function ReceivablesPage() {
                 key: "total",
                 width: 160,
                 align: "right",
-                render: (_, r) => fmtRp(r.order.total),
+                render: (_, r) => (r.order ? fmtRp(r.order.total) : "—"),
               },
               {
                 title: t("piutang.owed", "Still owed"),
@@ -543,7 +557,24 @@ export function ReceivablesPage() {
                 title: "",
                 key: "actions",
                 width: 56,
-                render: (_, r) => (
+                render: (_, r) =>
+                  r.order === undefined ? (
+                    <Tooltip
+                      title={t("piutang.editOldDebt", "Correct it on the customer")}
+                    >
+                      <Link to="/customers">
+                        <Button
+                          size="small"
+                          icon={<EditOutlined />}
+                          aria-label={t(
+                            "piutang.editOldDebtAria",
+                            "Open {{name}} in Customers",
+                            { name: r.customer },
+                          )}
+                        />
+                      </Link>
+                    </Tooltip>
+                  ) : (
                   <Tooltip
                     title={t("piutang.openInHistory", "Correct what was paid")}
                   >
@@ -559,7 +590,7 @@ export function ReceivablesPage() {
                       />
                     </Link>
                   </Tooltip>
-                ),
+                  ),
               },
             ]}
           />

@@ -12,7 +12,6 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { readAnthropicEnv, hasCredential } from "@nusantara/agent";
 import { defaultSecretsFile, loadApiSecrets } from "./secretsFile.js";
-import { readAuth0Env } from "./auth/auth0.js";
 
 export { createApp } from "./app.js";
 export { loadConfig, type ApiConfig } from "./config.js";
@@ -23,11 +22,6 @@ export {
   loadApiSecrets,
   defaultSecretsFile,
 } from "./secretsFile.js";
-export {
-  readAuth0Env,
-  AUTH0_ENV_KEYS,
-  type Auth0Config,
-} from "./auth/auth0.js";
 
 export function main(): void {
   const config = loadConfig(process.env);
@@ -42,7 +36,6 @@ export function main(): void {
   const secretsFile = process.env["API_ENV_FILE"] ?? defaultSecretsFile();
   const secrets = { ...loadApiSecrets(secretsFile), ...process.env };
   const anthropic = readAnthropicEnv(secrets);
-  const auth0 = readAuth0Env(secrets);
 
   // Said once, at startup, where somebody will see it. The Chat page reports
   // the same fact to staff, but "nobody gave it a token" and "the token is
@@ -57,26 +50,12 @@ export function main(): void {
       : "no Anthropic credential — the chat agent will stay switched off",
   );
 
-  // Same reasoning as the credential line above: "Auth0 was never configured"
-  // and "Auth0 is configured and the redirect is broken" look identical from a
-  // browser, and only one of them is fixed by editing the dashboard.
-  logger.info(
-    {
-      evt: "api.auth0.credential",
-      ctx: { configured: auth0 !== undefined, baseUrl: auth0?.baseUrl },
-    },
-    auth0 === undefined
-      ? "no Auth0 credentials — hosted login is not mounted"
-      : "Auth0 hosted login is mounted at /login",
-  );
-
   const client = prisma();
   const server = createApp({
     db: client,
     config,
     logger,
     anthropic,
-    auth0,
   }).listen(config.port, () => {
     logger.info({ evt: "api.started", ctx: { port: config.port } }, "API siap");
   });

@@ -44,13 +44,22 @@
 import {
   DEFAULT_WAITS,
   MAX_CORRECTIONS,
-  buildSystemPrompt,
+  buildAgentPrompt,
   computeWaitMs,
   converse,
   hasCredential,
   anthropicClient,
+  knowledgeBlock,
+  loadKnowledgeBase,
+  loadStoreFacts,
+  matchesFor,
+  matchesNote,
+  renderStoreFacts,
+  routeMessage,
+  storeOpenAt,
   type AgentClient,
   type AnthropicEnv,
+  type ConverseResult,
   type ConverseTurn,
   type ToolContext,
   type WaitProfile,
@@ -105,9 +114,6 @@ export interface DraftPassResult {
 /** Answered turns shown verbatim. Older ones live in the rolling summary. */
 const HISTORY_TURNS = 8;
 
-/** Staff-approved answers pulled into the prompt. Mirrors the API's cap. */
-const KNOWLEDGE_LIMIT = 40;
-
 const DEFAULT_MAX_BATCH = 30;
 
 /** `ts` is the sender's phone clock. Past this much skew, stop trusting it. */
@@ -120,7 +126,9 @@ class BatchRaceError extends Error {
     readonly expected: number,
     readonly actual: number,
   ) {
-    super(`batch for ${from} changed: expected ${expected} rows, claimed ${actual}`);
+    super(
+      `batch for ${from} changed: expected ${expected} rows, claimed ${actual}`,
+    );
     this.name = "BatchRaceError";
   }
 }
@@ -170,6 +178,17 @@ interface Candidate {
  * on for this customer should answer the backlog, not find it already stamped
  * as somebody else's problem. The inbox counts BARU as pending, so a muted
  * thread still reads as waiting on a human — which it is.
+ *
+ * The second `NOT EXISTS` is the hand-over hold (2026-09-18). Once the bot has
+ * given a thread to a person — a PERLU_STAF row — it says nothing more to that
+ * customer until the person has answered: a staff reply marks every waiting
+ * row DIJAWAB_STAF (routes/inbox.ts), and so does "handled" on the Chat page.
+ * Without it the customer who asked for Air M1 stock and then wrote "kak?"
+ * would get a second holding line from the bot while the colleague was still
+ * looking. Derived from the rows rather than written onto the switch above,
+ * because that switch is staff-owned and the agent's role cannot write it
+ * (migration 20260827090000) — a bot that could turn itself off could also
+ * turn itself on.
  */
 async function quietCandidates(
   db: PrismaClient,
@@ -191,6 +210,13 @@ async function quietCandidates(
                FROM "WaThreadMemory" t
               WHERE t."from" = "WaMessage"."from"
                 AND t."autoReply" = false
+           )
+       AND NOT EXISTS (
+             SELECT 1
+               FROM "WaMessage" h
+              WHERE h."from" = "WaMessage"."from"
+                AND h."direction" = 'IN'
+                AND h."status" = 'PERLU_STAF'
            )
      GROUP BY "from"
     HAVING COUNT(*) FILTER (WHERE "status" = 'BARU') > 0
@@ -277,7 +303,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   // human answers them. Rows are deliberately left at BARU rather than being
   // escalated, so that configuring a key later answers the backlog instead of
   // finding it already marked as somebody else's problem.
-  const client = deps.client ?? (hasCredential(anthropic) ? anthropicClient(anthropic) : null);
+  const client =
+    deps.client ??
+    (hasCredential(anthropic) ? anthropicClient(anthropic) : null);
   if (!client) return { drafted: 0, escalated: 0, dormant: true };
 
   const at = now();
@@ -310,13 +338,14 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   // staff member editing the shop's voice on the Chat page changed what THEY
   // drafted and not one word of what the bot said at 2am. That gap is what the
   // Persona and AgentCorrection tables close.
-  const [knowledge, persona, corrections] = await Promise.all([
-    db.agentKnowledge.findMany({
-      where: { active: true },
-      select: { question: true, answer: true },
-      orderBy: { updatedAt: "desc" },
-      take: KNOWLEDGE_LIMIT,
-    }),
+  //
+  // The knowledge base and the shop facts are the bot's two sources
+  // (docs/chatbot-rag.md) — read once, indexed once, and rendered once into
+  // the cached half of the prompt, which is then byte-identical for every
+  // thread in the pass.
+  const [knowledge, storeFacts, persona, corrections] = await Promise.all([
+    loadKnowledgeBase(db),
+    loadStoreFacts(db).then(renderStoreFacts),
     db.persona.findFirst({
       where: { active: true },
       select: { prompt: true },
@@ -327,6 +356,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       take: MAX_CORRECTIONS,
     }),
   ]);
+  const knowledgeText = knowledgeBlock(knowledge);
 
   let drafted = 0;
   let escalated = 0;
@@ -353,7 +383,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       // Outside the window a free-form reply cannot be delivered (06 §11), so
       // drafting one would burn a model call to queue a send Graph will reject.
       if (!isWithinWindow(anchor.ts, at)) {
-        await escalate(db, batchIds);
+        await escalate(db, batchIds, anchor.id, "window_closed");
         escalated += 1;
         logger.warn(
           { evt: "worker.draft.window_closed", ctx: { from } },
@@ -366,7 +396,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       if (!current) {
         // A sticker with no caption and no type worth naming. There is nothing
         // for the model to read, and guessing is what costs a sale.
-        await escalate(db, batchIds);
+        await escalate(db, batchIds, anchor.id, "nothing_to_read");
         escalated += 1;
         continue;
       }
@@ -383,11 +413,12 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         select: { summary: true, directive: true },
       });
 
-      const systemPrompt = buildSystemPrompt({
+      const prompt = buildAgentPrompt({
         // A fresh database has no persona row, and production never runs the
         // seed, so the compiled-in voice is the fallback rather than an error.
         persona: persona?.prompt ?? DEFAULT_PERSONA,
-        knowledge,
+        storeFacts,
+        knowledge: knowledgeText,
         // Newest first out of the database, oldest first into the prompt, so
         // the most recent correction is the last thing the model reads.
         corrections: [...corrections].reverse().map((c) => ({
@@ -395,7 +426,8 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           corrected: c.corrected,
           note: c.note ?? undefined,
         })),
-        today: at,
+        now: at,
+        openNow: storeOpenAt(at),
         summary: memory?.summary ?? null,
         directive: memory?.directive ?? null,
         recentReplies: history
@@ -404,6 +436,14 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           .slice(0, 3),
         customerText: current,
       });
+
+      // The two reads of the customer's message that do not ask the model:
+      // whether it must go to a person whatever the model thinks (policy.ts),
+      // and which of the owner's answers it most looks like (retrieval.ts).
+      const route = routeMessage(current, {
+        hasMedia: batch.some((m) => m.msgType !== "text"),
+      });
+      const hint = matchesNote(knowledge, matchesFor(knowledge, current));
 
       const ctx: ToolContext = {
         from,
@@ -434,8 +474,12 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         client,
         db,
         ctx,
-        systemPrompt,
+        prompt,
         turns: toTurns([...history].reverse(), current),
+        knowledge,
+        storeFacts,
+        route,
+        hint,
         onError: (err) => {
           failure = err;
         },
@@ -461,7 +505,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           },
           "the agent produced no reply — handing the thread to a person",
         );
-        await escalate(db, batchIds);
+        await escalate(db, batchIds, anchor.id, "no_reply");
         escalated += 1;
         continue;
       }
@@ -478,7 +522,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
             status,
             answeredByAgent: !result.handoff,
             answeredAt,
-            intent: intentOf(result.toolsUsed),
+            intent: intentOf(result),
           },
         });
         if (count !== batchIds.length) {
@@ -486,7 +530,26 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         }
         await tx.waMessage.update({
           where: { id: anchor.id },
-          data: { replyText: result.reply },
+          data: {
+            replyText: result.reply,
+            // What the inbox shows the colleague picking the thread up: why,
+            // and the bot's one-line note. `entities` is the JSON column
+            // reserved for what the agent extracts (schema.prisma).
+            ...(result.handoff
+              ? {
+                  entities: {
+                    handoff: {
+                      topic: result.handoff.topic,
+                      summary: result.handoff.summary,
+                      ...(result.handoff.forcedBy
+                        ? { forcedBy: result.handoff.forcedBy }
+                        : {}),
+                      at: answeredAt.toISOString(),
+                    },
+                  },
+                }
+              : { entities: { sources: result.sources } }),
+          },
         });
         await enqueueOutbox(tx, {
           kind: "WA_REPLY",
@@ -504,7 +567,16 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
             covered: batchIds.length,
             tools: result.toolsUsed,
             steps: result.steps,
-            ...(result.handoff ? { handoff: result.handoff.topic } : {}),
+            sources: result.sources,
+            ...(route ? { routed: route.rule } : {}),
+            ...(result.handoff
+              ? {
+                  handoff: result.handoff.topic,
+                  ...(result.handoff.forcedBy
+                    ? { forcedBy: result.handoff.forcedBy }
+                    : {}),
+                }
+              : {}),
             ...(result.rawReply !== result.reply ? { sanitised: true } : {}),
           },
         },
@@ -516,7 +588,10 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // staff member through the inbox. Their reply stands; ours is dropped
         // without ever reaching the customer.
         logger.warn(
-          { evt: "worker.draft.raced", ctx: { from, expected: err.expected, claimed: err.actual } },
+          {
+            evt: "worker.draft.raced",
+            ctx: { from, expected: err.expected, claimed: err.actual },
+          },
           "the thread was answered while the agent was drafting — discarding the draft",
         );
         continue;
@@ -540,40 +615,65 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
 }
 
 /**
- * What this turn was about, from which tools actually ran.
+ * What this turn was about — a closed vocabulary derived from what the turn
+ * DID, never from model free text, so it cannot be talked into a new value.
+ * `intent` has been in the schema, unwritten, since the first migration.
  *
- * A closed vocabulary derived from behaviour rather than from model free text,
- * so it costs nothing and cannot be talked into a new value. `intent` has been
- * in the schema, unwritten, since the first migration.
+ * A hand-over is `staf:<topic>` (policy.ts `HANDOFF_TOPICS`), so the inbox
+ * can say why a person is needed without reading `entities`. An answer is named
+ * by what it rested on: the owner's answers, the shop facts, the catalogue, or
+ * nothing at all (a greeting).
  */
-function intentOf(toolsUsed: readonly string[]): string {
-  if (toolsUsed.includes("create_reservation")) return "reservasi";
-  if (toolsUsed.includes("cancel_reservation")) return "batal_reservasi";
-  if (toolsUsed.includes("handoff_to_staff")) return "perlu_staf";
-  if (toolsUsed.includes("check_order")) return "cek_pesanan";
-  if (toolsUsed.includes("lookup_customer")) return "cek_pelanggan";
-  if (toolsUsed.includes("check_serial")) return "cek_serial";
-  if (toolsUsed.includes("search_stock") || toolsUsed.includes("browse_catalog"))
-    return "tanya_stok";
-  if (toolsUsed.includes("store_info")) return "tanya_toko";
-  return "lain";
+function intentOf(result: ConverseResult): string {
+  if (result.handoff) return `staf:${result.handoff.topic}`;
+  if (result.sources.some((s) => /^K\d+$/.test(s))) return "jawab:faq";
+  if (result.sources.includes("catalog")) return "jawab:katalog";
+  if (result.sources.includes("store")) return "jawab:toko";
+  return "sapaan";
 }
 
 /**
- * Hand a batch to a human.
+ * Hand a batch to a human, without a reply.
  *
  * Scoped to the frozen ids, exactly like the claim: escalating on the model's
  * failure happens AFTER a network call, so the unbounded predicate would sweep
  * in a message that arrived meanwhile and hide it from everyone.
  *
- * PERLU_STAF is terminal for the agent — this pass only selects BARU rows — so
- * an escalated thread is not retried in a loop. It shows in the inbox as
- * waiting, which is the honest description of what it is.
+ * PERLU_STAF is terminal for the agent — this pass only selects BARU rows, and
+ * the hold in `quietCandidates` keeps it off the whole thread — so an
+ * escalated thread is not retried in a loop. It shows in the inbox as waiting,
+ * with the reason on the newest row so the colleague knows why.
  */
-async function escalate(db: PrismaClient, batchIds: string[]): Promise<number> {
-  const { count } = await db.waMessage.updateMany({
-    where: { id: { in: batchIds }, status: "BARU" },
-    data: { status: "PERLU_STAF" },
-  });
-  return count;
+async function escalate(
+  db: PrismaClient,
+  batchIds: string[],
+  anchorId: string,
+  why: "window_closed" | "nothing_to_read" | "no_reply",
+): Promise<number> {
+  const summary =
+    why === "window_closed"
+      ? "Jendela 24 jam WhatsApp sudah tutup — balas dengan template."
+      : why === "nothing_to_read"
+        ? "Pesan tanpa teks yang bisa dibaca bot."
+        : "Bot gagal membalas — cek log worker.";
+  return db.$transaction(async (tx) => {
+    const { count } = await tx.waMessage.updateMany({
+      where: { id: { in: batchIds }, status: "BARU" },
+      data: { status: "PERLU_STAF", intent: "staf:other" },
+    });
+    await tx.waMessage.updateMany({
+      where: { id: anchorId, status: "PERLU_STAF" },
+      data: {
+        entities: {
+          handoff: {
+            topic: "other",
+            summary,
+            forcedBy: why,
+            at: new Date().toISOString(),
+          },
+        },
+      },
+    });
+    return count;
+  }, TXN_TIMEOUTS);
 }

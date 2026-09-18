@@ -53,6 +53,11 @@ import {
   type AntColumns,
 } from "./tableCells";
 import { useTranslation } from "react-i18next";
+import {
+  EDITABLE_ROW_ATTR,
+  focusControl,
+  gridArrowTarget,
+} from "../lib/keyboardNav";
 
 /**
  * The attribute the keyboard finds a row by, in either layout.
@@ -62,7 +67,13 @@ import { useTranslation } from "react-i18next";
  * keystroke asking for it was handled, so anything captured in advance would
  * be stale exactly when it mattered.
  */
-const ROW_ATTR = "data-editable-row";
+/**
+ * Restated from `lib/keyboardNav.ts` rather than imported, and the direction
+ * matters: that module was written against the marker this component already
+ * put on its rows, so this is the definition and `EDITABLE_ROW_ATTR` is the
+ * copy. The assertion below is what keeps them one value.
+ */
+const ROW_ATTR: typeof EDITABLE_ROW_ATTR = "data-editable-row";
 
 /** What counts as somewhere a caret can go. */
 const FOCUSABLE =
@@ -252,6 +263,39 @@ export function EditableTable<T extends object>({
     [onAdd, add],
   );
 
+  /**
+   * The grid's arrows (owner ask 2026-09-15: *"All of the UI has to be
+   * keyboard friendly … arrow buttons, and other navigation helpers"*).
+   *
+   * ↑ ↓ move down a column, ← → across a row. `gridArrowTarget` decides which
+   * arrows are the grid's and which belong to the control under the caret,
+   * which is the whole difficulty: ↓ in a number box steps the figure, ↓ on a
+   * closed Select opens it, and → in a half-typed serial moves the caret.
+   *
+   * ## Why CAPTURE
+   *
+   * antd's `InputNumber` calls `preventDefault()` on ↑ ↓ to step its value,
+   * and it does so before a bubbling handler here would ever run — so on
+   * bubble every one of these keys arrives already claimed, and `Qty` was the
+   * one column the arrows could not leave. Capture is the only phase in which
+   * the question "whose key is this?" can still be asked, which is the same
+   * reason `KeyboardNav` reads Enter there.
+   *
+   * Enter is NOT here: it moves to the next FIELD everywhere in the app, and
+   * `components/KeyboardNav.tsx` owns it once for all of them.
+   */
+  const onKeyDownCapture = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
+    const root = rootRef.current;
+    if (root === null) return;
+    const target = gridArrowTarget(e, e.target, root);
+    if (target === null) return;
+    // Before the number steps, before the list opens, and before the browser
+    // scrolls the row into view.
+    e.preventDefault();
+    e.stopPropagation();
+    focusControl(target);
+  }, []);
+
   const leaves = useMemo(() => leafColumns(columns), [columns]);
   const stacked = leaves.filter(inStackedLayout);
   const fields = stacked.filter((c) => !isActionColumn(c));
@@ -426,6 +470,7 @@ export function EditableTable<T extends object>({
       ref={rootRef}
       className="nusantara-editable-table"
       onKeyDown={onKeyDown}
+      onKeyDownCapture={onKeyDownCapture}
     >
       {body}
       {adder}

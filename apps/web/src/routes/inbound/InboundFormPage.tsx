@@ -27,10 +27,11 @@
  * balance on delivery is how the shop buys. The order carries the outstanding
  * balance rather than refusing the entry.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import dayjs, { type Dayjs } from "dayjs";
 import {
+  Alert,
   App,
   AutoComplete,
   Button,
@@ -47,7 +48,7 @@ import {
   Steps,
   Typography,
 } from "antd";
-import { DeleteOutlined } from "@ant-design/icons";
+import { DeleteOutlined, SaveOutlined } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { FooterToolbar } from "../../components/FooterToolbar";
 import { EditableTable } from "../../components/EditableTable";
@@ -58,6 +59,13 @@ import { RP_SYMBOL } from "../../components/money";
 import { fmtRp } from "../../lib/format.js";
 import { useDb, mutate, nextId, docCode } from "../../mock/store.js";
 import { FORM_CENTRE } from "../../theme/tokens";
+import { usePersistentState } from "../../hooks/usePersistentState";
+import {
+  INBOUND_DRAFT_KEY,
+  inboundDraftHasContent,
+  parseInboundDraft,
+  type InboundDraft,
+} from "../../lib/inboundDraft.js";
 import { useTranslation } from "react-i18next";
 
 interface Line {
@@ -77,17 +85,54 @@ export function InboundFormPage() {
   const db = useDb();
   const navigate = useNavigate();
   const { message } = App.useApp();
-  const [step, setStep] = useState(0);
+  /**
+   * The wizard, mirrored to this device on every keystroke (owner ask
+   * 2026-09-15).
+   *
+   * Read ONCE, into the ordinary state below, rather than held as the state
+   * itself: eleven fields reading and writing one object would rerender the
+   * whole form on every character, and every existing control here is written
+   * against its own setter. The effect underneath is the mirror. See
+   * `lib/inboundDraft.ts` for why auto-save and *Save draft* are two different
+   * things.
+   */
+  const [stored, setStored, clearStored] = usePersistentState<
+    InboundDraft | null
+  >(INBOUND_DRAFT_KEY, null, (raw) =>
+    raw === null ? null : parseInboundDraft(raw),
+  );
+  // Read at mount and never again: `stored` changes on every keystroke once
+  // the mirror below starts writing, and re-seeding from it would fight the
+  // person typing.
+  const [restored] = useState(() =>
+    stored !== null && inboundDraftHasContent(stored) ? stored : null,
+  );
+  const [restoreOffered, setRestoreOffered] = useState(restored !== null);
 
-  const [supplier, setSupplier] = useState<string>();
-  const [invoice, setInvoice] = useState("");
-  const [noInvoice, setNoInvoice] = useState(false);
-  const [date, setDate] = useState<Dayjs | null>(dayjs());
-  const [warehouseId, setWarehouseId] = useState(db.myWarehouseId);
-  const [method, setMethod] = useState<string>("TUNAI");
-  const [paid, setPaid] = useState<number>();
-  const [shippingFee, setShippingFee] = useState<number>();
-  const [taxFee, setTaxFee] = useState<number>();
+  const [step, setStep] = useState(restored?.step ?? 0);
+
+  const [supplier, setSupplier] = useState<string | undefined>(
+    restored?.supplier,
+  );
+  const [invoice, setInvoice] = useState(restored?.invoice ?? "");
+  const [noInvoice, setNoInvoice] = useState(restored?.noInvoice ?? false);
+  const [date, setDate] = useState<Dayjs | null>(
+    restored?.date ? dayjs(restored.date) : dayjs(),
+  );
+  const [warehouseId, setWarehouseId] = useState(
+    // A warehouse the shop has since removed would leave the Select showing an
+    // id, so the stored one is only taken when it is still a place.
+    restored?.warehouseId &&
+      db.warehouses.some((w) => w.id === restored.warehouseId)
+      ? restored.warehouseId
+      : db.myWarehouseId,
+  );
+  const [method, setMethod] = useState<string>(restored?.method ?? "TUNAI");
+  const [paid, setPaid] = useState<number | undefined>(restored?.paid);
+  const [shippingFee, setShippingFee] = useState<number | undefined>(
+    restored?.shippingFee,
+  );
+  const [taxFee, setTaxFee] = useState<number | undefined>(restored?.taxFee);
   /**
    * The negotiated discount, in whichever unit it was agreed in.
    *
@@ -101,10 +146,57 @@ export function InboundFormPage() {
    * built from and no schema column changes — so a percentage is resolved
    * against the subtotal at the moment the order is saved.
    */
-  const [discountMode, setDiscountMode] = useState<"RP" | "PCT">("RP");
-  const [discount, setDiscount] = useState<number>();
-  const [discountPct, setDiscountPct] = useState<number>();
-  const [lines, setLines] = useState<Line[]>([]);
+  const [discountMode, setDiscountMode] = useState<"RP" | "PCT">(
+    restored?.discountMode ?? "RP",
+  );
+  const [discount, setDiscount] = useState<number | undefined>(
+    restored?.discount,
+  );
+  const [discountPct, setDiscountPct] = useState<number | undefined>(
+    restored?.discountPct,
+  );
+  const [lines, setLines] = useState<Line[]>(() =>
+    (restored?.lines ?? []).map((l) => ({ ...l })),
+  );
+
+  /**
+   * The mirror. One effect over every answer, so nothing can be added to the
+   * form and quietly left out of what is saved.
+   */
+  useEffect(() => {
+    setStored({
+      step,
+      ...(supplier === undefined ? {} : { supplier }),
+      invoice,
+      noInvoice,
+      date: date ? date.format("YYYY-MM-DD") : null,
+      warehouseId,
+      method,
+      ...(paid === undefined ? {} : { paid }),
+      ...(shippingFee === undefined ? {} : { shippingFee }),
+      ...(taxFee === undefined ? {} : { taxFee }),
+      discountMode,
+      ...(discount === undefined ? {} : { discount }),
+      ...(discountPct === undefined ? {} : { discountPct }),
+      lines,
+    });
+  }, [
+    setStored,
+    step,
+    supplier,
+    invoice,
+    noInvoice,
+    date,
+    warehouseId,
+    method,
+    paid,
+    shippingFee,
+    taxFee,
+    discountMode,
+    discount,
+    discountPct,
+    lines,
+  ]);
 
   /**
    * `MoneyInput` clears to `null`; this state is `undefined`.
@@ -158,7 +250,20 @@ export function InboundFormPage() {
     return null;
   };
 
-  const save = () => {
+  /**
+   * Write the order — as a draft, or as one that has been placed.
+   *
+   * *Save draft* is the fallback the owner asked for on every step: a real
+   * `Po` with `status: "DRAFT"`, which is on the Inbound list, has a code and
+   * can be opened from another till. Auto-save cannot do any of that — it is
+   * this device's `localStorage` — so the two are not alternatives, they are a
+   * short net and a long one. See `lib/inboundDraft.ts`.
+   *
+   * Both go through the same writer, because a draft and a placed order differ
+   * in exactly one field and having two functions is how they come to differ
+   * in two.
+   */
+  const save = (status: "DRAFT" | "ORDERED" = "ORDERED") => {
     const err = step1Error();
     if (err) {
       message.error(err);
@@ -208,13 +313,24 @@ export function InboundFormPage() {
         shippingFee: shippingFee ?? 0,
         taxFee: taxFee ?? 0,
         discount: discountRp,
-        status: "ORDERED",
+        status,
       });
     });
+    // The order IS the draft now, so the device's copy has done its job.
+    // Leaving it behind would offer to restore this order onto the next one.
+    clearStored();
     message.success(
-      lines.length === 0
-        ? "Order saved. Add the products from the order page when the goods arrive."
-        : "Order saved.",
+      status === "DRAFT"
+        ? t(
+            "inboundForm.draftSaved",
+            "Saved as a draft. It is on the Inbound list — finish it whenever.",
+          )
+        : lines.length === 0
+          ? t(
+              "inboundForm.savedNoProducts",
+              "Order saved. Add the products from the order page when the goods arrive.",
+            )
+          : t("inboundForm.saved", "Order saved."),
     );
     navigate(`/inbound/${id}`);
   };
@@ -620,6 +736,46 @@ export function InboundFormPage() {
       backTo="/inbound"
     >
       <Flex vertical gap={16}>
+        {/*
+         * Auto-save, said out loud (owner ask 2026-09-15).
+         *
+         * A form that silently refills itself is a form somebody saves twice:
+         * they came to raise Tuesday's order and got Monday's, half-typed,
+         * with no sign of where it came from. The banner names what happened
+         * and offers the one thing the restore cannot guess — that they did
+         * not want it.
+         */}
+        {restoreOffered && (
+          <Alert
+            type="info"
+            showIcon
+            closable
+            onClose={() => setRestoreOffered(false)}
+            title={t(
+              "inboundForm.restoredTitle",
+              "Picked up where you left off",
+            )}
+            description={t(
+              "inboundForm.restoredBody",
+              "This order was still being typed when the page last closed. Nothing has been saved to Inbound yet — press Save draft for that.",
+            )}
+            action={
+              <Button
+                size="small"
+                onClick={() => {
+                  clearStored();
+                  setRestoreOffered(false);
+                  // A reload rather than eleven setters: the form seeds itself
+                  // from storage at mount, and mount is the only moment that
+                  // can put every field back to its default at once.
+                  navigate(0);
+                }}
+              >
+                {t("inboundForm.startFresh", "Start a fresh order")}
+              </Button>
+            }
+          />
+        )}
         <Steps
           current={step}
           onChange={setStep}
@@ -648,15 +804,35 @@ export function InboundFormPage() {
           </Typography.Text>
         }
       >
-        <Button onClick={() => navigate("/inbound")}>Cancel</Button>
-        {step > 0 && <Button onClick={() => setStep(step - 1)}>Back</Button>}
+        <Button
+          onClick={() => {
+            // Cancelling is a decision, so it takes the auto-saved copy with
+            // it: offering to restore an order somebody just abandoned is the
+            // banner that teaches people to ignore banners.
+            clearStored();
+            navigate("/inbound");
+          }}
+        >
+          {t("inboundForm.cancel", "Cancel")}
+        </Button>
+        {step > 0 && (
+          <Button onClick={() => setStep(step - 1)}>
+            {t("inboundForm.back", "Back")}
+          </Button>
+        )}
+        {/* On every step (owner ask 2026-09-15), because the reason to save a
+            draft — the goods have not arrived, nobody knows the prices yet —
+            turns up on step one as often as on step three. */}
+        <Button icon={<SaveOutlined />} onClick={() => save("DRAFT")}>
+          {t("inboundForm.saveDraft", "Save draft")}
+        </Button>
         {step < STEPS.length - 1 && (
           <Button type="primary" onClick={() => setStep(step + 1)}>
             {t("inboundForm.next", "Next")}
           </Button>
         )}
         {step === STEPS.length - 1 && (
-          <Button type="primary" onClick={save}>
+          <Button type="primary" onClick={() => save("ORDERED")}>
             {t("inboundForm.saveOrder", "Save order")}
           </Button>
         )}

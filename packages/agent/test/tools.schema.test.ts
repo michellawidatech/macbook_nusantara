@@ -22,7 +22,9 @@
 import { describe, expect, it } from "vitest";
 import {
   ANTHROPIC_TOOLS,
+  CUSTOMER_TOOLS,
   READ_TOOLS,
+  TERMINAL_TOOLS,
   WRITE_TOOLS,
   dispatchTool,
   phoneForms,
@@ -39,7 +41,9 @@ const ALLOWED = [
   "lookup_customer",
   "check_order",
   "search_knowledge",
+  "lookup_catalog",
   "handoff_to_staff",
+  "reply",
   "create_reservation",
   "cancel_reservation",
 ] as const;
@@ -67,8 +71,11 @@ describe("the tool whitelist", () => {
       "create_reservation",
     ]);
     expect([...READ_TOOLS].sort()).toEqual(
-      [...ALLOWED].filter((n) => !WRITE_TOOLS.includes(n as never)).sort(),
+      [...ALLOWED]
+        .filter((n) => !WRITE_TOOLS.includes(n as never) && n !== "reply")
+        .sort(),
     );
+    expect([...TERMINAL_TOOLS].sort()).toEqual(["handoff_to_staff", "reply"]);
   });
 
   it("ships a way to undo the write, because a hold nobody can release is a lost unit", () => {
@@ -77,19 +84,41 @@ describe("the tool whitelist", () => {
     expect(WRITE_TOOLS).toContain("cancel_reservation");
   });
 
-  it("hides the write tools from a caller that was granted no reserve capability", () => {
-    // The staff Draft page passes none: pressing Draft proposes a sentence, it
-    // does not book. A model cannot call a tool that is not in the array.
+  it("offers a customer's conversation no stock, price, order or booking tool during the parallel operation", () => {
+    // 2026-09-18: production holds the master data and NOT the shop's real
+    // stock or prices (policy.ts). A model cannot call a tool that is not in
+    // the array — and that holds for the worker too, reserve capability and
+    // all, because a booking would hold a unit this database does not have.
     const base = { from: "628111000111", now: new Date() };
-    const offered = toolsFor(base).map((t) => t.name).sort();
-    expect(offered).toEqual([...READ_TOOLS].sort());
-    expect(offered).not.toContain("create_reservation");
+    for (const ctx of [
+      base,
+      { ...base, reserve: { write: noDb, staffId: "staff_agent" } },
+    ]) {
+      const offered = toolsFor(ctx)
+        .map((t) => t.name)
+        .sort();
+      expect(offered).toEqual([...CUSTOMER_TOOLS].sort());
+      for (const hidden of [
+        "search_stock",
+        "check_serial",
+        "browse_catalog",
+        "lookup_customer",
+        "check_order",
+        "create_reservation",
+        "cancel_reservation",
+      ]) {
+        expect(offered).not.toContain(hidden);
+      }
+    }
+  });
 
-    const withWrite = toolsFor({
-      ...base,
-      reserve: { write: noDb, staffId: "staff_agent" },
-    }).map((t) => t.name);
-    expect(withWrite).toContain("create_reservation");
+  it("offers a routed message no way to answer, only a way to hand over", () => {
+    const offered = toolsFor(
+      { from: "628111000111", now: new Date() },
+      { handoffOnly: true },
+    ).map((t) => t.name);
+    expect(offered).not.toContain("reply");
+    expect(offered).toContain("handoff_to_staff");
   });
 
   it("exposes no tool that can create an order, take a payment or change a price", () => {
@@ -119,7 +148,9 @@ describe("the tool whitelist", () => {
     }
     // And nothing may mutate a unit beyond the reservation hold.
     for (const name of names()) {
-      expect(/terjual|hilang|koreksi|klaim|opname|retur/i.test(name)).toBe(false);
+      expect(/terjual|hilang|koreksi|klaim|opname|retur/i.test(name)).toBe(
+        false,
+      );
     }
   });
 
@@ -282,9 +313,10 @@ describe("the tool arguments the model is allowed to supply", () => {
       /^(price|harga|amount|total|qty|quantity|status|grade|discount|diskon|cost|buy|landed)$/i;
     for (const tool of ANTHROPIC_TOOLS) {
       for (const key of Object.keys(tool.input_schema.properties ?? {})) {
-        expect(banned.test(key), `${tool.name}.${key} is not the model's to set`).toBe(
-          false,
-        );
+        expect(
+          banned.test(key),
+          `${tool.name}.${key} is not the model's to set`,
+        ).toBe(false);
       }
     }
   });

@@ -1,0 +1,367 @@
+#!/bin/zsh
+# nusantara-deploy — the one thing the CI's SSH key can do on the Mac mini.
+#
+# docs/deploy-pipeline.md is the pipeline this serves. setup-deploy-access
+# installs it root:wheel 755 at /usr/local/libexec/nusantara-deploy, and the
+# deploy key reaches it ONLY through the forced command on that key:
+#
+#   command="/usr/bin/sudo -n /usr/local/libexec/nusantara-deploy \"$SSH_ORIGINAL_COMMAND\""
+#
+# so whatever the client asks for arrives here as one string and is matched
+# against the four verbs below. Nothing the client sends is ever executed.
+#
+#   status                      what is live, what is installed, what is loaded
+#   backup <label>              pg_dump now, before a migration touches anything
+#   install <version> <sha256>  the release tarball on stdin: check it, unpack
+#                               it, switch to it, restart, health-check — and
+#                               switch BACK if the new release is not healthy
+#   rollback                    switch to the release that was live before
+#
+# An admin runs the same verbs by hand:
+#
+#   sudo /usr/local/libexec/nusantara-deploy status
+#
+# ⚠️ This file is the lock, not the key. Every release carries a copy in ops/,
+# but a release can never replace the installed one: a change here reaches the
+# Mac mini only when somebody re-runs setup-deploy-access.
+
+setopt err_exit no_unset pipe_fail
+zmodload zsh/system
+umask 022
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export LC_ALL=C
+
+INSTALLER_VERSION=1
+
+# Every path is fixed on the Mac mini. The overrides exist for rehearsing this
+# script in a scratch directory; sudo resets the environment, so nothing the
+# CI sends can set them.
+home=${NUSANTARA_HOME:-/opt/nusantara}
+svc_user=${NUSANTARA_USER:-_nusantara}
+svc_group=${NUSANTARA_GROUP:-staff}
+daemons=${NUSANTARA_DAEMONS:-/Library/LaunchDaemons}
+launchctl=${NUSANTARA_LAUNCHCTL:-/bin/launchctl}
+curl=${NUSANTARA_CURL:-/usr/bin/curl}
+caddy=${NUSANTARA_CADDY:-/opt/homebrew/bin/caddy}
+keep=${NUSANTARA_KEEP:-5}
+api_wait=${NUSANTARA_API_WAIT:-60}
+releases=$home/releases
+incoming=$home/incoming
+max_bytes=$(( 300 * 1024 * 1024 ))
+services=(api caddy worker webhook backup)
+
+say() { print -r -- "$*" }
+die() { print -ru2 -- "✗ nusantara-deploy: $*"; exit 1 }
+usage() {
+  print -u2 "usage: nusantara-deploy status | backup <label> | install <version> <sha256> | rollback"
+  exit 64
+}
+
+(( EUID == 0 )) || [[ -n ${NUSANTARA_HOME:-} ]] || die "run it as root: sudo $0 $*"
+
+# The directory a link points at, or nothing.
+target() {
+  if [[ -L $1 ]]; then readlink $1; fi
+}
+
+loaded() { $launchctl print system/local.nusantara.$1 >/dev/null 2>&1 }
+
+# point <link> <dir>: one rename(2), so no request ever meets a missing link.
+point() {
+  local tmp=$1.next.$$
+  ln -sfn $2 $tmp
+  mv -fh $tmp $1
+}
+
+as_svc() {
+  if (( EUID == 0 )); then
+    sudo -u $svc_user env HOME=$home/var XDG_DATA_HOME=$home/var XDG_CONFIG_HOME=$home/var "$@"
+  else
+    "$@"
+  fi
+}
+
+put_plist() {
+  if (( EUID == 0 )); then
+    install -m 644 -o root -g wheel $1 $daemons/
+  else
+    install -m 644 $1 $daemons/
+  fi
+}
+
+lock() {
+  mkdir -p $incoming
+  chmod 700 $incoming
+  : >>$incoming/.lock
+  zsystem flock -t 0 $incoming/.lock || die "another deploy is running on this machine"
+}
+
+# answers <url> <text> <seconds>: poll until the body contains <text>.
+answers() {
+  local url=$1 want=$2 body
+  local -i deadline=$(( SECONDS + $3 ))
+  while (( SECONDS < deadline )); do
+    if body=$($curl -fsS --max-time 3 $url 2>/dev/null) && [[ $body == *$want* ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+pid_of() {
+  $launchctl print system/local.nusantara.$1 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3; exit }'
+}
+
+# A process with no port answers nothing, so the worker counts as up when it is
+# running and is still the SAME process ten seconds later — KeepAlive restarts
+# a crashing one, and a crash loop is running half the time.
+stays_up() {
+  local first second
+  sleep 3
+  first=$(pid_of $1)
+  [[ -n $first ]] || return 1
+  sleep 10
+  second=$(pid_of $1)
+  [[ $second == $first ]]
+}
+
+# healthy <version or "">: every loaded service answers. With a version, the
+# API must say it is serving exactly that release (apps/api/src/config.ts) —
+# an API that answers "ok" from the old release is not a deploy.
+healthy() {
+  local want='"ok":true'
+  if [[ -n $1 ]]; then want="\"release\":\"$1\""; fi
+  if ! answers http://127.0.0.1:4000/api/health $want $api_wait; then
+    say "  ✗ the API did not answer${1:+ as $1} on :4000"
+    return 1
+  fi
+  if loaded caddy; then
+    if ! answers http://127.0.0.1:8080/api/health $want 15; then
+      say "  ✗ Caddy (:8080) does not reach the API"
+      return 1
+    fi
+    if ! answers http://127.0.0.1:8080/ '<script' 15; then
+      say "  ✗ Caddy (:8080) does not serve the SPA"
+      return 1
+    fi
+  fi
+  if loaded webhook && ! answers http://127.0.0.1:3001/health '"status":"ok"' 30; then
+    say "  ✗ the webhook did not answer on :3001"
+    return 1
+  fi
+  if loaded worker && ! stays_up worker; then
+    say "  ✗ the worker does not stay up"
+    return 1
+  fi
+  return 0
+}
+
+# What the CI log needs when a release will not come up: launchd's view of each
+# process and the tail of its own log.
+show_failure() {
+  local svc log
+  for svc in api webhook worker; do
+    loaded $svc || continue
+    say "  --- local.nusantara.$svc"
+    $launchctl print system/local.nusantara.$svc 2>/dev/null |
+      grep -E '^[[:space:]]+(state|pid|runs|last exit code) = ' |
+      sed 's/^[[:space:]]*/    /' || true
+    log=$home/logs/$svc.log
+    if [[ -r $log ]]; then tail -n 15 $log | cut -c1-300 | sed 's/^/    /'; fi
+  done
+}
+
+# activate <dir> [<dir it replaces>]: point current at <dir>, restart every
+# loaded service onto it, and reload any whose plist changed. Caddy restarts
+# only when its Caddyfile changed: it reads current/web on every request.
+activate() {
+  local dir=$1 was=${2:-} svc plist
+  point $home/current $dir
+  for svc in $services; do
+    loaded $svc || continue
+    plist=$dir/ops/launchd/local.nusantara.$svc.plist
+    if [[ -f $plist ]] && ! cmp -s $plist $daemons/local.nusantara.$svc.plist; then
+      put_plist $plist
+      $launchctl bootout system/local.nusantara.$svc 2>/dev/null || true
+      # bootout returns before the job is gone; bootstrap refuses until it is.
+      local -i tries=0
+      until $launchctl bootstrap system $daemons/local.nusantara.$svc.plist 2>/dev/null; do
+        (( ++tries < 10 )) || die "could not bootstrap local.nusantara.$svc"
+        sleep 1
+      done
+      say "  reloaded local.nusantara.$svc (its plist changed)"
+      continue
+    fi
+    if [[ $svc == (api|worker|webhook) ]]; then
+      $launchctl kickstart -k system/local.nusantara.$svc
+    elif [[ $svc == caddy && -n $was ]] && ! cmp -s $dir/ops/Caddyfile $was/ops/Caddyfile; then
+      $launchctl kickstart -k system/local.nusantara.caddy
+      say "  restarted Caddy (its Caddyfile changed)"
+    fi
+  done
+}
+
+# Keep the newest $keep releases, and never the live one or the one before it.
+prune() {
+  local cur=$(target $home/current) prev=$(target $home/previous) d
+  local -a all=( $releases/nusantara-*(N/om) )
+  for d in ${all[$(( keep + 1 )),-1]}; do
+    if [[ $d == $cur || $d == $prev ]]; then continue; fi
+    rm -rf -- $d
+    say "  pruned ${d:t}"
+  done
+}
+
+cmd_status() {
+  local cur=$(target $home/current) prev=$(target $home/previous) d svc
+  say "installer=$INSTALLER_VERSION"
+  say "arch=$(uname -m)"
+  say "current=${cur:t}"
+  say "previous=${prev:t}"
+  for d in $releases/nusantara-*(N/om); do say "installed=${d:t}"; done
+  for svc in $services; do
+    if loaded $svc; then say "service.$svc=loaded"; else say "service.$svc=not-loaded"; fi
+  done
+}
+
+cmd_backup() {
+  local label=$1 cur=$(target $home/current)
+  [[ $label =~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$' ]] || die "not a label: $label"
+  [[ -n $cur && -x $cur/ops/backup ]] || die "no live release to run ops/backup from"
+  lock
+  as_svc $cur/ops/backup $label
+}
+
+cmd_install() {
+  local version=$1 sha=$2
+  [[ $version =~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$' ]] || die "not a version: $version"
+  [[ $sha =~ '^[0-9a-f]{64}$' ]] || die "not a sha256: $sha"
+  loaded api || die "local.nusantara.api is not loaded — install the services by hand first (docs/deploy-macmini.md §4)"
+  lock
+
+  local name=nusantara-$version
+  local dest=$releases/$name
+  local was=$(target $home/current)
+  local upload=$incoming/$name.tar.gz
+  mkdir -p $releases
+  rm -rf -- $releases/.staging.*(N)
+
+  # 1. The bytes, capped, then hashed. Nothing is unpacked from a file whose
+  #    hash is not the one CI computed when it built the release.
+  head -c $(( max_bytes + 1 )) >$upload
+  local -i size=$(stat -f %z $upload)
+  if (( size == 0 )); then rm -f $upload; die "nothing arrived on stdin"; fi
+  if (( size > max_bytes )); then rm -f $upload; die "the upload is over $(( max_bytes >> 20 )) MB"; fi
+  local got=${$(shasum -a 256 $upload)[1]}
+  if [[ $got != $sha ]]; then rm -f $upload; die "sha256 mismatch: expected $sha, got $got"; fi
+
+  if [[ -d $dest ]]; then
+    if [[ ! -r $dest/.sha256 || $(<$dest/.sha256) != $sha ]]; then
+      rm -f $upload
+      die "$name is already installed from different bytes — refusing to replace it"
+    fi
+    rm -f $upload
+    say "  $name is already on this machine, byte for byte — reusing it"
+  else
+    # 2. The shape: regular files and directories, every one inside $name/.
+    #    No links, no absolute paths, no way out of releases/.
+    local listing names line bad=
+    listing=$(tar -tvzf $upload) || { rm -f $upload; die "not a readable .tar.gz" }
+    names=$(tar -tzf $upload)
+    for line in ${(f)listing}; do
+      if [[ $line != [-d]* ]]; then bad=$line; break; fi
+    done
+    for line in ${(f)names}; do
+      if [[ $line != $name && $line != $name/* || /$line/ == */../* ]]; then bad=$line; break; fi
+    done
+    if [[ -n $bad ]]; then rm -f $upload; die "refusing the tarball, it holds: $bad"; fi
+
+    local stage=$releases/.staging.$$
+    mkdir -m 700 $stage
+    tar -xzf $upload -C $stage --no-same-owner
+    [[ -f $stage/$name/RELEASE ]] || die "$name/RELEASE is missing"
+    local rv=$(sed -n 's/^version=//p' $stage/$name/RELEASE)
+    local ra=$(sed -n 's/^arch=//p' $stage/$name/RELEASE)
+    [[ $rv == $version ]] || die "RELEASE says version=$rv, not $version"
+    [[ $ra == $(uname -m) ]] || die "the release was built for $ra; this machine is $(uname -m)"
+    [[ -x $stage/$name/ops/run ]] || die "$name/ops/run is missing or not executable"
+    print -r -- $sha >$stage/$name/.sha256
+    xattr -cr $stage/$name 2>/dev/null || true
+    chown -R ${svc_user}:${svc_group} $stage/$name
+    mv $stage/$name $dest
+    rmdir $stage
+    rm -f $upload
+    say "  unpacked $name"
+  fi
+
+  if [[ $was == $dest ]]; then
+    say "  $name is already live — checking it"
+    if ! healthy $version; then show_failure; die "$name is live but not healthy"; fi
+    say "✓ $name is live"
+    return 0
+  fi
+
+  # 3. A Caddyfile that does not parse would take the whole site down on the
+  #    restart below, so it is checked before anything is switched.
+  if loaded caddy && [[ -n $was ]] && ! cmp -s $dest/ops/Caddyfile $was/ops/Caddyfile; then
+    as_svc $caddy validate --config $dest/ops/Caddyfile --adapter caddyfile >/dev/null 2>&1 ||
+      die "the new Caddyfile does not validate — nothing was switched"
+  fi
+
+  # 4. Switch, restart, and prove it.
+  local was_name=${was:t}
+  say "  switching: ${was_name:-nothing} → $name"
+  activate $dest $was
+  if healthy $version; then
+    if [[ -n $was ]]; then point $home/previous $was; fi
+    prune
+    say "✓ $name is live${was_name:+ (was $was_name)}"
+    return 0
+  fi
+
+  # 5. It did not come up: put the old one back. The database is NOT touched —
+  #    the migrations stay, which is why a migration must never break the
+  #    release before it (docs/deploy-pipeline.md).
+  show_failure
+  [[ -n $was ]] || die "$name is not healthy, and there is nothing to switch back to"
+  say "  switching back to $was_name"
+  activate $was $dest
+  if healthy ""; then die "$name failed its health check; $was_name is serving again"; fi
+  show_failure
+  die "$name failed its health check, and $was_name is not healthy either — look at the Mac mini now"
+}
+
+cmd_rollback() {
+  local cur=$(target $home/current) prev=$(target $home/previous)
+  [[ -n $prev && -d $prev ]] || die "no previous release is recorded"
+  [[ $prev != $cur ]] || die "the previous release is the live one"
+  lock
+  say "  switching back: ${cur:t} → ${prev:t}"
+  activate $prev $cur
+  if healthy ""; then
+    point $home/previous $cur
+    say "✓ ${prev:t} is live (rolled back from ${cur:t})"
+    return 0
+  fi
+  show_failure
+  say "  ${prev:t} is not healthy either — switching forward to ${cur:t} again"
+  activate $cur $prev
+  healthy "" || die "neither release is healthy — look at the Mac mini now"
+  die "the rollback failed; ${cur:t} is serving again"
+}
+
+# The forced command hands over ONE string; an admin at the keyboard hands
+# over words. Split the first into the second. No globbing happens here:
+# zsh does not glob the result of a parameter expansion.
+if (( $# == 1 )); then set -- ${=1}; fi
+verb=${1:-}
+if (( $# )); then shift; fi
+
+case $verb in
+  status)   (( $# == 0 )) || usage; cmd_status ;;
+  backup)   (( $# == 1 )) || usage; cmd_backup $1 ;;
+  install)  (( $# == 2 )) || usage; cmd_install $1 $2 ;;
+  rollback) (( $# == 0 )) || usage; cmd_rollback ;;
+  *)        usage ;;
+esac

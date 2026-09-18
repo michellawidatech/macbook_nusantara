@@ -6,7 +6,7 @@ Environment, and a trigger that promotes code into it.
 | | dev | stage | prod |
 |---|---|---|---|
 | Database | `nusantara_pos_rebuild` | `nusantara_pos_stage` | `nusantara_pos_prod` |
-| Enters on | a pull request | merge to `main` | a `v*` tag |
+| Enters on | any push | merge to `main` | a `v*` tag |
 | GitHub Environment | `dev` | `stage` | `prod` |
 | Refs allowed in | any | `main` only | `v*` tags only |
 
@@ -69,25 +69,30 @@ psql "postgresql://nusantara@localhost:5432/nusantara_pos_stage" -tAc "select co
 
 ## What CI does with them
 
-`.github/workflows/ci.yml` gates every environment behind the same two jobs —
-format/lint/types/build, and the suites against a real PostgreSQL 16 — and then
-records a deployment against the matching GitHub Environment. The gates are the
-promotion; the environments are where per-environment secrets live.
+`.github/workflows/ci.yml` runs the same two jobs on every push to every
+branch — format/lint/types/build, and the suites against a real PostgreSQL 16.
+Only `prod` goes further: a `v*` tag builds the release and deploys it to the
+Mac mini (`docs/deploy-pipeline.md`), and the deploy job runs in the GitHub
+Environment `prod`, which is where its credentials live and which admits only
+`v*` tags.
 
 ## What is deliberately missing
 
-**Only `monitor` still has no hosting target.** The other four got one on
-2026-09-02 and `docs/deploy.md` describes them: `web` on Netlify, and `api`,
-`worker` and `whatsapp-webhook` on Render as three services off one image,
-declared together in a `render.yaml` Blueprint, with a `Dockerfile` and a
-`netlify.toml` beside it.
+**Only `monitor` still has no hosting target.** The other four ship to the
+shop's Mac mini as one compiled release (`docs/deploy-macmini.md`): the SPA
+behind Caddy, `api` under launchd, and `worker` and `whatsapp-webhook` beside
+it, switched on when WhatsApp moves there. Render and Netlify hosted them from
+2026-09-02 until they were retired on 2026-09-18.
 `monitor` is a package with a typecheck and no server to start.
 
-**CI still does not deploy.** `.github/workflows/ci.yml` records a deployment
-against the matching GitHub Environment and stops there — the gates are the
-promotion, and pushing the image is a command somebody runs. Same reasoning as
-the migrations: `prisma migrate status` lies in this project, so the step that
-would report a bad deploy is the one that cannot be trusted to.
+**CI deploys `prod`, and only `prod`** (2026-09-18). Until then it deployed
+nothing, for a reason that still stands: `prisma migrate status` lies in this
+project, so the step that would report a bad deploy was the one that could not
+be trusted. The pipeline never asks it. After `prisma migrate deploy` it asks
+the database — every migration the tag carries is applied and finished, none is
+half-done, and `nusantara_app`'s grants still read `t|f|t|f|t` — and it
+switches no code on until all three hold. `dev` and `stage` have no host, so a
+push to a branch or to `main` is checked and goes no further.
 
 **`prod` has no required-reviewer gate.** That protection rule needs a paid plan
 on a private repository, and this one is GitHub Free. What stands in for it is
@@ -95,6 +100,6 @@ the deployment branch policy: only a `v*` tag can enter `prod`, and cutting a
 tag is already a deliberate act. If the repo moves to Pro or Team, add the
 reviewer gate in Settings → Environments → prod.
 
-Stage and prod both live on the developer cluster today, because there is no
-second host. When one exists, only the host and the password in
-`secrets/<env>.env` change.
+`prod` lives on the shop's Mac mini. `stage` still lives on the developer
+cluster, because there is no second host; when one exists, only the host and
+the password in `secrets/<env>.env` change.

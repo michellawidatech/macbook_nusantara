@@ -80,6 +80,22 @@ export const saysAndCalls = (
  */
 export const silent = (): ScriptStep => ({ kind: "silent" });
 
+/** The model ends the turn with an answer and what it rests on (2026-09-18). */
+export const replies = (message: string, sources: string): ScriptStep =>
+  calls("reply", { message, sources });
+
+/** The model ends the turn by handing the customer to a colleague. */
+export const handsOver = (
+  topic: string,
+  summary: string,
+  customerMessage: string,
+): ScriptStep =>
+  calls("handoff_to_staff", {
+    topic,
+    summary,
+    customer_message: customerMessage,
+  });
+
 /** The SDK throws — an expired token, a rate limit, a network fault. */
 export const fails = (error: unknown): ScriptStep => ({ kind: "fail", error });
 

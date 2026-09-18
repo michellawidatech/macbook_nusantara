@@ -50,6 +50,7 @@ import {
 } from "@nusantara/fixture";
 import { appendUnitEvent } from "./appendUnitEvent.js";
 import { type PrismaClient, type Tx } from "./client.js";
+import { UNUSABLE_PASSWORD_HASH } from "./staffAccounts.js";
 
 export interface SeedOptions {
   /**
@@ -88,7 +89,14 @@ function rng(seed: number): () => number {
  * calling `seed()`.
  *
  * `forPo` is true for the owner's three ways of paying a supplier — cash, a
- * transfer and a card (2026-09-09);
+ * transfer and a marketplace (owner revision 2026-09-15: *"The payment method
+ * is wrong, it should be Cash, Transfer, and Marketplace"*). A card was on the
+ * list until then and is not any more; stock bought through a marketplace
+ * checkout is paid through it, which is what replaced it. Migration
+ * `20260915090000_po_payment_methods` says the same to a database that already
+ * exists, and `apps/web/src/mock/seed.ts` says it to the browser — all three
+ * have to agree, or the till and the API offer different lists.
+ *
  * `builtIn` marks the rows application code reads by `code` (MARKETPLACE
  * drives Shopee escrow), which staff may rename or deactivate but never drop.
  */
@@ -98,7 +106,7 @@ const PAYMENT_METHODS = [
     id: "pm_kartu_kredit",
     code: "KARTU_KREDIT",
     label: "Credit card",
-    forPo: true,
+    forPo: false,
     forSale: true,
   },
   // DEPOSIT was a row here until 2026-09-09 (owner decision): a deposit is the
@@ -153,7 +161,7 @@ const PAYMENT_METHODS = [
     id: "pm_marketplace",
     code: "MARKETPLACE",
     label: "Marketplace escrow",
-    forPo: false,
+    forPo: true,
     forSale: true,
   },
 ] as const;
@@ -164,15 +172,14 @@ export const SYSTEM_STAFF_ID = "staff_system";
 export const AGENT_STAFF_ID = "staff_agent";
 
 /**
- * A placeholder Argon2id hash.
+ * Seeded accounts carry no usable password.
  *
- * Deliberately not a hash of a real password: seeded accounts must not be
- * usable until someone sets a password through the API. It is a syntactically
- * valid hash of a random value, so nothing can log in as them.
+ * Deliberately: a seeded database must not be something anyone can sign in
+ * to. `pnpm --filter @nusantara/api accounts` is the step that opens the door —
+ * it gives every human account still carrying this hash the shop's initial
+ * password, which the person must replace at first sign-in (2026-09-18).
  */
-const UNUSABLE_HASH =
-  "$argon2id$v=19$m=19456,t=2,p=1$c2VlZGVkbm9sb2dpbnNhbHQ$Zm9yY2VkdG9mYWlsdmVyaWZpY2F0aW9u";
-
+const UNUSABLE_HASH = UNUSABLE_PASSWORD_HASH;
 
 const PAYMENT_METHOD_ID = new Map<string, string>(
   PAYMENT_METHODS.map((m) => [m.code, m.id]),
@@ -369,6 +376,9 @@ async function writeReference(
         id: c.id,
         name: c.name,
         sortOrder: c.sortOrder,
+        // Absent in the fixture means yes, which is the column's own default:
+        // every category that existed before 2026-09-15 was tracked by serial.
+        tracksSerial: c.tracksSerial ?? true,
         marginMode: "PCT",
         marginMin: 8n,
         marginMax: 25n,
@@ -385,9 +395,10 @@ async function writeReference(
         // so saying so here is what lets each column sort as one. Their units
         // differ, which is the whole point of the 2026-09-08 split: a
         // percentage, a count, and a capacity in mAh.
-        type: NUMERIC_ATTRS[key] === undefined
-          ? ("TEXT" as const)
-          : ("NUMBER" as const),
+        type:
+          NUMERIC_ATTRS[key] === undefined
+            ? ("TEXT" as const)
+            : ("NUMBER" as const),
         unit: NUMERIC_ATTRS[key] ?? null,
         sortOrder: j + 1,
       })),
@@ -901,9 +912,7 @@ export async function seed(
       async (tx: Tx) => {
         let n = 0;
         for (const unit of chunk) {
-          for (const e of shop.events.filter(
-            (x) => x.serial === unit.serial,
-          )) {
+          for (const e of shop.events.filter((x) => x.serial === unit.serial)) {
             await appendUnitEvent(tx, {
               serial: e.serial,
               type: e.type as Parameters<typeof appendUnitEvent>[1]["type"],
@@ -928,7 +937,9 @@ export async function seed(
     );
     events += written;
     if ((start / CHUNK) % 5 === 0) {
-      log(`riwayat: ${Math.min(start + CHUNK, shop.units.length)}/${shop.units.length}`);
+      log(
+        `riwayat: ${Math.min(start + CHUNK, shop.units.length)}/${shop.units.length}`,
+      );
     }
   }
 

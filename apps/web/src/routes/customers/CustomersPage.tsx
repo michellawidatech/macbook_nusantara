@@ -30,6 +30,7 @@ import {
   Flex,
   Form,
   Input,
+  InputNumber,
   Modal,
   Select,
   Tag,
@@ -57,7 +58,8 @@ import {
 } from "../../lib/salePayments.js";
 import { diffPayments } from "../../lib/paymentEdits.js";
 import { TYPE } from "../../theme/tokens";
-import { useDb, mutate, nextId } from "../../mock/store.js";
+import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
+import { useDb, mutate, nextId, currentStaffName } from "../../mock/store.js";
 import type { Customer, Order } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
 
@@ -78,24 +80,44 @@ export function CustomersPage() {
   );
   const ordersOf = (id: string) => db.orders.filter((o) => o.customerId === id);
   /** What one customer owes across every sale of theirs. */
-  const balanceOf = (id: string) => customerBalance(id, db.orders);
+  const balanceOf = (c: Customer) =>
+    customerBalance(c.id, db.orders, c.openingBalance);
   const refName = (id?: string) =>
     db.referralSources.find((r) => r.id === id)?.name;
 
   const save = () =>
     form.validateFields().then((v) => {
+      const { openingBalance, ...rest } = v;
+      const opening =
+        typeof openingBalance === "number" && openingBalance > 0
+          ? openingBalance
+          : undefined;
+      const now = new Date().toISOString();
       mutate((d) => {
         if (editing === "new") {
           d.customers.unshift({
             id: nextId("c"),
-            createdAt: new Date().toISOString(),
-            ...v,
+            createdAt: now,
+            ...rest,
+            // Optional since the B2Soft customers arrived without one (owner
+            // answer 2026-09-13): staff add the number when they have it.
+            phone: rest.phone ?? "",
+            ...(opening === undefined
+              ? {}
+              : { openingBalance: opening, openingBalanceAt: now }),
           });
         } else if (editing) {
-          Object.assign(
-            d.customers.find((c) => c.id === editing.id)!,
-            v,
-          );
+          const c = d.customers.find((x) => x.id === editing.id)!;
+          Object.assign(c, rest, { phone: rest.phone ?? "" });
+          // The date says when the old debt was stated, so it moves only when
+          // the figure does — fixing a phone number is not a new statement.
+          if (opening === undefined) {
+            delete c.openingBalance;
+            delete c.openingBalanceAt;
+          } else if (opening !== c.openingBalance) {
+            c.openingBalance = opening;
+            c.openingBalanceAt = now;
+          }
         }
       });
       message.success("Customer saved.");
@@ -114,7 +136,7 @@ export function CustomersPage() {
   const savePayments = (order: Order, next: SalePayment[], reason: string) => {
     const rows = diffPayments(paymentsOf(order), next, {
       at: new Date().toISOString(),
-      staff: "Michella",
+      staff: currentStaffName(),
       ...(reason ? { reason } : {}),
     });
     mutate((d) => {
@@ -213,7 +235,7 @@ export function CustomersPage() {
               align: "right",
               width: 190,
               render: (_, c) => {
-                const b = balanceOf(c.id);
+                const b = balanceOf(c);
                 if (b.owed === 0 && b.pending === 0) {
                   return <Typography.Text type="secondary">—</Typography.Text>;
                 }
@@ -320,6 +342,18 @@ export function CustomersPage() {
                   label: t("customers.referral", "Referral"),
                   children: refName(viewing.referralSourceId) ?? "—",
                 },
+                ...(viewing.openingBalance
+                  ? [
+                      {
+                        key: "o",
+                        label: t("customers.oldDebt", "Owed from before this app"),
+                        children: t("customers.oldDebtSince", "{{amount}} as of {{date}}", {
+                          amount: fmtRp(viewing.openingBalance),
+                          date: fmtDate(viewing.openingBalanceAt ?? viewing.createdAt),
+                        }),
+                      },
+                    ]
+                  : []),
               ]}
             />
             <DataTable
@@ -471,7 +505,6 @@ export function CustomersPage() {
           <Form.Item
             name="phone"
             label={t("customers.phoneNumber", "Phone number")}
-            rules={[{ required: true }]}
           >
             <Input placeholder="+62…" />
           </Form.Item>
@@ -490,6 +523,23 @@ export function CustomersPage() {
               options={db.referralSources
                 .filter((r) => r.active)
                 .map((r) => ({ value: r.id, label: r.name }))}
+            />
+          </Form.Item>
+          <Form.Item
+            name="openingBalance"
+            label={t("customers.oldDebtLabel", "What they already owe us")}
+            tooltip={t(
+              "customers.oldDebtHint",
+              "A debt from before this app, with no sale here to show for it. It is stated once and added to what their sales still owe.",
+            )}
+          >
+            <InputNumber
+              min={0}
+              precision={0}
+              prefix={RP_SYMBOL}
+              formatter={moneyFormatter}
+              parser={moneyParser}
+              style={{ width: "100%" }}
             />
           </Form.Item>
         </Form>

@@ -41,8 +41,14 @@ beforeEach(async () => {
   await db.staff.deleteMany({ where: { id: STAFF } });
   await db.staff.create({
     data: {
-      id: STAFF, username: "kb_staff", name: "Staf", role: "STAFF",
-      canApprove: false, active: true, passwordHash: "unusable", createdAt: NOW,
+      id: STAFF,
+      username: "kb_staff",
+      name: "Staf",
+      role: "STAFF",
+      canApprove: false,
+      active: true,
+      passwordHash: "unusable",
+      createdAt: NOW,
     },
   });
 });
@@ -50,8 +56,12 @@ beforeEach(async () => {
 async function entry(question: string, answer: string, active = true) {
   return db.agentKnowledge.create({
     data: {
-      question, answer, active,
-      createdById: STAFF, createdAt: NOW, updatedAt: NOW,
+      question,
+      answer,
+      active,
+      createdById: STAFF,
+      createdAt: NOW,
+      updatedAt: NOW,
     },
   });
 }
@@ -73,7 +83,10 @@ describe("finding an approved answer", () => {
 
   it("matches on the answer text too, not only the question", async () => {
     // A customer rarely phrases it the way staff wrote the question.
-    await entry("Pengiriman", "Kami kirim ke seluruh Indonesia lewat JNE dan SiCepat.");
+    await entry(
+      "Pengiriman",
+      "Kami kirim ke seluruh Indonesia lewat JNE dan SiCepat.",
+    );
     expect(await ask("sicepat")).toMatchObject({ found: true });
   });
 
@@ -82,11 +95,18 @@ describe("finding an approved answer", () => {
     expect(await ask("cicilan kredivo")).toMatchObject({ found: true });
   });
 
-  it("tells the bot to reword rather than read the answer out verbatim", async () => {
+  it("tells the bot to keep the owner's words and add nothing, and hands back a citable handle", async () => {
+    // 2026-09-18: the owner's answers are scripts, sent close to verbatim
+    // and cited by handle (converse.ts checks the citation).
     await entry("Garansi berapa lama?", "90 hari garansi toko.");
     const out = await ask("garansi");
-    expect(String(out["guidance"])).toMatch(/reword them into your own voice/i);
-    expect(String(out["guidance"])).toMatch(/do not add anything they do not say/i);
+    expect(String(out["guidance"])).toMatch(
+      /keep its facts and its wording close/i,
+    );
+    expect(String(out["guidance"])).toMatch(
+      /do not add anything it does not say/i,
+    );
+    expect((out["answers"] as Array<{ handle: string }>)[0]!.handle).toBe("K1");
   });
 
   it("never returns an answer staff switched off", async () => {
@@ -148,6 +168,10 @@ describe("what a customer cannot do to it", () => {
     const names = ANTHROPIC_TOOLS.map((t) => t.name);
     expect(names).not.toContain("save_knowledge");
     expect(names).not.toContain("remember_preference");
-    expect(names.filter((n) => /knowledge/.test(n))).toEqual(["search_knowledge"]);
+    expect(names.filter((n) => /knowledge/.test(n))).toEqual([
+      "search_knowledge",
+    ]);
+    // `reply` sends words to a customer; it writes nothing the bot reads back.
+    expect(names).not.toContain("save_answer");
   });
 });

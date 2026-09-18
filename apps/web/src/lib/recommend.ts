@@ -32,7 +32,7 @@
  * |---|---|---|
  * | confidence | P(candidate ∣ basket item), over past receipts | how often this actually followed that |
  * | lift | confidence ÷ the candidate's own base rate | whether that is a real association or just a popular item |
- * | margin | `Sku.price` vs `Unit.buy` | two machines the customer would like equally are not equally worth selling |
+ * | margin | `Sku.price` vs `costOfUnit` (bought, shipping & tax, repairs) | two machines the customer would like equally are not equally worth selling |
  * | age | the unit's intake event | old stock is money on a shelf; the shop wants it gone first |
  * | fit | price step over the basket line (upgrades only) | a small step up is a conversation, a huge one is a different customer |
  * | bundle | a live `BUNDLE` discount this unit would complete | the one suggestion that makes the basket CHEAPER per item |
@@ -64,6 +64,7 @@ import {
   scopeMatches,
   type BasketLine,
 } from "./pricing.js";
+import { costIndex, type UnitCost } from "./service.js";
 
 export type RecommendationKind = "UPGRADE" | "ADDON";
 
@@ -239,6 +240,12 @@ interface Index {
   readonly units: Map<string, Unit>;
   /** Serial → its earliest event timestamp. The intake date, per `intakeOf`. */
   readonly intake: Map<string, string>;
+  /**
+   * What each machine has cost the shop — `costIndex`: bought, its share of
+   * its invoice's shipping and tax (2026-09-15), and its repairs. Indexed for
+   * the reason everything else here is: one share needs its whole invoice.
+   */
+  readonly cost: (unit: Unit) => UnitCost;
 }
 
 function buildIndex(db: MockDb): Index {
@@ -252,7 +259,7 @@ function buildIndex(db: MockDb): Index {
     const held = intake.get(e.serial);
     if (held === undefined || e.at < held) intake.set(e.serial, e.at);
   }
-  return { skus, models, units, intake };
+  return { skus, models, units, intake, cost: costIndex(db) };
 }
 
 function resolve(ix: Index, unit: Unit): Resolved | null {
@@ -459,13 +466,17 @@ function ageScore(intake: string | undefined, now: number): number {
 /**
  * Margin on this machine, as a fraction of what it sells for, clamped to 0…1.
  *
- * Of revenue, matching `marginPct` in lib/pos.ts and the P&L. A unit with no
- * recorded cost scores 0 rather than 1: an unknown cost is not a 100% margin,
- * and treating it as one would float every un-costed machine to the top.
+ * Of revenue, matching `marginPct` in lib/pos.ts and the P&L, and against all
+ * the machine cost — `costOfUnit`, so one that came in carrying a share of an
+ * invoice's ongkir is worth that much less to sell (2026-09-15). A unit with
+ * no recorded purchase price scores 0 rather than 1: an unknown cost is not a
+ * 100% margin, and treating it as one would float every un-costed machine to
+ * the top. A share of shipping on top of an unknown price is still an unknown
+ * cost, which is why the test is on `buy`.
  */
-function marginScore(price: number, buy: number): number {
-  if (price <= 0 || buy <= 0) return 0;
-  return Math.max(0, Math.min(1, (price - buy) / price));
+function marginScore(price: number, cost: UnitCost): number {
+  if (price <= 0 || cost.buy <= 0) return 0;
+  return Math.max(0, Math.min(1, (price - cost.total) / price));
 }
 
 /**
@@ -605,8 +616,8 @@ export function recommendFor(
           detail: `${rp(step)} (${pct(step / line.price)})`,
         },
         margin: {
-          value: marginScore(cand.price, cand.unit.buy),
-          detail: pct(marginScore(cand.price, cand.unit.buy)),
+          value: marginScore(cand.price, ix.cost(cand.unit)),
+          detail: pct(marginScore(cand.price, ix.cost(cand.unit))),
         },
         age: {
           value: ageScore(intakeOf(ix, cand.unit.serial), now),
@@ -664,7 +675,7 @@ export function recommendFor(
   for (const cand of addonCandidates) {
     const note = bundleFor(db, lines, cand);
     const found = bestRule(baskets, basket, cand);
-    const margin = marginScore(cand.price, cand.unit.buy);
+    const margin = marginScore(cand.price, ix.cost(cand.unit));
     const age = ageScore(intakeOf(ix, cand.unit.serial), now);
 
     // Discounted for a backed-off rule — see `CATEGORY_BACKOFF`. Applied to

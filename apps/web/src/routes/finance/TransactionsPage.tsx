@@ -42,7 +42,7 @@ import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { InvoiceModal } from "../../components/Invoice";
 import { fmtRp, fmtDateTime } from "../../lib/format.js";
-import { mutate, nextId, useDb } from "../../mock/store.js";
+import { mutate, nextId, useDb, currentStaffName } from "../../mock/store.js";
 import type { Order } from "../../mock/seed.js";
 import { PaymentsModal } from "../../components/PaymentsModal";
 import { diffPayments } from "../../lib/paymentEdits.js";
@@ -198,7 +198,7 @@ export function TransactionsPage() {
     const before = paymentsOf(order);
     const rows = diffPayments(before, next, {
       at: new Date().toISOString(),
-      staff: "Michella",
+      staff: currentStaffName(),
       ...(reason ? { reason } : {}),
     });
     mutate((d) => {

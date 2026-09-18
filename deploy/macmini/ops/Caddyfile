@@ -1,14 +1,16 @@
-# Nusantara POS — ONE origin for the SPA, /api and /auth, which is what Vite's
-# dev proxy and Netlify both arrange: the session cookie is SameSite=Lax, and
-# the Auth0 callback has to land on the SPA's own origin.
+# Nusantara POS — ONE origin for the SPA and /api, which is what Vite's dev
+# proxy arranges too: the session cookie is SameSite=Lax and HttpOnly, and the
+# sign-in form posts to the same origin that set it.
 #
-# Plain HTTP on loopback only. HTTPS is Cloudflare Tunnel's job, and nothing on
-# the shop's network can reach this port directly.
+# Plain HTTP on loopback only. HTTPS is `tailscale serve`'s job
+# (docs/deploy-macmini.md §5), and nothing on the shop's network can reach this
+# port directly.
 {
 	auto_https off
 	servers {
-		# cloudflared connects from loopback; trusting it is what lets its
-		# X-Forwarded-Proto: https reach the API.
+		# tailscale serve connects from loopback; trusting it is what lets the
+		# client's address (X-Forwarded-For) and X-Forwarded-Proto: https reach
+		# the API, whose login throttle keys on the address.
 		trusted_proxies static 127.0.0.1/32 ::1/128
 	}
 }
@@ -17,7 +19,7 @@
 	bind 127.0.0.1 [::1]
 	encode zstd gzip
 
-	@backend path /api /api/* /auth /auth/*
+	@backend path /api /api/*
 	handle @backend {
 		reverse_proxy 127.0.0.1:4000
 	}

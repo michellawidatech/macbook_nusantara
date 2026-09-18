@@ -196,7 +196,7 @@ describe("readBattery", () => {
 
   it("reads a pre-2021 machine as cycles and ignores a stray percentage", () => {
     const r = readBattery(old, 2017);
-    expect(r.era).toBe("CYCLES");
+    expect(r.mode).toBe("CYCLES");
     expect(r.cycleCount).toBe(312);
     expect(r.fcc).toBe(4800);
     expect(r.health).toBeUndefined();
@@ -206,7 +206,7 @@ describe("readBattery", () => {
 
   it("reads a 2021-or-later machine as health and ignores a stray count", () => {
     const r = readBattery(old, 2023);
-    expect(r.era).toBe("HEALTH");
+    expect(r.mode).toBe("HEALTH");
     expect(r.health).toBe(91);
     expect(r.cycleCount).toBeUndefined();
     expect(r.grade).toBe("good");

@@ -22,11 +22,13 @@
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import dayjs from "dayjs";
 import {
   Alert,
   App,
   Button,
   Card,
+  DatePicker,
   Descriptions,
   Empty,
   Flex,
@@ -48,6 +50,7 @@ import {
   CheckOutlined,
   CloseCircleOutlined,
   DeleteOutlined,
+  EditOutlined,
   InboxOutlined,
   LockOutlined,
   PlusOutlined,
@@ -85,22 +88,27 @@ import { fmtRp, fmtDate } from "../../lib/format.js";
 import {
   BATTERY_GRADE_COLOR,
   batteryDraftOf,
-  batteryEra,
+  defaultBatteryModeOfSku,
   batteryPatch,
   batterySettingsFrom,
   isBatteryDraftInRange,
   readBattery,
   BATTERY_FIELD_RANGE,
   type BatteryDraft,
-  type BatteryEra,
+  type BatteryField,
+  type BatteryMode,
 } from "../../lib/battery.js";
 import {
   INBOUND_STAGE_COLOR,
   INBOUND_STAGE_LABEL,
+  PO_PAYMENT_STATUS_COLOR,
+  PO_PAYMENT_STATUS_LABEL,
+  PO_STATUS_LABEL,
+  PO_STATUSES,
   canReopenQc,
   paymentFor,
   poClosed,
-  poStage,
+  poPaymentStatus,
   poTotals,
   unitStage,
   unitsOfPo,
@@ -132,6 +140,10 @@ import {
   type ScanRejection,
 } from "../../lib/serialScan.js";
 import { readSerialInput } from "../../lib/serialInput.js";
+import {
+  countedSerial,
+  skuTracksSerial,
+} from "../../lib/serialTracking.js";
 import { serviceLocationOf } from "../../lib/service.js";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import {
@@ -145,6 +157,7 @@ import { wasScannedText } from "../../lib/scanner.js";
 import {
   PO_PAYMENT_FOR_LABEL,
   type MockDb,
+  type Po,
   type PoItem,
   type PoPaymentFor,
 } from "../../mock/seed.js";
@@ -156,6 +169,7 @@ import {
   appendEvent,
   ensureQcDescription,
   ensureReason,
+  currentStaffName,
 } from "../../mock/store.js";
 
 export function InboundDetailPage() {
@@ -164,8 +178,23 @@ export function InboundDetailPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { message, modal } = App.useApp();
-  const [payOpen, setPayOpen] = useState(false);
-  const [payMethod, setPayMethod] = useState("TUNAI");
+  /**
+   * The payment dialog: closed, adding, or correcting one already recorded
+   * (owner ask 2026-09-15 — *"All the payment/Purchase history should be
+   * editable and deletable"*).
+   *
+   * One dialog for both, because a correction asks the same three questions as
+   * a new payment. `id` is the payment being edited; `null` is closed.
+   */
+  const [paying, setPaying] = useState<{ readonly id?: string } | null>(null);
+  /**
+   * Undefined is a method nobody has picked (owner ask 2026-09-15 —
+   * *"Make the option/value that the user fill (e.g., payment method)
+   * deleteable, but cannot be empty if the Total Paid now is not empty"*), so
+   * the box can be cleared while somebody decides. The OK is what refuses to
+   * record money that does not say how it moved.
+   */
+  const [payMethod, setPayMethod] = useState<string | undefined>("TUNAI");
   const [payAmount, setPayAmount] = useState<number>();
   /**
    * Which part of the invoice the payment being recorded is settling.
@@ -431,10 +460,35 @@ export function InboundDetailPage() {
    * percentage onto it. Every group on this page is one variant, so the whole
    * block shares an era and the column can say what it is asking for.
    */
-  const eraOfSku = (skuId: string): BatteryEra => {
-    const sku = db.skus.find((s) => s.id === skuId);
-    const model = sku && db.models.find((m) => m.id === sku.modelId);
-    return batteryEra(model?.releaseYear);
+  /**
+   * Which reading a product's machines START on — the chip and the year, not
+   * the year alone (owner ask 2026-09-15). `defaultBatteryMode` is the rule;
+   * the switch on every row is what overrides it for one machine.
+   */
+  const modeOfSku = (skuId: string): BatteryMode =>
+    defaultBatteryModeOfSku(db, skuId);
+
+  /**
+   * Is this product identified one by one, or merely counted (owner ask
+   * 2026-09-15)?
+   *
+   * A counted product — an accessory — has no serial anybody reads, so this
+   * desk neither asks for one nor waits for one. See `lib/serialTracking.ts`.
+   */
+  const tracksSerial = (skuId: string) => skuTracksSerial(db, skuId);
+
+  /**
+   * A free handle for one counted item on this invoice.
+   *
+   * The invoice's code is in it, so two intakes of the same accessory cannot
+   * collide, and the loop is the belt: a line whose quantity went up and down
+   * can reach the same ordinal twice.
+   */
+  const freeCountedSerial = (skuId: string): string => {
+    for (let n = 1; ; n += 1) {
+      const candidate = countedSerial(`${skuId}-${po?.code ?? poId}`, n);
+      if (!db.units.some((u) => u.serial === candidate)) return candidate;
+    }
   };
 
   /** The product category behind a row — what picks its grading checklist. */
@@ -490,7 +544,7 @@ export function InboundDetailPage() {
     // refused reading never reaches a draft (see `commitBattery`), so
     // `batteryPatch` dropping an out-of-range one is belt and braces against
     // a value arriving by some other door.
-    const reading = batteryPatch(pending?.battery ?? {}, eraOfSku(skuId));
+    const reading = batteryPatch(pending?.battery ?? {}, modeOfSku(skuId));
     d.units.push({
       serial,
       skuId,
@@ -894,7 +948,7 @@ export function InboundDetailPage() {
    */
   const commitBattery = (
     row: QcRow,
-    field: keyof BatteryDraft,
+    field: BatteryField,
     value: number | null,
   ) => {
     /** Give the box back to what the store says. */
@@ -906,9 +960,9 @@ export function InboundDetailPage() {
         return rest;
       });
 
-    const era = eraOfSku(row.skuId);
+    const mode = modeOfSku(row.skuId);
     const draft = { ...(battery[row.key] ?? {}), [field]: value };
-    if (!isBatteryDraftInRange(draft, era)) {
+    if (!isBatteryDraftInRange(draft, mode)) {
       const [lo, hi] = BATTERY_FIELD_RANGE[field];
       message.error(
         t(
@@ -924,7 +978,43 @@ export function InboundDetailPage() {
     // clearing it here is what would empty the box under somebody's hand.
     if (row.kind === "slot") return;
     revert();
-    const next = batteryPatch(draft, era);
+    const next = batteryPatch(draft, mode);
+    const unit = row.unit;
+    if (
+      next.batteryHealth === unit.batteryHealth &&
+      next.cycleCount === unit.cycleCount &&
+      next.fcc === unit.fcc
+    ) {
+      return;
+    }
+    const serial = unit.serial;
+    mutate((d) => {
+      const u = d.units.find((x) => x.serial === serial)!;
+      u.batteryHealth = next.batteryHealth;
+      u.cycleCount = next.cycleCount;
+      u.fcc = next.fcc;
+    });
+  };
+
+  /**
+   * Flick one machine from cycles to health, or back.
+   *
+   * Separate from `commitBattery` because a switch is not a keystroke: there
+   * is no box to blur, nothing to refuse (a mode is always one of two), and
+   * the write has to happen even when both readings are empty — that is the
+   * case where somebody is telling the bench which two boxes to hold up
+   * before anybody has read the machine.
+   *
+   * `batteryPatch` does the clearing. Its own exception applies: switching to
+   * a reading with nothing in it leaves the other reading alone, so flicking
+   * the switch by accident cannot erase a number somebody measured.
+   */
+  const commitBatteryMode = (row: QcRow, draft: BatteryDraft) => {
+    setBattery((d) => ({ ...d, [row.key]: draft }));
+    // A slot has nowhere to file it yet — the draft IS the reading until a
+    // serial turns the row into a unit.
+    if (row.kind === "slot") return;
+    const next = batteryPatch(draft, modeOfSku(row.skuId));
     const unit = row.unit;
     if (
       next.batteryHealth === unit.batteryHealth &&
@@ -1192,7 +1282,11 @@ export function InboundDetailPage() {
   }
 
   const totals = poTotals(po);
-  const stage = poStage(po, db.units);
+  /**
+   * Where the MONEY stands (owner revision 2026-09-15) — what "Stage" used to
+   * be. See `poPaymentStatus`; the goods are answered by everything below.
+   */
+  const payment = poPaymentStatus(po);
   const supplier = db.suppliers.find((s) => s.id === po.supplierId);
   // What says the goods physically turned up. Until 2026-08-26 this read
   // `units.length > 0`, which worked only because arrival minted a placeholder
@@ -1335,7 +1429,7 @@ export function InboundDetailPage() {
             label: t("inbound.serviceShipLabel", "Transfer to the bench"),
             amount: v.shippingFee!,
             at: now,
-            staff: "Michella",
+            staff: currentStaffName(),
           });
         }
         if ((v.serviceFee ?? 0) > 0) {
@@ -1345,7 +1439,7 @@ export function InboundDetailPage() {
             label: t("inbound.serviceFeeRaised", "Quoted at QC"),
             amount: v.serviceFee!,
             at: now,
-            staff: "Michella",
+            staff: currentStaffName(),
           });
         }
         d.services.push({
@@ -1361,7 +1455,7 @@ export function InboundDetailPage() {
           ...(v.note ? { note: v.note } : {}),
           raisedBy: "QC",
           poId: po.id,
-          staff: "Michella",
+          staff: currentStaffName(),
         });
       });
       setSendingToService(null);
@@ -1674,48 +1768,207 @@ export function InboundDetailPage() {
     });
   };
 
+  /**
+   * Every fact about the invoice, and every one of them editable (owner ask
+   * 2026-09-15).
+   *
+   * > *"All of the information should be editable (Supplier, warehouse, No
+   * > invoice, Ordered, Warehouse, Status)."*
+   *
+   * These were read-only text, so a supplier picked in haste or an invoice
+   * number mistyped could only be fixed by raising the order again — which
+   * loses its lines, its payments and every serial graded against it. They
+   * write on CHANGE rather than through a Save: there is no draft here, each
+   * field is one fact, and a page with a Save button is a page somebody
+   * leaves without pressing it. `lib/inboundDraft.ts` is what protects the
+   * boxes that ARE a draft.
+   *
+   * Payment status is the exception and is not a field: it is derived from
+   * what has been paid (`poPaymentStatus`), so the way to change it is to
+   * record or correct a payment.
+   */
+  const setPo = (patch: (order: Po) => void) =>
+    mutate((d) => {
+      patch(d.pos.find((p) => p.id === po.id)!);
+    });
+
   const header = (
     <Card>
-      <Flex justify="space-between" align="flex-start" wrap gap={16}>
-        <Descriptions
-          column={{ xs: 1, sm: 2, md: 3 }}
-          items={[
-            {
-              key: "sup",
-              label: t("inbound.supplier", "Supplier"),
-              children: supplier?.name ?? "—",
-            },
-            {
-              key: "inv",
-              label: t("inbound.invoice", "Invoice"),
-              children: po.noInvoice ? (
-                <Typography.Text type="secondary">No invoice</Typography.Text>
-              ) : (
-                po.invoice
-              ),
-            },
-            {
-              key: "d",
-              label: t("inbound.ordered", "Ordered"),
-              children: fmtDate(po.date),
-            },
-            {
-              key: "wh",
-              label: t("inbound.warehouse", "Warehouse"),
-              children: db.warehouses.find((w) => w.id === po.locationId)?.name,
-            },
-            {
-              key: "st",
-              label: t("inbound.stage", "Stage"),
-              children: (
-                <Tag color={INBOUND_STAGE_COLOR[stage]}>
-                  {INBOUND_STAGE_LABEL[stage]}
+      <Descriptions
+        column={{ xs: 1, sm: 2, md: 3 }}
+        // `vertical` since the fields became editable: a label beside a
+        // full-width Select gives the Select about a third of the row, and
+        // "Apel Segar Nusantara" then reads as "Apel Segar Nus…".
+        layout="vertical"
+        items={[
+          {
+            key: "sup",
+            label: t("inbound.supplier", "Supplier"),
+            children: (
+              <Select
+                showSearch
+                optionFilterProp="label"
+                style={{ width: "100%" }}
+                disabled={closed}
+                aria-label={t("inbound.supplier", "Supplier")}
+                value={supplier?.id}
+                placeholder={t("inbound.pickSupplier", "Pick a supplier")}
+                options={db.suppliers.map((sup) => ({
+                  value: sup.id,
+                  label: sup.name,
+                }))}
+                onChange={(v: string) =>
+                  setPo((order) => {
+                    order.supplierId = v;
+                  })
+                }
+              />
+            ),
+          },
+          {
+            key: "inv",
+            label: t("inbound.invoice", "Invoice"),
+            children: (
+              <Flex vertical gap={4}>
+                <Input
+                  style={{ width: "100%" }}
+                  disabled={closed || po.noInvoice}
+                  aria-label={t("inbound.invoice", "Invoice")}
+                  placeholder={t(
+                    "inbound.invoiceNumber",
+                    "The supplier's invoice number",
+                  )}
+                  value={po.invoice}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setPo((order) => {
+                      order.invoice = v;
+                    });
+                  }}
+                />
+                {/* The escape hatch the owner kept (2026-08-26): a supplier
+                    who issues none is a fact, and a silently blank box is
+                    not. Ticking it clears the number, because a number kept
+                    behind a disabled box is one nobody can see or correct. */}
+                <Switch
+                  size="small"
+                  disabled={closed}
+                  checked={po.noInvoice === true}
+                  aria-label={t("inbound.noInvoiceAria", "No invoice issued")}
+                  checkedChildren={t("inbound.noInvoice", "No invoice")}
+                  unCheckedChildren={t("inbound.noInvoice", "No invoice")}
+                  onChange={(on) =>
+                    setPo((order) => {
+                      order.noInvoice = on || undefined;
+                      if (on) order.invoice = "";
+                    })
+                  }
+                />
+              </Flex>
+            ),
+          },
+          {
+            key: "d",
+            label: t("inbound.ordered", "Ordered"),
+            children: (
+              <DatePicker
+                style={{ width: "100%" }}
+                disabled={closed}
+                allowClear={false}
+                aria-label={t("inbound.ordered", "Ordered")}
+                // A named month cannot be read the American way round, which
+                // is the whole point — the same format the order form uses.
+                format="DD MMM YYYY"
+                value={po.date ? dayjs(po.date) : null}
+                onChange={(v) => {
+                  if (!v) return;
+                  const day = v.format("YYYY-MM-DD");
+                  setPo((order) => {
+                    order.date = day;
+                  });
+                }}
+              />
+            ),
+          },
+          {
+            key: "wh",
+            label: t("inbound.warehouse", "Warehouse"),
+            children: (
+              <Select
+                style={{ width: "100%" }}
+                disabled={closed}
+                aria-label={t("inbound.warehouse", "Warehouse")}
+                value={po.locationId}
+                options={db.warehouses.map((w) => ({
+                  value: w.id,
+                  label: w.name,
+                }))}
+                onChange={(v: string) =>
+                  setPo((order) => {
+                    order.locationId = v;
+                  })
+                }
+              />
+            ),
+          },
+          {
+            key: "st",
+            label: t("inbound.orderStatus", "Order status"),
+            children: (
+              <Select
+                style={{ width: "100%" }}
+                disabled={closed}
+                aria-label={t("inbound.orderStatus", "Order status")}
+                value={po.status}
+                options={PO_STATUSES.map((code) => ({
+                  value: code,
+                  label: t(PO_STATUS_LABEL[code]),
+                }))}
+                onChange={(v: Po["status"]) => {
+                  // Received is what mints the QC rows, so moving BACK from it
+                  // is the one direction that can strand graded work. It is
+                  // still allowed — this whole block exists because a wrong
+                  // answer has to be correctable — but it says so first.
+                  const leaving = po.status === "RECEIVED" && v !== "RECEIVED";
+                  const apply = () =>
+                    setPo((order) => {
+                      order.status = v;
+                    });
+                  if (!leaving) return apply();
+                  modal.confirm({
+                    title: t(
+                      "inbound.unreceiveTitle",
+                      "Mark this order as not arrived?",
+                    ),
+                    content: t(
+                      "inbound.unreceiveBody",
+                      "Serials & QC is built from a received order, so it disappears until the order is marked arrived again. Machines already accepted keep their serial, their grade and their timeline.",
+                    ),
+                    okText: t("inbound.unreceiveOk", "Mark not arrived"),
+                    onOk: apply,
+                  });
+                }}
+              />
+            ),
+          },
+          {
+            key: "pay",
+            /*
+             * Payment, not stage (owner revision 2026-09-15). Read-only
+             * because it is not a fact anybody types: it follows from the
+             * payments recorded below, which is where it is changed.
+             */
+            label: t("inbound.paymentStatus", "Payment status"),
+            children: (
+              <Flex align="center" style={{ minHeight: 32 }}>
+                <Tag color={PO_PAYMENT_STATUS_COLOR[payment]}>
+                  {t(PO_PAYMENT_STATUS_LABEL[payment])}
                 </Tag>
-              ),
-            },
-          ]}
-        />
-      </Flex>
+              </Flex>
+            ),
+          },
+        ]}
+      />
     </Card>
   );
 
@@ -1777,7 +2030,11 @@ export function InboundDetailPage() {
         <Button
           icon={<PlusOutlined />}
           disabled={closed}
-          onClick={() => setPayOpen(true)}
+          onClick={() => {
+            setPaying({});
+            setPayMethod("TUNAI");
+            setPayAmount(undefined);
+          }}
         >
           {t("inbound.recordPayment", "Record payment")}
         </Button>
@@ -1886,6 +2143,120 @@ export function InboundDetailPage() {
               align: "right",
               render: (v: number) => fmtRp(v),
             },
+            {
+              /*
+               * Correct one, or take it back (owner ask 2026-09-15).
+               *
+               * Until now a payment could only be added. A transfer typed as
+               * Rp1.000.000 when it was Rp10.000.000 left the invoice reading
+               * as outstanding forever, and the only remedy was a second,
+               * compensating payment — which is a lie about how many times
+               * the shop paid this supplier.
+               *
+               * Deleting is not a general licence. A payment funded out of a
+               * supplier DEPOSIT is an allocation, and unpicking it has to
+               * give the money back to the deposit; that is the Suppliers
+               * page's job, so those rows say so rather than offering a
+               * button that would strand the money.
+               */
+              title: "",
+              key: "actions",
+              width: 80,
+              render: (_, p) => {
+                const fromDeposit = p.fromDepositId !== undefined;
+                return (
+                  <Flex gap={4} justify="end">
+                    <Tooltip
+                      title={
+                        fromDeposit
+                          ? t(
+                              "inbound.depositPaymentLocked",
+                              "Paid out of a deposit — correct it on the supplier's account, so the money goes back to the deposit.",
+                            )
+                          : t("inbound.editPayment", "Edit this payment")
+                      }
+                    >
+                      <Button
+                        size="small"
+                        type="text"
+                        disabled={closed || fromDeposit}
+                        aria-label={t(
+                          "inbound.editPaymentAria",
+                          "Edit the payment of {{amount}}",
+                          { amount: fmtRp(p.amount) },
+                        )}
+                        icon={<EditOutlined />}
+                        onClick={() => {
+                          setPaying({ id: p.id });
+                          setPayMethod(p.method);
+                          setPayAmount(p.amount);
+                          setPayFor(paymentFor(p));
+                        }}
+                      />
+                    </Tooltip>
+                    <Tooltip
+                      title={
+                        fromDeposit
+                          ? t(
+                              "inbound.depositPaymentLocked",
+                              "Paid out of a deposit — correct it on the supplier's account, so the money goes back to the deposit.",
+                            )
+                          : t("inbound.deletePayment", "Delete this payment")
+                      }
+                    >
+                      <Button
+                        size="small"
+                        type="text"
+                        danger
+                        disabled={closed || fromDeposit}
+                        aria-label={t(
+                          "inbound.deletePaymentAria",
+                          "Delete the payment of {{amount}}",
+                          { amount: fmtRp(p.amount) },
+                        )}
+                        icon={<DeleteOutlined />}
+                        onClick={() =>
+                          modal.confirm({
+                            title: t(
+                              "inbound.deletePaymentTitle",
+                              "Delete this payment?",
+                            ),
+                            content: t(
+                              "inbound.deletePaymentBody",
+                              "{{amount}} against {{what}} stops counting towards this invoice, and the balance goes back up by that much. Record it again if it really was paid.",
+                              {
+                                amount: fmtRp(p.amount),
+                                what: t(
+                                  PO_PAYMENT_FOR_LABEL[paymentFor(p)],
+                                ).toLowerCase(),
+                              },
+                            ),
+                            okText: t("inbound.delete", "Delete"),
+                            okButtonProps: { danger: true },
+                            onOk: () => {
+                              mutate((d) => {
+                                const order = d.pos.find(
+                                  (x) => x.id === po.id,
+                                )!;
+                                order.payments = order.payments.filter(
+                                  (x) => x.id !== p.id,
+                                );
+                              });
+                              message.success(
+                                t(
+                                  "inbound.paymentDeleted",
+                                  "Payment deleted.",
+                                ),
+                              );
+                            },
+                          })
+                        }
+                      />
+                    </Tooltip>
+                  </Flex>
+                );
+              },
+            },
           ]}
         />
       </Flex>
@@ -1894,7 +2265,10 @@ export function InboundDetailPage() {
 
   const products = (
     <Card
-      title={t("inbound.products", "Products")}
+      // "Products" until 2026-09-15 (owner ask). The page has two lists of
+      // machines — the invoice's lines and the serials graded against them —
+      // and one titled "Products" did not say which.
+      title={t("inbound.productsInInvoice", "Product in invoice")}
       extra={
         !arrived && (
           <Button
@@ -2241,7 +2615,7 @@ export function InboundDetailPage() {
    * is left is exactly the things that differ per machine, which is what a row
    * was always supposed to be.
    */
-  const qcColumns = (era: BatteryEra) => [
+  const qcColumns = (mode: BatteryMode) => [
     {
       // Which machine of the group this is. The grid used to say "2 of 3
       // expected" inside the Product cell of every waiting row; as a column it
@@ -2276,6 +2650,25 @@ export function InboundDetailPage() {
             <Link to={`/stock/history?serial=${r.unit.serial}`}>
               {r.unit.serial}
             </Link>
+          );
+        }
+        /*
+         * A product the shop COUNTS has no serial anybody reads (owner ask
+         * 2026-09-15), so this desk does not ask for one. The handle is
+         * minted when the row is accepted — `takeIn` — because until then
+         * there is nothing to name.
+         *
+         * The cell still says something rather than being blank: a column
+         * with a star on it and an empty cell under it reads as a box that
+         * failed to render.
+         */
+        if (!tracksSerial(r.skuId)) {
+          return (
+            <Typography.Text type="secondary">
+              {r.kind === "unit"
+                ? t("inbound.countedItem", "Counted — no serial")
+                : t("inbound.countedOnAccept", "Counted — no serial needed")}
+            </Typography.Text>
           );
         }
         const stored = r.kind === "unit" ? r.unit.serial : "";
@@ -2536,22 +2929,23 @@ export function InboundDetailPage() {
     },
     {
       /*
-       * The battery, in whichever units this product's era reports (owner ask
-       * 2026-09-08).
+       * The battery, in whichever reading the machine is recorded in (owner
+       * asks 2026-09-08, 2026-09-15).
        *
-       * A 2020-or-earlier machine shows two boxes — charge cycles and full
-       * charge capacity — and a 2021-or-later one shows the percentage it has
-       * always shown. The title says which, because a column headed "Battery
-       * Health" over a box wanting a cycle count is a column that gets a
-       * percentage typed into it.
+       * An Intel machine of 2020 or before shows two boxes — charge cycles and
+       * full charge capacity — and an Apple silicon one, or anything from 2021
+       * on, shows the percentage it has always shown. The title says which the
+       * PRODUCT starts on, because a column headed "Battery Health" over a box
+       * wanting a cycle count is a column that gets a percentage typed into
+       * it; the switch in each cell is what one machine overrides it with.
        *
        * The one column definition per group that DOES vary, against the rule
        * in `qcColumns`' docblock. The width does not, which is what that rule
        * was protecting: the blocks still line up as one grid.
        */
-      title: batteryFieldsLabel(era, t),
+      title: batteryFieldsLabel(mode, t),
       key: "battery",
-      width: era === "CYCLES" ? 150 : 120,
+      width: mode === "CYCLES" ? 150 : 120,
       render: (_: unknown, r: QcRow) => {
         if (r.kind === "unit" && r.unit.status !== "QC") {
           const read = readBattery(
@@ -2572,8 +2966,13 @@ export function InboundDetailPage() {
         const draft = battery[r.key] ?? {};
         // The draft wins per FIELD, not per row: somebody who typed a cycle
         // count and has not touched the capacity should still see the
-        // capacity the store holds.
+        // capacity the store holds. The switch is the same bargain — the
+        // draft's `mode` if somebody flicked it, else whatever the machine's
+        // own numbers say it was recorded in.
         const shown: BatteryDraft = {
+          ...((draft.mode ?? stored.mode) === undefined
+            ? {}
+            : { mode: draft.mode ?? stored.mode }),
           health: draft.health === undefined ? stored.health : draft.health,
           cycleCount:
             draft.cycleCount === undefined
@@ -2583,7 +2982,7 @@ export function InboundDetailPage() {
         };
         return (
           <BatteryFields
-            era={era}
+            fallback={mode}
             value={shown}
             disabled={closed}
             idPrefix={`battery-${r.key}`}
@@ -2592,6 +2991,14 @@ export function InboundDetailPage() {
             }
             // Both commit, as the serial field's do.
             onCommit={(field, value) => commitBattery(r, field, value)}
+            // The switch has no blur to wait for, and flicking it is what
+            // CLEARS the other reading (`batteryPatch`) — so a machine
+            // switched to health stops reporting a count nobody can check
+            // against it the moment somebody says so, not when they next
+            // touch a box.
+            onModeCommit={(picked) =>
+              commitBatteryMode(r, { ...shown, mode: picked })
+            }
           />
         );
       },
@@ -2767,7 +3174,46 @@ export function InboundDetailPage() {
       fixed: "right" as const,
       align: "right" as const,
       render: (_: unknown, r: QcRow) => {
-        if (r.kind === "slot" || closed) return null;
+        if (closed) return null;
+        if (r.kind === "slot") {
+          /*
+           * A counted product has nothing to type, so nothing turns its slot
+           * into a unit by itself (owner ask 2026-09-15). This button is what
+           * a serial is for a tracked one: the moment somebody says the thing
+           * is really here.
+           */
+          if (tracksSerial(r.skuId)) return null;
+          return (
+            <Button
+              size="small"
+              icon={<PlusOutlined />}
+              aria-label={t("inbound.takeInCountedAria", "Take in one {{product}}", {
+                product: skuLabel(r.skuId),
+              })}
+              onClick={() => {
+                const serial = freeCountedSerial(r.skuId);
+                // What the bench typed into the row while it was still a
+                // slot, exactly as `commitSerial` carries it.
+                const carry = {
+                  description: notes[r.key] ?? [],
+                  battery: battery[r.key] ?? {},
+                  price: prices[r.key] ?? {},
+                  ...(gradeDrafts[r.key]
+                    ? { grade: gradeDrafts[r.key] }
+                    : {}),
+                };
+                mutate((d) => {
+                  identify(d, r.skuId, r.unitCost, serial, carry);
+                });
+                message.success(
+                  t("inbound.takenIn", "Taken in. Accept it when you are done."),
+                );
+              }}
+            >
+              {t("inbound.takeInCounted", "Take in")}
+            </Button>
+          );
+        }
         const serial = r.unit.serial;
 
         // A decision already taken, and the way back out of it.
@@ -3240,7 +3686,7 @@ export function InboundDetailPage() {
                   rowClassName={(r) =>
                     r.kind === "unit" && r.overQuota ? "row-over-quota" : ""
                   }
-                  columns={qcColumns(eraOfSku(g.skuId))}
+                  columns={qcColumns(modeOfSku(g.skuId))}
                 />
               </Card>
             );
@@ -3416,10 +3862,18 @@ export function InboundDetailPage() {
       </Modal>
 
       <Modal
-        open={payOpen}
-        title={t("inbound.recordAPayment", "Record a payment")}
-        okText={t("inbound.record", "Record")}
-        onCancel={() => setPayOpen(false)}
+        open={paying !== null}
+        title={
+          paying?.id
+            ? t("inbound.editAPayment", "Edit this payment")
+            : t("inbound.recordAPayment", "Record a payment")
+        }
+        okText={
+          paying?.id
+            ? t("inbound.saveChanges", "Save changes")
+            : t("inbound.record", "Record")
+        }
+        onCancel={() => setPaying(null)}
         onOk={() => {
           if (!payAmount || payAmount <= 0) {
             message.error(
@@ -3427,28 +3881,61 @@ export function InboundDetailPage() {
             );
             return;
           }
+          /*
+           * The half of the owner's ask that is NOT "make it deletable": the
+           * box may be emptied while somebody thinks, and an amount without a
+           * method may not be recorded. Money the shop cannot say the movement
+           * of lands in neither the cash pot nor the bank one
+           * (`lib/accounts.ts`), so it would go missing from the balance while
+           * still counting against the invoice.
+           */
+          if (!payMethod) {
+            message.error(
+              t(
+                "inbound.pickAMethod",
+                "Say how the money moved before recording it.",
+              ),
+            );
+            return;
+          }
           const applied = payFor;
+          const method = payMethod;
+          const amount = payAmount;
+          const editing = paying?.id;
           mutate((d) => {
-            d.pos
-              .find((p) => p.id === po.id)!
-              .payments.push({
+            const order = d.pos.find((p) => p.id === po.id)!;
+            if (editing === undefined) {
+              order.payments.push({
                 id: nextId("pp"),
-                method: payMethod,
-                amount: payAmount,
+                method,
+                amount,
                 at: new Date().toISOString(),
                 appliedTo: applied,
               });
+              return;
+            }
+            const row = order.payments.find((x) => x.id === editing);
+            if (row === undefined) return;
+            // `at` is left alone: it is when the money MOVED, which correcting
+            // the figure beside it does not change.
+            row.method = method;
+            row.amount = amount;
+            row.appliedTo = applied;
           });
           setPayAmount(undefined);
           // The bucket is NOT reset. Somebody settling three orders' shipping
           // in one sitting picks "Shipping" once, and a control that snaps
           // back to Products between them is a control they will forget to set
           // on the third.
-          setPayOpen(false);
+          setPaying(null);
           message.success(
-            t("inbound.paymentRecorded", "Payment recorded against {{what}}.", {
-              what: t(PO_PAYMENT_FOR_LABEL[applied]).toLowerCase(),
-            }),
+            editing
+              ? t("inbound.paymentUpdated", "Payment updated.")
+              : t(
+                  "inbound.paymentRecorded",
+                  "Payment recorded against {{what}}.",
+                  { what: t(PO_PAYMENT_FOR_LABEL[applied]).toLowerCase() },
+                ),
           );
         }}
       >
@@ -3466,11 +3953,28 @@ export function InboundDetailPage() {
             <Select
               value={payMethod}
               onChange={setPayMethod}
+              // Clearable (owner ask 2026-09-15). A method already recorded
+              // but since deactivated still has to show as itself rather than
+              // as an empty box, so the stored code is offered alongside the
+              // live list.
+              allowClear
+              status={payAmount && !payMethod ? "error" : undefined}
+              placeholder={t("inbound.pickMethod", "How the money moved")}
               aria-label={t("inbound.method", "Method")}
               options={db.paymentMethods
-                .filter((m) => m.forPo && m.active)
+                .filter(
+                  (m) => (m.forPo && m.active) || m.code === payMethod,
+                )
                 .map((m) => ({ value: m.code, label: m.label }))}
             />
+            {payAmount !== undefined && payAmount > 0 && !payMethod && (
+              <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                {t(
+                  "inbound.methodNeededForAmount",
+                  "An amount needs a method — the balance has to know whether it left the drawer or the bank.",
+                )}
+              </Typography.Text>
+            )}
           </Flex>
           <Flex vertical gap={4}>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>

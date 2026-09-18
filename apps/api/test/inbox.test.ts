@@ -556,9 +556,9 @@ describe("PUT /api/inbox/:phone/auto-reply", () => {
   });
 
   it("rejects anything that is not a wa_id", async () => {
-    expect((await put("/not-a-number/auto-reply", { enabled: false })).status).toBe(
-      400,
-    );
+    expect(
+      (await put("/not-a-number/auto-reply", { enabled: false })).status,
+    ).toBe(400);
   });
 
   it("rejects a body that does not say which way", async () => {
@@ -568,5 +568,100 @@ describe("PUT /api/inbox/:phone/auto-reply", () => {
     expect((await put(`/${PHONE}/auto-reply`, { enabled: "off" })).status).toBe(
       400,
     );
+  });
+});
+
+/**
+ * The bot's hand-overs, as the inbox shows them (2026-09-18): which threads
+ * the bot gave to a person, why, and the one action that gives a thread back
+ * without writing a reply.
+ */
+describe("a thread the bot handed to a person", () => {
+  /** A batch the worker handed over, exactly as apps/worker/src/draft.ts writes it. */
+  async function handedOver(text = "air m1 ready kak?") {
+    const row = await inbound({ id: `wamid.H${Math.random()}`, text });
+    return db.waMessage.update({
+      where: { id: row.id },
+      data: {
+        status: "PERLU_STAF",
+        intent: "staf:stock",
+        replyText: "Siap kak 😊 kami cekkan dulu ya",
+        answeredAt: new Date(),
+        entities: {
+          handoff: {
+            topic: "stock",
+            summary: "Tanya stok MacBook Air M1",
+            forcedBy: "route",
+            at: new Date().toISOString(),
+          },
+        },
+      },
+    });
+  }
+
+  it("is listed first, with the topic and the bot's note", async () => {
+    await inbound({ id: "wamid.QUIET", from: "628111000999", text: "halo" });
+    await handedOver();
+
+    const res = await get("");
+    expect(res.body.threads[0]).toMatchObject({
+      phone: PHONE,
+      handoff: {
+        topic: "stock",
+        summary: "Tanya stok MacBook Air M1",
+        forcedBy: "route",
+      },
+    });
+    expect(res.body.threads[1].handoff).toBeNull();
+  });
+
+  it("says so on the conversation and on the message", async () => {
+    await handedOver();
+    const res = await get(`/${PHONE}`);
+    expect(res.body.handoff).toMatchObject({ topic: "stock" });
+    expect(res.body.messages[0].handoff).toMatchObject({
+      topic: "stock",
+      summary: "Tanya stok MacBook Air M1",
+    });
+  });
+
+  it("reads an older escalation, with no note, as a hand-over too", async () => {
+    const row = await inbound({ id: "wamid.OLD", text: "halo" });
+    await db.waMessage.update({
+      where: { id: row.id },
+      data: { status: "PERLU_STAF", intent: "perlu_staf" },
+    });
+    const res = await get("");
+    expect(res.body.threads[0].handoff).toMatchObject({
+      topic: "other",
+      summary: null,
+    });
+  });
+
+  it("is closed by 'handled', which sends nothing and lets the bot answer again", async () => {
+    await handedOver();
+    await inbound({ id: "wamid.IMPATIENT", text: "kak?" });
+
+    const res = await request(app)
+      .post(`/api/inbox/${PHONE}/handled`)
+      .set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.closed).toBe(2);
+
+    expect(await db.outbox.count()).toBe(0);
+    const rows = await db.waMessage.findMany({ where: { from: PHONE } });
+    expect(rows.every((r) => r.status === "DIJAWAB_STAF")).toBe(true);
+    const list = await get("");
+    expect(list.body.threads[0]).toMatchObject({
+      handoff: null,
+      needsReply: false,
+    });
+  });
+
+  it("refuses 'handled' for a number that was never a thread", async () => {
+    const res = await request(app)
+      .post("/api/inbox/628000000001/handled")
+      .set("Cookie", cookie);
+    expect(res.status).toBe(404);
   });
 });

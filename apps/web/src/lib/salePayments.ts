@@ -258,6 +258,11 @@ export interface CustomerBalance {
   readonly pending: number;
   /** The customer's actual debt: promised-and-unpaid, plus unaccounted. */
   readonly owed: number;
+  /**
+   * Debt from before this app — `Customer.openingBalance` — which is already
+   * inside `owed`. Reported apart because there is no sale to open for it.
+   */
+  readonly openingBalance: number;
   /** How many of their sales still owe something. */
   readonly openSales: number;
   /** The earliest promise date across their sales. */
@@ -272,6 +277,10 @@ export interface CustomerBalance {
  * payment"* — is this shape, per row. Note `pending` is reported and is NOT
  * part of `owed`: a marketplace holding the money is not the customer failing
  * to pay, and a shop that chases the second for the first loses the customer.
+ *
+ * `openingBalance` is what the customer owed before this app existed. It is
+ * debt, so it is part of `owed`; it has no sale and no promise date, so it
+ * moves neither `openSales` nor `nextDueAt`.
  */
 export function customerBalance(
   customerId: string,
@@ -285,11 +294,13 @@ export function customerBalance(
     readonly ts: string;
     readonly payments?: readonly SalePayment[];
   }[],
+  openingBalance = 0,
 ): CustomerBalance {
+  const opening = Math.max(0, openingBalance);
   let billed = 0;
   let settled = 0;
   let pending = 0;
-  let owed = 0;
+  let owed = opening;
   let openSales = 0;
   const dues: string[] = [];
   for (const o of orders) {
@@ -309,6 +320,7 @@ export function customerBalance(
     settled,
     pending,
     owed,
+    openingBalance: opening,
     openSales,
     ...(dues[0] === undefined ? {} : { nextDueAt: dues[0] }),
   };

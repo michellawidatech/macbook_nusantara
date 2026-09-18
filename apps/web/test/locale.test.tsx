@@ -128,6 +128,7 @@ describe("the switch in the account menu", () => {
                         name: "Stub Admin",
                         role: "OWNER",
                         canApprove: true,
+                        mustChangePassword: false,
                       }}
                     />
                   }

@@ -90,7 +90,8 @@ import {
   type Persona,
   type AgentStatus,
 } from "../../lib/chatApi.js";
-import { sendReply, setAutoReply } from "../../lib/inboxApi.js";
+import { markHandled, sendReply, setAutoReply } from "../../lib/inboxApi.js";
+import { handoffTopicLabel } from "../../lib/handoffTopics.js";
 import { useInbox } from "../../hooks/useInbox.js";
 import { useAgentConfig } from "../../hooks/useAgentConfig.js";
 import { useTranslation } from "react-i18next";
@@ -151,6 +152,7 @@ export function ChatInbox() {
   const [drafting, setDrafting] = useState(false);
   const [sending, setSending] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [closing, setClosing] = useState(false);
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [statusError, setStatusError] = useState(false);
   const [personaOpen, setPersonaOpen] = useState(false);
@@ -346,6 +348,34 @@ export function ChatInbox() {
   };
 
   /**
+   * "Handled" — the bot's hand-over was dealt with some other way (a call, a
+   * visit). Closes the waiting messages without sending anything, which is
+   * what lets the bot answer this customer's next message.
+   */
+  const handled = async () => {
+    if (!active) return;
+    setClosing(true);
+    try {
+      await markHandled(active);
+      message.success(
+        t(
+          "chat.handledDone",
+          "Marked as handled. The bot will answer this customer's next message.",
+        ),
+      );
+      refresh();
+    } catch (err) {
+      message.error(
+        err instanceof Error
+          ? err.message
+          : t("chat.handledFailed", "Could not mark it handled."),
+      );
+    } finally {
+      setClosing(false);
+    }
+  };
+
+  /**
    * Ask the bot for a draft.
    *
    * Every correction the shop has ever made goes along with the request. The
@@ -373,11 +403,27 @@ export function ChatInbox() {
         ...(active ? { waId: active } : {}),
       });
       setReply(result.reply);
-      message.success(
-        result.toolsUsed.length
-          ? `Draft ready — it checked ${[...new Set(result.toolsUsed)].join(", ")}.`
-          : "Draft ready.",
-      );
+      if (result.handoff) {
+        // The bot would not answer this one itself (2026-09-18): stock, price,
+        // or something the owner's answers do not cover. What is in the box is
+        // its holding line, and saying so stops it being sent as an answer.
+        message.info(
+          t(
+            "chat.draftWouldHandOver",
+            "The bot would hand this to a person ({{topic}}). Its holding line is in the box — answer it yourself.",
+            { topic: handoffTopicLabel(t, result.handoff.topic) },
+          ),
+        );
+      } else {
+        message.success(
+          result.sources.some((s) => /^K\d+$/.test(s))
+            ? t(
+                "chat.draftFromAnswers",
+                "Draft ready, from the shop's approved answers.",
+              )
+            : t("chat.draftReady", "Draft ready."),
+        );
+      }
     } catch (err) {
       message.error(
         err instanceof Error ? err.message : "Could not get a draft.",
@@ -590,8 +636,28 @@ export function ChatInbox() {
                                 {t("chat.you", "you")}
                               </Tag>
                             )}
-                            {c.needsReply && (
-                              <Badge status="error" text="waiting" />
+                            {/* The bot gave this one to a person: the list a
+                                colleague works through first (2026-09-18). */}
+                            {c.handoff ? (
+                              <Tag color="volcano" style={{ marginInline: 0 }}>
+                                {t(
+                                  "chat.needsYouTopic",
+                                  "Needs you · {{topic}}",
+                                  {
+                                    topic: handoffTopicLabel(
+                                      t,
+                                      c.handoff.topic,
+                                    ),
+                                  },
+                                )}
+                              </Tag>
+                            ) : (
+                              c.needsReply && (
+                                <Badge
+                                  status="error"
+                                  text={t("chat.waiting", "waiting")}
+                                />
+                              )
                             )}
                           </Flex>
                         }
@@ -685,9 +751,7 @@ export function ChatInbox() {
                     <Flex align="center" gap={8}>
                       <Typography.Text
                         type={
-                          conversation.autoReply.enabled
-                            ? undefined
-                            : "warning"
+                          conversation.autoReply.enabled ? undefined : "warning"
                         }
                       >
                         {conversation.autoReply.enabled
@@ -708,6 +772,48 @@ export function ChatInbox() {
                   </Tooltip>
                 }
               >
+                {/* Why a person is needed here, in the bot's own note, and
+                    the way to give the chat back without writing in it. The
+                    bot says nothing more to this customer until one of the two
+                    happens (apps/worker/src/draft.ts). */}
+                {conversation.handoff && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message={t(
+                      "chat.handedToYou",
+                      "The bot handed this chat to you — {{topic}}",
+                      {
+                        topic: handoffTopicLabel(t, conversation.handoff.topic),
+                      },
+                    )}
+                    description={
+                      <Flex vertical gap={4}>
+                        {conversation.handoff.summary && (
+                          <Typography.Text>
+                            {conversation.handoff.summary}
+                          </Typography.Text>
+                        )}
+                        <Typography.Text type="secondary">
+                          {t(
+                            "chat.handedToYouHint",
+                            "The bot stays quiet here until somebody replies, or marks it handled.",
+                          )}
+                        </Typography.Text>
+                      </Flex>
+                    }
+                    action={
+                      <Button
+                        size="small"
+                        loading={closing}
+                        onClick={() => void handled()}
+                      >
+                        {t("chat.markHandled", "Mark handled")}
+                      </Button>
+                    }
+                  />
+                )}
                 {/* The message history. `minHeight: 0` is what finally makes
                     this `overflowY: auto` do anything: without it this flex
                     item sizes to its content and pushes the page taller
@@ -887,12 +993,13 @@ export function ChatInbox() {
                           actually flips it — a chat nobody has ruled on is on
                           by default, and naming a person who never touched it
                           would be a lie. */}
-                      <Field
-                        label={t("chat.onThisChat", "On this chat")}
-                      >
+                      <Field label={t("chat.onThisChat", "On this chat")}>
                         {conversation.autoReply.enabled
                           ? t("chat.answersOnItsOwn", "Answers on its own")
-                          : t("chat.offYouReAnswering", "Off — you're answering")}
+                          : t(
+                              "chat.offYouReAnswering",
+                              "Off — you're answering",
+                            )}
                       </Field>
                       {conversation.autoReply.at && (
                         <Typography.Text type="secondary">

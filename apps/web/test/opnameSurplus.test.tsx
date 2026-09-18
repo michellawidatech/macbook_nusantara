@@ -14,12 +14,12 @@
  * a unit test of the store could hold while the page broke.
  */
 import { App as AntdApp } from "antd";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OpnameSessionPage } from "../src/routes/opname/OpnameSessionPage.js";
-import { mutate } from "../src/mock/store.js";
+import { getDb, mutate } from "../src/mock/store.js";
 import { HELD_STATUSES } from "../src/lib/inventory.js";
 import type { MockDb } from "../src/mock/seed.js";
 
@@ -35,13 +35,7 @@ const FOUND = "ASZZ999888ZZ";
 let elsewhereSerial = "";
 
 function snapshot(): MockDb {
-  let seen!: MockDb;
-  act(() => {
-    mutate((d) => {
-      seen = d;
-    });
-  });
-  return seen;
+  return getDb();
 }
 
 /** A draft count of one warehouse, with the found serial already scanned in. */
@@ -67,6 +61,7 @@ beforeEach(() => {
       date: "2026-08-31",
       at: new Date().toISOString(),
       counted: [],
+      counts: {},
       missing: [],
       unknown: [],
       notes: {},

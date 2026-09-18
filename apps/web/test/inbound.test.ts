@@ -4,6 +4,8 @@ import {
   canReopenQc,
   paymentFor,
   poClosed,
+  poDeletion,
+  poPaymentStatus,
   poStage,
   poStageFromCounts,
   poTotals,
@@ -430,5 +432,120 @@ describe("poStageFromCounts — the same rule, from the API's counts", () => {
 
   it("is IN_INVENTORY only when every machine is through", () => {
     expect(poStageFromCounts(row())).toBe("IN_INVENTORY");
+  });
+});
+
+describe("poPaymentStatus", () => {
+  /** An invoice for a million, paid `paid` of it. */
+  const billed = (paid: number) =>
+    po({
+      items: [line("i1", 1_000_000)],
+      payments:
+        paid === 0
+          ? []
+          : [{ id: "p1", method: "TUNAI", amount: paid, at: "2026-09-01" }],
+    });
+
+  it("is Open while nothing has been paid", () => {
+    expect(poPaymentStatus(billed(0))).toBe("OPEN");
+  });
+
+  it("is Closed once part of it has", () => {
+    // The owner's own words: "Closed is paid but not fully".
+    expect(poPaymentStatus(billed(1))).toBe("CLOSED");
+    expect(poPaymentStatus(billed(999_999))).toBe("CLOSED");
+  });
+
+  it("is Paid in full at the total, and above it", () => {
+    expect(poPaymentStatus(billed(1_000_000))).toBe("PAID_IN_FULL");
+    // An overpayment is a supplier credit, not a half-paid invoice.
+    expect(poPaymentStatus(billed(1_500_000))).toBe("PAID_IN_FULL");
+  });
+
+  it("counts the fees, not just the goods", () => {
+    // Shipping and tax are owed to somebody. An invoice whose machines are
+    // settled and whose ongkir is not has not been paid in full.
+    const withOngkir = po({
+      items: [line("i1", 1_000_000)],
+      shippingFee: 300_000,
+      payments: [
+        { id: "p1", method: "TUNAI", amount: 1_000_000, at: "2026-09-01" },
+      ],
+    });
+    expect(poPaymentStatus(withOngkir)).toBe("CLOSED");
+  });
+
+  it("calls an unpriced invoice with money against it part-paid", () => {
+    // The owner's paid-first case: a transfer before anybody knew what it
+    // bought. It cannot be paid in full — nobody knows what full is — and it
+    // is not untouched either.
+    const paidFirst = po({
+      items: [],
+      payments: [
+        { id: "p1", method: "TRANSFER", amount: 5_000_000, at: "2026-09-01" },
+      ],
+    });
+    expect(poPaymentStatus(paidFirst)).toBe("CLOSED");
+  });
+
+  it("does not read a discounted-to-nothing order as settled", () => {
+    // Total zero and nothing paid is Open, not "paid in full": there is no
+    // evidence anybody did anything.
+    expect(poPaymentStatus(po())).toBe("OPEN");
+  });
+});
+
+describe("poDeletion", () => {
+  it("takes the machines still waiting in QC with it", () => {
+    const order = po();
+    const d = poDeletion(order, [
+      unit({ serial: "S2" }),
+      unit({ serial: "S1" }),
+    ]);
+    expect(d.allowed).toBe(true);
+    // Sorted, so the dialog names them in an order that does not depend on
+    // which was scanned first.
+    expect(d.takes).toEqual(["S1", "S2"]);
+    expect(d.blockers).toEqual([]);
+  });
+
+  it("is refused by a machine that has left QC, and names it", () => {
+    const d = poDeletion(po(), [
+      unit({ serial: "S1" }),
+      unit({ serial: "S2", status: "TERSEDIA" }),
+    ]);
+    expect(d.allowed).toBe(false);
+    expect(d.blockers).toEqual(["S2"]);
+    // The QC machine is still listed: the dialog that refuses says what it
+    // WOULD have taken, so the reader can see the whole invoice.
+    expect(d.takes).toEqual(["S1"]);
+  });
+
+  it("is refused by a machine already sent back to the supplier", () => {
+    // A supplier return is a decision somebody made against this invoice.
+    // Deleting the invoice would leave the return pointing at nothing.
+    const d = poDeletion(po(), [
+      unit({ serial: "S1", status: "RETUR_SUPPLIER" }),
+    ]);
+    expect(d.allowed).toBe(false);
+  });
+
+  it("ignores machines that came off another invoice", () => {
+    const d = poDeletion(po(), [
+      unit({ serial: "S9", poId: "po-other", status: "TERSEDIA" }),
+    ]);
+    expect(d.allowed).toBe(true);
+    expect(d.takes).toEqual([]);
+  });
+
+  it("is allowed on an invoice that has been paid", () => {
+    // Money paid against an invoice that turned out not to exist is money
+    // paid to that supplier, which the supplier's own account tracks.
+    const paid = po({
+      payments: [
+        { id: "p1", method: "TUNAI", amount: 5_000_000, at: "2026-09-01" },
+      ],
+    });
+    expect(poDeletion(paid, []).allowed).toBe(true);
   });
 });

@@ -23,6 +23,23 @@ export interface IdempotencyDeps {
   readonly ttlMs: number;
 }
 
+/**
+ * A body naming a password is never fingerprinted or stored.
+ *
+ * The fingerprint is an unsalted SHA-256 of the body, and the stored response
+ * sits in a table the app role reads: a remembered hash of a password is a
+ * password waiting for a dictionary. Changing a password is not something a
+ * double-click can duplicate anyway — the second attempt fails on the old one.
+ * Same key rule as the log redaction (`packages/logging/src/redact.ts`).
+ */
+function carriesPassword(body: unknown): boolean {
+  return (
+    body !== null &&
+    typeof body === "object" &&
+    Object.keys(body).some((k) => /password/i.test(k))
+  );
+}
+
 /** A stable fingerprint of what was asked for. */
 function fingerprint(method: string, route: string, body: unknown): string {
   return createHash("sha256")
@@ -47,7 +64,8 @@ export function idempotency({ db, ttlMs }: IdempotencyDeps): RequestHandler {
           key === undefined ||
           key === "" ||
           !MUTATING.has(req.method) ||
-          req.staff === undefined
+          req.staff === undefined ||
+          carriesPassword(req.body)
         ) {
           next();
           return;

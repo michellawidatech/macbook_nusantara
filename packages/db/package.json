@@ -12,7 +12,8 @@
     "generate": "prisma generate",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "seed": "tsx src/seed-cli.ts"
+    "seed": "tsx src/seed-cli.ts",
+    "import:b2soft": "tsx src/import-b2soft-cli.ts"
   },
   "devDependencies": {
     "@types/pg": "^8.21.0",
@@ -22,8 +23,10 @@
     "vitest": "catalog:"
   },
   "dependencies": {
-    "@prisma/client": "^6",
     "@nusantara/domain": "workspace:*",
-    "@nusantara/fixture": "workspace:*"
+    "@nusantara/fixture": "workspace:*",
+    "@nusantara/store": "workspace:^",
+    "@prisma/client": "^6",
+    "zod": "^4.4.3"
   }
 }

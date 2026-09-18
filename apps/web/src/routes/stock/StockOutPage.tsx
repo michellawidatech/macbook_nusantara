@@ -141,7 +141,7 @@ import {
   type SalePayment,
 } from "../../lib/salePayments.js";
 import { PaymentsPanel } from "../../components/PaymentsPanel.js";
-import { costOfUnit } from "../../lib/service.js";
+import { costIndex } from "../../lib/service.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
 import { useLayoutMode } from "../../layouts/useLayoutMode.js";
 import { TradeInDialog } from "./TradeInDialog.js";
@@ -696,26 +696,35 @@ export function StockOutPage() {
    * is what lets the subtotal stay the shop's own price list while the total
    * follows what was actually agreed.
    */
+  /**
+   * What each machine has cost the shop, indexed once per store change. The
+   * totals, the below-cost check and the price detail all ask, and the check
+   * runs on every render. See `costIndex` in lib/service.ts.
+   */
+  const costOf = useMemo(
+    () => costIndex(db),
+    [db.pos, db.units, db.events, db.services],
+  );
   const totals = useMemo(
     () =>
       saleTotals({
         prices: basket.map((l) => l.price),
         listPrices: basket.map((l) => priceOf(l.serial) ?? l.price),
         // What each machine ACTUALLY cost the shop: what it was bought for,
-        // plus every repair charged against it (owner ask 2026-09-08 — *"the
-        // service will be included to count the COGS"*). A machine bought at
-        // Rp4jt and repaired for Rp800k is a Rp4.8jt machine, and a margin
-        // that ignores the repair flatters every unit that has been to the
-        // bench.
+        // its share of its invoice's shipping and tax (owner ask 2026-09-15 —
+        // *"divided across all units evenly for the COGS and margin
+        // calculation"*), and every repair charged against it (2026-09-08). A
+        // margin that leaves either out flatters every machine that came by
+        // courier or went to the bench.
         costs: basket.map((l) => {
           const u = db.units.find((x) => x.serial === l.serial);
-          return u ? costOfUnit(u, db.services) : 0;
+          return u ? costOf(u).total : 0;
         }),
         discount: discountValue,
         extra: liveFees,
         tradeIns,
       }),
-    [basket, db.units, db.skus, db.services, discountValue, liveFees, tradeIns],
+    [basket, db.units, db.skus, costOf, discountValue, liveFees, tradeIns],
   );
   const total = totals.total;
 
@@ -810,9 +819,7 @@ export function StockOutPage() {
     if (!l.serial) return false;
     const unit = db.units.find((u) => u.serial === l.serial);
     const asking = l.price ?? priceOf(l.serial) ?? 0;
-    return (
-      unit !== undefined && asking > 0 && asking < costOfUnit(unit, db.services)
-    );
+    return unit !== undefined && asking > 0 && asking < costOf(unit).total;
   });
 
   const submit = () => {
@@ -2721,9 +2728,19 @@ export function StockOutPage() {
               ? unitListPrice(unit, sku?.price ?? 0)
               : (sku?.price ?? 0);
             const charged = inspected.price ?? listed;
-            // Bought plus repaired, so a machine that went to the bench does
-            // not show a margin it has not earned.
-            const cost = unit ? costOfUnit(unit, db.services) : 0;
+            // Bought, its share of the invoice's ongkir and tax, and every
+            // repair — so a machine that went to the bench does not show a
+            // margin it has not earned.
+            //
+            // Kept as its PARTS, because this dialog exists to be checked: a
+            // machine whose cost is Rp200.000 above the figure on the
+            // supplier's line is a machine somebody will otherwise query, and
+            // "what the shop paid" is the one number here that cannot be read
+            // off any other screen.
+            const paid = unit
+              ? costOf(unit)
+              : { buy: 0, shippingTax: 0, repair: 0, total: 0 };
+            const cost = paid.total;
             const margin = charged > 0 ? ((charged - cost) / charged) * 100 : null;
             const move = charged - listed;
             return (
@@ -2766,6 +2783,42 @@ export function StockOutPage() {
                         </Flex>
                       ),
                     },
+                    // The parts, and only the ones that are actually there:
+                    // a trade-in has no invoice behind it and most machines
+                    // have never been to a repairer, and four rows of an em
+                    // dash is a dialog nobody reads twice.
+                    ...(paid.shippingTax === 0 && paid.repair === 0
+                      ? []
+                      : [
+                          {
+                            key: "buy",
+                            label: t("pos.purchasePrice", "Purchase price"),
+                            children: fmtRp(paid.buy),
+                          },
+                        ]),
+                    ...(paid.shippingTax === 0
+                      ? []
+                      : [
+                          {
+                            key: "shippingTax",
+                            // PURCHASE shipping: a sale has a delivery charge
+                            // of its own, and this is not it.
+                            label: t(
+                              "pos.purchaseShippingTax",
+                              "Purchase shipping & tax",
+                            ),
+                            children: fmtRp(paid.shippingTax),
+                          },
+                        ]),
+                    ...(paid.repair === 0
+                      ? []
+                      : [
+                          {
+                            key: "repair",
+                            label: t("pos.repairsPaid", "Repairs"),
+                            children: fmtRp(paid.repair),
+                          },
+                        ]),
                     {
                       key: "cost",
                       label: t("pos.whatWePaid", "What the shop paid"),

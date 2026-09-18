@@ -15,6 +15,14 @@ export default tseslint.config(
       "reference/**",
       "docs/**",
       "secrets/**",
+      // Agent sessions' worktrees: whole checkouts, each with its own generated
+      // client. Gitignored, so CI never sees them; locally they buried every
+      // real finding under ~31,000 of their own. .prettierignore skips them too.
+      ".claude/**",
+      // Build output — build/macmini, build/b2soft, and the comment-free Prisma
+      // client build-release.mjs generates under packages/db/build/release.
+      // Gitignored at every depth, so nothing tracked lives in one.
+      "**/build/**",
     ],
   },
   js.configs.recommended,

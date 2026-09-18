@@ -752,6 +752,238 @@ Decisions that outlived those documents:
   gradient: same colours, no blur, nothing broken. The phone drawer takes the
   gradient and NOT the panels — a drawer is already a floating pane, and panels
   inside one are two frames saying the same thing.
+- **Every POS screen reads PostgreSQL, 2026-09-13.** *"Make all the POS
+  screen read the Postgres not Mock."* `mock/store.ts` keeps the `MockDb`
+  shape and its API — `useDb`, `mutate`, `appendEvent` — and became a client of
+  `/api/store`: a mutation shows at once, is diffed into a changeset and sent to
+  `POST /api/store/commit`; what other tills wrote arrives by polling
+  `GET /api/store/changes`. `packages/db/src/store/adapters` maps each collection
+  onto the schema, `packages/store` holds the Zod contract (money as strings),
+  and the commit refuses a stale base (409), an edit to the ledger (400) and a
+  unit whose status disagrees with its last event. `docs/store-on-postgres.md`
+  is the design.
+  - Tests still run the store on the demo seed (`MODE === "test"`);
+    `test/remoteStore.test.ts` drives it against a fake server.
+  - The ⚠️ Mock-only gaps in the entries above — racks, grading, expenses,
+    settlements, service visits, deposits, opname scope, `Supplier.code`,
+    per-serial price, `OrderFee` — are columns and tables now, in migrations
+    `20260913120000_store_on_postgres` and `20260913120100_store_on_postgres_checks`.
+  - ⚠️ Anything else in `packages/db` that writes a row the store projects must
+    call `recordStoreChanges` in the same transaction, or no till sees it until
+    a reload. `appendUnitEvent` and the hold writers do.
+  - ⚠️ A document number made in the browser is provisional (`SI-2026/09-T` and
+    seven characters) until the commit answers with the real one.
+- **The B2Soft history, 2026-09-13.** `tools/b2soft/extract.py` reads the
+  export and writes monthly changesets plus `audit.xlsx`;
+  `pnpm --filter @nusantara/db import:b2soft` commits them through the store in
+  import mode. `docs/migration-b2soft.md` has the owner's answers; the ones
+  that shaped the app:
+  - `Platform` gained `TOKOPEDIA`, `TIKTOK` and `LAINNYA` ("Other" at the till).
+  - B2Soft had no phone numbers, so a customer's phone is optional in the form.
+  - Receivables "need to combine all": `Customer.openingBalance` is a debt from
+    before this app, shown on Customers and as its own row on Receivables. A
+    supplier's investor money is `Supplier.openingBalance`.
+  - ⚠️ Income & Expense's balance counts only money that moved after
+    `openingBalanceAt`. The import sets it to the cutoff; without it three
+    years of B2Soft takings read as money in the drawer.
+  - ⚠️ A customer return closes only receipts dated before it (the `events`
+    adapter): a monthly import commits a return and the resale together.
+- **Six revisions and three shell changes, 2026-09-15.**
+  - **An invoice has a payment status, not a stage** (`poPaymentStatus`):
+    OPEN is nothing paid, CLOSED is part paid, PAID IN FULL is settled. It
+    replaces the Stage column on `/inbound` and on the order's own header —
+    how far the GOODS have got is answered by the Products count beside it and
+    by Serials & QC below it, while the question staff bring to the list is who
+    is still owed money. `unitStage` stays: that is what the QC grid tags.
+  - **Everything on the invoice header is editable** — supplier, invoice
+    number, date, warehouse and `Po.status` (`PO_STATUS_LABEL`; leaving
+    RECEIVED warns, because Serials & QC is built from it). They write on
+    change, not through a Save: each field is one fact, and a page with a Save
+    button is a page somebody leaves without pressing it.
+  - **A supplier payment can be corrected and taken back.** One dialog for
+    both; an amount without a method is refused (`lib/accounts.ts` has nowhere
+    to put money whose movement nobody stated) though the box may be emptied
+    while somebody thinks. A payment funded from a DEPOSIT is not editable
+    here — unpicking it has to give the money back to the deposit, which is
+    `/suppliers`' job.
+  - **An invoice is deletable** by right-click on the list, which means
+    CANCELLING: `cancelPo` sends the header to `BATAL`, marks its lines removed
+    and voids its payments. `poDeletion` is the rule — it takes the machines
+    still in QC with it and is REFUSED by one that has left QC, because an
+    invoice is the only record of what a machine cost.
+  - **Shipping and tax reach the COGS** (`lib/landedCost.ts`, owner ask): split
+    evenly over the invoice's machines, because a courier charges by the box.
+    `costOfUnit` is buy + that share + repairs, and every margin is against it.
+  - **A battery reading is switchable per machine.** `defaultBatteryMode` picks
+    the starting reading from the CHIP and the year — Apple silicon or 2021+
+    starts on health — and the Segmented control in `BatteryFields` overrides
+    it for one machine. `BatteryDraft.mode` carries the choice, so
+    `batteryPatch` writes the right pair of columns without being told.
+  - **The order form saves itself** (`lib/inboundDraft.ts`), and *Save draft*
+    is on every step. The two are different nets and the difference matters:
+    auto-save is `localStorage` on this device and nobody else can see it;
+    a draft is a real `Po` with `status: "DRAFT"`, on the Inbound list.
+  - **Accessories are counted, not tracked** — `Category.tracksSerial`
+    (migration `20260915140000`), false for the Accessory category.
+    `lib/serialTracking.ts` is the reading. A `Unit` row still exists per item
+    and still carries a serial, because that is what a `UnitEvent` names and
+    what `Unit.buy` is the cost of; what changes is that nothing ASKS for one.
+    QC's Serial column says "Counted — no serial" and a *Take in* button mints
+    the handle (`countedSerial`, prefixed `QTY-` so anybody who meets one can
+    see it was not read off a machine). Stock opname answers those shelves with
+    a NUMBER — `OpnameSession.counts`, `OpnameCount` in the schema (migration
+    `20260915141000`) — where absent means "not reached" and **zero means
+    somebody looked**. A shortfall marks that many lost; a surplus mints that
+    many into QC. Settings → Product categories is the switch; it is per
+    category and not the category being NAMED "Accessory", for the reason
+    `wh-4` records.
+  - **The nav collapses by hand, and the bubbles are gone.** `openKeys` is the
+    person's answer and is kept (`hooks/usePersistentState.ts`); the accordion
+    that kept `keys.slice(-1)` is gone, and so is the effect that ASSIGNED
+    `[openSection]` on every navigation — the same accordion by a second door.
+    A fold button rails the whole column to `siderCollapsedWidth`. The two
+    floating glass panels of 2026-09-09 are gone with them; the gradient stays,
+    because flattening it would be the revamp the owner asked twice not to
+    have.
+  - **The app has tabs** (`layouts/tabs.ts`, `layouts/AppTabs.tsx`). One tab
+    per nav LEAF, so `/inbound/po-1` is the Inbound tab showing an order and
+    never a second one. Every open tab stays MOUNTED — a half-built sale
+    survives a glance at Inventory — capped at `MAX_TABS`, least-recently-used
+    evicted. The ROUTER still owns the URL and this layer follows it, which is
+    why browser back works and why no existing page had to be touched.
+    ⚠️ Each panel renders inside `UNSAFE_LocationContext` and a reset
+    `UNSAFE_RouteContext`, or a hidden page reads the ACTIVE tab's params.
+    Resetting the route context is also what stops React Router warning about
+    a descendant `<Routes>`. `src/pages.tsx` is the one table both `App.tsx`
+    and `AppTabs` read; redirects stay in `App.tsx` and get no tab.
+    ⚠️ `moveTab` is tested and dormant: nothing in this app navigates from an
+    effect, so a hidden tab never navigates. It is the answer if one ever does.
+  - **The keyboard is wired, not just written.** `lib/keyboardNav.ts` was the
+    kit; now `EditableTable` takes the grid arrows **in the CAPTURE phase**
+    (antd's `InputNumber` calls `preventDefault` on ↑ ↓ to step its value, so
+    on bubble every arrow arrives already claimed and Qty was the one column
+    they could not leave), `DataTable` takes `keyboardRows` to put a row that
+    opens something into the tab order with ↑ ↓ Home End and Enter/Space, and
+    `ProTable` marks its search box for `/`. `?` lists the lot.
+    ⚠️ `keyboardRows` is opt-in: a row that opens nothing must not become a
+    focus stop, or forty read-only rows are forty presses of Tab.
+- **A `v*` tag deploys to the Mac mini, 2026-09-18.** Render and Netlify are
+  retired (their files are gone; `git show f6f5f3c:docs/deploy.md`), and the
+  shop's Mac mini behind Tailscale is the only deployment.
+  `docs/deploy-pipeline.md` is the runbook.
+  - **The release is built on GitHub's `macos-15` runner, never on the Mac
+    mini** — `build-release.mjs` exists so the shop's machine holds no source,
+    and a runner that checked the repo out there would undo it.
+  - **The deploy job joins the tailnet as an ephemeral `tag:ci` node** and SSHes
+    in as `nusantara-deploy`, whose key has a forced command:
+    `ops/nusantara-deploy`, root-owned at `/usr/local/libexec/`, with four
+    verbs (status, backup, install, rollback). ⚠️ A release ships a copy but can
+    NEVER replace the installed one — a change to it reaches the Mac mini only
+    through `ops/setup-deploy-access`, and the job warns when the two copies'
+    `INSTALLER_VERSION` differ.
+  - Migrations run from CI through the ssh tunnel as the owner, after a
+    `predeploy-<version>` pg_dump, and are verified by QUERY: every migration
+    the tag carries applied, none half-done, grants `t|f|t|f|t`. The installer
+    then refuses any switch whose `/api/health` does not name the new release
+    (`ApiConfig.release`, exported by `ops/run`), and switches back by itself.
+    The database is never rolled back automatically — which is why a
+    migration must never break the release before it.
+  - Every credential is in the GitHub Environment `prod`, which admits only
+    `v*` tags.
+  - ⚠️ CI had been red since 2026-08-19 for two reasons neither of which was a
+    code bug: turbo 2's strict env mode never passed `TEST_DATABASE_URL` to a
+    suite (it is in `turbo.json`'s `passThroughEnv` now), and the role tests
+    log in without a password, which the CI container refused until it was
+    set to trust (`POSTGRES_HOST_AUTH_METHOD`). CI now runs on every push to
+    every branch, and no longer on `pull_request` as well.
+- **Sign-in is the app's own, 2026-09-18 — Auth0 is gone.** *"Make a secure
+  login system … seed the account and the password, initially all will be
+  'password', then in the first time login need to change their password and
+  Ersen can manage all the password account."* The password login under Auth0
+  was already sound (Argon2id, session tokens stored as SHA-256, per-username
+  and per-address progressive delay, `LOGIN_GAGAL` audit); what changed:
+  - `apps/api/src/auth/auth0.ts`, its two tests, `express-openid-connect` and
+    the `/auth` proxy and Caddy route are gone. `LoginPage` is a form again.
+  - **`Staff.mustChangePassword`** (migration `20260918120000`, additive,
+    default false — the one new column, owner-asked). A session of such an
+    account gets 403 `GANTI_SANDI` from every business route
+    (`requirePasswordChanged`) and `App` shows `ChangePasswordPage` and nothing
+    else. `POST /api/auth/password` asks for the current password even then,
+    and on success revokes EVERY session of the account and opens a new one
+    in the same transaction (08 §9: rotate on a credential change).
+  - What a password may be is `passwordProblem` in `packages/domain`
+    (credentials.ts): 8+ characters, not the initial one, not containing the
+    username, not on a short local blocklist. The form and the API run the
+    same function. `INITIAL_PASSWORD` is `password`, public by the owner's
+    choice, which is exactly why an account on it can do nothing else.
+  - **Settings → Staff accounts** (`/api/staff`, owner-only per endpoint):
+    add, rename, role, can-approve, switch off (ends every session), reset to
+    the initial password. Never shows or sets a password; never lists or
+    touches a service account (`agent`, `system`, `migrasi-b2soft` —
+    `SERVICE_ACCOUNT_USERNAMES` in `packages/db`); nobody may demote or switch
+    off themselves.
+  - **`pnpm --filter @nusantara/api accounts --owner ersen`** gives every
+    active salesperson a login (username from the first name) and every human
+    account still on the seed's unusable hash the initial password; the seed
+    itself stays locked on purpose. `staff … --initial` does one account.
+    Both ship in the release (`ops/run accounts|staff`).
+  - `TRUST_PROXY` (default `loopback`): with `trust proxy 1`, req.ip behind
+    tailscale serve + Caddy was 127.0.0.1 for every client, so one person's
+    typos throttled the whole shop.
+  - A request whose body names a password is never fingerprinted by the
+    idempotency middleware — the fingerprint is an unsalted SHA-256 of the
+    body, stored in a table the app reads.
+  - ⚠️ `Staff.auth0Sub` is dead and kept for ONE release, so the release before
+    this one still finds the column it selects during a deploy. Drop it after.
+- **The chatbot answers from the owner's sheet and hands over the rest,
+  2026-09-18.** *"For stock, price, negotiation, and other questions that are
+  not in the documents RAG, we should escalate it to human"* — because the
+  shop runs this app in PARALLEL with B2Soft and production holds only the
+  master data. `docs/chatbot-rag.md` is the design; in short:
+  - Two sources only: the owner's approved answers (`AgentKnowledge`, first
+    loaded from `docs/chatbot/knowledge-2026-09-18.md`) and the system's master
+    data (store, hours, payment methods, catalogue configurations —
+    `systemFacts.ts`). No unit, price, order or customer is read. The stock and
+    booking tools still exist, tested, but `toolsFor` offers only
+    `CUSTOMER_TOOLS`.
+  - Retrieval is BM25 over normalised Indonesian chat spelling
+    (`retrieval.ts`); the whole base rides in the CACHED half of the prompt
+    (`buildAgentPrompt`) with `K` handles the model must cite.
+  - Every turn ends in `reply(message, sources)` or `handoff_to_staff` under
+    `tool_choice: any`. `routeMessage` sends a named machine's stock / price /
+    condition, battery health, payments, bookings, budgets and photos to a
+    person before the model sees them; `checkReply` turns a reply with no
+    source, or with a figure or a "ready" its source does not contain, into a
+    hand-over with `holdingMessage`.
+  - A hand-over is PERLU_STAF + `intent: staf:<topic>` + `entities.handoff`,
+    and the worker HOLDS the thread (no more bot replies) until a staff reply
+    or `POST /api/inbox/:phone/handled`. Derived from the rows, not from
+    `autoReply`, which the agent's role cannot write by design.
+  - `sanitiseReply`, not `stripFormatting`, for these replies: the old one
+    rewrote "1–3 hari" to "1, 3 hari" and dropped the owner's brackets.
+  - The persona now sounds like the owner's answers (kak, 😊, 🙏) and no longer
+    sells from a shelf it cannot see.
+  - `import:b2soft … --master-only` imports the reference chunk alone, without
+    opening balances — what production takes during the parallel operation.
+    `pnpm --filter @nusantara/api knowledge <file>` / `ops/run knowledge`
+    loads an answer sheet; /chat → Knowledge → Import from a document pastes
+    one. Both read it with `parseQaText` and skip what is there.
+- **Leftovers cleared before the next deploy, 2026-09-18.** Nothing on disk
+  blocked the pipeline; what did is that the good work was UNCOMMITTED (a tag
+  would ship `f6f5f3c`), `v2026.09.18` was already pushed at `f6f5f3c` with a
+  failed run, and the `prod` environment has no secrets yet. The Docker +
+  Cloudflare route (`deploy/docker/`, `docs/deploy-docker.md`, the root
+  `Dockerfile`, `.dockerignore`), the TEST-export extract (`build/b2soft`) and
+  the 2026-09-11 hand-built release were moved to
+  `~/projects/macbook_nusantara-archive-2026-09-18/` (README there); build
+  outputs (`packages/db/build`, `apps/web/dist`, `build/macmini/stage`,
+  `.turbo`) were deleted. The 2026-09-13 release and its maps stay in
+  `build/macmini/` — it is what the Mac mini runs until a CI release does.
+- ⚠️ **The web suite needs room.** `apps/web` has 47 files of rendered React
+  and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
+  2-vCPU runner); at full parallelism on a laptop several time out and look
+  like failures. `npx vitest run --maxWorkers=2 --testTimeout=90000` is the
+  honest run.
 - Lists paginate with a page size the user picks, and a filterable column puts
   its filter in the **column header**. `ProTable` holds the filter/sort state
   and does the work itself — the header control only reports clicks — because
@@ -797,10 +1029,27 @@ there is the comment/DM ingest this build has not written yet.
 - `pnpm -r test` — everything
 - `pnpm -r typecheck` — types
 - `pnpm --filter @nusantara/db migrate` — apply migrations
-- `printf '%s' '<password>' | pnpm --filter @nusantara/api staff --username <u> --name '<n>' --role OWNER`
-  — create a staff login, or reset one. The seed writes an unusable hash for
-  every account, so this is the only way into a fresh database. Password on
-  stdin, never argv.
+- `python3 tools/b2soft/extract.py "$HOME/Export Files" build/b2soft` then
+  `APP_ENV=prod DATABASE_URL="$OWNER_URL" pnpm --filter @nusantara/db import:b2soft build/b2soft --master-only`
+  — the B2Soft migration: read the export (no database), then import it.
+  `--master-only` is the reference data alone (production, during the parallel
+  operation); leave it off at cutover for the whole history
+- `TEST_DATABASE_URL=… pnpm --filter @nusantara/db test` — the db suite. It is
+  `TEST_DATABASE_URL`, not `DATABASE_URL`, and a database missing a migration
+  fails 35 tests with errors that read like code bugs ("The column
+  `Staff.defaultLocationId` does not exist").
+- `pnpm --filter @nusantara/api accounts --owner ersen` — a login for every
+  salesperson, on the initial password `password` with a forced change; Ersen
+  the owner. `… staff --username <u> --name '<n>' --role OWNER --initial` does
+  one account (or a password on stdin instead of `--initial`). The seed writes
+  an unusable hash for every account, so one of these is the way into a fresh
+  database. On the Mac mini: `sudo -u _nusantara /opt/nusantara/current/ops/run accounts|staff …`
+- `pnpm --filter @nusantara/api knowledge docs/chatbot/knowledge-2026-09-18.md --by ersen`
+  — load the owner's answer sheet into the chatbot (skips what is there)
+- `git tag v2026.09.18.2 && git push origin v2026.09.18.2` — deploy that
+  commit to the Mac mini (`docs/deploy-pipeline.md`). `v2026.09.18` itself is
+  taken (a failed run at `f6f5f3c`). Rollback in seconds, on the Mac mini:
+  `sudo /usr/local/libexec/nusantara-deploy rollback`
 - Ports: web 3000, api 4000, webhook 3001, monitor 4100
 - Database: `nusantara_pos_rebuild` on `localhost:5432`, role `nusantara`
 - Meta: App ID `2157052578394015`, WABA `1701973881546032`,

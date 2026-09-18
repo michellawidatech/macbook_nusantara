@@ -17,6 +17,13 @@
  *
  * The knowledge base IS persisted — `AgentKnowledge` is in the schema for
  * exactly this — so it is read here rather than trusted from the client.
+ *
+ * Since 2026-09-18 a draft is made exactly the way the unattended worker
+ * makes a reply (docs/chatbot-rag.md): the owner's approved answers and the
+ * shop's facts as the only sources, the same routing of stock and price
+ * questions to a person, the same check of what a reply cites. A draft that
+ * would have been a hand-over comes back as one — `handoff` set, and the
+ * holding line as the text — so staff see what the bot would have done.
  */
 
 import { Router } from "express";
@@ -26,9 +33,17 @@ import type { Logger } from "@nusantara/logging";
 import { ApiError } from "../errors.js";
 import {
   anthropicClient,
-  buildSystemPrompt,
+  buildAgentPrompt,
   converse,
   hasCredential,
+  knowledgeBlock,
+  loadKnowledgeBase,
+  loadStoreFacts,
+  matchesFor,
+  matchesNote,
+  renderStoreFacts,
+  routeMessage,
+  storeOpenAt,
   usingOAuth,
   DEFAULT_PERSONA,
   MAX_CORRECTIONS,
@@ -132,13 +147,9 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
         );
       }
 
-      const [knowledge, persona, stored] = await Promise.all([
-        db.agentKnowledge.findMany({
-          where: { active: true },
-          select: { question: true, answer: true },
-          orderBy: { updatedAt: "desc" },
-          take: 40,
-        }),
+      const [knowledge, storeFacts, persona, stored] = await Promise.all([
+        loadKnowledgeBase(db),
+        loadStoreFacts(db).then(renderStoreFacts),
         db.persona.findFirst({
           where: { active: true },
           select: { prompt: true },
@@ -150,12 +161,17 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
         }),
       ]);
 
-      const systemPrompt = buildSystemPrompt({
+      const now = new Date();
+      const turns = parsed.data.turns;
+      const last = turns[turns.length - 1];
+      const customerText = last?.role === "user" ? last.text : "";
+      const prompt = buildAgentPrompt({
         // Body first so an unsaved edit can be previewed, then the stored
         // voice, then the compiled-in one. The same order the worker uses,
         // minus the preview it has no way to receive.
         persona: parsed.data.persona ?? persona?.prompt ?? DEFAULT_PERSONA,
-        knowledge,
+        storeFacts,
+        knowledge: knowledgeBlock(knowledge),
         corrections: parsed.data.corrections.length
           ? parsed.data.corrections
           : [...stored].reverse().map((c) => ({
@@ -163,7 +179,9 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
               corrected: c.corrected,
               note: c.note ?? undefined,
             })),
-        today: new Date(),
+        now,
+        openNow: storeOpenAt(now),
+        customerText,
       });
 
       let failure: unknown;
@@ -172,14 +190,20 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
         db,
         // No `reserve` capability, deliberately. Pressing Draft should propose
         // a sentence for a staff member to send, not book a reservation and
-        // hold a unit — they have the POS for that. This is also what keeps the
-        // write path down to exactly one caller, the worker.
+        // hold a unit — they have the POS for that.
         ctx: {
           from: parsed.data.waId ?? "",
-          now: new Date(),
+          now,
         },
-        systemPrompt,
-        turns: parsed.data.turns,
+        prompt,
+        turns,
+        knowledge,
+        storeFacts,
+        // The same two reads the worker makes of the customer's latest words.
+        route: customerText ? routeMessage(customerText) : null,
+        hint: customerText
+          ? matchesNote(knowledge, matchesFor(knowledge, customerText))
+          : undefined,
         onError: (err) => {
           failure = err;
         },
@@ -214,7 +238,13 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
       }
 
       logger.info(
-        { event: "agent.reply", tools: result.toolsUsed, steps: result.steps },
+        {
+          event: "agent.reply",
+          tools: result.toolsUsed,
+          steps: result.steps,
+          sources: result.sources,
+          ...(result.handoff ? { handoff: result.handoff.topic } : {}),
+        },
         "agent drafted a reply",
       );
       res.json(result);
@@ -395,7 +425,11 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
     try {
       const parsed = correctionSaveSchema.safeParse(req.body);
       if (!parsed.success) {
-        throw new ApiError(400, "VALIDASI", "The correction was not understood.");
+        throw new ApiError(
+          400,
+          "VALIDASI",
+          "The correction was not understood.",
+        );
       }
       const staff = req.staff;
       if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");

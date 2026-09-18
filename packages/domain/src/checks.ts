@@ -241,14 +241,24 @@ export function checkPaymentCoverage(
   return report("CAKUPAN_PEMBAYARAN", "ALERT", findings);
 }
 
-/** 6. `Unit` with no `DITERIMA` event. §6 expects only migrated rows here. */
+/**
+ * 6. `Unit` with no arrival event. §6 expects only migrated rows here.
+ *
+ * An arrival is either genesis arrow in `unitState.ts`: `DITERIMA` off a
+ * purchase, or `OPNAME_DITEMUKAN` for a machine a stock take found with no
+ * paperwork (2026-08-31). Counting only the first reported every unit taken in
+ * at a count — and the B2Soft import's machines sold with no purchase invoice,
+ * which arrive the same way (2026-09-13).
+ */
 export function checkOrphanUnits(
   units: readonly UnitRow[],
   events: readonly UnitEventRow[],
 ): CheckReport {
   const received = new Set<string>();
   for (const e of events) {
-    if (e.type === "DITERIMA") received.add(e.unitId);
+    if (e.type === "DITERIMA" || e.type === "OPNAME_DITEMUKAN") {
+      received.add(e.unitId);
+    }
   }
 
   const findings: Finding[] = [];
@@ -256,7 +266,7 @@ export function checkOrphanUnits(
     if (!received.has(u.id)) {
       findings.push({
         subject: u.serial,
-        detail: "tidak punya event DITERIMA",
+        detail: "tidak punya event kedatangan (DITERIMA atau OPNAME_DITEMUKAN)",
       });
     }
   }

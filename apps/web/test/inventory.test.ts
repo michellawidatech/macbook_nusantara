@@ -169,7 +169,7 @@ describe("the seeded battery readings", () => {
       seeded.units.filter(
         (u) =>
           u.batteryHealth != null &&
-          readUnitBattery(u, seeded).era === "HEALTH",
+          readUnitBattery(u, seeded).mode === "HEALTH",
       ),
     );
     for (const grade of ["good", "fair", "bad"] as const) {
@@ -182,7 +182,7 @@ describe("the seeded battery readings", () => {
   it("populate all three bands in the cycles era", () => {
     const present = bandsOf(
       seeded.units.filter(
-        (u) => u.cycleCount != null && readUnitBattery(u, seeded).era === "CYCLES",
+        (u) => u.cycleCount != null && readUnitBattery(u, seeded).mode === "CYCLES",
       ),
     );
     for (const grade of ["good", "fair", "bad"] as const) {
@@ -196,8 +196,8 @@ describe("the seeded battery readings", () => {
     // One battery, one set of numbers. A unit carrying both would let two
     // columns disagree about the same machine.
     for (const u of seeded.units) {
-      const era = readUnitBattery(u, seeded).era;
-      if (era === "CYCLES") expect(u.batteryHealth, u.serial).toBeUndefined();
+      const mode = readUnitBattery(u, seeded).mode;
+      if (mode === "CYCLES") expect(u.batteryHealth, u.serial).toBeUndefined();
       else expect(u.cycleCount, u.serial).toBeUndefined();
     }
   });

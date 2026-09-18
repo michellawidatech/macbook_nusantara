@@ -13,7 +13,8 @@ import {
   shelfCategories,
   shelfRows,
 } from "../src/lib/pos.js";
-import type { MockDb, Unit } from "../src/mock/seed.js";
+import { costOfUnit } from "../src/lib/service.js";
+import type { MockDb, Po, Unit } from "../src/mock/seed.js";
 
 const unit = (over: Partial<Unit> & Pick<Unit, "serial">): Unit => ({
   skuId: "sku-air",
@@ -185,6 +186,52 @@ describe("marginPct", () => {
 
   it("goes negative on a machine sold under what it cost", () => {
     expect(marginPct(80, 100)).toBeCloseTo(-25);
+  });
+});
+
+describe("what a machine costs the till", () => {
+  /**
+   * The margin the basket shows is `costOfUnit`, not `Unit.buy` — so the
+   * invoice's ongkir and tax reach it (owner ask 2026-09-15). The split
+   * itself is `test/landedCost.test.ts`; what is pinned here is that the
+   * till's own arithmetic is fed the whole cost.
+   */
+  const po = (over: Partial<Po> = {}): Po =>
+    ({
+      id: "po-1",
+      shippingFee: 300_000,
+      taxFee: 100_000,
+      items: [
+        { id: "it-1", skuId: "sku-air", serial: null, qty: 2, unitCost: 8_000_000 },
+      ],
+      ...over,
+    }) as unknown as Po;
+
+  const store = (pos: Po[], units: Unit[]) =>
+    ({ pos, units, events: [], services: [] }) as unknown as MockDb;
+
+  it("carries the invoice's shipping and tax, split over its machines", () => {
+    const units = [unit({ serial: "S1" }), unit({ serial: "S2" })];
+    const db = store([po()], units);
+    // Rp400.000 of charges over two machines is Rp200.000 each.
+    expect(costOfUnit(units[0]!, db)).toBe(8_200_000);
+    expect(costOfUnit(units[1]!, db)).toBe(8_200_000);
+  });
+
+  it("lands in the margin the basket prints", () => {
+    const units = [unit({ serial: "S1" }), unit({ serial: "S2" })];
+    const db = store([po()], units);
+    // Sold at the asking price, the ongkir is the difference between the
+    // margin the shop thinks it made and the one it made.
+    const sold = 11_500_000;
+    expect(marginPct(sold, units[0]!.buy)).toBeCloseTo(30.43, 2);
+    expect(marginPct(sold, costOfUnit(units[0]!, db))).toBeCloseTo(28.7, 2);
+  });
+
+  it("charges nothing to a machine that came off no invoice", () => {
+    // A trade-in or a stock-take find has no forwarder behind it.
+    const found = unit({ serial: "S9", poId: null });
+    expect(costOfUnit(found, store([po()], [found]))).toBe(found.buy);
   });
 });
 

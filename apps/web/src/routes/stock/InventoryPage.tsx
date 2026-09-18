@@ -66,17 +66,16 @@ import { LongText } from "../../components/LongText";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { fmtDateTime } from "../../lib/format.js";
 import {
-  BATTERY_CYCLE_ERA_MAX_YEAR,
   batteryBandOf,
   batteryDraftOf,
-  batteryEra,
+  defaultBatteryModeOfSku,
   batteryPatch,
   batterySettingsFrom,
   isBatteryDraftInRange,
   readBattery,
   releaseYearOfSku,
   type BatteryDraft,
-  type BatteryEra,
+  type BatteryMode,
 } from "../../lib/battery.js";
 import {
   BatteryFields,
@@ -96,6 +95,7 @@ import {
   appendEvent,
   ensureReason,
   nextId,
+  currentStaffName,
 } from "../../mock/store.js";
 import { tagOf, UNIT_STATUS } from "../../i18n/enumLabels.js";
 import { SPACE, TYPE } from "../../theme/tokens";
@@ -132,9 +132,19 @@ interface BatchRow {
   /** Only for a serial no unit carries: what staff say the machine is. */
   modelId?: string;
   skuId?: string;
-  /** A 2021-or-later machine's reading. See `batteryEra` in lib/battery.ts. */
+  /**
+   * Which reading this row is being taken in, once somebody has flicked the
+   * switch on it (owner ask 2026-09-15). Absent means the product's own
+   * default decides — see `batchModeOf`.
+   *
+   * On the ROW rather than derived, because this grid is whatever four
+   * machines somebody happens to be adjusting at once: a row switched to
+   * cycles must stay on cycles while the row beside it stays on health.
+   */
+  batteryMode?: BatteryMode;
+  /** An Apple silicon or 2021-or-later machine's reading, as a percentage. */
   batteryHealth?: number;
-  /** A 2020-or-earlier machine's, in cycles… */
+  /** An older Intel machine's, in cycles… */
   cycleCount?: number;
   /** …and its capacity in mAh. */
   fcc?: number;
@@ -150,17 +160,17 @@ interface BatchRow {
  * making them optional on the component, which every other caller does supply.
  */
 function BatteryFieldsField({
-  era,
+  fallback,
   value,
   onChange,
 }: {
-  era: BatteryEra;
+  fallback: BatteryMode;
   value?: BatteryDraft;
   onChange?: (next: BatteryDraft) => void;
 }) {
   return (
     <BatteryFields
-      era={era}
+      fallback={fallback}
       size="middle"
       idPrefix="unit-edit-battery"
       value={value ?? {}}
@@ -168,16 +178,6 @@ function BatteryFieldsField({
     />
   );
 }
-
-/**
- * A year in each era, for the few places that hold an era and need to ask
- * `readBattery` — which takes a release year, because everywhere else that is
- * what the caller actually has.
- */
-const YEAR_OF_ERA: Record<BatteryEra, number> = {
-  CYCLES: BATTERY_CYCLE_ERA_MAX_YEAR,
-  HEALTH: BATTERY_CYCLE_ERA_MAX_YEAR + 1,
-};
 
 let rowSeq = 0;
 const blankRow = (): BatchRow => ({
@@ -194,6 +194,7 @@ const touched = (r: BatchRow) =>
   r.batteryHealth != null ||
   r.cycleCount != null ||
   r.fcc != null ||
+  r.batteryMode !== undefined ||
   r.skuId !== undefined;
 
 export function InventoryPage() {
@@ -257,19 +258,24 @@ export function InventoryPage() {
     );
 
   /**
-   * The era of one row of the batch editor.
+   * The reading one row of the batch editor STARTS on.
    *
    * A row for a serial the shop already carries takes it from that unit; a row
    * for an unknown serial takes it from the product being chosen on the row
    * itself. Both can be absent while somebody is still typing, and the default
    * is health — the reading the box asked for before the split.
+   *
+   * The row's own switch (`batteryMode`) is not read here: this is the
+   * FALLBACK handed to `BatteryFields`, which resolves the two itself. Folding
+   * the switch in here would make the fallback depend on the override and give
+   * `batteryDraftMode` nothing left to decide.
    */
-  const batchEraOf = (r: BatchRow) => {
+  const batchModeOf = (r: BatchRow): BatteryMode => {
     const known = db.units.find(
       (u) => u.serial === r.serial.trim().toUpperCase(),
     );
     const skuId = known?.skuId ?? r.skuId;
-    return batteryEra(skuId ? releaseYearOfSku(db, skuId) : undefined);
+    return skuId ? defaultBatteryModeOfSku(db, skuId) : "HEALTH";
   };
   const unitOf = (serial: string) =>
     db.units.find((u) => u.serial === normalise(serial));
@@ -320,7 +326,10 @@ export function InventoryPage() {
         // never cleared, which is why every comparison here is against
         // `undefined` rather than falsiness.
         const year = releaseYearOfSku(db, u.skuId);
-        const next = batteryPatch(v.battery ?? {}, batteryEra(year));
+        const next = batteryPatch(
+          v.battery ?? {},
+          defaultBatteryModeOfSku(db, u.skuId),
+        );
         const before = readBattery(u, year, batterySettings).text;
         if (
           next.batteryHealth !== u.batteryHealth ||
@@ -485,8 +494,13 @@ export function InventoryPage() {
             description,
             poId: null,
             ...batteryPatch(
-              { health: r.batteryHealth, cycleCount: r.cycleCount, fcc: r.fcc },
-              batteryEra(releaseYearOfSku(d, sku.id)),
+              {
+                ...(r.batteryMode === undefined ? {} : { mode: r.batteryMode }),
+                health: r.batteryHealth,
+                cycleCount: r.cycleCount,
+                fcc: r.fcc,
+              },
+              defaultBatteryModeOfSku(d, sku.id),
             ),
           });
           // The adjustment IS this unit's intake. Its timeline starts with the
@@ -504,7 +518,7 @@ export function InventoryPage() {
             note: [`Adjusted into stock — ${label}`, description]
               .filter(Boolean)
               .join(" — "),
-            staff: "Michella",
+            staff: currentStaffName(),
           });
           created += 1;
         } else {
@@ -512,17 +526,22 @@ export function InventoryPage() {
           // Only the fields somebody actually typed. An untouched box must
           // not clear a reading the machine already carries — a batch that
           // records where four machines went is a reason and four scans.
-          const era = batteryEra(releaseYearOfSku(d, existing.skuId));
+          const mode = defaultBatteryModeOfSku(d, existing.skuId);
           const typed = batteryPatch(
-            { health: r.batteryHealth, cycleCount: r.cycleCount, fcc: r.fcc },
-            era,
+            {
+              ...(r.batteryMode === undefined ? {} : { mode: r.batteryMode }),
+              health: r.batteryHealth,
+              cycleCount: r.cycleCount,
+              fcc: r.fcc,
+            },
+            mode,
           );
           if (typed.batteryHealth != null)
             existing.batteryHealth = typed.batteryHealth;
           if (typed.cycleCount != null) existing.cycleCount = typed.cycleCount;
           if (typed.fcc != null) existing.fcc = typed.fcc;
           // What the note will say about the battery, if anything was typed.
-          const reading = readBattery(typed, YEAR_OF_ERA[era], batterySettings);
+          const reading = readBattery(typed, mode, batterySettings);
           if (kind === "IN" && existing.locationId !== locationId) {
             // Same reasoning as the single-unit move above: the rack it was
             // filed on belongs to the warehouse it is leaving.
@@ -571,7 +590,7 @@ export function InventoryPage() {
               fees: [],
               ...(description ? { note: description } : {}),
               raisedBy: "ADJUSTMENT",
-              staff: "Michella",
+              staff: currentStaffName(),
             });
           }
           // A unit that has left stock cannot stay on hold for a customer. The
@@ -598,7 +617,7 @@ export function InventoryPage() {
           description,
           reasonId,
           at,
-          staff: "Michella",
+          staff: currentStaffName(),
           kind,
           batchId,
           batteryHealth: r.batteryHealth,
@@ -1153,34 +1172,36 @@ export function InventoryPage() {
                  * dropped by `batchProblems`, not filed.
                  */
                 // Neutral, unlike the QC grid's: that page groups by product
-                // so a block is one era, while this grid is whatever four
-                // machines somebody happens to be adjusting at once.
+                // so a block starts on one reading, while this grid is
+                // whatever four machines somebody happens to be adjusting at
+                // once — and each row carries its own switch.
                 title: t("stock.battery", "Battery"),
                 key: "battery",
                 width: 150,
-                render: (_, r) => {
-                  const era = batchEraOf(r);
-                  return (
-                    <BatteryFields
-                      era={era}
-                      idPrefix={`batch-battery-${r.key}`}
-                      value={{
-                        health: r.batteryHealth ?? null,
-                        cycleCount: r.cycleCount ?? null,
-                        fcc: r.fcc ?? null,
-                      }}
-                      // No `onCommit`: the grid validates every row at OK
-                      // (`batchProblems`), so there is nothing to do per box.
-                      onChange={(next) =>
-                        setRow(r.key, {
-                          batteryHealth: next.health ?? undefined,
-                          cycleCount: next.cycleCount ?? undefined,
-                          fcc: next.fcc ?? undefined,
-                        })
-                      }
-                    />
-                  );
-                },
+                render: (_, r) => (
+                  <BatteryFields
+                    fallback={batchModeOf(r)}
+                    idPrefix={`batch-battery-${r.key}`}
+                    value={{
+                      ...(r.batteryMode === undefined
+                        ? {}
+                        : { mode: r.batteryMode }),
+                      health: r.batteryHealth ?? null,
+                      cycleCount: r.cycleCount ?? null,
+                      fcc: r.fcc ?? null,
+                    }}
+                    // No `onCommit`: the grid validates every row at OK
+                    // (`batchProblems`), so there is nothing to do per box.
+                    onChange={(next) =>
+                      setRow(r.key, {
+                        batteryMode: next.mode,
+                        batteryHealth: next.health ?? undefined,
+                        cycleCount: next.cycleCount ?? undefined,
+                        fcc: next.fcc ?? undefined,
+                      })
+                    }
+                  />
+                ),
               },
               {
                 title: t(
@@ -1271,7 +1292,7 @@ export function InventoryPage() {
             label={
               editing
                 ? batteryFieldsLabel(
-                    batteryEra(releaseYearOfSku(db, editing.skuId)),
+                    defaultBatteryModeOfSku(db, editing.skuId),
                     t,
                   )
                 : t("stock.battery", "Battery")
@@ -1290,7 +1311,7 @@ export function InventoryPage() {
                   !editing ||
                   isBatteryDraftInRange(
                     value ?? {},
-                    batteryEra(releaseYearOfSku(db, editing.skuId)),
+                    defaultBatteryModeOfSku(db, editing.skuId),
                   )
                     ? Promise.resolve()
                     : Promise.reject(
@@ -1309,9 +1330,9 @@ export function InventoryPage() {
                 reading is one form value rather than two or three that a
                 validator would have to reassemble. */}
             <BatteryFieldsField
-              era={
+              fallback={
                 editing
-                  ? batteryEra(releaseYearOfSku(db, editing.skuId))
+                  ? defaultBatteryModeOfSku(db, editing.skuId)
                   : "HEALTH"
               }
             />

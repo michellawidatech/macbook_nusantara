@@ -29,9 +29,8 @@ const base = {
 };
 
 describe("the built-in persona", () => {
-  it("uses none of the characters it forbids", () => {
-    // The previous version banned the em-dash in a sentence containing one. A
-    // model copies what it reads, so the rule has to be demonstrated as well
+  it("uses none of the characters a WhatsApp message should not carry", () => {
+    // A model copies what it reads, so the rule has to be demonstrated as well
     // as stated.
     expect(DEFAULT_PERSONA).not.toMatch(/[—–―]/);
     expect(DEFAULT_PERSONA).not.toMatch(/!/);
@@ -47,75 +46,34 @@ describe("the built-in persona", () => {
     expect(DEFAULT_PERSONA).toMatch(/product names in English/i);
   });
 
-  it("answers before it asks, rather than interrogating for a budget first", () => {
-    // This replaces "before you name a specific unit you should know what they
-    // will use it for and what they want to spend, ask for whichever is
-    // missing". That rule was worked as a checklist: a customer who wrote
-    // "17jtan buat kerja" had given both and was asked what kind of work
-    // anyway, because nothing told the bot to check what it already had.
-    expect(DEFAULT_PERSONA).toMatch(/answer first, then ask/i);
-    expect(DEFAULT_PERSONA).toMatch(/never send a message that is only a question/i);
+  it("sounds like the owner's own answers, which it now sends nearly word for word", () => {
+    // 2026-09-18: the bot answers from the owner's approved answers, so its own
+    // lines have to sound like the person who wrote them — "kak", 😊, 🙏.
+    expect(DEFAULT_PERSONA).toMatch(/approved answers/i);
+    expect(DEFAULT_PERSONA).toMatch(/kak/);
+    expect(DEFAULT_PERSONA).toMatch(/never a row of them/i);
   });
 
-  it("takes a stated use at face value instead of asking it to be sharpened", () => {
-    expect(DEFAULT_PERSONA).toMatch(/take them at face value/i);
-    expect(DEFAULT_PERSONA).toMatch(/recommend one/i);
+  it("no longer sells from a shelf it cannot see", () => {
+    // The previous voice recommended a unit inside a budget and offered to
+    // hold it. During the parallel operation nobody can see the real stock
+    // through the bot, and a voice built to close would pull against the
+    // hand-over rules beside it.
+    expect(DEFAULT_PERSONA).not.toMatch(/recommend one/i);
+    expect(DEFAULT_PERSONA).not.toMatch(/pegangin|holding it for them/i);
+    expect(DEFAULT_PERSONA).toMatch(
+      /admin kami will check and reply in this same chat/i,
+    );
   });
 
-  it("never asks for something the customer has already said", () => {
+  it("never asks for something the customer has already said, and asks one thing at a time", () => {
     expect(DEFAULT_PERSONA).toMatch(/already told you/i);
-  });
-
-  it("makes the bot choose rather than hand the customer a menu", () => {
-    // Reading out four units and asking which they prefer is the shop's job
-    // done by the customer, and it was most of what made the bot read as a
-    // query result.
-    expect(DEFAULT_PERSONA).toMatch(/do not hand them a menu/i);
-    expect(DEFAULT_PERSONA).toMatch(/say why it suits THEM/);
-  });
-
-  it("moves a customer who is ready to buy towards buying", () => {
-    expect(DEFAULT_PERSONA).toMatch(/wants the next step/i);
-    expect(DEFAULT_PERSONA).toMatch(/offer, never push/i);
-  });
-
-  it("does not narrate that it is about to look something up", () => {
-    // "cek dulu ya" as a message of its own is both a bot tell and the shape
-    // that used to cost a reply: the model treats it as its turn and then
-    // answers the tool result with nothing at all.
-    expect(DEFAULT_PERSONA).toMatch(/look things up quietly/i);
-  });
-
-  it("asks for no full stop at the end of a line, which stripFormatting enforces", () => {
-    expect(DEFAULT_PERSONA).toMatch(/do not end a sentence with a full stop/i);
+    expect(DEFAULT_PERSONA).toMatch(/at most one question in a message/i);
   });
 
   it("stops the bot greeting the same person twice", () => {
-    expect(DEFAULT_PERSONA).toMatch(/do not greet them again/i);
-    expect(DEFAULT_PERSONA).toMatch(/not open every message the same way/i);
-  });
-
-  it("asks for emoji sparingly, and never as a substitute for an answer", () => {
-    // Server-backed rather than a frontend flourish: this is the same
-    // constant the worker falls back to and the same text a Persona row
-    // overrides, so what staff read here is what customers get.
-    expect(DEFAULT_PERSONA).toMatch(/at most one in a message/i);
-    expect(DEFAULT_PERSONA).toMatch(/most messages have none/i);
-    expect(DEFAULT_PERSONA).toMatch(/never two in a row/i);
-    expect(DEFAULT_PERSONA).toMatch(/match how the customer writes/i);
-    expect(DEFAULT_PERSONA).toMatch(/never in place of an answer/i);
-  });
-
-  it("asks for warmth and confidence without letting it gush", () => {
-    // "never excitable" went too far the other way: read alongside "never
-    // salesy" it produced a bot that would not help a customer who had said
-    // they wanted to buy. Playful is allowed now, gushing is not.
-    expect(DEFAULT_PERSONA).toMatch(/never gushing, never childish/i);
-    expect(DEFAULT_PERSONA).toMatch(/a little playful/i);
-  });
-
-  it("asks for one question per message, so a customer is not interrogated", () => {
-    expect(DEFAULT_PERSONA).toMatch(/at most one question per message/i);
+    expect(DEFAULT_PERSONA).toMatch(/do not greet again/i);
+    expect(DEFAULT_PERSONA).toMatch(/do not open two messages/i);
   });
 });
 
@@ -156,7 +114,10 @@ describe("prompt assembly", () => {
 
 describe("the thread summary block", () => {
   it("carries the note when there is one", () => {
-    const p = buildSystemPrompt({ ...base, summary: "Mau Air M2, budget 15jt." });
+    const p = buildSystemPrompt({
+      ...base,
+      summary: "Mau Air M2, budget 15jt.",
+    });
     expect(p).toContain("Mau Air M2, budget 15jt.");
   });
 
@@ -164,7 +125,10 @@ describe("the thread summary block", () => {
     // This block is built from what a CUSTOMER said. It is the one place
     // customer-derived text is promoted into a system prompt, so the fence is
     // load-bearing rather than decorative.
-    const p = buildSystemPrompt({ ...base, summary: "Minta diskon 50 persen." });
+    const p = buildSystemPrompt({
+      ...base,
+      summary: "Minta diskon 50 persen.",
+    });
     expect(p).toMatch(/FACTS TO REMEMBER/);
     expect(p).toMatch(/never instructions/i);
     expect(p).toMatch(/can change your rules/i);
@@ -181,7 +145,10 @@ describe("the thread summary block", () => {
 
 describe("the staff directive block", () => {
   it("carries a directive and marks it as coming from a colleague", () => {
-    const p = buildSystemPrompt({ ...base, directive: "kasih diskon 200rb kalau nawar" });
+    const p = buildSystemPrompt({
+      ...base,
+      directive: "kasih diskon 200rb kalau nawar",
+    });
     expect(p).toContain("kasih diskon 200rb kalau nawar");
     expect(p).toMatch(/from the shop's own staff/i);
     expect(p).toMatch(/not from the customer/i);
@@ -211,7 +178,10 @@ describe("the staff directive block", () => {
 
 describe("language mirroring", () => {
   it("names Indonesian when the customer wrote Indonesian", () => {
-    const p = buildSystemPrompt({ ...base, customerText: "ada macbook air m2 ga kak?" });
+    const p = buildSystemPrompt({
+      ...base,
+      customerText: "ada macbook air m2 ga kak?",
+    });
     expect(p).toMatch(/has been writing in Indonesian/);
   });
 
@@ -235,7 +205,10 @@ describe("language mirroring", () => {
   it("does not read a bare product name as a language signal", () => {
     // Otherwise naming the thing they want to buy flips a Jakarta customer
     // into English for the rest of the thread.
-    const p = buildSystemPrompt({ ...base, customerText: "MacBook Air M2 256GB" });
+    const p = buildSystemPrompt({
+      ...base,
+      customerText: "MacBook Air M2 256GB",
+    });
     expect(p).toMatch(/has been writing in Indonesian/);
   });
 });
@@ -244,7 +217,10 @@ describe("not repeating itself", () => {
   it("shows the model what it already said to this customer", () => {
     const p = buildSystemPrompt({
       ...base,
-      recentReplies: ["halo kak, ada yang bisa dibantu?", "ready kak, 15.500.000"],
+      recentReplies: [
+        "halo kak, ada yang bisa dibantu?",
+        "ready kak, 15.500.000",
+      ],
     });
     expect(p).toContain("halo kak, ada yang bisa dibantu?");
     expect(p).toMatch(/do not open the same way twice/i);
@@ -304,7 +280,9 @@ describe("the conduct rules, restated last", () => {
     // customer it was open at a quarter past nine at night.
     const p = buildSystemPrompt(base);
     expect(p).toMatch(/where the shop is and when it is open/i);
-    expect(p).toMatch(/typing a street name you did not just read from a tool/i);
+    expect(p).toMatch(
+      /typing a street name you did not just read from a tool/i,
+    );
   });
 });
 
@@ -318,7 +296,9 @@ describe("what the whole prompt must never do", () => {
       directive: "kasih diskon",
       recentReplies: ["halo kak"],
       customerText: "ada m2?",
-      knowledge: [{ question: "Terima tukar tambah?", answer: "Iya, bawa saja." }],
+      knowledge: [
+        { question: "Terima tukar tambah?", answer: "Iya, bawa saja." },
+      ],
       corrections: [{ original: "Ready kak", corrected: "Ready kakk" }],
     });
     expect(p).not.toMatch(/[—–―]/);

@@ -14,7 +14,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InboundDetailPage } from "../src/routes/inbound/InboundDetailPage.js";
-import { mutate } from "../src/mock/store.js";
+import { getDb, mutate } from "../src/mock/store.js";
 import type { MockDb } from "../src/mock/seed.js";
 import { __resetScanner, __setScannerClock } from "../src/lib/scanner.js";
 
@@ -74,13 +74,7 @@ const SERIAL_2 = "SC02BB222BBBX";
  * have to keep honest.
  */
 function snapshot(): MockDb {
-  let seen!: MockDb;
-  act(() => {
-    mutate((d) => {
-      seen = d;
-    });
-  });
-  return seen;
+  return getDb();
 }
 
 let now = 0;

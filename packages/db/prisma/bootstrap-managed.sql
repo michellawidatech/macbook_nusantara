@@ -19,8 +19,8 @@
 --   * **The platform gave you a superuser and nothing else** — it creates all
 --     four roles and the database. Run against the maintenance database.
 --
---   * **The platform made the database and its owner for you** (Render, where
---     `render.yaml` declares `databaseName: nusantara_pos_prod` and
+--   * **The platform made the database and its owner for you** (as Render's
+--     Blueprint did, declaring `databaseName: nusantara_pos_prod` and
 --     `user: nusantara`) — the owner and the database already exist, so it
 --     creates only the three application roles. Run as that owner, against
 --     that database; there is no maintenance database to reach.

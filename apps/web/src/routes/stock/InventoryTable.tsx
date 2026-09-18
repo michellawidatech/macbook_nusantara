@@ -752,7 +752,7 @@ export function InventoryTable({ onAdjust, extra }: InventoryTableProps) {
             title: (
               <Flex align="center" gap={SPACE.xs}>
                 {t("inventory.batteryHealth", "Battery")}
-                <Tooltip title={batteryEraGuide(batterySettings)}>
+                <Tooltip title={batteryEraGuide(batterySettings, t)}>
                   <QuestionCircleOutlined
                     style={{ color: colorTextSecondary, cursor: "help" }}
                     aria-label={t(

@@ -351,6 +351,147 @@ export function poTotals(po: Po): PoTotals {
   };
 }
 
+/**
+ * The three states of the GOODS on an order — `Po.status`, and now a field
+ * somebody can set rather than a consequence of pressing *Mark arrived*
+ * (owner ask 2026-09-15: *"All of the information should be editable …
+ * Status"*).
+ *
+ * In English, for the reason `PO_PAYMENT_STATUS_LABEL` gives: no `t` is in
+ * scope in a module constant, so the call site renders `t(PO_STATUS_LABEL[…])`.
+ * "Arrived" rather than "Received" because that is the word the rest of the
+ * screen already uses — the button says *Mark arrived*, and a Status offering
+ * "Received" beside it would read as a second, different idea.
+ */
+export const PO_STATUSES: readonly Po["status"][] = [
+  "DRAFT",
+  "ORDERED",
+  "RECEIVED",
+];
+
+export const PO_STATUS_LABEL: Record<Po["status"], string> = {
+  DRAFT: "Draft",
+  ORDERED: "Ordered",
+  RECEIVED: "Arrived",
+};
+
+/**
+ * Where an invoice stands on MONEY — three answers (owner revision 2026-09-15).
+ *
+ * > *"Per invoice should have 3 status 'open' for unpaid, 'close' for paid,
+ * > 'paid full' for fully paid. Remove the 'Stage', it should be payment
+ * > status instead."* … *"Open is not paid yet, Closed is paid but not fully,
+ * > and Paid in Full for paid all."*
+ *
+ * This REPLACES `poStage` on the list and on the order's own header. A stage
+ * answered "how far have the goods got", which every screen behind the row
+ * already shows — the Products column counts the lines, Serials & QC shows
+ * every machine and what was decided about it — while the question staff
+ * actually bring to this list is who is still owed money.
+ *
+ * `poStage` and `unitStage` stay: a UNIT's stage is what the QC grid tags and
+ * what the reopen dialog names, and that has nothing to do with payment.
+ *
+ * ## Why an unpriced invoice with money against it is CLOSED, not paid
+ *
+ * An order with no lines yet and a transfer against it is the owner's
+ * paid-first case (see `poTotals`). It cannot be `PAID_IN_FULL`, because
+ * nobody knows what full is; it is not `OPEN` either, because money has moved.
+ * Partly paid is the honest reading and the one that keeps the row in front of
+ * whoever has to finish it.
+ */
+export type PoPaymentStatus =
+  /** Nothing has been paid against it. */
+  | "OPEN"
+  /** Something has, but not all of it. */
+  | "CLOSED"
+  /** Settled in full. */
+  | "PAID_IN_FULL";
+
+/**
+ * In English, because this is a module-level constant with no `t` in scope —
+ * the same bargain `INBOUND_STAGE_LABEL` strikes. Every call site renders
+ * `t(PO_PAYMENT_STATUS_LABEL[…])`, and `test/i18n.test.ts` lists these among
+ * the strings whose English IS the key.
+ */
+export const PO_PAYMENT_STATUS_LABEL: Record<PoPaymentStatus, string> = {
+  OPEN: "Open",
+  CLOSED: "Closed",
+  PAID_IN_FULL: "Paid in full",
+};
+
+export const PO_PAYMENT_STATUS_COLOR: Record<PoPaymentStatus, string> = {
+  // Red rather than grey: an invoice nobody has paid anything against is the
+  // one this column exists to surface.
+  OPEN: "red",
+  CLOSED: "gold",
+  PAID_IN_FULL: "green",
+};
+
+/** Ordered as the money moves, for a facet that reads like a progression. */
+export const PO_PAYMENT_STATUSES: readonly PoPaymentStatus[] = [
+  "OPEN",
+  "CLOSED",
+  "PAID_IN_FULL",
+];
+
+/** Which of the three an invoice is at. Derived — there is no column for it. */
+export function poPaymentStatus(po: Po): PoPaymentStatus {
+  const { paid, fullyPaid } = poTotals(po);
+  if (fullyPaid) return "PAID_IN_FULL";
+  return paid > 0 ? "CLOSED" : "OPEN";
+}
+
+/**
+ * What deleting an invoice would take with it, and what stops it.
+ *
+ * > *"Make the inbound deletable. with right click and add modal popup
+ * > confirmation"* (owner ask 2026-09-15)
+ *
+ * Deleting is CANCELLING. Nothing is hard-deleted on the Postgres side — the
+ * header goes to `BATAL`, its lines are marked removed and its payments voided
+ * (`packages/db/src/store/adapters/documents.ts`) — and the browser's copy
+ * simply stops carrying the row, which is what that projection leaves out.
+ *
+ * ## What it may take with it
+ *
+ * A machine still in QC. It exists only because this invoice said so: nobody
+ * has graded it, nothing has been decided about it, and leaving it behind
+ * would strand a unit on `OrphanQcCard` that no document explains.
+ *
+ * ## What stops it
+ *
+ * A machine that has LEFT QC — accepted onto a shelf, reserved, sold, sent to
+ * the bench, returned to the supplier. The shop really did buy that machine on
+ * this invoice, and an invoice is the only record of what it cost; deleting it
+ * would leave a unit whose `buy` no document backs. Those are named rather
+ * than counted, because the answer is to deal with each one — a QC reopen, a
+ * stock adjustment — and a number tells nobody which.
+ *
+ * Payments do NOT stop it. Money paid against an invoice that turned out not
+ * to exist is money paid to that supplier, which the supplier's own account is
+ * what tracks.
+ */
+export interface PoDeletion {
+  /** Serials that would go with the invoice — machines still in QC. */
+  readonly takes: readonly string[];
+  /** Serials that refuse it, because they have left QC. */
+  readonly blockers: readonly string[];
+  /** Whether the invoice can be deleted at all. */
+  readonly allowed: boolean;
+}
+
+export function poDeletion(po: Po, units: readonly Unit[]): PoDeletion {
+  const mine = units.filter((u) => u.poId === po.id);
+  const takes = mine.filter((u) => u.status === "QC").map((u) => u.serial);
+  const blockers = mine.filter((u) => u.status !== "QC").map((u) => u.serial);
+  return {
+    takes: [...takes].sort(),
+    blockers: [...blockers].sort(),
+    allowed: blockers.length === 0,
+  };
+}
+
 /** Units belonging to an order, in serial order. */
 export function unitsOfPo(db: MockDb, poId: string): Unit[] {
   return db.units

@@ -134,13 +134,70 @@ export type Language = "id" | "en" | "mix";
  * and shop slang rather than nouns — nouns are where the two languages overlap.
  */
 const ID_WORDS = new Set([
-  "ada", "ga", "gak", "nggak", "tidak", "yang", "dan", "atau", "kak", "mas",
-  "mbak", "bang", "saya", "aku", "kamu", "mau", "bisa", "berapa", "harga",
-  "harganya", "gimana", "bagaimana", "kalau", "kalo", "aja", "saja", "dulu",
-  "udah", "sudah", "belum", "masih", "juga", "buat", "untuk", "dengan", "dari",
-  "ini", "itu", "nya", "sih", "dong", "ya", "iya", "nanti", "besok", "bisa",
-  "punya", "cari", "beli", "jual", "tanya", "lagi", "banget", "murah", "mahal",
-  "warna", "berapa", "kapan", "dimana", "di", "ke", "pakai", "pake", "kuliah",
+  "ada",
+  "ga",
+  "gak",
+  "nggak",
+  "tidak",
+  "yang",
+  "dan",
+  "atau",
+  "kak",
+  "mas",
+  "mbak",
+  "bang",
+  "saya",
+  "aku",
+  "kamu",
+  "mau",
+  "bisa",
+  "berapa",
+  "harga",
+  "harganya",
+  "gimana",
+  "bagaimana",
+  "kalau",
+  "kalo",
+  "aja",
+  "saja",
+  "dulu",
+  "udah",
+  "sudah",
+  "belum",
+  "masih",
+  "juga",
+  "buat",
+  "untuk",
+  "dengan",
+  "dari",
+  "ini",
+  "itu",
+  "nya",
+  "sih",
+  "dong",
+  "ya",
+  "iya",
+  "nanti",
+  "besok",
+  "bisa",
+  "punya",
+  "cari",
+  "beli",
+  "jual",
+  "tanya",
+  "lagi",
+  "banget",
+  "murah",
+  "mahal",
+  "warna",
+  "berapa",
+  "kapan",
+  "dimana",
+  "di",
+  "ke",
+  "pakai",
+  "pake",
+  "kuliah",
 ]);
 
 /**
@@ -149,11 +206,57 @@ const ID_WORDS = new Set([
  * write, and counting them as English would flip a whole thread on one message.
  */
 const EN_WORDS = new Set([
-  "the", "is", "are", "do", "does", "you", "have", "still", "what", "when",
-  "where", "how", "much", "can", "could", "would", "please", "thanks", "want",
-  "looking", "for", "any", "there", "this", "that", "with", "and", "or", "but",
-  "it", "its", "im", "i", "my", "me", "we", "they", "about", "price", "buy",
-  "sell", "available", "in", "of", "to", "a", "an", "if", "not", "yes", "no",
+  "the",
+  "is",
+  "are",
+  "do",
+  "does",
+  "you",
+  "have",
+  "still",
+  "what",
+  "when",
+  "where",
+  "how",
+  "much",
+  "can",
+  "could",
+  "would",
+  "please",
+  "thanks",
+  "want",
+  "looking",
+  "for",
+  "any",
+  "there",
+  "this",
+  "that",
+  "with",
+  "and",
+  "or",
+  "but",
+  "it",
+  "its",
+  "im",
+  "i",
+  "my",
+  "me",
+  "we",
+  "they",
+  "about",
+  "price",
+  "buy",
+  "sell",
+  "available",
+  "in",
+  "of",
+  "to",
+  "a",
+  "an",
+  "if",
+  "not",
+  "yes",
+  "no",
 ]);
 
 /**
@@ -183,4 +286,50 @@ export function detectLanguage(text: string): Language {
   if (id === 0 && en === 0) return "id";
   if (id > 0 && en > 0) return "mix";
   return en > 0 ? "en" : "id";
+}
+
+// --- the grounded bot's replies (2026-09-18) ---------------------------------
+
+/** More than this many emoji in one message reads as a sticker, not a person. */
+export const MAX_REPLY_EMOJI = 4;
+
+/**
+ * Take the markdown out of a reply and leave the owner's punctuation alone.
+ *
+ * `stripFormatting` enforces the old persona's typography — no dashes, no
+ * brackets, one emoji, no full stop at the end of a line — and it rewrites
+ * text to get there. That was right for sentences the model composed, and it
+ * is wrong for the owner's approved answers, which the grounded bot now sends
+ * close to verbatim: "1–3 hari kerja" became "1, 3 hari kerja", "10.00 –
+ * 20.00 WIB" became two times, and "PO (pre-order)" lost its brackets. A
+ * sanitiser that changes the meaning of an approved answer is not sanitising.
+ *
+ * So this removes only what WhatsApp would show as litter — code fences,
+ * backticks, heading and quote markers, `**bold**` and `_italic_` markers,
+ * markdown links — and caps a run of emoji. Ranges, brackets, full stops and
+ * line breaks are the owner's and stay.
+ */
+export function sanitiseReply(text: string): string {
+  if (!text) return "";
+  let out = text;
+  out = out.replace(/```[\s\S]*?```/g, " ");
+  out = out.replace(/`([^`]*)`/g, "$1");
+  out = out.replace(/^[ \t]*#{1,6}[ \t]+/gm, "");
+  out = out.replace(/^[ \t]*>[ \t]?/gm, "");
+  out = out.replace(/\*\*([^*]+)\*\*/g, "$1");
+  out = out.replace(/__([^_]+)__/g, "$1");
+  out = out.replace(/(^|\s)\*([^*\n]+)\*(?=\s|$|[.,!?])/g, "$1$2");
+  out = out.replace(/\[([^\]]+)\]\(([^)]*)\)/g, "$1 $2");
+  let seen = 0;
+  out = out.replace(/\p{Extended_Pictographic}/gu, (m) => {
+    seen += 1;
+    return seen <= MAX_REPLY_EMOJI ? m : "";
+  });
+  out = out.replace(/[ \t]{2,}/g, " ");
+  out = out.replace(/\n{3,}/g, "\n\n");
+  return out
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
 }

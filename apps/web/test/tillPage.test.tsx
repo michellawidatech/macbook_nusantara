@@ -16,26 +16,23 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StockOutPage } from "../src/routes/stock/StockOutPage.js";
-import { mutate } from "../src/mock/store.js";
+import { getDb, mutate } from "../src/mock/store.js";
 import { __resetScanner, __setScannerClock } from "../src/lib/scanner.js";
 import { bargainOn, upsellOn } from "../src/lib/pos.js";
 import type { MockDb } from "../src/mock/seed.js";
 
 // Same reasoning as inboundQcPage.test.tsx: every test renders the whole page
 // and drives it with real events, so the cost is a multiple of the page rather
-// than of the assertion, and it moves with how busy the machine is.
-vi.setConfig({ testTimeout: 60_000 });
+// than of the assertion, and it moves with how busy the machine is. Three
+// minutes, not one: the split-payment test alone took 45 s on an M2 with a
+// worker to itself (2026-09-18), and CI's 2-vCPU runner — one vitest worker,
+// slower cores — is the machine this budget has to hold on.
+vi.setConfig({ testTimeout: 180_000 });
 
 const SKU = "sku-till";
 
 function snapshot(): MockDb {
-  let seen!: MockDb;
-  act(() => {
-    mutate((d) => {
-      seen = d;
-    });
-  });
-  return seen;
+  return getDb();
 }
 
 function renderTill() {
@@ -81,8 +78,18 @@ beforeEach(() => {
   mutate((d) => {
     // Both sellable statuses go, so the catalogue holds only the variant this
     // file makes — otherwise "1 left" matches a seeded row as well as ours.
+    //
+    // …and this file's OWN serials go with them, whatever state a previous
+    // test left them in. A serial is the subject of this database: two units
+    // carrying one is a store no screen is written against, and the first
+    // symptom is that `units.find(byPersonSerial)` answers with the sold copy
+    // — which carries no invoice, so its share of the ongkir is zero.
+    const mine = new Set(["TILLAAA00001", "TILLBBB00002"]);
     d.units = d.units.filter(
-      (u) => u.status !== "TERSEDIA" && u.status !== "DIRESERVASI",
+      (u) =>
+        !mine.has(u.serial) &&
+        u.status !== "TERSEDIA" &&
+        u.status !== "DIRESERVASI",
     );
     d.skus = d.skus.filter((s) => s.id !== SKU);
     d.skus.push({
@@ -155,7 +162,17 @@ async function openCatalogue() {
   if (add) await userEvent.click(add);
 }
 
-/** Put the shop's only variant in the basket, via the chooser. */
+/**
+ * Put the shop's only variant in the basket, through the chooser when there
+ * is one.
+ *
+ * A variant down to its LAST machine skips the chooser (owner revision
+ * 2026-08-27) — a dialog offering one option is a tap paid for nothing — so
+ * the second call in a test that has already sold one goes straight into the
+ * basket, and there is nothing to pick. Asserting on the chooser here would
+ * make every such test depend on how many machines the file happens to have
+ * left rather than on what it is checking.
+ */
 async function pickFirstMachine(serial = "TILLAAA00001") {
   await openCatalogue();
   await userEvent.click(
@@ -164,7 +181,10 @@ async function pickFirstMachine(serial = "TILLAAA00001") {
   // By the button's own `aria-label`, which names the machine — walking the
   // DOM for the row would be a test that breaks on a layout change rather
   // than on a behaviour one.
-  await userEvent.click(await screen.findByLabelText(`Pick ${serial}`));
+  const pick = await screen
+    .findByLabelText(`Pick ${serial}`, {}, { timeout: 250 })
+    .catch(() => null);
+  if (pick) await userEvent.click(pick);
 }
 
 describe("picking a machine", () => {
@@ -653,5 +673,91 @@ describe("phone and desktop", () => {
     renderTill();
     await pickFirstMachine();
     expect(screen.getByRole("button", { name: /^Continue$/ })).toBeVisible();
+  });
+});
+
+/**
+ * What a machine cost, with its invoice's shipping and tax on it (owner ask
+ * 2026-09-15: *"Shipping fee and tax fee should be divided across all units
+ * evenly for the COGS and margin calculation"*).
+ *
+ * Both machines on this till come off one invoice of two rows — one per
+ * machine, the shape Inbound & QC writes — that charged Rp300.000 of ongkir
+ * and Rp100.000 of tax. Each has therefore cost the shop Rp8.200.000, not the
+ * Rp8.000.000 its row says, and the margin and the below-cost warning both
+ * have to know.
+ */
+describe("a machine's share of its invoice's shipping and tax", () => {
+  beforeEach(() => {
+    mutate((d) => {
+      d.pos = d.pos.filter((p) => p.id !== "po-till");
+      d.pos.push({
+        id: "po-till",
+        code: "PI-TILL",
+        supplierId: d.suppliers[0]!.id,
+        invoice: "INV-TILL",
+        date: "2026-09-01",
+        locationId: d.myWarehouseId,
+        items: ["TILLAAA00001", "TILLBBB00002"].map((serial, i) => ({
+          id: `po-till-${i + 1}`,
+          skuId: SKU,
+          serial,
+          qty: 1,
+          unitCost: 8_000_000,
+        })),
+        payments: [],
+        shippingFee: 300_000,
+        taxFee: 100_000,
+        discount: 0,
+        status: "RECEIVED",
+      });
+      // Only the machines the outer `beforeEach` just shelved: earlier tests
+      // leave sold copies of the same serials behind, and those are not on
+      // this invoice.
+      for (const u of d.units) {
+        if (u.skuId === SKU && u.status === "TERSEDIA") u.poId = "po-till";
+      }
+    });
+  });
+
+  it("puts the share on its own line and takes the margin after it", async () => {
+    renderTill();
+    await pickFirstMachine();
+    await userEvent.click(
+      screen.getByLabelText("Price detail for TILLAAA00001"),
+    );
+    const d = await dialog();
+    // Named PURCHASE shipping: a sale has a delivery charge of its own, and
+    // this is not it.
+    expect(d.getByText("Purchase shipping & tax")).toBeTruthy();
+    expect(d.getByText("Rp 200.000")).toBeTruthy();
+    expect(d.getByText("Rp 8.200.000")).toBeTruthy();
+    // (10.000.000 − 8.200.000) ÷ 10.000.000, where the row's price alone
+    // said 20%.
+    expect(d.getByText("18.0%")).toBeTruthy();
+  });
+
+  it("calls a price under that cost a loss, though it is above the row's price", async () => {
+    renderTill();
+    await pickFirstMachine();
+    // Above the Rp8.000.000 on the invoice row, below the Rp8.200.000 the
+    // machine has actually cost.
+    const price = screen.getByLabelText("Price for TILLAAA00001");
+    await userEvent.tripleClick(price);
+    await userEvent.paste("8100000");
+    await userEvent.click(screen.getByRole("button", { name: /^Continue$/ }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Pay & finish$/ }),
+    );
+    expect(
+      await screen.findByRole("button", { name: /Record at a loss/ }),
+    ).toBeTruthy();
+    // Scoped to the confirm dialog: the totals panel behind it says the same
+    // sentence, which is the point of both — the panel warns while there is
+    // still time to change the price, the dialog asks before it is recorded.
+    const d = await dialog();
+    expect(
+      d.getByText("1 line(s) priced below what the shop paid."),
+    ).toBeTruthy();
   });
 });

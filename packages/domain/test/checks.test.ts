@@ -245,6 +245,12 @@ describe("08 §6 — 6. orphan units", () => {
     ).toEqual([]);
   });
 
+  it("counts a machine a stock take found as arrived", () => {
+    expect(
+      checkOrphanUnits([unit()], [event({ type: "OPNAME_DITEMUKAN" })]).findings,
+    ).toEqual([]);
+  });
+
   it("reports a unit with no DITERIMA event", () => {
     const r = checkOrphanUnits([unit()], [event({ type: "DIPINDAH" })]);
     expect(r.findings).toHaveLength(1);

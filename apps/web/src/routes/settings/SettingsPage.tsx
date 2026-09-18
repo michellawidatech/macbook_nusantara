@@ -30,8 +30,12 @@ import {
 } from "antd";
 import { EditOutlined } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
+import { CategorySettings } from "./CategorySettings.js";
 import { GradingSettings } from "./GradingSettings.js";
 import { ScannerSettings } from "./ScannerSettings.js";
+import { StaffAccountsSettings } from "./StaffAccountsSettings.js";
+import { ChangePasswordForm } from "../../components/ChangePasswordForm.js";
+import { useSession } from "../../lib/session.js";
 import { DataTable } from "../../components/DataTable";
 import { ProTable } from "../../components/ProTable";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
@@ -83,6 +87,8 @@ const REASON_ACTIVITIES: {
 export function SettingsPage() {
   const { t } = useTranslation();
   const db = useDb();
+  // Cached by the auth gate; the Settings page never renders without it.
+  const me = useSession().data ?? null;
   const { message, modal } = App.useApp();
   const { compact } = useLayoutMode();
   const [whForm] = Form.useForm<{ name: string }>();
@@ -482,12 +488,12 @@ export function SettingsPage() {
           />
         </Form.Item>
         {/*
-          * The two-letter origin code that goes on the front of every serial
-          * scanned in from this supplier (owner ask 2026-08-28) — see
-          * `lib/serialScan.ts`. Suggested from the name as it is typed, and
-          * only suggested: the shop's codes are the shop's to choose, and two
-          * suppliers can easily suggest the same two letters.
-          */}
+         * The two-letter origin code that goes on the front of every serial
+         * scanned in from this supplier (owner ask 2026-08-28) — see
+         * `lib/serialScan.ts`. Suggested from the name as it is typed, and
+         * only suggested: the shop's codes are the shop's to choose, and two
+         * suppliers can easily suggest the same two letters.
+         */}
         <Form.Item name="code" label={compact ? "Code" : undefined}>
           <Input
             placeholder={t("settings.supplierCodePlaceholder", "Code (AS)")}
@@ -1159,7 +1165,9 @@ export function SettingsPage() {
             render: (_, x) => {
               const { upsell } = salesStats(x.id);
               return upsell > 0 ? (
-                <Typography.Text type="success">{fmtRp(upsell)}</Typography.Text>
+                <Typography.Text type="success">
+                  {fmtRp(upsell)}
+                </Typography.Text>
               ) : (
                 "—"
               );
@@ -1199,29 +1207,48 @@ export function SettingsPage() {
   );
 
   const account = (
-    <Card title={t("settings.myAccount", "My account")}>
-      <Form layout="vertical" style={{ ...FORM_CENTRE, maxWidth: 420 }}>
-        <Form.Item
-          label={t("settings.defaultWarehouse", "Default warehouse")}
-          tooltip={t(
-            "settings.stockInFromThisAccount",
-            "Stock In from this account goes here",
-          )}
-        >
-          <Select
-            value={db.myWarehouseId}
-            options={db.warehouses
-              .filter((w) => w.active)
-              .map((w) => ({ value: w.id, label: w.name }))}
-            onChange={(v) =>
-              mutate((d) => {
-                d.myWarehouseId = v;
-              })
-            }
-          />
-        </Form.Item>
-      </Form>
-    </Card>
+    <Flex vertical gap={SPACE.lg}>
+      <Card title={t("settings.myAccount", "My account")}>
+        <Form layout="vertical" style={{ ...FORM_CENTRE, maxWidth: 420 }}>
+          <Form.Item
+            label={t("settings.defaultWarehouse", "Default warehouse")}
+            tooltip={t(
+              "settings.stockInFromThisAccount",
+              "Stock In from this account goes here",
+            )}
+          >
+            <Select
+              value={db.myWarehouseId}
+              options={db.warehouses
+                .filter((w) => w.active)
+                .map((w) => ({ value: w.id, label: w.name }))}
+              onChange={(v) =>
+                mutate((d) => {
+                  d.myWarehouseId = v;
+                })
+              }
+            />
+          </Form.Item>
+        </Form>
+      </Card>
+      {me !== null && (
+        <Card title={t("settings.changePassword", "Change password")}>
+          <div style={{ ...FORM_CENTRE, maxWidth: 420 }}>
+            <ChangePasswordForm
+              username={me.username}
+              onChanged={() =>
+                message.success(
+                  t(
+                    "settings.passwordChanged",
+                    "Password changed. Every other device signed in as you has been signed out.",
+                  ),
+                )
+              }
+            />
+          </div>
+        </Card>
+      )}
+    </Flex>
   );
 
   /**
@@ -1256,7 +1283,12 @@ export function SettingsPage() {
         <Typography.Text strong>
           {t("settings.batteryHealthBands", "Battery health bands")}
         </Typography.Text>
-        <Flex gap={SPACE.lg} wrap align="flex-end" style={{ marginTop: SPACE.sm }}>
+        <Flex
+          gap={SPACE.lg}
+          wrap
+          align="flex-end"
+          style={{ marginTop: SPACE.sm }}
+        >
           <Flex vertical gap={SPACE.xs}>
             <Typography.Text type="secondary">Good from</Typography.Text>
             <InputNumber
@@ -1409,8 +1441,7 @@ export function SettingsPage() {
             style={{ width: 160 }}
             aria-label={t("settings.listingMarkup", "Listing markup")}
             value={
-              db.settings.marketplaceMarkupPct ??
-              DEFAULT_MARKETPLACE_MARKUP_PCT
+              db.settings.marketplaceMarkupPct ?? DEFAULT_MARKETPLACE_MARKUP_PCT
             }
             onChange={(v: number | null) =>
               v != null &&
@@ -1445,10 +1476,7 @@ export function SettingsPage() {
                   aria-label={t("settings.commissionFor", "{{channel}} fee", {
                     channel: c.label,
                   })}
-                  value={commissionPctOf(
-                    c.value,
-                    db.settings.marketplaceFees,
-                  )}
+                  value={commissionPctOf(c.value, db.settings.marketplaceFees)}
                   onChange={(v: number | null) =>
                     v != null &&
                     mutate((d) => {
@@ -1506,7 +1534,9 @@ export function SettingsPage() {
             d.settings.shopAddress = values.shopAddress.trim();
             d.settings.shopContact = values.shopContact.trim();
           });
-          message.success(t("settings.shopIdentitySaved", "Shop identity saved."));
+          message.success(
+            t("settings.shopIdentitySaved", "Shop identity saved."),
+          );
         }}
       >
         <Form.Item name="shopName" label={t("settings.shopName", "Name")}>
@@ -1527,7 +1557,9 @@ export function SettingsPage() {
           name="shopAddress"
           label={t("settings.shopAddress", "Address")}
         >
-          <Input placeholder={t("settings.shopAddressEg", "Jakarta, Indonesia")} />
+          <Input
+            placeholder={t("settings.shopAddressEg", "Jakarta, Indonesia")}
+          />
         </Form.Item>
         <Form.Item
           name="shopContact"
@@ -1572,6 +1604,11 @@ export function SettingsPage() {
             children: shopIdentity,
           },
           {
+            key: "cat",
+            label: t("settings.tabCategories", "Product categories"),
+            children: <CategorySettings />,
+          },
+          {
             key: "grading",
             label: t("settings.tabGrading", "Grading"),
             children: <GradingSettings />,
@@ -1601,6 +1638,17 @@ export function SettingsPage() {
             label: t("settings.tabAccount", "Account"),
             children: account,
           },
+          // The owner's alone (08 §9: staff management). `/api/staff` refuses
+          // anybody else whatever this tab does.
+          ...(me?.role === "OWNER"
+            ? [
+                {
+                  key: "staff",
+                  label: t("settings.tabStaffAccounts", "Staff accounts"),
+                  children: <StaffAccountsSettings me={me} />,
+                },
+              ]
+            : []),
           {
             key: "scan",
             label: t("settings.tabScanner", "Scanner"),

@@ -64,6 +64,7 @@ import {
   Flex,
   Form,
   Input,
+  InputNumber,
   Modal,
   Result,
   Segmented,
@@ -96,10 +97,15 @@ import {
   appendEvent,
   ensureReason,
   nextId,
+  currentStaffName,
 } from "../../mock/store.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
 import { focusScanTarget } from "../../lib/scanner.js";
 import { resolveSerialQuery } from "../../lib/serialInput.js";
+import {
+  countedSerial,
+  skuTracksSerial,
+} from "../../lib/serialTracking.js";
 import {
   inOpnameScope,
   scopeOf,
@@ -385,6 +391,19 @@ export function OpnameSessionPage() {
   const [surplus, setSurplus] = useState<Record<string, OpnameSurplus>>(
     session?.surplus ?? {},
   );
+  /**
+   * What was found of each product the shop COUNTS rather than scans (owner
+   * ask 2026-09-15: *"in stock opname, they will only be counted and validated
+   * by qty, not serial"*).
+   *
+   * By variant id. A variant with no entry is one nobody reached; **zero is a
+   * shelf somebody looked at and found empty**, which is a discrepancy the
+   * count has to explain. The two are different answers, which is why an
+   * untouched row is absent rather than 0.
+   */
+  const [counts, setCounts] = useState<Record<string, number>>(
+    session?.counts ?? {},
+  );
   /** The serial the surplus dialog is open for, or null when it is closed. */
   const [surplusFor, setSurplusFor] = useState<string | null>(null);
   /**
@@ -444,7 +463,7 @@ export function OpnameSessionPage() {
     // Deliberately NOT keyed on the store: `missing` moves whenever stock
     // moves anywhere in the app, and saving a draft because someone else sold
     // a laptop is not a change this counter made.
-  }, [serials, notes, surplus, posted]);
+  }, [serials, notes, surplus, counts, posted]);
 
   const scannedSet = useMemo(() => new Set(serials), [serials]);
 
@@ -471,6 +490,27 @@ export function OpnameSessionPage() {
     );
     if (!s) return;
     if (posted) return;
+    /*
+     * A product the shop counts is not scanned into a count (owner ask
+     * 2026-09-15). Refused out loud rather than silently ignored: the serial
+     * is a handle the app minted, so a counter who somehow has one in front of
+     * them needs to know the shelf is answered with a number instead — and
+     * accepting it would count the same box twice, once here and once in the
+     * quantity above.
+     */
+    const known = db.units.find((u) => u.serial === s);
+    if (known !== undefined && !tracksSerial(known.skuId)) {
+      setScan("");
+      message.info(
+        t(
+          "opname.countedByQty",
+          "{{product}} is counted by quantity — put the number in the Counted by quantity card instead.",
+          { product: skuName(known.skuId) },
+        ),
+      );
+      focusScanTarget();
+      return;
+    }
     setScan("");
     setFocused(s);
     if (scannedSet.has(s)) {
@@ -530,9 +570,21 @@ export function OpnameSessionPage() {
     return sku && db.models.find((m) => m.id === sku.modelId)?.category;
   };
 
-  const expected = db.units.filter(
+  /** Is this variant identified one by one, or counted? See `lib/serialTracking.ts`. */
+  const tracksSerial = (skuId: string) => skuTracksSerial(db, skuId);
+
+  const inScope = db.units.filter(
     (u) => IN_STOCK.includes(u.status) && inOpnameScope(u, scope, categoryOf),
   );
+  /**
+   * The machines this count SCANS. Accessories are not among them (owner ask
+   * 2026-09-15), and keeping them out here is the whole fix: they have no
+   * serial anybody could read, so leaving them in `expected` reported every
+   * sleeve in the shop as missing the moment a count was posted.
+   */
+  const expected = inScope.filter((u) => tracksSerial(u.skuId));
+  /** …and the ones it counts. Grouped into `countedProducts` below. */
+  const countedStock = inScope.filter((u) => !tracksSerial(u.skuId));
   const expectedSerials = new Set(expected.map((u) => u.serial));
 
   /**
@@ -616,6 +668,14 @@ export function OpnameSessionPage() {
     mutate((d) => {
       const o = d.opnames.find((x) => x.id === session.id)!;
       o.counted = counted;
+      // Only the products still in this count's scope. Narrowing a scope
+      // mid-count must not leave a number behind for a shelf nobody is
+      // counting any more — the same filter `surplus` gets below.
+      o.counts = Object.fromEntries(
+        countedProducts
+          .filter((r) => r.answered)
+          .map((r) => [r.skuId, r.found!] as const),
+      );
       o.missing = missing;
       o.unknown = unknown;
       o.notes = { ...notes };
@@ -693,6 +753,19 @@ export function OpnameSessionPage() {
         ),
       });
     }
+    if (countsNeedingNote.length > 0) {
+      return modal.info({
+        title: t(
+          "opname.needCountNotes",
+          "{{count}} product(s) counted differently need a note",
+          { count: countsNeedingNote.length },
+        ),
+        content: t(
+          "opname.needCountNotesBody",
+          "A shelf that holds a different number from the one the system expects needs a line saying why before the count can be posted.",
+        ),
+      });
+    }
     // Only the decisions attached to a serial still on the unknown list, which
     // is the same filter `persist` applies — the two have to agree or the
     // record would disagree with the units it created.
@@ -712,6 +785,15 @@ export function OpnameSessionPage() {
               },
             )}
           </span>
+          {countedOff.length > 0 && (
+            <span>
+              {t(
+                "opname.postBodyCounted",
+                "{{count}} product(s) counted by quantity do not match: short ones are marked lost, extra ones are created in QC.",
+                { count: countedOff.length },
+              )}
+            </span>
+          )}
           {taking.length > 0 && (
             // Said before the button rather than only after it. Posting is
             // where a surplus stops being a note and becomes a machine in the
@@ -800,8 +882,78 @@ export function OpnameSessionPage() {
                 (notes[serial] ?? "").trim() ? ` — ${notes[serial]}` : ""
               }`,
               refCode: session.code,
-              staff: "Michella",
+              staff: currentStaffName(),
             });
+          }
+
+          /*
+           * The products counted by quantity (owner ask 2026-09-15).
+           *
+           * A shortfall marks that many of them lost, and a surplus mints
+           * that many into QC — the same two outcomes a scanned count has,
+           * reached by arithmetic instead of by serial. WHICH of a variant's
+           * boxes is the lost one is a question with no answer and no
+           * consequence: they are interchangeable by construction, which is
+           * the whole reason this category is counted rather than tracked.
+           * Oldest first, so the ones that have sat longest are the ones
+           * reported gone.
+           */
+          for (const row of countedOff) {
+            const note = (notes[row.skuId] ?? "").trim();
+            if (row.delta < 0) {
+              const mine = countedStock
+                .filter((u) => u.skuId === row.skuId)
+                .map((u) => u.serial)
+                .sort();
+              for (const serial of mine.slice(0, -row.delta)) {
+                appendEvent(d, serial, {
+                  type: "OPNAME_HILANG",
+                  toStatus: "HILANG",
+                  note: `Short on a counted shelf at opname — ${note}`,
+                  refCode: session.code,
+                });
+              }
+              continue;
+            }
+            // A surplus. The reason goes on the managed list first, so
+            // nothing ever points at a reason Settings has not heard of.
+            const reason = t("opname.countSurplusReason", "Found in a count");
+            ensureReason(d, "ADJUSTMENT", reason);
+            const home = surplusHome ?? session.locationIds[0] ?? db.myWarehouseId;
+            for (let i = 0; i < row.delta; i += 1) {
+              // A handle, not a serial: nothing is printed on the box. The
+              // count's own code is in it, so two counts of one shelf cannot
+              // mint the same one twice.
+              const serial = countedSerial(
+                `${row.skuId}-${session.code}`,
+                i + 1,
+              );
+              if (d.units.some((u) => u.serial === serial)) continue;
+              d.units.push({
+                serial,
+                skuId: row.skuId,
+                // QC, as every surplus is: a box found with no paperwork has
+                // no cost and nobody has looked at it.
+                status: "QC",
+                locationId: home,
+                buy: 0,
+                description: "",
+                poId: null,
+              });
+              d.events.push({
+                id: nextId("ev"),
+                serial,
+                seq: 1,
+                type: "OPNAME_DITEMUKAN",
+                at,
+                fromStatus: "-",
+                toStatus: "QC",
+                locationId: home,
+                note: `Found at opname — ${reason}${note ? ` — ${note}` : ""}`,
+                refCode: session.code,
+                staff: currentStaffName(),
+              });
+            }
           }
 
           // Everything else that turned up unexpectedly. A unit that belongs
@@ -889,6 +1041,58 @@ export function OpnameSessionPage() {
    * are in the expansion, marked found or not, for the moment the count and
    * the expectation disagree and somebody has to work out which one.
    */
+  /**
+   * The products this count counts, and what was found of each.
+   *
+   * Every counted-category variant with stock in scope, plus any the counter
+   * added by hand — a box of cables the system has never heard of is exactly
+   * the surplus a stock take exists to find, and without the picker there
+   * would be nowhere to record it.
+   *
+   * `expected` is on the row but is NOT shown while counting. The page's own
+   * docblock says why: a counter who can see the expected number stops
+   * counting and starts agreeing with it.
+   */
+  const countedProducts = (() => {
+    const bySku = new Map<string, number>();
+    for (const u of countedStock) {
+      bySku.set(u.skuId, (bySku.get(u.skuId) ?? 0) + 1);
+    }
+    for (const skuId of Object.keys(counts)) {
+      if (!bySku.has(skuId)) bySku.set(skuId, 0);
+    }
+    return [...bySku.entries()]
+      .map(([skuId, expectedQty]) => {
+        const found = counts[skuId];
+        return {
+          skuId,
+          product: skuName(skuId),
+          expected: expectedQty,
+          /** Undefined until somebody answers. Zero is an answer. */
+          found,
+          /** Positive is a surplus, negative a shortfall, 0 agreement. */
+          delta: found === undefined ? 0 : found - expectedQty,
+          answered: found !== undefined,
+        };
+      })
+      .sort((a, b) => a.product.localeCompare(b.product));
+  })();
+
+  /** The counted products whose number does not match, once answered. */
+  const countedOff = countedProducts.filter((r) => r.answered && r.delta !== 0);
+  /**
+   * A counted product whose number disagrees with the shelf needs a line too.
+   *
+   * The same rule as a missing serial, and for the same reason: posting turns
+   * the difference into `HILANG` events or into machines in QC, and a number
+   * nobody explained is a number nobody can audit. Keyed by SKU rather than by
+   * serial, so it shares `notes` without colliding — a serial and a variant id
+   * are different shapes.
+   */
+  const countsNeedingNote = posted
+    ? []
+    : countedOff.filter((r) => !(notes[r.skuId] ?? "").trim()).map((r) => r.skuId);
+
   const expectedByProduct = (() => {
     // Plain, not `useMemo`: everything from `scope` down is computed after the
     // `if (!session)` return above, where a hook cannot go. It is a group-by
@@ -1031,6 +1235,114 @@ export function OpnameSessionPage() {
       />
     </Card>
   );
+
+  /**
+   * The shelves this count answers with a NUMBER (owner ask 2026-09-15).
+   *
+   * > *"Accessories do not have serial number, and in stock opname, they will
+   * > only be counted and validated by qty, not serial."*
+   *
+   * Renders nothing when the scope holds none, which is most counts. The
+   * expected number is deliberately absent from this card and present on the
+   * review step: the page's own docblock is that a counter who can see what
+   * they are supposed to find stops counting and starts agreeing.
+   */
+  const countedCard =
+    countedProducts.length === 0 ? null : (
+      <Card
+        title={t("opname.byQuantityTitle", "Counted by quantity")}
+        extra={
+          <Typography.Text type="secondary">
+            {t("opname.byQuantityOf", "{{count}} product(s)", {
+              count: countedProducts.length,
+            })}
+          </Typography.Text>
+        }
+      >
+        <Flex vertical gap={12}>
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+            {t(
+              "opname.byQuantityHint",
+              "These have no serial to scan. Put in how many are actually on the shelf — leave a row blank if you have not counted it yet, and put 0 if you looked and found none.",
+            )}
+          </Typography.Paragraph>
+          <Table
+            rowKey="skuId"
+            size="small"
+            pagination={false}
+            dataSource={countedProducts}
+            columns={[
+              {
+                title: t("opname.product", "Product"),
+                dataIndex: "product",
+              },
+              {
+                title: t("opname.foundQty", "How many are there?"),
+                key: "found",
+                align: "right" as const,
+                width: 190,
+                render: (_: unknown, r: (typeof countedProducts)[number]) => (
+                  <InputNumber
+                    min={0}
+                    precision={0}
+                    disabled={posted}
+                    style={{ width: "100%" }}
+                    aria-label={t("opname.foundQtyAria", "How many {{product}}", {
+                      product: r.product,
+                    })}
+                    placeholder={t("opname.notCountedYet", "not counted")}
+                    value={r.found ?? null}
+                    onChange={(v: number | null) =>
+                      setCounts((prev) => {
+                        // An emptied box is "not counted yet" again, which is
+                        // a different answer from zero and has to be able to
+                        // get back to being one.
+                        if (v === null) {
+                          const { [r.skuId]: _gone, ...rest } = prev;
+                          return rest;
+                        }
+                        return { ...prev, [r.skuId]: Math.max(0, Math.trunc(v)) };
+                      })
+                    }
+                  />
+                ),
+              },
+            ]}
+          />
+          {/* Adding one by hand is how a box of cables the system has never
+              heard of gets recorded at all — the surplus a stock take exists
+              to find. */}
+          {!posted && (
+            <Flex gap={8} wrap align="center">
+              <Select
+                showSearch
+                optionFilterProp="label"
+                style={{ minWidth: 260, flex: "1 1 260px" }}
+                value={null}
+                placeholder={t(
+                  "opname.addCountedProduct",
+                  "Add a product that is not on this list",
+                )}
+                aria-label={t(
+                  "opname.addCountedProduct",
+                  "Add a product that is not on this list",
+                )}
+                options={db.skus
+                  .filter(
+                    (k) =>
+                      !tracksSerial(k.id) &&
+                      !countedProducts.some((r) => r.skuId === k.id),
+                  )
+                  .map((k) => ({ value: k.id, label: skuName(k.id) }))}
+                onChange={(v: string) =>
+                  setCounts((prev) => ({ ...prev, [v]: prev[v] ?? 0 }))
+                }
+              />
+            </Flex>
+          )}
+        </Flex>
+      </Card>
+    );
 
   const countPhase = (
     <Card
@@ -1612,6 +1924,113 @@ export function OpnameSessionPage() {
             },
           ]}
         />
+        {/*
+         * The counted shelves, on the same step and in the same shape (owner
+         * ask 2026-09-15). Here the expected number IS shown — the counting
+         * is over, and checking the scope is what this step is for.
+         */}
+        {countedProducts.length > 0 && (
+          <>
+            <Typography.Text strong>
+              {t("opname.byQuantityTitle", "Counted by quantity")}
+            </Typography.Text>
+            <Table
+              rowKey="skuId"
+              size="small"
+              pagination={false}
+              dataSource={countedProducts}
+              columns={[
+                {
+                  title: t("opname.product", "Product"),
+                  dataIndex: "product",
+                },
+                {
+                  title: t("opname.expectedQty", "Expected"),
+                  dataIndex: "expected",
+                  align: "right" as const,
+                  width: 110,
+                },
+                {
+                  title: t("opname.countedQty", "Counted"),
+                  key: "found",
+                  align: "right" as const,
+                  width: 110,
+                  render: (_: unknown, r: (typeof countedProducts)[number]) =>
+                    r.answered ? (
+                      r.found
+                    ) : (
+                      <Typography.Text type="secondary">
+                        {t("opname.notCountedYet", "not counted")}
+                      </Typography.Text>
+                    ),
+                },
+                {
+                  title: t("opname.difference", "Difference"),
+                  key: "diff",
+                  align: "right" as const,
+                  width: 120,
+                  render: (_: unknown, r: (typeof countedProducts)[number]) => {
+                    if (!r.answered)
+                      return (
+                        <Typography.Text type="warning">
+                          {t("opname.notCountedYet", "not counted")}
+                        </Typography.Text>
+                      );
+                    if (r.delta === 0)
+                      return (
+                        <Typography.Text type="success">
+                          {t("opname.allFound", "All found")}
+                        </Typography.Text>
+                      );
+                    return (
+                      <Typography.Text type="danger">
+                        {r.delta < 0
+                          ? t("opname.shortBy", "{{count}} short", {
+                              count: -r.delta,
+                            })
+                          : t("opname.overBy", "{{count}} extra", {
+                              count: r.delta,
+                            })}
+                      </Typography.Text>
+                    );
+                  },
+                },
+                {
+                  // The line the post gate asks for. On this step rather than
+                  // on the counting one, because it is here that the number
+                  // and the expectation are beside each other — which is when
+                  // somebody can actually say why they differ.
+                  title: t("opname.note", "Note"),
+                  key: "note",
+                  width: 260,
+                  render: (_: unknown, r: (typeof countedProducts)[number]) =>
+                    !r.answered || r.delta === 0 ? null : (
+                      <Input
+                        disabled={posted}
+                        status={
+                          (notes[r.skuId] ?? "").trim() ? undefined : "error"
+                        }
+                        aria-label={t(
+                          "opname.countNoteAria",
+                          "Why the count of {{product}} differs",
+                          { product: r.product },
+                        )}
+                        placeholder={t(
+                          "opname.countNotePlaceholder",
+                          "Why does it differ?",
+                        )}
+                        value={notes[r.skuId] ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setNotes((prev) => ({ ...prev, [r.skuId]: v }));
+                        }}
+                      />
+                    ),
+                },
+              ]}
+            />
+          </>
+        )}
       </Flex>
     </Card>
   );
@@ -1626,7 +2045,12 @@ export function OpnameSessionPage() {
         {posted
           ? confirmPhase
           : phase === "COUNT"
-            ? countPhase
+            ? (
+                <Flex vertical gap={16}>
+                  {countPhase}
+                  {countedCard}
+                </Flex>
+              )
             : phase === "EXPECTED"
               ? expectedPhase
               : confirmPhase}
@@ -1684,10 +2108,10 @@ export function OpnameSessionPage() {
             {phase === "COUNT" ? (
               <Tooltip
                 title={
-                  serials.length === 0
+                  serials.length === 0 && !countedProducts.some((r) => r.answered)
                     ? t(
                         "opname.countOneFirst",
-                        "Count at least one serial first",
+                        "Count at least one serial or quantity first",
                       )
                     : t(
                         "opname.reviewHint",
@@ -1697,7 +2121,12 @@ export function OpnameSessionPage() {
               >
                 <Button
                   type="primary"
-                  disabled={serials.length === 0}
+                  // A count of nothing but accessories has no scanned serial
+                  // and is a real count (2026-09-15).
+                  disabled={
+                    serials.length === 0 &&
+                    !countedProducts.some((r) => r.answered)
+                  }
                   // Lands on the expected list, not the confirmation. Same
                   // button, one step earlier — see the `phase` docblock.
                   onClick={() => setPhase("EXPECTED")}

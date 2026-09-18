@@ -57,6 +57,21 @@ beforeAll(async () => {
   });
   ownerId = owner.id;
 
+  app = createApp({
+    db,
+    config,
+    logger: createLogger({ app: "api", env: "test", destination: sink }),
+  });
+
+  const res = await request(app)
+    .post("/api/auth/login")
+    .send({ username: "pemilik", password: PASSWORD });
+  cookie = (res.headers["set-cookie"] as unknown as string[])[0]!;
+
+  // A successful sign-in is audited too (2026-09-18). This suite's own one is
+  // taken back out, so the four rows below are the whole log it reads.
+  await db.auditLog.deleteMany({ where: { action: "LOGIN" } });
+
   await db.auditLog.createMany({
     data: [
       {
@@ -100,17 +115,6 @@ beforeAll(async () => {
       },
     ],
   });
-
-  app = createApp({
-    db,
-    config,
-    logger: createLogger({ app: "api", env: "test", destination: sink }),
-  });
-
-  const res = await request(app)
-    .post("/api/auth/login")
-    .send({ username: "pemilik", password: PASSWORD });
-  cookie = (res.headers["set-cookie"] as unknown as string[])[0]!;
 }, 180_000);
 
 afterAll(async () => {

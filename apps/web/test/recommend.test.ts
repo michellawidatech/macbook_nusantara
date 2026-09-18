@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { recommendFor } from "../src/lib/recommend.js";
-import type { MockDb, Order, Unit, UnitEvent } from "../src/mock/seed.js";
+import type { MockDb, Order, Po, Unit, UnitEvent } from "../src/mock/seed.js";
 
 /** A fixed clock, so the age signal is a fact about the fixture. */
 const NOW = new Date("2026-09-01T00:00:00.000Z").getTime();
@@ -65,11 +65,16 @@ function db(over: {
   units: Unit[];
   events?: UnitEvent[];
   orders?: Order[];
+  pos?: Po[];
 }): MockDb {
   return {
     units: over.units,
     events: over.events ?? [],
     orders: over.orders ?? [],
+    // What a machine COST is read off these since 2026-09-15: its invoice's
+    // shipping and tax, and its repairs. Empty unless a test says otherwise.
+    pos: over.pos ?? [],
+    services: [],
     discounts: [],
     skus: [
       {

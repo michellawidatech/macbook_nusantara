@@ -175,6 +175,16 @@ describe("customerBalance", () => {
   it("answers zero for a customer with no sales", () => {
     expect(customerBalance("nobody", []).owed).toBe(0);
   });
+
+  it("owes a debt from before this app, without opening a sale for it", () => {
+    const orders = [order("o1", 1_000_000, [pay({ amount: 1_000_000 })])];
+    const b = customerBalance("c-1", orders, 2_500_000);
+    expect(b.owed).toBe(2_500_000);
+    expect(b.openingBalance).toBe(2_500_000);
+    expect(b.billed).toBe(1_000_000);
+    expect(b.openSales).toBe(0);
+    expect(b.nextDueAt).toBeUndefined();
+  });
 });
 
 describe("isOverdue", () => {

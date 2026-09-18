@@ -18,8 +18,9 @@
  * ## Cost, and where it lands
  *
  * Each fee is one charge from one party — labour, a part, the courier — and
- * the total joins `Unit.buy` in `costOfUnit`, which is what every margin in
- * the app is now computed against. `Unit.buy` itself is untouched: it is what
+ * the total joins `Unit.buy` and the machine's share of its invoice's shipping
+ * and tax (2026-09-15) in `costOfUnit`, which is what every margin in the app
+ * is now computed against. `Unit.buy` itself is untouched: it is what
  * the machine cost to ACQUIRE, it is on a supplier's invoice, and rewriting it
  * would make the two disagree forever.
  *
@@ -88,7 +89,7 @@ import {
   type ServiceFee,
   type ServiceFeeKind,
 } from "../../lib/service.js";
-import { appendEvent, mutate, nextId, useDb } from "../../mock/store.js";
+import { appendEvent, mutate, nextId, useDb, currentStaffName } from "../../mock/store.js";
 import { SPACE, TYPE } from "../../theme/tokens";
 
 export function ServicePage() {
@@ -121,12 +122,8 @@ export function ServicePage() {
   }>();
 
   const rows = useMemo(
-    () =>
-      benchRows(
-        db.services,
-        (serial) => db.units.find((u) => u.serial === serial)?.buy ?? 0,
-      ),
-    [db.services, db.units],
+    () => benchRows(db),
+    [db.services, db.units, db.pos, db.events],
   );
   const { expected, onBench } = useMemo(() => splitBench(rows), [rows]);
 
@@ -211,7 +208,7 @@ export function ServicePage() {
                   ...(v.label ? { label: v.label } : {}),
                   amount: v.amount,
                   at: new Date().toISOString(),
-                  staff: "Michella",
+                  staff: currentStaffName(),
                 },
               ],
             };
@@ -272,7 +269,7 @@ export function ServicePage() {
                       label: t("service.transferLabel", "Transfer out"),
                       amount: v.transferFee,
                       at,
-                      staff: "Michella",
+                      staff: currentStaffName(),
                     },
                   ]
                 : rec.fees,
@@ -615,10 +612,13 @@ export function ServicePage() {
               },
               {
                 /*
-                 * Bought plus repaired — the number the machine now has to
-                 * sell above. It is the whole reason the fees are recorded:
-                 * a Rp4jt machine with Rp800k of repair in it is a Rp4.8jt
-                 * machine, and a till quoting Rp4.5jt for it is losing money.
+                 * Everything the machine has cost — `costOfUnit`: bought, its
+                 * share of its invoice's shipping and tax, and every repair,
+                 * this one included. The number it now has to sell above, and
+                 * the whole reason the fees are recorded: a Rp4jt machine with
+                 * Rp800k of repair in it is a Rp4.8jt machine, and a till
+                 * quoting Rp4.5jt for it is losing money. The lines under it
+                 * say what it is made of.
                  */
                 title: t("service.total", "Cost now"),
                 key: "total",
@@ -635,6 +635,28 @@ export function ServicePage() {
                         amount: fmtRp(r.buy),
                       })}
                     </Typography.Text>
+                    {r.shippingTax > 0 && (
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: TYPE.sm }}
+                      >
+                        {t("service.shippingTax", "shipping & tax {{amount}}", {
+                          amount: fmtRp(r.shippingTax),
+                        })}
+                      </Typography.Text>
+                    )}
+                    {r.earlierRepair > 0 && (
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: TYPE.sm }}
+                      >
+                        {t(
+                          "service.earlierRepairs",
+                          "earlier repairs {{amount}}",
+                          { amount: fmtRp(r.earlierRepair) },
+                        )}
+                      </Typography.Text>
+                    )}
                   </Flex>
                 ),
               },

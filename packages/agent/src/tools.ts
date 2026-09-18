@@ -59,6 +59,10 @@ import {
 } from "@nusantara/db";
 import type Anthropic from "@anthropic-ai/sdk";
 import { formatRupiah } from "@nusantara/domain";
+import { loadKnowledgeBase, type KnowledgeBase } from "./knowledge.js";
+import { isStrongMatch } from "./retrieval.js";
+import { HANDOFF_TOPICS } from "./policy.js";
+import { lookupCatalog } from "./systemFacts.js";
 
 /** How many units one search may return. Past this the agent should narrow. */
 const SEARCH_LIMIT = 12;
@@ -67,8 +71,8 @@ const SEARCH_LIMIT = 12;
 const ORDER_LIMIT = 5;
 const RESERVATION_LIMIT = 5;
 
-/** The shop's day, as one machine-readable fact that prose and logic share. */
-export const STORE_HOURS = { openHour: 10, closeHour: 20 } as const;
+import { STORE_HOURS } from "./hours.js";
+export { STORE_HOURS };
 
 /** How far ahead a booking may be made. */
 export const MAX_BOOKING_DAYS = 60;
@@ -99,6 +103,12 @@ export interface ToolContext {
   };
   /** Writes already made this turn, so a retry cannot double-book. */
   readonly writesUsed?: Set<string>;
+  /**
+   * The pass's knowledge base, already indexed (knowledge.ts), so a search
+   * cites the same `K` handles the prompt shows. Absent, `search_knowledge`
+   * loads and indexes the active answers itself.
+   */
+  readonly knowledge?: KnowledgeBase;
   /**
    * Where a swallowed failure goes.
    *
@@ -325,11 +335,10 @@ const LOOKUP_CUSTOMER: Anthropic.Tool = {
 const SEARCH_KNOWLEDGE: Anthropic.Tool = {
   name: "search_knowledge",
   description:
-    "Search the answers the shop's own staff have written and approved, for anything about how " +
-    "the shop works: trade-in, instalments, shipping, testing, what is included in the box, " +
-    "how a warranty claim goes. Call this BEFORE answering any question you are not certain " +
-    "about. If it returns an answer, use that answer. If it returns nothing, say you will " +
-    "check with a colleague rather than working it out for yourself.",
+    "Search the answers the shop's owner has written and approved, for anything about how the " +
+    "shop works: instalments, delivery, warranty, what comes in the box, trade-in, service. " +
+    "Returns the best matches with their handles (K7). If nothing matches, the shop has not " +
+    "answered it and a colleague must: use handoff_to_staff rather than working it out.",
   input_schema: {
     type: "object",
     properties: {
@@ -341,6 +350,96 @@ const SEARCH_KNOWLEDGE: Anthropic.Tool = {
       },
     },
     required: ["query"],
+    additionalProperties: false,
+  },
+};
+
+const LOOKUP_CATALOG: Anthropic.Tool = {
+  name: "lookup_catalog",
+  description:
+    "Which models and which configurations the shop deals in, from its own catalogue: chip, " +
+    "memory, storage, screen size, year. Specifications only. It never says what is in stock " +
+    "or what anything costs, so it cannot answer either question.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        maxLength: 80,
+        description:
+          "The model as the customer named it, for example 'air m2' or 'pro 14 m3'.",
+      },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+};
+
+/**
+ * The only way an answer reaches a customer (converse.ts): the words, and what
+ * they rest on. `sources` is one string rather than an array because no tool
+ * here takes an array — tools.schema.test.ts holds every argument to a scalar.
+ */
+const REPLY: Anthropic.Tool = {
+  name: "reply",
+  description:
+    "Send your answer to the customer. Everything it tells them must come from an approved " +
+    "answer (cite its handle, like K7), the shop facts ('store') or a catalogue lookup " +
+    "('catalog'). A greeting or a thank-you that states no fact cites 'greeting'. If you cannot " +
+    "name a source for what they asked, use handoff_to_staff instead.",
+  input_schema: {
+    type: "object",
+    properties: {
+      message: {
+        type: "string",
+        maxLength: 1500,
+        description:
+          "Exactly what the customer will read, in the shop's voice.",
+      },
+      sources: {
+        type: "string",
+        maxLength: 120,
+        description:
+          "Comma-separated: the handles of the approved answers used (K3, K12), and/or store, catalog or greeting.",
+      },
+    },
+    required: ["message", "sources"],
+    additionalProperties: false,
+  },
+};
+
+const HANDOFF: Anthropic.Tool = {
+  name: "handoff_to_staff",
+  description:
+    "Hand the conversation to a colleague. Use it for the stock, price or condition of a " +
+    "particular machine, negotiation, picking a machine from today's shelf, bookings, payments " +
+    "already made, trade-in or buy-back quotes, shipping costs, complaints and warranty claims, " +
+    "when the customer asks for a person, and for ANYTHING the approved answers and the shop " +
+    "facts do not cover. Never guess instead of using this.",
+  input_schema: {
+    type: "object",
+    properties: {
+      topic: {
+        type: "string",
+        enum: [...HANDOFF_TOPICS],
+        description: "What the colleague is picking up.",
+      },
+      summary: {
+        type: "string",
+        maxLength: 240,
+        description:
+          "For the colleague, in Indonesian: what the customer wants, naming the model or specification if they gave one.",
+      },
+      customer_message: {
+        type: "string",
+        maxLength: 600,
+        description:
+          "What the customer reads now: a short, warm line in the shop's voice saying the admin " +
+          '("admin kami") will follow up in this chat. If an approved answer covers part of the ' +
+          "question, answer that part first. No price, no stock, no promised time.",
+      },
+    },
+    required: ["topic", "summary", "customer_message"],
     additionalProperties: false,
   },
 };
@@ -361,36 +460,6 @@ const CHECK_ORDER: Anthropic.Tool = {
       },
     },
     required: ["code"],
-    additionalProperties: false,
-  },
-};
-
-const HANDOFF: Anthropic.Tool = {
-  name: "handoff_to_staff",
-  description:
-    "Hand the conversation to a person. Use for price negotiation, instalment terms, trade-in " +
-    "quotes, warranty claims, returns, refunds, complaints, payment problems, repairs, or when the " +
-    "customer asks for a human. Also use it whenever you do not know and no tool answers it. Never " +
-    "guess instead of using this.",
-  input_schema: {
-    type: "object",
-    properties: {
-      topic: {
-        type: "string",
-        enum: [
-          "price_negotiation",
-          "trade_in",
-          "warranty_claim",
-          "return_or_refund",
-          "payment",
-          "service",
-          "complaint",
-          "other",
-        ],
-      },
-      reason: { type: "string", maxLength: 200 },
-    },
-    required: ["topic"],
     additionalProperties: false,
   },
 };
@@ -455,7 +524,7 @@ const CANCEL_RESERVATION: Anthropic.Tool = {
   },
 };
 
-/** Reads, plus the escalation exit. Always offered. */
+/** Reads, plus the escalation exit. */
 export const READ_TOOLS = [
   "search_stock",
   "check_serial",
@@ -464,11 +533,36 @@ export const READ_TOOLS = [
   "lookup_customer",
   "check_order",
   "search_knowledge",
+  "lookup_catalog",
+  "handoff_to_staff",
+] as const;
+
+/** How a turn ends: an answer with its sources, or a colleague (converse.ts). */
+export const TERMINAL_TOOLS = ["reply", "handoff_to_staff"] as const;
+
+/**
+ * What a customer's conversation is offered while the shop runs this app in
+ * parallel with B2Soft (owner, 2026-09-18). Production holds the catalogue,
+ * the store and the staff, and NOT the shop's real stock or prices, so every
+ * tool that reads a unit, a price, an order or a booking stays out of the
+ * array — a model cannot call a tool it was never given. The shop facts ride
+ * in the prompt itself (systemFacts.ts), so `store_info` is not needed.
+ *
+ * Bringing stock answers back is a change to this list and to the prompt's
+ * rules, the day the stock in this database is the shop's stock.
+ */
+export const CUSTOMER_TOOLS = [
+  "search_knowledge",
+  "lookup_catalog",
+  "reply",
   "handoff_to_staff",
 ] as const;
 
 /** Writes: offered only to a caller holding a reserve capability. */
-export const WRITE_TOOLS = ["create_reservation", "cancel_reservation"] as const;
+export const WRITE_TOOLS = [
+  "create_reservation",
+  "cancel_reservation",
+] as const;
 
 /** The complete surface. Changing this array is a policy decision. */
 export const ANTHROPIC_TOOLS: Anthropic.Tool[] = [
@@ -479,7 +573,9 @@ export const ANTHROPIC_TOOLS: Anthropic.Tool[] = [
   LOOKUP_CUSTOMER,
   CHECK_ORDER,
   SEARCH_KNOWLEDGE,
+  LOOKUP_CATALOG,
   HANDOFF,
+  REPLY,
   CREATE_RESERVATION,
   CANCEL_RESERVATION,
 ];
@@ -488,13 +584,21 @@ export const ANTHROPIC_TOOLS: Anthropic.Tool[] = [
  * The tools this caller may actually see.
  *
  * A model cannot call a tool that was never in the array. This is the strongest
- * control in the design and it costs one function: with no reserve capability
- * `create_reservation` is not merely refused, it does not exist.
+ * control in the design and it costs one function. During the parallel
+ * operation it is `CUSTOMER_TOOLS` for every caller — the worker's reserve
+ * capability included, because a booking holds a unit this database does not
+ * truly have.
+ *
+ * `handoffOnly` drops `reply`: the message has already been routed to a person
+ * (policy.ts `routeMessage`), so the one way to end the turn is to say so.
  */
-export function toolsFor(ctx: ToolContext): Anthropic.Tool[] {
-  const allowed: readonly string[] = ctx.reserve
-    ? [...READ_TOOLS, ...WRITE_TOOLS]
-    : READ_TOOLS;
+export function toolsFor(
+  _ctx: ToolContext,
+  opts: { handoffOnly?: boolean } = {},
+): Anthropic.Tool[] {
+  const allowed: readonly string[] = opts.handoffOnly
+    ? CUSTOMER_TOOLS.filter((n) => n !== "reply")
+    : CUSTOMER_TOOLS;
   return ANTHROPIC_TOOLS.filter((t) => allowed.includes(t.name));
 }
 
@@ -508,9 +612,12 @@ export function toolsFor(ctx: ToolContext): Anthropic.Tool[] {
 const STORE_FACTS: Record<string, string> = {
   payment:
     "We take cash, bank transfer, QRIS, debit and credit card, and instalments.",
+  // The owner's warranty is in the approved answers (1 month, 2026-09-18). It
+  // said 90 days here, which nobody at the shop ever offered; a policy written
+  // twice is two policies.
   warranty:
-    "Every unit carries a 90 day shop warranty covering hardware faults that are not caused by " +
-    "damage, liquid or software. Keep the receipt as proof.",
+    "The warranty terms are in the shop's approved answers. Use search_knowledge for 'garansi' " +
+    "and do not state a term from here.",
   grade:
     "Grade A is near mint with only faint marks. Grade B has visible wear but nothing that " +
     "affects use. Grade C is well used and looks it. Every grade is tested and works.",
@@ -532,7 +639,16 @@ const NEVER_INVENT_REASON =
 
 /** Words that carry no signal, so "macbook 13 inch" narrows on the useful part. */
 const STOPWORDS = new Set([
-  "inch", "inci", "ram", "ssd", "unit", "dan", "atau", "yang", "gb", "grade",
+  "inch",
+  "inci",
+  "ram",
+  "ssd",
+  "unit",
+  "dan",
+  "atau",
+  "yang",
+  "gb",
+  "grade",
 ]);
 
 /**
@@ -554,7 +670,9 @@ const STOPWORDS = new Set([
 function gradeIn(query: string | undefined): "A" | "B" | "C" | undefined {
   const m = /\bgrade\s*([abc])\b/i.exec(query ?? "");
   const letter = m?.[1]?.toUpperCase();
-  return letter === "A" || letter === "B" || letter === "C" ? letter : undefined;
+  return letter === "A" || letter === "B" || letter === "C"
+    ? letter
+    : undefined;
 }
 
 /**
@@ -565,14 +683,16 @@ function gradeIn(query: string | undefined): "A" | "B" | "C" | undefined {
  * "m2 air" and "macbook 256gb" both land, which is how people actually type.
  */
 function tokens(query: string): string[] {
-  return query
-    .toLowerCase()
-    .split(/[\s,/|·]+/)
-    // `%` and `_` are LIKE wildcards, and Prisma's `contains` does not escape
-    // them. Without this a customer typing "%" matches every row in the table.
-    .map((t) => t.trim().replace(/[%_\\]/g, ""))
-    .filter((t) => t.length >= 2 && !STOPWORDS.has(t))
-    .slice(0, 6);
+  return (
+    query
+      .toLowerCase()
+      .split(/[\s,/|·]+/)
+      // `%` and `_` are LIKE wildcards, and Prisma's `contains` does not escape
+      // them. Without this a customer typing "%" matches every row in the table.
+      .map((t) => t.trim().replace(/[%_\\]/g, ""))
+      .filter((t) => t.length >= 2 && !STOPWORDS.has(t))
+      .slice(0, 6)
+  );
 }
 
 /**
@@ -627,7 +747,9 @@ function stockWhere(args: {
               },
               {
                 sku: {
-                  model: { name: { contains: t, mode: "insensitive" as const } },
+                  model: {
+                    name: { contains: t, mode: "insensitive" as const },
+                  },
                 },
               },
               {
@@ -696,7 +818,12 @@ async function searchStock(db: PrismaClient, args: Record<string, unknown>) {
         : ({ intakeAt: "desc" } as const);
 
   const [units, total] = await Promise.all([
-    db.unit.findMany({ where, select: UNIT_SELECT, orderBy, take: SEARCH_LIMIT }),
+    db.unit.findMany({
+      where,
+      select: UNIT_SELECT,
+      orderBy,
+      take: SEARCH_LIMIT,
+    }),
     db.unit.count({ where }),
   ]);
 
@@ -764,7 +891,8 @@ async function checkSerial(db: PrismaClient, args: Record<string, unknown>) {
       },
     },
   });
-  if (!unit) return { found: false, note: "No unit with that serial in this shop." };
+  if (!unit)
+    return { found: false, note: "No unit with that serial in this shop." };
 
   const available =
     unit.status === "TERSEDIA" &&
@@ -861,7 +989,9 @@ async function browseCatalog(db: PrismaClient) {
  * customer still does not have. Naming the gap is what turns that into a
  * handover.
  */
-function shopBlock(shops: ReadonlyArray<{ name: string; address: string | null }>) {
+function shopBlock(
+  shops: ReadonlyArray<{ name: string; address: string | null }>,
+) {
   const withAddress = shops.filter((s) => s.address);
   return {
     shops: shops.map((s) => ({
@@ -993,7 +1123,9 @@ async function lookupCustomer(db: PrismaClient, ctx: ToolContext) {
 
   return {
     known: true,
-    ...(customer ? { name: customer.name, customerSince: jakartaDate(customer.createdAt) } : {}),
+    ...(customer
+      ? { name: customer.name, customerSince: jakartaDate(customer.createdAt) }
+      : {}),
     orders: orders.map((o) => ({
       code: o.code,
       date: jakartaDate(o.ts),
@@ -1014,7 +1146,9 @@ async function lookupCustomer(db: PrismaClient, ctx: ToolContext) {
     reservations: reservations.map((r) => ({
       code: r.code,
       ...(r.scheduledFor
-        ? { when: `${jakartaDate(r.scheduledFor)} ${jakartaTime(r.scheduledFor)}` }
+        ? {
+            when: `${jakartaDate(r.scheduledFor)} ${jakartaTime(r.scheduledFor)}`,
+          }
         : {}),
       ...(r.note ? { note: r.note } : {}),
       items: r.items.map((i) =>
@@ -1089,68 +1223,50 @@ async function checkOrder(
 /** How many approved answers one search may return. */
 const KNOWLEDGE_LIMIT = 6;
 
+const NO_APPROVED_ANSWER =
+  "The shop has not written an answer for this. Do NOT work one out yourself. Hand it to a " +
+  "colleague with handoff_to_staff.";
+
 /**
- * The staff-written answers, searched rather than recited.
+ * The owner's approved answers, ranked (retrieval.ts) rather than recited.
  *
- * These already ride in the system prompt, but only the forty most recently
- * edited, and a prompt block is something the model may or may not reach for.
- * A tool call is different in two ways that matter: it scales past whatever
- * fits in a prompt, and its result arrives as a fact retrieved in THIS turn,
- * which is exactly the standing the grounding rules give to a tool result and
- * withhold from the model's own memory.
+ * The whole base normally rides in the prompt already (knowledge.ts); this is
+ * for the base that has outgrown it, and for a model that wants to check. A
+ * result arrives as a fact retrieved in THIS turn, which is the standing the
+ * rules give a tool result and withhold from the model's own memory.
  *
  * Staff-authored and `active: true` only, so this is the shop talking, not the
  * model. A customer can never write into it.
  */
-async function searchKnowledge(db: PrismaClient, args: Record<string, unknown>) {
+async function searchKnowledge(
+  db: PrismaClient,
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+) {
   const query = String(args["query"] ?? "").trim();
   if (!query) return { error: "No question given." };
 
-  const words = tokens(query);
-  // A query was given but nothing usable survived it — punctuation, a wildcard,
-  // a single letter. Returning "no filter" here would hand back the entire
-  // knowledge base as though every entry answered the question.
-  if (words.length === 0) {
-    return {
-      found: false,
-      guidance:
-        "The shop has not written an answer for this. Do NOT work one out yourself. Say you will " +
-        "check with a colleague, and use handoff_to_staff.",
-    };
-  }
-
-  const entries = await db.agentKnowledge.findMany({
-    where: {
-      active: true,
-      ...(words.length
-        ? {
-            OR: words.flatMap((w) => [
-              { question: { contains: w, mode: "insensitive" as const } },
-              { answer: { contains: w, mode: "insensitive" as const } },
-            ]),
-          }
-        : {}),
-    },
-    select: { question: true, answer: true },
-    orderBy: { updatedAt: "desc" },
-    take: KNOWLEDGE_LIMIT,
-  });
-
-  if (entries.length === 0) {
-    return {
-      found: false,
-      guidance:
-        "The shop has not written an answer for this. Do NOT work one out yourself. Say you will " +
-        "check with a colleague, and use handoff_to_staff.",
-    };
-  }
+  const kb = ctx.knowledge ?? (await loadKnowledgeBase(db));
+  const ranked = kb.index.rank(query, KNOWLEDGE_LIMIT);
+  if (ranked.length === 0)
+    return { found: false, guidance: NO_APPROVED_ANSWER };
 
   return {
     found: true,
-    answers: entries,
+    answers: ranked.map((r) => {
+      const entry = kb.byHandle.get(r.doc.id)!;
+      return {
+        handle: entry.handle,
+        question: entry.question,
+        answer: entry.answer,
+        match: isStrongMatch(r) ? "strong" : "weak",
+      };
+    }),
     guidance:
-      "These are approved by the shop and are correct. Reword them into your own voice, do not " +
-      "read them out word for word, and do not add anything they do not say.",
+      "These are the owner's approved answers, best match first. Use one only if it really " +
+      "answers what was asked, keep its facts and its wording close, do not add anything it " +
+      "does not say, and cite its handle. A weak match usually means the shop has not " +
+      "answered this: hand it over.",
   };
 }
 
@@ -1233,7 +1349,8 @@ async function createReservation(
   args: Record<string, unknown>,
   ctx: ToolContext,
 ) {
-  if (!ctx.reserve) return { error: "Booking is not available on this channel." };
+  if (!ctx.reserve)
+    return { error: "Booking is not available on this channel." };
 
   // Claimed synchronously, before the first await: `converse` runs a step's
   // tool calls through Promise.all, so two create_reservation blocks in one
@@ -1312,11 +1429,16 @@ async function createReservation(
     // and NEITHER releases the turn guard through the failure path nor calls
     // ctx.onError — which is wired to logger.error("a grounding tool failed").
     // A customer asking for a machine somebody else holds is not a failed tool.
-    if (err instanceof UnitNotAvailableError || err instanceof UnknownSerialError) {
+    if (
+      err instanceof UnitNotAvailableError ||
+      err instanceof UnknownSerialError
+    ) {
       // Nothing was held, so a later step may legitimately try another serial.
       guard?.delete("create_reservation");
       const skuId =
-        err instanceof UnitNotAvailableError ? (err.units[0]?.skuId ?? null) : null;
+        err instanceof UnitNotAvailableError
+          ? (err.units[0]?.skuId ?? null)
+          : null;
       const alternatives = await alternativesFor(write, skuId);
       return toolJson({
         unavailable: true,
@@ -1384,7 +1506,8 @@ async function cancelReservation(
   args: Record<string, unknown>,
   ctx: ToolContext,
 ) {
-  if (!ctx.reserve) return { error: "Booking is not available on this channel." };
+  if (!ctx.reserve)
+    return { error: "Booking is not available on this channel." };
   const { write, staffId } = ctx.reserve;
   const e164 = toE164(ctx.from);
   const code = String(args["code"] ?? "").trim();
@@ -1417,7 +1540,9 @@ async function cancelReservation(
     if (err instanceof HoldNotFoundError) {
       // `ref` is null when they named nothing and nothing was open, and the
       // code when they named one that is not theirs. Two different sentences.
-      return err.ref === null ? { none: true } : { notFound: true, code: err.ref };
+      return err.ref === null
+        ? { none: true }
+        : { notFound: true, code: err.ref };
     }
     if (err instanceof AmbiguousHoldError) {
       return { ambiguous: true, codes: err.codes };
@@ -1467,7 +1592,9 @@ export async function dispatchTool(
     else if (name === "browse_catalog") out = await browseCatalog(db);
     else if (name === "lookup_customer") out = await lookupCustomer(db, ctx);
     else if (name === "check_order") out = await checkOrder(db, args, ctx);
-    else if (name === "search_knowledge") out = await searchKnowledge(db, args);
+    else if (name === "search_knowledge")
+      out = await searchKnowledge(db, args, ctx);
+    else if (name === "lookup_catalog") out = await lookupCatalog(db, args);
     else if (name === "handoff_to_staff") out = handoff(args, ctx);
     else if (name === "create_reservation")
       out = await createReservation(args, ctx);

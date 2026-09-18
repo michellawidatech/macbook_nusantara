@@ -28,6 +28,12 @@ import { IllegalUnitTransitionError } from "@nusantara/domain";
 export type ErrorCode =
   | "VALIDASI"
   | "TIDAK_LOGIN"
+  /**
+   * Signed in, on a password somebody else chose (the shop's initial one, or
+   * an owner's reset). Everything but choosing a new one answers this, so the
+   * SPA can route to the change-password screen instead of an error page.
+   */
+  | "GANTI_SANDI"
   | "AKSES_DITOLAK"
   | "TIDAK_DITEMUKAN"
   | "KONFLIK"
@@ -114,11 +120,17 @@ export function mapServiceError(err: unknown): unknown {
     return new ApiError(409, "KONFLIK", err.message);
 
   if (err instanceof BookingInPastError)
-    return new ApiError(400, "VALIDASI", err.message, { field: "scheduledFor" });
+    return new ApiError(400, "VALIDASI", err.message, {
+      field: "scheduledFor",
+    });
   if (err instanceof BookingTooFarAheadError)
-    return new ApiError(400, "VALIDASI", err.message, { field: "scheduledFor" });
+    return new ApiError(400, "VALIDASI", err.message, {
+      field: "scheduledFor",
+    });
   if (err instanceof OutsideStoreHoursError)
-    return new ApiError(400, "VALIDASI", err.message, { field: "scheduledFor" });
+    return new ApiError(400, "VALIDASI", err.message, {
+      field: "scheduledFor",
+    });
 
   if (err instanceof Prisma.PrismaClientKnownRequestError) {
     // P2025 — a row the service read by id is not there.

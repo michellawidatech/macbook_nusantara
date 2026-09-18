@@ -83,6 +83,14 @@ const RANGES = [
   { value: 90, label: "90 days" },
 ];
 
+/** A calendar day in the shop's time zone, which is how movements are dated. */
+const JAKARTA_DAY = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Jakarta",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
 export function IncomeExpensePage() {
   const { t } = useTranslation();
   const db = useDb();
@@ -126,23 +134,34 @@ export function IncomeExpensePage() {
    * The three opening figures below and `lib/accounts.ts` are the whole of the
    * arithmetic; this page only decides what counts as a movement.
    */
+  const openedAt = db.settings.openingBalanceAt;
   const settledMovements = useMemo<Movement[]>(() => {
+    // Money that moved before the starting balance was stated is already
+    // inside it. Adding it again is what a migrated shop saw on its first
+    // morning (2026-09-13): three years of B2Soft takings as money in hand.
+    const from = openedAt === undefined ? undefined : Date.parse(openedAt);
+    const fromDay =
+      openedAt === undefined ? undefined : JAKARTA_DAY.format(new Date(openedAt));
+    const since = (iso: string) => from === undefined || Date.parse(iso) >= from;
+    const sinceDay = (day: string) => fromDay === undefined || day >= fromDay;
     const rows: Movement[] = [];
     for (const o of db.orders) {
       for (const p of paymentsOf(o)) {
-        if (p.state === "SETTLED") {
+        if (p.state === "SETTLED" && since(p.at)) {
           rows.push({ method: p.method, amount: p.amount });
         }
       }
     }
     // Money in that no sale accounts for, and money out — both carry the
     // method staff picked, which is the only reason either can be sorted.
-    for (const i of db.incomes) rows.push({ method: i.method, amount: i.amount });
+    for (const i of db.incomes) {
+      if (sinceDay(i.date)) rows.push({ method: i.method, amount: i.amount });
+    }
     for (const e of db.expenses) {
-      rows.push({ method: e.method, amount: -e.amount });
+      if (sinceDay(e.date)) rows.push({ method: e.method, amount: -e.amount });
     }
     return rows;
-  }, [db.orders, db.incomes, db.expenses]);
+  }, [db.orders, db.incomes, db.expenses, openedAt]);
 
   const openingCash = db.settings.openingCash;
   const openingBank = db.settings.openingBank;

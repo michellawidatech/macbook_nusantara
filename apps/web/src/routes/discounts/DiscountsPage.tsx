@@ -90,6 +90,9 @@ export function DiscountsPage() {
           // you would click, and making only one cell clickable is a target
           // people miss. The switch stops propagation so toggling it on or off
           // does not also open the drawer.
+          keyboardRows={(d) =>
+            t("discounts.openDiscount", "Open {{name}}", { name: d.name })
+          }
           onRow={(d) => ({
             onClick: () => setOpened(d),
             style: { cursor: "pointer" },

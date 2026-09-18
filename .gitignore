@@ -23,7 +23,5 @@ packages/db/generated/
 .idea/
 *.swp
 
-
-
-# Local Netlify folder
-.netlify
+# Python tooling (tools/b2soft)
+__pycache__/

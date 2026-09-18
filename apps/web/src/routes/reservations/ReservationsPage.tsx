@@ -172,8 +172,8 @@ export function ReservationsPage() {
    * ⚠️ What this costs, stated plainly: a hold the WhatsApp agent books is a
    * real `Reservation` row and is invisible here. Today that is theoretical —
    * `packages/agent`'s `reserve` capability has exactly one caller, the worker,
-   * and the worker is not deployed (Render has no free background worker; see
-   * docs/deploy.md). The day it ships, this page and the till move to the API
+   * and the worker is not deployed (it is optional on the Mac mini; see
+   * docs/deploy-macmini.md §8). The day it ships, this page and the till move to the API
    * together, and `lib/reservationsApi.ts` is still here, tested, for it.
    *
    * The view model is deliberately the SERVER's shape — `Hold` and `HoldItem`

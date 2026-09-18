@@ -19,20 +19,14 @@ import { act, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StockHistoryPage } from "../src/routes/stock/StockHistoryPage.js";
-import { mutate } from "../src/mock/store.js";
+import { getDb, mutate } from "../src/mock/store.js";
 import type { MockDb } from "../src/mock/seed.js";
 
 vi.setConfig({ testTimeout: 60_000 });
 
 /** The store, read through the one door it has. */
 function snapshot(): MockDb {
-  let seen!: MockDb;
-  act(() => {
-    mutate((d) => {
-      seen = d;
-    });
-  });
-  return seen;
+  return getDb();
 }
 
 const SERIAL = "SC02TL1234567";

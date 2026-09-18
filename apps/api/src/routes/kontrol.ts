@@ -4,9 +4,9 @@
  * This replaces a stub. The route existed since S6 and answered
  * `{ entries: [] }` unconditionally, which made the owner-only guard provable
  * (a non-owner got a 403) while the body itself was a lie: three call sites
- * have been writing `AuditLog` rows all along — password login
- * (routes/auth.ts), Auth0 login (auth/auth0.ts) and the staff CLI
- * (cli/upsert-staff.ts) — and none of them could be read back.
+ * have been writing `AuditLog` rows all along — sign-in and password changes
+ * (routes/auth.ts), the owner's account screen (routes/staff.ts) and the staff
+ * CLIs (cli/) — and none of them could be read back.
  *
  * `AuditLog` is append-only for the app role by privilege, not by convention
  * (invariant 14, migration 20260815060658: INSERT and SELECT, with UPDATE and
@@ -108,8 +108,17 @@ export function kontrolRouter({ db, requireOwner }: KontrolDeps): Router {
           );
           return;
         }
-        const { q, entity, entityId, action, staffId, from, to, page, perPage } =
-          parsed.data;
+        const {
+          q,
+          entity,
+          entityId,
+          action,
+          staffId,
+          from,
+          to,
+          page,
+          perPage,
+        } = parsed.data;
 
         if (from !== undefined && to !== undefined && from >= to) {
           next(

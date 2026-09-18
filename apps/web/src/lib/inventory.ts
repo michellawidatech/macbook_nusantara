@@ -153,7 +153,7 @@ export function rollUpInventory(
     const battery = mine
       .map((u) => {
         const r = readBattery(u, model?.releaseYear, opts.battery ?? DEFAULT_BATTERY_SETTINGS);
-        return r.era === "CYCLES" ? r.cycleCount : r.health;
+        return r.mode === "CYCLES" ? r.cycleCount : r.health;
       })
       .filter((c): c is number => c != null && Number.isFinite(c));
     const byLocation = new Map<string, number>();

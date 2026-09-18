@@ -20,6 +20,12 @@ export const UNIT_STATUSES = [
   "REFUND_KLAIM",
   "HILANG",
   "KOREKSI_KELUAR",
+  // At the repairer or on its way (owner ask 2026-09-08), and in PostgreSQL
+  // since 20260913120000_store_on_postgres. No arrow in TRANSITIONS names it
+  // yet: the browser records the trip as DICATAT with a status change, which
+  // the store commit checks for continuity rather than against this table —
+  // declaring the service arrows is the follow-up (docs/store-on-postgres.md).
+  "SERVIS",
 ] as const;
 
 export type UnitStatus = (typeof UNIT_STATUSES)[number];

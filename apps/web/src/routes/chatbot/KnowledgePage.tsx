@@ -13,14 +13,25 @@
  * this list.
  */
 import { useState } from "react";
-import { App, Button, Card, Form, Input, Modal, Switch, Tooltip } from "antd";
-import { EditOutlined, PlusOutlined } from "@ant-design/icons";
+import {
+  App,
+  Button,
+  Card,
+  Flex,
+  Form,
+  Input,
+  Modal,
+  Switch,
+  Tooltip,
+} from "antd";
+import { EditOutlined, ImportOutlined, PlusOutlined } from "@ant-design/icons";
 import { ProTable } from "../../components/ProTable";
 import { LongText } from "../../components/LongText";
 import { fmtDate } from "../../lib/format.js";
 import { useDb, mutate, nextId } from "../../mock/store.js";
 import { useTranslation } from "react-i18next";
 import type { Knowledge } from "../../mock/seed.js";
+import { KnowledgeImport } from "./KnowledgeImport.js";
 
 export function KnowledgePanel() {
   const db = useDb();
@@ -28,6 +39,7 @@ export function KnowledgePanel() {
   const { message } = App.useApp();
   const [form] = Form.useForm<{ question: string; answer: string }>();
   const [editing, setEditing] = useState<Knowledge | "new" | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const open = (k: Knowledge | "new") => {
     setEditing(k);
@@ -71,13 +83,21 @@ export function KnowledgePanel() {
           "Search a question or an answer",
         )}
         extra={
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => open("new")}
-          >
-            {t("knowledge.add", "Add Q&A")}
-          </Button>
+          <Flex gap={8} wrap>
+            <Button
+              icon={<ImportOutlined />}
+              onClick={() => setImporting(true)}
+            >
+              {t("knowledge.import", "Import from a document")}
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => open("new")}
+            >
+              {t("knowledge.add", "Add Q&A")}
+            </Button>
+          </Flex>
         }
         columns={[
           {
@@ -151,6 +171,8 @@ export function KnowledgePanel() {
           },
         ]}
       />
+
+      <KnowledgeImport open={importing} onClose={() => setImporting(false)} />
 
       <Modal
         title={

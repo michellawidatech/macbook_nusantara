@@ -88,15 +88,24 @@ interface Scripted {
   before(n: number, fn: () => Promise<void>): void;
 }
 
+/** A step of the script: a greeting-grade reply, or any tool call. */
+type Step =
+  string | { readonly tool: string; readonly input: Record<string, unknown> };
+
 /**
- * A model that answers with fixed text, recording what it was asked.
+ * A model that answers from a script, recording what it was asked.
+ *
+ * A plain string is a `reply` citing `greeting` — a turn that states no fact,
+ * which is what the batching tests need: they are about which rows move, and
+ * a reply the policy would refuse (a price, a stock claim) would turn them
+ * into tests of the policy instead (2026-09-18, converse.ts).
  *
  * `before` is the whole reason this exists rather than a one-line stub: the
  * mid-draft race can only be tested by inserting a row *while* the call is in
  * flight, and doing that for real is far better evidence than asserting on a
  * predicate.
  */
-function scripted(replies: string[]): Scripted {
+function scripted(steps: Step[]): Scripted {
   const calls: CreateArgs[] = [];
   const hooks = new Map<number, () => Promise<void>>();
   let n = 0;
@@ -107,10 +116,21 @@ function scripted(replies: string[]): Scripted {
     n += 1;
     const hook = hooks.get(i);
     if (hook) await hook();
-    const text = replies[i] ?? replies[replies.length - 1] ?? "siap kak";
+    const step = steps[i] ?? steps[steps.length - 1] ?? "siap kak";
+    const use =
+      typeof step === "string"
+        ? { tool: "reply", input: { message: step, sources: "greeting" } }
+        : step;
     return {
-      content: [{ type: "text" as const, text, citations: [] }],
-      stop_reason: "end_turn" as const,
+      content: [
+        {
+          type: "tool_use" as const,
+          id: `toolu_${i}`,
+          name: use.tool,
+          input: use.input,
+        },
+      ],
+      stop_reason: "tool_use" as const,
     };
   };
 
@@ -139,11 +159,26 @@ describe("batching a burst", () => {
   it("answers a burst of four messages with one reply and one outbox row", async () => {
     // A customer typing the way people actually type.
     await inbound({ id: "b.1", from: SENDER, text: "halo", ts: ago(30_000) });
-    await inbound({ id: "b.2", from: SENDER, text: "mau tanya", ts: ago(28_000) });
-    await inbound({ id: "b.3", from: SENDER, text: "ada macbook air m2", ts: ago(26_000) });
-    await inbound({ id: "b.4", from: SENDER, text: "yang 256gb", ts: ago(24_000) });
+    await inbound({
+      id: "b.2",
+      from: SENDER,
+      text: "mau tanya",
+      ts: ago(28_000),
+    });
+    await inbound({
+      id: "b.3",
+      from: SENDER,
+      text: "ada macbook air m2",
+      ts: ago(26_000),
+    });
+    await inbound({
+      id: "b.4",
+      from: SENDER,
+      text: "yang 256gb",
+      ts: ago(24_000),
+    });
 
-    const model = scripted(["ada kak, harganya 15.500.000"]);
+    const model = scripted(["siap kak"]);
     const result = await pass(model.client);
 
     expect(result.drafted).toBe(1);
@@ -153,38 +188,63 @@ describe("batching a burst", () => {
 
   it("joins the burst into one customer turn, in the order it was typed", async () => {
     await inbound({ id: "j.1", from: SENDER, text: "halo", ts: ago(30_000) });
-    await inbound({ id: "j.2", from: SENDER, text: "ada m2 ga", ts: ago(28_000) });
+    await inbound({
+      id: "j.2",
+      from: SENDER,
+      text: "ada m2 ga",
+      ts: ago(28_000),
+    });
 
-    const model = scripted(["ada kak"]);
+    const model = scripted(["siap kak"]);
     await pass(model.client);
 
     const sent = model.calls[0]!;
     const last = sent.messages[sent.messages.length - 1]!;
     expect(last.role).toBe("user");
-    expect(last.content).toBe("halo\nada m2 ga");
+    // The customer's words first; the shop's note rides in its own block.
+    expect((last.content as Array<{ text: string }>)[0]!.text).toBe(
+      "halo\nada m2 ga",
+    );
   });
 
   it("moves every message the reply covered off BARU, and only those", async () => {
     await inbound({ id: "c.1", from: SENDER, text: "halo", ts: ago(30_000) });
-    await inbound({ id: "c.2", from: SENDER, text: "ada m2?", ts: ago(28_000) });
-    await inbound({ id: "c.3", from: OTHER, text: "halo juga", ts: ago(1_000) });
+    await inbound({
+      id: "c.2",
+      from: SENDER,
+      text: "mau tanya dong",
+      ts: ago(28_000),
+    });
+    await inbound({
+      id: "c.3",
+      from: OTHER,
+      text: "halo juga",
+      ts: ago(1_000),
+    });
 
-    await pass(scripted(["ada kak"]).client);
+    await pass(scripted(["siap kak"]).client);
 
     const mine = await db.waMessage.findMany({ where: { from: SENDER } });
     expect(mine.every((m) => m.status === "DIJAWAB_AGEN")).toBe(true);
     expect(mine.every((m) => m.answeredByAgent)).toBe(true);
 
     // The other sender arrived a second ago and is still typing.
-    const theirs = await db.waMessage.findFirstOrThrow({ where: { from: OTHER } });
+    const theirs = await db.waMessage.findFirstOrThrow({
+      where: { from: OTHER },
+    });
     expect(theirs.status).toBe("BARU");
   });
 
   it("records the reply on exactly one row, so the thread reads as one answered turn", async () => {
     await inbound({ id: "r.1", from: SENDER, text: "halo", ts: ago(30_000) });
-    await inbound({ id: "r.2", from: SENDER, text: "ada m2?", ts: ago(28_000) });
+    await inbound({
+      id: "r.2",
+      from: SENDER,
+      text: "mau tanya dong",
+      ts: ago(28_000),
+    });
 
-    await pass(scripted(["ada kak"]).client);
+    await pass(scripted(["siap kak"]).client);
 
     const withReply = await db.waMessage.findMany({
       where: { from: SENDER, replyText: { not: null } },
@@ -199,11 +259,21 @@ describe("batching a burst", () => {
     // The bug this guards is silent message loss: the row was stamped
     // DIJAWAB_AGEN with no replyText, which removed it from the agent's queue
     // AND from the inbox's pending count, so nobody ever saw it.
-    await inbound({ id: "m.1", from: SENDER, text: "ada m2?", ts: ago(30_000) });
+    await inbound({
+      id: "m.1",
+      from: SENDER,
+      text: "mau tanya dong",
+      ts: ago(30_000),
+    });
 
-    const model = scripted(["ada kak"]);
+    const model = scripted(["siap kak"]);
     model.before(0, async () => {
-      await inbound({ id: "m.late", from: SENDER, text: "eh yang 512 aja", ts: NOW });
+      await inbound({
+        id: "m.late",
+        from: SENDER,
+        text: "eh satu lagi",
+        ts: NOW,
+      });
     });
 
     await pass(model.client);
@@ -217,35 +287,53 @@ describe("batching a burst", () => {
   });
 
   it("answers the message that arrived during drafting on the very next pass", async () => {
-    await inbound({ id: "n.1", from: SENDER, text: "ada m2?", ts: ago(30_000) });
+    await inbound({
+      id: "n.1",
+      from: SENDER,
+      text: "mau tanya dong",
+      ts: ago(30_000),
+    });
 
-    const first = scripted(["ada kak"]);
+    const first = scripted(["siap kak"]);
     first.before(0, async () => {
-      await inbound({ id: "n.late", from: SENDER, text: "yang 512 aja", ts: ago(20_000) });
+      await inbound({
+        id: "n.late",
+        from: SENDER,
+        text: "eh satu lagi",
+        ts: ago(20_000),
+      });
     });
     await pass(first.client);
 
-    const second = await pass(scripted(["yang 512 ready juga"]).client);
+    const second = await pass(scripted(["boleh kak, silakan"]).client);
     expect(second.drafted).toBe(1);
 
     const late = await db.waMessage.findFirstOrThrow({
       where: { waMessageId: "n.late" },
     });
     expect(late.status).toBe("DIJAWAB_AGEN");
-    expect(late.replyText).toBe("yang 512 ready juga");
+    expect(late.replyText).toBe("boleh kak, silakan");
   });
 
   it("discards its draft when a staff member answers the thread first", async () => {
     // The compare-and-swap earns its keep here: without it the agent's stale
     // reply would be queued on top of the human's, and the customer would get
     // two answers to one question.
-    await inbound({ id: "s.1", from: SENDER, text: "boleh nego?", ts: ago(30_000) });
+    await inbound({
+      id: "s.1",
+      from: SENDER,
+      text: "boleh nego?",
+      ts: ago(30_000),
+    });
 
     const model = scripted(["harganya pas kak"]);
     model.before(0, async () => {
       await db.waMessage.updateMany({
         where: { from: SENDER },
-        data: { status: "DIJAWAB_STAF", replyText: "boleh kak, sini saya bantu" },
+        data: {
+          status: "DIJAWAB_STAF",
+          replyText: "boleh kak, sini saya bantu",
+        },
       });
     });
 
@@ -253,7 +341,9 @@ describe("batching a burst", () => {
 
     expect(result.drafted).toBe(0);
     expect(await db.outbox.count()).toBe(0);
-    const row = await db.waMessage.findFirstOrThrow({ where: { from: SENDER } });
+    const row = await db.waMessage.findFirstOrThrow({
+      where: { from: SENDER },
+    });
     expect(row.status).toBe("DIJAWAB_STAF");
     expect(row.replyText).toBe("boleh kak, sini saya bantu");
   });
@@ -270,7 +360,9 @@ describe("batching a burst", () => {
 
     await pass(scripted(["oke kak"]).client, { maxBatch: 4 });
 
-    expect(await db.waMessage.count({ where: { from: SENDER, status: "BARU" } })).toBe(2);
+    expect(
+      await db.waMessage.count({ where: { from: SENDER, status: "BARU" } }),
+    ).toBe(2);
   });
 });
 
@@ -278,10 +370,15 @@ describe("the adaptive wait", () => {
   it("answers a customer who asked a question before one who is still muttering", async () => {
     // Both last spoke 6 seconds ago: past the 4s question wait, short of the
     // 8s base window.
-    await inbound({ id: "a.q", from: SENDER, text: "ada m2?", ts: ago(6_000) });
+    await inbound({
+      id: "a.q",
+      from: SENDER,
+      text: "bisa cod?",
+      ts: ago(6_000),
+    });
     await inbound({ id: "a.f", from: OTHER, text: "hmm", ts: ago(6_000) });
 
-    const model = scripted(["ada kak"]);
+    const model = scripted(["siap kak"]);
     const result = await pass(model.client);
 
     expect(result.drafted).toBe(1);
@@ -312,9 +409,14 @@ describe("the adaptive wait", () => {
 
   it("does not let a sender who is still typing hold up anybody else", async () => {
     await inbound({ id: "f.1", from: SENDER, text: "bentar", ts: ago(1_000) });
-    await inbound({ id: "f.2", from: OTHER, text: "ada m2?", ts: ago(10_000) });
+    await inbound({
+      id: "f.2",
+      from: OTHER,
+      text: "bisa cod?",
+      ts: ago(10_000),
+    });
 
-    const result = await pass(scripted(["ada kak"]).client);
+    const result = await pass(scripted(["siap kak"]).client);
 
     expect(result.drafted).toBe(1);
     expect(
@@ -348,9 +450,18 @@ describe("the adaptive wait", () => {
     });
     await db.waMessage.update({
       where: { id: answered.id },
-      data: { status: "DIJAWAB_AGEN", answeredByAgent: true, answeredAt: ago(500) },
+      data: {
+        status: "DIJAWAB_AGEN",
+        answeredByAgent: true,
+        answeredAt: ago(500),
+      },
     });
-    await inbound({ id: "g.new", from: SENDER, text: "ada m2?", ts: ago(20_000) });
+    await inbound({
+      id: "g.new",
+      from: SENDER,
+      text: "ada m2?",
+      ts: ago(20_000),
+    });
 
     const result = await pass(scripted(["ada kak"]).client);
     expect(result.drafted).toBe(1);
@@ -376,30 +487,38 @@ describe("the adaptive wait", () => {
 });
 
 describe("what reaches the customer", () => {
-  it("never queues a reply containing an em-dash, whatever the model wrote", async () => {
+  it("never queues markdown, whatever the model wrote", async () => {
     // The last line of defence, asserted where the message actually leaves.
-    await inbound({ id: "d.1", from: SENDER, text: "ada m2?", ts: ago(20_000) });
+    // Dashes and brackets stay (2026-09-18): the owner's answers use them —
+    // "1–3 hari kerja", "PO (pre-order)".
+    await inbound({ id: "d.1", from: SENDER, text: "halo", ts: ago(20_000) });
 
-    await pass(scripted(["siap kak — ready ya"]).client);
+    await pass(scripted(["**siap** kak — 1–3 hari (kerja)"]).client);
 
     const row = await db.outbox.findFirstOrThrow();
     const body = (row.payload as { body: string }).body;
-    expect(body).not.toMatch(/[—–]/);
-    expect(body).toBe("siap kak, ready ya");
+    expect(body).toBe("siap kak — 1–3 hari (kerja)");
   });
 
   it("records what the turn was about, so the inbox can be filtered", async () => {
-    await inbound({ id: "i.1", from: SENDER, text: "ada m2?", ts: ago(20_000) });
+    await inbound({ id: "i.1", from: SENDER, text: "halo", ts: ago(20_000) });
 
-    await pass(scripted(["ada kak"]).client);
+    await pass(scripted(["halo kak, ada yang bisa dibantu?"]).client);
 
-    const row = await db.waMessage.findFirstOrThrow({ where: { from: SENDER } });
-    // No tool ran in this scripted turn, so the honest answer is "lain".
-    expect(row.intent).toBe("lain");
+    const row = await db.waMessage.findFirstOrThrow({
+      where: { from: SENDER },
+    });
+    // A reply resting on no fact is a greeting.
+    expect(row.intent).toBe("sapaan");
   });
 
   it("carries the thread's rolling summary into the prompt", async () => {
-    await inbound({ id: "sum.1", from: SENDER, text: "jadi gimana?", ts: ago(20_000) });
+    await inbound({
+      id: "sum.1",
+      from: SENDER,
+      text: "jadi gimana?",
+      ts: ago(20_000),
+    });
     await db.waThreadMemory.create({
       data: {
         from: SENDER,
@@ -413,12 +532,19 @@ describe("what reaches the customer", () => {
     const model = scripted(["oke kak"]);
     await pass(model.client);
 
-    expect(model.calls[0]!.system).toContain("budget 15jt");
-    expect(model.calls[0]!.system).toContain("FACTS TO REMEMBER");
+    // The per-thread half of the prompt, after the cache breakpoint.
+    const volatile = JSON.stringify((model.calls[0]!.system as unknown[])[1]);
+    expect(volatile).toContain("budget 15jt");
+    expect(volatile).toContain("FACTS TO REMEMBER");
   });
 
   it("carries a staff directive into the prompt and never writes one back", async () => {
-    await inbound({ id: "dir.1", from: SENDER, text: "boleh nego?", ts: ago(20_000) });
+    await inbound({
+      id: "dir.1",
+      from: SENDER,
+      text: "boleh nego?",
+      ts: ago(20_000),
+    });
     await db.waThreadMemory.create({
       data: {
         from: SENDER,
@@ -433,7 +559,9 @@ describe("what reaches the customer", () => {
     const model = scripted(["boleh kak"]);
     await pass(model.client);
 
-    expect(model.calls[0]!.system).toContain("kasih diskon 200rb kalau nawar");
+    expect(JSON.stringify(model.calls[0]!.system)).toContain(
+      "kasih diskon 200rb kalau nawar",
+    );
 
     const memo = await db.waThreadMemory.findUniqueOrThrow({
       where: { from: SENDER },
@@ -469,7 +597,12 @@ describe("the per-thread bot switch", () => {
     });
 
   it("never drafts for a thread a person has taken on", async () => {
-    await inbound({ id: "sw.1", from: SENDER, text: "mau nego", ts: ago(30_000) });
+    await inbound({
+      id: "sw.1",
+      from: SENDER,
+      text: "mau nego",
+      ts: ago(30_000),
+    });
     await setAutoReply(SENDER, false);
 
     const model = scripted(["ada kak"]);
@@ -483,7 +616,12 @@ describe("the per-thread bot switch", () => {
 
   it("leaves the muted thread's messages BARU, so switching back on answers the backlog", async () => {
     await inbound({ id: "sw.2", from: SENDER, text: "halo", ts: ago(30_000) });
-    await inbound({ id: "sw.3", from: SENDER, text: "ada m2?", ts: ago(28_000) });
+    await inbound({
+      id: "sw.3",
+      from: SENDER,
+      text: "ada m2?",
+      ts: ago(28_000),
+    });
     await setAutoReply(SENDER, false);
 
     await pass(scripted(["ada kak"]).client);
@@ -494,31 +632,48 @@ describe("the per-thread bot switch", () => {
   });
 
   it("answers the backlog once the bot is switched back on", async () => {
-    await inbound({ id: "sw.4", from: SENDER, text: "ada m2?", ts: ago(30_000) });
+    await inbound({
+      id: "sw.4",
+      from: SENDER,
+      text: "mau tanya kak",
+      ts: ago(30_000),
+    });
     await setAutoReply(SENDER, false);
-    expect((await pass(scripted(["ada kak"]).client)).drafted).toBe(0);
+    expect((await pass(scripted(["siap kak"]).client)).drafted).toBe(0);
 
     await db.waThreadMemory.update({
       where: { from: SENDER },
       data: { autoReply: true },
     });
 
-    const result = await pass(scripted(["ada kak, 15.500.000"]).client);
+    const result = await pass(
+      scripted(["halo kak, ada yang bisa dibantu?"]).client,
+    );
 
     expect(result.drafted).toBe(1);
     const answered = await db.waMessage.findFirstOrThrow({
       where: { from: SENDER },
     });
     expect(answered.status).toBe("DIJAWAB_AGEN");
-    expect(answered.replyText).toBe("ada kak, 15.500.000");
+    expect(answered.replyText).toBe("halo kak, ada yang bisa dibantu?");
   });
 
   it("switches off one customer and nobody else", async () => {
-    await inbound({ id: "sw.5", from: SENDER, text: "mau nego", ts: ago(30_000) });
-    await inbound({ id: "sw.6", from: OTHER, text: "ada m2?", ts: ago(30_000) });
+    await inbound({
+      id: "sw.5",
+      from: SENDER,
+      text: "mau nego",
+      ts: ago(30_000),
+    });
+    await inbound({
+      id: "sw.6",
+      from: OTHER,
+      text: "halo kak",
+      ts: ago(30_000),
+    });
     await setAutoReply(SENDER, false);
 
-    const result = await pass(scripted(["ada kak"]).client);
+    const result = await pass(scripted(["siap kak"]).client);
 
     expect(result.drafted).toBe(1);
     expect(
@@ -532,7 +687,12 @@ describe("the per-thread bot switch", () => {
   it("drafts for a thread whose memory row exists but was never switched off", async () => {
     // The summariser creates memory rows on its own. A row's mere existence
     // must not read as "switched off" — the column defaults to true.
-    await inbound({ id: "sw.7", from: SENDER, text: "ada m2?", ts: ago(30_000) });
+    await inbound({
+      id: "sw.7",
+      from: SENDER,
+      text: "ada m2?",
+      ts: ago(30_000),
+    });
     await db.waThreadMemory.create({
       data: {
         from: SENDER,
@@ -545,5 +705,225 @@ describe("the per-thread bot switch", () => {
     });
 
     expect((await pass(scripted(["ada kak"]).client)).drafted).toBe(1);
+  });
+});
+
+/**
+ * The owner's rule, from the worker's side (2026-09-18): stock, price and
+ * anything the approved answers do not cover goes to a person — and once it
+ * has, the bot stays out of that conversation until the person has answered.
+ */
+describe("handing a customer to a person", () => {
+  const handsOver = (
+    topic: string,
+    summary: string,
+    customer: string,
+  ): Step => ({
+    tool: "handoff_to_staff",
+    input: { topic, summary, customer_message: customer },
+  });
+
+  it("gives a named machine to a colleague, tells the customer, and says why", async () => {
+    await inbound({
+      id: "h.1",
+      from: SENDER,
+      text: "air m1 ready kak?",
+      ts: ago(20_000),
+    });
+
+    const model = scripted([
+      handsOver(
+        "stock",
+        "Tanya stok MacBook Air M1",
+        "Siap kak 😊 untuk Air M1 kami cekkan dulu ya, admin kami segera balas 🙏",
+      ),
+    ]);
+    const result = await pass(model.client);
+
+    expect(result).toMatchObject({ drafted: 1, escalated: 1 });
+    // The routed turn was offered no way to answer.
+    expect(model.calls[0]!.tools!.map((t) => t.name)).not.toContain("reply");
+    const row = await db.waMessage.findFirstOrThrow({
+      where: { from: SENDER },
+    });
+    expect(row.status).toBe("PERLU_STAF");
+    expect(row.answeredByAgent).toBe(false);
+    expect(row.intent).toBe("staf:stock");
+    expect(row.entities).toMatchObject({
+      handoff: { topic: "stock", summary: "Tanya stok MacBook Air M1" },
+    });
+    const sent = await db.outbox.findFirstOrThrow();
+    expect((sent.payload as { body: string }).body).toMatch(
+      /Air M1 kami cekkan/,
+    );
+  });
+
+  it("says nothing more to that customer until a person has answered", async () => {
+    await inbound({
+      id: "hold.1",
+      from: SENDER,
+      text: "air m1 ready kak?",
+      ts: ago(60_000),
+    });
+    await pass(
+      scripted([
+        handsOver("stock", "Stok Air M1", "Admin kami cek dulu ya kak 🙏"),
+      ]).client,
+    );
+
+    // The customer gets impatient.
+    await inbound({
+      id: "hold.2",
+      from: SENDER,
+      text: "kak?",
+      ts: ago(20_000),
+    });
+    const held = scripted(["halo kak"]);
+    expect((await pass(held.client)).drafted).toBe(0);
+    expect(held.calls).toHaveLength(0);
+    expect(
+      (
+        await db.waMessage.findFirstOrThrow({
+          where: { waMessageId: "hold.2" },
+        })
+      ).status,
+    ).toBe("BARU");
+
+    // A colleague answers through the inbox, which closes every waiting row.
+    await db.waMessage.updateMany({
+      where: { from: SENDER, status: { in: ["BARU", "PERLU_STAF"] } },
+      data: { status: "DIJAWAB_STAF", answeredAt: NOW },
+    });
+    await inbound({
+      id: "hold.3",
+      from: SENDER,
+      text: "makasih kak",
+      ts: ago(20_000),
+    });
+    expect((await pass(scripted(["sama-sama kak 😊"]).client)).drafted).toBe(1);
+  });
+
+  it("holds only that customer", async () => {
+    await inbound({
+      id: "o.1",
+      from: SENDER,
+      text: "air m1 ready kak?",
+      ts: ago(60_000),
+    });
+    await pass(
+      scripted([handsOver("stock", "Stok", "Admin kami cek dulu ya kak 🙏")])
+        .client,
+    );
+    await inbound({
+      id: "o.2",
+      from: OTHER,
+      text: "halo kak",
+      ts: ago(20_000),
+    });
+
+    expect((await pass(scripted(["halo kak 😊"]).client)).drafted).toBe(1);
+  });
+
+  it("replaces a reply the policy refuses with the shop's holding line", async () => {
+    await inbound({ id: "p.1", from: SENDER, text: "halo", ts: ago(20_000) });
+
+    await pass(scripted(["halo kak, yang m1 7.500.000 aja"]).client);
+
+    const row = await db.waMessage.findFirstOrThrow({
+      where: { from: SENDER },
+    });
+    expect(row.status).toBe("PERLU_STAF");
+    expect(row.entities).toMatchObject({
+      handoff: { topic: "other", forcedBy: "AMOUNT_NOT_IN_SOURCE" },
+    });
+    const body = (
+      (await db.outbox.findFirstOrThrow()).payload as { body: string }
+    ).body;
+    expect(body).not.toMatch(/7\.500\.000/);
+    expect(body).toMatch(/admin kami/i);
+  });
+
+  it("says why when the model itself fails", async () => {
+    await inbound({ id: "x.1", from: SENDER, text: "halo", ts: ago(20_000) });
+    const broken = {
+      messages: {
+        create: async () => {
+          throw new Error("529 overloaded");
+        },
+      },
+    } as unknown as AgentClient;
+
+    const result = await pass(broken);
+    expect(result).toMatchObject({ drafted: 0, escalated: 1 });
+    const row = await db.waMessage.findFirstOrThrow({
+      where: { from: SENDER },
+    });
+    expect(row.status).toBe("PERLU_STAF");
+    expect(row.entities).toMatchObject({ handoff: { forcedBy: "no_reply" } });
+    expect(await db.outbox.count()).toBe(0);
+  });
+});
+
+describe("the prompt", () => {
+  it("carries the owner's answers in the cached half, and the clock in the other", async () => {
+    await db.staff.upsert({
+      where: { id: "staff_kb_worker" },
+      update: {},
+      create: {
+        id: "staff_kb_worker",
+        username: "kb_worker",
+        name: "KB",
+        role: "STAFF",
+        canApprove: false,
+        active: false,
+        passwordHash: "unusable",
+        createdAt: NOW,
+      },
+    });
+    await db.agentKnowledge.deleteMany({});
+    await db.agentKnowledge.create({
+      data: {
+        question: "Garansi berapa lama kak?",
+        answer: "Garansi dari kami 1 bulan ya kak 😊",
+        createdById: "staff_kb_worker",
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    });
+    await inbound({
+      id: "pr.1",
+      from: SENDER,
+      text: "garansinya brp lama?",
+      ts: ago(20_000),
+    });
+
+    const model = scripted([
+      {
+        tool: "reply",
+        input: {
+          message: "Garansi dari kami 1 bulan ya kak 😊",
+          sources: "K1",
+        },
+      },
+    ]);
+    await pass(model.client);
+
+    const [stable, volatile] = model.calls[0]!.system as Array<{
+      text: string;
+      cache_control?: unknown;
+    }>;
+    expect(stable!.cache_control).toEqual({ type: "ephemeral" });
+    expect(stable!.text).toContain("[K1] Q: Garansi berapa lama kak?");
+    expect(stable!.text).not.toContain("It is now");
+    expect(volatile!.text).toContain("It is now");
+    // The likeliest answer rides beside the message.
+    expect(JSON.stringify(model.calls[0]!.messages.at(-1))).toContain("K1");
+
+    const row = await db.waMessage.findFirstOrThrow({
+      where: { from: SENDER },
+    });
+    expect(row.status).toBe("DIJAWAB_AGEN");
+    expect(row.intent).toBe("jawab:faq");
+    await db.agentKnowledge.deleteMany({});
   });
 });

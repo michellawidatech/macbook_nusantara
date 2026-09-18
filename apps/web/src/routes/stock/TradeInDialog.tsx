@@ -80,6 +80,7 @@ import { readSerialInput } from "../../lib/serialInput.js";
 import { wasScannedText } from "../../lib/scanner.js";
 import { gradeForCondition, type UnitCondition } from "../../lib/condition.js";
 import type { GradingSelection } from "../../lib/grading.js";
+import { costIndex } from "../../lib/service.js";
 import type { MockDb } from "../../mock/seed.js";
 
 /** What the dialog hands back. Mirrors `TradeInRec` minus its id. */
@@ -176,17 +177,26 @@ export function TradeInDialog({
    * Machines already sold are included. What the shop paid is what the shop
    * paid, and excluding the ones that moved would bias the picture towards the
    * stock nobody wants.
+   *
+   * What a machine cost is `costIndex`'s since 2026-09-15 — bought, its share
+   * of its invoice's shipping and tax, and any repair. The owner counts
+   * shipping and tax in the cost of goods, and an allowance weighed against
+   * the invoice line alone is weighed against less than the shop paid.
    */
+  const costOf = useMemo(
+    () => costIndex(db),
+    [db.pos, db.units, db.events, db.services],
+  );
   const held = useMemo(
     () =>
       sku
         ? db.units
             .filter((u) => u.skuId === sku.id && u.buy > 0)
-            .sort((a, b) => a.buy - b.buy)
+            .sort((a, b) => costOf(a).total - costOf(b).total)
         : [],
-    [db.units, sku],
+    [db.units, sku, costOf],
   );
-  const costs = held.map((u) => u.buy);
+  const costs = held.map((u) => costOf(u).total);
   const low = costs[0];
   const high = costs[costs.length - 1];
 
@@ -739,12 +749,46 @@ export function TradeInDialog({
               {
                 title:
                   basisOpen === "COST"
-                    ? t("trade.bought", "Bought for")
+                    ? t("trade.costCol", "Cost")
                     : t("trade.listedAt", "Listed at"),
                 key: "money",
                 align: "right" as const,
-                render: (_: unknown, u: (typeof held)[number]) =>
-                  basisOpen === "COST" ? fmtRp(u.buy) : fmtRp(sku?.price ?? 0),
+                render: (_: unknown, u: (typeof held)[number]) => {
+                  if (basisOpen !== "COST") return fmtRp(sku?.price ?? 0);
+                  // The total, and what it is made of whenever it is more than
+                  // the invoice line — shipping and tax on a line of their own
+                  // (owner ask 2026-09-15), so nobody has to work out why a
+                  // machine cost more than its supplier charged.
+                  const c = costOf(u);
+                  const part = (text: string) => (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {text}
+                    </Typography.Text>
+                  );
+                  return (
+                    <Flex vertical align="flex-end" gap={0}>
+                      <Typography.Text>{fmtRp(c.total)}</Typography.Text>
+                      {c.total !== c.buy &&
+                        part(
+                          t("trade.boughtLine", "bought {{amount}}", {
+                            amount: fmtRp(c.buy),
+                          }),
+                        )}
+                      {c.shippingTax > 0 &&
+                        part(
+                          t("trade.shippingTaxLine", "shipping & tax {{amount}}", {
+                            amount: fmtRp(c.shippingTax),
+                          }),
+                        )}
+                      {c.repair > 0 &&
+                        part(
+                          t("trade.repairLine", "repair {{amount}}", {
+                            amount: fmtRp(c.repair),
+                          }),
+                        )}
+                    </Flex>
+                  );
+                },
               },
             ]}
           />

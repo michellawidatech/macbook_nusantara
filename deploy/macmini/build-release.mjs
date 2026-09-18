@@ -5,6 +5,11 @@
  *
  *     node deploy/macmini/build-release.mjs
  *
+ * CI runs the same script on GitHub's Apple silicon runner when a v* tag is
+ * pushed (docs/deploy-pipeline.md), with NUSANTARA_VERSION set to the tag and
+ * the commit — so the release is named for what it is, not for when it was
+ * built — and there a tree with uncommitted changes is refused outright.
+ *
  * What goes in: the four server processes (api, worker, webhook and the staff
  * CLI), each compiled by esbuild into ONE minified file; the SPA exactly as
  * `vite build` emits it; a Prisma client generated from a copy of the schema
@@ -65,14 +70,29 @@ const esbuild = createRequire(rootRequire.resolve("tsx/package.json"))(
 // ---------------------------------------------------------------------------
 
 const sha = read("git", ["rev-parse", "--short", "HEAD"]);
-const dirty = read("git", ["status", "--porcelain"]) !== "";
+const changes = read("git", ["status", "--porcelain"]);
+const dirty = changes !== "";
+// A release CI builds is deployed because of the tag it is named for. One that
+// quietly carried something the tag does not would be a release nobody can
+// rebuild or read the source of.
+if (process.env.CI && dirty) {
+  throw new Error(
+    `refusing to build a release in CI from a changed tree:\n${changes}`,
+  );
+}
 const builtAt = new Date();
 const two = (n) => String(n).padStart(2, "0");
 // Local time, because it is read by a person standing at the Mac mini.
 const stamp =
   `${builtAt.getFullYear()}${two(builtAt.getMonth() + 1)}${two(builtAt.getDate())}` +
   `-${two(builtAt.getHours())}${two(builtAt.getMinutes())}`;
-const version = `${stamp}-${sha}${dirty ? "-dirty" : ""}`;
+const version =
+  process.env.NUSANTARA_VERSION ?? `${stamp}-${sha}${dirty ? "-dirty" : ""}`;
+// It becomes a directory name on the Mac mini, and ops/nusantara-deploy
+// refuses anything outside this alphabet.
+if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(version)) {
+  throw new Error(`not a usable release version: ${version}`);
+}
 const name = `nusantara-${version}`;
 const stageRoot = join(OUT, "stage");
 const stage = join(stageRoot, name);
@@ -132,6 +152,8 @@ const ENTRIES = {
   worker: "apps/worker/src/main.ts",
   webhook: "apps/whatsapp-webhook/src/server.ts",
   staff: "apps/api/src/cli/upsert-staff.ts",
+  accounts: "apps/api/src/cli/seed-accounts.ts",
+  knowledge: "apps/api/src/cli/import-knowledge.ts",
 };
 
 /** The generated client stays a directory of files next to the bundles. */
@@ -267,7 +289,11 @@ cpSync(join(ROOT, "apps", "web", "dist"), join(stage, "web"), {
 // ---------------------------------------------------------------------------
 
 cpSync(join(HERE, "ops"), join(stage, "ops"), { recursive: true });
-for (const f of ["run", "backup"]) chmodSync(join(stage, "ops", f), 0o755);
+// nusantara-deploy and setup-deploy-access ride along so an admin at the Mac
+// mini can reinstall them from the live release; neither runs from here.
+for (const f of ["run", "backup", "nusantara-deploy", "setup-deploy-access"]) {
+  chmodSync(join(stage, "ops", f), 0o755);
+}
 writeFileSync(
   join(stage, "RELEASE"),
   [

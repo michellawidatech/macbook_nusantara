@@ -96,14 +96,24 @@ describe("catalogue", () => {
       "Expected here",
       "Belongs elsewhere",
       "Not in system",
-      // lib/inbound.ts INBOUND_STAGE_LABEL — the Inbound list's Stage column
-      // and the QC grid's. "On service" and "Returned to supplier" are already
+      // lib/inbound.ts INBOUND_STAGE_LABEL — the QC grid's tag. The Inbound
+      // list's Stage column was one of these until 2026-09-15, when it became
+      // a payment status. "On service" and "Returned to supplier" are already
       // above as Unit.status labels and share the key.
       "Pending",
       "Arrived",
       "In QC",
       "In inventory",
       "Closed",
+      // lib/inbound.ts PO_PAYMENT_STATUS_LABEL — what replaced it. "Closed" is
+      // already above and shares the key, which is the point: an order filed
+      // away and an invoice part-paid are the same word in both places.
+      "Open",
+      "Paid in full",
+      // lib/inbound.ts PO_STATUS_LABEL — the order's own status, editable
+      // since 2026-09-15. "Arrived" is already above.
+      "Draft",
+      "Ordered",
       // mock/seed.ts PO_PAYMENT_FOR_LABEL — what a supplier payment settles.
       // "Products" is already above as an InboundFormPage step.
       "Shipping",

@@ -1,13 +1,20 @@
 #!/bin/zsh
 # Start one Nusantara process. launchd calls this for api, webhook and worker;
-# a person calls it for the staff CLI:
+# a person calls it for the two account CLIs:
 #
-#   printf '%s' "$PW" | sudo -u _nusantara /opt/nusantara/current/ops/run staff \
-#     --username owner@example.com --name 'Owner' --role OWNER
+#   sudo -u _nusantara /opt/nusantara/current/ops/run accounts --owner ersen
+#   sudo -u _nusantara /opt/nusantara/current/ops/run staff \
+#     --username ersen --name 'Ersen' --role OWNER --initial
+#
+# `accounts` gives every salesperson a login on the shop's initial password;
+# `staff` creates or resets one account (a password on stdin, or --initial).
+# Both force a new password at the next sign-in when they hand out the initial
+# one. `knowledge <file> --by ersen` loads the owner's answer sheet into the
+# chatbot (docs/chatbot-rag.md).
 #
 # Configuration comes from $NUSANTARA_HOME/etc (default /opt/nusantara/etc):
 # common.env for everything plus one file per process, so the API never holds
-# the webhook's APP_SECRET — the same split render.yaml keeps.
+# the webhook's APP_SECRET.
 setopt err_exit no_unset pipe_fail
 
 home=${NUSANTARA_HOME:-/opt/nusantara}
@@ -23,11 +30,13 @@ load() {
 }
 
 case $proc in
-  api)     envfile=api.env;     heap=384 ;;
-  webhook) envfile=webhook.env; heap=256 ;;
-  worker)  envfile=worker.env;  heap=256 ;;
-  staff)   envfile=;            heap=256 ;;
-  *) print -u2 "usage: run api|webhook|worker|staff [args…]"; exit 64 ;;
+  api)       envfile=api.env;     heap=384 ;;
+  webhook)   envfile=webhook.env; heap=256 ;;
+  worker)    envfile=worker.env;  heap=256 ;;
+  staff)     envfile=;            heap=256 ;;
+  accounts)  envfile=;            heap=256 ;;
+  knowledge) envfile=;            heap=256 ;;
+  *) print -u2 "usage: run api|webhook|worker|staff|accounts|knowledge [args…]"; exit 64 ;;
 esac
 
 load $home/etc/common.env
@@ -37,6 +46,10 @@ load $home/etc/common.env
 # than as a dlopen error three frames deep.
 built=$(sed -n 's/^arch=//p' $release/RELEASE)
 [[ $built == $(uname -m) ]] || die "this release was built for $built; this machine is $(uname -m)"
+
+# /api/health answers with it, and the deploy pipeline refuses a switch whose
+# API does not name the release it just installed (ops/nusantara-deploy).
+export NUSANTARA_RELEASE=$(sed -n 's/^version=//p' $release/RELEASE)
 
 export NODE_ENV=production
 export NODE_OPTIONS="--max-old-space-size=$heap"

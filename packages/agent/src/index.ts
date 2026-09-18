@@ -17,15 +17,20 @@ export {
 } from "./anthropic.js";
 export {
   MAX_CORRECTIONS,
+  buildAgentPrompt,
   buildSystemPrompt,
+  type AgentPrompt,
+  type AgentPromptInput,
   type CorrectionExample,
   type KnowledgeEntry,
   type PromptInput,
 } from "./prompt.js";
 export {
   ANTHROPIC_TOOLS,
+  CUSTOMER_TOOLS,
   MAX_BOOKING_DAYS,
   READ_TOOLS,
+  TERMINAL_TOOLS,
   STORE_HOURS,
   WRITE_TOOLS,
   dispatchTool,
@@ -54,8 +59,10 @@ export {
 } from "./debounce.js";
 export {
   MAX_EMOJI,
+  MAX_REPLY_EMOJI,
   detectLanguage,
   hasForbiddenFormatting,
+  sanitiseReply,
   stripFormatting,
   type Language,
 } from "./sanitise.js";
@@ -67,10 +74,51 @@ export {
   converse,
   type AgentClient,
   type CreateArgs,
+  type ConverseHandoff,
   type ConverseInput,
   type ConverseResult,
   type ConverseTurn,
 } from "./converse.js";
+export {
+  MATCHES_WHEN_PARTIAL,
+  PROMPT_BUDGET_CHARS,
+  knowledgeBase,
+  knowledgeBlock,
+  loadKnowledgeBase,
+  matchesFor,
+  matchesNote,
+  type ApprovedAnswer,
+  type KnowledgeBase,
+} from "./knowledge.js";
+export {
+  STRONG_COVERAGE,
+  STRONG_MATCH,
+  indexKnowledge,
+  isStrongMatch,
+  searchWords,
+  type KnowledgeDoc,
+  type KnowledgeIndex,
+  type RankedDoc,
+} from "./retrieval.js";
+export {
+  HANDOFF_TOPICS,
+  MAX_REPLY_CHARS,
+  checkHoldingMessage,
+  checkReply,
+  holdingMessage,
+  isHandoffTopic,
+  mentionsProduct,
+  routeMessage,
+  type HandoffTopic,
+  type ReplyProblem,
+  type Route,
+} from "./policy.js";
+export {
+  loadStoreFacts,
+  lookupCatalog,
+  renderStoreFacts,
+  type StoreFacts,
+} from "./systemFacts.js";
 export { DEFAULT_PERSONA } from "./persona.js";
 export {
   emptyThreadMemory,

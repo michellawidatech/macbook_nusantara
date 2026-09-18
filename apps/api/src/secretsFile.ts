@@ -17,21 +17,20 @@
  * — the HMAC key for verifying inbound webhooks, which the API has no business
  * holding. Neither can be smuggled in by editing the file, which is the point.
  *
- * The API drafts replies, and since Auth0 it is also the confidential OIDC
- * client. It needs those two credentials and nothing else. `DATABASE_URL` and
- * `APP_SECRET` stay excluded whatever that file happens to contain.
+ * The API drafts replies and needs the Anthropic credential and nothing else.
+ * `DATABASE_URL` and `APP_SECRET` stay excluded whatever that file happens to
+ * contain — and so, since 2026-09-18, do the `AUTH0_*` keys a developer's copy
+ * may still carry: sign-in is the app's own now.
  */
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AUTH0_ENV_KEYS } from "./auth/auth0.js";
 
 /** The only keys the API will accept from a secrets file. */
 export const API_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
-  ...AUTH0_ENV_KEYS,
 ] as const;
 
 /**

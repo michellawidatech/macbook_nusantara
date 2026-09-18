@@ -176,7 +176,9 @@ export async function listPurchaseOrders(
           ],
         }),
     ...(query.status === undefined || query.status.length === 0
-      ? {}
+      ? // A cancelled invoice is a deleted one (2026-09-15) — see `cancelPo`
+        // in store/adapters/documents.ts.
+        { status: { not: "BATAL" as const } }
       : { status: { in: [...query.status] } }),
     ...(query.closed === undefined
       ? {}
@@ -306,7 +308,7 @@ export async function purchaseOrderDetail(
       },
     },
   });
-  if (po === null) return null;
+  if (po === null || po.status === "BATAL") return null;
 
   const row = toRow({
     ...po,

@@ -122,8 +122,144 @@ export const id: Record<string, string> = {
   "account.signOut": "Keluar",
 
   // ── Login ─────────────────────────────────────────────────────────────────
+  // The app's own sign-in since 2026-09-18 (Auth0 retired).
   "login.subtitle": "Masuk dengan akun staf Anda.",
   "login.signIn": "Masuk",
+  "login.username": "Nama pengguna",
+  "login.usernameRequired": "Ketik nama pengguna Anda.",
+  "login.password": "Kata sandi",
+  "login.passwordRequired": "Ketik kata sandi Anda.",
+  "login.wrong": "Nama pengguna atau kata sandi salah.",
+  "login.tooMany":
+    "Terlalu banyak percobaan. Tunggu beberapa menit, lalu coba lagi.",
+  "login.offline":
+    "Server tidak bisa dihubungi. Periksa koneksi lalu coba lagi.",
+  "login.forgot":
+    "Lupa kata sandi? Minta pemilik meresetnya dari Pengaturan → Akun staf.",
+
+  // ── Password ──────────────────────────────────────────────────────────────
+  // The forced first change and Settings → My account share one form.
+  "password.chooseTitle": "Pilih kata sandi Anda sendiri",
+  "password.chooseIntro":
+    "Halo {{name}}. Anda masuk dengan kata sandi yang dibuat orang lain, jadi mungkin ada orang lain yang tahu. Pilih kata sandi Anda sendiri sebelum melanjutkan.",
+  "password.saveAndContinue": "Simpan dan lanjutkan",
+  "password.save": "Simpan kata sandi baru",
+  "password.current": "Kata sandi saat ini",
+  "password.currentRequired": "Ketik kata sandi yang Anda pakai untuk masuk.",
+  "password.currentWrong": "Itu bukan kata sandi Anda saat ini.",
+  "password.new": "Kata sandi baru",
+  "password.newRequired": "Pilih kata sandi baru.",
+  "password.hint": "Minimal {{n}} karakter. Kalimat pendek juga bagus.",
+  "password.confirm": "Ketik ulang kata sandi baru",
+  "password.confirmRequired": "Ketik sekali lagi untuk memastikan.",
+  "password.mismatch": "Kedua kata sandi baru tidak sama.",
+  "password.tooShort": "Minimal {{n}} karakter.",
+  "password.tooLong": "Terlalu panjang untuk sebuah kata sandi.",
+  "password.initial":
+    "Itu kata sandi awal toko. Pilih kata sandi Anda sendiri.",
+  "password.hasUsername":
+    "Jangan masukkan nama pengguna Anda — itu tebakan pertama siapa pun.",
+  "password.tooCommon":
+    "Terlalu mudah ditebak. Beberapa kata digabung lebih mudah diingat dan lebih sulit ditebak.",
+
+  // ── Chatbot: hand-overs and the answer sheet (2026-09-18) ────────────────
+  "chat.draftFromAnswers": "Draf siap, dari jawaban yang disetujui toko.",
+  "chat.draftReady": "Draf siap.",
+  "chat.draftWouldHandOver":
+    "Bot akan menyerahkan chat ini ke staf ({{topic}}). Kalimat penahannya ada di kotak — jawab sendiri.",
+  "chat.handedToYou": "Bot menyerahkan chat ini ke Anda — {{topic}}",
+  "chat.handedToYouHint":
+    "Bot tidak membalas chat ini sampai ada staf yang membalas, atau menandainya selesai.",
+  "chat.handledDone":
+    "Ditandai selesai. Bot akan membalas pesan pelanggan ini berikutnya.",
+  "chat.handledFailed": "Gagal menandai selesai.",
+  "chat.markHandled": "Tandai selesai",
+  "chat.needsYouTopic": "Perlu staf · {{topic}}",
+  "chat.waiting": "menunggu",
+  "handoff.stock": "Stok",
+  "handoff.price": "Harga",
+  "handoff.negotiation": "Nego",
+  "handoff.unitDetails": "Detail unit",
+  "handoff.recommendation": "Rekomendasi",
+  "handoff.reservation": "Booking",
+  "handoff.orderPayment": "Pesanan atau pembayaran",
+  "handoff.tradeIn": "Tukar tambah",
+  "handoff.sellToShop": "Jual ke toko",
+  "handoff.shippingQuote": "Ongkos kirim",
+  "handoff.warrantyClaim": "Klaim garansi",
+  "handoff.complaint": "Komplain",
+  "handoff.media": "Foto atau file",
+  "handoff.human": "Minta staf",
+  "handoff.other": "Di luar jawaban",
+  "knowledge.import": "Impor dari dokumen",
+  "knowledge.importTitle": "Impor jawaban dari dokumen",
+  "knowledge.importHint":
+    "Tempel seluruh isi dokumen. Tiap pertanyaan diawali “Q:” dan jawabannya “A:”; satu jawaban boleh beberapa baris.",
+  "knowledge.importPaste": "Isi dokumen",
+  "knowledge.importUnanswered":
+    "{{n}} pertanyaan tidak punya baris “A:” dan tidak akan diimpor:",
+  "knowledge.importFound": "{{n}} jawaban ditemukan, {{m}} dipilih",
+  "knowledge.importDuplicate": "sudah ada di basis pengetahuan",
+  "knowledge.importOk": "Impor {{n}}",
+  "knowledge.imported":
+    "{{n}} jawaban diimpor — bot memakainya mulai balasan berikutnya.",
+
+  // ── Staff accounts (Settings, owner only) ─────────────────────────────────
+  "staff.title": "Akun staf",
+  "staff.intro":
+    "Siapa saja yang bisa masuk. Akun baru, atau akun yang Anda reset, memakai kata sandi awal toko dan wajib memilih kata sandi sendiri saat pertama masuk — Anda tidak perlu tahu kata sandi siapa pun.",
+  "staff.add": "Tambah akun",
+  "staff.addTitle": "Tambah akun",
+  "staff.addOk": "Tambah akun",
+  "staff.addFooter":
+    "Akun ini mulai dengan kata sandi awal toko ({{password}}) dan memilih kata sandi sendiri saat pertama masuk.",
+  "staff.name": "Nama",
+  "staff.rename": "Ganti nama",
+  "staff.username": "Nama pengguna",
+  "staff.usernameHint":
+    "Yang diketik saat masuk: huruf kecil dan angka, tanpa spasi.",
+  "staff.usernameRequired": "Pilih nama pengguna.",
+  "staff.usernameShape":
+    "2–32 karakter: huruf, angka, titik, tanda hubung, atau garis bawah.",
+  "staff.usernameTaken": "Nama pengguna itu sudah dipakai.",
+  "staff.role": "Peran",
+  "staff.owner": "Pemilik",
+  "staff.staff": "Staf",
+  "staff.canApprove": "Boleh menyetujui",
+  "staff.ownerApproves": "Pemilik selalu bisa menyetujui.",
+  "staff.canApproveHint":
+    "Menyetujui harga di bawah modal dan keputusan lain yang perlu orang kedua.",
+  "staff.status": "Status",
+  "staff.statusActive": "Aktif",
+  "staff.statusOff": "Nonaktif",
+  "staff.statusNoPassword": "Belum ada kata sandi",
+  "staff.statusWaiting": "Menunggu masuk pertama",
+  "staff.statusWaitingHint":
+    "Masih memakai kata sandi awal toko. Akan diganti saat pertama kali masuk.",
+  "staff.lastSignIn": "Terakhir masuk",
+  "staff.never": "Belum pernah",
+  "staff.actions": "Aksi",
+  "staff.you": "Anda — ganti kata sandi sendiri di Akun saya",
+  "staff.reset": "Reset kata sandi",
+  "staff.resetTitle": "Reset kata sandi {{name}}?",
+  "staff.resetBody":
+    "Mereka dikeluarkan dari semua perangkat, lalu masuk berikutnya dengan kata sandi awal toko — dan wajib memilih kata sandi baru.",
+  "staff.resetOk": "Reset kata sandi",
+  "staff.toldTitle": "Beri tahu {{name}} cara masuk",
+  "staff.toldBody":
+    "Nama pengguna {{username}}, kata sandi {{password}}. Begitu masuk, mereka diminta memilih kata sandi sendiri, dan kata sandi di atas tidak berlaku lagi.",
+  "staff.on": "Aktif",
+  "staff.off": "Mati",
+  "staff.activeLabel": "Boleh masuk",
+  "staff.deactivateTitle": "Nonaktifkan {{name}}?",
+  "staff.deactivateBody":
+    "Mereka langsung dikeluarkan dan tidak bisa masuk lagi sampai akunnya diaktifkan kembali. Penjualan dan pergerakan stok mereka tetap seperti semula.",
+  "staff.deactivateOk": "Nonaktifkan",
+  "staff.failed": "Belum tersimpan. Coba lagi.",
+  "settings.tabStaffAccounts": "Akun staf",
+  "settings.changePassword": "Ganti kata sandi",
+  "settings.passwordChanged":
+    "Kata sandi diganti. Semua perangkat lain yang masuk dengan akun Anda sudah dikeluarkan.",
 
   // ── Common ────────────────────────────────────────────────────────────────
   "common.delete": "Hapus",
@@ -331,6 +467,8 @@ export const id: Record<string, string> = {
   "service.spent": "Biaya servis",
   "service.spentHint":
     "Ditambahkan ke modal tiap unit, supaya marginnya jujur.",
+  "service.shippingTax": "ongkir & pajak {{amount}}",
+  "service.earlierRepairs": "servis sebelumnya {{amount}}",
   "service.bench": "Lokasi servis",
   "service.onTheBench": "Sedang diservis",
   // Yang masih di jalan, dan konfirmasi kedatangannya (2026-09-09).
@@ -339,7 +477,8 @@ export const id: Record<string, string> = {
   "service.expectedHint":
     "Sudah dikirim, belum ditandatangani. Konfirmasi kalau unitnya sudah di tangan — itu yang mencatatnya masuk {{bench}}.",
   "service.markArrived": "Sudah sampai — mulai servis",
-  "service.arrivedOk": "{{serial}} sudah di meja servis. Pengerjaan bisa mulai.",
+  "service.arrivedOk":
+    "{{serial}} sudah di meja servis. Pengerjaan bisa mulai.",
   "service.sentWhen": "Dikirim",
   "service.nDaysAgo": "{{n}} hari lalu",
   "service.quoted": "Perkiraan sejauh ini",
@@ -554,6 +693,11 @@ export const id: Record<string, string> = {
   "battery.fcc": "Kapasitas isi penuh",
   "battery.cyclesAndCapacity": "Siklus & kapasitas",
   "battery.range": "Hanya {{lo}}–{{hi}}",
+  "battery.modeHealth": "Kesehatan",
+  "battery.modeCycles": "Siklus",
+  "battery.modeAria": "Cara baterai ini dicatat",
+  "battery.guide":
+    "Mac Apple silicon dan model 2021 ke atas dimulai dari kesehatan baterai; mesin yang lebih lama dimulai dari jumlah siklus dan kapasitas isi penuh, dan setiap unit bisa dipindah saat baterainya diisikan. Kesehatan: baik {{goodMin}}% ke atas, cukup {{fairMin}}–{{fairTop}}%, buruk di bawah {{fairMin}}%. Siklus: baik {{goodMax}} atau kurang, cukup sampai {{fairMax}}, buruk di atas itu. Kosong berarti belum ada yang mengukurnya.",
 
   // ── Inbound & QC — the order detail screen ───────────────────────────
   "inbound.accept": "Terima",
@@ -2579,7 +2723,8 @@ export const id: Record<string, string> = {
 
   "pos.suggestCompletesBundle":
     "Menambahkan ini melengkapi {{code}} — {{name}}.",
-  "pos.whyStepUp": "{{step}} lebih mahal dari {{name}} {{variant}} di transaksi ini.",
+  "pos.whyStepUp":
+    "{{step}} lebih mahal dari {{name}} {{variant}} di transaksi ini.",
   "pos.whyModelRule":
     "{{pct}}% penjualan sebelumnya untuk barang di keranjang ini juga mengambil salah satu dari ini.",
   "pos.whyCategoryRule":
@@ -2602,4 +2747,167 @@ export const id: Record<string, string> = {
   "discounts.shapePctCapped": "{{pct}}% maksimal {{max}}",
   "discounts.shapeNominal": "Potongan {{amount}}",
   "discounts.shapeBundle": "{{qty}} apa saja seharga {{price}}",
+
+  // The store on PostgreSQL (2026-09-13) — components/StoreGate.tsx.
+  "store.loading": "Memuat data toko…",
+  "store.loadFailed": "Data toko tidak bisa dimuat",
+  "store.retry": "Coba lagi",
+  "store.notSaved": "Tidak tersimpan — {{reason}}",
+  "store.offline":
+    "Offline — {{count}} perubahan menunggu disimpan. Perubahan tetap ada dan dikirim begitu koneksi kembali.",
+
+  // ── B2Soft migration (2026-09-13) ─────────────────────────────────────────
+  // `SALE_CHANNELS` label, run through t() at the till's chips.
+  Other: "Lainnya",
+  "customers.oldDebtLabel": "Piutang lama (sebelum aplikasi)",
+  "customers.oldDebtHint":
+    "Utang pelanggan dari sebelum aplikasi ini, tanpa penjualan di sini. Dicatat sekali dan ditambahkan ke sisa tagihan penjualannya.",
+  "customers.oldDebt": "Piutang dari sebelum aplikasi ini",
+  "customers.oldDebtSince": "{{amount}} per {{date}}",
+  "piutang.fromBefore": "Dari sebelum aplikasi ini",
+  "piutang.editOldDebt": "Koreksi di data pelanggan",
+  "piutang.editOldDebtAria": "Buka {{name}} di Pelanggan",
+
+  // ── Trade-in cost breakdown (2026-09-15) ──────────────────────────────────
+  "pos.purchasePrice": "Harga beli",
+  "pos.purchaseShippingTax": "Ongkir & pajak pembelian",
+  "pos.repairsPaid": "Biaya servis",
+  "trade.costCol": "Modal",
+  "trade.boughtLine": "dibeli {{amount}}",
+  "trade.shippingTaxLine": "ongkir & pajak {{amount}}",
+  "trade.repairLine": "servis {{amount}}",
+
+  // ── The keyboard (2026-09-15) — components/KeyboardShortcutsModal.tsx ─────
+  "keyboard.title": "Pintasan papan ketik",
+  "keyboard.groupFields": "Saat mengisi",
+  "keyboard.groupGrids": "Tabel baris barang",
+  "keyboard.groupLists": "Daftar",
+  "keyboard.groupAnywhere": "Di mana saja",
+  "keyboard.keySpace": "Spasi",
+  "keyboard.enter":
+    "Kolom berikutnya. Di kolom terakhir sebuah dialog, langsung mengonfirmasi; di tempat lain, berhenti di tombol simpan.",
+  "keyboard.tab":
+    "Kontrol berikutnya atau sebelumnya, termasuk tombol dan sakelar",
+  "keyboard.escape": "Menutup daftar pilihan atau dialog",
+  "keyboard.gridUpDown": "Kolom yang sama, satu baris ke atas atau ke bawah",
+  "keyboard.gridLeftRight":
+    "Sel sebelumnya atau berikutnya, setelah kursor sampai di ujung teks",
+  "keyboard.addRow": "Tambah baris",
+  "keyboard.listUpDown": "Baris sebelumnya atau berikutnya",
+  "keyboard.listHomeEnd": "Baris pertama atau terakhir di halaman daftar ini",
+  "keyboard.listOpen": "Buka baris yang sedang disorot",
+  "keyboard.search": "Lompat ke kotak pencarian halaman ini",
+  "keyboard.help": "Tampilkan daftar ini",
+  "keyboard.stays":
+    "Enter diam di tempat setelah pemindaian, supaya hasil pindai tetap masuk ke kotak yang dituju — begitu juga di kotak pencarian, dan di kotak yang baru saja menolak isiannya.",
+
+  // ── Inbound & QC, revised 2026-09-15 ──────────────────────────────────────
+  // The header is editable, the payments are a ledger you can correct, and
+  // "Stage" became a payment status.
+  "inbound.paymentStatus": "Status pembayaran",
+  "inboundList.paymentStatus": "Status pembayaran",
+  Open: "Belum dibayar",
+  "Paid in full": "Lunas",
+  Draft: "Draf",
+  Ordered: "Dipesan",
+  "inbound.orderStatus": "Status pesanan",
+  "inbound.pickSupplier": "Pilih pemasok",
+  "inbound.invoiceNumber": "Nomor faktur dari pemasok",
+  "inbound.noInvoice": "Tanpa faktur",
+  "inbound.noInvoiceAria": "Pemasok tidak menerbitkan faktur",
+  "inbound.unreceiveTitle": "Tandai pesanan ini belum tiba?",
+  "inbound.unreceiveBody":
+    "Serial & QC dibangun dari pesanan yang sudah tiba, jadi bagian itu hilang sampai pesanan ditandai tiba lagi. Unit yang sudah diterima tetap membawa serial, grade, dan riwayatnya.",
+  "inbound.unreceiveOk": "Tandai belum tiba",
+  "inbound.productsInInvoice": "Produk dalam faktur",
+  "inbound.editAPayment": "Ubah pembayaran ini",
+  "inbound.editPayment": "Ubah pembayaran ini",
+  "inbound.editPaymentAria": "Ubah pembayaran {{amount}}",
+  "inbound.saveChanges": "Simpan perubahan",
+  "inbound.paymentUpdated": "Pembayaran diperbarui.",
+  "inbound.delete": "Hapus",
+  "inbound.deletePayment": "Hapus pembayaran ini",
+  "inbound.deletePaymentAria": "Hapus pembayaran {{amount}}",
+  "inbound.deletePaymentTitle": "Hapus pembayaran ini?",
+  "inbound.deletePaymentBody":
+    "{{amount}} untuk {{what}} berhenti dihitung pada faktur ini, dan sisa tagihan naik sebesar itu. Catat lagi kalau memang benar dibayar.",
+  "inbound.paymentDeleted": "Pembayaran dihapus.",
+  "inbound.depositPaymentLocked":
+    "Dibayar dari deposit — perbaiki di akun pemasok, supaya uangnya kembali ke deposit.",
+  "inbound.pickMethod": "Bagaimana uangnya berpindah",
+  "inbound.pickAMethod": "Sebutkan dulu bagaimana uangnya berpindah.",
+  "inbound.methodNeededForAmount":
+    "Nominal butuh metode — saldo harus tahu uangnya keluar dari laci atau dari bank.",
+  "inboundList.deleteOrder": "Hapus pesanan ini",
+  "inboundList.deleteTitle": "Hapus {{code}}?",
+  "inboundList.deleteBody":
+    "Baris dan pembayarannya berhenti dihitung. Uang yang sudah dibayar tetap ada di akun pemasok.",
+  "inboundList.deleteBodyWithUnits":
+    "Baris dan pembayarannya berhenti dihitung, dan {{count}} unit yang masih menunggu di QC ikut terhapus. Uang yang sudah dibayar tetap ada di akun pemasok.",
+  "inboundList.delete": "Hapus",
+  "inboundList.deleted": "{{code}} dihapus.",
+  "inboundList.cannotDeleteTitle": "{{code}} tidak bisa dihapus",
+  "inboundList.cannotDeleteBody":
+    "{{count}} unit di dalamnya sudah keluar dari QC: {{serials}}. Faktur adalah satu-satunya catatan modal sebuah unit, jadi selesaikan dulu unit-unit itu — buka lagi QC-nya, atau keluarkan lewat penyesuaian stok.",
+
+  // ── The order form's auto-save and draft (2026-09-15) ─────────────────────
+  "inboundForm.cancel": "Batal",
+  "inboundForm.back": "Kembali",
+  "inboundForm.saveDraft": "Simpan draf",
+  "inboundForm.draftSaved":
+    "Tersimpan sebagai draf. Sudah ada di daftar Inbound — lanjutkan kapan saja.",
+  "inboundForm.saved": "Pesanan tersimpan.",
+  "inboundForm.savedNoProducts":
+    "Pesanan tersimpan. Tambahkan produknya dari halaman pesanan saat barangnya tiba.",
+  "inboundForm.restoredTitle": "Dilanjutkan dari yang terakhir diketik",
+  "inboundForm.restoredBody":
+    "Pesanan ini masih diketik saat halaman terakhir ditutup. Belum ada yang tersimpan ke Inbound — tekan Simpan draf untuk itu.",
+  "inboundForm.startFresh": "Mulai pesanan baru",
+
+  // ── Counting by quantity (2026-09-15) — accessories have no serial ────────
+  "opname.byQuantityTitle": "Dihitung per jumlah",
+  "opname.byQuantityOf": "{{count}} produk",
+  "opname.byQuantityHint":
+    "Barang-barang ini tidak punya serial untuk dipindai. Isi berapa banyak yang benar-benar ada di rak — kosongkan kalau belum dihitung, dan isi 0 kalau sudah dicek dan memang tidak ada.",
+  "opname.foundQty": "Ada berapa?",
+  "opname.foundQtyAria": "Ada berapa {{product}}",
+  "opname.notCountedYet": "belum dihitung",
+  "opname.addCountedProduct": "Tambah produk yang belum ada di daftar ini",
+  "opname.countedByQty":
+    "{{product}} dihitung per jumlah — isi angkanya di kartu Dihitung per jumlah.",
+  "opname.note": "Catatan",
+  "opname.countNoteAria": "Kenapa jumlah {{product}} berbeda",
+  "opname.countNotePlaceholder": "Kenapa berbeda?",
+  "opname.overBy": "{{count}} lebih",
+  "opname.needCountNotes": "{{count}} produk dengan selisih perlu catatan",
+  "opname.needCountNotesBody":
+    "Rak yang isinya berbeda dari catatan sistem perlu satu baris penjelasan sebelum stock opname bisa diposting.",
+  "opname.postBodyCounted":
+    "{{count}} produk yang dihitung per jumlah tidak cocok: yang kurang ditandai hilang, yang lebih dibuat di QC.",
+  "opname.countSurplusReason": "Ditemukan saat stock opname",
+
+  // ── Categories tracked by serial, or counted (2026-09-15) ────────────────
+  "settings.tabCategories": "Kategori produk",
+  "settings.category": "Kategori",
+  "settings.categoryProducts": "Produk",
+  "settings.trackedBySerial": "Dilacak per serial",
+  "settings.trackedBySerialAria": "Lacak {{name}} per serial",
+  "settings.categoryTrackingTitle": "Produk mana yang punya serial",
+  "settings.categoryTrackingBody":
+    "Kategori yang dilacak dikenali satu per satu: QC menanyakan serialnya, dan stock opname memindai tiap unit. Kategori yang dihitung tidak — aksesoris tidak punya serial yang bisa dibaca siapa pun, jadi QC menerimanya tanpa serial dan stock opname menjawab dengan angka. Unit yang sudah ada di stok tetap memakai serial yang sudah dimilikinya.",
+  "settings.countedNow": "Dihitung per jumlah: {{names}}",
+  "inbound.countedItem": "Dihitung — tanpa serial",
+  "inbound.countedOnAccept": "Dihitung — tidak perlu serial",
+  "inbound.takeInCounted": "Terima",
+  "inbound.takeInCountedAria": "Terima satu {{product}}",
+  "inbound.takenIn": "Sudah masuk. Terima ke stok kalau sudah selesai.",
+
+  // ── The nav collapses by hand (2026-09-15) ───────────────────────────────
+  "nav.collapse": "Ciutkan menu",
+  "nav.expand": "Lebarkan menu",
+
+  // ── Rows a keyboard can reach (2026-09-15) ───────────────────────────────
+  "inboundList.openOrder": "Buka {{code}}",
+  "opnameList.openCount": "Buka {{code}}",
+  "discounts.openDiscount": "Buka {{name}}",
 };

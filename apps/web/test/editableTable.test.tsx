@@ -15,7 +15,7 @@
  */
 import { useState } from "react";
 import { App as AntdApp } from "antd";
-import { act, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -27,7 +27,7 @@ import {
 } from "../src/components/CountInput.js";
 import { InboundFormPage } from "../src/routes/inbound/InboundFormPage.js";
 import { InboundDetailPage } from "../src/routes/inbound/InboundDetailPage.js";
-import { mutate } from "../src/mock/store.js";
+import { getDb } from "../src/mock/store.js";
 import type { MockDb } from "../src/mock/seed.js";
 
 /**
@@ -313,12 +313,7 @@ describe("the inbound order form's Products step", () => {
 describe("a product label that will not fit on one line", () => {
   /** The two variants on `po-5`, which is the order in the owner's screenshot. */
   function skusOnPo5() {
-    let db!: MockDb;
-    act(() => {
-      mutate((d) => {
-        db = d;
-      });
-    });
+    const db: MockDb = getDb();
     const po = db.pos.find((p) => p.id === "po-5")!;
     return po.items.map((i) => db.skus.find((s) => s.id === i.skuId)!);
   }

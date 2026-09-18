@@ -24,6 +24,17 @@
  * pass and nothing else — the inbox, the drafting button and the reply box all
  * behave identically either way, because none of them send without a person.
  *
+ * ## The bot's hand-overs (2026-09-18)
+ *
+ * When the bot gives a conversation to a person — the stock or price of a
+ * named machine, anything the owner's answers do not cover — the batch it
+ * answered is PERLU_STAF, `intent` says `staf:<topic>`, and the newest row's
+ * `entities.handoff` carries the topic and the bot's one-line note. The worker
+ * then holds that thread (apps/worker/src/draft.ts) until a person answers:
+ * a reply here, or `POST /:phone/handled` when it was dealt with some other
+ * way — on the phone, at the counter. Both close every waiting row, which is
+ * what lets the bot pick the thread up again.
+ *
  * ## The 24-hour window
  *
  * 06 §11: free-form text delivers only within 24 hours of the customer's last
@@ -74,6 +85,52 @@ interface ThreadRow {
   lastInboundAt: Date | null;
   /** False only where staff have taken this one thread off the bot. */
   autoReply: boolean;
+  /** The newest open hand-over's row, if the bot gave this thread to a person. */
+  handoffIntent: string | null;
+  handoffEntities: unknown;
+  handoffAt: Date | null;
+}
+
+export interface Handoff {
+  /** policy.ts `HANDOFF_TOPICS`, or "other" for a row older than the topics. */
+  readonly topic: string;
+  /** The bot's note for the colleague, or null. */
+  readonly summary: string | null;
+  /** Set when the code, not the model, decided — `route`, a refusal, a failure. */
+  readonly forcedBy: string | null;
+  readonly at: string | null;
+}
+
+/**
+ * Read a hand-over back off a row. `entities` is the agent's JSON column
+ * ("shape not ours" in the schema), so every field is checked rather than
+ * cast, and a row escalated before 2026-09-18 — no `handoff` object, intent
+ * `perlu_staf` — still reads as a hand-over with no note.
+ */
+export function readHandoff(
+  intent: string | null,
+  entities: unknown,
+  at: Date | null,
+): Handoff {
+  const h =
+    entities && typeof entities === "object" && "handoff" in entities
+      ? (entities as { handoff?: unknown }).handoff
+      : undefined;
+  const field = (k: string): string | null => {
+    const v =
+      h && typeof h === "object"
+        ? (h as Record<string, unknown>)[k]
+        : undefined;
+    return typeof v === "string" && v.trim() !== "" ? v : null;
+  };
+  const topic =
+    field("topic") ?? (intent?.startsWith("staf:") ? intent.slice(5) : "other");
+  return {
+    topic,
+    summary: field("summary"),
+    forcedBy: field("forcedBy"),
+    at: field("at") ?? at?.toISOString() ?? null,
+  };
 }
 
 export function inboxRouter(db: PrismaClient): Router {
@@ -108,9 +165,23 @@ export function inboxRouter(db: PrismaClient): Router {
                -- COALESCE rather than the bare column: most threads have
                -- no memory row at all, and no row means the bot answers —
                -- the same answer the column's DEFAULT gives.
-               COALESCE(mem."autoReply", true) AS "autoReply"
+               COALESCE(mem."autoReply", true) AS "autoReply",
+               esc."intent"    AS "handoffIntent",
+               esc."entities"  AS "handoffEntities",
+               esc."ts"        AS "handoffAt"
           FROM "WaMessage" m
           LEFT JOIN "WaThreadMemory" mem ON mem."from" = m."from"
+          -- The newest row the bot handed to a person and nobody has closed
+          -- yet. Its note is on the batch's newest row, so newest first.
+          LEFT JOIN LATERAL (
+                 SELECT h."intent", h."entities", h."ts"
+                   FROM "WaMessage" h
+                  WHERE h."from" = m."from"
+                    AND h."direction" = 'IN'
+                    AND h."status" = 'PERLU_STAF'
+                  ORDER BY h."ts" DESC, h."id" DESC
+                  LIMIT 1
+               ) esc ON true
           JOIN (
                  SELECT "from",
                         COUNT(*) FILTER (
@@ -138,17 +209,27 @@ export function inboxRouter(db: PrismaClient): Router {
           pending: r.pending,
           /** False means a person is handling this one, not the bot. */
           autoReply: r.autoReply,
+          /**
+           * Set while the bot has handed this thread to a person and nobody
+           * has answered — the one list a colleague needs to work through.
+           */
+          handoff:
+            r.handoffAt === null
+              ? null
+              : readHandoff(r.handoffIntent, r.handoffEntities, r.handoffAt),
           /** Null once the window has closed, so the UI can disable the reply box. */
           windowClosesAt:
             r.lastInboundAt && isWithinWindow(r.lastInboundAt, now)
               ? windowClosesAt(r.lastInboundAt).toISOString()
               : null,
         }))
-        // Unanswered first, then most recent. Sorted here rather than in SQL
-        // because `needsReply` is derived and the list is small enough that
-        // paginating it would cost more than it saves.
+        // Handed to a person first, then unanswered, then most recent.
+        // Sorted here rather than in SQL because both flags are derived and
+        // the list is small enough that paginating it would cost more than it
+        // saves.
         .sort(
           (a, b) =>
+            Number(b.handoff !== null) - Number(a.handoff !== null) ||
             Number(b.needsReply) - Number(a.needsReply) ||
             b.lastAt.localeCompare(a.lastAt),
         );
@@ -184,6 +265,8 @@ export function inboxRouter(db: PrismaClient): Router {
           answeredByAgent: true,
           answeredAt: true,
           name: true,
+          intent: true,
+          entities: true,
           answeredBy: { select: { name: true } },
         },
       });
@@ -276,6 +359,13 @@ export function inboxRouter(db: PrismaClient): Router {
           : null,
         /** A standing instruction staff left about this customer. */
         directive: memory?.directive ?? null,
+        /** The open hand-over, newest first — null once a person has answered. */
+        handoff: (() => {
+          const open = [...messages]
+            .reverse()
+            .find((m) => m.direction === "IN" && m.status === "PERLU_STAF");
+          return open ? readHandoff(open.intent, open.entities, open.ts) : null;
+        })(),
         /**
          * Whether the bot answers this customer unattended.
          *
@@ -322,6 +412,12 @@ export function inboxRouter(db: PrismaClient): Router {
           direction: m.direction,
           status: m.status,
           msgType: m.msgType,
+          /** Why the bot gave this message to a person, on the row it answered. */
+          handoff:
+            m.status === "PERLU_STAF" ||
+            (m.intent?.startsWith("staf:") ?? false)
+              ? readHandoff(m.intent, m.entities, m.answeredAt)
+              : null,
           reply: m.replyText
             ? {
                 text: m.replyText,
@@ -437,6 +533,50 @@ export function inboxRouter(db: PrismaClient): Router {
         // 06 §11 insists on.
         status: "QUEUED",
       });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * POST /api/inbox/:phone/handled — "this is dealt with", without a reply.
+   *
+   * For the hand-over answered some other way: the colleague rang the
+   * customer, or the customer walked in. Closes every waiting row of the thread
+   * as answered by this staff member — the same thing a reply here does to
+   * them — so the worker's hand-over hold lifts and the bot answers the next
+   * message. Nothing is sent and nothing is queued; `replyText` stays empty,
+   * which is how the thread shows that nobody wrote back in the chat.
+   */
+  router.post("/:phone/handled", async (req, res, next) => {
+    try {
+      const phone = phoneParam.safeParse(req.params["phone"]);
+      if (!phone.success)
+        throw new ApiError(400, "VALIDASI", "Nomor WhatsApp tidak valid.");
+      const staff = req.staff;
+      if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
+
+      const { count } = await db.waMessage.updateMany({
+        where: {
+          from: phone.data,
+          direction: "IN",
+          status: { in: ["BARU", "PERLU_STAF"] },
+        },
+        data: {
+          status: "DIJAWAB_STAF",
+          answeredByAgent: false,
+          answeredById: staff.id,
+          answeredAt: new Date(),
+        },
+      });
+      if (count === 0) {
+        const exists = await db.waMessage.findFirst({
+          where: { from: phone.data },
+          select: { id: true },
+        });
+        if (!exists) throw notFound("Percakapan");
+      }
+      res.json({ closed: count });
     } catch (err) {
       next(err);
     }

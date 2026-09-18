@@ -40,7 +40,12 @@
  * is already narrowed, so a filter picked on a desktop survives a rotation to
  * cards.
  */
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { Card, Empty, Flex, Pagination, Table, Typography, theme } from "antd";
 import type { TableProps } from "antd";
 import { SPACE, TYPE, WEIGHT } from "../theme/tokens";
@@ -54,6 +59,12 @@ import {
   type AntColumns,
 } from "./tableCells";
 import { useTranslation } from "react-i18next";
+import {
+  KEYBOARD_ROW_ATTR,
+  KEYBOARD_ROW_CLASS,
+  hasCommandModifier,
+  listRowTarget,
+} from "../lib/keyboardNav";
 
 /**
  * What the size changer offers.
@@ -94,6 +105,25 @@ export interface DataTableProps<T> extends Omit<
    * rather than readings, where cards would break the row's alignment.
    */
   cards?: boolean;
+  /**
+   * Make the rows reachable from the keyboard (owner ask 2026-09-15).
+   *
+   * A list whose whole row opens something — Inbound, Transaction History,
+   * Customers — is a control, and until now it was one only a mouse could
+   * reach: `onRow.onClick` on a `<tr>` is invisible to the Tab key and
+   * announced as nothing. Setting this puts each row in the tab order as a
+   * button, gives it ↑ ↓ Home End between its neighbours, and fires the click
+   * on Enter and Space.
+   *
+   * Opt-in rather than automatic, because a row that does NOT open anything
+   * must not become a focus stop: a list of forty read-only rows would put
+   * forty presses of Tab between the filter above it and the pager below.
+   *
+   * `label` is what a screen reader announces — "Open PI-2026/09-0004" — and
+   * is required for the same reason: a row announced as its own concatenated
+   * cells is a sentence nobody can act on.
+   */
+  keyboardRows?: (record: T, index: number) => string;
 }
 
 export function DataTable<T extends object>({
@@ -106,6 +136,7 @@ export function DataTable<T extends object>({
   rowKey,
   size,
   scroll,
+  keyboardRows,
   ...rest
 }: DataTableProps<T>) {
   const { compact } = useLayoutMode();
@@ -198,13 +229,62 @@ export function DataTable<T extends object>({
   // scrolls sideways on a phone. Detected rather than configured: a caller who
   // adds `expandable` later would otherwise silently lose the expansion on
   // mobile and never see it, because they were testing on a laptop.
+  /**
+   * What a keyboard-reachable row needs, merged over whatever the caller's own
+   * `onRow` returns.
+   *
+   * `role="button"` rather than `role="row"`: the row IS a button here — the
+   * cells are its label — and a grid role would promise a cell-by-cell
+   * navigation this list does not have. The arrows are handled on the row
+   * rather than on the table so a row inside an expanded panel, which is not a
+   * child of the same `<tbody>`, simply gets no neighbours instead of jumping
+   * to somebody else's.
+   */
+  const keyboardRow = (record: T, index: number) => {
+    if (keyboardRows === undefined) return {};
+    const label = keyboardRows(record, index);
+    return {
+      [KEYBOARD_ROW_ATTR]: "",
+      tabIndex: 0,
+      role: "button",
+      "aria-label": label,
+      className: KEYBOARD_ROW_CLASS,
+      onKeyDown: (e: ReactKeyboardEvent<HTMLElement>) => {
+        if (e.defaultPrevented || hasCommandModifier(e) || e.shiftKey) return;
+        const row = e.currentTarget;
+        // A key pressed inside a control in the row is that control's — a
+        // button in the actions column, a Select in a filter row.
+        if (e.target !== row) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          row.click();
+          return;
+        }
+        const target = listRowTarget(e.key, row);
+        if (target === null) return;
+        // Before the browser scrolls the page on an arrow or a Home.
+        e.preventDefault();
+        target.focus();
+      },
+    };
+  };
+
   if (compact && cards && rest.expandable === undefined) {
     return (
       <>
         <Flex vertical gap={SPACE.sm}>
           {rows.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />}
           {rows.map((record, index) => (
-            <Card key={keyOf(record, index, rowKey)} size="small">
+            <Card
+              key={keyOf(record, index, rowKey)}
+              size="small"
+              /* The row props the caller wrote for a `<tr>` land on the card
+                 instead (2026-09-15). Without them a list whose rows open
+                 something opened nothing at all on a phone — the click was on
+                 the `<tr>` this layout does not render. */
+              {...(rest.onRow?.(record, index) ?? {})}
+              {...keyboardRow(record, index)}
+            >
               {heading && (
                 <div
                   style={{ fontWeight: WEIGHT.strong, marginBottom: SPACE.sm }}
@@ -265,6 +345,10 @@ export function DataTable<T extends object>({
   return (
     <Table
       {...rest}
+      onRow={(record, index) => ({
+        ...(rest.onRow?.(record, index) ?? {}),
+        ...keyboardRow(record, index ?? 0),
+      })}
       rowKey={rowKey}
       columns={columns}
       // Already sliced above. antd is handed one page and told not to paginate,

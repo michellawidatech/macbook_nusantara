@@ -8,7 +8,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "dev": "tsx watch src/server.ts",
-    "staff": "tsx src/cli/upsert-staff.ts"
+    "staff": "tsx src/cli/upsert-staff.ts",
+    "accounts": "tsx src/cli/seed-accounts.ts",
+    "knowledge": "tsx src/cli/import-knowledge.ts"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",
@@ -25,12 +27,12 @@
     "@nusantara/agent": "workspace:^",
     "@nusantara/db": "workspace:^",
     "@nusantara/domain": "workspace:^",
+    "@nusantara/fixture": "workspace:*",
     "@nusantara/logging": "workspace:^",
+    "@nusantara/store": "workspace:^",
     "@nusantara/whatsapp": "workspace:^",
     "cookie-parser": "^1.4.7",
     "express": "^5.2.1",
-    "express-openid-connect": "^3.4.0",
-    "zod": "^4.4.3",
-    "@nusantara/fixture": "workspace:*"
+    "zod": "^4.4.3"
   }
 }

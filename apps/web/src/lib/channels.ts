@@ -18,14 +18,19 @@
  * One entry in `SALE_CHANNELS`, and the till, the escrow banner, the pending
  * chart and the invoice all follow. What does NOT follow is the database:
  * `Platform` in schema.prisma is the enum a real sale is stored against, and
- * it currently knows OFFLINE, WA, IG and SHOPEE. Widening it is a migration
- * and an owner decision, not something this file can do — see the note in
- * `SALE_CHANNELS`.
+ * `SALE_SOURCES` in `packages/store` is the list the server accepts. A new
+ * channel is a value in all three.
  */
 
 /** A sale's channel, as the mock store writes it onto `Order.source`. */
 export type SaleSource =
-  "OFFLINE" | "SHOPEE" | "TOKOPEDIA" | "TIKTOK" | "INSTAGRAM" | "WHATSAPP";
+  | "OFFLINE"
+  | "SHOPEE"
+  | "TOKOPEDIA"
+  | "TIKTOK"
+  | "INSTAGRAM"
+  | "WHATSAPP"
+  | "LAINNYA";
 
 export interface SaleChannel {
   readonly value: SaleSource;
@@ -48,12 +53,12 @@ export interface SaleChannel {
  * Every channel a sale can be recorded against, in the order the till offers
  * them.
  *
- * ⚠️ `TOKOPEDIA` and `TIKTOK` exist in this list and in the mock store only.
- * `Platform` in `packages/db/prisma/schema.prisma` still reads
- * `OFFLINE | WA | IG | SHOPEE`, and CLAUDE.md's first non-negotiable is that
- * nothing here invents schema. Adding the two enum members is a migration the
- * owner has to sign off; until then the API cannot store a sale on either
- * channel and this file is the UI running ahead of the database on purpose.
+ * `TOKOPEDIA`, `TIKTOK` and `LAINNYA` joined `Platform` in migration
+ * `20260913120000_store_on_postgres` (owner answer 2026-09-13). `LAINNYA` is
+ * every other place the shop has sold through — Facebook, OLX, Carousell,
+ * Threads, Akulaku, Google Maps — which B2Soft kept as customer accounts and
+ * none of the named channels describes. It holds no funds: the shop is paid
+ * directly.
  */
 export const SALE_CHANNELS: readonly SaleChannel[] = [
   {
@@ -80,6 +85,12 @@ export const SALE_CHANNELS: readonly SaleChannel[] = [
     value: "WHATSAPP",
     label: "WhatsApp",
     phrase: "via WhatsApp",
+    holdsFunds: false,
+  },
+  {
+    value: "LAINNYA",
+    label: "Other",
+    phrase: "on another channel",
     holdsFunds: false,
   },
 ];

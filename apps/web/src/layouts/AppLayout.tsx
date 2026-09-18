@@ -15,7 +15,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Avatar,
   Button,
@@ -25,13 +25,16 @@ import {
   Flex,
   Layout,
   Menu,
+  Tooltip,
   Typography,
 } from "antd";
 import {
   CheckOutlined,
   DesktopOutlined,
   LogoutOutlined,
+  MenuFoldOutlined,
   MenuOutlined,
+  MenuUnfoldOutlined,
   MoonOutlined,
   PlusOutlined,
   SunOutlined,
@@ -43,6 +46,7 @@ import { useLayoutMode } from "./useLayoutMode.js";
 import { ScannerChip } from "../components/ScannerChip.js";
 import { BrandMark } from "../components/BrandMark.js";
 import { ErrorBoundary } from "../components/ErrorBoundary.js";
+import { StoreGate } from "../components/StoreGate.js";
 import {
   BRAND_DEEP,
   LAYOUT,
@@ -58,6 +62,8 @@ import { useLogout, type Staff } from "../lib/session.js";
 import { LANGUAGES } from "../i18n/catalogue.js";
 import { useLanguage } from "../i18n/useLanguage.js";
 import { useColorScheme } from "../theme/useColorScheme";
+import { usePersistentState } from "../hooks/usePersistentState";
+import { AppTabs } from "./AppTabs.js";
 import type { ColorSchemePreference } from "../theme/tokens";
 
 export function AppLayout({ staff }: { staff: Staff }) {
@@ -82,25 +88,21 @@ export function AppLayout({ staff }: { staff: Staff }) {
    * here.
    */
   /**
-   * One floating pane of the nav (owner ask 2026-09-09).
+   * One region of the nav column.
    *
-   * A shared object rather than a class, because the two panels differ only in
-   * how they flex and every other value has to be identical — two panels with
-   * slightly different translucency is the one thing that would make the
-   * treatment read as an accident. `backdrop-filter` is prefixed for Safari,
-   * which still ships it behind `-webkit-`; where it is unsupported entirely
-   * the panel is a 10% white overlay on the gradient, which is a fair
-   * degradation rather than a broken one.
+   * It carried the glass treatment from 2026-09-09 until 2026-09-15, when the
+   * owner asked for it to go — *"you can remove the bubble UI"*. Two floating
+   * translucent cards inside a coloured column is a lot of frame for a list of
+   * eleven links, and the frame was competing with the selected pill, which is
+   * the one thing in the column that has to read instantly.
+   *
+   * The gradient stays. It was there to give the glass something to blur, but
+   * it is also just what the column looks like, and flattening it to one green
+   * would be the revamp the owner asked twice not to have.
    */
-  const glassPanel: CSSProperties = {
+  const navRegion: CSSProperties = {
     display: "flex",
     flexDirection: "column",
-    background: NAV.panelBg,
-    border: `1px solid ${NAV.border}`,
-    borderRadius: NAV.panelRadius,
-    boxShadow: NAV.panelShadow,
-    backdropFilter: `blur(${NAV.blur})`,
-    WebkitBackdropFilter: `blur(${NAV.blur})`,
     overflow: "hidden",
   };
   /**
@@ -116,8 +118,37 @@ export function AppLayout({ staff }: { staff: Staff }) {
 
   const match = matchLeaf(pathname);
   const selectedKey = match?.leaf?.path ?? match?.section.path ?? "";
-  const [openKeys, setOpenKeys] = useState<string[]>(
-    match?.section.children ? [match.section.key] : [],
+  /**
+   * Which sections are open — the person's answer, kept (owner ask
+   * 2026-09-15: *"Make the navigation bar have to be collapsible manually
+   * instead of dynamic accordion"*).
+   *
+   * It was an accordion: `onOpenChange` kept only the last key, so opening
+   * Financial closed Stock, and walking between two sections meant reopening
+   * one of them every time. Now a section stays as it was left, on this
+   * device, and the only thing that opens one by itself is arriving at a route
+   * inside it.
+   */
+  const [openKeys, setOpenKeys] = usePersistentState<string[]>(
+    "nusantara.nav.open",
+    () => (match?.section.children ? [match.section.key] : []),
+    (stored) =>
+      Array.isArray(stored) && stored.every((k) => typeof k === "string")
+        ? (stored as string[])
+        : undefined,
+  );
+  /**
+   * The whole column, collapsed to its icons — also the person's answer, and
+   * also kept.
+   *
+   * The other half of "collapsible manually". A shop laptop at 1280px wants
+   * the 240px back when somebody is reading a wide table, and wants the labels
+   * again when they are not.
+   */
+  const [railed, setRailed] = usePersistentState<boolean>(
+    "nusantara.nav.railed",
+    false,
+    (stored) => (typeof stored === "boolean" ? stored : undefined),
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -139,8 +170,13 @@ export function AppLayout({ staff }: { staff: Staff }) {
   const openSection = match?.section.children ? match.section.key : undefined;
   useEffect(() => {
     if (openSection === undefined) return;
-    setOpenKeys((keys) => (keys.includes(openSection) ? keys : [openSection]));
-  }, [openSection]);
+    // Additive, which the docblock above has always claimed and the code did
+    // not do: it assigned `[openSection]`, so every navigation closed every
+    // other section — the accordion again, by a second door.
+    setOpenKeys((keys) =>
+      keys.includes(openSection) ? keys : [...keys, openSection],
+    );
+  }, [openSection, setOpenKeys]);
 
   // Closing on navigation is not enough: the drawer must also go away when the
   // viewport grows past `lg`, or a rotated tablet keeps a scrim over a sider
@@ -205,9 +241,13 @@ export function AppLayout({ staff }: { staff: Staff }) {
         style={{ borderInlineEnd: "none", background: "transparent" }}
         items={items}
         selectedKeys={selectedKey ? [selectedKey] : []}
-        openKeys={openKeys}
-        // Accordion: one section open at a time keeps the list scannable.
-        onOpenChange={(keys) => setOpenKeys(keys.slice(-1))}
+        // A railed menu opens its sections as flyouts and manages their keys
+        // itself; handing it a controlled `openKeys` freezes every flyout shut.
+        {...(railed ? {} : { openKeys })}
+        inlineCollapsed={railed}
+        // Every section the person left open stays open (owner ask
+        // 2026-09-15). The accordion this replaces kept `keys.slice(-1)`.
+        onOpenChange={setOpenKeys}
         onClick={({ key }) => {
           if (key.startsWith("/")) {
             navigate(key);
@@ -230,24 +270,38 @@ export function AppLayout({ staff }: { staff: Staff }) {
    * NOT antd's `type="primary"`: the primary button carries the app's green
    * gradient, which on a green column is a button-shaped nothing.
    */
-  const newTransaction = (
-    <Button
-      block
-      icon={<PlusOutlined />}
-      onClick={() => {
-        navigate(TILL_PATH);
-        setDrawerOpen(false);
-      }}
-      style={{
-        background: NAV.selectedBg,
-        borderColor: NAV.selectedBg,
-        color: BRAND_DEEP,
-        fontWeight: WEIGHT.strong,
-      }}
+  /**
+   * `railed` is the sider only. The drawer is never a rail — it is the phone's
+   * whole nav — so it asks for the full-width button by passing nothing.
+   */
+  const newTransactionButton = (rail: boolean) => (
+    <Tooltip
+      title={rail ? t("nav.newTransaction", "New Transaction") : ""}
+      placement="right"
     >
-      {t("nav.newTransaction", "New Transaction")}
-    </Button>
+      <Button
+        block
+        icon={<PlusOutlined />}
+        aria-label={t("nav.newTransaction", "New Transaction")}
+        onClick={() => {
+          navigate(TILL_PATH);
+          setDrawerOpen(false);
+        }}
+        style={{
+          background: NAV.selectedBg,
+          borderColor: NAV.selectedBg,
+          color: BRAND_DEEP,
+          fontWeight: WEIGHT.strong,
+        }}
+      >
+        {/* The label goes in a rail and the tooltip takes over. The button
+            stays, because it is the one control in this column somebody
+            presses in a hurry. */}
+        {rail ? null : t("nav.newTransaction", "New Transaction")}
+      </Button>
+    </Tooltip>
   );
+  const newTransaction = newTransactionButton(false);
 
   /**
    * One row of a "pick exactly one" group in the account menu.
@@ -392,6 +446,7 @@ export function AppLayout({ staff }: { staff: Staff }) {
         aria-haspopup="menu"
         aria-label={t("account.menu", "Account menu")}
         align="center"
+        justify={railed ? "center" : "flex-start"}
         gap={SPACE.sm}
         // `minWidth: 0` so the label can actually shrink. A flex item refuses
         // to go narrower than its content by default, and a sign-in address is
@@ -412,13 +467,17 @@ export function AppLayout({ staff }: { staff: Staff }) {
           }}
         />
         {/* One line, truncated, with the full value on hover and to a screen
-            reader. Letting it wrap turned the sider foot into two rows. */}
-        <Typography.Text
-          ellipsis={{ tooltip: staff.name }}
-          style={{ color: NAV.text }}
-        >
-          {staff.name}
-        </Typography.Text>
+            reader. Letting it wrap turned the sider foot into two rows — and
+            in a rail there is no room for one at all, so the avatar stands
+            alone and `aria-label` still names the control. */}
+        {!railed && (
+          <Typography.Text
+            ellipsis={{ tooltip: staff.name }}
+            style={{ color: NAV.text }}
+          >
+            {staff.name}
+          </Typography.Text>
+        )}
       </Flex>
     </Dropdown>
   );
@@ -445,13 +504,23 @@ export function AppLayout({ staff }: { staff: Staff }) {
            * On a phone there is no sider and the bar spans the full width.
            */
           "--nusantara-content-left":
-            nav === "sider" ? `${LAYOUT.siderWidth}px` : "0px",
+            nav === "sider"
+              ? `${railed ? LAYOUT.siderCollapsedWidth : LAYOUT.siderWidth}px`
+              : "0px",
         } as CSSProperties
       }
     >
       {nav === "sider" && (
         <Layout.Sider
           width={LAYOUT.siderWidth}
+          // antd's own collapse, so the Menu, the width and the CSS variable
+          // above all follow one flag. `trigger={null}` because the control is
+          // the button in the brand row — antd's default trigger is a bar
+          // pinned across the bottom of the column, exactly where the account
+          // foot already is.
+          collapsed={railed}
+          collapsedWidth={LAYOUT.siderCollapsedWidth}
+          trigger={null}
           style={{
             /*
              * A gradient, and no edge (owner ask 2026-09-09).
@@ -501,10 +570,12 @@ export function AppLayout({ staff }: { staff: Staff }) {
               // auto` on the wrapper itself would scroll the foot away with
               // it, which is the one thing a pinned control must not do.
               overflow: "hidden",
-              // The gutter the two glass panels float inside (2026-09-09).
-              // On the column rather than on each panel, so the gap BETWEEN
-              // them and the gap around them are one number.
-              padding: NAV.gutter,
+              // The column's own inset. It was the gutter the two glass
+              // panels floated inside until 2026-09-15; with the panels gone
+              // it is simply the space the list is not pressed against, and
+              // the horizontal half goes when the column is a rail so the
+              // icons stay centred under a 56px width.
+              padding: railed ? `${NAV.gutter}px 0` : NAV.gutter,
               gap: NAV.gutter,
             },
           }}
@@ -517,20 +588,39 @@ export function AppLayout({ staff }: { staff: Staff }) {
            * panel wants its own heading, or the mark is a caption for the
            * whole window rather than for the nav.
            */}
-          <div style={{ ...glassPanel, flex: 1, minHeight: 0 }}>
+          <div style={{ ...navRegion, flex: 1, minHeight: 0 }}>
             <Flex
               align="center"
+              justify={railed ? "center" : "space-between"}
               gap={SPACE.sm}
               style={{
                 height: LAYOUT.headerHeight,
                 // One step tighter than the 24 the rest of the sider uses: the
                 // mark reads as the sider's own edge marker, and 24 on both
                 // sides of it left the wordmark no room to sit unabbreviated.
-                paddingInline: SPACE.md,
+                paddingInline: railed ? 0 : SPACE.md,
                 flex: "0 0 auto",
               }}
             >
-              {brand}
+              {/* The mark goes when the column is a rail. 56px of width is
+                  one icon wide, and a mark plus a toggle in it is two things
+                  fighting for the same square — the toggle wins, because it is
+                  the only way back. */}
+              {!railed && brand}
+              <Button
+                type="text"
+                aria-label={
+                  railed
+                    ? t("nav.expand", "Expand the menu")
+                    : t("nav.collapse", "Collapse the menu")
+                }
+                // Pressed state said out loud, because the icon alone is a
+                // chevron and a chevron is not a state.
+                aria-expanded={!railed}
+                icon={railed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                onClick={() => setRailed((on) => !on)}
+                style={{ color: NAV.textStrong, flex: "0 0 auto" }}
+              />
             </Flex>
             <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>{menu}</div>
           </div>
@@ -552,7 +642,7 @@ export function AppLayout({ staff }: { staff: Staff }) {
             // text button's colour — for the dark ground. See global.css.
             className="nusantara-nav-foot"
             style={{
-              ...glassPanel,
+              ...navRegion,
               flex: "0 0 auto",
               padding: SPACE.sm,
               // Clears the home indicator when the console is run full-screen
@@ -564,8 +654,11 @@ export function AppLayout({ staff }: { staff: Staff }) {
                 and also the right one: it is the only thing in this column
                 somebody presses in a hurry, so it sits where the hand already
                 is rather than at the end of a scrolling list. */}
-            {newTransaction}
-            <ScannerChip />
+            {newTransactionButton(railed)}
+            {/* The chip is a phrase — "Scanner ready" — and a rail has no
+                room for one. It is the account menu's own line in that state:
+                nothing is lost, it is one click further away. */}
+            {!railed && <ScannerChip />}
             {account}
           </Flex>
         </Layout.Sider>
@@ -709,7 +802,15 @@ export function AppLayout({ staff }: { staff: Staff }) {
               from a broken page clears the latch, which is the difference
               between a recoverable error and a dead tab. */}
           <ErrorBoundary resetKey={pathname}>
-            <Outlet />
+            {/* Inside the shell for the same reason as the boundary: the
+                sidebar and sign-out stay usable while the shop loads, or
+                when it cannot. */}
+            <StoreGate staffName={staff.name}>
+              {/* `AppTabs` replaced `<Outlet />` on 2026-09-15 (owner ask).
+                  It renders one mounted page per open tab and shows the
+                  active one; the router still owns the URL. */}
+              <AppTabs />
+            </StoreGate>
           </ErrorBoundary>
         </Layout.Content>
       </Layout>

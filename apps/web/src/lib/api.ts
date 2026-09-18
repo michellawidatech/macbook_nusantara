@@ -39,6 +39,22 @@ export class ApiOfflineError extends Error {
 
 let lastRequestId: string | undefined;
 
+type RefusalListener = (status: number, code: string) => void;
+const refusalListeners = new Set<RefusalListener>();
+
+/**
+ * Hear about a 401 or 403 from ANY request — the session ended, or it is on a
+ * password that must be changed first. `lib/session.ts` registers the one
+ * listener, so a page does not have to notice that its own save was refused
+ * because of who is (no longer) signed in. Returns the unsubscribe.
+ */
+export function onApiRefusal(listener: RefusalListener): () => void {
+  refusalListeners.add(listener);
+  return () => {
+    refusalListeners.delete(listener);
+  };
+}
+
 /** Exposed for the tests and for a future "report a problem" affordance. */
 export function currentCorrelationId(): string | undefined {
   return lastRequestId;
@@ -89,13 +105,23 @@ export async function api<T>(
 
   if (!response.ok) {
     const shape = parsed as Partial<ApiErrorBody> | undefined;
-    throw new ApiRequestError(
+    const error = new ApiRequestError(
       response.status,
       shape?.error ?? {
         code: "KESALAHAN_SERVER",
         message: "Terjadi kesalahan di server.",
       },
     );
+    // A wrong password at sign-in is a 401 too, and it says nothing about a
+    // session — there is none yet.
+    if (
+      (error.status === 401 || error.status === 403) &&
+      !path.startsWith("/api/auth/login")
+    ) {
+      for (const listener of refusalListeners)
+        listener(error.status, error.code);
+    }
+    throw error;
   }
 
   return parsed as T;

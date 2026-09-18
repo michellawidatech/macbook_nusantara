@@ -29,7 +29,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ReservationsPage } from "../src/routes/reservations/ReservationsPage.js";
-import { mutate } from "../src/mock/store.js";
+import { getDb, mutate } from "../src/mock/store.js";
 import type { MockDb } from "../src/mock/seed.js";
 
 // Same budget and the same reason as inboundQcPage: this renders a whole page
@@ -44,13 +44,7 @@ const SERIALS = ["SC02RS1111111", "SC02RS2222222"] as const;
 
 /** The store, read through the one door it has. */
 function snapshot(): MockDb {
-  let seen!: MockDb;
-  act(() => {
-    mutate((d) => {
-      seen = d;
-    });
-  });
-  return seen;
+  return getDb();
 }
 
 const unitOf = (serial: string) =>

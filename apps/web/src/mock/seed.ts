@@ -206,6 +206,15 @@ export interface Sku {
   axisValues?: Record<string, string>;
   price: number;
 }
+/** A product category — see `MockDb.categories`. */
+export interface ProductCategory {
+  id: string;
+  /** What `CatalogModel.category` names. Unique. */
+  name: string;
+  /** False for what the shop counts rather than identifies. */
+  tracksSerial: boolean;
+}
+
 export interface CatalogModel {
   id: string;
   name: string;
@@ -536,6 +545,15 @@ export interface Customer {
   addresses?: CustomerAddress[];
   referralSourceId?: string;
   createdAt: string;
+  /**
+   * What this customer owed before this app existed, stated once — the
+   * B2Soft account balance that no invoice explains (owner answer
+   * 2026-09-13: receivables "need to combine all"). Same footing as
+   * `Supplier.openingBalance`: deliberately not a fake sale, which would put
+   * a receipt in Transaction History for something nobody sold.
+   */
+  openingBalance?: number;
+  openingBalanceAt?: string;
 }
 /**
  * A machine the customer handed over against the bill. Mirrors `TradeIn`.
@@ -1060,6 +1078,18 @@ export interface OpnameRec {
   date: string;
   at: string;
   counted: string[];
+  /**
+   * What was found of each product the shop COUNTS rather than scans, by
+   * variant id (owner ask 2026-09-15).
+   *
+   * Absent is a variant nobody reached; **zero is a variant somebody looked
+   * at and found none of**, which is a discrepancy the count has to report.
+   * The two are not the same answer, which is why this is a map rather than a
+   * number per row of a list built from the scope.
+   *
+   * See `lib/serialTracking.ts` and `Category.tracksSerial`.
+   */
+  counts: Record<string, number>;
   missing: string[];
   /**
    * Scanned here but not expected here.
@@ -1220,6 +1250,15 @@ export interface MockDb {
   gradingRules: GradingRule[];
   reservationSources: ReservationSource[];
   salesmen: Salesman[];
+  /**
+   * The product categories, and whether each is tracked by serial
+   * (2026-09-15).
+   *
+   * A category reached the browser only as a NAME on a model until now, which
+   * was enough while nothing else was true of one. `lib/serialTracking.ts` is
+   * the reading; `Category.tracksSerial` in the schema is the column.
+   */
+  categories: ProductCategory[];
   models: CatalogModel[];
   /**
    * AppleDB models the shop has HIDDEN from the import list — by AppleDB's
@@ -1609,6 +1648,12 @@ export function buildSeed(): MockDb {
     name: s.name,
     active: true,
   }));
+  const categories: ProductCategory[] = shop.categories.map((c) => ({
+    id: c.id,
+    name: c.name,
+    // Absent in the fixture means yes, which is the column's own default.
+    tracksSerial: c.tracksSerial ?? true,
+  }));
   const models: CatalogModel[] = shop.models.map((m) => ({
     id: m.id,
     name: m.name,
@@ -1836,7 +1881,10 @@ export function buildSeed(): MockDb {
       code: "KARTU_KREDIT",
       label: "Credit card",
       builtIn: true,
-      forPo: true,
+      // Not offered for a supplier since 2026-09-15: the owner's three are
+      // cash, transfer and marketplace. Migration 20260915090000 says the same
+      // to a live database.
+      forPo: false,
       forSale: true,
       active: true,
     },
@@ -1876,7 +1924,9 @@ export function buildSeed(): MockDb {
       code: "MARKETPLACE",
       label: "Marketplace escrow",
       builtIn: true,
-      forPo: false,
+      // Stock bought through a marketplace checkout is paid through it too
+      // (owner revision 2026-09-15).
+      forPo: true,
       forSale: true,
       active: true,
     },
@@ -2288,6 +2338,8 @@ export function buildSeed(): MockDb {
       date: isoOf(STOCK_TAKE_AT, shop.now).slice(0, 10),
       at: isoOf(STOCK_TAKE_AT, shop.now),
       counted: opnameScope.map((u) => u.serial),
+      // The fixture counts machines, all of which carry serials.
+      counts: {},
       missing: [missingSerial],
       unknown: [],
       notes: { [missingSerial]: "Tidak ada di rak, sudah dicari dua kali." },
@@ -2315,6 +2367,7 @@ export function buildSeed(): MockDb {
     gradingRules,
     reservationSources,
     salesmen,
+    categories,
     models,
     appleDbHidden: [],
     skus,

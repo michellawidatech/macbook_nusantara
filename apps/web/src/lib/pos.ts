@@ -189,8 +189,9 @@ export function shelfRows(
 /**
  * What the shop makes on a sale, as a percentage of what it charges.
  *
- * Against `Unit.buy` — what this particular machine COST — because that is the
- * one figure on the sale that is per-serial. Two machines of one variant ask
+ * Against `costOfUnit` — what this particular machine COST: its invoice line,
+ * its share of that invoice's shipping and tax, and its repairs (lib/service.ts)
+ * — because that is the one figure on the sale that is per-serial. Two machines of one variant ask
  * the same money and were very often bought for different amounts, so a margin
  * computed off the variant would be a margin about no actual transaction.
  *
@@ -321,7 +322,7 @@ export interface SaleTotals {
      */
     readonly tradeCredit: number;
   };
-  /** Σ `Unit.buy` for the machines going out. */
+  /** Σ what the machines going out COST — `costOfUnit`, not `Unit.buy`. */
   readonly cogs: number;
   /** Margin on the goods, as a percentage of what they sold for. */
   readonly margin: number | null;
@@ -359,6 +360,11 @@ export function saleTotals(input: {
    * it always did, with a zero bargain and a zero upsell.
    */
   readonly listPrices?: readonly number[];
+  /**
+   * What each line COST the shop, index-matched to `prices` — `costOfUnit`:
+   * the invoice line, its share of that invoice's shipping and tax, and its
+   * repairs. Bare `Unit.buy` here flatters every margin.
+   */
   readonly costs: readonly number[];
   readonly discount: number;
   /**
