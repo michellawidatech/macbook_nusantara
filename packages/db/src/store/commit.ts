@@ -64,11 +64,23 @@ import {
 /** Collections whose rows are only ever inserted. */
 const APPEND_ONLY: ReadonlySet<CollectionName> = new Set<CollectionName>([
   "events",
-  "stockMoves",
   "stockIns",
-  "adjustments",
   "paymentLog",
   "settlementLog",
+]);
+
+/**
+ * Collections whose rows are inserted and may be CORRECTED afterwards, never
+ * removed (owner ask 2026-09-24: the stock movement history is editable).
+ * Which fields a correction may touch is each adapter's rule — never the
+ * quantity of a stock move, never the unit or the direction of an adjustment
+ * — and the database's: `nusantara_app`'s UPDATE on both tables is granted
+ * per column (`20260924090000_stock_movement_history_editable`), so a
+ * rewrite of the rest is refused twice.
+ */
+const CORRECTABLE: ReadonlySet<CollectionName> = new Set<CollectionName>([
+  "adjustments",
+  "stockMoves",
 ]);
 
 export interface CommitInput {
@@ -305,16 +317,20 @@ export async function commitStore(
   );
   // Some rows are written once and never again, whatever they were based on —
   // say so before asking whether the base is stale. The one removal allowed is
-  // a unit's events leaving with the unit archived in the same commit.
+  // a unit's events leaving with the unit archived in the same commit; the one
+  // edit allowed is a correction to the stock movement history, whose fields
+  // the adapter judges (`CORRECTABLE`).
   const removedUnits = new Set(
     (plans.find((p) => p.name === "units")?.rows ?? [])
       .filter((r) => r.next === undefined)
       .map((r) => r.key),
   );
   for (const p of plans) {
-    if (!APPEND_ONLY.has(p.name)) continue;
+    const correctable = CORRECTABLE.has(p.name);
+    if (!APPEND_ONLY.has(p.name) && !correctable) continue;
     for (const r of p.rows) {
       if (r.base === undefined) continue;
+      if (correctable && r.next !== undefined) continue;
       const serial = (r.base as { serial?: string }).serial;
       const archiving =
         p.name === "events" &&
@@ -325,7 +341,9 @@ export async function commitStore(
         throw new StoreValidationError(
           p.name === "events"
             ? "Riwayat unit tidak bisa diubah atau dihapus."
-            : `Catatan ${p.name} tidak bisa diubah setelah tersimpan.`,
+            : correctable
+              ? `Catatan ${p.name} tidak bisa dihapus.`
+              : `Catatan ${p.name} tidak bisa diubah setelah tersimpan.`,
           p.name,
           r.key,
         );

@@ -453,6 +453,129 @@ describe("a till's commit", () => {
     ).rejects.toBeInstanceOf(StoreValidationError);
   }, 180_000);
 
+  /*
+   * The stock movement history is editable (owner ask 2026-09-24): a
+   * correction may change when, why and what was said — never what the row
+   * IS. `CORRECTABLE` in commit.ts lets the edit through to the adapter,
+   * which judges its fields; the app role's UPDATE is per column.
+   */
+  // Decoded: a snapshot is the wire form, money as strings, and a changeset is
+  // built from browser rows.
+  const stored = async (collection: string, id: string): Promise<Row> =>
+    decodeRow(
+      collection as (typeof COLLECTION_NAMES)[number],
+      (
+        (await snapshotStore(db, { staffId: ACTOR })).db[collection] as Row[]
+      ).find((r) => r["id"] === id)!,
+    );
+  const correct = (collection: string, base: Row, next: Row) =>
+    commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore({ [collection]: [base] }, { [collection]: [next] }),
+      ),
+    });
+
+  it("corrects a stock adjustment's when, why, sentence and reading — never its unit", async () => {
+    const shop = await loadDemo();
+    const adj = (shop["adjustments"] as Row[])[0]!;
+    const other = (shop["reasons"] as Row[]).find(
+      (r) => r["activity"] === "ADJUSTMENT" && r["id"] !== adj["reasonId"],
+    )!;
+    const corrected = {
+      ...adj,
+      at: "2026-09-10T02:00:00.000Z",
+      reasonId: other["id"],
+      description: "Lecet di sudut kanan",
+      batteryHealth: 88,
+    };
+    await correct("adjustments", adj, corrected);
+    const back = await stored("adjustments", adj["id"] as string);
+    expect(back).toMatchObject({
+      at: "2026-09-10T02:00:00.000Z",
+      reasonId: other["id"],
+      description: "Lecet di sudut kanan",
+      batteryHealth: 88,
+      serial: adj["serial"],
+      kind: adj["kind"],
+      batchId: adj["batchId"],
+      staff: adj["staff"],
+    });
+
+    // What the row IS does not move: its unit, its direction — and nothing
+    // removes one.
+    const otherUnit = (shop["units"] as Row[]).find(
+      (u) => u["serial"] !== adj["serial"],
+    )!;
+    await expect(
+      correct("adjustments", back, { ...back, serial: otherUnit["serial"] }),
+    ).rejects.toBeInstanceOf(StoreValidationError);
+    await expect(
+      correct("adjustments", back, {
+        ...back,
+        kind: back["kind"] === "IN" ? "OUT" : "IN",
+      }),
+    ).rejects.toBeInstanceOf(StoreValidationError);
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ adjustments: [back] }, { adjustments: [] }),
+        ),
+      }),
+    ).rejects.toBeInstanceOf(StoreValidationError);
+  }, 180_000);
+
+  it("corrects a counted product's correction — when, why and note — and never its quantity", async () => {
+    const shop = await loadDemo();
+    const reasons = (shop["reasons"] as Row[]).filter(
+      (r) => r["activity"] === "ADJUSTMENT",
+    );
+    const sample = (shop["stockMoves"] as Row[])[0]!;
+    const move: Row = {
+      id: "sm_history_test",
+      skuId: sample["skuId"],
+      locationId: sample["locationId"],
+      qty: 2,
+      cost: sample["cost"],
+      type: "KOREKSI",
+      at: NOW.toISOString(),
+      reasonId: reasons[0]!["id"],
+      note: "Adjusted in — found in the drawer",
+      staff: "Michella",
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore({ stockMoves: [] }, { stockMoves: [move] }),
+      ),
+    });
+    // As the store now holds it — a till's write carries the session's name.
+    const written = await stored("stockMoves", "sm_history_test");
+    const corrected = {
+      ...written,
+      at: "2026-09-12T01:00:00.000Z",
+      reasonId: reasons[1]!["id"],
+      note: "Found behind the till",
+    };
+    await correct("stockMoves", written, corrected);
+    expect(await stored("stockMoves", "sm_history_test")).toMatchObject({
+      at: "2026-09-12T01:00:00.000Z",
+      reasonId: reasons[1]!["id"],
+      note: "Found behind the till",
+      qty: 2,
+    });
+
+    // The quantity is the ledger.
+    await expect(
+      correct("stockMoves", corrected, { ...corrected, qty: 5 }),
+    ).rejects.toBeInstanceOf(StoreValidationError);
+    // A move of any other type is not a row of the history.
+    await expect(
+      correct("stockMoves", sample, { ...sample, note: "x" }),
+    ).rejects.toBeInstanceOf(StoreValidationError);
+  }, 180_000);
+
   it("records a return on the sale it undid — credit, refund and reference", async () => {
     // Owner brief 2026-09-19: a marketplace sale carries its order number
     // (`Payment.ref`), and a return takes its credit off the bill

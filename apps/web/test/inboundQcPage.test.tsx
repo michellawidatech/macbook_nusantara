@@ -21,6 +21,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InboundDetailPage } from "../src/routes/inbound/InboundDetailPage.js";
 import { getDb, mutate } from "../src/mock/store.js";
 import type { MockDb } from "../src/mock/seed.js";
+import { skuTracksSerial } from "../src/lib/serialTracking.js";
 import { __resetScanner, __setScannerClock } from "../src/lib/scanner.js";
 
 /**
@@ -1252,5 +1253,44 @@ describe("sending a machine to service", () => {
       ["LABOUR", 800_000],
       ["SHIPPING", 150_000],
     ]);
+  });
+});
+
+/**
+ * A counted product is priced before it is shelved (owner ask 2026-09-24:
+ * *"the accessories at the moment do not have a field to input the price …
+ * set the price before accepting the unit into the inventory"*). The line
+ * carries a Sell price box — the variant's asking price, the one price an
+ * accessory has — and Confirm arrived waits for it.
+ */
+describe("a counted product's sell price", () => {
+  it("is asked for on the line, and Confirm arrived waits for it", async () => {
+    const db = snapshot();
+    const sku = db.skus.find((s) => !skuTracksSerial(db, s.id))!;
+    mutate((d) => {
+      d.skus.find((s) => s.id === sku.id)!.price = 0;
+      d.stockMoves = d.stockMoves.filter((m) => m.poId !== ORDER);
+    });
+    renderOrder();
+    await addProduct(sku.code, 2);
+
+    const confirm = () =>
+      screen.getByRole("button", { name: /^Confirm 2 .* arrived$/ });
+    expect(confirm()).toBeDisabled();
+
+    const box = screen.getByLabelText(/^Sell price of /);
+    await userEvent.clear(box);
+    await userEvent.type(box, "150000");
+    fireEvent.blur(box);
+    await settle();
+    expect(snapshot().skus.find((s) => s.id === sku.id)!.price).toBe(150_000);
+    expect(confirm()).toBeEnabled();
+
+    await userEvent.click(confirm());
+    await settle();
+    const moves = snapshot().stockMoves.filter(
+      (m) => m.poId === ORDER && m.skuId === sku.id,
+    );
+    expect(moves.map((m) => m.qty)).toEqual([2]);
   });
 });

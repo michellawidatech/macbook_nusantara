@@ -1786,12 +1786,46 @@ export function InboundDetailPage() {
   };
 
   /**
+   * A counted product's sell price is the VARIANT's asking price — the one
+   * price an accessory has, and what the till quotes for it (owner ask
+   * 2026-09-24: *"make the inbound table to set the price before accepting
+   * the unit into the inventory"*). Written on commit, like every other fact
+   * on this page; an emptied box is "unpriced", which is what stops the
+   * arrival below.
+   */
+  const sellPriceOfSku = (skuId: string) =>
+    db.skus.find((s) => s.id === skuId)?.price ?? 0;
+  const sellPriceOfLine = (l: PurchaseLine) => sellPriceOfSku(l.skuId);
+  const setSellPrice = (l: PurchaseLine, value: number | null) => {
+    if (l.skuId === "") return;
+    mutate((d) => {
+      const sku = d.skus.find((s) => s.id === l.skuId);
+      if (sku) sku.price = value ?? 0;
+    });
+  };
+  /** Can these pieces be confirmed onto the shelf — is there a sell price? */
+  const countedPriced = (l: PurchaseLine) => sellPriceOfLine(l) > 0;
+
+  /**
    * The pieces are here: one press per product (owner answer 2026-09-19 —
    * *confirm arrival first*, not per piece). Writes a `MASUK` of whatever
    * has not arrived yet into the invoice's location, and marks the order
    * arrived the way a first scan does.
    */
   const confirmArrival = (itemId: string) => {
+    // Unpriced pieces stay off the shelf: the till would quote Rp 0 for them.
+    const unpriced = po.items.find(
+      (i) => i.id === itemId && sellPriceOfSku(i.skuId) <= 0,
+    );
+    if (unpriced) {
+      message.warning(
+        t(
+          "inbound.sellPriceFirst",
+          "Set the sell price before confirming the arrival.",
+        ),
+      );
+      return;
+    }
     const wasArrived = arrived;
     let added = 0;
     mutate((d) => {
@@ -3233,21 +3267,35 @@ export function InboundDetailPage() {
     return (
       <>
         {missing > 0 && owing.length > 0 && (
-          <Button
-            size="small"
-            type="primary"
-            icon={<CheckOutlined aria-hidden />}
-            onClick={() => owing.forEach((i) => confirmArrival(i.id))}
-            aria-label={t(
-              "inbound.confirmArrivalAria",
-              "Confirm {{count}} {{product}} arrived",
-              { count: missing, product: skuLabel(l.skuId) },
-            )}
+          <Tooltip
+            title={
+              countedPriced(l)
+                ? undefined
+                : t(
+                    "inbound.sellPriceFirst",
+                    "Set the sell price before confirming the arrival.",
+                  )
+            }
           >
-            {t("inbound.confirmArrival", "Confirm arrived ({{count}})", {
-              count: missing,
-            })}
-          </Button>
+            <span>
+              <Button
+                size="small"
+                type="primary"
+                disabled={!countedPriced(l)}
+                icon={<CheckOutlined aria-hidden />}
+                onClick={() => owing.forEach((i) => confirmArrival(i.id))}
+                aria-label={t(
+                  "inbound.confirmArrivalAria",
+                  "Confirm {{count}} {{product}} arrived",
+                  { count: missing, product: skuLabel(l.skuId) },
+                )}
+              >
+                {t("inbound.confirmArrival", "Confirm arrived ({{count}})", {
+                  count: missing,
+                })}
+              </Button>
+            </span>
+          </Tooltip>
         )}
         {came.length > 0 && (
           <Button
@@ -3326,6 +3374,8 @@ export function InboundDetailPage() {
           onSetCost={setLineCost}
           onSetDiscount={setLineDiscount}
           onOpenDetails={(l) => setDetailsKey(l.key)}
+          sellPriceOf={sellPriceOfLine}
+          onSetSellPrice={setSellPrice}
           emptyText={
             <>
               {t("inbound.noUnitsYet", "Nothing on this invoice yet.")}

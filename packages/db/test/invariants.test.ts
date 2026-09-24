@@ -571,3 +571,35 @@ describe("the app role has no DELETE anywhere", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe("the stock movement history (2026-09-24)", () => {
+  it("is correctable per column and never as a ledger", async () => {
+    // What a person can get wrong is granted; what the row IS is not. Column
+    // grants only, so the table-level UPDATE that the 20260913 self-check and
+    // the deploy's grant query read stays false.
+    const { rows } = await owner.query(
+      `SELECT has_column_privilege('nusantara_app','"StockAdjustment"','description','UPDATE') AS adj_description,
+              has_column_privilege('nusantara_app','"StockAdjustment"','at','UPDATE')          AS adj_at,
+              has_column_privilege('nusantara_app','"StockAdjustment"','unitId','UPDATE')      AS adj_unit,
+              has_column_privilege('nusantara_app','"StockAdjustment"','kind','UPDATE')        AS adj_kind,
+              has_column_privilege('nusantara_app','"StockMove"','note','UPDATE')              AS move_note,
+              has_column_privilege('nusantara_app','"StockMove"','qty','UPDATE')               AS move_qty,
+              has_table_privilege('nusantara_app','"StockMove"','UPDATE')                      AS move_table,
+              has_table_privilege('nusantara_app','"StockAdjustment"','UPDATE')                AS adj_table,
+              has_table_privilege('nusantara_app','"StockMove"','DELETE')                      AS move_delete`,
+    );
+    expect(rows[0]).toEqual({
+      adj_description: true,
+      adj_at: true,
+      adj_unit: false,
+      adj_kind: false,
+      move_note: true,
+      move_qty: false,
+      move_table: false,
+      adj_table: false,
+      move_delete: false,
+    });
+  });
+});

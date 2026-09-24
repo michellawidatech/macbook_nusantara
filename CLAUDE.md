@@ -1835,6 +1835,32 @@ Decisions that outlived those documents:
     explanation, the supplier deposit and opening-balance hints, the AppleDB
     blurb, the adjustment dialog's two tooltips. Sentences that warn about a
     consequence stay.
+- **The stock movement history is editable, 2026-09-24.** *"Make the movement
+  log editable … each row is editable."* Inventory's second tab is **Stock
+  Movement History**, and every row carries an Edit: when, reason, description
+  and the battery reading on a unit's row; when, reason and the note on a
+  counted product's. What a row IS — the unit, the direction, the quantity,
+  the batch, whose hand — is not editable, and a wrong quantity is another
+  adjustment. `lib/stockHistory.ts` builds the rows and applies the edit; the
+  unit's own description and reading follow the correction only while they
+  still say what that adjustment wrote (`test/stockHistory.test.ts`). The
+  unit's `KOREKSI` event keeps the note it was written with — the ledger is
+  untouched.
+  ⚠️ On Postgres this is the store's one "written once and correctable"
+  collection pair: `commit.ts` has a `CORRECTABLE` set beside `APPEND_ONLY`,
+  the two adapters accept an edit that touches only those columns
+  (`sameApartFrom`), and migration
+  `20260924090000_stock_movement_history_editable` grants `nusantara_app`
+  UPDATE on exactly those columns — table-level UPDATE stays revoked, so the
+  20260913 self-check and the deploy's grant query read as before. Do not
+  generalise it.
+- **A counted product is priced before it is shelved, 2026-09-24.** *"The
+  accessories at the moment do not have a field to input the price."* A
+  counted line on the inbound table (both screens) carries a **Sell price**
+  box in the cell a tracked line keeps its Units button in, writing
+  `Sku.price` — the variant's asking price, the one price an accessory has and
+  what the till quotes — and *Confirm arrived* is disabled until it is above
+  zero, because a piece confirmed without one reaches the till at Rp 0.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

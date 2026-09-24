@@ -44,6 +44,8 @@ import { SPACE, TYPE } from "../../theme/tokens";
 export const lineCostFieldId = (key: string) => `po-line-cost-${key}`;
 /** The DOM id of a line's discount box — the one Tab leaves for the popup. */
 const lineDiscountFieldId = (key: string) => `po-line-discount-${key}`;
+/** The DOM id of a counted line's sell-price box. */
+const lineSellFieldId = (key: string) => `po-line-sell-${key}`;
 
 export interface PurchaseLinesTableProps {
   readonly lines: readonly PurchaseLine[];
@@ -59,6 +61,15 @@ export interface PurchaseLinesTableProps {
   readonly onSetDiscount: (line: PurchaseLine, value: number | null) => void;
   /** Open the line's units. Omitted for a counted product, which has none. */
   readonly onOpenDetails: (line: PurchaseLine) => void;
+  /**
+   * A counted product's sell price — the variant's asking price, the one
+   * price an accessory has and what the till quotes for it (owner ask
+   * 2026-09-24: *"the accessories at the moment do not have a field to input
+   * the price"*). Drawn in the cell a tracked line keeps its Units button in.
+   * Left out, the cell stays empty as before.
+   */
+  readonly sellPriceOf?: (line: PurchaseLine) => number;
+  readonly onSetSellPrice?: (line: PurchaseLine, value: number | null) => void;
   /** The line's own buttons — not arrived, remove, whatever the page offers. */
   readonly actions?: (line: PurchaseLine) => ReactNode;
   /** A blank line at the end, for the page that lets one be added. */
@@ -90,6 +101,8 @@ export function PurchaseLinesTable({
   onSetCost,
   onSetDiscount,
   onOpenDetails,
+  sellPriceOf,
+  onSetSellPrice,
   actions,
   onAddLine,
   emptyText,
@@ -99,6 +112,7 @@ export function PurchaseLinesTable({
   const [qtyDraft, setQtyDraft] = useState<Record<string, number | null>>({});
   const [costDraft, setCostDraft] = useState<Record<string, number | null>>({});
   const [discDraft, setDiscDraft] = useState<Record<string, number | null>>({});
+  const [sellDraft, setSellDraft] = useState<Record<string, number | null>>({});
 
   const productName = (skuId: string) => {
     const sku = skus.find((s) => s.id === skuId);
@@ -111,6 +125,45 @@ export function PurchaseLinesTable({
     if (typed === undefined || typed === null) return;
     const qty = Math.max(1, Math.floor(typed));
     if (qty !== l.qty) onSetQty(l, qty);
+  };
+
+  /**
+   * A counted product's sell price, in the cell a tracked line keeps its
+   * Units button in (owner ask 2026-09-24). Amber while it is nothing: the
+   * order page will not confirm the pieces into stock until it is set,
+   * because the till would quote Rp 0 for them.
+   */
+  const sellPriceCell = (l: PurchaseLine) => {
+    const current = sellPriceOf?.(l) ?? 0;
+    if (closed) {
+      return (
+        <Typography.Text style={{ whiteSpace: "nowrap" }}>
+          {t("inbound.sellsAt", "Sells at {{price}}", {
+            price: fmtRp(current),
+          })}
+        </Typography.Text>
+      );
+    }
+    const typed = sellDraft[l.key];
+    const value = typed !== undefined ? typed : current;
+    return (
+      <div style={{ width: 150 }}>
+        <CommitMoneyInput
+          id={lineSellFieldId(l.key)}
+          label={t("inbound.sellPriceOfLine", "Sell price of {{product}}", {
+            product: productName(l.skuId),
+          })}
+          placeholder={t("inbound.sellPrice", "Sell price")}
+          value={value}
+          warn={!value}
+          onChange={(v) => setSellDraft((d) => ({ ...d, [l.key]: v }))}
+          onCommit={(v) => {
+            setSellDraft((d) => drop(d, l.key));
+            onSetSellPrice?.(l, v);
+          }}
+        />
+      </div>
+    );
   };
 
   const columns = [
@@ -301,10 +354,11 @@ export function PurchaseLinesTable({
     {
       title: "",
       key: "actions",
-      width: actions ? 260 : 170,
+      width: actions ? 320 : 170,
       align: "right" as const,
       render: (_: unknown, l: PurchaseLine) => (
         <Flex gap={SPACE.xs} justify="end" align="center" wrap>
+          {l.counted && sellPriceOf && l.skuId !== "" && sellPriceCell(l)}
           {!l.counted && (
             <Button
               size="small"

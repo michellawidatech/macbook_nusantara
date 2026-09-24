@@ -42,6 +42,7 @@ import {
   lockRows,
   refuseEdit,
   refuseRemoval,
+  sameApartFrom,
 } from "../context.js";
 
 const byId = (keys?: readonly string[]) =>
@@ -920,7 +921,7 @@ export const unitNotes: Adapter<"unitNotes"> = {
 };
 
 // ---------------------------------------------------------------------------
-// QC decisions and adjustments — written once
+// QC decisions — written once — and adjustments, written once and correctable
 // ---------------------------------------------------------------------------
 
 export const stockIns: Adapter<"stockIns"> = {
@@ -984,6 +985,46 @@ export const stockIns: Adapter<"stockIns"> = {
   },
 };
 
+/**
+ * What a correction to a recorded adjustment may change (owner ask
+ * 2026-09-24: *"make the movement log editable … each row is editable"*):
+ * what somebody can get wrong and find out about later — when, why, the
+ * sentence, and the reading typed alongside the unit. Everything else is what
+ * the row IS: its unit, its direction, its batch, whose hand, and whether it
+ * minted the unit. A change to any of those is refused here, and the app
+ * role's UPDATE on `StockAdjustment` names exactly these six columns, so the
+ * database refuses it too.
+ */
+const ADJUSTMENT_CORRECTABLE: ReadonlySet<keyof RowOf<"adjustments">> = new Set<
+  keyof RowOf<"adjustments">
+>(["at", "reasonId", "description", "batteryHealth", "cycleCount", "fcc"]);
+
+async function correctAdjustment(
+  ctx: WriteContext,
+  base: RowOf<"adjustments">,
+  next: RowOf<"adjustments">,
+): Promise<void> {
+  if (!sameApartFrom(base, next, ADJUSTMENT_CORRECTABLE)) {
+    throw new StoreValidationError(
+      "Unit, arah, batch dan pencatat penyesuaian tidak bisa diubah — hanya waktu, alasan, deskripsi dan baterainya.",
+      "adjustments",
+      next.id,
+    );
+  }
+  await ctx.tx.stockAdjustment.update({
+    where: { id: next.id },
+    data: {
+      at: instantOf(next.at),
+      reasonId: next.reasonId,
+      description: next.description,
+      batteryHealth: whole(next.batteryHealth),
+      cycleCount: whole(next.cycleCount),
+      fcc: whole(next.fcc),
+    },
+  });
+  ctx.touch("adjustments", next.id);
+}
+
 export const adjustments: Adapter<"adjustments"> = {
   collection: "adjustments",
   async project(tx, _ctx, keys) {
@@ -1015,7 +1056,10 @@ export const adjustments: Adapter<"adjustments"> = {
     for (const r of rows) {
       const n = r.next;
       if (n === undefined) throw refuseRemoval("adjustments", r.key);
-      if (r.base !== undefined) throw refuseEdit("adjustments", r.key);
+      if (r.base !== undefined) {
+        await correctAdjustment(ctx, r.base, n);
+        continue;
+      }
       await ctx.tx.stockAdjustment.create({
         data: {
           id: n.id,

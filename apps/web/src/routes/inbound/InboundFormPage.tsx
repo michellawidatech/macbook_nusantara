@@ -1141,6 +1141,19 @@ export function InboundFormPage() {
         <PurchaseLinesTable
           lines={lineViews}
           skus={db.skus}
+          // A counted product's sell price is the variant's asking price, a
+          // fact about the catalogue rather than this order, so it is written
+          // the moment it is typed (owner ask 2026-09-24).
+          sellPriceOf={(view) =>
+            db.skus.find((s) => s.id === view.skuId)?.price ?? 0
+          }
+          onSetSellPrice={(view, v) => {
+            if (view.skuId === "") return;
+            mutate((d) => {
+              const sku = d.skus.find((s) => s.id === view.skuId);
+              if (sku) sku.price = v ?? 0;
+            });
+          }}
           cogsOf={(view) => {
             const l = lines.find((x) => x.key === view.key);
             return l === undefined ? 0 : lineCogs(l);

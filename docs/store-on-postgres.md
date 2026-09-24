@@ -45,7 +45,14 @@ not trusted from the browser.
 
 1. **The ledger is append-only.** An event in a changeset may only be new. The
    database refuses the rest anyway (`nusantara_app` has no UPDATE or DELETE on
-   `UnitEvent`).
+   `UnitEvent`). The stock movement history — `adjustments`, and a `KOREKSI`
+   in `stockMoves` — is the one collection written once and CORRECTABLE
+   afterwards (2026-09-24): when, why, what was said, and a unit's battery
+   reading may change; the unit, the direction, the quantity and whose hand
+   may not, and nothing removes a row. `CORRECTABLE` in `commit.ts` lets the
+   edit through, each adapter checks its fields (`sameApartFrom`), and the app
+   role's UPDATE on both tables is granted per column, so the rule holds three
+   times over.
 2. **Projection and event travel together.** A unit whose status or location
    changes must carry the event that explains it, in the same changeset, and
    the unit's new status and location must equal that event's. Sequence numbers
@@ -99,8 +106,10 @@ resale that followed it arrive in one changeset.
 
 A category with `tracksSerial = false` has no `Unit` rows: what a location
 holds of one of its variants is `SUM(StockMove.qty)`. The adapter
-(`adapters/stock.ts`) refuses an edit or a removal (it is in `APPEND_ONLY`,
-and the app role has INSERT and SELECT only), refuses a move of a variant
+(`adapters/stock.ts`) refuses a removal and every edit but one — a `KOREKSI`'s
+`at`, `reasonId` and `note`, which is the Stock Movement History's row
+(2026-09-24; the app role's UPDATE is those three columns and nothing else,
+and the quantity is never rewritten) — refuses a move of a variant
 whose category tracks serials, and on a till refuses any commit that leaves a
 shelf below zero — checked after the insert, under the store lock every commit
 holds. A `TERJUAL` move adds `-qty × unitCost` to its `OrderItem.cogs` and
@@ -183,7 +192,7 @@ own event type, is the follow-up.
 | `stockMoves` | `StockMove` — the counted products' append-only ledger (2026-09-19) | id |
 | `unitNotes` | `UnitNote` + `UnitNotePhoto` | id |
 | `pos` | `PurchaseOrder` + items, serials, fees, payments | id |
-| `stockIns` / `adjustments` | `StockIn` / `StockAdjustment` | id |
+| `stockIns` / `adjustments` | `StockIn` (written once) / `StockAdjustment` (correctable since 2026-09-24: when, why, description, battery) | id |
 | `customers` | `Customer` + `CustomerAddress` | id |
 | `orders` | `Order` + `OrderItem` (a unit per line, or a counted product's `lines` with `unitId` null), `OrderFee`, `TradeIn`, `Payment` | id |
 | `returns` | `UnitReturn` | id |

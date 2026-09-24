@@ -6,9 +6,10 @@
  * "Stock Movement" listed it by serial and owned the adjustment machinery. The
  * owner asked for one screen with one table, and `InventoryTable` is that
  * table: flat since 2026-09-19 — a line per variant, grade and warehouse, its
- * units in a popup. This file is what remains — the page frame, the movement
- * log, the stock export (`StockExportModal`), and the two modals that
- * actually write.
+ * units in a popup. This file is what remains — the page frame, the stock
+ * movement history (every row of it editable since 2026-09-24, through
+ * `StockMovementEditModal`), the stock export (`StockExportModal`), and the
+ * two modals that actually write.
  *
  * **Counted categories have no battery.** An accessory (a category with
  * `tracksSerial` off, 2026-09-15) has no battery to read and no serial anybody
@@ -63,6 +64,7 @@ import {
 import {
   DeleteOutlined,
   DownloadOutlined,
+  EditOutlined,
   LoginOutlined,
   LogoutOutlined,
 } from "@ant-design/icons";
@@ -71,6 +73,12 @@ import { ProTable } from "../../components/ProTable";
 import { EditableTable } from "../../components/EditableTable";
 import { InventoryTable } from "./InventoryTable";
 import { StockExportModal } from "./StockExportModal";
+import { StockMovementEditModal } from "./StockMovementEditModal";
+import {
+  stockHistoryRows,
+  stockHistorySkuId,
+  type StockHistoryRow,
+} from "../../lib/stockHistory.js";
 import { skuTracksSerial } from "../../lib/serialTracking.js";
 import { averageCost, onHand, takeFrom } from "../../lib/stock.js";
 import { EnumTag } from "../../components/EnumTag";
@@ -219,6 +227,8 @@ export function InventoryPage() {
   const { compact } = useLayoutMode();
   /** The stock export dialog (owner ask 2026-09-19). */
   const [exporting, setExporting] = useState(false);
+  /** The history row being corrected (owner ask 2026-09-24). */
+  const [editing, setEditing] = useState<StockHistoryRow | null>(null);
   // ── The batch, held as plain state rather than in a Form ──────────────────
   // The grid below is a line-item editor, and antd's Form.List buys validation
   // this page does its own way (one dialog listing every problem at once,
@@ -695,7 +705,7 @@ export function InventoryPage() {
   /**
    * The stock tab's actions: the two movements, and the export beside them
    * (owner ask 2026-09-19) — on the stock tab only, because it exports the
-   * stock, not the movement log.
+   * stock, not the movement history.
    */
   const stockActions = (
     <Flex gap={SPACE.sm} wrap>
@@ -725,37 +735,24 @@ export function InventoryPage() {
   );
 
   /**
-   * The log's rows: every unit adjusted, and every counted product adjusted
-   * by quantity (2026-09-19) — an accessory's adjustment is a `KOREKSI` stock
-   * move, and it belongs in the same log as a unit's.
+   * The history's rows: every unit adjusted, and every counted product
+   * adjusted by quantity (2026-09-19) — an accessory's adjustment is a
+   * `KOREKSI` stock move, and it belongs in the same history as a unit's.
+   * `lib/stockHistory.ts` builds them, and applies the edit behind each row.
    */
-  type LogRow = Adjustment & { counted?: { skuId: string; qty: number } };
-  const logRows: LogRow[] = [
-    ...db.adjustments,
-    ...db.stockMoves
-      .filter((m) => m.type === "KOREKSI" && m.reasonId !== undefined)
-      .map((m): LogRow => ({
-        id: m.id,
-        serial: "",
-        description: m.note ?? "",
-        reasonId: m.reasonId!,
-        at: m.at,
-        staff: m.staff,
-        kind: m.qty > 0 ? "IN" : "OUT",
-        batchId: m.id,
-        counted: { skuId: m.skuId, qty: Math.abs(m.qty) },
-      })),
-  ];
-  const logProduct = (a: LogRow) => {
-    const skuId =
-      a.counted?.skuId ?? db.units.find((x) => x.serial === a.serial)?.skuId;
+  const logRows: StockHistoryRow[] = stockHistoryRows(db);
+  const logProduct = (a: StockHistoryRow) => {
+    const skuId = stockHistorySkuId(db, a);
     const k = skuId ? skuOf(skuId) : undefined;
     return k ? `${k.name} ${k.variantLabel}` : fmtNone();
   };
+  /** What a row is about, for the edit button's name: the serial, or the product. */
+  const logSubject = (a: StockHistoryRow) =>
+    a.counted ? logProduct(a) : a.serial;
 
   const logTab = (
     <Card>
-      <ProTable<LogRow>
+      <ProTable<StockHistoryRow>
         persistKey="inventory.adjustments"
         rowKey="id"
         dataSource={logRows}
@@ -777,10 +774,11 @@ export function InventoryPage() {
             width: 100,
             facet: true,
             facetLabel: t("stock.inAndOut", "In and out"),
-            sortValue: (a) => (a.kind === "IN" ? "In" : "Out"),
+            sortValue: (a) =>
+              a.kind === "IN" ? t("stock.in", "In") : t("stock.out", "Out"),
             render: (_, a) => (
               <Tag color={a.kind === "IN" ? "green" : "volcano"}>
-                {a.kind === "IN" ? "In" : "Out"}
+                {a.kind === "IN" ? t("stock.in", "In") : t("stock.out", "Out")}
               </Tag>
             ),
           },
@@ -858,6 +856,27 @@ export function InventoryPage() {
             ),
           },
           { title: t("stock.by", "By"), dataIndex: "staff", facet: true },
+          {
+            // Blank by convention: DataTable drops an untitled column to
+            // the foot of the card on a phone, where buttons belong.
+            title: "",
+            key: "actions",
+            width: 56,
+            render: (_, a) => (
+              <Tooltip title={t("stock.editMovement", "Edit")}>
+                <Button
+                  size="small"
+                  aria-label={t(
+                    "stock.editMovementAria",
+                    "Edit the movement of {{what}}",
+                    { what: logSubject(a) },
+                  )}
+                  icon={<EditOutlined />}
+                  onClick={() => setEditing(a)}
+                />
+              </Tooltip>
+            ),
+          },
         ]}
       />
     </Card>
@@ -932,7 +951,7 @@ export function InventoryPage() {
           },
           {
             key: "log",
-            label: t("stock.tabLog", "Movement log"),
+            label: t("stock.tabHistory", "Stock Movement History"),
             children: logTab,
           },
         ]}
@@ -1450,6 +1469,11 @@ export function InventoryPage() {
       </Modal>
 
       <StockExportModal open={exporting} onClose={() => setExporting(false)} />
+      <StockMovementEditModal
+        open={editing !== null}
+        row={editing}
+        onClose={() => setEditing(null)}
+      />
     </PageContainer>
   );
 }

@@ -1020,8 +1020,10 @@ export const id: Record<string, string> = {
   "stock.specs": "Spesifikasi",
   "stock.stockIn": "Stok masuk",
   "stock.stockOut": "Stok keluar",
-  "stock.tabLog": "Log pergerakan",
+  "stock.tabHistory": "Riwayat Pergerakan Stok",
   "stock.tabStock": "Stok",
+  "stock.editMovement": "Ubah",
+  "stock.editMovementAria": "Ubah pergerakan {{what}}",
   "stock.thisSerialWasNotIn":
     "Serial ini belum ada di sistem; penyesuaian ini yang membuatnya",
   "stock.type": "Jenis",
@@ -2006,6 +2008,33 @@ export const id: Record<string, string> = {
   "stock.serialisedProducts": "Produk berserial",
   "stock.noCounted": "Belum ada produk hitungan di batch ini.",
   "stock.qty": "Jumlah",
+
+  // Inbound — a counted product's sell price (owner ask 2026-09-24).
+  "inbound.sellPriceOfLine": "Harga jual {{product}}",
+  "inbound.sellsAt": "Dijual {{price}}",
+  "inbound.sellPriceFirst":
+    "Isi harga jual dulu sebelum mengonfirmasi kedatangan.",
+
+  // Edit one row of the Stock Movement History (owner ask 2026-09-24).
+  "stockHistoryEdit.title": "Ubah pergerakan stok",
+  "stockHistoryEdit.save": "Simpan",
+  "stockHistoryEdit.saved": "Pergerakan stok diperbarui.",
+  "stockHistoryEdit.gone": "Pergerakan ini sudah tidak ada di riwayat.",
+  "stockHistoryEdit.reasonRequired": "Pergerakan perlu alasan.",
+  "stockHistoryEdit.batteryOutOfRange": "Pembacaan baterai di luar rentang.",
+  "stockHistoryEdit.type": "Jenis",
+  "stockHistoryEdit.by": "Oleh",
+  "stockHistoryEdit.product": "Produk",
+  "stockHistoryEdit.serial": "Serial",
+  "stockHistoryEdit.qty": "Jumlah",
+  "stockHistoryEdit.qtyFixed":
+    "Jumlahnya ada di buku stok dan tidak bisa diubah di sini. Catat penyesuaian lain untuk mengoreksinya.",
+  "stockHistoryEdit.when": "Waktu",
+  "stockHistoryEdit.reason": "Alasan",
+  "stockHistoryEdit.description": "Deskripsi",
+  "stockHistoryEdit.battery": "Baterai",
+  "stockHistoryEdit.unitFollows":
+    "Deskripsi dan baterai unit ikut dikoreksi selama masih sama dengan yang dicatat pergerakan ini.",
 
   // Edit unit.
   "unitEdit.title": "Ubah unit",

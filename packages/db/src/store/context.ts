@@ -18,6 +18,7 @@ import type {
   SingletonName,
   serverSchemas,
 } from "@nusantara/store";
+import { comparable } from "@nusantara/store";
 import type { Tx } from "../client.js";
 import type {
   FeeKind,
@@ -516,6 +517,43 @@ export function refuseEdit(
     collection,
     key,
   );
+}
+
+/**
+ * Is `next` the same row as `base` apart from the fields a correction may
+ * touch? For a row that is written once and CORRECTED afterwards (the stock
+ * movement history, 2026-09-24): what the row is must not move, only what
+ * was said about it. Compared on the wire's own terms (`comparable`), so an
+ * optional field left out and one sent as undefined are the same fact.
+ */
+export function sameApartFrom<R extends object>(
+  base: R,
+  next: R,
+  correctable: ReadonlySet<keyof R>,
+): boolean {
+  // Server rows carry money as BigInt, which JSON cannot serialise; on the
+  // wire the same figure is a string, and that is the form compared here.
+  const plain = (v: unknown): unknown =>
+    typeof v === "bigint"
+      ? v.toString()
+      : Array.isArray(v)
+        ? v.map(plain)
+        : v !== null && typeof v === "object"
+          ? Object.fromEntries(
+              Object.entries(v as Record<string, unknown>).map(([k, x]) => [
+                k,
+                plain(x),
+              ]),
+            )
+          : v;
+  const fixed = (row: R): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(row)) {
+      if (!correctable.has(k as keyof R)) out[k] = plain(v);
+    }
+    return out;
+  };
+  return comparable(fixed(base)) === comparable(fixed(next));
 }
 
 /** Where a key sits in a new order, when there is one. */

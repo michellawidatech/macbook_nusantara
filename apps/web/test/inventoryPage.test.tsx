@@ -451,3 +451,120 @@ describe("on a phone", () => {
     }
   });
 });
+
+/**
+ * The second tab is the Stock Movement History, and every row of it can be
+ * corrected (owner ask 2026-09-24: *"make the movement log editable … each
+ * row is editable"*). What a correction may change and how far it reaches is
+ * `lib/stockHistory.ts` (test/stockHistory.test.ts); this is the screen.
+ */
+describe("the stock movement history", () => {
+  /** The history's rows: the ones carrying an Edit, not the stock tab's. */
+  function historyRows(): HTMLElement[] {
+    return tableRows().filter(
+      (tr) =>
+        tr.querySelector('button[aria-label^="Edit the movement of"]') !== null,
+    );
+  }
+
+  async function openHistory() {
+    renderPage();
+    await settle();
+    await userEvent.click(screen.getByText("Stock Movement History"));
+    await settle();
+  }
+
+  it("is named for what it is, and every row has an Edit", async () => {
+    await openHistory();
+    expect(screen.queryByText("Movement log")).toBeNull();
+    const db = getDb();
+    const expected =
+      db.adjustments.length +
+      db.stockMoves.filter(
+        (m) => m.type === "KOREKSI" && m.reasonId !== undefined,
+      ).length;
+    expect(historyRows()).toHaveLength(expected);
+  });
+
+  it("corrects a unit's row — reason and description — and the unit follows", async () => {
+    await openHistory();
+    const adj = getDb().adjustments[0]!;
+    const unitBefore = getDb().units.find((u) => u.serial === adj.serial)!;
+    const row = screen.getByText(adj.serial).closest("tr")!;
+    await userEvent.click(labelled(row, `Edit the movement of ${adj.serial}`));
+    const dialog = await topModal();
+    // What the row is, restated and not editable.
+    expect(within(dialog).getByText(adj.serial)).toBeInTheDocument();
+    const description = dialog.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(description.value).toBe(adj.description);
+    fireEvent.change(description, {
+      target: { value: "Corrected from the history" },
+    });
+    fireEvent.change(dialog.querySelector("#stock-history-reason")!, {
+      target: { value: "Internal Use" },
+    });
+    await userEvent.click(worded(dialog, "Save"));
+
+    await waitFor(() => {
+      expect(
+        getDb().adjustments.find((a) => a.id === adj.id)!.description,
+      ).toBe("Corrected from the history");
+    });
+    const after = getDb().adjustments.find((a) => a.id === adj.id)!;
+    expect(getDb().reasons.find((r) => r.id === after.reasonId)!.label).toBe(
+      "Internal Use",
+    );
+    expect(after.serial).toBe(adj.serial);
+    expect(after.kind).toBe(adj.kind);
+    expect(after.batchId).toBe(adj.batchId);
+    // The unit carried this adjustment's sentence, so it carries the new one.
+    const unitAfter = getDb().units.find((u) => u.serial === adj.serial)!;
+    expect(unitAfter.description).toBe(
+      unitBefore.description === adj.description
+        ? "Corrected from the history"
+        : unitBefore.description,
+    );
+  });
+
+  it("corrects a counted product's row, and shows its quantity as a fact", async () => {
+    const db = getDb();
+    const sku = db.skus.find((s) => !skuTracksSerial(db, s.id))!;
+    const reason = db.reasons.find((r) => r.activity === "ADJUSTMENT")!;
+    await mutate((d) => {
+      d.stockMoves.push({
+        id: "sm-history-test",
+        skuId: sku.id,
+        locationId: d.myWarehouseId,
+        qty: 3,
+        cost: 0,
+        type: "KOREKSI",
+        at: new Date().toISOString(),
+        reasonId: reason.id,
+        note: "Adjusted in — found in the drawer",
+        staff: "Michella",
+      });
+    });
+    await openHistory();
+    const row = screen.getByText("×3").closest("tr")!;
+    await userEvent.click(
+      labelled(row, `Edit the movement of ${sku.name} ${sku.variantLabel}`),
+    );
+    const dialog = await topModal();
+    expect(within(dialog).getByText("×3")).toBeInTheDocument();
+    // Nothing to read off an accessory: no battery boxes.
+    expect(within(dialog).queryByText("Battery")).toBeNull();
+    fireEvent.change(dialog.querySelector("textarea")!, {
+      target: { value: "Found behind the till" },
+    });
+    await userEvent.click(worded(dialog, "Save"));
+
+    await waitFor(() => {
+      expect(
+        getDb().stockMoves.find((m) => m.id === "sm-history-test")!.note,
+      ).toBe("Found behind the till");
+    });
+    expect(
+      getDb().stockMoves.find((m) => m.id === "sm-history-test")!.qty,
+    ).toBe(3);
+  });
+});
