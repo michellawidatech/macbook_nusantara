@@ -390,15 +390,18 @@ describe("a product label that will not fit on one line", () => {
     const widths = [...editor.querySelectorAll("colgroup col")].map(
       (c) => (c as HTMLElement).style.width,
     );
+    // One width for every box since 2026-09-24 — Qty, Unit price, Discount
+    // and Sell price — and a narrower one for the two figures only printed.
     expect(widths).toEqual([
       "44px",
-      "300px",
-      `${COUNT_COLUMN_WIDTH + 24}px`,
-      "170px",
-      "170px",
-      "150px",
-      "150px",
       "260px",
+      "176px",
+      "176px",
+      "176px",
+      "176px",
+      "150px",
+      "150px",
+      "280px",
     ]);
   });
 

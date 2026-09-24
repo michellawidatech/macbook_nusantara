@@ -1861,6 +1861,17 @@ Decisions that outlived those documents:
   `Sku.price` — the variant's asking price, the one price an accessory has and
   what the till quotes — and *Confirm arrived* is disabled until it is above
   zero, because a piece confirmed without one reaches the till at Rp 0.
+  - **The inbound table is one row of equal boxes** (owner ask later the same
+    day: *"every input field will have the same size and is in 1 row"*).
+    Sell price is a column of its own — a tracked line reads its units'
+    price or range there — and Qty, Unit price, Discount and Sell price share
+    one width (`INPUT_COLUMN_WIDTH` in `PurchaseLinesTable.tsx`), every box
+    filling its column. Cells align to the TOP (`.purchase-lines` in
+    global.css): the product's name and a line's "n received" are second
+    lines under their boxes, and centring a two-line cell beside a one-line
+    one is what put the Qty box half a line above Unit price. The order
+    form's products card lost its 1180px cap. `editableTable.test.tsx` pins
+    the widths.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

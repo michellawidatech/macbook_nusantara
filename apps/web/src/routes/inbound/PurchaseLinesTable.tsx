@@ -33,9 +33,10 @@ import { PlusOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { EditableTable } from "../../components/EditableTable";
 import { SkuPicker, skuFullName } from "../../components/SkuPicker";
-import { CountInput, COUNT_COLUMN_WIDTH } from "../../components/CountInput";
+import { CountInput } from "../../components/CountInput";
 import { CommitMoneyInput } from "../../components/CommitMoneyInput";
 import { fmtRp, fmtNone } from "../../lib/format.js";
+import { priceRange } from "../../lib/unitPrice.js";
 import type { PurchaseLine } from "../../lib/invoiceLines.js";
 import type { Sku } from "../../mock/seed.js";
 import { SPACE, TYPE } from "../../theme/tokens";
@@ -46,6 +47,23 @@ export const lineCostFieldId = (key: string) => `po-line-cost-${key}`;
 const lineDiscountFieldId = (key: string) => `po-line-discount-${key}`;
 /** The DOM id of a counted line's sell-price box. */
 const lineSellFieldId = (key: string) => `po-line-sell-${key}`;
+
+/**
+ * One width for every box (owner ask 2026-09-24: *"every input field will
+ * have the same size and is in 1 row"*). Qty, Unit price, Discount and Sell
+ * price are columns of this width and each box fills its column; the two
+ * money figures the table only PRINTS share a narrower one. Every column is
+ * declared, so `EditableTable` lays the grid out at their sum and nothing is
+ * squeezed, and the boxes stand on one line at the top of the row
+ * (`.purchase-lines` in global.css) — the product's name and a line's
+ * "n received" sit under theirs.
+ */
+const INPUT_COLUMN_WIDTH = 176;
+const PRODUCT_COLUMN_WIDTH = 260;
+const MONEY_COLUMN_WIDTH = 150;
+/** The buttons: Units, or a counted line's arrival, plus the row's icons. */
+const ACTIONS_COLUMN_WIDTH = 280;
+const UNITS_COLUMN_WIDTH = 170;
 
 export interface PurchaseLinesTableProps {
   readonly lines: readonly PurchaseLine[];
@@ -65,8 +83,8 @@ export interface PurchaseLinesTableProps {
    * A counted product's sell price — the variant's asking price, the one
    * price an accessory has and what the till quotes for it (owner ask
    * 2026-09-24: *"the accessories at the moment do not have a field to input
-   * the price"*). Drawn in the cell a tracked line keeps its Units button in.
-   * Left out, the cell stays empty as before.
+   * the price"*). Drawn in the Sell price column, where a tracked line only
+   * reads what its units ask. Left out, a counted line's cell stays empty.
    */
   readonly sellPriceOf?: (line: PurchaseLine) => number;
   readonly onSetSellPrice?: (line: PurchaseLine, value: number | null) => void;
@@ -128,41 +146,49 @@ export function PurchaseLinesTable({
   };
 
   /**
-   * A counted product's sell price, in the cell a tracked line keeps its
-   * Units button in (owner ask 2026-09-24). Amber while it is nothing: the
-   * order page will not confirm the pieces into stock until it is set,
-   * because the till would quote Rp 0 for them.
+   * The Sell price column (owner ask 2026-09-24). A counted product's is the
+   * variant's asking price — the one price an accessory has — and it is a
+   * box, amber while it is nothing: the order page will not confirm the
+   * pieces into stock until it is set, because the till would quote Rp 0 for
+   * them. A tracked line's units are priced one by one in the popup, so its
+   * cell only reads what they ask: one figure, a range, or None.
    */
   const sellPriceCell = (l: PurchaseLine) => {
-    const current = sellPriceOf?.(l) ?? 0;
-    if (closed) {
+    if (!l.counted) {
+      const asked = l.units
+        .map((u) => u.row.unit?.price)
+        .filter((p): p is number => typeof p === "number" && p > 0);
+      const range = priceRange(asked);
       return (
-        <Typography.Text style={{ whiteSpace: "nowrap" }}>
-          {t("inbound.sellsAt", "Sells at {{price}}", {
-            price: fmtRp(current),
-          })}
+        <Typography.Text type="secondary" style={{ whiteSpace: "nowrap" }}>
+          {range.count === 0
+            ? fmtNone()
+            : range.single
+              ? fmtRp(range.min)
+              : `${fmtRp(range.min)} – ${fmtRp(range.max)}`}
         </Typography.Text>
       );
     }
+    if (sellPriceOf === undefined || l.skuId === "") return null;
+    const current = sellPriceOf(l);
+    if (closed) return fmtRp(current);
     const typed = sellDraft[l.key];
     const value = typed !== undefined ? typed : current;
     return (
-      <div style={{ width: 150 }}>
-        <CommitMoneyInput
-          id={lineSellFieldId(l.key)}
-          label={t("inbound.sellPriceOfLine", "Sell price of {{product}}", {
-            product: productName(l.skuId),
-          })}
-          placeholder={t("inbound.sellPrice", "Sell price")}
-          value={value}
-          warn={!value}
-          onChange={(v) => setSellDraft((d) => ({ ...d, [l.key]: v }))}
-          onCommit={(v) => {
-            setSellDraft((d) => drop(d, l.key));
-            onSetSellPrice?.(l, v);
-          }}
-        />
-      </div>
+      <CommitMoneyInput
+        id={lineSellFieldId(l.key)}
+        label={t("inbound.sellPriceOfLine", "Sell price of {{product}}", {
+          product: productName(l.skuId),
+        })}
+        placeholder={t("inbound.sellPrice", "Sell price")}
+        value={value}
+        warn={!value}
+        onChange={(v) => setSellDraft((d) => ({ ...d, [l.key]: v }))}
+        onCommit={(v) => {
+          setSellDraft((d) => drop(d, l.key));
+          onSetSellPrice?.(l, v);
+        }}
+      />
     );
   };
 
@@ -181,7 +207,7 @@ export function PurchaseLinesTable({
       key: "product",
       // A product label runs to seventy characters; it wraps in its own cell
       // rather than taking the money columns' room.
-      width: 300,
+      width: PRODUCT_COLUMN_WIDTH,
       render: (_: unknown, l: PurchaseLine) =>
         closed ? (
           <Typography.Text>{productName(l.skuId)}</Typography.Text>
@@ -204,7 +230,7 @@ export function PurchaseLinesTable({
     {
       title: t("inbound.qty", "Qty"),
       key: "qty",
-      width: COUNT_COLUMN_WIDTH + 24,
+      width: INPUT_COLUMN_WIDTH,
       render: (_: unknown, l: PurchaseLine) => (
         <Flex vertical gap={2}>
           {closed ? (
@@ -213,6 +239,7 @@ export function PurchaseLinesTable({
             <CountInput
               min={1}
               precision={0}
+              style={{ width: "100%" }}
               aria-label={t("inbound.qty", "Qty")}
               value={qtyDraft[l.key] !== undefined ? qtyDraft[l.key] : l.qty}
               onChange={(v) => setQtyDraft((d) => ({ ...d, [l.key]: v }))}
@@ -248,7 +275,7 @@ export function PurchaseLinesTable({
     {
       title: t("inbound.unitPrice", "Unit price"),
       key: "cost",
-      width: 170,
+      width: INPUT_COLUMN_WIDTH,
       render: (_: unknown, l: PurchaseLine) => {
         if (closed) return fmtRp(l.unitCost);
         const typed = costDraft[l.key];
@@ -273,7 +300,7 @@ export function PurchaseLinesTable({
     {
       title: t("inbound.lineDiscount", "Discount"),
       key: "discount",
-      width: 170,
+      width: INPUT_COLUMN_WIDTH,
       render: (_: unknown, l: PurchaseLine) => {
         if (closed)
           return l.discount === 0 ? (
@@ -313,9 +340,15 @@ export function PurchaseLinesTable({
       },
     },
     {
+      title: t("inbound.sellPrice", "Sell price"),
+      key: "sell",
+      width: INPUT_COLUMN_WIDTH,
+      render: (_: unknown, l: PurchaseLine) => sellPriceCell(l),
+    },
+    {
       title: t("inbound.total", "Total"),
       key: "total",
-      width: 150,
+      width: MONEY_COLUMN_WIDTH,
       align: "right" as const,
       // What is owed for the line and — when part of it never came — what the
       // supplier billed, so units that never arrived do not read as free.
@@ -336,7 +369,7 @@ export function PurchaseLinesTable({
     {
       title: t("inbound.cogs", "COGS"),
       key: "cogs",
-      width: 150,
+      width: MONEY_COLUMN_WIDTH,
       align: "right" as const,
       render: (_: unknown, l: PurchaseLine) => (
         <Tooltip
@@ -354,11 +387,10 @@ export function PurchaseLinesTable({
     {
       title: "",
       key: "actions",
-      width: actions ? 320 : 170,
+      width: actions ? ACTIONS_COLUMN_WIDTH : UNITS_COLUMN_WIDTH,
       align: "right" as const,
       render: (_: unknown, l: PurchaseLine) => (
         <Flex gap={SPACE.xs} justify="end" align="center" wrap>
-          {l.counted && sellPriceOf && l.skuId !== "" && sellPriceCell(l)}
           {!l.counted && (
             <Button
               size="small"
@@ -386,7 +418,7 @@ export function PurchaseLinesTable({
     <EditableTable<PurchaseLine>
       size="small"
       rowKey="key"
-      className="qc-table"
+      className="qc-table purchase-lines"
       dataSource={lines}
       rowTitle={(l) => productName(l.skuId)}
       emptyText={

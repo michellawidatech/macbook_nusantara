@@ -451,6 +451,17 @@ body {
   padding-inline: 10px !important;
 }
 /*
+ * The inbound lines table (owner ask 2026-09-24: "every input field will have
+ * the same size and is in 1 row"). Every column is declared and every box
+ * fills its column, and the cells align to the TOP rather than the middle:
+ * the product's name and a line's "n received" are second lines under their
+ * boxes, and centring a two-line cell beside a one-line one is what put the
+ * Qty box half a line above the Unit price box.
+ */
+.purchase-lines .ant-table-tbody > tr > td {
+  vertical-align: top;
+}
+/*
  * The two anchored columns and the anchored action column need a surface of
  * their own — a fixed cell floats over the rows scrolling under it, and antd
  * paints it from the table background, which is transparent on an over-quota

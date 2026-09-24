@@ -1127,8 +1127,9 @@ export function InboundFormPage() {
   const productStep = (
     <Card
       // Wider than FORM_CENTRE allows: this step is a line-item grid, not a
-      // form read top to bottom. Centred all the same.
-      style={{ maxWidth: 1180, width: "100%", marginInline: "auto" }}
+      // form read top to bottom — and since 2026-09-24 it takes the whole
+      // content column, so every box of a line sits on one row.
+      style={{ width: "100%" }}
       title={t("inboundForm.products", "Products")}
     >
       <Typography.Paragraph type="secondary">

@@ -2011,7 +2011,6 @@ export const id: Record<string, string> = {
 
   // Inbound — a counted product's sell price (owner ask 2026-09-24).
   "inbound.sellPriceOfLine": "Harga jual {{product}}",
-  "inbound.sellsAt": "Dijual {{price}}",
   "inbound.sellPriceFirst":
     "Isi harga jual dulu sebelum mengonfirmasi kedatangan.",
 
