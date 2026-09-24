@@ -548,7 +548,8 @@ Decisions that outlived those documents:
     a repricing over the counter moves it and an overridden one stays. Stored
     as the number rather than a flag beside one: a unit either carries its own
     marketplace price or it does not, and that is one fact.
-  - Inventory expands **product → grade → serial**, and the price is a RANGE
+  - Inventory expands **product → grade → serial** (⚠️ flat since
+    2026-09-19 — see that entry), and the price is a RANGE
     per variant-grade (owner ask). Grade is the axis that MAKES them differ; the
     spread WITHIN a grade is a tired battery, and that is what the range is for.
   - `components/PriceEditorModal.tsx` reprices a whole shelf at once, with a
@@ -680,8 +681,8 @@ Decisions that outlived those documents:
     prisma and every other reader use. Every screen that SHOWS a method looks
     its label up now — `Invoice`, Transaction History, the till's own summary —
     and `PaymentsPanel.methods` takes `{value, label}` rather than a flat list
-    of labels. Supplier payments are still not in the balance at all; that
-    predates this and is an owner decision.
+    of labels. ~~Supplier payments are still not in the balance at all.~~
+    **They are since 2026-09-22** — see "Paying off debts" below.
 - **Serials & QC, loosened 2026-09-09.** *"The spacing now is a bit odd (too
   dense, spacing and fields are not aligned). Specifically, in setting price,
   we should not stack the store and marketplace field without specifying which
@@ -814,18 +815,23 @@ Decisions that outlived those documents:
   - **Shipping and tax reach the COGS** (`lib/landedCost.ts`, owner ask): split
     evenly over the invoice's machines, because a courier charges by the box.
     `costOfUnit` is buy + that share + repairs, and every margin is against it.
-  - **A battery reading is switchable per machine.** `defaultBatteryMode` picks
-    the starting reading from the CHIP and the year — Apple silicon or 2021+
-    starts on health — and the Segmented control in `BatteryFields` overrides
-    it for one machine. `BatteryDraft.mode` carries the choice, so
-    `batteryPatch` writes the right pair of columns without being told.
+  - ~~A battery reading is switchable per unit.~~ **Reversed 2026-09-19:**
+    *"the system is the one that must determine."* `defaultBatteryMode` — Apple
+    silicon or 2021+ is health, Intel is cycle count + FCC — is the only
+    answer; the switch and `BatteryDraft.mode` are gone, and a unit's own
+    numbers never override it either — the deployment starts on a fresh
+    database, so there is no legacy reading to keep (owner, same day). The
+    fixture follows the same rule (`recordsBatteryHealth`): a 2020 M1 is
+    health.
   - **The order form saves itself** (`lib/inboundDraft.ts`), and *Save draft*
     is on every step. The two are different nets and the difference matters:
     auto-save is `localStorage` on this device and nobody else can see it;
     a draft is a real `Po` with `status: "DRAFT"`, on the Inbound list.
   - **Accessories are counted, not tracked** — `Category.tracksSerial`
     (migration `20260915140000`), false for the Accessory category.
-    `lib/serialTracking.ts` is the reading. A `Unit` row still exists per item
+    ⚠️ The per-item `Unit` and `QTY-` handle below are GONE since 2026-09-19 —
+    see "Counted products are quantities". `lib/serialTracking.ts` is the
+    reading. A `Unit` row still exists per item
     and still carries a serial, because that is what a `UnitEvent` names and
     what `Unit.buy` is the cost of; what changes is that nothing ASKS for one.
     QC's Serial column says "Counted — no serial" and a *Take in* button mints
@@ -845,19 +851,9 @@ Decisions that outlived those documents:
     floating glass panels of 2026-09-09 are gone with them; the gradient stays,
     because flattening it would be the revamp the owner asked twice not to
     have.
-  - **The app has tabs** (`layouts/tabs.ts`, `layouts/AppTabs.tsx`). One tab
-    per nav LEAF, so `/inbound/po-1` is the Inbound tab showing an order and
-    never a second one. Every open tab stays MOUNTED — a half-built sale
-    survives a glance at Inventory — capped at `MAX_TABS`, least-recently-used
-    evicted. The ROUTER still owns the URL and this layer follows it, which is
-    why browser back works and why no existing page had to be touched.
-    ⚠️ Each panel renders inside `UNSAFE_LocationContext` and a reset
-    `UNSAFE_RouteContext`, or a hidden page reads the ACTIVE tab's params.
-    Resetting the route context is also what stops React Router warning about
-    a descendant `<Routes>`. `src/pages.tsx` is the one table both `App.tsx`
-    and `AppTabs` read; redirects stay in `App.tsx` and get no tab.
-    ⚠️ `moveTab` is tested and dormant: nothing in this app navigates from an
-    effect, so a hidden tab never navigates. It is the answer if one ever does.
+  - ~~**The app has tabs**~~ (`layouts/tabs.ts`, `layouts/AppTabs.tsx`) —
+    **removed 2026-09-21** (owner ask), files deleted; `git show 4832efe:apps/web/src/layouts/AppTabs.tsx`
+    has them. See "Tabs out, drafts in" below.
   - **The keyboard is wired, not just written.** `lib/keyboardNav.ts` was the
     kit; now `EditableTable` takes the grid arrows **in the CAPTURE phase**
     (antd's `InputNumber` calls `preventDefault` on ↑ ↓ to step its value, so
@@ -979,7 +975,867 @@ Decisions that outlived those documents:
   outputs (`packages/db/build`, `apps/web/dist`, `build/macmini/stage`,
   `.turbo`) were deleted. The 2026-09-13 release and its maps stay in
   `build/macmini/` — it is what the Mac mini runs until a CI release does.
-- ⚠️ **The web suite needs room.** `apps/web` has 47 files of rendered React
+- **Inbound, the flow put right — 2026-09-18, late.** *"You do not get the
+  flow of the inbound right."* This REPLACES the same day's one-table
+  "receiving" rework (never committed; its summary band, progress bar, Details
+  drawer and add bar are gone). `/inbound/:id` is four blocks, in the order
+  the work is done:
+  - **The invoice's facts**, editable in place. *No invoice* is a checkbox
+    worded like the order form's — the switch said "No invoice" on and off.
+  - **Inbound**, folded by default (open only while the invoice has no lines):
+    the invoice as entered, grouped back into product × qty × unit price
+    (`lib/invoiceLines.ts`, `InvoiceSection`). Qty up adds machines at the
+    product's last price; qty down takes only machines nobody has scanned;
+    correcting the product moves every machine still in QC that followed it.
+  - **Units**, one row per machine: product, serial, unit price with its
+    **COGS** under it, sell price, a **QC** button (needs the serial) and the
+    two row decisions, Service and Return. No status column (owner). A row
+    whose product changed says *Previously X*; **what differs from the invoice
+    is listed under the table, NET of swaps** (`invoiceChanges`): *"they might
+    just be inputting the price wrong … and then they might swap the unit name.
+    That is a price correction … you should not flag it, but should still
+    display the prev unit."* Only rows in a real difference are tinted.
+  - **Purchase**: goods, every expense, and the payments.
+  - **QC is a centered dialog** (`QcModal`) — ⚠️ REPLACED 2026-09-19 by
+    columns on the row; see that entry. Order: condition → Enter →
+    battery (health for Apple silicon or 2021+, otherwise **FCC** and **CC**,
+    decided by the model, no switch since 2026-09-19) → grade (a typed A/B/C
+    select) → Enter → description → Enter on an empty box → photo; Tab from the
+    grade reaches *Configure grade*, which folds the category's checklist
+    (`components/GradingChecklist`, shared with `GradingModal`) open inside
+    the dialog. Answers write as given; ONE `DICATAT` line for the inspection
+    is appended when the dialog closes. **Done = QC passed (`QC_SELESAI`)**,
+    still gated by `qcReady`; Service and Reject are the other two decisions.
+  - **Expenses are rows** (`ExpenseModal`) — migration
+    `20260918180000_po_fee_cogs_and_payment_link`, owner-approved:
+    `PurchaseOrderFee.inCogs` (default true), `.removedAt`, and
+    `Payment.poFeeId`. The store's `Po.shippingFee`/`taxFee` became
+    `Po.fees[]` and a payment carries `feeId`; `byFeeOrder` (packages/store) is
+    the one order both sides list them in. *Split into COGS* feeds
+    `invoiceCharges`; *Paid* records a payment for what is unpaid, tied to the
+    expense, and un-ticking or lowering the expense takes it back. A payment
+    from before names only a bucket and `poTotals` spreads it over that
+    bucket's expenses; the migration links the unambiguous ones.
+  - ⚠️ `tools/b2soft` now writes `fees=[]`. A changeset extracted before
+    this change is refused by the store's strict schema — extract again.
+  - Payment status reads **Open / Partially paid / Fully paid** (codes
+    `OPEN`/`PARTIALLY_PAID`/`FULLY_PAID`); "Closed" said the opposite of what
+    it meant. The app's active tab was the brand green (`.nusantara-app-tabs`,
+    gone with the tabs on 2026-09-21),
+    and Knowledge pins Updated, Active and the pencil to the right.
+- **The redesign brief, 2026-09-19** (`Redesign Plan & Changes.pdf`, twelve
+  pages, plus four asks in chat). What it changed, screen by screen:
+  - **"Unit", never "machine"** — in every string the app shows, English
+    and Indonesian ("unit", never "mesin"). Owner: *"remove the machine
+    dictionary from this app, it is supposed to be unit."* Write new copy
+    that way; say it that way to the user too.
+  - ⚠️ **The PDF's page-1 layout notes are NOT applied.** It asks for
+    left-aligned forms and Next/Back "right below the form"; that shipped
+    and was reverted within the hour — *"it is wrong… it will be centered
+    aligned and the button will be sticky to the bottom"*. `FORM_CENTRE` and
+    the fixed `FooterToolbar` stand. Page 1's accordion note was already
+    done (2026-09-15).
+  - **A product can be added from the Units card** (2026-09-19) —
+    `AddUnitsBar`, the same `addLines` the Inbound section calls, so it is
+    an invoice line either way; the caret lands on the new row's serial.
+  - **A filter lists words, not codes.** A `facet` column whose `sortValue`
+    is an index or an enum needs a `facetValue` giving the label, or the
+    header filter offers `0`/`INCOME` (Inbound's payment status, Income &
+    Expense's Type — both fixed 2026-09-19).
+  - **Nothing waits for anything (inputs, not decisions).** *"I don't need to
+    input serial first, I could input in whatever order I want."*
+    - Inbound: QC is COLUMNS again, the PDF's order — Unit | Serial | Battery
+      | Unit price | COGS | Description | Grade | Sell price | actions. The
+      2026-09-18 `QcModal` is gone. Battery, description, grade and photos
+      typed on a row with no serial yet are held in `qcDrafts` and written
+      onto the unit by `identify` in the mutation that mints it
+      (`applyQcDraft`); a serial typed before the product waits in its box.
+      **Grade is the condition**: the dropdown is New / A / B / C
+      (`lib/condition.ts`); the checklist opens beside it (`GradingModal`).
+      Photos sit behind the row's camera button (`UnitPhotos` has a `draft`
+      mode). Accept / Service / Return still need the serial — they are
+      decisions about a particular unit — and say so on a disabled button.
+    - Trade-in: the category is its own box (the checklist needs only that),
+      the grade is a hand-picked letter, the product is ENFORCED (the store
+      refuses a unit without one, which refused the whole sale).
+  - **Price is per unit, from the first box** (PDF p3): the Inbound section
+    and the order wizard take a product and a quantity and make that many
+    UNPRICED rows; nothing copies a price across units. A product is never
+    one price anywhere: *"when qty is 2 there will be 2 input rows"* (user,
+    later the same day), so the order page's Inbound section gives each unit
+    of a product its own price box, numbered as the Units list numbers its
+    rows — the same number, typed in either place (`InvoiceGroup.units`,
+    `components/CommitMoneyInput`).
+  - **Inbound list** (p2): Order | Supplier | Date | Payment status (the
+    unpaid amount under *Partially paid*) | Total price | Total paid |
+    *Add payment* (opens the order with its payment dialog, via navigation
+    STATE — nothing navigates from an effect) and *Delete*.
+  - **Marketplace price is per VARIANT** (p3): the highest per-unit
+    marketplace price among its units on sale (`variantMarketPrice`); no
+    per-unit box anywhere. `Unit.marketPrice` still exists and still counts.
+  - **Inventory is flat** (p4): one line per variant × grade × warehouse,
+    unit price and sell price as ranges, *Set price* / *Print barcode*; a line
+    opens a popup of its units with an "i" per unit breaking down the COGS
+    (`components/CostBreakdown`). **Export stock** (p5) writes .xlsx after
+    B2Soft's PERSEDIAAN BARANG, with `lib/xlsxWrite.ts` — no dependency.
+  - **S/N Tracking** (p6) lists every serial (filters: category / product /
+    unit tree, last-movement dates); *Check history* opens the old view.
+  - **Stock opname** (p8): one live table of every expected unit from the
+    start; scans move to the top in green, the rest red. This REVERSES the
+    blind count the page's own comments argued for. *Add to inventory* still
+    writes at POST.
+  - **The till's payment** (chat ask 4 + p11): four chips — Transfer, Cash,
+    Shopee, Tokopedia (**only the four**, owner answer; TikTok stays a
+    channel) — any number of them; each picked method is a row with a split
+    amount (the last row takes the rest) and an actual-paid amount (less
+    than the split is a debt, piutang, with an optional due date).
+    `lib/tillPayments.ts`. A **payment reference** (the marketplace's order
+    number) is required when the channel or a method is a marketplace;
+    stored on `Payment.ref`, now in the store contract. Payments are written
+    against what is COLLECTED — they used to cover the bill before the
+    trade-in, putting the trade-in's value in the drawer as cash.
+  - **Trade-Ins dialog** (chat ask 2): title *Trade-Ins*, one star (the
+    dialog drew its own beside the app's), nothing at all to grade on a New
+    unit, the *We list it at* / *We have paid* cards gone. An accessory
+    (counted category) has no serial box; the till mints its `QTY-` handle.
+  - **Returns & exchange** (p9–10, `lib/returns.ts`): a return CREDITS the
+    sale — full price by default, overridable (owner answer), less a per-unit
+    "additional expense" — as an `OrderAdjustment` RETUR carrying the SG
+    code, and the credit cancels what the customer still owes, then what a
+    marketplace holds, then is handed back as a refund (`Order.refunds` →
+    `Payment` with direction KELUAR). Unpaid → a return; paid → a buy-back;
+    one rule. An exchange puts the replacement on the SAME sale at its price.
+    Several units per form; a serial finds its sale (`saleOfSerial`).
+    `orderBalance` / `billAfterReturns` are what every money screen asks.
+  - **Receivables** (p11): the sales a payout covers are ticked; the note
+    says where the money really landed (*"one step + note"*, owner answer:
+    a friend's account is recorded as received, with a note); a Shopee
+    income report (.xlsx, read by `lib/xlsxRead.ts`) marks sales received by
+    their payment reference. ⚠️ Fixed: settling wrote comma-joined ids into
+    `Settlement.paymentId`, so any payout of two or more sales was refused by
+    Postgres — one `Settlement` per payment now.
+  - **Transaction History** (p12): Order number / reference | Unit | Status
+    (Returned / Partly returned) | Payment status | Received | actions.
+  - **"Selected is dark green and hard to see"** (chat ask 3): antd derived
+    the selected fill from this deep a seed as a mid green (`#a5b8af`,
+    `#72ab93` on hover) in light and an invisible one in dark. `SELECTION`
+    in tokens.ts states real tints; the dark scheme seeds emerald 500
+    (`SEED.primaryDark`, primary text 5.5:1); the till's total panel and the
+    active app tab use `BRAND_DEEP`, and the panel's main button is white.
+    `test/theme.test.ts` checks the contrast.
+  - ⚠️ Schema gaps still open: `Location.code` is not in the store (the
+    export names warehouses by name), and a settlement's note lives on the
+    payments because `Settlement` has only `reason`.
+- **Counted products are quantities, in the database too — 2026-09-19.**
+  *"For accessories literally don't record any individual measurements like
+  code, no need, that should purely be by qty"* — and, asked how far: the
+  database as well, with arrival confirmed per product. A category with
+  `tracksSerial = false` has **no `Unit` rows at all**.
+  - **`StockMove`** (migration `20260919120000_stock_move_counted_products`,
+    owner-approved): an append-only ledger — sku, location, signed `qty`,
+    `unitCost` per piece, `type` (`MASUK`, `MASUK_BATAL`, `TERJUAL`,
+    `RETUR_PELANGGAN`, `TUKAR_TAMBAH`, `OPNAME`, `KOREKSI`), links to the
+    invoice line, order line, stock take and reason. On-hand is `SUM(qty)` and
+    nothing stores it. The app role has INSERT and SELECT only. The store
+    collection is `stockMoves`; `adapters/stock.ts` refuses a move of a
+    tracked variant and, on a till, a shelf below zero.
+  - **Cost is a moving average per variant** (`lib/stock.ts` `averageCost`):
+    an arrival adds its pieces at the line's price plus their share of the
+    invoice's COGS expenses (the same `poRowShares` split units get — a
+    counted line's pieces were always rows of the parcel); a sale snapshots
+    the average onto its `TERJUAL` move, and the adapter adds it to
+    `OrderItem.cogs`/`Order.cogs`.
+  - **Inbound**: a counted product is ONE line of a quantity at one price —
+    never rows in the Units table. The Units card lists it under *Counted
+    products* with **Confirm arrived (n)** (a `MASUK`, marks the order
+    arrived) and *Undo arrival* (`MASUK_BATAL`, refused once pieces have been
+    sold or moved). Qty cannot go below what arrived.
+  - **The till** lists counted variants off the ledger; a tap adds a piece
+    (no chooser), the basket line has a qty and a per-piece price, and the
+    sale writes `Order.lines` (an `OrderItem` with `unitId` null) plus
+    `TERJUAL` moves, the till's warehouse first (`takeFrom`). Bundles count
+    pieces: a `BasketLine` is one piece, by serial or by `skuId`.
+  - **Everywhere else**: Inventory lines and popup (the moves), the
+    adjustment batch (a *Counted products* list), stock opname (expected is
+    the ledger in scope; posting writes `OPNAME` moves — nothing marked lost,
+    nothing minted; a rack scope leaves counted stock out, it sits on none),
+    customer returns (a qty per line → `RETUR_PELANGGAN` straight to stock and
+    `returnedQty`), trade-ins (`TUKAR_TAMBAH`), recommendations, invoice,
+    Transaction History. Settings refuses to flip a category's
+    `tracksSerial` while it holds stock of the old kind.
+  - **A counted product goes back to its supplier by quantity** (owner ask,
+    same day). Returns → To supplier has a *Counted product* mode: product,
+    warehouse, qty, the invoice it came in on, reason. It writes ONE
+    `RETUR_SUPPLIER` move (migration `20260919150000`, one enum value) with
+    the SP code in `refCode` — **a move, not a `UnitReturn`** (owner
+    decision), so the invoice is what names the supplier and there is no
+    expected credit. It shares the supplier-return history table.
+  - **A customer's counted piece skips QC** (owner, same day): it goes
+    straight back on the shelf; a damaged one comes off with an adjustment.
+  - ⚠️ Not covered: a counted product cannot be RESERVED.
+  - **B2Soft**: `tools/b2soft` still replays accessories as pseudo-serials
+    (FIFO gives every piece its cost) and turns them into moves and quantity
+    lines on the way out; `COUNTED_CATEGORIES` is `Aksesoris`, `Charger`,
+    `Box`, `Sparepart`. Verified end to end on a throwaway database
+    2026-09-19: 4,511 moves, no negative shelf, every control OK.
+  - ⚠️ `OpnameCount` had no grant for `nusantara_app` since `20260915141000`;
+    the new migration grants it.
+- **Receivables, reshaped 2026-09-20.** Both tables were rebuilt to the owner's
+  own column lists, and the screen is `ProTable` on both halves now — so each
+  gets the search box, the header filters and the phone cards every other list
+  has.
+  - **The marketplace table is FLAT and holds both halves.** No expansion, no
+    tick-boxes: one row is one marketplace payment, pending rows first (oldest
+    sale first, the one nobody has chased) and received ones underneath
+    (newest payout first). Channel · Order number · Date · Amount · Received ·
+    the action. The order number cell is the shop's SI code with the
+    marketplace's own number under it, and the search reads both — *"a search
+    button for the order reference"*.
+  - **`Receive` records THAT row's payout**, alone. ⚠️ The consequence: a bank
+    transfer covering five sales is five presses. `splitPayout` and `payoutsOf`
+    are untouched and still used (a settlement of one is what they make of a
+    single part), so the grouped form is recoverable; the database always held
+    one `Settlement` per `Payment` and still does.
+  - **A deduction is free text and it DRIVES what landed.** The dialog's kind
+    dropdown is gone — a statement does not arrive in five kinds and the name
+    beside it was the part anybody read — and the received box now follows
+    `gross − Σ deductions` as they are typed. It was seeded once on open and
+    then sat still, so every deduction added after that had to be subtracted by
+    hand. `FeeKind` survives in the data (the seeded line is `COMMISSION`, a
+    typed one `OTHER`) because that is what `Settlement.fees` and the schema's
+    enum hold. Typing a figure detaches it — a bank statement outranks
+    arithmetic, which is the 2026-09-08 discrepancy-and-reason machinery,
+    unchanged — and *Follow the deductions again* re-attaches it.
+  - **The Shopee income-report upload is gone** (owner ask), with the
+    `shopeeImport.*` copy. `lib/shopeeIncome.ts` and `lib/xlsxRead.ts` stay,
+    tested and dormant; `ShopeeIncomeImport.tsx` does not. The separate
+    "Withdrawals recorded" card went with it, because the received rows are in
+    the table above now.
+  - **Owed by customers answers a telephone call**: transaction number (with
+    the promise date under it) · item · customer · telephone number · amount ·
+    received, and two buttons — the receipt (`InvoiceModal`) and the payment
+    history (`PaymentsModal`, full CRUD with its log). Deliberately the same
+    two dialogs Transaction History and the customer drawer open: a payment
+    recorded from any of them is the same event and must write the same log.
+    A debt from before this app still has neither, and keeps its link to
+    Customers.
+  - **Waiting money is Shopee and Tokopedia, hard-coded** (`holdsPendingMoney`
+    in `lib/channels.ts`, owner ask later the same day). It was every payment
+    in PENDING, and `legacyPayments` reads an unsettled order written before
+    the payment list as ONE pending payment carrying the ORDER's channel — so
+    an unpaid walk-in or WhatsApp sale sat on the marketplace table. Money a
+    person owes and money a platform holds are the two things this screen
+    exists to keep apart. ⚠️ Deliberately NOT `holdsFunds`, which is also true
+    of TikTok: that asks "did this SALE settle at the till", this asks "can
+    money be waiting HERE", and the till's four payment methods do not include
+    TikTok. **Income & Expense's pending card reads the same function**, and
+    it was wrong the same way plus one more — it summed each sale's whole
+    `total`, so a bill half cash and half Shopee reported all of it as sitting
+    at Shopee. Its column is *Awaiting withdrawal* now, per payment.
+  - **Nothing is seeded and nothing is guessed** (owner: *"the payment pending
+    is not always deducted as 10%, the user should be the one adding the
+    deduction"*). The dialog opens with an EMPTY table, the row's Received
+    cell says only "Waiting", and `seedFees`/`commissionPctOf`/
+    `AppSettings.marketplaceFees` are no longer read by any screen.
+  - **The dialog is the deductions table and nothing else.** The "Deducted /
+    Amount received" block, the typable override, the discrepancy alert and
+    its reason, and the where-it-landed Note all went (owner ask). What landed
+    is `gross − Σ deductions`, computed in one place and shown on the row. A
+    payout that came up short is a deduction nobody has named yet, which is a
+    row in the table. ⚠️ This retires the 2026-09-19 "one step + note"
+    decision; `SalePayment.note` still exists and Transaction History still
+    edits it.
+  - **Both row actions are icon buttons, and every row has the payment
+    history** — waiting or not (*"don't put receive on 1 and then symbol on
+    the other"*). Transaction History matches: its **Status column is gone**
+    (the per-unit Returned tag on the line is what somebody actually needs,
+    and the CSV export still carries the whole-sale word), and its two buttons
+    are the same pair, same icons, same order, same words.
+  - **The marketing card is four columns**: channel, spent, customers, sales.
+    Revenue, cost per customer and return on spend left together (owner ask) —
+    each turned a self-reported referral into a hard-looking rupiah figure.
+- **FCC and CC share a row, 2026-09-20.** *"For the inbound battery section in
+  FCC and CC, make it in 1 row not separate row."* They are one reading off one
+  screen in System Information, and stacking them made one battery look like
+  two questions and cost the QC grid a row's height per unit.
+  `components/BatteryFields` is horizontal now, so all four desks follow.
+  ⚠️ Two things make the pair fit: the capacity box gets half again the cycle
+  box's share (`GROW`) because it holds four digits and the longer suffix, and
+  the stepper arrows are off — nobody nudges a measured battery by one, and the
+  arrows were eating the width the fourth digit needed ("7538" rendered as
+  "75… mAh"). The battery columns went 150 → 230 at Inbound & QC and in the
+  Inventory batch editor.
+- **Inbound is a line and a popup, 2026-09-20 — and this REVERSES the per-unit
+  price rows of 2026-09-19.** *"User will input: unit, qty, price. It will not
+  automatically expand the unit below it. Input product name > QTY > price >
+  discount > display total (+ COGS based on the tax + shipping fee displayed
+  before). When the user clicks tab, then it will display a modal popup for the
+  user to fill: Serial, grade, battery, sell price."*
+  - **One table, drawn by ONE component on both screens**
+    (`routes/inbound/PurchaseLinesTable.tsx`), because the owner asked for
+    exactly that: *"either seeing inbound detail and adding new inbound will
+    have the same display for the unit and it should only have that."* The
+    order form's step 2 and `/inbound/:id` are the same rows —
+    Unit | Qty | Unit price | Discount | Total | COGS | Units (n/qty).
+  - **Everything per unit is in the popup** (`components/UnitDetailsModal.tsx`):
+    serial, grade, battery, description, sell price, photos and the row's
+    decisions. Tab off the discount box opens it; the button is drawn too.
+    Description is in it although the owner listed four fields — a second-hand
+    unit cannot be accepted without one (`qcReady`), so a popup that never
+    asked would be a popup after which nothing could be shelved (owner answer,
+    same day). The popup's order is what moves the caret: an empty description
+    on Enter now hands on to the SELL PRICE, not back to the grade.
+  - **What went**: the collapsed *Inbound* section (`InvoiceSection.tsx`,
+    deleted), the list of one row per unit, the per-row product picker, and
+    the discrepancy panel — *"the user will handle it manually (add new
+    product, changed product no need to flag, mark as not arrived, and remove
+    the line)"*. A product is a fact about the LINE now, and correcting one
+    relabels every unit of it still in QC. ⚠️ `invoiceChanges` in
+    `lib/inboundRows.ts` stays, tested and dormant.
+  - **One price per line.** Asked, and answered: *"if 2 same unit have
+    different price, they would manually input 2 times."* So two prices are two
+    lines, and `lib/invoiceLines.ts` groups on **product AND price** — lines of
+    one product at one price are one row however they were typed.
+  - ⚠️ **The storage did not change.** A `PoItem` is still ONE piece: that is
+    what pins a unit to its line (`PoItem.serial`), what `lib/landedCost.ts`
+    spreads the expenses over, and what `receivingRows` builds the bench's rows
+    from. Only the READING is per line. Which is why a writer must find a
+    line's pieces by (skuId, unitCost) INSIDE the mutation (`piecesOf`) and
+    never by the ids the last render saw: `editOrder` runs `normaliseLines`
+    first, which gives pieces 1…n new ids, so an id filter finds one piece of
+    three and every quantity change adds the difference twice.
+  - **A line discount is a column**, owner-approved: `PurchaseOrderItem.discount`
+    (migration `20260920120000_po_item_line_discount`, BIGINT default 0, CHECK
+    `0 <= discount <= qty * unitCost`), in the store contract as optional so a
+    changeset extracted before it still commits. `Po.discount` is unchanged and
+    is still the one negotiated off the WHOLE order.
+    ⚠️ It lowers what each unit COST: `pieceCosts` spreads it largest-remainder
+    over the line's pieces and `Unit.buy` is written net, so every margin behind
+    it is right rather than only the invoice total. `normaliseLines` splits it
+    with the pieces for the same reason.
+  - **The order form now mints units.** Serials typed into its popup become
+    real units in QC at Save, with their `DITERIMA` in the same mutation — the
+    same thing `identify` does on the order page. A *draft* mints nothing.
+    Auto-save carries them, at `nusantara.inbound.draft.v2`.
+  - **Grading configuration is hidden** (owner ask, same day): Settings →
+    Grading is gone, and so is every *Configure grade* / checklist button —
+    Inbound & QC, `OrphanQcCard`, the return desk and the trade-in dialog all
+    pick a letter by hand now. ⚠️ `lib/grading.ts`, `GradingModal`,
+    `GradingChecklist` and `GradingSettings` are untouched on disk and still
+    tested; the Settings tab is one line to bring back, and each call site says
+    where its button was.
+- **Nine asks, 2026-09-21** — `docs/assumptions-2026-09-21.md` is what was
+  decided where the brief left room, and it is the file to correct first.
+  - **A supplier is paid in cash or by transfer**, and nothing else
+    (`PaymentMethod.forPo`, migration
+    `20260921090000_po_payment_methods_cash_and_transfer`). MARKETPLACE left
+    the supplier side; it is still what a marketplace SALE is written with.
+    ⚠️ The supplier deposit dialog and the invoice expense dialog read the same
+    flag, so they stop offering it too.
+  - **The till's Actual paid is cash and transfer only** (`canPayInPart`), and
+    the box starts **empty** with the split as its placeholder. Empty still
+    means "the whole split", which is what an absent `paid` has always meant —
+    a cash sale must not default to a piutang. A Shopee or Tokopedia part is
+    paid in full by construction and shows the amount as text.
+  - ⚠️ The next two bullets are SUPERSEDED by "The serial, restated
+    2026-09-21 (evening)" below.
+  - **A scanned `I` becomes `1` and a scanned `O` becomes `0`**
+    (`correctScanConfusables`), everywhere a barcode is read. It is no longer a
+    refusal: Apple prints neither, so there is exactly one thing each can have
+    been, and refusing sent the bench back to the same imager and the same worn
+    label. SCANS only — a person looking at the machine could legitimately key
+    either.
+  - **Apple's SHAPE is enforced on a NEW unit only** (`validateSerial(s,
+    {strict})`, `readSerialInput({grade})`). A second-hand label has been
+    through however many owners and the number the shop can read off it is the
+    only number there is. What survives on every unit: not empty, capitals and
+    digits, the `S` marker on a SCAN (it tells the serial's barcode from the
+    regulatory one, which is a fact about the case), and a ceiling that still
+    catches two scans with no Enter between them (`LENIENT_BASE_*`). The field
+    takes `SERIAL_FIELD_MAX_LENGTH` now, not the store barcode's fifteen.
+    ⚠️ The page-level loose scan is LENIENT: it arrives with no row focused, so
+    nothing has said yet which machine it is about.
+  - **Payable & Receivable** (`/finance/payable-receivable`,
+    `lib/payableReceivable.ts`): utang and piutang side by side, one row per
+    party expanding to its documents. Closed invoices count, drafts do not.
+    ⚠️ `customerDebtOf` exists because `legacyPayments` reads an unsettled
+    pre-2026-09-08 sale as one PENDING payment on the ORDER's channel — so
+    every sale the B2Soft import brings over would have reported zero debt.
+  - **The chatbot had never received a message.** `WaRawEvent` was empty: the
+    webhook is on loopback and `tailscale serve` publishes the POS over the
+    TAILNET, so Meta had nowhere to POST to. `ops/whatsapp-funnel` publishes
+    `/webhook` and only `/webhook`; `ops/run chatbot` walks the whole path and
+    says which half is broken. `docs/chatbot-runbook.md`.
+  - **`AGENT_CAPABILITIES`** (`agentCapabilities`, packages/agent policy.ts) is
+    the switch between the 2026-09-18 bot and the 2026-09-21 one: stock,
+    prices, unit condition, the shop's own photos and ONE write —
+    `create_reservation`. **Unset is the cautious reading and is the default**,
+    because after a cutover the shelf is empty and a bot reading it would tell
+    every customer the shop has nothing. Negotiation, payments, complaints, a
+    photo the CUSTOMER sent and CANCELLING a hold still go to a person.
+    Photos go by handle through a `WA_IMAGE` outbox row (migration
+    `20260921100000_outbox_image_send`); the model never sees an image and only
+    handles `unit_photos` gave it this turn are accepted.
+  - **The Shopee cost structure is code** (`lib/shopeeFees.ts`), and the two
+    worked examples in `docs/shopee-fees.md` are its tests. The upload takes
+    either export: a Rincian Penghasilan's stated payout WINS and the rates
+    only itemise it; an order export is estimated and says so. `Total
+    Pembayaran` is refused as a payout column — the foot-gun
+    `docs/shopee-settlement-import.md` named.
+  - **Stock exports as .xlsx, .pdf or both.** `lib/pdfWrite.ts` is written out
+    rather than installed, for the reason `xlsxWrite` and `code128` already
+    record.
+  - **The shop's product naming convention is `shopProductName`**
+    (packages/domain): `AIR 13" 2020 I5 8/256`, from B2Soft's PERSEDIAAN
+    BARANG. An Apple-silicon machine prints its CHIP where an Intel one prints
+    its YEAR — ⚠️ except before 2020, where `M3` is an Intel Core m3.
+    `Sku.code` is this now instead of `SKU_17`. `productCode` is unchanged:
+    that is the sticker, and labels are already on machines.
+  - **The cutover is `docs/cutover.md`**, and its extract-and-import half was
+    run against a throwaway database on the real export:
+    `extract.py … --balances-only` then `import:b2soft … --master-only
+    --with-balances` gives 159 models, 369 SKUs, 64 suppliers, 38 customers,
+    Rp1,560,030,931 receivable, Rp6,887,861,193 payable and **zero units**.
+    Three years of documents become two numbers per party, taken from B2Soft's
+    own aged reports rather than from a replay.
+- **The Shopee upload reads the seller balance report, 2026-09-21, later.**
+  *"The purpose of this file is to see what they actually receive … if there
+  is discrepancies that are not mentioned in the rule just add like Biaya
+  lainnya / additional payment."* The file is
+  `my_balance_transaction_report.shopee.*.xlsx` (Saldo Penjual → Export), and
+  `docs/shopee-settlement-import.md` has its columns.
+  - An order's payout is the sum of its rows' `Jumlah`, and that is what
+    lands. ⚠️ `Jumlah` counts as money ONLY with the whole signature
+    (`BALANCE_HEADERS`) — in the order export it is the quantity — and
+    `Saldo Akhir`, the running balance, never does.
+  - The deduction is itemised by the published rates, then closed on
+    Shopee's figure by `closeOnPayout`: the rest is **Biaya Lainnya**, or
+    **Pembayaran Tambahan** as a line BELOW ZERO when Shopee paid more.
+    `settlementTotals`, `mergeFees` and `splitPayout` net a negative line now
+    instead of clamping it. A person cannot start one (a new box in
+    `SettleModal` stops at zero); the box drops its `min` only for a line
+    already negative, or the first blur would clamp it and rewrite what landed.
+  - Not ticked, with the reason beside it: an order with more than one
+    balance row (a return the courier compensated Rp10.000.000) and a
+    payout above the rates. A payout of zero or less cannot be recorded here.
+  - Ad top-ups and withdrawals in the file are listed, never recorded. ⚠️ The
+    POS has no home for either yet (owner decision): the top-ups are an
+    expense, and a received payout counts as in the bank although it sits in
+    the Shopee balance until a Penarikan Dana.
+  - Run against the real file and the order export: 12 of 16 orders reconcile
+    to the rupiah (docs/shopee-fees.md, "What the balance report settled"). It
+    also showed Komisi AMS carries 11% PPN (`PPN_PCT`) and that the 5 kg
+    listings pay Rp60.000 of Ukuran Khusus ongkir.
+- **Tabs out, drafts in, 2026-09-21.** *"Remove the tab view but the user
+  must be able to drag the feature and open it in another tab and all the
+  things of the user input will be saved locally."*
+  - `AppLayout` renders `<Outlet />` again; `AppTabs`, `tabs.ts`,
+    `tabScope.ts` and their test are deleted. **Every nav row is a real
+    `<Link>`** (antd stretches it over the row), and the New Transaction
+    button is an `href` — so a place can be dragged onto the browser's tab
+    bar, cmd- or middle-clicked. The menu's `onClick` navigates only for the
+    keyboard and a click on the icon; a click on the link is the router's.
+  - **Work in progress is kept on this device** by `usePersistentState`
+    (`draftKey("…")` names it). It now follows a key that changes under a
+    live page (`/inbound/po-1` → `po-2`), syncs between browser tabs of the
+    same page (`storage` event), removes a key whose value is `undefined`
+    rather than writing it, and takes a `null` key as plain state. What comes
+    back is read through `lib/draftGuards.ts`; a shape an older build wrote is
+    dropped, not rendered. `useFormDraft` is the same for an antd `Form`.
+  - **What is kept:** the till's whole sale (basket, customer, channel,
+    payments and references, fees, trade-ins, step) — a restored unit that has
+    since been sold is taken off with a warning, and `?serial=` JOINS the kept
+    basket; Inventory's adjustment batch (the dialog reopens with it); the
+    customer return form (a PICKED date only — "today" is not stored); the new
+    discount form; the chat reply, per thread; an inbound order's unsaved row
+    input (typed serials, prices, QC answers before a serial), per order; and
+    every page list's search, filters and sort (`ProTable persistKey`, 24
+    lists — never a list inside a dialog) plus S/N Tracking's own search.
+    Short modal forms (products, suppliers, customers, settings…) are not
+    kept: each saves on submit, and a half-typed one is a click to redo.
+  - ⚠️ **Stock opname lost its last scans on leaving the page.** The autosave
+    waits 1.2 s and the unmount cleared the wait; the tabs had hidden it. It
+    flushes on unmount now (`opnameSurplus.test.tsx` fails without it).
+- **The till's payment is a table, 2026-09-21.** *"Cash/transfer → amount and
+  actual paid; Shopee, Tokopedia → the amount & reference number (1 for
+  shopee 1 for tokopedia)."* Payment method | Amount paid | Actual paid /
+  Reference number. **The reference lives on the part** (`TillPart.ref`) and
+  is written on that part's payment, so a Shopee + Tokopedia sale carries two.
+  The sale-level box shows only when the channel is a marketplace and no part
+  is paid through one (`saleRefNeeded` — TikTok, or Shopee taken in cash).
+  `paymentRefOf` lists every distinct reference, so Transaction History shows
+  both.
+- **The Shopee upload's view, 2026-09-21.** Reference number | Order nominal |
+  → | Receivable ⓘ, over EVERY waiting Shopee sale. **Yellow and on top means
+  "does not match"**: what Shopee paid differs from the published fees (a
+  Biaya Lainnya or Pembayaran Tambahan), or the row is not plain — nothing
+  paid, a compensation beside the payout, a number two sales share. A sale
+  the file does not mention is dimmed at the bottom, not yellow: Shopee has
+  simply not released it. The ⓘ is a popover with the lines and their rates.
+  A Biaya Lainnya row is still ticked (the owner's rule is to name it and
+  record it); the unusual ones are not.
+- **The serial, restated 2026-09-21 (evening) — this OVERWRITES 2026-09-01,
+  2026-09-08 and the morning's two serial bullets above.** *"New item, scan:
+  validated against the S and 10–12 characters and 1 and 0 instead of I or O.
+  After that the S will be removed. New item, typed: validated against 10–12
+  and 1 and 0. Second, scanned: no validation. Second, typed: no
+  validation."* — and the same afternoon: *"Delete the supplier auto-append in
+  serial number. It turns out we do not record that at all."*
+
+  | | new (`NEW`) | second-hand (A/B/C) |
+  |---|---|---|
+  | scanned | `S` + 10–12, `I`/`O` → `1`/`0`, the `S` dropped | as read |
+  | typed | 10–12, `I`/`O` → `1`/`0` | as read |
+
+  - **A new unit is filed under Apple's serial WITHOUT the barcode's `S`**:
+    `SC02740137JK` is stored as `C02740137JK`. A typed string that is exactly
+    a barcode (`S` + 10–12) is read as one and loses its `S` too — a scanner
+    too slow for `wasScannedText`, or somebody copying the line under the bars
+    — while a ten-character serial that starts with an `S` keeps it, because
+    without it it is nine. "As read" is trimmed, upper-cased, blanks removed,
+    and nothing else: no length, no alphabet, no marker check on a scan.
+    `lib/serialScan.ts` owns the shapes, `lib/serialInput.ts` the decision.
+  - **No supplier code anywhere.** `storeBarcodeOf`, `components/StoreLabelTag`
+    ("Store QR:") and the derived sticker are gone; a sticker prints the stored
+    serial (`lib/labels.ts`). `Supplier.code` is still a field in Settings that
+    nothing reads — retiring it is a separate decision. `resolveSerialQuery`
+    still reads a 2026-09-01 store sticker back to its unit, should one exist.
+  - **The serial waits for the grade (owner answer).** The rule depends on the
+    condition and the bench reaches the serial box first, so a serial read
+    before its row has a grade is HELD in its box (amber, "Pick the grade to
+    record it") with a note of whether it arrived as a scan (`heldScan`, kept
+    on this device — `wasScannedText` remembers five seconds), and judged the
+    moment a grade is picked. Nothing is minted in between: a unit filed as
+    second-hand and then graded New would be a sealed unit nobody checked. A
+    loose scan onto an ungraded row is held the same way and focus stays put,
+    so a run of scans still lands row after row; Enter in the box still moves
+    to the next waiting row. The order form holds it in `UnitDraft.pending`
+    and refuses to PLACE an order around an unjudged or refused serial (a
+    draft is not asked). A unit graded New AFTER its serial was filed is
+    warned about, not renamed — a unit's serial is its name in the ledger.
+  - **Read-only boxes validate nothing** (owner: *"for read only
+    scanning/typing, there should not be any validation"*). The till, S/N
+    Tracking, stock opname and the return desk go through
+    `resolveSerialQuery`: the input, without an `S`, with one, and with
+    `I`/`O` read as `1`/`0` — never a guess between two units — so a unit filed
+    either way is found from its barcode or its case.
+  - Units filed before this — every intake from 2026-09-01 to the afternoon of
+    2026-09-21, and the whole demo seed (`packages/fixture` `serialAt`) — keep
+    their `S`. Nothing rewrites them.
+  - ⚠️ `/api/inbound` (unused by the web) still enforces the 2026-09-01
+    `S`-form. `katalog` and `reservations` take serials up to 23 characters,
+    the field's width, since a second-hand serial has no length.
+- **The till takes a typed serial straight into the basket, 2026-09-21.**
+  *"When we type in serial number, we should automatically add the unit instead
+  of showing the unit name and choosing it manually."* The catalogue's search
+  box is a serial box too: the moment its text names one unit outright —
+  whole, and not the head of a longer serial the shop also holds
+  (`serialNamedBy`) — a sellable unit goes on the sale and the box empties for
+  the next; one that cannot go (sold, in QC, already on the sale) says so under
+  the box. Enter does the same for a serial that is the head of a longer one. A
+  tapped catalogue row still opens the chooser.
+- **Returns & exchange, reworked 2026-09-21.** *"The user can add multiple
+  product in exchange. Either they input the serial or the transaction; only
+  then show the unit for replacement in the inventory. If the unit they
+  exchange for is cheaper than the one they purchase, the money will not
+  return."* — and, asked how far: one unit back for two out, and units back
+  from TWO transactions at once, mixed, exchanged for one, two or three.
+  - **The form holds a list of sales.** A serial adds the sale it is CURRENTLY
+    out on (a unit sold, returned and resold can only come back on its newest
+    receipt — `returnableSerials`), the transaction picker adds one by hand;
+    each sale is a block of its own with its units ticked. *Exchange for* is
+    a search over the shelf (TERSEDIA units and counted stock) that a whole
+    serial drops straight into — the till's `serialNamedBy` rule — with a
+    price per replacement. Several sales and a replacement: *Put the
+    replacements on* picks the sale they go out on (the newest by default).
+  - **The screenshot's section is gone**: the *Refund value* box, its hint,
+    the Return/Buy-back tag and the "cancels … a marketplace is holding"
+    sentence. The credit is not overridable — a unit is worth what it sold
+    for, less its additional expense. What is left on screen is what somebody
+    must act on: *Hand back Rp X* on a plain return, *Customer pays Rp X* on a
+    dearer exchange, each with Cash/Transfer.
+  - **The money is `planReturn`** (lib/returns.ts, `test/returns.test.ts`). A
+    plain return is `applyReturnCredit` per sale, unchanged. An exchange: each
+    other sale cancels its own debt first; what the customer PAID on it
+    (settled or held by a marketplace) can move to the sale taking the
+    replacements, and moves as a copy of the payment — same method, state,
+    channel, reference and `at` — so no rupiah is counted twice and the
+    balance's history does not change; the replacements are paid from that
+    pool, the customer pays any shortfall now, and a pool bigger than the
+    replacements cancels debt and is otherwise the shop's: **nothing is ever
+    handed back in an exchange**. A sale's RETUR is only what was USED of its
+    credit (it can be zero).
+  - **Several replacements, no schema change.** Each replacement unit's
+    `TERJUAL` names the exchange's first unit-return SG code, which on
+    Postgres is the event's foreign key to that `UnitReturn`
+    (`unitReturnId`); counted replacements carry it on their `StockMove`.
+    Every return row of the exchange gets `exchangeSerial` = the first
+    replacement, which groups them, and the history's Replacement column
+    lists them all. S/N Tracking resolves such an event to its sale.
+  - **A RETUR's reason names the marketplace order** it undid ("… (Shopee
+    260912RGK2YKYU)", `marketplaceRefs`): a return that cancels what Shopee
+    held removes the payment and its reference with it.
+  - **Check a Shopee file** (Return history → `ShopeeRefundCheck`,
+    `lib/shopeeRefunds.ts`). The seller balance report — or the order export
+    — lists each REFUNDED order against its sale: a refund is an order whose
+    OWN "Penghasilan dari Pesanan" row is zero or less (−Rp53.625 on
+    260912RGK2YKYU), never the order's net — the same order's Rp10.000.000
+    "Kompensasi Jasa Kirim" makes it net positive. Matched by payment
+    reference, then by a RETUR naming the number (`returnNamesOrder`), which
+    is also what makes it read *Return recorded*. *Record return* opens the
+    ordinary form on that sale with everything still out ticked; the dialog
+    itself writes nothing. ⚠️ Neither the fees Shopee kept on a refunded order
+    nor a courier's compensation is recorded anywhere — the same owner
+    decision as ad top-ups.
+  - ⚠️ **`paymentsOf` reads a sale with a RETUR by its own list, even an empty
+    one.** An empty list used to fall back to `legacyPayments` — one payment
+    for the whole ORIGINAL total — so a fully returned sale put money nobody
+    received into the balance. The return form writes every involved sale's
+    list out, changed or not, so the rule holds; Postgres projects "no rows"
+    as no list, which is why the rule keys on the adjustment.
+  - ⚠️ A unit added to a sale already in Postgres adds its cost to
+    `Order.cogs` (`syncSaleLines`); it used to be counted only when the sale
+    was created, so every exchanged-out unit was missing from the sale's cost.
+    `packages/db/test/store.test.ts` covers both halves.
+- **Returns simplified, serials open popups, no dashes — 2026-09-21,
+  evening.** Three owner asks in one message.
+  - **The return history is three columns**: transaction number / reference
+    (the SI code, its marketplace `Ref`, then the SG codes and date) · every
+    product that came back, one per line, with its Receive button · the
+    exchange units with name, condition and serial — empty when nothing went
+    out. One row per RETURN, not per unit: a press of *Record return* is
+    grouped by its RETUR adjustments' shared `at`, older rows by
+    `exchangeSerial`, then by code (a B2Soft document's lines share one).
+    Counted pieces come from their `RETUR_PELANGGAN` moves. The payment-status
+    and reason columns and the top-up `fee` left the table.
+  - **The return form is two tables in a 1360px modal**: reason and date on
+    top, *Return* on the left (every listed sale's units in one table, the
+    sale's code spanning its rows), *Exchange for* on the right. They stack
+    below `xl`.
+  - **A clickable serial opens `SerialHistory` in a popup** (`SerialLink`),
+    never navigates. The dialog is mounted ONCE by `SerialHistoryHost` in
+    `AppLayout` — a dialog inside a table cell would have its keystrokes and
+    clicks bubble (React bubbles through portals) into `EditableTable`'s
+    capture handler and row `onClick`s. S/N Tracking keeps `?serial=` in place.
+  - **No "—" for missing data, anywhere**: a number says 0 (`fmtRp(null)` is
+    `Rp 0` now) and a word says **`fmtNone()`** — "None" / "Tidak ada",
+    following the language like `fmtDate`. The one exception is a battery with
+    no reading, which says None rather than 0%/0 mAh: 0 is a dead battery. An
+    input box shows no dash placeholder either. Write new empty cells this way.
+- **Four screens reshaped, 2026-09-21 evening.** The morning's grouped
+  Payable & Receivable, the four-card Income & Expense, the return dialog and
+  its history all changed under one ask.
+  - **Payable & Receivable is TWO TABS** (⚠️ two nav leaves since
+    2026-09-22 — see "Paying off debts") and each table is FLAT — one row per
+    document. Payable: Supplier · Date · Inbound number · Total · Paid · Owed.
+    Receivable: Customer · Date · Phone · Transaction ID · Total · Paid ·
+    Owed, with a *View invoice* button on every row. **Owed prints red**
+    (`#cf1322`) on both. Both carry an *Export .xlsx* / *Export .pdf* pair
+    (`lib/tableExport.ts`, on top of the existing `xlsxWrite`/`pdfWrite`) —
+    plain text at the top for the shop's name and the printed-at line, the
+    columns as their headings, and a grand-total row at the foot. The
+    2026-09-21 morning grouping is still readable in `payableGroups` /
+    `receivableGroups` — this page now flattens their rows.
+  - **Income & Expense is ONE table.** The balance card, the period card,
+    the pending marketplace card, the marketing scorecard and the adjustment
+    history are all gone. Every movement is one row: Date | Type · Method |
+    Description | Transaction ID | Amount | Status | Latest balance. Rows
+    come from `Order.payments` (SETTLED / PENDING / DUE), `Order.refunds`,
+    `db.incomes` and `db.expenses` — the SAME sources the old page read, but
+    projected one row per event rather than one lump per sale. **Latest
+    balance is a running sum of SETTLED rows only**, walked oldest-first and
+    indexed by key, so PENDING and DUE do not move it. `AdjustmentPanel`
+    still owns the write path but takes a new `showHistory={false}` — the
+    modal alone is drawn here, because the same rows are already in the main
+    table.
+  - **Returns write a Refund adjustment.** `EXPENSE_KIND` and `IncomeReason`
+    gained a `REFUND` value (migration `20260921180000_refund_adjustment_categories`,
+    `packages/store/src/schemas.ts` too). A return with a refund out writes an
+    `Expense` with `kind: REFUND` **in the same mutation** as the RETUR
+    adjustment; a dearer exchange writes a `ManualIncome` with `reason: REFUND`.
+    Description is the payment reference the form asks for, empty falling back
+    to the return's SG codes. The `Order.adjustments[type=RETUR]` on the sale
+    is unchanged and still says a unit came back — this pair records where the
+    rupiah went.
+  - **The return dialog** gained an EDITABLE Condition column on the left
+    table (grade select per unit — the `after` grade the shelf reflects on
+    receive-QC), and a Payment reference input under the money row, drawn
+    only when money will move. `Pick.grade` is the new field; the mutation
+    updates the unit's grade only when it differs from what is stored.
+  - **The return history is five columns** — Transaction number/reference,
+    Product (serial, name), Condition (before → after), Exchange unit,
+    Adjustment (signed rupiah). `ReturnRec` gained three optional fields —
+    `beforeGrade`, `afterGrade`, `adjustment` — snapshotted at write time so
+    the history reads them off the row rather than inferring from the
+    timeline. Only the FIRST unit of a press carries the adjustment amount,
+    so a return with three units back does not add its refund up three times.
+  - ⚠️ Prisma's enums (`ExpenseKind`, `IncomeReason`) hold `REFUND` too as of
+    migration `20260921180000`; regenerate the client (`prisma generate`)
+    before typechecking `packages/db`.
+- **Paying off debts, 2026-09-22.** *"The receivable and the payable supposed
+  to be different navigation tab … In each table, add a button to add payment
+  … the system will automatically select the 5 mil paid in full, 2 mil paid in
+  full, then 4 mil paid only 3mil."* Four owner answers shaped it.
+  - **Two leaves**, `/finance/receivable` then `/finance/payable`;
+    `/finance/payable-receivable` redirects to Receivable. Customer, date,
+    phone and transaction ID filter in their headers (Receivable); supplier,
+    date and inbound number (Payable). The date filter is new in `ProTable`:
+    `dateRange: true` on a column — a RangePicker in the header, local days,
+    bounds included, a dateless row filtered out while a range is set.
+  - **One dialog, `routes/finance/DebtPaymentModal.tsx`**, behind *Add
+    payment* (nobody chosen) and every row's *Record payment* (that party,
+    that row ticked). Party, amount, Cash/Transfer, date, note, the balance
+    switch, and the party's documents oldest first — old debt, then by date —
+    with "n selected · Rp X" above them; green is paid in full, yellow in
+    part (`.debt-row-full`/`-partial` on the CELLS, because antd's selected
+    tint is on the cells too).
+  - **Only the total is typed** (owner answer). `lib/allocatePayment.ts`:
+    with no amount the ticked rows are paid in full and the box shows their
+    sum; with one, the money goes to hand-ticked rows first, oldest first
+    (so lowering it cuts the newest), then spills over every row nobody
+    unticked, oldest first. `skipped` exists so unticking a spill-filled row
+    sticks.
+  - **The balance switch is `Payment.inBalance`** (and
+    `SupplierDeposit.inBalance`), default true, absent-means-true in the
+    store: off settles the debt and moves no pot — the owner paid from their
+    own account. It is on this dialog, the invoice's payment dialog and the
+    deposit dialog. **Supplier payments, deposits and old-debt payments are on
+    Income & Expense now** and move its balance; a deposit-funded payment is
+    not (the deposit was the day the money left). An out-of-balance row is
+    listed with a *Not in balance* tag and never counted. ⚠️ On the demo seed
+    the running balance goes deeply negative: it has supplier payments and no
+    opening cash or bank.
+  - **The old debt is the oldest row and is paid first** (owner answer).
+    `Supplier.openingPayments` / `Customer.openingPayments` are `Payment`
+    rows naming the party (`Payment.supplierId`, `.customerId`); the opening
+    figure is never rewritten, and `openingOwed` is the difference — every
+    reader (Payable, Receivable, `supplierAccount`, `customerBalance`,
+    `supplierHistory`) nets it.
+  - **What the money becomes** is `lib/debtPayments.ts`: an invoice takes it
+    on the goods, then each unpaid expense by `feeId`; a sale shrinks its
+    promises (`DUE`, and pending on a channel that holds no money), records
+    one `SETTLED` payment and logs it through `diffPayments`; a marketplace's
+    money is never touched.
+  - **More than is owed** (owner answer): a supplier's remainder becomes an
+    unallocated deposit; a customer's is refused — there is no customer
+    credit. A walk-in row offers only itself, since "Walk-in customers" is
+    strangers.
+  - Migration `20260922090000_payment_balance_switch_and_opening_payments`
+    (owner-approved): the three columns, two FKs, and invariant 7 widened to
+    exactly one of `orderId`/`poId`/`supplierId`/`customerId`, a supplier's
+    payment KELUAR and a customer's MASUK. ⚠️ `comparable()` in
+    `packages/store/src/wire.ts` treats `false` as empty, so two tills
+    flipping the same switch at once are not reported as a conflict.
+- **The money screens, reshaped 2026-09-23.** Seven owner asks, and two of
+  them overturn rules this file has held since the beginning.
+  - **A payment row says three things**: method (the till's four — Transfer,
+    Cash, Shopee, Tokopedia) · status (Pending or Settled) · amount. *"The owe
+    should automatically be calculated."* What a customer still owes is the
+    bill less what is recorded against it, and it is no longer typed. It is
+    still STORED — `owedRow`/`withOwed` in `lib/salePayments.ts` derive ONE
+    `DUE` row on save, the projection rule `Order.settled` follows — because
+    Receivable, `customerBalance`, `DebtPaymentModal` and the overdue tag all
+    read one, and it is the only row that carries a promise date. The date is
+    asked for below the grid and only while something is owed; the Note column
+    is gone. A marketplace row carries its reference under the method.
+  - **The payment edit log is folded shut**, not deleted (`Collapse` at the
+    foot of `PaymentsModal`), and no longer demands a sentence before saving.
+    The "why is this being corrected?" box, the unaccounted-money alert and
+    the three-figure summary went with it.
+  - ⚠️ **The ledger is no longer strictly append-only** (owner decision, taken
+    against the alternative of appending a correction). Transaction History's
+    *Edit transaction* can swap the unit on a recorded sale, and the owner
+    asked for that to leave no trace of the unit it replaced. So
+    `packages/db`'s events adapter now permits exactly two things: **removing
+    the LAST event of a unit** (`removeLastEvents` — never one in the middle,
+    never the only one) and **renaming the denormalised `serial` on rows that
+    still belong to the same unit** (`renameEvents`). Every other edit is
+    still refused, `verifyLedger` still checks the projection against whatever
+    is now the last row, and `commit.ts` locks a unit named only by a REMOVED
+    event. `mock/store.ts` gained `removeLastEvent` for the same reason. The
+    rename half also fixes a live bug: `renameUnit` at Inbound & QC has
+    rewritten `UnitEvent.serial` since 2026-09-01 and the store refused it.
+  - **Transaction History** is Order number | Reference ID | Date | Channel |
+    Customer | Unit | Serial number | Payment status | Received | Download
+    invoice · Edit transaction. The page's own range picker is gone — the Date
+    column carries a `dateRange` header filter. *Edit transaction*
+    (`EditTransactionModal`) corrects the reference, the date, the channel, the
+    customer, the units (a serial fills the product in; changing the product
+    empties the serial) and the payments. Ticking rows offers **Mark as
+    settled**, which turns what a marketplace was holding into the shop's
+    money; a payout whose fees somebody wants itemised is still `Receive` on
+    Pending Payment, which keeps a settlement document.
+    ⚠️ "Last updated" was asked for and withdrawn — `Order` has no such column
+    in the mock or in prisma.
+  - **Pending Payment is marketplace money alone**: Channel | Transaction
+    number | Reference number | Customer | Date | Amount | Received (0, not
+    "Waiting"). The "Owed by customers" table is gone — `/finance/receivable`
+    is where a customer's debt is read, and two lists of the same debts drifted.
+  - **A filter is a chip per value** (`ProTable`), each with its own ×, plus
+    *Clear all* once more than one is on. *"So that I can cancel out one of the
+    filter"* — a count told you how many were on and left you opening funnels
+    to find which.
+  - **Income & Expense is Type · Category · Method**, and the categories are
+    the owner's own list, declared in `mock/seed.ts` beside the enum values
+    with `retired` and `needsTransaction` flags. Income: Sales transaction,
+    Account transfer, Refund received, Interest, Balance mismatch. Expense:
+    Operational, Payroll, Marketing & Advertisement, Rent and Facilities,
+    Balance mismatch, Customer compensation, Refund to customer, Supplier
+    payment, Bank transfer, Interest. Professional Services and Software &
+    Technology are `retired`: still read back, no longer offered. The same
+    values name the DERIVED rows, so the column and the dialog share one
+    vocabulary. A **Cash basis / Accrual** switch decides whether PENDING and
+    DUE rows are listed; the running balance counts SETTLED rows either way
+    (*"still the real balance until the payment is settled"*).
+  - **An adjustment can name its transaction** — `Expense.orderId` and
+    `ManualIncome.orderId`, nullable FKs (migration `20260923090000`), asked
+    for by the categories that mean nothing without a receipt. The picker
+    searches an order number, a marketplace reference, a customer or a serial
+    (*"we can either put a serial number or a transaction"*).
+  - **`TRANSFER_LUAR` — "Transfer from another bank"** settles a debt and moves
+    neither pot. `accountOfMethod` answers `undefined` for it BY NAME rather
+    than by falling through to the default, which means "a method nobody has
+    mapped". `forPo` true, `forSale` false, and on the adjustment list.
+    ⚠️ It overlaps `Payment.inBalance` (2026-09-22) — both mean "this settled
+    and the balance did not move". The method is the standard way now; the
+    switch is untouched.
+  - Migration `20260923090000_money_categories` carries all of it: seven enum
+    values, the two `orderId` columns with their FKs and indexes, and the
+    `PaymentMethod` row. ⚠️ Run `prisma generate` before typechecking
+    `packages/db`.
+- **Inventory, returns and the adjustment dialog, 2026-09-23.**
+  - The nav leaf and the page are **"Inventory"** — the old name described the
+    2026-08-26 merge rather than the screen.
+  - **The unit popup is wider (1440) and tighter** (`.unit-popup-table` in
+    global.css). Widening it alone spreads eight cells across the dialog and
+    puts the serial a hand's width from the price on its own row.
+  - **The per-unit actions are Price change and Edit unit.**
+    `UnitEditModal` corrects serial, grade, battery, warehouse, rack,
+    description and unit price — which retires the page's old warehouse-and-note
+    adjust form. Renaming carries the history across (see the ledger note
+    above). Both dialogs sit at `zIndex 1100`, because they open from inside
+    another modal in a different part of the tree.
+  - **The adjustment dialog has no In/Out toggle**: Inventory opens it from
+    *Stock in* or *Stock out*, so it is already answered. It starts on **one**
+    blank line, not three, and the counted half is now the same kind of grid as
+    the serial half rather than a bare row of controls.
+  - **Returns are ONE table** (`ReturnHistoryTable`): Type (From customer / To
+    supplier) | Transaction / inbound | Date | Supplier / customer | Reason,
+    with the units behind the row in a popup (product, serial, condition; None
+    on a counted product). The Segmented that swapped the whole page is gone;
+    two Add buttons remain, because the two forms genuinely ask different
+    things.
+  - **A customer return is received as it is recorded** — no *Receive* step,
+    no QC panel. The form already asks the condition per unit, which was all
+    that step added, so the `RETUR_PELANGGAN`, the regrade and the row go in
+    one mutation and the unit is back on the shelf at once.
+    ⚠️ `ReturnRec.status` is written `ARRIVED` from the start.
+  - **Copy pass**: the sentences that explained what a thing IS are gone —
+    Inventory's "each unit becomes sellable in…", the price editor's variant
+    explanation, the supplier deposit and opening-balance hints, the AppleDB
+    blurb, the adjustment dialog's two tooltips. Sentences that warn about a
+    consequence stay.
+- ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
   like failures. `npx vitest run --maxWorkers=2 --testTimeout=90000` is the

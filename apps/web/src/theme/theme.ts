@@ -7,6 +7,7 @@ import {
   NAV,
   RADIUS,
   SEED,
+  SELECTION,
   SPACE,
   SURFACE,
   TYPE,
@@ -23,7 +24,9 @@ import {
  * 1. **Seeds only, never derived steps.** We set `colorPrimary`; we never set
  *    `colorPrimaryHover`. antd derives the hover, active, border, and tint
  *    steps from the seed, and hand-setting one of them desynchronises it from
- *    the other seven.
+ *    the other seven. ONE exception: the fill of a selected thing, whose
+ *    derivation from this deep a seed is a mid green in light and invisible
+ *    in dark (`SELECTION` in tokens.ts, owner report 2026-09-19).
  *
  * 2. **Component overrides read resolved tokens, not literals.** The sider
  *    needs "the container background", not `#ffffff` — otherwise dark mode is
@@ -32,13 +35,24 @@ import {
  */
 
 /** Seeds and scale — everything the algorithm derives the rest from. */
-function seedTokens(): ThemeConfig["token"] {
+function seedTokens(scheme: ResolvedColorScheme): ThemeConfig["token"] {
+  // The dark scheme's own seed — see `SEED.primaryDark`. Info follows it,
+  // because links take their colour from info.
+  const primary = scheme === "dark" ? SEED.primaryDark : SEED.primary;
+  const info = scheme === "dark" ? SEED.primaryDark : SEED.info;
   return {
-    colorPrimary: SEED.primary,
+    colorPrimary: primary,
     colorSuccess: SEED.success,
     colorWarning: SEED.warning,
     colorError: SEED.error,
-    colorInfo: SEED.info,
+    colorInfo: info,
+
+    // What a selected thing is filled with. The exception to "seeds only" —
+    // `SELECTION` in tokens.ts says why.
+    colorPrimaryBg: SELECTION[scheme].bg,
+    colorPrimaryBgHover: SELECTION[scheme].bgHover,
+    controlItemBgActive: SELECTION[scheme].bg,
+    controlItemBgActiveHover: SELECTION[scheme].bgHover,
 
     fontFamily: FONT_FAMILY,
     fontFamilyCode: FONT_FAMILY_CODE,
@@ -66,7 +80,7 @@ export function buildTheme(scheme: ResolvedColorScheme): ThemeConfig {
   const surface = SURFACE[scheme];
   const base: ThemeConfig = {
     token: {
-      ...seedTokens(),
+      ...seedTokens(scheme),
       // The page behind the cards, tinted to the mark's hue — see SURFACE.
       // Set on the SEED layer rather than as a Layout component override so
       // that everything antd derives from it (the alternate fill a table

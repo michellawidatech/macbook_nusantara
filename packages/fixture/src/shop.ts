@@ -12,9 +12,11 @@
  *
  * Every one of these is a rule the old data broke, and each is worth keeping:
  *
- * - **A serial is a serial.** Every one below passes `validateSerial` — `S`
- *   plus ten to twelve, no `I`, no `O` — so it can be scanned, printed on a
- *   label and scanned back.
+ * - **A serial is a serial.** Every one below is Apple's barcode — `S` plus
+ *   ten to twelve, no `I`, no `O` — so it can be scanned, printed on a label
+ *   and scanned back. (A sealed unit taken in since 2026-09-21 is filed
+ *   WITHOUT the `S`; these are the 2026-09-01 era's form, and every search box
+ *   finds a unit by either — `resolveSerialQuery`.)
  * - **A description is a list of phrases from the QC vocabulary**, comma
  *   joined, exactly as CLAUDE.md's 2026-08-27 revision says. The old fixture
  *   wrote free sentences that no suggestion list contained.
@@ -107,8 +109,10 @@ export const isoOf = (m: FixtureMoment, now = Date.now()): string =>
  * fixture's dates move with the clock and a purchase order dated last month
  * carrying this month's number is the kind of small lie that makes a demo
  * unusable for checking a report. Mirrors `next_doc_code` in migration
- * 20260815060658; the seeded numbers start high so the live sequence, which
- * restarts at one, cannot collide with them.
+ * 20260815060658; the seeded numbers start above 40 so the live sequence, which
+ * restarts at one every month, cannot collide with them. The two holds were
+ * numbered 1 and 2 until 2026-09-18, so the month's first real booking took
+ * the demo's number and failed; `test/shop.test.ts` now checks every one.
  */
 export function docCode(
   prefix: string,
@@ -208,8 +212,8 @@ export const SUPPLIERS: readonly FixtureSupplier[] = [
     phone: "+62215550101",
     address: "Jl. Gajah Mada 40, Jakarta",
   },
-  // The owner's own worked example: Apel Segar is AS, so `SBJ347203KLM` prints
-  // as `ASBJ347203KLM`.
+  // Apel Segar is AS. The code once went in front of its serials; since
+  // 2026-09-21 nothing files or prints it.
   {
     id: "sup-2",
     name: "CV Apel Segar",
@@ -319,6 +323,8 @@ export const PAYMENT_METHOD_CODES = [
   "QRIS",
   "KARTU_KREDIT",
   "MARKETPLACE",
+  // Settles a debt and moves neither pot (owner ask 2026-09-23).
+  "TRANSFER_LUAR",
 ] as const;
 
 export interface FixtureCustomer {
@@ -386,6 +392,15 @@ export interface FixturePoLine {
   readonly notReceived?: boolean;
 }
 
+/** A counted product's line: how many arrived, at what each. */
+export interface FixtureCountedLine {
+  readonly id: string;
+  readonly skuId: string;
+  readonly qty: number;
+  /** Per piece. Defaults to the variant's landed cost. */
+  readonly unitCost?: number;
+}
+
 export interface FixturePoPayment {
   readonly id: string;
   readonly method: string;
@@ -416,6 +431,12 @@ export interface FixturePurchaseOrder {
   readonly taxFee: number;
   /** Lines with no serial behind them — ordered, or ordered and not sent. */
   readonly extraLines: readonly FixturePoLine[];
+  /**
+   * Counted products — accessories — that ARRIVED on this invoice, by
+   * quantity (2026-09-19). No unit is minted for them; each becomes a
+   * `MASUK` stock move of `qty` pieces into the invoice's location.
+   */
+  readonly counted?: readonly FixtureCountedLine[];
   readonly payments: readonly FixturePoPayment[];
   readonly note?: string;
 }
@@ -444,6 +465,17 @@ export const PURCHASE_ORDERS: readonly FixturePurchaseOrder[] = [
     shippingFee: 250_000,
     taxFee: 0,
     extraLines: [],
+    // Accessories, on the same invoice as the units they get sold beside.
+    // Some already gone, so "bought together" has history for the recommender
+    // to read; the rest on the shelf so there is something to recommend.
+    counted: [
+      { id: "po-1-acc-1", skuId: "m-magic-mouse-v1", qty: 2 },
+      { id: "po-1-acc-2", skuId: "m-magic-mouse-v2", qty: 1 },
+      { id: "po-1-acc-3", skuId: "m-magic-keyboard-v1", qty: 2 },
+      { id: "po-1-acc-4", skuId: "m-magic-keyboard-v2", qty: 1 },
+      { id: "po-1-acc-5", skuId: "m-usbc-hub-v1", qty: 3 },
+      { id: "po-1-acc-6", skuId: "m-sleeve-v1", qty: 3 },
+    ],
     payments: [
       // Two transfers on one order, because that is how it goes: the supplier
       // is paid for the machines and the forwarder for the box they came in.
@@ -867,77 +899,6 @@ export const INTAKE: readonly FixtureIntake[] = [
     fate: "SUPPLIER_RETURN",
     description: "Layar ada garis",
   },
-  // Accessories, on the same invoice as the machines they get sold beside.
-  // Some already gone, so "bought together" has history for the recommender to
-  // read; the rest on the shelf so there is something to recommend.
-  {
-    ref: "mouse-sold",
-    skuId: "m-magic-mouse-v1",
-    poId: "po-1",
-    fate: "SOLD",
-    grade: "NEW",
-    description: "Fullset dus",
-  },
-  {
-    ref: "mouse-shelf",
-    skuId: "m-magic-mouse-v2",
-    poId: "po-1",
-    fate: "SHELF",
-    rack: 3,
-    grade: "NEW",
-    description: "Fullset dus",
-  },
-  {
-    ref: "keyboard-sold",
-    skuId: "m-magic-keyboard-v1",
-    poId: "po-1",
-    fate: "SOLD",
-    grade: "NEW",
-    description: "Fullset dus",
-  },
-  {
-    ref: "keyboard-shelf",
-    skuId: "m-magic-keyboard-v2",
-    poId: "po-1",
-    fate: "SHELF",
-    rack: 3,
-    grade: "NEW",
-    description: "Fullset dus",
-  },
-  {
-    ref: "hub-sold",
-    skuId: "m-usbc-hub-v1",
-    poId: "po-1",
-    fate: "SOLD",
-    grade: "NEW",
-    description: "Fullset dus",
-  },
-  {
-    ref: "hub-shelf",
-    skuId: "m-usbc-hub-v1",
-    poId: "po-1",
-    fate: "SHELF",
-    rack: 3,
-    grade: "NEW",
-    description: "Fullset dus",
-  },
-  {
-    ref: "sleeve-sold",
-    skuId: "m-sleeve-v1",
-    poId: "po-1",
-    fate: "SOLD",
-    grade: "NEW",
-    description: "Fullset dus",
-  },
-  {
-    ref: "sleeve-shelf",
-    skuId: "m-sleeve-v1",
-    poId: "po-1",
-    fate: "SHELF",
-    rack: 3,
-    grade: "NEW",
-    description: "Fullset dus",
-  },
   // --- PO-2, CV Apel Segar, into the Serpong warehouse ----------------------
   {
     ref: "ipad9-wifi",
@@ -1097,12 +1058,22 @@ export interface FixtureSplitPart {
   readonly note?: string;
 }
 
+/** Some pieces of a counted product on a sale (2026-09-19). */
+export interface FixtureCountedSale {
+  readonly skuId: string;
+  readonly qty: number;
+  /** Per piece. Absent means the list price. */
+  readonly price?: number;
+}
+
 export interface FixtureOrder {
   readonly id: string;
   readonly seq: number;
   readonly at: FixtureMoment;
   readonly customerId: string;
   readonly lines: readonly FixtureOrderLine[];
+  /** Accessories sold on this receipt, by quantity. */
+  readonly counted?: readonly FixtureCountedSale[];
   /** A promotion off the goods. Whole rupiah. */
   readonly discount: number;
   readonly discountId?: string;
@@ -1145,13 +1116,14 @@ export interface FixtureOrder {
 
 export const ORDERS: readonly FixtureOrder[] = [
   {
-    // A machine and a mouse on one receipt: the row the add-on recommender
+    // A unit and a mouse on one receipt: the row the add-on recommender
     // reads to learn that the two go together.
     id: "o-1",
     seq: 201,
     at: at(11, 15),
     customerId: "c-1",
-    lines: [{ ref: "pro15-2016-sold" }, { ref: "mouse-sold" }],
+    lines: [{ ref: "pro15-2016-sold" }],
+    counted: [{ skuId: "m-magic-mouse-v1", qty: 1 }],
     discount: 300_000,
     discountId: "d-1",
     channel: "OFFLINE",
@@ -1189,7 +1161,11 @@ export const ORDERS: readonly FixtureOrder[] = [
     seq: 203,
     at: at(6, 11),
     customerId: "c-4",
-    lines: [{ ref: "airm2-sold" }, { ref: "sleeve-sold" }, { ref: "hub-sold" }],
+    lines: [{ ref: "airm2-sold" }],
+    counted: [
+      { skuId: "m-sleeve-v1", qty: 1 },
+      { skuId: "m-usbc-hub-v1", qty: 1 },
+    ],
     discount: 0,
     channel: "INSTAGRAM",
     fulfil: "PICKUP",
@@ -1232,7 +1208,8 @@ export const ORDERS: readonly FixtureOrder[] = [
     seq: 205,
     at: at(2, 14),
     customerId: "c-2",
-    lines: [{ ref: "keyboard-sold" }],
+    lines: [],
+    counted: [{ skuId: "m-magic-keyboard-v1", qty: 1 }],
     discount: 0,
     extra: 30_000,
     extraNote: "Delivery",
@@ -1282,7 +1259,7 @@ export interface FixtureReservation {
 export const RESERVATIONS: readonly FixtureReservation[] = [
   {
     id: "rsv-1",
-    seq: 1,
+    seq: 101,
     customerId: "c-2",
     created: at(2, 10),
     scheduledFor: at(-1, 15),
@@ -1294,7 +1271,7 @@ export const RESERVATIONS: readonly FixtureReservation[] = [
     // Two machines held for one customer in one conversation — the shape a
     // flat one-row-per-serial model could not express.
     id: "rsv-2",
-    seq: 2,
+    seq: 102,
     customerId: "c-1",
     created: at(1, 11),
     scheduledFor: at(-2, 11),
@@ -1317,7 +1294,7 @@ export interface FixtureSupplierReturn {
 export const SUPPLIER_RETURNS: readonly FixtureSupplierReturn[] = [
   {
     id: "ret-1",
-    seq: 7,
+    seq: 107,
     supplierId: "sup-1",
     poId: "po-1",
     ref: "mb12-rejected",
@@ -1374,10 +1351,11 @@ export const DISCOUNTS: readonly {
 // ---------------------------------------------------------------------------
 
 /**
- * A serial in Apple's own shape: `S`, then twelve.
+ * A serial in Apple's barcode shape: `S`, then twelve.
  *
- * `Unit.serial` is Apple's barcode and nothing is prefixed at intake — the
- * store barcode is DERIVED for the sticker (CLAUDE.md, 2026-09-01). The tail
+ * The 2026-09-01 era's form of `Unit.serial` — Apple's barcode, marker and
+ * all. Since 2026-09-21 a sealed unit is filed without the `S`; the seed keeps
+ * this form, which every lookup still finds (CLAUDE.md, 2026-09-21). The tail
  * pairs avoid `I` and `O` because Apple prints neither, so a scanner reading
  * one is misreading a `1` or a `0`; a seeded serial that tripped that rule
  * would be data the app refuses to re-scan.
@@ -1394,6 +1372,20 @@ export const DISCOUNTS: readonly {
  * that came out of it is two stock takes, one of them invisible.
  */
 export const STOCK_TAKE_AT: FixtureMoment = at(3, 18);
+
+/**
+ * The serial slot of the `index`-th intake.
+ *
+ * Eight slots after `mb12-rejected` were accessories until 2026-09-19, when
+ * counted products stopped being units. The units after them keep the serials
+ * they had, so every test, screenshot and story that names one still does.
+ */
+const RETIRED_SLOTS_AFTER = "mb12-rejected";
+const RETIRED_SLOTS = 8;
+function serialSlotOf(index: number): number {
+  const cut = INTAKE.findIndex((it) => it.ref === RETIRED_SLOTS_AFTER);
+  return index + 1 + (cut >= 0 && index > cut ? RETIRED_SLOTS : 0);
+}
 
 export function serialAt(index: number): string {
   const digits = String(7_400_000 + index * 137).slice(0, 7);
@@ -1486,17 +1478,57 @@ export interface BuiltPoLine {
   readonly notReceived: boolean;
   /** Serials booked against this line — one, or none for an unreceived line. */
   readonly serials: readonly string[];
+  /**
+   * A counted product's line (2026-09-19): it arrived as `qty` pieces on a
+   * `MASUK` stock move, and no serial will ever be booked against it.
+   */
+  readonly counted: boolean;
+}
+
+/**
+ * One movement of a counted product — a `StockMove` row. Signed `qty`;
+ * `cost` is one piece's.
+ */
+export interface BuiltStockMove {
+  readonly id: string;
+  readonly skuId: string;
+  readonly locationId: string;
+  readonly qty: number;
+  readonly cost: number;
+  readonly type: "MASUK" | "TERJUAL";
+  readonly at: FixtureMoment;
+  readonly poId?: string;
+  readonly poLineId?: string;
+  readonly orderId?: string;
+  readonly orderLineId?: string;
+  readonly staffId: string;
+}
+
+/**
+ * One expense of an invoice — a `PurchaseOrderFee` row (owner ask
+ * 2026-09-18: expenses are a list, and each one says whether it joins the
+ * machines' cost). Every fixture expense does: shipping and tax always have.
+ */
+export interface BuiltPoFee {
+  /** `${po.id}-fee-${n}`, which both seeds write. */
+  readonly id: string;
+  readonly kind: "ONGKIR" | "PAJAK";
+  readonly label: string;
+  readonly amount: number;
 }
 
 export interface BuiltPo extends FixturePurchaseOrder {
   readonly code: string;
   readonly status: "DIPESAN" | "SEBAGIAN" | "DITERIMA";
   readonly lines: readonly BuiltPoLine[];
+  readonly fees: readonly BuiltPoFee[];
   readonly subtotal: number;
   readonly feesTotal: number;
   readonly total: number;
   readonly payments: readonly (FixturePoPayment & {
     readonly rupiah: number;
+    /** The expense a shipping or tax payment settled — `Payment.poFeeId`. */
+    readonly feeId?: string;
   })[];
 }
 
@@ -1537,10 +1569,28 @@ export interface BuiltPayment {
   readonly at: FixtureMoment;
 }
 
+/** Some pieces of a counted product on a sale, priced and costed. */
+export interface BuiltCountedLine {
+  readonly id: string;
+  readonly skuId: string;
+  readonly name: string;
+  readonly variant: string;
+  readonly qty: number;
+  /** Per piece. */
+  readonly price: number;
+  /** Per piece, what the shop was asking on the day. */
+  readonly listPrice: number;
+  readonly sub: number;
+  /** For the whole line: the moving average at the sale, times qty. */
+  readonly cogs: number;
+}
+
 export interface BuiltOrder extends FixtureOrder {
   readonly code: string;
   readonly status: "LUNAS" | "BELUM" | "RETUR";
   readonly builtLines: readonly BuiltOrderLine[];
+  /** Accessories on the receipt, by quantity. */
+  readonly countedLines: readonly BuiltCountedLine[];
   readonly subtotal: number;
   readonly total: number;
   readonly paidTotal: number;
@@ -1574,6 +1624,8 @@ export interface BuiltShop {
   readonly purchaseOrders: readonly BuiltPo[];
   readonly units: readonly BuiltUnit[];
   readonly events: readonly BuiltEvent[];
+  /** The counted products' ledger, in time order. */
+  readonly stockMoves: readonly BuiltStockMove[];
   readonly orders: readonly BuiltOrder[];
   readonly reservations: readonly BuiltReservation[];
   readonly supplierReturns: readonly BuiltSupplierReturn[];
@@ -1611,6 +1663,22 @@ function allocate(total: number, count: number): number[] {
  * the Postgres seed project it. `test/shop.test.ts` asserts the two agree.
  */
 export const CYCLE_ERA_MAX_YEAR = 2020;
+
+/**
+ * Does a model carry an M-series chip? An M1 of 2020 records health like
+ * every Apple silicon Mac after it (owner 2026-09-19), whatever its year.
+ * The same test as `namesAppleSilicon` in `apps/web/src/lib/battery.ts`,
+ * duplicated for the reason `CYCLE_ERA_MAX_YEAR` gives.
+ */
+const M_CHIP = /(?<![A-Za-z0-9])(?<!core[\s-]*)m[1-9]\d?(?![A-Za-z0-9])/i;
+
+/** Which reading a model's batteries are recorded in. */
+export function recordsBatteryHealth(model: {
+  readonly name: string;
+  readonly releaseYear: number;
+}): boolean {
+  return model.releaseYear > CYCLE_ERA_MAX_YEAR || M_CHIP.test(model.name);
+}
 
 /**
  * Nominal design capacity in mAh, by category, for deriving a plausible FCC.
@@ -1707,7 +1775,7 @@ function batteryOf(
 ): { battery?: number } | { cycleCount?: number; fcc?: number } {
   if (it.battery === undefined) return {};
   const model = modelOf(skuOf(it.skuId).modelId);
-  if (model.releaseYear > CYCLE_ERA_MAX_YEAR) return { battery: it.battery };
+  if (recordsBatteryHealth(model)) return { battery: it.battery };
   const fcc = fccForHealth(it.battery, model.categoryId);
   return {
     cycleCount: cyclesForHealth(it.battery),
@@ -1779,7 +1847,7 @@ export function buildShop(now: number = Date.now()): BuiltShop {
   const intakeIndexOfRef = new Map<string, number>();
 
   INTAKE.forEach((it, i) => {
-    const serial = serialAt(i + 1);
+    const serial = serialAt(serialSlotOf(i));
     serialOfRef.set(it.ref, serial);
     intakeIndexOfRef.set(it.ref, i);
   });
@@ -1803,6 +1871,7 @@ export function buildShop(now: number = Date.now()): BuiltShop {
         allocatedFee: 0,
         notReceived: false,
         serials: [serialOfRef.get(it.ref)!],
+        counted: false,
       };
     });
     for (const extra of po.extraLines) {
@@ -1818,13 +1887,61 @@ export function buildShop(now: number = Date.now()): BuiltShop {
         allocatedFee: 0,
         notReceived: extra.notReceived === true,
         serials: [],
+        counted: false,
       });
     }
-    const fees = allocate(po.shippingFee + po.taxFee, lines.length);
+    for (const c of po.counted ?? []) {
+      const sku = skuOf(c.skuId);
+      const unitCost = c.unitCost ?? sku.landed;
+      lines.push({
+        id: c.id,
+        poId: po.id,
+        skuId: c.skuId,
+        produk: sku.name,
+        spec: sku.variantLabel,
+        qty: c.qty,
+        unitCost,
+        lineTotal: unitCost * c.qty,
+        allocatedFee: 0,
+        notReceived: false,
+        serials: [],
+        counted: true,
+      });
+    }
+    // Evenly by PIECE, as the app splits it (`lib/landedCost.ts`): a line of
+    // three hubs is three boxes in the parcel. A line's fee is its pieces'.
+    const pieces = lines.reduce((n, l) => n + l.qty, 0);
+    const shares = allocate(po.shippingFee + po.taxFee, pieces);
+    let next = 0;
     linesByPo.set(
       po.id,
-      lines.map((l, i) => ({ ...l, allocatedFee: fees[i] ?? 0 })),
+      lines.map((l) => {
+        let fee = 0;
+        for (let k = 0; k < l.qty; k += 1) fee += shares[next++] ?? 0;
+        return { ...l, allocatedFee: fee };
+      }),
     );
+  }
+
+  // --- counted products arriving: one MASUK per line -------------------------
+  const stockMoves: BuiltStockMove[] = [];
+  for (const po of PURCHASE_ORDERS) {
+    if (po.received === undefined) continue;
+    for (const l of linesByPo.get(po.id)!) {
+      if (!l.counted) continue;
+      stockMoves.push({
+        id: `${l.id}-in`,
+        skuId: l.skuId,
+        locationId: po.locationId,
+        qty: l.qty,
+        cost: l.unitCost,
+        type: "MASUK",
+        at: po.received,
+        poId: po.id,
+        poLineId: l.id,
+        staffId: "staff_owner",
+      });
+    }
   }
 
   // --- the machines, and their ledgers -------------------------------------
@@ -1976,9 +2093,25 @@ export function buildShop(now: number = Date.now()): BuiltShop {
   const purchaseOrders: BuiltPo[] = PURCHASE_ORDERS.map((po) => {
     const lines = linesByPo.get(po.id)!;
     const subtotal = lines.reduce((n, l) => n + l.lineTotal, 0);
-    const feesTotal = po.shippingFee + po.taxFee;
+    const fees: BuiltPoFee[] = [
+      ...(po.shippingFee > 0
+        ? [
+            {
+              kind: "ONGKIR" as const,
+              label: "Ongkir",
+              amount: po.shippingFee,
+            },
+          ]
+        : []),
+      ...(po.taxFee > 0
+        ? [{ kind: "PAJAK" as const, label: "Pajak", amount: po.taxFee }]
+        : []),
+    ].map((f, i) => ({ id: `${po.id}-fee-${i + 1}`, ...f }));
+    const feesTotal = fees.reduce((n, f) => n + f.amount, 0);
     const received = lines.filter(
-      (l) => !l.notReceived && l.serials.length > 0,
+      (l) =>
+        !l.notReceived &&
+        (l.serials.length > 0 || (l.counted && po.received !== undefined)),
     );
     return {
       ...po,
@@ -1990,18 +2123,28 @@ export function buildShop(now: number = Date.now()): BuiltShop {
             ? "DITERIMA"
             : "SEBAGIAN",
       lines,
+      fees,
       subtotal,
       feesTotal,
       total: subtotal + feesTotal,
-      payments: po.payments.map((p) => ({
-        ...p,
-        rupiah:
-          p.amount === "GOODS"
-            ? subtotal
-            : p.amount === "FEES"
-              ? feesTotal
-              : p.amount,
-      })),
+      payments: po.payments.map((p) => {
+        // A shipping or tax payment settles THE expense of that kind — the
+        // fixture never gives an invoice two of one kind.
+        const fee =
+          p.appliedTo === "BARANG"
+            ? undefined
+            : fees.find((f) => f.kind === p.appliedTo);
+        return {
+          ...p,
+          rupiah:
+            p.amount === "GOODS"
+              ? subtotal
+              : p.amount === "FEES"
+                ? feesTotal
+                : p.amount,
+          ...(fee === undefined ? {} : { feeId: fee.id }),
+        };
+      }),
     };
   });
 
@@ -2034,7 +2177,53 @@ export function buildShop(now: number = Date.now()): BuiltShop {
           : { warrantyUntil: at(o.at.daysAgo - 90, o.at.hour) }),
       };
     });
-    const subtotal = builtLines.reduce((n, l) => n + l.sub, 0);
+    const countedLines: BuiltCountedLine[] = (o.counted ?? []).map((c, i) => {
+      const sku = skuOf(c.skuId);
+      const price = c.price ?? sku.price;
+      const id = `${o.id}-qty-${i + 1}`;
+      // What one piece cost the shop, landed: the fixture buys each counted
+      // variant on ONE line, so its average is that line's.
+      const bought = [...linesByPo.values()]
+        .flat()
+        .find((l) => l.counted && l.skuId === c.skuId);
+      if (bought === undefined) {
+        throw new Error(
+          `fixture: order ${o.id} sells ${c.skuId}, never bought`,
+        );
+      }
+      const each = Math.round(
+        (bought.unitCost * bought.qty + bought.allocatedFee) / bought.qty,
+      );
+      stockMoves.push({
+        id: `${id}-out`,
+        skuId: c.skuId,
+        locationId: poOf(bought.poId).locationId,
+        qty: -c.qty,
+        cost: each,
+        type: "TERJUAL",
+        at: o.at,
+        orderId: o.id,
+        orderLineId: id,
+        staffId: "staff_owner",
+      });
+      return {
+        id,
+        skuId: c.skuId,
+        name: sku.name,
+        variant: sku.variantLabel,
+        qty: c.qty,
+        price,
+        listPrice: sku.price,
+        sub: price * c.qty,
+        cogs: each * c.qty,
+      };
+    });
+    if (o.returnedAt !== undefined && countedLines.length > 0) {
+      throw new Error(`fixture: order ${o.id} returns counted products`);
+    }
+    const subtotal =
+      builtLines.reduce((n, l) => n + l.sub, 0) +
+      countedLines.reduce((n, l) => n + l.sub, 0);
     const extra = o.extra ?? 0;
     const total = subtotal - o.discount + extra;
     const returned = o.returnedAt !== undefined;
@@ -2063,12 +2252,15 @@ export function buildShop(now: number = Date.now()): BuiltShop {
       code: docCode("SI", o.at, o.seq, now),
       status: returned ? "RETUR" : o.settled ? "LUNAS" : "BELUM",
       builtLines,
+      countedLines,
       subtotal,
       total,
       // What the shop is actually holding: nothing while a marketplace has it,
       // and nothing once it has been given back.
       paidTotal: o.settled && !returned ? total : 0,
-      cogs: builtLines.reduce((n, l) => n + l.cogs, 0),
+      cogs:
+        builtLines.reduce((n, l) => n + l.cogs, 0) +
+        countedLines.reduce((n, l) => n + l.cogs, 0),
       payments,
       parts: partsOf(o, total),
     };
@@ -2100,6 +2292,9 @@ export function buildShop(now: number = Date.now()): BuiltShop {
     purchaseOrders,
     units,
     events,
+    stockMoves: [...stockMoves].sort(
+      (a, b) => b.at.daysAgo - a.at.daysAgo || a.at.hour - b.at.hour,
+    ),
     orders,
     reservations,
     supplierReturns,

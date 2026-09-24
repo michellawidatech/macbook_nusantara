@@ -7,7 +7,6 @@
  * what it is (a count and a price) and worked out against the real basket at
  * the till. See `lib/pricing.ts`.
  */
-import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import dayjs from "dayjs";
 import {
@@ -27,6 +26,33 @@ import { FooterToolbar } from "../../components/FooterToolbar";
 import { MoneyInput } from "../../components/MoneyInput";
 import { useDb, mutate, nextId } from "../../mock/store.js";
 import { useTranslation } from "react-i18next";
+import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
+import { useFormDraft } from "../../hooks/useFormDraft";
+import { asOneOf, isRecord } from "../../lib/draftGuards.js";
+
+type DiscountType = "PCT" | "NOMINAL" | "BUNDLE";
+
+/**
+ * The half-typed discount, kept on this device (owner ask 2026-09-21: "all the
+ * things of the user input will be saved locally"). Its date window is a pair
+ * of dayjs values in the form and a pair of ISO days in storage.
+ */
+const DISCOUNT_DRAFT = draftKey("discount.new");
+const toStored = (v: Record<string, unknown>) => ({
+  ...v,
+  range: Array.isArray(v.range)
+    ? (v.range as (dayjs.Dayjs | null)[]).map((d) =>
+        d ? d.format("YYYY-MM-DD") : null,
+      )
+    : undefined,
+});
+const fromStored = (v: unknown): Record<string, unknown> | undefined => {
+  if (!isRecord(v)) return undefined;
+  const range = Array.isArray(v.range)
+    ? v.range.map((d) => (typeof d === "string" ? dayjs(d) : null))
+    : undefined;
+  return { ...v, range };
+};
 
 export function DiscountFormPage() {
   const { t } = useTranslation();
@@ -34,7 +60,21 @@ export function DiscountFormPage() {
   const navigate = useNavigate();
   const { message } = App.useApp();
   const [form] = Form.useForm();
-  const [type, setType] = useState<"PCT" | "NOMINAL" | "BUNDLE">("PCT");
+  const [type, setType, clearType] = usePersistentState<DiscountType>(
+    `${DISCOUNT_DRAFT}.type`,
+    "PCT",
+    asOneOf<DiscountType>(["PCT", "NOMINAL", "BUNDLE"]),
+  );
+  const draft = useFormDraft<Record<string, unknown>>(form, DISCOUNT_DRAFT, {
+    save: toStored,
+    load: fromStored,
+  });
+  /** Saved or cancelled, the draft is over — neither may come back. */
+  const leave = () => {
+    draft.clear();
+    clearType();
+    navigate("/discounts");
+  };
 
   const submit = (v: {
     name: string;
@@ -75,12 +115,18 @@ export function DiscountFormPage() {
       });
     });
     message.success("Discount saved.");
-    navigate("/discounts");
+    leave();
   };
 
   return (
     <PageContainer title={t("discount.addDiscount", "Add Discount")}>
-      <Form form={form} layout="vertical" onFinish={submit} style={{ flex: 1 }}>
+      <Form
+        form={form}
+        layout="vertical"
+        onFinish={submit}
+        onValuesChange={draft.onValuesChange}
+        style={{ flex: 1 }}
+      >
         <Flex vertical gap={16}>
           <Card title={t("discount.theDiscount", "The discount")}>
             <Flex gap={16} wrap>
@@ -108,7 +154,7 @@ export function DiscountFormPage() {
             >
               <Segmented
                 value={type}
-                onChange={(v) => setType(v as "PCT" | "NOMINAL" | "BUNDLE")}
+                onChange={(v) => setType(v as DiscountType)}
                 options={[
                   {
                     value: "PCT",
@@ -251,7 +297,7 @@ export function DiscountFormPage() {
             </Typography.Text>
           </Card>
           <FooterToolbar>
-            <Button onClick={() => navigate("/discounts")}>Cancel</Button>
+            <Button onClick={leave}>{t("discount.cancel", "Cancel")}</Button>
             <Button type="primary" htmlType="submit">
               {t("discount.saveDiscount", "Save discount")}
             </Button>

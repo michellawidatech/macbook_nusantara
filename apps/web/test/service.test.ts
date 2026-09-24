@@ -67,8 +67,10 @@ const freight: Po = {
     { id: "l1", skuId: "sku-air", serial: null, qty: 4, unitCost: 4_000_000 },
   ],
   payments: [],
-  shippingFee: 300_000,
-  taxFee: 100_000,
+  fees: [
+    { id: "f1", kind: "SHIPPING", label: "", amount: 300_000, inCogs: true },
+    { id: "f2", kind: "TAX", label: "", amount: 100_000, inCogs: true },
+  ],
   discount: 0,
   status: "RECEIVED",
 };

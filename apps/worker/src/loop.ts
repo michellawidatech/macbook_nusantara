@@ -48,6 +48,7 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     maxDraftsPerTick: config.maxDraftsPerTick,
     maxBatch: config.maxBatch,
     agentStaffId: config.agentStaffId,
+    capabilities: config.capabilities,
   });
 
   const send = await sendPass({

@@ -37,8 +37,7 @@ const po = (items: Po["items"]): Po => ({
   locationId: "wh-1",
   items,
   payments: [],
-  shippingFee: 0,
-  taxFee: 0,
+  fees: [],
   discount: 0,
   status: "RECEIVED",
 });

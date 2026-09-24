@@ -83,7 +83,7 @@ export interface UnitCard {
    * Always null for now, and deliberately so rather than missing: `Unit` has no
    * description column, and the schema's own docblocks disagree about whether
    * `UnitNote` is its home. An owner decision, not a client concern — the field
-   * is here so the screen keeps its row and shows "—".
+   * is here so the screen keeps its row and shows "None".
    */
   readonly description: null;
   /** Always null for now: there is no Rack model. Same reasoning. */

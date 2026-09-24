@@ -15,7 +15,7 @@
  *
  * The scope is what stops a partial count reporting the rest of the shop as
  * lost. A Tuesday-afternoon recount of one rack of iPads used to name a
- * warehouse and nothing else, so every machine in it that nobody walked past
+ * warehouse and nothing else, so every unit in it that nobody walked past
  * came out as missing at the confirmation step.
  */
 import { useMemo, useState } from "react";
@@ -37,12 +37,17 @@ import {
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
-import { fmtDate } from "../../lib/format.js";
+import { fmtDate, fmtNone } from "../../lib/format.js";
 import { useDb, mutate, nextId, docCode } from "../../mock/store.js";
 import type { OpnameScope } from "../../lib/opnameScope.js";
+import { restoreScans } from "../../lib/opnameCount.js";
 import { ScopeFields, useConditionWord } from "./ScopeFields.js";
 import type { OpnameRec } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
+
+/** How many serials a count has read, expected or not. See `restoreScans`. */
+const scannedIn = (o: OpnameRec | null) =>
+  o === null ? 0 : restoreScans(o.counted, o.unknown).length;
 
 export function OpnamePage() {
   const { t } = useTranslation();
@@ -95,13 +100,14 @@ export function OpnamePage() {
               ? t("opnameList.allWarehouses", "All warehouses")
               : o.locationIds
                   .map(
-                    (id) => db.warehouses.find((w) => w.id === id)?.name ?? "—",
+                    (id) =>
+                      db.warehouses.find((w) => w.id === id)?.name ?? fmtNone(),
                   )
                   .join(", "),
           /** The other three axes, as words, for the line under the warehouse. */
           narrowing: [
             ...o.rackIds.map(
-              (id) => db.racks.find((r) => r.id === id)?.name ?? "—",
+              (id) => db.racks.find((r) => r.id === id)?.name ?? fmtNone(),
             ),
             ...o.categories,
             ...o.conditions.map(conditionWord),
@@ -163,6 +169,7 @@ export function OpnamePage() {
     >
       <Card>
         <ProTable
+          persistKey="opname"
           rowKey="id"
           dataSource={rows}
           searchPlaceholder={t(
@@ -220,7 +227,7 @@ export function OpnamePage() {
                *
                * One column rather than four. Rack, category and condition are
                * empty on most counts — the shop's monthly count of a whole
-               * warehouse names none of them — and three columns of "—" is
+               * warehouse names none of them — and three columns of "None" is
                * three columns of nothing on the screen this page opens with.
                */
               title: t("opnameList.scope", "Scope"),
@@ -274,7 +281,7 @@ export function OpnamePage() {
               sortValue: (r) => r.missingN,
               render: (v: number) =>
                 v === 0 ? (
-                  "—"
+                  0
                 ) : (
                   <Typography.Text type="danger">{v}</Typography.Text>
                 ),
@@ -287,7 +294,7 @@ export function OpnamePage() {
               sortValue: (r) => r.unknownN,
               render: (v: number) =>
                 v === 0 ? (
-                  "—"
+                  0
                 ) : (
                   <Typography.Text type="warning">{v}</Typography.Text>
                 ),
@@ -307,7 +314,7 @@ export function OpnamePage() {
                * rather than history.
                *
                * A POSTED count is the opposite and is refused: it has written
-               * `OPNAME_HILANG` against real machines, and deleting the record
+               * `OPNAME_HILANG` against real units, and deleting the record
                * would leave those events pointing at a document that no longer
                * exists. The button is not drawn on a posted row at all — a
                * disabled control invites the click that has to be explained,
@@ -457,13 +464,16 @@ export function OpnamePage() {
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             {t(
               "opnameList.deleteBody",
-              "This throws away the count and everything scanned into it. It is a draft, so no machine is touched — but nothing here can be recovered.",
+              "This throws away the count and everything scanned into it. It is a draft, so no unit is touched — but nothing here can be recovered.",
             )}
           </Typography.Paragraph>
-          {(deleting?.counted.length ?? 0) > 0 && (
+          {/* Both lists: a draft keeps the serials it expected in `counted`
+              and the ones it did not in `unknown`, and a scan of either is
+              work this dialog is about to throw away. */}
+          {scannedIn(deleting) > 0 && (
             <Typography.Text type="warning">
               {t("opnameList.deleteScanned", "{{count}} serial(s) scanned.", {
-                count: deleting?.counted.length ?? 0,
+                count: scannedIn(deleting),
               })}
             </Typography.Text>
           )}

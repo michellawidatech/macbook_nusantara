@@ -13,9 +13,10 @@
  * machine nobody has inspected. This is the one place that decides, and
  * `lib/condition.ts` is where the meaning behind it is written down.
  *
- * An ungraded machine gets a muted dash rather than nothing at all: an empty
+ * An ungraded unit gets a muted "None" rather than nothing at all: an empty
  * cell reads as a rendering fault, and "nobody has graded this" is a fact
- * worth showing in a shop where grading is the job.
+ * worth showing in a shop where grading is the job. (A dash until 2026-09-21,
+ * when the owner asked for words instead of dashes everywhere.)
  */
 import { Tag, Tooltip, Typography } from "antd";
 import { useTranslation } from "react-i18next";
@@ -36,7 +37,7 @@ export function GradeTag({
   if (text === null) {
     return (
       <Typography.Text type="secondary">
-        {t("grade.ungraded", "—")}
+        {t("grade.ungraded", "None")}
       </Typography.Text>
     );
   }

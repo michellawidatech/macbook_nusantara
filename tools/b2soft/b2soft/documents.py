@@ -31,6 +31,9 @@ WALK_IN = "USER"
 METHOD = "B2SOFT"
 MARKETPLACES = ("SHOPEE", "TOKPED", "TOKOPEDIA", "TIKTOK", "AKULAKU")
 OTHER_CHANNELS = ("FACEBOOK", "OLX", "CAROUSELL", "THREADS", "AKULAKU", "GOOGLE MAPS")
+# The importer's own accessory groups (`catalogue.category_of`), which the app
+# counts by quantity rather than by serial.
+COUNTED_CATEGORIES = ("Aksesoris", "Charger", "Box", "Sparepart")
 
 
 def source_of(name: str) -> str:
@@ -67,6 +70,14 @@ class Documents:
     rows: dict[str, list[dict]] = field(default_factory=lambda: defaultdict(list))
     balances: list[dict] = field(default_factory=list)
     open_sales: list[dict] = field(default_factory=list)
+    # Counted products (2026-09-19): B2Soft product names whose category holds
+    # no serialised product. They have no units in the app — their pseudo
+    # units become quantities on the stock ledger (`emit.py`).
+    counted: set[str] = field(default_factory=set)
+    # (invoice code, product, cost) → the quantity line a counted purchase is on.
+    po_item: dict[tuple[str, str, int], str] = field(default_factory=dict)
+    # (sale code, pseudo serial) → the quantity line a counted piece sold on.
+    sale_line: dict[tuple[str, str], str] = field(default_factory=dict)
 
 
 def build(si: dict[str, Invoice], pi: dict[str, Invoice], summary: dict[str, tuple[str, str, str]],
@@ -162,6 +173,24 @@ def build(si: dict[str, Invoice], pi: dict[str, Invoice], summary: dict[str, tup
     if open_sale.get(WALK_IN):
         flag("Piutang tanpa pelanggan", WALK_IN, f"{len(open_sale[WALK_IN])} faktur USER belum lunas")
 
+    # Counted categories (owner decision 2026-09-19): the accessory groups this
+    # importer files B2Soft's products under (`catalogue.category_of`) — and
+    # only while none of their products was ever sold by serial. Their products
+    # are quantities, never units. A device category B2Soft merely never
+    # scanned (an iPhone, a Pencil) is NOT made counted: that would stop the
+    # app asking for the serial of every one sold from now on. Its pieces stay
+    # pseudo-serial units, flagged, for the owner to decide.
+    serialised = {u.product for u in L.units.values() if not u.pseudo}
+    category_of = {name: cat.models[s["modelId"]]["category"] for name, s in cat.skus.items()}
+    tracked_categories = {category_of[p] for p in serialised if p in category_of}
+    counted_categories = sorted(c for c in COUNTED_CATEGORIES
+                                if c in category_of.values() and c not in tracked_categories)
+    out.counted = {p for p, c in category_of.items() if c in counted_categories}
+    for c in counted_categories:
+        rows["categories"].append(dict(id=f"b2s-cat-{slug(c)}", name=c, tracksSerial=False))
+    for p in sorted({u.product for u in L.units.values() if u.pseudo} - out.counted):
+        flag("Aksesoris di kategori berserial", p, f"{category_of.get(p, '?')} — tetap unit dengan serial semu")
+
     # The catalogue, priced at each product's most recent sale (answer 12).
     last_price: dict[str, int] = {}
     for inv in live_sales:
@@ -185,12 +214,28 @@ def build(si: dict[str, Invoice], pi: dict[str, Invoice], summary: dict[str, tup
             flag("Total faktur pembelian beda", inv.code, f"barang Rp{sum(c for _, c, _ in lines):,}, faktur Rp{inv.total:,}")
         oid, at = doc_id(inv.code), iso(local(inv.at))
         ref = refs.get(inv.code, "")
+        # A unit is a line of one; a counted product is ONE line per price, of
+        # however many came (2026-09-19).
+        items: list[dict] = []
+        qty_line: dict[tuple[str, int], dict] = {}
+        for serial, cost, product in lines:
+            if product in out.counted:
+                held = qty_line.get((product, cost))
+                if held is None:
+                    held = dict(id=f"{oid}-{len(items) + 1}", skuId=sku_id[product], serial=None, qty=0,
+                                unitCost=money(cost))
+                    qty_line[(product, cost)] = held
+                    items.append(held)
+                    out.po_item[(inv.code, product, cost)] = held["id"]
+                held["qty"] += 1
+            else:
+                items.append(dict(id=f"{oid}-{len(items) + 1}", skuId=sku_id[product], serial=serial, qty=1,
+                                  unitCost=money(cost)))
         po = dict(id=oid, code=inv.code, supplierId=sup_id[inv.party], invoice="" if ref in ("", ".") else ref,
                   date=inv.at[:10], locationId=wh(inv.lines[0].gd),
-                  items=[dict(id=f"{oid}-{i + 1}", skuId=sku_id[product], serial=serial, qty=1, unitCost=money(cost))
-                         for i, (serial, cost, product) in enumerate(lines)],
+                  items=items,
                   payments=[dict(id=f"{oid}-pay-1", method=METHOD, amount=money(inv.paid), at=at)] if inv.paid > 0 else [],
-                  shippingFee="0", taxFee="0", discount="0", status="RECEIVED")
+                  fees=[], discount="0", status="RECEIVED")
         if inv.status == "LUNAS" and inv.code not in waiting:
             po["closedAt"] = at
         rows["pos"].append(po)
@@ -226,9 +271,24 @@ def build(si: dict[str, Invoice], pi: dict[str, Invoice], summary: dict[str, tup
             payments.append(part)
             out.open_sales.append(dict(code=inv.code, party=inv.party, at=inv.at, total=inv.total, paid=inv.paid,
                                        open=gap, state=part["state"], due=inv.due))
+        product_of = {u.serial: u.product for u in L.units.values()}
+        units = [(s, p) for s, p in lines if product_of.get(s) not in out.counted]
+        qty_lines: dict[tuple[str, int], dict] = {}
+        for s, p in lines:
+            product = product_of.get(s)
+            if product not in out.counted:
+                continue
+            held = qty_lines.get((product, p))
+            if held is None:
+                held = dict(id=f"{oid}-q-{len(qty_lines) + 1}", skuId=sku_id[product], qty=0, price=money(p))
+                qty_lines[(product, p)] = held
+            held["qty"] += 1
+            out.sale_line[(inv.code, s)] = held["id"]
         order = dict(id=oid, code=inv.code, ts=at, customerId=None if inv.party == WALK_IN else cus_id[inv.party],
-                     serials=[s for s, _ in lines], prices={s: money(p) for s, p in lines}, discount=money(discount),
+                     serials=[s for s, _ in units], prices={s: money(p) for s, p in units}, discount=money(discount),
                      source=source, payMethod=method, settled=gap <= 0, total=money(inv.total))
+        if qty_lines:
+            order["lines"] = list(qty_lines.values())
         if payments:
             order["payments"] = payments
         if salesman in sales_id:
@@ -241,7 +301,12 @@ def build(si: dict[str, Invoice], pi: dict[str, Invoice], summary: dict[str, tup
             order["extraNote"] = fees[0]["label"]
         rows["orders"].append(order)
 
+    counted_serials = {u.serial for u in L.units.values() if u.product in out.counted}
     for r in L.returns:
+        # A counted piece's return is a quantity back on the shelf — a stock
+        # move (`emit.py`) — not a unit's return document.
+        if r["serial"] in counted_serials:
+            continue
         row = dict(id=f"b2s-ret-{slug(r['code'])}", code=r["code"], kind=r["kind"], serial=r["serial"],
                    reason="Retur pelanggan (B2Soft)" if r["kind"] == "CUSTOMER" else "Retur ke supplier (B2Soft)",
                    date=r["day"], status="DONE")

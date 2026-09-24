@@ -345,13 +345,38 @@ body {
  * dark page rather than a white one.
  */
 .pos-total .ant-card-body {
-  background: color-mix(
-    in srgb,
-    var(--nusantara-primary, #14532d) 92%,
-    #000000
-  );
+  /* The mark's own deep green, the nav's colour, in both schemes (2026-09-19).
+     It was the primary darkened 8%, which followed the primary to a green
+     too light for white text once the dark scheme got its own brighter seed. */
+  background: var(--nusantara-brand-deep, #0f5648);
   color: #ffffff;
   border-radius: inherit;
+}
+
+/*
+ * The panel's own action, inverted: a white button with the deep green on it
+ * (owner report 2026-09-19 — "highlighted as dark green which is hard to
+ * see"). A green primary on a dark green panel was the one thing on the till
+ * nobody could pick out, and it is the button every sale ends on. Same
+ * treatment as the nav's selected pill. A below-cost sale keeps its red.
+ */
+.pos-total
+  .pos-pay-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(
+    .ant-btn-disabled
+  ) {
+  background: #ffffff;
+  background-image: none;
+  color: var(--nusantara-brand-deep, #0f5648);
+  border-color: #ffffff;
+  font-weight: 600;
+}
+.pos-total
+  .pos-pay-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(
+    .ant-btn-disabled
+  ):hover {
+  background: #e7f4ee;
+  background-image: none;
+  color: var(--nusantara-brand-deep, #0f5648);
 }
 /* Everything inside inherits the light-on-dark, including antd's own type
    helpers, which would otherwise paint their own grey on it. */
@@ -657,4 +682,123 @@ body {
 .ant-card.nusantara-keyboard-row:focus-visible {
   outline-offset: 1px;
   border-radius: var(--ant-border-radius-lg, 8px);
+}
+
+/*
+ * Inbound's machines (owner revision 2026-09-18).
+ *
+ * A row whose product changed is only TINTED when it is part of a real
+ * difference from the invoice — a swap of two names is a price correction and
+ * stays plain (`invoiceChanges`). Warning, not error: the machine is fine, the
+ * paperwork disagrees with it. Tinted from the theme's own tokens, for the
+ * reason `.row-over-quota` gives.
+ */
+.receiving-row-different > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 10%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.nusantara-stacked-row.receiving-row-different > .ant-card {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 10%,
+    var(--nusantara-surface, #ffffff)
+  );
+}
+/*
+ * The Shopee upload's rows (owner ask 2026-09-21): yellow where what Shopee
+ * paid does not match its published fees, and at the top; dimmed where the
+ * file does not mention the sale yet. The same warning tint as a changed
+ * inbound row, a step stronger because here it is the whole point of the view.
+ */
+.shopee-row-mismatch > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 18%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.shopee-row-absent > td {
+  opacity: 0.6;
+}
+/*
+ * Add payment's allocation table (2026-09-22): green is a bill this payment
+ * settles, yellow one it pays in part. On the CELLS and important, because
+ * every such row is also a selected row, and antd paints its selected tint on
+ * the cells — a row background underneath would never show.
+ */
+.debt-row-full > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-success, #52c41a) 16%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.debt-row-partial > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 20%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.shopee-legend-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-inline-end: 6px;
+  vertical-align: -1px;
+  border-radius: 3px;
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 18%,
+    var(--nusantara-surface, #ffffff)
+  );
+  border: 1px solid var(--nusantara-warning, #faad14);
+}
+
+/* A machine the supplier never sent: still on the invoice, so still listed,
+   and quieter than the ones that came. */
+.receiving-row-not-arrived > td {
+  opacity: 0.65;
+}
+
+/* What the delivery changed about the invoice, under the machines. */
+.receiving-changes {
+  padding: 12px 16px;
+  border-radius: 8px;
+  border-left: 3px solid var(--nusantara-warning, #faad14);
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 8%,
+    var(--nusantara-surface, #ffffff)
+  );
+}
+
+/* The grading checklist folded open inside the QC dialog. */
+.qc-checklist {
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px dashed
+    color-mix(in srgb, var(--nusantara-primary, #047857) 35%, transparent);
+}
+
+/*
+ * Inventory's unit popup (owner ask 2026-09-23: *"enlarge the modal popup and
+ * adjust the spacing in the table so that it is not too far apart"*).
+ *
+ * The dialog got wider so a unit's row fits without wrapping; left alone, the
+ * same widening spreads eight cells across 1440px and the serial ends up a
+ * hand's width from the price on its own row. Tighter padding and a fixed
+ * layout keep the row reading as one line.
+ */
+.unit-popup-table .ant-table-cell {
+  padding-block: 8px !important;
+  padding-inline: 8px !important;
+  vertical-align: middle;
+}
+.unit-popup-table .ant-table-thead > tr > th {
+  padding-block: 6px !important;
+  padding-inline: 8px !important;
 }

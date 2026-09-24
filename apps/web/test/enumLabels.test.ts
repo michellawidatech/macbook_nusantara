@@ -111,11 +111,11 @@ describe("the fallback", () => {
   });
 
   // Absent and unrecognised are different facts and get different copy.
-  it("says nothing at all for an absent value", () => {
-    expect(labelOf(UNIT_EVENT, null)).toBe("—");
-    expect(labelOf(UNIT_EVENT, undefined)).toBe("—");
-    expect(labelOf(UNIT_EVENT, "")).toBe("—");
-    expect(tagOf(UNIT_STATUS, null).label).toBe("—");
+  it("says None for an absent value", () => {
+    expect(labelOf(UNIT_EVENT, null)).toBe("None");
+    expect(labelOf(UNIT_EVENT, undefined)).toBe("None");
+    expect(labelOf(UNIT_EVENT, "")).toBe("None");
+    expect(tagOf(UNIT_STATUS, null).label).toBe("None");
   });
 
   it("passes through text that is already human", () => {

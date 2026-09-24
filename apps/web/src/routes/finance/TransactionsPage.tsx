@@ -1,5 +1,5 @@
 /**
- * Transaction History — every movement of money, in one searchable list.
+ * Transaction History — every sale, in one searchable list.
  *
  * Cashflow answers "how are we doing"; this answers "what happened, exactly".
  * They read the same two tables and are deliberately not the same screen: the
@@ -11,11 +11,28 @@
  * now the one ledger carrying every movement of money — sales and purchases
  * posting into it automatically, manual lines on top.
  *
- * The split is by what the screen is FOR rather than by where the data lives.
- * This is the receipt-finder: a customer rings up about something they bought
- * three weeks ago, and every column here — serial, salesperson, channel,
- * payment — narrows towards one sale. Expenses answered none of those questions
- * and only made the Type facet necessary.
+ * ## The columns, as the owner laid them out (2026-09-19)
+ *
+ * Order number / reference · Unit · Payment status · Received · the actions.
+ * Each answers one question about a receipt:
+ *
+ * - **Order** — the SI code, and under it the marketplace's own order number
+ *   when a payment carries one (`SalePayment.ref`), because that is what a
+ *   Shopee or Tokopedia income report names a payout by. The date and the
+ *   channel ride on a small line beneath, and the channel is its LABEL — the
+ *   column used to print the raw `SHOPEE`.
+ * - **Unit** — product and serial as pairs, one line each, with the customer
+ *   under them as the old Detail column had it.
+ * - ~~**Status**~~ — the Returned / Partly returned column left on
+ *   2026-09-20 (owner ask). The fact did not: a unit that came back still
+ *   carries its own tag on its line in the Unit column, which is the reading
+ *   somebody actually needs — WHICH unit, not how many — and `saleReturnStatus`
+ *   still writes the whole-sale word into the CSV export.
+ * - **Payment status** — Settled, With a marketplace, Partly paid, Owed: which
+ *   party still has money outstanding. The old status checked "is anything
+ *   owed?" first, so a half-collected bill read exactly like an unpaid one.
+ * - **Received** — the SETTLED money, the only money that is the shop's, with
+ *   the bill under it.
  *
  * Selection exists for a reason beyond ticking boxes: the selected rows get
  * totalled, and can be exported. Reconciling a bank statement against a shop's
@@ -34,36 +51,42 @@ import {
   Typography,
 } from "antd";
 import {
+  CheckCircleOutlined,
   DownloadOutlined,
-  PrinterOutlined,
-  WalletOutlined,
+  EditOutlined,
+  FileTextOutlined,
 } from "@ant-design/icons";
+import dayjs from "dayjs";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { InvoiceModal } from "../../components/Invoice";
-import { fmtRp, fmtDateTime } from "../../lib/format.js";
-import { mutate, nextId, useDb, currentStaffName } from "../../mock/store.js";
+import { fmtRp, fmtDate, fmtDateTime, fmtNone } from "../../lib/format.js";
+import { currentStaffName, mutate, nextId, useDb } from "../../mock/store.js";
 import type { Order } from "../../mock/seed.js";
-import { PaymentsModal } from "../../components/PaymentsModal";
+import { EditTransactionModal } from "./EditTransactionModal";
 import { diffPayments } from "../../lib/paymentEdits.js";
 import {
+  billAfterReturns,
   isSettled,
+  orderBalance,
   paymentsOf,
-  saleBalance,
-  type SalePayment,
+  refundedOf,
+  type SaleBalance,
 } from "../../lib/salePayments.js";
+import {
+  paymentRefOf,
+  returnedSerials,
+  salePaymentStatus,
+  saleReturnStatus,
+  type SalePaymentStatus,
+  type SaleReturnStatus,
+} from "../../lib/saleStatus.js";
+import { labelOf, ORDER_SOURCE } from "../../i18n/enumLabels.js";
 import { SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
 
 /**
- * One line of the ledger.
- *
- * Sales and expenses are flattened into a single shape here rather than being
- * rendered by a per-kind branch in every column: a column that has to ask "is
- * this a sale?" five times is a column that will disagree with itself once.
- */
-/**
- * One product on one sale, and the machine it was.
+ * One product on one sale, and the unit it was.
  *
  * A sale of three things used to render as every product name joined by
  * commas, a `·`, then every serial joined by commas — which left the reader
@@ -71,205 +94,199 @@ import { useTranslation } from "react-i18next";
  * (owner report 2026-08-26). They are pairs in the data, so they are pairs on
  * screen.
  */
-/**
- * What a sale's money is doing. Four answers since 2026-09-08 — see
- * `statusOf` for why two were not enough.
- */
-type MovementStatus = "Settled" | "Part paid" | "Pending" | "Owed" | "Unpaid";
-
-interface MovementLine {
+interface SaleLine {
   /** Null when no unit in the system carries this serial — see the mapper. */
   readonly product: string | null;
   readonly serial: string;
+  /** Brought back by the customer since this sale — `lib/saleStatus.ts`. */
+  readonly returned: boolean;
 }
 
-interface Movement {
+/** One sale, flattened once so no column has to look anything up. */
+interface SaleRow {
   readonly key: string;
+  readonly order: Order;
   readonly at: string;
-  readonly reference: string;
+  readonly code: string;
+  /** The marketplace's order number, when a payment carries one. */
+  readonly ref?: string;
+  /** The channel's label, translated — never the raw `Order.source` code. */
+  readonly channel: string;
+  readonly customer: string;
   /**
-   * Everything on the sale as one flat string.
+   * Searched, never drawn — so a sale naming nobody has none, rather than a
+   * placeholder word that a search for "none" would then match.
+   */
+  readonly salesperson: string | undefined;
+  readonly lines: readonly SaleLine[];
+  /**
+   * Every product and serial on the sale as one flat string.
    *
-   * Still built, and still the ONLY thing search, sort and the CSV read: a
-   * spreadsheet cell holds one string, and searching "which sale was this
-   * serial on" has to match across every product and serial at once. `lines`
-   * is the same content shaped for the screen; neither is derived from the
-   * other at render time, so they cannot disagree mid-row.
+   * What search and sort read: "which sale was this serial on" has to match
+   * across every product and serial at once. `lines` is the same content
+   * shaped for the screen; both are built here in one pass, so they cannot
+   * disagree mid-row.
    */
   readonly detail: string;
-  /** The same sale as product/serial pairs. Empty for a row with no units. */
-  readonly lines: readonly MovementLine[];
-  readonly counterparty: string;
-  readonly salesperson: string;
-  readonly channel: string;
-  readonly payment: string;
-  readonly status: MovementStatus;
-  readonly moneyIn: number;
-  readonly moneyOut: number;
-  /** Present on a sale, so the row can reprint its invoice. */
-  readonly order?: Order;
-}
-
-/** RFC 4180 enough for a spreadsheet: quote everything, double the quotes. */
-function toCsv(rows: readonly Movement[]): string {
-  const header = [
-    "When",
-    "Reference",
-    "Detail",
-    "Counterparty",
-    "Salesperson",
-    "Channel",
-    "Payment",
-    "Status",
-    "Money in",
-    "Money out",
-  ];
-  const cell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
-  const lines = rows.map((r) =>
-    [
-      r.at,
-      r.reference,
-      r.detail,
-      r.counterparty,
-      r.salesperson,
-      r.channel,
-      r.payment,
-      r.status,
-      r.moneyIn,
-      r.moneyOut,
-    ]
-      .map(cell)
-      .join(","),
-  );
-  return [header.map(cell).join(","), ...lines].join("\r\n");
+  readonly status: SaleReturnStatus;
+  readonly payStatus: SalePaymentStatus;
+  readonly balance: SaleBalance;
 }
 
 /**
- * What a sale's money is doing, in one word.
- *
- * Four rather than the two `settled` could express (owner ask 2026-09-08). A
- * marketplace sitting on a payout, a customer who has not paid, and a bill
- * half collected are three different situations, and the shop acts differently
- * on each: press a button on Shopee, telephone a person, or neither.
- *
- * Order matters. "Owed" wins over "Pending" when both are true, because a
- * customer debt is the one with a deadline and a person to ring.
+ * Amber for money a marketplace is holding, red for money a customer owes —
+ * the shop acts differently on each: press a button on Shopee, or telephone a
+ * person. Partly paid is the customer's too, a shade short of Owed.
  */
-function statusOf(order: Order): MovementStatus {
-  const b = saleBalance(order.total, paymentsOf(order));
-  if (b.fullySettled) return "Settled";
-  if (b.customerOwes > 0) return "Owed";
-  if (b.pending > 0) return "Pending";
-  return b.settled > 0 ? "Part paid" : "Unpaid";
+const PAY_COLOR: Record<SalePaymentStatus, string> = {
+  SETTLED: "default",
+  WITH_MARKETPLACE: "gold",
+  PARTLY_PAID: "volcano",
+  OWED: "red",
+};
+
+/** RFC 4180 enough for a spreadsheet: quote everything, double the quotes. */
+function toCsv(
+  header: readonly string[],
+  body: readonly (readonly (string | number)[])[],
+): string {
+  const cell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
+  return [header, ...body].map((r) => r.map(cell).join(",")).join("\r\n");
 }
 
 export function TransactionsPage() {
   const { t } = useTranslation();
   const db = useDb();
-  /**
-   * A `PaymentMethod` code, spelled for a person.
-   *
-   * `Order.payMethod` holds a code since 2026-09-09, so this column would
-   * otherwise read "KARTU_KREDIT". Which marketplace a sale came from is the
-   * channel column's job, so this one does not repeat it.
-   */
-  const methodLabel = (code: string) =>
-    db.paymentMethods.find((m) => m.code === code)?.label ?? code;
   const { message } = App.useApp();
   const [reprint, setReprint] = useState<Order | null>(null);
-  /** Null when the payment editor is shut; the sale it is about when open. */
-  const [editingPay, setEditingPay] = useState<Order | null>(null);
+  /** Null when the editor is shut; the sale it is about when open. */
+  const [editing, setEditing] = useState<Order | null>(null);
+
+  /*
+   * The words for each status, in a switch rather than a lookup table so
+   * `test/i18n.test.ts` can review them: it finds copy by reading the source
+   * for literal two-argument `t()` calls, and a table indexed by a variable is
+   * invisible to it.
+   */
+  const statusLabel = (s: SaleReturnStatus) =>
+    s === "RETURNED"
+      ? t("transactions.stReturned", "Returned")
+      : s === "PARTLY_RETURNED"
+        ? t("transactions.stPartlyReturned", "Partly returned")
+        : t("transactions.stCompleted", "Completed");
+  const payLabel = (s: SalePaymentStatus) =>
+    s === "SETTLED"
+      ? t("transactions.stSettled", "Settled")
+      : s === "WITH_MARKETPLACE"
+        ? t("transactions.stPending", "With a marketplace")
+        : s === "PARTLY_PAID"
+          ? t("transactions.stPartPaid", "Partly paid")
+          : t("transactions.stOwed", "Owed");
 
   /**
-   * Save a correction, and the log rows that make it safe (owner ask
-   * 2026-09-08).
+   * Turn what a marketplace was holding into money the shop has.
    *
-   * One `mutate`: the payments, the `settled` projection over them and every
-   * log row go together, exactly as a unit's event and its projection do. A
-   * correction half-written — the amount changed and the log row missing — is
-   * the one state this feature must never be able to reach, because it is
-   * indistinguishable from the amount having always been that.
+   * One `mutate` over every sale ticked: the payments, the `settled`
+   * projection over them and the log rows go together, the rule every writer
+   * in this app follows.
    */
-  const savePayments = (order: Order, next: SalePayment[], reason: string) => {
-    const before = paymentsOf(order);
-    const rows = diffPayments(before, next, {
-      at: new Date().toISOString(),
-      staff: currentStaffName(),
-      ...(reason ? { reason } : {}),
-    });
+  const settlePending = (orders: readonly Order[]) => {
+    const stamp = new Date().toISOString();
+    let moved = 0;
     mutate((d) => {
-      const o = d.orders.find((x) => x.id === order.id);
-      if (!o) return;
-      o.payments = next;
-      o.settled = isSettled(o.total, next);
-      for (const row of rows) {
-        d.paymentLog.push({ id: nextId("plog"), ...row });
+      for (const order of orders) {
+        const o = d.orders.find((x) => x.id === order.id);
+        if (!o) continue;
+        const before = paymentsOf(o);
+        if (!before.some((p) => p.state === "PENDING")) continue;
+        const next = before.map((p) =>
+          p.state === "PENDING"
+            ? { ...p, state: "SETTLED" as const, at: stamp }
+            : p,
+        );
+        o.payments = next;
+        o.settled = isSettled(billAfterReturns(o), next, refundedOf(o));
+        for (const row of diffPayments(before, next, {
+          at: stamp,
+          staff: currentStaffName(),
+        })) {
+          d.paymentLog.push({ id: nextId("plog"), ...row });
+        }
+        moved += 1;
       }
     });
-    setEditingPay(null);
     message.success(
-      rows.length === 0
-        ? t("transactions.payUnchanged", "Nothing changed.")
-        : t("transactions.payLogged", "{{n}} change(s) recorded.", {
-            n: rows.length,
-          }),
+      t("transactions.settledCount", "{{count}} sale(s) marked as settled.", {
+        count: moved,
+      }),
     );
   };
 
-  const movements = useMemo<Movement[]>(() => {
-    const sales: Movement[] = db.orders.map((o) => {
-      const customer = db.customers.find((c) => c.id === o.customerId);
-      const lines: MovementLine[] = o.serials.map((serial) => {
-        const unit = db.units.find((u) => u.serial === serial);
-        const sku = unit && db.skus.find((k) => k.id === unit.skuId);
-        // Null rather than the serial repeated: a unit whose product the
-        // catalogue no longer knows should show its serial once, not twice.
+  const sales = useMemo<SaleRow[]>(() => {
+    const back = returnedSerials(db.orders, db.events);
+    // Maps rather than a `find` per sale: the B2Soft history is thousands of
+    // receipts against thousands of customers.
+    const units = new Map(db.units.map((u) => [u.serial, u]));
+    const skus = new Map(db.skus.map((k) => [k.id, k]));
+    const customers = new Map(db.customers.map((c) => [c.id, c]));
+    const salesmen = new Map(db.salesmen.map((s) => [s.id, s]));
+    return db.orders
+      .map((o) => {
+        const customer =
+          o.customerId === null ? undefined : customers.get(o.customerId);
+        const returned = back.get(o.id);
+        const lines: SaleLine[] = [
+          ...o.serials.map((serial) => {
+            const unit = units.get(serial);
+            const sku = unit && skus.get(unit.skuId);
+            // Null rather than the serial repeated: a unit whose product the
+            // catalogue no longer knows should show its serial once, not twice.
+            return {
+              product: sku ? `${sku.name} ${sku.variantLabel}` : null,
+              serial,
+              returned: returned?.has(serial) ?? false,
+            };
+          }),
+          // A counted product (2026-09-19): no serial, so the second line
+          // says how many instead.
+          ...(o.lines ?? []).map((l) => {
+            const sku = skus.get(l.skuId);
+            return {
+              product: sku ? `${sku.name} ${sku.variantLabel}` : l.skuId,
+              serial: `×${l.qty}`,
+              returned: (l.returnedQty ?? 0) >= l.qty,
+            };
+          }),
+        ];
+        const payments = paymentsOf(o);
+        const balance = orderBalance(o);
+        const ref = paymentRefOf(payments);
         return {
-          product: sku ? `${sku.name} ${sku.variantLabel}` : null,
-          serial,
+          key: o.id,
+          order: o,
+          at: o.ts,
+          code: o.code,
+          ...(ref === undefined ? {} : { ref }),
+          channel: labelOf(ORDER_SOURCE, o.source, t),
+          customer: customer?.name ?? t("piutang.walkIn", "Walk-in"),
+          salesperson:
+            o.salesmanId === undefined
+              ? undefined
+              : salesmen.get(o.salesmanId)?.name,
+          lines,
+          // Serials go in the searchable detail on purpose: "which sale was
+          // this serial on" is the question this shop asks most, and it is
+          // the one the unit's own timeline answers slowest.
+          detail: lines
+            .map((l) => (l.product ? `${l.product} (${l.serial})` : l.serial))
+            .join("; "),
+          status: saleReturnStatus(o.serials, returned, o.lines),
+          payStatus: salePaymentStatus(balance),
+          balance,
         };
-      });
-      const units = lines.map((l) => l.product ?? l.serial).join(", ");
-      return {
-        key: `o-${o.id}`,
-        at: o.ts,
-        reference: o.code,
-        // Serials go in the searchable detail on purpose: "which sale was this
-        // serial on" is the question this shop asks most, and it is the one the
-        // unit's own timeline answers slowest.
-        detail: `${units} · ${o.serials.join(", ")}`,
-        lines,
-        counterparty: customer?.name ?? "Walk-in",
-        salesperson:
-          db.salesmen.find((s) => s.id === o.salesmanId)?.name ?? "—",
-        channel: o.source,
-        payment: methodLabel(o.payMethod),
-        /*
-         * Three answers, not two (owner ask 2026-09-08).
-         *
-         * `settled ? "Settled" : "Pending"` could not tell a marketplace
-         * sitting on a payout from a customer who has not paid — and the shop
-         * chases a different party for each. A sale that is part collected
-         * says so too, because "how much of this have we actually had?" is the
-         * question somebody opens this screen to answer.
-         */
-        status: statusOf(o),
-        moneyIn: o.total,
-        moneyOut: 0,
-        order: o,
-      };
-    });
-
-    return [...sales].sort((a, b) => b.at.localeCompare(a.at));
-  }, [
-    db.orders,
-    db.expenses,
-    db.customers,
-    db.units,
-    db.skus,
-    db.salesmen,
-    db.referralSources,
-  ]);
+      })
+      .sort((a, b) => b.at.localeCompare(a.at));
+  }, [db.orders, db.events, db.customers, db.units, db.skus, db.salesmen, t]);
 
   /*
    * Summed over the PAYMENTS, not over the sale totals (owner ask
@@ -285,30 +302,65 @@ export function TransactionsPage() {
     let settled = 0;
     let pending = 0;
     let owed = 0;
-    for (const o of db.orders) {
-      const b = saleBalance(o.total, paymentsOf(o));
-      settled += b.settled;
-      pending += b.pending;
-      owed += b.customerOwes;
+    for (const s of sales) {
+      settled += s.balance.settled;
+      pending += s.balance.pending;
+      owed += s.balance.customerOwes;
     }
     return { settled, pending, owed };
-  }, [db.orders]);
-  const totalIn = money.settled;
-  const totalOut = movements.reduce((t, m) => t + m.moneyOut, 0);
-  const pendingTotal = money.pending;
+  }, [sales]);
 
-  const exportCsv = (rows: readonly Movement[]) => {
-    const blob = new Blob([toCsv(rows)], { type: "text/csv;charset=utf-8;" });
+  const exportCsv = (rows: readonly SaleRow[]) => {
+    const returnedWord = t("transactions.stReturned", "Returned");
+    const csv = toCsv(
+      [
+        t("transactions.orderNumber", "Order number"),
+        t("transactions.paymentRef", "Payment reference"),
+        t("transactions.date", "Date"),
+        t("transactions.channel", "Channel"),
+        t("transactions.customer", "Customer"),
+        t("transactions.units", "Units"),
+        t("transactions.status", "Status"),
+        t("transactions.paymentStatus", "Payment status"),
+        t("transactions.received", "Received"),
+        t("transactions.total", "Total"),
+      ],
+      rows.map((r) => [
+        r.code,
+        r.ref ?? "",
+        // The shop's own clock, sortable as text — an ISO instant in UTC
+        // would put an evening sale on the next day's row.
+        dayjs(r.at).format("YYYY-MM-DD HH:mm"),
+        r.channel,
+        r.customer,
+        r.lines
+          .map((l) =>
+            [l.product, l.serial, l.returned ? `(${returnedWord})` : null]
+              .filter(Boolean)
+              .join(" "),
+          )
+          .join("; "),
+        statusLabel(r.status),
+        payLabel(r.payStatus),
+        r.balance.settled,
+        r.balance.total,
+      ]),
+    );
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `transactions-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     // Revoked immediately: the click has already handed the blob to the
-    // browser's download machinery, and an un-revoked object URL keeps the
-    // whole file alive in memory for the life of the tab.
+    // browser's download, and an un-revoked object URL keeps the whole file
+    // alive in memory for the life of the tab.
     URL.revokeObjectURL(url);
-    message.success(`${rows.length} row(s) exported.`);
+    message.success(
+      t("transactions.exported", "{{count}} row(s) exported.", {
+        count: rows.length,
+      }),
+    );
   };
 
   return (
@@ -320,25 +372,22 @@ export function TransactionsPage() {
           <Card style={{ flex: 1, minWidth: 200 }}>
             <Statistic
               title={t("transactions.transactions", "Transactions")}
-              value={movements.length}
+              value={sales.length}
             />
           </Card>
           <Card style={{ flex: 1, minWidth: 200 }}>
             <Statistic
               title={t("transactions.moneyInSettled", "Money in (settled)")}
-              value={fmtRp(totalIn)}
+              value={fmtRp(money.settled)}
             />
           </Card>
-          <Card style={{ flex: 1, minWidth: 200 }}>
-            <Statistic
-              title={t("transactions.moneyOut", "Money out")}
-              value={fmtRp(totalOut)}
-            />
-          </Card>
+          {/* "Money out" is gone (2026-09-19): this screen has held sales
+              only since 2026-08-24, so it read Rp 0 on every visit, and the
+              In/Out columns it summed left with the new layout. */}
           <Card style={{ flex: 1, minWidth: 200 }}>
             <Statistic
               title={t("transactions.stillPending", "With a marketplace")}
-              value={fmtRp(pendingTotal)}
+              value={fmtRp(money.pending)}
               styles={{ content: { color: "#d48806" } }}
             />
           </Card>
@@ -356,30 +405,37 @@ export function TransactionsPage() {
         </Flex>
 
         <Card>
-          <ProTable
+          <ProTable<SaleRow>
+            persistKey="transactions"
             rowKey="key"
-            dataSource={movements}
+            dataSource={sales}
             searchPlaceholder={t(
-              "transactions.searchACodeSerialProduct",
-              "Search a code, serial, product, customer or expense",
+              "transactions.searchOrders",
+              "Search an order, reference, serial, product or customer",
             )}
             selectable
             extra={
               <Button
                 icon={<DownloadOutlined />}
-                onClick={() => exportCsv(movements)}
+                onClick={() => exportCsv(sales)}
               >
                 {t("transactions.exportAll", "Export all")}
               </Button>
             }
             bulkActions={(selected, clear) => {
-              const inSum = selected.reduce((t, m) => t + m.moneyIn, 0);
-              const outSum = selected.reduce((t, m) => t + m.moneyOut, 0);
+              const received = selected.reduce(
+                (n, r) => n + r.balance.settled,
+                0,
+              );
+              const billed = selected.reduce((n, r) => n + r.balance.total, 0);
               return (
                 <>
                   <Typography.Text type="secondary">
-                    In {fmtRp(inSum)} · Out {fmtRp(outSum)} · Net{" "}
-                    {fmtRp(inSum - outSum)}
+                    {t(
+                      "transactions.selectedSum",
+                      "Received {{received}} of {{total}}",
+                      { received: fmtRp(received), total: fmtRp(billed) },
+                    )}
                   </Typography.Text>
                   <Button
                     size="small"
@@ -391,213 +447,257 @@ export function TransactionsPage() {
                   >
                     {t("transactions.exportSelected", "Export selected")}
                   </Button>
+                  {/* Money a marketplace was holding that has landed (owner
+                      ask 2026-09-23). It records the payout arriving and
+                      nothing else — a withdrawal whose fees somebody wants
+                      itemised is `Receive` on Pending Payment, which keeps a
+                      settlement document. */}
+                  {selected.some((r) => r.balance.pending > 0) && (
+                    <Button
+                      size="small"
+                      icon={<CheckCircleOutlined />}
+                      onClick={() => {
+                        settlePending(selected.map((r) => r.order));
+                        clear();
+                      }}
+                    >
+                      {t("transactions.markSettled", "Mark as settled")}
+                    </Button>
+                  )}
                 </>
               );
             }}
             columns={[
               {
-                title: t("transactions.when", "When"),
-                dataIndex: "at",
-                width: 150,
-                defaultSortOrder: "descend",
-                render: (v: string) => fmtDateTime(v),
-              },
-              {
-                title: t("transactions.reference", "Reference"),
-                dataIndex: "reference",
-                searchable: true,
+                title: t("transactions.orderNumber", "Order number"),
+                key: "order",
                 width: 170,
+                // Newest first, by when it was sold — which is also the order
+                // the SI codes run in.
+                defaultSortOrder: "descend",
+                sortValue: (r) => Date.parse(r.at),
+                searchable: true,
+                searchValue: (r) => `${r.code} ${r.salesperson ?? ""}`,
+                render: (_, r) => (
+                  <Typography.Text strong>{r.code}</Typography.Text>
+                ),
               },
               {
-                title: t("transactions.detail", "Detail"),
-                key: "detail",
+                title: t("transactions.referenceId", "Reference ID"),
+                key: "ref",
+                width: 170,
                 searchable: true,
-                sortValue: (m) => m.detail,
-                render: (_, m) => (
-                  <Flex vertical gap={SPACE.xs}>
-                    {/*
-                     * One row per product, with the serial beside it. The old
-                     * single line joined every name, then every serial, which
-                     * meant pairing them by counting along two lists.
-                     *
-                     * `wrap` on each pair rather than truncation: a serial is
-                     * the thing someone is here to read, so on a narrow column
-                     * it drops under its product instead of being cut off.
-                     */}
-                    {m.lines.length > 0 ? (
-                      m.lines.map((line) => (
+                searchValue: (r) => r.ref ?? "",
+                sortValue: (r) => r.ref ?? "",
+                render: (_, r) => (
+                  <Typography.Text
+                    type={r.ref === undefined ? "secondary" : undefined}
+                    style={{ fontFamily: "monospace", fontSize: TYPE.sm }}
+                  >
+                    {r.ref ?? fmtNone()}
+                  </Typography.Text>
+                ),
+              },
+              {
+                title: t("transactions.date", "Date"),
+                key: "at",
+                width: 140,
+                dateRange: true,
+                facetLabel: t("transactions.date", "Date"),
+                sortValue: (r) => Date.parse(r.at),
+                render: (_, r) => fmtDateTime(r.at),
+              },
+              {
+                title: t("transactions.channel", "Channel"),
+                key: "channel",
+                width: 130,
+                facet: true,
+                facetLabel: t("transactions.channel", "Channel"),
+                facetValue: (r) => r.channel,
+                sortValue: (r) => r.channel,
+                render: (_, r) => r.channel,
+              },
+              {
+                title: t("transactions.customer", "Customer"),
+                key: "customer",
+                width: 170,
+                searchable: true,
+                searchValue: (r) => r.customer,
+                sortValue: (r) => r.customer,
+                render: (_, r) => r.customer,
+              },
+              {
+                title: t("transactions.unit", "Unit"),
+                key: "unit",
+                searchable: true,
+                sortValue: (r) => r.detail,
+                searchValue: (r) => r.detail,
+                render: (_, r) =>
+                  r.lines.length === 0 ? (
+                    <Typography.Text type="secondary">
+                      {fmtNone()}
+                    </Typography.Text>
+                  ) : (
+                    <Flex vertical gap={SPACE.xs}>
+                      {r.lines.map((line, i) => (
                         <Flex
-                          key={line.serial}
+                          key={`${i}-${line.serial}`}
                           gap={SPACE.sm}
                           align="baseline"
                           wrap
                         >
-                          {line.product !== null && (
-                            <Typography.Text>{line.product}</Typography.Text>
-                          )}
-                          <Typography.Text
-                            type="secondary"
-                            style={{
-                              fontFamily: "monospace",
-                              fontSize: TYPE.sm,
-                            }}
-                          >
-                            {line.serial}
+                          <Typography.Text>
+                            {line.product ?? fmtNone()}
                           </Typography.Text>
+                          {line.returned && (
+                            <Tag color="purple">
+                              {t("transactions.stReturned", "Returned")}
+                            </Tag>
+                          )}
                         </Flex>
-                      ))
-                    ) : (
-                      <Typography.Text>{m.detail}</Typography.Text>
-                    )}
-                    {/* The customer, separated from the lines above by its own
-                        gap so it does not read as a fourth product. */}
+                      ))}
+                    </Flex>
+                  ),
+              },
+              {
+                title: t("transactions.serialNumber", "Serial number"),
+                key: "serial",
+                width: 190,
+                searchable: true,
+                searchValue: (r) => r.lines.map((l) => l.serial).join(" "),
+                render: (_, r) =>
+                  r.lines.length === 0 ? (
+                    <Typography.Text type="secondary">
+                      {fmtNone()}
+                    </Typography.Text>
+                  ) : (
+                    <Flex vertical gap={SPACE.xs}>
+                      {r.lines.map((line, i) => (
+                        <Typography.Text
+                          key={`${i}-${line.serial}`}
+                          type="secondary"
+                          style={{
+                            fontFamily: "monospace",
+                            fontSize: TYPE.sm,
+                          }}
+                        >
+                          {line.serial}
+                        </Typography.Text>
+                      ))}
+                    </Flex>
+                  ),
+              },
+              {
+                title: t("transactions.paymentStatus", "Payment status"),
+                key: "payStatus",
+                width: 160,
+                facet: true,
+                facetLabel: t("transactions.paymentStatus", "Payment status"),
+                facetValue: (r) => payLabel(r.payStatus),
+                sortValue: (r) => payLabel(r.payStatus),
+                render: (_, r) => {
+                  // The promise date, where the customer owes and made one.
+                  const due =
+                    r.payStatus === "OWED" || r.payStatus === "PARTLY_PAID"
+                      ? r.balance.nextDueAt
+                      : undefined;
+                  const late =
+                    due !== undefined && Date.parse(due) < Date.now();
+                  return (
+                    <Flex vertical gap={SPACE.xs} align="flex-start">
+                      <Tag color={PAY_COLOR[r.payStatus]}>
+                        {payLabel(r.payStatus)}
+                      </Tag>
+                      {due !== undefined && (
+                        <Typography.Text
+                          type={late ? "danger" : "secondary"}
+                          style={{ fontSize: TYPE.sm }}
+                        >
+                          {late
+                            ? t(
+                                "transactions.overdueSince",
+                                "Overdue since {{date}}",
+                                { date: fmtDate(due) },
+                              )
+                            : t("transactions.dueOn", "Due {{date}}", {
+                                date: fmtDate(due),
+                              })}
+                        </Typography.Text>
+                      )}
+                    </Flex>
+                  );
+                },
+              },
+              {
+                title: t("transactions.received", "Received"),
+                key: "received",
+                align: "right",
+                width: 160,
+                sortValue: (r) => r.balance.settled,
+                render: (_, r) => (
+                  <Flex vertical align="flex-end" gap={0}>
+                    <Typography.Text strong>
+                      {fmtRp(r.balance.settled)}
+                    </Typography.Text>
                     <Typography.Text
                       type="secondary"
-                      style={{ marginTop: SPACE.xs }}
+                      style={{ fontSize: TYPE.sm }}
                     >
-                      {m.counterparty}
+                      {t("transactions.ofTotal", "of {{total}}", {
+                        total: fmtRp(r.balance.total),
+                      })}
                     </Typography.Text>
                   </Flex>
                 ),
               },
               {
-                title: t("transactions.salesperson", "Salesperson"),
-                dataIndex: "salesperson",
-                facet: true,
-                searchable: true,
-                width: 140,
-              },
-              {
-                title: t("transactions.channel", "Channel"),
-                dataIndex: "channel",
-                facet: true,
-                width: 120,
-              },
-              {
-                title: t("transactions.payment", "Payment"),
-                dataIndex: "payment",
-                facet: true,
-                width: 130,
-              },
-              {
-                title: t("transactions.status", "Status"),
-                dataIndex: "status",
-                facet: true,
-                width: 110,
-                render: (v: string) => (
-                  /*
-                   * Amber for money somebody else is holding, red for money a
-                   * customer owes — the shop acts differently on each.
-                   *
-                   * Translated in a switch rather than through a lookup, so
-                   * `test/i18n.test.ts` can review the words: it finds copy by
-                   * reading the source for literal two-argument `t()` calls,
-                   * and a table indexed by a variable is invisible to it.
-                   */
-                  <Tag
-                    color={
-                      v === "Owed" || v === "Unpaid"
-                        ? "red"
-                        : v === "Pending" || v === "Part paid"
-                          ? "orange"
-                          : "default"
-                    }
-                  >
-                    {v === "Settled"
-                      ? t("transactions.stSettled", "Settled")
-                      : v === "Part paid"
-                        ? t("transactions.stPartPaid", "Part paid")
-                        : v === "Pending"
-                          ? t("transactions.stPending", "With a marketplace")
-                          : v === "Owed"
-                            ? t("transactions.stOwed", "Owed")
-                            : t("transactions.stUnpaid", "Unpaid")}
-                  </Tag>
-                ),
-              },
-              {
-                title: t("transactions.in", "In"),
-                key: "in",
-                align: "right",
-                width: 140,
-                sortValue: (m) => m.moneyIn,
-                render: (_, m) => (m.moneyIn ? fmtRp(m.moneyIn) : "—"),
-              },
-              {
-                title: t("transactions.out", "Out"),
-                key: "out",
-                align: "right",
-                width: 140,
-                sortValue: (m) => m.moneyOut,
-                render: (_, m) => (m.moneyOut ? fmtRp(m.moneyOut) : "—"),
-              },
-              {
+                // Blank by convention: DataTable drops an untitled column to
+                // the foot of the card on a phone, where buttons belong.
                 title: "",
                 key: "actions",
                 width: 96,
-                render: (_, m) =>
-                  m.order ? (
-                    <Flex gap={4}>
-                      <Tooltip
-                        title={t(
-                          "transactions.editPayments",
-                          "What was paid, and correcting it",
+                render: (_, r) => (
+                  <Flex gap={4}>
+                    <Tooltip
+                      title={t("transactions.seeReceipt", "Download invoice")}
+                    >
+                      <Button
+                        size="small"
+                        aria-label={t(
+                          "transactions.seeReceiptAria",
+                          "Receipt for {{code}}",
+                          { code: r.code },
                         )}
-                      >
-                        <Button
-                          size="small"
-                          aria-label={t(
-                            "transactions.editPaymentsAria",
-                            "Payments on {{code}}",
-                            { code: m.reference },
-                          )}
-                          icon={<WalletOutlined />}
-                          onClick={() => setEditingPay(m.order!)}
-                        />
-                      </Tooltip>
-                      <Tooltip
-                        title={t(
-                          "transactions.printThisInvoiceAgain",
-                          "Print this invoice again",
+                        icon={<FileTextOutlined />}
+                        onClick={() => setReprint(r.order)}
+                      />
+                    </Tooltip>
+                    <Tooltip
+                      title={t("transactions.editSale", "Edit transaction")}
+                    >
+                      <Button
+                        size="small"
+                        aria-label={t(
+                          "transactions.editSaleAria",
+                          "Edit {{code}}",
+                          { code: r.code },
                         )}
-                      >
-                        <Button
-                          size="small"
-                          aria-label={`Print invoice ${m.reference}`}
-                          icon={<PrinterOutlined />}
-                          onClick={() => setReprint(m.order!)}
-                        />
-                      </Tooltip>
-                    </Flex>
-                  ) : null,
+                        icon={<EditOutlined />}
+                        onClick={() => setEditing(r.order)}
+                      />
+                    </Tooltip>
+                  </Flex>
+                ),
               },
             ]}
           />
         </Card>
       </Flex>
 
-      <PaymentsModal
-        open={editingPay !== null}
-        code={editingPay?.code ?? ""}
-        total={editingPay?.total ?? 0}
-        payments={editingPay ? paymentsOf(editingPay) : []}
-        log={
-          editingPay
-            ? db.paymentLog
-                .filter((e) =>
-                  paymentsOf(editingPay).some((p) => p.id === e.paymentId),
-                )
-                .slice()
-                .sort((a, b) => b.at.localeCompare(a.at))
-            : []
-        }
-        methods={db.paymentMethods
-          .filter((m) => m.forSale && m.active)
-          .map((m) => ({ value: m.code, label: m.label }))}
-        onClose={() => setEditingPay(null)}
-        onSave={(next, reason) =>
-          editingPay && savePayments(editingPay, next, reason)
-        }
+      <EditTransactionModal
+        open={editing !== null}
+        order={editing}
+        onClose={() => setEditing(null)}
       />
 
       <InvoiceModal

@@ -15,7 +15,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { PrismaClient, appendUnitEvent } from "@nusantara/db";
+import { PrismaClient, appendUnitEvent, truncateAll } from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
 import { expirePass } from "../src/expire.js";
 
@@ -41,17 +41,17 @@ afterAll(async () => {
   await db.$disconnect();
 });
 
+/**
+ * Empty the schema, then write this file's own shop.
+ *
+ * Was a hand-written chain of `deleteMany` calls in child-before-parent order,
+ * which never listed `ModelAxis`: whenever another suite had left a catalogue
+ * in the shared test database, all twelve tests failed in this hook on
+ * `ModelAxis_modelId_fkey` (2026-09-11, and again rehearsing CI's clean run on
+ * 2026-09-18). `truncateAll` cannot fall behind the schema.
+ */
 beforeEach(async () => {
-  await db.reservationItem.deleteMany({});
-  // Before the reservations: a DIRESERVASI event names the hold it belongs to
-  // (UnitEvent.reservationId, Restrict), so the ledger goes first.
-  await db.unitEvent.deleteMany({});
-  await db.reservation.deleteMany({});
-  await db.unit.deleteMany({});
-  await db.sku.deleteMany({});
-  await db.catalogModel.deleteMany({});
-  await db.category.deleteMany({});
-  await db.location.deleteMany({});
+  await truncateAll(db);
   await seedShop();
 });
 

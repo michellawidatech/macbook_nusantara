@@ -11,7 +11,7 @@
  * answers, 2026-08-27).
  */
 import { App as AntdApp } from "antd";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,6 +53,37 @@ async function dialog() {
   const all = screen.getAllByRole("dialog");
   return within(all[all.length - 1]!);
 }
+
+/**
+ * Pick an option of an antd Select by its visible label. rc-select opens on
+ * mouse-down, and its options are portalled out of the dialog, so the option
+ * is looked for in the dropdown opened last rather than under the control.
+ */
+async function chooseOption(control: HTMLElement, option: string) {
+  fireEvent.mouseDown(control);
+  // Typed first, because a long list is virtual and draws only its first
+  // screenful — the demo catalogue's last variant is not in the DOM until the
+  // search narrows the list to it.
+  fireEvent.change(control, { target: { value: option } });
+  const item = await vi.waitFor(() => {
+    const open = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".ant-select-dropdown:not(.ant-select-dropdown-hidden)",
+      ),
+    );
+    const found = Array.from(
+      open[open.length - 1]?.querySelectorAll<HTMLElement>(
+        ".ant-select-item-option",
+      ) ?? [],
+    ).find((el) => el.getAttribute("title") === option);
+    if (!found) throw new Error(`no option “${option}” open`);
+    return found;
+  });
+  fireEvent.click(item);
+}
+
+/** The variant this file stocks, as the trade-in's product list names it. */
+const TILL_PRODUCT = "Till Test Air 8GB / 256GB";
 
 beforeEach(() => {
   /*
@@ -116,6 +147,9 @@ beforeEach(() => {
       });
     }
     d.orders = [];
+    // Counted products live on the stock ledger (2026-09-19); an empty one
+    // keeps the catalogue to the one variant this file makes.
+    d.stockMoves = [];
   });
 });
 
@@ -187,6 +221,59 @@ async function pickFirstMachine(serial = "TILLAAA00001") {
   if (pick) await userEvent.click(pick);
 }
 
+describe("selling a counted product", () => {
+  it("adds pieces by quantity and writes the sale to the stock ledger", async () => {
+    const db = snapshot();
+    const mouse = db.skus.find((s) => {
+      const model = db.models.find((m) => m.id === s.modelId);
+      return db.categories.some(
+        (c) => c.name === model?.category && !c.tracksSerial,
+      );
+    })!;
+    act(() => {
+      mutate((d) => {
+        d.stockMoves = [
+          {
+            id: "sm-till-1",
+            skuId: mouse.id,
+            locationId: d.myWarehouseId,
+            qty: 3,
+            cost: 400_000,
+            type: "KOREKSI",
+            at: "2026-09-01T10:00:00.000Z",
+            staff: "Michella",
+          },
+        ];
+      });
+    });
+    renderTill();
+    await openCatalogue();
+    const row = new RegExp(`Choose a ${mouse.name}`);
+    // No chooser for a mouse: each tap is one more piece.
+    await userEvent.click(screen.getByRole("button", { name: row }));
+    await openCatalogue();
+    await userEvent.click(screen.getByRole("button", { name: row }));
+    await payAndFinish();
+
+    const after = snapshot();
+    const order = after.orders[0]!;
+    expect(order.serials).toEqual([]);
+    expect(order.lines).toMatchObject([
+      { skuId: mouse.id, qty: 2, price: mouse.price },
+    ]);
+    const out = after.stockMoves.filter((m) => m.orderId === order.id);
+    expect(out).toMatchObject([
+      {
+        type: "TERJUAL",
+        qty: -2,
+        cost: 400_000,
+        orderLineId: order.lines![0]!.id,
+      },
+    ]);
+    expect(order.total).toBe(mouse.price * 2);
+  });
+});
+
 describe("picking a machine", () => {
   it("lists variants with a count, not one row per serial", async () => {
     renderTill();
@@ -232,6 +319,35 @@ describe("picking a machine", () => {
     expect(d.getByText("TILLBBB00002")).toBeTruthy();
     expect(d.getByLabelText("Pick TILLAAA00001")).toBeTruthy();
     expect(d.getByLabelText("Pick TILLBBB00002")).toBeTruthy();
+  });
+
+  it("puts a unit in the basket the moment its serial is typed (owner ask 2026-09-21)", async () => {
+    // "When we type in serial number, we should automatically add the unit
+    // instead of showing the unit name and choosing it manually."
+    renderTill();
+    await openCatalogue();
+    const search = screen.getByRole("searchbox", { name: "Search the stock" });
+    await userEvent.type(search, "tillbbb00002");
+
+    // No chooser, and the box is empty for the next one.
+    expect(screen.queryByLabelText("Pick TILLBBB00002")).toBeNull();
+    expect(search).toHaveValue("");
+    expect(screen.getAllByText("TILLBBB00002").length).toBeGreaterThan(0);
+    expect(screen.getByText("1 left")).toBeTruthy();
+  });
+
+  it("says why a typed serial cannot go on the sale, rather than adding it", async () => {
+    act(() => {
+      mutate((d) => {
+        d.units.find((u) => u.serial === "TILLBBB00002")!.status = "TERJUAL";
+      });
+    });
+    renderTill();
+    await openCatalogue();
+    const search = screen.getByRole("searchbox", { name: "Search the stock" });
+    await userEvent.type(search, "TILLBBB00002");
+    expect(search).toHaveValue("TILLBBB00002");
+    expect(screen.getByText(/TILLBBB00002 cannot be sold/)).toBeInTheDocument();
   });
 
   it("counts the picked machine off the row without hiding it", async () => {
@@ -314,9 +430,13 @@ describe("a walk-in paying cash", () => {
     renderTill();
     await pickFirstMachine();
     await goToPayment();
-    await userEvent.click(screen.getByRole("button", { name: "QRIS" }));
+    // The chips are toggles since 2026-09-19: Cash off, Transfer on.
+    await userEvent.click(screen.getByRole("button", { name: "Pay by Cash" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Pay by Transfer" }),
+    );
     await payAndFinish();
-    expect(snapshot().orders[0]!.payMethod).toBe("QRIS");
+    expect(snapshot().orders[0]!.payMethod).toBe("TRANSFER");
 
     // The same answer all afternoon. A till that forgets between sales asks
     // the same question ten times.
@@ -324,7 +444,7 @@ describe("a walk-in paying cash", () => {
     await payAndFinish();
     const orders = snapshot().orders;
     expect(orders).toHaveLength(2);
-    expect(orders[0]!.payMethod).toBe("QRIS");
+    expect(orders[0]!.payMethod).toBe("TRANSFER");
   });
 
   it("will not leave the catalogue with an empty basket", () => {
@@ -386,43 +506,198 @@ describe("paying a bill in more than one way", () => {
     expect(order.settled).toBe(true);
   });
 
-  it("records a split, and is not settled while a marketplace holds half", async () => {
+  it("records a split across two methods, the last taking the rest", async () => {
+    // Owner revision 2026-09-19: pick several chips; each is listed with its
+    // split amount and what was actually paid.
     renderTill();
     await pickFirstMachine();
     await goToPayment();
 
-    await userEvent.click(screen.getByRole("button", { name: /Pay in parts/ }));
-    // The grid opens on the one payment the chips describe, so splitting is
-    // "add the second half" rather than "describe the whole bill again".
-    const amounts = screen.getAllByLabelText("Amount") as HTMLInputElement[];
-    await userEvent.tripleClick(amounts[0]!);
-    await userEvent.paste("5000000");
     await userEvent.click(
-      screen.getByRole("button", { name: /Add a payment/ }),
+      screen.getByRole("button", { name: "Pay by Transfer" }),
     );
-
-    // The new row takes the GAP by default — a deposit and then the rest is
-    // one press and no arithmetic.
-    const states = screen.getAllByLabelText(
-      "State of this payment",
-    ) as HTMLElement[];
-    expect(states).toHaveLength(2);
+    const cashSplit = screen.getByLabelText("Amount paid, Cash");
+    await userEvent.tripleClick(cashSplit);
+    await userEvent.paste("4000000");
+    // Transfer is last, so it takes what Cash leaves — no subtraction. The box
+    // is EMPTY and says so in its placeholder (owner revision 2026-09-21):
+    // blank means "all of it", and only a shortfall is ever typed.
+    const transferPaid = screen.getByLabelText("Actual paid, Transfer");
+    expect(transferPaid).toHaveValue("");
+    expect(transferPaid).toHaveAttribute("placeholder", "6.000.000");
 
     await payAndFinish();
 
     const order = snapshot().orders[0]!;
-    expect(order.payments).toHaveLength(2);
-    expect(order.payments!.reduce((n, p) => n + p.amount, 0)).toBe(order.total);
-    expect(order.payments![0]!.amount).toBe(5_000_000);
-    // Every rupiah is accounted for, and all of it is the shop's, so the sale
-    // IS settled — the projection is over the parts, not over the channel.
+    expect(order.payments!.map((p) => [p.method, p.amount, p.state])).toEqual([
+      ["TUNAI", 4_000_000, "SETTLED"],
+      ["TRANSFER", 6_000_000, "SETTLED"],
+    ]);
+    // Every rupiah is the shop's, so the sale IS settled.
     expect(order.settled).toBe(true);
+  });
+
+  it("records what is still owed when less was paid (piutang)", async () => {
+    renderTill();
+    await pickFirstMachine();
+    await goToPayment();
+
+    const paid = screen.getByLabelText("Actual paid, Cash");
+    await userEvent.tripleClick(paid);
+    await userEvent.paste("3000000");
+    expect(screen.getByText(/Customer owes/)).toBeInTheDocument();
+
+    await payAndFinish();
+
+    const order = snapshot().orders[0]!;
+    expect(order.payments!.map((p) => [p.state, p.amount])).toEqual([
+      ["SETTLED", 3_000_000],
+      ["DUE", 7_000_000],
+    ]);
+    expect(order.settled).toBe(false);
+  });
+
+  it("will not record a marketplace part without its own order number", async () => {
+    renderTill();
+    await pickFirstMachine();
+    await goToPayment();
+
+    await userEvent.click(screen.getByRole("button", { name: "Pay by Cash" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Pay by Shopee" }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Pay & finish$/ }),
+    );
+    // Refused on this page, on the box that needs the answer.
+    expect(
+      await screen.findAllByText(/the marketplace's order number/),
+    ).not.toHaveLength(0);
+    expect(snapshot().orders).toHaveLength(0);
+
+    // In the Shopee row itself, where a cash row has its Actual paid (owner
+    // revision 2026-09-21).
+    await userEvent.type(
+      screen.getByLabelText("Reference number, Shopee"),
+      "240919ABCDEF",
+    );
+    await payAndFinish();
+
+    const order = snapshot().orders[0]!;
+    expect(order.payments).toEqual([
+      expect.objectContaining({
+        method: "MARKETPLACE",
+        channel: "SHOPEE",
+        state: "PENDING",
+        amount: order.total,
+        ref: "240919ABCDEF",
+      }),
+    ]);
+    // Paid, but Shopee holds it until the payout.
+    expect(order.settled).toBe(false);
+  });
+
+  it("gives a Shopee part and a Tokopedia part a number each", async () => {
+    // Owner revision 2026-09-21: "if the user choose 1 shopee 1 tokopedia,
+    // then have 2 reference number". Two platforms, two orders, two payouts.
+    renderTill();
+    await pickFirstMachine();
+    await goToPayment();
+
+    await userEvent.click(screen.getByRole("button", { name: "Pay by Cash" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Pay by Shopee" }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Pay by Tokopedia" }),
+    );
+    const shopeeAmount = screen.getByLabelText("Amount paid, Shopee");
+    await userEvent.tripleClick(shopeeAmount);
+    await userEvent.paste("4000000");
+    // A marketplace row has no Actual paid — it is paid in full at checkout.
+    expect(screen.queryByLabelText("Actual paid, Shopee")).toBeNull();
+    await userEvent.type(
+      screen.getByLabelText("Reference number, Shopee"),
+      "2609SHOPEE01",
+    );
+    await userEvent.type(
+      screen.getByLabelText("Reference number, Tokopedia"),
+      "INV/TKP/0001",
+    );
+    await payAndFinish();
+
+    const order = snapshot().orders[0]!;
+    expect(
+      order.payments!.map((p) => [p.channel, p.amount, p.ref, p.state]),
+    ).toEqual([
+      ["SHOPEE", 4_000_000, "2609SHOPEE01", "PENDING"],
+      ["TOKOPEDIA", 6_000_000, "INV/TKP/0001", "PENDING"],
+    ]);
+  });
+});
+
+describe("a sale kept on this device", () => {
+  it("is still there after leaving the till and coming back", async () => {
+    // The in-app tab strip used to keep the till mounted; it is gone (owner
+    // ask 2026-09-21), and what was typed is kept on this device instead.
+    const first = renderTill();
+    await pickFirstMachine();
+    await goToPayment();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Pay by Shopee" }),
+    );
+    await userEvent.type(
+      screen.getByLabelText("Reference number, Shopee"),
+      "2609KEPT0001",
+    );
+    first.unmount();
+
+    renderTill();
+    // Back on the payment step, with the same basket and the same answers.
+    expect(
+      await screen.findByRole("button", { name: /Go back to products/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Reference number, Shopee")).toHaveValue(
+      "2609KEPT0001",
+    );
+    // …and the unit is still in the basket.
+    await userEvent.click(
+      screen.getByRole("button", { name: /Go back to products/ }),
+    );
+    expect(screen.getByLabelText("Price for TILLAAA00001")).toBeInTheDocument();
+  });
+
+  it("takes a unit sold elsewhere off a kept basket, and says so", async () => {
+    localStorage.setItem(
+      "nusantara.draft.till.lines",
+      JSON.stringify([{ serial: "TILLAAA00001" }, { serial: "TILLBBB00002" }]),
+    );
+    act(() => {
+      mutate((d) => {
+        const u = d.units.find((x) => x.serial === "TILLAAA00001")!;
+        u.status = "TERJUAL";
+      });
+    });
+    renderTill();
+    expect(
+      await screen.findByText(
+        "TILLAAA00001 is no longer for sale and was taken off this sale.",
+      ),
+    ).toBeInTheDocument();
+    const kept = JSON.parse(
+      localStorage.getItem("nusantara.draft.till.lines") ?? "[]",
+    ) as { serial?: string }[];
+    expect(kept.map((l) => l.serial)).toEqual(["TILLBBB00002"]);
   });
 });
 
 describe("taking a machine in part-exchange", () => {
-  /** The serial a traded machine comes in under. `S` + ten, like every other. */
-  const TRADED = "STRADEIN0001";
+  /**
+   * A traded unit's barcode, and what a NEW one is filed under: the barcode
+   * without its S (owner rules 2026-09-21).
+   */
+  const TRADED_BARCODE = "SC02TRADE001";
+  const TRADED = "C02TRADE001";
 
   it("credits the bill and books the machine into QC", async () => {
     renderTill();
@@ -431,8 +706,9 @@ describe("taking a machine in part-exchange", () => {
     await goToPayment();
     await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
     const d = await dialog();
+    await chooseOption(d.getByLabelText(/^Product/), TILL_PRODUCT);
     await userEvent.type(d.getByLabelText(/Description/), "Air 2017");
-    await userEvent.type(d.getByLabelText(/Serial/), TRADED);
+    await userEvent.type(d.getByLabelText(/Serial/), TRADED_BARCODE);
     await userEvent.click(d.getByLabelText(/Price/));
     await userEvent.paste("2000000");
     // New, so no grading checklist is owed — `lib/condition.ts` is explicit
@@ -471,6 +747,7 @@ describe("taking a machine in part-exchange", () => {
     await goToPayment();
     await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
     const d = await dialog();
+    await chooseOption(d.getByLabelText(/^Product/), TILL_PRODUCT);
     await userEvent.type(d.getByLabelText(/Description/), "Air 2017");
     // Fourteen characters: too long for the app to put a marker in front of
     // (10–12 is a bare serial), and carrying none of its own. Neither form,
@@ -484,7 +761,9 @@ describe("taking a machine in part-exchange", () => {
     await userEvent.click(d.getByRole("button", { name: "Add it" }));
 
     // Refused, and the dialog stays open with the reason on it.
-    expect(await d.findByText(/is not a serial/)).toBeInTheDocument();
+    expect(
+      await d.findByText(/is not a new unit's serial/),
+    ).toBeInTheDocument();
     // On the FIELD, not in a banner at the top of a dialog that scrolls
     // (owner ask 2026-09-01). The reason names a serial; the outline says
     // which box is holding it.
@@ -496,17 +775,17 @@ describe("taking a machine in part-exchange", () => {
     );
   });
 
-  it("puts the S back on a serial read off the customer's machine", async () => {
-    // Owner ask 2026-09-01: the marker is printed under the bars, not on the
-    // case. A machine traded in arrives with no paperwork and no sticker, so
-    // its serial is always read off the case — this is the desk where being
-    // asked for a character that is not in front of you bites hardest.
+  it("files a new unit's serial as read off its case — no S added", async () => {
+    // Owner rules 2026-09-21: the S is the BARCODE's, never the serial's. A
+    // unit traded in arrives with no paperwork, so its serial is read off the
+    // case, and that is what it is filed under.
     renderTill();
     await pickFirstMachine();
 
     await goToPayment();
     await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
     const d = await dialog();
+    await chooseOption(d.getByLabelText(/^Product/), TILL_PRODUCT);
     await userEvent.type(d.getByLabelText(/Description/), "Air 2017");
     await userEvent.type(d.getByLabelText(/Serial/), "c02dqxfpxwck");
     await userEvent.click(d.getByLabelText(/Price/));
@@ -517,13 +796,132 @@ describe("taking a machine in part-exchange", () => {
     // The machine is minted with the sale, exactly as the test above shows.
     await payAndFinish();
 
-    // Filed with its marker, and upper-cased on the way.
-    expect(snapshot().units.some((u) => u.serial === "SC02DQXFPXWCK")).toBe(
+    // Filed as it is on the case, upper-cased on the way.
+    expect(snapshot().units.some((u) => u.serial === "C02DQXFPXWCK")).toBe(
       true,
     );
-    expect(snapshot().units.some((u) => u.serial === "C02DQXFPXWCK")).toBe(
+    expect(snapshot().units.some((u) => u.serial === "SC02DQXFPXWCK")).toBe(
       false,
     );
+  });
+
+  /*
+   * Owner revision 2026-09-19: "Trade-Ins", one star, nothing drawn for a
+   * sealed machine, no price cards — and no field waits for another.
+   */
+  it("is titled Trade-Ins and adds no star of its own", async () => {
+    renderTill();
+    await pickFirstMachine();
+    await goToPayment();
+    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
+    const d = await dialog();
+
+    expect(d.getByText("Trade-Ins")).toBeInTheDocument();
+    // The star is the app-wide required mark's (theme/requiredMark.tsx — not
+    // mounted here). The dialog used to write its own `*` into the label as
+    // well, so in the app every required field read "Product * *".
+    expect(document.querySelector('label[for="skuId"]')?.textContent).toBe(
+      "Product",
+    );
+    expect(d.queryByText(/We list it at/)).toBeNull();
+    expect(d.queryByText(/We have paid/)).toBeNull();
+  });
+
+  it("draws nothing to grade on a new machine", async () => {
+    renderTill();
+    await pickFirstMachine();
+    await goToPayment();
+    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
+    const d = await dialog();
+
+    expect(d.getByLabelText("Grade")).toBeInTheDocument();
+    await userEvent.click(d.getByText("New"));
+    expect(d.queryByLabelText("Grade")).toBeNull();
+  });
+
+  it("grades a unit before its product is found", async () => {
+    // The category is its own box, and the product can be found afterwards.
+    renderTill();
+    await pickFirstMachine();
+    await goToPayment();
+    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
+    const d = await dialog();
+
+    const category = snapshot().models.find(
+      (m) => m.id === snapshot().skus.find((s) => s.id === SKU)!.modelId,
+    )!.category;
+    await chooseOption(d.getByLabelText(/^Category/), category);
+    await chooseOption(d.getByLabelText("Grade"), "B");
+
+    // …and the product last, which keeps the category it agrees with.
+    await chooseOption(d.getByLabelText(/^Product/), TILL_PRODUCT);
+    await userEvent.type(d.getByLabelText(/Description/), "Air 2017");
+    await userEvent.type(d.getByLabelText(/Serial/), "STRADEIN0002");
+    await userEvent.click(d.getByLabelText(/Price/));
+    await userEvent.paste("2000000");
+    await userEvent.click(d.getByRole("button", { name: "Add it" }));
+    await payAndFinish();
+
+    const taken = snapshot().units.find((u) => u.serial === "STRADEIN0002")!;
+    expect(taken.skuId).toBe(SKU);
+    expect(taken.grade).toBe("B");
+  });
+
+  it("takes an accessory in without a serial, as a quantity", async () => {
+    // Owner brief 2026-09-19: "Accessories: do not have battery and serial".
+    const db = snapshot();
+    const sleeve = db.skus.find((s) => {
+      const model = db.models.find((m) => m.id === s.modelId);
+      return db.categories.some(
+        (c) => c.name === model?.category && !c.tracksSerial,
+      );
+    })!;
+    renderTill();
+    await pickFirstMachine();
+    await goToPayment();
+    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
+    const d = await dialog();
+    await chooseOption(
+      d.getByLabelText(/^Product/),
+      `${sleeve.name} ${sleeve.variantLabel}`,
+    );
+    // No box for a number nobody reads off an accessory.
+    await vi.waitFor(() => expect(d.queryByLabelText(/Serial/)).toBeNull());
+    await userEvent.type(d.getByLabelText(/Description/), "Sleeve bekas");
+    await userEvent.click(d.getByLabelText(/Price/));
+    await userEvent.paste("100000");
+    await userEvent.click(d.getByText("New"));
+    await userEvent.click(d.getByRole("button", { name: "Add it" }));
+    await payAndFinish();
+
+    // A quantity on the stock ledger, at what was allowed for it — and no
+    // unit minted to hold it (2026-09-19).
+    const db2 = snapshot();
+    expect(db2.units.some((u) => u.skuId === sleeve.id)).toBe(false);
+    expect(db2.stockMoves.find((m) => m.skuId === sleeve.id)).toMatchObject({
+      type: "TUKAR_TAMBAH",
+      qty: 1,
+      cost: 100_000,
+    });
+  });
+
+  it("will not take a trade-in without its product", async () => {
+    // A unit is filed under a variant, and the store refuses one with none —
+    // which would have refused the whole sale with it.
+    renderTill();
+    await pickFirstMachine();
+    await goToPayment();
+    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
+    const d = await dialog();
+
+    await userEvent.type(d.getByLabelText(/Description/), "Air 2017");
+    await userEvent.type(d.getByLabelText(/Serial/), "STRADEIN0003");
+    await userEvent.click(d.getByLabelText(/Price/));
+    await userEvent.paste("2000000");
+    await userEvent.click(d.getByText("New"));
+    await userEvent.click(d.getByRole("button", { name: "Add it" }));
+
+    expect(await d.findByText(/Pick the product/)).toBeInTheDocument();
   });
 });
 
@@ -702,8 +1100,16 @@ describe("a machine's share of its invoice's shipping and tax", () => {
           unitCost: 8_000_000,
         })),
         payments: [],
-        shippingFee: 300_000,
-        taxFee: 100_000,
+        fees: [
+          {
+            id: "f1",
+            kind: "SHIPPING",
+            label: "",
+            amount: 300_000,
+            inCogs: true,
+          },
+          { id: "f2", kind: "TAX", label: "", amount: 100_000, inCogs: true },
+        ],
         discount: 0,
         status: "RECEIVED",
       });

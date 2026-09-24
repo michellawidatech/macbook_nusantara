@@ -34,6 +34,28 @@
  * drawer to exclude. Logins are a separate step (`pnpm --filter @nusantara/api
  * accounts --owner ersen`), from the salespeople this brings.
  *
+ * ## `--with-balances` (owner, 2026-09-21)
+ *
+ *     python3 tools/b2soft/extract.py "$HOME/Export Files" build/b2soft --balances-only
+ *     pnpm --filter @nusantara/db import:b2soft build/b2soft --master-only --with-balances
+ *
+ * The cutover the owner described: *"the data that I will migrate is probably
+ * only the master product and piutang & utang (payable and receivable) ...
+ * pls do not create a long list of migration data from 2020"*.
+ *
+ * It is `--master-only` with the opening balances KEPT, and it is meant to be
+ * fed the extractor's `--balances-only` output, where every customer's and
+ * every supplier's whole outstanding position has been rolled into one opening
+ * balance from B2Soft's own aged reports. Three years of documents become two
+ * numbers per party, which is exactly what was asked for — and what the
+ * `openingBalance` columns were added for (2026-09-08, 2026-09-13): *debt from
+ * before this app, stated once*.
+ *
+ * It also sets `finance.openingBalanceAt`, which `--master-only` alone does
+ * not: with balances in the shop there IS a before, and without that setting
+ * Income & Expense counts three years of B2Soft takings as money in the
+ * drawer.
+ *
  * Run it with the OWNER connection, the one migrations use: the numbering
  * sequences it creates must belong to the role `next_doc_code` runs as.
  */
@@ -216,13 +238,15 @@ function withoutBalances(changes: unknown): unknown {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const masterOnly = args.includes("--master-only");
+  const withBalances = args.includes("--with-balances");
   const folder = args.find((a) => !a.startsWith("--"));
+  const known = ["--master-only", "--with-balances"];
   if (
     folder === undefined ||
-    args.some((a) => a.startsWith("--") && a !== "--master-only")
+    args.some((a) => a.startsWith("--") && !known.includes(a))
   ) {
     console.error(
-      "usage: pnpm --filter @nusantara/db import:b2soft <folder written by tools/b2soft/extract.py> [--master-only]",
+      "usage: pnpm --filter @nusantara/db import:b2soft <folder written by tools/b2soft/extract.py> [--master-only] [--with-balances]",
     );
     process.exitCode = 2;
     return;
@@ -240,7 +264,10 @@ async function main(): Promise<void> {
   if (masterOnly) {
     console.log(
       "master data only: catalogue, warehouses, suppliers, customers and salespeople — " +
-        "no stock, no sales, no purchases, and no opening balances",
+        "no stock, no sales, no purchases" +
+        (withBalances
+          ? ", and every party's outstanding balance as an opening balance"
+          : ", and no opening balances"),
     );
   }
 
@@ -256,7 +283,10 @@ async function main(): Promise<void> {
     const body = JSON.parse(
       await readFile(path.join(root, chunk.file), "utf8"),
     ) as { changes: unknown };
-    const changes = masterOnly ? withoutBalances(body.changes) : body.changes;
+    const changes =
+      masterOnly && !withBalances
+        ? withoutBalances(body.changes)
+        : body.changes;
     try {
       await commitStore(client, {
         staffId,
@@ -288,7 +318,13 @@ async function main(): Promise<void> {
 
   for (const line of await advanceNumbering(client))
     console.log(`numbering: ${line}`);
-  if (!masterOnly && (await startBalanceAt(client, manifest.cutoff))) {
+  // With balances in the shop there IS a before, so the balance has to start
+  // somewhere — otherwise Income & Expense counts three years of B2Soft
+  // takings as money in the drawer.
+  if (
+    (!masterOnly || withBalances) &&
+    (await startBalanceAt(client, manifest.cutoff))
+  ) {
     console.log(`Income & Expense counts from ${manifest.cutoff}`);
   }
 

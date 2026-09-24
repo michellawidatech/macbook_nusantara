@@ -202,10 +202,40 @@ export const SEED = {
    * emerald 600 sat at 3.9:1 and only ever cleared the large-text bar.
    */
   primary: "#047857",
+  /**
+   * Emerald 500 — the seed in the DARK scheme (owner report 2026-09-19:
+   * *"when something is selected it might be highlighted as dark green which
+   * is hard to see"*).
+   *
+   * antd's dark algorithm mixes the seed toward the background, and emerald
+   * 700 came out `#06694d`: 2.75:1 on a dark card, so every green label, link,
+   * active tab and page number was hard to read. Emerald 500 comes out
+   * `#11a071`, 5.5:1. Filled primary buttons are unaffected — they carry the
+   * gradient (`ACCENT`), not this.
+   */
+  primaryDark: "#10b981",
   success: "#52c41a",
   warning: "#faad14",
   error: "#ff4d4f",
   info: "#047857",
+} as const;
+
+/**
+ * What a SELECTED thing is filled with — a picked option, a selected row, the
+ * chosen item of a menu, a conversation that is open — per scheme (owner
+ * report 2026-09-19, as above).
+ *
+ * The one place this file hands antd a DERIVED step rather than a seed, and
+ * on purpose: for a seed as deep as emerald 700, antd's derivation goes wrong
+ * in both schemes. Its light "pale" tint came out `#a5b8af` with a `#72ab93`
+ * hover — a mid green under dark text, which is the "dark green, hard to see"
+ * — and its dark tint came out `#0f3228`, 1.3:1 against the card, which is to
+ * say invisible. These are real tints of the brand hue: pale behind dark text
+ * in light, a clearly lifted green behind white text in dark (10:1).
+ */
+export const SELECTION = {
+  light: { bg: "#e7f4ee", bgHover: "#d3ebdf" },
+  dark: { bg: "#1b4a3b", bgHover: "#225b48" },
 } as const;
 
 /**

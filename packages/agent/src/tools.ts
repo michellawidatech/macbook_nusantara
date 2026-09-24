@@ -61,7 +61,11 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { formatRupiah } from "@nusantara/domain";
 import { loadKnowledgeBase, type KnowledgeBase } from "./knowledge.js";
 import { isStrongMatch } from "./retrieval.js";
-import { HANDOFF_TOPICS } from "./policy.js";
+import {
+  HANDOFF_TOPICS,
+  PARALLEL_CAPABILITIES,
+  type AgentCapabilities,
+} from "./policy.js";
 import { lookupCatalog } from "./systemFacts.js";
 
 /** How many units one search may return. Past this the agent should narrow. */
@@ -284,6 +288,42 @@ const CHECK_SERIAL: Anthropic.Tool = {
   },
 };
 
+/**
+ * The shop's own photographs of one machine (owner ask 2026-09-21: *"the
+ * chatbot can send pictures per unit"*).
+ *
+ * It returns HANDLES, never bytes and never a URL: the model is given
+ * `photoIds` and the sending is done by the worker, out of band, from the
+ * database. That ordering is the whole safety of it — a model that never sees
+ * an image cannot be talked into describing one, and a customer who guesses a
+ * serial gets the same three pictures the shop would have sent anyway, with no
+ * way to reach any other row.
+ *
+ * Only the photos QC took of THAT unit, and only while it can be bought. A
+ * machine that is sold, reserved or written off returns nothing: its pictures
+ * are a record, not a listing.
+ */
+const UNIT_PHOTOS: Anthropic.Tool = {
+  name: "unit_photos",
+  description:
+    "The shop's own photos of one unit, by serial. Returns photo handles you pass to reply as " +
+    "'photos'; you never see the pictures yourself, so describe nothing about them. Use it when " +
+    "the customer asks for a photo, a real pic or to see the condition of a unit you have " +
+    "already found with search_stock.",
+  input_schema: {
+    type: "object",
+    properties: {
+      serial: {
+        type: "string",
+        maxLength: 40,
+        description: "The serial of the unit, as search_stock returned it.",
+      },
+    },
+    required: ["serial"],
+    additionalProperties: false,
+  },
+};
+
 const STORE_INFO: Anthropic.Tool = {
   name: "store_info",
   description:
@@ -384,9 +424,10 @@ const REPLY: Anthropic.Tool = {
   name: "reply",
   description:
     "Send your answer to the customer. Everything it tells them must come from an approved " +
-    "answer (cite its handle, like K7), the shop facts ('store') or a catalogue lookup " +
-    "('catalog'). A greeting or a thank-you that states no fact cites 'greeting'. If you cannot " +
-    "name a source for what they asked, use handoff_to_staff instead.",
+    "answer (cite its handle, like K7), the shop facts ('store'), a catalogue lookup " +
+    "('catalog') or a stock lookup ('stock'). A greeting or a thank-you that states no fact " +
+    "cites 'greeting'. If you cannot name a source for what they asked, use handoff_to_staff " +
+    "instead.",
   input_schema: {
     type: "object",
     properties: {
@@ -400,7 +441,14 @@ const REPLY: Anthropic.Tool = {
         type: "string",
         maxLength: 120,
         description:
-          "Comma-separated: the handles of the approved answers used (K3, K12), and/or store, catalog or greeting.",
+          "Comma-separated: the handles of the approved answers used (K3, K12), and/or store, catalog, stock or greeting.",
+      },
+      photos: {
+        type: "string",
+        maxLength: 300,
+        description:
+          "Comma-separated photo handles from unit_photos, when the customer asked to see the " +
+          "unit. They are sent after your message. Leave it out otherwise.",
       },
     },
     required: ["message", "sources"],
@@ -528,6 +576,7 @@ const CANCEL_RESERVATION: Anthropic.Tool = {
 export const READ_TOOLS = [
   "search_stock",
   "check_serial",
+  "unit_photos",
   "store_info",
   "browse_catalog",
   "lookup_customer",
@@ -558,16 +607,41 @@ export const CUSTOMER_TOOLS = [
   "handoff_to_staff",
 ] as const;
 
-/** Writes: offered only to a caller holding a reserve capability. */
-export const WRITE_TOOLS = [
-  "create_reservation",
-  "cancel_reservation",
+/**
+ * What is added when the bot may read the shelf (owner ask 2026-09-21).
+ *
+ * `lookup_customer` is in it, and it earns its place twice over: the owner
+ * asked the bot to *"focus more on how to get to know the user"*, and the
+ * cheapest way to sound like a shop that knows somebody is to not ask them a
+ * question they have already answered. It reads that sender's own name, their
+ * past purchases and their own booking — nobody else's.
+ */
+export const STOCK_TOOLS = [
+  "search_stock",
+  "check_serial",
+  "browse_catalog",
+  "unit_photos",
+  "lookup_customer",
+  "check_order",
 ] as const;
+
+/**
+ * Writes: offered only to a caller holding a reserve capability.
+ *
+ * ⚠️ `cancel_reservation` is NOT offered to a customer's conversation since
+ * 2026-09-21 — *"the only write operation is to make a reservation"*. It still
+ * exists, and `dispatchTool` still answers it, because the staff Draft page
+ * and the tests both reach it; what changed is `toolsFor`, which is the only
+ * thing a model can see. A customer asking to cancel goes to a person, which
+ * is also where somebody can ask them why.
+ */
+export const WRITE_TOOLS = ["create_reservation"] as const;
 
 /** The complete surface. Changing this array is a policy decision. */
 export const ANTHROPIC_TOOLS: Anthropic.Tool[] = [
   SEARCH_STOCK,
   CHECK_SERIAL,
+  UNIT_PHOTOS,
   STORE_INFO,
   BROWSE_CATALOG,
   LOOKUP_CUSTOMER,
@@ -593,13 +667,34 @@ export const ANTHROPIC_TOOLS: Anthropic.Tool[] = [
  * (policy.ts `routeMessage`), so the one way to end the turn is to say so.
  */
 export function toolsFor(
-  _ctx: ToolContext,
-  opts: { handoffOnly?: boolean } = {},
+  ctx: ToolContext,
+  opts: {
+    handoffOnly?: boolean;
+    /** What the bot may do for itself. Defaults to the 2026-09-18 design. */
+    capabilities?: AgentCapabilities;
+  } = {},
 ): Anthropic.Tool[] {
-  const allowed: readonly string[] = opts.handoffOnly
-    ? CUSTOMER_TOOLS.filter((n) => n !== "reply")
-    : CUSTOMER_TOOLS;
-  return ANTHROPIC_TOOLS.filter((t) => allowed.includes(t.name));
+  const can = opts.capabilities ?? PARALLEL_CAPABILITIES;
+  const names = new Set<string>(CUSTOMER_TOOLS);
+  if (can.stock) {
+    for (const n of STOCK_TOOLS) {
+      // The photo tool is its own capability: a shop may want the bot quoting
+      // stock without it sending pictures it has not looked at.
+      if (n === "unit_photos" && !can.photos) continue;
+      names.add(n);
+    }
+  }
+  /*
+   * A write needs BOTH the shop's policy and the caller's own capability. The
+   * staff Draft page passes no `reserve` capability at all, because pressing
+   * Draft should propose a sentence and not book a reservation — so a booking
+   * tool reaching it would be a button with a side effect nobody asked for.
+   */
+  if (can.reserve && ctx.reserve !== undefined) {
+    for (const n of WRITE_TOOLS) names.add(n);
+  }
+  if (opts.handoffOnly) names.delete("reply");
+  return ANTHROPIC_TOOLS.filter((t) => names.has(t.name));
 }
 
 // --- the shop's static facts -----------------------------------------------
@@ -914,6 +1009,84 @@ async function checkSerial(db: PrismaClient, args: Record<string, unknown>) {
       : {
           note: "This unit is not available. You do not know why, so do not speculate.",
         }),
+  };
+}
+
+/** How many photos one answer may carry. Three is a listing, ten is a folder. */
+export const MAX_UNIT_PHOTOS = 3;
+
+/**
+ * The photo handles for one unit.
+ *
+ * `UnitNotePhoto` is where QC's pictures land, under a `UnitNote` on the unit.
+ * Only the ids and a caption come back — the bytes are read by the worker when
+ * it sends, which is what keeps an image out of the model's context and out of
+ * the prompt cache.
+ */
+async function unitPhotos(db: PrismaClient, args: Record<string, unknown>) {
+  const serial = String(args["serial"] ?? "").trim();
+  if (!serial) return { error: "No serial given." };
+
+  const unit = await db.unit.findUnique({
+    where: { serial },
+    select: {
+      serial: true,
+      status: true,
+      archivedAt: true,
+      sku: {
+        select: {
+          name: true,
+          variantLabel: true,
+          archived: true,
+          model: { select: { name: true, archived: true } },
+        },
+      },
+      notes: {
+        select: {
+          photos: {
+            select: { id: true, sortOrder: true },
+            orderBy: { sortOrder: "asc" },
+          },
+        },
+        orderBy: { at: "desc" },
+      },
+    },
+  });
+  if (!unit) return { found: false, note: "No unit with that serial." };
+
+  const sellable =
+    unit.status === "TERSEDIA" &&
+    unit.archivedAt === null &&
+    !unit.sku.archived &&
+    !unit.sku.model.archived;
+  if (!sellable) {
+    // A sold machine's pictures are a record of what the shop shipped, not a
+    // listing. Saying only "not available" is the same answer `check_serial`
+    // gives, for the same reason: the raw status is nobody's business.
+    return {
+      found: true,
+      photos: [],
+      note: "This unit is not available, so there are no photos to send.",
+    };
+  }
+
+  const ids = unit.notes
+    .flatMap((n) => n.photos)
+    .map((p) => p.id)
+    .slice(0, MAX_UNIT_PHOTOS);
+  const name = [unit.sku.model.name, unit.sku.variantLabel]
+    .filter(Boolean)
+    .join(" ");
+  return {
+    found: true,
+    serial: unit.serial,
+    photoIds: ids,
+    caption: name,
+    note:
+      ids.length === 0
+        ? "There are no photos of this unit yet. Offer to have a colleague take some."
+        : `Pass these ${ids.length} handle(s) to reply as 'photos'. You have not seen the ` +
+          "pictures, so say nothing about what is in them.",
   };
 }
 
@@ -1589,6 +1762,7 @@ export async function dispatchTool(
     if (name === "store_info") out = await storeInfo(db, args, ctx);
     else if (name === "search_stock") out = await searchStock(db, args);
     else if (name === "check_serial") out = await checkSerial(db, args);
+    else if (name === "unit_photos") out = await unitPhotos(db, args);
     else if (name === "browse_catalog") out = await browseCatalog(db);
     else if (name === "lookup_customer") out = await lookupCustomer(db, ctx);
     else if (name === "check_order") out = await checkOrder(db, args, ctx);

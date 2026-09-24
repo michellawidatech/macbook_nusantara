@@ -10,7 +10,7 @@ import { useAntdLocale } from "../i18n/antdLocale";
 import { ColorSchemeContext, type ColorSchemeContextValue } from "./context";
 import { renderRequiredMark } from "./requiredMark";
 import { buildTheme } from "./theme";
-import { ACCENT, NAV } from "./tokens";
+import { ACCENT, BRAND_DEEP, NAV } from "./tokens";
 import type { ColorSchemePreference, ResolvedColorScheme } from "./tokens";
 
 const STORAGE_KEY = "xinchuan-cms.color-scheme";
@@ -124,6 +124,11 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     root.style.setProperty("--nusantara-nav-text", NAV.text);
     root.style.setProperty("--nusantara-nav-text-strong", NAV.textStrong);
     root.style.setProperty("--nusantara-nav-hover", NAV.hoverBg);
+    // The mark's deep green, for the two surfaces that carry white text in
+    // both schemes: the till's total panel and the app's active tab. The
+    // primary itself is too light for white text in the dark scheme (see
+    // `SEED.primaryDark`), so neither may borrow it.
+    root.style.setProperty("--nusantara-brand-deep", BRAND_DEEP);
   }, []);
 
   const themeConfig = useMemo(() => buildTheme(resolved), [resolved]);
@@ -146,6 +151,11 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     const t = antdTheme.getDesignToken(themeConfig);
     const root = document.documentElement;
     root.style.setProperty("--nusantara-error", t.colorError);
+    // The receiving table's "arrived as a different product" accent.
+    root.style.setProperty("--nusantara-warning", t.colorWarning);
+    // Add payment's "paid in full" rows (2026-09-22), beside the warning's
+    // "paid in part".
+    root.style.setProperty("--nusantara-success", t.colorSuccess);
     root.style.setProperty("--nusantara-surface", t.colorBgContainer);
     // Published for the till's total panel and the catalogue's hover, both of
     // which tint with the brand colour rather than picking a green of their

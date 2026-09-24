@@ -1,39 +1,45 @@
 /**
  * Turning a marketplace payout into money, and saying what the platform kept.
  *
- * > *"It will have fixed fee from the marketplace (let's say 10%), then often
- * > times there're additional adjustment like bank transfer fee. But the
- * > existing system don't keep track of which fee is which and what the
- * > adjustment is for … mark as done (enter the fee and additional fee,
- * > auto-calculate the amount of money they get but can be overwritten, and
- * > the discrepancies is highlighted and staff can add reason."*
+ * > *"It will have fixed fee from the marketplace … then often times there're
+ * > additional adjustment like bank transfer fee. But the existing system
+ * > don't keep track of which fee is which and what the adjustment is for."*
  * > — owner, 2026-09-08
  *
- * The arithmetic and its reasoning are in `lib/marketplace.ts`; this is the
- * form. Three things it is careful about:
+ * > *"When clicked, it will show a table of 'deduction' (free-text input) and
+ * > amount, which will automatically reduce the amount received."*
+ * > — owner, 2026-09-20
  *
- * 1. **It opens already filled in.** The commission line is seeded from the
- *    shop's rate for the channel and the received box starts at the
- *    expectation, so a payout that behaves normally is one press. The fees
- *    that *"often times"* appear are added, not deleted.
- * 2. **The received figure is the truth.** It is what a bank statement says,
- *    and a prediction that disagrees with a statement is wrong by definition.
- *    Everything downstream believes this number.
- * 3. **A discrepancy is not absorbed.** When the two disagree the difference
- *    is shown in red or green and a reason is required — pre-filled with the
- *    owner's default so the common case is still one press, but present, so
- *    the shop can answer "why did this payout come up short?" a month later.
+ * > *"The payment pending is not always deducted as 10%, the user should be
+ * > the one adding the deduction."* — owner, 2026-09-20, later the same day
+ *
+ * So this dialog is a table and nothing else: what was deducted, in the words
+ * off the statement, and how much. Three things it no longer does, each
+ * removed by that second ask:
+ *
+ * 1. **It seeds nothing.** It used to open with a commission line computed
+ *    from the shop's rate for the channel. Shopee, Tokopedia and a campaign
+ *    month do not agree on a percentage, and a figure the form invents is a
+ *    figure somebody has to check before they can trust the one under it.
+ * 2. **There is no "amount received" box.** What landed is `gross − Σ
+ *    deductions`, full stop; it is shown on the row in the table behind this
+ *    dialog, where it can be read beside the amount it came from.
+ * 3. **No discrepancy, and therefore no reason.** Those existed because the
+ *    received figure could be typed over the arithmetic. With the deductions
+ *    as the only input the two can never disagree — a payout that came up
+ *    short is a deduction nobody has named yet, which is a row in this table.
+ *
+ * `FeeKind` survives in the data underneath (every line typed here is
+ * `OTHER`), because that is what `Settlement.fees` stores and what the
+ * schema's enum holds; `label` is the sentence.
  */
 import { useEffect, useState } from "react";
 import {
-  Alert,
   Button,
   Flex,
   Input,
   InputNumber,
   Modal,
-  Select,
-  Statistic,
   Table,
   Typography,
 } from "antd";
@@ -42,35 +48,25 @@ import { useTranslation } from "react-i18next";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "./money";
 import { fmtRp } from "../lib/format.js";
 import { channelOf } from "../lib/channels.js";
-import {
-  DEFAULT_DISCREPANCY_REASON,
-  FEE_KINDS,
-  seedFees,
-  settlementTotals,
-  type FeeKind,
-  type SettlementFee,
-} from "../lib/marketplace.js";
-import { SPACE, TYPE } from "../theme/tokens";
+import { settlementTotals, type SettlementFee } from "../lib/marketplace.js";
+import { SPACE } from "../theme/tokens";
 
 export interface SettleModalProps {
   readonly open: boolean;
-  /** What is being settled — a channel and the sales behind it. */
+  /** What is being received — a channel, and one sale's payment. */
   readonly channel: string;
   readonly gross: number;
-  /** How many sales this payout covers, for the subtitle. */
-  readonly count: number;
-  readonly rates: Readonly<Record<string, number>> | undefined;
-  /** Prefilled when an existing settlement is being amended. */
+  /** Which sale this payout is for, for the line under the title. */
+  readonly subject?: string;
+  /** Prefilled when an existing settlement is being corrected. */
   readonly existing?: {
     readonly fees: readonly SettlementFee[];
-    readonly received: number;
-    readonly reason?: string;
   };
   readonly onClose: () => void;
   readonly onSave: (result: {
     readonly fees: SettlementFee[];
+    /** `gross` less the deductions. Derived here so one place computes it. */
     readonly received: number;
-    readonly reason?: string;
   }) => void;
 }
 
@@ -81,70 +77,63 @@ export function SettleModal({
   open,
   channel,
   gross,
-  count,
-  rates,
+  subject,
   existing,
   onClose,
   onSave,
 }: SettleModalProps) {
   const { t } = useTranslation();
   const [fees, setFees] = useState<SettlementFee[]>([]);
-  const [received, setReceived] = useState<number | null>(null);
-  const [reason, setReason] = useState("");
+
+  const label = channelOf(channel)?.label ?? channel;
 
   useEffect(() => {
     if (!open) return;
-    const seeded = existing
-      ? existing.fees.map((f) => ({ ...f }))
-      : seedFees(gross, channel, rates, newId());
-    setFees(seeded);
-    setReceived(
-      existing
-        ? existing.received
-        : settlementTotals({ gross, fees: seeded }).expected,
-    );
-    setReason(existing?.reason ?? "");
+    setFees(existing ? existing.fees.map((f) => ({ ...f })) : []);
     // Re-seeded when the dialog opens on a different payout, not when
     // `existing` changes identity under a store write. This project's eslint
     // config has no exhaustive-deps rule to disable, so the reason is stated
     // rather than suppressed.
   }, [open, channel, gross]);
 
-  const totals = settlementTotals({
-    gross,
-    fees,
-    ...(received === null ? {} : { received }),
-  });
+  const totals = settlementTotals({ gross, fees });
 
   const set = (id: string, patch: Partial<SettlementFee>) =>
     setFees((f) => f.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-
-  const label = channelOf(channel)?.label ?? channel;
 
   return (
     <Modal
       open={open}
       onCancel={onClose}
-      width={760}
-      title={t("settle.title", "Withdraw from {{channel}}", { channel: label })}
-      okText={t("settle.mark", "Mark as received")}
-      okButtonProps={{
-        disabled: totals.needsReason && reason.trim() === "",
-      }}
-      onOk={() =>
-        onSave({
-          fees,
-          received: totals.received,
-          ...(totals.needsReason ? { reason: reason.trim() } : {}),
-        })
+      width={640}
+      // A correction says it is one: the money has already been received,
+      // and "Mark as received" on a payout recorded last week reads as doing
+      // it twice.
+      title={
+        existing === undefined
+          ? t("settle.title", "Receive from {{channel}}", { channel: label })
+          : t("settle.amendTitle", "Correct the withdrawal from {{channel}}", {
+              channel: label,
+            })
       }
+      okText={
+        existing === undefined
+          ? t("settle.mark", "Mark as received")
+          : t("settle.saveCorrection", "Save the correction")
+      }
+      onOk={() => onSave({ fees, received: totals.expected })}
     >
       <Flex vertical gap={SPACE.md}>
         <Typography.Text type="secondary">
-          {t("settle.covering", "{{count}} sale(s), {{gross}} in total.", {
-            count,
-            gross: fmtRp(gross),
-          })}
+          {subject === undefined
+            ? t("settle.coveringPlain", "{{gross}} waiting at {{channel}}.", {
+                gross: fmtRp(gross),
+                channel: label,
+              })
+            : t("settle.covering", "{{subject}} · {{gross}}", {
+                subject,
+                gross: fmtRp(gross),
+              })}
         </Typography.Text>
 
         <Table<SettlementFee>
@@ -153,37 +142,24 @@ export function SettleModal({
           dataSource={fees}
           pagination={false}
           locale={{
-            emptyText: t("settle.noFees", "No deductions recorded."),
+            emptyText: t(
+              "settle.noFees",
+              "No deductions. The whole amount landed.",
+            ),
           }}
           columns={[
             {
-              title: t("settle.feeKind", "What was deducted"),
-              key: "kind",
-              width: 230,
-              render: (_, f) => (
-                <Select
-                  size="small"
-                  style={{ width: "100%" }}
-                  value={f.kind}
-                  aria-label={t("settle.feeKindFor", "Kind of deduction")}
-                  options={FEE_KINDS.map((k) => ({
-                    value: k.value,
-                    label: k.label,
-                    title: k.guide,
-                  }))}
-                  onChange={(v: FeeKind) => set(f.id, { kind: v })}
-                />
-              ),
-            },
-            {
-              title: t("settle.feeLabel", "As the statement calls it"),
+              title: t("settle.feeLabel", "Deduction"),
               key: "label",
               render: (_, f) => (
                 <Input
                   size="small"
                   value={f.label ?? ""}
-                  aria-label={t("settle.feeLabelFor", "Name on the statement")}
-                  placeholder={t("settle.feeLabelPlaceholder", "Optional")}
+                  aria-label={t("settle.feeLabelFor", "What was deducted")}
+                  placeholder={t(
+                    "settle.feeLabelPlaceholder",
+                    "As the statement calls it",
+                  )}
                   onChange={(e) => set(f.id, { label: e.target.value })}
                 />
               ),
@@ -191,13 +167,19 @@ export function SettleModal({
             {
               title: t("settle.feeAmount", "Amount"),
               key: "amount",
-              width: 170,
+              width: 190,
               align: "right",
               render: (_, f) => (
                 <InputNumber
                   size="small"
                   style={{ width: "100%" }}
-                  min={0}
+                  // A deduction stops at zero, which is what keeps a mistyped
+                  // minus from inflating what the shop is owed. The one line
+                  // already below it is the Shopee upload's Pembayaran
+                  // Tambahan — money ADDED to the payout — and a `min` of 0
+                  // would clamp it on the first blur, rewriting what landed
+                  // without anybody touching the figure.
+                  min={f.amount < 0 ? undefined : 0}
                   precision={0}
                   prefix={RP_SYMBOL}
                   formatter={moneyFormatter}
@@ -229,81 +211,14 @@ export function SettleModal({
           icon={<PlusOutlined />}
           style={{ alignSelf: "flex-start" }}
           onClick={() =>
-            setFees((f) => [...f, { id: newId(), kind: "TRANSFER", amount: 0 }])
+            setFees((f) => [
+              ...f,
+              { id: newId(), kind: "OTHER", label: "", amount: 0 },
+            ])
           }
         >
           {t("settle.addFee", "Add a deduction")}
         </Button>
-
-        <Flex gap={SPACE.lg} wrap>
-          <Statistic
-            title={t("settle.expected", "Should land")}
-            value={fmtRp(totals.expected)}
-          />
-          <Flex vertical gap={SPACE.xs}>
-            <Typography.Text type="secondary">
-              {t("settle.received", "Actually landed")}
-            </Typography.Text>
-            <InputNumber
-              min={0}
-              precision={0}
-              prefix={RP_SYMBOL}
-              formatter={moneyFormatter}
-              parser={moneyParser}
-              style={{ width: 200 }}
-              aria-label={t("settle.receivedFor", "What actually landed")}
-              value={received}
-              onChange={setReceived}
-            />
-            <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
-              {t("settle.receivedHint", "What the bank statement says.")}
-            </Typography.Text>
-          </Flex>
-        </Flex>
-
-        {totals.needsReason && (
-          <Alert
-            type={totals.discrepancy < 0 ? "error" : "warning"}
-            showIcon
-            message={
-              totals.discrepancy < 0
-                ? t(
-                    "settle.short",
-                    "{{amount}} less arrived than the fees explain.",
-                    {
-                      amount: fmtRp(-totals.discrepancy),
-                    },
-                  )
-                : t(
-                    "settle.over",
-                    "{{amount}} more arrived than the fees explain.",
-                    {
-                      amount: fmtRp(totals.discrepancy),
-                    },
-                  )
-            }
-            description={
-              <Flex vertical gap={SPACE.xs} style={{ marginTop: SPACE.xs }}>
-                <Input
-                  value={reason}
-                  aria-label={t("settle.reasonFor", "Why the figures differ")}
-                  placeholder={DEFAULT_DISCREPANCY_REASON}
-                  onChange={(e) => setReason(e.target.value)}
-                />
-                <Button
-                  size="small"
-                  type="link"
-                  style={{ alignSelf: "flex-start", paddingInline: 0 }}
-                  onClick={() => setReason(DEFAULT_DISCREPANCY_REASON)}
-                >
-                  {t("settle.useDefault", "Use “{{reason}}”", {
-                    reason: DEFAULT_DISCREPANCY_REASON,
-                  })}
-                </Button>
-              </Flex>
-            }
-          />
-        )}
       </Flex>
     </Modal>
   );

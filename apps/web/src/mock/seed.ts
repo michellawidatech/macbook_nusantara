@@ -22,10 +22,16 @@ import {
   docCode,
   isoOf,
 } from "@nusantara/fixture";
+import { byFeeOrder } from "@nusantara/store";
 import { holdsFunds } from "../lib/channels.js";
 import type { SaleSource } from "../lib/channels.js";
 import type { GradingCriterion, GradingRule } from "../lib/grading.js";
-import type { PaymentLogEntry, SalePayment } from "../lib/salePayments.js";
+import type {
+  OrderAdjustmentRec,
+  PaymentLogEntry,
+  SalePayment,
+  SaleRefund,
+} from "../lib/salePayments.js";
 import type { Settlement, SettlementLogEntry } from "../lib/marketplace.js";
 import type { ServiceRec } from "../lib/service.js";
 import type { SupplierDeposit } from "../lib/supplierLedger.js";
@@ -71,25 +77,13 @@ export interface Supplier {
   phone?: string;
   address?: string;
   /**
-   * The two-letter origin code that goes on the front of every serial taken in
-   * from this supplier (owner ask 2026-08-28).
+   * A two-letter code for the supplier, edited in Settings.
    *
-   * `CV Apel Segar` is `AS`, so the machine whose own barcode reads
-   * `SBJ347203KLM` is stored and printed as `ASBJ347203KLM`. Two machines can
-   * share an Apple serial only if one is counterfeit; two SUPPLIERS is the
-   * fact the shop wants back later — which pallet did this come off, and who
-   * do we chase about it — so the origin goes in the one string every screen
-   * already carries. `lib/serialScan.ts` is the whole scheme.
-   *
-   * Optional, and it has to be: every supplier in the shop predates the
-   * scheme, and a walk-in seller may never get one. Intake refuses a SCANNED
-   * serial for a supplier with no code (it would have nothing to prefix and
-   * the machine's own label would then not find it); a typed one is unaffected.
-   *
-   * ⚠️ Schema gap: prisma's `Supplier` has no `code`. It wants a nullable
-   * `String? @db.Char(2)` with a unique index — an owner decision plus a
-   * migration before the API can carry it, on the same footing as the grading
-   * tables.
+   * It was the "origin code" put in front of every serial taken in from this
+   * supplier (2026-08-28), then in front of the shop's sticker (2026-09-01).
+   * The owner retired both on 2026-09-21 — *"it turns out we do not record
+   * that at all"* — so nothing files or prints it now. Kept because the field
+   * exists in the store; retiring it is a separate decision.
    */
   code?: string;
   /**
@@ -108,6 +102,28 @@ export interface Supplier {
   openingBalance?: number;
   /** When that balance was stated, so the card can say how old it is. */
   openingBalanceAt?: string;
+  /** What has been paid off `openingBalance` since. See `OpeningPayment`. */
+  openingPayments?: OpeningPayment[];
+}
+/**
+ * Money paid against a debt from before this app — a supplier's or a
+ * customer's `openingBalance` (owner answer 2026-09-22: the old debt is the
+ * oldest row of Add payment, and is paid first).
+ *
+ * A `Payment` naming the supplier or customer directly (`Payment.supplierId`,
+ * `Payment.customerId`), because there is no invoice or sale for it to hang
+ * off. The opening figure is never rewritten: what was owed on the day and
+ * what has been paid since are two facts, and `openingOwed` is the difference.
+ */
+export interface OpeningPayment {
+  id: string;
+  /** A `PaymentMethod` code — TUNAI, TRANSFER. */
+  method: string;
+  amount: number;
+  at: string;
+  note?: string;
+  /** False when the money never passed through the shop's cash or bank. */
+  inBalance?: boolean;
 }
 /**
  * The activities that keep a managed list of reasons. Every reason a user can
@@ -270,16 +286,15 @@ export interface Unit {
    */
   price?: number;
   /**
-   * What it is listed at on Shopee/Tokopedia, when somebody overrode the rule.
+   * A marketplace price set on this one unit before 2026-09-19.
    *
-   * Absent means "use the rule" — store price plus
-   * `AppSettings.marketplaceMarkupPct` — so a repricing over the counter moves
-   * the marketplace figure with it and leaves an overridden one alone, which
-   * is exactly what an override is for. Stored as the number rather than as a
-   * flag beside one: a unit either carries its own marketplace price or it
-   * does not, and that is one fact.
-   *
-   * ⚠️ Mock-only. Prisma has no marketplace price column at all.
+   * The marketplace price is the VARIANT's since then (owner brief: "taken
+   * from the highest price for all unit, so it will not be displayed per
+   * unit") — `variantMarketPrice` in lib/unitPrice.ts, the highest per-unit
+   * figure among the variant's units on sale, where a unit without this field
+   * counts as its store price plus `AppSettings.marketplaceMarkupPct`. Nothing
+   * sets it any more; one already set still counts, and repricing the unit's
+   * store price clears it. Prisma's `Unit.marketPrice`.
    */
   marketPrice?: number;
   /**
@@ -368,6 +383,16 @@ export interface PoItem {
   qty: number;
   unitCost: number;
   /**
+   * Knocked off this line, in whole rupiah (owner ask 2026-09-20:
+   * *"product name > QTY > price > discount > display total"*).
+   *
+   * `Po.discount` is the one negotiated off the whole order; this is the one
+   * a supplier writes against a single line, and it is what makes the line's
+   * units cost less. Never more than `qty × unitCost` — the column's CHECK
+   * says so too.
+   */
+  discount?: number;
+  /**
    * Set when the goods did not match the invoice and this line never turned up.
    * A not-received line still counts towards what was INVOICED — that is the
    * whole point of recording it — but not towards what arrived.
@@ -424,13 +449,75 @@ export interface PoPayment {
    * nullable FK to the deposit row that does not exist there yet either.
    */
   fromDepositId?: string;
+  /**
+   * The expense this payment settles, when it settles one (owner ask
+   * 2026-09-18: an expense "should be able to mark as paid, which will
+   * automatically record the payment"). `Payment.poFeeId`.
+   *
+   * The link is what makes marking an expense paid reversible: correcting the
+   * expense corrects this payment, and un-marking it takes this payment back,
+   * rather than guessing which of the invoice's payments was the one. A
+   * payment against the goods has none.
+   */
+  feeId?: string;
+  /**
+   * Did this money come out of the shop's cash or bank? (owner answer
+   * 2026-09-22.) `false` when it did not — the owner paid the supplier from
+   * their own account — so it settles the invoice and moves no balance.
+   * Absent means it counts, which is what every payment before the switch
+   * meant. `Payment.inBalance`.
+   */
+  inBalance?: boolean;
 }
 
 /**
- * What a supplier payment is settling.
+ * What an invoice expense is for — `FeeKind` in the schema (ONGKIR, PAJAK,
+ * BEACUKAI, LAIN).
+ */
+export type PoFeeKind = "SHIPPING" | "TAX" | "CUSTOMS" | "OTHER";
+
+/** English labels; `t()` translates at the call site, as the enum maps do. */
+export const PO_FEE_KIND_LABEL: Record<PoFeeKind, string> = {
+  SHIPPING: "Shipping",
+  TAX: "Tax",
+  CUSTOMS: "Customs",
+  OTHER: "Other",
+};
+
+/**
+ * One expense on a purchase invoice (owner ask 2026-09-18): *"Add Expense ->
+ * to add like additional payment, this is like what we owe"*.
  *
- * Three buckets and no more: `poTotals` gives each one a figure, and a bucket
- * with nothing to owe against would be a choice that can never be right.
+ * It replaced the invoice's two figures, `shippingFee` and `taxFee`, which
+ * could say neither that one delivery carried customs AND a packing charge,
+ * nor which of those belongs in what a machine cost. A `PurchaseOrderFee`
+ * row; see `lib/inbound.ts` for what is owed on one and `lib/landedCost.ts`
+ * for how it reaches a machine.
+ */
+export interface PoFee {
+  id: string;
+  kind: PoFeeKind;
+  /** What the receipt calls it — "JNE Cargo". Empty reads as the kind. */
+  label: string;
+  /** Whole rupiah, never negative. */
+  amount: number;
+  /**
+   * Spread evenly over the invoice's machines as part of what each cost (owner
+   * ask 2026-09-18: *"we should be able to add if we want to divide it to COGS
+   * per unit or not"*). Shipping and tax were always spread; a charge the
+   * shop pays for its own reasons — a courier to the owner's house — is not.
+   */
+  inCogs: boolean;
+}
+
+/**
+ * What a supplier payment is settling — `Payment.appliedTo`.
+ *
+ * Three buckets, the schema's `PayTarget`. Since expenses became a list
+ * (2026-09-18) a payment for one names it (`PoPayment.feeId`), and the bucket
+ * only keeps the older column truthful: shipping for a shipping expense, tax
+ * for every other kind (`payTargetOfFee`). A payment recorded before then names
+ * only its bucket, and `poTotals` reads it against that bucket's expenses.
  * `DISCOUNT` is not here — a discount is money that never moved.
  */
 export type PoPaymentFor = "ORDER" | "TAX" | "SHIPPING";
@@ -453,9 +540,12 @@ export interface Po {
   locationId: string;
   items: PoItem[];
   payments: PoPayment[];
-  /** Charged on the whole order, not on any line. */
-  shippingFee: number;
-  taxFee: number;
+  /**
+   * What else the shop owes because of this delivery — shipping, tax,
+   * customs, anything. Charged on the whole order, not on any line. Kept in
+   * `byFeeOrder` order, which is the order the server projects them in.
+   */
+  fees: PoFee[];
   /** Negotiated off the whole order. */
   discount: number;
   status: "DRAFT" | "ORDERED" | "RECEIVED";
@@ -548,6 +638,8 @@ export interface Customer {
    */
   openingBalance?: number;
   openingBalanceAt?: string;
+  /** What has been paid off `openingBalance` since. See `OpeningPayment`. */
+  openingPayments?: OpeningPayment[];
 }
 /**
  * A machine the customer handed over against the bill. Mirrors `TradeIn`.
@@ -599,6 +691,60 @@ export interface OrderFee {
   amount: number;
 }
 
+/** One counted product on a sale: how many, at what each. */
+export interface OrderLine {
+  id: string;
+  skuId: string;
+  qty: number;
+  /** Per piece, as charged. */
+  price: number;
+  /** Per piece, what the variant asked on the day — the bargain's baseline. */
+  listPrice?: number;
+  /** How many of them have come back (`OrderItem.returnedQty`). */
+  returnedQty?: number;
+}
+
+/** Why a counted product's quantity moved. See `StockMove`. */
+export type StockMoveType =
+  | "MASUK"
+  | "MASUK_BATAL"
+  | "TERJUAL"
+  | "RETUR_PELANGGAN"
+  | "TUKAR_TAMBAH"
+  | "OPNAME"
+  | "KOREKSI"
+  | "RETUR_SUPPLIER";
+
+/**
+ * One movement of a product the shop COUNTS rather than identifies
+ * (owner decision 2026-09-19 — "quantity in the database too").
+ *
+ * The accessories' ledger, beside the units' one: append-only, and what is on
+ * a shelf is the SUM of these for that variant and location
+ * (`lib/stock.ts`). Nothing stores the sum, so nothing can disagree with it.
+ * `qty` is signed and never zero; `cost` is ONE piece's — what an arrival
+ * paid, or the moving average a departure took.
+ */
+export interface StockMove {
+  id: string;
+  skuId: string;
+  locationId: string;
+  qty: number;
+  cost: number;
+  type: StockMoveType;
+  at: string;
+  /** The document it belongs to — PI, SI, SO, AD… */
+  refCode?: string;
+  poId?: string;
+  poItemId?: string;
+  orderId?: string;
+  orderLineId?: string;
+  opnameId?: string;
+  reasonId?: string;
+  note?: string;
+  staff: string;
+}
+
 export interface Order {
   id: string;
   code: string;
@@ -628,6 +774,13 @@ export interface Order {
    * `OrderItem`, and an owner decision.
    */
   listPrices?: Record<string, number>;
+  /**
+   * What was sold of COUNTED products — accessories — by quantity
+   * (2026-09-19). No serial, no unit: an `OrderItem` whose `unitId` is null.
+   * What the pieces cost is on the `TERJUAL` stock moves naming the line
+   * (`lib/stock.ts`). Absent on a sale with none.
+   */
+  lines?: OrderLine[];
   discount: number;
   discountId?: string;
   /** See `lib/channels.ts` — the list, and which of them hold the money. */
@@ -674,6 +827,16 @@ export interface Order {
    * the order.
    */
   payments?: SalePayment[];
+  /**
+   * Money handed back on this sale — a return that refunds (owner brief
+   * 2026-09-19). `Payment` rows with direction KELUAR. See `SaleRefund`.
+   */
+  refunds?: SaleRefund[];
+  /**
+   * What returns took off the bill — `OrderAdjustment`, a RETUR carrying the
+   * return's SG code. `billAfterReturns` reads it.
+   */
+  adjustments?: OrderAdjustmentRec[];
   /**
    * A charge the shop is adding — delivery, almost always (owner revision
    * 2026-08-27). Mirrors `Order.extra` / `Order.extraNote`.
@@ -738,6 +901,26 @@ export interface ReturnRec {
   fee?: number;
   supplierId?: string;
   expectedCredit?: number;
+  /**
+   * The unit's grade BEFORE this return recorded it — snapshotted at write
+   * time so the history can show "A → B" without inferring "before" from the
+   * timeline (owner ask 2026-09-21).
+   */
+  beforeGrade?: string;
+  /**
+   * The unit's grade AS RECORDED by this return. Undefined means the return
+   * did not overwrite it; the unit's current grade is still the before-value.
+   */
+  afterGrade?: string;
+  /**
+   * Money received AFTER the refund — positive when the customer paid extra
+   * on a dearer exchange, negative when the shop handed money back on a
+   * plain return or a cheaper exchange, zero on an even swap. Set on the
+   * FIRST unit's ReturnRec of a press, so the history's row does not double
+   * it. Mock-only; the schema holds `refund` on `Order` and this is the
+   * portion attributable to this document.
+   */
+  adjustment?: number;
 }
 /**
  * One machine inside a reservation. Mirrors `ReservationItem`.
@@ -815,67 +998,109 @@ export interface Discount {
   scope: string;
 }
 /**
- * Expense categories, fixed by the owner. The guide text is what the "?" button
- * on the Expenses page shows — it lives beside the value so the two cannot
- * drift apart.
+ * What a movement of money is FOR — the owner's categories (2026-09-23).
+ *
+ * One list per direction. `retired` marks a value the picker no longer offers
+ * but which rows already written still carry, so their label resolves;
+ * `needsTransaction` marks the ones that mean nothing without a sale, an
+ * invoice or a return beside them. `guide` is what the "?" beside the picker
+ * shows.
+ *
+ * The same values name the DERIVED rows on Income & Expense — a sale's
+ * payment is `SALES`, a supplier's is `SUPPLIER` — so the Category column and
+ * the adjustment dialog cannot drift into two vocabularies.
  */
 export const EXPENSE_CATEGORIES = [
   {
     value: "OPERATIONAL",
     label: "Operational",
-    guide: "General and administrative expenses to run daily operations.",
+    guide: "Day-to-day running costs.",
   },
-  {
-    value: "PAYROLL",
-    label: "Payroll",
-    guide: "Employee salaries, wages, bonuses, and benefits.",
-  },
+  { value: "PAYROLL", label: "Payroll", guide: "Salaries, wages and bonuses." },
   {
     value: "MARKETING",
     label: "Marketing & Advertisement",
-    guide: "Campaigns, promotions, and brand awareness efforts.",
+    guide: "Campaigns and promotions.",
   },
   {
     value: "RENT",
     label: "Rent and Facilities",
-    guide: "Commercial office space, storage, or warehouse leases.",
+    guide: "Shop, storage and warehouse leases.",
   },
+  {
+    value: "SELISIH",
+    label: "Balance mismatch",
+    guide: "The counted balance is short of the books.",
+  },
+  {
+    value: "KOMPENSASI",
+    label: "Customer compensation",
+    guide: "Goodwill paid on a sale that went wrong.",
+    needsTransaction: true,
+  },
+  {
+    value: "REFUND",
+    label: "Refund to customer",
+    guide: "Money handed back on a return or a cheaper exchange.",
+    needsTransaction: true,
+  },
+  {
+    value: "SUPPLIER",
+    label: "Supplier payment",
+    guide: "Money paid to a supplier.",
+  },
+  {
+    value: "TRANSFER",
+    label: "Bank transfer",
+    guide: "Money moved out to another account of the business.",
+  },
+  { value: "BUNGA", label: "Interest", guide: "Bank interest and charges." },
   {
     value: "PROFESSIONAL",
     label: "Professional Services",
-    guide: "Legal fees, accounting, and third-party contractor costs.",
+    guide: "Legal, accounting and contractors.",
+    retired: true,
   },
   {
     value: "SOFTWARE",
     label: "Software & Technology",
-    guide: "SaaS subscriptions, cloud hosting, and IT hardware.",
+    guide: "Subscriptions, hosting and IT hardware.",
+    retired: true,
   },
 ] as const;
 export type ExpenseKind = (typeof EXPENSE_CATEGORIES)[number]["value"];
 
 /**
- * Why money came IN by hand (owner ask 2026-09-01).
+ * Why money came IN.
  *
- * Two, and only two, because everything else that raises the balance is a
- * SALE and the app already records those from the till. These are the entries
- * a sale cannot make: takings from before the app, or from a channel it does
- * not sell through, and money moved in from another account of the business's
- * own — which is not revenue and must never be counted as any.
- *
- * ⚠️ Mock-only. Prisma has no manual-income table; carrying this to the API is
- * an owner decision plus a migration. Same footing as `openingBalance`.
+ * ⚠️ Mock-only as a manual row: prisma has `IncomeReason` but no
+ * manual-income table. Same footing as `openingBalance`.
  */
 export const INCOME_REASONS = [
   {
     value: "SALES",
-    label: "Sales",
-    guide: "Takings this app did not record — an off-app sale, or an old till.",
+    label: "Sales transaction",
+    guide:
+      "A sale. The till records these; enter one only for takings this app did not.",
+    needsTransaction: true,
   },
   {
     value: "TRANSFER",
     label: "Account transfer",
+    guide: "Money moved in from another account of the business.",
+  },
+  {
+    value: "REFUND",
+    label: "Refund received",
     guide:
-      "Money moved in from another account of the business. Not revenue — it raises the balance without being a sale.",
+      "A supplier's credit on a return, or a customer's top-up on a dearer exchange.",
+    needsTransaction: true,
+  },
+  { value: "BUNGA", label: "Interest", guide: "Bank interest." },
+  {
+    value: "SELISIH",
+    label: "Balance mismatch",
+    guide: "The counted balance is above the books.",
   },
 ] as const;
 export type IncomeReason = (typeof INCOME_REASONS)[number]["value"];
@@ -903,6 +1128,12 @@ export interface ManualIncome {
    * `lib/accounts.ts` maps the code to the pot.
    */
   method: string;
+  /**
+   * The sale this is about, where the category names one — a refund received
+   * (owner ask 2026-09-23). Absent on interest, an account transfer or a
+   * balance mismatch, none of which is about a particular receipt.
+   */
+  orderId?: string;
 }
 
 export interface Expense {
@@ -932,6 +1163,11 @@ export interface Expense {
    * reason, on the other side of the ledger.
    */
   method: string;
+  /**
+   * The sale this is about, where the category names one — a customer
+   * compensation, a refund to a customer (owner ask 2026-09-23).
+   */
+  orderId?: string;
 }
 export interface ChatMsg {
   id: string;
@@ -1280,6 +1516,8 @@ export interface MockDb {
   /** Notes and their photographs, keyed to a serial. See `UnitNote`. */
   unitNotes: UnitNote[];
   pos: Po[];
+  /** The counted products' ledger. See `StockMove`. */
+  stockMoves: StockMove[];
   stockIns: StockInRec[];
   customers: Customer[];
   orders: Order[];
@@ -1670,6 +1908,10 @@ export function buildSeed(): MockDb {
     ONGKIR: "SHIPPING",
     PAJAK: "TAX",
   };
+  const PO_FEE_KIND_OF_FIXTURE: Record<"ONGKIR" | "PAJAK", PoFeeKind> = {
+    ONGKIR: "SHIPPING",
+    PAJAK: "TAX",
+  };
   const pos: Po[] = shop.purchaseOrders.map((p) => ({
     id: p.id,
     code: p.code,
@@ -1686,9 +1928,17 @@ export function buildSeed(): MockDb {
       amount: pay.rupiah,
       at: isoOf(pay.at, shop.now),
       appliedTo: PO_PAYMENT_TARGET[pay.appliedTo]!,
+      ...(pay.feeId === undefined ? {} : { feeId: pay.feeId }),
     })),
-    shippingFee: p.shippingFee,
-    taxFee: p.taxFee,
+    fees: p.fees
+      .map((f) => ({
+        id: f.id,
+        kind: PO_FEE_KIND_OF_FIXTURE[f.kind],
+        label: f.label,
+        amount: f.amount,
+        inCogs: true,
+      }))
+      .sort(byFeeOrder),
     // No PO-level discount in the fixture: `PurchaseOrder` in prisma has no
     // column for one, so a number here would be money only the browser knows
     // about. See the fixture's own note.
@@ -1764,6 +2014,34 @@ export function buildSeed(): MockDb {
       ...(e.note === undefined ? {} : { note: e.note }),
       ...(refCode === undefined ? {} : { refCode }),
       staff: shop.staff.find((s) => s.id === e.staffId)?.name ?? "Michella",
+    };
+  });
+  /*
+   * The counted products' ledger, off the fixture (2026-09-19). Codes as the
+   * unit events carry them: the invoice an arrival came on, the sale a piece
+   * went out on.
+   */
+  const stockMoves: StockMove[] = shop.stockMoves.map((m) => {
+    const refCode =
+      m.orderId !== undefined
+        ? shop.orders.find((o) => o.id === m.orderId)?.code
+        : m.poId !== undefined
+          ? shop.purchaseOrders.find((p) => p.id === m.poId)?.code
+          : undefined;
+    return {
+      id: m.id,
+      skuId: m.skuId,
+      locationId: m.locationId,
+      qty: m.qty,
+      cost: m.cost,
+      type: m.type,
+      at: isoOf(m.at, shop.now),
+      ...(refCode === undefined ? {} : { refCode }),
+      ...(m.poId === undefined ? {} : { poId: m.poId }),
+      ...(m.poLineId === undefined ? {} : { poItemId: m.poLineId }),
+      ...(m.orderId === undefined ? {} : { orderId: m.orderId }),
+      ...(m.orderLineId === undefined ? {} : { orderLineId: m.orderLineId }),
+      staff: shop.staff.find((s) => s.id === m.staffId)?.name ?? "Michella",
     };
   });
   for (const po of pos) {
@@ -1898,6 +2176,22 @@ export function buildSeed(): MockDb {
       active: true,
     },
     {
+      /*
+       * Money that settles a debt without moving either of the shop's pots
+       * (owner ask 2026-09-23): *"Transfer from other bank for
+       * expense/deposit to supplier, which does not reduce the bank balance
+       * in the POS."* `lib/accounts.ts` gives it no pot, which is what makes
+       * that true; nothing here needs to know.
+       */
+      id: "pm_transfer_luar",
+      code: "TRANSFER_LUAR",
+      label: "Transfer from another bank",
+      builtIn: true,
+      forPo: true,
+      forSale: false,
+      active: true,
+    },
+    {
       // `forPo` since 2026-09-09: the owner's three for money going out are
       // cash, transfer and card, and a supplier deposit is a transfer nine
       // times in ten. The deposit dialog defaulted to TRANSFER while this said
@@ -1915,9 +2209,13 @@ export function buildSeed(): MockDb {
       code: "MARKETPLACE",
       label: "Marketplace escrow",
       builtIn: true,
-      // Stock bought through a marketplace checkout is paid through it too
-      // (owner revision 2026-09-15).
-      forPo: true,
+      // NOT offered on an invoice since 2026-09-21 (owner revision): the
+      // inbound form's two methods are Cash and Bank transfer. It had been
+      // `forPo` since 2026-09-15, on the grounds that stock bought through a
+      // marketplace checkout is paid through it — but a supplier payment asks
+      // how the SHOP's money moved, and escrow is not an answer to that. Still
+      // `forSale`: a marketplace sale is written with this code.
+      forPo: false,
       forSale: true,
       active: true,
     },
@@ -1934,6 +2232,17 @@ export function buildSeed(): MockDb {
     listPrices: Object.fromEntries(
       o.builtLines.map((l) => [l.serial, l.listPrice]),
     ),
+    ...(o.countedLines.length === 0
+      ? {}
+      : {
+          lines: o.countedLines.map((l) => ({
+            id: l.id,
+            skuId: l.skuId,
+            qty: l.qty,
+            price: l.price,
+            listPrice: l.listPrice,
+          })),
+        }),
     discount: o.discount,
     ...(o.discountId === undefined ? {} : { discountId: o.discountId }),
     source: o.channel as SaleSource,
@@ -2150,7 +2459,7 @@ export function buildSeed(): MockDb {
       id: "e-7",
       method: "TRANSFER",
       label: "Accountant retainer",
-      kind: "PROFESSIONAL",
+      kind: "OPERATIONAL",
       amount: 1_500_000,
       date: iso(7).slice(0, 10),
     },
@@ -2158,7 +2467,7 @@ export function buildSeed(): MockDb {
       id: "e-8",
       method: "KARTU_KREDIT",
       label: "Cloud hosting + POS licence",
-      kind: "SOFTWARE",
+      kind: "OPERATIONAL",
       amount: 650_000,
       date: iso(2).slice(0, 10),
     },
@@ -2372,6 +2681,7 @@ export function buildSeed(): MockDb {
     // one would put a picture of nothing beside a real serial.
     unitNotes: [],
     pos,
+    stockMoves,
     stockIns,
     customers,
     orders,

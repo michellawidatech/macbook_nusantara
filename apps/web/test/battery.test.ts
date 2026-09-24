@@ -122,10 +122,11 @@ describe("batteryBand", () => {
 });
 
 describe("fmtBatteryHealth", () => {
-  it("prints a percentage, or an em dash when there is no reading", () => {
+  // "None", not 0%: a missing reading is not a dead battery.
+  it("prints a percentage, or None when there is no reading", () => {
     expect(fmtBatteryHealth(88)).toBe("88%");
-    expect(fmtBatteryHealth(undefined)).toBe("—");
-    expect(fmtBatteryHealth(null)).toBe("—");
+    expect(fmtBatteryHealth(undefined)).toBe("None");
+    expect(fmtBatteryHealth(null)).toBe("None");
   });
 });
 
@@ -215,7 +216,7 @@ describe("readBattery", () => {
 
   it("says nothing was measured when nothing was", () => {
     expect(readBattery({}, 2017).grade).toBeNull();
-    expect(readBattery({}, 2017).text).toBe("—");
+    expect(readBattery({}, 2017).text).toBe("None");
     expect(readBattery({}, 2023).grade).toBeNull();
   });
 

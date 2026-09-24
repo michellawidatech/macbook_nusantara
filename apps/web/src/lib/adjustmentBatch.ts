@@ -46,11 +46,25 @@ export interface BatchLine {
   fcc?: number;
 }
 
+/**
+ * A counted product on the batch — an accessory, by quantity (2026-09-19).
+ * `onHand` is what the shelf holds of it where an OUT would take from.
+ */
+export interface CountedBatchLine {
+  skuId?: string;
+  /** Name for the messages; the product's own. */
+  label: string;
+  qty: number | null;
+  onHand: number;
+}
+
 export interface BatchInput {
   kind: AdjustmentKind;
   reason: string;
   /** Only the lines the operator actually touched. */
   lines: readonly BatchLine[];
+  /** Counted products on the batch, if any. */
+  counted?: readonly CountedBatchLine[];
 }
 
 /** In stock right now, in the sense an IN adjustment would be a no-op. */
@@ -64,13 +78,32 @@ const IN_STOCK = ["TERSEDIA", "DIRESERVASI"];
  * the enum maps nor a `t` — the caller already has both.
  */
 export function batchProblems(
-  { kind, reason, lines }: BatchInput,
+  { kind, reason, lines, counted = [] }: BatchInput,
   unitBySerial: (serial: string) => Unit | undefined,
   statusLabel: (status: string) => string,
 ): string[] {
   const out: string[] = [];
   if (!reason.trim()) out.push("Pick or type a reason for this batch.");
-  if (lines.length === 0) out.push("Add at least one unit.");
+  if (lines.length === 0 && counted.length === 0)
+    out.push("Add at least one unit.");
+  const seenSku = new Set<string>();
+  for (const c of counted) {
+    if (!c.skuId) {
+      out.push("Every counted line needs its product.");
+      continue;
+    }
+    if (seenSku.has(c.skuId)) out.push(`${c.label} is on this batch twice.`);
+    seenSku.add(c.skuId);
+    if (c.qty === null || !Number.isInteger(c.qty) || c.qty <= 0) {
+      out.push(`${c.label} needs a quantity of at least 1.`);
+      continue;
+    }
+    if (kind === "OUT" && c.qty > c.onHand) {
+      out.push(
+        `${c.label}: only ${c.onHand} in stock — ${c.qty} cannot be taken out.`,
+      );
+    }
+  }
 
   const seen = new Set<string>();
   for (const line of lines) {

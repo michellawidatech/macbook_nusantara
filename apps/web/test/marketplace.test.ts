@@ -8,11 +8,20 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_COMMISSION_PCT,
+  apportion,
   commissionOn,
   commissionPctOf,
+  isEvenSplit,
+  joinNote,
+  mergeFees,
+  payoutsOf,
   pendingByChannel,
+  respreadPayout,
   seedFees,
   settlementTotals,
+  splitPayout,
+  type PayoutPart,
+  type Settlement,
   type SettlementFee,
 } from "../src/lib/marketplace.js";
 
@@ -107,15 +116,22 @@ describe("settlementTotals", () => {
     expect(t.needsReason).toBe(true);
   });
 
-  it("refuses a negative fee rather than netting it", () => {
-    // Money coming back is not a fee, and a mistyped minus would quietly
-    // inflate what the shop thinks it is owed.
+  it("nets a line below zero as money added to the payout", () => {
+    // The Shopee upload's "Pembayaran Tambahan" (2026-09-21): Shopee paid more
+    // than its own fees leave room for, and the lines must still close on what
+    // landed. Clamping it to zero made the received figure disagree with its
+    // own deductions. A person still cannot type one — the dialog's box stops
+    // at zero, which is the mistyped-minus guard.
     const t = settlementTotals({
       gross: 10_000_000,
-      fees: [fee({ amount: -500_000 })],
+      fees: [
+        fee({ kind: "COMMISSION", amount: 525_000 }),
+        fee({ amount: -125_000 }),
+      ],
     });
-    expect(t.deducted).toBe(0);
-    expect(t.expected).toBe(10_000_000);
+    expect(t.deducted).toBe(400_000);
+    expect(t.expected).toBe(9_600_000);
+    expect(t.needsReason).toBe(false);
   });
 });
 
@@ -155,5 +171,325 @@ describe("pendingByChannel", () => {
     expect(
       pendingByChannel([{ amount: 5_000_000, state: "SETTLED" }], undefined),
     ).toEqual([]);
+  });
+});
+
+describe("apportion", () => {
+  const sum = (xs: readonly number[]) => xs.reduce((n, x) => n + x, 0);
+
+  it("splits exactly, the leftover rupiah to the largest remainders", () => {
+    expect(apportion(100, [1, 1, 1])).toEqual([34, 33, 33]);
+    expect(apportion(8_850_000, [5_000_000, 3_000_000, 2_000_000])).toEqual([
+      4_425_000, 2_655_000, 1_770_000,
+    ]);
+  });
+
+  it("spreads a shortfall the same way, and still adds up", () => {
+    const shares = apportion(-5, [1, 1]);
+    expect(sum(shares)).toBe(-5);
+    expect(shares).toEqual([-2, -3]);
+  });
+
+  it("stays exact past 2^53, where floating point would not", () => {
+    // Rp999 billion over two sales: total × weight is ~6.7e23, far past what a
+    // double holds exactly. BigInt keeps every share within one rupiah of its
+    // exact value and the sum exact.
+    const total = 999_999_999_999;
+    const weights = [333_333_333_333, 666_666_666_667];
+    const shares = apportion(total, weights);
+    expect(sum(shares)).toBe(total);
+    const W = BigInt(weights[0]! + weights[1]!);
+    weights.forEach((w, i) => {
+      const floor = Number((BigInt(total) * BigInt(w)) / W);
+      expect(shares[i]! - floor).toBeGreaterThanOrEqual(0);
+      expect(shares[i]! - floor).toBeLessThanOrEqual(1);
+    });
+  });
+
+  it("gives nothing to a weight that is not positive", () => {
+    expect(apportion(10, [0, 5, -3])).toEqual([0, 10, 0]);
+    expect(apportion(10, [0, 0])).toEqual([0, 0]);
+  });
+});
+
+describe("splitPayout", () => {
+  const parts: PayoutPart[] = [
+    { paymentId: "p-a", orderId: "o-a", gross: 5_000_000 },
+    { paymentId: "p-b", orderId: "o-b", gross: 3_000_000 },
+    { paymentId: "p-c", orderId: "o-c", gross: 2_000_000 },
+  ];
+  const fees: SettlementFee[] = [
+    fee({ id: "com", kind: "COMMISSION", label: "10%", amount: 1_000_000 }),
+    fee({ id: "bank", kind: "TRANSFER", amount: 6_500 }),
+  ];
+  let n = 0;
+  const ids = () => `f${++n}`;
+
+  it("writes one settlement per payment, each naming exactly one", () => {
+    // The bug of 2026-09-19: one row whose ids were "p-a,p-b,p-c", which
+    // Postgres refuses as a foreign key.
+    const drafts = splitPayout(parts, { fees, received: 8_993_500 }, ids);
+    expect(drafts.map((d) => [d.paymentId, d.orderId])).toEqual([
+      ["p-a", "o-a"],
+      ["p-b", "o-b"],
+      ["p-c", "o-c"],
+    ]);
+  });
+
+  it("spreads every fee line and what landed, and loses no rupiah", () => {
+    const drafts = splitPayout(
+      parts,
+      { fees, received: 8_843_500, reason: "Marketplace fee adjustment" },
+      ids,
+    );
+    // Each line keeps its name, and its shares add back up to it.
+    for (const [k, line] of fees.entries()) {
+      expect(drafts.every((d) => d.fees[k]!.kind === line.kind)).toBe(true);
+      expect(drafts.reduce((t, d) => t + d.fees[k]!.amount, 0)).toBe(
+        line.amount,
+      );
+    }
+    expect(drafts.reduce((t, d) => t + d.received, 0)).toBe(8_843_500);
+    // The Rp150.000 shortfall is split too, and each short sale says why.
+    const short = drafts.map(
+      (d) =>
+        settlementTotals({ gross: d.gross, fees: d.fees, received: d.received })
+          .discrepancy,
+    );
+    expect(short.reduce((t, x) => t + x, 0)).toBe(-150_000);
+    expect(drafts.every((d) => d.reason === "Marketplace fee adjustment")).toBe(
+      true,
+    );
+  });
+
+  it("splits a payout that agrees into sales that each agree", () => {
+    // Two independent roundings would leave a rupiah of "discrepancy" on some
+    // of these; a payout nobody has a reason for must not grow one.
+    const odd: PayoutPart[] = [
+      { paymentId: "x", orderId: "ox", gross: 333_333 },
+      { paymentId: "y", orderId: "oy", gross: 333_333 },
+      { paymentId: "z", orderId: "oz", gross: 333_334 },
+    ];
+    const lines = [fee({ id: "c", kind: "COMMISSION", amount: 100_001 })];
+    const drafts = splitPayout(
+      odd,
+      { fees: lines, received: 1_000_000 - 100_001 },
+      ids,
+    );
+    for (const d of drafts) {
+      const t = settlementTotals({
+        gross: d.gross,
+        fees: d.fees,
+        received: d.received,
+      });
+      expect(t.discrepancy).toBe(0);
+      expect(d.reason).toBeUndefined();
+    }
+  });
+
+  it("names each sale's copy of a fee line on its own", () => {
+    const drafts = splitPayout(parts, { fees, received: 8_993_500 }, ids);
+    const all = drafts.flatMap((d) => d.fees.map((f) => f.id));
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it("does not depend on the order the sales arrive in", () => {
+    // Postgres hands a payout's settlements back ordered by id; a fresh split
+    // of them has to agree with the one recorded from the table's order.
+    const odd = [
+      { paymentId: "m", orderId: "om", gross: 1 },
+      { paymentId: "k", orderId: "ok", gross: 1 },
+      { paymentId: "q", orderId: "oq", gross: 1 },
+    ];
+    const lines = [fee({ id: "c", kind: "COMMISSION", amount: 2 })];
+    const a = splitPayout(odd, { fees: lines, received: 1 }, ids);
+    const b = splitPayout(
+      [...odd].reverse(),
+      { fees: lines, received: 1 },
+      ids,
+    );
+    const byPayment = (ds: typeof a) =>
+      Object.fromEntries(
+        ds.map((d) => [d.paymentId, [d.fees[0]!.amount, d.received]]),
+      );
+    expect(byPayment(b)).toEqual(byPayment(a));
+  });
+
+  it("never records a sale as receiving less than nothing", () => {
+    // Three one-rupiah lines over three one-rupiah sales: every tie goes to
+    // the same sale, which would come out at minus two.
+    const tiny = [
+      { paymentId: "a", orderId: "oa", gross: 1 },
+      { paymentId: "b", orderId: "ob", gross: 1 },
+      { paymentId: "c", orderId: "oc", gross: 1 },
+    ];
+    const lines = ["1", "2", "3"].map((id) =>
+      fee({ id, kind: "OTHER", amount: 1 }),
+    );
+    const drafts = splitPayout(tiny, { fees: lines, received: 0 }, ids);
+    expect(drafts.every((d) => d.received >= 0)).toBe(true);
+    expect(drafts.reduce((t, d) => t + d.received, 0)).toBe(0);
+  });
+});
+
+describe("payouts, put back together", () => {
+  const at = "2026-09-19T03:00:00.000Z";
+  const settled = (
+    over: Partial<Settlement> & Pick<Settlement, "id" | "paymentId">,
+  ): Settlement => ({
+    orderId: `o-${over.paymentId}`,
+    channel: "SHOPEE",
+    gross: 1_000_000,
+    fees: [],
+    received: 900_000,
+    at,
+    staff: "Ersen",
+    ...over,
+  });
+
+  it("groups what was written together, newest first, fees merged by name", () => {
+    const list = [
+      settled({
+        id: "s1",
+        paymentId: "p1",
+        fees: [
+          fee({ id: "a1", kind: "COMMISSION", label: "10%", amount: 100_000 }),
+        ],
+      }),
+      settled({
+        id: "s2",
+        paymentId: "p2",
+        fees: [
+          fee({ id: "a2", kind: "COMMISSION", label: "10%", amount: 100_000 }),
+        ],
+        reason: "Marketplace fee adjustment",
+      }),
+      settled({
+        id: "s3",
+        paymentId: "p3",
+        channel: "TOKOPEDIA",
+        at: "2026-09-19T05:00:00.000Z",
+      }),
+    ];
+    const payouts = payoutsOf(list);
+    expect(payouts.map((p) => p.settlements.map((s) => s.id))).toEqual([
+      ["s3"],
+      ["s1", "s2"],
+    ]);
+    const shopee = payouts[1]!;
+    expect(shopee.gross).toBe(2_000_000);
+    expect(shopee.received).toBe(1_800_000);
+    expect(shopee.fees).toEqual([
+      { id: "a1", kind: "COMMISSION", label: "10%", amount: 200_000 },
+    ]);
+    expect(shopee.reasons).toEqual(["Marketplace fee adjustment"]);
+  });
+
+  it("merges lines of the same kind and name, and only those", () => {
+    expect(
+      mergeFees([
+        { fees: [fee({ id: "x", kind: "TRANSFER", amount: 1 })] },
+        {
+          fees: [
+            fee({ id: "y", kind: "TRANSFER", amount: 2 }),
+            fee({ id: "z", kind: "TRANSFER", label: "BCA", amount: 4 }),
+          ],
+        },
+      ]),
+    ).toEqual([
+      { id: "x", kind: "TRANSFER", amount: 3 },
+      { id: "z", kind: "TRANSFER", label: "BCA", amount: 4 },
+    ]);
+  });
+
+  /** A payout recorded as one figure, the way the page writes it. */
+  const recorded = (): Settlement[] => {
+    let n = 0;
+    return splitPayout(
+      [
+        { paymentId: "p1", orderId: "o1", gross: 5_000_000 },
+        { paymentId: "p2", orderId: "o2", gross: 3_000_001 },
+      ],
+      {
+        fees: [
+          fee({ id: "com", kind: "COMMISSION", label: "10%", amount: 800_000 }),
+        ],
+        received: 7_200_001,
+      },
+      (_, i) => `fee-${i}-${++n}`,
+    ).map((d, i) => ({
+      ...d,
+      id: `s${i}`,
+      channel: "SHOPEE",
+      at,
+      staff: "Ersen",
+    }));
+  };
+
+  it("knows a payout recorded as one figure, in whatever order it returns", () => {
+    const list = recorded();
+    expect(isEvenSplit(payoutsOf(list)[0]!)).toBe(true);
+    expect(isEvenSplit(payoutsOf([...list].reverse())[0]!)).toBe(true);
+    // Corrected sale by sale — Rp100.000 moved from one sale to the other,
+    // as a report stating each order's own payout would — it is no longer one
+    // figure spread, and re-spreading it would undo the correction.
+    const edited = list.map((s, i) => ({
+      ...s,
+      received: s.received + (i === 0 ? -100_000 : 100_000),
+    }));
+    expect(isEvenSplit(payoutsOf(edited)[0]!)).toBe(false);
+  });
+
+  it("respreads a corrected payout, each sale keeping its own fee rows", () => {
+    const payout = payoutsOf(recorded())[0]!;
+    const merged = payout.fees[0]!;
+    let n = 0;
+    const next = respreadPayout(
+      payout,
+      {
+        fees: [
+          { ...merged, amount: 800_001 },
+          fee({ id: "new", kind: "TRANSFER", label: "BCA", amount: 6_500 }),
+        ],
+        received: 7_193_500,
+      },
+      () => `added-${++n}`,
+    );
+    expect(next.reduce((t, s) => t + s.received, 0)).toBe(7_193_500);
+    // The commission rows are edited, not replaced…
+    expect(next.map((s) => s.fees[0]!.id)).toEqual(
+      payout.settlements.map((s) => s.fees[0]!.id),
+    );
+    // …and the bank charge is a new row on each sale.
+    expect(next.map((s) => s.fees[1]!.id)).toEqual(["added-1", "added-2"]);
+    expect(next.reduce((t, s) => t + s.fees[1]!.amount, 0)).toBe(6_500);
+    expect(isEvenSplit(payoutsOf(next)[0]!)).toBe(true);
+  });
+
+  it("corrects a single sale as exactly the figures given", () => {
+    const one = payoutsOf([recorded()[0]!])[0]!;
+    const [s] = respreadPayout(
+      one,
+      {
+        fees: [{ ...one.fees[0]!, amount: 450_000 }],
+        received: 4_500_000,
+        reason: "Refund of a voucher",
+      },
+      () => "unused",
+    );
+    expect(s!.received).toBe(4_500_000);
+    expect(s!.fees).toEqual([{ ...one.fees[0]!, amount: 450_000 }]);
+    expect(s!.reason).toBe("Refund of a voucher");
+  });
+});
+
+describe("joinNote", () => {
+  it("adds to what a payment already says, never over it", () => {
+    expect(joinNote("Shopee PayLater", "Landed in a friend's account")).toBe(
+      "Shopee PayLater · Landed in a friend's account",
+    );
+    expect(joinNote(undefined, "  Landed in BCA  ")).toBe("Landed in BCA");
+    expect(joinNote("Landed in BCA", "Landed in BCA")).toBe("Landed in BCA");
+    expect(joinNote("Shopee PayLater", "   ")).toBe("Shopee PayLater");
   });
 });

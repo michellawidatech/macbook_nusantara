@@ -1,144 +1,122 @@
 /**
- * The two barcodes a machine carries, and which of them the database stores.
+ * What a serial barcode looks like, and what a serial is.
  *
- * ## The rules, restated by the owner on 2026-09-01
+ * ## The rules, restated by the owner on 2026-09-21
  *
- * The owner rewrote these and said so explicitly — *"get this right, if I have
- * said something differently pls overwrite it"* — so this file is the rules as
- * they now stand, not as they were on 2026-08-28 or 2026-08-31.
+ * This REPLACES the 2026-09-01 model, in which `Unit.serial` held Apple's
+ * barcode with its `S` and the shop's sticker was a DERIVED "store barcode" —
+ * the supplier's two-letter code in front of it. The owner's words, the same
+ * day: *"Delete the supplier auto-append in serial number. It turns out we do
+ * not record that at all."* So there is ONE barcode now, Apple's, and the
+ * serial is the number inside it:
  *
  * ```
- *   S C 0 2 7 4 0 1 3 7 J K            the ORIGINAL barcode, Apple's own
- *   ^                                  the marker. Compulsory, everywhere.
- *     └────────── 10–12 ──────┘        the rest
- *
- *   A S  S C 0 2 7 4 0 1 3 7 J K       the STORE barcode, the shop's sticker
- *   ^^                                 the supplier's two-letter origin code
- *      └──── the original, whole ──┘   including its S
+ *   S C 0 2 7 4 0 1 3 7 J K       Apple's barcode, as a scanner reads it
+ *   ^                             the marker, printed under the bars and NOT
+ *                                 on the case — never part of the serial
+ *     C 0 2 7 4 0 1 3 7 J K       the serial: 10–12, what a NEW unit stores
  * ```
  *
- * | | shape | length |
+ * | | barcode (a scan) | serial (typed, and stored) |
  * |---|---|---|
- * | original | `S` + 10–12 | 11–13 |
- * | store | two letters + `S` + 10–12 | 13–15 |
+ * | shape | `S` + 10–12 | 10–12 |
+ * | length | 11–13 | 10–12 |
  *
- * ## What changed, and why it is a better model
+ * Which rules a serial is held to is decided by the unit's CONDITION, in
+ * `lib/serialInput.ts`: a sealed (`NEW`) unit is held to the shapes above and
+ * its `I`/`O` are read as `1`/`0`; a second-hand one is taken exactly as read.
+ * This file owns the shapes and the pieces; that one owns the decision.
  *
- * Until this revision the store barcode was the origin code with the `S`
- * REMOVED, and `Unit.serial` held that — so intake prefixed every scan and the
- * database never held what was printed on the machine. Two things fall out of
- * the owner's correction, and both are improvements:
+ * ## Why the `S` goes
  *
- * 1. **`Unit.serial` is now Apple's own barcode, exactly as read.** Nothing is
- *    appended at intake. The store barcode is DERIVED for the sticker and for
- *    display — `storeBarcodeOf` — which means the serial in the database is
- *    the string on the machine, and a machine whose supplier is corrected later
- *    does not need its serial rewritten.
- * 2. **The ambiguity is gone.** The old windows overlapped at 12 and 13
- *    characters, so a shop that ever issued an origin code beginning with `S`
- *    produced reads that were honestly both barcodes; this file used to carry
- *    a tie-break and an `ambiguous` flag for it. Keeping the `S` in the store
- *    barcode puts a marker at a known position in both — index 0 or index 2 —
- *    and no read can satisfy both, because the store form is always exactly
- *    two characters longer than the original it contains.
+ * It is a marker, not a character of the serial — it says "this barcode is
+ * the serial" to a scanner aimed at the underside of a box that also carries a
+ * regulatory code and a part number of much the same shape. A person copying
+ * the number off the case never sees it. Keeping it (the 2026-09-01 model)
+ * made the database hold a string nobody reads off the machine, and made every
+ * search box add one back.
  *
- * ## Validation is absolute now
+ * ## Units taken in before this
  *
- * The owner's words: *"if any barcode is not adhering to this rule then do not
- * accept"*. So the shape is enforced on the TYPED serial as well as on the
- * scanned one, which is a real change — the old rules deliberately let a hand
- * keyed serial through on the grounds that a person can see the machine.
- * `validateSerial` is that gate and `lib/inboundQc.ts` calls it.
- *
- * The one rule that stays scan-only is the `I`/`O` check: Apple prints neither,
- * so their presence is proof of a MISREAD, which is a statement about a scanner
- * rather than about a serial. On a typed serial it is a warning at print time
- * instead — see `inspectStoredSerial`.
+ * Every serial minted between 2026-09-01 and 2026-09-21 — and the demo seed —
+ * carries the `S`. Nothing rewrites them: `resolveSerialQuery` tries the
+ * marked and the unmarked reading of whatever is scanned or typed, so both
+ * kinds are found the same way, and a sticker prints the serial as stored.
  *
  * Pure: no React, no store, no DOM. `test/serialScan.test.ts` is the spec.
  */
 
-/** The two-letter origin code every supplier carries. See `Supplier.code`. */
+/**
+ * The supplier's two-letter origin code (Settings → Suppliers).
+ *
+ * ⚠️ Nothing prints or files it any more (owner, 2026-09-21: "we do not
+ * record that at all"). The field is still on the supplier and still edited
+ * there; retiring it is a separate decision.
+ */
 export const SUPPLIER_CODE_LENGTH = 2;
 
-/** A supplier code is exactly two capitals — the same alphabet as a serial. */
+/** A supplier code is exactly two capitals. */
 export const SUPPLIER_CODE_PATTERN = /^[A-Z]{2}$/;
 
 /**
- * Apple's serial after its marker, and the only length rule in the file.
+ * Apple's serial, and the only length rule in the file.
  *
  * Ten at the short end is the owner's number, and the example that forced it is
- * `SDQXFPXWCK7` — eleven characters, ten of them serial. Twelve at the long end
- * is Apple's post-2010 length.
+ * `SDQXFPXWCK7` — the barcode of `DQXFPXWCK7`, a ten-character serial. Twelve
+ * at the long end is Apple's 2010–2020 length.
  */
 export const BASE_MIN_LENGTH = 10;
 export const BASE_MAX_LENGTH = 12;
 
-/** The marker on the front of Apple's barcode, and inside the shop's. */
+/** The marker on the front of Apple's serial barcode. */
 export const SCAN_PREFIX = "S";
 
-/**
- * The original barcode: `S` and then ten to twelve.
- *
- * This is also the shape of `Unit.serial`, since 2026-09-01 — the two are the
- * same string, which is the whole point of the owner's correction.
- */
+/** Apple's serial barcode: `S` and then ten to twelve. */
 export const ORIGINAL_PATTERN = new RegExp(
   `^${SCAN_PREFIX}[A-Z0-9]{${BASE_MIN_LENGTH},${BASE_MAX_LENGTH}}$`,
 );
 
-/** The store barcode: two letters, then a whole original barcode. */
-export const STORE_PATTERN = new RegExp(
-  `^[A-Z]{${SUPPLIER_CODE_LENGTH}}${SCAN_PREFIX}[A-Z0-9]{${BASE_MIN_LENGTH},${BASE_MAX_LENGTH}}$`,
-);
-
-/** The original barcode's window, marker included. */
-export const SERIAL_MIN_LENGTH = BASE_MIN_LENGTH + 1;
-export const SERIAL_MAX_LENGTH = BASE_MAX_LENGTH + 1;
-
-/** The store barcode's window: the original plus the origin code. */
-export const STORE_MIN_LENGTH = SERIAL_MIN_LENGTH + SUPPLIER_CODE_LENGTH;
-export const STORE_MAX_LENGTH = SERIAL_MAX_LENGTH + SUPPLIER_CODE_LENGTH;
-
-/**
- * The letters Apple leaves out of a serial, and therefore the letters whose
- * presence means a READ is wrong.
- */
-export const CONFUSABLE_LETTERS = ["I", "O"] as const;
-
-/**
- * A serial with no marker on it, as somebody reads it off the machine.
- *
- * The owner's rule of 2026-09-01, second revision: *"if the barcode is typed
- * and is 10–12 digit, auto-add S"*. The `S` is a marker on the BARCODE, not
- * part of the number — it is printed under the bars, not on the case — so a
- * person copying the serial off the underside of a Mac has no reason to type
- * one, and demanding it made the field refuse the number the machine actually
- * shows.
- *
- * Ten at the floor rather than eleven, and that is deliberate: the owner's own
- * example `SDQXFPXWCK7` is an `S` and then ten, and moving the floor to match
- * `OLDER_MODEL_PATTERN` would refuse every machine already taken in under one.
- */
+/** A serial as a sealed unit stores it: ten to twelve capitals and digits. */
 export const BARE_PATTERN = new RegExp(
   `^[A-Z0-9]{${BASE_MIN_LENGTH},${BASE_MAX_LENGTH}}$`,
 );
 
+/** A sealed unit's stored serial. `lib/inboundQc.ts` re-exports these. */
+export const SERIAL_MIN_LENGTH = BASE_MIN_LENGTH;
+export const SERIAL_MAX_LENGTH = BASE_MAX_LENGTH;
+
 /**
- * What an Apple serial itself looks like, older models included.
+ * The longest a serial FIELD will take — the box's `maxLength`, not a rule.
  *
- * The owner's regex, verbatim (2026-09-01): eleven or twelve characters, and
- * no `I`, `O` or `U` anywhere in them — pre-2010 Macs carry eleven, everything
- * since carries twelve. It is deliberately NARROWER than `BARE_PATTERN` and
- * does not gate anything on its own; it is the shape `markTypedSerial` is
- * there to catch, written down so a test can say so.
- *
- * Not a rule on a typed serial that already carries its `S`. That one keeps
- * the looser alphabet, which is the 2026-09-01 decision unchanged: the `I`/`O`
- * rule exists to catch a SCANNER misreading a `1` or a `0`, and a person
- * looking at the machine is the one witness who could legitimately key either.
+ * A second-hand unit's serial is taken as read and held to no length (owner,
+ * 2026-09-21), so the box has to be generous: a box that stopped short would
+ * silently swallow the end of one, and nothing on screen would say so. Twice
+ * Apple's longest barcode, which is also where two scans with no Enter between
+ * them end up.
  */
-export const OLDER_MODEL_PATTERN = /^[A-HJ-NP-TV-Z0-9]{11,12}$/;
+export const SERIAL_FIELD_MAX_LENGTH = 23;
+
+/**
+ * The letters Apple leaves out of a serial. On a sealed unit an `I` or an `O`
+ * can only be a `1` or a `0` somebody — or something — misread.
+ */
+export const CONFUSABLE_LETTERS = ["I", "O"] as const;
+
+/** What each of them was really looking at. `I` is a one, `O` is a zero. */
+const CONFUSABLE_FIX: Readonly<Record<string, string>> = { I: "1", O: "0" };
+
+/**
+ * Read `I` as `1` and `O` as `0`.
+ *
+ * Apple prints neither letter in a serial, so on a SEALED unit there is exactly
+ * one thing each can have been, and the correction is not a guess. Applied to
+ * a scan since the morning of 2026-09-21 and to a typed serial since that
+ * afternoon (owner: "corrected to 1/0"). Never applied to a second-hand unit,
+ * whose serial is taken as read.
+ */
+export function correctScanConfusables(value: string): string {
+  return value.replace(/[IO]/g, (c) => CONFUSABLE_FIX[c] ?? c);
+}
 
 /**
  * The symbology the shop's scanner is expected to be set to.
@@ -149,102 +127,43 @@ export const OLDER_MODEL_PATTERN = /^[A-HJ-NP-TV-Z0-9]{11,12}$/;
  */
 export const CODE128_HINT = "Code 128";
 
-/** Which of a machine's two barcodes a read came off. */
-export type BarcodeKind = "ORIGINAL" | "STORE";
-
-/** Trim and upper-case, which is all a scan needs before it can be judged. */
+/**
+ * Trim, upper-case, and drop blanks — all a read needs before it is judged.
+ *
+ * Blanks INSIDE go too: no serial has one, and "C02 7401 37JK" typed off a
+ * sticker that groups its characters is the same unit as "C027401 37JK".
+ */
 export function normaliseScan(raw: string): string {
-  return raw.trim().toUpperCase();
+  return raw.replace(/\s+/g, "").toUpperCase();
 }
 
-/** Upper-cased, de-blanked, deduplicated — how a code list is compared. */
-function codeSet(codes: Iterable<string> | undefined): ReadonlySet<string> {
-  const out = new Set<string>();
-  for (const raw of codes ?? []) {
-    const code = raw.trim().toUpperCase();
-    if (SUPPLIER_CODE_PATTERN.test(code)) out.add(code);
-  }
-  return out;
-}
-
-/** Is this Apple's own barcode — `S` plus ten to twelve? */
-export function isOriginalBarcode(value: string): boolean {
-  return ORIGINAL_PATTERN.test(normaliseScan(value));
-}
-
-/**
- * Is this the shop's own sticker — an issued origin code in front of an
- * original barcode?
- *
- * Membership, not shape. Any two capitals LOOK like an origin code, and taking
- * them for one would bite two characters off the front of a barcode nobody
- * issued and call the remainder a serial. The `S` at index 2 is a second
- * guard, and between them there is nothing left to guess.
- */
-export function isStoreBarcode(
-  value: string,
-  supplierCodes: Iterable<string>,
-): boolean {
-  const clean = normaliseScan(value);
-  if (!STORE_PATTERN.test(clean)) return false;
-  return codeSet(supplierCodes).has(clean.slice(0, SUPPLIER_CODE_LENGTH));
-}
-
-/**
- * The sticker for a serial: the supplier's origin code, then the whole serial.
- *
- * Derived, never stored (owner correction 2026-09-01). Returns null when there
- * is nothing to derive it from — an unset supplier code, or a serial that is
- * not a valid original barcode — because a half-formed store barcode on a
- * sticker is worse than no sticker: it would print, it would scan, and it
- * would scan as nothing.
- */
-export function storeBarcodeOf(
-  serial: string,
-  supplierCode: string | undefined,
-): string | null {
-  const clean = normaliseScan(serial);
-  const code = (supplierCode ?? "").trim().toUpperCase();
-  if (!SUPPLIER_CODE_PATTERN.test(code)) return null;
-  if (!ORIGINAL_PATTERN.test(clean)) return null;
-  return `${code}${clean}`;
-}
-
-/** Why a serial or a scan was refused. Each maps to one sentence at a call site. */
+/** Why a sealed unit's serial or scan was refused. One sentence per reason at a call site. */
 export type ScanRejection =
   /** Nothing at all. */
   | "empty"
-  /** Right shape, wrong size — the base is not ten to twelve. */
+  /** Right characters, wrong size — the serial is not ten to twelve. */
   | "length"
-  /** A symbol, a space, a lower-case letter — not capitals and digits. */
+  /** A symbol or a punctuation mark — not capitals and digits. */
   | "charset"
   /**
-   * Does not begin with `S`, and is not an issued origin code in front of one.
+   * A SCAN that does not begin with `S`.
    *
-   * Its own reason because the remedy is a different action: aim at a different
-   * barcode. The underside of a Mac carries a regulatory code and a part
-   * number of much the same shape, and the marker is what tells them apart.
+   * Its own reason because the remedy is a different action: aim at a
+   * different barcode. The underside of a box carries a regulatory code and a
+   * part number of much the same shape, and the marker is what tells them
+   * apart.
    */
-  | "no-marker"
-  /** Carries an `I` or an `O`, which Apple never prints. Scans only. */
-  | "confusable";
+  | "no-marker";
 
 export type ScanResult =
   | {
       readonly ok: true;
-      /** The cleaned-up read, so a message can quote what arrived. */
+      /** The cleaned-up read, after any `I`/`O` repair. */
       readonly scanned: string;
-      /** Which of the machine's two barcodes this came off. */
-      readonly kind: BarcodeKind;
-      /**
-       * Apple's barcode — what `Unit.serial` holds.
-       *
-       * The same string either way: a store read has its origin code taken
-       * off, and an original read is already it.
-       */
+      /** The serial inside the barcode — the read without its `S`. */
       readonly serial: string;
-      /** The origin code, when the read carried one. Empty on an original. */
-      readonly supplierCode: string;
+      /** The read carried an `I` or an `O` and was repaired. */
+      readonly corrected: boolean;
     }
   | {
       readonly ok: false;
@@ -255,33 +174,17 @@ export type ScanResult =
       readonly length: number;
     };
 
-/** What one desk asks of a scan, on top of the rules every desk shares. */
-export interface ScanOptions {
-  /**
-   * Every origin code the shop has issued, so the store barcode can be
-   * recognised as one. Without it only Apple's barcode is readable.
-   */
-  readonly supplierCodes?: Iterable<string>;
-}
-
 /**
- * Read one barcode: which of the two it is, and the serial it names.
+ * Read one of Apple's serial barcodes — a sealed unit's, strictly.
  *
- * Both forms are accepted everywhere a scan is taken, which is the owner's ask
- * of 2026-09-01 — a machine on the shelf carries both, and which one somebody
- * happens to aim at is not a decision they should have to make. What comes
- * back is always Apple's barcode, because that is what the database holds.
- *
- * No supplier argument any more, and its absence is the point: nothing is
- * prefixed at intake, so nothing here needs to know which pallet the machine
- * came off. The origin code is used to PRINT a sticker (`storeBarcodeOf`), not
- * to file a serial.
+ * `I`/`O` are repaired first, so the length window and the serial that comes
+ * back are about the same string; then the read must be `S` and ten to twelve,
+ * and what comes back is the ten to twelve.
  */
-export function readBarcode(
-  raw: string,
-  { supplierCodes }: ScanOptions = {},
-): ScanResult {
-  const scanned = normaliseScan(raw);
+export function readBarcode(raw: string): ScanResult {
+  const read = normaliseScan(raw);
+  const scanned = correctScanConfusables(read);
+  const corrected = scanned !== read;
   const fail = (reason: ScanRejection): ScanResult => ({
     ok: false,
     reason,
@@ -291,177 +194,89 @@ export function readBarcode(
 
   if (scanned === "") return fail("empty");
   if (!/^[A-Z0-9]+$/.test(scanned)) return fail("charset");
+  if (!scanned.startsWith(SCAN_PREFIX)) return fail("no-marker");
+  const serial = scanned.slice(SCAN_PREFIX.length);
+  const bad = judgeBare(serial);
+  if (bad) return fail(bad);
+  return { ok: true, scanned, serial, corrected };
+}
 
-  const codes = codeSet(supplierCodes);
-  const looksStore =
-    scanned.length > SUPPLIER_CODE_LENGTH &&
-    codes.has(scanned.slice(0, SUPPLIER_CODE_LENGTH)) &&
-    scanned[SUPPLIER_CODE_LENGTH] === SCAN_PREFIX;
+/** What is wrong with something claiming to be a sealed unit's serial, or null. */
+function judgeBare(value: string): ScanRejection | null {
+  if (value === "") return "empty";
+  if (!/^[A-Z0-9]+$/.test(value)) return "charset";
+  if (value.length < BASE_MIN_LENGTH || value.length > BASE_MAX_LENGTH) {
+    return "length";
+  }
+  return null;
+}
 
-  // The store form is checked FIRST, and the order matters exactly once: a
-  // store barcode whose origin code happens to begin with `S` — `SB` say —
-  // also starts with an S, and reading it as Apple's would leave `B` glued to
-  // the front of the serial. Testing for the origin code first cannot make the
-  // opposite mistake, because it demands a code the shop actually issued AND
-  // an `S` behind it.
-  if (looksStore) {
-    const serial = scanned.slice(SUPPLIER_CODE_LENGTH);
-    const bad = judgeOriginal(serial);
-    if (bad) return fail(bad);
+/**
+ * Read a serial somebody TYPED for a sealed unit.
+ *
+ * `I`/`O` become `1`/`0` (owner answer, 2026-09-21). A typed serial is the
+ * number off the case, ten to twelve — except that a string that is exactly
+ * Apple's BARCODE (`S` and then ten to twelve) is read as one, marker and all,
+ * and the `S` is dropped. That is somebody copying the line under the bars, or
+ * a scanner slow enough to pass for a hand; either way the `S` is not part of
+ * the serial. It cannot swallow a real ten-character serial that starts with
+ * an `S`: without its first letter that is nine, which is no barcode.
+ */
+export function readTypedSealed(raw: string): ScanResult {
+  const read = normaliseScan(raw);
+  const typed = correctScanConfusables(read);
+  const corrected = typed !== read;
+  const fail = (reason: ScanRejection): ScanResult => ({
+    ok: false,
+    reason,
+    scanned: typed,
+    length: typed.length,
+  });
+  if (typed === "") return fail("empty");
+  if (ORIGINAL_PATTERN.test(typed)) {
     return {
       ok: true,
-      scanned,
-      kind: "STORE",
-      serial,
-      supplierCode: scanned.slice(0, SUPPLIER_CODE_LENGTH),
+      scanned: typed,
+      serial: typed.slice(SCAN_PREFIX.length),
+      corrected,
     };
   }
-
-  if (!scanned.startsWith(SCAN_PREFIX)) return fail("no-marker");
-  const bad = judgeOriginal(scanned);
+  const bad = judgeBare(typed);
   if (bad) return fail(bad);
-  return {
-    ok: true,
-    scanned,
-    kind: "ORIGINAL",
-    serial: scanned,
-    supplierCode: "",
-  };
+  return { ok: true, scanned: typed, serial: typed, corrected };
 }
 
 /**
- * What is wrong with something claiming to be an original barcode, or null.
+ * Is this a serial a sealed unit may be stored under?
  *
- * Split out so the two branches above judge the serial identically — a store
- * barcode is an origin code in front of one of these, so anything true of the
- * inner string has to be true either way it arrived.
+ * `strict` is the sealed reading — ten to twelve capitals and digits. The
+ * lenient one is the second-hand reading, which asks only that there is
+ * something there: a second-hand serial is taken as read (owner, 2026-09-21).
+ * Defaults to strict, so a caller that has not thought about it gets the
+ * safer answer.
  */
-function judgeOriginal(value: string): ScanRejection | null {
-  if (!value.startsWith(SCAN_PREFIX)) return "no-marker";
-  const base = value.slice(SCAN_PREFIX.length);
-  if (base.length < BASE_MIN_LENGTH || base.length > BASE_MAX_LENGTH) {
-    return "length";
-  }
-  if (!/^[A-Z0-9]+$/.test(base)) return "charset";
-  if (CONFUSABLE_LETTERS.some((c) => base.includes(c))) return "confusable";
-  return null;
-}
-
-/**
- * The gate on a serial somebody TYPED (owner ask 2026-09-01).
- *
- * *"If any barcode is not adhering to this rule then do not accept."* So the
- * shape is enforced on the keyboard too, which the old rules deliberately did
- * not do — they let a hand-keyed serial through on the grounds that a person
- * can see the machine. That was defensible while a wrong serial was merely
- * unfindable; it stopped being defensible once the sticker is derived from the
- * serial, because a malformed one now produces a malformed sticker.
- *
- * The `I`/`O` rule is NOT applied here and that is deliberate: it exists to
- * catch a scanner misreading a `1` or a `0`, and a person looking at the
- * machine is the one witness who could legitimately type either. It stays a
- * warning at print time — see `inspectStoredSerial`.
- *
- * Returns null when the serial is fine.
- */
-export function validateSerial(serial: string): ScanRejection | null {
+export function validateSerial(
+  serial: string,
+  { strict = true }: ValidateOptions = {},
+): ScanRejection | null {
   const clean = normaliseScan(serial);
   if (clean === "") return "empty";
-  if (!/^[A-Z0-9]+$/.test(clean)) return "charset";
-  if (!clean.startsWith(SCAN_PREFIX)) return "no-marker";
-  const base = clean.slice(SCAN_PREFIX.length);
-  if (base.length < BASE_MIN_LENGTH || base.length > BASE_MAX_LENGTH) {
-    return "length";
-  }
-  return null;
+  if (!strict) return null;
+  return judgeBare(clean);
+}
+
+/** What `validateSerial` is being asked. */
+export interface ValidateOptions {
+  /** Hold the serial to a sealed unit's shape? */
+  readonly strict?: boolean;
 }
 
 /** Convenience: is this a serial the database is allowed to hold? */
-export function isValidSerial(serial: string): boolean {
-  return validateSerial(serial) === null;
-}
-
-/**
- * Put the marker back on a serial somebody typed without one.
- *
- * The owner's second revision of 2026-09-01, and the distinction it turns on
- * is WHERE the two forms come from. A scanner reads a barcode, and a barcode
- * carries the `S`; if a scan has none, the scanner was aimed at the regulatory
- * code or the part number beside it, which is exactly the misread the marker
- * exists to catch — so a scan is never marked for, it is refused. A PERSON
- * reads the case, where the number is printed with no marker at all, so
- * demanding one asked them to type a character that is not in front of them.
- *
- * Hence: this is for the typed route only. `commitSerial` calls it when the
- * text did not arrive as a burst — see `wasScannedText` in `lib/scanner.ts`.
- *
- * Anything that is ALREADY a valid serial is returned untouched, and that
- * ordering is the whole subtlety. `SC02AA111AA` is eleven characters, so it is
- * both a legal marked serial (`S` + ten) and a legal bare one — and marking it
- * again would file a machine under `SSC02AA111AA`, a serial no scan of it will
- * ever match. A string that is already legal is never rewritten.
- *
- * Anything else comes back as it went in, for `validateSerial` to refuse and
- * name.
- */
-export function markTypedSerial(raw: string): string {
-  const clean = normaliseScan(raw);
-  if (clean === "") return clean;
-  // Already a serial. Never rewrite one — see the docblock.
-  if (validateSerial(clean) === null) return clean;
-  if (BARE_PATTERN.test(clean)) return `${SCAN_PREFIX}${clean}`;
-  return clean;
-}
-
-/**
- * Turn a scan on the shop floor into the serial the database actually holds.
- *
- * A machine on the shelf carries both barcodes and the counter reads whichever
- * faces them. Sales, Stock Opname and Stock Movement all match against
- * `Unit.serial` — Apple's — so a scan of the shop's own sticker has to have its
- * origin code taken off before it can find anything.
- *
- * Much simpler than it was. It used to search the whole serial list for one
- * ending in the scanned base, because the stored form and the scanned form
- * differed by a prefix that could not be derived from the read. Now the store
- * barcode CONTAINS the serial, so taking two characters off the front is the
- * whole job and no lookup is needed.
- *
- * `known` is still taken and still consulted first, for one honest reason: a
- * read that already names a stored serial is returned untouched, so nothing
- * this function does can disturb the ordinary case.
- *
- * Returns the normalised scan unchanged when it resolves to nothing, so a
- * caller reports "unknown" exactly as it did before.
- */
-export function resolveScannedSerial(
-  raw: string,
-  known: Iterable<string>,
-  supplierCodes: Iterable<string> = [],
-): string {
-  const scanned = normaliseScan(raw);
-  if (scanned === "") return scanned;
-
-  const serials = new Set([...known].map((s) => normaliseScan(s)));
-  if (serials.has(scanned)) return scanned;
-
-  const read = readBarcode(scanned, { supplierCodes });
-  if (read.ok && serials.has(read.serial)) return read.serial;
-
-  /*
-   * The sticker of a supplier whose code this shop no longer lists.
-   *
-   * `readBarcode` refuses to strip two letters it cannot vouch for, and that
-   * is right for the way IN — but on the sales floor the question is only
-   * whether this names a machine on a shelf, and a serial that EXISTS is proof
-   * enough. A code that was retired after its stickers were printed would
-   * otherwise leave those machines unscannable.
-   */
-  if (STORE_PATTERN.test(scanned)) {
-    const inner = scanned.slice(SUPPLIER_CODE_LENGTH);
-    if (serials.has(inner)) return inner;
-  }
-  return scanned;
+export function isValidSerial(
+  serial: string,
+  options?: ValidateOptions,
+): boolean {
+  return validateSerial(serial, options) === null;
 }
 
 /** What is wrong with a serial that is about to be printed. */
@@ -472,8 +287,6 @@ export type SerialFault =
   | "unencodable"
   /** Has an `I` or an `O`, which Apple never prints. */
   | "confusable"
-  /** Not `S` plus ten to twelve. */
-  | "shape"
   /** Something other than a capital or a digit — a space, a dash, a slash. */
   | "charset";
 
@@ -491,19 +304,11 @@ export interface SerialInspection {
 /**
  * Look at a serial the shop is about to put on a sticker.
  *
- * The scan rules guard the way IN. This guards the way out, and it is the more
- * expensive direction to get wrong: a bad scan is refused on screen with the
- * machine still in somebody's hands, whereas a bad sticker is discovered weeks
- * later, peeled onto a machine, when it will not scan or scans as the wrong
- * unit.
- *
  * An **error** is a serial no sticker can carry — empty, or characters the
  * symbology cannot encode. A **warning** is a serial that will print and scan
- * back perfectly but does not look like one this shop takes in: an `I` where a
- * `1` belongs, or a shape nothing Apple prints has. Those reach the database
- * only through data written before the rules tightened, and the shop may well
- * still have the machine — so the dialog says so and prints anyway rather than
- * leaving it with no label at all.
+ * back perfectly but has a character Apple never uses. There is no warning
+ * about LENGTH any more: a second-hand serial is taken as read (2026-09-21),
+ * so no length is wrong, and a sealed one was held to its shape on the way in.
  *
  * Returns `null` when there is nothing to say.
  */
@@ -512,16 +317,13 @@ export function inspectStoredSerial(serial: string): SerialInspection | null {
   if (clean === "") return { fault: "empty", level: "error" };
   // Anything outside printable ASCII cannot go into a Code 128 at all, and in
   // a QR it would encode bytes that come back out of a cheap imager as
-  // something else. Either way the sticker would not be about this machine.
+  // something else. Either way the sticker would not be about this unit.
   if (!/^[\x20-\x7e]+$/.test(clean)) {
     return { fault: "unencodable", level: "error" };
   }
   if (!/^[A-Z0-9]+$/.test(clean)) return { fault: "charset", level: "warning" };
   if (CONFUSABLE_LETTERS.some((c) => clean.includes(c))) {
     return { fault: "confusable", level: "warning" };
-  }
-  if (!ORIGINAL_PATTERN.test(clean)) {
-    return { fault: "shape", level: "warning" };
   }
   return null;
 }

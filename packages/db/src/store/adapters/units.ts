@@ -467,22 +467,63 @@ export const events: Adapter<"events"> = {
   async write(ctx, rows) {
     const { tx } = ctx;
     const fresh: EventRow[] = [];
+    /**
+     * Events being taken OFF a unit (owner decision 2026-09-23).
+     *
+     * A sale's unit can be swapped from Transaction History, and the owner
+     * asked for that to leave no trace of the unit it replaced — *"if we edit
+     * the unit it should edit the ledger as well instead of append only"*. So
+     * the LAST event of a unit may be removed, and only the last: taking a row
+     * out of the middle would leave the events either side claiming statuses
+     * that no longer meet, which is exactly the continuity the create pass
+     * below refuses to write in the first place.
+     *
+     * Everything else about the ledger is unchanged. An event may not be
+     * EDITED in place, because its `seq`, its `fromStatus` and its unit are a
+     * chain rather than fields; a swap is a removal and an append, which is
+     * the same chain rebuilt.
+     */
+    const dropped: { id: string; serial: string }[] = [];
+    /**
+     * A unit renamed, and its history carried across with it.
+     *
+     * The ONLY edit an event accepts: `serial` is denormalised onto the row
+     * and a unit's serial can be corrected — a mistyped one at QC, a swap on
+     * a recorded sale. `unitId` does not move, the chain does not move, and
+     * every other field must be identical; anything else is still refused.
+     */
+    const renamed: { id: string; serial: string }[] = [];
     for (const r of rows) {
-      if (r.next !== undefined && r.base !== undefined)
-        throw refuseEdit("events", r.key);
+      if (r.next !== undefined && r.base !== undefined) {
+        const { serial: to, ...restNext } = r.next;
+        const { serial: from, ...restBase } = r.base;
+        if (
+          to === from ||
+          JSON.stringify(restNext) !== JSON.stringify(restBase)
+        )
+          throw refuseEdit("events", r.key);
+        renamed.push({ id: r.key, serial: to });
+        continue;
+      }
       if (r.next === undefined) {
         if (r.base !== undefined && ctx.archivedSerials.has(r.base.serial)) {
           ctx.touch("events", r.key);
           continue;
         }
-        throw new StoreValidationError(
-          "Riwayat unit tidak bisa dihapus.",
-          "events",
-          r.key,
-        );
+        if (r.base === undefined) {
+          throw new StoreValidationError(
+            "Riwayat unit tidak bisa dihapus.",
+            "events",
+            r.key,
+          );
+        }
+        dropped.push({ id: r.key, serial: r.base.serial });
+        continue;
       }
       fresh.push(r.next);
     }
+    if (renamed.length > 0) await renameEvents(ctx, renamed);
+    if (dropped.length > 0) await removeLastEvents(ctx, dropped);
     if (fresh.length === 0) return;
 
     const bySerial = new Map<string, EventRow[]>();
@@ -597,6 +638,123 @@ export const events: Adapter<"events"> = {
 };
 
 /** The newest event of each unit, one query. */
+/**
+ * Carry a unit's history across to its new serial.
+ *
+ * The unit row is renamed by its own adapter in the same commit; this is the
+ * denormalised copy on each event following it. Refused unless the event still
+ * belongs to the unit that now holds that serial — otherwise a rename could
+ * quietly move one unit's history onto another.
+ */
+async function renameEvents(
+  ctx: WriteContext,
+  renamed: readonly { id: string; serial: string }[],
+): Promise<void> {
+  const { tx } = ctx;
+  const rows = await tx.unitEvent.findMany({
+    where: { id: { in: renamed.map((r) => r.id) } },
+    select: { id: true, unitId: true },
+  });
+  const unitOf = new Map(rows.map((r) => [r.id, r.unitId]));
+  const serials = [...new Set(renamed.map((r) => r.serial))];
+  const units = await tx.unit.findMany({
+    where: { serial: { in: serials } },
+    select: { id: true, serial: true },
+  });
+  const idOfSerial = new Map(units.map((u) => [u.serial, u.id]));
+  for (const r of renamed) {
+    const unitId = unitOf.get(r.id);
+    if (unitId === undefined || idOfSerial.get(r.serial) !== unitId) {
+      throw new StoreValidationError(
+        `Riwayat tidak bisa dipindahkan ke serial ${r.serial}.`,
+        "events",
+        r.id,
+      );
+    }
+    await tx.unitEvent.update({
+      where: { id: r.id },
+      data: { serial: r.serial },
+    });
+    ctx.touch("events", r.id);
+  }
+}
+
+/**
+ * Take events off the end of their units' ledgers.
+ *
+ * Refuses anything that is not currently the unit's last row, and refuses to
+ * empty a unit: a unit with no history is a unit whose status nothing
+ * explains, which `verifyLedger` would reject a moment later anyway. What is
+ * left becomes `ledgerAfter`, so the projection check compares the unit
+ * against the event that is now its last.
+ */
+async function removeLastEvents(
+  ctx: WriteContext,
+  dropped: readonly { id: string; serial: string }[],
+): Promise<void> {
+  const { tx } = ctx;
+  const rows = await tx.unitEvent.findMany({
+    where: { id: { in: dropped.map((d) => d.id) } },
+    select: { id: true, unitId: true, seq: true, serial: true },
+  });
+  const found = new Map(rows.map((r) => [r.id, r]));
+  const perUnit = new Map<string, { serial: string; seqs: number[] }>();
+  for (const d of dropped) {
+    const row = found.get(d.id);
+    if (row === undefined) {
+      throw new StoreValidationError(
+        `Riwayat unit ${d.serial} tidak ditemukan.`,
+        "events",
+        d.id,
+      );
+    }
+    const entry = perUnit.get(row.unitId) ?? { serial: row.serial, seqs: [] };
+    entry.seqs.push(row.seq);
+    perUnit.set(row.unitId, entry);
+  }
+
+  const lasts = await lastEvents(tx, [...perUnit.keys()]);
+  for (const [unitId, entry] of perUnit) {
+    const last = lasts.get(unitId);
+    const top = last?.seq ?? 0;
+    entry.seqs.sort((a, b) => b - a);
+    // They have to be the top N, contiguous: 7 then 6 then 5, never 7 then 5.
+    for (let i = 0; i < entry.seqs.length; i += 1) {
+      if (entry.seqs[i] !== top - i) {
+        throw new StoreValidationError(
+          `Hanya kejadian terakhir unit ${entry.serial} yang bisa dihapus.`,
+          "events",
+          String(entry.seqs[i]),
+        );
+      }
+    }
+    if (entry.seqs.length >= top) {
+      throw new StoreValidationError(
+        `Unit ${entry.serial} harus punya riwayat.`,
+        "events",
+        entry.serial,
+      );
+    }
+  }
+
+  await tx.unitEvent.deleteMany({ where: { id: { in: [...found.keys()] } } });
+  for (const d of dropped) ctx.touch("events", d.id);
+
+  // What the ledger says NOW, so the projection is checked against it.
+  const after = await lastEvents(tx, [...perUnit.keys()]);
+  for (const [unitId, entry] of perUnit) {
+    const last = after.get(unitId);
+    if (last === undefined) continue;
+    ctx.ledgerAfter.set(entry.serial, {
+      status: last.toStatus,
+      locationId:
+        last.toLocationId ??
+        ctx.unitsBefore.get(entry.serial)?.locationId ??
+        "",
+    });
+  }
+}
+
 export async function lastEvents(
   tx: Tx,
   unitIds: readonly string[],

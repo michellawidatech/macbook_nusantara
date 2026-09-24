@@ -300,6 +300,436 @@ describe("a till's commit", () => {
     expect(written["staff"]).toBe("Store Test");
   }, 180_000);
 
+  /*
+   * Counted products are quantities on `StockMove` (2026-09-19): a sale is an
+   * `OrderItem` with no unit plus a TERJUAL move, and its cost reaches the
+   * line and the order from the move.
+   */
+  function accessorySale(shop: Record<string, unknown>, qty: number) {
+    const moves = shop["stockMoves"] as Row[];
+    const held = new Map<string, number>();
+    for (const m of moves) {
+      const k = `${m["skuId"] as string}|${m["locationId"] as string}`;
+      held.set(k, (held.get(k) ?? 0) + (m["qty"] as number));
+    }
+    const [key, onHand] = [...held].find(([, n]) => n > 0)!;
+    const [skuId, locationId] = key.split("|") as [string, string];
+    const code = "SI-2026/09-Tqty1234";
+    const sale = {
+      id: "o_qty_test",
+      code,
+      ts: NOW.toISOString(),
+      customerId: null,
+      serials: [],
+      prices: {},
+      lines: [{ id: "ol_qty_test", skuId, qty, price: 300_000 }],
+      discount: 0,
+      source: "OFFLINE",
+      payMethod: "TUNAI",
+      settled: true,
+      payments: [
+        {
+          id: "p_qty_test",
+          method: "TUNAI",
+          amount: 300_000 * qty,
+          state: "SETTLED",
+          at: NOW.toISOString(),
+        },
+      ],
+      total: 300_000 * qty,
+    };
+    const move = {
+      id: "sm_qty_test",
+      skuId,
+      locationId,
+      qty: -qty,
+      cost: 120_000,
+      type: "TERJUAL",
+      at: NOW.toISOString(),
+      refCode: code,
+      orderId: "o_qty_test",
+      orderLineId: "ol_qty_test",
+      staff: "Michella",
+    };
+    return { sale, move, onHand, skuId, code };
+  }
+
+  it("sells a counted product by quantity, costing it off its stock move", async () => {
+    const shop = await loadDemo();
+    const { sale, move, code } = accessorySale(shop, 1);
+    const result = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [], stockMoves: [] },
+          { orders: [sale], stockMoves: [move] },
+        ),
+      ),
+    });
+    const real = result.codes[code]!;
+    const item = await db.orderItem.findUniqueOrThrow({
+      where: { id: "ol_qty_test" },
+    });
+    expect(item).toMatchObject({ unitId: null, qty: 1, cogs: 120_000n });
+    const order = await db.order.findUniqueOrThrow({
+      where: { id: "o_qty_test" },
+    });
+    expect(order.cogs).toBe(120_000n);
+    expect(order.subtotal).toBe(300_000n);
+    const written = await db.stockMove.findUniqueOrThrow({
+      where: { id: "sm_qty_test" },
+    });
+    expect(written).toMatchObject({ refCode: real, orderItemId: item.id });
+    const back = (result.rows.orders as Row[])[0]!;
+    expect(back["lines"]).toEqual([
+      {
+        id: "ol_qty_test",
+        skuId: sale.lines[0]!.skuId,
+        qty: 1,
+        price: "300000",
+      },
+    ]);
+  }, 180_000);
+
+  it("refuses to sell more of a counted product than the shelf holds", async () => {
+    const shop = await loadDemo();
+    const { sale, move, onHand } = accessorySale(shop, 1);
+    const tooMany = { ...move, qty: -(onHand + 1) };
+    const big = {
+      ...sale,
+      lines: [{ ...sale.lines[0]!, qty: onHand + 1 }],
+      payments: [{ ...sale.payments[0]!, amount: 300_000 * (onHand + 1) }],
+      total: 300_000 * (onHand + 1),
+    };
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { orders: [], stockMoves: [] },
+            { orders: [big], stockMoves: [tooMany] },
+          ),
+        ),
+      }),
+    ).rejects.toBeInstanceOf(StoreValidationError);
+  }, 180_000);
+
+  it("refuses a quantity of a product that is tracked by serial", async () => {
+    const shop = await loadDemo();
+    const unit = (shop["units"] as Row[])[0]!;
+    const move = {
+      id: "sm_tracked_test",
+      skuId: unit["skuId"],
+      locationId: unit["locationId"],
+      qty: 1,
+      cost: 0,
+      type: "KOREKSI",
+      at: NOW.toISOString(),
+      staff: "Michella",
+    };
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ stockMoves: [] }, { stockMoves: [move] }),
+        ),
+      }),
+    ).rejects.toBeInstanceOf(StoreValidationError);
+  }, 180_000);
+
+  it("never lets a stock move be edited", async () => {
+    const shop = await loadDemo();
+    const move = (shop["stockMoves"] as Row[])[0]!;
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { stockMoves: [move] },
+            { stockMoves: [{ ...move, qty: 99 }] },
+          ),
+        ),
+      }),
+    ).rejects.toBeInstanceOf(StoreValidationError);
+  }, 180_000);
+
+  it("records a return on the sale it undid — credit, refund and reference", async () => {
+    // Owner brief 2026-09-19: a marketplace sale carries its order number
+    // (`Payment.ref`), and a return takes its credit off the bill
+    // (`OrderAdjustment` RETUR, carrying the SG code) and hands money back
+    // (`Payment`, direction KELUAR).
+    const shop = await loadDemo();
+    const unit = (shop["units"] as Row[]).find(
+      (u) => u["status"] === "TERSEDIA",
+    )!;
+    const serial = unit["serial"] as string;
+    const events = (shop["events"] as Row[]).filter(
+      (e) => e["serial"] === serial,
+    );
+    const sale = {
+      id: "o_return_test",
+      code: "SI-2026/09-000901",
+      ts: NOW.toISOString(),
+      customerId: null,
+      serials: [serial],
+      prices: { [serial]: 5_000_000 },
+      discount: 0,
+      source: "OFFLINE",
+      payMethod: "TRANSFER",
+      settled: true,
+      payments: [
+        {
+          id: "p_return_test",
+          method: "TRANSFER",
+          amount: 5_000_000,
+          state: "SETTLED",
+          at: NOW.toISOString(),
+          ref: "240919ABCDEF",
+        },
+      ],
+      total: 5_000_000,
+    };
+    const sold = { ...unit, status: "TERJUAL" };
+    const event = {
+      id: "ev_return_test",
+      serial,
+      seq: events.length + 1,
+      type: "TERJUAL",
+      at: NOW.toISOString(),
+      fromStatus: "TERSEDIA",
+      toStatus: "TERJUAL",
+      locationId: unit["locationId"],
+      note: "Sold",
+      refCode: sale.code,
+      staff: "Michella",
+    };
+    const first = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [], units: [unit], events: [] },
+          { orders: [sale], units: [sold], events: [event] },
+        ),
+      ),
+    });
+    const written = decodeRow(
+      "orders",
+      (first.rows.orders as Row[])[0]!,
+    ) as Row;
+    expect((written["payments"] as Row[])[0]!["ref"]).toBe("240919ABCDEF");
+
+    const later = new Date(NOW.getTime() + 60_000).toISOString();
+    const returned = {
+      ...written,
+      adjustments: [
+        {
+          id: "adj_return_test",
+          type: "RETUR",
+          code: "SG-2026/09-000901",
+          amount: 5_000_000,
+          reason: `Returned ${serial}`,
+          at: later,
+        },
+      ],
+      refunds: [
+        {
+          id: "rf_return_test",
+          method: "TRANSFER",
+          amount: 5_000_000,
+          at: later,
+          note: "Bought back",
+        },
+      ],
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore({ orders: [written] }, { orders: [returned] }),
+      ),
+    });
+
+    const back = decodeStore(
+      (await snapshotStore(db, { staffId: ACTOR })).db,
+    ) as unknown as Record<string, Row[]>;
+    const order = back["orders"]!.find((o) => o["id"] === "o_return_test")!;
+    expect(order["adjustments"]).toMatchObject([
+      { type: "RETUR", code: "SG-2026/09-000901", amount: 5_000_000 },
+    ]);
+    expect(order["refunds"]).toMatchObject([
+      { method: "TRANSFER", amount: 5_000_000, note: "Bought back" },
+    ]);
+    // The refund is its own list, not a payment the customer made.
+    expect(order["payments"]).toHaveLength(1);
+    const row = await db.order.findUniqueOrThrow({
+      where: { id: "o_return_test" },
+      include: { payments: true },
+    });
+    expect(row.paidTotal).toBe(0n);
+    expect(row.payments.map((p) => [p.direction, p.amount]).sort()).toEqual([
+      ["KELUAR", 5_000_000n],
+      ["MASUK", 5_000_000n],
+    ]);
+  }, 180_000);
+
+  it("hands a unit over in an exchange: costed onto the sale, its sale entry naming the return", async () => {
+    // Owner ask 2026-09-21: the replacements go out on the SAME sale. A unit
+    // joining a sale already in the database adds what it cost to
+    // `Order.cogs`, and its TERJUAL names the RETURN it went out for — the
+    // event's foreign key to it, which is how the return lists every
+    // replacement with no schema change. The code is provisional, as the
+    // browser writes it, so the renumbering has to reach the event too.
+    const shop = await loadDemo();
+    const [back, out] = (shop["units"] as Row[]).filter(
+      (u) => u["status"] === "TERSEDIA",
+    );
+    const serialBack = back!["serial"] as string;
+    const serialOut = out!["serial"] as string;
+    const seqOf = (serial: string) =>
+      (shop["events"] as Row[]).filter((e) => e["serial"] === serial).length;
+    const sale = {
+      id: "o_exchange_test",
+      code: "SI-2026/09-000902",
+      ts: NOW.toISOString(),
+      customerId: null,
+      serials: [serialBack],
+      prices: { [serialBack]: 5_000_000 },
+      discount: 0,
+      source: "OFFLINE",
+      payMethod: "TUNAI",
+      settled: true,
+      payments: [
+        {
+          id: "p_exchange_test",
+          method: "TUNAI",
+          amount: 5_000_000,
+          state: "SETTLED",
+          at: NOW.toISOString(),
+        },
+      ],
+      total: 5_000_000,
+    };
+    const soldBack = { ...back!, status: "TERJUAL" };
+    const first = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [], units: [back!], events: [] },
+          {
+            orders: [sale],
+            units: [soldBack],
+            events: [
+              {
+                id: "ev_exchange_sold",
+                serial: serialBack,
+                seq: seqOf(serialBack) + 1,
+                type: "TERJUAL",
+                at: NOW.toISOString(),
+                fromStatus: "TERSEDIA",
+                toStatus: "TERJUAL",
+                locationId: back!["locationId"],
+                note: "Sold",
+                refCode: sale.code,
+                staff: "Michella",
+              },
+            ],
+          },
+        ),
+      ),
+    });
+    const written = decodeRow(
+      "orders",
+      (first.rows.orders as Row[])[0]!,
+    ) as Row;
+
+    const later = new Date(NOW.getTime() + 60_000).toISOString();
+    const code = "SG-2026/09-Tex4mpl3";
+    const exchanged = {
+      ...written,
+      serials: [serialBack, serialOut],
+      prices: { [serialBack]: 5_000_000, [serialOut]: 6_000_000 },
+      total: 11_000_000,
+      adjustments: [
+        {
+          id: "adj_exchange_test",
+          type: "RETUR",
+          code,
+          amount: 5_000_000,
+          reason: `Returned ${serialBack}`,
+          at: later,
+        },
+      ],
+      payments: [
+        ...(written["payments"] as Row[]),
+        {
+          id: "p_exchange_topup",
+          method: "TUNAI",
+          amount: 1_000_000,
+          state: "SETTLED",
+          at: later,
+          note: "Exchange top-up",
+        },
+      ],
+    };
+    const ret = {
+      id: "r_exchange_test",
+      code,
+      kind: "CUSTOMER",
+      serial: serialBack,
+      reason: "Rusak",
+      date: later.slice(0, 10),
+      status: "PENDING",
+      exchangeSerial: serialOut,
+      fee: 1_000_000,
+    };
+    const soldOut = { ...out!, status: "TERJUAL" };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [written], returns: [], units: [out!], events: [] },
+          {
+            orders: [exchanged],
+            returns: [ret],
+            units: [soldOut],
+            events: [
+              {
+                id: "ev_exchange_out",
+                serial: serialOut,
+                seq: seqOf(serialOut) + 1,
+                type: "TERJUAL",
+                at: later,
+                fromStatus: "TERSEDIA",
+                toStatus: "TERJUAL",
+                locationId: out!["locationId"],
+                note: `Exchange for ${serialBack} (${code})`,
+                refCode: code,
+                staff: "Michella",
+              },
+            ],
+          },
+        ),
+      ),
+    });
+
+    const order = await db.order.findUniqueOrThrow({
+      where: { id: "o_exchange_test" },
+    });
+    const units = await db.unit.findMany({
+      where: { serial: { in: [serialBack, serialOut] } },
+      select: { buy: true },
+    });
+    expect(order.cogs).toBe(units.reduce((n, u) => n + u.buy, 0n));
+
+    const returnRow = await db.unitReturn.findFirstOrThrow({
+      where: { exchangeUnit: { serial: serialOut } },
+    });
+    expect(returnRow.code).not.toBe(code); // numbered for real
+    const handedOver = await db.unitEvent.findFirstOrThrow({
+      where: { serial: serialOut, type: "TERJUAL" },
+    });
+    expect(handedOver.unitReturnId).toBe(returnRow.id);
+  }, 180_000);
+
   it("keeps a purchase line whose product has not been picked yet", async () => {
     // Owner report 2026-09-15: this line used to refuse the whole commit.
     const shop = await loadDemo();
@@ -320,6 +750,117 @@ describe("a till's commit", () => {
       skuId: "",
       qty: 1,
     });
+  }, 180_000);
+
+  it("keeps each invoice expense as a row, and the payment that settled it", async () => {
+    // Owner ask 2026-09-18: "Add Expense" — an expense can stay out of COGS,
+    // and marking it paid records a payment that names it.
+    const shop = await loadDemo();
+    const fresh = {
+      id: "po_store_fees",
+      code: "PI-2026/09-Tfee1234",
+      supplierId: (shop["suppliers"] as Row[])[0]!["id"],
+      invoice: "INV-FEE",
+      date: "2026-09-18",
+      locationId: (shop["warehouses"] as Row[])[0]!["id"],
+      items: [
+        {
+          id: "poi_store_fees",
+          skuId: (shop["skus"] as Row[])[0]!["id"],
+          serial: null,
+          qty: 1,
+          unitCost: 1_000_000,
+        },
+      ],
+      payments: [
+        {
+          id: "pp_store_fees",
+          method: "TUNAI",
+          amount: 150_000,
+          at: NOW.toISOString(),
+          appliedTo: "SHIPPING",
+          feeId: "fee_store_ship",
+        },
+      ],
+      fees: [
+        {
+          id: "fee_store_ship",
+          kind: "SHIPPING",
+          label: "JNE",
+          amount: 150_000,
+          inCogs: true,
+        },
+        {
+          id: "fee_store_pack",
+          kind: "OTHER",
+          label: "Packing",
+          amount: 25_000,
+          inCogs: false,
+        },
+      ],
+      discount: 0,
+      status: "RECEIVED",
+    };
+    const created = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(diffStore({ pos: [] }, { pos: [fresh] })),
+    });
+    const saved = decodeRow("pos", (created.rows.pos as Row[])[0]!);
+    expect(saved["fees"]).toEqual(fresh.fees);
+    expect(saved["payments"]).toMatchObject([{ feeId: "fee_store_ship" }]);
+    const header = await db.purchaseOrder.findUnique({
+      where: { id: fresh.id },
+    });
+    expect(header?.feesTotal).toBe(175_000n);
+    expect(header?.total).toBe(1_175_000n);
+    const paid = await db.payment.findUnique({
+      where: { id: "pp_store_fees" },
+    });
+    expect(paid?.poFeeId).toBe("fee_store_ship");
+
+    // Taking the packing charge off keeps its row, marked removed.
+    const without: Row = {
+      ...saved,
+      fees: (saved["fees"] as Row[]).filter(
+        (f) => f["id"] !== "fee_store_pack",
+      ),
+    };
+    const after = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(diffStore({ pos: [saved] }, { pos: [without] })),
+    });
+    expect(
+      decodeRow("pos", (after.rows.pos as Row[])[0]!)["fees"],
+    ).toMatchObject([{ id: "fee_store_ship" }]);
+    const gone = await db.purchaseOrderFee.findUnique({
+      where: { id: "fee_store_pack" },
+    });
+    expect(gone?.removedAt).not.toBeNull();
+
+    // A payment may only name an expense of its own invoice.
+    const wrong = {
+      ...without,
+      payments: [
+        ...(without["payments"] as Row[]),
+        {
+          id: "pp_store_wrong",
+          method: "TUNAI",
+          amount: 1_000,
+          at: NOW.toISOString(),
+          appliedTo: "TAX",
+          feeId: "fee_store_pack",
+        },
+      ],
+    };
+    const latest = decodeRow("pos", (after.rows.pos as Row[])[0]!);
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ pos: [latest] }, { pos: [wrong] }),
+        ),
+      }),
+    ).rejects.toThrow(/tidak ada di faktur ini/);
   }, 180_000);
 
   it("cancels a deleted invoice, voiding its payments and releasing its deposit money", async () => {
@@ -350,8 +891,7 @@ describe("a till's commit", () => {
           appliedTo: "ORDER",
         },
       ],
-      shippingFee: 0,
-      taxFee: 0,
+      fees: [],
       discount: 0,
       status: "ORDERED",
     };
@@ -404,5 +944,362 @@ describe("a till's commit", () => {
       where: { id: draft["id"] as string },
     });
     expect(row?.status).toBe("BATAL");
+  }, 180_000);
+});
+
+describe("money that settles a debt without moving the balance (2026-09-22)", () => {
+  /** Commit `base` → `next` for one collection, and read the row back. */
+  async function commitRow(
+    name: "pos" | "orders" | "deposits" | "suppliers" | "customers",
+    base: Row | undefined,
+    next: Row,
+    extra: { base: Record<string, Row[]>; next: Record<string, Row[]> } = {
+      base: {},
+      next: {},
+    },
+  ): Promise<Row> {
+    const result = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { [name]: base === undefined ? [] : [base], ...extra.base },
+          { [name]: [next], ...extra.next },
+        ),
+      ),
+    });
+    const row = (result.rows[name] as Row[]).find(
+      (r) => r["id"] === next["id"],
+    );
+    if (row === undefined) throw new Error(`${name} ${next["id"]} not written`);
+    return decodeRow(name, row) as Row;
+  }
+
+  it("keeps the switch on an invoice payment, a sale payment and a deposit", async () => {
+    const shop = await loadDemo();
+    const supplierId = (shop["suppliers"] as Row[])[0]!["id"] as string;
+
+    // An invoice paid partly by the owner from his own account.
+    const po = {
+      id: "po_store_balance",
+      code: "PI-2026/09-Tbal1234",
+      supplierId,
+      invoice: "INV-BAL",
+      date: "2026-09-22",
+      locationId: (shop["warehouses"] as Row[])[0]!["id"],
+      items: [
+        {
+          id: "poi_store_balance",
+          skuId: (shop["skus"] as Row[])[0]!["id"],
+          serial: null,
+          qty: 1,
+          unitCost: 2_000_000,
+        },
+      ],
+      payments: [
+        {
+          id: "pp_store_owner",
+          method: "TRANSFER",
+          amount: 1_500_000,
+          at: NOW.toISOString(),
+          appliedTo: "ORDER",
+          inBalance: false,
+        },
+        {
+          id: "pp_store_shop",
+          method: "TUNAI",
+          amount: 500_000,
+          at: NOW.toISOString(),
+          appliedTo: "ORDER",
+        },
+      ],
+      fees: [],
+      discount: 0,
+      status: "ORDERED",
+    };
+    const savedPo = await commitRow("pos", undefined, po);
+    const [owner, shopPaid] = savedPo["payments"] as Row[];
+    expect(owner!["inBalance"]).toBe(false);
+    // True is the absent key, or every row would diff against the browser's.
+    expect(shopPaid!["inBalance"]).toBeUndefined();
+    expect(
+      (await db.payment.findUniqueOrThrow({ where: { id: "pp_store_owner" } }))
+        .inBalance,
+    ).toBe(false);
+    expect(
+      (await db.payment.findUniqueOrThrow({ where: { id: "pp_store_shop" } }))
+        .inBalance,
+    ).toBe(true);
+
+    // Switched back on, from the row the commit answered with — which is also
+    // proof the projection passes a till's conflict check.
+    const flipped = {
+      ...savedPo,
+      payments: (savedPo["payments"] as Row[]).map((p) => {
+        const { inBalance: _dropped, ...rest } = p;
+        return rest;
+      }),
+    };
+    const againPo = await commitRow("pos", savedPo, flipped);
+    expect(
+      (againPo["payments"] as Row[]).every((p) => p["inBalance"] === undefined),
+    ).toBe(true);
+    expect(
+      (await db.payment.findUniqueOrThrow({ where: { id: "pp_store_owner" } }))
+        .inBalance,
+    ).toBe(true);
+
+    // A sale whose payment never reached the drawer or the bank.
+    const unit = (shop["units"] as Row[]).find(
+      (u) => u["status"] === "TERSEDIA",
+    )!;
+    const serial = unit["serial"] as string;
+    const seq =
+      (shop["events"] as Row[]).filter((e) => e["serial"] === serial).length +
+      1;
+    const sale = {
+      id: "o_store_balance",
+      code: "SI-2026/09-000922",
+      ts: NOW.toISOString(),
+      customerId: null,
+      serials: [serial],
+      prices: { [serial]: 5_000_000 },
+      discount: 0,
+      source: "OFFLINE",
+      payMethod: "TRANSFER",
+      settled: true,
+      payments: [
+        {
+          id: "p_store_balance",
+          method: "TRANSFER",
+          amount: 5_000_000,
+          state: "SETTLED",
+          at: NOW.toISOString(),
+          inBalance: false,
+        },
+      ],
+      total: 5_000_000,
+    };
+    const event = {
+      id: "ev_store_balance",
+      serial,
+      seq,
+      type: "TERJUAL",
+      at: NOW.toISOString(),
+      fromStatus: "TERSEDIA",
+      toStatus: "TERJUAL",
+      locationId: unit["locationId"],
+      note: "Sold",
+      refCode: sale.code,
+      staff: "Michella",
+    };
+    const savedSale = await commitRow("orders", undefined, sale, {
+      base: { units: [unit], events: [] },
+      next: { units: [{ ...unit, status: "TERJUAL" }], events: [event] },
+    });
+    expect((savedSale["payments"] as Row[])[0]!["inBalance"]).toBe(false);
+    expect(
+      (await db.payment.findUniqueOrThrow({ where: { id: "p_store_balance" } }))
+        .inBalance,
+    ).toBe(false);
+
+    // A deposit — the remainder of a payment the owner made personally.
+    const deposit = {
+      id: "dep_store_balance",
+      supplierId,
+      amount: 3_000_000,
+      method: "TRANSFER",
+      at: NOW.toISOString(),
+      inBalance: false,
+      staff: "Michella",
+      allocations: [],
+    };
+    const savedDeposit = await commitRow("deposits", undefined, deposit);
+    expect(savedDeposit["inBalance"]).toBe(false);
+    expect(
+      (
+        await db.supplierDeposit.findUniqueOrThrow({
+          where: { id: "dep_store_balance" },
+        })
+      ).inBalance,
+    ).toBe(false);
+    const { inBalance: _off, ...depositOn } = savedDeposit;
+    const againDeposit = await commitRow("deposits", savedDeposit, depositOn);
+    expect(againDeposit["inBalance"]).toBeUndefined();
+    // A deposit the browser never switched is the default, and says nothing.
+    const plain = (
+      decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>
+    )["deposits"]!.find((d) => d["id"] !== "dep_store_balance")!;
+    expect(plain["inBalance"]).toBeUndefined();
+  }, 180_000);
+
+  it("records, edits and voids a payment against a supplier's opening balance", async () => {
+    const shop = await loadDemo();
+    const supplier = (shop["suppliers"] as Row[])[0]!;
+    const supplierId = supplier["id"] as string;
+    const later = new Date(NOW.getTime() + 60_000).toISOString();
+
+    const owed = {
+      ...supplier,
+      openingBalance: 10_000_000,
+      openingBalanceAt: "2026-09-01T00:00:00.000Z",
+      openingPayments: [
+        {
+          id: "op_sup_1",
+          method: "TRANSFER",
+          amount: 4_000_000,
+          at: NOW.toISOString(),
+          note: "Cicilan 1",
+          inBalance: false,
+        },
+      ],
+    };
+    const saved = await commitRow("suppliers", supplier, owed);
+    expect(saved["openingPayments"]).toEqual(owed.openingPayments);
+    expect(saved["openingBalance"]).toBe(10_000_000);
+    const row = await db.payment.findUniqueOrThrow({
+      where: { id: "op_sup_1" },
+      include: { method: { select: { code: true } } },
+    });
+    expect(row).toMatchObject({
+      supplierId,
+      customerId: null,
+      orderId: null,
+      poId: null,
+      direction: "KELUAR",
+      status: "LUNAS",
+      appliedTo: "BARANG",
+      amount: 4_000_000n,
+      note: "Cicilan 1",
+      inBalance: false,
+      staffId: ACTOR,
+      voidedAt: null,
+    });
+    expect(row.method.code).toBe("TRANSFER");
+    expect(row.paidAt?.toISOString()).toBe(NOW.toISOString());
+    expect(row.recordedAt?.toISOString()).toBe(NOW.toISOString());
+
+    // Corrected: a different amount, no note, and it went through the shop.
+    const corrected = {
+      ...saved,
+      openingPayments: [
+        {
+          id: "op_sup_1",
+          method: "TUNAI",
+          amount: 4_500_000,
+          at: NOW.toISOString(),
+        },
+      ],
+    };
+    const edited = await commitRow("suppliers", saved, corrected);
+    expect(edited["openingPayments"]).toEqual(corrected.openingPayments);
+    expect(
+      await db.payment.findUniqueOrThrow({ where: { id: "op_sup_1" } }),
+    ).toMatchObject({ amount: 4_500_000n, note: null, inBalance: true });
+
+    // Renaming the supplier leaves its payments alone.
+    const renamed = await commitRow("suppliers", edited, {
+      ...edited,
+      name: `${edited["name"] as string} (baru)`,
+    });
+    expect(renamed["openingPayments"]).toEqual(corrected.openingPayments);
+
+    // A second instalment, and the first one taken back: voided, not deleted.
+    const second = {
+      id: "op_sup_2",
+      method: "TRANSFER",
+      amount: 2_000_000,
+      at: later,
+    };
+    const replaced = await commitRow("suppliers", renamed, {
+      ...renamed,
+      openingPayments: [second],
+    });
+    expect(replaced["openingPayments"]).toEqual([second]);
+    const voided = await db.payment.findUniqueOrThrow({
+      where: { id: "op_sup_1" },
+    });
+    expect(voided.voidedAt).not.toBeNull();
+
+    // All of it taken back: the list is absent again, not [].
+    const none = { ...replaced };
+    delete none["openingPayments"];
+    const cleared = await commitRow("suppliers", replaced, none);
+    expect(cleared["openingPayments"]).toBeUndefined();
+    const rows = await db.payment.findMany({
+      where: { supplierId },
+      orderBy: { id: "asc" },
+    });
+    expect(rows.map((p) => [p.id, p.voidedAt !== null])).toEqual([
+      ["op_sup_1", true],
+      ["op_sup_2", true],
+    ]);
+
+    // Nothing is paid by paying nothing.
+    await expect(
+      commitRow("suppliers", cleared, {
+        ...cleared,
+        openingPayments: [{ ...second, id: "op_sup_zero", amount: 0 }],
+      }),
+    ).rejects.toThrow(/lebih dari nol/);
+  }, 180_000);
+
+  it("records a customer's payment against their opening balance, as money in", async () => {
+    const shop = await loadDemo();
+    const customer = (shop["customers"] as Row[])[0]!;
+    const paid = {
+      ...customer,
+      openingBalance: 2_500_000,
+      openingPayments: [
+        {
+          id: "op_cus_1",
+          method: "TUNAI",
+          amount: 1_000_000,
+          at: NOW.toISOString(),
+          note: "Bayar sebagian",
+        },
+      ],
+    };
+    const saved = await commitRow("customers", customer, paid);
+    expect(saved["openingPayments"]).toEqual(paid.openingPayments);
+    expect(
+      await db.payment.findUniqueOrThrow({ where: { id: "op_cus_1" } }),
+    ).toMatchObject({
+      customerId: customer["id"],
+      supplierId: null,
+      orderId: null,
+      poId: null,
+      direction: "MASUK",
+      status: "LUNAS",
+      inBalance: true,
+    });
+
+    // A customer created with the payment in the same commit.
+    const fresh = {
+      id: "cus_store_opening",
+      name: "Pelanggan Lama",
+      phone: "",
+      createdAt: NOW.toISOString(),
+      openingBalance: 800_000,
+      openingPayments: [
+        {
+          id: "op_cus_new",
+          method: "TRANSFER",
+          amount: 300_000,
+          at: NOW.toISOString(),
+          inBalance: false,
+        },
+      ],
+    };
+    const created = await commitRow("customers", undefined, fresh);
+    expect(created["openingPayments"]).toEqual(fresh.openingPayments);
+    expect(
+      await db.payment.findUniqueOrThrow({ where: { id: "op_cus_new" } }),
+    ).toMatchObject({
+      customerId: "cus_store_opening",
+      direction: "MASUK",
+      inBalance: false,
+    });
   }, 180_000);
 });

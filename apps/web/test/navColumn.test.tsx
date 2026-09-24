@@ -76,6 +76,10 @@ function renderShell() {
                 }
               >
                 <Route path="/stock/opname" element={<div />} />
+                <Route
+                  path="/stock/inventory"
+                  element={<div>The inventory page</div>}
+                />
               </Route>
             </Routes>
           </MemoryRouter>
@@ -153,6 +157,33 @@ describe("the nav column", () => {
       screen.getByRole("button", { name: "Expand the menu" }),
     );
     expect(screen.getByText("Macbook Nusantara")).toBeTruthy();
+  });
+
+  it("makes every place a link, so it can be dragged into another tab", () => {
+    // Owner ask 2026-09-21: "remove the tab view but the user must be able
+    // to drag the feature and open it in another tab". A browser drags, and
+    // cmd- or middle-clicks, an `<a href>` — never a row that only navigates.
+    renderShell();
+    expect(screen.getByRole("link", { name: "Stock Opname" })).toHaveAttribute(
+      "href",
+      "/stock/opname",
+    );
+    expect(screen.getByRole("link", { name: "Customer" })).toHaveAttribute(
+      "href",
+      "/customers",
+    );
+    // The Stock entry and the white button above the account foot, which is
+    // the same place on purpose (2026-09-01) — both draggable.
+    const till = screen.getAllByRole("link", { name: /New Transaction/ });
+    expect(till).toHaveLength(2);
+    for (const link of till) expect(link).toHaveAttribute("href", "/stock/out");
+  });
+
+  it("still goes there on a plain click, and draws no tab strip", async () => {
+    renderShell();
+    expect(document.querySelector(".nusantara-app-tabs")).toBeNull();
+    await userEvent.click(screen.getByRole("link", { name: "Inventory" }));
+    expect(await screen.findByText("The inventory page")).toBeTruthy();
   });
 
   it("remembers the rail on this device", async () => {

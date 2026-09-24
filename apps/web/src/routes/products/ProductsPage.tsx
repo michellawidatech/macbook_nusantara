@@ -34,11 +34,12 @@ import { ProTable } from "../../components/ProTable";
 import { EditableTable } from "../../components/EditableTable";
 import { MoneyInput } from "../../components/MoneyInput";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
-import { fmtRp } from "../../lib/format.js";
+import { fmtNone, fmtRp } from "../../lib/format.js";
 import { fetchMacModels, type ImportCandidate } from "../../lib/appledb.js";
 import { useDb, mutate, nextId } from "../../mock/store.js";
 import type { CatalogModel, Sku } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
+import { parseProductName, shopProductName } from "../../lib/productCode.js";
 
 function combos(axes: { name: string; values: string[] }[]): string[] {
   return axes.reduce<string[]>(
@@ -46,6 +47,59 @@ function combos(axes: { name: string; values: string[] }[]): string[] {
       acc.flatMap((p) => a.values.map((v) => (p ? `${p} / ${v}` : v))),
     [""],
   );
+}
+
+/**
+ * One variant's SKU CODE, in the shop's own naming convention (owner ask
+ * 2026-09-21: *"in the SKU and product input, actually they use the naming
+ * convention in stock persediaan"*).
+ *
+ * `AIR 13" 2020 I5 8/256` — B2Soft's `PERSEDIAAN BARANG` spelling, which the
+ * shop has read its stock off for years and which the bookkeeper's sheets
+ * start from. It replaces `nextId("SKU")`, which produced `SKU_17`: a code
+ * nobody could look up, match against a supplier's quotation or find in the
+ * old system.
+ *
+ * The MODEL NAME is read for its parts rather than trusted to be in the
+ * convention (`parseProductName`), because a product added by hand or brought
+ * in from AppleDB is named however whoever added it named it. A name the
+ * convention cannot read — an accessory, a spare part — keeps its own words
+ * and simply gains the variant, which is the honest answer: `KOLI` has no
+ * chip, no size and nothing to configure.
+ *
+ * Deliberately NOT unique on its own. Two products genuinely named the same
+ * thing are the same thing, and `Sku.code` is unique in the schema, so the
+ * caller appends a discriminator when the shop really does hold two.
+ */
+function skuCodeFor(
+  modelName: string,
+  year: number | string | undefined,
+  variantLabel: string,
+): string {
+  const parsed = parseProductName(modelName);
+  // "8GB / 256GB" as the axes joined it. RAM first, storage second, which is
+  // the order `combos` builds and the order the convention prints.
+  const [ram, ssd] = variantLabel.split("/").map((v) => v.trim());
+  const name = shopProductName({
+    line: parsed.line,
+    ...(parsed.sizeInch === undefined ? {} : { sizeInch: parsed.sizeInch }),
+    year: parsed.year ?? (year === undefined ? null : String(year)),
+    ...(parsed.chip === undefined ? {} : { chip: parsed.chip }),
+    ...(ram ? { ram } : {}),
+    ...(ssd ? { ssd } : {}),
+    ...(parsed.extra === undefined ? {} : { extra: parsed.extra }),
+  });
+  return name === "" ? modelName.trim().toUpperCase() : name;
+}
+
+/** A code nothing else in the catalogue is using. See `skuCodeFor`. */
+function freeSkuCode(taken: ReadonlySet<string>, wanted: string): string {
+  if (!taken.has(wanted)) return wanted;
+  for (let n = 2; n < 100; n += 1) {
+    const tried = `${wanted} (${n})`;
+    if (!taken.has(tried)) return tried;
+  }
+  return `${wanted} ${Date.now()}`;
 }
 
 const SPEC_SOURCE_TAG: Record<
@@ -93,6 +147,9 @@ export function ProductsPage() {
 
   const [variantOpen, setVariantOpen] = useState(false);
   const [variantForm] = Form.useForm<{ variantLabel: string; price: number }>();
+  // Watched so the code preview under the name field follows what is typed.
+  const addName = Form.useWatch("name", addForm);
+  const addYear = Form.useWatch("releaseYear", addForm);
 
   const model = editing && db.models.find((m) => m.id === editing.id);
 
@@ -261,14 +318,20 @@ export function ProductsPage() {
             { name: "SSD", values: v.ssd },
           ],
         });
+        const taken = new Set(d.skus.map((x) => x.code));
         for (const label of combos([
           { name: "RAM", values: v.ram },
           { name: "SSD", values: v.ssd },
         ])) {
+          const code = freeSkuCode(
+            taken,
+            skuCodeFor(v.name, v.releaseYear, label),
+          );
+          taken.add(code);
           d.skus.push({
             id: nextId("sku"),
             modelId: id,
-            code: nextId("SKU").toUpperCase(),
+            code,
             name: v.name,
             variantLabel: label,
             price: v.price ?? 0,
@@ -297,7 +360,10 @@ export function ProductsPage() {
         d.skus.push({
           id: nextId("sku"),
           modelId: m.id,
-          code: nextId("SKU").toUpperCase(),
+          code: freeSkuCode(
+            new Set(d.skus.map((x) => x.code)),
+            skuCodeFor(m.name, m.releaseYear, v.variantLabel.trim()),
+          ),
           name: m.name,
           variantLabel: v.variantLabel.trim(),
           price: v.price ?? 0,
@@ -332,6 +398,7 @@ export function ProductsPage() {
             variants live in an expanded row, and a card has nothing to expand
             into. See DataTable's docblock. */}
         <ProTable
+          persistKey="products"
           rowKey="id"
           dataSource={db.models}
           searchPlaceholder={t(
@@ -403,7 +470,7 @@ export function ProductsPage() {
               title: t("products.appleId", "Apple ID"),
               dataIndex: "identifier",
               searchable: true,
-              render: (v) => v ?? "—",
+              render: (v) => v ?? fmtNone(),
             },
             {
               title: t("products.source", "Source"),
@@ -493,11 +560,6 @@ export function ProductsPage() {
           />
         ) : (
           <>
-            <Typography.Paragraph type="secondary">
-              Live from api.appledb.dev. Pick the models you sell — each one
-              arrives with its RAM and SSD options as variants. AppleDB carries
-              no prices, so imported variants start at Rp 0.
-            </Typography.Paragraph>
             <ProTable
               rowKey="key"
               loading={importing}
@@ -564,7 +626,7 @@ export function ProductsPage() {
                   title: t("products.chip", "Chip"),
                   dataIndex: "chip",
                   facet: true,
-                  render: (v) => v ?? "—",
+                  render: (v) => v ?? fmtNone(),
                 },
                 {
                   title: t("products.appleId", "Apple ID"),
@@ -623,7 +685,9 @@ export function ProductsPage() {
                         {t("products.imported", "Imported")}
                       </Tag>
                     ) : (
-                      <Typography.Text type="secondary">—</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {fmtNone()}
+                      </Typography.Text>
                     ),
                 },
                 {
@@ -704,9 +768,29 @@ export function ProductsPage() {
             name="name"
             label={t("products.modelName", "Model name")}
             rules={[{ required: true }]}
+            /*
+             * The shop's own convention, from B2Soft's PERSEDIAAN BARANG
+             * (owner ask 2026-09-21). The placeholder is a real row from it,
+             * and the line under the field shows what this product's SKU
+             * codes will read as — so somebody who types a name outside the
+             * convention sees it before they create eight variants under it.
+             */
+            extra={
+              addName?.trim()
+                ? t("products.codePreview", "SKU codes will read: {{code}}", {
+                    code: skuCodeFor(addName, addYear, "8GB / 256GB"),
+                  })
+                : t(
+                    "products.namingHint",
+                    "The shop's convention: line, size, year or chip, processor. An Apple-silicon machine is named by its chip instead of its year.",
+                  )
+            }
           >
             <Input
-              placeholder={t("products.eGMacbookAirM4", "e.g. MacBook Air M4")}
+              placeholder={t(
+                "products.eGAir13",
+                'e.g. AIR 13" 2020 I5, or AIR 13" M2',
+              )}
             />
           </Form.Item>
           <Form.Item

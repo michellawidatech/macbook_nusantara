@@ -11,7 +11,13 @@
 
 import { Prisma, type PrismaClient, type Tx } from "./client.js";
 
-export type OutboxKind = "WA_REPLY" | "IG_REPLY" | "IG_DM" | "ALERT";
+export type OutboxKind =
+  | "WA_REPLY"
+  /** One photograph of a unit (2026-09-21). See the schema's own note. */
+  | "WA_IMAGE"
+  | "IG_REPLY"
+  | "IG_DM"
+  | "ALERT";
 export type OutboxStatus = "PENDING" | "SENDING" | "SENT" | "FAILED";
 
 export interface OutboxRow {

@@ -1,0 +1,15 @@
+-- The bot may send the shop's own photographs of a unit (owner ask
+-- 2026-09-21: *"make sure like the chatbot can send pictures per unit"*).
+--
+-- One new `OutboxKind`, and nothing else. A photo send is an outbox row for
+-- exactly the reasons a text reply is one (08 §5): it is a network call, so it
+-- may not happen inside the transaction that decided to make it, and it needs
+-- the same claim, the same backoff and the same "nothing is marked SENT that
+-- was not sent".
+--
+-- The IMAGE ITSELF is not copied anywhere. The payload carries the
+-- `UnitNotePhoto` id; the worker reads the bytes at send time and uploads them
+-- to Graph's media endpoint. That matters on this deployment: the Mac mini sits
+-- behind Tailscale with no public origin, so a `link` send — the other half of
+-- Graph's image API — could not be fetched by Meta at all.
+ALTER TYPE "OutboxKind" ADD VALUE IF NOT EXISTS 'WA_IMAGE';

@@ -19,6 +19,7 @@ import { Form, Select, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import type { OpnameScope } from "../../lib/opnameScope.js";
 import { CONDITIONS, type UnitCondition } from "../../lib/condition.js";
+import { fmtNone } from "../../lib/format.js";
 import type { CatalogModel, RackLocation, Warehouse } from "../../mock/seed.js";
 
 export interface ScopeFieldsProps {
@@ -79,7 +80,7 @@ export function ScopeFields({
               : // Qualified only when the qualifier tells two racks apart —
                 // every warehouse numbers its own from one, so a bare "Rak 1"
                 // is ambiguous the moment two warehouses are in play.
-                `${warehouses.find((w) => w.id === r.warehouseId)?.name ?? "—"} · ${r.name}`,
+                `${warehouses.find((w) => w.id === r.warehouseId)?.name ?? fmtNone()} · ${r.name}`,
         })),
     [racks, warehouses, value.locationIds],
   );
@@ -146,7 +147,7 @@ export function ScopeFields({
         label={t("opnameScope.racks", "Racks")}
         extra={t(
           "opnameScope.racksHint",
-          "Leave empty for every rack in those warehouses. Naming racks leaves out machines still in QC, which are not on a shelf yet.",
+          "Leave empty for every rack in those warehouses. Naming racks leaves out units still in QC, which are not on a shelf yet.",
         )}
       >
         <Select
@@ -210,10 +211,10 @@ export function ScopeHint({ scope }: { scope: OpnameScope }) {
       scope.rackIds.length === 0 &&
       scope.categories.length === 0 &&
       scope.conditions.length === 0
-        ? t("opnameScope.wholeShop", "Every machine the shop holds.")
+        ? t("opnameScope.wholeShop", "Every unit the shop holds.")
         : t(
             "opnameScope.narrowed",
-            "Only machines matching every axis you picked.",
+            "Only units matching every axis you picked.",
           )}
     </Typography.Text>
   );

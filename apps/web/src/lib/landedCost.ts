@@ -1,17 +1,22 @@
 /**
- * An invoice's shipping and tax, spread over the machines it bought.
+ * An invoice's expenses, spread over the machines it bought.
  *
- * ## The owner's ask (2026-09-15)
+ * ## The owner's asks (2026-09-15, 2026-09-18)
  *
  * > *"Shipping fee and tax fee should be divided across all units evenly for
  * > the COGS and margin calculation."*
  *
- * A purchase invoice charges its ongkir and its tax on the whole order, not on
- * a line (`Po.shippingFee`, `Po.taxFee`), and until now neither reached a
- * machine: `costOfUnit` was `Unit.buy` plus repairs, so every margin in the app
- * was computed as though somebody else had paid the forwarder and the tax
- * office. Rp300.000 of ongkir on a ten-machine invoice is Rp30.000 of cost on
- * each of the ten.
+ * > *"When adding expense we should be able to add if we want to divide it to
+ * > COGS per unit or not. This should be editable and automatically adjust the
+ * > COGS per unit."*
+ *
+ * A purchase invoice charges its expenses on the whole order, not on a line
+ * (`Po.fees`), and until 2026-09-15 none reached a machine: `costOfUnit` was
+ * `Unit.buy` plus repairs, so every margin in the app was computed as though
+ * somebody else had paid the forwarder and the tax office. Rp300.000 of ongkir
+ * on a ten-machine invoice is Rp30.000 of cost on each of the ten. Since
+ * 2026-09-18 each expense says whether it is spread (`PoFee.inCogs`), and only
+ * those that are count here — see `invoiceCharges`.
  *
  * Evenly, not in proportion to price: the owner said so, and a courier charges
  * by the box — a Rp4jt Air and a Rp20jt Pro in one parcel cost the forwarder
@@ -52,12 +57,13 @@
  *
  * ## What is not spread
  *
- * The invoice's discount. The owner named two charges, and a discount is not a
- * charge on the delivery: it was negotiated off the GOODS, which is where
- * `poTotals` puts it — a supplier knocking a million off does not reduce the
- * forwarder's bill. Netted in here, it would make a "shipping & tax" line
- * smaller than what the forwarder and the tax office were actually paid.
- * Whether a discount should lower the machines' cost is its own owner decision.
+ * An expense somebody kept out of COGS, by definition. And the invoice's
+ * discount: a discount is not a charge on the delivery — it was negotiated off
+ * the GOODS, which is where `poTotals` puts it, and a supplier knocking a
+ * million off does not reduce the forwarder's bill. Netted in here, it would
+ * make an expenses line smaller than what the forwarder and the tax office
+ * were actually paid. Whether a discount should lower the machines' cost is
+ * its own owner decision.
  *
  * A machine with no invoice — a trade-in, a stock-take find — has no shipping
  * or tax behind it and carries nothing.
@@ -69,10 +75,11 @@
  * Pure: no React, no store. `test/landedCost.test.ts` is the spec.
  */
 import { allocateFees } from "@nusantara/domain";
-import type { Po, PoItem, Unit, UnitEvent } from "../mock/seed.js";
+import type { Po, PoFee, PoItem, Unit, UnitEvent } from "../mock/seed.js";
 
 /** What an invoice has to say for its charges to be spread. A `Po` is one. */
-export type InvoiceForCharges = Pick<Po, "id" | "shippingFee" | "taxFee"> & {
+export type InvoiceForCharges = Pick<Po, "id"> & {
+  readonly fees: readonly Pick<PoFee, "amount" | "inCogs">[];
   readonly items: readonly Pick<
     PoItem,
     "id" | "skuId" | "serial" | "qty" | "notReceived"
@@ -107,14 +114,20 @@ export function rowKey(itemId: string, piece: number): string {
 }
 
 /**
- * What an invoice spreads over its machines: shipping plus tax.
+ * What an invoice spreads over its machines: every expense marked to join the
+ * machines' cost (owner ask 2026-09-18: *"we should be able to add if we want
+ * to divide it to COGS per unit or not"*). Shipping and tax always did, and
+ * still do unless somebody says otherwise.
  *
  * A negative charge counts as nothing rather than being netted, as a repair
  * fee's does — money coming back from a forwarder is a credit, and its own
  * document.
  */
-export function invoiceCharges(po: Pick<Po, "shippingFee" | "taxFee">): number {
-  return wholeRupiah(po.shippingFee) + wholeRupiah(po.taxFee);
+export function invoiceCharges(po: Pick<InvoiceForCharges, "fees">): number {
+  return po.fees.reduce(
+    (t, f) => (f.inCogs ? t + wholeRupiah(f.amount) : t),
+    0,
+  );
 }
 
 /** The invoice's rows: every piece of every line that arrived, in line order. */

@@ -62,6 +62,7 @@ import {
 } from "./seed.js";
 import { purgePlaceholderUnits } from "../lib/inboundQc.js";
 import { ApiOfflineError, ApiRequestError, api } from "../lib/api.js";
+import { fmtNone } from "../lib/format.js";
 
 // Pages keep references to rows they read and occasionally compare them after
 // a write; a frozen object would throw where a plain one never did.
@@ -105,6 +106,7 @@ function emptyDb(): MockDb {
     events: [],
     unitNotes: [],
     pos: [],
+    stockMoves: [],
     stockIns: [],
     customers: [],
     orders: [],
@@ -788,9 +790,12 @@ export function ensureQcDescription(draft: MockDb, label: string): string {
   return clean;
 }
 
-/** The label for a reason id, falling back to the id so a row never renders blank. */
+/**
+ * The label for a reason id, falling back to the id so a row never renders
+ * blank — and to "None" when there is no reason at all.
+ */
 export function reasonLabel(draft: MockDb, id: string | undefined): string {
-  if (!id) return "—";
+  if (!id) return fmtNone();
   return draft.reasons.find((r) => r.id === id)?.label ?? id;
 }
 
@@ -881,6 +886,36 @@ export function purgeQcPhotos(draft: MockDb, serials: readonly string[]): void {
   draft.unitNotes = draft.unitNotes.filter(
     (n) => !(sold.has(n.serial) && n.tag === QC_PHOTO_TAG),
   );
+}
+
+/**
+ * Take a unit's LAST event back off, and re-project it onto the unit.
+ *
+ * The one place the ledger is not append-only (owner decision 2026-09-23):
+ * a sale's unit can be swapped in Transaction History, and the owner asked for
+ * that to leave no trace of the unit it replaced. Only the last event, because
+ * the rows either side of a hole would claim statuses that no longer meet —
+ * which is the continuity `packages/db` checks on the way in.
+ *
+ * Answers the event it removed, so a caller can tell whether anything moved.
+ */
+export function removeLastEvent(
+  draft: MockDb,
+  serial: string,
+): MockDb["events"][number] | undefined {
+  const mine = draft.events.filter((e) => e.serial === serial);
+  const last = mine[mine.length - 1];
+  // Never the only one: a unit with no history is a unit whose status nothing
+  // explains, and the store refuses to hold one.
+  if (last === undefined || mine.length < 2) return undefined;
+  draft.events = draft.events.filter((e) => e.id !== last.id);
+  const now = mine[mine.length - 2]!;
+  const unit = draft.units.find((u) => u.serial === serial);
+  if (unit) {
+    unit.status = now.toStatus as typeof unit.status;
+    unit.locationId = now.locationId;
+  }
+  return last;
 }
 
 /** Append a lifecycle event and update the unit projection together. */

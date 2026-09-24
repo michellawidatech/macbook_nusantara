@@ -55,6 +55,7 @@ model Location {
   serviceFrom    ServiceVisit[]        @relation("ServiceVisitFrom")
   serviceTo      ServiceVisit[]        @relation("ServiceVisitTo")
   staffDefaults  Staff[]               @relation("StaffDefaultLocation")
+  stockMoves     StockMove[]
 }
 
 model Supplier {
@@ -78,6 +79,8 @@ model Supplier {
   warrantyClaims  WarrantyClaim[]
   unitReturns     UnitReturn[]
   deposits        SupplierDeposit[]
+  /// Paid against `openingBalance` — see `Payment.supplierId`.
+  openingPayments Payment[]
 }
 
 // ============================================================================
@@ -118,6 +121,7 @@ model PurchaseOrder {
 
   items           PurchaseOrderItem[]
   fees            PurchaseOrderFee[]
+  stockMoves      StockMove[]
   packages        PurchaseOrderPackage[]
   arrivalPhotos   ArrivalPhoto[]
   supplierReturns SupplierReturn[]
@@ -137,6 +141,12 @@ model PurchaseOrderItem {
   spec         String?
   qty          Int
   unitCost     BigInt
+  /// Knocked off THIS line, in whole rupiah (owner ask 2026-09-20: "product
+  /// name > QTY > price > discount > display total"). `PurchaseOrder.discount`
+  /// is the one negotiated off the whole order; this is the one a supplier
+  /// writes against a single line. It comes off the line total, and therefore
+  /// off what each of the line's units cost.
+  discount     BigInt    @default(0)
   lineTotal    BigInt
   allocatedFee BigInt
   /// The supplier never sent it. Still counts towards what was INVOICED.
@@ -147,8 +157,9 @@ model PurchaseOrderItem {
   po  PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Restrict)
   sku Sku?          @relation(fields: [skuId], references: [id], onDelete: Restrict)
 
-  serials PurchaseOrderItemSerial[]
-  units   Unit[]
+  serials    PurchaseOrderItemSerial[]
+  units      Unit[]
+  stockMoves StockMove[]
 }
 
 model PurchaseOrderItemSerial {
@@ -163,14 +174,26 @@ model PurchaseOrderItemSerial {
   @@unique([itemId, serial])
 }
 
+/// One expense on a purchase invoice — shipping, tax, customs or anything
+/// else the shop owes because of this delivery (owner ask 2026-09-18: "Add
+/// Expense … this is like what we owe").
 model PurchaseOrderFee {
-  id     String  @id @default(cuid())
-  poId   String
-  label  String
-  kind   FeeKind
-  amount BigInt
+  id        String    @id @default(cuid())
+  poId      String
+  label     String
+  kind      FeeKind
+  amount    BigInt
+  /// Spread evenly over the invoice's machines as part of what each one cost
+  /// (owner ask 2026-09-18: "we should be able to add if we want to divide it
+  /// to COGS per unit or not"). Default true: shipping and tax were spread
+  /// this way before the column existed (owner ask 2026-09-15).
+  inCogs    Boolean   @default(true)
+  /// Taken off the invoice. Never deleted: a payment may still point at it.
+  removedAt DateTime?
 
   po PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Restrict)
+
+  payments Payment[]
 }
 
 model PurchaseOrderPackage {
@@ -381,6 +404,7 @@ model Sku {
   tradeIns         TradeIn[]
   opnameSurplus    OpnameSurplus[]
   opnameCounts     OpnameCount[]
+  stockMoves       StockMove[]
 }
 
 // ============================================================================
@@ -586,6 +610,52 @@ model OpnameSession {
   scopeConditions OpnameScopeCondition[]
   surplus         OpnameSurplus[]
   counts          OpnameCount[]
+  stockMoves      StockMove[]
+}
+
+/// One movement of a product the shop COUNTS rather than identifies — an
+/// accessory (owner decision 2026-09-19: "purely by qty … in the database
+/// too"). A counted category (`Category.tracksSerial = false`) has no `Unit`
+/// rows at all; what a location holds of one of its variants is SUM(qty) over
+/// these rows, and nothing stores that sum, so there is no projection to
+/// drift from its ledger.
+///
+/// Append-only, like `UnitEvent`: the app role has INSERT and SELECT and
+/// nothing else. `qty` is signed and never zero (CHECK in the migration).
+/// `unitCost` is ONE piece's: what an arrival paid, or the moving average a
+/// departure left at — a sale's COGS is `-qty * unitCost` of its TERJUAL rows.
+model StockMove {
+  id              String        @id @default(cuid())
+  skuId           String
+  locationId      String
+  qty             Int
+  unitCost        BigInt
+  type            StockMoveType
+  at              DateTime
+  /// The document it belongs to, as its code — PI, SI, SO, SG.
+  refCode         String?
+  purchaseOrderId String?
+  poItemId        String?
+  orderId         String?
+  orderItemId     String?
+  opnameSessionId String?
+  reasonId        String?
+  note            String?
+  staffId         String
+
+  sku           Sku                @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  location      Location           @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  purchaseOrder PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  poItem        PurchaseOrderItem? @relation(fields: [poItemId], references: [id], onDelete: Restrict)
+  order         Order?             @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderItem     OrderItem?         @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  opnameSession OpnameSession?     @relation(fields: [opnameSessionId], references: [id], onDelete: Restrict)
+  reason        Reason?            @relation(fields: [reasonId], references: [id], onDelete: Restrict)
+  staff         Staff              @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  @@index([skuId, locationId])
+  @@index([orderId])
+  @@index([poItemId])
 }
 
 /// What a stock take found of a product it counts rather than scans.
@@ -696,6 +766,8 @@ model Customer {
   waMessages       WaMessage[]
   waThreadMemories WaThreadMemory[]
   addresses        CustomerAddress[]
+  /// Paid against `openingBalance` — see `Payment.customerId`.
+  openingPayments  Payment[]
 }
 
 model Order {
@@ -754,10 +826,13 @@ model Order {
   tradeIns    TradeIn[]
   payments    Payment[]
   adjustments OrderAdjustment[]
+  expenses    Expense[]
+  incomes     ManualIncome[]
   shipments   Shipment[]
   unitEvents  UnitEvent[]
   fees        OrderFee[]
   settlements Settlement[]
+  stockMoves  StockMove[]
 }
 
 model OrderItem {
@@ -790,6 +865,7 @@ model OrderItem {
   unitsSold      Unit[]          @relation("UnitSoldOrderItem")
   shipmentItems  ShipmentItem[]
   warrantyClaims WarrantyClaim[]
+  stockMoves     StockMove[]
 }
 
 model TradeIn {
@@ -811,12 +887,18 @@ model TradeIn {
   sku   Sku?  @relation(fields: [skuId], references: [id], onDelete: Restrict)
 }
 
-/// CHECK (amount > 0) and CHECK ((orderId IS NULL) <> (poId IS NULL)) —
-/// invariants 6 and 7 — are hand-written in a --create-only migration (08 §2).
+/// CHECK (amount > 0) and CHECK (num_nonnulls(orderId, poId, supplierId,
+/// customerId) = 1) — invariants 6 and 7 — are hand-written in migrations
+/// (08 §2), with a supplier's payment KELUAR and a customer's MASUK.
 model Payment {
   id            String       @id @default(cuid())
   orderId       String?
   poId          String?
+  /// A debt from before this app (`Supplier.openingBalance`,
+  /// `Customer.openingBalance`; owner 2026-09-22) has no invoice or sale to
+  /// hang a payment off, so the payment names the party instead.
+  supplierId    String?
+  customerId    String?
   direction     PayDirection
   methodId      String
   amount        BigInt
@@ -846,17 +928,30 @@ model Payment {
   recordedAt    DateTime?
   /// The supplier deposit this payment was allocated out of.
   fromDepositId String?
+  /// The invoice expense this payment settles (owner ask 2026-09-18: an
+  /// expense "should be able to mark as paid, which will automatically record
+  /// the payment"). The link is what lets editing or un-marking the expense
+  /// update or void the same payment. Null for a payment against the goods.
+  poFeeId       String?
   /// Removed in an edit. Never deleted; the payment log says why.
   voidedAt      DateTime?
   /// Order among one sale's or one invoice's payments.
   sortOrder     Int          @default(0)
+  /// False when the money settled the debt without passing through the shop's
+  /// cash or bank — the owner paid a supplier from their own account (owner
+  /// 2026-09-22). The debt is paid; Income & Expense's balance does not move.
+  /// Default true, which is what every payment before the column was.
+  inBalance     Boolean      @default(true)
 
-  order       Order?           @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  po          PurchaseOrder?   @relation(fields: [poId], references: [id], onDelete: Restrict)
-  staff       Staff            @relation(fields: [staffId], references: [id], onDelete: Restrict)
-  shift       Shift?           @relation(fields: [shiftId], references: [id], onDelete: Restrict)
-  method      PaymentMethod    @relation(fields: [methodId], references: [id], onDelete: Restrict)
-  fromDeposit SupplierDeposit? @relation(fields: [fromDepositId], references: [id], onDelete: Restrict)
+  order       Order?            @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  po          PurchaseOrder?    @relation(fields: [poId], references: [id], onDelete: Restrict)
+  supplier    Supplier?         @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  customer    Customer?         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  staff       Staff             @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  shift       Shift?            @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  method      PaymentMethod     @relation(fields: [methodId], references: [id], onDelete: Restrict)
+  fromDeposit SupplierDeposit?  @relation(fields: [fromDepositId], references: [id], onDelete: Restrict)
+  poFee       PurchaseOrderFee? @relation(fields: [poFeeId], references: [id], onDelete: Restrict)
 
   logs        PaymentLog[]
   settlements Settlement[]
@@ -864,6 +959,9 @@ model Payment {
   // Declared, not just created in SQL: an index that exists in the database
   // but not here is one Prisma emits a DROP for on the next migration.
   @@index([methodId])
+  @@index([poFeeId])
+  @@index([supplierId])
+  @@index([customerId])
 }
 
 /// How money moved. A lookup table rather than an enum for the same reason
@@ -992,6 +1090,7 @@ model Staff {
   arrivalPhotos            ArrivalPhoto[]
   supplierReturns          SupplierReturn[]
   unitEvents               UnitEvent[]
+  stockMoves               StockMove[]
   unitNotes                UnitNote[]
   opnameSessions           OpnameSession[]
   ordersApproved           Order[]             @relation("OrderApprovedBy")
@@ -1882,6 +1981,11 @@ enum OpexKind {
 
 enum OutboxKind {
   WA_REPLY
+  /// One photograph of a unit, sent after the reply that offered it
+  /// (2026-09-21). The payload names a `UnitNotePhoto`; the worker reads the
+  /// bytes and uploads them to Graph at send time, because this deployment has
+  /// no public origin for Meta to fetch a link from.
+  WA_IMAGE
   IG_REPLY
   IG_DM
   ALERT
@@ -1949,6 +2053,7 @@ model Reason {
   createdAt DateTime
 
   adjustments StockAdjustment[]
+  stockMoves  StockMove[]
 
   @@unique([activity, label])
 }
@@ -2164,11 +2269,15 @@ model Expense {
   referralSourceId String?
   methodId         String
   staffId          String
+  /// The sale this is about, where the category needs one — a customer
+  /// compensation, a refund (owner ask 2026-09-23).
+  orderId          String?
   createdAt        DateTime
 
   referralSource ReferralSource? @relation(fields: [referralSourceId], references: [id], onDelete: Restrict)
   method         PaymentMethod   @relation(fields: [methodId], references: [id], onDelete: Restrict)
   staff          Staff           @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  order          Order?          @relation(fields: [orderId], references: [id], onDelete: Restrict)
 }
 
 /// Money in that no sale accounts for (owner ask 2026-09-01).
@@ -2181,10 +2290,14 @@ model ManualIncome {
   note      String?
   methodId  String
   staffId   String
+  /// The sale or return this is about, where the category needs one — a
+  /// supplier's refund credit (owner ask 2026-09-23).
+  orderId   String?
   createdAt DateTime
 
   method PaymentMethod @relation(fields: [methodId], references: [id], onDelete: Restrict)
   staff  Staff         @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  order  Order?        @relation(fields: [orderId], references: [id], onDelete: Restrict)
 }
 
 /// Every change ever made to a sale payment (owner ask 2026-09-08). Append-only.
@@ -2301,6 +2414,10 @@ model SupplierDeposit {
   at         DateTime
   note       String?
   staffId    String
+  /// `Payment.inBalance` for the remainder of a payment larger than every
+  /// invoice (owner 2026-09-22): it moved the balance exactly as the rest of
+  /// that payment did, or did not.
+  inBalance  Boolean  @default(true)
 
   supplier Supplier      @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   method   PaymentMethod @relation(fields: [methodId], references: [id], onDelete: Restrict)
@@ -2460,13 +2577,24 @@ enum ExpenseKind {
   PAYROLL
   MARKETING
   RENT
+  // No longer offered by the adjustment picker (owner's list, 2026-09-23).
+  // Kept so rows already written under them still read back.
   PROFESSIONAL
   SOFTWARE
+  REFUND
+  BUNGA
+  SELISIH
+  KOMPENSASI
+  SUPPLIER
+  TRANSFER
 }
 
 enum IncomeReason {
   SALES
   TRANSFER
+  REFUND
+  BUNGA
+  SELISIH
 }
 
 enum PaymentLogAction {
@@ -2500,4 +2628,19 @@ enum ServiceRaisedBy {
   QC
   ADJUSTMENT
   RETURN
+}
+
+/// Why a counted product's quantity moved (2026-09-19). See `StockMove`.
+enum StockMoveType {
+  MASUK
+  MASUK_BATAL
+  TERJUAL
+  RETUR_PELANGGAN
+  TUKAR_TAMBAH
+  OPNAME
+  KOREKSI
+  /// Pieces sent back to the supplier (owner ask 2026-09-19). A move, not a
+  /// `UnitReturn`: the SP code is `refCode`, the invoice they came in on is
+  /// `purchaseOrderId`, and that invoice is what names the supplier.
+  RETUR_SUPPLIER
 }

@@ -31,7 +31,7 @@
  * different thing. ⚠️ Mock-only: prisma has neither a manual-income table nor
  * a nullable `Expense.label`.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import dayjs, { type Dayjs } from "dayjs";
 import {
   App,
@@ -54,7 +54,7 @@ import { LongText } from "../../components/LongText";
 import { MoneyInput } from "../../components/MoneyInput";
 import { useTranslation } from "react-i18next";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
-import { fmtRp, fmtDate } from "../../lib/format.js";
+import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import { useDb, mutate, nextId } from "../../mock/store.js";
 import {
   EXPENSE_CATEGORIES,
@@ -85,6 +85,8 @@ interface Values {
   method: string;
   note?: string;
   referralSourceId?: string;
+  /** The receipt this is about, where the category needs one. */
+  orderId?: string;
 }
 
 /** One row of the history table, from either list. */
@@ -106,9 +108,17 @@ interface Row {
 export function AdjustmentPanel({
   addOpen,
   onCloseAdd,
+  showHistory = true,
 }: {
   addOpen: boolean;
   onCloseAdd: () => void;
+  /**
+   * Whether the adjustment history Card is drawn. Off on Income & Expense
+   * from 2026-09-21 evening — every row this list would carry appears in the
+   * page's own unified table now, and two tables of the same rows on the same
+   * page is the shape the owner asked to leave behind.
+   */
+  showHistory?: boolean;
 }) {
   const db = useDb();
   const { t } = useTranslation();
@@ -123,6 +133,8 @@ export function AdjustmentPanel({
   const [direction, setDirection] = useState<Direction>("EXPENSE");
   const [reason, setReason] = useState<string>("OPERATIONAL");
   const [guideOpen, setGuideOpen] = useState(false);
+  /** What has been typed into the transaction picker — a code, a serial. */
+  const [orderQuery, setOrderQuery] = useState("");
 
   /**
    * The three ways money moves, and the labels the shop calls them by.
@@ -174,6 +186,7 @@ export function AdjustmentPanel({
             date,
             method: v.method,
             ...(v.note ? { note: v.note } : {}),
+            ...(v.orderId ? { orderId: v.orderId } : {}),
           });
           return;
         }
@@ -184,6 +197,7 @@ export function AdjustmentPanel({
           date,
           method: v.method,
           ...(v.note ? { note: v.note } : {}),
+          ...(v.orderId ? { orderId: v.orderId } : {}),
           // Marketing only, and only when one was named. The scorecard above
           // reads this field to attribute spend to the customers a channel
           // brought in.
@@ -231,7 +245,7 @@ export function AdjustmentPanel({
         ? {
             channel:
               db.referralSources.find((r) => r.id === e.referralSourceId)
-                ?.name ?? "—",
+                ?.name ?? fmtNone(),
           }
         : {}),
     })),
@@ -247,106 +261,156 @@ export function AdjustmentPanel({
    * and it is sound there because `pickDirection` resets the reason whenever
    * the direction changes, so the two can never disagree.
    */
-  const reasonOptions: { value: string; label: string }[] =
-    direction === "INCOME"
-      ? INCOME_REASONS.map((r) => ({ value: r.value, label: t(r.label) }))
-      : EXPENSE_CATEGORIES.map((c) => ({ value: c.value, label: t(c.label) }));
+  const categories: readonly {
+    readonly value: string;
+    readonly label: string;
+    readonly guide: string;
+    readonly retired?: boolean;
+    readonly needsTransaction?: boolean;
+  }[] = direction === "INCOME" ? INCOME_REASONS : EXPENSE_CATEGORIES;
+  const reasonOptions = categories
+    // A retired category still reads back on rows already written; it is just
+    // not something new money can be filed under (2026-09-23).
+    .filter((c) => !c.retired)
+    .map((c) => ({ value: c.value, label: t(c.label) }));
+  /** Does the picked category mean nothing without a receipt beside it? */
+  const needsTransaction =
+    categories.find((c) => c.value === reason)?.needsTransaction === true;
+
+  /**
+   * The receipts the transaction picker offers.
+   *
+   * Searched by the shop's code, the marketplace's reference, the customer and
+   * every serial on the sale — *"we can either put a serial number or a
+   * transaction"* (owner, 2026-09-23). Capped, because the B2Soft history is
+   * thousands of receipts and a Select holding all of them is a frozen tab.
+   */
+  const orderOptions = useMemo(() => {
+    const needle = orderQuery.trim().toLowerCase();
+    const out: { value: string; label: string }[] = [];
+    for (const o of db.orders) {
+      const customer =
+        o.customerId === null
+          ? ""
+          : (db.customers.find((c) => c.id === o.customerId)?.name ?? "");
+      const refs = (o.payments ?? [])
+        .map((p) => p.ref ?? "")
+        .filter(Boolean)
+        .join(" ");
+      const hay =
+        `${o.code} ${refs} ${customer} ${o.serials.join(" ")}`.toLowerCase();
+      if (needle !== "" && !hay.includes(needle)) continue;
+      out.push({
+        value: o.id,
+        label: [o.code, customer, fmtDate(o.ts)].filter(Boolean).join(" · "),
+      });
+      if (out.length >= 50) break;
+    }
+    return out;
+  }, [db.orders, db.customers, orderQuery]);
 
   return (
     <>
-      <Card title={t("adjust.history", "Adjustment history")}>
-        <ProTable
-          rowKey="key"
-          dataSource={rows}
-          searchPlaceholder={t(
-            "adjust.searchReasonOrNote",
-            "Search a reason or a note",
-          )}
-          columns={[
-            {
-              title: t("adjust.date", "Date"),
-              dataIndex: "date",
-              defaultSortOrder: "descend",
-              render: fmtDate,
-            },
-            {
-              // Narrow on purpose: antd draws a column's own filter and sort
-              // controls at the right edge of its header cell, so a wide
-              // column parks them a long way from the word they belong to.
-              title: t("adjust.type", "Type"),
-              dataIndex: "direction",
-              width: 130,
-              facet: true,
-              facetLabel: t("adjust.type", "Type"),
-              sortValue: (r: Row) => r.direction,
-              render: (v: string) =>
-                v === "INCOME" ? (
-                  <Tag color="green">{t("adjust.income", "Income")}</Tag>
-                ) : (
-                  <Tag color="volcano">{t("adjust.expense", "Expense")}</Tag>
+      {showHistory && (
+        <Card title={t("adjust.history", "Adjustment history")}>
+          <ProTable
+            persistKey="adjustments"
+            rowKey="key"
+            dataSource={rows}
+            searchPlaceholder={t(
+              "adjust.searchReasonOrNote",
+              "Search a reason or a note",
+            )}
+            columns={[
+              {
+                title: t("adjust.date", "Date"),
+                dataIndex: "date",
+                defaultSortOrder: "descend",
+                render: fmtDate,
+              },
+              {
+                // Narrow on purpose: antd draws a column's own filter and sort
+                // controls at the right edge of its header cell, so a wide
+                // column parks them a long way from the word they belong to.
+                title: t("adjust.type", "Type"),
+                dataIndex: "direction",
+                width: 130,
+                facet: true,
+                facetLabel: t("adjust.type", "Type"),
+                facetValue: (r: Row) =>
+                  r.direction === "INCOME"
+                    ? t("adjust.income", "Income")
+                    : t("adjust.expense", "Expense"),
+                sortValue: (r: Row) => r.direction,
+                render: (v: string) =>
+                  v === "INCOME" ? (
+                    <Tag color="green">{t("adjust.income", "Income")}</Tag>
+                  ) : (
+                    <Tag color="volcano">{t("adjust.expense", "Expense")}</Tag>
+                  ),
+              },
+              {
+                title: t("adjust.reason", "Reason"),
+                dataIndex: "reason",
+                width: 210,
+                facet: true,
+                facetLabel: t("adjust.reason", "Reason"),
+                searchable: true,
+                sortValue: (r: Row) => r.reason,
+                render: (v: string) => <Tag>{v}</Tag>,
+              },
+              {
+                // "None" for anything typed through the adjustment dialog, which
+                // asks for a reason and a note and no third name for the same
+                // thing. Rows that predate it still carry one.
+                title: t("adjust.what", "What"),
+                dataIndex: "label",
+                searchable: true,
+                render: (v?: string) => v ?? fmtNone(),
+              },
+              {
+                // Which pot it moved, as a facet: "show me everything that came
+                // out of the drawer" is how a float is reconciled at closing.
+                title: t("adjust.method", "How the money moved"),
+                dataIndex: "method",
+                width: 170,
+                facet: true,
+                facetLabel: t("adjust.method", "How the money moved"),
+                sortValue: (r: Row) => r.method,
+                render: (v: string) => <Tag>{v}</Tag>,
+              },
+              {
+                title: t("adjust.channel", "Channel"),
+                dataIndex: "channel",
+                facet: true,
+                sortValue: (r: Row) => r.channel ?? fmtNone(),
+                render: (v?: string) => v ?? fmtNone(),
+              },
+              {
+                title: t("adjust.amount", "Amount"),
+                key: "amount",
+                align: "right",
+                sortValue: (r: Row) => r.amount,
+                render: (_: unknown, r: Row) => (
+                  <Typography.Text
+                    type={r.direction === "INCOME" ? "success" : undefined}
+                  >
+                    {r.direction === "INCOME" ? "+" : "−"}
+                    {fmtRp(r.amount)}
+                  </Typography.Text>
                 ),
-            },
-            {
-              title: t("adjust.reason", "Reason"),
-              dataIndex: "reason",
-              width: 210,
-              facet: true,
-              facetLabel: t("adjust.reason", "Reason"),
-              searchable: true,
-              sortValue: (r: Row) => r.reason,
-              render: (v: string) => <Tag>{v}</Tag>,
-            },
-            {
-              // Blank for anything typed through the adjustment dialog, which
-              // asks for a reason and a note and no third name for the same
-              // thing. Rows that predate it still carry one.
-              title: t("adjust.what", "What"),
-              dataIndex: "label",
-              searchable: true,
-              render: (v?: string) => v ?? "—",
-            },
-            {
-              // Which pot it moved, as a facet: "show me everything that came
-              // out of the drawer" is how a float is reconciled at closing.
-              title: t("adjust.method", "How the money moved"),
-              dataIndex: "method",
-              width: 170,
-              facet: true,
-              facetLabel: t("adjust.method", "How the money moved"),
-              sortValue: (r: Row) => r.method,
-              render: (v: string) => <Tag>{v}</Tag>,
-            },
-            {
-              title: t("adjust.channel", "Channel"),
-              dataIndex: "channel",
-              facet: true,
-              sortValue: (r: Row) => r.channel ?? "—",
-              render: (v?: string) => v ?? "—",
-            },
-            {
-              title: t("adjust.amount", "Amount"),
-              key: "amount",
-              align: "right",
-              sortValue: (r: Row) => r.amount,
-              render: (_: unknown, r: Row) => (
-                <Typography.Text
-                  type={r.direction === "INCOME" ? "success" : undefined}
-                >
-                  {r.direction === "INCOME" ? "+" : "−"}
-                  {fmtRp(r.amount)}
-                </Typography.Text>
-              ),
-            },
-            {
-              title: t("adjust.note", "Note"),
-              dataIndex: "note",
-              searchable: true,
-              width: 320,
-              render: (v?: string) => <LongText>{v}</LongText>,
-            },
-          ]}
-        />
-      </Card>
+              },
+              {
+                title: t("adjust.note", "Note"),
+                dataIndex: "note",
+                searchable: true,
+                width: 320,
+                render: (v?: string) => <LongText>{v}</LongText>,
+              },
+            ]}
+          />
+        </Card>
+      )}
 
       {/*
        * The dialog. Five questions, in the order the owner listed them —
@@ -416,16 +480,41 @@ export function AdjustmentPanel({
                 >
                   {t("adjust.whatGoesWhere", "What goes in each category?")}
                 </Button>
-              ) : (
-                t(
-                  "adjust.incomeReasonHint",
-                  "A transfer raises the balance without being revenue.",
-                )
-              )
+              ) : undefined
             }
           >
             <Select options={reasonOptions} onChange={setReason} />
           </Form.Item>
+
+          {needsTransaction && (
+            <Form.Item
+              name="orderId"
+              label={t("adjust.transaction", "Transaction")}
+              rules={[
+                {
+                  required: true,
+                  message: t(
+                    "adjust.pickATransaction",
+                    "Pick the transaction this is about.",
+                  ),
+                },
+              ]}
+            >
+              <Select
+                showSearch
+                allowClear
+                // The list is already narrowed by `orderQuery`; filtering the
+                // narrowed list again would hide a match the search found.
+                filterOption={false}
+                onSearch={setOrderQuery}
+                options={orderOptions}
+                placeholder={t(
+                  "adjust.searchTransaction",
+                  "Search an order number, reference or serial",
+                )}
+              />
+            </Form.Item>
+          )}
 
           {direction === "EXPENSE" && reason === "MARKETING" && (
             <Form.Item
@@ -488,10 +577,6 @@ export function AdjustmentPanel({
           <Form.Item
             name="method"
             label={t("adjust.method", "How the money moved")}
-            tooltip={t(
-              "adjust.methodHint",
-              "Cash moves the drawer; a transfer or a card moves the bank.",
-            )}
             rules={[
               {
                 required: true,
@@ -529,7 +614,9 @@ export function AdjustmentPanel({
           // Both lists, because the dialog offers both and a guide that only
           // covered the expense half would send anyone asking about "Account
           // transfer" away empty-handed.
-          dataSource={[...EXPENSE_CATEGORIES, ...INCOME_REASONS]}
+          dataSource={[...EXPENSE_CATEGORIES, ...INCOME_REASONS].filter(
+            (c) => !("retired" in c && c.retired),
+          )}
           columns={[
             {
               title: t("adjust.reason", "Reason"),

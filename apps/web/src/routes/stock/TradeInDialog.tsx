@@ -1,91 +1,80 @@
 /**
- * Taking a customer's machine against the bill — "tukar tambah".
+ * Taking a customer's unit against the bill — "tukar tambah".
  *
  * ## What the owner asked for (2026-09-01)
  *
  * *"When taking trade-ins, display the following field: product (searchable
  * drop down), category, serial, grading & config, condition (new/second),
- * price (show the other unit base price) — so it's like the normal Inbound &
- * QC flow but just has to be in 1 flow."*
+ * price — so it's like the normal Inbound & QC flow but just has to be in 1
+ * flow."*
  *
- * That is exactly right, and it is what the old three-field dialog was
- * missing. A trade-in with a serial is not a discount — the shop has BOUGHT a
- * machine, and it enters stock at QC with the allowance as its cost. Every
- * question intake asks about a machine off a purchase order applies to this
- * one too; the only difference is that it is being asked at the counter with
- * the customer standing there, so it has to be one dialog rather than a
- * purchase order followed by a QC grid.
+ * A trade-in with a serial is not a discount — the shop has BOUGHT a unit,
+ * and it enters stock at QC with the price as its cost. Everything asked here
+ * — the variant, the condition, the grade, the description — is carried onto
+ * the unit, so whoever picks it up at Inbound & QC is finishing an inspection
+ * rather than starting one.
  *
- * ## The two shapes, still
+ * ## Any order (owner revision 2026-09-19)
  *
- * The serial remains what tells them apart, and that has not changed:
+ * *"There should not be like precedence in which I should input something
+ * first … I could input in whatever order I want."* Nothing here waits for
+ * anything else:
  *
- * - **With a serial** the shop is keeping the machine. It becomes a `Unit` in
- *   QC with `value` as its cost, and everything gathered here — the variant,
- *   the condition, the grade, the description — is carried onto it, so
- *   whoever picks it up at Inbound & QC is finishing an inspection rather than
- *   starting one.
- * - **Without one** it is a valuation of something the shop is not taking in:
- *   an old phone knocked off the price and given away with the box. Nothing is
- *   created, so nothing but the label and the allowance is asked for.
+ * - The **category** is its own box. Picking a product fills it, and picking
+ *   it first narrows the product list — but the grading checklist only needs
+ *   the category, so the unit can be graded before anybody has found its
+ *   exact variant in the list.
+ * - The **grade** is a letter picked by hand (A, B or C), always available on
+ *   a second-hand unit. *Configure grade* folds the category's checklist
+ *   open under it, the way the QC dialog does, and the checklist's answer
+ *   fills the letter in — a helper, not a gate.
  *
- * The form does not hide the extra fields in the second case — a cashier does
- * not know which case they are in until the customer says.
+ * ## Same revision: less on screen
  *
- * ## Everything is required now (owner revision 2026-09-01)
+ * - The title is just *Trade-Ins*.
+ * - One star per required field. The dialog used to draw its own `*` beside a
+ *   label that the app-wide `requiredMark` (theme/requiredMark.tsx) already
+ *   starred, so every required field carried two.
+ * - A **New** unit shows no grading at all — not a disabled button and a
+ *   sentence explaining why, just nothing. There is nothing to inspect in a
+ *   sealed box (`lib/condition.ts`).
+ * - The *We list it at* / *We have paid* cards, and the table behind them,
+ *   are gone (owner: *"it is making it very complicated"*).
  *
- * Product, category, serial, condition, grading and price, each marked with a
- * star. The earlier cut asked for a description and a number and made the rest
- * optional, on the reasoning that a machine the shop is NOT keeping needs no
- * paperwork. The owner's answer is that the shop is nearly always keeping it,
- * and a trade-in taken without a grade is a machine that reaches the bench
- * with nothing on it — which is the same hole the QC grid exists to close.
+ * ## Everything the unit needs is required
  *
- * The grading dialog also reopens on the answers it was left with rather than
- * blank; `GradingModal.initialSelection` carries that, and this dialog keeps
- * the selection for it.
- *
- * ## "Show the other unit base price"
- *
- * Picking a variant puts the shop's own numbers for it on screen: what it
- * lists at, and what it has actually paid for the ones it holds. An allowance
- * is a negotiation, and the person making it is otherwise doing that
- * arithmetic from memory with a customer watching.
+ * Product, serial, condition, grade (second-hand only), description and
+ * price. An accessory has no serial anybody reads (owner brief 2026-09-19:
+ * *"Accessories: do not have battery and serial"*) — a product whose category
+ * is counted rather than tracked (`lib/serialTracking.ts`) gets no serial box,
+ * and the till mints its `QTY-` handle the way Inbound does. The product is ENFORCED, not just starred: a unit is filed under a
+ * variant, and the store refuses a unit with none (`skuId` is required in
+ * `packages/store`) — which would have refused the whole sale with it.
  */
-import { useMemo, useState } from "react";
-import {
-  Alert,
-  Button,
-  Flex,
-  Form,
-  Input,
-  Modal,
-  Segmented,
-  Select,
-  Table,
-  Typography,
-} from "antd";
+import { Flex, Form, Input, Modal, Segmented, Select } from "antd";
 import { useTranslation } from "react-i18next";
 import { MoneyInput } from "../../components/MoneyInput";
-import { GradeTag } from "../../components/GradeTag";
-import { GradingModal } from "../../components/GradingModal";
-import { fmtRp } from "../../lib/format.js";
 import {
   BASE_MAX_LENGTH,
   BASE_MIN_LENGTH,
   normaliseScan,
-  STORE_MAX_LENGTH,
+  SERIAL_FIELD_MAX_LENGTH,
 } from "../../lib/serialScan.js";
 import { readSerialInput } from "../../lib/serialInput.js";
+import { skuTracksSerial } from "../../lib/serialTracking.js";
 import { wasScannedText } from "../../lib/scanner.js";
-import { gradeForCondition, type UnitCondition } from "../../lib/condition.js";
-import type { GradingSelection } from "../../lib/grading.js";
-import { costIndex } from "../../lib/service.js";
+import {
+  canGrade,
+  gradeForCondition,
+  type UnitCondition,
+} from "../../lib/condition.js";
+import { GRADES, type GradingSelection } from "../../lib/grading.js";
 import type { MockDb } from "../../mock/seed.js";
+import { SPACE } from "../../theme/tokens";
 
 /** What the dialog hands back. Mirrors `TradeInRec` minus its id. */
 export interface TradeInDraft {
-  /** The machine in words — what prints on the invoice. */
+  /** The unit in words — what prints on the invoice. */
   label: string;
   serial?: string;
   value: number;
@@ -94,34 +83,24 @@ export interface TradeInDraft {
   condition?: UnitCondition;
   grade?: string;
   /**
-   * The grading checklist as answered, so reopening the dialog can show it.
-   *
-   * Held on the DRAFT rather than in the dialog's own state because a trade-in
-   * can be edited after it is added to the sale, and the answers have to
-   * survive the dialog being closed. It is never stored on the unit — a grade
-   * is a conclusion, and prisma has no table for the working behind one.
+   * ⚠️ Nothing sets this since 2026-09-20 — the grading checklist is hidden
+   * (owner ask). Kept on the type because the trade-in record carries it and
+   * the checklist is one switch away. Never stored on the unit — a grade is
+   * a conclusion, and prisma has no table for the working behind one.
    */
   gradingSelection?: GradingSelection;
 }
 
-/**
- * A required-field marker.
- *
- * The owner asked for a star on every required column (2026-09-01). It is
- * `aria-hidden` because "Serial star" is not what a required field is called —
- * the fact itself reaches assistive tech from the `required` rule on the
- * `Form.Item`, which is where a requirement belongs. Same arrangement the QC
- * grid uses for its own headers.
- */
-function req(label: string) {
-  return (
-    <span>
-      {label}{" "}
-      <Typography.Text type="danger" aria-hidden>
-        *
-      </Typography.Text>
-    </span>
-  );
+/** The form's own fields. */
+interface TradeInFields {
+  skuId?: string;
+  category?: string;
+  serial?: string;
+  condition: UnitCondition;
+  grade?: string;
+  label?: string;
+  value?: number;
+  note?: string;
 }
 
 export function TradeInDialog({
@@ -136,77 +115,20 @@ export function TradeInDialog({
   onAdd: (draft: TradeInDraft) => void;
 }) {
   const { t } = useTranslation();
-  const [form] = Form.useForm<{
-    label: string;
-    serial?: string;
-    value?: number;
-    note?: string;
-  }>();
-  const [skuId, setSkuId] = useState<string>();
-  const [condition, setCondition] = useState<UnitCondition>("SECOND");
-  const [grade, setGrade] = useState<string>();
-  /**
-   * The checklist as answered, kept so the dialog can reopen on it.
-   *
-   * The owner's complaint: *"when I grade & I finish and I want to edit, it
-   * literally resets the grading, but I need it to tell me what is the last
-   * state grading."* `GradingModal` cannot keep this itself — it is unmounted
-   * between openings and, more importantly, a stored GRADE is a letter with no
-   * checklist behind it. Only a caller that watched the answers being given
-   * can hand them back.
-   */
-  const [selection, setSelection] = useState<GradingSelection>({});
-  const [gradingOpen, setGradingOpen] = useState(false);
-  /** Which of the two price cards is expanded into a table. */
-  const [basisOpen, setBasisOpen] = useState<"COST" | "LIST" | null>(null);
-  const [error, setError] = useState<string>();
+  const [form] = Form.useForm<TradeInFields>();
+  const skuId = Form.useWatch("skuId", form);
+  const category = Form.useWatch("category", form);
+  /** A counted product — an accessory — carries no serial to ask for. */
+  const counted = !!skuId && !skuTracksSerial(db, skuId);
+  const condition = Form.useWatch("condition", form) ?? "SECOND";
 
-  const sku = db.skus.find((s) => s.id === skuId);
-  const model = db.models.find((m) => m.id === sku?.modelId);
-  /** A grade is only asked of a machine there is something to inspect on. */
-  const gradeRequired = condition === "SECOND";
-
-  /**
-   * What the shop's own stock of this variant cost it, unit by unit.
-   *
-   * The owner asked for the DETAIL behind "we have paid" (2026-09-01): which
-   * machine, what grade, and what was paid for it. A range answered "roughly
-   * what do these cost us" and left the obvious follow-up — *which* one went
-   * for that — with nowhere to go.
-   *
-   * Machines already sold are included. What the shop paid is what the shop
-   * paid, and excluding the ones that moved would bias the picture towards the
-   * stock nobody wants.
-   *
-   * What a machine cost is `costIndex`'s since 2026-09-15 — bought, its share
-   * of its invoice's shipping and tax, and any repair. The owner counts
-   * shipping and tax in the cost of goods, and an allowance weighed against
-   * the invoice line alone is weighed against less than the shop paid.
-   */
-  const costOf = useMemo(
-    () => costIndex(db),
-    [db.pos, db.units, db.events, db.services],
-  );
-  const held = useMemo(
-    () =>
-      sku
-        ? db.units
-            .filter((u) => u.skuId === sku.id && u.buy > 0)
-            .sort((a, b) => costOf(a).total - costOf(b).total)
-        : [],
-    [db.units, sku, costOf],
-  );
-  const costs = held.map((u) => costOf(u).total);
-  const low = costs[0];
-  const high = costs[costs.length - 1];
+  const categoryOfSku = (id: string | undefined) => {
+    const sku = db.skus.find((s) => s.id === id);
+    return db.models.find((m) => m.id === sku?.modelId)?.category;
+  };
 
   const reset = () => {
     form.resetFields();
-    setSkuId(undefined);
-    setCondition("SECOND");
-    setGrade(undefined);
-    setSelection({});
-    setError(undefined);
   };
 
   const close = () => {
@@ -215,280 +137,189 @@ export function TradeInDialog({
   };
 
   /**
-   * What the field means, whichever barcode was put in it.
-   *
-   * Either barcode is taken, exactly as the scanner and the QC field take it:
-   * the machine in the customer's hands may already carry somebody's sticker.
-   * What comes back is always Apple's serial, because that is what a unit is
-   * filed under.
+   * What the field means — the same reader as every other serial box
+   * (`lib/serialInput.ts`). A trade-in mints a unit exactly as intake does, so
+   * it is judged exactly as intake judges (owner rules 2026-09-21): a NEW
+   * unit's scan must be `S` and ten to twelve and loses its `S`, its typed
+   * serial is ten to twelve, `I`/`O` read as `1`/`0`; a second-hand one — a
+   * customer's own machine, almost always — is taken as read.
    */
-  const serialOf = (raw: string | undefined): string => {
+  const readSerial = (raw: string | undefined) => {
     const typed = normaliseScan(raw ?? "");
-    /*
-     * The same reader as every other serial box (owner ask 2026-09-08).
-     *
-     * This dialog used to take the typed route unconditionally, on the
-     * grounds that it registers no scan target and a scanned barcode carries
-     * its own `S` anyway — so marking one would be a no-op. That was true of
-     * the marking and false of the REFUSING: a burst aimed at the regulatory
-     * code beside the serial's arrives here with no marker, gets one put on
-     * it, and mints a unit under a serial no scan of the machine will ever
-     * match. A trade-in mints a unit exactly as intake does, so it is judged
-     * exactly as intake judges.
-     */
-    const read = readSerialInput(typed, {
-      scanned: wasScannedText(typed),
-      supplierCodes: db.suppliers
-        .map((x) => x.code)
-        .filter((c): c is string => !!c),
-    });
+    return {
+      typed,
+      read: readSerialInput(typed, {
+        scanned: wasScannedText(typed),
+        condition: condition === "NEW" ? "NEW" : "SECOND",
+      }),
+    };
+  };
+  const serialOf = (raw: string | undefined): string => {
+    const { typed, read } = readSerial(raw);
     return read.ok ? read.serial : typed;
   };
 
-  /** Why a serial was refused, or null. Drives the field's own message. */
-  const serialFaultOf = (raw: string | undefined) => {
-    const typed = normaliseScan(raw ?? "");
-    if (typed === "") return null;
-    const read = readSerialInput(typed, {
-      scanned: wasScannedText(typed),
-      supplierCodes: db.suppliers
-        .map((x) => x.code)
-        .filter((c): c is string => !!c),
-    });
-    return read.ok ? null : read;
+  /**
+   * Keeps the product and the category agreeing, whichever was picked first.
+   *
+   * A product fills its category in. A category that the chosen product is
+   * not in clears the product rather than keeping a pair that contradicts
+   * itself — the list under it now offers that category's products.
+   */
+  const onValuesChange = (changed: Partial<TradeInFields>) => {
+    if ("skuId" in changed) {
+      const cat = categoryOfSku(changed.skuId);
+      if (cat !== undefined && cat !== form.getFieldValue("category")) {
+        form.setFieldValue("category", cat);
+      }
+    }
+    if ("category" in changed) {
+      const current = form.getFieldValue("skuId") as string | undefined;
+      if (
+        current !== undefined &&
+        categoryOfSku(current) !== changed.category
+      ) {
+        form.setFieldValue("skuId", undefined);
+      }
+    }
+    if ("condition" in changed && changed.condition === "NEW") {
+      // A sealed unit has no letter to keep — `gradeForCondition`.
+      form.setFieldValue("grade", undefined);
+    }
   };
 
   const submit = () =>
     form
       .validateFields()
       .then((v) => {
-        // The shape and the collision are the field's own rules now — see the
-        // validator on the serial item. By here they have both passed.
-        const serial = serialOf(v.serial);
-        if (gradeRequired && !grade) {
-          setError(
-            t(
-              "trade.gradeRequired",
-              "Run the grading checklist — a second-hand machine reaches the bench with nothing on it otherwise.",
-            ),
-          );
-          return;
-        }
+        const grade = gradeForCondition(v.condition, v.grade);
         onAdd({
-          // The typed description always wins. It is what prints on the invoice,
-          // and the customer's machine is often not quite the variant it
-          // resembles — "MacBook Air 2017, dent on the lid" says more than the
-          // SKU name.
-          label: v.label.trim(),
-          serial,
+          // The typed description always wins. It is what prints on the
+          // invoice, and the customer's unit is often not quite the variant
+          // it resembles.
+          label: (v.label ?? "").trim(),
+          ...(counted ? {} : { serial: serialOf(v.serial) }),
           value: v.value ?? 0,
           ...(v.note?.trim() ? { note: v.note.trim() } : {}),
-          ...(skuId ? { skuId } : {}),
-          condition,
-          // `gradeForCondition` is what stops a sealed machine keeping a letter
-          // and a second-hand one keeping `NEW` — see lib/condition.ts.
-          ...(() => {
-            const g = gradeForCondition(condition, grade);
-            return g ? { grade: g } : {};
-          })(),
-          gradingSelection: selection,
+          ...(v.skuId ? { skuId: v.skuId } : {}),
+          condition: v.condition,
+          ...(grade ? { grade } : {}),
         });
         reset();
       })
       .catch(() => {
-        /*
-         * The fields say it themselves.
-         *
-         * `validateFields` rejects with the same messages the form has already
-         * painted under the boxes that failed, so there is nothing here left to
-         * tell anybody — but an uncaught rejection is still an error in the
-         * console, and since the serial's shape moved onto the field this is the
-         * ORDINARY path rather than a rarity worth logging.
-         */
+        // The fields say it themselves — `validateFields` rejects with the
+        // messages the form has already painted under the boxes that failed.
       });
 
-  /**
-   * One of the two price cards.
-   *
-   * A button rather than a `Statistic`, because the owner asked for them to be
-   * clickable and a figure that opens something has to look like it does. The
-   * whole card is the target — a number with a small "details" link beside it
-   * is two things where there is one.
-   */
-  const priceCard = (
-    key: "LIST" | "COST",
-    title: string,
-    value: string,
-    hint: string,
-  ) => (
-    <button
-      type="button"
-      onClick={() => setBasisOpen(key)}
-      style={{
-        flex: "1 1 180px",
-        textAlign: "start",
-        padding: "10px 12px",
-        borderRadius: 8,
-        border: "1px solid rgba(0,0,0,0.12)",
-        background: "transparent",
-        cursor: "pointer",
-        font: "inherit",
-        color: "inherit",
-      }}
-    >
-      <Flex vertical gap={2}>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {title}
-        </Typography.Text>
-        <Typography.Text strong style={{ fontSize: 18 }}>
-          {value}
-        </Typography.Text>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {hint}
-        </Typography.Text>
-      </Flex>
-    </button>
-  );
+  const productOptions = db.skus
+    .filter((k) => !category || categoryOfSku(k.id) === category)
+    .map((k) => ({ value: k.id, label: `${k.name} ${k.variantLabel}` }));
 
   return (
-    <>
-      <Modal
-        open={open}
-        title={t("trade.title", "Take a machine against the bill")}
-        okText={t("trade.add", "Add it")}
-        onCancel={close}
-        onOk={submit}
-        width={640}
+    <Modal
+      open={open}
+      title={t("trade.title", "Trade-Ins")}
+      okText={t("trade.add", "Add it")}
+      onCancel={close}
+      onOk={submit}
+      width={640}
+    >
+      <Form<TradeInFields>
+        form={form}
+        layout="vertical"
+        initialValues={{ condition: "SECOND" }}
+        onValuesChange={onValuesChange}
       >
-        <Form form={form} layout="vertical">
-          {error && (
-            <Alert
-              type="error"
-              showIcon
-              closable
-              style={{ marginBottom: 16 }}
-              title={error}
-              onClose={() => setError(undefined)}
-            />
-          )}
-
-          {/*
-           * The variant first, because everything under it reads better once
-           * the machine has a name — the category appears, the shop's own
-           * numbers appear, and the grading checklist knows which criteria to
-           * offer.
-           */}
+        <Flex gap={SPACE.md} wrap>
           <Form.Item
-            label={req(t("trade.product", "Product"))}
-            required
-            tooltip={t(
-              "trade.productHint",
-              "The machine enters QC already knowing what it is — and picking it shows what the shop pays for the same variant.",
-            )}
-            validateStatus={skuId === undefined ? undefined : "success"}
+            name="skuId"
+            label={t("trade.product", "Product")}
+            style={{ flex: "2 1 260px" }}
+            rules={[
+              {
+                required: true,
+                message: t(
+                  "trade.productRequired",
+                  "Pick the product — the unit is filed under it.",
+                ),
+              },
+            ]}
           >
             <Select
               showSearch
               allowClear
-              value={skuId}
-              onChange={setSkuId}
               optionFilterProp="label"
               placeholder={t(
                 "trade.searchProduct",
                 "Search a product or variant",
               )}
-              options={db.skus.map((k) => ({
-                value: k.id,
-                label: `${k.name} ${k.variantLabel}`,
+              options={productOptions}
+            />
+          </Form.Item>
+          <Form.Item
+            name="category"
+            label={t("trade.category", "Category")}
+            required
+            style={{ flex: "1 1 180px" }}
+          >
+            <Select
+              showSearch
+              allowClear
+              placeholder={t("trade.pickCategory", "Pick a category")}
+              options={db.categories.map((c) => ({
+                value: c.name,
+                label: c.name,
               }))}
             />
           </Form.Item>
+        </Flex>
 
-          <Flex gap={12} wrap>
-            <Form.Item
-              label={req(t("trade.category", "Category"))}
-              required
-              style={{ flex: "1 1 200px" }}
-              // Shown, never asked: a category is a fact about the model, and
-              // a second control for it would be a second answer that can
-              // disagree with the first. The star says it must be answered;
-              // picking the product is how.
-              extra={
-                model
-                  ? undefined
-                  : t("trade.categoryFromProduct", "Comes from the product.")
-              }
-            >
-              <Input
-                readOnly
-                value={model?.category ?? ""}
-                placeholder={t("trade.pickAProductFirst", "Pick a product")}
-              />
-            </Form.Item>
+        <Flex gap={SPACE.md} wrap>
+          {!counted && (
             <Form.Item
               name="serial"
-              label={req(t("trade.serial", "Serial"))}
+              label={t("trade.serial", "Serial")}
               style={{ flex: "1 1 220px" }}
               /*
-               * On blur, not on every keystroke.
-               *
-               * A serial is thirteen characters typed one at a time, and every
-               * prefix of a valid one is an invalid one — validating as it is
-               * typed would put the field in red from the first character and
-               * keep it there until the last. Blur is also where the QC grid
-               * commits, so the two fields refuse at the same moment.
+               * On blur, not on every keystroke: every prefix of a valid serial
+               * is an invalid one, so validating as it is typed would put the
+               * box in red from the first character to the last.
                */
               validateTrigger={["onBlur"]}
-              // Capitals whatever the keyboard is doing (owner ask
-              // 2026-09-01). `normalize` rather than an `onChange`, because
-              // the value is owned by the Form: rewriting it anywhere else
-              // would fight whatever the Form put there.
+              // New and second-hand are held to different rules, so a change of
+              // condition judges the serial again.
+              dependencies={["condition"]}
+              // Capitals whatever the keyboard is doing (owner ask 2026-09-01).
               normalize={(v: string) => v.toUpperCase()}
               rules={[
                 {
                   required: true,
                   message: t(
                     "trade.serialRequired",
-                    "Scan or type the machine's serial.",
+                    "Scan or type the unit's serial.",
                   ),
                 },
                 {
-                  /*
-                   * The shape rule the whole app runs on, and the collision,
-                   * both on the field itself (owner ask 2026-09-01).
-                   *
-                   * They were an `Alert` at the top of a dialog that scrolls,
-                   * which named a serial without pointing at the box holding
-                   * it. A trade-in mints a unit exactly as intake does, so it
-                   * is held to exactly the same serial — and now it says so in
-                   * the same place, with the same red outline.
-                   */
+                  // The shape rule the whole app runs on, and the collision, on
+                  // the field itself so the red outline points at the box.
                   validator: (_, value: string) => {
-                    const serial = serialOf(value);
-                    // `required` above owns the empty case. Saying it twice
-                    // would stack two messages under one field.
-                    if (serial === "") return Promise.resolve();
-                    const bad = serialFaultOf(value);
-                    if (bad !== null) {
-                      /*
-                       * A scan and a hand are told different things, because
-                       * the remedy differs: aim at another barcode, versus
-                       * check what you typed. Written out rather than looked
-                       * up, so `test/i18n.test.ts` can review the copy — see
-                       * the note in `lib/serialInput.ts`.
-                       */
+                    const { typed, read } = readSerial(value);
+                    // `required` above owns the empty case.
+                    if (typed === "") return Promise.resolve();
+                    if (!read.ok) {
                       return Promise.reject(
                         new Error(
-                          bad.reason === "no-marker" && bad.source === "scan"
+                          read.reason === "no-marker" && read.source === "scan"
                             ? t(
                                 "trade.serialScanNoMarker",
                                 "That is not the serial barcode — a Mac carries several. Look for the one printed under an S.",
                               )
                             : t(
                                 "trade.serialShape",
-                                "“{{serial}}” is not a serial. Type the {{min}}–{{max}} characters printed on the machine, or scan the barcode.",
+                                "“{{serial}}” is not a new unit's serial. Type the {{min}}–{{max}} characters printed on it, or scan its barcode.",
                                 {
-                                  serial,
+                                  serial: typed,
                                   min: BASE_MIN_LENGTH,
                                   max: BASE_MAX_LENGTH,
                                 },
@@ -496,13 +327,13 @@ export function TradeInDialog({
                         ),
                       );
                     }
-                    if (db.units.some((u) => u.serial === serial)) {
+                    if (db.units.some((u) => u.serial === read.serial)) {
                       return Promise.reject(
                         new Error(
                           t(
                             "trade.serialTaken",
                             "{{serial}} already belongs to a unit we carry.",
-                            { serial },
+                            { serial: read.serial },
                           ),
                         ),
                       );
@@ -513,310 +344,123 @@ export function TradeInDialog({
               ]}
               tooltip={t(
                 "trade.serialHint",
-                "The number printed on the machine — {{min}}–{{max}} characters. Type it without the S; the app puts that back. It enters QC under this serial, exactly as a machine off a purchase order would.",
+                "The number printed on the unit. A new unit's is {{min}}–{{max}} characters; a second-hand unit's is taken as read. It enters QC under this serial, exactly as a unit off a purchase order would.",
                 { min: BASE_MIN_LENGTH, max: BASE_MAX_LENGTH },
               )}
             >
-              {/* Capitals whatever the keyboard is doing (owner 2026-09-01):
-                  the value is upper-cased on commit either way, and a box
-                  showing `sc02aa` while `SC02AA` gets filed is a field
-                  disagreeing with itself. */}
               <Input
-                maxLength={STORE_MAX_LENGTH}
+                maxLength={SERIAL_FIELD_MAX_LENGTH}
                 placeholder={t("trade.scanOrType", "Scan or type it")}
                 style={{ fontFamily: "monospace", textTransform: "uppercase" }}
               />
             </Form.Item>
-          </Flex>
-
-          <Flex gap={12} wrap align="flex-end">
-            <Form.Item
-              label={req(t("trade.condition", "Condition"))}
-              required
-              style={{ flex: "0 0 auto" }}
-            >
-              <Segmented
-                value={condition}
-                onChange={(v) => {
-                  const next = v as UnitCondition;
-                  setCondition(next);
-                  // A sealed machine has no letter to keep. Same one-way rule
-                  // the QC grid applies — see `gradeForCondition`.
-                  if (next === "NEW") {
-                    setGrade(undefined);
-                    setSelection({});
-                  }
-                }}
-                options={[
-                  { value: "SECOND", label: t("trade.second", "Second") },
-                  { value: "NEW", label: t("trade.new", "New") },
-                ]}
-              />
-            </Form.Item>
-            <Form.Item
-              label={
-                gradeRequired
-                  ? req(t("trade.grading", "Grading & config"))
-                  : t("trade.grading", "Grading & config")
-              }
-              required={gradeRequired}
-              style={{ flex: "1 1 240px" }}
-              // Required only on a second-hand machine, and that is not a
-              // softening of the owner's ask: `lib/condition.ts` is explicit
-              // that a sealed machine has nothing to inspect, and the QC grid
-              // does not draw the button for one either. Demanding a checklist
-              // for an unopened box would be asking somebody to invent one.
-              extra={
-                condition === "NEW"
-                  ? t(
-                      "trade.gradeNotForNew",
-                      "Nothing to inspect in a sealed box.",
-                    )
-                  : undefined
-              }
-            >
-              <Flex gap={8} align="center">
-                <Button
-                  disabled={condition === "NEW" || !model}
-                  onClick={() => setGradingOpen(true)}
-                >
-                  {grade
-                    ? t("trade.regrade", "Change grade")
-                    : t("trade.grade", "Run the checklist")}
-                </Button>
-                <GradeTag grade={gradeForCondition(condition, grade)} plain />
-                {condition === "SECOND" && !model && (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {t(
-                      "trade.gradeNeedsProduct",
-                      "Pick a product first — the checklist is per category.",
-                    )}
-                  </Typography.Text>
-                )}
-              </Flex>
-            </Form.Item>
-          </Flex>
-
+          )}
           <Form.Item
-            name="label"
-            label={req(t("trade.description", "Description"))}
-            rules={[
-              {
-                required: true,
-                message: t(
-                  "trade.descriptionRequired",
-                  "Describe the machine — its marks and its age.",
-                ),
-              },
-            ]}
-            tooltip={t(
-              "trade.descriptionHint",
-              "In words, as it will read on the invoice — the marks and the age, not just the model.",
-            )}
+            name="condition"
+            label={t("trade.condition", "Condition")}
+            required
+            style={{ flex: "0 0 auto" }}
           >
-            <Input
-              placeholder={t(
-                "trade.descriptionPlaceholder",
-                "e.g. MacBook Air 2017 8/128, lecet di lid",
-              )}
+            <Segmented
+              options={[
+                { value: "SECOND", label: t("trade.second", "Second") },
+                { value: "NEW", label: t("trade.new", "New") },
+              ]}
             />
           </Form.Item>
+        </Flex>
 
-          {/*
-           * The shop's own numbers for this variant, beside the box where the
-           * price is typed. This is the owner's "show the other unit base
-           * price", and both cards open the detail behind them.
-           */}
-          {sku && (
-            <Flex gap={12} wrap style={{ marginBottom: 16 }}>
-              {priceCard(
-                "LIST",
-                t("trade.weListAt", "We list it at"),
-                fmtRp(sku.price),
-                t("trade.seeStock", "See the machines behind this"),
-              )}
-              {held.length > 0 &&
-                priceCard(
-                  "COST",
-                  t("trade.wePay", "We have paid ({{count}})", {
-                    count: held.length,
-                  }),
-                  low === high
-                    ? fmtRp(low ?? 0)
-                    : `${fmtRp(low ?? 0)} – ${fmtRp(high ?? 0)}`,
-                  t("trade.seeWhatWePaid", "See what each one cost"),
-                )}
-            </Flex>
-          )}
-
-          <Flex gap={12} wrap>
+        {/* Nothing at all for a sealed unit (owner ask 2026-09-19). */}
+        {canGrade(condition) && (
+          <Form.Item
+            label={t("trade.gradeLabel", "Grade")}
+            required
+            style={{ marginBottom: SPACE.lg }}
+          >
+            {/* Picked by hand: the grading checklist is hidden (owner ask
+                2026-09-20). `GradingChecklist` is untouched on disk. */}
             <Form.Item
-              name="value"
-              label={req(t("trade.price", "Price"))}
-              style={{ flex: "1 1 220px" }}
+              name="grade"
+              noStyle
               rules={[
                 {
                   required: true,
                   message: t(
-                    "trade.priceRequired",
-                    "Say what the shop is paying for it.",
+                    "trade.gradeRequired",
+                    "Pick a grade — A, B or C.",
                   ),
                 },
               ]}
-              tooltip={t(
-                "trade.priceHint",
-                "Comes off what the customer pays, and becomes the machine's cost when it enters stock.",
-              )}
             >
-              <MoneyInput style={{ width: "100%" }} />
-            </Form.Item>
-            <Form.Item
-              name="note"
-              label={t("trade.note", "Note")}
-              style={{ flex: "1 1 260px" }}
-            >
-              <Input
-                placeholder={t(
-                  "trade.notePlaceholder",
-                  "Anything QC should know",
-                )}
+              <Select
+                showSearch
+                allowClear
+                style={{ width: "100%" }}
+                placeholder={t("trade.gradePlaceholder", "A, B or C")}
+                aria-label={t("trade.gradeLabel", "Grade")}
+                options={GRADES.map((g) => ({ value: g, label: g }))}
               />
             </Form.Item>
-          </Flex>
+          </Form.Item>
+        )}
 
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {t(
-              "trade.entersQc",
-              "The machine enters QC at this price as its cost, exactly as one off a purchase order does.",
-            )}
-          </Typography.Text>
-        </Form>
-      </Modal>
-
-      {/*
-       * The detail behind a price card (owner ask 2026-09-01).
-       *
-       * One dialog for both, because the table is the same either way — which
-       * machine, what grade, what it cost — and only the heading differs. The
-       * list price has no per-unit detail of its own, so its view is the same
-       * machines with the shop's asking price beside them: the honest answer
-       * to "what does this variant mean" in both directions.
-       */}
-      <Modal
-        open={basisOpen !== null}
-        onCancel={() => setBasisOpen(null)}
-        footer={null}
-        width={560}
-        title={
-          basisOpen === "COST"
-            ? t("trade.whatWePaidTitle", "What we paid for these")
-            : t("trade.whatWeListTitle", "What we list these at")
-        }
-      >
-        <Flex vertical gap={12}>
-          <Typography.Text type="secondary">
-            {sku ? `${sku.name} ${sku.variantLabel}` : ""}
-          </Typography.Text>
-          <Table
-            rowKey="serial"
-            size="small"
-            pagination={false}
-            dataSource={held}
-            locale={{
-              emptyText: t(
-                "trade.noneHeld",
-                "The shop has never taken one of these in.",
+        <Form.Item
+          name="label"
+          label={t("trade.description", "Description")}
+          rules={[
+            {
+              required: true,
+              whitespace: true,
+              message: t(
+                "trade.descriptionRequired",
+                "Describe the unit — its marks and its age.",
               ),
-            }}
-            columns={[
+            },
+          ]}
+        >
+          <Input
+            placeholder={t(
+              "trade.descriptionPlaceholder",
+              "e.g. MacBook Air 2017 8/128, lecet di lid",
+            )}
+          />
+        </Form.Item>
+
+        <Flex gap={SPACE.md} wrap>
+          <Form.Item
+            name="value"
+            label={t("trade.price", "Price")}
+            style={{ flex: "1 1 220px", marginBottom: 0 }}
+            rules={[
               {
-                title: t("trade.unit", "Unit"),
-                dataIndex: "serial",
-                render: (v: string) => (
-                  <Typography.Text style={{ fontFamily: "monospace" }}>
-                    {v}
-                  </Typography.Text>
+                required: true,
+                message: t(
+                  "trade.priceRequired",
+                  "Say what the shop is paying for it.",
                 ),
-              },
-              {
-                title: t("trade.grade", "Grade"),
-                key: "grade",
-                width: 100,
-                render: (_: unknown, u: (typeof held)[number]) => (
-                  <GradeTag grade={u.grade} plain />
-                ),
-              },
-              {
-                title:
-                  basisOpen === "COST"
-                    ? t("trade.costCol", "Cost")
-                    : t("trade.listedAt", "Listed at"),
-                key: "money",
-                align: "right" as const,
-                render: (_: unknown, u: (typeof held)[number]) => {
-                  if (basisOpen !== "COST") return fmtRp(sku?.price ?? 0);
-                  // The total, and what it is made of whenever it is more than
-                  // the invoice line — shipping and tax on a line of their own
-                  // (owner ask 2026-09-15), so nobody has to work out why a
-                  // machine cost more than its supplier charged.
-                  const c = costOf(u);
-                  const part = (text: string) => (
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {text}
-                    </Typography.Text>
-                  );
-                  return (
-                    <Flex vertical align="flex-end" gap={0}>
-                      <Typography.Text>{fmtRp(c.total)}</Typography.Text>
-                      {c.total !== c.buy &&
-                        part(
-                          t("trade.boughtLine", "bought {{amount}}", {
-                            amount: fmtRp(c.buy),
-                          }),
-                        )}
-                      {c.shippingTax > 0 &&
-                        part(
-                          t(
-                            "trade.shippingTaxLine",
-                            "shipping & tax {{amount}}",
-                            {
-                              amount: fmtRp(c.shippingTax),
-                            },
-                          ),
-                        )}
-                      {c.repair > 0 &&
-                        part(
-                          t("trade.repairLine", "repair {{amount}}", {
-                            amount: fmtRp(c.repair),
-                          }),
-                        )}
-                    </Flex>
-                  );
-                },
               },
             ]}
-          />
+            tooltip={t(
+              "trade.priceHint",
+              "Comes off what the customer pays, and becomes the unit's cost when it enters stock.",
+            )}
+          >
+            <MoneyInput style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item
+            name="note"
+            label={t("trade.note", "Note")}
+            style={{ flex: "1 1 260px", marginBottom: 0 }}
+          >
+            <Input
+              placeholder={t(
+                "trade.notePlaceholder",
+                "Anything QC should know",
+              )}
+            />
+          </Form.Item>
         </Flex>
-      </Modal>
-
-      <GradingModal
-        open={gradingOpen}
-        onClose={() => setGradingOpen(false)}
-        category={model?.category ?? ""}
-        subject={
-          <Typography.Text type="secondary">
-            {sku ? `${sku.name} ${sku.variantLabel}` : ""}
-          </Typography.Text>
-        }
-        {...(grade ? { currentGrade: grade } : {})}
-        // Reopens on the answers it was left with, which is the owner's ask.
-        initialSelection={selection}
-        onApply={(g, _inspection, picked) => {
-          setGrade(g);
-          setSelection(picked);
-          setGradingOpen(false);
-        }}
-      />
-    </>
+      </Form>
+    </Modal>
   );
 }

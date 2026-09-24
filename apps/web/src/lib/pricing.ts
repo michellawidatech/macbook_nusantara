@@ -11,17 +11,34 @@
  */
 import type { Discount, MockDb } from "../mock/seed.js";
 
-/** One basket line, already resolved to the price that will actually be charged. */
+/**
+ * One PIECE in the basket, already resolved to the price that will actually
+ * be charged: a unit by its serial, or one of a counted product's pieces by
+ * its variant (2026-09-19 — three mice are three lines here, because a bundle
+ * counts pieces).
+ */
 export interface BasketLine {
-  readonly serial: string;
+  readonly serial?: string;
+  readonly skuId?: string;
   readonly price: number;
 }
 
-/** The catalogue model behind a serial, via its unit and SKU. */
-export function modelOfSerial(db: MockDb, serial: string) {
-  const unit = db.units.find((u) => u.serial === serial);
-  const sku = unit && db.skus.find((s) => s.id === unit.skuId);
-  return sku && db.models.find((m) => m.id === sku.modelId);
+/** What a basket line, or a bare serial, names. */
+export type LineRef = string | Pick<BasketLine, "serial" | "skuId">;
+
+/** The variant behind a line: its unit's, or the one it names. */
+export function skuIdOfLine(db: MockDb, ref: LineRef): string | undefined {
+  const line = typeof ref === "string" ? { serial: ref } : ref;
+  if (line.skuId) return line.skuId;
+  if (!line.serial) return undefined;
+  return db.units.find((u) => u.serial === line.serial)?.skuId;
+}
+
+/** The catalogue model behind a serial or a line, via its SKU. */
+export function modelOfSerial(db: MockDb, ref: LineRef) {
+  const skuId = skuIdOfLine(db, ref);
+  const sku = skuId && db.skus.find((s) => s.id === skuId);
+  return sku ? db.models.find((m) => m.id === sku.modelId) : undefined;
 }
 
 /**
@@ -35,10 +52,10 @@ export function modelOfSerial(db: MockDb, serial: string) {
 export function scopeMatches(
   db: MockDb,
   scope: string,
-  serial: string,
+  line: LineRef,
 ): boolean {
   if (!scope || scope === "All products") return true;
-  const model = modelOfSerial(db, serial);
+  const model = modelOfSerial(db, line);
   if (!model) return false;
   return model.name === scope || model.category === scope;
 }
@@ -75,7 +92,7 @@ export function bundleProgress(
   const perBundle = Math.max(2, d.bundleQty ?? 2);
   const price = d.bundlePriceRp ?? 0;
   const qualifying = lines
-    .filter((l) => scopeMatches(db, d.scope, l.serial))
+    .filter((l) => scopeMatches(db, d.scope, l))
     .map((l) => l.price)
     .sort((a, b) => b - a);
 
@@ -120,7 +137,7 @@ export function discountAmount(
   lines: readonly BasketLine[],
 ): number {
   if (!d) return 0;
-  const qualifying = lines.filter((l) => scopeMatches(db, d.scope, l.serial));
+  const qualifying = lines.filter((l) => scopeMatches(db, d.scope, l));
   const inScope = qualifying.reduce((t, l) => t + l.price, 0);
   if (d.type === "PCT") {
     const raw = Math.round((inScope * (d.pct ?? 0)) / 100);
@@ -185,8 +202,8 @@ export function fitDiscount(
 ): DiscountFit {
   const blockers: DiscountBlocker[] = [...redemptionBlockers(d, today)];
 
-  const priced = lines.filter((l) => l.serial);
-  const qualifying = priced.filter((l) => scopeMatches(db, d.scope, l.serial));
+  const priced = lines.filter((l) => l.serial || l.skuId);
+  const qualifying = priced.filter((l) => scopeMatches(db, d.scope, l));
   const bundle =
     d.type === "BUNDLE" ? bundleProgress(db, d, priced) : undefined;
 

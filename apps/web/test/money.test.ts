@@ -104,8 +104,9 @@ describe("the empty field stays empty", () => {
 });
 
 describe("fmtRp keeps its own contract", () => {
-  it("renders an absent amount as a dash", () => {
-    expect(fmtRp(null)).toBe("—");
-    expect(fmtRp(undefined)).toBe("—");
+  // A number says 0 when there is none — never a dash (owner 2026-09-21).
+  it("renders an absent amount as Rp 0", () => {
+    expect(fmtRp(null)).toBe("Rp 0");
+    expect(fmtRp(undefined)).toBe("Rp 0");
   });
 });

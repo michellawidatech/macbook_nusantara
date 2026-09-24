@@ -63,8 +63,10 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       // The owner's own word for the till. "Point of Sale" named the software
       // category; "New Transaction" names what the button does.
       { path: "/stock/out", label: "New Transaction" },
-      // The merge of 2026-08-26. See this file's docblock.
-      { path: "/stock/inventory", label: "Inventory & Stock Movement" },
+      // "Inventory" since 2026-09-23 (owner ask). The merge of 2026-08-26 is
+      // unchanged — one screen, one table, the adjustments behind its own
+      // buttons — but the name was describing the merge rather than the page.
+      { path: "/stock/inventory", label: "Inventory" },
       { path: "/stock/opname", label: "Stock Opname" },
       { path: "/stock/history", label: "S/N Tracking" },
       // Machines away at a repairer (owner ask 2026-09-08). Under Stock
@@ -99,7 +101,14 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       // marketplace payout and chasing a customer are daily jobs with their
       // own rhythm, and burying them a click inside the monthly screen is how
       // a Rp23jt payout sits unwithdrawn for a fortnight.
-      { path: "/finance/receivables", label: "Pending & Receivables" },
+      { path: "/finance/receivables", label: "Pending Payment" },
+      // Piutang and utang, each its own leaf (owner ask 2026-09-22 — they
+      // were two tabs of one page for a day). Not tabs of the one above:
+      // that screen's first table is money a MARKETPLACE is holding, which is
+      // not a debt in either direction. Receivable first, because chasing a
+      // customer is the daily job and paying a supplier the weekly one.
+      { path: "/finance/receivable", label: "Receivable" },
+      { path: "/finance/payable", label: "Payable" },
       { path: "/finance/income-expense", label: "Income & Expense" },
     ],
   },

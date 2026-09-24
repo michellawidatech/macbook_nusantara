@@ -18,6 +18,8 @@ import {
   MAX_WAIT_MS,
   MIN_WAIT_MS,
   SUMMARY_EVERY_TURNS,
+  agentCapabilities,
+  type AgentCapabilities,
   type AnthropicEnv,
   type WaitProfile,
 } from "@nusantara/agent";
@@ -56,6 +58,7 @@ export const WORKER_ENV_KEYS = [
   "WORKER_RESERVATION_TTL_MS",
   "WORKER_MAX_EXPIRIES",
   "WORKER_AGENT_STAFF_ID",
+  "AGENT_CAPABILITIES",
   "WORKER_MAX_DRAFTS",
   "WORKER_MAX_SENDS",
 ] as const;
@@ -128,6 +131,21 @@ export interface WorkerConfig {
    * migration, so it exists in every environment.
    */
   readonly agentStaffId: string;
+  /**
+   * What the bot may do for itself — `AGENT_CAPABILITIES` (2026-09-21).
+   *
+   * `live` is the owner's 2026-09-21 design: the bot reads the shelf, sends
+   * the shop's own photographs of a unit, and may book a hold. Anything else,
+   * including the variable being unset, is the 2026-09-18 design: it answers
+   * from the owner's approved sheet and hands every question about a
+   * particular unit to a person.
+   *
+   * The cautious reading is the DEFAULT, deliberately. The live one is right
+   * only once the stock in this database is the shop's real stock, and a
+   * variable nobody set should not be the thing that decides a bot is quoting
+   * prices off a half-migrated shelf.
+   */
+  readonly capabilities: AgentCapabilities;
 }
 
 function int(raw: string | undefined, fallback: number): number {
@@ -174,5 +192,8 @@ export function loadWorkerConfig(
     reservationTtlMs: int(env["WORKER_RESERVATION_TTL_MS"], 48 * 3_600_000),
     maxExpiriesPerTick: int(env["WORKER_MAX_EXPIRIES"], 10),
     agentStaffId: env["WORKER_AGENT_STAFF_ID"]?.trim() || "staff_agent",
+    // One reader for the whole repo (packages/agent policy.ts), so the worker
+    // and the API's Draft endpoint cannot disagree about what the bot may do.
+    capabilities: agentCapabilities(env),
   };
 }

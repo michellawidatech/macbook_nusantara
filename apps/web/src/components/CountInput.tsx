@@ -58,6 +58,9 @@ export interface CountInputProps {
   "aria-describedby"?: string;
   "aria-required"?: boolean;
   onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  /** For a count that is written when the box is left, not per keystroke. */
+  onBlur?: (e: React.FocusEvent<HTMLInputElement>) => void;
+  onPressEnter?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
 }
 
 /**

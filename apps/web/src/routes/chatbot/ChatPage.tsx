@@ -83,7 +83,7 @@ import {
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
-import { fmtDateTime } from "../../lib/format.js";
+import { fmtDateTime, fmtNone } from "../../lib/format.js";
 import {
   agentStatus,
   draftReply,
@@ -94,6 +94,8 @@ import { markHandled, sendReply, setAutoReply } from "../../lib/inboxApi.js";
 import { handoffTopicLabel } from "../../lib/handoffTopics.js";
 import { useInbox } from "../../hooks/useInbox.js";
 import { useAgentConfig } from "../../hooks/useAgentConfig.js";
+import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
+import { asString } from "../../lib/draftGuards.js";
 import { useTranslation } from "react-i18next";
 
 /**
@@ -148,7 +150,6 @@ export function ChatInbox() {
     token: { colorPrimaryBg, colorFillTertiary, colorBorderSecondary },
   } = theme.useToken();
   const [picked, setPicked] = useState<string | null>(null);
-  const [reply, setReply] = useState("");
   const [drafting, setDrafting] = useState(false);
   const [sending, setSending] = useState(false);
   const [switching, setSwitching] = useState(false);
@@ -222,6 +223,17 @@ export function ChatInbox() {
   }, [compact, picked, threadsSeen, threads]);
 
   const active = picked ?? threadsSeen;
+  /*
+   * The reply being written, one per conversation and kept on this device
+   * (owner ask 2026-09-21: "all the things of the user input will be saved
+   * locally"). It used to be one box for every thread, so a half-typed answer
+   * to one customer was still sitting there when somebody opened another.
+   */
+  const [reply, setReply] = usePersistentState<string>(
+    active ? draftKey(`chat.reply.${active}`) : null,
+    "",
+    asString,
+  );
   const thread = threads.find((t) => t.phone === active) ?? null;
   const showList = !compact || !active;
 
@@ -661,7 +673,7 @@ export function ChatInbox() {
                             )}
                           </Flex>
                         }
-                        description={c.lastReply ?? c.lastText ?? "—"}
+                        description={c.lastReply ?? c.lastText ?? fmtNone()}
                       />
                     </List.Item>
                   )}

@@ -17,9 +17,9 @@
  *
  * So this is the other door into QC. It is deliberately the same conversation
  * the two existing desks have — condition, description, grade, then a decision
- * — using the same `GradingModal` and the same `qcDescriptions` vocabulary, so
- * a machine graded here cannot be graded by different rules from one graded on
- * an order.
+ * — with the same grade picker and the same `qcDescriptions` vocabulary, so a
+ * unit graded here cannot be graded by different rules from one graded on an
+ * order.
  *
  * ## Why it is on `/inbound` and not on its own menu item
  *
@@ -48,10 +48,11 @@ import {
   Typography,
 } from "antd";
 import { EditableTable } from "./EditableTable";
-import { AuditOutlined, CheckOutlined, StopOutlined } from "@ant-design/icons";
+import { CheckOutlined, StopOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { GradeTag } from "./GradeTag";
-import { GradingModal } from "./GradingModal";
+import { GRADES } from "../lib/grading.js";
+import { fmtNone } from "../lib/format.js";
 import { joinDescription, splitDescription } from "../lib/inboundQc.js";
 import {
   CONDITIONS,
@@ -74,18 +75,12 @@ export function OrphanQcCard() {
   const { message, modal } = App.useApp();
   /** serial → the phrases typed into its description box, before committing. */
   const [describing, setDescribing] = useState<Record<string, string[]>>({});
-  /** The serial whose grading checklist is open. */
-  const [gradingFor, setGradingFor] = useState<string | null>(null);
 
   const waiting = db.units.filter((u) => u.status === "QC" && u.poId === null);
   // The whole card, including its heading, disappears when the shop has none.
   if (waiting.length === 0) return null;
 
   const skuOf = (skuId: string) => db.skus.find((k) => k.id === skuId);
-  const categoryOf = (skuId: string) => {
-    const sku = skuOf(skuId);
-    return (sku && db.models.find((m) => m.id === sku.modelId)?.category) ?? "";
-  };
   const partsOf = (serial: string, stored: string) =>
     describing[serial] ?? splitDescription(stored);
 
@@ -106,18 +101,21 @@ export function OrphanQcCard() {
       });
     });
 
-  const applyGrade = (serial: string, grade: string, inspection: string) =>
+  /**
+   * The letter, picked by hand.
+   *
+   * ⚠️ It came off the grading checklist until 2026-09-20, which also put its
+   * working on the timeline beside the letter; the checklist UI is hidden
+   * (owner ask), so what is written is the letter somebody chose.
+   */
+  const applyGrade = (serial: string, grade: string | undefined) =>
     mutate((d) => {
       const u = d.units.find((x) => x.serial === serial);
       if (!u || u.grade === grade) return;
       u.grade = grade;
-      // The letter alone is a conclusion with no working, so the checklist
-      // goes on the timeline beside it — the same note intake writes.
       appendEvent(d, serial, {
         type: "DICATAT",
-        note: inspection
-          ? `Graded ${grade} — ${inspection}`
-          : `Graded ${grade}`,
+        note: grade === undefined ? "Marked second-hand" : `Graded ${grade}`,
       });
     });
 
@@ -137,7 +135,7 @@ export function OrphanQcCard() {
       message.error(
         t(
           "orphanQc.describeFirst",
-          "Say what condition this machine is in before it goes on the shelf.",
+          "Say what condition this unit is in before it goes on the shelf.",
         ),
       );
       return;
@@ -177,7 +175,7 @@ export function OrphanQcCard() {
       title: t("orphanQc.writeOffTitle", "Write off {{serial}}?", { serial }),
       content: t(
         "orphanQc.writeOffBody",
-        "It leaves stock and stays on the ledger. There is no supplier to send it back to — this machine came off no order.",
+        "It leaves stock and stays on the ledger. There is no supplier to send it back to — this unit came off no order.",
       ),
       okText: t("orphanQc.writeOffOk", "Write it off"),
       okButtonProps: { danger: true },
@@ -190,8 +188,6 @@ export function OrphanQcCard() {
           }),
         ),
     });
-
-  const grading = waiting.find((u) => u.serial === gradingFor);
 
   return (
     <Card
@@ -206,7 +202,7 @@ export function OrphanQcCard() {
         style={{ marginBottom: 12 }}
         message={t(
           "orphanQc.explain",
-          "Machines found at a stock take, not bought on an invoice. They count as stock but cannot be sold until they are graded here.",
+          "Units found at a stock take, not bought on an invoice. They count as stock but cannot be sold until they are graded here.",
         )}
       />
       <EditableTable
@@ -239,14 +235,15 @@ export function OrphanQcCard() {
             width: 220,
             render: (_, u) => {
               const k = skuOf(u.skuId);
-              return k ? `${k.name} ${k.variantLabel}` : "—";
+              return k ? `${k.name} ${k.variantLabel}` : fmtNone();
             },
           },
           {
             title: t("orphanQc.warehouse", "Warehouse"),
             width: 150,
             render: (_, u) =>
-              db.warehouses.find((w) => w.id === u.locationId)?.name ?? "—",
+              db.warehouses.find((w) => w.id === u.locationId)?.name ??
+              fmtNone(),
           },
           {
             title: t("orphanQc.condition", "Condition"),
@@ -317,24 +314,27 @@ export function OrphanQcCard() {
           {
             title: t("orphanQc.grade", "Grade"),
             width: 140,
-            render: (_, u) => (
-              <Flex align="center" gap={8}>
+            render: (_, u) =>
+              // Sealed stock has no letter to pick: there is nothing to
+              // inspect in an unopened box.
+              canGrade(conditionOf(u.grade)) ? (
+                <Select<string>
+                  size="small"
+                  style={{ width: "100%" }}
+                  showSearch
+                  allowClear
+                  optionFilterProp="label"
+                  value={u.grade}
+                  placeholder={t("orphanQc.gradePlaceholder", "Grade")}
+                  aria-label={t("orphanQc.gradeAria", "Grade {{serial}}", {
+                    serial: u.serial,
+                  })}
+                  options={GRADES.map((g) => ({ value: g, label: g }))}
+                  onChange={(v?: string) => applyGrade(u.serial, v)}
+                />
+              ) : (
                 <GradeTag grade={u.grade} />
-                {/* Hidden rather than disabled for sealed stock: there is no
-                    screen to look at and no case to mark, so a checklist would
-                    be a form about a machine nobody has opened. */}
-                {canGrade(conditionOf(u.grade)) && (
-                  <Button
-                    size="small"
-                    icon={<AuditOutlined />}
-                    aria-label={t("orphanQc.gradeAria", "Grade {{serial}}", {
-                      serial: u.serial,
-                    })}
-                    onClick={() => setGradingFor(u.serial)}
-                  />
-                )}
-              </Flex>
-            ),
+              ),
           },
           {
             title: "",
@@ -374,23 +374,6 @@ export function OrphanQcCard() {
             ),
           },
         ]}
-      />
-
-      <GradingModal
-        open={grading !== undefined}
-        onClose={() => setGradingFor(null)}
-        category={grading ? categoryOf(grading.skuId) : ""}
-        currentGrade={grading?.grade}
-        subject={
-          grading ? (
-            <Typography.Text>
-              {skuOf(grading.skuId)?.name} · {grading.serial}
-            </Typography.Text>
-          ) : null
-        }
-        onApply={(grade, inspection) => {
-          if (grading) applyGrade(grading.serial, grade, inspection);
-        }}
       />
     </Card>
   );

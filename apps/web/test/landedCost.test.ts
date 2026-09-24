@@ -1,7 +1,8 @@
 /**
- * An invoice's shipping and tax, spread over its machines — owner ask
- * 2026-09-15: *"Shipping fee and tax fee should be divided across all units
- * evenly for the COGS and margin calculation."*
+ * An invoice's expenses, spread over its machines — owner ask 2026-09-15:
+ * *"Shipping fee and tax fee should be divided across all units evenly for the
+ * COGS and margin calculation."* Since 2026-09-18 only the expenses marked to
+ * join the machines' cost are spread (`PoFee.inCogs`).
  *
  * The split is defined on the invoice's ROWS (each line expanded by its
  * quantity), and a serial only decides which row a unit stands in. See
@@ -17,7 +18,7 @@ import {
   shippingTaxShares,
   type LandedCostSources,
 } from "../src/lib/landedCost.js";
-import type { Po, PoItem, Unit, UnitEvent } from "../src/mock/seed.js";
+import type { Po, PoFee, PoItem, Unit, UnitEvent } from "../src/mock/seed.js";
 
 const line = (id: string, over: Partial<PoItem> = {}): PoItem => ({
   id,
@@ -28,7 +29,15 @@ const line = (id: string, over: Partial<PoItem> = {}): PoItem => ({
   ...over,
 });
 
-const invoice = (over: Partial<Po> = {}): Po => ({
+/**
+ * An invoice. `shippingFee` and `taxFee` are shorthand for the two expenses
+ * every invoice had before expenses were a list — both in COGS.
+ */
+const invoice = ({
+  shippingFee = 0,
+  taxFee = 0,
+  ...over
+}: Partial<Po> & { shippingFee?: number; taxFee?: number } = {}): Po => ({
   id: "po-1",
   code: "PI-001",
   supplierId: "sup-1",
@@ -37,12 +46,23 @@ const invoice = (over: Partial<Po> = {}): Po => ({
   locationId: "wh-1",
   items: [line("r1")],
   payments: [],
-  shippingFee: 0,
-  taxFee: 0,
+  fees: [
+    ...(shippingFee > 0 ? [expense("f-ship", "SHIPPING", shippingFee)] : []),
+    ...(taxFee > 0 ? [expense("f-tax", "TAX", taxFee)] : []),
+  ],
   discount: 0,
   status: "RECEIVED",
   ...over,
 });
+
+function expense(
+  id: string,
+  kind: PoFee["kind"],
+  amount: number,
+  inCogs = true,
+): PoFee {
+  return { id, kind, label: "", amount, inCogs };
+}
 
 const unit = (serial: string, over: Partial<Unit> = {}): Unit => ({
   serial,
@@ -87,6 +107,39 @@ describe("invoiceCharges", () => {
         invoice({ shippingFee: 300_000, taxFee: 100_000, discount: 250_000 }),
       ),
     ).toBe(400_000);
+  });
+
+  it("leaves out an expense kept out of the machines' cost", () => {
+    // Owner ask 2026-09-18: "we should be able to add if we want to divide it
+    // to COGS per unit or not".
+    expect(
+      invoiceCharges(
+        invoice({
+          fees: [
+            expense("f1", "SHIPPING", 300_000),
+            expense("f2", "CUSTOMS", 120_000),
+            expense("f3", "OTHER", 80_000, false),
+          ],
+        }),
+      ),
+    ).toBe(420_000);
+  });
+
+  it("moves every machine's share when an expense changes sides", () => {
+    const withCrate = (inCogs: boolean) =>
+      invoice({
+        items: [line("r1"), line("r2")],
+        fees: [
+          expense("f1", "SHIPPING", 100_000),
+          expense("f2", "OTHER", 60_000, inCogs),
+        ],
+      });
+    expect([...poRowShares(withCrate(true)).values()]).toEqual([
+      80_000, 80_000,
+    ]);
+    expect([...poRowShares(withCrate(false)).values()]).toEqual([
+      50_000, 50_000,
+    ]);
   });
 });
 

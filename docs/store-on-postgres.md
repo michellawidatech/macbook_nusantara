@@ -95,6 +95,19 @@ A customer return closes the receipts dated BEFORE it, not every open line of
 the machine: the B2Soft import commits a month at a time, so a return and the
 resale that followed it arrive in one changeset.
 
+## Counted products — `stockMoves` (2026-09-19)
+
+A category with `tracksSerial = false` has no `Unit` rows: what a location
+holds of one of its variants is `SUM(StockMove.qty)`. The adapter
+(`adapters/stock.ts`) refuses an edit or a removal (it is in `APPEND_ONLY`,
+and the app role has INSERT and SELECT only), refuses a move of a variant
+whose category tracks serials, and on a till refuses any commit that leaves a
+shelf below zero — checked after the insert, under the store lock every commit
+holds. A `TERJUAL` move adds `-qty × unitCost` to its `OrderItem.cogs` and
+`Order.cogs`: the order row is written earlier in the same commit, before the
+moves naming it exist. Import mode skips the zero floor, because the B2Soft
+history replays a sale before the purchase it came off.
+
 ## Import mode
 
 `commitStore(…, { mode: "import" })` is the B2Soft migration
@@ -133,7 +146,9 @@ Every field below was browser-only and marked ⚠️ in `seed.ts`. The migration
   `Customer.openingBalance/openingBalanceAt` and `phone` nullable (B2Soft has
   none — owner answer 2026-09-13); `CatalogModel.identifier/source`;
   `Unit.rackId/price/marketPrice/purchaseOrderId`; `UnitEvent.unitReturnId` (the event's `refCode` is projected from its document link);
-  `PurchaseOrder.discount`; `PurchaseOrderItem.notReceived`;
+  `PurchaseOrder.discount`; `PurchaseOrderItem.notReceived/discount` (the
+  second is money off ONE line, owner ask 2026-09-20 — the first stays the
+  discount negotiated off the whole order);
   `Payment.channel/note/recordedAt/fromDepositId/voidedAt`;
   `Order.salespersonId/shippingAddress/payMethod/grossTotal/netReceived/reservationId`;
   `OrderItem.listPrice`; `TradeIn.skuId/condition/grade`;
@@ -165,11 +180,12 @@ own event type, is the follow-up.
 | `appleDbHidden` | `AppleDbHiddenModel` | singleton list |
 | `units` | `Unit` + battery `UnitAttribute`s | serial |
 | `events` | `UnitEvent` | id |
+| `stockMoves` | `StockMove` — the counted products' append-only ledger (2026-09-19) | id |
 | `unitNotes` | `UnitNote` + `UnitNotePhoto` | id |
 | `pos` | `PurchaseOrder` + items, serials, fees, payments | id |
 | `stockIns` / `adjustments` | `StockIn` / `StockAdjustment` | id |
 | `customers` | `Customer` + `CustomerAddress` | id |
-| `orders` | `Order` + `OrderItem`, `OrderFee`, `TradeIn`, `Payment` | id |
+| `orders` | `Order` + `OrderItem` (a unit per line, or a counted product's `lines` with `unitId` null), `OrderFee`, `TradeIn`, `Payment` | id |
 | `returns` | `UnitReturn` | id |
 | `reservations` | `Reservation` + `ReservationItem` | id |
 | `discounts` | `Discount` | id |

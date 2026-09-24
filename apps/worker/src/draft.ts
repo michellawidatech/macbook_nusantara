@@ -56,6 +56,7 @@ import {
   matchesNote,
   renderStoreFacts,
   routeMessage,
+  type AgentCapabilities,
   storeOpenAt,
   type AgentClient,
   type AnthropicEnv,
@@ -96,6 +97,17 @@ export interface DraftDeps {
   readonly maxBatch?: number;
   /** The reserved agent Staff row, so a booking's UnitEvent is attributable. */
   readonly agentStaffId?: string;
+  /**
+   * What the bot may do for itself (packages/agent `policy.ts`).
+   *
+   * Absent is the 2026-09-18 design: answers from the owner's approved sheet,
+   * everything about a particular unit to a person. `AGENT_CAPABILITIES=live`
+   * in the environment is the 2026-09-21 one — the bot reads the shelf, sends
+   * the shop's own photographs and may book a hold. One variable rather than a
+   * deploy, because which is right depends on whether the data in this
+   * database is the shop's data today.
+   */
+  readonly capabilities?: AgentCapabilities;
   /** How far a sender's clock may run ahead before we stop believing it. */
   readonly skewToleranceMs?: number;
   /** Injectable so a test can drive the debounce without waiting. */
@@ -419,6 +431,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         persona: persona?.prompt ?? DEFAULT_PERSONA,
         storeFacts,
         knowledge: knowledgeText,
+        ...(deps.capabilities ? { capabilities: deps.capabilities } : {}),
         // Newest first out of the database, oldest first into the prompt, so
         // the most recent correction is the last thing the model reads.
         corrections: [...corrections].reverse().map((c) => ({
@@ -442,6 +455,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       // and which of the owner's answers it most looks like (retrieval.ts).
       const route = routeMessage(current, {
         hasMedia: batch.some((m) => m.msgType !== "text"),
+        capabilities: deps.capabilities,
       });
       const hint = matchesNote(knowledge, matchesFor(knowledge, current));
 
@@ -480,6 +494,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         storeFacts,
         route,
         hint,
+        capabilities: deps.capabilities,
         onError: (err) => {
           failure = err;
         },
@@ -555,6 +570,22 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           kind: "WA_REPLY",
           payload: { to: from, body: result.reply, inReplyTo: anchor.id },
         });
+        /*
+         * The photographs the answer offered, one row each, queued AFTER the
+         * reply (owner ask 2026-09-21). Order matters and is cheap to get
+         * right: the outbox is drained in insertion order, so the words arrive
+         * first and the pictures follow, which is how a person would send them.
+         *
+         * Still inside the one transaction. A reply that promised photos and a
+         * queue that never got them is the split this boundary exists to
+         * prevent.
+         */
+        for (const photoId of result.photos ?? []) {
+          await enqueueOutbox(tx, {
+            kind: "WA_IMAGE",
+            payload: { to: from, photoId, inReplyTo: anchor.id },
+          });
+        }
       }, TXN_TIMEOUTS);
 
       drafted += 1;

@@ -82,6 +82,31 @@ export const REASON_ACTIVITIES = [
 export const CATALOG_SOURCES = ["MANUAL", "APPLEDB"] as const;
 export const PO_STATUSES = ["DRAFT", "ORDERED", "RECEIVED"] as const;
 export const PO_PAYMENT_FOR = ["ORDER", "TAX", "SHIPPING"] as const;
+/** `FeeKind` — ONGKIR, PAJAK, BEACUKAI, LAIN — in the browser's words. */
+export const PO_FEE_KINDS = ["SHIPPING", "TAX", "CUSTOMS", "OTHER"] as const;
+export type PoFeeKind = (typeof PO_FEE_KINDS)[number];
+
+/**
+ * The order an invoice's expenses are listed in: by kind, then by label, then
+ * by id — the same on the server's projection and in the browser.
+ *
+ * Needed because nothing stores an order: an expense's id is a random token,
+ * and a list that reshuffles every time a till polls is a list nobody can
+ * find their place in.
+ */
+export function byFeeOrder(
+  a: { readonly kind: PoFeeKind; readonly label: string; readonly id: string },
+  b: { readonly kind: PoFeeKind; readonly label: string; readonly id: string },
+): number {
+  const kind = PO_FEE_KINDS.indexOf(a.kind) - PO_FEE_KINDS.indexOf(b.kind);
+  if (kind !== 0) return kind;
+  // By code unit rather than `localeCompare`, so the order cannot depend on
+  // the locale of whichever machine sorted it.
+  const la = a.label.toLowerCase();
+  const lb = b.label.toLowerCase();
+  if (la !== lb) return la < lb ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
 export const STOCK_IN_DECISIONS = ["ACCEPTED", "REJECTED"] as const;
 export const STOCK_IN_REJECT_KINDS = ["SUPPLIER", "SERVICE"] as const;
 export const PAYMENT_STATES = ["SETTLED", "PENDING", "DUE"] as const;
@@ -99,10 +124,29 @@ export const EXPENSE_KINDS = [
   "PAYROLL",
   "MARKETING",
   "RENT",
+  // Not offered by the picker since 2026-09-23 (the owner's list); accepted
+  // so rows already written under them still commit.
   "PROFESSIONAL",
   "SOFTWARE",
+  // Money handed back on a return or a cheaper exchange (owner ask
+  // 2026-09-21). Written by the customer-return form.
+  "REFUND",
+  // The owner's categories, 2026-09-23 — see the migration of that date.
+  "BUNGA",
+  "SELISIH",
+  "KOMPENSASI",
+  "SUPPLIER",
+  "TRANSFER",
 ] as const;
-export const INCOME_REASONS = ["SALES", "TRANSFER"] as const;
+export const INCOME_REASONS = [
+  "SALES",
+  "TRANSFER",
+  // Money coming back around a return: a supplier's credit, or a customer's
+  // top-up on a dearer exchange.
+  "REFUND",
+  "BUNGA",
+  "SELISIH",
+] as const;
 export const PAYMENT_LOG_ACTIONS = ["ADDED", "AMENDED", "REMOVED"] as const;
 export const SETTLEMENT_FEE_KINDS = [
   "COMMISSION",
@@ -125,6 +169,20 @@ export const SERVICE_FEE_KINDS = [
 export const SERVICE_RAISED_BY = ["QC", "ADJUSTMENT", "RETURN"] as const;
 export const ADJUSTMENT_KINDS = ["IN", "OUT"] as const;
 export const OPNAME_STATUSES = ["DRAFT", "POSTED"] as const;
+/**
+ * Why a counted product's quantity moved (owner decision 2026-09-19). One
+ * per door stock comes in or goes out of; see `stockMove`.
+ */
+export const STOCK_MOVE_TYPES = [
+  "MASUK",
+  "MASUK_BATAL",
+  "TERJUAL",
+  "RETUR_PELANGGAN",
+  "TUKAR_TAMBAH",
+  "OPNAME",
+  "KOREKSI",
+  "RETUR_SUPPLIER",
+] as const;
 
 // ---------------------------------------------------------------------------
 // Money and time
@@ -229,6 +287,23 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     active: z.boolean(),
   });
 
+  /*
+   * Money paid against a debt from before this app — `Supplier.openingBalance`
+   * or `Customer.openingBalance` (owner answer 2026-09-22). A `Payment` naming
+   * the supplier or the customer directly, because there is no invoice or sale
+   * for it to hang off. The opening figure itself is never rewritten: what was
+   * owed on the day and what has been paid since are two facts.
+   */
+  const openingPayment = z.strictObject({
+    id,
+    method: z.string().min(1),
+    amount: money,
+    at: instant,
+    note: text.optional(),
+    /** `Payment.inBalance`. Absent means it counts, as on every payment. */
+    inBalance: z.boolean().optional(),
+  });
+
   const supplier = z.strictObject({
     id,
     name: z.string().min(1),
@@ -240,6 +315,7 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
       .optional(),
     openingBalance: z.optional(money),
     openingBalanceAt: instant.optional(),
+    openingPayments: z.array(openingPayment).optional(),
   });
 
   const reason = z.strictObject({
@@ -358,6 +434,34 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     staff: text,
   });
 
+  /**
+   * One movement of a product the shop COUNTS rather than identifies — an
+   * accessory (owner decision 2026-09-19: "quantity in the database too").
+   *
+   * Append-only, like `event`: what is on the shelf is the SUM of these per
+   * variant and location, and nothing stores that sum, so there is no second
+   * copy of it to disagree. `qty` is signed and never zero. `cost` is ONE
+   * piece's: what an arrival paid, or the moving average a departure left at.
+   */
+  const stockMove = z.strictObject({
+    id,
+    skuId: id,
+    locationId: id,
+    qty: count.refine((n) => n !== 0, "Jumlah tidak boleh nol."),
+    cost: money,
+    type: z.enum(STOCK_MOVE_TYPES),
+    at: instant,
+    refCode: text.optional(),
+    poId: id.optional(),
+    poItemId: id.optional(),
+    orderId: id.optional(),
+    orderLineId: id.optional(),
+    opnameId: id.optional(),
+    reasonId: id.optional(),
+    note: text.optional(),
+    staff: text,
+  });
+
   const po = z.strictObject({
     id,
     code: z.string().min(1),
@@ -383,6 +487,12 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
         serial: text.nullable(),
         qty: count,
         unitCost: money,
+        /*
+         * Knocked off this line and off nothing else (owner ask 2026-09-20).
+         * Optional, so a changeset extracted before the column existed still
+         * commits and reads as what it is: a line with no discount.
+         */
+        discount: z.optional(money),
         notReceived: z.boolean().optional(),
       }),
     ),
@@ -394,10 +504,32 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
         at: instant,
         appliedTo: z.enum(PO_PAYMENT_FOR).optional(),
         fromDepositId: id.optional(),
+        /** The expense this payment settles — `Payment.poFeeId`. */
+        feeId: id.optional(),
+        /*
+         * `Payment.inBalance` (owner answer 2026-09-22): false when the money
+         * did not come out of the shop's cash or bank — the owner paid it
+         * personally. Absent means it counts, which is what every payment
+         * written before the column meant.
+         */
+        inBalance: z.boolean().optional(),
       }),
     ),
-    shippingFee: money,
-    taxFee: money,
+    /*
+     * The invoice's expenses, one row each (owner ask 2026-09-18). Replaced
+     * the two figures `shippingFee` and `taxFee`, which could not say that an
+     * invoice had customs AND a packing charge, nor which of them belonged in
+     * a machine's cost.
+     */
+    fees: z.array(
+      z.strictObject({
+        id,
+        kind: z.enum(PO_FEE_KINDS),
+        label: text,
+        amount: money,
+        inCogs: z.boolean(),
+      }),
+    ),
     discount: money,
     status: z.enum(PO_STATUSES),
     closedAt: instant.optional(),
@@ -434,6 +566,7 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     createdAt: instant,
     openingBalance: z.optional(money),
     openingBalanceAt: instant.optional(),
+    openingPayments: z.array(openingPayment).optional(),
   });
 
   const salePayment = z.strictObject({
@@ -445,6 +578,36 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     at: instant,
     dueAt: instant.optional(),
     note: text.optional(),
+    /** The marketplace's order number, for Shopee/Tokopedia/TikTok sales. */
+    ref: text.optional(),
+    /** `Payment.inBalance`: false when the money never reached the shop's cash or bank. */
+    inBalance: z.boolean().optional(),
+  });
+
+  /**
+   * Money handed BACK to the customer on a sale — what a return refunds
+   * (owner brief 2026-09-19). A `Payment` with direction KELUAR on the order;
+   * kept apart from `payments`, which are what the customer paid.
+   */
+  const saleRefund = z.strictObject({
+    id,
+    method: z.string().min(1),
+    amount: money,
+    at: instant,
+    note: text.optional(),
+  });
+
+  /**
+   * What a return took off a sale's bill — `OrderAdjustment`, whose RETUR type
+   * carries the return's own SG code.
+   */
+  const orderAdjustment = z.strictObject({
+    id,
+    type: z.enum(["RETUR", "REFUND", "VOID"]),
+    code: text.optional(),
+    amount: money,
+    reason: text,
+    at: instant,
   });
 
   const order = z.strictObject({
@@ -455,6 +618,24 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     serials: z.array(z.string().min(1)),
     prices: z.record(z.string(), money),
     listPrices: z.record(z.string(), money).optional(),
+    /**
+     * What was sold of COUNTED products, by quantity (2026-09-19) — an
+     * `OrderItem` with no unit. `price` is per piece; `returnedQty` is
+     * `OrderItem.returnedQty`. What the pieces cost is on the `TERJUAL`
+     * stock moves that name the line.
+     */
+    lines: z
+      .array(
+        z.strictObject({
+          id,
+          skuId: id,
+          qty: count.min(1),
+          price: money,
+          listPrice: z.optional(money),
+          returnedQty: count.min(0).optional(),
+        }),
+      )
+      .optional(),
     discount: money,
     discountId: id.optional(),
     source: z.enum(SALE_SOURCES),
@@ -464,6 +645,8 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     payMethod: z.string().min(1),
     settled: z.boolean(),
     payments: z.array(salePayment).optional(),
+    refunds: z.array(saleRefund).optional(),
+    adjustments: z.array(orderAdjustment).optional(),
     extra: z.optional(money),
     extraNote: text.optional(),
     fees: z
@@ -541,6 +724,8 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     date: day,
     note: text.optional(),
     method: z.string().min(1),
+    /** The sale it is about, where the category names one (2026-09-23). */
+    orderId: id.optional(),
   });
 
   const expense = z.strictObject({
@@ -552,6 +737,8 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     note: text.optional(),
     referralSourceId: id.optional(),
     method: z.string().min(1),
+    /** The sale it is about, where the category names one (2026-09-23). */
+    orderId: id.optional(),
   });
 
   const chat = z.strictObject({
@@ -728,6 +915,12 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     method: z.string().min(1),
     at: instant,
     note: text.optional(),
+    /*
+     * `SupplierDeposit.inBalance`, the deposit's half of the payment switch
+     * (2026-09-22): a payment larger than every invoice leaves its remainder
+     * here, and it moved the balance exactly as the rest of that payment did.
+     */
+    inBalance: z.boolean().optional(),
     staff: text,
     allocations: z.array(
       z.strictObject({
@@ -761,6 +954,7 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     knowledge,
     units: unit,
     pos: po,
+    stockMoves: stockMove,
     deposits: deposit,
     reservations: reservation,
     orders: order,
@@ -808,6 +1002,7 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     events: z.array(event),
     unitNotes: z.array(unitNote),
     pos: z.array(po),
+    stockMoves: z.array(stockMove),
     stockIns: z.array(stockIn),
     customers: z.array(customer),
     orders: z.array(order),

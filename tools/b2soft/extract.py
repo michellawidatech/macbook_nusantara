@@ -33,6 +33,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("source", help="the folder holding the B2Soft .xlsx exports")
     ap.add_argument("out", help="where to write chunks/, manifest.json and the audit")
+    ap.add_argument("--balances-only", action="store_true",
+                    help="master data plus what is owed, as opening balances, and no history at all "
+                         "(owner ask 2026-09-21). One chunk. See b2soft/emit.py balances_only().")
     args = ap.parse_args()
     src, out = Path(args.source).expanduser(), Path(args.out)
 
@@ -49,7 +52,12 @@ def main() -> int:
         L.flag("Nama Mac tidak terbaca", name, "dibuat sebagai satu model tanpa varian")
     docs = documents.build(si, pi, R.sales_summary(src / "Laporan Penjualan.xlsx"), R.purchase_refs(src / "Laporan Pembelian.xlsx"),
                            suppliers, customers, R.warehouses(src / "Master Gudang.xlsx"), R.salesmen(src / "Salesman List.xlsx"), cat, L)
-    parts = emit.chunks(docs, L)
+    piutang = R.open_items(src / "Laporan Piutang Dagang.xlsx", "SI")
+    hutang = R.open_items(src / "Laporan Hutang Dagang.xlsx", "PI")
+    if args.balances_only:
+        parts, balances = emit.balances_only(docs, L, piutang, hutang)
+    else:
+        parts = emit.chunks(docs, L)
 
     folder = out / "chunks"
     folder.mkdir(parents=True, exist_ok=True)
@@ -64,10 +72,29 @@ def main() -> int:
                                        rows={k: len(v["rows"]) for k, v in part["changes"]["collections"].items()}))
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
 
+    report_piutang = sum(v for _, v in piutang.values())
+    report_hutang = sum(v for _, v in hutang.values())
+    if args.balances_only:
+        # No audit workbook: there is nothing to reconcile. What was written is
+        # the two aged reports, so the check is that every rupiah in them found
+        # a party — and a shortfall means a name in the report that matches no
+        # customer or supplier, which is the one failure worth stopping for.
+        print(f"1 chunk → {folder}  (master data and balances only, no history)")
+        print(f"  {'Piutang ditempatkan':40s} {balances['receivable']:>16,}")
+        print(f"  {'Laporan Piutang Dagang B2Soft':40s} {report_piutang:>16,}")
+        print(f"  {'Utang ditempatkan':40s} {balances['payable']:>16,}")
+        print(f"  {'Laporan Hutang Dagang B2Soft':40s} {report_hutang:>16,}")
+        # Named rather than summed. A shortfall is always one of two things —
+        # an internal pseudo-account, or a party the master list is missing —
+        # and only the name says which, so the name is what is printed.
+        if balances["unplaced"]:
+            print("\n  NOT imported, no such customer or supplier in the master list:")
+            for name, owed in sorted(balances["unplaced"].items(), key=lambda kv: -kv[1]):
+                print(f"    {name:38s} {owed:>16,}")
+        return 0
+
     report = audit.write(out / "audit.xlsx", out / "audit.md", docs=docs, L=L, stock=stock, customers=customers,
-                         suppliers=suppliers,
-                         report_piutang=sum(v for _, v in R.open_items(src / "Laporan Piutang Dagang.xlsx", "SI").values()),
-                         report_hutang=sum(v for _, v in R.open_items(src / "Laporan Hutang Dagang.xlsx", "PI").values()))
+                         suppliers=suppliers, report_piutang=report_piutang, report_hutang=report_hutang)
     print(f"{len(parts)} chunks → {folder}")
     for k, v in report["figures"].items():
         print(f"  {k:40s} {v:>16,}")

@@ -7,26 +7,23 @@
  */
 import type { CatalogModel, Sku, Unit } from "../mock/seed.js";
 import { productCodeLines } from "./productCode.js";
-import { storeBarcodeOf } from "./serialScan.js";
 
-/** One sticker: a QR of the store barcode, its text, and the product code. */
+/** One sticker: a QR of the serial, its text, and the product code. */
 export interface LabelDatum {
   /**
-   * The machine's own serial — Apple's barcode, what `Unit.serial` holds.
-   *
-   * Not what the sticker encodes. It is the identity of the row: the React
-   * key, the QR cache key, and what the pre-print warnings are asked about.
+   * The unit's serial — what `Unit.serial` holds. The identity of the row: the
+   * React key, the QR cache key, and what the pre-print warnings are asked
+   * about.
    */
   readonly serial: string;
   /**
-   * What the sticker actually carries (owner correction 2026-09-01).
+   * What the sticker carries: the serial, as stored.
    *
-   * The STORE barcode — the supplier's two-letter origin code in front of the
-   * whole serial — because that is the code on the shop's own label and the
-   * one its phones scan. Falls back to the bare serial when there is no origin
-   * code to derive one from, which is honest: the sticker then carries what
-   * the shop actually knows about the machine, and a scan of it still finds
-   * the unit.
+   * It was a DERIVED "store barcode" from 2026-09-01 — the supplier's
+   * two-letter code in front of Apple's barcode — and the owner retired it on
+   * 2026-09-21: *"it turns out we do not record that at all"*. Kept as its own
+   * field so a sticker's CONTENT stays a separate question from the row's
+   * identity.
    */
   readonly barcode: string;
   /** `PRO 13" 2017` — what the machine is. */
@@ -51,17 +48,8 @@ export function labelFor(
   unit: Unit,
   sku: Sku | undefined,
   model: CatalogModel | undefined,
-  /**
-   * The supplier's origin code for this unit, where the caller can find one.
-   *
-   * Passed in rather than looked up, for the reason `inOpnameScope` gives
-   * about categories: reaching it is two hops the caller already holds
-   * (unit → purchase order → supplier) and none of them is anything this file
-   * is about.
-   */
-  supplierCode?: string,
 ): LabelDatum {
-  const barcode = storeBarcodeOf(unit.serial, supplierCode) ?? unit.serial;
+  const barcode = unit.serial;
   if (!sku) return { serial: unit.serial, barcode, line1: "", line2: "" };
 
   const axes = sku.axisValues;
@@ -100,18 +88,11 @@ export function labelsFor(
   units: readonly Unit[],
   skus: readonly Sku[],
   models: readonly CatalogModel[],
-  /** Where the origin code for a unit comes from. See `labelFor`. */
-  supplierCodeOf: (unit: Unit) => string | undefined = () => undefined,
 ): LabelDatum[] {
   const skuById = new Map(skus.map((s) => [s.id, s]));
   const modelById = new Map(models.map((m) => [m.id, m]));
   return units.map((u) => {
     const sku = skuById.get(u.skuId);
-    return labelFor(
-      u,
-      sku,
-      sku && modelById.get(sku.modelId),
-      supplierCodeOf(u),
-    );
+    return labelFor(u, sku, sku && modelById.get(sku.modelId));
   });
 }

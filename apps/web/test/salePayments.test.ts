@@ -131,6 +131,28 @@ describe("paymentsOf", () => {
     const payments = [pay({ amount: 1 })];
     expect(paymentsOf({ ...legacy, payments })).toBe(payments);
   });
+
+  it("invents nothing for a sale a return emptied (2026-09-21)", () => {
+    // Everything cancelled, or moved to the sale an exchange went out on:
+    // no payments is the truth, not a sale from before the list existed —
+    // reading it as one would put the whole ORIGINAL total in the balance.
+    const returned = {
+      ...legacy,
+      adjustments: [
+        {
+          id: "adj-1",
+          type: "RETUR" as const,
+          code: "SG-2026/09-000001",
+          amount: 10_000_000,
+          reason: "Returned",
+          at: "2026-09-21T03:00:00.000Z",
+        },
+      ],
+    };
+    expect(paymentsOf({ ...returned, payments: [] })).toEqual([]);
+    // …and Postgres, which projects no payment rows as no list at all.
+    expect(paymentsOf(returned)).toEqual([]);
+  });
 });
 
 describe("customerBalance", () => {

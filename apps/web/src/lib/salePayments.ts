@@ -91,6 +91,70 @@ export interface SalePayment {
   readonly dueAt?: string;
   /** What staff wrote — "deposit", "sisa dibayar tunai". */
   readonly note?: string;
+  /**
+   * The marketplace's own order number — required on a Shopee, Tokopedia or
+   * TikTok sale (owner ask 2026-09-19). It is what a marketplace's income
+   * report names each payout by, so it is the key a report is matched on.
+   * Prisma's `Payment.ref`.
+   */
+  readonly ref?: string;
+  /**
+   * Did this money reach the shop's cash or bank? (owner answer 2026-09-22.)
+   * `false` when it went somewhere the balance does not keep — the owner's
+   * own account — so the debt is settled and Income & Expense's balance does
+   * not move. Absent means it counts. `Payment.inBalance`.
+   */
+  readonly inBalance?: boolean;
+}
+
+/**
+ * Money handed BACK to the customer on a sale — what a return refunds (owner
+ * brief 2026-09-19). Prisma's `Payment` with direction KELUAR on the order.
+ *
+ * A list of its own rather than a row in `payments` with a sign: `payments`
+ * is what the customer paid, and every screen that reads it — the payment
+ * editor, Receivables, the period's takings — would otherwise have to learn
+ * that one kind of row means the opposite of the others.
+ */
+export interface SaleRefund {
+  readonly id: string;
+  /** A `PaymentMethod` code — how the money went back. */
+  readonly method: string;
+  readonly amount: number;
+  readonly at: string;
+  readonly note?: string;
+}
+
+/**
+ * What a return took off a sale's bill — prisma's `OrderAdjustment`. A RETUR
+ * carries the return's own SG code, which is what ties a return to the sale
+ * it undid.
+ */
+export interface OrderAdjustmentRec {
+  readonly id: string;
+  readonly type: "RETUR" | "REFUND" | "VOID";
+  readonly code?: string;
+  readonly amount: number;
+  readonly reason: string;
+  readonly at: string;
+}
+
+/** A sale's bill after what returns took off it — what it is worth now. */
+export function billAfterReturns(order: {
+  readonly total: number;
+  readonly adjustments?: readonly OrderAdjustmentRec[];
+}): number {
+  const off = (order.adjustments ?? [])
+    .filter((a) => a.type === "RETUR")
+    .reduce((t, a) => t + a.amount, 0);
+  return Math.max(0, order.total - off);
+}
+
+/** What was handed back on a sale. */
+export function refundedOf(order: {
+  readonly refunds?: readonly SaleRefund[];
+}): number {
+  return (order.refunds ?? []).reduce((t, r) => t + r.amount, 0);
 }
 
 /**
@@ -151,17 +215,22 @@ export interface SaleBalance {
  * Add one sale's money up.
  *
  * `unaccounted` is floored at zero on purpose: a sale over-recorded — a
- * refund entered as a payment, a deposit larger than the bill — is a
- * different problem and not one this function should express as a negative
- * gap. `overpaid` is where that shows.
+ * deposit larger than the bill — is a different problem and not one this
+ * function should express as a negative gap. `overpaid` is where that shows.
+ *
+ * `refunded` is money already handed back (`SaleRefund`): it leaves what the
+ * shop holds, so it comes off `settled`. A bill of nothing — every unit
+ * returned, or a trade-in worth the lot — is settled: there is nothing left
+ * to collect.
  */
 export function saleBalance(
   total: number,
   payments: readonly SalePayment[],
+  refunded = 0,
 ): SaleBalance {
   const sum = (state: PaymentState) =>
     payments.filter((p) => p.state === state).reduce((t, p) => t + p.amount, 0);
-  const settled = sum("SETTLED");
+  const settled = Math.max(0, sum("SETTLED") - refunded);
   const pending = sum("PENDING");
   const due = sum("DUE");
   const recorded = settled + pending + due;
@@ -177,7 +246,7 @@ export function saleBalance(
     due,
     recorded,
     unaccounted,
-    fullySettled: settled >= total && total > 0,
+    fullySettled: settled >= total,
     customerOwes: due + unaccounted,
     ...(dues[0] === undefined ? {} : { nextDueAt: dues[0] }),
   };
@@ -200,8 +269,35 @@ export function overpaid(balance: SaleBalance): number {
  * one the customer still owes for — which is what the flag meant before this,
  * for the marketplace case, and now means for all of them.
  */
-export function isSettled(total: number, payments: readonly SalePayment[]) {
-  return saleBalance(total, payments).fullySettled;
+export function isSettled(
+  total: number,
+  payments: readonly SalePayment[],
+  refunded = 0,
+) {
+  return saleBalance(total, payments, refunded).fullySettled;
+}
+
+/**
+ * A recorded sale's balance, its returns included: the bill after what
+ * returns took off it, against what was paid less what was handed back.
+ * What every screen that shows one sale's money should ask.
+ */
+export function orderBalance(order: {
+  readonly id: string;
+  readonly total: number;
+  readonly payMethod: string;
+  readonly settled: boolean;
+  readonly source: string;
+  readonly ts: string;
+  readonly payments?: readonly SalePayment[];
+  readonly refunds?: readonly SaleRefund[];
+  readonly adjustments?: readonly OrderAdjustmentRec[];
+}): SaleBalance {
+  return saleBalance(
+    billAfterReturns(order),
+    paymentsOf(order),
+    refundedOf(order),
+  );
 }
 
 /**
@@ -241,10 +337,20 @@ export function paymentsOf(order: {
   readonly source: string;
   readonly ts: string;
   readonly payments?: readonly SalePayment[];
+  readonly adjustments?: readonly OrderAdjustmentRec[];
 }): readonly SalePayment[] {
-  return order.payments && order.payments.length > 0
-    ? order.payments
-    : legacyPayments(order);
+  if (order.payments && order.payments.length > 0) return order.payments;
+  /*
+   * A sale a return has touched had its payments written out by that return,
+   * every time — so no payments there is the truth: everything was cancelled,
+   * or moved to the sale an exchange went out on (2026-09-21). Reading it as
+   * a sale from before the list existed invented one payment for the whole
+   * ORIGINAL total, and the balance counted money nobody received. Keyed on
+   * the RETUR rather than on an empty array because Postgres projects "no
+   * payment rows" as no list at all.
+   */
+  if ((order.adjustments ?? []).some((a) => a.type === "RETUR")) return [];
+  return legacyPayments(order);
 }
 
 /** What one customer owes across every sale of theirs. */
@@ -293,6 +399,8 @@ export function customerBalance(
     readonly source: string;
     readonly ts: string;
     readonly payments?: readonly SalePayment[];
+    readonly refunds?: readonly SaleRefund[];
+    readonly adjustments?: readonly OrderAdjustmentRec[];
   }[],
   openingBalance = 0,
 ): CustomerBalance {
@@ -305,7 +413,7 @@ export function customerBalance(
   const dues: string[] = [];
   for (const o of orders) {
     if (o.customerId !== customerId) continue;
-    const b = saleBalance(o.total, paymentsOf(o));
+    const b = orderBalance(o);
     billed += b.total;
     settled += b.settled;
     pending += b.pending;
@@ -333,4 +441,83 @@ export function isOverdue(
 ): boolean {
   if (payment.state !== "DUE" || !payment.dueAt) return false;
   return Date.parse(payment.dueAt) < now;
+}
+
+/*
+ * =============================================================================
+ * The owner's revision, 2026-09-23: a payment row says three things
+ * =============================================================================
+ *
+ * > *"For payment per transaction, it should only have these columns: Payment
+ * > method (Transfer, Cash, Shopee, Tokopedia) | Status (Pending, settled) |
+ * > Amount. The owe should automatically be calculated."*
+ *
+ * DUE stops being something anybody types. What a customer still owes is the
+ * bill less everything recorded against it, which is arithmetic and therefore
+ * cannot disagree with itself the way two typed figures can.
+ *
+ * It does NOT stop being stored. A DUE row is still what Receivable, the
+ * customer balance, `DebtPaymentModal` and the overdue tag all read, and it is
+ * the only row that carries a promise date — so the shortfall is written back
+ * as ONE DUE row, derived in the same mutation as `Order.settled`, exactly the
+ * projection rule `Unit.status` follows. `owedRow` builds it and `withOwed`
+ * puts a list back together; `enteredPayments` is what a screen shows.
+ */
+
+/** The id a derived shortfall row is filed under, per sale. */
+export const OWED_ID_SUFFIX = "-owed";
+
+/** The rows somebody actually entered — everything but the derived shortfall. */
+export function enteredPayments(
+  payments: readonly SalePayment[],
+): SalePayment[] {
+  return payments.filter((p) => p.state !== "DUE");
+}
+
+/** The promise date carried by a sale's derived shortfall, if it has one. */
+export function owedDueAt(
+  payments: readonly SalePayment[],
+): string | undefined {
+  return payments.find((p) => p.state === "DUE" && p.dueAt)?.dueAt;
+}
+
+/**
+ * The one DUE row a sale needs, or none.
+ *
+ * Its id is derived from the sale so a correction rewrites the same row rather
+ * than growing a new one each time somebody opens the dialog and saves.
+ */
+export function owedRow(
+  orderId: string,
+  total: number,
+  entered: readonly SalePayment[],
+  dueAt?: string,
+  at: string = new Date().toISOString(),
+): SalePayment | undefined {
+  const recorded = entered.reduce((t, p) => t + p.amount, 0);
+  const short = total - recorded;
+  if (short <= 0) return undefined;
+  return {
+    id: `${orderId}${OWED_ID_SUFFIX}`,
+    // The shortfall is not a method anybody chose. TUNAI is what an unpaid
+    // balance is finally collected in nine times in ten, and `inBalance` is
+    // never read on a DUE row because nothing has moved.
+    method: "TUNAI",
+    amount: short,
+    state: "DUE",
+    at,
+    ...(dueAt ? { dueAt } : {}),
+  };
+}
+
+/** Entered rows plus the shortfall they leave — what a save writes. */
+export function withOwed(
+  orderId: string,
+  total: number,
+  entered: readonly SalePayment[],
+  dueAt?: string,
+  at?: string,
+): SalePayment[] {
+  const owed = owedRow(orderId, total, entered, dueAt, at);
+  return owed === undefined ? [...entered] : [...entered, owed];
 }

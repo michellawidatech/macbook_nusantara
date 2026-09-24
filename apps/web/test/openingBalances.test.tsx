@@ -13,13 +13,9 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { CustomersPage } from "../src/routes/customers/CustomersPage.js";
-import { ReceivablesPage } from "../src/routes/finance/ReceivablesPage.js";
+import { ReceivablePage } from "../src/routes/finance/PayableReceivablePage.js";
 import { fmtRp } from "../src/lib/format.js";
-import {
-  customerBalance,
-  paymentsOf,
-  saleBalance,
-} from "../src/lib/salePayments.js";
+import { customerBalance } from "../src/lib/salePayments.js";
 import { getDb, mutate } from "../src/mock/store.js";
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -44,17 +40,17 @@ const page = (ui: ReactNode) =>
   );
 
 describe("a debt from before this app", () => {
-  it("is its own row on Receivables and part of what customers owe", async () => {
+  it("is its own row on Receivable", async () => {
+    // Pending Payment is marketplace money alone since 2026-09-23 (owner ask),
+    // so what a customer owes — including a debt no invoice explains — is read
+    // on Receivable and nowhere else.
     const customer = oweFromBefore();
-    const onSales = getDb().orders.reduce(
-      (n, o) => n + saleBalance(o.total, paymentsOf(o)).customerOwes,
-      0,
-    );
-    page(<ReceivablesPage />);
+    page(<ReceivablePage />);
     expect(await screen.findByText("From before this app")).toBeTruthy();
     expect(screen.getAllByText(customer.name).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(fmtRp(OLD_DEBT)).length).toBeGreaterThan(0);
-    expect(screen.getByText(fmtRp(onSales + OLD_DEBT))).toBeTruthy();
+    expect(
+      screen.getAllByText((text) => text.includes(fmtRp(OLD_DEBT))).length,
+    ).toBeGreaterThan(0);
   });
 
   it("is in the customer's balance on Customers", async () => {

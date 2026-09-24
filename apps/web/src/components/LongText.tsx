@@ -21,12 +21,13 @@
  * people learn to ignore.
  */
 import { Tooltip, Typography } from "antd";
+import { fmtNone } from "../lib/format.js";
 
 export interface LongTextProps {
   children: string | null | undefined;
   /** How many lines before it clamps. */
   lines?: number;
-  /** What to draw when there is nothing. */
+  /** What to draw when there is nothing. "None" unless told otherwise. */
   fallback?: string;
 }
 
@@ -41,7 +42,7 @@ const CHARS_PER_LINE = 44;
 export function LongText({
   children,
   lines = 2,
-  fallback = "—",
+  fallback = fmtNone(),
 }: LongTextProps) {
   const text = (children ?? "").trim();
   if (text === "") return <>{fallback}</>;

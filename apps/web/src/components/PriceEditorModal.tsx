@@ -1,24 +1,36 @@
 /**
- * Repricing a shelf: every machine's counter price and marketplace price, in
- * one grid (owner ask 2026-09-08).
+ * Repricing a shelf: every unit's counter price in one grid (owner ask
+ * 2026-09-08), and what that does to the variant's marketplace listing
+ * (2026-09-19).
  *
  * *"For editing the price, make it easy to edit all the unit price in the
- * inventory, both for store price and marketplace price."*
+ * inventory."*
  *
  * With a price per serial, repricing stopped being one field on the Product
- * and became one field per machine — which is right, and which would be
+ * and became one field per unit — which is right, and which would be
  * miserable if it meant opening eleven units one at a time. So this is the
- * whole set at once: a row per serial with what it cost, what it asks and what
- * it is listed at, plus a header that fills a column down.
+ * whole set at once: a row per serial with what it cost and what it asks, plus
+ * a header that fills the column down.
  *
- * ## The marketplace column is derived until it is not
+ * ## No marketplace column (2026-09-19)
  *
- * A blank marketplace box means "use the rule" — the store price plus the
- * shop's markup — and shows the derived figure as a placeholder so the row
- * never looks unpriced. Typing in it overrides the rule for that machine;
- * clearing it hands the machine back to the rule. That is the same contract
- * `lib/unitPrice.ts` describes, made visible: there is no third state and no
- * checkbox.
+ * *"Marketplace price is taken from the highest price for all unit, so it
+ * will not be displayed per unit."* The per-unit marketplace box and its Fill
+ * down went the day the listing became the variant's. What the grid shows
+ * instead is the CONSEQUENCE: the variant's marketplace price as it stands
+ * and as it will be after Save, because repricing the dearest unit is how the
+ * listing moves and somebody pricing a shelf should see it move.
+ *
+ * The preview has to be told about the variant's OTHER units (`listedUnits`):
+ * the grid holds one grade in one warehouse, and the listing is the highest
+ * across all of them.
+ *
+ * ## What a unit cost, not only what it was bought for
+ *
+ * The cost column is COGS — the invoice line, the unit's share of the
+ * invoice's expenses and its repairs (`costBreakdown`) — and "Below cost" is
+ * measured against it. It showed `Unit.buy` until 2026-09-19, which let a
+ * unit be priced under what it had actually cost without a word.
  *
  * ## Nothing is written until Save
  *
@@ -39,54 +51,54 @@ import {
 } from "antd";
 import { useTranslation } from "react-i18next";
 import { GradeTag } from "./GradeTag";
+import { CostInfoButton } from "./CostBreakdown";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "./money";
 import { fmtRp } from "../lib/format.js";
 import {
-  derivedMarketPrice,
   isPriceInRange,
-  marketPriceOf,
-  markupOf,
   priceOf,
   PRICE_MAX,
   PRICE_MIN,
+  variantMarketPrice,
+  type ListedUnit,
 } from "../lib/unitPrice.js";
+import type { UnitCost } from "../lib/service.js";
 import { SPACE, TYPE } from "../theme/tokens";
 
-/** One machine as this grid needs it. */
-export interface PriceEditorUnit {
-  readonly serial: string;
-  readonly skuId: string;
-  readonly grade?: string;
+/** One unit as this grid needs it. A store `Unit` is one. */
+export interface PriceEditorUnit extends ListedUnit {
   readonly buy: number;
-  readonly price?: number;
-  readonly marketPrice?: number;
+  /** Its invoice, for its share of the invoice's expenses; null for none. */
+  readonly poId: string | null;
 }
 
-/** What Save hands back: only the machines whose numbers actually moved. */
+/** What Save hands back: only the units whose price actually moved. */
 export interface PriceEdit {
   readonly serial: string;
   /** The new counter price. */
   readonly price: number;
-  /** The new marketplace price, or `undefined` to hand it back to the rule. */
-  readonly marketPrice: number | undefined;
 }
 
 export interface PriceEditorModalProps {
   readonly open: boolean;
   readonly units: readonly PriceEditorUnit[];
-  /** `Sku.price` per SKU id — what a machine with no price of its own quotes. */
+  /** `Sku.price` per SKU id — what a unit with no price of its own quotes. */
   readonly skuPrice: (skuId: string) => number;
   readonly markupPct: number;
-  /** What the dialog is about: a product name, a grade, a warehouse. */
+  /** What a unit has cost the shop — build it with `costIndex`. */
+  readonly costOf: (unit: PriceEditorUnit) => UnitCost;
+  /**
+   * Every unit a variant's listing is taken over — the store's units. Without
+   * it the preview can only see the grid's own units, which is one grade in
+   * one warehouse of what the listing covers.
+   */
+  readonly listedUnits?: readonly ListedUnit[];
+  /** A variant's name, for the preview when the grid spans more than one. */
+  readonly skuName?: (skuId: string) => string;
+  /** What the dialog is about: a product, a grade, a warehouse. */
   readonly title: string;
   readonly onClose: () => void;
   readonly onSave: (edits: readonly PriceEdit[]) => void;
-}
-
-interface Draft {
-  price: number | null;
-  /** `null` is "use the rule" — the box is empty. */
-  market: number | null;
 }
 
 export function PriceEditorModal({
@@ -94,12 +106,16 @@ export function PriceEditorModal({
   units,
   skuPrice,
   markupPct,
+  costOf,
+  listedUnits,
+  skuName,
   title,
   onClose,
   onSave,
 }: PriceEditorModalProps) {
   const { t } = useTranslation();
-  const [draft, setDraft] = useState<Record<string, Draft>>({});
+  /** Serial → the typed price; `null` is a box somebody emptied. */
+  const [draft, setDraft] = useState<Record<string, number | null>>({});
 
   // Re-seeded whenever the dialog opens on a different set. Keyed on the
   // serials rather than on `open` alone, so reopening on another product does
@@ -109,13 +125,7 @@ export function PriceEditorModal({
     if (!open) return;
     setDraft(
       Object.fromEntries(
-        units.map((u) => [
-          u.serial,
-          {
-            price: priceOf(u, skuPrice(u.skuId)),
-            market: u.marketPrice ?? null,
-          },
-        ]),
+        units.map((u) => [u.serial, priceOf(u, skuPrice(u.skuId))]),
       ),
     );
     // `skuPrice` is a closure over the store and changes on every render; the
@@ -124,58 +134,66 @@ export function PriceEditorModal({
     // the reason is stated rather than suppressed.
   }, [open, key]);
 
-  const rowOf = (u: PriceEditorUnit): Draft =>
-    draft[u.serial] ?? { price: priceOf(u, skuPrice(u.skuId)), market: null };
-
-  const set = (serial: string, patch: Partial<Draft>) =>
-    setDraft((d) => ({
-      ...d,
-      [serial]: { ...(d[serial] ?? { price: null, market: null }), ...patch },
-    }));
+  const current = (u: PriceEditorUnit) => priceOf(u, skuPrice(u.skuId));
+  /** What the box holds: the draft, or — before it is seeded — the stored price. */
+  const typed = (u: PriceEditorUnit): number | null => {
+    const v = draft[u.serial];
+    return v === undefined ? current(u) : v;
+  };
 
   /** Everything that is out of range, so Save can refuse and say how many. */
-  const bad = useMemo(
-    () =>
-      units.filter((u) => {
-        const r = rowOf(u);
-        return !isPriceInRange(r.price) || !isPriceInRange(r.market);
-      }).length,
-    // `rowOf` closes over `draft`, which is already a dependency.
-    [units, draft],
-  );
+  const bad = units.filter((u) => !isPriceInRange(typed(u))).length;
 
   /**
-   * Fill a column down from the first row.
+   * Fill the column down from the first row.
    *
-   * The shop's actual repricing job: eleven machines of one variant that all
+   * The shop's actual repricing job: eleven units of one variant that all
    * move by the same amount because the market did. Taking the top row rather
    * than asking for a number in a second dialog keeps it to one press.
    */
-  const fillDown = (field: keyof Draft) => {
+  const fillDown = () => {
     const first = units[0];
     if (!first) return;
-    const value = rowOf(first)[field];
-    setDraft((d) => {
-      const next = { ...d };
-      for (const u of units) {
-        next[u.serial] = { ...(next[u.serial] ?? rowOf(u)), [field]: value };
-      }
-      return next;
-    });
+    const value = typed(first);
+    setDraft(Object.fromEntries(units.map((u) => [u.serial, value])));
   };
+
+  /**
+   * A unit as it will stand after Save: the typed price, and — if that price
+   * moved — no legacy marketplace override, because saving a price hands the
+   * unit back to the rule (see `applyPriceEdits` in `InventoryTable`).
+   */
+  const afterSave = (u: PriceEditorUnit): ListedUnit => {
+    const price = typed(u) ?? current(u);
+    return price === current(u) ? u : { ...u, price, marketPrice: undefined };
+  };
+
+  /** The variant's listing now and after Save, per variant in the grid. */
+  const listings = useMemo(() => {
+    const pool = listedUnits ?? units;
+    const mine = new Set(units.map((u) => u.serial));
+    const after = [
+      ...pool.filter((u) => !mine.has(u.serial)),
+      ...units.map(afterSave),
+    ];
+    const skuIds = [...new Set(units.map((u) => u.skuId))];
+    return skuIds.map((skuId) => ({
+      skuId,
+      before: variantMarketPrice(pool, skuId, skuPrice(skuId), markupPct),
+      after: variantMarketPrice(after, skuId, skuPrice(skuId), markupPct),
+    }));
+    // `afterSave` and `skuPrice` read the draft and the store, both of which
+    // are listed; see the seeding effect above for the rule.
+  }, [units, listedUnits, draft, markupPct]);
 
   const save = () => {
     const edits: PriceEdit[] = [];
     for (const u of units) {
-      const r = rowOf(u);
-      const price = r.price ?? priceOf(u, skuPrice(u.skuId));
-      const market = r.market ?? undefined;
-      // Only what moved. A dialog opened and closed on eleven machines must
-      // not write eleven identical repricings into the ledger.
-      if (price === priceOf(u, skuPrice(u.skuId)) && market === u.marketPrice) {
-        continue;
-      }
-      edits.push({ serial: u.serial, price, marketPrice: market });
+      const price = typed(u) ?? current(u);
+      // Only what moved. A dialog opened and closed on eleven units must not
+      // write eleven identical repricings into the ledger.
+      if (price === current(u)) continue;
+      edits.push({ serial: u.serial, price });
     }
     onSave(edits);
   };
@@ -184,19 +202,15 @@ export function PriceEditorModal({
     <Modal
       open={open}
       onCancel={onClose}
-      width={860}
+      width={760}
+      // Reachable from inside Inventory's unit popup since 2026-09-23, which
+      // is a modal in another part of the tree — see `UnitEditModal`.
+      zIndex={1100}
       title={t("price.editTitle", "Prices — {{what}}", { what: title })}
       okText={t("price.save", "Save prices")}
       okButtonProps={{ disabled: bad > 0 }}
       onOk={save}
     >
-      <Typography.Paragraph type="secondary">
-        {t(
-          "price.marketHint",
-          "Leave the marketplace price empty to follow the rule: store price plus {{pct}}%.",
-          { pct: markupPct },
-        )}
-      </Typography.Paragraph>
       {bad > 0 && (
         <Typography.Text type="danger">
           {t("price.outOfRange", "{{n}} of these is not a price.", { n: bad })}
@@ -227,15 +241,20 @@ export function PriceEditorModal({
             ),
           },
           {
-            // What it cost, so nobody prices a machine under it by accident.
-            // Read-only here: a cost is a fact about a purchase, not a number
-            // a repricing may touch.
-            title: t("price.cost", "Cost"),
-            key: "buy",
-            width: 130,
+            // What it cost, so nobody prices a unit under it by accident.
+            // Read-only here: a cost is a fact about a purchase and its
+            // repairs, not a number a repricing may touch.
+            title: t("price.cogs", "COGS"),
+            key: "cost",
+            width: 170,
             align: "right",
             render: (_: unknown, u: PriceEditorUnit) => (
-              <Typography.Text type="secondary">{fmtRp(u.buy)}</Typography.Text>
+              <Flex align="center" justify="flex-end" gap={SPACE.xs}>
+                <Typography.Text type="secondary">
+                  {fmtRp(costOf(u).total)}
+                </Typography.Text>
+                <CostInfoButton serial={u.serial} cost={costOf(u)} />
+              </Flex>
             ),
           },
           {
@@ -248,22 +267,18 @@ export function PriceEditorModal({
                     "Copy the top row down the column",
                   )}
                 >
-                  <Button
-                    size="small"
-                    type="link"
-                    onClick={() => fillDown("price")}
-                  >
+                  <Button size="small" type="link" onClick={fillDown}>
                     {t("price.fill", "Fill down")}
                   </Button>
                 </Tooltip>
               </Flex>
             ),
             key: "price",
-            width: 220,
+            width: 240,
             align: "right",
             render: (_: unknown, u: PriceEditorUnit) => {
-              const r = rowOf(u);
-              const badRow = !isPriceInRange(r.price);
+              const value = typed(u);
+              const badRow = !isPriceInRange(value);
               return (
                 <Flex vertical align="flex-end" gap={2}>
                   <InputNumber
@@ -278,20 +293,18 @@ export function PriceEditorModal({
                     aria-label={t(
                       "price.storeFor",
                       "Store price for {{serial}}",
-                      {
-                        serial: u.serial,
-                      },
+                      { serial: u.serial },
                     )}
-                    value={r.price}
+                    value={value}
                     formatter={moneyFormatter}
                     parser={moneyParser}
                     precision={0}
                     prefix={RP_SYMBOL}
-                    onChange={(v) => set(u.serial, { price: v })}
+                    onChange={(v) => setDraft((d) => ({ ...d, [u.serial]: v }))}
                   />
-                  {r.price != null && r.price < u.buy && (
-                    // The one warning worth the vertical space: a machine
-                    // priced under what it cost is a loss somebody should have
+                  {value != null && value < costOf(u).total && (
+                    // The one warning worth the vertical space: a unit priced
+                    // under what it cost is a loss somebody should have
                     // meant. It does not block — the shop does clear stock.
                     <Typography.Text
                       type="warning"
@@ -304,82 +317,33 @@ export function PriceEditorModal({
               );
             },
           },
-          {
-            title: (
-              <Flex align="center" gap={SPACE.xs} justify="flex-end">
-                {t("price.market", "Marketplace")}
-                <Tooltip
-                  title={t(
-                    "price.fillDown",
-                    "Copy the top row down the column",
-                  )}
-                >
-                  <Button
-                    size="small"
-                    type="link"
-                    onClick={() => fillDown("market")}
-                  >
-                    {t("price.fill", "Fill down")}
-                  </Button>
-                </Tooltip>
-              </Flex>
-            ),
-            key: "market",
-            width: 240,
-            align: "right",
-            render: (_: unknown, u: PriceEditorUnit) => {
-              const r = rowOf(u);
-              const derived = derivedMarketPrice(
-                r.price ?? priceOf(u, skuPrice(u.skuId)),
-                markupPct,
-              );
-              const badRow = !isPriceInRange(r.market);
-              const effective = r.market ?? derived;
-              const up = markupOf(r.price ?? 0, effective);
-              return (
-                <Flex vertical align="flex-end" gap={2}>
-                  <InputNumber
-                    aria-valuemin={PRICE_MIN}
-                    aria-valuemax={PRICE_MAX}
-                    style={{ width: "100%" }}
-                    status={badRow ? "error" : undefined}
-                    aria-invalid={badRow || undefined}
-                    aria-label={t(
-                      "price.marketFor",
-                      "Marketplace price for {{serial}}",
-                      { serial: u.serial },
-                    )}
-                    // The derived figure as the placeholder, so an empty box
-                    // still shows what the machine is listed at.
-                    placeholder={fmtRp(derived)}
-                    value={r.market}
-                    formatter={moneyFormatter}
-                    parser={moneyParser}
-                    precision={0}
-                    prefix={RP_SYMBOL}
-                    onChange={(v) => set(u.serial, { market: v })}
-                  />
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: TYPE.sm }}
-                  >
-                    {r.market == null
-                      ? t("price.followsRule", "follows the rule")
-                      : up === null
-                        ? t("price.overridden", "set by hand")
-                        : t("price.overriddenAt", "set by hand · {{pct}}%", {
-                            pct: up.toFixed(0),
-                          })}
-                  </Typography.Text>
-                </Flex>
-              );
-            },
-          },
         ]}
       />
+      <Flex vertical gap={SPACE.xs} style={{ marginTop: SPACE.md }}>
+        {listings.map(({ skuId, before, after }) => {
+          const line =
+            after === undefined
+              ? t(
+                  "price.notListed",
+                  "Marketplace: not listed — no unit of this variant is on sale.",
+                )
+              : before === after
+                ? t("price.listing", "Marketplace price: {{price}}", {
+                    price: fmtRp(after),
+                  })
+                : t(
+                    "price.listingChanges",
+                    "Marketplace price after saving: {{before}} → {{after}}",
+                    { before: fmtRp(before), after: fmtRp(after) },
+                  );
+          return (
+            <Typography.Text key={skuId} strong={before !== after}>
+              {listings.length > 1 && skuName ? `${skuName(skuId)} — ` : ""}
+              {line}
+            </Typography.Text>
+          );
+        })}
+      </Flex>
     </Modal>
   );
 }
-
-/** What a machine is listed at right now, for a caller that only needs the number. */
-export { marketPriceOf };

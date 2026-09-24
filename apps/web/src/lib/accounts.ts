@@ -67,6 +67,19 @@ export function accountOfMethod(code: string): AccountKind | undefined {
       // the balance by only settled movements reaching this, and what a
       // marketplace finally sends arrives in the bank like any other transfer.
       return "BANK";
+    case "TRANSFER_LUAR":
+      /*
+       * Money from an account this app does not keep (owner ask 2026-09-23):
+       * *"Transfer from other bank for expense/deposit to supplier, which does
+       * not reduce the bank balance in the POS."*
+       *
+       * No pot, deliberately and by name rather than by falling through to
+       * the default: an unmapped method is a method somebody added in
+       * Settings and a figure the balance reports separately, and this is not
+       * that — it is a method whose whole job is to settle a debt and move
+       * neither figure.
+       */
+      return undefined;
     default:
       return undefined;
   }
@@ -84,6 +97,9 @@ export const ADJUSTMENT_METHOD_CODES = [
   "TUNAI",
   "TRANSFER",
   "KARTU_KREDIT",
+  // Settles without moving a pot (owner ask 2026-09-23) — an expense paid
+  // from an account this app does not keep.
+  "TRANSFER_LUAR",
 ] as const;
 
 /** One movement of money, reduced to the two things a balance needs. */

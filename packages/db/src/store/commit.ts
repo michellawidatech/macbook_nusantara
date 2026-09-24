@@ -64,6 +64,7 @@ import {
 /** Collections whose rows are only ever inserted. */
 const APPEND_ONLY: ReadonlySet<CollectionName> = new Set<CollectionName>([
   "events",
+  "stockMoves",
   "stockIns",
   "adjustments",
   "paymentLog",
@@ -367,10 +368,14 @@ export async function commitStore(
 
         // 3. Locks. The ledger's units are locked with the units.
         const eventRows = plans.find((p) => p.name === "events")?.rows ?? [];
+        // Both sides: a removed event names its unit through `base` alone, and
+        // that unit still has to be locked and still has its projection
+        // checked against whatever is now its last row (2026-09-23).
         const eventSerials = new Set(
-          eventRows.flatMap((r) =>
-            r.next === undefined ? [] : [(r.next as { serial: string }).serial],
-          ),
+          eventRows.flatMap((r) => {
+            const row = (r.next ?? r.base) as { serial: string } | undefined;
+            return row === undefined ? [] : [row.serial];
+          }),
         );
         const unitPlan = plans.find((p) => p.name === "units");
         for (const p of plans) {

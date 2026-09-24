@@ -1,6 +1,30 @@
 /**
- * What one machine is worth, per serial — and what it is worth on a
+ * What one unit is worth, per serial — and what its variant is listed at on a
  * marketplace.
+ *
+ * ## The owner's revision of 2026-09-19 — one marketplace price per VARIANT
+ *
+ * *"Marketplace price is taken from the highest price for all unit, so it will
+ * not be displayed per unit."*
+ *
+ * A Shopee or Tokopedia listing is a listing of a variant: a customer buys "a
+ * MacBook Air M2 16/512" and the shop picks the unit. One listing therefore
+ * carries one price, and the owner's rule is that it is the DEAREST unit's —
+ * listed at the top of the spread, a buyer can be handed any unit on the shelf
+ * without the shop selling one below what the counter would ask for it.
+ * `variantMarketPrice` is that rule. Each unit's own figure (below) still
+ * exists, but only as a term of the maximum: nothing shows it or edits it any
+ * more, and the Inventory price grid lost its marketplace column the same day.
+ *
+ * Only units that can be sold today count — on the shelf or held for a
+ * customer (`LISTABLE_STATUSES`). A unit still in QC has not been priced, and
+ * one at a repairer is not for sale; letting either set the listing would
+ * list a price no unit on the shelf asks.
+ *
+ * A legacy override (`Unit.marketPrice`, typed per unit between 2026-09-08 and
+ * 2026-09-19) is not thrown away: it still feeds the maximum, until that unit's
+ * store price is next saved — see `applyPriceEdits` in
+ * `routes/stock/InventoryTable.tsx`, which hands the unit back to the rule.
  *
  * ## The owner's revision of 2026-09-08
  *
@@ -22,26 +46,23 @@
  * ## Two prices, one rule
  *
  * The marketplace price is the store price plus a percentage, because that is
- * what the marketplace takes back out of it. Derived by default and
- * overridable always: the rule is right for most machines and wrong for the
- * ones somebody is trying to move, and a derived number nobody can override is
- * a number staff work around in the marketplace's own dashboard, where this
- * app cannot see it.
+ * what the marketplace takes back out of it. Until 2026-09-19 it was derived
+ * per unit and overridable per unit; since then the rule is applied to every
+ * sellable unit of a variant and the listing takes the highest (above), so
+ * there is no per-unit figure left for anybody to override.
  *
- * The override is stored as a NUMBER, not as a flag plus a number. A unit
- * either carries its own marketplace price or it does not, and asking "is this
- * overridden?" is asking whether the column is null — one fact, one place. A
- * repricing of the store price therefore moves the derived price and leaves an
- * overridden one alone, which is exactly what an override is for.
+ * The old override was stored as a NUMBER, not as a flag plus a number — a
+ * unit either carries its own marketplace price or it does not — and that is
+ * why an existing one can go on feeding the maximum without a migration.
  *
  * ## Ranges
  *
  * With a price per serial, "what does a MacBook Air M2 16/512 cost?" stops
- * having one answer, so Inventory expands one level: a row per variant AND
- * grade, showing a range when the machines behind it disagree. Grade is the
- * right second axis because it is the thing that MAKES them disagree — an A
- * and a C of one variant are two products as far as a customer is concerned,
- * and averaging them into one "from Rp…" tells nobody anything.
+ * having one answer, so Inventory lists a line per variant, grade and
+ * warehouse (flat since 2026-09-19), showing a range when the units behind a
+ * line disagree. Grade is the axis that MAKES them disagree — an A and a C of
+ * one variant are two products as far as a customer is concerned, and
+ * averaging them into one "from Rp…" tells nobody anything.
  *
  * Pure: no React, no store. `test/unitPrice.test.ts` is the spec.
  */
@@ -60,7 +81,11 @@ export interface PricedUnit {
    * zero: zero is a giveaway somebody chose.
    */
   readonly price?: number;
-  /** What it is listed at on Shopee/Tokopedia, when somebody overrode the rule. */
+  /**
+   * A marketplace price somebody typed for this unit before 2026-09-19, when
+   * the listing became the variant's. Nothing sets one any more; it feeds
+   * `variantMarketPrice` until the unit's store price is next saved.
+   */
   readonly marketPrice?: number;
 }
 
@@ -96,8 +121,14 @@ export function derivedMarketPrice(
   markupPct: number = DEFAULT_MARKETPLACE_MARKUP_PCT,
 ): number {
   if (!Number.isFinite(storePrice) || storePrice <= 0) return 0;
-  const raw = storePrice * (1 + Math.max(0, markupPct) / 100);
-  return Math.ceil(raw / PRICE_ROUNDING) * PRICE_ROUNDING;
+  // Multiplied by the whole percentage before dividing, and with a
+  // micro-rupiah of slack under the ceiling (2026-09-19). `storePrice * 1.1`
+  // is 33000000.000000004 for Rp30.000.000, and a ceiling taken on that
+  // listed the unit at Rp33.001.000 — a thousand rupiah invented by the
+  // floating point, on every listing whose figure lands exactly on a
+  // thousand. No real price has a fraction smaller than the slack.
+  const raw = (storePrice * (100 + Math.max(0, markupPct))) / 100;
+  return Math.ceil(raw / PRICE_ROUNDING - 1e-9) * PRICE_ROUNDING;
 }
 
 /**
@@ -113,7 +144,13 @@ export function priceOf(unit: PricedUnit, skuPrice: number): number {
   return unit.price ?? skuPrice;
 }
 
-/** What it is listed at on a marketplace: the override, or the rule. */
+/**
+ * One unit's term in its variant's marketplace price: a legacy override, or
+ * the rule applied to its store price.
+ *
+ * Not a price anything is listed at since 2026-09-19 — a listing takes the
+ * highest of these across the variant, see `variantMarketPrice`.
+ */
 export function marketPriceOf(
   unit: PricedUnit,
   skuPrice: number,
@@ -124,9 +161,74 @@ export function marketPriceOf(
   );
 }
 
-/** Is this machine's marketplace price a number somebody typed? */
+/** Does this unit still carry a marketplace price somebody typed before 2026-09-19? */
 export function isMarketPriceOverridden(unit: PricedUnit): boolean {
   return unit.marketPrice != null;
+}
+
+/**
+ * The statuses a marketplace listing can be sold from: on the shelf, or held
+ * for a customer.
+ *
+ * The same pair `lib/inventory.ts` calls sellable, restated rather than
+ * imported because this file imports nothing. A reserved unit is still in:
+ * a hold is a promise to one person, and the variant is listed for everybody
+ * else in the meantime.
+ */
+export const LISTABLE_STATUSES: readonly string[] = ["TERSEDIA", "DIRESERVASI"];
+
+/** A unit, as far as its variant's marketplace listing is concerned. */
+export interface ListedUnit extends PricedUnit {
+  readonly status: string;
+}
+
+/**
+ * A variant's marketplace price: the highest `marketPriceOf` among its units
+ * that can be sold today (owner ask 2026-09-19).
+ *
+ * *"Marketplace price is taken from the highest price for all unit."* The
+ * dearest unit, not the average and not the catalogue figure: the listing is
+ * one price for whichever unit the shop ends up sending, so it has to cover
+ * the one the counter would ask most for.
+ *
+ * `undefined` when nothing of the variant is sellable — a variant with no
+ * unit on the shelf has nothing to list, and a number here would be a price
+ * no unit asks. `skuPrice` is `Sku.price`, what a unit nobody has priced yet
+ * quotes (`priceOf`).
+ */
+export function variantMarketPrice(
+  units: readonly ListedUnit[],
+  skuId: string,
+  skuPrice: number,
+  markupPct: number = DEFAULT_MARKETPLACE_MARKUP_PCT,
+): number | undefined {
+  let best: number | undefined;
+  for (const u of units) {
+    if (u.skuId !== skuId || !LISTABLE_STATUSES.includes(u.status)) continue;
+    const p = marketPriceOf(u, skuPrice, markupPct);
+    if (best === undefined || p > best) best = p;
+  }
+  return best;
+}
+
+/**
+ * Every variant's marketplace price in one pass over the units — for a screen
+ * that shows many. The same answers `variantMarketPrice` gives, keyed by SKU
+ * id; a variant with nothing sellable is absent rather than zero.
+ */
+export function variantMarketPrices(
+  units: readonly ListedUnit[],
+  skuPrice: (skuId: string) => number,
+  markupPct: number = DEFAULT_MARKETPLACE_MARKUP_PCT,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const u of units) {
+    if (!LISTABLE_STATUSES.includes(u.status)) continue;
+    const p = marketPriceOf(u, skuPrice(u.skuId), markupPct);
+    const held = out.get(u.skuId);
+    if (held === undefined || p > held) out.set(u.skuId, p);
+  }
+  return out;
 }
 
 /** The spread of one set of prices — what a row of Inventory shows. */

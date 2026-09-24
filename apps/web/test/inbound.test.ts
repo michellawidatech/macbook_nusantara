@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Po, Unit } from "../src/mock/seed.js";
+import type { Po, PoFee, Unit } from "../src/mock/seed.js";
 import {
   canReopenQc,
   paymentFor,
@@ -21,12 +21,19 @@ const po = (over: Partial<Po> = {}): Po => ({
   locationId: "wh-1",
   items: [],
   payments: [],
-  shippingFee: 0,
-  taxFee: 0,
+  fees: [],
   discount: 0,
   status: "ORDERED",
   ...over,
 });
+
+/** One expense of the invoice. In COGS unless said otherwise. */
+const fee = (
+  id: string,
+  kind: PoFee["kind"],
+  amount: number,
+  over: Partial<PoFee> = {},
+): PoFee => ({ id, kind, label: "", amount, inCogs: true, ...over });
 
 const unit = (over: Partial<Unit> = {}): Unit => ({
   serial: "S1",
@@ -149,18 +156,30 @@ describe("poStage", () => {
 });
 
 describe("poTotals", () => {
-  it("adds fees and takes off the negotiated discount", () => {
+  it("adds the expenses and takes off the negotiated discount", () => {
     const t = poTotals(
       po({
         items: [line("a", 4_000_000), line("b", 3_000_000)],
-        shippingFee: 150_000,
-        taxFee: 50_000,
+        fees: [fee("f1", "SHIPPING", 150_000), fee("f2", "TAX", 50_000)],
         discount: 100_000,
       }),
     );
     expect(t.subtotal).toBe(7_000_000);
-    expect(t.fees).toBe(100_000);
+    expect(t.expenses).toBe(200_000);
     expect(t.total).toBe(7_100_000);
+  });
+
+  it("owes an expense whether or not it joins the machines' cost", () => {
+    // Owner ask 2026-09-18: "divide it to COGS per unit or not" decides what
+    // a machine cost, never what the supplier is owed.
+    const t = poTotals(
+      po({
+        items: [line("a", 1_000_000)],
+        fees: [fee("f1", "OTHER", 40_000, { inCogs: false })],
+      }),
+    );
+    expect(t.total).toBe(1_040_000);
+    expect(t.outstanding).toBe(1_040_000);
   });
 
   it("does not charge for a line the supplier never sent", () => {
@@ -266,17 +285,18 @@ describe("poTotals by bucket", () => {
     const t = poTotals(
       po({
         items: [line("a", 10_000_000)],
-        shippingFee: 250_000,
-        taxFee: 100_000,
+        fees: [fee("f1", "SHIPPING", 250_000), fee("f2", "TAX", 100_000)],
       }),
     );
-    expect(t.due).toEqual({
-      ORDER: 10_000_000,
-      SHIPPING: 250_000,
-      TAX: 100_000,
-    });
-    // The buckets are the invoice, seen a second way.
-    expect(t.due.ORDER + t.due.SHIPPING + t.due.TAX).toBe(t.total);
+    expect(t.goods.due).toBe(10_000_000);
+    expect(t.feeStandings.map((s) => [s.fee.id, s.due])).toEqual([
+      ["f1", 250_000],
+      ["f2", 100_000],
+    ]);
+    // The standings are the invoice, seen a second way.
+    expect(t.goods.due + t.feeStandings.reduce((n, s) => n + s.due, 0)).toBe(
+      t.total,
+    );
   });
 
   it("takes the discount off the goods, not off the forwarder", () => {
@@ -285,43 +305,75 @@ describe("poTotals by bucket", () => {
     const t = poTotals(
       po({
         items: [line("a", 10_000_000)],
-        shippingFee: 250_000,
+        fees: [fee("f1", "SHIPPING", 250_000)],
         discount: 1_000_000,
       }),
     );
-    expect(t.due.ORDER).toBe(9_000_000);
-    expect(t.due.SHIPPING).toBe(250_000);
+    expect(t.goods.due).toBe(9_000_000);
+    expect(t.feeStandings[0]!.due).toBe(250_000);
   });
 
-  it("settles the bucket the money was aimed at, and only that one", () => {
+  it("settles the expense a payment names, and only that one", () => {
     const t = poTotals(
       po({
         items: [line("a", 10_000_000)],
-        shippingFee: 250_000,
-        payments: [paid("p1", 250_000, "SHIPPING")],
+        fees: [fee("f1", "SHIPPING", 250_000), fee("f2", "OTHER", 50_000)],
+        payments: [{ ...paid("p1", 250_000, "SHIPPING"), feeId: "f1" }],
       }),
     );
-    // The whole question the column exists to answer: the ongkir is paid and
-    // the machines are not.
-    expect(t.owedFor.SHIPPING).toBe(0);
-    expect(t.owedFor.ORDER).toBe(10_000_000);
-    expect(t.paidFor).toEqual({ ORDER: 0, SHIPPING: 250_000, TAX: 0 });
+    // The whole question the card exists to answer: the ongkir is paid, the
+    // packing crate and the machines are not.
+    expect(t.feeStandings.map((s) => s.owed)).toEqual([0, 50_000]);
+    expect(t.goods).toEqual({ due: 10_000_000, paid: 0, owed: 10_000_000 });
     // And the order overall still owes what it owes.
-    expect(t.outstanding).toBe(10_000_000);
+    expect(t.outstanding).toBe(10_050_000);
   });
 
-  it("never turns an overpaid bucket into a credit", () => {
+  it("reads a payment filed under a bucket against that bucket's expenses", () => {
+    // Paid before expenses had names: "Shipping" was the bucket, and the
+    // bucket's expenses take it in order, each filled before the next.
+    const t = poTotals(
+      po({
+        items: [line("a", 1_000_000)],
+        fees: [
+          fee("f1", "SHIPPING", 100_000),
+          fee("f2", "SHIPPING", 100_000),
+          fee("f3", "CUSTOMS", 70_000),
+        ],
+        payments: [paid("p1", 150_000, "SHIPPING"), paid("p2", 70_000, "TAX")],
+      }),
+    );
+    expect(t.feeStandings.map((s) => s.paid)).toEqual([
+      100_000, 50_000, 70_000,
+    ]);
+    expect(t.goods.paid).toBe(0);
+  });
+
+  it("counts what no expense can take towards the goods", () => {
+    // A shipping payment on an invoice with no shipping expense is still
+    // money the supplier was paid on this invoice.
+    const t = poTotals(
+      po({
+        items: [line("a", 1_000_000)],
+        payments: [paid("p1", 200_000, "SHIPPING")],
+      }),
+    );
+    expect(t.goods.paid).toBe(200_000);
+    expect(t.goods.owed).toBe(800_000);
+  });
+
+  it("never turns an overpaid expense into a credit", () => {
     // Same rule as `outstanding`: paying the forwarder too much is a credit
     // with the forwarder, not a discount on the machines.
     const t = poTotals(
       po({
         items: [line("a", 1_000_000)],
-        shippingFee: 100_000,
-        payments: [paid("p1", 500_000, "SHIPPING")],
+        fees: [fee("f1", "SHIPPING", 100_000)],
+        payments: [{ ...paid("p1", 500_000, "SHIPPING"), feeId: "f1" }],
       }),
     );
-    expect(t.owedFor.SHIPPING).toBe(0);
-    expect(t.owedFor.ORDER).toBe(1_000_000);
+    expect(t.feeStandings[0]!.owed).toBe(0);
+    expect(t.goods.owed).toBe(1_000_000);
   });
 });
 
@@ -450,29 +502,30 @@ describe("poPaymentStatus", () => {
     expect(poPaymentStatus(billed(0))).toBe("OPEN");
   });
 
-  it("is Closed once part of it has", () => {
-    // The owner's own words: "Closed is paid but not fully".
-    expect(poPaymentStatus(billed(1))).toBe("CLOSED");
-    expect(poPaymentStatus(billed(999_999))).toBe("CLOSED");
+  it("is Partially paid once part of it has", () => {
+    // Owner revision 2026-09-18: "open, partially paid, and fully paid". It
+    // was called Closed, which said the opposite of what it meant.
+    expect(poPaymentStatus(billed(1))).toBe("PARTIALLY_PAID");
+    expect(poPaymentStatus(billed(999_999))).toBe("PARTIALLY_PAID");
   });
 
-  it("is Paid in full at the total, and above it", () => {
-    expect(poPaymentStatus(billed(1_000_000))).toBe("PAID_IN_FULL");
+  it("is Fully paid at the total, and above it", () => {
+    expect(poPaymentStatus(billed(1_000_000))).toBe("FULLY_PAID");
     // An overpayment is a supplier credit, not a half-paid invoice.
-    expect(poPaymentStatus(billed(1_500_000))).toBe("PAID_IN_FULL");
+    expect(poPaymentStatus(billed(1_500_000))).toBe("FULLY_PAID");
   });
 
-  it("counts the fees, not just the goods", () => {
+  it("counts the expenses, not just the goods", () => {
     // Shipping and tax are owed to somebody. An invoice whose machines are
     // settled and whose ongkir is not has not been paid in full.
     const withOngkir = po({
       items: [line("i1", 1_000_000)],
-      shippingFee: 300_000,
+      fees: [fee("f1", "SHIPPING", 300_000)],
       payments: [
         { id: "p1", method: "TUNAI", amount: 1_000_000, at: "2026-09-01" },
       ],
     });
-    expect(poPaymentStatus(withOngkir)).toBe("CLOSED");
+    expect(poPaymentStatus(withOngkir)).toBe("PARTIALLY_PAID");
   });
 
   it("calls an unpriced invoice with money against it part-paid", () => {
@@ -485,7 +538,7 @@ describe("poPaymentStatus", () => {
         { id: "p1", method: "TRANSFER", amount: 5_000_000, at: "2026-09-01" },
       ],
     });
-    expect(poPaymentStatus(paidFirst)).toBe("CLOSED");
+    expect(poPaymentStatus(paidFirst)).toBe("PARTIALLY_PAID");
   });
 
   it("does not read a discounted-to-nothing order as settled", () => {

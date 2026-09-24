@@ -140,14 +140,81 @@ describe("the wire", () => {
       locationId: "wh-1",
       items: [{ id: "poi-1", skuId: "", serial: null, qty: 1, unitCost: 0 }],
       payments: [],
-      shippingFee: 0,
-      taxFee: 0,
+      fees: [],
       discount: 0,
       status: "ORDERED",
     };
     expect(encodeRow("pos", po)).toMatchObject({
       items: [{ skuId: "", unitCost: "0" }],
     });
+  });
+
+  it("carries an invoice's expenses and the payment that settled one", () => {
+    // Owner ask 2026-09-18: an expense can be left out of COGS, and marking it
+    // paid records a payment that names it.
+    const po = {
+      id: "po-1",
+      code: "PI-2026/09-000001",
+      supplierId: "sup-1",
+      invoice: "INV-1",
+      date: "2026-09-18",
+      locationId: "wh-1",
+      items: [],
+      payments: [
+        {
+          id: "pp-1",
+          method: "TUNAI",
+          amount: 150_000,
+          at: "2026-09-18T03:00:00.000Z",
+          appliedTo: "SHIPPING",
+          feeId: "fee-1",
+        },
+      ],
+      fees: [
+        {
+          id: "fee-1",
+          kind: "SHIPPING",
+          label: "JNE",
+          amount: 150_000,
+          inCogs: true,
+        },
+        {
+          id: "fee-2",
+          kind: "OTHER",
+          label: "Packing",
+          amount: 25_000,
+          inCogs: false,
+        },
+      ],
+      discount: 0,
+      status: "RECEIVED",
+    };
+    const wire = encodeRow("pos", po);
+    expect(wire).toMatchObject({
+      fees: [{ amount: "150000" }, { amount: "25000", inCogs: false }],
+      payments: [{ feeId: "fee-1" }],
+    });
+    expect(decodeRow("pos", wire)).toEqual(po);
+  });
+
+  it("refuses an expense of a kind the schema has no word for", () => {
+    expect(() =>
+      encodeRow("pos", {
+        id: "po-1",
+        code: "PI-2026/09-000001",
+        supplierId: "sup-1",
+        invoice: "",
+        date: "2026-09-18",
+        locationId: "wh-1",
+        items: [],
+        payments: [],
+        fees: [
+          { id: "f", kind: "INSURANCE", label: "", amount: 1, inCogs: true },
+        ],
+        discount: 0,
+        status: "ORDERED",
+      }),
+    ).toThrow();
   });
 
   it("encodes every row of a changeset, base and next", () => {

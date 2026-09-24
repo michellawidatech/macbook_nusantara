@@ -32,7 +32,9 @@ import {
 import type { Logger } from "@nusantara/logging";
 import {
   canSend,
+  sendImage,
   sendText,
+  uploadMedia,
   WINDOW_MS,
   type WhatsAppCredentials,
 } from "@nusantara/whatsapp";
@@ -51,6 +53,25 @@ const waReplyPayload = z.object({
     .trim()
     .regex(/^\d{6,20}$/),
   body: z.string().trim().min(1),
+  inReplyTo: z.string().trim().optional(),
+});
+
+/**
+ * A WA_IMAGE intent: one photograph of one unit (owner ask 2026-09-21).
+ *
+ * It names a `UnitNotePhoto` and carries no bytes. Reading them at SEND time
+ * rather than at draft time is what keeps the transaction that decided to send
+ * a picture from carrying a megabyte of it, and it is what makes the queue
+ * readable: an outbox row is an intent, and an intent with an image inlined
+ * into a JSON column is a blob store nobody meant to build.
+ */
+const waImagePayload = z.object({
+  to: z
+    .string()
+    .trim()
+    .regex(/^\d{6,20}$/),
+  photoId: z.string().trim().min(1),
+  caption: z.string().trim().optional(),
   inReplyTo: z.string().trim().optional(),
 });
 
@@ -89,6 +110,12 @@ export async function sendPass(deps: SendDeps): Promise<SendPassResult> {
     if (!row) break;
 
     try {
+      if (row.kind === "WA_IMAGE") {
+        const done = await sendPhoto(deps, row, now);
+        if (done) sent += 1;
+        else failed += 1;
+        continue;
+      }
       if (row.kind !== "WA_REPLY") {
         // IG_REPLY, IG_DM and ALERT have no sender yet. This retries with the
         // normal backoff and ends in FAILED, which is the right outcome: the
@@ -180,4 +207,120 @@ export async function sendPass(deps: SendDeps): Promise<SendPassResult> {
   }
 
   return { sent, failed, dormant: false };
+}
+
+/**
+ * Send one photograph of a unit: read the bytes, upload them, send the id.
+ *
+ * Returns true when it went, false when the row was failed — the caller only
+ * needs to count. Every failure path is `markOutboxFailed`, so a photo is in
+ * the same backoff as a reply and ends the same way; a throw reaches the
+ * caller's catch, which is what drives the retry.
+ *
+ * ## Why it is two calls and not one
+ *
+ * Graph's image message takes `{ link }` or `{ id }`. A link would need a
+ * public origin, and this deployment is a Mac mini behind Tailscale that has
+ * none — so the bytes go up first and the message names the upload. The cost
+ * is one extra round trip per picture, on a path that runs at most three times
+ * per conversation.
+ */
+async function sendPhoto(
+  deps: SendDeps,
+  row: {
+    id: string;
+    kind: string;
+    payload: unknown;
+    createdAt: Date;
+    attempts: number;
+  },
+  now: () => Date,
+): Promise<boolean> {
+  const { db, logger, credentials } = deps;
+  const parsed = waImagePayload.safeParse(row.payload);
+  if (!parsed.success) {
+    await markOutboxFailed(db, row, "malformed WA_IMAGE payload", {
+      maxAttempts: 0,
+      now: now(),
+    });
+    logger.error(
+      { evt: "worker.send.malformed", ctx: { outboxId: row.id } },
+      "an outbox row carried a payload this version cannot send",
+    );
+    return false;
+  }
+
+  // The same 24-hour rule a reply is held to, and for the same reason: Graph
+  // answers 200 and delivers nothing.
+  if (now().getTime() - row.createdAt.getTime() > WINDOW_MS) {
+    await markOutboxFailed(
+      db,
+      row,
+      "the 24-hour window closed before this photo could be sent",
+      { maxAttempts: 0, now: now() },
+    );
+    logger.warn(
+      { evt: "worker.send.expired", ctx: { outboxId: row.id } },
+      "a queued photo outlived the 24-hour window and was not sent",
+    );
+    return false;
+  }
+
+  const photo = await db.unitNotePhoto.findUnique({
+    where: { id: parsed.data.photoId },
+    select: { data: true, contentType: true, url: true },
+  });
+  /*
+   * A photo row with no bytes is one that was LINKED rather than uploaded
+   * (`UnitNotePhoto.url` with a null `data`). There is nothing to push to
+   * Graph and nothing this side can do about it, so it is exhausted at once
+   * rather than retried six times against the same absent column.
+   */
+  if (!photo || !photo.data || photo.data.length === 0) {
+    await markOutboxFailed(db, row, "the photo has no stored image", {
+      maxAttempts: 0,
+      now: now(),
+    });
+    logger.warn(
+      {
+        evt: "worker.send.photo_missing",
+        ctx: { outboxId: row.id, photoId: parsed.data.photoId },
+      },
+      "a queued photo had no bytes to send",
+    );
+    return false;
+  }
+
+  const upload = await uploadMedia({
+    credentials,
+    data: new Uint8Array(photo.data),
+    contentType: photo.contentType ?? "image/jpeg",
+    ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+  });
+  if (!upload.mediaId) {
+    // Simulation mode: no credential. `sendPass` does not claim at all without
+    // one, so this is unreachable in practice and is here so the branch has an
+    // answer rather than a non-null assertion.
+    await markOutboxFailed(db, row, "no credential to upload the photo", {
+      now: now(),
+    });
+    return false;
+  }
+
+  const result = await sendImage({
+    credentials,
+    to: parsed.data.to,
+    mediaId: upload.mediaId,
+    ...(parsed.data.caption ? { caption: parsed.data.caption } : {}),
+    ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+  });
+  await markOutboxSent(db, row.id, now());
+  logger.info(
+    {
+      evt: "worker.send.photo_sent",
+      ctx: { outboxId: row.id, waMessageId: result.waMessageId },
+    },
+    "sent a unit photo",
+  );
+  return true;
 }

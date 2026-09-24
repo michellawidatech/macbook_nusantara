@@ -1,42 +1,45 @@
 /**
- * Stock rolled up BY PRODUCT — the other way of asking what the shop holds.
+ * Stock as the Inventory table lists it: one line per variant, grade and
+ * warehouse (owner ask 2026-09-19).
  *
- * Every existing stock screen is per serial, because the serial is the subject
- * of this database and a second-hand Mac is not interchangeable with the next
- * one. But "do you have a MacBook Air M2 16/512?" is a question about a SKU,
- * not about a serial, and answering it by counting rows in a 5 000-line table
- * is not answering it. That question is asked dozens of times a day by the
- * chatbot and by whoever is standing at the counter, so it gets its own shape
- * of the same data.
+ * ## Why flat
  *
- * Two rules this file holds:
+ * > *"The previous design is less intuitive for them since it is nested."*
  *
- * - **Held, not owned.** A unit counts towards inventory while the shop still
- *   has it to sell or to get back: in QC, on the shelf, on hold for a customer,
- *   away at service. Sold, written off and returned-to-supplier units are gone
- *   and are not stock, however recently they moved.
- * - **The caller filters, this counts.** Filtering by warehouse or by battery
- *   health has to happen on UNITS and before the roll-up, or the quantity in
- *   the row stops matching the filter that produced it — "3 in stock" while a
- *   poor-battery filter is on has to mean three tired units, not a product that
- *   happens to own one. So this takes whatever unit list the page has already
- *   narrowed and never filters on its own.
+ * Until 2026-09-19 a row was a product that expanded to its grades, each of
+ * which expanded to its serials — three levels, and the question staff bring
+ * to the screen ("how many A-grade Air M2 16/512 are in Serpong, and what do
+ * they ask?") was answered on the second level of one row and the third of
+ * another. A line here IS that question: one variant, at one grade, in one
+ * warehouse, with its count and its prices on the line itself. The serials
+ * behind it are a click away (a popup on the page), not a level of the table.
+ *
+ * Grade and warehouse are the two axes because they are the two that change
+ * what staff do next. Grade changes what the unit asks (an A and a C of one
+ * variant are two products to a customer); warehouse changes where somebody
+ * has to walk. Everything else — battery, rack, description — varies per unit
+ * and belongs in the popup, where each unit has its own row.
+ *
+ * ## Two rules this file holds
+ *
+ * - **Held, not owned.** A unit counts while the shop still has it to sell or
+ *   to get back: in QC, on the shelf, on hold for a customer, away at service.
+ *   Sold, written off and returned-to-supplier units are gone and are not
+ *   stock, however recently they moved.
+ * - **The caller filters, this counts.** Filtering by battery or by category
+ *   has to happen on UNITS and before the roll-up, or the quantity on a line
+ *   stops matching the filter that produced it — "3 available" while a
+ *   poor-battery filter is on has to mean three tired units. So this takes
+ *   whatever unit list the page has already narrowed and never filters on its
+ *   own.
+ *
+ * Pure: no React, no store. `test/inventory.test.ts` is the spec.
  */
 import type { CatalogModel, Sku, Unit, UnitStatus } from "../mock/seed.js";
-import {
-  DEFAULT_BATTERY_SETTINGS,
-  batteryEra,
-  readBattery,
-  type BatteryEra,
-  type BatterySettings,
-} from "./battery.js";
 import { gradeRank } from "./condition.js";
-import {
-  marketPriceOf,
-  priceOf,
-  priceRange,
-  type PriceRange,
-} from "./unitPrice.js";
+import { fmtNone } from "./format.js";
+import { categoryTracksSerial } from "./serialTracking.js";
+import { priceOf, priceRange, type PriceRange } from "./unitPrice.js";
 
 /** Statuses that mean the shop still has the unit. */
 export const HELD_STATUSES: readonly UnitStatus[] = [
@@ -46,56 +49,118 @@ export const HELD_STATUSES: readonly UnitStatus[] = [
   "SERVIS",
 ];
 
-export interface InventoryRow {
-  skuId: string;
-  modelId: string;
-  /** `Sku.code` — what a staff member types when they know exactly what they want. */
-  code: string;
-  product: string;
-  /** The variant axes as one string: "16GB / 512GB". */
-  specs: string;
-  category: string;
-  releaseYear?: number;
+/**
+ * Statuses a unit can be sold from today: on the shelf, or held for a named
+ * customer. What a line's sell price and value are taken over — a unit in QC
+ * has not been priced yet and one at a repairer is not for sale.
+ */
+export const SELLABLE_STATUSES: readonly UnitStatus[] = [
+  "TERSEDIA",
+  "DIRESERVASI",
+];
+
+/** Is this unit on the shelf or on hold — something a customer can buy today? */
+export function isSellable(unit: Pick<Unit, "status">): boolean {
+  return SELLABLE_STATUSES.includes(unit.status);
+}
+
+/** The slice of the store a line is described from. `MockDb` satisfies it. */
+export interface InventoryCatalogue {
+  readonly skus: readonly Sku[];
+  readonly models: readonly CatalogModel[];
   /**
-   * `Sku.price` — what the catalogue asks for the variant.
-   *
-   * The starting point of a machine's own price since 2026-09-08, not the
-   * price anything is sold at. See `store` for what the machines on this row
-   * are actually asking.
+   * The shop's warehouses, in its own order — the order the lines of one
+   * variant are listed in. A location missing from it sorts last.
    */
-  listPrice: number;
-  /** What the sellable machines on this row ask over the counter. */
-  store: PriceRange;
-  /** What they are listed at on a marketplace — the rule, or an override. */
-  market: PriceRange;
+  readonly warehouses?: readonly { readonly id: string }[];
+  /**
+   * For `InventoryLine.tracksSerial`. Absent, every category tracks serials —
+   * `lib/serialTracking.ts`'s safe direction.
+   */
+  readonly categories?: readonly {
+    readonly name: string;
+    readonly tracksSerial: boolean;
+  }[];
+}
+
+/** One line of the Inventory table: a variant, at a grade, in a warehouse. */
+export interface InventoryLine {
+  /** `lineKey(…)` — stable across renders, so it can be the table's row key. */
+  readonly key: string;
+  readonly skuId: string;
+  readonly modelId: string;
+  /** `Sku.code` — what a staff member types when they know what they want. */
+  readonly code: string;
+  /** `Sku.name` — the model as the catalogue names it. */
+  readonly product: string;
+  /** The variant axes as one string: "i5 / 8GB / 256GB". */
+  readonly specs: string;
+  readonly category: string;
+  /**
+   * False for a category the shop counts rather than identifies — the
+   * accessories (2026-09-15). Their units have no battery and no serial
+   * anybody reads, so the popup leaves both questions out.
+   */
+  readonly tracksSerial: boolean;
+  /** `Unit.grade`; absent for units nobody has graded, and on an empty line. */
+  readonly grade?: string;
+  /**
+   * `Unit.locationId`. Absent only on an EMPTY line — a variant with nothing
+   * held, listed so "All products" can say "none" (see `includeEmpty`).
+   */
+  readonly locationId?: string;
+  /**
+   * `Sku.price` — the asking price a unit starts from (2026-09-08), not what
+   * any unit on this line asks. See `store` for that.
+   */
+  readonly listPrice: number;
   /** Sellable right now. */
-  available: number;
+  readonly available: number;
   /** On hold for a named customer. */
-  reserved: number;
+  readonly reserved: number;
   /** Waiting to be graded; real stock, not yet sellable. */
-  qc: number;
+  readonly qc: number;
   /** Away at a repairer. */
-  service: number;
-  /** Everything the shop is holding — the four above. */
-  onHand: number;
-  /** What the sellable units on this row would fetch at the asking price. */
-  value: number;
+  readonly service: number;
+  /** Everything held on this line — the four above. */
+  readonly onHand: number;
   /**
-   * Range of battery readings among the units behind this row, in whichever
-   * units this row's era reports.
-   *
-   * A row is one variant, so it is one model, so it is one era — which is what
-   * makes a range meaningful at all. A range over a mixed shelf would put a
-   * cycle count and a percentage at opposite ends of one dash.
+   * What the units on this line were bought for — `Unit.buy`, the invoice
+   * line, which Inbound calls a unit's "Unit price". Over every unit held,
+   * whatever its status: what a unit cost does not depend on whether it is
+   * for sale yet.
    */
-  batteryMin?: number;
-  batteryMax?: number;
-  /** Which reading `batteryMin`/`batteryMax` are in. See `batteryEra`. */
-  batteryEra: BatteryEra;
-  /** Which warehouses hold it, by location id, most-stocked first. */
-  locationIds: string[];
-  /** The serials behind the row, available first. */
-  units: Unit[];
+  readonly buy: PriceRange;
+  /**
+   * What they have COST the shop: the invoice line plus its share of the
+   * invoice's expenses plus every repair — `costOfUnit`, the figure every
+   * margin is computed against. Until 2026-09-19 this screen showed buy +
+   * repairs and left the expense share out.
+   */
+  readonly cost: PriceRange;
+  /** What the sellable units on this line ask over the counter. */
+  readonly store: PriceRange;
+  /** What the sellable units would fetch at their own asking prices. */
+  readonly value: number;
+  /** The units behind the line, available first. */
+  readonly units: readonly Unit[];
+  /**
+   * A counted product's line (2026-09-19): its quantity is the stock
+   * ledger's, `units` is empty, and what it cost is the moving average.
+   */
+  readonly counted?: boolean;
+}
+
+/**
+ * A line's key. The empty string stands for "absent" in both slots, which no
+ * grade and no location id ever is.
+ */
+export function lineKey(
+  skuId: string,
+  grade: string | undefined,
+  locationId: string | undefined,
+): string {
+  return `${skuId}|${grade ?? ""}|${locationId ?? ""}`;
 }
 
 const STATUS_ORDER: Record<string, number> = {
@@ -106,32 +171,78 @@ const STATUS_ORDER: Record<string, number> = {
 };
 
 /**
- * One row per SKU in the catalogue, whether or not any of it is in stock.
+ * The Inventory table's lines, in catalogue order: variant as the catalogue
+ * lists it, then best grade first, then the shop's own warehouse order.
  *
- * Zero-quantity rows are kept deliberately: "we don't have that one" is an
- * answer, and a lookup that silently omits the product cannot give it. The
- * page decides whether to show them.
+ * Catalogue order rather than by quantity, because a flat table sorted by
+ * count scatters one variant's lines across the page — the A in Serpong at
+ * the top, the B in the shop halfway down — and "what do we have of this
+ * variant" becomes a search. Every column still sorts on a click.
+ *
+ * `costOf` is required, and is `costOfUnit`'s total (build it once with
+ * `costIndex` over the store). Optional would mean a default, and the only
+ * default available is `Unit.buy` — the bug this revision fixes.
+ *
+ * `includeEmpty` adds one empty line per variant that has nothing held in
+ * `units`: "we don't have that one" is an answer, and the page's "All
+ * products" switch is how staff ask for it.
  */
-export function rollUpInventory(
+export function inventoryLines(
   units: readonly Unit[],
-  skus: readonly Sku[],
-  models: readonly CatalogModel[],
+  cat: InventoryCatalogue,
   opts: {
-    readonly markupPct?: number;
-    readonly battery?: BatterySettings;
-  } = {},
-): InventoryRow[] {
-  const held = new Map<string, Unit[]>();
+    readonly costOf: (unit: Unit) => number;
+    readonly includeEmpty?: boolean;
+    /**
+     * Counted products — accessories — off the stock ledger (2026-09-19):
+     * `sku → location → qty`, and what one piece of a variant costs.
+     */
+    readonly counted?: {
+      readonly levels: ReadonlyMap<string, ReadonlyMap<string, number>>;
+      readonly averageCost: (skuId: string) => number;
+      /** Leave a variant out — the page's category filter. */
+      readonly include?: (skuId: string) => boolean;
+    };
+  },
+): InventoryLine[] {
+  const skuIndex = new Map(cat.skus.map((s, i) => [s.id, i]));
+  const warehouseIndex = new Map(
+    (cat.warehouses ?? []).map((w, i) => [w.id, i]),
+  );
+
+  const groups = new Map<string, Unit[]>();
   for (const u of units) {
     if (!HELD_STATUSES.includes(u.status)) continue;
-    const list = held.get(u.skuId);
+    const key = lineKey(u.skuId, u.grade || undefined, u.locationId);
+    const list = groups.get(key);
     if (list) list.push(u);
-    else held.set(u.skuId, [u]);
+    else groups.set(key, [u]);
   }
 
-  return skus.map((sku) => {
-    const model = models.find((m) => m.id === sku.modelId);
-    const mine = (held.get(sku.id) ?? [])
+  const skuById = new Map(cat.skus.map((s) => [s.id, s]));
+  const modelById = new Map(cat.models.map((m) => [m.id, m]));
+  const describe = (skuId: string) => {
+    const sku = skuById.get(skuId);
+    const model = sku && modelById.get(sku.modelId);
+    return {
+      skuId,
+      modelId: sku?.modelId ?? "",
+      code: sku?.code ?? "",
+      product: sku?.name ?? skuId,
+      specs: sku?.variantLabel ?? "",
+      category: model?.category ?? fmtNone(),
+      tracksSerial: cat.categories
+        ? categoryTracksSerial({ categories: cat.categories }, model?.category)
+        : true,
+      listPrice: sku?.price ?? 0,
+    };
+  };
+
+  const lines: InventoryLine[] = [];
+  for (const [key, held] of groups) {
+    const first = held[0]!;
+    const base = describe(first.skuId);
+    const mine = held
       .slice()
       .sort(
         (a, b) =>
@@ -139,133 +250,83 @@ export function rollUpInventory(
           a.serial.localeCompare(b.serial),
       );
     const count = (s: UnitStatus) => mine.filter((u) => u.status === s).length;
-    const available = count("TERSEDIA");
-    const reserved = count("DIRESERVASI");
-    const sellable = mine.filter((u) =>
-      ["TERSEDIA", "DIRESERVASI"].includes(u.status),
-    );
-    const era = batteryEra(model?.releaseYear);
-    // `undefined`, not 0 — see battery.ts: an unmeasured battery and a dead
-    // one are different facts and Math.min would merge them. Read through
-    // `readBattery` so the numbers in the range are the ones the era reports:
-    // a stray percentage on a 2017 body must not end up at one end of a
-    // cycle-count dash.
-    const battery = mine
-      .map((u) => {
-        const r = readBattery(
-          u,
-          model?.releaseYear,
-          opts.battery ?? DEFAULT_BATTERY_SETTINGS,
-        );
-        return r.mode === "CYCLES" ? r.cycleCount : r.health;
-      })
-      .filter((c): c is number => c != null && Number.isFinite(c));
-    const byLocation = new Map<string, number>();
-    for (const u of mine)
-      byLocation.set(u.locationId, (byLocation.get(u.locationId) ?? 0) + 1);
-
-    return {
-      skuId: sku.id,
-      modelId: sku.modelId,
-      code: sku.code,
-      product: sku.name,
-      specs: sku.variantLabel,
-      category: model?.category ?? "—",
-      releaseYear: model?.releaseYear,
-      listPrice: sku.price,
-      store: priceRange(sellable.map((u) => priceOf(u, sku.price))),
-      market: priceRange(
-        sellable.map((u) => marketPriceOf(u, sku.price, opts.markupPct)),
-      ),
-      available,
-      reserved,
+    const sellable = mine.filter(isSellable);
+    lines.push({
+      key,
+      ...base,
+      ...(first.grade ? { grade: first.grade } : {}),
+      locationId: first.locationId,
+      available: count("TERSEDIA"),
+      reserved: count("DIRESERVASI"),
       qc: count("QC"),
       service: count("SERVIS"),
       onHand: mine.length,
-      // A SUM over the machines again, not a multiplication (owner revision
-      // 2026-09-08). Each one asks its own money now, so multiplying a count
-      // by the catalogue price would value a shelf of tired Cs at what a shelf
-      // of As is worth.
-      value: sellable.reduce((t, u) => t + priceOf(u, sku.price), 0),
-      batteryMin: battery.length ? Math.min(...battery) : undefined,
-      batteryMax: battery.length ? Math.max(...battery) : undefined,
-      batteryEra: era,
-      locationIds: [...byLocation.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .map(([id]) => id),
+      buy: priceRange(mine.map((u) => u.buy)),
+      cost: priceRange(mine.map((u) => opts.costOf(u))),
+      store: priceRange(sellable.map((u) => priceOf(u, base.listPrice))),
+      // A SUM over the units, not a count times the catalogue price (owner
+      // revision 2026-09-08): each one asks its own money.
+      value: sellable.reduce((t, u) => t + priceOf(u, base.listPrice), 0),
       units: mine,
-    };
-  });
-}
-
-/**
- * One rung further down: a variant AND a grade (owner ask 2026-09-08).
- *
- * *"For the price display on inventory, the product should be expanded to
- * variant-grade level and the display price is a range if there is more than
- * one price per variant per grade."*
- *
- * Grade is the right second axis because it is the thing that MAKES two
- * machines of one variant cost different money. An A and a C of one MacBook
- * Air are two products as far as a customer is concerned, and folding them
- * into one "from Rp7.900.000" tells nobody whether the cheap one is the one
- * they want. Within a grade the prices still spread — a tired battery, a
- * missing box — and THAT is what the range is for.
- *
- * The ungraded machines get a group of their own rather than being dropped or
- * lumped with the As: a unit in QC has no grade yet and is real stock.
- */
-export interface GradeGroup {
-  readonly skuId: string;
-  /** `Unit.grade`, or undefined for machines nobody has graded. */
-  readonly grade?: string;
-  /** Sellable right now. */
-  readonly available: number;
-  /** On hold for a named customer. */
-  readonly reserved: number;
-  /** Everything held at this grade — QC and service included. */
-  readonly onHand: number;
-  readonly store: PriceRange;
-  readonly market: PriceRange;
-  readonly units: readonly Unit[];
-}
-
-/**
- * The grade groups behind one Inventory row, best grade first.
- *
- * Takes the row rather than the raw units so the page cannot accidentally
- * group a set the filters have not been applied to — the same "the caller
- * filters, this counts" rule the roll-up follows.
- */
-export function gradeGroupsOf(
-  row: InventoryRow,
-  skuPrice: number,
-  markupPct?: number,
-): GradeGroup[] {
-  const by = new Map<string, Unit[]>();
-  for (const u of row.units) {
-    const key = u.grade ?? "";
-    const list = by.get(key);
-    if (list) list.push(u);
-    else by.set(key, [u]);
-  }
-  return [...by.entries()]
-    .sort(([a], [b]) => gradeRank(a || undefined) - gradeRank(b || undefined))
-    .map(([grade, units]) => {
-      const sellable = units.filter((u) =>
-        ["TERSEDIA", "DIRESERVASI"].includes(u.status),
-      );
-      return {
-        skuId: row.skuId,
-        ...(grade === "" ? {} : { grade }),
-        available: units.filter((u) => u.status === "TERSEDIA").length,
-        reserved: units.filter((u) => u.status === "DIRESERVASI").length,
-        onHand: units.length,
-        store: priceRange(sellable.map((u) => priceOf(u, skuPrice))),
-        market: priceRange(
-          sellable.map((u) => marketPriceOf(u, skuPrice, markupPct)),
-        ),
-        units,
-      };
     });
+  }
+
+  for (const [skuId, at] of opts.counted?.levels ?? []) {
+    if (opts.counted?.include && !opts.counted.include(skuId)) continue;
+    const base = describe(skuId);
+    const each = opts.counted!.averageCost(skuId);
+    for (const [locationId, qty] of at) {
+      if (qty <= 0) continue;
+      lines.push({
+        key: lineKey(skuId, undefined, locationId),
+        ...base,
+        locationId,
+        available: qty,
+        reserved: 0,
+        qc: 0,
+        service: 0,
+        onHand: qty,
+        buy: priceRange([each]),
+        cost: priceRange([each]),
+        store: priceRange([base.listPrice]),
+        value: base.listPrice * qty,
+        units: [],
+        counted: true,
+      });
+    }
+  }
+
+  if (opts.includeEmpty) {
+    const stocked = new Set(lines.map((l) => l.skuId));
+    for (const sku of cat.skus) {
+      if (stocked.has(sku.id)) continue;
+      lines.push({
+        key: lineKey(sku.id, undefined, undefined),
+        ...describe(sku.id),
+        available: 0,
+        reserved: 0,
+        qc: 0,
+        service: 0,
+        onHand: 0,
+        buy: priceRange([]),
+        cost: priceRange([]),
+        store: priceRange([]),
+        value: 0,
+        units: [],
+      });
+    }
+  }
+
+  const place = (id: string | undefined) =>
+    id === undefined
+      ? Number.MAX_SAFE_INTEGER
+      : (warehouseIndex.get(id) ?? Number.MAX_SAFE_INTEGER - 1);
+  return lines.sort(
+    (a, b) =>
+      (skuIndex.get(a.skuId) ?? Number.MAX_SAFE_INTEGER) -
+        (skuIndex.get(b.skuId) ?? Number.MAX_SAFE_INTEGER) ||
+      gradeRank(a.grade) - gradeRank(b.grade) ||
+      place(a.locationId) - place(b.locationId) ||
+      (a.locationId ?? "").localeCompare(b.locationId ?? ""),
+  );
 }

@@ -30,6 +30,7 @@ import {
   phoneForms,
   toolsFor,
 } from "../src/tools.js";
+import { LIVE_CAPABILITIES } from "../src/policy.js";
 import { noDb } from "./fixtures.js";
 
 /** The complete surface this build allows. Changing it is a policy decision. */
@@ -42,6 +43,7 @@ const ALLOWED = [
   "check_order",
   "search_knowledge",
   "lookup_catalog",
+  "unit_photos",
   "handoff_to_staff",
   "reply",
   "create_reservation",
@@ -66,22 +68,31 @@ describe("the tool whitelist", () => {
   });
 
   it("splits reads from writes, so the boundary is readable in code", () => {
-    expect([...WRITE_TOOLS].sort()).toEqual([
-      "cancel_reservation",
-      "create_reservation",
-    ]);
+    // ONE write since 2026-09-21 (owner: *"the only write operation is to make
+    // a reservation"*). `cancel_reservation` still exists and `dispatchTool`
+    // still answers it — the staff Draft path and these tests reach it — but it
+    // is no longer on the list a customer's conversation can be offered.
+    expect([...WRITE_TOOLS].sort()).toEqual(["create_reservation"]);
+    // Every read tool is a tool, and none of them is a write or a terminal.
     expect([...READ_TOOLS].sort()).toEqual(
       [...ALLOWED]
-        .filter((n) => !WRITE_TOOLS.includes(n as never) && n !== "reply")
+        .filter((n) => n !== "reply")
+        .filter((n) => n !== "create_reservation" && n !== "cancel_reservation")
         .sort(),
     );
     expect([...TERMINAL_TOOLS].sort()).toEqual(["handoff_to_staff", "reply"]);
   });
 
-  it("ships a way to undo the write, because a hold nobody can release is a lost unit", () => {
-    // A booking takes a real unit out of stock. Without cancel_reservation the
-    // only way back is a staff member noticing.
-    expect(WRITE_TOOLS).toContain("cancel_reservation");
+  it("keeps a way to undo the write, off the model's list", () => {
+    /*
+     * A booking takes a real unit out of stock, so there has to be a way back.
+     * It is a person's now: `/reservations` releases a hold, and a customer
+     * asking to cancel is routed to staff (policy.ts `RESERVATION`) — which is
+     * also where somebody can ask them why before the unit goes back on the
+     * shelf.
+     */
+    expect(names()).toContain("cancel_reservation");
+    expect(WRITE_TOOLS).not.toContain("cancel_reservation");
   });
 
   it("offers a customer's conversation no stock, price, order or booking tool during the parallel operation", () => {
@@ -110,6 +121,49 @@ describe("the tool whitelist", () => {
         expect(offered).not.toContain(hidden);
       }
     }
+  });
+
+  it("offers the shelf and ONE write when the capability is on (2026-09-21)", () => {
+    const ctx = {
+      from: "628111000111",
+      now: new Date(),
+      reserve: { write: noDb, staffId: "staff_agent" },
+    };
+    const offered = toolsFor(ctx, { capabilities: LIVE_CAPABILITIES }).map(
+      (t) => t.name,
+    );
+    for (const wanted of [
+      "search_stock",
+      "check_serial",
+      "browse_catalog",
+      "unit_photos",
+      "lookup_customer",
+      "create_reservation",
+    ]) {
+      expect(offered).toContain(wanted);
+    }
+    // The one write the owner allows, and nothing beside it.
+    expect(offered).not.toContain("cancel_reservation");
+  });
+
+  it("withholds the write from a caller with no reserve capability", () => {
+    // The staff Draft page passes none: pressing Draft proposes a sentence, it
+    // does not book a reservation.
+    const offered = toolsFor(
+      { from: "628111000111", now: new Date() },
+      { capabilities: LIVE_CAPABILITIES },
+    ).map((t) => t.name);
+    expect(offered).toContain("search_stock");
+    expect(offered).not.toContain("create_reservation");
+  });
+
+  it("withholds photos when only the stock capability is on", () => {
+    const offered = toolsFor(
+      { from: "628111000111", now: new Date() },
+      { capabilities: { stock: true, reserve: false, photos: false } },
+    ).map((t) => t.name);
+    expect(offered).toContain("search_stock");
+    expect(offered).not.toContain("unit_photos");
   });
 
   it("offers a routed message no way to answer, only a way to hand over", () => {

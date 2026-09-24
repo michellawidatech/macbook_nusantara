@@ -5,9 +5,16 @@
  * Two nav items until 2026-08-26. "Inventory" counted stock by product;
  * "Stock Movement" listed it by serial and owned the adjustment machinery. The
  * owner asked for one screen with one table, and `InventoryTable` is that
- * table: a row per product, expanding to the serials behind it. This file is
- * what remains — the page frame, the movement log, and the two modals that
+ * table: flat since 2026-09-19 — a line per variant, grade and warehouse, its
+ * units in a popup. This file is what remains — the page frame, the movement
+ * log, the stock export (`StockExportModal`), and the two modals that
  * actually write.
+ *
+ * **Counted categories have no battery.** An accessory (a category with
+ * `tracksSerial` off, 2026-09-15) has no battery to read and no serial anybody
+ * reads, so neither the batch grid nor the single-unit Adjust asks for one on
+ * it (2026-09-19) — a box nobody can fill is a box somebody fills with a
+ * guess.
  *
  * **The batch is the flow.** Staff do not adjust one unit. They come back from
  * the back room having moved three or four machines for one reason, and the
@@ -35,7 +42,8 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import { SerialLink } from "../../components/SerialLink";
 import {
   App,
   AutoComplete,
@@ -44,8 +52,8 @@ import {
   Flex,
   Form,
   Input,
+  InputNumber,
   Modal,
-  Segmented,
   Select,
   Tabs,
   Tag,
@@ -54,6 +62,7 @@ import {
 } from "antd";
 import {
   DeleteOutlined,
+  DownloadOutlined,
   LoginOutlined,
   LogoutOutlined,
 } from "@ant-design/icons";
@@ -61,26 +70,23 @@ import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { EditableTable } from "../../components/EditableTable";
 import { InventoryTable } from "./InventoryTable";
+import { StockExportModal } from "./StockExportModal";
+import { skuTracksSerial } from "../../lib/serialTracking.js";
+import { averageCost, onHand, takeFrom } from "../../lib/stock.js";
 import { EnumTag } from "../../components/EnumTag";
 import { LongText } from "../../components/LongText";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
-import { fmtDateTime } from "../../lib/format.js";
+import { fmtDateTime, fmtNone } from "../../lib/format.js";
 import {
   batteryBandOf,
-  batteryDraftOf,
   defaultBatteryModeOfSku,
   batteryPatch,
   batterySettingsFrom,
-  isBatteryDraftInRange,
   readBattery,
   releaseYearOfSku,
-  type BatteryDraft,
   type BatteryMode,
 } from "../../lib/battery.js";
-import {
-  BatteryFields,
-  batteryFieldsLabel,
-} from "../../components/BatteryFields.js";
+import { BatteryFields } from "../../components/BatteryFields.js";
 import { HELD_STATUSES } from "../../lib/inventory.js";
 import { reprojectHolds } from "../../lib/reservations.js";
 import {
@@ -89,6 +95,15 @@ import {
 } from "../../lib/adjustmentBatch.js";
 import { rendered } from "../../lib/rendered.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
+import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
+import {
+  FIELD,
+  asBoolean,
+  asListOf,
+  asOneOf,
+  asString,
+  hasShape,
+} from "../../lib/draftGuards.js";
 import {
   useDb,
   mutate,
@@ -103,12 +118,11 @@ import type {
   Adjustment,
   AdjustmentKind,
   MockDb,
-  Unit,
   UnitStatus,
 } from "../../mock/seed.js";
 
 /** Rows the modal opens with — the owner's "typically three or four". */
-const BLANK_ROWS = 3;
+const BLANK_ROWS = 1;
 
 /** Where an OUT adjustment leaves the unit. */
 type OutStatus = Extract<UnitStatus, "HILANG" | "SERVIS">;
@@ -132,16 +146,6 @@ interface BatchRow {
   /** Only for a serial no unit carries: what staff say the machine is. */
   modelId?: string;
   skuId?: string;
-  /**
-   * Which reading this row is being taken in, once somebody has flicked the
-   * switch on it (owner ask 2026-09-15). Absent means the product's own
-   * default decides — see `batchModeOf`.
-   *
-   * On the ROW rather than derived, because this grid is whatever four
-   * machines somebody happens to be adjusting at once: a row switched to
-   * cycles must stay on cycles while the row beside it stays on health.
-   */
-  batteryMode?: BatteryMode;
   /** An Apple silicon or 2021-or-later machine's reading, as a percentage. */
   batteryHealth?: number;
   /** An older Intel machine's, in cycles… */
@@ -151,41 +155,52 @@ interface BatchRow {
   description: string;
 }
 
-/**
- * `BatteryFields` as an antd form field.
- *
- * antd injects `value` and `onChange` into a `Form.Item`'s single child, and
- * `BatteryFields` already takes exactly those — but it requires them, and a
- * form's first render passes neither. This fills in the blanks rather than
- * making them optional on the component, which every other caller does supply.
- */
-function BatteryFieldsField({
-  fallback,
-  value,
-  onChange,
-}: {
-  fallback: BatteryMode;
-  value?: BatteryDraft;
-  onChange?: (next: BatteryDraft) => void;
-}) {
-  return (
-    <BatteryFields
-      fallback={fallback}
-      size="middle"
-      idPrefix="unit-edit-battery"
-      value={value ?? {}}
-      onChange={(next) => onChange?.(next)}
-    />
-  );
-}
-
 let rowSeq = 0;
+/**
+ * A row's key is unique across reloads, not just within one: a batch is kept
+ * on this device (below), and a counter that restarts at one would hand a new
+ * row the key of a row already in the restored batch.
+ */
 const blankRow = (): BatchRow => ({
-  key: `batch-${++rowSeq}`,
+  key: `batch-${Date.now().toString(36)}-${++rowSeq}`,
   serial: "",
   description: "",
 });
 const blankRows = () => Array.from({ length: BLANK_ROWS }, blankRow);
+
+/*
+ * The batch being typed, kept on this device (owner ask 2026-09-21: "all the
+ * things of the user input will be saved locally"). The in-app tab strip used
+ * to keep it alive while somebody looked something up; now leaving the page,
+ * or reloading it, brings the dialog back open with what was typed.
+ */
+const BATCH_DRAFT = (name: string) => draftKey(`inventory.batch.${name}`);
+const isBatchRow = (v: unknown): v is BatchRow =>
+  hasShape(v, {
+    key: FIELD.string,
+    serial: FIELD.string,
+    description: FIELD.string,
+    modelId: FIELD.optString,
+    skuId: FIELD.optString,
+    batteryHealth: FIELD.optNumber,
+    cycleCount: FIELD.optNumber,
+    fcc: FIELD.optNumber,
+  });
+interface CountedRow {
+  key: string;
+  skuId?: string;
+  qty: number | null;
+}
+const isCountedRow = (v: unknown): v is CountedRow =>
+  hasShape(v, {
+    key: FIELD.string,
+    skuId: FIELD.optString,
+    qty: (q) => q === null || (typeof q === "number" && Number.isFinite(q)),
+  });
+const parseBatchRows = (v: unknown): BatchRow[] | undefined => {
+  const rows = asListOf(isBatchRow)(v);
+  return rows === undefined || rows.length === 0 ? undefined : rows;
+};
 
 /** A row is in play once anything has been typed into it. */
 const touched = (r: BatchRow) =>
@@ -194,7 +209,6 @@ const touched = (r: BatchRow) =>
   r.batteryHealth != null ||
   r.cycleCount != null ||
   r.fcc != null ||
-  r.batteryMode !== undefined ||
   r.skuId !== undefined;
 
 export function InventoryPage() {
@@ -203,27 +217,59 @@ export function InventoryPage() {
   const [params, setParams] = useSearchParams();
   const { message, modal } = App.useApp();
   const { compact } = useLayoutMode();
-  const [editing, setEditing] = useState<Unit | null>(null);
-  const [form] = Form.useForm<{
-    locationId: string;
-    description: string;
-    battery: BatteryDraft;
-    reason: string;
-  }>();
-
+  /** The stock export dialog (owner ask 2026-09-19). */
+  const [exporting, setExporting] = useState(false);
   // ── The batch, held as plain state rather than in a Form ──────────────────
   // The grid below is a line-item editor, and antd's Form.List buys validation
   // this page does its own way (one dialog listing every problem at once,
   // as Stock In's bulk accept does) at the cost of addressing every cell
   // through a name path.
-  const [adding, setAdding] = useState(false);
-  const [kind, setKind] = useState<AdjustmentKind>("OUT");
-  const [reason, setReason] = useState("");
-  const [outStatus, setOutStatus] = useState<OutStatus>("HILANG");
+  const [adding, setAdding] = usePersistentState<boolean>(
+    BATCH_DRAFT("open"),
+    false,
+    asBoolean,
+  );
+  const [kind, setKind] = usePersistentState<AdjustmentKind>(
+    BATCH_DRAFT("kind"),
+    "OUT",
+    asOneOf<AdjustmentKind>(["IN", "OUT"]),
+  );
+  const [reason, setReason] = usePersistentState<string>(
+    BATCH_DRAFT("reason"),
+    "",
+    asString,
+  );
+  const [outStatus, setOutStatus] = usePersistentState<OutStatus>(
+    BATCH_DRAFT("outStatus"),
+    "HILANG",
+    asOneOf<OutStatus>(["HILANG", "SERVIS"]),
+  );
   /** Once the destination is chosen by hand, the reason stops guessing at it. */
-  const [outTouched, setOutTouched] = useState(false);
-  const [locationId, setLocationId] = useState(db.myWarehouseId);
-  const [rows, setRows] = useState<BatchRow[]>(blankRows);
+  const [outTouched, setOutTouched] = usePersistentState<boolean>(
+    BATCH_DRAFT("outTouched"),
+    false,
+    asBoolean,
+  );
+  const [locationId, setLocationId] = usePersistentState<string>(
+    BATCH_DRAFT("location"),
+    db.myWarehouseId,
+    asString,
+  );
+  const [rows, setRows] = usePersistentState<BatchRow[]>(
+    BATCH_DRAFT("rows"),
+    blankRows,
+    parseBatchRows,
+  );
+  /**
+   * Counted products on the batch — accessories, by quantity (2026-09-19).
+   * They have no serial to scan, so they are their own short list.
+   */
+  const [countedRows, setCountedRows] = usePersistentState<CountedRow[]>(
+    BATCH_DRAFT("counted"),
+    [],
+    asListOf(isCountedRow),
+  );
+  const countedSkus = db.skus.filter((s) => !skuTracksSerial(db, s.id));
   /**
    * One batch, once — a ref rather than state, because that is the only kind
    * of latch that closes in time.
@@ -264,23 +310,39 @@ export function InventoryPage() {
    * for an unknown serial takes it from the product being chosen on the row
    * itself. Both can be absent while somebody is still typing, and the default
    * is health — the reading the box asked for before the split.
-   *
-   * The row's own switch (`batteryMode`) is not read here: this is the
-   * FALLBACK handed to `BatteryFields`, which resolves the two itself. Folding
-   * the switch in here would make the fallback depend on the override and give
-   * `batteryDraftMode` nothing left to decide.
    */
   const batchModeOf = (r: BatchRow): BatteryMode => {
-    const known = db.units.find(
-      (u) => u.serial === r.serial.trim().toUpperCase(),
-    );
-    const skuId = known?.skuId ?? r.skuId;
+    const skuId = batchSkuOf(r);
     return skuId ? defaultBatteryModeOfSku(db, skuId) : "HEALTH";
   };
+  /** The variant a batch row is about: its unit's, or the one picked for an unknown serial. */
+  const batchSkuOf = (r: BatchRow): string | undefined =>
+    db.units.find((u) => u.serial === r.serial.trim().toUpperCase())?.skuId ??
+    r.skuId;
+  /**
+   * Does this variant have a battery to ask about? Not when its category is
+   * counted rather than identified — an accessory (2026-09-19). A row whose
+   * variant is not known yet still asks: the safe direction, as
+   * `lib/serialTracking.ts` reasons about an unknown category.
+   */
+  const hasBattery = (skuId: string | undefined) => skuTracksSerial(db, skuId);
+  /**
+   * A row as it is judged and written. A counted variant's row carries no
+   * battery, whatever its hidden boxes last held — a reading typed before the
+   * product was changed to a sleeve must not be validated against a field
+   * nobody can see, or filed on the sleeve.
+   */
+  const asWritten = (r: BatchRow): BatchRow =>
+    hasBattery(batchSkuOf(r))
+      ? r
+      : {
+          ...r,
+          batteryHealth: undefined,
+          cycleCount: undefined,
+          fcc: undefined,
+        };
   const unitOf = (serial: string) =>
     db.units.find((u) => u.serial === normalise(serial));
-  const warehouseOf = (id: string) =>
-    db.warehouses.find((w) => w.id === id)?.name ?? id;
   const adjustmentReasons = db.reasons.filter(
     (r) => r.activity === "ADJUSTMENT" && r.active,
   );
@@ -289,81 +351,6 @@ export function InventoryPage() {
   const setRow = (key: string, patch: Partial<BatchRow>) =>
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
-  const openEdit = (u: Unit) => {
-    setEditing(u);
-    form.setFieldsValue({
-      locationId: u.locationId,
-      description: u.description,
-      battery: batteryDraftOf(u),
-      reason: "",
-    });
-  };
-
-  const saveEdit = () =>
-    form.validateFields().then((v) => {
-      mutate((d) => {
-        const u = d.units.find((x) => x.serial === editing!.serial)!;
-        if (v.locationId !== u.locationId) {
-          appendEvent(d, u.serial, {
-            type: "DIPINDAH",
-            toLocationId: v.locationId,
-            note: v.reason || "Moved",
-          });
-          // The rack belongs to the old warehouse, so a move clears it rather
-          // than leaving the unit filed onto a shelf in another building.
-          u.rackId = undefined;
-        }
-        if (v.description !== u.description) {
-          appendEvent(d, u.serial, {
-            type: "DICATAT",
-            note: `Description updated: ${v.description}`,
-          });
-          u.description = v.description;
-        }
-        // An emptied number input gives back `null`, and clearing a reading
-        // is a real edit — it was wrong and is now nobody's guess. Zero is a
-        // genuine reading in both eras (a dead battery, a replaced one) and is
-        // never cleared, which is why every comparison here is against
-        // `undefined` rather than falsiness.
-        const year = releaseYearOfSku(db, u.skuId);
-        const next = batteryPatch(
-          v.battery ?? {},
-          defaultBatteryModeOfSku(db, u.skuId),
-        );
-        const before = readBattery(u, year, batterySettings).text;
-        if (
-          next.batteryHealth !== u.batteryHealth ||
-          next.cycleCount !== u.cycleCount ||
-          next.fcc !== u.fcc
-        ) {
-          u.batteryHealth = next.batteryHealth;
-          u.cycleCount = next.cycleCount;
-          u.fcc = next.fcc;
-          appendEvent(d, u.serial, {
-            type: "KOREKSI",
-            note: `Battery ${before} → ${readBattery(u, year, batterySettings).text} — ${v.reason || "adjustment"}`,
-          });
-        }
-      });
-      message.success("Adjustment logged on the unit's timeline.");
-      setEditing(null);
-    });
-
-  /** Open the batch editor, empty. */
-  /**
-   * Opens the batch editor in a chosen direction.
-   *
-   * Two buttons rather than one, since the Stock page absorbed stock-in and
-   * stock-out on 2026-08-24. The editor was always capable of both — it had an
-   * In/Out toggle — but "Add adjustment" named the mechanism rather than the
-   * job, so nobody looking to move stock between warehouses would think to
-   * open it. Naming the two jobs on the buttons is the whole change; the form
-   * behind them is the same one.
-   *
-   * Note what this deliberately is NOT: a till. Selling to a customer left for
-   * the Point of Sale screen (owner decision). What lands here is warehouse
-   * work — a transfer in, a write-off, a unit going to the bench.
-   */
   const openAdd = (direction: AdjustmentKind = "OUT") => {
     submitted.current = false;
     setKind(direction);
@@ -372,6 +359,7 @@ export function InventoryPage() {
     setOutTouched(false);
     setLocationId(db.myWarehouseId);
     setRows(blankRows());
+    setCountedRows([]);
     setAdding(true);
   };
 
@@ -426,9 +414,24 @@ export function InventoryPage() {
    * this only supplies what the page knows — the store, and how a status is
    * spelled in the current language.
    */
+  const countedInput = () =>
+    countedRows.map((c) => ({
+      ...(c.skuId ? { skuId: c.skuId } : {}),
+      label: c.skuId
+        ? `${skuOf(c.skuId)?.name ?? ""} ${skuOf(c.skuId)?.variantLabel ?? ""}`.trim()
+        : "",
+      qty: c.qty,
+      onHand: c.skuId ? onHand(db.stockMoves, c.skuId) : 0,
+    }));
+
   const problems = (): string[] =>
     batchProblems(
-      { kind, reason, lines: rows.filter(touched) },
+      {
+        kind,
+        reason,
+        lines: rows.filter(touched).map(asWritten),
+        counted: countedInput(),
+      },
       unitOf,
       statusLabel,
     );
@@ -460,7 +463,7 @@ export function InventoryPage() {
       });
     }
 
-    const active = rows.filter(touched);
+    const active = rows.filter(touched).map(asWritten);
     const typed = reason.trim();
     const isNewReason = !adjustmentReasons.some(
       (r) => r.label.toLowerCase() === typed.toLowerCase(),
@@ -474,6 +477,35 @@ export function InventoryPage() {
       const label = d.reasons.find((r) => r.id === reasonId)?.label ?? typed;
       const batchId = nextId("adjb");
       const at = new Date().toISOString();
+
+      /*
+       * Counted products move on the stock ledger (2026-09-19): IN puts the
+       * pieces in the chosen warehouse, OUT takes them from it first and
+       * then wherever else holds them — both at the moving average, so an
+       * adjustment never moves what a piece is worth.
+       */
+      for (const c of countedRows) {
+        if (!c.skuId || !c.qty) continue;
+        const cost = averageCost(d, c.skuId);
+        const parts =
+          kind === "IN"
+            ? [{ locationId, qty: c.qty }]
+            : (takeFrom(d.stockMoves, c.skuId, c.qty, locationId) ?? []);
+        for (const part of parts) {
+          d.stockMoves.push({
+            id: nextId("sm"),
+            skuId: c.skuId,
+            locationId: part.locationId,
+            qty: kind === "IN" ? part.qty : -part.qty,
+            cost,
+            type: "KOREKSI",
+            at,
+            reasonId,
+            note: `${kind === "IN" ? "Adjusted in" : "Adjusted out"} — ${label}`,
+            staff: currentStaffName(),
+          });
+        }
+      }
 
       for (const r of active) {
         const serial = normalise(r.serial);
@@ -495,7 +527,6 @@ export function InventoryPage() {
             poId: null,
             ...batteryPatch(
               {
-                ...(r.batteryMode === undefined ? {} : { mode: r.batteryMode }),
                 health: r.batteryHealth,
                 cycleCount: r.cycleCount,
                 fcc: r.fcc,
@@ -529,7 +560,6 @@ export function InventoryPage() {
           const mode = defaultBatteryModeOfSku(d, existing.skuId);
           const typed = batteryPatch(
             {
-              ...(r.batteryMode === undefined ? {} : { mode: r.batteryMode }),
               health: r.batteryHealth,
               cycleCount: r.cycleCount,
               fcc: r.fcc,
@@ -628,9 +658,13 @@ export function InventoryPage() {
       }
     });
 
+    const pieces = countedRows.reduce((n, c) => n + (c.qty ?? 0), 0);
     message.success(
       [
-        `${active.length} unit${active.length === 1 ? "" : "s"} adjusted ${kind === "IN" ? "in" : "out"}.`,
+        active.length > 0 &&
+          `${active.length} unit${active.length === 1 ? "" : "s"} adjusted ${kind === "IN" ? "in" : "out"}.`,
+        pieces > 0 &&
+          `${pieces} counted piece${pieces === 1 ? "" : "s"} adjusted ${kind === "IN" ? "in" : "out"}.`,
         created > 0 &&
           `${created} new serial${created === 1 ? " was" : "s were"} created in stock.`,
         released > 0 &&
@@ -659,29 +693,72 @@ export function InventoryPage() {
   );
 
   /**
-   * The one table the merge produced: products, expanding to their serials.
+   * The stock tab's actions: the two movements, and the export beside them
+   * (owner ask 2026-09-19) — on the stock tab only, because it exports the
+   * stock, not the movement log.
+   */
+  const stockActions = (
+    <Flex gap={SPACE.sm} wrap>
+      <Button icon={<DownloadOutlined />} onClick={() => setExporting(true)}>
+        {t("stockExport.button", "Export stock")}
+      </Button>
+      {addAction}
+    </Flex>
+  );
+
+  /**
+   * The one table the merge produced: a flat line per variant, grade and
+   * warehouse since 2026-09-19, its units in a popup.
    *
-   * The per-unit Adjust button inside the expansion calls back into `openEdit`
-   * here, because the modal it opens is this page's — the table stays a table
-   * and never owns a dialog.
+   * The popup owns its own per-unit buttons since 2026-09-23 — price change
+   * and edit unit — so nothing about one unit comes back up to this page.
    */
   const stockTab = (
     <Card>
       <InventoryTable
-        onAdjust={openEdit}
-        // The button sits at the top right of the table itself on a desktop;
-        // on a phone PageContainer turns it into the float button instead, so
-        // this half is hidden there to avoid rendering it twice.
-        extra={compact ? undefined : addAction}
+        // The buttons sit at the top right of the table itself on a desktop;
+        // on a phone PageContainer turns them into the float button instead,
+        // so this half is hidden there to avoid rendering them twice.
+        extra={compact ? undefined : stockActions}
       />
     </Card>
   );
 
+  /**
+   * The log's rows: every unit adjusted, and every counted product adjusted
+   * by quantity (2026-09-19) — an accessory's adjustment is a `KOREKSI` stock
+   * move, and it belongs in the same log as a unit's.
+   */
+  type LogRow = Adjustment & { counted?: { skuId: string; qty: number } };
+  const logRows: LogRow[] = [
+    ...db.adjustments,
+    ...db.stockMoves
+      .filter((m) => m.type === "KOREKSI" && m.reasonId !== undefined)
+      .map((m): LogRow => ({
+        id: m.id,
+        serial: "",
+        description: m.note ?? "",
+        reasonId: m.reasonId!,
+        at: m.at,
+        staff: m.staff,
+        kind: m.qty > 0 ? "IN" : "OUT",
+        batchId: m.id,
+        counted: { skuId: m.skuId, qty: Math.abs(m.qty) },
+      })),
+  ];
+  const logProduct = (a: LogRow) => {
+    const skuId =
+      a.counted?.skuId ?? db.units.find((x) => x.serial === a.serial)?.skuId;
+    const k = skuId ? skuOf(skuId) : undefined;
+    return k ? `${k.name} ${k.variantLabel}` : fmtNone();
+  };
+
   const logTab = (
     <Card>
-      <ProTable
+      <ProTable<LogRow>
+        persistKey="inventory.adjustments"
         rowKey="id"
-        dataSource={db.adjustments}
+        dataSource={logRows}
         searchPlaceholder={t(
           "stock.searchSerialDescriptionOrReason",
           "Search serial, description or reason",
@@ -711,36 +788,32 @@ export function InventoryPage() {
             title: t("stock.serial", "Serial"),
             dataIndex: "serial",
             searchable: true,
-            render: (v, a) => (
-              <Flex align="center" gap={SPACE.xs} wrap>
-                <Link to={`/stock/history?serial=${v}`}>{v}</Link>
-                {a.newUnit && (
-                  <Tooltip
-                    title={t(
-                      "stock.thisSerialWasNotIn",
-                      "This serial was not in the system; the adjustment created it",
-                    )}
-                  >
-                    <Tag color="blue">new</Tag>
-                  </Tooltip>
-                )}
-              </Flex>
-            ),
+            render: (v, a) =>
+              a.counted ? (
+                // A counted product has no serial: the log says how many.
+                <Typography.Text>×{a.counted.qty}</Typography.Text>
+              ) : (
+                <Flex align="center" gap={SPACE.xs} wrap>
+                  <SerialLink serial={v} />
+                  {a.newUnit && (
+                    <Tooltip
+                      title={t(
+                        "stock.thisSerialWasNotIn",
+                        "This serial was not in the system; the adjustment created it",
+                      )}
+                    >
+                      <Tag color="blue">new</Tag>
+                    </Tooltip>
+                  )}
+                </Flex>
+              ),
           },
           {
             title: t("stock.product", "Product"),
             key: "product",
             facet: true,
-            sortValue: (a) => {
-              const u = db.units.find((x) => x.serial === a.serial);
-              const k = u && skuOf(u.skuId);
-              return k ? `${k.name} ${k.variantLabel}` : "—";
-            },
-            render: (_, a) => {
-              const u = db.units.find((x) => x.serial === a.serial);
-              const k = u && skuOf(u.skuId);
-              return k ? `${k.name} ${k.variantLabel}` : "—";
-            },
+            sortValue: (a) => logProduct(a),
+            render: (_, a) => logProduct(a),
           },
           {
             title: t("stock.description", "Description"),
@@ -765,8 +838,10 @@ export function InventoryPage() {
             sortValue: (a) => a.batteryHealth ?? a.cycleCount,
             facet: true,
             facetLabel: t("stock.anyBattery", "Any battery"),
-            facetValue: (a) => batteryBandOf(adjustmentBattery(a)),
-            render: (_, a) => adjustmentBattery(a).text,
+            facetValue: (a) =>
+              a.counted ? fmtNone() : batteryBandOf(adjustmentBattery(a)),
+            render: (_, a) =>
+              a.counted ? fmtNone() : adjustmentBattery(a).text,
           },
           {
             title: t("stock.reason", "Reason"),
@@ -800,7 +875,9 @@ export function InventoryPage() {
   useEffect(() => {
     const want = params.get("adjust");
     if (want !== "IN" && want !== "OUT") return;
-    openAdd(want);
+    // A batch already open is one somebody was typing — kept on this device
+    // and brought back — and arriving here must not wipe it.
+    if (!adding) openAdd(want);
     setParams(
       (prev) => {
         const next = new URLSearchParams(prev);
@@ -814,18 +891,21 @@ export function InventoryPage() {
   }, [params]);
 
   const activeRows = rows.filter(touched).length;
-  const outHint = t(
-    OUT_STATUSES.find((o) => o.value === outStatus)?.hint ?? "",
-  );
 
   return (
     <PageContainer
-      title={t("stock.inventoryStockMovement", "Inventory & Stock Movement")}
+      title={t("stock.inventory", "Inventory")}
       // Compact only — the desktop button lives at the top right of the table
       // itself. See PageContainer's docblock on the ListToolbar arrangement.
       actions={
         compact
           ? [
+              {
+                key: "export",
+                label: t("stockExport.button", "Export stock"),
+                icon: <DownloadOutlined />,
+                onClick: () => setExporting(true),
+              },
               {
                 key: "in",
                 label: t("stock.stockIn", "Stock in"),
@@ -888,23 +968,13 @@ export function InventoryPage() {
         destroyOnHidden
       >
         <Form layout="vertical" className="responsive-controls">
-          {/* Chosen once for the whole batch — that is the point of it. */}
+          {/*
+           * No direction control (owner ask 2026-09-23). Inventory opens this
+           * from *Stock in* or *Stock out*, so it is already answered — and a
+           * toggle that repeats the button somebody just pressed is a second
+           * chance to get it wrong. The title says which one this is.
+           */}
           <Flex wrap gap={SPACE.md} align="flex-start">
-            <Form.Item
-              label={t("stock.adjustmentType", "Adjustment type")}
-              required
-              style={{ marginBottom: SPACE.md }}
-            >
-              <Segmented<AdjustmentKind>
-                value={kind}
-                onChange={setKind}
-                options={[
-                  { value: "IN", label: t("stock.in", "In") },
-                  { value: "OUT", label: t("stock.out", "Out") },
-                ]}
-              />
-            </Form.Item>
-
             <Form.Item
               label={t("stock.reason", "Reason")}
               required
@@ -984,13 +1054,12 @@ export function InventoryPage() {
             )}
           </Flex>
 
-          {/* Says what the OK button is about to do, in the words of the two
-              controls above it. */}
-          <Typography.Paragraph type="secondary" style={{ fontSize: TYPE.sm }}>
-            {kind === "IN"
-              ? `Each unit becomes sellable in ${warehouseOf(locationId)}. A serial nothing carries yet is created as a new unit from the product you pick.`
-              : `Each unit leaves stock — ${outHint}. Any hold a customer has on it is released.`}
-          </Typography.Paragraph>
+          {/* A heading, not a paragraph (owner ask 2026-09-23). The sentence
+              that was here explained what "stock in" means to somebody who had
+              just pressed Stock in. */}
+          <Typography.Text strong style={{ display: "block" }}>
+            {t("stock.serialisedProducts", "Serialised products")}
+          </Typography.Text>
 
           <EditableTable<BatchRow>
             rowKey="key"
@@ -1128,10 +1197,20 @@ export function InventoryPage() {
                                     skuId: undefined,
                                   })
                                 }
-                                options={db.models.map((m) => ({
-                                  value: m.id,
-                                  label: m.name,
-                                }))}
+                                // Only what is identified by serial: a
+                                // counted product is added below, by
+                                // quantity (2026-09-19).
+                                options={db.models
+                                  .filter(
+                                    (m) =>
+                                      !countedSkus.some(
+                                        (s) => s.modelId === m.id,
+                                      ),
+                                  )
+                                  .map((m) => ({
+                                    value: m.id,
+                                    label: m.name,
+                                  }))}
                                 style={{ minWidth: 180, flex: 1 }}
                               />
                               <Select
@@ -1174,34 +1253,47 @@ export function InventoryPage() {
                 // Neutral, unlike the QC grid's: that page groups by product
                 // so a block starts on one reading, while this grid is
                 // whatever four machines somebody happens to be adjusting at
-                // once — and each row carries its own switch.
+                // once — and each row's model decides its own reading.
                 title: t("stock.battery", "Battery"),
                 key: "battery",
-                width: 150,
-                render: (_, r) => (
-                  <BatteryFields
-                    fallback={batchModeOf(r)}
-                    idPrefix={`batch-battery-${r.key}`}
-                    value={{
-                      ...(r.batteryMode === undefined
-                        ? {}
-                        : { mode: r.batteryMode }),
-                      health: r.batteryHealth ?? null,
-                      cycleCount: r.cycleCount ?? null,
-                      fcc: r.fcc ?? null,
-                    }}
-                    // No `onCommit`: the grid validates every row at OK
-                    // (`batchProblems`), so there is nothing to do per box.
-                    onChange={(next) =>
-                      setRow(r.key, {
-                        batteryMode: next.mode,
-                        batteryHealth: next.health ?? undefined,
-                        cycleCount: next.cycleCount ?? undefined,
-                        fcc: next.fcc ?? undefined,
-                      })
-                    }
-                  />
-                ),
+                // The cycle reading is two boxes on ONE row since 2026-09-20
+                // (owner ask); this is the width they need side by side.
+                width: 230,
+                render: (_, r) =>
+                  // An accessory's row has nothing to read (2026-09-19): the
+                  // box is replaced by a "None" that says so, and whatever the
+                  // row's hidden boxes last held is dropped by `asWritten`.
+                  !hasBattery(batchSkuOf(r)) ? (
+                    <Tooltip
+                      title={t(
+                        "stock.noBatteryCounted",
+                        "Counted, not identified — no battery to record",
+                      )}
+                    >
+                      <Typography.Text type="secondary">
+                        {fmtNone()}
+                      </Typography.Text>
+                    </Tooltip>
+                  ) : (
+                    <BatteryFields
+                      fallback={batchModeOf(r)}
+                      idPrefix={`batch-battery-${r.key}`}
+                      value={{
+                        health: r.batteryHealth ?? null,
+                        cycleCount: r.cycleCount ?? null,
+                        fcc: r.fcc ?? null,
+                      }}
+                      // No `onCommit`: the grid validates every row at OK
+                      // (`batchProblems`), so there is nothing to do per box.
+                      onChange={(next) =>
+                        setRow(r.key, {
+                          batteryHealth: next.health ?? undefined,
+                          cycleCount: next.cycleCount ?? undefined,
+                          fcc: next.fcc ?? undefined,
+                        })
+                      }
+                    />
+                  ),
               },
               {
                 title: t(
@@ -1253,100 +1345,111 @@ export function InventoryPage() {
               },
             ]}
           />
+
+          {/*
+           * Counted products — accessories — by quantity (2026-09-19), drawn
+           * as the same kind of grid as the serials above (owner ask
+           * 2026-09-23). It was a bare row of controls with no headers, so two
+           * lists doing the same job on one dialog read as two different
+           * things.
+           */}
+          <Typography.Text
+            strong
+            style={{ display: "block", marginTop: SPACE.md }}
+          >
+            {t("stock.countedProducts", "Counted products")}
+          </Typography.Text>
+          <EditableTable<CountedRow>
+            rowKey="key"
+            dataSource={countedRows}
+            onAdd={() =>
+              setCountedRows((rs) => [
+                ...rs,
+                { key: `cnt-${++rowSeq}`, qty: 1 },
+              ])
+            }
+            addLabel={t("stock.addLine", "Add line")}
+            emptyText={t(
+              "stock.noCounted",
+              "No counted products on this batch.",
+            )}
+            columns={[
+              {
+                title: t("stock.product", "Product"),
+                key: "sku",
+                render: (_, c) => (
+                  <Select
+                    showSearch
+                    optionFilterProp="label"
+                    style={{ width: "100%" }}
+                    value={c.skuId}
+                    placeholder={t("stock.pickCountedProduct", "Product")}
+                    aria-label={t(
+                      "stock.countedProductAria",
+                      "Counted product",
+                    )}
+                    options={countedSkus.map((s) => ({
+                      value: s.id,
+                      label: `${s.name} ${s.variantLabel} · ${onHand(db.stockMoves, s.id)}`,
+                    }))}
+                    onChange={(v: string) =>
+                      setCountedRows((rs) =>
+                        rs.map((x) =>
+                          x.key === c.key ? { ...x, skuId: v } : x,
+                        ),
+                      )
+                    }
+                  />
+                ),
+              },
+              {
+                title: t("stock.qty", "Qty"),
+                key: "qty",
+                width: 120,
+                render: (_, c) => (
+                  <InputNumber
+                    min={1}
+                    precision={0}
+                    style={{ width: "100%" }}
+                    value={c.qty}
+                    aria-label={t("stock.countedQtyAria", "How many")}
+                    onChange={(v) =>
+                      setCountedRows((rs) =>
+                        rs.map((x) =>
+                          x.key === c.key ? { ...x, qty: v ?? null } : x,
+                        ),
+                      )
+                    }
+                  />
+                ),
+              },
+              {
+                title: "",
+                key: "remove",
+                width: 56,
+                render: (_, c) => (
+                  <Tooltip
+                    title={t("stock.removeThisLine", "Remove this line")}
+                  >
+                    <Button
+                      type="text"
+                      aria-label={t("stock.removeThisLine", "Remove this line")}
+                      icon={<DeleteOutlined />}
+                      onClick={() =>
+                        setCountedRows((rs) =>
+                          rs.filter((x) => x.key !== c.key),
+                        )
+                      }
+                    />
+                  </Tooltip>
+                ),
+              },
+            ]}
+          />
         </Form>
       </Modal>
 
-      <Modal
-        title={`Adjust ${editing?.serial ?? ""}`}
-        open={editing !== null}
-        onCancel={() => setEditing(null)}
-        onOk={saveEdit}
-        okText={t("stock.logAdjustment", "Log adjustment")}
-      >
-        <Form form={form} layout="vertical">
-          {/* No price field since 2026-08-27. The asking price is the
-              variant's, so repricing is an edit on the Product and not on one
-              serial — changing it here would have looked like it moved this
-              machine's price alone. Where the unit IS, what condition it is in
-              and what its battery reads are still per-serial facts, and stay. */}
-          <Form.Item
-            name="locationId"
-            label={t("stock.warehouse", "Warehouse")}
-            rules={[{ required: true }]}
-          >
-            <Select
-              options={db.warehouses.map((w) => ({
-                value: w.id,
-                label: w.name,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item
-            name="description"
-            label={t("stock.description", "Description")}
-          >
-            <Input.TextArea rows={2} />
-          </Form.Item>
-          <Form.Item
-            name="battery"
-            label={
-              editing
-                ? batteryFieldsLabel(
-                    defaultBatteryModeOfSku(db, editing.skuId),
-                    t,
-                  )
-                : t("stock.battery", "Battery")
-            }
-            tooltip={t(
-              "stock.leaveEmptyWhenNobodyHas",
-              "Leave empty when nobody has read it off the machine — that is not the same as zero",
-            )}
-            // A rule rather than each input's own `max`, for the reason the
-            // batch grid gives: a bound snaps the number and says nothing,
-            // while a rule refuses it and shows why under the field. Empty
-            // still passes — nobody has measured it.
-            rules={[
-              {
-                validator: (_, value: BatteryDraft | undefined) =>
-                  !editing ||
-                  isBatteryDraftInRange(
-                    value ?? {},
-                    defaultBatteryModeOfSku(db, editing.skuId),
-                  )
-                    ? Promise.resolve()
-                    : Promise.reject(
-                        new Error(
-                          t(
-                            "stock.batteryOutOfRange",
-                            "One of these readings is out of range.",
-                          ),
-                        ),
-                      ),
-              },
-            ]}
-          >
-            {/* antd hands a `Form.Item`'s single child `value`/`onChange`, so
-                the shared component slots in as a field of its own — the whole
-                reading is one form value rather than two or three that a
-                validator would have to reassemble. */}
-            <BatteryFieldsField
-              fallback={
-                editing ? defaultBatteryModeOfSku(db, editing.skuId) : "HEALTH"
-              }
-            />
-          </Form.Item>
-          <Form.Item
-            name="reason"
-            label={t("stock.reason", "Reason")}
-            tooltip={t(
-              "stock.writtenIntoTheAppendOnly",
-              "Written into the append-only log",
-            )}
-          >
-            <Input placeholder={t("stock.whyThisChange", "Why this change?")} />
-          </Form.Item>
-        </Form>
-      </Modal>
+      <StockExportModal open={exporting} onClose={() => setExporting(false)} />
     </PageContainer>
   );
 }

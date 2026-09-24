@@ -49,20 +49,10 @@ import { conditionOf, needsDescription } from "./condition.js";
 export const PLACEHOLDER_PREFIX = "TBD-";
 
 /**
- * The serial field's window — one rule, owned by `lib/serialScan.ts`.
- *
- * These were 12 and 15 and were their own numbers: the old serial was a
- * two-letter origin code plus Apple's, so intake's floor and the scanner's
- * were different quantities that happened to be related. The owner's
- * correction of 2026-09-01 collapsed that — `Unit.serial` IS Apple's barcode,
- * nothing is prefixed, and the store barcode is derived — so there is exactly
- * one shape a serial can have and one place that says so.
- *
- * Re-exported rather than deleted because six call sites read them by these
- * names, and because "the longest the field will take" is a real thing for a
- * `maxLength` to be even when it is now the same number as the rule.
- * `validateSerial` is what actually judges a typed serial; these two only size
- * the box.
+ * A NEW unit's stored serial — ten to twelve, owned by `lib/serialScan.ts`
+ * (owner rules 2026-09-21: the barcode's `S` is dropped and nothing is put in
+ * front). A second-hand serial is taken as read and has no window at all.
+ * `readSerialInput` is what actually judges a serial; these only describe it.
  */
 export { SERIAL_MAX_LENGTH, SERIAL_MIN_LENGTH } from "./serialScan.js";
 

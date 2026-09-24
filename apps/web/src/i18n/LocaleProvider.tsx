@@ -13,7 +13,7 @@ import "dayjs/locale/id";
 import { isLanguage, type Language } from "./catalogue.js";
 import { LocaleContext, type LocaleContextValue } from "./context.js";
 import { makeT } from "./translate.js";
-import { setDateLocale } from "../lib/format.js";
+import { setFormatLanguage } from "../lib/format.js";
 
 /**
  * Its own key, not a `xinchuan-cms.` one. ThemeProvider's `STORAGE_KEY` still
@@ -44,7 +44,8 @@ function readStoredLanguage(): Language {
 /**
  * Two globals React does not own have to track `language`: dayjs's active
  * locale, which is where antd's DatePicker gets its month and weekday names
- * (ConfigProvider cannot reach them), and `lib/format.ts`'s date locale.
+ * (ConfigProvider cannot reach them), and `lib/format.ts`'s language — the
+ * date locale and the word `fmtNone` prints.
  *
  * NOT called from an effect. An effect fires after the first paint and neither
  * of these re-renders anything on its own, so a picker or a date cell that
@@ -57,12 +58,12 @@ function readStoredLanguage(): Language {
  * changes is what makes "the globals match the language being rendered" true by
  * construction instead of by discipline — a second provider mounting from a
  * different stored value cannot leave the previous one's locale behind. It is
- * an assignment of two module variables, so the cost is nil and StrictMode's
+ * a handful of module assignments, so the cost is nil and StrictMode's
  * double invoke is a non-question.
  */
 function applyGlobals(language: Language): void {
   dayjs.locale(DAYJS_LOCALE[language]);
-  setDateLocale(language);
+  setFormatLanguage(language);
 }
 
 applyGlobals(readStoredLanguage());

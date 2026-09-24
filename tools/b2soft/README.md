@@ -49,7 +49,12 @@ the audit's Catatan sheet.
 
 - A serial is stored as `S` + Apple's serial, the string a scan produces; the
   bare serial typed at the counter still finds it. Anything else is kept verbatim.
-- An accessory unit gets a pseudo-serial `AKS-<barcode>-<nnnn>`, first in first out.
+- An accessory unit gets a pseudo-serial `AKS-<barcode>-<nnnn>`, first in first out — inside the
+  replay only. Since 2026-09-19 the app counts accessories by quantity: products in the importer's
+  accessory categories (`Aksesoris`, `Charger`, `Box`, `Sparepart` — `COUNTED_CATEGORIES` in
+  `documents.py`) leave as `StockMove` rows, invoice and sale lines of a quantity, and no unit.
+  Those categories are written with `tracksSerial: false`. A non-serialised product in any other
+  category (an iPhone B2Soft never scanned) stays a pseudo-serial unit and is flagged.
 - A serial sold twice with no return between gets an inferred customer return
   one second before the second sale.
 - `PEMAKAIAN TOKO` invoices are corrections (`KOREKSI_KELUAR`), not sales.

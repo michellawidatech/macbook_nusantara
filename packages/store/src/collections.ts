@@ -75,6 +75,9 @@ export const COLLECTIONS = {
   services: spec("id"),
   settlements: spec("id"),
   events: spec("id"),
+  // The counted products' ledger (2026-09-19) — after the orders, invoices
+  // and stock takes it names, beside the units' ledger.
+  stockMoves: spec("id"),
   unitNotes: spec("id"),
   stockIns: spec("id"),
   adjustments: spec("id"),

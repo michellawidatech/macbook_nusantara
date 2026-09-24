@@ -47,7 +47,18 @@ export const RP_SYMBOL = "Rp";
  */
 export const moneyFormatter: NonNullable<
   InputNumberProps<number>["formatter"]
-> = (value) => {
+> = (value) => groupRupiah(value);
+
+/**
+ * What `moneyFormatter` does, callable without antd's second argument.
+ *
+ * Exists for a PLACEHOLDER: the till's Actual paid box is empty by default and
+ * shows the split behind it (owner revision 2026-09-21), and a placeholder is
+ * a plain string rather than something antd formats. Going through the same
+ * function is what stops the ghost figure being grouped differently from the
+ * one that replaces it when somebody types.
+ */
+export function groupRupiah(value: number | string | undefined | null): string {
   const raw = `${value ?? ""}`;
   if (raw === "") {
     return "";
@@ -65,7 +76,7 @@ export const moneyFormatter: NonNullable<
   // string would round-trip to 42005. `precision={0}` means this only ever
   // shows mid-edit, on the way to being rounded away on blur.
   return fraction === undefined ? grouped : `${grouped},${fraction}`;
-};
+}
 
 /**
  * The inverse of `moneyFormatter`.

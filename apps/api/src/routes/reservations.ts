@@ -63,13 +63,14 @@ const listQuery = z.object({
 });
 
 /**
- * A serial is at most 15 characters (Inbound & QC), and a hold is capped at
+ * A serial is at most 23 characters (the Inbound field — a second-hand
+ * serial is taken as read since 2026-09-21), and a hold is capped at
  * `MAX_HOLD_SERIALS` machines — the service holds every unit's row lock across
  * the whole transaction, and that transaction has a ten-second budget.
  */
 const createBody = z.object({
   serials: z
-    .array(z.string().trim().min(1).max(15))
+    .array(z.string().trim().min(1).max(23))
     .min(1)
     .max(MAX_HOLD_SERIALS),
   customerId: z.string().trim().min(1).optional(),
@@ -81,7 +82,7 @@ const createBody = z.object({
 });
 
 const releaseBody = z.object({
-  serials: z.array(z.string().trim().min(1).max(15)).min(1).optional(),
+  serials: z.array(z.string().trim().min(1).max(23)).min(1).optional(),
 });
 
 const idParam = z.string().trim().min(1).max(64);

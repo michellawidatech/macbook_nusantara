@@ -105,11 +105,11 @@ describe("catalogue", () => {
       "In QC",
       "In inventory",
       "Closed",
-      // lib/inbound.ts PO_PAYMENT_STATUS_LABEL — what replaced it. "Closed" is
-      // already above and shares the key, which is the point: an order filed
-      // away and an invoice part-paid are the same word in both places.
+      // lib/inbound.ts PO_PAYMENT_STATUS_LABEL — what replaced it, renamed
+      // 2026-09-18 ("open, partially paid, and fully paid").
       "Open",
-      "Paid in full",
+      "Partially paid",
+      "Fully paid",
       // lib/inbound.ts PO_STATUS_LABEL — the order's own status, editable
       // since 2026-09-15. "Arrived" is already above.
       "Draft",
@@ -118,6 +118,10 @@ describe("catalogue", () => {
       // "Products" is already above as an InboundFormPage step.
       "Shipping",
       "Tax",
+      // mock/seed.ts PO_FEE_KIND_LABEL — what an invoice expense is for.
+      // Shipping and Tax are just above.
+      "Customs",
+      "Other",
     ];
     const untranslated = englishKeyed.filter(
       (key) => typeof CATALOGUES.id[key] !== "string",

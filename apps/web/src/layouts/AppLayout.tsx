@@ -15,7 +15,13 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import {
+  Link,
+  Outlet,
+  useHref,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import {
   Avatar,
   Button,
@@ -47,6 +53,7 @@ import { ScannerChip } from "../components/ScannerChip.js";
 import { BrandMark } from "../components/BrandMark.js";
 import { ErrorBoundary } from "../components/ErrorBoundary.js";
 import { StoreGate } from "../components/StoreGate.js";
+import { SerialHistoryHost } from "../components/SerialLink";
 import {
   BRAND_DEEP,
   LAYOUT,
@@ -63,7 +70,6 @@ import { LANGUAGES } from "../i18n/catalogue.js";
 import { useLanguage } from "../i18n/useLanguage.js";
 import { useColorScheme } from "../theme/useColorScheme";
 import { usePersistentState } from "../hooks/usePersistentState";
-import { AppTabs } from "./AppTabs.js";
 import type { ColorSchemePreference } from "../theme/tokens";
 
 export function AppLayout({ staff }: { staff: Staff }) {
@@ -115,6 +121,8 @@ export function AppLayout({ staff }: { staff: Staff }) {
    * the app is somewhere you go; this is the one you do.
    */
   const TILL_PATH = "/stock/out";
+  /** The till's address as the browser needs it — under the router's base. */
+  const tillHref = useHref(TILL_PATH);
 
   const match = matchLeaf(pathname);
   const selectedKey = match?.leaf?.path ?? match?.section.path ?? "";
@@ -188,13 +196,23 @@ export function AppLayout({ staff }: { staff: Staff }) {
   // Translated HERE, not in `NAV_SECTIONS`. Those labels stay English because
   // they are the catalogue keys — see i18n/catalogue.ts — and
   // navigation.test.tsx asserts on them.
+  //
+  // Every place is a real link (owner ask 2026-09-21: *"the user must be able
+  // to drag the feature and open it in another tab"*). An `<a href>` is what a
+  // browser lets somebody drag onto its tab bar, cmd- or ctrl-click, or
+  // middle-click; a menu row that only called `navigate()` was none of those.
+  // antd stretches a link in a menu item over the whole row, so the row is
+  // still one target.
   const items = useMemo(
     () =>
       NAV_SECTIONS.map((s) => ({
         key: s.children ? s.key : (s.path ?? s.key),
         icon: s.icon,
-        label: t(s.label),
-        children: s.children?.map((c) => ({ key: c.path, label: t(c.label) })),
+        label: s.path ? <Link to={s.path}>{t(s.label)}</Link> : t(s.label),
+        children: s.children?.map((c) => ({
+          key: c.path,
+          label: <Link to={c.path}>{t(c.label)}</Link>,
+        })),
       })),
     [t],
   );
@@ -248,11 +266,23 @@ export function AppLayout({ staff }: { staff: Staff }) {
         // Every section the person left open stays open (owner ask
         // 2026-09-15). The accordion this replaces kept `keys.slice(-1)`.
         onOpenChange={setOpenKeys}
-        onClick={({ key }) => {
-          if (key.startsWith("/")) {
-            navigate(key);
-            setDrawerOpen(false);
-          }
+        onClick={({ key, domEvent }) => {
+          if (!key.startsWith("/")) return;
+          // A click that landed on the link has been dealt with already: a
+          // plain one by the router, a modified one by the browser (a new
+          // tab). What is left is the keyboard — Enter on a focused row — and
+          // a click on the icon beside the label.
+          const onLink =
+            domEvent.target instanceof Element &&
+            domEvent.target.closest("a[href]") !== null;
+          const modified =
+            "metaKey" in domEvent &&
+            (domEvent.metaKey ||
+              domEvent.ctrlKey ||
+              domEvent.shiftKey ||
+              domEvent.altKey);
+          if (!onLink && !modified) navigate(key);
+          if (!modified) setDrawerOpen(false);
         }}
       />
     </ConfigProvider>
@@ -283,7 +313,12 @@ export function AppLayout({ staff }: { staff: Staff }) {
         block
         icon={<PlusOutlined />}
         aria-label={t("nav.newTransaction", "New Transaction")}
-        onClick={() => {
+        // A link too, for the same reason as the menu: the till is the page
+        // most worth dragging into a tab of its own.
+        href={tillHref}
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
           navigate(TILL_PATH);
           setDrawerOpen(false);
         }}
@@ -808,10 +843,17 @@ export function AppLayout({ staff }: { staff: Staff }) {
                 sidebar and sign-out stay usable while the shop loads, or
                 when it cannot. */}
             <StoreGate staffName={staff.name}>
-              {/* `AppTabs` replaced `<Outlet />` on 2026-09-15 (owner ask).
-                  It renders one mounted page per open tab and shows the
-                  active one; the router still owns the URL. */}
-              <AppTabs />
+              {/* One page at a time again (owner ask 2026-09-21: "remove
+                  the tab view"). The in-app tab strip of 2026-09-15 kept
+                  every visited page mounted; the browser's own tabs do that
+                  job now — every nav entry is a real link, so it can be
+                  dragged or cmd-clicked into another tab — and work in
+                  progress is kept on this device instead (`useDraft`). */}
+              {/* Every clickable serial's history dialog, once, over the
+                  page (2026-09-21) — `SerialLink` says why it lives here. */}
+              <SerialHistoryHost>
+                <Outlet />
+              </SerialHistoryHost>
             </StoreGate>
           </ErrorBoundary>
         </Layout.Content>

@@ -102,13 +102,17 @@ export {
 } from "./retrieval.js";
 export {
   HANDOFF_TOPICS,
+  LIVE_CAPABILITIES,
+  agentCapabilities,
   MAX_REPLY_CHARS,
+  PARALLEL_CAPABILITIES,
   checkHoldingMessage,
   checkReply,
   holdingMessage,
   isHandoffTopic,
   mentionsProduct,
   routeMessage,
+  type AgentCapabilities,
   type HandoffTopic,
   type ReplyProblem,
   type Route,

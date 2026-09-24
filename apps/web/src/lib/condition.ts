@@ -122,7 +122,7 @@ export function canGrade(condition: UnitCondition): boolean {
  *
  * Switching to New writes `NEW` over whatever was there. Switching to Second
  * clears the grade rather than guessing a letter — an ungraded second-hand
- * machine is an honest state (the grid says "—" and offers the checklist), and
+ * machine is an honest state (the grid says "None" and offers the checklist), and
  * inventing an `A` for a machine nobody has inspected is exactly the
  * unfounded letter `lib/grading.ts` was written to get rid of.
  *

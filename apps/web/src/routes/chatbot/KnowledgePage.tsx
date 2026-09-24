@@ -76,6 +76,7 @@ export function KnowledgePanel() {
   return (
     <Card>
       <ProTable
+        persistKey="knowledge"
         rowKey="id"
         dataSource={db.knowledge}
         searchPlaceholder={t(
@@ -109,16 +110,23 @@ export function KnowledgePanel() {
           {
             // The approved answer runs to a sentence or two by definition —
             // it is what the bot will say — so it gets two lines rather than
-            // antd's one-line clamp. See `LongText`.
+            // antd's one-line clamp. See `LongText`. A width of its own, so
+            // the longest answer wraps inside the column instead of widening
+            // the table to one line of it.
             title: t("knowledge.answer", "Answer"),
             dataIndex: "answer",
+            width: 460,
             searchable: true,
             render: (v: string) => <LongText>{v}</LongText>,
           },
           {
+            // Pinned to the right with the switch and the pencil beside it
+            // (owner ask 2026-09-18): a long answer scrolled them off the
+            // screen, and they are what somebody working down the list uses.
             title: t("knowledge.updated", "Updated"),
             dataIndex: "updatedAt",
             width: 140,
+            fixed: "right",
             defaultSortOrder: "descend",
             render: fmtDate,
           },
@@ -126,6 +134,7 @@ export function KnowledgePanel() {
             title: t("knowledge.active", "Active"),
             key: "active",
             width: 110,
+            fixed: "right",
             facet: true,
             facetLabel: t("knowledge.anyState", "Any state"),
             // The filter offers words, not `true`/`false` — a checkbox list
@@ -155,6 +164,7 @@ export function KnowledgePanel() {
             title: "",
             key: "actions",
             width: 64,
+            fixed: "right",
             render: (_, k) => (
               <Tooltip title={t("common.edit", "Edit")}>
                 <Button

@@ -73,6 +73,8 @@ function db(over: {
     // What a machine COST is read off these since 2026-09-15: its invoice's
     // shipping and tax, and its repairs. Empty unless a test says otherwise.
     pos: over.pos ?? [],
+    // Counted products' ledger (2026-09-19). Empty: these tests rank units.
+    stockMoves: [],
     services: [],
     discounts: [],
     skus: [

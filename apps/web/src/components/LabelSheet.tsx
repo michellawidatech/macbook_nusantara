@@ -33,8 +33,9 @@
  * (`inspectStoredSerial`). An empty or unencodable one is refused outright:
  * there is nothing to draw, and a sticker whose code says something other than
  * the text under it is worse than no sticker. A serial that merely looks wrong
- * — an `I` where a `1` belongs, a length nothing Apple prints — is named and
- * printed anyway. See that function for why the two get different answers.
+ * — an `I` where a `1` belongs, a dash — is named and printed anyway. (No
+ * length is "wrong" since 2026-09-21: a second-hand serial is taken as read.)
+ * See that function for why the two get different answers.
  *
  * ## Page setup (owner ask 2026-08-28)
  *
@@ -76,8 +77,6 @@ import {
 import {
   inspectStoredSerial,
   isPrintableSerial,
-  BASE_MAX_LENGTH,
-  BASE_MIN_LENGTH,
   type SerialFault,
   type SerialInspection,
 } from "../lib/serialScan.js";
@@ -642,8 +641,7 @@ function SetupControls({
  *
  * One sentence per fault, because the remedies are different: an unencodable
  * serial is a data problem somebody has to go and fix on the unit, whereas an
- * `I` in a serial is a typo at QC — and a length nothing Apple prints is
- * usually half a serial that was committed before the scanner finished.
+ * `I` in a serial is a typo at QC.
  */
 function useFaultText() {
   const { t } = useTranslation();
@@ -665,15 +663,6 @@ function useFaultText() {
         return t(
           "labels.faultConfusable",
           "has an I or an O, which Apple never prints",
-        );
-      case "shape":
-        // The rule the whole app now runs on: S and then ten to twelve. A
-        // serial that fails it predates the 2026-09-01 correction, so the
-        // sticker still prints — it just says the serial looks wrong.
-        return t(
-          "labels.faultShape",
-          "is not an S followed by {{min}}–{{max}} characters",
-          { min: BASE_MIN_LENGTH, max: BASE_MAX_LENGTH },
         );
     }
   };
@@ -754,7 +743,7 @@ function SerialWarnings({ labels }: { labels: readonly LabelDatum[] }) {
                 )
               : t(
                   "labels.checkBody",
-                  "These will print and scan back fine. Worth a second look at the machine before the sticker goes on it.",
+                  "These will print and scan back fine. Worth a second look at the unit before the sticker goes on it.",
                 )}
           </Typography.Text>
         </Flex>

@@ -41,24 +41,15 @@ export function App() {
         element={<Navigate to="/stock/inventory" replace />}
       />
       <Route element={<AppLayout staff={staff} />}>
-        {/*
-         * The pages come from `pages.tsx`, which `AppTabs` renders from too
-         * (2026-09-15). One table rather than two: a page listed here and not
-         * there is a route with no tab, and the other way round is a tab
-         * whose URL does not resolve.
-         */}
+        {/* The pages come from `pages.tsx` — one table of every screen. */}
         {PAGE_ROUTES.map((r) => (
           <Route key={r.path} path={r.path} element={r.element} />
         ))}
 
         {/* The shift opens on stock, which is the screen a shift opens on. */}
         <Route index element={<Navigate to="/stock/inventory" replace />} />
-        {/*
-         * Redirects, and they are deliberately NOT in `PAGE_ROUTES`: a
-         * redirect is on its way somewhere else, and a tab opened for one
-         * would be a tab for an address about to be replaced. See
-         * `visitLocation`.
-         */}
+        {/* Redirects, deliberately NOT in `PAGE_ROUTES`: a redirect is on its
+            way somewhere else, and is not a screen. */}
         {/* Inbound merged the Purchase Order and Stock In (QC) screens on
             2026-08-24. Both old paths still resolve, because a bookmark should
             not break on an IA change. */}
@@ -97,6 +88,12 @@ export function App() {
         <Route
           path="/finance/cashflow"
           element={<Navigate to="/finance/income-expense" replace />}
+        />
+        {/* Payable & Receivable was one page of two tabs for a day
+            (2026-09-21); they are two leaves since 2026-09-22. */}
+        <Route
+          path="/finance/payable-receivable"
+          element={<Navigate to="/finance/receivable" replace />}
         />
         {/* The inbox and the knowledge base are two tabs of one page since
             2026-08-26. The old leaf path still resolves. */}

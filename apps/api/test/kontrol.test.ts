@@ -66,6 +66,9 @@ beforeAll(async () => {
   const res = await request(app)
     .post("/api/auth/login")
     .send({ username: "pemilik", password: PASSWORD });
+  // Say why, if it ever fails: once in a full run this read only "Cannot read
+  // properties of undefined", and it never happened again (2026-09-18).
+  expect(res.status, JSON.stringify(res.body)).toBe(200);
   cookie = (res.headers["set-cookie"] as unknown as string[])[0]!;
 
   // A successful sign-in is audited too (2026-09-18). This suite's own one is

@@ -281,6 +281,71 @@ describe("08 §2 — the fifteen invariants", () => {
     await pay("ok2", null, "po1");
   });
 
+  it("7b. a payment against an opening balance names the party, and flows the right way", async () => {
+    // Owner answer 2026-09-22: a debt from before this app has no invoice or
+    // sale, so the payment's one parent is the supplier or the customer.
+    await owner.query(
+      `INSERT INTO "Supplier" (id, name, active, "createdAt") VALUES ('sup1','Supplier A',true,now())`,
+    );
+    await owner.query(
+      `INSERT INTO "Customer" (id, name, "createdAt") VALUES ('cus1','Pelanggan A',now())`,
+    );
+    const pay = (
+      id: string,
+      parents: {
+        orderId?: string;
+        supplierId?: string;
+        customerId?: string;
+      },
+      direction: "MASUK" | "KELUAR",
+    ) =>
+      owner.query(
+        `INSERT INTO "Payment" (id, "orderId", "supplierId", "customerId", direction, "methodId", amount, status, "staffId")
+         VALUES ($1,$2,$3,$4,$5,'pm_tunai',1000,'LUNAS',$6)`,
+        [
+          id,
+          parents.orderId ?? null,
+          parents.supplierId ?? null,
+          parents.customerId ?? null,
+          direction,
+          STAFF,
+        ],
+      );
+
+    // Two parents, each of which exists — the CHECK refuses, not a key.
+    await rejectsWith(
+      () => pay("two1", { orderId: ORDER, supplierId: "sup1" }, "KELUAR"),
+      CHECK_VIOLATION,
+    );
+    await rejectsWith(
+      () => pay("two2", { supplierId: "sup1", customerId: "cus1" }, "MASUK"),
+      CHECK_VIOLATION,
+    );
+    // The shop pays a supplier and is paid by a customer, never the reverse.
+    await rejectsWith(
+      () => pay("wrong1", { supplierId: "sup1" }, "MASUK"),
+      CHECK_VIOLATION,
+    );
+    await rejectsWith(
+      () => pay("wrong2", { customerId: "cus1" }, "KELUAR"),
+      CHECK_VIOLATION,
+    );
+    // A party that does not exist is a foreign key failing.
+    await rejectsWith(
+      () => pay("ghost", { supplierId: "nobody" }, "KELUAR"),
+      FOREIGN_KEY_VIOLATION,
+    );
+
+    await pay("sup_ok", { supplierId: "sup1" }, "KELUAR");
+    await pay("cus_ok", { customerId: "cus1" }, "MASUK");
+    // Money the owner paid personally still counts against the debt; the
+    // switch defaults to "it went through the shop".
+    const { rows } = await owner.query<{ inBalance: boolean }>(
+      `SELECT "inBalance" FROM "Payment" WHERE id IN ('sup_ok','cus_ok')`,
+    );
+    expect(rows.map((r) => r.inBalance)).toEqual([true, true]);
+  });
+
   it("8. money is never negative where it cannot be, and quantities are positive", async () => {
     const line = (id: string, qty: number, price: number) =>
       owner.query(

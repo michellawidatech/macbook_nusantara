@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  isAccessory,
   CUSTOMERS,
   INTAKE,
   ORDERS,
@@ -16,7 +17,7 @@ import {
   RESERVATIONS,
   SKUS,
   SUPPLIER_RETURNS,
-  CYCLE_ERA_MAX_YEAR,
+  recordsBatteryHealth,
   askingPriceOf,
   buildShop,
   cyclesForHealth,
@@ -153,8 +154,7 @@ describe("condition", () => {
    */
   it("records each machine's battery in its own era's units", () => {
     for (const u of shop.units) {
-      const year = modelOf(skuOf(u.skuId).modelId).releaseYear;
-      if (year <= CYCLE_ERA_MAX_YEAR) {
+      if (!recordsBatteryHealth(modelOf(skuOf(u.skuId).modelId))) {
         expect(u.battery, u.serial).toBeUndefined();
       } else {
         expect(u.cycleCount, u.serial).toBeUndefined();
@@ -448,9 +448,39 @@ describe("sales", () => {
     // The same arithmetic `Order_total_arithmetic_check` enforces in Postgres.
     for (const o of shop.orders) {
       expect(o.subtotal, o.code).toBe(
-        o.builtLines.reduce((n, l) => n + l.sub, 0),
+        o.builtLines.reduce((n, l) => n + l.sub, 0) +
+          o.countedLines.reduce((n, l) => n + l.sub, 0),
       );
       expect(o.total, o.code).toBe(o.subtotal - o.discount + (o.extra ?? 0));
+    }
+  });
+
+  /*
+   * Counted products (2026-09-19): accessories are quantities on a ledger,
+   * never units, and the shelf can never go below zero.
+   */
+  it("keeps accessories off the units, and on the stock ledger", () => {
+    for (const u of shop.units) {
+      expect(isAccessory(u.skuId), u.serial).toBe(false);
+    }
+    const onHand = new Map<string, number>();
+    for (const m of shop.stockMoves) {
+      expect(m.qty, m.id).not.toBe(0);
+      const k = `${m.skuId}@${m.locationId}`;
+      const next = (onHand.get(k) ?? 0) + m.qty;
+      expect(next, `${m.id} takes ${k} below zero`).toBeGreaterThanOrEqual(0);
+      onHand.set(k, next);
+    }
+    // Every counted line sold is one TERJUAL move for exactly its quantity.
+    for (const o of shop.orders) {
+      for (const l of o.countedLines) {
+        const out = shop.stockMoves.filter((m) => m.orderLineId === l.id);
+        expect(
+          out.map((m) => [m.type, m.qty]),
+          l.id,
+        ).toEqual([["TERJUAL", -l.qty]]);
+        expect(l.cogs, l.id).toBe(out[0]!.cost * l.qty);
+      }
     }
   });
 
@@ -560,6 +590,23 @@ describe("the shop as a whole", () => {
 
   it("sells through more than one channel", () => {
     expect(new Set(ORDERS.map((o) => o.channel)).size).toBeGreaterThan(2);
+  });
+
+  it("numbers its documents clear of the month's first live ones", () => {
+    // `next_doc_code` restarts at 1 every month. A seeded RV-…-000001 made
+    // the first booking of the month fail on the unique code, and CI's
+    // agentRole test with it (2026-09-18).
+    const codes = [
+      ...shop.purchaseOrders,
+      ...shop.orders,
+      ...shop.reservations,
+      ...shop.supplierReturns,
+    ].map((d) => d.code);
+    expect(codes.length).toBeGreaterThan(0);
+    for (const code of codes) {
+      const n = Number(/-(\d{6})$/.exec(code)?.[1]);
+      expect(n, code).toBeGreaterThan(40);
+    }
   });
 });
 

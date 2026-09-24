@@ -133,6 +133,26 @@ export function inOpnameScope(
 }
 
 /**
+ * Is a counted product's stock at `locationId` inside the count (2026-09-19)?
+ *
+ * The same axes a unit is judged on, read for a shelf of pieces: it sits in
+ * a warehouse and on no rack — so naming racks leaves it out, as it leaves
+ * out a unit still in QC — and it is sealed stock, `NEW`, for the condition.
+ */
+export function countedInScope(
+  skuId: string,
+  locationId: string,
+  scope: OpnameScope,
+  categoryOf: (skuId: string) => string | undefined,
+): boolean {
+  if (!axis(scope.locationIds, locationId)) return false;
+  if (!axis(scope.rackIds, undefined)) return false;
+  if (!axis(scope.categories, categoryOf(skuId))) return false;
+  if (!axis(scope.conditions, "NEW")) return false;
+  return true;
+}
+
+/**
  * The warehouse a surplus machine found on this count belongs to.
  *
  * A count of one warehouse can answer this by itself, and almost every count

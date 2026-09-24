@@ -1,27 +1,26 @@
 /**
  * How a bill was paid, in parts — and the one place either desk edits it.
  *
- * Two screens ask the same question of a sale and have to give the same
- * answer: the till, where the money is first recorded, and Transaction
- * History, where it is corrected afterwards (*"we should also be able to edit
- * how much the user have paid, for error handling"*). One panel, so a split
- * entered at the counter reads back the same way a week later.
+ * ## Three columns, and the fourth figure is arithmetic (owner, 2026-09-23)
  *
- * ## What a row says, and why it needs three states
+ * > *"For payment per transaction, it should only have these columns: Payment
+ * > method (Transfer, Cash, Shopee, Tokopedia) | Status (Pending, settled) |
+ * > Amount. The owe should automatically be calculated."*
  *
- * SETTLED / PENDING / DUE are not degrees of the same thing — see
- * `lib/salePayments.ts`. Cash in the till, money Shopee is holding, and money
- * a customer has promised are three different facts, and the shop chases a
- * different party for each. The state picker is therefore the first control on
- * a row, and picking PENDING asks which marketplace while picking DUE asks for
- * a date.
+ * What the customer still owes stops being a row somebody types and becomes
+ * the bill less what is recorded against it. Two typed figures can disagree;
+ * a subtraction cannot. The shortfall is still STORED as a DUE payment —
+ * Receivable, the customer balance and the overdue tag all read one — but it
+ * is derived on save, the way `Order.settled` is (`lib/salePayments.ts`).
  *
- * ## Nothing is written until the caller saves
+ * The due date is the one thing the shortfall cannot work out for itself, so
+ * it is asked for below the table and only while something is owed.
  *
- * The panel holds a draft and reports it upward. A payment grid that committed
- * per keystroke would file Rp5, Rp50, Rp500 … on the way to Rp5.000.000, and
- * the whole reason edits are logged is that the wrong one of those is what
- * somebody has to find later.
+ * The methods are the till's four, and a marketplace row carries the
+ * marketplace's own order number beneath it — that is the key a payout is
+ * matched on. A row recorded through anything else keeps its own label rather
+ * than being rewritten into one of the four: the method is what sorts money
+ * into the cash pot or the bank one.
  */
 import {
   Button,
@@ -38,31 +37,29 @@ import dayjs from "dayjs";
 import { useTranslation } from "react-i18next";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "./money";
 import { fmtRp } from "../lib/format.js";
-import { SALE_CHANNELS } from "../lib/channels.js";
 import {
-  saleBalance,
+  TILL_METHODS,
+  tillMethod,
+  tillMethodOfPayment,
+  type TillMethod,
+} from "../lib/tillPayments.js";
+import {
+  enteredPayments,
+  owedDueAt,
+  withOwed,
   type PaymentState,
   type SalePayment,
 } from "../lib/salePayments.js";
 import { SPACE, TYPE } from "../theme/tokens";
 
 export interface PaymentsPanelProps {
+  /** The sale, so a derived shortfall row is filed under a stable id. */
+  readonly orderId: string;
   readonly total: number;
+  /** The whole list, derived shortfall included. */
   readonly value: readonly SalePayment[];
+  /** The whole list back, with the shortfall rebuilt. */
   readonly onChange: (next: SalePayment[]) => void;
-  /**
-   * Methods the till offers: a `PaymentMethod` CODE and the label to show.
-   *
-   * Both, since 2026-09-09. It was a flat list of labels, so a payment
-   * recorded here stored "Bank transfer" in a field the schema, the fixture
-   * and every other reader treat as a code — and the cash-and-bank balance
-   * sorts a movement by exactly that field, so a renamed method quietly
-   * belonged to neither pot.
-   */
-  readonly methods: readonly {
-    readonly value: string;
-    readonly label: string;
-  }[];
   readonly disabled?: boolean;
   /** Hides the add/remove controls — a read-only view on a closed receipt. */
   readonly readOnly?: boolean;
@@ -72,110 +69,148 @@ let seq = 0;
 const newId = () => `pay-${Date.now()}-${++seq}`;
 
 export function PaymentsPanel({
+  orderId,
   total,
   value,
   onChange,
-  methods,
   disabled,
   readOnly,
 }: PaymentsPanelProps) {
   const { t } = useTranslation();
-  const balance = saleBalance(total, value);
+
+  const methodLabel = (m: TillMethod): string =>
+    m === "TRANSFER"
+      ? t("pos.methodTransfer", "Transfer")
+      : m === "TUNAI"
+        ? t("pos.methodCash", "Cash")
+        : m === "SHOPEE"
+          ? "Shopee"
+          : "Tokopedia";
+
+  const rows = enteredPayments(value);
+  const dueAt = owedDueAt(value);
+  const recorded = rows.reduce((n, p) => n + p.amount, 0);
+  const owed = Math.max(0, total - recorded);
+
+  /** Rebuild the whole list — entered rows plus whatever is still short. */
+  const emit = (next: readonly SalePayment[], date = dueAt) =>
+    onChange(withOwed(orderId, total, next, date));
 
   const set = (id: string, patch: Partial<SalePayment>) =>
-    onChange(value.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+    emit(rows.map((p) => (p.id === id ? { ...p, ...patch } : p)));
 
   const add = () =>
-    onChange([
-      ...value,
+    emit([
+      ...rows,
       {
         id: newId(),
-        method: methods[0]?.value ?? "TUNAI",
+        method: "TUNAI",
         // The gap, so the common case — a deposit and then the rest — is one
-        // press and no arithmetic. Zero when the bill is already accounted
-        // for, which is the honest starting point for a correction.
-        amount: balance.unaccounted,
+        // press and no arithmetic.
+        amount: owed,
         state: "SETTLED",
         at: new Date().toISOString(),
       },
     ]);
 
-  const states: { value: PaymentState; label: string }[] = [
-    { value: "SETTLED", label: t("pay.settled", "Received") },
-    { value: "PENDING", label: t("pay.pending", "With a marketplace") },
-    { value: "DUE", label: t("pay.due", "Owed by the customer") },
-  ];
+  /** Moving a row onto another method rewrites the pair that identifies it. */
+  const pickMethod = (p: SalePayment, key: TillMethod) => {
+    const def = tillMethod(key);
+    set(p.id, {
+      method: def.code,
+      channel: def.channel,
+      // Only a marketplace can be holding money. Cash in a drawer is either
+      // there or it is not.
+      state: def.channel === undefined ? "SETTLED" : p.state,
+      ...(def.channel === undefined ? { ref: undefined } : {}),
+    });
+  };
 
   return (
     <Flex vertical gap={SPACE.sm}>
       <Table<SalePayment>
         size="small"
         rowKey="id"
-        dataSource={value as SalePayment[]}
+        dataSource={rows}
         pagination={false}
         locale={{
           emptyText: t("pay.none", "Nothing recorded against this bill yet."),
         }}
         columns={[
           {
-            title: t("pay.state", "State"),
-            key: "state",
-            width: 190,
-            render: (_, p) => (
-              <Select
-                size="small"
-                style={{ width: "100%" }}
-                disabled={disabled || readOnly}
-                value={p.state}
-                options={states}
-                aria-label={t("pay.stateFor", "State of this payment")}
-                onChange={(v: PaymentState) =>
-                  set(p.id, {
-                    state: v,
-                    // A state change clears what the other states meant. A
-                    // date on a settled payment or a channel on a debt are
-                    // both fields nobody can act on.
-                    channel:
-                      v === "PENDING" ? (p.channel ?? "SHOPEE") : undefined,
-                    dueAt: v === "DUE" ? p.dueAt : undefined,
-                  })
-                }
-              />
-            ),
+            title: t("pay.method", "Payment method"),
+            key: "method",
+            width: 240,
+            render: (_, p) => {
+              const key = tillMethodOfPayment(p);
+              const options = TILL_METHODS.map((m) => ({
+                value: m.key,
+                label: methodLabel(m.key),
+              }));
+              return (
+                <Flex vertical gap={4}>
+                  <Select<string>
+                    size="small"
+                    style={{ width: "100%" }}
+                    disabled={disabled || readOnly}
+                    value={key ?? p.method}
+                    aria-label={t("pay.methodFor", "How it was paid")}
+                    options={
+                      key === undefined
+                        ? [...options, { value: p.method, label: p.method }]
+                        : options
+                    }
+                    onChange={(v) => pickMethod(p, v as TillMethod)}
+                  />
+                  {/* The marketplace's own order number — what a payout report
+                      names this money by, so it is what a report matches on. */}
+                  {p.channel !== undefined && (
+                    <Input
+                      size="small"
+                      disabled={disabled || readOnly}
+                      value={p.ref ?? ""}
+                      aria-label={t("pay.refFor", "Reference number")}
+                      placeholder={t("pay.refPlaceholder", "Reference number")}
+                      onChange={(e) => set(p.id, { ref: e.target.value })}
+                    />
+                  )}
+                </Flex>
+              );
+            },
           },
           {
-            title: t("pay.method", "Method"),
-            key: "method",
+            title: t("pay.status", "Status"),
+            key: "status",
             width: 170,
-            render: (_, p) =>
-              p.state === "PENDING" ? (
-                <Select
+            render: (_, p) => {
+              const marketplace = p.channel !== undefined;
+              return (
+                <Select<PaymentState>
                   size="small"
                   style={{ width: "100%" }}
-                  disabled={disabled || readOnly}
-                  value={p.channel}
-                  aria-label={t("pay.channelFor", "Marketplace holding it")}
-                  options={SALE_CHANNELS.filter((c) => c.holdsFunds).map(
-                    (c) => ({ value: c.value, label: c.label }),
-                  )}
-                  onChange={(v: string) => set(p.id, { channel: v })}
+                  disabled={disabled || readOnly || !marketplace}
+                  value={p.state === "DUE" ? "SETTLED" : p.state}
+                  aria-label={t("pay.stateFor", "State of this payment")}
+                  options={[
+                    { value: "SETTLED", label: t("pay.settled", "Settled") },
+                    ...(marketplace
+                      ? [
+                          {
+                            value: "PENDING" as PaymentState,
+                            label: t("pay.pending", "Pending"),
+                          },
+                        ]
+                      : []),
+                  ]}
+                  onChange={(v) => set(p.id, { state: v })}
                 />
-              ) : (
-                <Select
-                  size="small"
-                  style={{ width: "100%" }}
-                  disabled={disabled || readOnly}
-                  value={p.method}
-                  aria-label={t("pay.methodFor", "How it was paid")}
-                  options={methods as { value: string; label: string }[]}
-                  onChange={(v: string) => set(p.id, { method: v })}
-                />
-              ),
+              );
+            },
           },
           {
             title: t("pay.amount", "Amount"),
             key: "amount",
-            width: 170,
+            width: 180,
             align: "right",
             render: (_, p) => (
               <InputNumber
@@ -193,40 +228,6 @@ export function PaymentsPanel({
               />
             ),
           },
-          {
-            title: t("pay.dueDate", "Due"),
-            key: "due",
-            width: 150,
-            render: (_, p) =>
-              p.state === "DUE" ? (
-                <DatePicker
-                  size="small"
-                  style={{ width: "100%" }}
-                  disabled={disabled || readOnly}
-                  value={p.dueAt ? dayjs(p.dueAt) : null}
-                  aria-label={t("pay.dueFor", "When it is promised")}
-                  onChange={(d) =>
-                    set(p.id, { dueAt: d ? d.toISOString() : undefined })
-                  }
-                />
-              ) : (
-                <Typography.Text type="secondary">—</Typography.Text>
-              ),
-          },
-          {
-            title: t("pay.note", "Note"),
-            key: "note",
-            render: (_, p) => (
-              <Input
-                size="small"
-                disabled={disabled || readOnly}
-                placeholder={t("pay.notePlaceholder", "DP, sisa, …")}
-                aria-label={t("pay.noteFor", "Note")}
-                value={p.note ?? ""}
-                onChange={(e) => set(p.id, { note: e.target.value })}
-              />
-            ),
-          },
           ...(readOnly
             ? []
             : [
@@ -240,9 +241,7 @@ export function PaymentsPanel({
                       disabled={disabled}
                       icon={<DeleteOutlined />}
                       aria-label={t("pay.remove", "Remove this payment")}
-                      onClick={() =>
-                        onChange(value.filter((x) => x.id !== p.id))
-                      }
+                      onClick={() => emit(rows.filter((x) => x.id !== p.id))}
                     />
                   ),
                 },
@@ -261,28 +260,30 @@ export function PaymentsPanel({
             {t("pay.add", "Add a payment")}
           </Button>
         )}
-        <Flex gap={SPACE.md} wrap>
-          <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
-            {t("pay.received", "Received {{amount}}", {
-              amount: fmtRp(balance.settled),
-            })}
-          </Typography.Text>
-          {balance.pending > 0 && (
-            <Typography.Text type="warning" style={{ fontSize: TYPE.sm }}>
-              {t("pay.pendingAmount", "With a marketplace {{amount}}", {
-                amount: fmtRp(balance.pending),
-              })}
-            </Typography.Text>
-          )}
-          {balance.customerOwes > 0 && (
-            <Typography.Text type="danger" style={{ fontSize: TYPE.sm }}>
-              {t("pay.owed", "Customer owes {{amount}}", {
-                amount: fmtRp(balance.customerOwes),
-              })}
-            </Typography.Text>
-          )}
-        </Flex>
+        <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+          {t("pay.received", "Recorded {{amount}} of {{total}}", {
+            amount: fmtRp(recorded),
+            total: fmtRp(total),
+          })}
+        </Typography.Text>
       </Flex>
+
+      {/* The shortfall, and the one thing about it nobody can derive. */}
+      {owed > 0 && (
+        <Flex align="center" wrap gap={SPACE.md}>
+          <Typography.Text type="danger" strong>
+            {t("pay.owed", "Customer owes {{amount}}", { amount: fmtRp(owed) })}
+          </Typography.Text>
+          <DatePicker
+            size="small"
+            disabled={disabled || readOnly}
+            value={dueAt ? dayjs(dueAt) : null}
+            aria-label={t("pay.dueFor", "When it is promised")}
+            placeholder={t("pay.dueDate", "Due date")}
+            onChange={(d) => emit(rows, d ? d.toISOString() : undefined)}
+          />
+        </Flex>
+      )}
     </Flex>
   );
 }

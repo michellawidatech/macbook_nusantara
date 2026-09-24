@@ -269,9 +269,12 @@ export const id: Record<string, string> = {
   "common.done": "Selesai",
   "common.genericError": "Ada yang salah. Coba lagi.",
   // Shown when a map in `i18n/enumLabels.ts` meets an enum member the UI has
-  // not been taught yet. Deliberately not "—": the value exists, we just do not
-  // have a name for it.
+  // not been taught yet. Deliberately not "None": the value exists, we just do
+  // not have a name for it.
   "common.unknownValue": "Tidak dikenal",
+  // An empty cell whose value is a word — `fmtNone` (owner 2026-09-21: no
+  // dashes; 0 for a number, "None" for the rest).
+  "common.none": "Tidak ada",
 
   // ── Domain enums ──────────────────────────────────────────────────────────
   // Keyed by the English label in `i18n/enumLabels.ts`, per the English-source-
@@ -308,6 +311,10 @@ export const id: Record<string, string> = {
   Tax: "Pajak",
 
   // UnitEvent.type — the lifecycle timeline
+  "Arrived on an invoice": "Tiba dari faktur",
+  "Arrival undone": "Kedatangan dibatalkan",
+  "Taken in on a trade-in": "Masuk dari tukar tambah",
+  "Stock count difference": "Selisih stock opname",
   "Pending to QC": "Menunggu QC",
   "QC passed — entered inventory": "QC lolos — masuk stok",
   Note: "Catatan",
@@ -544,7 +551,13 @@ export const id: Record<string, string> = {
   // words: money a marketplace holds is "ditahan", money a customer owes is
   // "piutang pelanggan".
   "Pending & Receivables": "Saldo Tertahan & Piutang",
-  "piutang.title": "Saldo tertahan & piutang",
+  // The same leaf, renamed in the nav on 2026-09-21.
+  "Pending Payment": "Pembayaran Tertunda",
+  "Payable & Receivable": "Utang & Piutang",
+  // Two leaves since 2026-09-22.
+  Receivable: "Piutang",
+  Payable: "Utang",
+  "piutang.title": "Pembayaran tertunda",
   "piutang.withMarketplaces": "Ditahan marketplace",
   "piutang.withMarketplacesHint":
     "Sudah dibayar pelanggan. Tarik dari masing-masing platform.",
@@ -552,58 +565,64 @@ export const id: Record<string, string> = {
   "piutang.customersOweHint": "Belum dibayar sama sekali. Perlu ditagih.",
   "piutang.marketplaceMoney": "Menunggu di marketplace",
   "piutang.customerDebts": "Piutang pelanggan",
-  "piutang.withdrawals": "Penarikan yang tercatat",
   "piutang.channel": "Kanal",
-  "piutang.sales": "Transaksi",
-  "piutang.sale": "Transaksi",
+  "piutang.anyChannel": "Semua kanal",
   "piutang.customer": "Pelanggan",
   "piutang.walkIn": "Pelanggan umum",
   "piutang.when": "Tanggal",
   "piutang.amount": "Jumlah",
-  "piutang.gross": "Bruto",
-  "piutang.billed": "Tagihan",
-  "piutang.owed": "Masih kurang",
-  "piutang.due": "Dijanjikan",
-  "piutang.noDate": "Tanggal belum disepakati",
   "piutang.overdueOn": "Lewat tempo — {{date}}",
-  "piutang.expected": "Perkiraan masuk",
-  "piutang.afterPct": "setelah {{pct}}%",
-  "piutang.deducted": "Potongan",
-  "piutang.landed": "Yang masuk",
-  "piutang.markDone": "Tandai sudah masuk",
+  "piutang.promised": "Dijanjikan {{date}}",
+  "piutang.landed": "Diterima",
   "piutang.settled": "{{amount}} dicatat dari {{channel}}.",
   "piutang.noPending": "Semua marketplace sudah mencairkan.",
   "piutang.noDebts": "Tidak ada pelanggan yang berutang.",
-  "piutang.openInHistory": "Koreksi pembayarannya",
   "piutang.amend": "Koreksi pencairan ini",
-  "piutang.amendAria": "Koreksi pencairan dari {{channel}}",
   "piutang.amended": "Pencairan dikoreksi.",
-  "piutang.openInHistoryAria": "Buka {{code}} di Riwayat Transaksi",
+  // ── The marketplace table, flattened (owner ask 2026-09-20) ──────────
+  // One row per marketplace payment: what is waiting on top, what has been
+  // withdrawn underneath, and "Terima" on the row that is waiting.
+  "piutang.orderNo": "No. pesanan",
+  "piutang.noRef": "Tanpa referensi",
+  "piutang.searchOrders": "Cari no. pesanan atau referensi",
+  "piutang.waiting": "Menunggu",
+  "piutang.lessDeductions": "dipotong {{amount}}",
+  "piutang.receive": "Tandai pencairan ini sudah masuk",
+  "piutang.receiveAria": "Terima pencairan untuk {{code}}",
+  "piutang.alreadyReceived": "Pencairan ini sudah pernah dicatat diterima.",
+  "piutang.amendSaleAria": "Koreksi pencairan untuk {{code}}",
+  // ── The customer table: a call list with the receipt behind it ───────
+  "piutang.transactionNo": "No. transaksi",
+  "piutang.item": "Barang",
+  "piutang.phone": "No. telepon",
+  "piutang.noPhone": "Tidak ada di data",
+  "piutang.stillOwed": "kurang {{amount}}",
+  "piutang.searchDebts": "Cari transaksi, pelanggan, no. telepon atau unit",
+  "piutang.seeReceipt": "Lihat struk",
+  "piutang.seeReceiptAria": "Struk untuk {{code}}",
+  "piutang.openPayments":
+    "Riwayat pembayaran — catat, koreksi atau hapus pembayaran",
+  "piutang.openPaymentsAria": "Pembayaran pada {{code}}",
+  "piutang.payUnchanged": "Tidak ada yang berubah.",
+  "piutang.payLogged": "{{n}} perubahan dicatat.",
 
   // ── SettleModal — recording one marketplace withdrawal ───────────────
-  "settle.title": "Pencairan dari {{channel}}",
-  "settle.covering": "{{count}} transaksi, total {{gross}}.",
-  "settle.feeKind": "Yang dipotong",
-  "settle.feeKindFor": "Jenis potongan",
-  "settle.feeLabel": "Namanya di rekening koran",
-  "settle.feeLabelFor": "Nama di rekening koran",
-  "settle.feeLabelPlaceholder": "Opsional",
+  "settle.title": "Terima dari {{channel}}",
+  "settle.covering": "{{subject}} · {{gross}}",
+  "settle.coveringPlain": "{{gross}} menunggu di {{channel}}.",
+  // A deduction is the words off the statement, not a category (2026-09-20).
+  "settle.feeLabel": "Potongan",
+  "settle.feeLabelFor": "Yang dipotong",
+  "settle.feeLabelPlaceholder": "Sesuai nama di rekening koran",
   "settle.feeAmount": "Jumlah",
   "settle.feeAmountFor": "Jumlah potongan",
   "settle.addFee": "Tambah potongan",
   "settle.removeFee": "Hapus potongan ini",
-  "settle.noFees": "Belum ada potongan yang dicatat.",
-  "settle.expected": "Seharusnya masuk",
-  "settle.received": "Yang benar-benar masuk",
-  "settle.receivedFor": "Yang benar-benar masuk",
-  // The received figure is the only one anybody can check against a statement,
-  // so it is the one everything downstream believes.
-  "settle.receivedHint": "Sesuai rekening koran.",
+  "settle.noFees": "Tidak ada potongan. Seluruh jumlah masuk.",
+  // The received figure follows the deductions until somebody states what the
+  // bank actually paid — that figure is the only one anybody can check, so it
+  // is the one everything downstream believes.
   "settle.mark": "Tandai sudah masuk",
-  "settle.short": "{{amount}} lebih sedikit dari yang dijelaskan potongan.",
-  "settle.over": "{{amount}} lebih banyak dari yang dijelaskan potongan.",
-  "settle.reasonFor": "Kenapa angkanya beda",
-  "settle.useDefault": "Pakai “{{reason}}”",
 
   // ── PaymentsPanel — a bill paid in parts (owner ask 2026-09-08) ──────
   // The three states are three different facts and the words keep them apart:
@@ -654,11 +673,6 @@ export const id: Record<string, string> = {
   "payEdit.amended": "{{from}} → {{to}}",
 
   // ── The till — splitting a bill ──────────────────────────────────────
-  "pos.splitUpper": "BAGI TAGIHAN INI",
-  "pos.splitIt": "Bayar terpisah",
-  "pos.splitCancel": "Jadi satu pembayaran saja",
-  "pos.splitHint":
-    "Tunai sekarang lalu sisanya di marketplace, DP dengan jatuh tempo — apa pun yang bukan satu pembayaran.",
 
   // ── PriceEditorModal — repricing a shelf (owner ask 2026-09-08) ──────
   // The per-serial price. "Harga toko" and "Harga marketplace" are what the
@@ -668,20 +682,12 @@ export const id: Record<string, string> = {
   "price.save": "Simpan harga",
   "price.serial": "Serial",
   "price.grade": "Grade",
-  "price.cost": "Modal",
   "price.store": "Harga toko",
-  "price.market": "Harga marketplace",
   "price.storeFor": "Harga toko untuk {{serial}}",
-  "price.marketFor": "Harga marketplace untuk {{serial}}",
   "price.fill": "Isi ke bawah",
   "price.fillDown": "Salin baris teratas ke seluruh kolom",
-  "price.marketHint":
-    "Kosongkan harga marketplace untuk mengikuti aturan: harga toko plus {{pct}}%.",
   "price.outOfRange": "{{n}} di antaranya bukan harga.",
   "price.belowCost": "Di bawah modal",
-  "price.followsRule": "ikut aturan",
-  "price.overridden": "diisi manual",
-  "price.overriddenAt": "diisi manual · {{pct}}%",
   "price.notAPrice": "Bukan harga",
 
   // ── BatteryFields — the boxes every QC desk asks a battery through ───
@@ -693,13 +699,32 @@ export const id: Record<string, string> = {
   "battery.fcc": "Kapasitas isi penuh",
   "battery.cyclesAndCapacity": "Siklus & kapasitas",
   "battery.range": "Hanya {{lo}}–{{hi}}",
-  "battery.modeHealth": "Kesehatan",
-  "battery.modeCycles": "Siklus",
-  "battery.modeAria": "Cara baterai ini dicatat",
   "battery.guide":
-    "Mac Apple silicon dan model 2021 ke atas dimulai dari kesehatan baterai; mesin yang lebih lama dimulai dari jumlah siklus dan kapasitas isi penuh, dan setiap unit bisa dipindah saat baterainya diisikan. Kesehatan: baik {{goodMin}}% ke atas, cukup {{fairMin}}–{{fairTop}}%, buruk di bawah {{fairMin}}%. Siklus: baik {{goodMax}} atau kurang, cukup sampai {{fairMax}}, buruk di atas itu. Kosong berarti belum ada yang mengukurnya.",
+    "Mac Apple silicon dan model 2021 ke atas mencatat kesehatan baterai; unit Intel yang lebih lama mencatat jumlah siklus dan kapasitas isi penuh. Kesehatan: baik {{goodMin}}% ke atas, cukup {{fairMin}}–{{fairTop}}%, buruk di bawah {{fairMin}}%. Siklus: baik {{goodMax}} atau kurang, cukup sampai {{fairMax}}, buruk di atas itu. Kosong berarti belum ada yang mengukurnya.",
 
   // ── Inbound & QC — the order detail screen ───────────────────────────
+  "inbound.confirmArrival": "Konfirmasi tiba ({{count}})",
+  "inbound.confirmArrivalAria": "Konfirmasi {{count}} {{product}} tiba",
+  "inbound.countedArrived": "{{count}} pcs masuk stok.",
+  "inbound.countedArrivedCol": "Tiba",
+  "inbound.countedInvoiced": "Ditagih",
+  "inbound.countedPrice": "Harga per pcs",
+  "inbound.countedQtyRefused":
+    "{{count}} di antaranya sudah tiba. Batalkan kedatangannya dulu untuk menagih lebih sedikit.",
+  "inbound.countedSection": "Produk yang dihitung",
+  "inbound.invoiceArrived": "{{count}} tiba",
+  "inbound.invoiceLinePrice": "Harga per pcs {{product}}",
+  "inbound.invoiceRemoveArrived":
+    "Sebagian produk ini sudah tiba. Batalkan kedatangannya dulu.",
+  "inbound.kindChangeRefused":
+    "Sebagian produk ini sudah tiba. Batalkan dulu, lalu ganti ke produk yang dihitung dengan cara berbeda.",
+  "inbound.undoArrival": "Batalkan kedatangan",
+  "inbound.undoArrivalBody":
+    "Barang keluar dari rak dan kembali ke faktur sebagai belum tiba.",
+  "inbound.undoArrivalOk": "Batalkan kedatangan",
+  "inbound.undoArrivalRefused":
+    "Hanya {{left}} dari {{came}} yang masih ada di {{where}} — sisanya sudah terjual atau dipindah. Koreksi stoknya dengan penyesuaian.",
+  "inbound.undoArrivalTitle": "Batalkan kedatangan {{count}} pcs?",
   "inbound.accept": "Terima",
   "inbound.acceptAria": "Terima {{serial}}",
   "inbound.acceptHint": "Terima ke stok yang siap dijual",
@@ -884,7 +909,7 @@ export const id: Record<string, string> = {
   "inbound.serialTooLong":
     "Itu {{n}} karakter — serial paling panjang {{max}}. Dua kali scan ke satu kolom biasanya penyebabnya.",
   "inbound.serialTooShort":
-    "“{{serial}}” cuma {{n}} karakter — serial minimal {{min}}: kode dua huruf supplier plus nomor mesinnya. Cek stikernya.",
+    "“{{serial}}” cuma {{n}} karakter — serial minimal {{min}}: kode dua huruf supplier plus nomor unitnya. Cek stikernya.",
   "inbound.serialsQc": "Serial & QC",
   "inbound.shipping": "Ongkir",
   "inbound.slotOf": "Unit ke-{{n}} dari {{total}}",
@@ -904,7 +929,7 @@ export const id: Record<string, string> = {
   "inbound.gradeAria": "Nilai {{serial}}",
   "inbound.gradeHint": "Nilai dengan checklist kategorinya",
   "inbound.gradeNoSerialYet": "belum ada serial",
-  "inbound.gradeSlotAria": "Nilai mesin ini",
+  "inbound.gradeSlotAria": "Nilai unit ini",
 
   // ── Inbound & QC — raising an order ──────────────────────────────────
   "inboundForm.addProduct": "Tambah produk",
@@ -922,6 +947,7 @@ export const id: Record<string, string> = {
   "inboundForm.ordered": "Dipesan",
   "inboundForm.paymentMethod": "Metode pembayaran",
   "inboundForm.pickAProduct": "Pilih produk",
+  "inboundForm.countedQty": "Berapa banyak",
   "inboundForm.product": "Produk",
   "inboundForm.products": "Produk",
   "inboundForm.qty": "Qty",
@@ -971,15 +997,21 @@ export const id: Record<string, string> = {
   "stock.in": "Masuk",
   "stock.inAndOut": "Masuk dan keluar",
   "stock.intoWarehouse": "Ke gudang",
+  "stock.inventory": "Inventaris",
   "stock.inventoryStockMovement": "Inventaris & Pergerakan Stok",
   "stock.leaveEmptyWhenNobodyHas":
-    "Kosongkan kalau belum ada yang membacanya dari mesin — itu tidak sama dengan nol",
+    "Kosongkan kalau belum ada yang membacanya dari unit — itu tidak sama dengan nol",
   "stock.logAdjustment": "Catat penyesuaian",
   "stock.out": "Keluar",
   "stock.pickOneOrTypeA":
     "Pilih satu, atau ketik alasan baru — yang baru otomatis ditambahkan ke Pengaturan",
   "stock.product": "Produk",
   "stock.reason": "Alasan",
+  "stock.countedProducts": "Produk yang dihitung",
+  "stock.pickCountedProduct": "Produk",
+  "stock.countedProductAria": "Produk yang dihitung",
+  "stock.countedQtyAria": "Berapa banyak",
+  "stock.addCounted": "Tambah produk yang dihitung",
   "stock.removeThisLine": "Hapus baris ini",
   "stock.scanOrTypeASerial": "Scan atau ketik nomor serial",
   "stock.searchAReasonOrType": "Cari alasan, atau ketik yang baru",
@@ -1002,18 +1034,9 @@ export const id: Record<string, string> = {
   "stock.writtenIntoTheAppendOnly": "Ditulis ke log yang hanya bisa ditambah",
 
   // ── Inventory — the per-serial price (owner ask 2026-09-08) ──────────
-  "inventory.storePrice": "Harga toko",
-  "inventory.marketPrice": "Marketplace",
   "inventory.marketOne": "marketplace {{price}}",
-  "inventory.marketRange": "marketplace {{from}} – {{to}}",
   "inventory.notPricedYet": "belum dihargai",
-  "inventory.inclRepair": "termasuk servis {{amount}}",
-  "inventory.setByHand": "diisi manual",
-  "inventory.fromRule": "+{{pct}}%",
   "inventory.ungraded": "Belum digrade",
-  "inventory.editPricesN": "Ubah {{count}} harga",
-  "inventory.editPricesFor": "Ubah harga untuk {{what}}",
-  "inventory.nothingToPrice": "Tidak ada unit untuk dihargai",
   "inventory.repriced": "{{n}} harga diperbarui.",
 
   // ── Inventory & Stock Movement — the product table ───────────────────
@@ -1026,22 +1049,13 @@ export const id: Record<string, string> = {
   "inventory.anyWarehouse": "Semua gudang",
   "inventory.battery": "Baterai",
   "inventory.batteryBandsAria": "Arti rentang baterai",
-  "inventory.batteryHealth": "Kesehatan baterai",
-  "inventory.buy": "Beli",
-  "inventory.category": "Kategori",
   "inventory.description": "Deskripsi",
   "inventory.inStock": "Ada stok",
   "inventory.nAvailable": "{{n}} tersedia",
   "inventory.nInQc": "{{n}} di QC",
   "inventory.nOnHold": "{{n}} ditahan",
   "inventory.nOnService": "{{n}} di servis",
-  "inventory.noLabels": "Tidak ada serial untuk dilabeli",
-  "inventory.noSerials": "Produk ini sedang tidak ada stoknya.",
-  "inventory.price": "Harga",
-  "inventory.printForAria": "Cetak label untuk {{product}}",
-  "inventory.printLabelsN": "Cetak {{count}} label",
   "inventory.printN": "Cetak label ({{count}})",
-  "inventory.product": "Produk",
   "inventory.qty": "Jml",
   "inventory.searchPlaceholder":
     "Cari produk, spesifikasi, kode atau nomor serial",
@@ -1056,6 +1070,9 @@ export const id: Record<string, string> = {
   "pos.addAUnit": "Tambah unit",
   "pos.addCustomer": "Tambah pelanggan",
   "pos.addOn": "Pelengkap",
+  "pos.countedShort": "Stok {{product}} tinggal {{count}}.",
+  "pos.lineQty": "Jumlah {{product}}",
+  "pos.linePiecePrice": "Harga per pcs {{product}}",
   "pos.addToSale": "Tambah ke penjualan",
   "pos.applyIt": "Terapkan",
   "pos.cameFrom": "Berasal dari",
@@ -1113,7 +1130,6 @@ export const id: Record<string, string> = {
   "opname.backToCounting": "Kembali menghitung",
   "opname.backToList": "Kembali ke Stok Opname",
   "opname.batch": "Batch",
-  "opname.check": "Pemeriksaan",
   "opname.count": "Hitung",
   "opname.countOneFirst": "Hitung setidaknya satu serial dulu",
   "opname.counted": "Terhitung",
@@ -1137,7 +1153,6 @@ export const id: Record<string, string> = {
     "Hitungan yang mencatat selisih tanpa menyebut sebabnya adalah hitungan yang tidak bisa ditindaklanjuti nanti.",
   "opname.notFound": "Hitungan tidak ditemukan",
   "opname.notePlaceholder": "Wajib — sebutkan apa yang terjadi pada unit ini",
-  "opname.nothingCounted": "Belum ada yang dihitung. Mulai scan.",
   "opname.nothingMissing":
     "Tidak ada yang hilang. Semua unit yang diharapkan terhitung.",
   "opname.nothingUnexpected": "Tidak ditemukan hal yang di luar dugaan.",
@@ -1151,7 +1166,6 @@ export const id: Record<string, string> = {
   "opname.postedTag": "Diposting",
   "opname.postedTitle": "Hitungan ini sudah diposting",
   "opname.product": "Produk",
-  "opname.removeAria": "Hapus {{serial}}",
   "opname.review": "Tinjau & selesai",
   "opname.reviewHint": "Tinjau apa yang hilang dan apa yang muncul tak terduga",
   "opname.saveDraft": "Simpan sebagai draf",
@@ -1193,20 +1207,20 @@ export const id: Record<string, string> = {
   "opname.surplusOk": "Masukkan ke QC",
   "opname.surplusExplainTitle": "Masuk ke QC, bukan langsung ke rak",
   "opname.surplusExplainBody":
-    "Tidak ada yang dibuat sampai hitungan ini diposting. Setelah itu mesinnya menunggu di QC tanpa grade dan tanpa harga beli, karena belum ada yang memeriksanya — beri grade di Barang Masuk & QC supaya bisa dijual.",
+    "Tidak ada yang dibuat sampai hitungan ini diposting. Setelah itu unitnya menunggu di QC tanpa grade dan tanpa harga beli, karena belum ada yang memeriksanya — beri grade di Barang Masuk & QC supaya bisa dijual.",
   "opname.surplusProduct": "Produk",
   "opname.surplusPickProduct": "Cari produk",
   "opname.surplusProductHelp":
-    "Serial saja tidak menambah jumlah stok produk mana pun. Sebutkan ini mesin yang mana.",
+    "Serial saja tidak menambah jumlah stok produk mana pun. Sebutkan ini unit yang mana.",
   "opname.surplusReason": "Alasan",
   "opname.surplusReasonHelp":
-    "Sebutkan kenapa toko punya mesin yang tidak pernah dibukukan.",
+    "Sebutkan kenapa toko punya unit yang tidak pernah dibukukan.",
   "opname.surplusReasonPlaceholder":
     "mis. Dibeli di kasir, tidak pernah diinput",
   "opname.surplusCondition": "Kondisi",
   "opname.surplusWarehouse": "Ditemukan di",
   "opname.surplusWarehouseHint":
-    "Hitungan ini mencakup lebih dari satu gudang, jadi tidak bisa menentukan di mana mesinnya ditemukan.",
+    "Hitungan ini mencakup lebih dari satu gudang, jadi tidak bisa menentukan di mana unitnya ditemukan.",
   "opname.postBodySurplus":
     "{{count}} unit akan dibuat di QC — masih perlu digrade sebelum bisa dijual.",
   "opname.postedWithSurplus":
@@ -1237,7 +1251,7 @@ export const id: Record<string, string> = {
   // The rule the whole feature rests on, said on every field: kosong = semua.
   "opnameList.warehousesHint": "Kosongkan untuk menghitung semua gudang.",
   "opnameList.racksHint":
-    "Kosongkan untuk semua rak di gudang tersebut. Kalau rak dipilih, mesin yang masih di QC tidak ikut dihitung karena belum ada di rak mana pun.",
+    "Kosongkan untuk semua rak di gudang tersebut. Kalau rak dipilih, unit yang masih di QC tidak ikut dihitung karena belum ada di rak mana pun.",
   "opnameList.categoriesHint": "Kosongkan untuk menghitung semua kategori.",
   "opnameList.conditionHint":
     "Kosongkan untuk menghitung yang baru maupun yang bekas.",
@@ -1251,7 +1265,7 @@ export const id: Record<string, string> = {
   // ── In QC without an order — a stock take's surplus ──────────────────
   "orphanQc.title": "Di QC tanpa nota ({{count}})",
   "orphanQc.explain":
-    "Mesin yang ditemukan saat stok opname, bukan dibeli lewat nota. Sudah terhitung sebagai stok tapi belum bisa dijual sebelum digrade di sini.",
+    "Unit yang ditemukan saat stok opname, bukan dibeli lewat nota. Sudah terhitung sebagai stok tapi belum bisa dijual sebelum digrade di sini.",
   "orphanQc.serial": "Serial",
   "orphanQc.product": "Produk",
   "orphanQc.warehouse": "Gudang",
@@ -1260,10 +1274,11 @@ export const id: Record<string, string> = {
   "orphanQc.conditionSecond": "Bekas",
   "orphanQc.describe": "Deskripsi",
   "orphanQc.describePlaceholder": "Lecet, kelengkapan dus…",
-  "orphanQc.describeOptional": "Opsional untuk mesin baru",
+  "orphanQc.describeOptional": "Opsional untuk unit baru",
   "orphanQc.describeFirst":
-    "Sebutkan dulu kondisi mesin ini sebelum ditaruh di rak.",
+    "Sebutkan dulu kondisi unit ini sebelum ditaruh di rak.",
   "orphanQc.grade": "Grade",
+  "orphanQc.gradePlaceholder": "Grade",
   "orphanQc.gradeAria": "Beri grade {{serial}}",
   "orphanQc.accept": "Terima",
   "orphanQc.acceptHint": "Taruh di rak dengan harga jual produk ini",
@@ -1271,7 +1286,7 @@ export const id: Record<string, string> = {
   "orphanQc.writeOffAria": "Hapus {{serial}} dari stok",
   "orphanQc.writeOffTitle": "Hapus {{serial}} dari stok?",
   "orphanQc.writeOffBody":
-    "Unitnya keluar dari stok dan tetap tercatat di riwayat. Tidak ada supplier untuk mengembalikannya — mesin ini tidak berasal dari nota mana pun.",
+    "Unitnya keluar dari stok dan tetap tercatat di riwayat. Tidak ada supplier untuk mengembalikannya — unit ini tidak berasal dari nota mana pun.",
   "orphanQc.writeOffOk": "Hapus dari stok",
 
   // ── S/N Tracking ─────────────────────────────────────────────────────
@@ -1293,14 +1308,10 @@ export const id: Record<string, string> = {
   "snTracking.noUnitWithThisSerial":
     "Tidak ada unit dengan serial ini di sistem. Kalau baru saja datang, mungkin masih menunggu di penerimaan.",
   "snTracking.note": "Catatan",
-  "snTracking.pickASerialEveryUnit":
-    "Pilih serial — setiap unit dilacak sejak hari kedatangannya, selamanya.",
   "snTracking.printLabel": "Cetak label",
   "snTracking.rawLedgerAppendOnly": "Buku besar mentah (hanya bisa ditambah)",
   "snTracking.ref": "Ref",
   "snTracking.sNTracking": "Riwayat Serial",
-  "snTracking.searchASerialNumberTo":
-    "Cari nomor serial untuk melihat perjalanan lengkapnya",
   "snTracking.searchEventNoteOrReference":
     "Cari kejadian, catatan atau referensi",
   "snTracking.sellingPrice": "Harga jual",
@@ -1334,28 +1345,26 @@ export const id: Record<string, string> = {
   "reservations.when": "Waktu",
 
   // ── Return — from a customer ─────────────────────────────────────────
-  "returnCustomer.additionalFeeOptional": "Biaya tambahan (opsional)",
   "returnCustomer.date": "Tanggal",
-  "returnCustomer.exchange": "Tukar",
-  "returnCustomer.managedInSettingsReasonsPer":
-    "Diatur di Pengaturan → Alasan per aktivitas",
   "returnCustomer.pickOrSearchAReason": "Pilih atau cari alasan",
   "returnCustomer.product": "Produk",
   "returnCustomer.reason": "Alasan",
   "returnCustomer.recordAReturn": "Catat retur",
   "returnCustomer.recordReturn": "Catat retur",
-  "returnCustomer.replacementUnit": "Unit pengganti",
   "returnCustomer.returnHistory": "Riwayat retur",
   "returnCustomer.searchCodeSerialOrReason": "Cari kode, serial atau alasan",
-  "returnCustomer.searchTheSerialThatIs": "Cari serial yang dikembalikan",
-  "returnCustomer.soldUnitFromTransactionHistory":
-    "Unit terjual (dari riwayat transaksi)",
   "returnCustomer.specifyTheReason": "Sebutkan alasannya",
-  "returnCustomer.status": "Status",
-  "returnCustomer.type": "Jenis",
-  "returnCustomer.unitHandedToTheCustomer":
-    "Unit yang diberikan ke pelanggan sebagai gantinya",
   "returnCustomer.whatWasWrongWithIt": "Apa masalahnya?",
+  // Editable condition + payment reference (owner ask 2026-09-21 malam).
+  "returnCustomer.conditionCol": "Kondisi",
+  "returnCustomer.conditionAria": "Kondisi {{serial}} saat retur",
+  "returnCustomer.conditionBeforeAfter": "Kondisi",
+  "returnCustomer.adjustmentCol": "Penyesuaian",
+  "returnCustomer.paymentRef": "Referensi pembayaran",
+  "returnCustomer.paymentRefHint":
+    "Ditulis di penyesuaian Refund. Bukti transfer, resi kurir, atau nomor pesan dari pelanggan.",
+  "returnCustomer.paymentRefPlaceholder":
+    "mis. BCA 20260921-4711, atau nomor resi kurir",
 
   // ── Return — to a supplier ───────────────────────────────────────────
   "returnSupplier.date": "Tanggal",
@@ -1381,6 +1390,23 @@ export const id: Record<string, string> = {
   // A claim the shop raised and then took back — a QC rejection reopened
   // because it was the wrong machine.
   "returnSupplier.withdrawn": "Ditarik",
+  "returnSupplier.whatUnit": "Unit (per serial)",
+  "returnSupplier.whatCounted": "Produk hitungan (per jumlah)",
+  "returnSupplier.noCountedStock": "Tidak ada stok produk hitungan.",
+  "returnSupplier.searchProduct": "Cari produk",
+  "returnSupplier.productInStock": "{{product}} — {{count}} di stok",
+  "returnSupplier.warehouse": "Gudang",
+  "returnSupplier.warehouseHolds": "{{warehouse}} — {{count}} di stok",
+  "returnSupplier.qty": "Jml",
+  "returnSupplier.qtyOverStock": "Hanya {{count}} di gudang itu.",
+  "returnSupplier.cameInOn": "Invoice masuknya",
+  "returnSupplier.cameInOnHint":
+    "Invoice inilah yang mencatat ke supplier mana barang ini dikembalikan.",
+  "returnSupplier.countedShort":
+    "Stok di gudang itu tidak cukup — mungkin baru saja ada yang terjual.",
+  "returnSupplier.countedReturned":
+    "{{count}} × {{product}} dikembalikan ke supplier.",
+  "returnSupplier.countedNoSerial": "Hitungan",
 
   // ── Return — the shared frame ────────────────────────────────────────
   "returns.addReturn": "Tambah retur",
@@ -1494,7 +1520,6 @@ export const id: Record<string, string> = {
   "finance.confirmTheWithdrawalAndEnter":
     "Konfirmasi penarikannya dan masukkan jumlah yang benar-benar diterima",
   "finance.confirmWithdrawal": "Konfirmasi penarikan",
-  "finance.costPerCustomer": "Biaya per pelanggan",
   "finance.customers": "Pelanggan",
   "finance.expensesToday": "Pengeluaran hari ini",
   "finance.incomeExpense": "Pemasukan & Pengeluaran",
@@ -1506,16 +1531,12 @@ export const id: Record<string, string> = {
   "finance.netToday": "Bersih hari ini",
   "finance.noMarketingSpendRecordedYet":
     "Belum ada belanja pemasaran yang dicatat. Tambahkan di Pengeluaran → Marketing & Iklan.",
-  "finance.noSpend": "tanpa belanja",
   "finance.nothingPendingAllMarketplaceMoney":
     "Tidak ada yang tertunda — semua uang marketplace sudah ditarik.",
-  "finance.nothingWasSpentOnThis": "Tidak ada belanja pada kanal ini",
   "finance.out": "Keluar",
   "finance.pendingNotYetWithdrawn": "Tertunda (belum ditarik)",
   "finance.recentMovements": "Pergerakan terbaru",
-  "finance.returnOnSpend": "Imbal hasil belanja",
-  "finance.revenue": "Pendapatan",
-  "finance.saleAmount": "Nilai penjualan",
+  "finance.pendingAmount": "Menunggu pencairan",
   "finance.sales": "Penjualan",
   "finance.searchASaleOrAn": "Cari penjualan atau pengeluaran",
   "finance.searchOrderCode": "Cari kode order",
@@ -1558,6 +1579,26 @@ export const id: Record<string, string> = {
   "finance.today": "Hari ini",
   "finance.unassignedMoney":
     "{{amount}} berpindah lewat metode yang bukan tunai maupun bank.",
+  // One unified table (owner ask 2026-09-21 malam).
+  "finance.date": "Tanggal",
+  "finance.type": "Jenis",
+  "finance.description": "Keterangan",
+  "finance.transactionId": "ID transaksi",
+  "finance.amount": "Jumlah",
+  "finance.status": "Status",
+  "finance.latestBalance": "Saldo terkini",
+  "finance.statusSettled": "Selesai",
+  "finance.statusPending": "Tertunda",
+  "finance.statusDue": "Jatuh tempo",
+  "cashflow.kindSales": "Pemasukan dari penjualan",
+  "cashflow.kindAdjustmentIn": "Penyesuaian pemasukan",
+  "cashflow.kindExpense": "Pengeluaran",
+  "cashflow.kindRefundOut": "Pengembalian",
+  "cashflow.kindRefundIn": "Pengembalian diterima",
+  "cashflow.refundOnSale": "Pengembalian atas transaksi {{code}}",
+  "cashflow.saleDescription": "Penjualan lewat {{channel}}",
+  "cashflow.searchOrderOrDescription":
+    "Cari transaksi, keterangan, atau metode pembayaran",
 
   // ── Financial & Report — recording a spend ───────────────────────────
   "expense.add": "Tambah",
@@ -1584,30 +1625,22 @@ export const id: Record<string, string> = {
   "transactions.stSettled": "Lunas",
   "transactions.stPartPaid": "Dibayar sebagian",
   "transactions.stPending": "Ditahan marketplace",
-  "transactions.stOwed": "Kurang bayar",
-  "transactions.stUnpaid": "Belum dibayar",
-  "transactions.editPayments": "Pembayarannya, dan cara mengoreksinya",
+  "transactions.stOwed": "Belum dibayar",
+  "transactions.editPayments":
+    "Riwayat pembayaran — catat, koreksi atau hapus pembayaran",
   "transactions.editPaymentsAria": "Pembayaran pada {{code}}",
   "transactions.payLogged": "{{n}} perubahan dicatat.",
   "transactions.payUnchanged": "Tidak ada yang berubah.",
   "transactions.channel": "Kanal",
-  "transactions.detail": "Rincian",
   "transactions.exportAll": "Ekspor semua",
   "transactions.exportSelected": "Ekspor yang dipilih",
   "transactions.moneyInSettled": "Uang masuk (lunas)",
-  "transactions.moneyOut": "Uang keluar",
-  "transactions.out": "Keluar",
-  "transactions.payment": "Pembayaran",
-  "transactions.printThisInvoiceAgain": "Cetak ulang invoice ini",
-  "transactions.reference": "Referensi",
-  "transactions.salesperson": "Sales",
-  "transactions.searchACodeSerialProduct":
-    "Cari kode, serial, produk, pelanggan atau pengeluaran",
+  "transactions.seeReceipt": "Lihat struk",
+  "transactions.seeReceiptAria": "Struk untuk {{code}}",
   "transactions.status": "Status",
   "transactions.stillPending": "Masih tertunda",
   "transactions.transactionHistory": "Riwayat Transaksi",
   "transactions.transactions": "Transaksi",
-  "transactions.when": "Waktu",
 
   // ── Chatbot — the inbox ──────────────────────────────────────────────
   "chat.answersOnItsOwn": "Menjawab sendiri",
@@ -1743,8 +1776,6 @@ export const id: Record<string, string> = {
   "settings.tabMarketplace": "Marketplace",
   "settings.marketplace": "Harga & potongan marketplace",
   "settings.listingMarkup": "Markup listing",
-  "settings.listingMarkupHint":
-    "Ditambahkan ke harga toko untuk mengusulkan harga marketplace. Bisa ditimpa per unit.",
   "settings.commissions": "Potongan tiap marketplace",
   "settings.commissionsHint":
     "Dipotong dari pencairan. Form pencairan terbuka dengan angka ini; potongan lain diketik.",
@@ -1833,7 +1864,7 @@ export const id: Record<string, string> = {
   "settings.gradingAddOptionAria": "Tambah kondisi ke {{name}}",
   "settings.gradingAddRule": "Tambah aturan",
   "settings.gradingAnyCondition": "Apa saja",
-  "settings.gradingCatchAll": "cocok untuk semua mesin",
+  "settings.gradingCatchAll": "cocok untuk semua unit",
   "settings.gradingCategory": "Kategori",
   "settings.gradingCheckEarlier": "Periksa lebih awal",
   "settings.gradingCheckLater": "Periksa belakangan",
@@ -1845,7 +1876,7 @@ export const id: Record<string, string> = {
   "settings.gradingHowRulesRead":
     "Aturan diperiksa dari atas ke bawah; yang pertama cocok menang.",
   "settings.gradingHowRulesReadBody":
-    "Sebuah aturan cocok bila mesin yang diperiksa memenuhi semua syaratnya — kriteria yang dibiarkan “Apa saja” tidak diperiksa. Aturan tanpa syarat cocok untuk semua mesin, jadi taruh paling bawah sebagai penampung.",
+    "Sebuah aturan cocok bila unit yang diperiksa memenuhi semua syaratnya — kriteria yang dibiarkan “Apa saja” tidak diperiksa. Aturan tanpa syarat cocok untuk semua unit, jadi taruh paling bawah sebagai penampung.",
   "settings.gradingIntro":
     "Apa yang diperiksa QC per kategori, dan kombinasi mana yang menghasilkan tiap grade. Tombol grade di Barang Masuk & QC membaca ini — dan penilai selalu bisa menimpa hasilnya.",
   "settings.gradingMoveDownAria": "Turunkan aturan {{n}}",
@@ -1861,7 +1892,7 @@ export const id: Record<string, string> = {
   "settings.gradingRemoveCriterion": "Hapus “{{name}}”?",
   "settings.gradingRemoveCriterionAria": "Hapus kriteria {{name}}",
   "settings.gradingRemoveCriterionBody":
-    "Pilihannya ikut terhapus, dan setiap aturan yang menyebutnya berhenti memeriksanya. Grade yang sudah diberikan ke mesin tidak berubah.",
+    "Pilihannya ikut terhapus, dan setiap aturan yang menyebutnya berhenti memeriksanya. Grade yang sudah diberikan ke unit tidak berubah.",
   "settings.gradingRemoveRuleAria": "Hapus aturan {{n}}",
   "settings.gradingRules": "Grade — {{category}}",
   "settings.tabGrading": "Grading",
@@ -1883,7 +1914,7 @@ export const id: Record<string, string> = {
   "scanner.noField": "Tidak ada kolom serial untuk difokuskan.",
   "scanner.noSerialHere":
     "{{serial}} discan — halaman ini tidak punya kolom serial.",
-  "scanner.noSetupNeededOnThis": "Tidak perlu pengaturan di mesin ini.",
+  "scanner.noSetupNeededOnThis": "Tidak perlu pengaturan di perangkat ini.",
   "scanner.noTarget": "Tidak ada yang menerima serial di sini.",
   "scanner.nothingScannedYet": "Belum ada yang discan.",
   "scanner.ready": "Scanner siap",
@@ -1910,8 +1941,104 @@ export const id: Record<string, string> = {
   "page.back": "Kembali",
 
   // ── ProTable / DataTable ─────────────────────────────────────────────
-  "proTable.clearFilters": "Bersihkan filter ({{count}})",
+  "proTable.clearFilters": "Bersihkan semua",
+  // Adjustment: the receipt a category needs beside it (2026-09-23).
+  "adjust.transaction": "Transaksi",
+  "adjust.pickATransaction": "Pilih transaksi yang dimaksud.",
+  "adjust.searchTransaction": "Cari nomor order, referensi, atau serial",
+
+  // Edit transaction (owner ask 2026-09-23).
+  "editSale.title": "Ubah transaksi — {{code}}",
+  "editSale.save": "Simpan",
+  "editSale.saved": "Transaksi diperbarui.",
+  "editSale.ref": "ID Referensi",
+  "editSale.refPlaceholder": "Nomor order marketplace",
+  "editSale.date": "Tanggal",
+  "editSale.channel": "Kanal",
+  "editSale.customer": "Pelanggan",
+  "editSale.units": "Unit",
+  "editSale.unit": "Unit",
+  "editSale.unitFor": "Unit",
+  "editSale.pickUnit": "Pilih unit",
+  "editSale.serial": "Nomor seri",
+  "editSale.serialFor": "Nomor seri",
+  "editSale.addLine": "Tambah unit",
+  "editSale.removeLine": "Keluarkan unit ini",
+  "editSale.payment": "Pembayaran",
+  "editSale.duplicateSerial": "Serial yang sama ada di dua baris.",
+  "editSale.unknownSerial": "Tidak ada unit dengan serial {{serial}}.",
+  "editSale.alreadySold": "{{serial}} sudah ada di transaksi lain.",
+  "editSale.swapWarning":
+    "Unit yang dikeluarkan kembali ke stok, dan transaksi ini hilang dari riwayatnya.",
+
+  // Income & Expense: type, category, method and the two bases.
+  "finance.category": "Kategori",
+  "finance.method": "Metode pembayaran",
+  "finance.expense": "Pengeluaran",
+  "finance.cashBasis": "Basis kas",
+  "finance.accrual": "Akrual",
+
+  // The payment grid's three columns (owner ask 2026-09-23).
+  "pay.status": "Status",
+  "pay.refFor": "Nomor referensi",
+  "pay.refPlaceholder": "Nomor referensi",
+
+  // Pending Payment: reference its own column now.
+  "piutang.refNo": "Nomor referensi",
+
+  // One chip per picked filter, each with its own ×.
+  "proTable.removeFilter": "Hapus {{filter}}",
+
+  // Transaction History (owner ask 2026-09-23).
+  "transactions.referenceId": "ID Referensi",
+  "transactions.serialNumber": "Nomor seri",
+  "transactions.editSale": "Ubah transaksi",
+  "transactions.editSaleAria": "Ubah {{code}}",
+  "transactions.markSettled": "Tandai sudah diterima",
+  "transactions.settledCount": "{{count}} transaksi ditandai diterima.",
+  // Inventory's unit popup: price change and edit unit (owner ask 2026-09-23).
+  "inventory.priceChange": "Ubah harga",
+  "inventory.priceChangeAria": "Ubah harga {{serial}}",
+  "inventory.editUnit": "Ubah unit",
+  "inventory.editUnitAria": "Ubah {{serial}}",
+
+  // The adjustment dialog's two halves, headed the same way.
+  "stock.serialisedProducts": "Produk berserial",
+  "stock.noCounted": "Belum ada produk hitungan di batch ini.",
+  "stock.qty": "Jumlah",
+
+  // Edit unit.
+  "unitEdit.title": "Ubah unit",
+  "unitEdit.save": "Simpan",
+  "unitEdit.saved": "Unit diperbarui.",
+  "unitEdit.serial": "Nomor seri",
+  "unitEdit.serialRequired": "Unit harus punya nomor seri.",
+  "unitEdit.serialTaken": "{{serial}} milik unit lain.",
+  "unitEdit.grade": "Grade",
+  "unitEdit.gradeNew": "Baru",
+  "unitEdit.battery": "Baterai",
+  "unitEdit.warehouse": "Gudang",
+  "unitEdit.rack": "Rak",
+  "unitEdit.description": "Deskripsi",
+  "unitEdit.unitPrice": "Harga unit",
+  "unitEdit.movedNote": "Dipindahkan dari Inventaris",
+  // The combined return history (owner ask 2026-09-23).
+  "returns.type": "Jenis",
+  "returns.document": "Transaksi / inbound",
+  "returns.date": "Tanggal",
+  "returns.party": "Supplier / pelanggan",
+  "returns.reason": "Alasan",
+  "returns.product": "Produk",
+  "returns.serial": "Nomor seri",
+  "returns.condition": "Kondisi",
+  "returns.searchHistory": "Cari transaksi, faktur, nama, atau alasan",
+
   "proTable.narrowed": "Menampilkan {{shown}} dari {{total}}",
+  // A column's date-range filter (2026-09-22).
+  "proTable.dateFrom": "Dari",
+  "proTable.dateUntil": "Sampai",
+  "proTable.dateReset": "Atur ulang",
+  "proTable.dateDone": "OK",
 
   // ── ProTable / DataTable ─────────────────────────────────────────────
   "dataTable.range": "{{from}}–{{to}} dari {{total}}",
@@ -1989,9 +2116,6 @@ export const id: Record<string, string> = {
     "Belum pernah ada stok padanya, jadi tidak ada yang hilang.",
   "reservations.note": "Catatan",
   "reservations.serial": "Serial",
-  "returnCustomer.code": "Kode",
-  "returnCustomer.exchangeWithAnotherUnit": "Tukar dengan unit lain",
-  "returnCustomer.returnToStock": "Kembalikan ke stok",
   "returnCustomer.serial": "Serial",
   "returnSupplier.code": "Kode",
   "returnSupplier.serial": "Serial",
@@ -2005,7 +2129,6 @@ export const id: Record<string, string> = {
   "snTracking.to": "Ke",
   "snTracking.when": "Waktu",
   "stock.by": "Oleh",
-  "transactions.in": "Masuk",
 
   // Module constants keyed by their English — `statusOf` in DiscountsPage and
   // RANGES in CashflowPage, both translated at their render sites.
@@ -2116,7 +2239,7 @@ export const id: Record<string, string> = {
   "pos.holdsCollected": "{{count}} unit yang ditahan sudah diambil.",
   "pos.loadedFromHold": "{{count}} unit dimuat dari {{code}}.",
   "pos.marketplacePendingToast":
-    "Saldo belum cair dari {{channel}} — konfirmasi di Pemasukan & Pengeluaran setelah masuk.",
+    "Marketplace belum mencairkan dananya — tandai diterima di Saldo Tertahan & Piutang setelah dananya masuk.",
   // ── New Transaction — the till, rebuilt 2026-08-27 ───────────────────────
   // The catalogue on the left, the basket and all of the money on the right,
   // and everything about the PEOPLE in an optional second step. "Keranjang"
@@ -2162,8 +2285,6 @@ export const id: Record<string, string> = {
   "pos.linesBelowCost": "{{count}} baris dijual di bawah modal.",
   "pos.listPrice": "harga {{price}}",
   "pos.loadFromHold": "Ambil unit dan pelanggan dari reservasi",
-  "pos.marketplaceHolds":
-    "Uangnya masih ditahan {{channel}} — konfirmasi di Pemasukan & Pengeluaran setelah cair.",
   "pos.noNote": "Belum ada catatan QC",
   "pos.noneLeft": "Habis",
   "pos.nothingOnHold": "Tidak ada yang sedang ditahan",
@@ -2183,7 +2304,9 @@ export const id: Record<string, string> = {
   "pos.removeLineAria": "Hapus {{serial}}",
   "pos.removeTradeIn": "Hapus tukar tambah {{label}}",
   "pos.searchOrScan":
-    "Cari produk / varian — atau scan serial, Enter langsung masuk keranjang",
+    "Cari produk / varian — atau ketik atau scan serial, langsung masuk keranjang",
+  "pos.searchShelf": "Cari stok",
+  "pos.namedNotSellable": "{{serial}} tidak bisa dijual — statusnya",
   "pos.stockCatalogue": "Katalog stok",
   "pos.storeDiscount": "Diskon toko",
   "pos.subtotal": "Subtotal",
@@ -2236,7 +2359,7 @@ export const id: Record<string, string> = {
   // sentence the button text used to, and names the record it acts on.
   "customers.editAria": "Ubah {{name}}",
   "customers.historyAria": "Riwayat pembelian {{name}}",
-  "inbound.rejectAria": "Tolak {{serial}} dan kembalikan ke supplier",
+  "inbound.rejectAria": "Retur {{serial}} ke supplier",
   "inbound.rejectHint": "Tolak unitnya dan buka retur ke supplier",
   "inbound.serviceAria": "Kirim {{serial}} ke servis",
   "inbound.serviceHint": "Kirim ke meja servis, bukan ke rak",
@@ -2254,10 +2377,10 @@ export const id: Record<string, string> = {
   "grade.newHint":
     "Tersegel — belum pernah dipakai, jadi tidak ada yang diperiksa",
   "grade.letterHint": "Grade kondisi dari checklist QC",
-  "grade.ungraded": "—",
+  "grade.ungraded": "Tidak ada",
 
   // The grading checklist, now shared by QC and the return desk.
-  "grading.title": "Nilai mesin ini",
+  "grading.title": "Nilai unit ini",
   "grading.currently": "sekarang {{grade}}",
   "grading.noConfig": "Belum ada pengaturan untuk “{{category}}”",
   "grading.noConfigBody":
@@ -2269,7 +2392,7 @@ export const id: Record<string, string> = {
   "grading.useCalculated": "Pakai hasil hitung",
   "grading.cTitle": "Grade C — pikirkan lagi",
   "grading.cBody":
-    "Mesin seaus ini biasanya lebih baik dikembalikan ke supplier atau dikirim ke servis daripada ditaruh di rak.",
+    "Unit seaus ini biasanya lebih baik dikembalikan ke supplier atau dikirim ke servis daripada ditaruh di rak.",
   "grading.apply": "Terapkan grade",
   "grading.applyN": "Terapkan grade {{grade}}",
 
@@ -2279,19 +2402,17 @@ export const id: Record<string, string> = {
   // "Second" is what the shop says in Indonesian too — "seken" is the spoken
   // form, "bekas" the written one. The written one goes on a form.
   "inbound.conditionSecond": "Bekas",
-  "inbound.describeOptional": "Opsional untuk mesin baru",
+  "inbound.describeOptional": "Opsional untuk unit baru",
   "inbound.descriptionRequiredHint":
-    "Wajib sebelum mesin bekas bisa diterima. Opsional untuk mesin baru — tidak ada yang perlu dijelaskan dari dus tersegel.",
+    "Wajib sebelum unit bekas bisa diterima. Opsional untuk unit baru — tidak ada yang perlu dijelaskan dari dus tersegel.",
   "inbound.scanTooShort":
     "Hasil scan cuma {{n}} karakter. Barcode serial itu {{min}}–{{max}}; coba scan lagi.",
   "inbound.scanTooLong":
     "Hasil scan {{n}} karakter. Barcode serial itu {{min}}–{{max}} — dua scan masuk ke satu kolom bisa begini.",
-  "inbound.scanConfusable":
-    "“{{scanned}}” ada huruf I atau O. Apple tidak pernah mencetak keduanya — itu salah baca dari 1 dan 0, jadi scan ulang.",
   "inbound.scanCharset":
-    "“{{scanned}}” bukan serial — hanya huruf kapital dan angka. Pastikan scanner disetel ke {{symbology}} dan ini memang barcode mesinnya.",
+    "“{{scanned}}” bukan serial — hanya huruf kapital dan angka. Pastikan scanner disetel ke {{symbology}} dan ini memang barcode unitnya.",
   "inbound.scanNoPrefix":
-    "“{{scanned}}” tidak diawali S, berarti itu salah satu barcode lain di bagian bawah mesin. Arahkan ke barcode yang nomornya diawali S.",
+    "“{{scanned}}” tidak diawali S, berarti itu salah satu barcode lain di bagian bawah unit. Arahkan ke barcode yang nomornya diawali S.",
   "inbound.scanNoSupplierCode":
     "{{supplier}} belum punya kode dua huruf, jadi serial hasil scan tidak bisa didaftarkan atas namanya. Pengaturan → Supplier tempat memberinya kode.",
   "inbound.thisSupplier": "Supplier ini",
@@ -2300,7 +2421,6 @@ export const id: Record<string, string> = {
   "inventory.grade": "Grade",
   "snTracking.grade": "Grade",
   "reservations.grade": "Grade",
-  "returnCustomer.grade": "Grade",
 
   // Printing labels — page setup and the barcode.
   "labels.title": "Cetak label — {{count}} serial",
@@ -2328,7 +2448,7 @@ export const id: Record<string, string> = {
     "Perbaiki dulu serialnya di unit — stiker yang kodenya tidak cocok dengan tulisan di bawahnya lebih buruk daripada tidak ada stiker sama sekali.",
   "labels.checkTitle": "{{count}} serial terlihat janggal",
   "labels.checkBody":
-    "Semua ini tetap tercetak dan terbaca dengan benar. Ada baiknya dicek ulang ke mesinnya sebelum stikernya ditempel.",
+    "Semua ini tetap tercetak dan terbaca dengan benar. Ada baiknya dicek ulang ke unitnya sebelum stikernya ditempel.",
   "labels.faultEmpty": "tidak punya serial untuk dikodekan",
   "labels.faultUnencodable": "ada karakter yang tidak bisa dibawa barcode",
   "labels.faultCharset": "ada karakter selain huruf kapital dan angka",
@@ -2359,13 +2479,14 @@ export const id: Record<string, string> = {
   "returnCustomer.receiveHint":
     "Buka QC — jelaskan kondisinya dan beri grade, lalu kembalikan ke stok",
   "returnCustomer.receiveAria": "Terima kembali {{serial}}",
-  "returnCustomer.wasNewTitle": "Unit ini keluar sebagai mesin baru",
+  "returnCustomer.wasNewTitle": "Unit ini keluar dalam kondisi baru",
   "returnCustomer.wasNewBody":
     "Unit sudah terjual dan dibuka, jadi kembali ke rak sebagai bekas. Jelaskan kondisinya saat kembali, dan beri grade kalau bisa.",
   "returnCustomer.conditionBack": "Kondisi saat kembali",
   "returnCustomer.conditionPlaceholder":
     "Lecet, kelengkapan dus, keluhan pelanggan…",
   "returnCustomer.newGrade": "Grade baru",
+  "returnCustomer.gradePlaceholder": "Grade",
   "returnCustomer.gradeIt": "Beri grade",
   "returnCustomer.gradeOptional": "Opsional — bisa kembali ke rak tanpa grade.",
   "returnCustomer.restock": "Kembalikan ke stok",
@@ -2378,7 +2499,7 @@ export const id: Record<string, string> = {
   "settings.supplierCodeLabel": "Kode serial (opsional)",
   "settings.supplierCodePlaceholder": "Kode (AS)",
   "settings.supplierCodeHelp":
-    "Dipasang di depan setiap serial yang di-scan dari supplier ini — mesin yang terbaca BJ347203KLM disimpan sebagai ASBJ347203KLM.",
+    "Dipasang di depan setiap serial yang di-scan dari supplier ini — unit yang terbaca BJ347203KLM disimpan sebagai ASBJ347203KLM.",
   "settings.supplierCodeShape": "Kode supplier tepat dua huruf kapital.",
   "settings.supplierCodeTaken": "{{code}} sudah dipakai supplier lain.",
   "settings.supplierCodeMissing":
@@ -2430,7 +2551,7 @@ export const id: Record<string, string> = {
   "finance.whichMarketplace": "Marketplace yang mana",
   "inbound.acceptAll": "Terima semua ({{count}})",
   "inbound.acceptAllBody":
-    "Semuanya langsung masuk stok siap jual. Unit yang deskripsinya belum diisi tidak ikut, dan unit mana pun masih bisa dikembalikan ke QC lewat barisnya.",
+    "Semuanya langsung masuk stok siap jual. Unit yang deskripsinya belum diisi tidak ikut, dan unit mana pun masih bisa dikembalikan ke QC setelahnya.",
   "inbound.acceptAllDone": "{{count}} unit diterima ke stok.",
   "inbound.acceptAllHint":
     "Masukkan semua unit yang sudah dinilai di faktur ini ke stok siap jual",
@@ -2443,24 +2564,17 @@ export const id: Record<string, string> = {
   "nav.newTransaction": "Transaksi Baru",
   "opname.allFound": "Lengkap",
   "opname.applyScope": "Terapkan",
-  "opname.backToExpected": "Kembali ke daftar seharusnya",
-  "opname.continueToReview": "Lanjut ke tinjauan",
   "opname.countedQty": "Terhitung",
   "opname.difference": "Selisih",
   "opname.editScope": "Ubah cakupan",
   "opname.editScopeHint":
     "Ubah apa yang dihitung. Yang sudah discan tidak hilang.",
   "opname.editScopeTitle": "Ubah cakupan penghitungan ini",
-  "opname.expectedHint":
-    "Periksa cakupannya sebelum posting. Produk yang tidak Anda duga muncul di sini — atau yang Anda cari tapi tidak ada sama sekali — biasanya berarti cakupannya lebih luas atau lebih sempit dari yang Anda maksud.",
   "opname.expectedNothing":
     "Tidak ada unit di dalam cakupan ini. Perluas cakupannya, atau semua serial yang Anda scan akan terbaca tidak terduga.",
   "opname.expectedQty": "Seharusnya",
-  "opname.expectedSubtitle":
-    "Yang menurut catatan toko ada di dalam cakupan ini",
-  "opname.expectedTitle": "Seharusnya ada di hitungan ini ({{count}})",
   "opname.scopeChangeBody":
-    "Memperluas cakupan menambah unit yang diharapkan ada; mempersempitnya mengurangi. Serial yang sudah Anda scan tapi berada di luar cakupan baru tidak dihapus — ia pindah ke daftar tidak dikenal, karena memang ada orang yang membacanya dari mesin.",
+    "Memperluas cakupan menambah unit yang diharapkan ada; mempersempitnya mengurangi. Serial yang sudah Anda scan tapi berada di luar cakupan baru tidak dihapus — ia tetap ada di daftar sebagai Milik lokasi lain, karena memang ada orang yang membacanya dari unit.",
   "opname.scopeChangeTitle": "Semua yang sudah discan tetap tersimpan",
   "opname.scopeUpdated": "Cakupan diperbarui. Tidak ada hitungan yang hilang.",
   "opname.shortBy": "kurang {{count}}",
@@ -2513,7 +2627,6 @@ export const id: Record<string, string> = {
   "pos.comingOff": "−{{amount}}",
   "pos.customerAdded": "{{name}} ditambahkan.",
   "pos.customerDetail": "Detail pelanggan",
-  "pos.escrow": "escrow",
   "pos.feeAmount": "Jumlah",
   "pos.feeCategory": "Untuk apa",
   "pos.feeCategoryHint":
@@ -2559,28 +2672,18 @@ export const id: Record<string, string> = {
   "trade.allowanceRequired": "Isi berapa yang toko berikan untuk unit ini.",
   "trade.category": "Kategori",
   "trade.condition": "Kondisi",
-  "trade.grade": "Jalankan checklist",
-  "trade.gradeNeedsProduct":
-    "Pilih produknya dulu — checklist-nya per kategori.",
-  "trade.grading": "Grading & konfigurasi",
   "trade.new": "New",
   "trade.note": "Catatan",
   "trade.notePlaceholder": "Apa pun yang perlu diketahui QC",
-  "trade.pickAProductFirst": "Pilih produk",
   "trade.product": "Produk",
-  "trade.productHint":
-    "Opsional. Memilihnya berarti unit masuk QC sudah tahu ia produk apa — dan menampilkan berapa modal toko untuk unit sejenis.",
-  "trade.regrade": "Ubah grade",
   "trade.scanOrType": "Scan atau ketik",
   "trade.searchProduct": "Cari produk atau varian",
   "trade.second": "Second",
   "trade.serial": "Serial",
   "trade.serialHint":
-    "Nomor yang tercetak di mesinnya — {{min}}–{{max}} karakter. Ketik tanpa S; aplikasi yang menambahkannya. Unit masuk QC dengan serial ini, persis seperti unit dari purchase order.",
+    "Nomor yang tercetak di unitnya. Unit baru {{min}}–{{max}} karakter; unit second diterima apa adanya. Unit masuk QC dengan serial ini, persis seperti unit dari purchase order.",
   "trade.serialTaken": "{{serial}} sudah menjadi milik unit yang kami punya.",
-  "trade.title": "Ambil unit sebagai tukar tambah",
-  "trade.weListAt": "Kami jual di",
-  "trade.wePay": "Modal kami ({{count}})",
+  "trade.title": "Tukar Tambah",
   "trade.what": "Unit apa ini?",
   "trade.whatHint":
     "Dengan kata-kata, sebagaimana akan terbaca di invoice — lecetnya dan umurnya, bukan cuma modelnya.",
@@ -2590,10 +2693,15 @@ export const id: Record<string, string> = {
     "Dengan serial, unit masuk QC dengan nilai tukar sebagai modalnya. Tanpa serial, hanya uangnya yang mengurangi tagihan.",
   Sales: "Penjualan",
   "Account transfer": "Transfer antar rekening",
+  Refund: "Pengembalian",
   "Takings this app did not record — an off-app sale, or an old till.":
     "Pemasukan yang tidak dicatat aplikasi ini — penjualan di luar aplikasi, atau kasir lama.",
   "Money moved in from another account of the business. Not revenue — it raises the balance without being a sale.":
     "Uang yang dipindahkan dari rekening lain milik usaha. Bukan pendapatan — menambah saldo tanpa menjadi penjualan.",
+  "The customer paid extra on a dearer exchange. Written by the return form so a return's cash side shows on Income & Expense.":
+    "Pelanggan membayar lebih pada tukar tambah yang lebih mahal. Ditulis form retur agar sisi uang dari retur muncul di Pemasukan & Pengeluaran.",
+  "Money handed back to a customer after a return or an exchange. Written by the return form; keep to it so the balance and the return history cannot disagree.":
+    "Uang yang dikembalikan ke pelanggan setelah retur atau tukar tambah. Ditulis form retur; jangan diubah agar saldo dan riwayat retur tidak berbeda.",
   "Shopping bag": "Tas belanja",
   Installation: "Pemasangan",
   "Extended warranty": "Perpanjangan garansi",
@@ -2601,24 +2709,20 @@ export const id: Record<string, string> = {
 
   // ── 2026-09-01: the machine's two barcodes — Apple's and the shop's. ──
   "inbound.scanAmbiguous":
-    "“{{scanned}}” terbaca sebagai kedua barcode sekaligus — kode supplier yang diawali S membuat panjangnya sama. Dibaca sebagai barcode Apple. Cocokkan serialnya dengan mesinnya.",
-  "inbound.scanLandedOriginal":
-    "{{serial}} tercatat — {{product}}. Dibaca dari barcode Apple; cetak stiker toko setelah QC menerimanya.",
-  "inbound.scanLandedStore":
-    "{{serial}} tercatat — {{product}}. Dibaca dari stiker toko sendiri.",
+    "“{{scanned}}” terbaca sebagai kedua barcode sekaligus — kode supplier yang diawali S membuat panjangnya sama. Dibaca sebagai barcode Apple. Cocokkan serialnya dengan unitnya.",
+  "inbound.scanLandedOriginal": "{{serial}} tercatat — {{product}}.",
   "inbound.scanNoMarker":
-    "“{{scanned}}” tidak diawali S maupun kode supplier toko, jadi ini salah satu barcode lain di bagian bawah mesin. Arahkan ke serial Apple atau ke stiker toko.",
+    "“{{scanned}}” tidak diawali S. Arahkan scanner ke barcode yang nomornya diawali S.",
   "scanner.ambiguousRead": "Hasil scan ini adalah kedua barcode sekaligus.",
   "scanner.ambiguousReadWhy":
-    "Kode supplier yang diawali S membuat panjang keduanya sama. Dibaca sebagai barcode Apple — cocokkan serialnya dengan mesinnya.",
-  "scanner.neitherBarcode": "Itu bukan salah satu dari dua barcode mesin.",
-  "scanner.neitherBarcodeWhy":
-    "Barcode serial adalah S ditambah 10–12 karakter, dan stiker toko adalah kode supplier dua huruf ditambah jumlah yang sama. Ini kemungkinan besar barcode regulasi atau nomor part di sebelahnya.",
+    "Kode supplier yang diawali S membuat panjang keduanya sama. Dibaca sebagai barcode Apple — cocokkan serialnya dengan unitnya.",
   "scanner.notInStock": "Belum ada unit dengan serial ini",
-  "scanner.originalBarcode": "Barcode asli",
-  "scanner.originalBarcodeRead": "Serial Apple {{base}}",
-  "scanner.storeBarcode": "Barcode toko",
-  "scanner.storeBarcodeRead": "Supplier {{code}} · serial Apple {{base}}",
+  "scanner.notASerialBarcode": "Bukan barcode serial",
+  "scanner.serialBarcode": "Barcode serial",
+  "scanner.inStockAs": "Ada di stok sebagai {{serial}}",
+  "scanner.notASerialBarcodeWhy":
+    "Barcode serial adalah S ditambah 10–12 karakter. Unit baru hanya diterima dari barcode ini; barcode unit second diterima apa adanya.",
+  "scanner.originalBarcodeRead": "Serial {{serial}}",
   "serial.hasStoreBarcode": "Barcode toko",
   "serial.hasStoreBarcodeWhy":
     "Serial ini membawa kode asal supplier, jadi stiker toko sendiri bisa discan kembali ke unit ini.",
@@ -2630,20 +2734,24 @@ export const id: Record<string, string> = {
   //    till, repeatable fees and the fuller trade-in. ──
   "inbound.scanEmpty": "Tidak ada yang discan.",
   "inbound.scanLength":
-    "“{{scanned}}” terdiri dari {{n}} karakter. Barcode serial adalah S ditambah {{min}}–{{max}} karakter — hasil yang terlalu pendek berarti scanner terangkat terlalu cepat, dan yang terlalu panjang berarti dua scan tanpa Enter di antaranya.",
+    "“{{scanned}}” terdiri dari {{n}} karakter. Barcode unit baru adalah S lalu {{min}}–{{max}} karakter — hasil terlalu pendek berarti scanner terangkat terlalu cepat, terlalu panjang berarti dua scan tanpa Enter di antaranya.",
   "inbound.serialCharset":
     "“{{serial}}” mengandung selain huruf kapital dan angka.",
   "inbound.serialNoMarker":
-    "“{{serial}}” tidak diawali S. Barcode selalu punya S — scanner-nya terarah ke kode regulasi atau part number di sebelahnya.",
-  "inbound.serialNotASerial":
-    "“{{serial}}” bukan serial. Ketik {{min}}–{{max}} karakter yang tercetak di casing, atau scan barcode-nya.",
+    "“{{serial}}” tidak diawali S. Barcode unit baru selalu punya S — scanner-nya terarah ke kode regulasi atau part number di sebelahnya.",
   "inbound.serialHintBare": "{{min}}–{{max}} karakter",
   "inbound.serialShape":
-    "“{{serial}}” terdiri dari {{n}} karakter. Serial adalah S ditambah {{min}}–{{max}} karakter.",
+    "“{{serial}}” terdiri dari {{n}} karakter. Barcode unit baru adalah S lalu {{min}}–{{max}} karakter.",
+  "inbound.serialLengthTyped":
+    "“{{serial}}” terdiri dari {{n}} karakter. Serial unit baru {{min}}–{{max}} karakter.",
+  "inbound.serialHintGrade": "Pilih grade untuk mencatatnya",
+  "inbound.serialWaitsForGrade":
+    "{{serial}} disimpan — pilih grade unitnya dan serial langsung tercatat.",
+  "inbound.regradeSerialCheck":
+    "{{serial}} diterima sebagai serial unit second. Serial unit baru {{min}}–{{max}} karakter tanpa S — kalau yang ini tidak begitu, perbaiki di kotak serial.",
   "inbound.serialHintMarker": "Harus diawali S",
   "inbound.serialHintCharset": "Hanya huruf kapital dan angka",
   "inbound.serialHintLength": "S lalu {{min}}–{{max}} karakter",
-  "labels.faultShape": "bukan S diikuti {{min}}–{{max}} karakter",
   "pos.addFee": "Tambah biaya",
   "pos.backToProducts": "Kembali ke produk",
   "pos.continue": "Lanjut",
@@ -2656,42 +2764,28 @@ export const id: Record<string, string> = {
   "pos.seeFewer": "Tampilkan lebih sedikit",
   "pos.seeMore": "Lihat {{count}} lagi",
   "pos.severalCharges": "{{count}} biaya",
-  "serial.badSerialWhy":
-    "Serial ini bukan S diikuti 10–12 karakter, jadi barcode toko tidak bisa dibuat darinya. Stikernya akan memuat serial apa adanya.",
-  "serial.noStoreCodeWhy":
-    "Supplier ini belum punya kode dua huruf, jadi barcode toko belum bisa dibuat. Beri kodenya di Settings → Supplier.",
-  "serial.noStoreQr": "QR toko: —",
-  "serial.storeQr": "QR toko:",
-  "serial.storeQrWhy":
-    "Isi stiker toko sendiri: kode dua huruf supplier di depan serial mesin. Scan salah satunya sama-sama menemukan unit ini.",
   "trade.bought": "Dibeli seharga",
-  "trade.categoryFromProduct": "Mengikuti produk yang dipilih.",
   "trade.description": "Deskripsi",
-  "trade.descriptionHint":
-    "Dengan kata-kata, sebagaimana akan terbaca di invoice — lecetnya dan umurnya, bukan cuma modelnya.",
   "trade.descriptionPlaceholder": "mis. MacBook Air 2017 8/128, lecet di lid",
-  "trade.descriptionRequired": "Jelaskan mesinnya — lecet dan umurnya.",
-  "trade.entersQc":
-    "Unit masuk QC dengan harga ini sebagai modalnya, persis seperti unit dari purchase order.",
-  "trade.gradeNotForNew": "Tidak ada yang perlu diperiksa pada barang segel.",
-  "trade.gradeRequired":
-    "Jalankan checklist grading — kalau tidak, unit second sampai di bench tanpa keterangan apa pun.",
-  "trade.listedAt": "Dijual seharga",
-  "trade.noneHeld": "Toko belum pernah mengambil unit seperti ini.",
+  "trade.descriptionRequired": "Jelaskan unitnya — lecet dan umurnya.",
+  "trade.gradeRequired": "Pilih grade — A, B atau C.",
+  "trade.gradeLabel": "Grade",
+  "trade.gradePlaceholder": "A, B atau C",
+  "trade.configureGrade": "Atur grade",
+  "trade.checklistNeedsCategory":
+    "Checklist-nya per kategori — pilih kategorinya, atau produknya.",
+  "trade.pickCategory": "Pilih kategori",
+  "trade.productRequired":
+    "Pilih produknya — unit dicatat di bawah produk itu.",
   "trade.price": "Harga",
   "trade.priceHint":
     "Mengurangi yang dibayar pelanggan, dan menjadi modal unit ini saat masuk stok.",
   "trade.priceRequired": "Isi berapa yang toko bayar untuk unit ini.",
-  "trade.seeStock": "Lihat unit-unit di baliknya",
-  "trade.seeWhatWePaid": "Lihat modal tiap unitnya",
-  "trade.serialRequired": "Scan atau ketik serial mesinnya.",
+  "trade.serialRequired": "Scan atau ketik serial unitnya.",
   "trade.serialScanNoMarker":
     "Itu bukan barcode nomor seri — satu Mac punya beberapa barcode. Cari yang tercetak di bawah huruf S.",
   "trade.serialShape":
-    "“{{serial}}” bukan serial. Ketik {{min}}–{{max}} karakter yang tercetak di mesinnya, atau scan barcode-nya.",
-  "trade.unit": "Unit",
-  "trade.whatWeListTitle": "Harga jual unit-unit ini",
-  "trade.whatWePaidTitle": "Modal unit-unit ini",
+    "“{{serial}}” bukan serial unit baru. Ketik {{min}}–{{max}} karakter yang tercetak di unitnya, atau scan barcode-nya.",
 
   // ── 2026-09-01: the till's two steps and its confirmation. ──
   "pos.belowCostBody":
@@ -2772,10 +2866,6 @@ export const id: Record<string, string> = {
   "pos.purchasePrice": "Harga beli",
   "pos.purchaseShippingTax": "Ongkir & pajak pembelian",
   "pos.repairsPaid": "Biaya servis",
-  "trade.costCol": "Modal",
-  "trade.boughtLine": "dibeli {{amount}}",
-  "trade.shippingTaxLine": "ongkir & pajak {{amount}}",
-  "trade.repairLine": "servis {{amount}}",
 
   // ── The keyboard (2026-09-15) — components/KeyboardShortcutsModal.tsx ─────
   "keyboard.title": "Pintasan papan ketik",
@@ -2807,7 +2897,6 @@ export const id: Record<string, string> = {
   "inbound.paymentStatus": "Status pembayaran",
   "inboundList.paymentStatus": "Status pembayaran",
   Open: "Belum dibayar",
-  "Paid in full": "Lunas",
   Draft: "Draf",
   Ordered: "Dipesan",
   "inbound.orderStatus": "Status pesanan",
@@ -2883,7 +2972,7 @@ export const id: Record<string, string> = {
   "opname.needCountNotesBody":
     "Rak yang isinya berbeda dari catatan sistem perlu satu baris penjelasan sebelum stock opname bisa diposting.",
   "opname.postBodyCounted":
-    "{{count}} produk yang dihitung per jumlah tidak cocok: yang kurang ditandai hilang, yang lebih dibuat di QC.",
+    "{{count}} produk yang dihitung per jumlah tidak cocok: stoknya dikoreksi sesuai hasil hitung.",
   "opname.countSurplusReason": "Ditemukan saat stock opname",
 
   // ── Categories tracked by serial, or counted (2026-09-15) ────────────────
@@ -2891,6 +2980,8 @@ export const id: Record<string, string> = {
   "settings.category": "Kategori",
   "settings.categoryProducts": "Produk",
   "settings.trackedBySerial": "Dilacak per serial",
+  "settings.trackedBySerialLocked":
+    "{{count}} masih di stok. Jual, retur, atau keluarkan lewat penyesuaian dulu sebelum mengubah cara kategori ini dicatat.",
   "settings.trackedBySerialAria": "Lacak {{name}} per serial",
   "settings.categoryTrackingTitle": "Produk mana yang punya serial",
   "settings.categoryTrackingBody":
@@ -2910,4 +3001,658 @@ export const id: Record<string, string> = {
   "inboundList.openOrder": "Buka {{code}}",
   "opnameList.openCount": "Buka {{code}}",
   "discounts.openDiscount": "Buka {{name}}",
+
+  // ── Inbound: invoice, units, QC dialog and expenses (2026-09-18) ────────
+  "inbound.invoiceSection": "Barang masuk",
+  "inbound.invoiceSummary": "{{products}} produk · {{units}} unit · {{total}}",
+  "inbound.invoiceEmpty": "Belum ada produk",
+  "inbound.invoiceNoLines":
+    "Belum ada apa pun di invoice ini. Tambahkan setiap produk yang ditagih supplier di bawah.",
+  "inbound.invoiceReceived": "{{count}} diterima",
+  "inbound.invoiceBilled": "{{amount}} ditagihkan",
+  "inbound.invoicePriceVaries":
+    "Setiap unit punya harganya sendiri — ubah di daftar di bawah.",
+  "inbound.invoiceRemove": "Hapus dari invoice",
+  "inbound.invoiceRemoveAria": "Hapus {{product}}",
+  "inbound.invoiceRemoveBlocked":
+    "Unit produk ini sudah ada yang diterima. Hapus serialnya dulu.",
+  "inbound.invoiceRemoveTitle": "Hapus {{product}} dari invoice?",
+  "inbound.invoiceRemoveBody":
+    "Semua unitnya keluar dari invoice. Kalau supplier menagihnya tapi tidak pernah mengirim, tandai unitnya Tidak datang saja — dengan begitu tetap tercatat di invoice.",
+  "inbound.noProductYet": "baris yang belum dipilih produknya",
+  "inbound.unitPrice": "Harga satuan",
+  "inbound.notArrivedCount": "{{count}} tidak datang",
+  "inbound.addProductAria": "Produk yang ditambahkan",
+  "inbound.addQtyAria": "Berapa unit",
+  "inbound.addCostAria": "Harga satuan tiap unit",
+  "inbound.addCostPlaceholder": "Harga satuan (opsional)",
+  "inbound.addUnits": "Tambah {{count}} unit",
+  "inbound.addHint":
+    "Setiap unit dapat barisnya sendiri di daftar di bawah, mulai dari harga ini — ubah salah satunya di sana dan yang lain tidak ikut berubah.",
+  "inbound.qtyRefused":
+    "Hanya unit yang belum punya serial yang bisa dikeluarkan dari invoice. Hapus serial yang sudah di-scan dulu, atau tandai unitnya Tidak datang.",
+  // The invoice as one line per product (owner ask 2026-09-20).
+  "inbound.cogs": "HPP",
+  "inbound.lineDiscount": "Diskon",
+  "inbound.lineDiscountOf": "Diskon untuk {{product}}",
+  "inbound.lineCogsHint":
+    "Total baris ditambah bagiannya atas ongkir, pajak dan biaya lain di invoice ini.",
+  "inbound.unitPriceOfLine": "Harga satuan {{product}}",
+  "inbound.discountTooBig":
+    "Diskon tidak boleh lebih besar dari nilai barisnya ({{amount}}).",
+  "inbound.openDetails": "Unit ({{done}}/{{total}})",
+  "inbound.openDetailsAria": "Serial dan QC untuk {{product}}",
+  "inbound.detailsSubtitle":
+    "{{count}} unit · {{price}} per unit · HPP baris {{cogs}}",
+  "inbound.detailsAddUnit": "Tambah unit lagi",
+  "inbound.detailsNoUnits":
+    "Belum ada unit di baris ini. Tambahkan satu untuk mulai mencatat serial.",
+  "inbound.addLine": "Tambah produk",
+  "inbound.addLineOf": "Tambah {{count}} unit",
+  "inbound.addLineHint":
+    "Satu baris untuk satu produk dengan satu harga. Dua unit produk yang sama dengan harga berbeda dimasukkan sebagai dua baris.",
+  "inbound.noUnitsYetAdd2":
+    "Tambahkan produk yang ditagih supplier di bawah — satu baris masing-masing, dengan harganya sendiri.",
+  "inbound.lineArrivedAria": "{{product}} ternyata datang",
+  "inbound.lineNotArrivedAria": "{{product}} tidak datang",
+  "inbound.unitsSection": "Unit",
+  "inbound.noUnitsYet": "Belum ada apa pun di invoice ini.",
+  "inbound.noUnitsYetAdd":
+    "Tambahkan produk yang ditagih supplier di bawah — setiap unit dapat barisnya sendiri di sini.",
+  "inbound.addUnitProductAria": "Produk yang ditambahkan ke unit",
+  "inbound.addUnitQtyAria": "Berapa unit yang ditambahkan",
+  "inbound.addUnitsHint":
+    "Juga menambah baris di faktur. Setiap unit dapat baris dan harganya sendiri.",
+  "inbound.takeInAll": "Terima semua yang dihitung ({{count}})",
+  "inbound.takenInCount":
+    "{{count}} sudah masuk. Terima ke stok kalau sudah selesai.",
+  "inbound.stateNotArrived": "Tidak datang",
+  "inbound.markNotArrived": "Tidak datang",
+  "inbound.arrivedAfterAll": "Ternyata datang",
+  "inbound.arrivedAfterAllAria": "Unit {{n}} ternyata datang",
+  "inbound.previouslyUnit": "Sebelumnya {{product}}",
+  "inbound.notOnInvoice": "Tidak ada di invoice",
+  "inbound.addToInvoice": "Tambahkan ke invoice",
+  "inbound.productFirst": "Pilih produknya dulu",
+  "inbound.unitN": "unit {{n}}",
+  "inbound.moreAria": "Aksi lain untuk {{name}}",
+  "inbound.removeSerialMenu": "Hapus serial ini",
+  "inbound.removeRowMenu": "Hapus dari invoice",
+  "inbound.removeRowTitle": "Hapus unit ini dari invoice?",
+  "inbound.removeRowBody":
+    "Pakai ini kalau barisnya ditambahkan karena salah. Kalau supplier menagihnya tapi tidak pernah mengirim, tandai Tidak datang saja — dengan begitu tetap tercatat di invoice.",
+  "inbound.removeRowOk": "Hapus dari invoice",
+  "inbound.costRefused": "{{value}} bukan harga satuan yang valid.",
+  "inbound.scanFullRowsInbound":
+    "Semua unit di order ini sudah punya serial. Tambahkan unitnya di bagian Barang masuk kalau memang ada tambahan.",
+  "inbound.autoArrived": "Order ditandai sudah datang.",
+  "inbound.closeWaiting": "{{count}} unit belum punya serial",
+  "inbound.markArrivedBody":
+    "{{count}} unit menunggu serial. Memindainya otomatis menandai order sudah datang; tombol ini hanya mencatat bahwa kardusnya sudah sampai.",
+  "inbound.unreceiveBodyRows":
+    "Unit yang sudah diterima tetap di order ini dengan serial, grade, dan riwayatnya — hanya status order yang berubah.",
+  "inbound.cogsLine": "HPP {{amount}}",
+  "inbound.expensesShare": "Bagian biaya",
+  "inbound.repairCost": "Perbaikan",
+  "inbound.returnShort": "Retur",
+  "inbound.reopenQc": "Buka lagi QC",
+  "inbound.invoiceChanges": "Perubahan dari invoice",
+  "inbound.changeNotOnInvoice": "Tidak ada di invoice",
+  "inbound.changeNotArrived": "Tidak datang",
+  "inbound.noInvoiceIssued": "Tidak ada invoice",
+  "inboundList.noInvoice": "Tanpa invoice",
+
+  // The QC dialog
+  "inbound.qc": "QC",
+  "inbound.qcAria": "QC {{serial}}",
+  "inbound.qcNeedsSerial": "Isi serialnya dulu",
+  "inbound.qcTitle": "QC · {{what}}",
+  "inbound.qcDecided":
+    "QC unit ini sudah selesai. Buka lagi QC untuk mengubah apa pun.",
+  "inbound.qcBatteryHealthMode": "Kesehatan baterai",
+  "inbound.qcFccCcMode": "FCC & CC",
+  "inbound.qcFcc": "FCC",
+  "inbound.qcCc": "CC",
+  "inbound.qcGradePlaceholder": "A, B, atau C",
+  "inbound.qcConfigureGrade": "Atur grade",
+  "inbound.qcService": "Servis",
+  "inbound.qcReject": "Tolak",
+  "inbound.qcDone": "Selesai",
+  "inbound.qcNeedsDescription":
+    "Isi deskripsi unit ini sebelum masuk stok — unit bekas perlu setidaknya satu frasa.",
+  "inbound.qcAccepted": "{{serial}} lolos QC dan masuk stok.",
+  "common.close": "Tutup",
+
+  // Expenses
+  "inbound.expenses": "Biaya",
+  "inbound.noExpenses":
+    "Belum ada biaya — tambahkan ongkir, pajak, atau biaya lain untuk pengiriman ini.",
+  "inbound.addExpense": "Tambah biaya",
+  "inbound.editExpense": "Ubah biaya",
+  "inbound.editExpenseAria": "Ubah {{expense}}",
+  "inbound.expenseKind": "Jenis",
+  "inbound.expenseLabel": "Nama",
+  "inbound.expenseLabelHint": "Opsional — mis. JNE Cargo",
+  "inbound.expenseAmountNeeded": "Isi berapa biayanya.",
+  "inbound.expenseInCogs": "Bagi ke HPP per unit",
+  "inbound.expenseInCogsEach":
+    "Sekitar {{each}} di modal masing-masing dari {{n}} unit.",
+  "inbound.expenseInCogsLater": "Dibagi rata ke unit-unit di invoice ini.",
+  "inbound.expenseNotInCogs":
+    "Tetap jadi utang di invoice, tapi tidak masuk ke modal unit mana pun.",
+  "inbound.expensePaid": "Sudah dibayar",
+  "inbound.expensePaidHint":
+    "Mencatat pembayaran untuk sisa yang belum dibayar, hari ini.",
+  "inbound.expenseUnpaidHint":
+    "Menyimpan akan membatalkan {{amount}} yang tercatat sebagai pembayarannya.",
+  "inbound.expenseAdded":
+    "Biaya ditambahkan — sekarang jadi utang di invoice ini.",
+  "inbound.expenseAddedPaid": "Biaya ditambahkan dan pembayarannya dicatat.",
+  "inbound.expenseUpdated": "Biaya diperbarui.",
+  "inbound.expenseRemoveTitle": "Hapus biaya ini?",
+  "inbound.expenseRemoveBody":
+    "Tidak lagi jadi utang di invoice ini, dan tidak lagi dihitung ke modal unit.",
+  "inbound.expenseRemoveBodyPaid":
+    "Tidak lagi jadi utang, dan {{amount}} yang tercatat sebagai pembayarannya ikut dibatalkan.",
+  "inbound.expenseRemoveOk": "Hapus biaya",
+  "inbound.expenseRemoved": "Biaya dihapus.",
+  "inbound.inCogsTag": "Masuk HPP",
+  "inbound.notInCogsTag": "Tidak masuk HPP",
+  "inbound.expensePaidTag": "Lunas",
+  "inbound.expensePartlyTag": "Dibayar sebagian",
+  "inbound.expenseUnpaidTag": "Belum dibayar",
+  "inbound.payWhatIsOwed": "Bayar sisanya — {{amount}}",
+  "inbound.paymentRecordedFor": "Pembayaran dicatat untuk {{what}}.",
+
+  // Module-level labels, keyed by their English (see test/i18n.test.ts).
+  "Partially paid": "Dibayar sebagian",
+  "Fully paid": "Lunas",
+  Customs: "Bea cukai",
+
+  // ── 2026-09-19: the redesign brief (see CLAUDE.md) ─────────────────────────
+  "inboundForm.owedAmount": "{{amount}} belum dibayar",
+  "inboundForm.stillOwed": "Belum dibayar",
+  "discount.cancel": "Batal",
+  // The till's payment (lib/tillPayments.ts).
+  "pos.methodTransfer": "Transfer",
+  "pos.methodCash": "Tunai",
+  "pos.payBy": "Bayar dengan {{method}}",
+  "pos.payNeedsMethod": "Pilih cara pelanggan membayar.",
+  "pos.paySplitOver": "Jumlah split lebih {{over}} dari total.",
+  "pos.payPaidOver": "Yang dibayar tidak boleh lebih dari jumlah split-nya.",
+  "pos.paymentAmounts": "Jumlah pembayaran",
+  "pos.payMethodCol": "Metode pembayaran",
+  // The payment table, one number per marketplace part (2026-09-21).
+  "pos.amountPaidCol": "Jumlah bayar",
+  "pos.amountPaidFor": "Jumlah bayar, {{method}}",
+  "pos.actualPaidOrRefCol": "Dibayar sebenarnya / Nomor referensi",
+  "pos.refFor": "Nomor referensi, {{method}}",
+  "pos.refPlaceholderFor": "Nomor pesanan {{method}}",
+  "pos.refRequired": "Nomor pesanan wajib diisi.",
+  "pos.refShort": "Ref {{ref}}",
+  "pos.channelOrderNo": "Nomor pesanan {{channel}}",
+  "pos.payNeedsRefs":
+    "Isi nomor pesanan marketplace untuk setiap pembayaran Shopee atau Tokopedia.",
+  "pos.draftUnitGone":
+    "{{serials}} sudah tidak dijual dan dikeluarkan dari penjualan ini.",
+  "pos.actualPaidFor": "Dibayar, {{method}}",
+  "pos.theRest": "sisanya",
+  "pos.stillOwedOn": "{{amount}} belum dibayar",
+  "pos.customerOwesAmount": "Pelanggan masih berutang {{amount}}",
+  "pos.customerOwes": "Utang pelanggan",
+  "pos.dueDate": "Jatuh tempo",
+  "pos.dueDateAria": "Kapan pelanggan akan membayar",
+  "pos.dueOn": "jatuh tempo {{date}}",
+  "pos.paymentRefUpper": "REFERENSI PEMBAYARAN",
+  "pos.paymentRef": "Referensi pembayaran",
+  "pos.marketplaceHoldsPart":
+    "Marketplace menahan bagiannya sampai dicairkan — tandai diterima di Saldo Tertahan & Piutang.",
+  // Inbound & QC — QC on the row, in any order.
+  "inbound.serialWaitsForProduct":
+    "{{serial}} disimpan — pilih produk unitnya dan serial langsung tercatat.",
+  "inbound.gradePlaceholder": "Grade",
+  "inbound.gradeNew": "Baru",
+  "inbound.checklistNeedsProduct":
+    "Checklist-nya per kategori — pilih produknya.",
+  "inbound.checklistAria": "Checklist grading untuk {{name}}",
+  "inbound.decisionNeedsSerial": "Isi serialnya dulu",
+  "inbound.acceptTip": "Lolos QC — masuk stok siap jual",
+  "inbound.acceptNeedsDescription":
+    "Beri deskripsi unit ini dulu — unit second perlu minimal satu frasa.",
+  "inbound.notArrivedAria": "Unit {{n}} tidak datang",
+  "inbound.acceptedShort": "Diterima",
+  "inbound.photosTip": "Foto",
+  "inbound.photosAria": "Foto {{name}}",
+  "inbound.photosTitle": "Foto · {{what}}",
+  "inbound.unitCol": "Unit",
+  "inbound.batteryCol": "Baterai",
+  "inbound.cogsCol": "HPP",
+  "inbound.cogsHint":
+    "Harga unit ditambah bagiannya dari ongkir, pajak dan biaya lain di invoice, serta biaya servis.",
+  "inbound.invoiceUnitPrice": "Harga unit {{n}}",
+  "inbound.addHintPerUnit":
+    "Setiap unit punya kotak harganya sendiri, di sini dan di daftar di bawah.",
+  "photos.addedDraft": "{{count}} foto ditambahkan.",
+  "photos.altDraft": "Foto unit ini",
+  "photos.addHintDraft": "Foto kondisi unit ini",
+  // The Inbound list's columns and row buttons.
+  "inboundList.date": "Tanggal",
+  "inboundList.totalPrice": "Total harga",
+  "inboundList.totalPaid": "Total dibayar",
+  "inboundList.unpaidAmount": "{{amount}} belum dibayar",
+  "inboundList.addPayment": "Tambah pembayaran",
+  "inboundList.addPaymentAria": "Tambah pembayaran ke {{code}}",
+  "inboundList.addPaymentClosed":
+    "Invoice ditutup — buka lagi untuk mencatat pembayaran.",
+  "inboundList.deleteAria": "Hapus {{code}}",
+  // The order wizard: a product and how many, then a price per unit.
+  "inboundForm.productsOptional":
+    "Opsional. Kalau barang belum datang dan belum ada yang tahu isinya, biarkan kosong — order tetap tersimpan, dan produknya ditambahkan dari halaman order saat barangnya tiba.",
+  "inboundForm.addUnit": "Tambah unit",
+  "inboundForm.noUnitsYet":
+    "Belum ada unit. Pilih produk dan jumlahnya di bawah, atau biarkan kosong.",
+  "inboundForm.unitPrice": "Harga unit",
+  "inboundForm.unitPriceOf": "Harga unit {{n}}",
+  "inboundForm.removeUnit": "Hapus unit {{n}}",
+  "inboundForm.addUnits": "Tambah {{count}} unit",
+  "inboundForm.noLinesYet":
+    "Belum ada produk. Tambahkan satu di bawah, atau biarkan kosong.",
+  "inboundForm.removeLine": "Hapus baris {{n}}",
+  "inboundForm.detailsSubtitle":
+    "{{count}} unit · {{price}} per unit · HPP baris {{cogs}}",
+  "inboundForm.detailsFooter":
+    "Tidak ada yang wajib diisi di sini. Setiap serial yang dimasukkan menjadi unit di QC begitu order disimpan.",
+  "inboundForm.serialRefused":
+    "{{serial}} bukan serial unit baru — nomor di casing {{min}}–{{max}} karakter, barcode-nya S lalu jumlah yang sama.",
+  "inboundForm.serialsNotReady":
+    "{{count}} serial belum bisa dicatat — setiap unit perlu grade, dan serial unit baru harus lolos pengecekannya. Buka Unit di barisnya untuk menyelesaikan, atau simpan sebagai draft.",
+  "inboundForm.serialTwice": "{{serial}} sudah ada di order ini.",
+  "inboundForm.serialFault": "Cek lagi dengan stikernya.",
+  "inboundForm.notEnteredYet": "Belum diisi",
+  "inboundForm.unitCount": "{{count}} unit",
+  // Stock Opname — the counting table (owner brief 2026-09-19).
+  "opname.unitsTitle": "Unit dalam hitungan ini",
+  "opname.colUnit": "Unit",
+  "opname.description": "Deskripsi",
+  "opname.action": "Aksi",
+  "opname.statusFound": "Ditemukan",
+  "opname.statusNotScanned": "Belum discan",
+  "opname.statusElsewhere": "Milik lokasi lain",
+  "opname.statusUnregistered": "Tidak ada di sistem",
+  "opname.statusNotCounted": "Belum dihitung",
+  "opname.unknownUnit": "Unit tidak dikenal",
+  "opname.deleteScan": "Hapus scan ini — unitnya tidak diubah",
+  "opname.deleteScanAria": "Hapus scan {{serial}}",
+  "opname.tallyCounting":
+    "{{found}} ditemukan · {{notYet}} belum discan · {{unexpected}} tak terduga",
+  "opname.onlyCountedByQty":
+    "Tidak ada yang berserial untuk discan di cakupan ini — hitung per jumlah di bawah.",
+  // S/N Tracking — the list of every serial.
+  "snTracking.anyUnit": "Semua kategori, produk atau unit",
+  "snTracking.checkHistory": "Cek riwayat",
+  "snTracking.checkHistoryAria": "Cek riwayat {{serial}}",
+  "snTracking.clearFilters": "Bersihkan filter",
+  "snTracking.findInTree": "Cari kategori, produk atau unit",
+  "snTracking.lastMovement": "Pergerakan terakhir",
+  "snTracking.movedBetween": "Pergerakan terakhir antara",
+  "snTracking.movedSince": "Bergerak sejak",
+  "snTracking.movedUntil": "Bergerak sampai",
+  "snTracking.searchPlaceholder": "Cari atau scan serial, produk atau gudang",
+  "snTracking.serial": "Serial",
+  "snTracking.unit": "Unit",
+  "snTracking.variantPriceHint": "Belum diberi harga — harga jual variannya",
+  // Transaction History — the owner's columns.
+  "transactions.anyChannel": "Semua kanal",
+  "transactions.anyPaymentStatus": "Semua status pembayaran",
+  "transactions.customer": "Pelanggan",
+  "transactions.date": "Tanggal",
+  "transactions.dueOn": "Jatuh tempo {{date}}",
+  "transactions.exported": "{{count}} baris diekspor.",
+  "transactions.ofTotal": "dari {{total}}",
+  "transactions.orderNumber": "No. order",
+  "transactions.orderRef": "No. order / referensi",
+  "transactions.overdueSince": "Lewat jatuh tempo sejak {{date}}",
+  "transactions.paymentRef": "Referensi pembayaran",
+  "transactions.paymentStatus": "Status pembayaran",
+  "transactions.received": "Diterima",
+  "transactions.refHint":
+    "Referensi pembayaran — nomor pesanan dari marketplace",
+  "transactions.refLine": "Ref {{ref}}",
+  "transactions.searchOrders":
+    "Cari order, referensi, serial, produk atau pelanggan",
+  "transactions.selectedSum": "Diterima {{received}} dari {{total}}",
+  "transactions.soldBetween": "Terjual antara",
+  "transactions.soldFrom": "Terjual dari",
+  "transactions.soldUntil": "Terjual sampai",
+  "transactions.stCompleted": "Selesai",
+  "transactions.stPartlyReturned": "Diretur sebagian",
+  "transactions.stReturned": "Diretur",
+  "transactions.total": "Total",
+  "transactions.unit": "Unit",
+  "transactions.units": "Unit",
+  // Pending & Receivables — the correction dialog and its note.
+  "finance.recordWithdrawals": "Catat pencairan",
+  "settle.amendTitle": "Koreksi pencairan dari {{channel}}",
+  "settle.saveCorrection": "Simpan koreksi",
+  // Returns & exchange — buy-back or return, from one rule.
+  "returnCustomer.pickAUnit": "Centang minimal satu unit yang dikembalikan.",
+  "returnCustomer.needReason": "Sebutkan kenapa unitnya dikembalikan.",
+  "returnCustomer.recordedRefund":
+    "Retur dicatat — kembalikan {{amount}}. Terima unitnya saat sudah kembali.",
+  "returnCustomer.recorded":
+    "Retur dicatat — terima unitnya saat sudah kembali.",
+  "returnCustomer.paySettled": "Lunas",
+  "returnCustomer.payMarketplace": "Di marketplace",
+  "returnCustomer.payPartly": "Dibayar sebagian",
+  "returnCustomer.payOwed": "Belum dibayar",
+  "returnCustomer.serialLookup": "Serial",
+  "returnCustomer.notSold":
+    "{{serial}} bukan unit yang sedang ada di pelanggan. Pilih transaksinya di bawah.",
+  "returnCustomer.scanSerial": "Scan atau ketik serial yang dikembalikan",
+  "returnCustomer.findSale": "Cari transaksinya",
+  "returnCustomer.transaction": "Transaksi",
+  "returnCustomer.nothingOut":
+    "Semua unit transaksi ini sudah kembali, atau sedang dalam perjalanan.",
+  "returnCustomer.unitCol": "Unit",
+  "returnCustomer.priceCol": "Harga",
+  "returnCustomer.expenseCol": "Biaya tambahan",
+  "returnCustomer.tickAria": "{{serial}} dikembalikan",
+  "returnCustomer.qtyBackAria": "Berapa {{product}} yang dikembalikan",
+  "returnCustomer.countedOut": "{{code}} · {{count}} masih di pelanggan",
+  "returnCustomer.eachPrice": "{{price}} per pcs",
+  "returnCustomer.expenseFor": "Biaya tambahan untuk {{serial}}",
+  "returnCustomer.handBack": "Kembalikan {{amount}}",
+  "returnCustomer.customerPays":
+    "Pelanggan membayar {{amount}} untuk penukaran",
+  "returnCustomer.paymentStatus": "Status pembayaran",
+  "returnCustomer.replacement": "Pengganti",
+  "returnCustomer.description": "Deskripsi",
+  "returnCustomer.statusBack": "Kembali ke stok",
+  "returnCustomer.addReplacement": "Tambahkan {{item}}",
+  "returnCustomer.addSale": "Tambah transaksi — kode atau pelanggan",
+  "returnCustomer.alreadyChosen": "{{serial}} sudah ada di daftar penukaran.",
+  "returnCustomer.checkShopee": "Cek berkas Shopee",
+  "returnCustomer.exchangeFor": "Ditukar dengan",
+  "returnCustomer.exchangeHint":
+    "Opsional. Scan atau cari barang yang diambil pelanggan sebagai gantinya.",
+  "returnCustomer.inventoryList": "Unit di inventori",
+  "returnCustomer.itemsOf": "Unit di {{code}}",
+  "returnCustomer.noMatch": "Tidak ada stok yang cocok.",
+  "returnCustomer.notForSale": "{{serial}} tidak ada di rak untuk dijual.",
+  "returnCustomer.notOutAnymore": "{{serial}} sudah tidak ada di pelanggan.",
+  "returnCustomer.onHand": "{{count}} tersedia",
+  "returnCustomer.putOn": "Masukkan pengganti ke",
+  "returnCustomer.recordedExchange":
+    "Penukaran dicatat — terima unit yang dikembalikan saat sudah kembali.",
+  "returnCustomer.recordedExchangeTopUp":
+    "Penukaran dicatat — terima {{amount}} dari pelanggan. Terima unit yang dikembalikan saat sudah kembali.",
+  "returnCustomer.removeReplacement": "Hapus {{item}}",
+  "returnCustomer.removeSale": "Keluarkan {{code}} dari retur ini",
+  "returnCustomer.replacementGone":
+    "{{item}} sudah tidak ada di rak — pilih pengganti lain.",
+  "returnCustomer.replacementPriceFor": "Harga {{item}}",
+  "returnCustomer.replacementQtyFor": "Jumlah {{item}}",
+  "returnCustomer.searchReplacement":
+    "Scan serial, atau cari produk, varian atau kode",
+  "returnCustomer.searchReplacementAria": "Cari pengganti di inventori",
+  "returnCustomer.staleReplacements":
+    "Sudah tidak ada di rak, jadi tidak diikutkan: {{list}}",
+  // The two-table form and the three-column history (2026-09-21).
+  "returnCustomer.returnSide": "Retur",
+  "returnCustomer.returnTable": "Unit yang dikembalikan",
+  "returnCustomer.exchangeTable": "Unit yang keluar",
+  "returnCustomer.nothingListed":
+    "Scan serial yang dikembalikan, atau tambahkan transaksinya.",
+  "returnCustomer.nothingOutYet": "Tidak ada yang keluar — retur biasa.",
+  "returnCustomer.exchangeWaits": "Tambahkan dulu unit yang dikembalikan.",
+  "returnCustomer.transactionRef": "Nomor transaksi / referensi",
+  "returnCustomer.exchangeUnit": "Unit pengganti",
+  // Every clickable serial's history, in a popup (2026-09-21).
+  "serialHistory.title": "Riwayat — {{serial}}",
+  "shopeeRefund.fileCol": "Di berkas",
+  "shopeeRefund.noSale": "Tidak ada transaksi dengan nomor pesanan ini",
+  "shopeeRefund.none":
+    "Tidak ada pengembalian dana di berkas ini — {{count}} pesanan dicek.",
+  "shopeeRefund.notShopee":
+    "Berkas ini bukan laporan saldo penjual atau export pesanan Shopee.",
+  "shopeeRefund.orderCol": "Nomor pesanan Shopee",
+  "shopeeRefund.recordFor": "Catat retur {{code}}",
+  "shopeeRefund.recorded": "Retur sudah dicatat",
+  "shopeeRefund.returnCol": "Retur",
+  "shopeeRefund.returnedQty": "Jumlah dikembalikan: {{count}}",
+  "shopeeRefund.saleCol": "Transaksi",
+  "shopeeRefund.summary":
+    "{{count}} pesanan dengan pengembalian dana di berkas ini. Tidak ada yang dicatat sampai Anda mencatat returnya.",
+  "shopeeRefund.title": "Pengembalian dana di berkas Shopee",
+  "shopeeRefund.which":
+    "Laporan saldo penjual (Saldo Penjual → Export) menampilkan setiap pesanan yang dananya dikembalikan Shopee. Export pesanan juga bisa.",
+  // Inventory, flat since 2026-09-19.
+  "inventory.unitAndSku": "Unit & SKU",
+  "inventory.anyGrade": "Semua grade",
+  "inventory.unitPrice": "Harga satuan",
+  "inventory.sellPrice": "Harga jual",
+  "inventory.cogsOne": "HPP {{amount}}",
+  "inventory.action": "Aksi",
+  "inventory.setPrice": "Atur harga",
+  "inventory.setPriceFor": "Atur harga untuk {{what}}",
+  "inventory.printBarcode": "Cetak barcode",
+  "inventory.printBarcodeFor": "Cetak barcode untuk {{what}}",
+  "inventory.openLineAria": "Lihat unit {{what}}",
+  "inventory.moveDoc": "Dokumen",
+  "inventory.moveQty": "Jml",
+  "inventory.moveWhat": "Keterangan",
+  "inventory.moveWhen": "Waktu",
+  "inventory.nUnits": "{{n}} unit",
+  // What a unit cost, taken apart (the "i").
+  "cost.title": "Rincian HPP {{serial}}",
+  "cost.showAria": "Lihat rincian HPP {{serial}}",
+  "cost.unitPrice": "Harga satuan",
+  "cost.expenseShare": "Bagian ongkir, pajak & biaya",
+  "cost.repairs": "Perbaikan",
+  "cost.cogs": "HPP",
+  // The price grid: the marketplace price is the variant's.
+  "price.cogs": "HPP",
+  "price.variantHint":
+    "Harga marketplace itu per varian, bukan per unit: harga toko tertinggi dari unit yang dijual, ditambah {{pct}}%.",
+  "price.listing": "Harga marketplace: {{price}}",
+  "price.listingChanges":
+    "Harga marketplace setelah disimpan: {{before}} → {{after}}",
+  "price.notListed":
+    "Marketplace: belum tayang — tidak ada unit varian ini yang dijual.",
+  "settings.listingMarkupVariantHint":
+    "Ditambahkan ke harga toko tertinggi dari unit yang dijual dalam satu varian; hasilnya jadi harga marketplace varian itu.",
+  "stock.adjustTitle": "Sesuaikan {{serial}}",
+  "stock.noBatteryCounted":
+    "Dihitung per jumlah, bukan per serial — tidak ada baterai yang dicatat",
+  // Export stock.
+  "stockExport.button": "Ekspor stok",
+  "stockExport.title": "Ekspor stok",
+  "stockExport.warehouses": "Gudang",
+  "stockExport.categories": "Kategori",
+  "stockExport.products": "Produk",
+  "stockExport.columns": "Kolom",
+  "stockExport.columnsHint":
+    "Kalau Gudang dicentang, sheet dikelompokkan per gudang lengkap dengan totalnya; kalau tidak, tiap produk jadi satu baris untuk semua gudang. Grade bikin tiap grade punya baris sendiri.",
+  "stockExport.colUnit": "Unit (produk & varian)",
+  "stockExport.colQty": "Jml",
+  "stockExport.colWarehouse": "Gudang",
+  "stockExport.colUnitPrice": "Harga satuan",
+  "stockExport.colSellPrice": "Harga jual",
+  "stockExport.colSku": "Kode SKU",
+  "stockExport.colGrade": "Grade",
+  "stockExport.download": "Unduh .xlsx",
+  "stockExport.downloadPdf": "Unduh .pdf",
+  "stockExport.downloadBoth": "Unduh keduanya",
+  "stockExport.format": "Berkas",
+  "stockExport.formatXlsx": "Excel (.xlsx)",
+  "stockExport.formatPdf": "PDF",
+  "stockExport.formatHint":
+    "Excel berisi angka asli yang bisa diurutkan dan dijumlahkan; PDF tampil sama di semua layar dan tidak bisa diubah. Centang keduanya untuk mengunduh masing-masing satu.",
+  "stockExport.noFormat": "Pilih minimal satu berkas untuk diunduh.",
+  "stockExport.preview": "{{units}} unit dalam {{rows}} baris akan diekspor.",
+  "stockExport.nothing": "Tidak ada stok yang cocok dengan filter ini.",
+  "stockExport.done": "Stok diekspor: {{units}} unit dalam {{rows}} baris.",
+  // Payable & Receivable (owner ask 2026-09-21) — utang and piutang together.
+  "utang.title": "Utang & piutang",
+  "utang.weOwe": "Utang ke supplier",
+  "utang.weOweHint": "Faktur yang masih ada sisa tagihan, paling lama di atas.",
+  "utang.owedToUs": "Piutang pelanggan",
+  "utang.owedToUsHint":
+    "Penjualan tunai dan transfer yang belum lunas. Uang yang masih ditahan marketplace ada di Saldo Tertahan & Piutang.",
+  "utang.payable": "Utang — yang harus dibayar ke supplier",
+  "utang.receivable": "Piutang — yang belum dibayar pelanggan",
+  "utang.supplier": "Supplier",
+  "utang.noSupplier": "Tanpa nama supplier",
+  "utang.name": "Nama",
+  "utang.transactions": "Transaksi",
+  "utang.document": "Transaksi",
+  "utang.date": "Tanggal",
+  "utang.billed": "Total",
+  "utang.settled": "Dibayar",
+  "utang.amount": "Jumlah",
+  "utang.oldestSince": "Tertua sejak {{date}}",
+  "utang.promised": "Dijanjikan {{date}}",
+  "utang.overdue": "Lewat jatuh tempo",
+  "utang.andMore": "dan {{count}} lagi",
+  "utang.fromBefore": "Dari sebelum aplikasi ini",
+  "utang.walkIn": "Pelanggan umum",
+  "utang.searchSupplier": "Cari supplier atau nomor faktur",
+  "utang.searchCustomer": "Cari pelanggan, nomor telepon, atau kode order",
+  "utang.searchSupplierOrInvoice": "Cari supplier atau nomor faktur",
+  "utang.searchCustomerOrOrder":
+    "Cari pelanggan, nomor telepon, atau transaksi",
+  "utang.nothingPayable": "Semua faktur sudah lunas.",
+  "utang.nothingReceivable": "Semua pelanggan sudah membayar.",
+  // Tabs, columns, and export controls (owner ask 2026-09-21 malam).
+  "utang.customer": "Pelanggan",
+  "utang.phone": "Nomor telepon",
+  "utang.inboundNumber": "Nomor inbound",
+  "utang.transactionId": "ID transaksi",
+  "utang.total": "Total",
+  "utang.owed": "Sisa",
+  "utang.viewInvoice": "Lihat invoice",
+  "utang.grandTotal": "Total keseluruhan",
+  "utang.payableExportTitle": "Utang — yang harus dibayar ke supplier",
+  "utang.receivableExportTitle": "Piutang — yang belum dibayar pelanggan",
+  "utang.exportPrintedAt": "Dicetak {{when}}",
+  // Receivable and Payable as two leaves, and the payment dialog behind both
+  // (owner ask 2026-09-22).
+  "utang.weOweTotal": "Utang kita",
+  "utang.owedToUsTotal": "Piutang pelanggan",
+  "debtPay.add": "Tambah pembayaran",
+  "debtPay.recordRow": "Catat pembayaran",
+  "debtPay.recordRowAria": "Catat pembayaran untuk {{code}}",
+  "debtPay.titlePayable": "Bayar supplier",
+  "debtPay.titleReceivable": "Terima pembayaran pelanggan",
+  "debtPay.save": "Catat pembayaran",
+  "debtPay.pickSupplier": "Pilih supplier",
+  "debtPay.pickCustomer": "Pilih pelanggan",
+  "debtPay.amount": "Jumlah",
+  "debtPay.amountAuto": "Dijumlahkan dari baris yang dicentang.",
+  "debtPay.amountPlaceholder": "Ketik, atau centang barisnya",
+  "debtPay.method": "Dibayar dengan",
+  "debtPay.date": "Tanggal",
+  "debtPay.note": "Catatan",
+  "debtPay.inBalance": "Masuk hitungan saldo toko",
+  "debtPay.inBalanceOff":
+    "Melunasi utang tanpa mengubah saldo kas atau bank — untuk uang yang tidak lewat rekening toko.",
+  "debtPay.outOfCash": "Diambil dari laci kas.",
+  "debtPay.outOfBank": "Diambil dari saldo bank.",
+  "debtPay.intoCash": "Masuk ke laci kas.",
+  "debtPay.intoBank": "Masuk ke saldo bank.",
+  "debtPay.invoices": "faktur",
+  "debtPay.transactions": "transaksi",
+  "debtPay.selected": "{{count}} {{what}} dipilih · {{amount}}",
+  "debtPay.owedInAll": "Total sisa: {{amount}}",
+  "debtPay.toDeposit":
+    "{{amount}} melebihi sisa tagihan faktur-faktur ini. Kelebihannya disimpan sebagai deposit di {{name}}, untuk dipakai ke faktur berikutnya.",
+  "debtPay.tooMuchInvoice": "{{amount}} melebihi sisa tagihan faktur ini.",
+  "debtPay.tooMuch":
+    "{{amount}} melebihi utang {{name}}. Pelanggan tidak bisa membayar di muka.",
+  "debtPay.pickRow": "Bayar {{code}}",
+  "debtPay.nothingOwed": "Tidak ada yang terutang.",
+  "debtPay.owed": "Sisa",
+  "debtPay.paid": "Dibayar",
+  "debtPay.saved": "{{amount}} tercatat untuk {{count}} dokumen.",
+  "debtPay.logReason": "Pembayaran dicatat di Piutang",
+  "debtPay.depositNote": "Kelebihan bayar dari halaman Utang",
+  "inbound.inBalanceOn": "Diambil dari laci kas atau bank, sesuai metodenya.",
+  "supplier.inBalanceHint":
+    "Matikan bila uangnya tidak keluar dari kas atau rekening bank toko.",
+  "cashflow.kindSupplierPayment": "Pembayaran supplier",
+  "cashflow.kindDeposit": "Deposit supplier",
+  "cashflow.kindCustomerPayment": "Pembayaran pelanggan",
+  "cashflow.paidTo": "Dibayar ke {{name}}",
+  "cashflow.depositWith": "Deposit di {{name}}",
+  "cashflow.oldDebtTo": "{{name}} — utang dari sebelum aplikasi ini",
+  "cashflow.notInBalance": "Tidak masuk saldo",
+  "export.xlsx": "Ekspor .xlsx",
+  "export.pdf": "Ekspor .pdf",
+  // Shopee report upload (owner ask 2026-09-21). docs/shopee-fees.md.
+  "piutang.uploadShopee": "Unggah laporan Shopee",
+  "piutang.imported": "{{count}} pencairan dicatat — {{amount}}.",
+  "shopeeImport.title": "Unggah laporan Shopee",
+  "shopeeImport.drop": "Letakkan berkas .xlsx Shopee di sini",
+  "shopeeImport.which":
+    "Laporan saldo penjual (Saldo Penjual → Export) atau laporan penghasilan (Penghasilan Saya → Export) memuat apa yang benar-benar dibayarkan Shopee. Export pesanan juga bisa, dan akan diestimasi dari tarif resmi.",
+  "shopeeImport.unreadable":
+    "Berkas itu tidak bisa dibaca sebagai spreadsheet.",
+  "shopeeImport.orderExportTitle":
+    "Ini export pesanan — tidak memuat nilai pencairan",
+  "shopeeImport.orderExportBody":
+    "Satu-satunya kolom uang di dalamnya adalah tagihan pembeli, bukan yang dibayarkan Shopee ke toko. Semua angka di bawah DIESTIMASI dari tarif resmi. Koreksi satu per satu saat pencairan benar-benar masuk.",
+  "shopeeImport.noOrders":
+    "Tidak ada nomor pesanan yang ditemukan di berkas itu.",
+  "shopeeImport.conditionalHint":
+    "Dua komponen biaya tidak bisa dibaca dari export mana pun — apakah pembeli mengambil cicilan 0%, dan apakah penjualan lewat afiliasi. Keduanya membuat biaya satu penjualan berkisar 6,9% sampai 12,0%, jadi ditanyakan, bukan ditebak.",
+  "shopeeImport.noInstalment": "Tanpa cicilan 0%",
+  "shopeeImport.spay3": "SPayLater XTRA 0%, 3 bulan (2,5%)",
+  "shopeeImport.spay6": "SPayLater XTRA 0%, 6 bulan (4,0%)",
+  "shopeeImport.affiliate": "Terjual lewat afiliasi (1% + PPN)",
+  "shopeeImport.estimated": "Estimasi",
+  // The upload's table (owner revision 2026-09-21).
+  "shopeeImport.refCol": "Nomor referensi",
+  "shopeeImport.orderNominal": "Nominal pesanan",
+  "shopeeImport.receivable": "Nominal diterima",
+  "shopeeImport.deductionDetail": "Rincian potongan",
+  "shopeeImport.detailFor": "Rincian potongan untuk {{ref}}",
+  "shopeeImport.notInFile": "Tidak ada di berkas ini",
+  "shopeeImport.noRefYet": "Penjualan belum punya nomor pesanan Shopee",
+  "shopeeImport.paidIn": "Masuk {{when}}",
+  "shopeeImport.reasonShared": "Dua penjualan memakai nomor ini",
+  "shopeeImport.reasonNothing": "Tidak dibayar — pengembalian dana atau retur",
+  "shopeeImport.reasonUnreadable": "Angka Shopee tidak terbaca",
+  "shopeeImport.reasonParts": "Bukan pencairan biasa",
+  "shopeeImport.mismatchLegend":
+    "{{count}} ditandai di atas: yang dibayarkan Shopee tidak cocok dengan tarif resminya, atau barisnya perlu dicek. Tombol ⓘ di samping nominal diterima menampilkan potongannya.",
+  "shopeeImport.estimatedReason":
+    "Diestimasi dari tarif resmi Shopee — koreksi saat pencairan masuk.",
+  "shopeeImport.record": "Catat {{count}} pencairan",
+  "shopeeImport.summary":
+    "{{count}} dari {{total}} dipilih · {{amount}} akan dicatat sebagai diterima.",
+  "shopeeImport.leftovers":
+    "{{unknown}} nomor pesanan di berkas tidak cocok dengan penjualan yang menunggu, {{ambiguous}} cocok dengan lebih dari satu, {{already}} sudah pernah dicatat, dan {{missing}} penjualan yang menunggu tidak ada di berkas.",
+  // The seller balance report (owner ask 2026-09-21, later the same day).
+  "shopeeImport.nothingPaid":
+    "Shopee tidak membayar apa pun untuk pesanan ini ({{amount}}) — pengembalian dana atau retur. Tangani di Retur, bukan di sini.",
+  "shopeeImport.unreadableRow":
+    "Angka Shopee untuk pesanan ini tidak bisa dibaca. Catat secara manual.",
+  "shopeeImport.reviewParts":
+    "Bukan pencairan biasa: {{parts}}. Periksa penjualannya, lalu centang.",
+  "shopeeImport.reviewAbove":
+    "Shopee membayar {{amount}} lebih banyak daripada yang dimungkinkan tarifnya. Periksa nominal penjualannya, lalu centang.",
+  "shopeeImport.totalDeducted": "Potongan",
+  "shopeeImport.inTheBalance": "Di saldo: {{parts}}",
+  "shopeeImport.unmatchedList":
+    "Tidak cocok — belum ada penjualan dengan nomor pesanan Shopee ini sebagai referensinya: {{list}}",
+  "shopeeImport.andMore": "dan {{count}} lagi",
+  "shopeeImport.balanceOther":
+    "Juga ada di saldo, dan tidak dicatat di sini: {{list}}.",
+  "shopeeImport.notDone":
+    "{{count}} baris pesanan belum selesai diproses dan tidak diikutkan.",
+  // The shop's own product naming convention (owner ask 2026-09-21).
+  "products.codePreview": "Kode SKU akan terbaca: {{code}}",
+  "products.namingHint":
+    "Konvensi toko: lini, ukuran, tahun atau chip, prosesor. Unit Apple silicon dinamai dengan chip-nya, bukan tahunnya.",
+  "products.eGAir13": 'mis. AIR 13" 2020 I5, atau AIR 13" M2',
 };

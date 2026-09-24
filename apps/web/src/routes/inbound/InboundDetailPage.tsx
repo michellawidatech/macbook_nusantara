@@ -1,43 +1,74 @@
 /**
  * One inbound order, from raised to on-the-shelf.
  *
- * This is where the PO and QC screens actually merged. The three intake stories
- * the owner described are three paths through this one page:
+ * ## The flow (owner revision 2026-09-20)
  *
- * 1. **Goods match.** Lines were entered when the order was raised. Mark
- *    arrived, then grade each serial.
- * 2. **Goods do not match.** Add the product that actually turned up, drop the
- *    one that did not (`Not received` — it stays visible because it was
- *    invoiced), or correct a unit cost to what was really paid.
- * 3. **Paid first.** The order arrives here with a payment and no lines at all.
- *    Add the products now, then mark arrived.
+ * > *"Do not show all detail in 1 page. Do the same with the initial adding
+ * > product flow — display the unit and qty and price first, then the detail.
+ * > Either seeing inbound detail and adding new inbound will have the same
+ * > display for the unit and it should only have that."*
  *
- * "Mark arrived" is the hinge: it opens QC, and QC is where each machine is
- * identified. It does NOT create units — the serial does. Every row in
- * *Serials & QC* is one machine the invoice accounts for, and it becomes a
- * unit at the moment somebody scans or types the serial off its case
- * (2026-08-26; `lib/inboundQc.ts` has the reasoning). Before that a row is a
- * question the paperwork is asking; after it, the machine has a ledger of its
- * own.
+ * Three blocks, top to bottom, in the order the work is done:
+ *
+ * 1. **The invoice's facts** — supplier, number, date, warehouse, status —
+ *    every one editable in place.
+ * 2. **Units**: the invoice's lines, one row each — product, quantity, one
+ *    unit price, a discount, the line total and its COGS. It is the SAME
+ *    component the order form's second step draws
+ *    (`PurchaseLinesTable`), which is what the owner's ask is about, and
+ *    everything about the machines behind a line is in the popup behind it
+ *    (`UnitDetailsModal`): serial, grade, battery, description, sell price,
+ *    photos and the row's decisions.
+ * 3. **Purchase**: the goods, every expense (`ExpenseModal`), and the
+ *    payments.
+ *
+ * ## What went, and why
+ *
+ * The collapsed *Inbound* section and the list of one row per unit were two
+ * readings of the same lines, and the owner asked for one. The discrepancy
+ * panel under them went with them — *"the user will handle it manually (add
+ * new product, changed product no need to flag, mark as not arrived, and
+ * remove the line)"* — and with it the per-row product picker: a product is a
+ * fact about the LINE now, and correcting one relabels every unit of it still
+ * in QC. `invoiceChanges` in `lib/inboundRows.ts` is what drew that panel; it
+ * stays, tested and dormant, because nothing about it was wrong.
+ *
+ * ## Any order (owner revision 2026-09-19, unchanged)
+ *
+ * A row becomes a unit the moment its serial is read (2026-08-26;
+ * `lib/inboundQc.ts` has why a unit without a serial is not a unit), so what
+ * the popup is told before that — battery, description, grade, photos, sell
+ * price — is held against the row and written onto the unit in the SAME
+ * mutation that mints it (`identify`). Only the decisions (accept, service,
+ * return) wait for the serial, because they are about a particular unit.
+ * The first serial read against the order marks it arrived.
  */
-import { useMemo, useState, type ReactNode } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { SerialLink } from "../../components/SerialLink";
 import dayjs from "dayjs";
 import {
   Alert,
   App,
   Button,
   Card,
+  Checkbox,
   DatePicker,
   Descriptions,
-  Empty,
+  Dropdown,
   Flex,
   Form,
   Input,
   InputNumber,
   Modal,
   Result,
-  Segmented,
   Select,
   Switch,
   Table,
@@ -45,126 +76,267 @@ import {
   Tooltip,
   Typography,
 } from "antd";
+import type { MenuProps } from "antd";
 import {
-  AuditOutlined,
+  CameraOutlined,
+  CheckCircleFilled,
   CheckOutlined,
   CloseCircleOutlined,
   DeleteOutlined,
   EditOutlined,
+  FileAddOutlined,
   InboxOutlined,
   LockOutlined,
+  MoreOutlined,
   PlusOutlined,
   PrinterOutlined,
+  StopOutlined,
   ToolOutlined,
   UndoOutlined,
   UnlockOutlined,
-  WarningOutlined,
 } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { useTranslation } from "react-i18next";
 import { MoneyInput } from "../../components/MoneyInput";
+import { CommitMoneyInput } from "../../components/CommitMoneyInput";
 import { EditableTable } from "../../components/EditableTable";
-import { SkuPicker } from "../../components/SkuPicker";
-import { CountInput, COUNT_COLUMN_WIDTH } from "../../components/CountInput";
+import { EnumTag } from "../../components/EnumTag";
 import { PrintLabelsModal } from "../../components/LabelSheet";
-import { UnitPhotos } from "../../components/UnitPhotos";
-import { GradeTag } from "../../components/GradeTag";
-import { GradingModal } from "../../components/GradingModal";
-import { StoreLabelTag } from "../../components/StoreLabelTag";
-import {
-  BatteryFields,
-  batteryFieldsLabel,
-} from "../../components/BatteryFields.js";
-import { PriceFields, type PriceDraft } from "../../components/PriceFields.js";
-import {
-  DEFAULT_MARKETPLACE_MARKUP_PCT,
-  isPriceInRange,
-} from "../../lib/unitPrice.js";
+import { isPriceInRange } from "../../lib/unitPrice.js";
 import { labelsFor, type LabelDatum } from "../../lib/labels.js";
-import { fmtRp, fmtDate } from "../../lib/format.js";
+import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import {
-  BATTERY_GRADE_COLOR,
-  batteryDraftOf,
-  defaultBatteryModeOfSku,
-  batteryPatch,
-  batterySettingsFrom,
-  isBatteryDraftInRange,
-  readBattery,
-  BATTERY_FIELD_RANGE,
-  type BatteryDraft,
-  type BatteryField,
-  type BatteryMode,
-} from "../../lib/battery.js";
-import {
-  INBOUND_STAGE_COLOR,
   INBOUND_STAGE_LABEL,
   PO_PAYMENT_STATUS_COLOR,
   PO_PAYMENT_STATUS_LABEL,
   PO_STATUS_LABEL,
   PO_STATUSES,
   canReopenQc,
+  payTargetOfFee,
   paymentFor,
   poClosed,
   poPaymentStatus,
   poTotals,
   unitStage,
   unitsOfPo,
+  type Standing,
 } from "../../lib/inbound.js";
 import {
   joinDescription,
-  qcGroups,
   qcReady,
-  qcRows,
-  reslotDrafts,
   splitDescription,
-  type QcGroup,
-  type QcRow,
 } from "../../lib/inboundQc.js";
 import {
-  canGrade,
-  conditionOf,
-  gradeForCondition,
+  batteryDraftOf,
+  batteryPatch,
+  defaultBatteryModeOfSku,
+  isBatteryDraftInRange,
+  readUnitBattery,
+  BATTERY_FIELD_RANGE,
+  type BatteryDraft,
+  type BatteryField,
+  type BatteryMode,
+} from "../../lib/battery.js";
+import {
+  NEW_GRADE,
   needsDescription,
-  type UnitCondition,
+  conditionOf,
 } from "../../lib/condition.js";
+import { GRADES } from "../../lib/grading.js";
+import {
+  normaliseLines,
+  receivingRows,
+  receivingState,
+  receivingSummary,
+  type ReceivingRow,
+} from "../../lib/inboundRows.js";
+import {
+  insertAfterGroup,
+  linesToDrop,
+  purchaseLines,
+  spreadDiscount,
+  type PurchaseLine,
+} from "../../lib/invoiceLines.js";
+import { poRowShares, rowKey } from "../../lib/landedCost.js";
+import { costBreakdown, serviceLocationOf } from "../../lib/service.js";
 import {
   CODE128_HINT,
   BASE_MAX_LENGTH,
   BASE_MIN_LENGTH,
   normaliseScan,
-  STORE_MAX_LENGTH,
+  SERIAL_FIELD_MAX_LENGTH,
   readBarcode,
   type ScanRejection,
 } from "../../lib/serialScan.js";
-import { readSerialInput } from "../../lib/serialInput.js";
-import { countedSerial, skuTracksSerial } from "../../lib/serialTracking.js";
-import { serviceLocationOf } from "../../lib/service.js";
+import { readSerialInput, serialConditionOf } from "../../lib/serialInput.js";
+import { skuTracksSerial } from "../../lib/serialTracking.js";
+import { arrivedQty, onHand } from "../../lib/stock.js";
+import { BatteryFields } from "../../components/BatteryFields";
+import { GradeTag } from "../../components/GradeTag";
+import { UnitPhotos } from "../../components/UnitPhotos";
+import { UNIT_STATUS } from "../../i18n/enumLabels.js";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
-import {
-  planSerialFill,
-  type FillPlan,
-  type FillRow,
-} from "../../lib/scanFill.js";
+import { planSerialFill, type FillPlan } from "../../lib/scanFill.js";
 import { rendered } from "../../lib/rendered.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
 import { wasScannedText } from "../../lib/scanner.js";
+import { SPACE, TYPE } from "../../theme/tokens";
 import {
+  PO_FEE_KIND_LABEL,
   PO_PAYMENT_FOR_LABEL,
   type MockDb,
   type Po,
+  type PoFee,
   type PoItem,
+  type PoPayment,
   type PoPaymentFor,
 } from "../../mock/seed.js";
 import {
   useDb,
+  getDb,
   mutate,
   nextId,
   docCode,
   appendEvent,
-  ensureQcDescription,
   ensureReason,
   currentStaffName,
+  ensureQcDescription,
+  addQcPhoto,
+  qcPhotosOf,
 } from "../../mock/store.js";
+import {
+  AddLineBar,
+  PurchaseLinesTable,
+  lineCostFieldId,
+} from "./PurchaseLinesTable.js";
+import { UnitDetailsModal } from "../../components/UnitDetailsModal";
+import { ExpenseModal } from "./ExpenseModal.js";
+import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
+import { isRecord } from "../../lib/draftGuards.js";
+
+/**
+ * The DOM ids of a row's boxes — what Enter and the scanner hand the caret
+ * to. Row keys are line ids, so the id outlives a re-render. A line's own
+ * price box is `lineCostFieldId`.
+ */
+const serialFieldId = (key: string) => `receiving-serial-${key}`;
+const descFieldId = (key: string) => `receiving-desc-${key}`;
+const gradeFieldId = (key: string) => `receiving-grade-${key}`;
+const sellFieldId = (key: string) => `receiving-sell-${key}`;
+
+/**
+ * The statuses in which a machine's money can still be corrected here.
+ *
+ * In QC, and on the shelf unsold. Reserved or sold, the cost and the price
+ * are already on somebody's hold or receipt, and correcting them belongs to
+ * that document; on the bench or back with the supplier, the machine is not
+ * this invoice's to reprice.
+ */
+const MONEY_EDITABLE: readonly string[] = ["QC", "TERSEDIA"];
+
+/**
+ * Is a variant COUNTED rather than identified in this store — an accessory
+ * (2026-09-19)? Its lines are quantities that arrive on the stock ledger, not
+ * rows of units, so every row reading leaves them out.
+ */
+const countedIn =
+  (store: Parameters<typeof skuTracksSerial>[0]) =>
+  (skuId: string): boolean =>
+    skuId !== "" && !skuTracksSerial(store, skuId);
+
+/** Hand the caret to a field once React has drawn what the last change did. */
+function focusSoon(id: string): void {
+  // A microtask, not a timer: React flushes a keystroke's render in a
+  // microtask queued during the handler, and this one is queued after it.
+  queueMicrotask(() => {
+    const el = document.getElementById(id);
+    if (el instanceof HTMLInputElement) {
+      el.focus();
+      el.select();
+    } else {
+      el?.focus();
+    }
+  });
+}
+
+/** A map without one key — the same map when the key was never there. */
+function without<T>(
+  map: Readonly<Record<string, T>>,
+  key: string,
+): Readonly<Record<string, T>> {
+  if (!(key in map)) return map;
+  const rest = { ...map };
+  delete rest[key];
+  return rest;
+}
+
+/** What one edit of the order can reach, one machine per line already. */
+interface OrderEdit {
+  readonly d: MockDb;
+  readonly order: Po;
+  /** The line behind a row the page rendered, wherever normalising put it. */
+  readonly lineOf: (row: ReceivingRow) => PoItem | undefined;
+  /** The key the page's drafts hold for a row derived inside this edit. */
+  readonly draftKeyOf: (row: ReceivingRow) => string;
+}
+
+/**
+ * What a payment is for, as the payment dialog's one Select holds it: the
+ * goods, an expense (`fee:<id>`), or — only for a payment recorded before
+ * expenses had names — the bucket it was filed under.
+ */
+type PayTarget = "ORDER" | "SHIPPING" | "TAX" | `fee:${string}`;
+
+const targetOf = (p: PoPayment): PayTarget =>
+  p.feeId !== undefined ? `fee:${p.feeId}` : paymentFor(p);
+
+/**
+ * QC answered on a row whose serial is not in yet — held against the row and
+ * written onto the unit by `identify`. `grade` carries the condition: `NEW`
+ * is sealed stock, a letter is graded second-hand, absent is second-hand not
+ * graded yet (`lib/condition.ts`).
+ */
+interface QcDraft {
+  readonly grade?: string;
+  readonly battery?: BatteryDraft;
+  readonly description?: readonly string[];
+  readonly photos?: readonly { readonly id: string; readonly url: string }[];
+}
+
+/*
+ * What is typed on this order and not written yet — a serial being typed, a
+ * price or QC answers held for a row with no serial — kept on this device per
+ * order (owner ask 2026-09-21: "all the things of the user input will be
+ * saved locally"). The in-app tab strip used to keep them in memory while
+ * somebody looked elsewhere; leaving the order now brings them back with it.
+ * `forget` and `rekey` work on them exactly as before.
+ *
+ * Photos ride along when they fit: a data URL can outgrow the browser's
+ * storage, and a refused write leaves the page working as it did before.
+ */
+const INBOUND_DRAFT = (poId: string, name: string) =>
+  draftKey(`inbound.${poId}.${name}`);
+const mapOf =
+  <T,>(item: (v: unknown) => boolean) =>
+  (v: unknown): Record<string, T> | undefined =>
+    isRecord(v)
+      ? (Object.fromEntries(
+          Object.entries(v).filter(([, x]) => item(x)),
+        ) as Record<string, T>)
+      : undefined;
+
+/** The grade picker's choices: sealed, then the letters. */
+const GRADE_CHOICES = [NEW_GRADE, ...GRADES] as const;
+
+/**
+ * The timeline's line for a grade given at QC. In English, like every ledger
+ * note: a `UnitEvent` is append-only, and its text is frozen as written.
+ */
+function gradeNote(grade: string | undefined): string {
+  if (grade === NEW_GRADE) return "Marked new — sealed stock";
+  if (grade === undefined) return "Marked second-hand";
+  return `Graded ${grade}`;
+}
 
 export function InboundDetailPage() {
   const { poId = "" } = useParams();
@@ -175,128 +347,99 @@ export function InboundDetailPage() {
   /**
    * The payment dialog: closed, adding, or correcting one already recorded
    * (owner ask 2026-09-15 — *"All the payment/Purchase history should be
-   * editable and deletable"*).
-   *
-   * One dialog for both, because a correction asks the same three questions as
-   * a new payment. `id` is the payment being edited; `null` is closed.
+   * editable and deletable"*). `id` is the payment being edited.
    */
   const [paying, setPaying] = useState<{ readonly id?: string } | null>(null);
   /**
-   * Undefined is a method nobody has picked (owner ask 2026-09-15 —
-   * *"Make the option/value that the user fill (e.g., payment method)
-   * deleteable, but cannot be empty if the Total Paid now is not empty"*), so
-   * the box can be cleared while somebody decides. The OK is what refuses to
-   * record money that does not say how it moved.
+   * Undefined is a method nobody has picked (owner ask 2026-09-15), so the box
+   * can be cleared while somebody decides. The OK is what refuses to record
+   * money that does not say how it moved.
    */
   const [payMethod, setPayMethod] = useState<string | undefined>("TUNAI");
   const [payAmount, setPayAmount] = useState<number>();
   /**
-   * Which part of the invoice the payment being recorded is settling.
-   *
-   * Defaults to the goods, which is what the overwhelming majority of
-   * transfers are, and what every payment recorded before this field existed
-   * is read as — see `paymentFor`.
+   * Did the money pass through the shop's cash or bank? (owner answer
+   * 2026-09-22 — `PoPayment.inBalance`.) Off for a supplier the owner paid
+   * from their own account: the invoice is settled, the balance untouched.
    */
-  const [payFor, setPayFor] = useState<PoPaymentFor>("ORDER");
+  const [payInBalance, setPayInBalance] = useState(true);
+  /** What the payment being recorded is settling. */
+  const [payTarget, setPayTarget] = useState<PayTarget>("ORDER");
+  /** The expense dialog: closed, `"new"`, or the id of the one being edited. */
+  const [expense, setExpense] = useState<string | null>(null);
   const [printing, setPrinting] = useState<LabelDatum[] | null>(null);
   /**
    * Serials being typed, keyed by row.
    *
-   * The serial is not written to the store until the field is left or Enter is
-   * pressed, and this is where it waits. Committing per keystroke is what broke
-   * the field: the table is keyed on the serial, so every character re-keyed
-   * the row, React remounted the input and the caret went with it — one click
-   * per digit, which is how the owner reported it.
+   * Not written to the store until the field is left or Enter is pressed:
+   * committing per keystroke re-keyed the row, React remounted the input and
+   * the caret went with it — one click per digit, which is how the owner
+   * reported it. A half-typed serial is not a machine.
    */
-  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [draft, setDraft] = usePersistentState<Record<string, string>>(
+    INBOUND_DRAFT(poId, "serials"),
+    {},
+    mapOf<string>((x) => typeof x === "string"),
+  );
   /**
-   * Rows whose serial was refused for its SHAPE, keyed by row.
-   *
-   * The toast was the only thing that said so, and a toast is gone in four
-   * seconds — on a bench where the next thing you do is pick up the next
-   * machine, the box was left holding a serial that looked accepted (owner
-   * report 2026-09-01). The field carries the refusal now: a red outline for
-   * as long as the text is still wrong, and the reason under it, so somebody
-   * who looked away can still see which of thirty rows is the bad one.
-   *
-   * Only shape faults live here, and that follows the same reasoning that
-   * makes a shape fault the one refusal that does not clear the box. A
-   * collision reverts the field to what the store holds, and an emptied unit
-   * row does too — in both the text on screen after the refusal is text the
-   * store vouches for, and outlining THAT in red would accuse the wrong
-   * string.
+   * Rows whose serial was refused for its SHAPE, keyed by row. The field
+   * carries the refusal — a red outline for as long as the text is still
+   * wrong, and the reason under it — because a toast is gone in four seconds
+   * (owner report 2026-09-01). Only shape faults: a collision reverts the box
+   * to what the store holds, and outlining THAT would accuse the wrong string.
    */
   const [serialFault, setSerialFault] = useState<
     Record<string, { fault: ScanRejection; scanned: boolean }>
   >({});
-  /** Take a row's refusal back — it is being retyped, or it has landed. */
+  /**
+   * Whether the serial held in a row's box arrived as a SCAN (2026-09-21).
+   *
+   * A sealed unit's scan and its typed serial are held to different rules,
+   * and a serial read before its row has a grade is held until one is picked
+   * — by which time `wasScannedText` (a five-second memory) has long
+   * forgotten. So the answer is written down when the text arrives, kept with
+   * the text on this device, and cleared the moment somebody edits the box.
+   */
+  const [heldScan, setHeldScan] = usePersistentState<Record<string, boolean>>(
+    INBOUND_DRAFT(poId, "serialScanned"),
+    {},
+    mapOf<boolean>((x) => typeof x === "boolean"),
+  );
   const clearSerialFault = (key: string) =>
-    setSerialFault((f) => {
-      if (!(key in f)) return f;
-      const rest = { ...f };
-      delete rest[key];
-      return rest;
-    });
-  /**
-   * Descriptions chosen on rows that are not machines yet, keyed by row.
-   *
-   * Only slots live here now. The field stopped being a textarea on
-   * 2026-08-27 and became a list of phrases picked from the shop's own
-   * vocabulary, so there is no longer any per-keystroke cost to defend
-   * against: adding a tag is one discrete decision, and a unit row writes it
-   * straight to the store. A slot has nowhere to write it YET, which is the
-   * only reason this map still exists — `identify` empties it onto the machine
-   * the moment the row has a serial.
+    setSerialFault((f) => without(f, key));
+  /** A sell price: typed on a unit row, or held for a waiting one. `null` is an emptied box. */
+  const [prices, setPrices] = usePersistentState<Record<string, number | null>>(
+    INBOUND_DRAFT(poId, "prices"),
+    {},
+    mapOf<number | null>(
+      (x) => x === null || (typeof x === "number" && Number.isFinite(x)),
+    ),
+  );
+  /** QC answered before the serial, by row — see `QcDraft`. */
+  const [qcDrafts, setQcDrafts] = usePersistentState<Record<string, QcDraft>>(
+    INBOUND_DRAFT(poId, "qc"),
+    {},
+    mapOf<QcDraft>(isRecord),
+  );
+  /** Battery boxes being typed on a unit's row — written when left. */
+  const [batteryTyping, setBatteryTyping] = usePersistentState<
+    Record<string, BatteryDraft>
+  >(INBOUND_DRAFT(poId, "battery"), {}, mapOf<BatteryDraft>(isRecord));
+  /** Which line's units are open, or null. */
+  const [detailsKey, setDetailsKey] = useState<string | null>(null);
+  /** The row whose photos are open, or null. */
+  const [photosRow, setPhotosRow] = useState<string | null>(null);
+  /*
+   * ⚠️ `checklists` — the grading answers each row was last graded with —
+   * lived here until 2026-09-20, when the owner asked for the grading
+   * configuration and its checklists to be hidden. The grade is picked by
+   * hand; `components/GradingModal` and `lib/grading.ts` are untouched on
+   * disk, and this is the state to bring back with them.
    */
-  const [notes, setNotes] = useState<Record<string, string[]>>({});
   /**
-   * Battery readings being typed, keyed by row.
-   *
-   * The third field held outside the store, and the one that needed it most.
-   * A percentage is typed a digit at a time, so committing per keystroke files
-   * 1, then 15, then 150 — and the first two are readings of a nearly dead
-   * machine that nobody took. The reading is written once, when the box is
-   * left or Enter is pressed, and that is also the moment it can be refused:
-   * see `commitBattery`.
-   *
-   * `null` in here is a box somebody emptied, which is not the same as no
-   * draft at all — that one shows what the store holds.
-   *
-   * Keyed by ROW rather than by serial since 2026-08-27, because a row with no
-   * serial can now hold a reading: every column is typable before the machine
-   * is identified, and a map keyed on the one thing the row does not have yet
-   * could not hold it. `identify` carries the reading onto the unit, and
-   * `reslotDrafts` keeps the rest on the rows they were typed into.
-   */
-  const [battery, setBattery] = useState<Record<string, BatteryDraft>>({});
-  /**
-   * The price given to a row, before it is committed (owner ask 2026-09-08).
-   *
-   * The fifth draft map, and it exists for the reason the other four do: every
-   * column on this grid is typable before the serial is, and a slot has no
-   * unit to write onto. `identify` carries the price onto the machine it
-   * creates and `reslotDrafts` keeps the rest on the rows they were typed
-   * into.
-   *
-   * A price used to be asked for here, then stopped being (2026-08-27, when
-   * the price moved to the variant), and is asked for again now that each
-   * machine carries its own. See `lib/unitPrice.ts` for why the pendulum
-   * lands here.
-   */
-  const [prices, setPrices] = useState<Record<string, PriceDraft>>({});
-  /**
-   * The machine the Send-to-service dialog is open on, or null.
-   *
-   * The charges it asks for used to be a COLUMN in the grid (2026-09-08), on
-   * the argument that the courier's number is on the desk at the moment
-   * somebody decides a machine needs a repair. That argument survives; what
-   * did not is asking for the number twice. The owner's 2026-09-09 revision
-   * put both fees in the confirmation dialog — *"add a field so that they can
-   * add additional fee like shipping fee from warehouse 1 to warehouse 4. If
-   * the user can already know the service fee, they can add it to"* — which is
-   * the same moment, on the screen that is already asking the question, and it
-   * gave a column of empty Rp boxes back to a grid the owner had just called
-   * too dense.
+   * The machine the Send-to-service dialog is open on, or null. Both fees are
+   * asked for there (owner revision 2026-09-09): the courier's number is on
+   * the desk at the moment somebody decides a machine needs a repair.
    */
   const [sendingToService, setSendingToService] = useState<string | null>(null);
   const [serviceForm] = Form.useForm<{
@@ -306,69 +449,58 @@ export function InboundDetailPage() {
     note?: string;
   }>();
   /**
-   * Grades given to rows that are not machines yet, keyed by row.
+   * Where normalising moved a row's key (old key → line id).
    *
-   * The fourth draft map, and it exists for the same reason `notes` does: a
-   * slot has no unit to write onto, and grading no longer waits for the
-   * serial. `identify` carries the letter onto the unit; `reslotDrafts` keeps
-   * the rest on the rows they were graded in.
+   * An older invoice's line of quantity three is three rows keyed
+   * `line#0…#2` until its first edit splits it into three lines. Handlers
+   * created before that render still hold the old key; this is how they find
+   * the row it became.
    */
-  const [gradeDrafts, setGradeDrafts] = useState<Record<string, string>>({});
-  /**
-   * New or second — the owner's first ask of 2026-08-28.
-   *
-   * There is no fifth draft map, and that is the point: the condition IS the
-   * grade (`lib/condition.ts`), so a slot marked New is a slot whose
-   * `gradeDrafts` entry is `NEW`, and a slot marked Second is one with no
-   * entry at all. Second is therefore the default for a row nobody has touched
-   * — which is right for a second-hand shop, and is also the safe way round,
-   * since it leaves the description gate on until somebody says otherwise.
-   */
-  const conditionOfRow = (r: QcRow): UnitCondition =>
-    conditionOf(r.kind === "unit" ? r.unit.grade : gradeDrafts[r.key]);
-  /** The row the grading dialog is open for, or null. */
-  const [grading, setGrading] = useState<QcRow | null>(null);
+  const aliases = useRef<Record<string, string>>({});
 
   const po = db.pos.find((p) => p.id === poId);
   const units = useMemo(() => (po ? unitsOfPo(db, po.id) : []), [db, po]);
-  const batterySettings = batterySettingsFrom(db.settings);
-  const markupPct =
-    db.settings.marketplaceMarkupPct ?? DEFAULT_MARKETPLACE_MARKUP_PCT;
 
   /**
-   * The QC rows: machines this order has identified, and the ones it is still
-   * waiting on. Derived from the invoice lines rather than stored — see
-   * `lib/inboundQc.ts` for why there is no longer any such thing as a unit
-   * without a serial.
+   * Arriving from the list's *Add payment* (owner brief 2026-09-19): the
+   * payment dialog opens by itself. Carried as navigation STATE rather than a
+   * query parameter, so nothing has to navigate from an effect to clear it.
+   */
+  const location = useLocation();
+  const payOnArrival = useRef(
+    (location.state as { pay?: boolean } | null)?.pay === true,
+  );
+  useEffect(() => {
+    if (!payOnArrival.current) return;
+    payOnArrival.current = false;
+    if (!po || poClosed(po)) return;
+    setPaying({});
+    setPayMethod("TUNAI");
+    setPayAmount(undefined);
+    setPayTarget("ORDER");
+    setPayInBalance(true);
+    // Once, on arrival — not every time the order re-renders.
+  }, []);
+
+  /**
+   * The rows: every machine the invoice lists, and every machine on it that
+   * no line accounts for. Derived, never stored — see `lib/inboundRows.ts`.
    */
   const rows = useMemo(
-    () => (po?.status === "RECEIVED" ? qcRows(po, db.units) : []),
+    () => (po ? receivingRows(po, db.units, countedIn(db)) : []),
+    [po, db],
+  );
+  const summary = useMemo(() => receivingSummary(rows), [rows]);
+  /** Each waiting row's share of the invoice's COGS expenses. */
+  const shares = useMemo(
+    () => (po ? poRowShares(po, db.units) : new Map<string, number>()),
     [po, db.units],
   );
 
   /**
-   * The same rows, grouped by the product each machine is.
-   *
-   * What the screen actually renders since 2026-08-27; `rows` stays because
-   * three things — the over-quota banner, the close-invoice warning and the
-   * scan target — ask questions of the whole order rather than of one product.
-   */
-  const groups = useMemo(
-    () => (po?.status === "RECEIVED" ? qcGroups(po, db.units) : []),
-    [po, db.units],
-  );
-
-  /**
-   * Every machine on this invoice that could be accepted right now.
-   *
-   * Exactly the rows whose own Accept button is enabled — same `qcReady`
-   * gate, read from the store rather than from a draft, for the reason that
-   * button's comment gives: a description is a list of tags and every tag is
-   * written the moment it is chosen, so there is no uncommitted value to miss.
-   *
-   * `status === "QC"` is what keeps a machine already accepted, already sent
-   * to service or already returned out of the list — the bulk button must not
-   * be able to reach a decision somebody has taken.
+   * Every machine on this invoice that could be accepted right now — the same
+   * `qcReady` gate as the QC dialog's Done. `status === "QC"` keeps a machine
+   * already decided out of the list.
    */
   const readyToAccept = useMemo(
     () =>
@@ -379,34 +511,21 @@ export function InboundDetailPage() {
   );
 
   /**
-   * Accept the lot, in ONE mutation.
-   *
-   * One transaction rather than a loop of them, because that is what the row
-   * button does per machine and this is the same act repeated: a partial
-   * failure halfway through a loop of `mutate` calls would leave the invoice
-   * in a state nobody chose. It also means one re-render for thirty machines
-   * instead of thirty.
-   *
-   * Confirmed first. It is not destructive — every acceptance can be reopened
-   * from the row, and `canReopenQc` is what says when — but it moves a whole
-   * invoice's worth of stock onto the shelf in one press, and the count is
-   * worth reading before that happens rather than after.
+   * Accept the lot, in ONE mutation — a partial failure halfway through a loop
+   * of them would leave the invoice in a state nobody chose. Confirmed first:
+   * it moves a whole invoice's worth of stock onto the shelf in one press.
    */
   const acceptAll = () => {
-    // `po` is guaranteed by the guard further down — this closure only ever
-    // runs from a button the guard has already let render — but the compiler
-    // cannot see that from up here, and an early return is cheaper than a
-    // non-null assertion that would silently outlive the guard.
     if (!po) return;
     const serials = readyToAccept.map((u) => u.serial);
     if (serials.length === 0) return;
     modal.confirm({
-      title: t("inbound.acceptAllTitle", "Accept {{count}} machine(s)?", {
+      title: t("inbound.acceptAllTitle", "Accept {{count}} unit(s)?", {
         count: serials.length,
       }),
       content: t(
         "inbound.acceptAllBody",
-        "They go into sellable stock now. Anything still missing a description is not included, and any one of these can be put back into QC from its row afterwards.",
+        "They go into sellable stock now. Anything still missing a description is not included, and any one of these can be put back into QC afterwards.",
       ),
       okText: t("inbound.acceptAllOk", "Accept them"),
       cancelText: t("inbound.cancel", "Cancel"),
@@ -422,188 +541,249 @@ export function InboundDetailPage() {
           }
         });
         message.success(
-          t(
-            "inbound.acceptAllDone",
-            "{{count}} machine(s) accepted into stock.",
-            { count: serials.length },
-          ),
+          t("inbound.acceptAllDone", "{{count}} unit(s) accepted into stock.", {
+            count: serials.length,
+          }),
         );
       },
     });
   };
 
-  /**
-   * The origin code this order's stickers carry — its own supplier's.
-   *
-   * Every unit on this page came off one purchase order, so unlike Inventory
-   * (which prints across orders) the lookup is a constant here.
-   */
-  const supplierCodeOf = () =>
-    db.suppliers.find((x) => x.id === po?.supplierId)?.code;
-
+  const skuOf = (skuId: string) => db.skus.find((s) => s.id === skuId);
   const skuLabel = (skuId: string) => {
-    const sku = db.skus.find((s) => s.id === skuId);
-    return sku ? `${sku.name} ${sku.variantLabel}` : "—";
+    const sku = skuOf(skuId);
+    return sku ? `${sku.name} ${sku.variantLabel}` : fmtNone();
   };
-
-  /**
-   * Which battery reading this machine's model reports (owner ask 2026-09-08).
-   *
-   * Off the MODEL's release year, not off which fields happen to be filled in:
-   * a 2017 body is a cycles machine whether or not somebody once typed a
-   * percentage onto it. Every group on this page is one variant, so the whole
-   * block shares an era and the column can say what it is asking for.
-   */
-  /**
-   * Which reading a product's machines START on — the chip and the year, not
-   * the year alone (owner ask 2026-09-15). `defaultBatteryMode` is the rule;
-   * the switch on every row is what overrides it for one machine.
-   */
-  const modeOfSku = (skuId: string): BatteryMode =>
-    defaultBatteryModeOfSku(db, skuId);
-
+  /** The printed code, which is what the shop reads off a shelf. */
+  const skuCode = (skuId: string) => skuOf(skuId)?.code ?? fmtNone();
   /**
    * Is this product identified one by one, or merely counted (owner ask
-   * 2026-09-15)?
-   *
-   * A counted product — an accessory — has no serial anybody reads, so this
-   * desk neither asks for one nor waits for one. See `lib/serialTracking.ts`.
+   * 2026-09-15)? A counted product — an accessory — has no serial anybody
+   * reads, so this desk neither asks for one nor waits for one.
    */
   const tracksSerial = (skuId: string) => skuTracksSerial(db, skuId);
 
   /**
-   * A free handle for one counted item on this invoice.
+   * What a row's machine IS: the unit's own product once it exists, and what
+   * the invoice says before that.
    *
-   * The invoice's code is in it, so two intakes of the same accessory cannot
-   * collide, and the loop is the belt: a line whose quantity went up and down
-   * can reach the same ordinal twice.
+   * There is no longer a third answer. Until 2026-09-20 a waiting row could
+   * be told it had turned out to be something else, held in the page until
+   * the serial arrived; the product is a fact about the LINE now (owner:
+   * *"changed product no need to flag"*), and correcting a line relabels
+   * every unit of it still in QC. The two can still disagree on an invoice
+   * edited before that, which is why this asks the unit first.
    */
-  const freeCountedSerial = (skuId: string): string => {
-    for (let n = 1; ; n += 1) {
-      const candidate = countedSerial(`${skuId}-${po?.code ?? poId}`, n);
-      if (!db.units.some((u) => u.serial === candidate)) return candidate;
-    }
+  const actualSkuOf = (row: ReceivingRow): string =>
+    row.unit?.skuId ?? row.expectedSkuId;
+
+  /**
+   * Waiting for a serial: expected, not marked as never sent, with a product
+   * that is identified one by one. What a scan fills and Enter moves to.
+   */
+  const awaitsSerial = (row: ReceivingRow): boolean => {
+    if (row.unit !== null || row.notArrived || row.orphan) return false;
+    const sku = actualSkuOf(row);
+    return sku !== "" && tracksSerial(sku);
   };
 
-  /** The product category behind a row — what picks its grading checklist. */
-  const categoryOfSku = (skuId: string) => {
-    const sku = db.skus.find((s) => s.id === skuId);
-    return db.models.find((m) => m.id === sku?.modelId)?.category ?? "";
+  /** The row's position, as the # column counts it. */
+  const numberOf = (row: ReceivingRow) =>
+    rows.findIndex((r) => r.key === row.key) + 1;
+
+  /** The row as the store has it NOW, rather than as the last render drew it. */
+  const liveRow = (key: string): ReceivingRow | undefined => {
+    const live = getDb();
+    const order = live.pos.find((p) => p.id === poId);
+    if (!order) return undefined;
+    const k = aliases.current[key] ?? key;
+    return receivingRows(order, live.units, countedIn(live)).find(
+      (r) => r.key === k,
+    );
   };
 
   /**
-   * Open the grading dialog on a row.
-   *
-   * The dialog clears its own checklist when it opens — see `GradingModal`
-   * for why a stored letter is not prefilled back into one.
+   * Move every draft to the key its row has now — after an edit that split an
+   * older invoice's lines, which gives pieces 1…n new line ids.
    */
-  const openGrading = (row: QcRow) => setGrading(row);
+  const rekey = (moved: Readonly<Record<string, string>>) => {
+    aliases.current = { ...aliases.current, ...moved };
+    const move = <T,>(map: Readonly<Record<string, T>>): Record<string, T> => {
+      let changed = false;
+      const out: Record<string, T> = {};
+      for (const [key, value] of Object.entries(map)) {
+        const to = moved[key];
+        if (to !== undefined && to !== key) changed = true;
+        out[to ?? key] = value;
+      }
+      return changed ? out : (map as Record<string, T>);
+    };
+    setDraft(move);
+    setHeldScan(move);
+    setSerialFault(move);
+    setPrices(move);
+    setQcDrafts(move);
+    setBatteryTyping(move);
+  };
+
+  /** Drop everything the page was holding for a row — it is a machine now, or gone. */
+  const forget = (key: string) => {
+    const k = aliases.current[key] ?? key;
+    setDraft((m) => without(m, k));
+    setHeldScan((m) => without(m, k));
+    setSerialFault((m) => without(m, k));
+    setPrices((m) => without(m, k));
+    setQcDrafts((m) => without(m, k));
+    setBatteryTyping((m) => without(m, k));
+  };
 
   /**
-   * A slot becomes a unit. The only place intake creates one.
+   * Change this order — one machine per line first.
+   *
+   * Every edit of the rows goes through here, so an older invoice written with
+   * quantities is split into one line per machine at the moment somebody
+   * first changes it (`normaliseLines`), inside the same mutation as the
+   * change itself. Opening the page never writes.
+   */
+  const editOrder = (fn: (edit: OrderEdit) => void): Promise<boolean> => {
+    let moved: Record<string, string> = {};
+    const done = mutate((d) => {
+      const order = d.pos.find((p) => p.id === poId);
+      if (!order) return;
+      moved = normaliseLines(order, d.units, () => nextId("poi"), countedIn(d));
+      const back = new Map(
+        Object.entries(moved).map(([from, to]) => [to, from]),
+      );
+      fn({
+        d,
+        order,
+        lineOf: (row) => {
+          if (row.itemId === null) return undefined;
+          const id = moved[row.key] ?? aliases.current[row.key] ?? row.itemId;
+          return order.items.find((i) => i.id === id);
+        },
+        draftKeyOf: (row) => back.get(row.key) ?? row.key,
+      });
+    });
+    if (Object.keys(moved).length > 0) rekey(moved);
+    return done;
+  };
+
+  /**
+   * A row becomes a unit. The only place intake creates one.
    *
    * The `DITERIMA` event is written in the same mutation as the row, because a
-   * unit that exists without one is a row the timeline cannot explain — this
-   * codebase's one rule, applied at the only moment a machine enters it.
+   * unit that exists without one is a row the timeline cannot explain. The
+   * machine gets the product the bench said it IS, and the line keeps the one
+   * the invoice said — the line's serial ties the two, so the difference stays
+   * visible after a reload. And the order is marked arrived if it was not: a
+   * machine in hand is the proof the goods came.
    */
   const identify = (
     d: MockDb,
+    order: Po,
+    line: PoItem | undefined,
     skuId: string,
     unitCost: number,
     serial: string,
-    /**
-     * What the bench had already written on this row before it had a serial.
-     *
-     * Grading no longer waits for identification (owner revision 2026-08-27),
-     * so by the time a slot becomes a unit it may already carry a description
-     * and a battery reading. They are written in the SAME push that creates
-     * the unit — a second mutation would put a moment on the clock in which
-     * the machine exists and what somebody observed about it does not.
-     */
-    pending?: {
-      description?: readonly string[];
-      battery?: BatteryDraft;
-      price?: PriceDraft;
-      grade?: string;
-    },
+    /** A sell price typed before the serial, written in the SAME push. */
+    price?: number,
+    /** QC answered before the serial — written in this same mutation. */
+    qc?: QcDraft,
   ) => {
-    const order = d.pos.find((p) => p.id === poId)!;
-    // Vocabulary first, machine second — see `writeDescription`.
-    const described = joinDescription(
-      (pending?.description ?? [])
-        .map((phrase) => ensureQcDescription(d, phrase))
-        .filter(Boolean),
-    );
-    // In the units this machine's own era reports — see `batteryEra`. A
-    // refused reading never reaches a draft (see `commitBattery`), so
-    // `batteryPatch` dropping an out-of-range one is belt and braces against
-    // a value arriving by some other door.
-    const reading = batteryPatch(pending?.battery ?? {}, modeOfSku(skuId));
     d.units.push({
       serial,
       skuId,
       status: "QC",
       locationId: order.locationId,
       buy: unitCost,
-      description: described,
+      description: "",
       poId: order.id,
-      ...(reading.batteryHealth === undefined
-        ? {}
-        : { batteryHealth: reading.batteryHealth }),
-      ...(reading.cycleCount === undefined
-        ? {}
-        : { cycleCount: reading.cycleCount }),
-      ...(reading.fcc === undefined ? {} : { fcc: reading.fcc }),
       /*
-       * Priced from the moment the machine exists.
-       *
-       * The variant's asking price is the fallback, and it is not a default
-       * nobody chose: it is what this shop asks for this model, and QC's job
-       * is to move it where the machine deserves. A unit reaching the shelf
-       * with no price at all is one the till would quote the catalogue figure
-       * for anyway — this makes that explicit and editable instead.
+       * Priced from the moment the machine exists: what the bench typed, or
+       * what the shop asks for the product it turned out to be. It is the
+       * asking price, and QC's job is to move it where the machine deserves.
        */
-      price:
-        pending?.price?.price ?? d.skus.find((x) => x.id === skuId)?.price ?? 0,
-      ...(pending?.price?.marketPrice == null
-        ? {}
-        : { marketPrice: pending.price.marketPrice }),
-      ...(pending?.grade ? { grade: pending.grade } : {}),
+      price: price ?? d.skus.find((x) => x.id === skuId)?.price ?? 0,
     });
+    if (line) line.serial = serial;
     appendEvent(d, serial, {
       type: "DITERIMA",
       toStatus: "QC",
       refCode: order.code,
       note: `Received against ${order.code}`,
     });
+    if (qc) applyQcDraft(d, order.code, serial, qc);
+    if (order.status !== "RECEIVED") order.status = "RECEIVED";
   };
 
   /**
-   * Correcting a mistyped serial, ledger and all.
-   *
-   * The events move with it. A unit is referred to by its serial everywhere in
-   * this app, so renaming the row and leaving the event rows behind orphans the
-   * machine's whole timeline — its history page would come up empty while the
-   * old serial kept a `DITERIMA` nothing pointed at. Only reachable while the
-   * unit is in QC, which is before anything but that arrival can have been
-   * written about it.
+   * What the bench answered on a row before its serial was read, onto the
+   * unit that has just been minted for it — the battery, the description (its
+   * phrases joining the vocabulary in the same mutation), the photos, and the
+   * grade with its line on the timeline.
+   */
+  const applyQcDraft = (
+    d: MockDb,
+    poCode: string,
+    serial: string,
+    qc: QcDraft,
+  ) => {
+    const u = d.units.find((x) => x.serial === serial);
+    if (!u) return;
+    if (qc.battery) {
+      const next = batteryPatch(
+        qc.battery,
+        defaultBatteryModeOfSku(d, u.skuId),
+      );
+      u.batteryHealth = next.batteryHealth;
+      u.cycleCount = next.cycleCount;
+      u.fcc = next.fcc;
+    }
+    if (qc.description && qc.description.length > 0) {
+      u.description = joinDescription(
+        qc.description.map((p) => ensureQcDescription(d, p)).filter(Boolean),
+      );
+    }
+    for (const photo of qc.photos ?? []) addQcPhoto(d, serial, photo.url);
+    if (qc.grade !== undefined) {
+      u.grade = qc.grade;
+      appendEvent(d, serial, {
+        type: "DICATAT",
+        refCode: poCode,
+        note: gradeNote(qc.grade),
+      });
+    }
+  };
+
+  /** Say so when the first machine marked the order arrived by itself. */
+  const noteArrival = (wasArrived: boolean) => {
+    if (wasArrived) return;
+    const order = getDb().pos.find((p) => p.id === poId);
+    if (order?.status === "RECEIVED") {
+      message.info(t("inbound.autoArrived", "The order is marked as arrived."));
+    }
+  };
+
+  /**
+   * Correcting a mistyped serial, ledger and all. A unit is referred to by its
+   * serial everywhere, so the events move with it, and so does the line's
+   * link. Only reachable while the unit is in QC.
    */
   const renameUnit = (d: MockDb, from: string, to: string) => {
     const unit = d.units.find((u) => u.serial === from);
     if (!unit) return;
     unit.serial = to;
     for (const e of d.events) if (e.serial === from) e.serial = to;
+    const order = d.pos.find((p) => p.id === poId);
+    for (const item of order?.items ?? []) {
+      if (item.serial === from) item.serial = to;
+    }
   };
 
   /**
-   * Why a scan was refused, in a sentence somebody at the bench can act on.
-   *
-   * Four rejections and four different remedies: a short read is a scanner
-   * that needs re-aiming, a long one is two scans with no Enter between them,
-   * a charset failure is the wrong barcode on the box entirely, an `I` or an
-   * `O` is a misread of a `1` or a `0`, and a missing supplier code is a
-   * Settings job. A single "invalid barcode" would send all five to the same
-   * dead end.
+   * Why a scan was refused, in a sentence somebody at the bench can act on —
+   * four rejections and four different remedies.
    */
   const scanRefusal = (
     reason: ScanRejection,
@@ -614,47 +794,37 @@ export function InboundDetailPage() {
       return t("inbound.scanEmpty", "Nothing was scanned.");
     }
     if (reason === "length") {
+      // Only a NEW unit's scan is judged at all (2026-09-21).
       return t(
         "inbound.scanLength",
-        "“{{scanned}}” is {{n}} characters. A serial barcode is an S and then {{min}}–{{max}} more — a short read is a scanner that came away early, and a long one is two scans with no Enter between.",
+        "“{{scanned}}” is {{n}} characters. A new unit's barcode is an S and then {{min}}–{{max}} more — a short read is a scanner that came away early, a long one two scans with no Enter between.",
         { scanned, n: length, min: BASE_MIN_LENGTH, max: BASE_MAX_LENGTH },
       );
     }
     if (reason === "no-marker") {
-      // The owner's rule, said back to the person holding the scanner: the
-      // underside of a Mac carries a regulatory code and a part number of
+      // The underside of a box carries a regulatory code and a part number of
       // much the same shape, and the S is what tells the serial from them.
       return t(
         "inbound.scanNoMarker",
-        "“{{scanned}}” does not begin with S, and is not one of the shop's own stickers either. Aim at the barcode whose number starts with S.",
+        "“{{scanned}}” does not begin with S. Aim at the barcode whose number starts with S.",
         { scanned },
       );
     }
-    if (reason === "confusable") {
-      return t(
-        "inbound.scanConfusable",
-        "“{{scanned}}” has an I or an O in it. Apple never prints either — they are a misread of 1 and 0, so scan it again.",
-        { scanned },
-      );
-    }
+    /*
+     * There is no `confusable` refusal any more (owner revision 2026-09-21):
+     * an `I` or an `O` in a READ is mapped to a `1` or a `0` and the scan is
+     * recorded. See `correctScanConfusables`.
+     */
     return t(
       "inbound.scanCharset",
-      "“{{scanned}}” is not a serial — capitals and digits only. Check the scanner is set to {{symbology}} and that this is the machine's own barcode.",
+      "“{{scanned}}” is not a serial — capitals and digits only. Check the scanner is set to {{symbology}} and that this is the unit's own barcode.",
       { scanned, symbology: CODE128_HINT },
     );
   };
 
   /**
-   * Why a TYPED serial was refused, in one sentence.
-   *
-   * The same three sentences the toast has always carried, lifted out of
-   * `commitSerial` so the field can say them too — a toast is gone in four
-   * seconds and the box it was about is not.
-   *
-   * Deliberately not `scanRefusal`. The remedies differ: a scan that came up
-   * short is a scanner that came away early, a typed serial that came up short
-   * is a serial somebody has not finished. Telling a person at a keyboard to
-   * re-aim would be advice about a device they are not holding.
+   * Why a NEW unit's serial was refused, in one sentence. A second-hand one is
+   * taken as read and never gets here (owner, 2026-09-21).
    */
   const serialFaultText = (
     fault: ScanRejection,
@@ -662,28 +832,13 @@ export function InboundDetailPage() {
     scanned: boolean,
   ): string => {
     if (fault === "no-marker") {
-      /*
-       * Two different sentences, because by 2026-09-01 the marker means two
-       * different things depending on how the text got here.
-       *
-       * A SCAN without one was aimed at the wrong barcode, and the remedy is
-       * to aim again. A TYPED string without one is somebody copying the case,
-       * where there is no marker to copy — the app puts it back for them — so
-       * reaching this branch on the typed route means the string is not a
-       * serial at all, and telling that person to "check the sticker for an S"
-       * would send them looking for a character that is not printed there.
-       */
-      return scanned
-        ? t(
-            "inbound.serialNoMarker",
-            "“{{serial}}” does not begin with S. A barcode carries one — the scanner was aimed at the regulatory code or the part number beside it.",
-            { serial },
-          )
-        : t(
-            "inbound.serialNotASerial",
-            "“{{serial}}” is not a serial. Type the {{min}}–{{max}} characters printed on the case, or scan the barcode.",
-            { serial, min: BASE_MIN_LENGTH, max: BASE_MAX_LENGTH },
-          );
+      // Only a SCAN is refused for this: a typed serial is the number off the
+      // case, which never had an S.
+      return t(
+        "inbound.serialNoMarker",
+        "“{{serial}}” does not begin with S. A new unit's barcode carries one — the scanner was aimed at the regulatory code or the part number beside it.",
+        { serial },
+      );
     }
     if (fault === "charset") {
       return t(
@@ -692,38 +847,65 @@ export function InboundDetailPage() {
         { serial },
       );
     }
-    return t(
-      "inbound.serialShape",
-      "“{{serial}}” is {{n}} characters. A serial is an S and then {{min}}–{{max}} more.",
-      { serial, n: serial.length, min: BASE_MIN_LENGTH, max: BASE_MAX_LENGTH },
-    );
-  };
-
-  /**
-   * The same refusal, short enough to sit under a 176px column.
-   *
-   * The sentence above quotes the serial and counts its characters, which is
-   * right for a toast and four wrapped lines inside the table — on a grid of
-   * thirty rows that pushes every other row down the page. The outline says
-   * *this one*, this line says *what about it*, and the toast keeps the long
-   * version for the moment it happens.
-   */
-  const serialFaultHint = (fault: ScanRejection, scanned: boolean): string => {
-    if (fault === "no-marker") {
-      return scanned
-        ? t("inbound.serialHintMarker", "Must start with S")
-        : t("inbound.serialHintBare", "{{min}}–{{max}} characters", {
+    return scanned
+      ? t(
+          "inbound.serialShape",
+          "“{{serial}}” is {{n}} characters. A new unit's barcode is an S and then {{min}}–{{max}} more.",
+          {
+            serial,
+            n: serial.length,
             min: BASE_MIN_LENGTH,
             max: BASE_MAX_LENGTH,
-          });
+          },
+        )
+      : t(
+          "inbound.serialLengthTyped",
+          "“{{serial}}” is {{n}} characters. A new unit's serial is {{min}}–{{max}} characters.",
+          {
+            serial,
+            n: serial.length,
+            min: BASE_MIN_LENGTH,
+            max: BASE_MAX_LENGTH,
+          },
+        );
+  };
+
+  /** The same refusal, short enough to sit under the serial column. */
+  const serialFaultHint = (fault: ScanRejection, scanned: boolean): string => {
+    if (fault === "no-marker") {
+      return t("inbound.serialHintMarker", "Must start with S");
     }
     if (fault === "charset") {
       return t("inbound.serialHintCharset", "Capitals and digits only");
     }
-    return t("inbound.serialHintLength", "S and then {{min}}–{{max}}", {
-      min: BASE_MIN_LENGTH,
-      max: BASE_MAX_LENGTH,
-    });
+    return scanned
+      ? t("inbound.serialHintLength", "S and then {{min}}–{{max}}", {
+          min: BASE_MIN_LENGTH,
+          max: BASE_MAX_LENGTH,
+        })
+      : t("inbound.serialHintBare", "{{min}}–{{max}} characters", {
+          min: BASE_MIN_LENGTH,
+          max: BASE_MAX_LENGTH,
+        });
+  };
+
+  /**
+   * The next row still waiting for a serial, after `fromKey` — and failing
+   * that, the first one above it. Read from the store, because the caller has
+   * just changed it.
+   */
+  const focusNextWaiting = (fromKey: string) => {
+    const live = getDb();
+    const order = live.pos.find((p) => p.id === poId);
+    if (!order) return;
+    const all = receivingRows(order, live.units, countedIn(live));
+    const from = all.findIndex(
+      (r) => r.key === (aliases.current[fromKey] ?? fromKey),
+    );
+    const next =
+      all.slice(from + 1).find((r) => awaitsSerial(r)) ??
+      all.slice(0, Math.max(0, from)).find((r) => awaitsSerial(r));
+    if (next) focusSoon(serialFieldId(next.key));
   };
 
   /**
@@ -731,15 +913,16 @@ export function InboundDetailPage() {
    *
    * The plan is worked out against the mutation draft rather than against the
    * render closure, because the store has already moved on by the time the next
-   * scan of a burst arrives — reading the closure would pick the same empty row
-   * every time and each scan would overwrite the last. `rendered()` on the way
-   * out lets the screen catch up before the queue releases the next one.
+   * scan of a burst arrives. It fills in ROW order and nothing else: the
+   * scanner reads a serial, not a product, so it cannot know which of two
+   * waiting rows the machine belongs to. A machine that turns out to be
+   * another product is changed on its row.
    */
   const scanSerial = async (raw: string) => {
     if (raw.trim() === "") return;
     // A closed order takes nothing, and the scanner is the one input on this
     // page that no `disabled` prop can reach — it listens at the document.
-    const target = db.pos.find((p) => p.id === poId);
+    const target = getDb().pos.find((p) => p.id === poId);
     if (target && poClosed(target)) {
       message.info(
         t(
@@ -749,154 +932,128 @@ export function InboundDetailPage() {
       );
       return;
     }
-    if (target?.status !== "RECEIVED") {
-      message.info(
-        t(
-          "inbound.scanNotArrived",
-          "Mark the order arrived first — that is what opens QC.",
-        ),
-      );
-      return;
-    }
 
     /*
-     * The barcode is judged before anything is done with it, and what is
-     * stored is what was read (owner correction 2026-09-01).
-     *
-     * Both of a machine's barcodes are taken: Apple's `S` + 10–12, and the
-     * shop's own sticker, which is an issued two-letter origin code in front
-     * of that same string. Either way the serial that lands in the row is
-     * Apple's — nothing is prefixed at intake any more, because the store
-     * barcode is DERIVED for the sticker rather than stored. `serialScan.ts`
-     * carries the rules and the reasoning.
-     *
-     * The marker is compulsory here and everywhere, which is the owner's
-     * *"begins with S; if not begin with S don't accept"*. The reason is the
-     * one they gave on 2026-08-31 and it has not changed: the underside of a
-     * Mac carries a regulatory code and a part number of much the same shape,
-     * and at the desk where a wrong read MINTS A UNIT the marker is what tells
-     * the serial's barcode from its neighbours.
-     *
-     * A typed serial goes through `validateSerial` in `commitSerial` — the
-     * same shape rule, minus the `I`/`O` check, which is about a scanner
-     * misreading rather than about a serial.
+     * Which rule a scan is held to is decided by the ROW it lands on (owner
+     * rules 2026-09-21): a NEW unit's barcode must be `S` and ten to twelve,
+     * and is filed without its `S`; a second-hand unit's is filed as read; a
+     * row with no grade yet holds the scan in its box until one is picked. So
+     * the row is found first — on every reading this scan could be filed
+     * under, so a double scan is caught whichever way the first was filed.
      */
-    const scan = readBarcode(raw, {
-      // What makes the shop's own sticker readable here at all. Every issued
-      // code, not just this order's: a machine can perfectly well be carried
-      // to this bench with another pallet's label already on it, and refusing
-      // to READ it would leave the bench with no way to find out.
-      supplierCodes: db.suppliers.map((x) => x.code ?? ""),
-    });
-    if (!scan.ok) {
-      message.error(scanRefusal(scan.reason, scan.scanned, scan.length));
-      return;
-    }
-    const serial = scan.serial;
+    const scanned = normaliseScan(raw);
+    const barcode = readBarcode(scanned);
+    const forms = barcode.ok ? [scanned, barcode.serial] : [scanned];
+    const wasArrived = target?.status === "RECEIVED";
 
     const out: {
       plan: FillPlan | null;
       product: string;
-      /** Set only when a slot was promoted, so the drafts can follow it. */
-      moved: { key: string; before: QcRow[]; after: QcRow[] } | null;
-    } = {
-      plan: null,
-      product: "",
-      moved: null,
-    };
-    mutate((d) => {
-      const order = d.pos.find((p) => p.id === poId);
-      if (!order) return;
-      const current = qcRows(order, d.units);
-      // A slot is empty by definition: the only text that survives being typed
-      // into one is text that became a unit, and that is a unit row now. There
-      // is therefore no half-typed serial for a scan to land on top of — see
-      // `commitSerial` on why a refused one does not linger either.
-      const fill: FillRow[] = current
-        .filter((r) => r.kind === "slot" || r.unit.status === "QC")
+      landed: string;
+      serial: string;
+      /** A row the scan is waiting on, or was refused for. */
+      held: { key: string; fault?: ScanRejection } | null;
+    } = { plan: null, product: "", landed: "", serial: scanned, held: null };
+    editOrder(({ d, order, draftKeyOf }) => {
+      const current = receivingRows(order, d.units, countedIn(d));
+      const fill = current
+        .filter(
+          (r) => awaitsSerial(r) || (r.unit !== null && r.unit.status === "QC"),
+        )
         .map((r) => ({
           key: r.key,
-          shown: r.kind === "unit" ? r.unit.serial : "",
+          // A serial held in a row's box — waiting for its grade — is that
+          // row's; the next scan goes on to the next row.
+          shown: r.unit?.serial ?? (draft[draftKeyOf(r)] ?? "").trim(),
         }));
       // A serial already on THIS order is a double scan, and the plan can name
-      // the row holding it. `exists` is for one the shop knows from elsewhere,
-      // which is a collision rather than a repeat.
+      // the row holding it. `exists` is for one the shop knows from elsewhere.
       const mine = new Set(
         d.units.filter((u) => u.poId === order.id).map((u) => u.serial),
       );
       const plan = planSerialFill(
-        serial,
+        forms,
         fill,
         (s) => !mine.has(s) && d.units.some((u) => u.serial === s),
       );
       out.plan = plan;
       if (plan.kind !== "fill") return;
-      const target = current.find((r) => r.key === plan.rowKey);
-      // Only a slot can be empty, so this is belt and braces.
-      if (target?.kind !== "slot") {
+      const row = current.find((r) => r.key === plan.rowKey);
+      if (!row || row.unit !== null) {
         out.plan = { kind: "full" };
         return;
       }
-      out.product = skuLabel(target.skuId);
-      // A scanned machine inherits whatever the bench had already written on
-      // the row it lands in, the same as a typed one. Somebody grading three
-      // identical MacBooks fills the conditions down the column and then walks
-      // the pile with the scanner; the readings must not be left behind.
-      identify(d, target.skuId, target.unitCost, serial, {
-        description: notes[target.key] ?? [],
-        battery: battery[target.key] ?? {},
-        price: prices[target.key] ?? {},
-        ...(gradeDrafts[target.key] ? { grade: gradeDrafts[target.key] } : {}),
+      const key = draftKeyOf(row);
+      const qc = qcDrafts[key];
+      const read = readSerialInput(scanned, {
+        scanned: true,
+        condition: serialConditionOf(qc?.grade),
       });
-      out.moved = {
-        key: target.key,
-        before: current,
-        after: qcRows(order, d.units),
-      };
+      if (!read.ok) {
+        out.held =
+          read.reason === "needs-grade"
+            ? { key: row.key }
+            : { key: row.key, fault: read.reason };
+        return;
+      }
+      const sku = actualSkuOf(row);
+      const line = order.items.find((i) => i.id === row.itemId);
+      identify(
+        d,
+        order,
+        line,
+        sku,
+        line ? line.unitCost - (line.discount ?? 0) : row.unitCost,
+        read.serial,
+        prices[key] ?? undefined,
+        qc,
+      );
+      out.serial = read.serial;
+      out.product = skuLabel(sku);
+      out.landed = row.key;
     });
-
-    const moved = out.moved;
-    if (moved) {
-      const shift = <T,>(d: Readonly<Record<string, T>>) =>
-        reslotDrafts(d, moved.before, moved.after, moved.key);
-      setDraft(shift);
-      // The refusal follows its row too. A slot's key is positional, so a
-      // fault left behind on `slot-2` would end up outlining whichever machine
-      // the renumbering moved into that place.
-      setSerialFault(shift);
-      setNotes(shift);
-      setBattery(shift);
-      setPrices(shift);
-      setGradeDrafts(shift);
-    }
+    if (out.landed !== "") forget(out.landed);
 
     // Toasts only once the mutation is over — never inside a state updater.
+    const held = out.held;
+    if (held !== null) {
+      setDraft((m) => ({ ...m, [held.key]: scanned }));
+      setHeldScan((m) => ({ ...m, [held.key]: true }));
+      if (held.fault !== undefined) {
+        const fault = held.fault;
+        setSerialFault((f) => ({ ...f, [held.key]: { fault, scanned: true } }));
+        message.error(
+          barcode.ok
+            ? serialFaultText(fault, scanned, true)
+            : scanRefusal(barcode.reason, barcode.scanned, barcode.length),
+        );
+      } else {
+        message.info(
+          t(
+            "inbound.serialWaitsForGrade",
+            "{{serial}} is kept — pick the unit's grade and it is recorded.",
+            { serial: scanned },
+          ),
+        );
+        // Focus stays where it is: the next scan of a run has to reach the
+        // page, and a grade picker holding the caret would swallow it.
+      }
+      // The next scan of a burst must see this row as taken — `draft` is read
+      // from the render closure. See `rendered`.
+      await rendered();
+      return;
+    }
     const plan: FillPlan | null = out.plan;
     if (plan === null) return;
+    const serial = out.serial;
     if (plan.kind === "fill") {
-      /*
-       * Which barcode was read, said back (owner ask 2026-09-01).
-       *
-       * Both are on the machine and either is a legitimate aim, so the toast's
-       * job is to confirm which one landed rather than to congratulate. The
-       * two sentences differ in the only way that matters at the bench:
-       * Apple's barcode has just been GIVEN an origin code and the sticker
-       * still has to be printed, while the shop's own already carried one and
-       * the machine is already labelled.
-       */
       message.success(
-        scan.kind === "STORE"
-          ? t(
-              "inbound.scanLandedStore",
-              "{{serial}} recorded — {{product}}. Read off the shop's own sticker.",
-              { serial, product: out.product },
-            )
-          : t(
-              "inbound.scanLandedOriginal",
-              "{{serial}} recorded — {{product}}. Read off Apple's barcode; print the shop's sticker when QC accepts it.",
-              { serial, product: out.product },
-            ),
+        t("inbound.scanLandedOriginal", "{{serial}} recorded — {{product}}.", {
+          serial,
+          product: out.product,
+        }),
       );
+      noteArrival(wasArrived);
     } else if (plan.kind === "duplicate") {
       message.warning(
         t("inbound.scanDuplicate", "{{serial}} is already on this order.", {
@@ -914,8 +1071,8 @@ export function InboundDetailPage() {
     } else {
       message.warning(
         t(
-          "inbound.scanFull",
-          "Every machine on this order already has a serial. Raise a quantity to expect another.",
+          "inbound.scanFullRowsInbound",
+          "Every unit on this order already has a serial. Add the unit in the Inbound section to expect another.",
         ),
       );
     }
@@ -925,199 +1082,82 @@ export function InboundDetailPage() {
   useScanTarget(scanSerial);
 
   /**
-   * A typed serial leaves the keyboard and becomes a fact — on blur or Enter,
-   * never per keystroke. See `draft` above for what committing early cost.
+   * Write a sell price the moment the box is left. Committed on blur rather
+   * than per keystroke: Rp9, Rp95, Rp950 on the way to Rp9.500.000 are each a
+   * number somebody could have meant. The marketplace price is not asked for
+   * here — it is derived from the sell prices elsewhere.
    */
   /**
-   * Write a battery reading, or refuse it and say so.
-   *
-   * Refusing rather than clamping. antd's `max` would have taken 150 and
-   * quietly stored 100 the moment the box was left — but 100% is a claim about
-   * a NEW battery, and a machine that arrives second-hand with a brand-new
-   * battery is a thing the shop would want to have actually measured. A number
-   * outside 0–100 is a typo, so it is named and dropped, exactly as a serial
-   * another unit already owns is.
+   * The grade a row is showing — the unit's own once it exists, the draft
+   * before that. It is the CONDITION (`lib/condition.ts`), which is why the
+   * serial rules read it.
    */
-  const commitBattery = (
-    row: QcRow,
-    field: BatteryField,
-    value: number | null,
-  ) => {
-    /** Give the box back to what the store says. */
-    const revert = () =>
-      setBattery((d) => {
-        if (!(row.key in d)) return d;
-        const rest = { ...d };
-        delete rest[row.key];
-        return rest;
-      });
+  const gradeShown = (r: ReceivingRow): string | undefined =>
+    r.unit ? r.unit.grade : qcDrafts[r.key]?.grade;
 
-    const mode = modeOfSku(row.skuId);
-    const draft = { ...(battery[row.key] ?? {}), [field]: value };
-    if (!isBatteryDraftInRange(draft, mode)) {
-      const [lo, hi] = BATTERY_FIELD_RANGE[field];
-      message.error(
-        t(
-          "inbound.batteryRefused",
-          "{{value}} is not a reading this box takes — {{lo}} to {{hi}} only.",
-          { value, lo, hi },
-        ),
-      );
-      return revert();
-    }
-    // A slot has nowhere to file it yet. The draft IS the reading until a
-    // serial turns the row into a unit, so it is kept rather than cleared —
-    // clearing it here is what would empty the box under somebody's hand.
-    if (row.kind === "slot") return;
-    revert();
-    const next = batteryPatch(draft, mode);
-    const unit = row.unit;
-    if (
-      next.batteryHealth === unit.batteryHealth &&
-      next.cycleCount === unit.cycleCount &&
-      next.fcc === unit.fcc
-    ) {
-      return;
-    }
-    const serial = unit.serial;
-    mutate((d) => {
-      const u = d.units.find((x) => x.serial === serial)!;
-      u.batteryHealth = next.batteryHealth;
-      u.cycleCount = next.cycleCount;
-      u.fcc = next.fcc;
-    });
-  };
-
-  /**
-   * Flick one machine from cycles to health, or back.
-   *
-   * Separate from `commitBattery` because a switch is not a keystroke: there
-   * is no box to blur, nothing to refuse (a mode is always one of two), and
-   * the write has to happen even when both readings are empty — that is the
-   * case where somebody is telling the bench which two boxes to hold up
-   * before anybody has read the machine.
-   *
-   * `batteryPatch` does the clearing. Its own exception applies: switching to
-   * a reading with nothing in it leaves the other reading alone, so flicking
-   * the switch by accident cannot erase a number somebody measured.
-   */
-  const commitBatteryMode = (row: QcRow, draft: BatteryDraft) => {
-    setBattery((d) => ({ ...d, [row.key]: draft }));
-    // A slot has nowhere to file it yet — the draft IS the reading until a
-    // serial turns the row into a unit.
-    if (row.kind === "slot") return;
-    const next = batteryPatch(draft, modeOfSku(row.skuId));
-    const unit = row.unit;
-    if (
-      next.batteryHealth === unit.batteryHealth &&
-      next.cycleCount === unit.cycleCount &&
-      next.fcc === unit.fcc
-    ) {
-      return;
-    }
-    const serial = unit.serial;
-    mutate((d) => {
-      const u = d.units.find((x) => x.serial === serial)!;
-      u.batteryHealth = next.batteryHealth;
-      u.cycleCount = next.cycleCount;
-      u.fcc = next.fcc;
-    });
-  };
-
-  /**
-   * Write a price the moment the box is left.
-   *
-   * Committed on blur rather than per keystroke, for the reason the battery
-   * boxes are: a price is typed a digit at a time, so committing per keystroke
-   * would file Rp9, Rp95, Rp950 … on the way to Rp9.500.000, and every one of
-   * those is a number somebody could have meant.
-   *
-   * An out-of-range figure is refused and named rather than clamped — the same
-   * bargain the serial and the battery strike.
-   */
-  const commitPrice = (
-    row: QcRow,
-    field: keyof PriceDraft,
-    value: number | null,
-  ) => {
-    const revert = () =>
-      setPrices((d) => {
-        if (!(row.key in d)) return d;
-        const rest = { ...d };
-        delete rest[row.key];
-        return rest;
-      });
-
+  const commitSellPrice = (row: ReceivingRow, value: number | null) => {
+    const revert = () => setPrices((d) => without(d, row.key));
     if (!isPriceInRange(value)) {
       message.error(
         t("inbound.priceRefused", "{{value}} is not a price.", { value }),
       );
       return revert();
     }
-    // A slot has nowhere to file it yet — the draft IS the price until a
-    // serial turns the row into a machine.
-    if (row.kind === "slot") return;
+    // A waiting row keeps it until the serial turns the row into a machine.
+    if (row.unit === null) return;
     revert();
     const serial = row.unit.serial;
     const next = value ?? undefined;
-    if (field === "price" && next === row.unit.price) return;
-    if (field === "marketPrice" && next === row.unit.marketPrice) return;
+    if (next === row.unit.price) return;
     mutate((d) => {
       const u = d.units.find((x) => x.serial === serial)!;
-      if (field === "price") {
-        // Never left blank on a machine that exists: an empty box means "back
-        // to what the shop asks", not "unpriced".
-        u.price = next ?? d.skus.find((x) => x.id === u.skuId)?.price ?? 0;
-      } else {
-        u.marketPrice = next;
-      }
+      // Never left blank on a machine that exists: an empty box means "back
+      // to what the shop asks", not "unpriced".
+      u.price = next ?? d.skus.find((x) => x.id === u.skuId)?.price ?? 0;
     });
   };
 
-  const commitSerial = (row: QcRow, raw: string) => {
+  const commitSerial = (
+    row: ReceivingRow,
+    raw: string,
+    advance: boolean,
+    /** A grade picked just now, releasing a serial held for want of one. */
+    over?: { readonly grade: string | undefined },
+  ) => {
     const typed = normaliseScan(raw);
     /*
-     * One reader for every serial box in the app (owner ask 2026-09-08).
-     *
-     * This desk had the rule written out inline, and it was the only desk that
-     * had it: the till, S/N Tracking, Stock Opname and the trade-in dialog
-     * each did something slightly different with the same characters.
-     * `readSerialInput` is that logic moved somewhere a test reads it, and
-     * what it does is exactly what stood here —
-     *
-     * - either barcode is accepted, because somebody re-keying a graded
-     *   machine reads whichever label faces them and on a graded one that is
-     *   the shop's own sticker;
-     * - a TYPED serial with no marker has one put back, because the `S` is
-     *   printed under the bars and not on the case;
-     * - a SCANNED one with no marker is refused, because a barcode carries its
-     *   marker and a burst without one was aimed at the regulatory code or the
-     *   part number beside it — the misread this desk exists to catch.
-     *
-     * `wasScannedText` tells the two apart the only way a keyboard-wedge
-     * scanner can be told apart: by how fast the characters came.
+     * One reader for every serial box in the app, under the owner's rules of
+     * 2026-09-21 (`lib/serialInput.ts`): a NEW unit's scan must be `S` and ten
+     * to twelve and loses its `S`; a NEW unit's typed serial is ten to twelve;
+     * `I`/`O` are read as `1`/`0` on either; a second-hand serial is taken as
+     * read. Scan or hand is how fast the characters came — or, for a serial
+     * held in its box, what was written down when it arrived.
      */
-    const read = readSerialInput(typed, {
-      scanned: wasScannedText(typed),
-      supplierCodes: db.suppliers
-        .map((x) => x.code)
-        .filter((c): c is string => !!c),
-    });
-    const serial = read.ok ? read.serial : typed;
-    const stored = row.kind === "unit" ? row.unit.serial : "";
+    const scanned = heldScan[row.key] ?? wasScannedText(typed);
+    // Read NOW, not from the render: the blur that follows an Enter would
+    // otherwise see a row that has already become the machine it names.
+    const live = liveRow(row.key) ?? row;
+    const stored = live.unit?.serial ?? "";
     /** Give the box back to what the store says. */
-    const revert = () =>
-      setDraft((d) => {
-        if (!(row.key in d)) return d;
-        const rest = { ...d };
-        delete rest[row.key];
-        return rest;
-      });
+    const revert = () => {
+      setDraft((d) => without(d, row.key));
+      setHeldScan((m) => without(m, row.key));
+    };
+    /** Keep the text in its box, as it arrived. */
+    const hold = () => {
+      setDraft((d) => ({ ...d, [row.key]: typed }));
+      setHeldScan((m) => ({ ...m, [row.key]: scanned }));
+    };
 
-    if (serial === stored) return revert();
-    if (serial === "") {
-      // Only reachable on a unit row: an empty box on a slot is just a slot.
-      if (row.kind === "unit") {
+    if (typed === stored) {
+      revert();
+      if (advance && stored !== "") focusNextWaiting(live.key);
+      return;
+    }
+    if (typed === "") {
+      // Only reachable on a unit row: an empty box on a waiting row is just
+      // a row still waiting.
+      if (live.unit) {
         message.error(
           t(
             "inbound.serialCannotBeBlank",
@@ -1127,97 +1167,111 @@ export function InboundDetailPage() {
       }
       return revert();
     }
-    /*
-     * A TYPED serial is held to the same shape as a scanned one (owner ask
-     * 2026-09-01): *"if any barcode is not adhering to this rule then do not
-     * accept"*.
-     *
-     * The old rules deliberately let a hand-keyed serial through on the
-     * grounds that a person can see the machine, and only checked its length.
-     * That was defensible while a malformed serial was merely unfindable; it
-     * stopped being defensible once the sticker is DERIVED from the serial,
-     * because `storeBarcodeOf` refuses to build one from a serial that is not
-     * a valid original barcode — so a machine keyed in wrongly would silently
-     * end up with no label at all.
-     *
-     * The `I`/`O` rule is not applied to a typed serial and that is deliberate
-     * — see `validateSerial`.
-     */
+    const grade = over ? over.grade : gradeShown(row);
+    const read = readSerialInput(typed, {
+      scanned,
+      // A unit that exists with no grade is second-hand not graded yet — it
+      // is already a unit, so there is nothing left to wait for.
+      condition: serialConditionOf(grade) ?? (live.unit ? "SECOND" : undefined),
+    });
     if (!read.ok) {
+      if (read.reason === "needs-grade") {
+        /*
+         * The serial waits for the grade (owner answer 2026-09-21): New and
+         * second-hand are held to different rules, and the bench can reach
+         * the serial box first. Nothing is minted until the grade is picked —
+         * `commitGrade` brings the held text back here.
+         */
+        hold();
+        clearSerialFault(row.key);
+        message.info(
+          t(
+            "inbound.serialWaitsForGrade",
+            "{{serial}} is kept — pick the unit's grade and it is recorded.",
+            { serial: typed },
+          ),
+        );
+        // Scan, scan, scan: Enter still hands the caret to the next row
+        // waiting for a serial, and the grades can be picked after.
+        if (advance) focusNextWaiting(live.key);
+        return;
+      }
       const fault = read.reason;
-      const scanned = read.source === "scan";
-      message.error(serialFaultText(fault, serial, scanned));
-      /*
-       * The text STAYS. This is the one refusal that must not clear the box.
-       *
-       * `revert()` exists for the collision below, where clearing is
-       * deliberate: a serial another unit owns can never be made valid by
-       * editing it here, and a slot has no identity of its own, so leaving
-       * text on one means leaving it on a key that is about to renumber. A
-       * SHAPE fault is the opposite — it is a typo, the fix is two
-       * keystrokes, and wiping it makes somebody retype thirteen characters
-       * to correct one. It also fires on BLUR, so clicking away mid-serial
-       * used to empty the field.
-       */
-      setDraft((d) => ({ ...d, [row.key]: serial }));
-      // What the toast says, said again by the box itself, and it stays until
-      // the text changes. Cleared in `onChange` rather than here on the next
-      // commit, so the outline goes the moment somebody starts fixing it.
+      message.error(serialFaultText(fault, typed, scanned));
+      // The text STAYS: a shape fault is a typo, and this also fires on BLUR,
+      // so clicking away mid-serial must not empty the field.
+      hold();
       setSerialFault((f) => ({ ...f, [row.key]: { fault, scanned } }));
       return;
     }
+    const serial = read.serial;
+    if (serial === stored) {
+      // A NEW unit's barcode scanned again: the same serial, without its S.
+      revert();
+      if (advance) focusNextWaiting(live.key);
+      return;
+    }
     clearSerialFault(row.key);
-    if (db.units.some((u) => u.serial === serial)) {
+    if (getDb().units.some((u) => u.serial === serial)) {
       message.error(
         t(
           "inbound.serialTaken",
           "{{serial}} already belongs to another unit.",
-          {
-            serial,
-          },
+          { serial },
         ),
       );
-      // Cleared rather than left to be corrected, and that is a deliberate
-      // trade. A slot has no identity of its own — it is the nth machine of a
-      // product that has no unit yet — so the moment any other row is filled
-      // the slots renumber, and text parked on one would follow a key that no
-      // longer renders. Better to name what was wrong and take the serial
-      // again than to show somebody work that is about to vanish.
+      // Cleared rather than left to be corrected: a serial another unit owns
+      // can never be made valid by editing it here.
       return revert();
     }
+    /*
+     * A serial read before anybody said what the unit IS (owner revision
+     * 2026-09-19: any order). It waits in its box, as it arrived — a unit is
+     * filed under a product, and committing the box once one is picked
+     * records both.
+     */
+    if (live.unit === null && actualSkuOf(row) === "") {
+      hold();
+      message.info(
+        t(
+          "inbound.serialWaitsForProduct",
+          "{{serial}} is kept — pick the unit's product and it is recorded.",
+          { serial },
+        ),
+      );
+      return;
+    }
     revert();
-    if (row.kind === "slot") {
+    if (live.unit === null) {
+      const wasArrived =
+        getDb().pos.find((p) => p.id === poId)?.status === "RECEIVED";
       // Read from the closure BEFORE the mutation: these are what the bench
-      // typed into this row while it was still waiting for a serial.
-      const carry = {
-        description: notes[row.key] ?? [],
-        battery: battery[row.key] ?? {},
-        price: prices[row.key] ?? {},
-        ...(gradeDrafts[row.key] ? { grade: gradeDrafts[row.key] } : {}),
-      };
-      const shape: { before: QcRow[]; after: QcRow[] } = {
-        before: [],
-        after: [],
-      };
-      mutate((d) => {
-        const order = d.pos.find((p) => p.id === poId)!;
-        shape.before = qcRows(order, d.units);
-        identify(d, row.skuId, row.unitCost, serial, carry);
-        shape.after = qcRows(order, d.units);
+      // typed into this row while it was still waiting for a serial — and the
+      // grade that released it, which `holdQc` has not written yet.
+      const price = prices[row.key] ?? undefined;
+      const qc = over ? { ...qcDrafts[row.key], grade } : qcDrafts[row.key];
+      const sku = actualSkuOf(row);
+      let landed = row.key;
+      editOrder(({ d, order, lineOf }) => {
+        const line = lineOf(row);
+        identify(
+          d,
+          order,
+          line,
+          sku,
+          line ? line.unitCost - (line.discount ?? 0) : row.unitCost,
+          serial,
+          price,
+          qc,
+        );
+        if (line) landed = line.id;
       });
-      // Functional updaters, so each map is re-keyed from what it holds NOW
-      // rather than from a closure `revert()` has already moved on from.
-      const move = <T,>(d: Readonly<Record<string, T>>) =>
-        reslotDrafts(d, shape.before, shape.after, row.key);
-      setDraft(move);
-      setSerialFault(move);
-      setNotes(move);
-      setBattery(move);
-      setPrices(move);
-      setGradeDrafts(move);
+      forget(landed);
       message.success(
         t("inbound.serialRecorded", "{{serial}} recorded.", { serial }),
       );
+      noteArrival(wasArrived);
+      if (advance) focusNextWaiting(landed);
     } else {
       mutate((d) => renameUnit(d, stored, serial));
       message.success(
@@ -1225,31 +1279,149 @@ export function InboundDetailPage() {
           serial,
         }),
       );
+      if (advance) focusNextWaiting(live.key);
+    }
+  };
+
+  // ── QC on the row (owner revision 2026-09-19) ───────────────────────────
+  //
+  // Each writer answers for both kinds of row: a unit that exists takes the
+  // answer at once; a row still waiting for its serial holds it in `qcDrafts`
+  // until `identify` carries it over.
+
+  /** Hold an answer against a row that has no unit yet. */
+  const holdQc = (key: string, patch: Partial<QcDraft>) =>
+    setQcDrafts((m) => ({ ...m, [key]: { ...m[key], ...patch } }));
+
+  /**
+   * A row's grade — its condition with it: `NEW` is sealed stock, a letter is
+   * graded second-hand, nothing is second-hand not graded yet. One line on
+   * the unit's timeline per pick.
+   *
+   * Picked by hand and nothing else since 2026-09-20 — the checklist that
+   * used to fill it in is hidden (owner ask). The parameter that carried the
+   * checklist's words onto the timeline went with it.
+   */
+  const commitGrade = (r: ReceivingRow, grade: string | undefined) => {
+    if (!r.unit) {
+      holdQc(r.key, { grade });
+      // A serial held for want of a grade is judged now, under the rule the
+      // grade has just decided (owner answer 2026-09-21).
+      const held = draft[r.key];
+      if (grade !== undefined && held !== undefined && held.trim() !== "") {
+        commitSerial(r, held, false, { grade });
+      }
+      return;
+    }
+    const serial = r.unit.serial;
+    if (grade === r.unit.grade) return;
+    mutate((d) => {
+      const u = d.units.find((x) => x.serial === serial);
+      if (!u) return;
+      u.grade = grade;
+      appendEvent(d, serial, {
+        type: "DICATAT",
+        refCode: po?.code,
+        note: gradeNote(grade),
+      });
+    });
+    /*
+     * Graded New AFTER its serial was filed, so the serial was taken as a
+     * second-hand one and never held to a new unit's shape. It is said, not
+     * rewritten: a unit's serial is its name in the ledger, and the serial
+     * box is where it is corrected.
+     */
+    if (grade === NEW_GRADE) {
+      const asNew = readSerialInput(serial, {
+        scanned: false,
+        condition: "NEW",
+      });
+      if (!asNew.ok || asNew.serial !== serial) {
+        message.warning(
+          t(
+            "inbound.regradeSerialCheck",
+            "{{serial}} was taken in as a second-hand serial. A new unit's serial is {{min}}–{{max}} characters with no S — if this one is not, correct it in the serial box.",
+            { serial, min: BASE_MIN_LENGTH, max: BASE_MAX_LENGTH },
+          ),
+        );
+      }
     }
   };
 
   /**
-   * Describe a machine: a list of phrases, stored comma-joined.
-   *
-   * Written on every change rather than on blur, and that is the difference
-   * between a tag list and the textarea it replaced. A textarea costs a clone
-   * of the whole store per keystroke, which is why descriptions used to wait
-   * for the field to be left; adding a phrase is one decision, taken once.
-   *
-   * `ensureQcDescription` runs INSIDE the same mutation as the write, which is
-   * `ensureReason`'s rule applied to the other free-typed field on this page:
-   * there is no moment at which a machine is described by a phrase the list
-   * has not heard of. It also hands back the STORED spelling, so typing
-   * "mulus" under a seeded "Mulus" files the machine under the phrase the list
-   * already has instead of forking the vocabulary on a capital letter.
+   * The description, as phrases. On a unit the vocabulary is written in the
+   * SAME mutation, so a unit is never described by a phrase the list has not
+   * heard of, and "mulus" under a seeded "Mulus" does not fork it.
    */
-  const writeDescription = (serial: string, parts: readonly string[]) => {
+  const commitDescription = (r: ReceivingRow, parts: readonly string[]) => {
+    if (!r.unit) return holdQc(r.key, { description: parts });
+    const serial = r.unit.serial;
     mutate((d) => {
       const u = d.units.find((x) => x.serial === serial);
       if (!u) return;
       u.description = joinDescription(
-        parts.map((phrase) => ensureQcDescription(d, phrase)).filter(Boolean),
+        parts.map((p) => ensureQcDescription(d, p)).filter(Boolean),
       );
+    });
+  };
+
+  /** Which battery reading a row starts on — from its product's chip and year. */
+  const batteryFallback = (r: ReceivingRow): BatteryMode =>
+    defaultBatteryModeOfSku(db, actualSkuOf(r));
+
+  /** What the battery boxes show: typing, else the unit, else the held draft. */
+  const batteryShown = (r: ReceivingRow): BatteryDraft =>
+    r.unit
+      ? (batteryTyping[r.key] ?? batteryDraftOf(r.unit))
+      : (qcDrafts[r.key]?.battery ?? {});
+
+  /** Every keystroke: into the typing buffer, or into the row's draft. */
+  const typeBattery = (r: ReceivingRow, next: BatteryDraft) => {
+    if (r.unit) setBatteryTyping((m) => ({ ...m, [r.key]: next }));
+    else holdQc(r.key, { battery: next });
+  };
+
+  /**
+   * A box left, or Enter: written, or refused — refused rather than clamped,
+   * because a number outside the range is a typo, and 100% is a claim about a
+   * NEW battery that a clamp would have made on somebody's behalf.
+   */
+  const commitBattery = (
+    r: ReceivingRow,
+    field: BatteryField,
+    value: number | null,
+  ) => {
+    const fallback = batteryFallback(r);
+    const draft: BatteryDraft = { ...batteryShown(r), [field]: value };
+    if (!isBatteryDraftInRange(draft, fallback)) {
+      const [lo, hi] = BATTERY_FIELD_RANGE[field];
+      message.error(
+        t(
+          "inbound.batteryRefused",
+          "{{value}} is not a reading this box takes — {{lo}} to {{hi}} only.",
+          { value, lo, hi },
+        ),
+      );
+      typeBattery(r, { ...draft, [field]: null });
+      return;
+    }
+    if (!r.unit) return;
+    const serial = r.unit.serial;
+    const next = batteryPatch(draft, fallback);
+    setBatteryTyping((m) => without(m, r.key));
+    if (
+      next.batteryHealth === r.unit.batteryHealth &&
+      next.cycleCount === r.unit.cycleCount &&
+      next.fcc === r.unit.fcc
+    ) {
+      return;
+    }
+    mutate((d) => {
+      const u = d.units.find((x) => x.serial === serial);
+      if (!u) return;
+      u.batteryHealth = next.batteryHealth;
+      u.cycleCount = next.cycleCount;
+      u.fcc = next.fcc;
     });
   };
 
@@ -1274,56 +1446,36 @@ export function InboundDetailPage() {
   }
 
   const totals = poTotals(po);
-  /**
-   * Where the MONEY stands (owner revision 2026-09-15) — what "Stage" used to
-   * be. See `poPaymentStatus`; the goods are answered by everything below.
-   */
+  /** Where the MONEY stands (owner revision 2026-09-15). */
   const payment = poPaymentStatus(po);
   const supplier = db.suppliers.find((s) => s.id === po.supplierId);
-  // What says the goods physically turned up. Until 2026-08-26 this read
-  // `units.length > 0`, which worked only because arrival minted a placeholder
-  // unit per line-quantity. Nothing is minted now, so an order can be received
-  // with every serial still unread, and only its own status can say so.
   const arrived = po.status === "RECEIVED";
   /**
-   * Filed away, and therefore read-only.
-   *
-   * One flag rather than a rule per control, because "closed" has to mean the
-   * same thing everywhere on the page or it means nothing: the money, the
-   * lines, the serials and the scanner all stop taking input together. The way
-   * back is the banner's Reopen, which is deliberately one click — see
-   * `closeInvoice`.
+   * Filed away, and therefore read-only: the money, the rows, the serials and
+   * the scanner all stop taking input together. The way back is the banner's
+   * Reopen.
    */
   const closed = poClosed(po);
-  const liveLines = po.items.filter((i) => !i.notReceived);
-  /**
-   * Machines the paperwork no longer accounts for — a quantity that came down
-   * after someone had already graded one. Painted red rather than deleted;
-   * `lib/inboundQc.ts` says why.
-   */
-  const overQuota = rows.filter((r) => r.kind === "unit" && r.overQuota).length;
 
   const bench = serviceLocationOf(db.warehouses);
   const benchName =
     db.warehouses.find((w) => w.id === bench)?.name ?? bench ?? "";
 
+  /** An expense's name as the page shows it: its label, else its kind. */
+  const feeName = (fee: PoFee) =>
+    fee.label.trim() !== ""
+      ? `${t(PO_FEE_KIND_LABEL[fee.kind])} · ${fee.label}`
+      : t(PO_FEE_KIND_LABEL[fee.kind]);
+
   /**
-   * A unit that fails QC, and goes back to whoever sold it.
-   *
-   * Carried over from the Stock In screen rather than dropped in the merge:
-   * refusing a unit is half of what QC is for. It writes the managed reason
-   * FIRST, so nothing ever points at a reason Settings has not heard of.
-   *
-   * A confirm rather than a form, unlike the service half below: there is
-   * nothing to ask. The machine goes back, the claim is opened at what the
-   * invoice says it cost, and the decision can be taken back from the row.
+   * A unit that fails QC, and goes back to whoever sold it. The managed reason
+   * is written FIRST, so nothing ever points at a reason Settings has not
+   * heard of; the claim is opened at what the invoice says it cost, and the
+   * decision can be taken back from the row.
    */
   const rejectToSupplier = (serial: string) => {
     modal.confirm({
       title: t("inbound.rejectTitle", "Return this unit to the supplier?"),
-      // Says the decision is reversible, because it now is. Staff who believe
-      // a click is final either hesitate over every one of them or hide the
-      // mistake afterwards, and both are worse than the mistake.
       content: t(
         "inbound.rejectBody",
         "{{serial}} will not enter inventory. Its history stays tracked either way, and you can take this back from the row afterwards.",
@@ -1352,8 +1504,7 @@ export function InboundDetailPage() {
             type: "RETUR_SUPPLIER",
             toStatus: "RETUR_SUPPLIER",
             // `refCode` is the return document, not the order. It is what a
-            // reopen reads to know which claim to withdraw, and what the
-            // machine's own timeline needs to explain where it went.
+            // reopen reads to know which claim to withdraw.
             refCode: code,
             note: reasonLabel,
           });
@@ -1362,28 +1513,10 @@ export function InboundDetailPage() {
   };
 
   /**
-   * A unit that needs a repair (owner revision 2026-09-09).
-   *
-   * > *"When the staff press the service button, asks a confirmation modal
-   * > that this unit will be sent/not to warehouse 4 for service, then add a
-   * > field so that they can add additional fee like shipping fee from
-   * > warehouse 1 to warehouse 4. If the user can already know the service
-   * > fee, they can add it to."*
-   *
-   * Three questions, and the first one governs the other two: does the machine
-   * have to travel? The shop's warehouses are separate buildings, so sending
-   * one to the bench is a courier job with a courier's price — but a machine
-   * already IN warehouse 4, or one a repairer collects, travels nowhere and
-   * should not be asked what the journey cost.
-   *
-   * ## The machine does not arrive by being sent
-   *
-   * This used to move the unit to the bench in the same breath as the status,
-   * so `wh-4` showed a machine that was still in a van. The location now moves
-   * when somebody at the bench confirms it turned up — see `arrivedAt` in
-   * lib/service.ts and the Expected table on /stock/service. What DOES happen
-   * immediately is the status: a machine promised to a repairer is not
-   * sellable from the moment it is promised, whatever shelf it is on.
+   * A unit that needs a repair (owner revision 2026-09-09). The machine does
+   * not arrive by being sent: the location moves when somebody at the bench
+   * confirms it turned up (/stock/service). What happens immediately is the
+   * status — a machine promised to a repairer is not sellable from then on.
    */
   const sendToService = () => {
     const serial = sendingToService!;
@@ -1393,9 +1526,6 @@ export function InboundDetailPage() {
         const u = d.units.find((x) => x.serial === serial)!;
         const reasonLabel = "On Service";
         ensureReason(d, "ADJUSTMENT", reasonLabel);
-        // A journey only happens when there is a bench to travel to. A shop
-        // whose locations include no service location keeps the machine where
-        // it is, which is exactly the behaviour before any of this existed.
         const travelling =
           v.ship && bench !== undefined && bench !== u.locationId;
         appendEvent(d, serial, {
@@ -1406,19 +1536,15 @@ export function InboundDetailPage() {
             ? `Sent to service — on its way to ${benchName}`
             : "Sent to service",
         });
-        // The rack belongs to the warehouse it is leaving, and it leaves the
-        // shelf the moment it is picked up rather than when it arrives.
+        // The rack belongs to the warehouse it is leaving.
         if (travelling) u.rackId = undefined;
         const fees = [];
         if (travelling && (v.shippingFee ?? 0) > 0) {
           fees.push({
             id: nextId("svcf"),
             kind: "SHIPPING" as const,
-            // Translated where it is WRITTEN, which is the trade
-            // `UnitEvent.note` already makes on this page: the string is
-            // stored and is frozen in whatever language the bench happened to
-            // be in. The alternative is a structured label the reader phrases,
-            // and there is no column for one.
+            // Translated where it is WRITTEN — the string is stored and frozen
+            // in whatever language the bench happened to be in.
             label: t("inbound.serviceShipLabel", "Transfer to the bench"),
             amount: v.shippingFee!,
             at: now,
@@ -1440,9 +1566,6 @@ export function InboundDetailPage() {
           serial,
           fromLocationId: u.locationId,
           openedAt: now,
-          // A machine that travels has to be signed for at the other end; one
-          // that does not is already there, so nothing is waiting to be
-          // confirmed and the bench can start work.
           ...(travelling ? {} : { arrivedAt: now }),
           fees,
           ...(v.note ? { note: v.note } : {}),
@@ -1463,114 +1586,27 @@ export function InboundDetailPage() {
           : t(
               "inbound.serviceSentHere",
               "{{serial}} is at the service bench.",
-              {
-                serial,
-              },
+              { serial },
             ),
       );
     });
   };
 
   /**
-   * New or second, written onto the row (owner ask 2026-08-28).
-   *
-   * One control writing one column. Marking a machine New writes the schema's
-   * own `Grade.NEW`; marking it Second CLEARS that letter rather than guessing
-   * another, because an ungraded second-hand machine is an honest state and an
-   * invented `A` is exactly the unfounded letter `lib/grading.ts` exists to be
-   * rid of. `gradeForCondition` is that rule, and it is shared with the return
-   * desk so the two screens cannot disagree.
-   *
-   * A condition change is filed on the ledger for the same reason a grade is:
-   * "why is this listed as sealed?" has to have an answer on the machine
-   * itself six weeks later.
-   */
-  const setCondition = (row: QcRow, condition: UnitCondition) => {
-    if (row.kind === "slot") {
-      const grade = gradeForCondition(condition, gradeDrafts[row.key]);
-      setGradeDrafts((g) => {
-        const next = { ...g };
-        if (grade === undefined) delete next[row.key];
-        else next[row.key] = grade;
-        return next;
-      });
-      return;
-    }
-    const serial = row.unit.serial;
-    const grade = gradeForCondition(condition, row.unit.grade);
-    if (grade === row.unit.grade) return;
-    mutate((d) => {
-      const u = d.units.find((x) => x.serial === serial);
-      if (!u) return;
-      u.grade = grade;
-      appendEvent(d, serial, {
-        type: "DICATAT",
-        refCode: po.code,
-        note:
-          condition === "NEW"
-            ? "Marked new — sealed stock"
-            : "Marked second-hand",
-      });
-    });
-  };
-
-  /** Write a grading decision onto the row the dialog is open for. */
-  const applyGrade = (row: QcRow, grade: string, inspection: string) => {
-    if (row.kind === "slot") {
-      setGradeDrafts((g) => ({ ...g, [row.key]: grade }));
-      return;
-    }
-    const serial = row.unit.serial;
-    if (row.unit.grade === grade) return;
-    mutate((d) => {
-      const u = d.units.find((x) => x.serial === serial);
-      if (!u) return;
-      u.grade = grade;
-      // The inspection goes on the timeline, because the letter alone is a
-      // conclusion with no working. Six weeks later "why is this a B?" has an
-      // answer on the machine itself.
-      appendEvent(d, serial, {
-        type: "DICATAT",
-        refCode: po.code,
-        note: inspection
-          ? `Graded ${grade} — ${inspection}`
-          : `Graded ${grade}`,
-      });
-    });
-  };
-
-  /**
    * Take a QC decision back — the owner's fourth ask of 2026-08-27.
-   *
-   * Three machines come off a pallet, two of them the same model, and the
-   * person grading accepts the wrong one or sends the wrong one back. Until
-   * now the only remedy was a stock adjustment, which files the correction as
-   * a different KIND of event from the mistake and leaves the timeline reading
-   * "arrived, passed QC, mysteriously adjusted out". A reopen says what
-   * actually happened: this decision was wrong, here is the machine back on
-   * the bench.
-   *
-   * `KOREKSI` is the schema's own word for it (`UnitEventType`), and the event
-   * is APPENDED — the QC_SELESAI or RETUR_SUPPLIER that was wrong stays on the
-   * ledger, because it was really recorded and somebody may need to know it
-   * was. Nothing is rewritten.
-   *
-   * A supplier return raised at QC is withdrawn with it. Leaving it standing
-   * would have the shop claiming money from a supplier for a machine sitting
-   * on its own bench — and the document is marked `CANCELLED` rather than
-   * deleted, because the claim really was raised.
+   * `QC_DIBUKA` is APPENDED; the decision that was wrong stays on the ledger.
+   * A supplier return raised at QC is withdrawn with it (marked `CANCELLED`,
+   * not deleted), and an open service visit is closed back to where it set
+   * out from.
    */
   const reopenQc = (serial: string) => {
-    const unit = db.units.find((u) => u.serial === serial);
-    // Asked again here, not only of the button. The button's `disabled` is a
-    // fact about the last render, and the thing this guards against is a
-    // machine that was sold or reserved in another tab between that render and
-    // the click — which is the same class of mistake the whole feature exists
-    // to undo, and not one worth introducing while undoing another.
+    const unit = getDb().units.find((u) => u.serial === serial);
+    // Asked again here, not only of the button: a machine can be sold or
+    // reserved in another tab between the last render and the click.
     if (!unit || !canReopenQc(unit)) return;
     const from = unitStage(unit);
     modal.confirm({
-      title: t("inbound.reopenTitle", "Put this machine back into QC?"),
+      title: t("inbound.reopenTitle", "Put this unit back into QC?"),
       content: t(
         "inbound.reopenBody",
         "{{serial}} is currently {{stage}}. Reopening leaves that on its timeline and adds a correction, so you can grade it again or make a different decision.",
@@ -1598,17 +1634,6 @@ export function InboundDetailPage() {
               withdrawn = claim.code;
             }
           }
-          /*
-           * A machine coming back from a service decision has to come off the
-           * bench's list as well (2026-09-09).
-           *
-           * The visit is CLOSED rather than removed — nothing here is hard-
-           * deleted, and a courier charge already incurred is still a cost
-           * against the machine whatever anybody decided afterwards. It closes
-           * back to where it set out from, which is where it still is: a visit
-           * with no `arrivedAt` is one nobody has signed for. Without this the
-           * bench would go on expecting a machine that is back on the QC grid.
-           */
           const visit = d.services.findIndex(
             (r) => r.serial === serial && r.closedAt === undefined,
           );
@@ -1621,10 +1646,6 @@ export function InboundDetailPage() {
             };
           }
           appendEvent(d, serial, {
-            // The schema's own word for it since the migration of 2026-08-27.
-            // It was KOREKSI while this lived only in the mock, which read on
-            // a timeline as "adjusted" — a different and vaguer thing from a
-            // QC decision somebody judged wrong.
             type: "QC_DIBUKA",
             toStatus: "QC",
             refCode: po.code,
@@ -1636,21 +1657,602 @@ export function InboundDetailPage() {
     });
   };
 
+  /** QC passed: into sellable stock. `qcReady` is the gate, on the button. */
+  const acceptUnit = async (serial: string) => {
+    await mutate((d) => {
+      appendEvent(d, serial, {
+        type: "QC_SELESAI",
+        toStatus: "TERSEDIA",
+        refCode: po.code,
+        note: "QC passed",
+      });
+    });
+    message.success(
+      t("inbound.qcAccepted", "{{serial}} passed QC and is in stock.", {
+        serial,
+      }),
+    );
+  };
+
   /**
-   * Close the invoice, or open it again.
+   * Remove a serial read in by mistake — only while the unit is still in QC,
+   * the one period in which nothing has happened to it beyond arriving. The
+   * row it leaves behind is still on the invoice, so it goes back to waiting.
+   */
+  const removeSerial = (serial: string) =>
+    modal.confirm({
+      title: t("inbound.removeSerialTitle", "Remove this serial row?"),
+      content: t(
+        "inbound.removeSerialBody",
+        "{{serial}} and everything recorded against it go. If a product line still expects the unit, the row comes back empty, waiting for a serial.",
+        { serial },
+      ),
+      okText: t("inbound.removeSerialOk", "Remove row"),
+      okButtonProps: { danger: true },
+      onOk: () =>
+        editOrder(({ d, order }) => {
+          d.units = d.units.filter((x) => x.serial !== serial);
+          d.events = d.events.filter((e) => e.serial !== serial);
+          for (const item of order.items) {
+            if (item.serial === serial) item.serial = null;
+          }
+        }),
+    });
+
+  /**
+   * The supplier invoiced it and never sent it — or it did turn up after all.
+   * The row stays on the invoice, because it was invoiced, and stops counting
+   * towards what is owed (`poTotals`).
+   */
+  const toggleNotArrived = (row: ReceivingRow) =>
+    editOrder(({ lineOf }) => {
+      const line = lineOf(row);
+      if (!line) return;
+      if (line.notReceived) delete line.notReceived;
+      else line.notReceived = true;
+    });
+
+  /**
+   * A row that should never have been on the invoice — typed twice, the wrong
+   * quantity. Not the same as Not arrived, which keeps the machine invoiced.
+   */
+  const removeFromInvoice = (row: ReceivingRow) =>
+    modal.confirm({
+      title: t("inbound.removeRowTitle", "Remove this unit from the invoice?"),
+      content: t(
+        "inbound.removeRowBody",
+        "Use this when the row was added by mistake. If the supplier invoiced it but never sent it, mark it Not arrived instead — that keeps it on the invoice.",
+      ),
+      okText: t("inbound.removeRowOk", "Remove from invoice"),
+      okButtonProps: { danger: true },
+      onOk: () => {
+        editOrder(({ order, lineOf }) => {
+          const line = lineOf(row);
+          if (!line) return;
+          order.items = order.items.filter((i) => i.id !== line.id);
+        });
+        forget(row.key);
+      },
+    });
+
+  /**
+   * A machine on the order that no line accounts for, put on the invoice at
+   * what it cost — the supplier sent one more than the paperwork said, and
+   * the paperwork is what is corrected.
+   */
+  const addToInvoice = (row: ReceivingRow) => {
+    const unit = row.unit;
+    if (!unit) return;
+    editOrder(({ order }) => {
+      order.items.push({
+        id: nextId("poi"),
+        skuId: unit.skuId,
+        serial: unit.serial,
+        qty: 1,
+        unitCost: unit.buy,
+      });
+    });
+  };
+
+  // ── Counted products: a quantity, not a row per unit (2026-09-19) ──────
+
+  /**
+   * Is this variant counted rather than identified — an accessory? Its line
+   * is one quantity at one price, and it arrives on the stock ledger.
+   */
+  const isCounted = countedIn(db);
+
+  /** Pieces of a counted line on the shelf because of this invoice. */
+  const arrivedOf = (itemId: string) => arrivedQty(db.stockMoves, itemId);
+
+  /** More of a counted product: its open line grows, or it gets one. */
+  const addCounted = (skuId: string, qty: number) => {
+    let id = "";
+    editOrder(({ order }) => {
+      const line = order.items.find((i) => i.skuId === skuId && !i.notReceived);
+      if (line) {
+        line.qty += qty;
+        id = line.id;
+        return;
+      }
+      id = nextId("poi");
+      order.items = insertAfterGroup(
+        order.items,
+        order.items.filter((i) => i.skuId === skuId),
+        [{ id, skuId, serial: null, qty, unitCost: 0 }],
+      );
+    });
+    if (id) focusSoon(lineCostFieldId(id));
+  };
+
+  /**
+   * The pieces are here: one press per product (owner answer 2026-09-19 —
+   * *confirm arrival first*, not per piece). Writes a `MASUK` of whatever
+   * has not arrived yet into the invoice's location, and marks the order
+   * arrived the way a first scan does.
+   */
+  const confirmArrival = (itemId: string) => {
+    const wasArrived = arrived;
+    let added = 0;
+    mutate((d) => {
+      const order = d.pos.find((p) => p.id === po.id);
+      const line = order?.items.find((i) => i.id === itemId);
+      if (!order || !line || line.notReceived || line.skuId === "") return;
+      const missing = line.qty - arrivedQty(d.stockMoves, line.id);
+      if (missing <= 0) return;
+      d.stockMoves.push({
+        id: nextId("sm"),
+        skuId: line.skuId,
+        locationId: order.locationId,
+        qty: missing,
+        // Net of the line's own discount (2026-09-20), per piece: this is
+        // what the variant's moving average is built from (`lib/stock.ts`).
+        cost:
+          line.unitCost -
+          Math.round((line.discount ?? 0) / Math.max(1, line.qty)),
+        type: "MASUK",
+        at: new Date().toISOString(),
+        refCode: order.code,
+        poId: order.id,
+        poItemId: line.id,
+        staff: currentStaffName(),
+      });
+      order.status = "RECEIVED";
+      added = missing;
+    });
+    if (added > 0) {
+      message.success(
+        t("inbound.countedArrived", "{{count}} piece(s) added to stock.", {
+          count: added,
+        }),
+      );
+    }
+    noteArrival(wasArrived);
+  };
+
+  /**
+   * Take a confirmation back — the count was wrong, or it was the wrong box.
+   * Only what is still on the shelf can go back: a piece already sold is a
+   * sale, and the invoice cannot be edited out from under it.
+   */
+  const undoArrival = (itemId: string) => {
+    const line = po.items.find((i) => i.id === itemId);
+    if (!line) return;
+    const came = arrivedOf(itemId);
+    const left = onHand(db.stockMoves, line.skuId, po.locationId);
+    if (came <= 0) return;
+    if (left < came) {
+      message.error(
+        t(
+          "inbound.undoArrivalRefused",
+          "Only {{left}} of the {{came}} are still in {{where}} — the rest have been sold or moved. Correct the stock with an adjustment instead.",
+          { left, came, where: warehouseName(po.locationId) },
+        ),
+      );
+      return;
+    }
+    modal.confirm({
+      title: t("inbound.undoArrivalTitle", "Undo the arrival of {{count}}?", {
+        count: came,
+      }),
+      content: t(
+        "inbound.undoArrivalBody",
+        "They come off the shelf and back onto the invoice as not yet arrived.",
+      ),
+      okText: t("inbound.undoArrivalOk", "Undo arrival"),
+      cancelText: t("inbound.cancel", "Cancel"),
+      onOk: () =>
+        mutate((d) => {
+          const order = d.pos.find((p) => p.id === po.id);
+          if (!order) return;
+          const now = arrivedQty(d.stockMoves, itemId);
+          if (now <= 0) return;
+          d.stockMoves.push({
+            id: nextId("sm"),
+            skuId: line.skuId,
+            locationId: order.locationId,
+            qty: -now,
+            cost: line.unitCost,
+            type: "MASUK_BATAL",
+            at: new Date().toISOString(),
+            refCode: order.code,
+            poId: order.id,
+            poItemId: itemId,
+            staff: currentStaffName(),
+          });
+        }),
+    });
+  };
+
+  const warehouseName = (id: string) =>
+    db.warehouses.find((w) => w.id === id)?.name ?? id;
+
+  // ── The invoice's lines ─────────────────────────────────────────────────
+
+  /**
+   * The lines as both inbound screens draw them: a product at a price, its
+   * quantity, its discount and the units behind it (`lib/invoiceLines.ts`).
+   */
+  // `db` rather than its slices: `isCounted` and `arrivedOf` are made fresh
+  // on every render and close over the units, the categories AND the stock
+  // moves, so the store is the dependency.
+  const lines = useMemo(
+    () => purchaseLines(po, db.units, isCounted, arrivedOf),
+    [po, db, isCounted, arrivedOf],
+  );
+
+  /**
+   * A whole line's COGS: what is owed for it plus its pieces' share of the
+   * invoice's expenses (owner ask 2026-09-20). A piece that has become a unit
+   * reads `costBreakdown`, so a repair already booked against it counts.
+   */
+  const lineCogs = (l: PurchaseLine) => {
+    if (l.counted) {
+      // An accessory's pieces share the parcel like everything else, and
+      // `poRowShares` files their share under the line's first piece.
+      const share = l.lines.reduce(
+        (n, i) => n + (shares.get(rowKey(i.id, 0)) ?? 0),
+        0,
+      );
+      return l.total + share;
+    }
+    // A piece the supplier never sent cost nothing: it is invoiced, not owed
+    // (`poTotals`), so it is out of what the line cost the shop.
+    return l.units.reduce(
+      (n, { row }) => (row.notArrived ? n : n + cogsOf(row).total),
+      0,
+    );
+  };
+
+  /**
+   * A line's pieces as they stand INSIDE a mutation.
    *
-   * Closing is the shop saying "we are finished with this piece of paper": the
-   * goods are dealt with, the money is settled or written off, and nothing
-   * more should be recorded against it. It makes the page read-only, which is
-   * the whole feature — an order nobody can edit is an order nobody edits by
-   * accident six weeks later while looking for something else.
+   * Never by id: `editOrder` runs `normaliseLines` first, which splits an
+   * invoice written as "qty 3" into three pieces with two NEW ids, so a
+   * filter on the ids the last render saw would find one piece of three and
+   * every quantity change would add the difference twice. A line is one
+   * product at one price — that is what groups it on screen, and it is what
+   * finds it here.
+   */
+  const piecesOf = (order: Po, l: PurchaseLine) =>
+    order.items.filter((i) => i.skuId === l.skuId && i.unitCost === l.unitCost);
+
+  /**
+   * More of a product: one line of that quantity, never a row per unit
+   * (owner ask 2026-09-20). The caret goes to the new line's price, which is
+   * the next thing anybody types.
+   */
+  const addLines = (skuId: string, qty: number) => {
+    if (closed) return;
+    if (isCounted(skuId)) {
+      addCounted(skuId, qty);
+      return;
+    }
+    const ids: string[] = [];
+    editOrder(({ order }) => {
+      const added: PoItem[] = [];
+      for (let i = 0; i < qty; i += 1) {
+        const id = nextId("poi");
+        ids.push(id);
+        added.push({ id, skuId, serial: null, qty: 1, unitCost: 0 });
+      }
+      order.items = insertAfterGroup(
+        order.items,
+        order.items.filter((i) => i.skuId === skuId && i.unitCost === 0),
+        added,
+      );
+    });
+    const first = ids[0];
+    if (first !== undefined) focusSoon(lineCostFieldId(first));
+  };
+
+  /**
+   * A line's quantity. Up adds pieces at the line's own price — one line is
+   * one price (2026-09-20) — and down takes away pieces nobody has scanned
+   * yet, from the end: a scanned unit is proof the piece arrived.
+   */
+  const setLineQty = (l: PurchaseLine, qty: number) => {
+    if (l.counted) {
+      setCountedQty(l, qty);
+      return;
+    }
+    let refused = false;
+    editOrder(({ d, order }) => {
+      const mine = piecesOf(order, l);
+      if (qty > mine.length) {
+        const added: PoItem[] = [];
+        for (let i = mine.length; i < qty; i += 1) {
+          added.push({
+            id: nextId("poi"),
+            skuId: l.skuId,
+            serial: null,
+            qty: 1,
+            unitCost: l.unitCost,
+          });
+        }
+        order.items = insertAfterGroup(order.items, mine, added);
+      } else {
+        const drop = linesToDrop(
+          order,
+          d.units,
+          mine,
+          mine.length - qty,
+          countedIn(d),
+        );
+        if (drop === null) {
+          refused = true;
+          return;
+        }
+        const going = new Set(drop);
+        order.items = order.items.filter((i) => !going.has(i.id));
+      }
+      spread(order, l, l.unitCost, l.discount);
+    });
+    if (refused) {
+      message.error(
+        t(
+          "inbound.qtyRefused",
+          "Only units without a serial can come off the invoice. Remove a scanned serial first, or mark a unit Not arrived.",
+        ),
+      );
+    }
+  };
+
+  /** A counted line's quantity: the last piece takes the change. */
+  const setCountedQty = (l: PurchaseLine, qty: number) => {
+    const arrived = l.lines.reduce((n, i) => n + arrivedOf(i.id), 0);
+    if (qty < arrived) {
+      message.error(
+        t(
+          "inbound.countedQtyRefused",
+          "{{count}} of these have already arrived. Undo the arrival first to invoice fewer.",
+          { count: arrived },
+        ),
+      );
+      return;
+    }
+    editOrder(({ order }) => {
+      const mine = piecesOf(order, l);
+      const last = mine[mine.length - 1];
+      if (!last) return;
+      const others = mine.slice(0, -1).reduce((n, i) => n + i.qty, 0);
+      last.qty = Math.max(arrivedOf(last.id), qty - others, 1);
+      spread(order, l, l.unitCost, l.discount);
+    });
+  };
+
+  /**
+   * Write a line's price and discount over its pieces, and onto the units
+   * that have already been identified.
    *
-   * It warns rather than refuses. An order can genuinely be finished with
-   * while it still owes a supplier money or still holds a machine nobody
-   * graded — a line written off, a unit that walked — and a screen that
-   * refuses to file such an order leaves it in the live list forever, which is
-   * how the live list stops being read. So the dialog names what is unfinished
-   * and lets a person decide.
+   * The discount is spread with `pieceCosts`, so the rupiah add up to what
+   * was negotiated and each unit's `buy` is what that machine really cost —
+   * which is what every margin in the app is computed against. `Unit.buy` is
+   * rewritten alongside the line and not instead of it: the two saying
+   * different things is the bug this avoids.
+   */
+  const spread = (
+    order: Po,
+    l: PurchaseLine,
+    unitCost: number,
+    discount: number,
+  ): PoItem[] => {
+    const mine = piecesOf(order, l);
+    if (mine.length === 0) return [];
+    // A counted row is a real quantity; an identified row is one piece.
+    const each = (line: PoItem) => (l.counted ? Math.max(1, line.qty) : 1);
+    const pieces = mine.reduce((n, line) => n + each(line), 0);
+    const share = spreadDiscount(
+      Math.min(Math.max(0, discount), unitCost * pieces),
+      pieces,
+    );
+    /*
+     * By the PIECE, then summed per row. Weighting whole rows would put more
+     * on one row than it is worth — a group of an accessory as "1 at 150k"
+     * and "11 at 150k" is two rows, and a Rp500.000 discount cannot all sit
+     * on the row of one: `PurchaseOrderItem.discount`'s CHECK refuses it.
+     */
+    let n = 0;
+    mine.forEach((line) => {
+      line.unitCost = unitCost;
+      let off = 0;
+      for (let i = 0; i < each(line); i += 1, n += 1) off += share[n] ?? 0;
+      if (off > 0) line.discount = off;
+      else delete line.discount;
+    });
+    return mine;
+  };
+
+  /** One price for the whole line (owner ask 2026-09-20). */
+  const setLineCost = (l: PurchaseLine, value: number | null) => {
+    if (value === null || value === l.unitCost) return;
+    if (!isPriceInRange(value)) {
+      message.error(
+        t("inbound.costRefused", "{{value}} is not a cost.", { value }),
+      );
+      return;
+    }
+    editOrder(({ d, order }) => {
+      const mine = spread(order, l, value, Math.min(l.discount, value * l.qty));
+      writeUnitCosts(d, mine);
+    });
+  };
+
+  /** Money off this line, and off nothing else. */
+  const setLineDiscount = (l: PurchaseLine, value: number | null) => {
+    const next = Math.max(0, value ?? 0);
+    if (next === l.discount) return;
+    const room = l.unitCost * l.qty;
+    if (next > room) {
+      message.error(
+        t(
+          "inbound.discountTooBig",
+          "A discount cannot be more than the line is worth ({{amount}}).",
+          { amount: fmtRp(room) },
+        ),
+      );
+      return;
+    }
+    editOrder(({ d, order }) => {
+      const mine = spread(order, l, l.unitCost, next);
+      writeUnitCosts(d, mine);
+    });
+  };
+
+  /** Each identified unit's `buy`, from the piece it stands on. */
+  const writeUnitCosts = (d: MockDb, pieces: readonly PoItem[]) => {
+    for (const line of pieces) {
+      if (!line.serial) continue;
+      const u = d.units.find((x) => x.serial === line.serial);
+      if (u && MONEY_EDITABLE.includes(u.status)) {
+        u.buy = line.unitCost - (line.discount ?? 0);
+      }
+    }
+  };
+
+  /**
+   * Correct the product the invoice names — a typo at entry, for the whole
+   * line. A unit of it still in QC follows the correction, because the
+   * product is a fact about the line now (owner 2026-09-20) and a unit filed
+   * under the old one would be a unit the line cannot find.
+   */
+  const setLineProduct = (l: PurchaseLine, to: string) => {
+    const from = l.skuId;
+    if (!to || to === from) return;
+    const was = skuOf(from);
+    const now = skuOf(to);
+    /*
+     * Counted and identified are different kinds of line (2026-09-19): a
+     * quantity on the stock ledger, or a row per unit. A line may change kind
+     * only while nothing of it has arrived — after that there are units or
+     * stock moves filed under the old product that a relabel would orphan.
+     */
+    if (from !== "" && isCounted(from) !== isCounted(to)) {
+      const started = l.lines.some(
+        (i) => arrivedOf(i.id) > 0 || (i.serial !== null && i.serial !== ""),
+      );
+      if (started) {
+        message.error(
+          t(
+            "inbound.kindChangeRefused",
+            "Some of this product has already arrived. Undo that first, then change it to a product that is counted differently.",
+          ),
+        );
+        return;
+      }
+    }
+    editOrder(({ d, order }) => {
+      for (const item of piecesOf(order, l)) {
+        item.skuId = to;
+        if (!item.serial) continue;
+        const u = d.units.find((x) => x.serial === item.serial);
+        if (!u || u.status !== "QC" || u.skuId !== from) continue;
+        // The asking price follows the product until somebody has priced this
+        // unit: still the old product's price means nobody has.
+        if (u.price !== undefined && u.price === was?.price && now) {
+          u.price = now.price;
+        }
+        u.skuId = to;
+        appendEvent(d, u.serial, {
+          type: "DICATAT",
+          refCode: po.code,
+          note: `Product corrected on the invoice: ${was?.code ?? from} → ${now?.code ?? to}`,
+        });
+      }
+    });
+  };
+
+  /**
+   * The supplier invoiced the whole line and never sent it — or it did turn
+   * up after all. It stays on the invoice, because it was invoiced, and stops
+   * counting towards what is owed (`poTotals`).
+   */
+  const toggleLineNotArrived = (l: PurchaseLine) => {
+    const marking = l.notArrived === 0;
+    editOrder(({ order }) => {
+      for (const item of piecesOf(order, l)) {
+        // A piece somebody has in their hands has arrived, whatever the paper
+        // said — marking it otherwise would take a real unit off the invoice.
+        if (marking && item.serial) continue;
+        if (marking) item.notReceived = true;
+        else delete item.notReceived;
+      }
+    });
+  };
+
+  /** A line that should never have been on the invoice. */
+  const removeLine = (l: PurchaseLine) => {
+    if (l.counted && l.received > 0) {
+      message.error(
+        t(
+          "inbound.invoiceRemoveArrived",
+          "Pieces of this product have arrived. Undo the arrival first.",
+        ),
+      );
+      return;
+    }
+    return modal.confirm({
+      title: t(
+        "inbound.invoiceRemoveTitle",
+        "Remove {{product}} from the invoice?",
+        {
+          product: l.skuId
+            ? skuLabel(l.skuId)
+            : t("inbound.noProductYet", "the unpicked lines"),
+        },
+      ),
+      content: t(
+        "inbound.invoiceRemoveBody",
+        "Every unit of it comes off the invoice. If the supplier billed it but never sent it, mark the units Not arrived instead — that keeps them on the invoice.",
+      ),
+      okText: t("inbound.removeRowOk", "Remove from invoice"),
+      okButtonProps: { danger: true },
+      onOk: () =>
+        editOrder(({ d, order }) => {
+          const mine = piecesOf(order, l);
+          if (l.counted) {
+            const going = new Set(mine.map((i) => i.id));
+            order.items = order.items.filter((i) => !going.has(i.id));
+            return;
+          }
+          const drop = linesToDrop(
+            order,
+            d.units,
+            mine,
+            mine.length,
+            countedIn(d),
+          );
+          if (drop === null) return;
+          const going = new Set(drop);
+          order.items = order.items.filter((i) => !going.has(i.id));
+        }),
+    });
+  };
+
+  /**
+   * Close the invoice, or open it again. Closing warns rather than refuses:
+   * an order can genuinely be finished with while it still owes money or
+   * holds a machine nobody graded.
    */
   const closeInvoice = () => {
     const loose: string[] = [];
@@ -1661,13 +2263,17 @@ export function InboundDetailPage() {
         }),
       );
     }
-    const ungraded = rows.filter(
-      (r) => r.kind === "slot" || r.unit.status === "QC",
-    ).length;
-    if (ungraded > 0) {
+    if (summary.waiting > 0) {
       loose.push(
-        t("inbound.closeUngraded", "{{count}} machine(s) have not left QC", {
-          count: ungraded,
+        t("inbound.closeWaiting", "{{count}} unit(s) have no serial yet", {
+          count: summary.waiting,
+        }),
+      );
+    }
+    if (summary.inQc > 0) {
+      loose.push(
+        t("inbound.closeUngraded", "{{count}} unit(s) have not left QC", {
+          count: summary.inQc,
         }),
       );
     }
@@ -1713,76 +2319,29 @@ export function InboundDetailPage() {
     );
   };
 
-  /**
-   * Opens QC.
-   *
-   * Marking an order arrived says the boxes are on the bench; it does NOT
-   * create units. Until 2026-08-26 it minted one `TBD-…` unit per
-   * line-quantity, which put rows in the database for machines nobody had yet
-   * held — and made the serial the one thing about a unit that was invented
-   * rather than read. QC now shows a row per expected machine and each becomes
-   * a unit at the moment its serial is scanned or typed. See
-   * `lib/inboundQc.ts`.
-   */
+  /** The boxes are here, before anybody has read a serial off them. */
   const markArrived = () => {
-    if (liveLines.length === 0) {
-      message.error(
-        t(
-          "inbound.nothingToReceive",
-          "Add the products first — there is nothing to receive.",
-        ),
-      );
-      return;
-    }
-    // A line whose product was never chosen would ask QC for a serial against
-    // an empty SKU, and a row that is not any product is a row no screen can
-    // render. Possible since "Add product" stopped guessing at a default
-    // (2026-08-26), so it is checked here rather than trusted.
-    if (liveLines.some((i) => !i.skuId)) {
-      message.error(
-        t(
-          "inbound.pickEveryProduct",
-          "Every line needs a product before the order can be received.",
-        ),
-      );
-      return;
-    }
     modal.confirm({
       title: t("inbound.markThisOrderAsArrived", "Mark this order as arrived?"),
-      content: `${liveLines.reduce((n, i) => n + i.qty, 0)} machine(s) will be waiting for a serial in QC. Lines marked "not received" are skipped.`,
+      content: t(
+        "inbound.markArrivedBody",
+        "{{count}} unit(s) are waiting for a serial. Scanning them marks the order arrived by itself; this only says the boxes are here.",
+        { count: summary.waiting },
+      ),
       okText: t("inbound.markArrived", "Mark arrived"),
       onOk: () => {
         mutate((d) => {
           d.pos.find((p) => p.id === po.id)!.status = "RECEIVED";
         });
-        message.success(
-          t(
-            "inbound.markedArrived",
-            "Marked arrived. Scan or type each serial below.",
-          ),
-        );
       },
     });
   };
 
   /**
    * Every fact about the invoice, and every one of them editable (owner ask
-   * 2026-09-15).
-   *
-   * > *"All of the information should be editable (Supplier, warehouse, No
-   * > invoice, Ordered, Warehouse, Status)."*
-   *
-   * These were read-only text, so a supplier picked in haste or an invoice
-   * number mistyped could only be fixed by raising the order again — which
-   * loses its lines, its payments and every serial graded against it. They
-   * write on CHANGE rather than through a Save: there is no draft here, each
-   * field is one fact, and a page with a Save button is a page somebody
-   * leaves without pressing it. `lib/inboundDraft.ts` is what protects the
-   * boxes that ARE a draft.
-   *
-   * Payment status is the exception and is not a field: it is derived from
-   * what has been paid (`poPaymentStatus`), so the way to change it is to
-   * record or correct a payment.
+   * 2026-09-15). They write on CHANGE rather than through a Save: each field
+   * is one fact, and a page with a Save button is a page somebody leaves
+   * without pressing it.
    */
   const setPo = (patch: (order: Po) => void) =>
     mutate((d) => {
@@ -1794,8 +2353,7 @@ export function InboundDetailPage() {
       <Descriptions
         column={{ xs: 1, sm: 2, md: 3 }}
         // `vertical` since the fields became editable: a label beside a
-        // full-width Select gives the Select about a third of the row, and
-        // "Apel Segar Nusantara" then reads as "Apel Segar Nus…".
+        // full-width Select gives the Select about a third of the row.
         layout="vertical"
         items={[
           {
@@ -1831,10 +2389,14 @@ export function InboundDetailPage() {
                   style={{ width: "100%" }}
                   disabled={closed || po.noInvoice}
                   aria-label={t("inbound.invoice", "Invoice")}
-                  placeholder={t(
-                    "inbound.invoiceNumber",
-                    "The supplier's invoice number",
-                  )}
+                  placeholder={
+                    po.noInvoice
+                      ? t("inbound.noInvoiceIssued", "No invoice issued")
+                      : t(
+                          "inbound.invoiceNumber",
+                          "The supplier's invoice number",
+                        )
+                  }
                   value={po.invoice}
                   onChange={(e) => {
                     const v = e.target.value;
@@ -1843,24 +2405,30 @@ export function InboundDetailPage() {
                     });
                   }}
                 />
-                {/* The escape hatch the owner kept (2026-08-26): a supplier
-                    who issues none is a fact, and a silently blank box is
-                    not. Ticking it clears the number, because a number kept
-                    behind a disabled box is one nobody can see or correct. */}
-                <Switch
-                  size="small"
+                {/*
+                 * A checkbox that says what it means, the way the order form
+                 * asks it (owner ask 2026-09-18). It was a switch reading "No
+                 * invoice" whether it was on or off, so nothing on it said
+                 * which state the invoice was in.
+                 */}
+                <Checkbox
                   disabled={closed}
                   checked={po.noInvoice === true}
-                  aria-label={t("inbound.noInvoiceAria", "No invoice issued")}
-                  checkedChildren={t("inbound.noInvoice", "No invoice")}
-                  unCheckedChildren={t("inbound.noInvoice", "No invoice")}
-                  onChange={(on) =>
+                  onChange={(e) => {
+                    const on = e.target.checked;
                     setPo((order) => {
                       order.noInvoice = on || undefined;
                       if (on) order.invoice = "";
-                    })
-                  }
-                />
+                    });
+                  }}
+                >
+                  <Typography.Text style={{ fontSize: TYPE.sm }}>
+                    {t(
+                      "inboundForm.thisSupplierIssuedNoInvoice",
+                      "This supplier issued no invoice",
+                    )}
+                  </Typography.Text>
+                </Checkbox>
               </Flex>
             ),
           },
@@ -1873,8 +2441,7 @@ export function InboundDetailPage() {
                 disabled={closed}
                 allowClear={false}
                 aria-label={t("inbound.ordered", "Ordered")}
-                // A named month cannot be read the American way round, which
-                // is the whole point — the same format the order form uses.
+                // A named month cannot be read the American way round.
                 format="DD MMM YYYY"
                 value={po.date ? dayjs(po.date) : null}
                 onChange={(v) => {
@@ -1922,11 +2489,13 @@ export function InboundDetailPage() {
                   label: t(PO_STATUS_LABEL[code]),
                 }))}
                 onChange={(v: Po["status"]) => {
-                  // Received is what mints the QC rows, so moving BACK from it
-                  // is the one direction that can strand graded work. It is
-                  // still allowed — this whole block exists because a wrong
-                  // answer has to be correctable — but it says so first.
-                  const leaving = po.status === "RECEIVED" && v !== "RECEIVED";
+                  // Moving BACK from arrived while machines are already on the
+                  // bench says something the rows contradict. Still allowed —
+                  // a wrong answer has to be correctable — but it says so.
+                  const leaving =
+                    po.status === "RECEIVED" &&
+                    v !== "RECEIVED" &&
+                    summary.received + summary.extra > 0;
                   const apply = () =>
                     setPo((order) => {
                       order.status = v;
@@ -1938,8 +2507,8 @@ export function InboundDetailPage() {
                       "Mark this order as not arrived?",
                     ),
                     content: t(
-                      "inbound.unreceiveBody",
-                      "Serials & QC is built from a received order, so it disappears until the order is marked arrived again. Machines already accepted keep their serial, their grade and their timeline.",
+                      "inbound.unreceiveBodyRows",
+                      "Units already received stay on the order with their serial, grade and timeline — only the order's status changes.",
                     ),
                     okText: t("inbound.unreceiveOk", "Mark not arrived"),
                     onOk: apply,
@@ -1950,11 +2519,7 @@ export function InboundDetailPage() {
           },
           {
             key: "pay",
-            /*
-             * Payment, not stage (owner revision 2026-09-15). Read-only
-             * because it is not a fact anybody types: it follows from the
-             * payments recorded below, which is where it is changed.
-             */
+            // Derived from the payments below, so it is not a field.
             label: t("inbound.paymentStatus", "Payment status"),
             children: (
               <Flex align="center" style={{ minHeight: 32 }}>
@@ -1969,97 +2534,1001 @@ export function InboundDetailPage() {
     </Card>
   );
 
-  /**
-   * One line of the invoice, and what has actually been paid against it.
-   *
-   * The sub-line is written only when it has something to say. An order that
-   * nobody has paid anything towards does not need "not paid yet" three times
-   * — the Paid row below already reads zero — so the note appears once money
-   * has moved somewhere on this order, and a fee of nothing never gets one at
-   * all.
-   */
-  const bucketLine = (
-    bucket: PoPaymentFor,
-    label: string,
-    invoiced: number,
-    /** Rendered between the amount and the note. Only Products uses it. */
-    adjustment?: ReactNode,
-  ) => {
-    const paid = totals.paidFor[bucket];
-    const owed = totals.owedFor[bucket];
-    const note =
-      paid > 0 && owed === 0
-        ? t("inbound.bucketSettled", "settled")
-        : paid > 0
-          ? t("inbound.bucketPartly", "{{paid}} paid, {{owed}} still owed", {
-              paid: fmtRp(paid),
-              owed: fmtRp(owed),
-            })
-          : totals.paid > 0 && invoiced > 0
-            ? t("inbound.bucketUnpaid", "not paid yet")
-            : "";
-    return (
-      <Flex vertical>
-        <Flex justify="space-between" gap={16}>
-          <span>{label}</span>
-          <span>{fmtRp(invoiced)}</span>
+  // ── The units ────────────────────────────────────────────────────────────
+
+  /** A row's product and serial are the bench's while it waits or sits in QC. */
+  const rowOpen = (r: ReceivingRow) =>
+    !closed && (r.unit === null ? !r.notArrived : r.unit.status === "QC");
+
+  /** A row's money is editable a little longer — see `MONEY_EDITABLE`. */
+  const moneyOpen = (r: ReceivingRow) =>
+    !closed &&
+    (r.unit === null ? !r.notArrived : MONEY_EDITABLE.includes(r.unit.status));
+
+  const serialCell = (r: ReceivingRow) => {
+    // Past QC the serial is settled: it has a ledger behind it, and correcting
+    // it there is a stock movement, not a retype.
+    if (r.unit && r.unit.status !== "QC") {
+      return (
+        <Flex vertical gap={2} align="flex-start">
+          <SerialLink serial={r.unit.serial} />
         </Flex>
-        {adjustment}
-        {note !== "" && (
+      );
+    }
+    if (r.notArrived) {
+      return (
+        <Tag icon={<StopOutlined aria-hidden />}>
+          {t("inbound.stateNotArrived", "Not arrived")}
+        </Tag>
+      );
+    }
+    /*
+     * No product yet is no reason to wait (owner revision 2026-09-19): the
+     * box takes the serial, and `commitSerial` holds it until the product is
+     * picked. A product the shop COUNTS never has a row here at all — it is
+     * a quantity (2026-09-19; see the counted card below the table).
+     */
+    const stored = r.unit?.serial ?? "";
+    const shown = draft[r.key] ?? stored;
+    const fault = serialFault[r.key];
+    /** A serial in the box, held until the row has a grade (2026-09-21). */
+    const waitsForGrade =
+      !fault &&
+      r.unit === null &&
+      shown.trim() !== "" &&
+      serialConditionOf(gradeShown(r)) === undefined;
+    return (
+      <Flex vertical gap={4}>
+        <Input
+          id={serialFieldId(r.key)}
+          size="small"
+          // Tells the scanner this box is where a scan was aimed, so a burst
+          // typed into it lands natively instead of being reported as a stray.
+          data-scan-target=""
+          disabled={closed}
+          // Generous on purpose: a second-hand serial is taken as read and
+          // held to no length, and a box that stopped short would swallow the
+          // end of one without a word.
+          maxLength={SERIAL_FIELD_MAX_LENGTH}
+          value={shown}
+          // Red beats amber: a row still waiting reads as a prompt, a refused
+          // serial as a mistake.
+          status={
+            fault
+              ? "error"
+              : shown.trim() === "" || waitsForGrade
+                ? "warning"
+                : undefined
+          }
+          aria-invalid={fault ? true : undefined}
+          aria-errormessage={fault ? `serial-fault-${r.key}` : undefined}
+          placeholder={t("inbound.scanOrType", "Scan or type the serial")}
+          aria-label={t("inbound.serial", "Serial")}
+          aria-required
+          onChange={(e) => {
+            // Capitals whatever the keyboard is doing (owner ask 2026-09-01).
+            setDraft((d) => ({
+              ...d,
+              [r.key]: e.target.value.toUpperCase(),
+            }));
+            // The refusal was about the text that WAS in the box, and so was
+            // the note of whether it arrived as a scan.
+            if (fault) clearSerialFault(r.key);
+            if (heldScan[r.key] !== undefined) {
+              setHeldScan((m) => without(m, r.key));
+            }
+          }}
+          /*
+           * Enter is what a scanner sends: it records the serial and hands the
+           * caret to the next row still waiting — scan, scan, scan. Claimed
+           * here so the app-wide Enter does not move the caret a second time.
+           */
+          onPressEnter={(e) => {
+            e.preventDefault();
+            commitSerial(r, e.currentTarget.value, true);
+          }}
+          onBlur={(e) => commitSerial(r, e.target.value, false)}
+        />
+        {fault && (
           <Typography.Text
-            type={paid > 0 && owed === 0 ? "success" : "secondary"}
-            style={{ fontSize: 12, textAlign: "right" }}
+            type="danger"
+            id={`serial-fault-${r.key}`}
+            style={{ fontSize: TYPE.sm, lineHeight: 1.3 }}
           >
-            {note}
+            {serialFaultHint(fault.fault, fault.scanned)}
+          </Typography.Text>
+        )}
+        {waitsForGrade && (
+          <Typography.Text
+            type="warning"
+            style={{ fontSize: TYPE.sm, lineHeight: 1.3 }}
+          >
+            {t("inbound.serialHintGrade", "Pick the grade to record it")}
           </Typography.Text>
         )}
       </Flex>
     );
   };
 
+  /**
+   * What the unit has cost, all in — the unit price, its share of the
+   * invoice's COGS expenses, and its repairs (owner ask 2026-09-18: *"COGS,
+   * which will be calculated with the expense like tax or shipping fee or
+   * other expense that are divided per unit"*). A unit reads it the way every
+   * margin in the app does (`costBreakdown`); a row still waiting reads its
+   * own line and its share.
+   */
+  const cogsOf = (r: ReceivingRow) =>
+    r.unit
+      ? costBreakdown(r.unit, db)
+      : (() => {
+          const share =
+            r.itemId === null
+              ? 0
+              : (shares.get(rowKey(r.itemId, r.piece)) ?? 0);
+          return {
+            buy: r.unitCost,
+            shippingTax: share,
+            repair: 0,
+            total: r.unitCost + share,
+          };
+        })();
+
+  /**
+   * Nothing to show in a cell — a unit that never came, a battery-less item.
+   * "None", not a dash (owner 2026-09-21); a missing AMOUNT is `fmtRp(0)`.
+   */
+  const none = <Typography.Text type="secondary">{fmtNone()}</Typography.Text>;
+
+  /**
+   * The battery, typed on the row (owner brief 2026-09-19). Health for Apple
+   * silicon or 2021+, otherwise full charge capacity and cycle count — the
+   * model decides, nobody switches it (`lib/battery.ts`). An
+   * accessory has no battery, and gets no boxes.
+   */
+  const batteryCell = (r: ReceivingRow) => {
+    if (r.notArrived) return none;
+    const actual = actualSkuOf(r);
+    if (actual !== "" && !tracksSerial(actual)) return none;
+    if (!rowOpen(r)) {
+      return r.unit ? (
+        <Typography.Text>{readUnitBattery(r.unit, db).text}</Typography.Text>
+      ) : (
+        none
+      );
+    }
+    return (
+      <BatteryFields
+        fallback={batteryFallback(r)}
+        value={batteryShown(r)}
+        onChange={(next) => typeBattery(r, next)}
+        onCommit={(field, value) => commitBattery(r, field, value)}
+        size="small"
+        idPrefix={`receiving-battery-${r.key}`}
+      />
+    );
+  };
+
+  /**
+   * Enter with nothing typed moves on to the sell price — the column after
+   * the description since the popup took the owner's order (serial, grade,
+   * battery, description, sell price; 2026-09-20). With something typed the
+   * key is the list's — it adds the phrase — and the app's own Enter is
+   * switched off on the cell so the two never both answer one key.
+   */
+  const onDescriptionKey = (e: KeyboardEvent<HTMLDivElement>, key: string) => {
+    if (e.key !== "Enter" || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey)
+      return;
+    if (e.nativeEvent.isComposing) return;
+    const input = e.target;
+    if (!(input instanceof HTMLInputElement) || input.value.trim() !== "")
+      return;
+    e.preventDefault();
+    e.stopPropagation();
+    focusSoon(sellFieldId(key));
+  };
+
+  /**
+   * The description, as phrases picked from the shop's vocabulary or typed
+   * (`MockDb.qcDescriptions`). Needed before a second-hand unit can be
+   * accepted, and optional on a sealed one — `qcReady`.
+   */
+  const descriptionCell = (r: ReceivingRow) => {
+    if (r.notArrived) return none;
+    const parts = r.unit
+      ? splitDescription(r.unit.description)
+      : [...(qcDrafts[r.key]?.description ?? [])];
+    if (!rowOpen(r)) {
+      return parts.length === 0 ? (
+        none
+      ) : (
+        <Typography.Text>{parts.join(", ")}</Typography.Text>
+      );
+    }
+    const grade = gradeShown(r);
+    const wants = needsDescription(conditionOf(grade));
+    return (
+      <div
+        data-keyboard-nav="off"
+        onKeyDownCapture={(e) => onDescriptionKey(e, r.key)}
+      >
+        <Select<string[]>
+          id={descFieldId(r.key)}
+          mode="tags"
+          size="small"
+          style={{ width: "100%" }}
+          value={parts}
+          // Amber only on a unit that exists: that is where an empty box is
+          // what stands between it and the shelf.
+          status={
+            wants && r.unit !== null && parts.length === 0
+              ? "warning"
+              : undefined
+          }
+          placeholder={
+            wants
+              ? t(
+                  "inbound.conditionPlaceholder",
+                  "Condition, marks, what is in the box…",
+                )
+              : t("inbound.describeOptional", "Optional on a new unit")
+          }
+          aria-label={t("inbound.description", "Description")}
+          aria-required={wants}
+          // The comma is the separator in the column, so it is the separator
+          // in the box.
+          tokenSeparators={[","]}
+          options={db.qcDescriptions
+            .filter((d) => d.active)
+            .map((d) => ({ value: d.label }))}
+          filterOption={(input, opt) =>
+            String(opt?.value ?? "")
+              .toLowerCase()
+              .includes(input.toLowerCase())
+          }
+          onChange={(next: string[]) => commitDescription(r, next)}
+        />
+      </div>
+    );
+  };
+
+  /**
+   * The grade, picked by hand (owner brief 2026-09-19: *"Grade (manual drop
+   * down)"*) — and the condition with it: *New* is sealed stock, a letter is
+   * graded second-hand, empty is second-hand not graded yet. The checklist
+   * button beside it opens the category's grading checklist, which fills the
+   * letter in; a sealed unit has nothing to inspect and gets no button.
+   */
+  const gradeCell = (r: ReceivingRow) => {
+    if (r.notArrived) return none;
+    const grade = gradeShown(r);
+    if (!rowOpen(r)) return <GradeTag grade={grade} plain />;
+    return (
+      <Flex gap={2} align="center">
+        <Select<string>
+          id={gradeFieldId(r.key)}
+          size="small"
+          style={{ flex: 1, minWidth: 76 }}
+          // Typed: "b" narrows the list to B, and Enter takes it.
+          showSearch
+          allowClear
+          optionFilterProp="label"
+          value={grade}
+          placeholder={t("inbound.gradePlaceholder", "Grade")}
+          aria-label={t("inbound.grade", "Grade")}
+          options={GRADE_CHOICES.map((g) => ({
+            value: g,
+            label: g === NEW_GRADE ? t("inbound.gradeNew", "New") : g,
+          }))}
+          onChange={(v?: string) => commitGrade(r, v)}
+        />
+      </Flex>
+    );
+  };
+
+  const sellCell = (r: ReceivingRow) => {
+    if (r.notArrived) {
+      return <Typography.Text type="secondary">{fmtRp(0)}</Typography.Text>;
+    }
+    const asking = skuOf(actualSkuOf(r))?.price ?? null;
+    const stored = r.unit ? (r.unit.price ?? asking) : asking;
+    const typed = prices[r.key];
+    const shown = typed !== undefined ? typed : stored;
+    if (!moneyOpen(r)) {
+      return <Typography.Text>{fmtRp(shown)}</Typography.Text>;
+    }
+    return (
+      <CommitMoneyInput
+        id={sellFieldId(r.key)}
+        label={t("inbound.sellPrice", "Sell price")}
+        value={shown}
+        placeholder={asking === null ? undefined : fmtRp(asking)}
+        onChange={(v) => setPrices((p) => ({ ...p, [r.key]: v }))}
+        onCommit={(v) => commitSellPrice(r, v)}
+      />
+    );
+  };
+
+  /** The row's own name, for every control on it that needs one. */
+  const rowName = (r: ReceivingRow) =>
+    r.unit
+      ? r.unit.serial
+      : t("inbound.unitN", "unit {{n}}", { n: numberOf(r) });
+
+  /** How many photos a row holds — the unit's, or the ones held for it. */
+  const photoCount = (r: ReceivingRow) =>
+    r.unit
+      ? qcPhotosOf(db, r.unit.serial).length
+      : (qcDrafts[r.key]?.photos?.length ?? 0);
+
+  /**
+   * One of the row's decisions, as an icon with its name in a tooltip. A
+   * decision is about a particular unit, so on a row with no serial yet it is
+   * drawn switched off and says why — the column reads the same on every row.
+   */
+  const decision = (opts: {
+    readonly key: string;
+    readonly tip: string;
+    readonly aria: string;
+    readonly icon: ReactNode;
+    readonly label?: string;
+    readonly danger?: boolean;
+    readonly primary?: boolean;
+    readonly disabledWhy?: string | null;
+    readonly onClick: () => void;
+  }) => (
+    <Tooltip key={opts.key} title={opts.disabledWhy ?? opts.tip}>
+      <span>
+        <Button
+          size="small"
+          danger={opts.danger}
+          icon={opts.icon}
+          disabled={!!opts.disabledWhy}
+          aria-label={opts.aria}
+          onClick={opts.onClick}
+        >
+          {opts.label}
+        </Button>
+      </span>
+    </Tooltip>
+  );
+
+  const actionsCell = (r: ReceivingRow) => {
+    const n = numberOf(r);
+    const state = receivingState(r);
+    const name = rowName(r);
+    const more: NonNullable<MenuProps["items"]> = [];
+    const onMore: Record<string, () => void> = {};
+    const item = (
+      key: string,
+      label: string,
+      icon: ReactNode,
+      run: () => void,
+      danger = false,
+    ) => {
+      more.push({ key, label, icon, danger });
+      onMore[key] = run;
+    };
+
+    const shown: ReactNode[] = [];
+    const needsSerial = t(
+      "inbound.decisionNeedsSerial",
+      "Enter the serial first",
+    );
+    const accept = (serial: string | null, ready: boolean) =>
+      decision({
+        key: "accept",
+        tip: t("inbound.acceptTip", "QC passed — into sellable stock"),
+        aria: t("inbound.acceptAria", "Accept {{serial}}", { serial: name }),
+        icon: <CheckOutlined aria-hidden />,
+        label: t("inbound.accept", "Accept"),
+        disabledWhy:
+          serial === null
+            ? needsSerial
+            : ready
+              ? null
+              : t(
+                  "inbound.acceptNeedsDescription",
+                  "Describe this unit first — a second-hand unit needs at least one phrase.",
+                ),
+        onClick: () => {
+          if (serial === null) return;
+          void acceptUnit(serial);
+        },
+      });
+    const service = (serial: string | null) =>
+      decision({
+        key: "service",
+        tip: t("inbound.serviceOk", "Send to service"),
+        aria: t("inbound.serviceAria", "Send {{serial}} to service", {
+          serial: name,
+        }),
+        icon: <ToolOutlined aria-hidden />,
+        disabledWhy: serial === null ? needsSerial : null,
+        onClick: () => serial !== null && setSendingToService(serial),
+      });
+    const giveBack = (serial: string | null) =>
+      decision({
+        key: "return",
+        tip: t("inbound.rejectOk", "Return to supplier"),
+        aria: t("inbound.rejectAria", "Return {{serial}} to the supplier", {
+          serial: name,
+        }),
+        icon: <CloseCircleOutlined aria-hidden />,
+        danger: true,
+        disabledWhy: serial === null ? needsSerial : null,
+        onClick: () => serial !== null && rejectToSupplier(serial),
+      });
+
+    if (!closed) {
+      if (state === "WAITING" || state === "NO_PRODUCT") {
+        shown.push(accept(null, false), service(null), giveBack(null));
+        if (r.itemId !== null) {
+          shown.push(
+            decision({
+              key: "not-arrived",
+              tip: t("inbound.markNotArrived", "Not arrived"),
+              aria: t("inbound.notArrivedAria", "Unit {{n}} did not arrive", {
+                n,
+              }),
+              icon: <StopOutlined aria-hidden />,
+              onClick: () => void toggleNotArrived(r),
+            }),
+          );
+          item(
+            "remove-row",
+            t("inbound.removeRowMenu", "Remove from invoice"),
+            <DeleteOutlined aria-hidden />,
+            () => removeFromInvoice(r),
+            true,
+          );
+        }
+      } else if (state === "NOT_ARRIVED") {
+        shown.push(
+          <Button
+            key="arrived"
+            size="small"
+            icon={<UndoOutlined aria-hidden />}
+            aria-label={t(
+              "inbound.arrivedAfterAllAria",
+              "Unit {{n}} arrived after all",
+              { n },
+            )}
+            onClick={() => void toggleNotArrived(r)}
+          >
+            {t("inbound.arrivedAfterAll", "It arrived")}
+          </Button>,
+        );
+        item(
+          "remove-row",
+          t("inbound.removeRowMenu", "Remove from invoice"),
+          <DeleteOutlined aria-hidden />,
+          () => removeFromInvoice(r),
+          true,
+        );
+      } else if (state === "IN_QC") {
+        const serial = r.unit!.serial;
+        shown.push(
+          accept(serial, qcReady(r.unit!)),
+          service(serial),
+          giveBack(serial),
+        );
+        item(
+          "remove-serial",
+          t("inbound.removeSerialMenu", "Remove this serial"),
+          <DeleteOutlined aria-hidden />,
+          () => removeSerial(serial),
+          true,
+        );
+      } else if (r.unit) {
+        // Decided. Service and a return are said on the row, because they are
+        // why the row stopped taking input; an accepted unit says so quietly.
+        if (r.unit.status === "SERVIS" || r.unit.status === "RETUR_SUPPLIER") {
+          shown.push(
+            <EnumTag key="st" map={UNIT_STATUS} value={r.unit.status} />,
+          );
+        } else {
+          shown.push(
+            <Typography.Text
+              key="ok"
+              type="success"
+              style={{ fontSize: TYPE.sm }}
+            >
+              <CheckCircleFilled aria-hidden />{" "}
+              {t("inbound.acceptedShort", "Accepted")}
+            </Typography.Text>,
+          );
+        }
+        const serial = r.unit.serial;
+        if (canReopenQc(r.unit)) {
+          item(
+            "reopen",
+            t("inbound.reopenQc", "Reopen QC"),
+            <UndoOutlined aria-hidden />,
+            () => reopenQc(serial),
+          );
+        }
+      }
+      if (r.orphan && r.unit) {
+        item(
+          "add-to-invoice",
+          t("inbound.addToInvoice", "Add to the invoice"),
+          <FileAddOutlined aria-hidden />,
+          () => addToInvoice(r),
+        );
+      }
+    } else if (
+      r.unit &&
+      (r.unit.status === "SERVIS" || r.unit.status === "RETUR_SUPPLIER")
+    ) {
+      shown.push(<EnumTag key="st" map={UNIT_STATUS} value={r.unit.status} />);
+    }
+
+    const photos = photoCount(r);
+    return (
+      <Flex gap={SPACE.xs} justify="end" align="center">
+        {shown}
+        {!r.notArrived && (rowOpen(r) || photos > 0) && (
+          <Tooltip title={t("inbound.photosTip", "Photos")}>
+            <Button
+              size="small"
+              type="text"
+              icon={<CameraOutlined aria-hidden />}
+              aria-label={t("inbound.photosAria", "Photos of {{name}}", {
+                name,
+              })}
+              onClick={() => setPhotosRow(r.key)}
+            >
+              {photos > 0 ? photos : null}
+            </Button>
+          </Tooltip>
+        )}
+        {more.length > 0 && (
+          <Dropdown
+            trigger={["click"]}
+            menu={{ items: more, onClick: ({ key }) => onMore[key]?.() }}
+          >
+            <Button
+              size="small"
+              type="text"
+              icon={<MoreOutlined aria-hidden />}
+              aria-label={t("inbound.moreAria", "More for {{name}}", {
+                name,
+              })}
+            />
+          </Dropdown>
+        )}
+      </Flex>
+    );
+  };
+
+  /**
+   * The units behind one line, as the shared popup draws them (owner ask
+   * 2026-09-20). Each cell is the one the bench had on the grid before this
+   * revision — the scanner still aims at the serial box, a refusal is still
+   * outlined in red, and the row's decisions still sit on the right.
+   */
+  const openLine = lines.find((l) => l.key === detailsKey);
+  const detailsModal = openLine !== undefined && (
+    <UnitDetailsModal<{ key: string; n: number; row: ReceivingRow }>
+      open
+      onClose={() => setDetailsKey(null)}
+      product={
+        openLine.skuId === ""
+          ? t("inbound.noProductYet", "the unpicked lines")
+          : `${skuCode(openLine.skuId)} — ${skuLabel(openLine.skuId)}`
+      }
+      subtitle={t(
+        "inbound.detailsSubtitle",
+        "{{count}} unit(s) · {{price}} each · {{cogs}} COGS for the line",
+        {
+          count: openLine.qty,
+          price: fmtRp(openLine.unitCost),
+          cogs: fmtRp(lineCogs(openLine)),
+        },
+      )}
+      rows={openLine.units.map(({ row, n }) => ({ key: row.key, n, row }))}
+      {...(closed
+        ? {}
+        : {
+            /*
+             * The quantity follows the serials (owner ask 2026-09-20). The
+             * LINE grows, at the line's own price — `addLines` would make a
+             * second, unpriced line of the same product, which is a second
+             * row on screen and not what "one more of these" means.
+             */
+            onAddUnit: () => setLineQty(openLine, openLine.qty + 1),
+          })}
+      serial={({ row }) => serialCell(row)}
+      grade={({ row }) => gradeCell(row)}
+      battery={({ row }) => batteryCell(row)}
+      description={({ row }) => descriptionCell(row)}
+      sellPrice={({ row }) => sellCell(row)}
+      actions={({ row }) => actionsCell(row)}
+    />
+  );
+
+  /**
+   * Units on the invoice that no line accounts for — the supplier sent one
+   * more than the paperwork said, or a line was removed under a unit. They
+   * have no line to hide behind, so they keep a table of their own.
+   */
+  const orphans = rows.filter((r) => r.orphan);
+  const orphanCard = orphans.length > 0 && (
+    <Flex vertical gap={SPACE.xs}>
+      <Typography.Text strong>
+        {t("inbound.notOnInvoice", "Not on the invoice")}
+      </Typography.Text>
+      <EditableTable<ReceivingRow>
+        size="small"
+        rowKey="key"
+        className="qc-table receiving-table"
+        rowClassName={() => "row-over-quota"}
+        dataSource={orphans}
+        rowTitle={(r) => r.unit?.serial ?? ""}
+        columns={[
+          {
+            title: t("inbound.unitCol", "Unit"),
+            key: "product",
+            width: 220,
+            render: (_: unknown, r: ReceivingRow) => (
+              <Flex vertical>
+                <Typography.Text>{skuCode(actualSkuOf(r))}</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                  {skuLabel(actualSkuOf(r))}
+                </Typography.Text>
+              </Flex>
+            ),
+          },
+          {
+            title: t("inbound.serial", "Serial"),
+            key: "serial",
+            width: 180,
+            render: (_: unknown, r: ReceivingRow) => serialCell(r),
+          },
+          {
+            title: t("inbound.grade", "Grade"),
+            key: "grade",
+            width: 120,
+            render: (_: unknown, r: ReceivingRow) => gradeCell(r),
+          },
+          {
+            title: t("inbound.battery", "Battery Health"),
+            key: "battery",
+            width: 230,
+            render: (_: unknown, r: ReceivingRow) => batteryCell(r),
+          },
+          {
+            title: t("inbound.description", "Description"),
+            key: "description",
+            width: 240,
+            render: (_: unknown, r: ReceivingRow) => descriptionCell(r),
+          },
+          {
+            title: t("inbound.sellPrice", "Sell price"),
+            key: "sell",
+            width: 160,
+            render: (_: unknown, r: ReceivingRow) => sellCell(r),
+          },
+          {
+            title: "",
+            key: "actions",
+            width: 230,
+            align: "right" as const,
+            render: (_: unknown, r: ReceivingRow) => actionsCell(r),
+          },
+        ]}
+      />
+    </Flex>
+  );
+
+  /** A counted line's arrival, which is the one thing it has instead of units. */
+  const countedActions = (l: PurchaseLine) => {
+    if (!l.counted || closed || l.notArrived > 0) return null;
+    const missing = l.qty - l.received;
+    // Every row of the group, not just its first: a line imported as two rows
+    // of one product at one price is one row on screen and two on the ledger.
+    const owing = l.lines.filter((i) => arrivedOf(i.id) < i.qty);
+    const came = l.lines.filter((i) => arrivedOf(i.id) > 0);
+    return (
+      <>
+        {missing > 0 && owing.length > 0 && (
+          <Button
+            size="small"
+            type="primary"
+            icon={<CheckOutlined aria-hidden />}
+            onClick={() => owing.forEach((i) => confirmArrival(i.id))}
+            aria-label={t(
+              "inbound.confirmArrivalAria",
+              "Confirm {{count}} {{product}} arrived",
+              { count: missing, product: skuLabel(l.skuId) },
+            )}
+          >
+            {t("inbound.confirmArrival", "Confirm arrived ({{count}})", {
+              count: missing,
+            })}
+          </Button>
+        )}
+        {came.length > 0 && (
+          <Button
+            size="small"
+            icon={<UndoOutlined aria-hidden />}
+            onClick={() => came.forEach((i) => undoArrival(i.id))}
+          >
+            {t("inbound.undoArrival", "Undo arrival")}
+          </Button>
+        )}
+      </>
+    );
+  };
+
+  const unitsCard = (
+    <Card
+      title={t("inbound.unitsSection", "Units")}
+      extra={
+        <Flex gap={8} wrap justify="end">
+          {!closed && !arrived && summary.waiting > 0 && (
+            <Button icon={<InboxOutlined aria-hidden />} onClick={markArrived}>
+              {t("inbound.markArrived", "Mark arrived")}
+            </Button>
+          )}
+          {/*
+           * Accept everything that is ready (owner ask 2026-09-01) — pressing
+           * each unit's Accept N times, not a different decision: same gate,
+           * same event. Disabled rather than hidden when none is ready.
+           */}
+          {!closed && units.length > 0 && (
+            <Tooltip
+              title={
+                readyToAccept.length === 0
+                  ? t(
+                      "inbound.acceptAllNoneReady",
+                      "Nothing is ready yet. A second-hand unit needs a description before it can be accepted.",
+                    )
+                  : t(
+                      "inbound.acceptAllHint",
+                      "Move every graded unit on this invoice into sellable stock",
+                    )
+              }
+            >
+              <span>
+                <Button
+                  icon={<CheckOutlined aria-hidden />}
+                  disabled={readyToAccept.length === 0}
+                  onClick={acceptAll}
+                >
+                  {t("inbound.acceptAll", "Accept all ({{count}})", {
+                    count: readyToAccept.length,
+                  })}
+                </Button>
+              </span>
+            </Tooltip>
+          )}
+          {units.length > 0 && (
+            <Button
+              icon={<PrinterOutlined aria-hidden />}
+              onClick={() => setPrinting(labelsFor(units, db.skus, db.models))}
+            >
+              {t("inbound.printLabels", "Print labels")}
+            </Button>
+          )}
+        </Flex>
+      }
+    >
+      <Flex vertical gap={SPACE.md}>
+        <PurchaseLinesTable
+          lines={lines}
+          skus={db.skus}
+          closed={closed}
+          cogsOf={lineCogs}
+          onSetProduct={setLineProduct}
+          onSetQty={setLineQty}
+          onSetCost={setLineCost}
+          onSetDiscount={setLineDiscount}
+          onOpenDetails={(l) => setDetailsKey(l.key)}
+          emptyText={
+            <>
+              {t("inbound.noUnitsYet", "Nothing on this invoice yet.")}
+              <br />
+              <Typography.Text type="secondary">
+                {t(
+                  "inbound.noUnitsYetAdd2",
+                  "Add the products the supplier billed below — a line each, with its own price.",
+                )}
+              </Typography.Text>
+            </>
+          }
+          actions={(l) =>
+            closed ? null : (
+              <>
+                {countedActions(l)}
+                <Tooltip
+                  title={
+                    l.notArrived > 0
+                      ? t("inbound.arrivedAfterAll", "It arrived")
+                      : t("inbound.markNotArrived", "Not arrived")
+                  }
+                >
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={
+                      l.notArrived > 0 ? (
+                        <UndoOutlined aria-hidden />
+                      ) : (
+                        <StopOutlined aria-hidden />
+                      )
+                    }
+                    aria-label={
+                      l.notArrived > 0
+                        ? t(
+                            "inbound.lineArrivedAria",
+                            "{{product}} arrived after all",
+                            { product: skuLabel(l.skuId) },
+                          )
+                        : t(
+                            "inbound.lineNotArrivedAria",
+                            "{{product}} did not arrive",
+                            { product: skuLabel(l.skuId) },
+                          )
+                    }
+                    onClick={() => toggleLineNotArrived(l)}
+                  />
+                </Tooltip>
+                <Tooltip
+                  title={t("inbound.invoiceRemove", "Remove from the invoice")}
+                >
+                  <Button
+                    size="small"
+                    type="text"
+                    danger
+                    icon={<DeleteOutlined aria-hidden />}
+                    aria-label={t(
+                      "inbound.invoiceRemoveAria",
+                      "Remove {{product}}",
+                      { product: skuLabel(l.skuId) },
+                    )}
+                    onClick={() => removeLine(l)}
+                  />
+                </Tooltip>
+              </>
+            )
+          }
+        />
+        {orphanCard}
+        {/*
+         * A product added from here is a line on the invoice (owner ask
+         * 2026-09-19, kept), of a quantity — never a row per unit.
+         */}
+        {!closed && (
+          <AddLineBar
+            skus={db.skus}
+            onAdd={addLines}
+            ariaLabel={t(
+              "inbound.addUnitProductAria",
+              "Product to add to the units",
+            )}
+            qtyAriaLabel={t("inbound.addUnitQtyAria", "How many units to add")}
+            hint={t(
+              "inbound.addLineHint",
+              "One line per product at one price. Two units of the same product that cost different money are two lines.",
+            )}
+          />
+        )}
+      </Flex>
+    </Card>
+  );
+
+  // ── Payment ──────────────────────────────────────────────────────────────
+
+  /** What a standing says under its figure — nothing when there is nothing. */
+  const standingNote = (s: Standing) =>
+    s.paid > 0 && s.owed === 0 ? (
+      <Typography.Text type="success" style={{ fontSize: TYPE.sm }}>
+        {t("inbound.bucketSettled", "settled")}
+      </Typography.Text>
+    ) : s.paid > 0 ? (
+      <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+        {t("inbound.bucketPartly", "{{paid}} paid, {{owed}} still owed", {
+          paid: fmtRp(s.paid),
+          owed: fmtRp(s.owed),
+        })}
+      </Typography.Text>
+    ) : null;
+
+  /** One expense: what it is, whether it is in COGS, whether it is paid. */
+  const expenseLine = (s: (typeof totals.feeStandings)[number]) => (
+    <Flex key={s.fee.id} justify="space-between" align="flex-start" gap={16}>
+      <Flex vertical gap={2} style={{ minWidth: 0 }}>
+        <Typography.Text>{feeName(s.fee)}</Typography.Text>
+        <Flex gap={4} wrap>
+          <Tag
+            color={s.fee.inCogs ? "blue" : undefined}
+            style={{ marginInlineEnd: 0 }}
+          >
+            {s.fee.inCogs
+              ? t("inbound.inCogsTag", "In COGS")
+              : t("inbound.notInCogsTag", "Not in COGS")}
+          </Tag>
+          <Tag
+            color={s.owed === 0 ? "green" : s.paid > 0 ? "gold" : "red"}
+            style={{ marginInlineEnd: 0 }}
+          >
+            {s.owed === 0
+              ? t("inbound.expensePaidTag", "Paid")
+              : s.paid > 0
+                ? t("inbound.expensePartlyTag", "Partly paid")
+                : t("inbound.expenseUnpaidTag", "Unpaid")}
+          </Tag>
+        </Flex>
+      </Flex>
+      <Flex align="center" gap={4}>
+        <Typography.Text style={{ whiteSpace: "nowrap" }}>
+          {fmtRp(s.due)}
+        </Typography.Text>
+        {!closed && (
+          <Button
+            size="small"
+            type="text"
+            icon={<EditOutlined aria-hidden />}
+            aria-label={t("inbound.editExpenseAria", "Edit {{expense}}", {
+              expense: feeName(s.fee),
+            })}
+            onClick={() => setExpense(s.fee.id)}
+          />
+        )}
+      </Flex>
+    </Flex>
+  );
+
+  /** What a payment settled, as the table says it. */
+  const appliedToText = (p: PoPayment) => {
+    if (p.feeId !== undefined) {
+      const fee = po.fees.find((f) => f.id === p.feeId);
+      if (fee) return feeName(fee);
+    }
+    return t(PO_PAYMENT_FOR_LABEL[paymentFor(p)]);
+  };
+
   const money = (
     <Card
       // "Purchase", matching the order form's review step (owner decision
-      // 2026-08-26). Everything on the page is money; this card is the
-      // purchase's figures.
+      // 2026-08-26).
       title={t("inbound.purchase", "Purchase")}
       extra={
-        <Button
-          icon={<PlusOutlined />}
-          disabled={closed}
-          onClick={() => {
-            setPaying({});
-            setPayMethod("TUNAI");
-            setPayAmount(undefined);
-          }}
-        >
-          {t("inbound.recordPayment", "Record payment")}
-        </Button>
+        <Flex gap={8} wrap justify="end">
+          <Button
+            icon={<PlusOutlined aria-hidden />}
+            disabled={closed}
+            onClick={() => setExpense("new")}
+          >
+            {t("inbound.addExpense", "Add expense")}
+          </Button>
+          <Button
+            icon={<PlusOutlined aria-hidden />}
+            disabled={closed}
+            onClick={() => {
+              setPaying({});
+              setPayMethod("TUNAI");
+              setPayAmount(undefined);
+              setPayTarget("ORDER");
+              setPayInBalance(true);
+            }}
+          >
+            {t("inbound.recordPayment", "Record payment")}
+          </Button>
+        </Flex>
       }
     >
       <Flex gap={32} wrap align="flex-start">
-        <Flex vertical gap={6} style={{ minWidth: 280 }}>
-          {/*
-           * Each line of the invoice now says what has been paid against IT,
-           * not just what it costs (owner revision 2026-08-27).
-           *
-           * Shipping is usually a different party from the supplier — a
-           * forwarder, paid on its own day — and tax is a third. One
-           * undifferentiated "Paid" figure could not answer the one question
-           * the card is ever asked, which is whether the ongkir has been
-           * settled. `bucketLine` writes each row and its own balance.
-           */}
-          {bucketLine(
-            "ORDER",
-            t("inbound.productsTotal", "Products"),
-            totals.subtotal,
-            // Inside the Products block, above its paid/owed note. A discount
-            // is negotiated off the GOODS, so a reader who works down the
-            // column has to meet it before the note that has already
-            // subtracted it — with the discount three lines lower, "Rp
-            // 31.300.000" and "Rp 27.200.000 still owed" were a hundred
-            // thousand rupiah apart with nothing on screen to explain it.
-            po.discount > 0 && (
+        <Flex vertical gap={10} style={{ minWidth: 300, flex: "1 1 300px" }}>
+          <Flex vertical>
+            <Flex justify="space-between" gap={16}>
+              <span>{t("inbound.productsTotal", "Products")}</span>
+              <span>{fmtRp(totals.subtotal)}</span>
+            </Flex>
+            {/* A discount is negotiated off the GOODS. */}
+            {po.discount > 0 && (
               <Flex justify="space-between" gap={16}>
                 <Typography.Text type="secondary">
                   {t("inbound.discount", "Discount")}
@@ -2068,14 +3537,29 @@ export function InboundDetailPage() {
                   −{fmtRp(po.discount)}
                 </Typography.Text>
               </Flex>
-            ),
-          )}
-          {bucketLine(
-            "SHIPPING",
-            t("inbound.shipping", "Shipping"),
-            po.shippingFee,
-          )}
-          {bucketLine("TAX", t("inbound.tax", "Tax"), po.taxFee)}
+            )}
+            <Flex justify="flex-end">{standingNote(totals.goods)}</Flex>
+          </Flex>
+          {/*
+           * What else is owed because of this delivery (owner ask 2026-09-18).
+           * Each says whether it is in the machines' cost and whether it is
+           * paid; the pencil corrects it, and the dialog can mark it paid.
+           */}
+          <Flex vertical gap={8}>
+            <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+              {t("inbound.expenses", "Expenses")}
+            </Typography.Text>
+            {totals.feeStandings.length === 0 ? (
+              <Typography.Text type="secondary">
+                {t(
+                  "inbound.noExpenses",
+                  "No expenses — add shipping, tax or anything else owed for this delivery.",
+                )}
+              </Typography.Text>
+            ) : (
+              totals.feeStandings.map(expenseLine)
+            )}
+          </Flex>
           <Flex justify="space-between" style={{ fontWeight: 600 }}>
             <span>{t("inbound.invoiced", "Invoiced")}</span>
             <span>{fmtRp(totals.total)}</span>
@@ -2107,7 +3591,7 @@ export function InboundDetailPage() {
         <Table
           size="small"
           rowKey="id"
-          style={{ flex: 1, minWidth: 280 }}
+          style={{ flex: "1 1 320px", minWidth: 280 }}
           dataSource={po.payments}
           pagination={false}
           locale={{
@@ -2121,13 +3605,9 @@ export function InboundDetailPage() {
                 db.paymentMethods.find((m) => m.code === code)?.label ?? code,
             },
             {
-              // What the transfer settled. A payment recorded before this
-              // column existed reads as "Products" rather than as a blank —
-              // see `paymentFor` for why that is the honest default and not a
-              // guess.
               title: t("inbound.appliedTo", "Applied to"),
               key: "for",
-              render: (_, p) => t(PO_PAYMENT_FOR_LABEL[paymentFor(p)]),
+              render: (_, p) => appliedToText(p),
             },
             {
               title: t("inbound.when", "When"),
@@ -2142,19 +3622,10 @@ export function InboundDetailPage() {
             },
             {
               /*
-               * Correct one, or take it back (owner ask 2026-09-15).
-               *
-               * Until now a payment could only be added. A transfer typed as
-               * Rp1.000.000 when it was Rp10.000.000 left the invoice reading
-               * as outstanding forever, and the only remedy was a second,
-               * compensating payment — which is a lie about how many times
-               * the shop paid this supplier.
-               *
-               * Deleting is not a general licence. A payment funded out of a
-               * supplier DEPOSIT is an allocation, and unpicking it has to
-               * give the money back to the deposit; that is the Suppliers
-               * page's job, so those rows say so rather than offering a
-               * button that would strand the money.
+               * Correct one, or take it back (owner ask 2026-09-15). A payment
+               * funded out of a supplier DEPOSIT is an allocation, and
+               * unpicking it has to give the money back to the deposit — the
+               * Suppliers page's job — so those rows say so.
                */
               title: "",
               key: "actions",
@@ -2187,7 +3658,8 @@ export function InboundDetailPage() {
                           setPaying({ id: p.id });
                           setPayMethod(p.method);
                           setPayAmount(p.amount);
-                          setPayFor(paymentFor(p));
+                          setPayTarget(targetOf(p));
+                          setPayInBalance(p.inBalance !== false);
                         }}
                       />
                     </Tooltip>
@@ -2223,9 +3695,7 @@ export function InboundDetailPage() {
                               "{{amount}} against {{what}} stops counting towards this invoice, and the balance goes back up by that much. Record it again if it really was paid.",
                               {
                                 amount: fmtRp(p.amount),
-                                what: t(
-                                  PO_PAYMENT_FOR_LABEL[paymentFor(p)],
-                                ).toLowerCase(),
+                                what: appliedToText(p).toLowerCase(),
                               },
                             ),
                             okText: t("inbound.delete", "Delete"),
@@ -2257,1444 +3727,119 @@ export function InboundDetailPage() {
     </Card>
   );
 
-  const products = (
-    <Card
-      // "Products" until 2026-09-15 (owner ask). The page has two lists of
-      // machines — the invoice's lines and the serials graded against them —
-      // and one titled "Products" did not say which.
-      title={t("inbound.productsInInvoice", "Product in invoice")}
-      extra={
-        !arrived && (
-          <Button
-            type="primary"
-            icon={<InboxOutlined />}
-            disabled={closed}
-            onClick={markArrived}
-          >
-            {t("inbound.markArrived", "Mark arrived")}
-          </Button>
-        )
-      }
-    >
-      <EditableTable<PoItem>
-        size="small"
-        rowKey="id"
-        dataSource={po.items}
-        /*
-         * Under the last row, not in the card header (owner ask 2026-09-01),
-         * and ⌘⏎ from inside any cell does the same. `EditableTable` lands the
-         * caret in the product picker of the row it creates, which is the only
-         * part of "add a line" a keyboard could not do before.
-         */
-        onAdd={() =>
-          mutate((d) => {
-            d.pos
-              .find((p) => p.id === po.id)!
-              .items.push({
-                id: nextId("poi"),
-                // Deliberately blank. This used to be `db.skus[0].id`, which
-                // silently stamped every new line with whatever happened to be
-                // first in the catalogue — "MacBook Air M2 8GB / 256GB" — and
-                // staff who did not notice saved orders for a product nobody had
-                // bought. An empty SKU renders as a placeholder that has to be
-                // answered, and `save` and `markArrived` both refuse a line
-                // without one.
-                skuId: "",
-                serial: null,
-                qty: 1,
-                unitCost: 0,
-              });
-          })
-        }
-        addLabel={t("inbound.addProduct", "Add product")}
-        addDisabled={closed}
-        // On a stacked card the product picker is a field like any other, so
-        // the card still needs to say which line it is. The product's name
-        // when one is chosen; "Line n" from `EditableTable` when it is not.
-        rowTitle={(item, i) =>
-          db.skus.find((s) => s.id === item.skuId)?.name ??
-          t("editableTable.line", "Line {{n}}", { n: i + 1 })
-        }
-        emptyText={
-          <>
-            {t("inbound.noProducts", "No products on this order yet.")}
-            <br />
-            <Typography.Text type="secondary">
-              {t(
-                "inbound.noProductsWhy",
-                "That is expected when the money was transferred before anyone knew what it bought — add them now that the goods are here.",
-              )}
-            </Typography.Text>
-          </>
-        }
-        columns={[
-          {
-            title: t("inbound.product", "Product"),
-            key: "product",
-            /*
-             * Fixed (owner complaint 2026-09-01). A product label runs to
-             * seventy characters — `PRO 13" 2016 i5 8/128 NTB — MacBook Pro
-             * 13 2016 i5 / 8GB / 128GB / NTB` — and a column sized to hold
-             * one on a single line paid for it out of its neighbours: Qty
-             * came out narrower than its own stepper arrows, and
-             * "Rp 3.900.000" broke across three lines in the Total column.
-             * The label takes a second line inside this cell instead.
-             */
-            width: 340,
-            render: (_, item) => (
-              // Editable after arrival too, since 2026-08-26. The old rule
-              // froze the product the moment goods landed, which meant the
-              // owner's second intake story — a different machine turned up
-              // than the one invoiced — could only be recorded by deleting
-              // the line and losing its price. Correcting it re-derives the
-              // QC rows, so the serials follow the product they belong to.
-              <SkuPicker
-                skus={db.skus}
-                disabled={closed}
-                aria-label={t("inbound.product", "Product")}
-                // A line with no product chosen is the state a fresh row
-                // starts in, and it has to look unanswered rather than
-                // arbitrary.
-                value={item.skuId}
-                placeholder={t(
-                  "inbound.pickProduct",
-                  "Search a product name or SKU code",
-                )}
-                status={item.skuId ? undefined : "warning"}
-                onChange={(v) => {
-                  mutate((d) => {
-                    d.pos
-                      .find((p) => p.id === po.id)!
-                      .items.find((i) => i.id === item.id)!.skuId = v;
-                  });
-                }}
-              />
-            ),
-          },
-          {
-            title: t("inbound.qty", "Qty"),
-            key: "qty",
-            width: COUNT_COLUMN_WIDTH,
-            render: (_, item) => (
-              // Editable after arrival, and this is the change the owner
-              // asked for: typing 3 here means three rows in Serials & QC,
-              // now rather than only at the moment the order was received.
-              // Lowering it never deletes graded work — see
-              // `lib/inboundQc.ts`.
-              <CountInput
-                min={1}
-                precision={0}
-                value={item.qty}
-                disabled={closed}
-                aria-label={t("inbound.qtyAria", "Quantity")}
-                onChange={(v) => {
-                  if (v == null) return;
-                  mutate((d) => {
-                    d.pos
-                      .find((p) => p.id === po.id)!
-                      .items.find((i) => i.id === item.id)!.qty = v;
-                  });
-                }}
-              />
-            ),
-          },
-          {
-            title: t("inbound.unitCost", "Unit cost"),
-            key: "unitCost",
-            width: 190,
-            render: (_, item) => (
-              // Editable even after arrival: the owner's second story is the
-              // invoice saying one price and the transfer being another, and
-              // the shop's cost of goods has to follow what was really paid.
-              <MoneyInput
-                value={item.unitCost}
-                disabled={closed}
-                aria-label={t("inbound.unitCost", "Unit cost")}
-                onChange={(v) =>
-                  mutate((d) => {
-                    d.pos
-                      .find((p) => p.id === po.id)!
-                      .items.find((i) => i.id === item.id)!.unitCost = v ?? 0;
-                  })
-                }
-              />
-            ),
-          },
-          {
-            // "Total", not "Line total" — the same rename the order form
-            // got (owner decision 2026-08-26). The column is inside a row;
-            // "line" is a word the layout already says.
-            title: t("inbound.total", "Total"),
-            key: "total",
-            align: "right",
-            width: 150,
-            render: (_, item) =>
-              item.notReceived ? (
-                <Typography.Text delete type="secondary">
-                  {fmtRp(item.unitCost * item.qty)}
-                </Typography.Text>
-              ) : (
-                fmtRp(item.unitCost * item.qty)
-              ),
-          },
-          {
-            title: "",
-            key: "actions",
-            width: 170,
-            render: (_, item) => (
-              <Flex gap={4} justify="end">
-                <Tooltip
-                  title={
-                    item.notReceived
-                      ? t(
-                          "inbound.putBackHint",
-                          "Put this line back — the goods did turn up",
-                        )
-                      : t(
-                          "inbound.notReceivedHint",
-                          "The supplier never sent this. It stays on the order because it was invoiced, but stops counting towards what is owed.",
-                        )
-                  }
-                >
-                  <Button
-                    size="small"
-                    disabled={closed}
-                    onClick={() => {
-                      mutate((d) => {
-                        const i = d.pos
-                          .find((p) => p.id === po.id)!
-                          .items.find((x) => x.id === item.id)!;
-                        i.notReceived = !i.notReceived;
-                      });
-                    }}
-                  >
-                    {item.notReceived
-                      ? t("inbound.received", "Received")
-                      : t("inbound.notReceived", "Not received")}
-                  </Button>
-                </Tooltip>
-                {/*
-                 * Removable at any point, not only before arrival. The owner
-                 * asked to be able to delete a product row; refusing after
-                 * arrival left a wrong line on the order permanently, since
-                 * "Not received" says something different (the supplier
-                 * failed to send it) and belongs on the invoice.
-                 *
-                 * After arrival it asks first, because the line's QC rows
-                 * outlive it: they are flagged over-quota rather than
-                 * deleted, so a graded machine is never lost to a click here.
-                 */}
-                <Tooltip title={t("inbound.removeLine", "Remove this line")}>
-                  <Button
-                    size="small"
-                    type="text"
-                    danger
-                    disabled={closed}
-                    icon={<DeleteOutlined />}
-                    aria-label={t("inbound.removeLine", "Remove this line")}
-                    onClick={() => {
-                      const drop = () => {
-                        mutate((d) => {
-                          const order = d.pos.find((p) => p.id === po.id)!;
-                          order.items = order.items.filter(
-                            (i) => i.id !== item.id,
-                          );
-                        });
-                      };
-                      if (!arrived) return drop();
-                      modal.confirm({
-                        title: t(
-                          "inbound.removeLineTitle",
-                          "Remove this line from the order?",
-                        ),
-                        content: t(
-                          "inbound.removeLineBody",
-                          "Its serials are not deleted. Any that were already graded stay in Serials & QC, marked over quota so you can decide what to do with each one.",
-                        ),
-                        okText: t("inbound.removeLineOk", "Remove line"),
-                        okButtonProps: { danger: true },
-                        onOk: drop,
-                      });
-                    }}
-                  />
-                </Tooltip>
-              </Flex>
-            ),
-          },
-        ]}
-      />
-    </Card>
-  );
-
   /**
-   * Serials & QC.
-   *
-   * One row per machine the order accounts for. A row with a serial IS a unit;
-   * a row without one is a slot, and the only thing it will accept is the
-   * serial that turns it into a unit. That order — identify, then grade — is
-   * the whole shape of the screen, and it is why `Description` and the rest
-   * are inert until the serial is in.
+   * What the payment dialog can settle: the goods and every expense, each
+   * with what is still owed on it — the number is the reason anybody picks
+   * one. A payment recorded before expenses had names keeps its bucket as an
+   * option while it is the one being corrected.
    */
-  /**
-   * A column header that says the field cannot be left empty.
-   *
-   * Every required column carries one (owner revision 2026-08-27), and only
-   * the required ones do — a star on everything says nothing. It is
-   * `aria-hidden`, because "Serial star" is not what a required field is
-   * called. The fact itself reaches assistive tech from `aria-required` on the
-   * control, which is where a requirement belongs — the star is how the
-   * SIGHTED reader learns the same thing without tabbing into the cell.
-   */
-  const req = (label: string) => (
-    <span>
-      {label}{" "}
-      <Typography.Text type="danger" aria-hidden>
-        *
-      </Typography.Text>
-    </span>
-  );
-
-  /**
-   * What a row still needs, said as a status rather than as a stage.
-   *
-   * This column used to render `unitStage`, which answers "how far has this
-   * machine got" — a reasonable question, and not the one somebody standing at
-   * the bench with a laptop in their hands is asking. They are asking *what do
-   * I still have to do to this row*, and a tag reading "Arrived" does not say.
-   * The owner put it plainly: the table looked like a report on data that
-   * already existed, and left the person filling it in guessing which rows
-   * were finished.
-   *
-   * So the three unfinished states name the missing field, and only a machine
-   * that has actually left QC falls through to its stage.
-   */
-  const rowStatus = (r: QcRow): { label: string; color?: string } => {
-    if (r.kind === "slot") {
-      return {
-        label: t("inbound.needsSerial", "Needs a serial"),
-        color: "warning",
-      };
-    }
-    if (r.unit.status !== "QC") {
-      const stage = unitStage(r.unit);
-      return {
-        label: t(INBOUND_STAGE_LABEL[stage]),
-        color: INBOUND_STAGE_COLOR[stage],
-      };
-    }
-    if (!qcReady(r.unit)) {
-      return {
-        label: t("inbound.needsDescription", "Needs a description"),
-        color: "warning",
-      };
-    }
-    return {
-      label: t("inbound.readyToAccept", "Ready to accept"),
-      color: "blue",
-    };
-  };
-
-  /**
-   * The columns of one product's machines.
-   *
-   * One definition, called once per group. It takes no argument on purpose:
-   * every group's table is the same table, and identical widths are what keeps
-   * the blocks reading as one grid rather than as several that happen to be
-   * stacked. A column that varied by group would break that on the first
-   * product with a longer name.
-   *
-   * Product and Sell price are NOT here any more. Both are facts about the
-   * variant, not about the machine, so they were the same value repeated down
-   * every row of a group; they belong in the group's heading, said once. What
-   * is left is exactly the things that differ per machine, which is what a row
-   * was always supposed to be.
-   */
-  const qcColumns = (mode: BatteryMode) => [
+  const editingPayment = paying?.id
+    ? po.payments.find((p) => p.id === paying.id)
+    : undefined;
+  const owedText = (owed: number) =>
+    owed > 0
+      ? t("inbound.owedShort", "{{amount}} owed", { amount: fmtRp(owed) })
+      : t("inbound.bucketSettled", "settled");
+  const payOptions: { value: PayTarget; label: string }[] = [
     {
-      // Which machine of the group this is. The grid used to say "2 of 3
-      // expected" inside the Product cell of every waiting row; as a column it
-      // numbers the identified ones too, so "the third MacBook Air" is a thing
-      // a person can point at across the bench.
-      title: "#",
-      key: "n",
-      width: 48,
-      fixed: "left" as const,
-      // Grid only. Below `md` the row IS a card and its number is the card's
-      // heading, so a field labelled "#" holding the same digit is furniture
-      // repeating itself. `EditableTable` reads antd's own `responsive` for
-      // this rather than inventing a second way to say it.
-      responsive: ["md" as const],
-      render: (_: unknown, __: QcRow, i: number) => (
-        <Typography.Text type="secondary">{i + 1}</Typography.Text>
-      ),
+      value: "ORDER",
+      label: `${t("inbound.productsTotal", "Products")} — ${owedText(totals.goods.owed)}`,
     },
-    {
-      title: req(t("inbound.serial", "Serial")),
-      key: "serial",
-      // Sized for what actually goes in it. Apple's longest serial is twelve
-      // characters and the field takes fifteen, so the 260px this column had
-      // until 2026-08-27 was 100px of white space.
-      width: 176,
-      fixed: "left" as const,
-      render: (_: unknown, r: QcRow) => {
-        // Past QC the serial is settled: it has a ledger behind it, and
-        // correcting it there is a stock movement, not a retype.
-        if (r.kind === "unit" && r.unit.status !== "QC") {
-          return (
-            <Link to={`/stock/history?serial=${r.unit.serial}`}>
-              {r.unit.serial}
-            </Link>
-          );
-        }
-        /*
-         * A product the shop COUNTS has no serial anybody reads (owner ask
-         * 2026-09-15), so this desk does not ask for one. The handle is
-         * minted when the row is accepted — `takeIn` — because until then
-         * there is nothing to name.
-         *
-         * The cell still says something rather than being blank: a column
-         * with a star on it and an empty cell under it reads as a box that
-         * failed to render.
-         */
-        if (!tracksSerial(r.skuId)) {
-          return (
-            <Typography.Text type="secondary">
-              {r.kind === "unit"
-                ? t("inbound.countedItem", "Counted — no serial")
-                : t("inbound.countedOnAccept", "Counted — no serial needed")}
-            </Typography.Text>
-          );
-        }
-        const stored = r.kind === "unit" ? r.unit.serial : "";
-        const shown = draft[r.key] ?? stored;
-        const fault = serialFault[r.key];
-        return (
-          <Flex vertical gap={4}>
-            <Flex align="center" gap={6}>
-              {r.kind === "unit" && r.overQuota && (
-                <Tooltip
-                  title={t(
-                    "inbound.overQuotaRow",
-                    "No product line accounts for this machine any more.",
-                  )}
-                >
-                  <WarningOutlined
-                    style={{ color: "#d4380d" }}
-                    aria-label={t("inbound.overQuotaAria", "Over quota")}
-                  />
-                </Tooltip>
-              )}
-              <Input
-                size="small"
-                // Tells the scanner this box is where a scan was aimed, so a
-                // burst typed into it is left alone to land natively instead of
-                // being reported as a stray. See lib/scanner.ts.
-                data-scan-target=""
-                disabled={closed}
-                // The owner's number. It is the browser's own refusal — no
-                // keystroke past the fifteenth is delivered — and `commitSerial`
-                // says the same thing out loud for text that reached the box
-                // some other way.
-                // The STORE window, not the serial's: the field takes either
-                // barcode, and truncating a pasted sticker to thirteen
-                // characters would fail it on a length rule it never broke.
-                maxLength={STORE_MAX_LENGTH}
-                value={shown}
-                /*
-                 * Red beats amber, and an empty box cannot be both.
-                 *
-                 * A row still waiting reads as a prompt rather than as data to
-                 * be edited around — that is the warning. A refused serial is
-                 * not waiting, it is wrong, and the box holds the proof: the
-                 * shape fault is the one refusal that leaves the text where it
-                 * was typed.
-                 */
-                status={
-                  fault ? "error" : shown.trim() === "" ? "warning" : undefined
-                }
-                aria-invalid={fault ? true : undefined}
-                aria-errormessage={fault ? `serial-fault-${r.key}` : undefined}
-                placeholder={t("inbound.scanOrType", "Scan or type the serial")}
-                aria-label={t("inbound.serial", "Serial")}
-                aria-required
-                onChange={(e) => {
-                  // Capitals whatever the keyboard is doing (owner ask
-                  // 2026-09-01). A serial is stored upper-cased either way —
-                  // `normaliseScan` sees to that on commit — but a box showing
-                  // `sc02aa` while `SC02AA` is what gets filed is a field
-                  // disagreeing with itself, and the mismatch is invisible
-                  // until somebody compares the sticker with the screen.
-                  setDraft((d) => ({
-                    ...d,
-                    [r.key]: e.target.value.toUpperCase(),
-                  }));
-                  // The refusal was about the text that WAS in the box. The
-                  // moment it changes the accusation is stale, and a field that
-                  // stayed red while somebody fixed it would be reporting a
-                  // serial nobody can see any more.
-                  if (fault) clearSerialFault(r.key);
-                }}
-                // Both commit. Enter is what a scanner sends; blur is what a
-                // person does by reaching for the next field.
-                onPressEnter={(e) => commitSerial(r, e.currentTarget.value)}
-                onBlur={(e) => commitSerial(r, e.target.value)}
-              />
-            </Flex>
-            {fault && (
-              <Typography.Text
-                type="danger"
-                id={`serial-fault-${r.key}`}
-                style={{ fontSize: 12, lineHeight: 1.3 }}
-              >
-                {serialFaultHint(fault.fault, fault.scanned)}
-              </Typography.Text>
-            )}
-            {/*
-             * The store barcode, under the serial (owner ask 2026-09-01).
-             *
-             * Derived from the STORED serial rather than from the draft: a
-             * half-typed serial is not a fact about the machine yet, and a line
-             * that rewrote itself per keystroke would be noise on the one column
-             * somebody is typing into all day.
-             */}
-            {r.kind === "unit" && stored !== "" && (
-              <StoreLabelTag serial={stored} supplierCode={supplierCodeOf()} />
-            )}
-          </Flex>
-        );
-      },
-    },
-    {
-      /*
-       * New or second (owner ask 2026-08-28).
-       *
-       * First of the fill-in columns, and deliberately so: it is the one
-       * answer that changes what the rest of the row asks for. A sealed
-       * machine needs no description and has nothing to grade; a second-hand
-       * one needs both columns to its right.
-       *
-       * A Segmented rather than a checkbox reading "New". Two named states
-       * beat one named state and its absence — "not ticked" would have to
-       * mean second-hand, which is a fact somebody actually decided, not a
-       * box they forgot.
-       */
-      title: t("inbound.condition", "Condition"),
-      key: "condition",
-      width: 150,
-      render: (_: unknown, r: QcRow) => {
-        const condition = conditionOfRow(r);
-        // Past QC the condition is settled with everything else about the
-        // machine: changing it is a regrade, and the way to one is Reopen.
-        if (r.kind === "unit" && r.unit.status !== "QC") {
-          return (
-            <Typography.Text>
-              {condition === "NEW"
-                ? t("inbound.conditionNew", "New")
-                : t("inbound.conditionSecond", "Second")}
-            </Typography.Text>
-          );
-        }
-        return (
-          <Segmented<UnitCondition>
-            size="small"
-            disabled={closed}
-            value={condition}
-            aria-label={t("inbound.condition", "Condition")}
-            onChange={(v) => setCondition(r, v)}
-            options={[
-              {
-                value: "SECOND",
-                label: t("inbound.conditionSecond", "Second"),
-              },
-              { value: "NEW", label: t("inbound.conditionNew", "New") },
-            ]}
-          />
-        );
-      },
-    },
-    {
-      /*
-       * Required for a second-hand machine, optional for a sealed one (owner
-       * ask 2026-08-28), which is why the star carries an explanation now.
-       *
-       * The star stays rather than going: most of what this shop takes in is
-       * second-hand, so a header with nothing on it would understate the rule
-       * for almost every row. What it cannot do is be silently wrong on the
-       * rows where it does not apply — hence the tooltip, and hence the
-       * per-row `aria-required` below, which is where a screen reader gets the
-       * fact that actually applies to the row it is on.
-       */
-      title: (
-        <Tooltip
-          title={t(
-            "inbound.descriptionRequiredHint",
-            "Required before a second-hand machine can be accepted. Optional on a new one — there is nothing to describe about a sealed box.",
-          )}
-        >
-          <span>{req(t("inbound.description", "Description"))}</span>
-        </Tooltip>
-      ),
-      key: "description",
-      width: 360,
-      render: (_: unknown, r: QcRow) => {
-        if (r.kind === "unit" && r.unit.status !== "QC") {
-          // Read-only, but still as the phrases it is made of — the same
-          // shape the person who typed it saw.
-          const parts = splitDescription(r.unit.description);
-          return parts.length === 0 ? (
-            "—"
-          ) : (
-            <Flex gap={4} wrap>
-              {parts.map((p) => (
-                <Tag key={p}>{p}</Tag>
-              ))}
-            </Flex>
-          );
-        }
-        const shown =
-          r.kind === "unit"
-            ? splitDescription(r.unit.description)
-            : (notes[r.key] ?? []);
-        // A sealed machine's description is optional, so an empty one is not
-        // an unanswered question and must not be painted as one.
-        const wanted = needsDescription(conditionOfRow(r));
-        return (
-          /*
-           * A list of phrases, not a sentence (owner revision 2026-08-27).
-           *
-           * "Mulus, fullset dus, charger original" is three facts about one
-           * machine, and the shop writes the same facts machine after machine.
-           * As free text they were three spellings waiting to happen and
-           * nothing anyone could filter on. `mode="tags"` picks from the
-           * shop's own vocabulary AND takes a phrase nobody has written before
-           * — which joins the vocabulary on its way to the unit
-           * (`ensureQcDescription`), so the list is the staff's own rather
-           * than one somebody guessed in advance.
-           *
-           * The column still stores one string. `splitDescription` and
-           * `joinDescription` are the whole of the conversion, and the comma
-           * is what the shop had already been typing.
-           */
-          <Select<string[]>
-            mode="tags"
-            size="small"
-            style={{ width: "100%" }}
-            disabled={closed}
-            value={shown}
-            // A row nobody has described reads as an unanswered question
-            // rather than as an optional note — but only where an answer is
-            // actually owed.
-            status={wanted && shown.length === 0 ? "warning" : undefined}
-            placeholder={
-              wanted
-                ? t(
-                    "inbound.conditionPlaceholder",
-                    "Condition, marks, what is in the box…",
-                  )
-                : t("inbound.describeOptional", "Optional on a new machine")
-            }
-            aria-label={t("inbound.description", "Description")}
-            aria-required={wanted}
-            // The comma is the separator in the column, so it is the separator
-            // in the box: pasting "Mulus, fullset dus" makes two tags rather
-            // than one tag with a comma in it that would come back as two.
-            tokenSeparators={[","]}
-            options={db.qcDescriptions
-              .filter((d) => d.active)
-              .map((d) => ({ value: d.label }))}
-            filterOption={(input, opt) =>
-              String(opt?.value ?? "")
-                .toLowerCase()
-                .includes(input.toLowerCase())
-            }
-            onChange={(parts: string[]) => {
-              // A slot has nowhere to write it yet — the draft IS the value
-              // until a serial turns the row into a machine, and `identify`
-              // carries it across.
-              if (r.kind === "slot") {
-                setNotes((n) => ({ ...n, [r.key]: parts }));
-              } else {
-                writeDescription(r.unit.serial, parts);
-              }
-            }}
-          />
-        );
-      },
-    },
-    {
-      /*
-       * The battery, in whichever reading the machine is recorded in (owner
-       * asks 2026-09-08, 2026-09-15).
-       *
-       * An Intel machine of 2020 or before shows two boxes — charge cycles and
-       * full charge capacity — and an Apple silicon one, or anything from 2021
-       * on, shows the percentage it has always shown. The title says which the
-       * PRODUCT starts on, because a column headed "Battery Health" over a box
-       * wanting a cycle count is a column that gets a percentage typed into
-       * it; the switch in each cell is what one machine overrides it with.
-       *
-       * The one column definition per group that DOES vary, against the rule
-       * in `qcColumns`' docblock. The width does not, which is what that rule
-       * was protecting: the blocks still line up as one grid.
-       */
-      title: batteryFieldsLabel(mode, t),
-      key: "battery",
-      width: mode === "CYCLES" ? 150 : 120,
-      render: (_: unknown, r: QcRow) => {
-        if (r.kind === "unit" && r.unit.status !== "QC") {
-          const read = readBattery(
-            r.unit,
-            db.models.find(
-              (m) => m.id === db.skus.find((x) => x.id === r.skuId)?.modelId,
-            )?.releaseYear,
-            batterySettings,
-          );
-          return read.grade === null ? (
-            "—"
-          ) : (
-            <Tag color={BATTERY_GRADE_COLOR[read.grade]}>{read.text}</Tag>
-          );
-        }
-        const stored =
-          r.kind === "unit" ? batteryDraftOf(r.unit) : ({} as BatteryDraft);
-        const draft = battery[r.key] ?? {};
-        // The draft wins per FIELD, not per row: somebody who typed a cycle
-        // count and has not touched the capacity should still see the
-        // capacity the store holds. The switch is the same bargain — the
-        // draft's `mode` if somebody flicked it, else whatever the machine's
-        // own numbers say it was recorded in.
-        const shown: BatteryDraft = {
-          ...((draft.mode ?? stored.mode) === undefined
-            ? {}
-            : { mode: draft.mode ?? stored.mode }),
-          health: draft.health === undefined ? stored.health : draft.health,
-          cycleCount:
-            draft.cycleCount === undefined
-              ? stored.cycleCount
-              : draft.cycleCount,
-          fcc: draft.fcc === undefined ? stored.fcc : draft.fcc,
-        };
-        return (
-          <BatteryFields
-            fallback={mode}
-            value={shown}
-            disabled={closed}
-            idPrefix={`battery-${r.key}`}
-            onChange={(next) => setBattery((d) => ({ ...d, [r.key]: next }))}
-            // Both commit, as the serial field's do.
-            onCommit={(field, value) => commitBattery(r, field, value)}
-            // The switch has no blur to wait for, and flicking it is what
-            // CLEARS the other reading (`batteryPatch`) — so a machine
-            // switched to health stops reporting a count nobody can check
-            // against it the moment somebody says so, not when they next
-            // touch a box.
-            onModeCommit={(picked) =>
-              commitBatteryMode(r, { ...shown, mode: picked })
-            }
-          />
-        );
-      },
-    },
-    {
-      /*
-       * What this machine will be asked for (owner ask 2026-09-08).
-       *
-       * *"Price should be set per serial … and will be determined right after
-       * QC."* So it is a column here, which it was until 2026-08-27 and then
-       * was not: the price moved to the variant for eight days and has come
-       * back to the serial, because two 2017 Airs off one pallet are not worth
-       * the same money.
-       *
-       * The store box starts at what the shop asks for the variant — visible
-       * in the block's heading — so the common case is confirming a number
-       * rather than inventing one. The marketplace box follows the rule until
-       * somebody overrides it.
-       */
-      title: t("inbound.price", "Price"),
-      key: "price",
-      // Wider since the two boxes started saying which is which (2026-09-09).
-      // "Marketplace price" over an Rp box needs the room, and a caption that
-      // wraps onto two lines is a caption that has stopped being a label.
-      width: 200,
-      render: (_: unknown, r: QcRow) => {
-        const sku = db.skus.find((x) => x.id === r.skuId);
-        const stored: PriceDraft =
-          r.kind === "unit"
-            ? {
-                price: r.unit.price ?? sku?.price ?? null,
-                marketPrice: r.unit.marketPrice ?? null,
-              }
-            : { price: sku?.price ?? null, marketPrice: null };
-        const draft = prices[r.key] ?? {};
-        const shown: PriceDraft = {
-          price: draft.price === undefined ? stored.price : draft.price,
-          marketPrice:
-            draft.marketPrice === undefined
-              ? stored.marketPrice
-              : draft.marketPrice,
-        };
-        return (
-          <PriceFields
-            value={shown}
-            markupPct={markupPct}
-            disabled={closed}
-            idPrefix={`qc-price-${r.key}`}
-            onChange={(next) => setPrices((d) => ({ ...d, [r.key]: next }))}
-            onCommit={(field, value) => commitPrice(r, field, value)}
-          />
-        );
-      },
-    },
-    {
-      /*
-       * The grade, and the inspection behind it (owner ask 2026-08-27).
-       *
-       * Optional, unlike the description: a machine can be accepted ungraded.
-       * The button opens the category's checklist — Settings → Grading — and
-       * the letter falls out of the rule table, overridable, because a rule
-       * table cannot see the machine. Typable before the serial is, like every
-       * other column: a slot's letter waits in `gradeDrafts` and `identify`
-       * carries it onto the unit.
-       */
-      title: t("inbound.grade", "Grade"),
-      key: "grade",
-      width: 110,
-      render: (_: unknown, r: QcRow) => {
-        const grade = r.kind === "unit" ? r.unit.grade : gradeDrafts[r.key];
-        const tag = <GradeTag grade={grade} plain />;
-        if (r.kind === "unit" && r.unit.status !== "QC") return tag;
-        // Not offered on a sealed machine (owner ask 2026-08-28): there is no
-        // screen to look at and no case to mark, so a checklist would be a
-        // form asking about a box nobody has opened. Hidden rather than
-        // disabled — a control that can never apply is not a control, and the
-        // cell already says "New", which is the answer the button would be
-        // for.
-        if (!canGrade(conditionOfRow(r))) return tag;
-        return (
-          <Flex align="center" gap={6}>
-            {tag}
-            <Tooltip
-              title={t(
-                "inbound.gradeHint",
-                "Grade it against the category's checklist",
-              )}
-            >
-              <Button
-                size="small"
-                type="text"
-                disabled={closed}
-                icon={<AuditOutlined />}
-                aria-label={
-                  r.kind === "unit"
-                    ? t("inbound.gradeAria", "Grade {{serial}}", {
-                        serial: r.unit.serial,
-                      })
-                    : t("inbound.gradeSlotAria", "Grade this machine")
-                }
-                onClick={() => openGrading(r)}
-              />
-            </Tooltip>
-          </Flex>
-        );
-      },
-    },
-    {
-      /*
-       * A picture per serial, at QC (owner decision 2026-08-26).
-       *
-       * Grading a second-hand machine is a claim about its condition, and six
-       * weeks later the customer's memory of that condition and the shop's are
-       * different memories. Description is one person's word for it; this is
-       * the evidence behind the word, taken at the one moment the machine is
-       * in somebody's hands with the screen in front of them.
-       *
-       * The one column a serial still gates, and the gate is the schema's
-       * rather than the flow's: a photograph hangs off a `UnitNote`, which
-       * points at a unit. Until the serial is in there is no unit to point at.
-       *
-       * Only while the unit is in QC. Afterwards the pictures are shown but
-       * not added to: a photograph dated after the machine reached the shelf
-       * is not evidence of what arrived. They are purged outright when it
-       * sells — `purgeQcPhotos`.
-       */
-      title: t("inbound.photo", "Photo"),
-      key: "photo",
-      width: 150,
-      render: (_: unknown, r: QcRow) =>
-        r.kind === "slot" ? (
-          <Tooltip
-            title={t(
-              "inbound.photoNeedsSerial",
-              "A photo is filed against the machine, so this one needs its serial first.",
-            )}
-          >
-            <Typography.Text type="secondary">
-              {t("inbound.afterTheSerial", "After the serial")}
-            </Typography.Text>
-          </Tooltip>
-        ) : (
-          <UnitPhotos
-            serial={r.unit.serial}
-            editable={!closed && r.unit.status === "QC"}
-          />
-        ),
-    },
-    {
-      title: t("inbound.status", "Status"),
-      key: "status",
-      width: 176,
-      render: (_: unknown, r: QcRow) => {
-        const { label, color } = rowStatus(r);
-        return <Tag color={color}>{label}</Tag>;
-      },
-    },
-    {
-      /*
-       * Everything you can DO to a row, in one place at the right edge (owner
-       * revision 2026-08-27).
-       *
-       * Accept used to have a column of its own beside the three icons, which
-       * meant the row's actions were split across two column boundaries and
-       * neither group was anchored — scroll right for the battery box and the
-       * buttons went with it. They are one fixed column now, so the thing you
-       * press is in the same place on every row whatever the table is
-       * scrolled to.
-       */
-      title: t("inbound.action", "Action"),
-      key: "actions",
-      width: 176,
-      fixed: "right" as const,
-      align: "right" as const,
-      render: (_: unknown, r: QcRow) => {
-        if (closed) return null;
-        if (r.kind === "slot") {
-          /*
-           * A counted product has nothing to type, so nothing turns its slot
-           * into a unit by itself (owner ask 2026-09-15). This button is what
-           * a serial is for a tracked one: the moment somebody says the thing
-           * is really here.
-           */
-          if (tracksSerial(r.skuId)) return null;
-          return (
-            <Button
-              size="small"
-              icon={<PlusOutlined />}
-              aria-label={t(
-                "inbound.takeInCountedAria",
-                "Take in one {{product}}",
-                {
-                  product: skuLabel(r.skuId),
-                },
-              )}
-              onClick={() => {
-                const serial = freeCountedSerial(r.skuId);
-                // What the bench typed into the row while it was still a
-                // slot, exactly as `commitSerial` carries it.
-                const carry = {
-                  description: notes[r.key] ?? [],
-                  battery: battery[r.key] ?? {},
-                  price: prices[r.key] ?? {},
-                  ...(gradeDrafts[r.key] ? { grade: gradeDrafts[r.key] } : {}),
-                };
-                mutate((d) => {
-                  identify(d, r.skuId, r.unitCost, serial, carry);
-                });
-                message.success(
-                  t(
-                    "inbound.takenIn",
-                    "Taken in. Accept it when you are done.",
-                  ),
-                );
-              }}
-            >
-              {t("inbound.takeInCounted", "Take in")}
-            </Button>
-          );
-        }
-        const serial = r.unit.serial;
-
-        // A decision already taken, and the way back out of it.
-        if (r.unit.status !== "QC") {
-          const can = canReopenQc(r.unit);
-          return (
-            <Tooltip
-              title={
-                can
-                  ? t(
-                      "inbound.reopenHint",
-                      "Wrong machine? Put it back into QC and decide again",
-                    )
-                  : t(
-                      "inbound.reopenBlocked",
-                      "This machine has been promised or sold. Correct it where that happened, not here.",
-                    )
-              }
-            >
-              {/* A span, because a disabled antd Button swallows the pointer
-                  events its own tooltip needs — and the tooltip is the entire
-                  explanation of why it is disabled. */}
-              <span>
-                <Button
-                  size="small"
-                  icon={<UndoOutlined />}
-                  disabled={!can}
-                  aria-label={t(
-                    "inbound.reopenAria",
-                    "Reopen QC for {{serial}}",
-                    { serial },
-                  )}
-                  onClick={() => reopenQc(serial)}
-                >
-                  {t("inbound.reopen", "Reopen")}
-                </Button>
-              </span>
-            </Tooltip>
-          );
-        }
-
-        // What QC is FOR, and what it therefore cannot skip. The price used to
-        // be half of this — the rule the database enforced with a CHECK — and
-        // went with the per-unit price on 2026-08-27: a variant is always
-        // priced, so there is nothing left for QC to be missing on that count.
-        // The description carries the gate alone: a second-hand machine that
-        // reaches the shelf without anyone writing down its condition is one
-        // nobody can list or answer a question about later.
-        //
-        // Reads the store, not a draft. A description is a list of tags now
-        // and every tag is written the moment it is chosen, so there is no
-        // uncommitted value for the gate to miss — which is what the old
-        // blur-commit made this read around.
-        //
-        // `qcReady` since 2026-08-28, so the button, the status tag and the
-        // group heading cannot disagree about whether a row is finished — and
-        // so that a machine marked New, which owes no description, is
-        // acceptable the moment it has a serial.
-        const missing = qcReady(r.unit)
-          ? []
-          : [t("inbound.missingDescription", "a description")];
-        return (
-          <Flex gap={4} justify="end" align="center">
-            <Tooltip
-              title={
-                missing.length === 0
-                  ? t("inbound.acceptHint", "Accept into sellable stock")
-                  : t("inbound.needBeforeAccept", "Still needs {{what}}", {
-                      what: missing.join(" and "),
-                    })
-              }
-            >
-              <span>
-                <Button
-                  size="small"
-                  type="primary"
-                  icon={<CheckOutlined />}
-                  disabled={missing.length > 0}
-                  // The only button in the row that had no name of its own.
-                  // Four buttons reading "Accept" down a group of three
-                  // MacBook Airs is four buttons a screen reader cannot tell
-                  // apart.
-                  aria-label={t("inbound.acceptAria", "Accept {{serial}}", {
-                    serial,
-                  })}
-                  onClick={() =>
-                    mutate((d) => {
-                      appendEvent(d, serial, {
-                        type: "QC_SELESAI",
-                        toStatus: "TERSEDIA",
-                        refCode: po.code,
-                        note: "QC passed",
-                      });
-                    })
-                  }
-                >
-                  {t("inbound.accept", "Accept")}
-                </Button>
-              </span>
-            </Tooltip>
-            <Tooltip
-              title={t(
-                "inbound.serviceHint",
-                "Send to the bench instead of the shelf",
-              )}
-            >
-              <Button
-                size="small"
-                type="text"
-                icon={<ToolOutlined />}
-                aria-label={t(
-                  "inbound.serviceAria",
-                  "Send {{serial}} to service",
-                  { serial },
-                )}
-                onClick={() => setSendingToService(serial)}
-              />
-            </Tooltip>
-            <Tooltip
-              title={t(
-                "inbound.rejectHint",
-                "Refuse it and open a supplier return",
-              )}
-            >
-              <Button
-                size="small"
-                type="text"
-                danger
-                icon={<CloseCircleOutlined />}
-                aria-label={t(
-                  "inbound.rejectAria",
-                  "Reject {{serial}} back to the supplier",
-                  { serial },
-                )}
-                onClick={() => rejectToSupplier(serial)}
-              />
-            </Tooltip>
-            {/*
-             * Deleting a QC row.
-             *
-             * Offered only while the unit is still in QC, which is the only
-             * period in which nothing has happened to it beyond arriving. Once
-             * a unit has been accepted, refused or sent to service it has a
-             * timeline — and the way to undo one of those is Reopen above,
-             * which appends a correction rather than making it as though the
-             * machine never arrived. CLAUDE.md's one rule: nothing with a
-             * history is hard-deleted.
-             *
-             * The row it leaves behind is a slot, because the invoice still
-             * says the machine is here. That is the point: the order goes on
-             * asking for a serial rather than quietly losing a machine.
-             */}
-            <Tooltip
-              title={t(
-                "inbound.removeSerial",
-                "Remove this machine from the order",
-              )}
-            >
-              <Button
-                size="small"
-                type="text"
-                danger
-                icon={<DeleteOutlined />}
-                aria-label={t("inbound.removeSerialAria", "Remove {{serial}}", {
-                  serial,
-                })}
-                onClick={() =>
-                  modal.confirm({
-                    title: t(
-                      "inbound.removeSerialTitle",
-                      "Remove this serial row?",
-                    ),
-                    content: t(
-                      "inbound.removeSerialBody",
-                      "{{serial}} and everything recorded against it go. If a product line still expects the machine, the row comes back empty, waiting for a serial.",
-                      { serial },
-                    ),
-                    okText: t("inbound.removeSerialOk", "Remove row"),
-                    okButtonProps: { danger: true },
-                    onOk: () =>
-                      mutate((d) => {
-                        d.units = d.units.filter((x) => x.serial !== serial);
-                        d.events = d.events.filter((e) => e.serial !== serial);
-                      }),
-                  })
-                }
-              />
-            </Tooltip>
-          </Flex>
-        );
-      },
-    },
+    ...totals.feeStandings.map((s) => ({
+      value: `fee:${s.fee.id}` as PayTarget,
+      label: `${feeName(s.fee)} — ${owedText(s.owed)}`,
+    })),
+    ...(editingPayment &&
+    editingPayment.feeId === undefined &&
+    paymentFor(editingPayment) !== "ORDER"
+      ? [
+          {
+            value: paymentFor(editingPayment) as PayTarget,
+            label: t(PO_PAYMENT_FOR_LABEL[paymentFor(editingPayment)]),
+          },
+        ]
+      : []),
   ];
+  /** What the selected target still owes — what the quick-fill offers. */
+  const owedForTarget = payTarget.startsWith("fee:")
+    ? (totals.feeStandings.find((s) => `fee:${s.fee.id}` === payTarget)?.owed ??
+      0)
+    : payTarget === "ORDER"
+      ? totals.goods.owed
+      : 0;
 
-  /**
-   * What one product's group of machines still owes, as tags.
-   *
-   * The heading is where the screen answers "what is left to do here?", and
-   * before 2026-08-27 nothing answered it: the person filling the grid in had
-   * to read every row and count. Each tag is one outstanding thing, and a
-   * group with none of them says so in one word.
-   */
-  const groupProgress = (g: QcGroup) => {
-    const tags: ReactNode[] = [];
-    // Worded without a verb, so one machine and four read the same. "1 still
-    // need a serial" is what a plural-agnostic sentence costs; a noun phrase
-    // costs nothing and is shorter on a tag this size.
-    if (g.waiting > 0) {
-      tags.push(
-        <Tag key="w" color="warning">
-          {t("inbound.needSerials", "{{count}} without a serial", {
-            count: g.waiting,
-          })}
-        </Tag>,
-      );
+  const recordPayment = () => {
+    if (!payAmount || payAmount <= 0) {
+      message.error(t("inbound.enterHowMuch", "Enter how much was paid."));
+      return;
     }
-    if (g.needDescription > 0) {
-      tags.push(
-        <Tag key="d" color="warning">
-          {t("inbound.needDescriptions", "{{count}} without a description", {
-            count: g.needDescription,
-          })}
-        </Tag>,
+    // Money the shop cannot say the movement of lands in neither the cash
+    // pot nor the bank one (`lib/accounts.ts`).
+    if (!payMethod) {
+      message.error(
+        t(
+          "inbound.pickAMethod",
+          "Say how the money moved before recording it.",
+        ),
       );
+      return;
     }
-    if (g.overQuota > 0) {
-      tags.push(
-        <Tag key="o" color="error">
-          {t("inbound.overQuotaTag", "{{count}} over quota", {
-            count: g.overQuota,
-          })}
-        </Tag>,
-      );
-    }
-    const ready = g.rows.filter(
-      (r) => r.kind === "unit" && r.unit.status === "QC" && qcReady(r.unit),
-    ).length;
-    if (ready > 0) {
-      tags.push(
-        <Tag key="r" color="blue">
-          {t("inbound.readyTag", "{{count}} ready to accept", { count: ready })}
-        </Tag>,
-      );
-    }
-    if (tags.length === 0) {
-      tags.push(
-        <Tag key="ok" color="success" icon={<CheckOutlined />}>
-          {t("inbound.groupDone", "All done")}
-        </Tag>,
-      );
-    }
-    return tags;
+    const target = payTarget;
+    const feeId = target.startsWith("fee:") ? target.slice(4) : undefined;
+    const fee = feeId ? po.fees.find((f) => f.id === feeId) : undefined;
+    const appliedTo: PoPaymentFor = fee
+      ? payTargetOfFee(fee.kind)
+      : (target as PoPaymentFor);
+    const method = payMethod;
+    const amount = payAmount;
+    const editing = paying?.id;
+    const inBalance = payInBalance;
+    mutate((d) => {
+      const order = d.pos.find((p) => p.id === po.id)!;
+      if (editing === undefined) {
+        order.payments.push({
+          id: nextId("pp"),
+          method,
+          amount,
+          at: new Date().toISOString(),
+          appliedTo,
+          ...(fee ? { feeId: fee.id } : {}),
+          ...(inBalance ? {} : { inBalance: false }),
+        });
+        return;
+      }
+      const row = order.payments.find((x) => x.id === editing);
+      if (row === undefined) return;
+      // `at` is left alone: it is when the money MOVED.
+      row.method = method;
+      row.amount = amount;
+      row.appliedTo = appliedTo;
+      if (fee) row.feeId = fee.id;
+      else delete row.feeId;
+      if (inBalance) delete row.inBalance;
+      else row.inBalance = false;
+    });
+    setPayAmount(undefined);
+    setPaying(null);
+    message.success(
+      editing
+        ? t("inbound.paymentUpdated", "Payment updated.")
+        : t(
+            "inbound.paymentRecordedFor",
+            "Payment recorded against {{what}}.",
+            {
+              what: (fee
+                ? feeName(fee)
+                : t(PO_PAYMENT_FOR_LABEL[appliedTo])
+              ).toLowerCase(),
+            },
+          ),
+    );
   };
 
-  /**
-   * Serials & QC.
-   *
-   * One row per machine the order accounts for. A row with a serial IS a unit;
-   * a row without one is a slot.
-   *
-   * ## Grouped by product (owner revision 2026-08-27)
-   *
-   * It was one flat table with a Product column, and the owner's verdict was
-   * that it read as a display table rather than as the form it is: every row
-   * repeated the product above it, a row still owed looked exactly like a row
-   * already filled, and nothing on the screen said how many machines of a
-   * product were still outstanding.
-   *
-   * A group per product says the product once, in a heading, and puts the
-   * outstanding counts beside it. The variant's asking price goes up there
-   * too, for the same reason — it is a fact about the variant, so as a column
-   * it was one number repeated down every row of the group.
-   *
-   * ## Every column is typable, in any order (owner revision 2026-08-27)
-   *
-   * It used to be identify-then-grade: Description, Battery and Photo were
-   * inert on a slot and said "Enter the serial first". That is not how a
-   * machine is graded. The serial is on a sticker on the underside, and a
-   * person holding an open laptop reads the battery off the screen and the
-   * marks off the lid long before they turn it over. Making the screen insist
-   * on the sticker first meant putting the machine down and picking it up
-   * again, per machine, all day.
-   *
-   * So a slot holds what has been typed into it and `identify` carries the lot
-   * onto the unit at the moment a serial arrives — see `reslotDrafts` for the
-   * one thing that makes that hard. The serial is still REQUIRED, and the star
-   * in its header is how the screen says so; it is simply no longer first.
-   */
-  const qc = (
-    <Card
-      title={t("inbound.serialsQc", "Serials & QC")}
-      extra={
-        units.length > 0 && (
-          <Flex gap={8} wrap>
-            {/*
-             * Accept everything that is ready (owner ask 2026-09-01), to the
-             * LEFT of Print labels because it is the earlier job: a machine
-             * gets onto the shelf and then gets a sticker.
-             *
-             * It is a shortcut for pressing the row's own Accept N times, not
-             * a different decision — same gate (`qcReady`), same event, same
-             * status. A row that still owes a description is not in the count
-             * and is not touched, which is why the button can be plain about
-             * how many it will take: the number IS what will move.
-             *
-             * Disabled rather than hidden when none is ready. A control that
-             * comes and goes as rows are filled in is a control nobody learns
-             * is there, and the tooltip is what says why it is off.
-             */}
-            {!closed && (
-              <Tooltip
-                title={
-                  readyToAccept.length === 0
-                    ? t(
-                        "inbound.acceptAllNoneReady",
-                        "Nothing is ready yet. A second-hand machine needs a description before it can be accepted.",
-                      )
-                    : t(
-                        "inbound.acceptAllHint",
-                        "Move every graded machine on this invoice into sellable stock",
-                      )
-                }
-              >
-                {/* A span, because a disabled antd Button swallows the pointer
-                    events its own tooltip needs. */}
-                <span>
-                  <Button
-                    type="primary"
-                    icon={<CheckOutlined />}
-                    disabled={readyToAccept.length === 0}
-                    onClick={acceptAll}
-                  >
-                    {t("inbound.acceptAll", "Accept all ({{count}})", {
-                      count: readyToAccept.length,
-                    })}
-                  </Button>
-                </span>
-              </Tooltip>
-            )}
-            <Button
-              icon={<PrinterOutlined />}
-              onClick={() =>
-                setPrinting(
-                  labelsFor(units, db.skus, db.models, supplierCodeOf),
-                )
-              }
-            >
-              {t("inbound.printLabels", "Print labels")}
-            </Button>
-          </Flex>
-        )
-      }
-    >
-      {overQuota > 0 && (
-        // Stated once above the groups as well as marked on each row. A red
-        // row says "something is wrong here"; only a sentence can say what,
-        // and what to do about it.
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 12 }}
-          title={t(
-            "inbound.overQuotaTitle",
-            "{{count}} serial(s) are no longer covered by a product line",
-            { count: overQuota },
-          )}
-          description={t(
-            "inbound.overQuotaBody",
-            "A quantity came down after these machines were graded, so they were kept rather than deleted. Put the quantity back if it was a mistake, or remove each row once you know where the machine went.",
-          )}
-        />
-      )}
-      {!arrived ? (
-        <Empty
-          description={t(
-            "inbound.nothingReceived",
-            "Nothing received yet. Mark the order arrived to start recording serials.",
-          )}
-        />
-      ) : groups.length === 0 ? (
-        <Empty
-          description={t(
-            "inbound.nothingExpected",
-            "No products on this order yet. Add a line and a row appears here for every machine it expects.",
-          )}
-        />
-      ) : (
-        <Flex vertical gap={16}>
-          <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-            {t(
-              "inbound.qcHint",
-              "One block per product, one row per machine it expects. Fill a row in whatever order the machine gives it to you — the serial can come last. Scanning with focus anywhere on this page drops a serial into the next row still waiting.",
-            )}
-          </Typography.Paragraph>
-          {groups.map((g) => {
-            const sku = db.skus.find((s) => s.id === g.skuId);
-            return (
-              <Card
-                key={g.skuId}
-                size="small"
-                // The heading answers the two questions a column could not:
-                // which product these machines are, and how many of them the
-                // invoice is still waiting on.
-                title={
-                  <Flex align="center" gap={8} wrap>
-                    <Typography.Text strong>
-                      {skuLabel(g.skuId)}
-                    </Typography.Text>
-                    <Typography.Text type="secondary">
-                      {t(
-                        "inbound.identifiedOf",
-                        "{{done}} of {{total}} identified",
-                        {
-                          done: g.identified,
-                          total: Math.max(g.quota, g.identified),
-                        },
-                      )}
-                    </Typography.Text>
-                    {groupProgress(g)}
-                  </Flex>
-                }
-                /*
-                 * The variant's ASKING price, said once above the machines it
-                 * applies to.
-                 *
-                 * It was the price for eight days (2026-08-27 to 2026-09-08)
-                 * and is the starting point again: every row's price box
-                 * begins here, and the grading moves it. Kept in the heading
-                 * rather than repeated down a column, because it is a fact
-                 * about the variant and the column now holds facts about
-                 * machines.
-                 */
-                extra={
-                  sku && (
-                    <Typography.Text type="secondary">
-                      {t("inbound.weAsk", "We ask {{price}}", {
-                        price: fmtRp(sku.price),
-                      })}
-                    </Typography.Text>
-                  )
-                }
-              >
-                <EditableTable<QcRow>
-                  size="small"
-                  rowKey="key"
-                  dataSource={g.rows}
-                  /*
-                   * A line-item editor: these columns ARE the form. It kept a
-                   * grid on a phone until 2026-09-01, behind a sideways
-                   * scroll — nine columns in 375px is nine slivers, and the
-                   * owner asked for rows instead. `EditableTable` stacks each
-                   * machine into a card of labelled full-width fields below
-                   * `md` and leaves the grid exactly as it was above it.
-                   *
-                   * The grid's width used to be a hand-maintained constant
-                   * that "has to BE the sum" of the columns and drifted the
-                   * first time one was resized. It is summed from the columns
-                   * now; there is nothing left to keep in step.
-                   */
-                  rowTitle={(r, i) =>
-                    r.kind === "unit" ? r.unit.serial : `#${i + 1}`
-                  }
-                  // Denser than antd's `small`, which is still built for
-                  // reading rather than for filling in. See global.css.
-                  className="qc-table"
-                  // The red row the owner asked for. A class rather than an
-                  // inline style so the colour comes from the theme and
-                  // survives dark mode — a hard-coded pink on a dark surface
-                  // is unreadable.
-                  rowClassName={(r) =>
-                    r.kind === "unit" && r.overQuota ? "row-over-quota" : ""
-                  }
-                  columns={qcColumns(modeOfSku(g.skuId))}
-                />
-              </Card>
-            );
-          })}
-        </Flex>
-      )}
-    </Card>
-  );
-
-  /** What the selected bucket still owes — what the quick-fill button offers. */
-  const owedForPicked = totals.owedFor[payFor];
+  const photosRowData = photosRow
+    ? rows.find((r) => r.key === photosRow)
+    : undefined;
 
   return (
     <PageContainer
@@ -3716,13 +3861,9 @@ export function InboundDetailPage() {
       <Flex vertical gap={16}>
         {closed && (
           /*
-           * The banner IS the way back, and it is deliberately one click.
-           *
-           * A closed order that took three steps to reopen would be an order
-           * staff work around — they would raise a second one rather than
-           * correct the first, and the shop would end up with two documents
-           * for one purchase. Closing is a filing decision, so undoing it
-           * costs what a filing decision costs.
+           * The banner IS the way back, and it is deliberately one click: a
+           * closed order that took three steps to reopen would be an order
+           * staff work around by raising a second one.
            */
           <Alert
             type="info"
@@ -3730,7 +3871,7 @@ export function InboundDetailPage() {
             title={t("inbound.closedTitle", "This invoice is closed")}
             description={t(
               "inbound.closedBody",
-              "Closed {{when}}. Nothing on the order can be changed — reopen it to record a payment, edit a line or grade a machine.",
+              "Closed {{when}}. Nothing on the order can be changed — reopen it to record a payment, edit a line or grade a unit.",
               { when: fmtDate(po.closedAt!) },
             )}
             action={
@@ -3745,21 +3886,91 @@ export function InboundDetailPage() {
           />
         )}
         {header}
+        {unitsCard}
         {money}
-        {products}
-        {qc}
       </Flex>
 
+      {detailsModal}
+
       {/*
-       * Sending a machine for a repair (owner revision 2026-09-09).
-       *
-       * A form rather than a `modal.confirm`, because there are now three
-       * things to say and one of them changes the other two: whether the
-       * machine has to travel to the bench decides whether a courier's charge
-       * makes any sense to ask for. See `sendToService`.
+       * A row's photos. Before the serial they are held against the row and
+       * written onto the unit with it (`applyQcDraft`); a photo taken after
+       * the unit has left QC is not evidence of what arrived, so they are
+       * added only while it is open.
+       */}
+      <Modal
+        open={photosRowData !== undefined}
+        title={
+          photosRowData
+            ? t("inbound.photosTitle", "Photos · {{what}}", {
+                what: `#${numberOf(photosRowData)} · ${skuLabel(actualSkuOf(photosRowData))}`,
+              })
+            : ""
+        }
+        onCancel={() => setPhotosRow(null)}
+        footer={
+          <Button onClick={() => setPhotosRow(null)}>
+            {t("common.close", "Close")}
+          </Button>
+        }
+        destroyOnHidden
+      >
+        {photosRowData &&
+          (photosRowData.unit ? (
+            <UnitPhotos
+              serial={photosRowData.unit.serial}
+              editable={rowOpen(photosRowData)}
+              size={72}
+              max={12}
+            />
+          ) : (
+            <UnitPhotos
+              draft={{
+                photos: qcDrafts[photosRowData.key]?.photos ?? [],
+                onAdd: (urls) =>
+                  setQcDrafts((m) => {
+                    const key = photosRowData.key;
+                    const held = m[key]?.photos ?? [];
+                    return {
+                      ...m,
+                      [key]: {
+                        ...m[key],
+                        photos: [
+                          ...held,
+                          ...urls.map((url) => ({ id: nextId("dph"), url })),
+                        ],
+                      },
+                    };
+                  }),
+                onRemove: (id) =>
+                  setQcDrafts((m) => {
+                    const key = photosRowData.key;
+                    return {
+                      ...m,
+                      [key]: {
+                        ...m[key],
+                        photos: (m[key]?.photos ?? []).filter(
+                          (p) => p.id !== id,
+                        ),
+                      },
+                    };
+                  }),
+              }}
+              editable={rowOpen(photosRowData)}
+              size={72}
+              max={12}
+            />
+          ))}
+      </Modal>
+
+      {/*
+       * Sending a machine for a repair (owner revision 2026-09-09). A form
+       * rather than a `modal.confirm`, because whether the machine has to
+       * travel decides whether a courier's charge makes any sense to ask for.
        */}
       <Modal
         open={sendingToService !== null}
+        centered
         title={t("inbound.serviceTitle", "Send this unit to service?")}
         okText={t("inbound.serviceOk", "Send to service")}
         onCancel={() => {
@@ -3772,9 +3983,8 @@ export function InboundDetailPage() {
         <Form
           form={serviceForm}
           layout="vertical"
-          // Shipped by default, because the common case is the one that costs
-          // money: the bench is a different building, and a machine graded in
-          // warehouse 1 has to get there.
+          // Shipped by default: the bench is a different building, and a
+          // machine graded in warehouse 1 has to get there.
           initialValues={{ ship: bench !== undefined }}
         >
           <Typography.Paragraph type="secondary">
@@ -3793,7 +4003,7 @@ export function InboundDetailPage() {
               })}
               tooltip={t(
                 "inbound.serviceShipHint",
-                "Leave this off if the machine is already at the bench, or if the repairer collects it. The bench confirms the arrival either way before work starts.",
+                "Leave this off if the unit is already at the bench, or if the repairer collects it. The bench confirms the arrival either way before work starts.",
               )}
             >
               <Switch />
@@ -3810,7 +4020,7 @@ export function InboundDetailPage() {
                   )}
                   tooltip={t(
                     "inbound.serviceShippingFeeHint",
-                    "The courier between the two warehouses. It joins what this machine has cost the shop.",
+                    "The courier between the two warehouses. It joins what this unit has cost the shop.",
                   )}
                 >
                   <InputNumber
@@ -3860,6 +4070,7 @@ export function InboundDetailPage() {
 
       <Modal
         open={paying !== null}
+        centered
         title={
           paying?.id
             ? t("inbound.editAPayment", "Edit this payment")
@@ -3871,70 +4082,7 @@ export function InboundDetailPage() {
             : t("inbound.record", "Record")
         }
         onCancel={() => setPaying(null)}
-        onOk={() => {
-          if (!payAmount || payAmount <= 0) {
-            message.error(
-              t("inbound.enterHowMuch", "Enter how much was paid."),
-            );
-            return;
-          }
-          /*
-           * The half of the owner's ask that is NOT "make it deletable": the
-           * box may be emptied while somebody thinks, and an amount without a
-           * method may not be recorded. Money the shop cannot say the movement
-           * of lands in neither the cash pot nor the bank one
-           * (`lib/accounts.ts`), so it would go missing from the balance while
-           * still counting against the invoice.
-           */
-          if (!payMethod) {
-            message.error(
-              t(
-                "inbound.pickAMethod",
-                "Say how the money moved before recording it.",
-              ),
-            );
-            return;
-          }
-          const applied = payFor;
-          const method = payMethod;
-          const amount = payAmount;
-          const editing = paying?.id;
-          mutate((d) => {
-            const order = d.pos.find((p) => p.id === po.id)!;
-            if (editing === undefined) {
-              order.payments.push({
-                id: nextId("pp"),
-                method,
-                amount,
-                at: new Date().toISOString(),
-                appliedTo: applied,
-              });
-              return;
-            }
-            const row = order.payments.find((x) => x.id === editing);
-            if (row === undefined) return;
-            // `at` is left alone: it is when the money MOVED, which correcting
-            // the figure beside it does not change.
-            row.method = method;
-            row.amount = amount;
-            row.appliedTo = applied;
-          });
-          setPayAmount(undefined);
-          // The bucket is NOT reset. Somebody settling three orders' shipping
-          // in one sitting picks "Shipping" once, and a control that snaps
-          // back to Products between them is a control they will forget to set
-          // on the third.
-          setPaying(null);
-          message.success(
-            editing
-              ? t("inbound.paymentUpdated", "Payment updated.")
-              : t(
-                  "inbound.paymentRecorded",
-                  "Payment recorded against {{what}}.",
-                  { what: t(PO_PAYMENT_FOR_LABEL[applied]).toLowerCase() },
-                ),
-          );
-        }}
+        onOk={recordPayment}
       >
         <Flex vertical gap={12}>
           <Typography.Text type="secondary">
@@ -3950,10 +4098,8 @@ export function InboundDetailPage() {
             <Select
               value={payMethod}
               onChange={setPayMethod}
-              // Clearable (owner ask 2026-09-15). A method already recorded
-              // but since deactivated still has to show as itself rather than
-              // as an empty box, so the stored code is offered alongside the
-              // live list.
+              // Clearable (owner ask 2026-09-15). A method already recorded but
+              // since deactivated still shows as itself.
               allowClear
               status={payAmount && !payMethod ? "error" : undefined}
               placeholder={t("inbound.pickMethod", "How the money moved")}
@@ -3975,31 +4121,11 @@ export function InboundDetailPage() {
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {t("inbound.appliedTo", "Applied to")}
             </Typography.Text>
-            {/*
-             * The owner's second ask of 2026-08-27. Shipping is paid to a
-             * forwarder and tax to the state, and recording either as "paid
-             * the supplier" is how an order reads as settled while the ongkir
-             * is still outstanding.
-             *
-             * Each option carries its own balance, because the number is the
-             * reason you are picking the bucket at all.
-             */}
-            <Select<PoPaymentFor>
-              value={payFor}
-              onChange={setPayFor}
+            <Select<PayTarget>
+              value={payTarget}
+              onChange={setPayTarget}
               aria-label={t("inbound.appliedTo", "Applied to")}
-              options={(["ORDER", "SHIPPING", "TAX"] as const).map(
-                (bucket) => ({
-                  value: bucket,
-                  label: `${t(PO_PAYMENT_FOR_LABEL[bucket])} — ${
-                    totals.owedFor[bucket] > 0
-                      ? t("inbound.owedShort", "{{amount}} owed", {
-                          amount: fmtRp(totals.owedFor[bucket]),
-                        })
-                      : t("inbound.bucketSettled", "settled")
-                  }`,
-                }),
-              )}
+              options={payOptions}
             />
           </Flex>
           <Flex vertical gap={4}>
@@ -4011,18 +4137,40 @@ export function InboundDetailPage() {
               onChange={(v) => setPayAmount(v ?? undefined)}
             />
           </Flex>
-          {owedForPicked > 0 && (
-            // Fills the balance of the bucket that is selected, not the
-            // order's. Somebody who has just chosen "Shipping" wants the
-            // ongkir, and offering them the whole invoice is offering them the
-            // wrong number in one click.
-            <Button size="small" onClick={() => setPayAmount(owedForPicked)}>
+          <Flex align="flex-start" gap={8}>
+            <Switch
+              checked={payInBalance}
+              onChange={setPayInBalance}
+              aria-label={t(
+                "debtPay.inBalance",
+                "Counts in the shop's balance",
+              )}
+            />
+            <Flex vertical gap={0}>
+              <Typography.Text>
+                {t("debtPay.inBalance", "Counts in the shop's balance")}
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {payInBalance
+                  ? t(
+                      "inbound.inBalanceOn",
+                      "Comes out of the cash drawer or the bank, by its method.",
+                    )
+                  : t(
+                      "debtPay.inBalanceOff",
+                      "Settles the debt without moving the cash or bank balance — for money that never passed through the shop's accounts.",
+                    )}
+              </Typography.Text>
+            </Flex>
+          </Flex>
+          {owedForTarget > 0 && (
+            // Fills the balance of what is selected, not the order's.
+            <Button size="small" onClick={() => setPayAmount(owedForTarget)}>
               {t(
-                "inbound.payTheBalance",
-                "Pay the {{what}} balance — {{amount}}",
+                "inbound.payWhatIsOwed",
+                "Pay what is owed on it — {{amount}}",
                 {
-                  what: t(PO_PAYMENT_FOR_LABEL[payFor]).toLowerCase(),
-                  amount: fmtRp(owedForPicked),
+                  amount: fmtRp(owedForTarget),
                 },
               )}
             </Button>
@@ -4030,66 +4178,11 @@ export function InboundDetailPage() {
         </Flex>
       </Modal>
 
-      {/*
-       * The inspection behind a grade.
-       *
-       * The dialog itself lives in `components/GradingModal` since
-       * 2026-08-28, because the return desk grades a machine coming back with
-       * exactly the same checklist — see that file for why one dialog rather
-       * than two.
-       *
-       * What stays here is the CONSEQUENCE, which is intake's alone: a C can
-       * go back to the supplier or onto the bench, and neither is a thing the
-       * return desk can do with a machine the shop already owns. Only a unit
-       * gets those buttons; a slot has no serial to reject.
-       */}
-      {grading && (
-        <GradingModal
-          open
-          onClose={() => setGrading(null)}
-          category={categoryOfSku(grading.skuId)}
-          subject={`${skuLabel(grading.skuId)} · ${
-            grading.kind === "unit"
-              ? grading.unit.serial
-              : t("inbound.gradeNoSerialYet", "no serial yet")
-          }`}
-          currentGrade={
-            grading.kind === "unit"
-              ? grading.unit.grade
-              : gradeDrafts[grading.key]
-          }
-          onApply={(grade, inspection) =>
-            applyGrade(grading, grade, inspection)
-          }
-          cActions={(finish) =>
-            grading.kind === "unit" ? (
-              <Flex vertical gap={4}>
-                <Button
-                  size="small"
-                  danger
-                  onClick={() => {
-                    const serial = grading.unit.serial;
-                    finish();
-                    rejectToSupplier(serial);
-                  }}
-                >
-                  {t("inbound.rejectOk", "Return to supplier")}
-                </Button>
-                <Button
-                  size="small"
-                  onClick={() => {
-                    const serial = grading.unit.serial;
-                    finish();
-                    setSendingToService(serial);
-                  }}
-                >
-                  {t("inbound.serviceOk", "Send to service")}
-                </Button>
-              </Flex>
-            ) : undefined
-          }
-        />
-      )}
+      <ExpenseModal
+        po={po}
+        editing={expense}
+        onClose={() => setExpense(null)}
+      />
 
       <PrintLabelsModal
         open={printing !== null}

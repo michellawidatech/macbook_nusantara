@@ -10,11 +10,16 @@ import {
   derivedMarketPrice,
   isMarketPriceOverridden,
   isPriceInRange,
+  LISTABLE_STATUSES,
   marketPriceOf,
   markupOf,
   priceOf,
   priceRange,
+  variantMarketPrice,
+  variantMarketPrices,
+  type ListedUnit,
 } from "../src/lib/unitPrice.js";
+import { buildSeed } from "../src/mock/seed.js";
 
 const unit = (over: Partial<{ price: number; marketPrice: number }> = {}) => ({
   serial: "SC02AA111AA",
@@ -34,6 +39,18 @@ describe("derivedMarketPrice", () => {
     // shaves the fee the markup exists to cover.
     for (const p of [1_000_001, 7_777_777, 12_345_678]) {
       expect(derivedMarketPrice(p, 10)).toBeGreaterThanOrEqual(p * 1.1);
+    }
+  });
+
+  it("does not invent a thousand out of floating-point error", () => {
+    // 30.000.000 × 1.1 is 33000000.000000004 in a double; a ceiling taken on
+    // that listed the unit at Rp33.001.000 (fixed 2026-09-19).
+    expect(derivedMarketPrice(30_000_000)).toBe(33_000_000);
+    expect(derivedMarketPrice(6_000_000)).toBe(6_600_000);
+    // Every whole million: the exact answer is a whole thousand, so the
+    // rounding must leave it alone. (p / 10) * 11 is integer arithmetic.
+    for (let p = 1_000_000; p <= 60_000_000; p += 1_000_000) {
+      expect(derivedMarketPrice(p, 10), String(p)).toBe((p / 10) * 11);
     }
   });
 
@@ -138,5 +155,104 @@ describe("isPriceInRange", () => {
 describe("the shop's default markup", () => {
   it("is the owner's ten per cent", () => {
     expect(DEFAULT_MARKETPLACE_MARKUP_PCT).toBe(10);
+  });
+});
+
+/**
+ * One marketplace price per VARIANT (owner ask 2026-09-19): *"Marketplace
+ * price is taken from the highest price for all unit, so it will not be
+ * displayed per unit."*
+ */
+describe("variantMarketPrice", () => {
+  let n = 0;
+  const listed = (over: Partial<ListedUnit> = {}): ListedUnit => ({
+    serial: `SC02VAR${String(++n).padStart(4, "0")}`,
+    skuId: "sku-1",
+    status: "TERSEDIA",
+    ...over,
+  });
+
+  it("is the dearest sellable unit's figure, not the cheapest or an average", () => {
+    const units = [
+      listed({ price: 9_000_000 }),
+      listed({ price: 10_000_000 }),
+      listed({ price: 8_000_000 }),
+    ];
+    // 10.000.000 + 10%, and nothing lower.
+    expect(variantMarketPrice(units, "sku-1", 11_000_000)).toBe(11_000_000);
+  });
+
+  it("counts a reserved unit, and nothing in QC, at a repairer or gone", () => {
+    // A hold is a promise to one customer; the variant is still listed for
+    // everybody else. A unit in QC is unpriced and one at the bench is not
+    // for sale, so neither may set the listing.
+    expect(LISTABLE_STATUSES).toEqual(["TERSEDIA", "DIRESERVASI"]);
+    const units = [
+      listed({ price: 9_000_000 }),
+      listed({ price: 9_500_000, status: "DIRESERVASI" }),
+      listed({ price: 20_000_000, status: "QC" }),
+      listed({ price: 21_000_000, status: "SERVIS" }),
+      listed({ price: 22_000_000, status: "TERJUAL" }),
+      listed({ price: 23_000_000, status: "HILANG" }),
+    ];
+    expect(variantMarketPrice(units, "sku-1", 0)).toBe(10_450_000);
+  });
+
+  it("answers nothing when no unit of the variant can be sold", () => {
+    // A number here would be a listing price no unit on the shelf asks.
+    expect(variantMarketPrice([], "sku-1", 11_000_000)).toBeUndefined();
+    expect(
+      variantMarketPrice(
+        [listed({ price: 9_000_000, status: "QC" })],
+        "sku-1",
+        11_000_000,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("ignores every other variant's units", () => {
+    const units = [
+      listed({ price: 9_000_000 }),
+      listed({ skuId: "sku-2", price: 30_000_000 }),
+    ];
+    expect(variantMarketPrice(units, "sku-1", 0)).toBe(9_900_000);
+    expect(variantMarketPrice(units, "sku-2", 0)).toBe(33_000_000);
+  });
+
+  it("quotes a unit nobody has priced at the variant's asking price", () => {
+    const units = [listed(), listed({ price: 5_000_000 })];
+    expect(variantMarketPrice(units, "sku-1", 6_000_000)).toBe(6_600_000);
+  });
+
+  it("lets a legacy per-unit override feed the maximum", () => {
+    // Typed between 2026-09-08 and 2026-09-19. Not thrown away: it is still
+    // what that unit was listed at, until its store price is next saved.
+    const units = [
+      listed({ price: 9_000_000 }),
+      listed({ price: 9_000_000, marketPrice: 12_500_000 }),
+    ];
+    expect(variantMarketPrice(units, "sku-1", 0)).toBe(12_500_000);
+  });
+
+  it("takes the shop's markup rather than the default when given one", () => {
+    const units = [listed({ price: 10_000_000 })];
+    expect(variantMarketPrice(units, "sku-1", 0, 25)).toBe(12_500_000);
+    expect(variantMarketPrice(units, "sku-1", 0, 0)).toBe(10_000_000);
+  });
+
+  it("gives the same answers in one pass as one variant at a time", () => {
+    // The batch form is what the Inventory table calls; it must never quote
+    // a listing the single form would not.
+    const db = buildSeed();
+    const skuPrice = (id: string) =>
+      db.skus.find((s) => s.id === id)?.price ?? 0;
+    const all = variantMarketPrices(db.units, skuPrice, 10);
+    for (const sku of db.skus) {
+      expect(all.get(sku.id), sku.id).toBe(
+        variantMarketPrice(db.units, sku.id, sku.price, 10),
+      );
+    }
+    // The demo shelf has to list something, or this proves nothing.
+    expect(all.size).toBeGreaterThan(0);
   });
 });

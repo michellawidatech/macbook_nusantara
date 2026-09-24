@@ -28,6 +28,75 @@
  * test/policy.test.ts with the kind of message customers actually send.
  */
 
+/**
+ * What the bot is allowed to do for itself — the switch between the 2026-09-18
+ * design and the 2026-09-21 one.
+ *
+ * ## Why this is a switch and not an edit
+ *
+ * The 2026-09-18 rules exist for a reason that is still true on the day they
+ * are relaxed: *while the shop runs this app in parallel with B2Soft*,
+ * production holds the master data and not the real stock, so a bot answering
+ * "ready kak" is reading a shelf nobody stocked. Everything that followed —
+ * `routeMessage`, `CUSTOMER_TOOLS`, `PARALLEL_RULES` — follows from that one
+ * fact and from nothing else.
+ *
+ * The owner's 2026-09-21 ask is the other side of it: *"make sure like the
+ * chatbot can send pictures per unit and get detail about a unit, and the only
+ * write operation is to make a reservation"*. That is a bot reading the shelf.
+ * Both are right, at different moments — which is what makes it a capability
+ * and not a rewrite. The day the data is the shop's data, the switch flips;
+ * the day a migration is half-finished, it flips back, and nothing else in the
+ * package has to move.
+ *
+ * Read from configuration (`apps/worker/src/config.ts`), so it is one
+ * environment variable on the Mac mini rather than a deploy.
+ */
+export interface AgentCapabilities {
+  /**
+   * May the bot read the shelf — stock, prices, a unit's grade and condition?
+   *
+   * With this off, every question about a particular machine goes to a person
+   * before the model sees it, which is the whole of the 2026-09-18 design.
+   */
+  readonly stock: boolean;
+  /** May it book a hold? The ONE write the owner allows (2026-09-21). */
+  readonly reserve: boolean;
+  /** May it send the shop's own photos of a unit? */
+  readonly photos: boolean;
+}
+
+/** The 2026-09-18 design: answers from the owner's sheet, hands over the rest. */
+export const PARALLEL_CAPABILITIES: AgentCapabilities = {
+  stock: false,
+  reserve: false,
+  photos: false,
+};
+
+/** The 2026-09-21 design: the bot reads the shelf and may hold a unit. */
+export const LIVE_CAPABILITIES: AgentCapabilities = {
+  stock: true,
+  reserve: true,
+  photos: true,
+};
+
+/**
+ * Read the capability out of an environment.
+ *
+ * One function so the worker, the API's Draft endpoint and anything else that
+ * grows a bot read the SAME variable the same way. The cautious reading is the
+ * default, and a value nobody recognises reads as cautious too: the live
+ * design is right only once the stock in this database is the shop's real
+ * stock, and a typo in an environment file must not be what decides that.
+ */
+export function agentCapabilities(
+  env: Record<string, string | undefined>,
+): AgentCapabilities {
+  return env["AGENT_CAPABILITIES"]?.trim().toLowerCase() === "live"
+    ? LIVE_CAPABILITIES
+    : PARALLEL_CAPABILITIES;
+}
+
 /** Why a conversation went to a person. Stored on the message for the inbox. */
 export const HANDOFF_TOPICS = [
   "stock",
@@ -144,8 +213,20 @@ export interface Route {
  */
 export function routeMessage(
   text: string,
-  opts: { hasMedia?: boolean } = {},
+  opts: {
+    hasMedia?: boolean;
+    /** What the bot may do for itself. Defaults to the 2026-09-18 design. */
+    capabilities?: AgentCapabilities;
+  } = {},
 ): Route | null {
+  const can = opts.capabilities ?? PARALLEL_CAPABILITIES;
+  /*
+   * A photo, a video, a voice note or a document still goes to a person, with
+   * `photos` on or off. The capability is about the shop SENDING its own
+   * pictures of a unit; a picture the CUSTOMER sent is a transfer slip, a
+   * cracked screen or a machine they want valued, and every one of those needs
+   * eyes.
+   */
   if (opts.hasMedia) return { topic: "media", rule: "media" };
 
   const t = text.toLowerCase();
@@ -154,24 +235,34 @@ export function routeMessage(
 
   if (ORDER_PAYMENT.test(t))
     return { topic: "order_payment", rule: "order_payment" };
-  if (BATTERY.test(t)) return { topic: "unit_details", rule: "battery" };
+  /*
+   * Negotiation goes to a person whatever the bot can read, and that is a
+   * decision rather than an oversight: a discount is the owner's to give, and
+   * a bot that has the price in front of it is a bot one message away from
+   * discounting it.
+   */
   if (NEGOTIATION.test(t) && (product || money))
     return { topic: "negotiation", rule: "negotiation+product" };
-  if (product) {
-    if (asksPrice(t)) return { topic: "price", rule: "price+product" };
-    if (UNIT_DETAILS.test(t))
-      return { topic: "unit_details", rule: "details+product" };
-    if (STOCK.test(t)) return { topic: "stock", rule: "stock+product" };
-    // "air m2 ram-nya berapa?" is about the model, and the catalogue answers
-    // it. Anything else about a named machine — "ada m2?", "yang i5 aja",
-    // "air m1 8/256" in answer to "tipe apa, kak?" — is a question about the
-    // shelf.
-    if (!SPEC.test(t)) return { topic: "stock", rule: "product" };
+  if (!can.stock) {
+    if (BATTERY.test(t)) return { topic: "unit_details", rule: "battery" };
+    if (product) {
+      if (asksPrice(t)) return { topic: "price", rule: "price+product" };
+      if (UNIT_DETAILS.test(t))
+        return { topic: "unit_details", rule: "details+product" };
+      if (STOCK.test(t)) return { topic: "stock", rule: "stock+product" };
+      // "air m2 ram-nya berapa?" is about the model, and the catalogue answers
+      // it. Anything else about a named machine — "ada m2?", "yang i5 aja",
+      // "air m1 8/256" in answer to "tipe apa, kak?" — is a question about the
+      // shelf.
+      if (!SPEC.test(t)) return { topic: "stock", rule: "product" };
+    }
   }
-  if (RESERVATION.test(t)) return { topic: "reservation", rule: "reservation" };
+  if (!can.reserve && RESERVATION.test(t))
+    return { topic: "reservation", rule: "reservation" };
   // A budget with no machine named is a request to pick one out of today's
-  // shelf, which nobody here can see.
-  if (money) return { topic: "recommendation", rule: "budget" };
+  // shelf. With `stock` the bot can do exactly that, and it is the most
+  // useful thing it does.
+  if (!can.stock && money) return { topic: "recommendation", rule: "budget" };
   return null;
 }
 

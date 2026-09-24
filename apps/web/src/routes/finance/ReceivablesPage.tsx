@@ -1,62 +1,67 @@
 /**
- * Money the shop is owed, by whoever is holding it.
+ * Pending Payment — money a marketplace is holding, one row per payment.
  *
- * > *"It can be creating a new tab for pending balance/piutang which source is
- * > from tokopedia/shopee/shopee paylater, can mark as done … Then it is
- * > editable and logged."*
- * > — owner, 2026-09-08
+ * ## One table (owner, 2026-09-23)
  *
- * ## Two tables, because there are two debtors
+ * > *"Make it just marketplace pending table (shopee, tokopedia), remove the
+ * > 'owed by customer' table."*
  *
- * The page is split down the middle and that split is the point of it. A
- * **marketplace** holding a payout and a **customer** who has not paid are
- * both "money we do not have yet", and every other similarity ends there:
+ * What a customer owes has its own screen — `/finance/receivable` — and having
+ * it here as well meant two lists of the same debts drifting apart. This page
+ * is now only the errand you do at a marketplace's dashboard.
  *
- * | | who has it | how it is collected | how it goes wrong |
- * |---|---|---|---|
- * | marketplace | Shopee, Tokopedia | press a button on their dashboard | fees nobody itemised |
- * | customer | a person | telephone them | a promise nobody chased |
+ * Pending rows sit on top, oldest sale first, because the oldest payout is the
+ * one nobody has chased; withdrawn rows underneath, most recent first.
+ * `Receive` records that row's payout alone, and `splitPayout`/`payoutsOf`
+ * still make a settlement of one out of it — the database has always held one
+ * `Settlement` per `Payment`.
  *
- * Before this, `Order.settled` covered both with one boolean, so a Shopee sale
- * awaiting withdrawal was indistinguishable from a customer four weeks late.
- * Nobody could answer either question.
+ * **Which money is "waiting" is Shopee and Tokopedia** (`holdsPendingMoney` in
+ * `lib/channels.ts`, owner ask 2026-09-20). It used to be every payment in
+ * PENDING, which let `legacyPayments` — one PENDING payment carrying the
+ * ORDER's channel — file an unpaid walk-in here, money a person owes on the
+ * table for money a platform holds.
  *
- * ## Grouped by channel, because withdrawing is a per-channel errand
- *
- * Somebody signs in to Shopee, presses a button, then does the same on
- * Tokopedia. A single "Rp23.400.000 pending" figure is not something anybody
- * can act on — which is the same reasoning the Income & Expense card was
- * reshaped under on 2026-09-01, taken one step further now that a withdrawal
- * is a document rather than a tick.
+ * The Shopee upload (owner ask 2026-09-21) writes through the same `record` a
+ * hand-typed withdrawal does, so a settlement made either way is the same row
+ * and carries the same log.
  */
 import { useMemo, useState } from "react";
+import { App, Button, Card, Flex, Statistic, Tooltip, Typography } from "antd";
 import {
-  App,
-  Button,
-  Card,
-  Flex,
-  Statistic,
-  Table,
-  Tag,
-  Tooltip,
-  Typography,
-} from "antd";
-import { CheckCircleOutlined, EditOutlined } from "@ant-design/icons";
+  CheckCircleOutlined,
+  EditOutlined,
+  UploadOutlined,
+  WalletOutlined,
+} from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { PageContainer } from "../../components/PageContainer";
+import { ProTable } from "../../components/ProTable";
 import { SettleModal } from "../../components/SettleModal";
-import { fmtRp, fmtDate, fmtDateTime } from "../../lib/format.js";
-import { channelOf } from "../../lib/channels.js";
 import {
-  commissionPctOf,
+  ShopeeSettlementImport,
+  pendingShopeePayments,
+} from "./ShopeeSettlementImport.js";
+import { PaymentsModal } from "../../components/PaymentsModal";
+import { fmtRp, fmtDate, fmtDateTime, fmtNone } from "../../lib/format.js";
+import { channelOf, holdsPendingMoney } from "../../lib/channels.js";
+import { diffPayments } from "../../lib/paymentEdits.js";
+import {
+  payoutsOf,
+  respreadPayout,
   settlementTotals,
+  splitPayout,
+  type Payout,
+  type Settlement,
+  type SettlementDraft,
   type SettlementFee,
 } from "../../lib/marketplace.js";
 import {
-  isOverdue,
+  billAfterReturns,
+  isSettled,
   paymentsOf,
-  saleBalance,
+  refundedOf,
   type SalePayment,
 } from "../../lib/salePayments.js";
 import {
@@ -69,167 +74,156 @@ import {
 import type { MockDb, Order } from "../../mock/seed.js";
 import { SPACE, TYPE } from "../../theme/tokens";
 
-/** One pending part, with the sale it came off. */
-interface PendingRow {
+/**
+ * One marketplace payment, waiting or withdrawn.
+ *
+ * Both halves of the table are this shape because they are the same fact at
+ * two moments — a row does not change what it is when the money lands, it
+ * gains a `settlement`.
+ */
+interface MarketRow {
   readonly key: string;
   readonly order: Order;
   readonly payment: SalePayment;
   readonly channel: string;
+  /** The channel's own label, which is what the filter and the search read. */
+  readonly channelLabel: string;
   readonly customer: string;
-}
-
-/** One channel's pending money, and the sales behind it. */
-interface ChannelRow {
-  readonly key: string;
-  readonly channel: string;
+  /** When the sale happened. */
+  readonly at: string;
   readonly gross: number;
-  readonly count: number;
-  readonly rows: readonly PendingRow[];
-}
-
-/** One customer debt: a sale, or what they owed before this app. */
-interface OwedRow {
-  readonly key: string;
-  /** Absent for a debt from before this app (`Customer.openingBalance`). */
-  readonly order?: Order;
-  readonly customer: string;
-  readonly owed: number;
-  readonly dueAt?: string;
-  readonly overdue: boolean;
+  /** Absent while the marketplace is still holding it. */
+  readonly settlement?: Settlement;
 }
 
 export function ReceivablesPage() {
   const { t } = useTranslation();
   const db = useDb();
   const { message } = App.useApp();
-  const [settling, setSettling] = useState<ChannelRow | null>(null);
+  /** The pending row being received. */
+  const [receiving, setReceiving] = useState<MarketRow | null>(null);
   /** A recorded withdrawal being corrected. *"Then it is editable and logged."* */
-  const [amending, setAmending] = useState<
-    (typeof db.settlements)[number] | null
-  >(null);
+  const [amending, setAmending] = useState<Payout | null>(null);
+  const [editingPay, setEditingPay] = useState<Order | null>(null);
+  /** The Shopee upload (owner ask 2026-09-21). See `ShopeeSettlementImport`. */
+  const [importing, setImporting] = useState(false);
 
-  const customerName = (o: Order) =>
-    db.customers.find((c) => c.id === o.customerId)?.name ??
-    t("piutang.walkIn", "Walk-in");
+  const channelLabel = (channel: string) =>
+    channelOf(channel)?.label ?? channel;
 
-  /** Everything a marketplace is holding, grouped by which one. */
-  const channels = useMemo<ChannelRow[]>(() => {
-    const by = new Map<string, PendingRow[]>();
+  const customerOf = (o: Order) =>
+    o.customerId === null
+      ? undefined
+      : db.customers.find((c) => c.id === o.customerId);
+
+  /**
+   * Every marketplace payment: what is waiting, then what has been withdrawn.
+   *
+   * The waiting half comes off the PAYMENTS, because a payment in PENDING is
+   * what "a marketplace is holding this" means. The withdrawn half comes off
+   * the SETTLEMENTS rather than off settled payments, because a settlement is
+   * the withdrawal document — the row that knows what was deducted and what
+   * landed. A marketplace payment settled by hand in Transaction History has
+   * no such document and belongs in neither list.
+   */
+  const market = useMemo<MarketRow[]>(() => {
+    const orders = new Map(db.orders.map((o) => [o.id, o]));
+    const row = (
+      o: Order,
+      p: SalePayment,
+      settlement?: Settlement,
+    ): MarketRow => {
+      const channel = settlement?.channel ?? p.channel ?? o.source;
+      return {
+        key: `${o.id}-${p.id}`,
+        order: o,
+        payment: p,
+        channel,
+        channelLabel: channelLabel(channel),
+        customer: customerOf(o)?.name ?? t("piutang.walkIn", "Walk-in"),
+        at: o.ts,
+        gross: settlement?.gross ?? p.amount,
+        ...(settlement === undefined ? {} : { settlement }),
+      };
+    };
+
+    const waiting: MarketRow[] = [];
     for (const o of db.orders) {
       for (const p of paymentsOf(o)) {
         if (p.state !== "PENDING") continue;
-        const channel = p.channel ?? o.source;
-        const row: PendingRow = {
-          key: `${o.id}-${p.id}`,
-          order: o,
-          payment: p,
-          channel,
-          customer: customerName(o),
-        };
-        by.set(channel, [...(by.get(channel) ?? []), row]);
+        // Shopee and Tokopedia only — see the header. Anything else waiting
+        // is a person who has not paid, and belongs to the table below.
+        if (!holdsPendingMoney(p.channel ?? o.source)) continue;
+        waiting.push(row(o, p));
       }
     }
-    return [...by.entries()]
-      .map(([channel, rows]) => ({
-        key: channel,
-        channel,
-        rows,
-        count: rows.length,
-        gross: rows.reduce((n, r) => n + r.payment.amount, 0),
-      }))
-      .sort((a, b) => b.gross - a.gross);
-  }, [db.orders, db.customers]);
-
-  /** Everything a customer owes, per sale. */
-  const owed = useMemo<OwedRow[]>(() => {
-    const out: OwedRow[] = [];
-    for (const o of db.orders) {
-      const b = saleBalance(o.total, paymentsOf(o));
-      if (b.customerOwes <= 0) continue;
-      const overdue = paymentsOf(o).some((p) => isOverdue(p));
-      out.push({
-        key: o.id,
-        order: o,
-        customer: customerName(o),
-        owed: b.customerOwes,
-        ...(b.nextDueAt === undefined ? {} : { dueAt: b.nextDueAt }),
-        overdue,
-      });
+    const done: MarketRow[] = [];
+    for (const s of db.settlements) {
+      if (!holdsPendingMoney(s.channel)) continue;
+      const o = orders.get(s.orderId);
+      if (o === undefined) continue;
+      const p = paymentsOf(o).find((x) => x.id === s.paymentId);
+      if (p === undefined) continue;
+      done.push(row(o, p, s));
     }
-    // What a customer owed before this app — B2Soft's balance that no invoice
-    // explains (owner answer 2026-09-13: receivables "need to combine all").
-    // No sale and no promise date: a name to ring and a figure.
-    for (const c of db.customers) {
-      if (!c.openingBalance || c.openingBalance <= 0) continue;
-      out.push({
-        key: `opening-${c.id}`,
-        customer: c.name,
-        owed: c.openingBalance,
-        overdue: false,
-      });
-    }
-    // Overdue first, then by the nearest promise: this is a call list.
-    return out.sort(
-      (a, b) =>
-        Number(b.overdue) - Number(a.overdue) ||
-        (a.dueAt ?? "9999").localeCompare(b.dueAt ?? "9999"),
-    );
-  }, [db.orders, db.customers]);
+    // Waiting first — that is the half somebody is here to act on — oldest
+    // sale first, because the oldest payout is the one nobody has chased.
+    // Withdrawn underneath, most recently withdrawn first.
+    waiting.sort((a, b) => a.at.localeCompare(b.at));
+    done.sort((a, b) => b.settlement!.at.localeCompare(a.settlement!.at));
+    return [...waiting, ...done];
+  }, [db.orders, db.customers, db.settlements]);
 
-  const pendingTotal = channels.reduce((n, c) => n + c.gross, 0);
-  const owedTotal = owed.reduce((n, r) => n + r.owed, 0);
+  const pendingTotal = market
+    .filter((r) => r.settlement === undefined)
+    .reduce((n, r) => n + r.gross, 0);
 
   /**
-   * Record a withdrawal: the money lands, and the fees are kept.
+   * Write settlements: the money lands, and the deductions are kept.
    *
-   * One `mutate` for the whole channel, because that is what the errand is —
-   * one press on Shopee's dashboard pays out every sale at once — and because
-   * the payments, their `settled` projections and the settlement document have
-   * to move together. A payout half-recorded would leave sales showing as
-   * pending against money that is already in the bank.
+   * The ONE writer, and ONE `mutate`, because the payments, their `settled`
+   * projections and the settlement documents have to move together. A payout
+   * half-recorded would leave a sale showing as pending against money that is
+   * already in the bank.
    *
-   * The RECEIVED figure is apportioned back across the sales in proportion to
-   * what each contributed, with the rounding remainder given to the largest.
-   * That is not cosmetic: `Order.netReceived` is what the finance screens add
-   * up, and a payout of Rp8.850.000 spread as three round numbers that sum to
-   * Rp8.849.999 would leave a rupiah unaccounted for on every reconciliation
-   * from now on.
+   * Per draft, i.e. per PAYMENT:
+   *
+   * - the payment flips PENDING → SETTLED, dated now — which is what puts it
+   *   in the bank's balance (`lib/accounts.ts` builds balances from payments),
+   *   and nothing about the order's total changes;
+   * - `grossTotal` / `netReceived` record what the SALE netted: its total less
+   *   what the platform kept of this payment. On a split sale — half cash,
+   *   half Shopee — that is the total less the Shopee part's deductions, not
+   *   the Shopee part alone;
+   * - one `Settlement` and its RECORDED log row.
+   *
+   * A payment that is no longer pending when the write happens — another till
+   * recorded it a moment ago — is skipped rather than settled twice, and the
+   * caller is told how many were.
    */
-  const settle = (
-    row: ChannelRow,
-    result: {
-      fees: SettlementFee[];
-      received: number;
-      reason?: string;
-    },
-  ) => {
-    const totals = settlementTotals({
-      gross: row.gross,
-      fees: result.fees,
-      received: result.received,
-    });
-    const shares = apportion(
-      result.received,
-      row.rows.map((r) => r.payment.amount),
-    );
+  const record = (
+    channel: string,
+    drafts: readonly SettlementDraft[],
+  ): { written: number; landed: number } => {
     const at = new Date().toISOString();
+    const staff = currentStaffName();
+    let written = 0;
+    let landed = 0;
     mutate((d: MockDb) => {
-      const settlementId = nextId("stl");
-      row.rows.forEach((r, i) => {
-        const o = d.orders.find((x) => x.id === r.order.id);
-        if (!o) return;
-        const parts = (o.payments ?? paymentsOf(r.order)).map((p) =>
-          p.id === r.payment.id ? { ...p, state: "SETTLED" as const, at } : p,
+      for (const s of drafts) {
+        const o = d.orders.find((x) => x.id === s.orderId);
+        if (!o) continue;
+        const parts = paymentsOf(o);
+        const target = parts.find((p) => p.id === s.paymentId);
+        if (target === undefined || target.state !== "PENDING") continue;
+        const next = parts.map((p) =>
+          p.id === s.paymentId ? { ...p, state: "SETTLED" as const, at } : p,
         );
-        o.payments = parts;
-        o.settled = parts.every((p) => p.state === "SETTLED");
-        // What the sale was worth before the platform's cut, and what came
-        // back. `grossTotal` is only written when the two differ, so a payout
-        // with no fees leaves the sale exactly as it was.
-        const net = shares[i] ?? 0;
-        if (net !== r.payment.amount) {
-          o.grossTotal = o.total;
-          o.netReceived = net;
+        o.payments = next;
+        o.settled = next.every((p) => p.state === "SETTLED");
+        if (s.received !== s.gross) {
+          o.grossTotal = o.grossTotal ?? o.total;
+          o.netReceived = (o.netReceived ?? o.total) - (s.gross - s.received);
         }
         // The sale's own timeline should say the money arrived — it is the
         // one place somebody chasing a serial will look.
@@ -237,536 +231,475 @@ export function ReceivablesPage() {
           appendEvent(d, serial, {
             type: "DICATAT",
             refCode: o.code,
-            note: `Withdrawal from ${channelOf(row.channel)?.label ?? row.channel}: ${fmtRp(net)}`,
+            note: `Withdrawal from ${channelLabel(channel)}: ${fmtRp(s.received)}`,
           });
         }
-      });
-      d.settlements.push({
-        id: settlementId,
-        paymentId: row.rows.map((r) => r.payment.id).join(","),
-        orderId: row.rows.map((r) => r.order.id).join(","),
-        channel: row.channel,
-        gross: row.gross,
-        fees: result.fees,
-        received: result.received,
-        ...(result.reason ? { reason: result.reason } : {}),
-        at,
-        staff: currentStaffName(),
-      });
-      d.settlementLog.push({
-        id: nextId("slog"),
-        settlementId,
-        at,
-        staff: currentStaffName(),
-        action: "RECORDED",
-        after: { received: result.received, deducted: totals.deducted },
-        ...(result.reason ? { reason: result.reason } : {}),
-      });
+        const id = nextId("stl");
+        const totals = settlementTotals({
+          gross: s.gross,
+          fees: s.fees,
+          received: s.received,
+        });
+        d.settlements.push({
+          id,
+          paymentId: s.paymentId,
+          orderId: s.orderId,
+          channel,
+          gross: s.gross,
+          fees: s.fees,
+          received: s.received,
+          ...(s.reason ? { reason: s.reason } : {}),
+          at,
+          staff,
+        });
+        d.settlementLog.push({
+          id: nextId("slog"),
+          settlementId: id,
+          at,
+          staff,
+          action: "RECORDED",
+          after: { received: totals.received, deducted: totals.deducted },
+          ...(s.reason ? { reason: s.reason } : {}),
+        });
+        written += 1;
+        landed += s.received;
+      }
     });
-    setSettling(null);
-    message.success(
-      t("piutang.settled", "{{amount}} recorded from {{channel}}.", {
-        amount: fmtRp(result.received),
-        channel: channelOf(row.channel)?.label ?? row.channel,
-      }),
+    return { written, landed };
+  };
+
+  /**
+   * "Receive": one row's payout, recorded.
+   *
+   * Still through `splitPayout` although there is only ever one part — it is
+   * what decides a settlement's fee rows and its share of any discrepancy, and
+   * a second copy of that arithmetic for the single case is a second place for
+   * it to drift.
+   */
+  const receive = (
+    what: MarketRow,
+    result: { fees: SettlementFee[]; received: number },
+  ) => {
+    const drafts = splitPayout(
+      [
+        {
+          paymentId: what.payment.id,
+          orderId: what.order.id,
+          gross: what.payment.amount,
+        },
+      ],
+      { fees: result.fees, received: result.received },
+      () => nextId("fee"),
     );
+    const done = record(what.channel, drafts);
+    setReceiving(null);
+    // Said outside the write, never inside it.
+    if (done.written > 0) {
+      message.success(
+        t("piutang.settled", "{{amount}} recorded from {{channel}}.", {
+          amount: fmtRp(done.landed),
+          channel: channelLabel(what.channel),
+        }),
+      );
+    } else {
+      message.warning(
+        t(
+          "piutang.alreadyReceived",
+          "This payout had already been recorded as received.",
+        ),
+      );
+    }
   };
 
   /**
    * Correct a withdrawal that was recorded wrongly.
    *
-   * The money has already landed and the sales are already settled — what is
-   * being corrected is the SHOP'S ACCOUNT of it: which fee was which, and how
-   * much actually arrived. So this rewrites the settlement and appends an
-   * AMENDED log row carrying both figures, and does not touch the payments.
-   *
-   * A reason is required whenever the corrected figures still disagree with
-   * the arithmetic, for the same reason it was required the first time: the
-   * disagreement is the interesting part and a bare number cannot be
-   * reconstructed later.
+   * The money has already landed and the sale is already settled — what is
+   * being corrected is the SHOP'S ACCOUNT of it: which deduction was which,
+   * and how much therefore arrived. So this rewrites the settlement and
+   * appends an AMENDED log row carrying both figures, and does not touch the
+   * payment.
    */
   const amend = (
-    existing: (typeof db.settlements)[number],
-    result: { fees: SettlementFee[]; received: number; reason?: string },
+    payout: Payout,
+    result: { fees: SettlementFee[]; received: number },
   ) => {
-    const before = settlementTotals({
-      gross: existing.gross,
-      fees: existing.fees,
-      received: existing.received,
-    });
-    const after = settlementTotals({
-      gross: existing.gross,
-      fees: result.fees,
-      received: result.received,
-    });
+    const next = respreadPayout(payout, result, () => nextId("fee"));
     const at = new Date().toISOString();
+    const staff = currentStaffName();
     mutate((d) => {
-      const i = d.settlements.findIndex((x) => x.id === existing.id);
-      if (i >= 0) {
-        d.settlements[i] = {
-          ...d.settlements[i]!,
-          fees: result.fees,
-          received: result.received,
-          ...(result.reason
-            ? { reason: result.reason }
-            : { reason: undefined }),
-        };
-      }
-      d.settlementLog.push({
-        id: nextId("slog"),
-        settlementId: existing.id,
-        at,
-        staff: currentStaffName(),
-        action: "AMENDED",
-        before: { received: before.received, deducted: before.deducted },
-        after: { received: after.received, deducted: after.deducted },
-        ...(result.reason ? { reason: result.reason } : {}),
+      next.forEach((s, i) => {
+        const was = payout.settlements[i]!;
+        const before = settlementTotals({
+          gross: was.gross,
+          fees: was.fees,
+          received: was.received,
+        });
+        const after = settlementTotals({
+          gross: s.gross,
+          fees: s.fees,
+          received: s.received,
+        });
+        const index = d.settlements.findIndex((x) => x.id === s.id);
+        if (index >= 0) d.settlements[index] = s;
+        d.settlementLog.push({
+          id: nextId("slog"),
+          settlementId: s.id,
+          at,
+          staff,
+          action: "AMENDED",
+          before: { received: before.received, deducted: before.deducted },
+          after: { received: after.received, deducted: after.deducted },
+          ...(s.reason ? { reason: s.reason } : {}),
+        });
       });
     });
     setAmending(null);
     message.success(t("piutang.amended", "Withdrawal corrected."));
   };
 
-  return (
-    <PageContainer title={t("piutang.title", "Pending balance & receivables")}>
-      <Flex vertical gap={SPACE.md}>
-        <Flex gap={SPACE.md} wrap>
-          <Card style={{ flex: 1, minWidth: 220 }}>
-            <Statistic
-              title={t("piutang.withMarketplaces", "With marketplaces")}
-              value={fmtRp(pendingTotal)}
-              styles={{ content: { color: "#d48806" } }}
-            />
-            <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
-              {t(
-                "piutang.withMarketplacesHint",
-                "Paid by the customer. Withdraw it from each platform.",
-              )}
-            </Typography.Text>
-          </Card>
-          <Card style={{ flex: 1, minWidth: 220 }}>
-            <Statistic
-              title={t("piutang.customersOwe", "Customers owe")}
-              value={fmtRp(owedTotal)}
-              styles={{ content: { color: "#cf1322" } }}
-            />
-            <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
-              {t(
-                "piutang.customersOweHint",
-                "Not paid at all. Somebody has to ring them.",
-              )}
-            </Typography.Text>
-          </Card>
-        </Flex>
+  /**
+   * Save a correction to what a customer paid, and the log rows that make it
+   * safe — the same writer Transaction History uses, for the same reason the
+   * dialog is shared (owner ask 2026-09-08).
+   *
+   * One `mutate`: the payments, the `settled` projection over them and every
+   * log row go together, exactly as a unit's event and its projection do.
+   */
+  const savePayments = (order: Order, next: SalePayment[]) => {
+    const rows = diffPayments(paymentsOf(order), next, {
+      at: new Date().toISOString(),
+      staff: currentStaffName(),
+    });
+    mutate((d) => {
+      const o = d.orders.find((x) => x.id === order.id);
+      if (!o) return;
+      o.payments = next;
+      // Against the bill AFTER returns, net of what was handed back.
+      o.settled = isSettled(billAfterReturns(o), next, refundedOf(o));
+      for (const row of rows) d.paymentLog.push({ id: nextId("plog"), ...row });
+    });
+    setEditingPay(null);
+    message.success(
+      rows.length === 0
+        ? t("piutang.payUnchanged", "Nothing changed.")
+        : t("piutang.payLogged", "{{n}} change(s) recorded.", {
+            n: rows.length,
+          }),
+    );
+  };
 
-        <Card title={t("piutang.marketplaceMoney", "Waiting at a marketplace")}>
-          <Table<ChannelRow>
-            size="small"
+  /** What a row shows in the Received column: waiting, or what landed. */
+  const receivedCell = (r: MarketRow) => {
+    if (r.settlement === undefined) {
+      // Zero, not a prediction. It used to say "~Rp7.704.000 after 10%", and
+      // the owner's answer is that the cut is not always 10% and is nobody's
+      // to guess (2026-09-20) — a figure the screen invents is one somebody
+      // has to check before they can trust the one beside it.
+      return <Typography.Text type="warning">{fmtRp(0)}</Typography.Text>;
+    }
+    const s = r.settlement;
+    const totals = settlementTotals({
+      gross: s.gross,
+      fees: s.fees,
+      received: s.received,
+    });
+    const note = r.payment.note?.trim();
+    return (
+      <Flex vertical align="flex-end" gap={0}>
+        <Typography.Text strong>{fmtRp(s.received)}</Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+          {t("piutang.lessDeductions", "less {{amount}}", {
+            amount: fmtRp(totals.deducted),
+          })}
+          {s.fees.length > 0 &&
+            ` · ${s.fees.map((f) => f.label?.trim() || f.kind).join(" · ")}`}
+        </Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+          {fmtDateTime(s.at)}
+        </Typography.Text>
+        {s.reason?.trim() && (
+          <Typography.Text type="warning" style={{ fontSize: TYPE.sm }}>
+            {s.reason}
+          </Typography.Text>
+        )}
+        {note && (
+          <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+            {note}
+          </Typography.Text>
+        )}
+      </Flex>
+    );
+  };
+
+  return (
+    <PageContainer title={t("piutang.title", "Pending Payment")}>
+      <Flex vertical gap={SPACE.md}>
+        <Card>
+          <Statistic
+            title={t("piutang.withMarketplaces", "With marketplaces")}
+            value={fmtRp(pendingTotal)}
+            styles={{ content: { color: "#d48806" } }}
+          />
+        </Card>
+
+        <Card
+          title={t("piutang.marketplaceMoney", "Waiting at a marketplace")}
+          extra={
+            <Button
+              icon={<UploadOutlined />}
+              onClick={() => setImporting(true)}
+            >
+              {t("piutang.uploadShopee", "Upload a Shopee report")}
+            </Button>
+          }
+        >
+          <ProTable<MarketRow>
+            persistKey="pending.marketplace"
             rowKey="key"
-            dataSource={channels}
-            pagination={false}
+            dataSource={market}
+            searchPlaceholder={t(
+              "piutang.searchOrders",
+              "Search an order number or reference",
+            )}
             locale={{
               emptyText: t(
                 "piutang.noPending",
                 "Every marketplace has paid out.",
               ),
             }}
-            expandable={{
-              expandedRowRender: (c) => (
-                <Table<PendingRow>
-                  size="small"
-                  rowKey="key"
-                  dataSource={c.rows as PendingRow[]}
-                  pagination={false}
-                  columns={[
-                    {
-                      title: t("piutang.sale", "Sale"),
-                      key: "code",
-                      render: (_, r) => (
-                        <Link to="/finance/transactions">{r.order.code}</Link>
-                      ),
-                    },
-                    {
-                      title: t("piutang.customer", "Customer"),
-                      dataIndex: "customer",
-                    },
-                    {
-                      title: t("piutang.when", "Sold"),
-                      key: "at",
-                      width: 130,
-                      render: (_, r) => fmtDate(r.order.ts),
-                    },
-                    {
-                      title: t("piutang.amount", "Amount"),
-                      key: "amount",
-                      width: 150,
-                      align: "right",
-                      render: (_, r) => fmtRp(r.payment.amount),
-                    },
-                  ]}
-                />
-              ),
-            }}
             columns={[
               {
                 title: t("piutang.channel", "Channel"),
                 key: "channel",
-                render: (_, c) => (
-                  <Typography.Text strong>
-                    {channelOf(c.channel)?.label ?? c.channel}
-                  </Typography.Text>
+                width: 140,
+                facet: true,
+                facetLabel: t("piutang.anyChannel", "Any channel"),
+                facetValue: (r) => r.channelLabel,
+                sortValue: (r) => r.channelLabel,
+                render: (_, r) => (
+                  <Typography.Text strong>{r.channelLabel}</Typography.Text>
                 ),
               },
               {
-                title: t("piutang.sales", "Sales"),
-                key: "count",
-                width: 100,
-                align: "right",
-                render: (_, c) => c.count,
-              },
-              {
-                title: t("piutang.gross", "Gross"),
-                key: "gross",
-                width: 170,
-                align: "right",
-                render: (_, c) => fmtRp(c.gross),
+                title: t("piutang.transactionNo", "Transaction number"),
+                key: "order",
+                width: 180,
+                searchable: true,
+                searchValue: (r) => r.order.code,
+                sortValue: (r) => r.order.code,
+                render: (_, r) => (
+                  <Link to="/finance/transactions">{r.order.code}</Link>
+                ),
               },
               {
                 /*
-                 * What the rule expects, said before anybody presses anything.
-                 *
-                 * A prediction, and labelled as one: the received figure in
-                 * the dialog is the truth, because it is the only one that can
-                 * be checked against a bank statement.
+                 * The marketplace's own order number — what its dashboard and
+                 * its statement name a payout by, and therefore what somebody
+                 * reconciling one is holding in their other hand.
                  */
-                title: t("piutang.expected", "Should land"),
-                key: "expected",
+                title: t("piutang.refNo", "Reference number"),
+                key: "ref",
                 width: 190,
-                align: "right",
-                render: (_, c) => {
-                  const pct = commissionPctOf(
-                    c.channel,
-                    db.settings.marketplaceFees,
-                  );
-                  const totals = settlementTotals({
-                    gross: c.gross,
-                    fees: [
-                      {
-                        id: "preview",
-                        kind: "COMMISSION",
-                        amount: Math.floor((c.gross * pct) / 100),
-                      },
-                    ],
-                  });
-                  return (
-                    <Flex vertical align="flex-end" gap={0}>
-                      <Typography.Text>
-                        {fmtRp(totals.expected)}
-                      </Typography.Text>
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: TYPE.sm }}
-                      >
-                        {t("piutang.afterPct", "after {{pct}}%", { pct })}
-                      </Typography.Text>
-                    </Flex>
-                  );
-                },
-              },
-              {
-                title: "",
-                key: "actions",
-                width: 190,
-                render: (_, c) => (
-                  <Button
-                    type="primary"
-                    size="small"
-                    icon={<CheckCircleOutlined />}
-                    onClick={() => setSettling(c)}
-                  >
-                    {t("piutang.markDone", "Mark as received")}
-                  </Button>
-                ),
-              },
-            ]}
-          />
-        </Card>
-
-        <Card title={t("piutang.customerDebts", "Owed by customers")}>
-          <Table<OwedRow>
-            size="small"
-            rowKey="key"
-            dataSource={owed}
-            pagination={false}
-            locale={{
-              emptyText: t("piutang.noDebts", "Nobody owes the shop anything."),
-            }}
-            columns={[
-              {
-                title: t("piutang.customer", "Customer"),
-                dataIndex: "customer",
-                render: (v: string, r) => (
-                  <Flex vertical gap={0}>
-                    <Typography.Text strong>{v}</Typography.Text>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: TYPE.sm }}
-                    >
-                      {r.order?.code ??
-                        t("piutang.fromBefore", "From before this app")}
-                    </Typography.Text>
-                  </Flex>
-                ),
-              },
-              {
-                title: t("piutang.billed", "Bill"),
-                key: "total",
-                width: 160,
-                align: "right",
-                render: (_, r) => (r.order ? fmtRp(r.order.total) : "—"),
-              },
-              {
-                title: t("piutang.owed", "Still owed"),
-                key: "owed",
-                width: 160,
-                align: "right",
+                searchable: true,
+                searchValue: (r) => r.payment.ref ?? "",
+                sortValue: (r) => r.payment.ref ?? "",
                 render: (_, r) => (
-                  <Typography.Text type="danger" strong>
-                    {fmtRp(r.owed)}
+                  <Typography.Text
+                    type={r.payment.ref?.trim() ? undefined : "secondary"}
+                    style={{ fontFamily: "monospace", fontSize: TYPE.sm }}
+                  >
+                    {r.payment.ref?.trim() || fmtNone()}
                   </Typography.Text>
                 ),
               },
               {
-                title: t("piutang.due", "Promised"),
-                key: "due",
-                width: 190,
-                render: (_, r) =>
-                  r.dueAt ? (
-                    <Tag color={r.overdue ? "red" : "default"}>
-                      {r.overdue
-                        ? t("piutang.overdueOn", "Overdue — {{date}}", {
-                            date: fmtDate(r.dueAt),
-                          })
-                        : fmtDate(r.dueAt)}
-                    </Tag>
-                  ) : (
-                    <Typography.Text type="secondary">
-                      {t("piutang.noDate", "No date agreed")}
-                    </Typography.Text>
-                  ),
+                title: t("piutang.customer", "Customer"),
+                key: "customer",
+                width: 170,
+                searchable: true,
+                searchValue: (r) => r.customer,
+                sortValue: (r) => r.customer,
+                render: (_, r) => r.customer,
               },
               {
+                title: t("piutang.when", "Date"),
+                key: "at",
+                width: 130,
+                sortValue: (r) => Date.parse(r.at),
+                render: (_, r) => fmtDate(r.at),
+              },
+              {
+                title: t("piutang.amount", "Amount"),
+                key: "amount",
+                width: 160,
+                align: "right",
+                sortValue: (r) => r.gross,
+                render: (_, r) => fmtRp(r.gross),
+              },
+              {
+                title: t("piutang.landed", "Received"),
+                key: "received",
+                width: 230,
+                align: "right",
+                sortValue: (r) => r.settlement?.received ?? -1,
+                render: (_, r) => receivedCell(r),
+              },
+              {
+                // Blank by convention: DataTable drops an untitled column to
+                // the foot of the card on a phone, where buttons belong.
+                //
+                // Two icon buttons on EVERY row, waiting or not (owner ask
+                // 2026-09-20). The first is whichever of receive/correct the
+                // row is up to; the second is the payment history, which a
+                // customer can ring about before a payout has cleared. Icons
+                // on both, because a labelled button on one row beside a bare
+                // symbol on the next reads as two different kinds of row.
                 title: "",
                 key: "actions",
-                width: 56,
-                render: (_, r) =>
-                  r.order === undefined ? (
-                    <Tooltip
-                      title={t(
-                        "piutang.editOldDebt",
-                        "Correct it on the customer",
-                      )}
-                    >
-                      <Link to="/customers">
+                width: 96,
+                render: (_, r) => (
+                  <Flex gap={4}>
+                    {r.settlement === undefined ? (
+                      <Tooltip
+                        title={t(
+                          "piutang.receive",
+                          "Mark this payout as received",
+                        )}
+                      >
                         <Button
                           size="small"
-                          icon={<EditOutlined />}
+                          icon={<CheckCircleOutlined />}
                           aria-label={t(
-                            "piutang.editOldDebtAria",
-                            "Open {{name}} in Customers",
-                            { name: r.customer },
-                          )}
-                        />
-                      </Link>
-                    </Tooltip>
-                  ) : (
-                    <Tooltip
-                      title={t(
-                        "piutang.openInHistory",
-                        "Correct what was paid",
-                      )}
-                    >
-                      <Link to="/finance/transactions">
-                        <Button
-                          size="small"
-                          icon={<EditOutlined />}
-                          aria-label={t(
-                            "piutang.openInHistoryAria",
-                            "Open {{code}} in Transaction History",
+                            "piutang.receiveAria",
+                            "Receive the payout for {{code}}",
                             { code: r.order.code },
                           )}
+                          onClick={() => setReceiving(r)}
                         />
-                      </Link>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip
+                        title={t("piutang.amend", "Correct this withdrawal")}
+                      >
+                        <Button
+                          size="small"
+                          icon={<EditOutlined />}
+                          aria-label={t(
+                            "piutang.amendSaleAria",
+                            "Correct the withdrawal for {{code}}",
+                            { code: r.order.code },
+                          )}
+                          onClick={() =>
+                            setAmending(payoutsOf([r.settlement!])[0]!)
+                          }
+                        />
+                      </Tooltip>
+                    )}
+                    <Tooltip
+                      title={t(
+                        "piutang.openPayments",
+                        "Payment history — record, correct or remove a payment",
+                      )}
+                    >
+                      <Button
+                        size="small"
+                        icon={<WalletOutlined />}
+                        aria-label={t(
+                          "piutang.openPaymentsAria",
+                          "Payments on {{code}}",
+                          { code: r.order.code },
+                        )}
+                        onClick={() => setEditingPay(r.order)}
+                      />
                     </Tooltip>
-                  ),
+                  </Flex>
+                ),
               },
             ]}
           />
         </Card>
-
-        {db.settlements.length > 0 && (
-          <Card title={t("piutang.withdrawals", "Withdrawals recorded")}>
-            <Table
-              size="small"
-              rowKey="id"
-              dataSource={db.settlements.slice().reverse()}
-              pagination={{ pageSize: 10 }}
-              columns={[
-                {
-                  title: t("piutang.when", "When"),
-                  key: "at",
-                  width: 190,
-                  render: (_: unknown, s: (typeof db.settlements)[number]) =>
-                    fmtDateTime(s.at),
-                },
-                {
-                  title: t("piutang.channel", "Channel"),
-                  key: "channel",
-                  width: 140,
-                  render: (_: unknown, s: (typeof db.settlements)[number]) =>
-                    channelOf(s.channel)?.label ?? s.channel,
-                },
-                {
-                  title: t("piutang.gross", "Gross"),
-                  key: "gross",
-                  width: 160,
-                  align: "right",
-                  render: (_: unknown, s: (typeof db.settlements)[number]) =>
-                    fmtRp(s.gross),
-                },
-                {
-                  title: t("piutang.deducted", "Fees"),
-                  key: "fees",
-                  align: "right",
-                  render: (_: unknown, s: (typeof db.settlements)[number]) => {
-                    const totals = settlementTotals({
-                      gross: s.gross,
-                      fees: s.fees,
-                      received: s.received,
-                    });
-                    return (
-                      <Flex vertical align="flex-end" gap={0}>
-                        <Typography.Text>
-                          {fmtRp(totals.deducted)}
-                        </Typography.Text>
-                        <Typography.Text
-                          type="secondary"
-                          style={{ fontSize: TYPE.sm }}
-                        >
-                          {s.fees
-                            .map(
-                              (f) => `${f.label ?? f.kind} ${fmtRp(f.amount)}`,
-                            )
-                            .join(" · ")}
-                        </Typography.Text>
-                      </Flex>
-                    );
-                  },
-                },
-                {
-                  title: t("piutang.landed", "Landed"),
-                  key: "received",
-                  width: 170,
-                  align: "right",
-                  render: (_: unknown, s: (typeof db.settlements)[number]) => (
-                    <Flex vertical align="flex-end" gap={0}>
-                      <Typography.Text strong>
-                        {fmtRp(s.received)}
-                      </Typography.Text>
-                      {s.reason && (
-                        <Typography.Text
-                          type="warning"
-                          style={{ fontSize: TYPE.sm }}
-                        >
-                          {s.reason}
-                        </Typography.Text>
-                      )}
-                    </Flex>
-                  ),
-                },
-                {
-                  title: "",
-                  key: "amend",
-                  width: 56,
-                  render: (_: unknown, s: (typeof db.settlements)[number]) => (
-                    <Tooltip
-                      title={t("piutang.amend", "Correct this withdrawal")}
-                    >
-                      <Button
-                        size="small"
-                        icon={<EditOutlined />}
-                        aria-label={t(
-                          "piutang.amendAria",
-                          "Correct the withdrawal from {{channel}}",
-                          {
-                            channel: channelOf(s.channel)?.label ?? s.channel,
-                          },
-                        )}
-                        onClick={() => setAmending(s)}
-                      />
-                    </Tooltip>
-                  ),
-                },
-              ]}
-            />
-          </Card>
-        )}
       </Flex>
 
       <SettleModal
         open={amending !== null}
         channel={amending?.channel ?? ""}
         gross={amending?.gross ?? 0}
-        count={1}
-        rates={db.settings.marketplaceFees}
-        {...(amending
-          ? {
-              existing: {
-                fees: amending.fees,
-                received: amending.received,
-                ...(amending.reason ? { reason: amending.reason } : {}),
-              },
-            }
-          : {})}
+        {...(amending ? { existing: { fees: amending.fees } } : {})}
         onClose={() => setAmending(null)}
         onSave={(result) => amending && amend(amending, result)}
       />
 
       <SettleModal
-        open={settling !== null}
-        channel={settling?.channel ?? ""}
-        gross={settling?.gross ?? 0}
-        count={settling?.count ?? 0}
-        rates={db.settings.marketplaceFees}
-        onClose={() => setSettling(null)}
-        onSave={(result) => settling && settle(settling, result)}
+        open={receiving !== null}
+        channel={receiving?.channel ?? ""}
+        gross={receiving?.payment.amount ?? 0}
+        {...(receiving
+          ? {
+              subject: [receiving.order.code, receiving.payment.ref?.trim()]
+                .filter(Boolean)
+                .join(" · "),
+            }
+          : {})}
+        onClose={() => setReceiving(null)}
+        onSave={(result) => receiving && receive(receiving, result)}
+      />
+
+      {/*
+        The upload (owner ask 2026-09-21). It writes through the SAME `record`
+        a hand-typed withdrawal writes through, so a settlement made here is
+        indistinguishable from one typed in — including its `SettlementLog`
+        row, and including the pencil that corrects it.
+      */}
+      <ShopeeSettlementImport
+        open={importing}
+        pending={pendingShopeePayments(db, paymentsOf)}
+        settledRefs={db.settlements
+          .map(
+            (s) =>
+              db.orders
+                .find((o) => o.id === s.orderId)
+                ?.payments?.find((p) => p.id === s.paymentId)?.ref ?? "",
+          )
+          .filter((r) => r !== "")}
+        onClose={() => setImporting(false)}
+        onRecord={(drafts) => {
+          const done = record("SHOPEE", drafts);
+          message.success(
+            t(
+              "piutang.imported",
+              "{{count}} payout(s) recorded — {{amount}}.",
+              {
+                count: done.written,
+                amount: fmtRp(done.landed),
+              },
+            ),
+          );
+        }}
+      />
+
+      {/* Deliberately the same dialog Transaction History and the customer
+          drawer open (2026-09-09): a payment recorded from any of them is the
+          same event, and has to write the same log. */}
+      <PaymentsModal
+        open={editingPay !== null}
+        orderId={editingPay?.id ?? ""}
+        code={editingPay?.code ?? ""}
+        total={editingPay ? billAfterReturns(editingPay) : 0}
+        payments={editingPay ? paymentsOf(editingPay) : []}
+        log={
+          editingPay
+            ? db.paymentLog
+                .filter((e) =>
+                  paymentsOf(editingPay).some((p) => p.id === e.paymentId),
+                )
+                .slice()
+                .sort((a, b) => b.at.localeCompare(a.at))
+            : []
+        }
+        onClose={() => setEditingPay(null)}
+        onSave={(next) => editingPay && savePayments(editingPay, next)}
       />
     </PageContainer>
   );
-}
-
-/**
- * Split one payout across the sales it covers, losing nothing.
- *
- * Largest-remainder: each sale gets its proportional share floored, and the
- * rupiah left over go to the sales with the biggest fractions. Any other
- * rounding leaves a few rupiah unaccounted for on every reconciliation
- * afterwards, which is the kind of error that costs an afternoon each time
- * somebody notices it.
- */
-export function apportion(total: number, weights: readonly number[]): number[] {
-  const sum = weights.reduce((n, w) => n + w, 0);
-  if (sum <= 0) return weights.map(() => 0);
-  const exact = weights.map((w) => (total * w) / sum);
-  const out = exact.map((n) => Math.floor(n));
-  let left = total - out.reduce((n, x) => n + x, 0);
-  const order = exact
-    .map((n, i) => ({ i, frac: n - Math.floor(n) }))
-    .sort((a, b) => b.frac - a.frac);
-  for (const { i } of order) {
-    if (left <= 0) break;
-    out[i] = (out[i] ?? 0) + 1;
-    left -= 1;
-  }
-  return out;
 }

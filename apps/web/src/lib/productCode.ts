@@ -15,5 +15,12 @@
 export {
   productCode,
   productCodeLines,
+  // The shop's own naming convention — B2Soft's `PERSEDIAAN BARANG` spelling
+  // (owner ask 2026-09-21). What the SKU code and the product input use;
+  // `productCode` is still what goes on a sticker.
+  isAppleSilicon,
+  parseProductName,
+  shopProductName,
   type CodeParts,
+  type ParsedProductName,
 } from "@nusantara/domain";

@@ -69,7 +69,7 @@ import { ProTable } from "../../components/ProTable";
 import { EnumTag } from "../../components/EnumTag";
 import { GradeTag } from "../../components/GradeTag";
 import { LongText } from "../../components/LongText";
-import { fmtDateTime } from "../../lib/format.js";
+import { fmtDateTime, fmtNone } from "../../lib/format.js";
 import { itemState, reprojectHolds } from "../../lib/reservations.js";
 import {
   appendEvent,
@@ -192,7 +192,7 @@ export function ReservationsPage() {
         id: r.id,
         code: r.code,
         customerId: r.customerId,
-        customerName: customer?.name ?? "—",
+        customerName: customer?.name ?? fmtNone(),
         phone: customer?.phone ?? null,
         scheduledFor: r.when,
         note: r.note === "" ? null : r.note,
@@ -492,7 +492,7 @@ export function ReservationsPage() {
                     "reservations.selectAria",
                     "Select {{serial}}",
                     {
-                      serial: serial ?? "—",
+                      serial: serial ?? fmtNone(),
                     },
                   )}
                   onChange={(e) =>
@@ -562,6 +562,7 @@ export function ReservationsPage() {
       <Flex vertical gap={16}>
         <Card title={t("reservations.reservations", "Reservations")}>
           <ProTable<Hold>
+            persistKey="reservations"
             rowKey="id"
             dataSource={rows}
             searchPlaceholder={t(
@@ -592,7 +593,7 @@ export function ReservationsPage() {
                 // A hold made through chat may carry no appointment at all —
                 // the customer never named one — so the cell has to say that
                 // rather than render an empty box.
-                render: (v) => (v ? fmtDateTime(v as string) : "—"),
+                render: (v) => (v ? fmtDateTime(v as string) : fmtNone()),
               },
               {
                 title: t("reservations.product", "Product"),
@@ -634,9 +635,9 @@ export function ReservationsPage() {
                 key: "source",
                 width: 130,
                 facet: true,
-                sortValue: (r) => r.channelName ?? "—",
+                sortValue: (r) => r.channelName ?? fmtNone(),
                 render: (_, r) =>
-                  r.channelName ? <Tag>{r.channelName}</Tag> : "—",
+                  r.channelName ? <Tag>{r.channelName}</Tag> : fmtNone(),
               },
               {
                 title: t("reservations.note", "Note"),
@@ -913,7 +914,7 @@ export function ReservationsPage() {
               options={unitOptions}
               notFoundContent={t(
                 "reservations.noUnitMatch",
-                "No machine matches that.",
+                "No unit matches that.",
               )}
               popupRender={(menu) => (
                 <>

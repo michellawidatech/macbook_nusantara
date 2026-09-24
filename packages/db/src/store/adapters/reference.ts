@@ -196,6 +196,131 @@ export const racks: Adapter<"racks"> = {
 };
 
 // ---------------------------------------------------------------------------
+// Payments against a debt from before this app
+// ---------------------------------------------------------------------------
+
+/*
+ * `Supplier.openingBalance` and `Customer.openingBalance` are debts no invoice
+ * or sale explains, so money paid against one is a `Payment` naming the party
+ * itself (owner answer 2026-09-22) — `Payment_one_parent_check` allows exactly
+ * one of order, invoice, supplier and customer. The opening figure is never
+ * rewritten: what was owed on the day and what has been paid since are two
+ * facts, and the page subtracts one from the other.
+ */
+
+type OpeningPayment = NonNullable<
+  RowOf<"suppliers">["openingPayments"]
+>[number];
+
+/** The rows `openingPaymentsOf` reads — `include` them on the party. */
+const OPENING_PAYMENTS = {
+  where: { voidedAt: null },
+  orderBy: [{ sortOrder: "asc" as const }, { id: "asc" as const }],
+  include: { method: { select: { code: true } } },
+};
+
+function openingPaymentsOf(
+  rows: readonly {
+    id: string;
+    amount: bigint;
+    paidAt: Date | null;
+    recordedAt: Date | null;
+    note: string | null;
+    inBalance: boolean;
+    method: { code: string };
+  }[],
+  fallbackAt: Date,
+): OpeningPayment[] | undefined {
+  // Absent, not [], when there are none: that is what the browser holds for a
+  // party nobody has paid, and anything else would diff on every poll.
+  if (rows.length === 0) return undefined;
+  return rows.map((p) => ({
+    id: p.id,
+    method: p.method.code,
+    amount: p.amount,
+    at: isoOf(p.recordedAt ?? p.paidAt ?? fallbackAt),
+    note: p.note ?? undefined,
+    // Only a `false` is said; true is the absent key.
+    inBalance: p.inBalance ? undefined : false,
+  }));
+}
+
+/**
+ * Synced by key like an invoice's payments (`syncPoPayments`): updated where
+ * the row exists, created where it does not, voided — never deleted — where
+ * the browser dropped it, because the payment log may still name it.
+ */
+async function syncOpeningPayments(
+  ctx: WriteContext,
+  collection: "suppliers" | "customers",
+  partyId: string,
+  list: readonly OpeningPayment[],
+): Promise<void> {
+  const { tx } = ctx;
+  const supplier = collection === "suppliers";
+  const existing = await tx.payment.findMany({
+    where: supplier ? { supplierId: partyId } : { customerId: partyId },
+    select: { id: true, voidedAt: true },
+  });
+  const left = new Map(existing.map((p) => [p.id, p]));
+  for (const [sortOrder, p] of list.entries()) {
+    if (p.amount <= 0n) {
+      throw new StoreValidationError(
+        "Pembayaran harus lebih dari nol.",
+        collection,
+        partyId,
+      );
+    }
+    const at = instantOf(p.at);
+    const data = {
+      methodId: await ctx.paymentMethodId(p.method),
+      amount: p.amount,
+      status: "LUNAS" as const,
+      paidAt: at,
+      recordedAt: at,
+      note: blankToNull(p.note),
+      inBalance: p.inBalance ?? true,
+      sortOrder,
+      voidedAt: null,
+    };
+    if (left.has(p.id)) {
+      left.delete(p.id);
+      await tx.payment.update({ where: { id: p.id }, data });
+    } else {
+      await tx.payment.create({
+        data: {
+          id: p.id,
+          supplierId: supplier ? partyId : null,
+          customerId: supplier ? null : partyId,
+          // The shop pays a supplier and is paid by a customer — the CHECKs
+          // Payment_supplier_direction_check / _customer_ hold it to that.
+          direction: supplier ? "KELUAR" : "MASUK",
+          staffId: ctx.staffId,
+          ...data,
+        },
+      });
+    }
+  }
+  for (const p of left.values()) {
+    if (p.voidedAt === null) {
+      await tx.payment.update({
+        where: { id: p.id },
+        data: { voidedAt: ctx.now },
+      });
+    }
+  }
+}
+
+/** Whether a party's opening payments need writing at all. */
+const openingPaymentsChanged = (
+  base: { openingPayments?: readonly OpeningPayment[] } | undefined,
+  next: { openingPayments?: readonly OpeningPayment[] },
+): boolean =>
+  base === undefined
+    ? (next.openingPayments?.length ?? 0) > 0
+    : !deepEqual(base.openingPayments, next.openingPayments);
+
+// ---------------------------------------------------------------------------
 // Suppliers
 // ---------------------------------------------------------------------------
 
@@ -205,6 +330,7 @@ export const suppliers: Adapter<"suppliers"> = {
     const rows = await tx.supplier.findMany({
       where: byId(keys),
       orderBy: [{ createdAt: "asc" }, { name: "asc" }],
+      include: { openingPayments: OPENING_PAYMENTS },
     });
     return rows.map((s) => ({
       id: s.id,
@@ -216,6 +342,10 @@ export const suppliers: Adapter<"suppliers"> = {
       code: s.code ?? undefined,
       openingBalance: s.openingBalance ?? undefined,
       openingBalanceAt: optionalIso(s.openingBalanceAt),
+      openingPayments: openingPaymentsOf(
+        s.openingPayments,
+        s.openingBalanceAt ?? s.createdAt,
+      ),
     }));
   },
   lock: (tx, keys) => lockRows(tx, "Supplier", "id", keys),
@@ -241,6 +371,15 @@ export const suppliers: Adapter<"suppliers"> = {
         });
       } else {
         await tx.supplier.update({ where: { id: n.id }, data });
+      }
+      // After the supplier row, which a new payment's foreign key names.
+      if (openingPaymentsChanged(r.base, n)) {
+        await syncOpeningPayments(
+          ctx,
+          "suppliers",
+          n.id,
+          n.openingPayments ?? [],
+        );
       }
       ctx.touch("suppliers", n.id);
     }
@@ -548,6 +687,7 @@ export const customers: Adapter<"customers"> = {
           where: { removedAt: null },
           orderBy: { sortOrder: "asc" },
         },
+        openingPayments: OPENING_PAYMENTS,
       },
     });
     return rows.map((c) => ({
@@ -567,6 +707,10 @@ export const customers: Adapter<"customers"> = {
       createdAt: isoOf(c.createdAt),
       openingBalance: c.openingBalance ?? undefined,
       openingBalanceAt: optionalIso(c.openingBalanceAt),
+      openingPayments: openingPaymentsOf(
+        c.openingPayments,
+        c.openingBalanceAt ?? c.createdAt,
+      ),
     }));
   },
   lock: (tx, keys) => lockRows(tx, "Customer", "id", keys),
@@ -595,6 +739,14 @@ export const customers: Adapter<"customers"> = {
       }
       if (r.base === undefined || !deepEqual(r.base.addresses, n.addresses)) {
         await syncAddresses(ctx, n.id, n.addresses ?? []);
+      }
+      if (openingPaymentsChanged(r.base, n)) {
+        await syncOpeningPayments(
+          ctx,
+          "customers",
+          n.id,
+          n.openingPayments ?? [],
+        );
       }
       ctx.touch("customers", n.id);
     }
@@ -727,6 +879,7 @@ export const expenses: Adapter<"expenses"> = {
       note: e.note ?? undefined,
       referralSourceId: e.referralSourceId ?? undefined,
       method: e.method.code,
+      orderId: e.orderId ?? undefined,
     }));
   },
   lock: (tx, keys) => lockRows(tx, "Expense", "id", keys),
@@ -743,6 +896,7 @@ export const expenses: Adapter<"expenses"> = {
         note: blankToNull(n.note),
         referralSourceId: n.referralSourceId ?? null,
         methodId: await ctx.paymentMethodId(n.method),
+        orderId: n.orderId ?? null,
       };
       if (r.base === undefined) {
         await tx.expense.create({
@@ -776,6 +930,7 @@ export const incomes: Adapter<"incomes"> = {
       date: i.date,
       note: i.note ?? undefined,
       method: i.method.code,
+      orderId: i.orderId ?? undefined,
     }));
   },
   lock: (tx, keys) => lockRows(tx, "ManualIncome", "id", keys),
@@ -790,6 +945,7 @@ export const incomes: Adapter<"incomes"> = {
         date: n.date,
         note: blankToNull(n.note),
         methodId: await ctx.paymentMethodId(n.method),
+        orderId: n.orderId ?? null,
       };
       if (r.base === undefined) {
         await tx.manualIncome.create({

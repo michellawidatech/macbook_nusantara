@@ -44,7 +44,20 @@
  * needs a per-card button too.
  */
 import { useMemo, useState, type Key, type ReactNode } from "react";
-import { Button, Flex, Input, Select, Space, Typography, theme } from "antd";
+import { draftKey, usePersistentState } from "../hooks/usePersistentState";
+import { asString, isRecord } from "../lib/draftGuards.js";
+import {
+  Button,
+  DatePicker,
+  Flex,
+  Input,
+  Select,
+  Space,
+  Tag,
+  Typography,
+  theme,
+} from "antd";
+import dayjs, { type Dayjs } from "dayjs";
 import type { TableProps } from "antd";
 import { SPACE, TYPE } from "../theme/tokens";
 import { useLayoutMode } from "../layouts/useLayoutMode";
@@ -90,7 +103,19 @@ export type ProColumn<T> = AntColumn<T> & {
   sortValue?: (record: T) => string | number | undefined | null;
   /** Text this column contributes to search, when it differs from `sortValue`. */
   searchValue?: (record: T) => string | undefined | null;
+  /**
+   * Give this column a date-range filter in its header (owner ask
+   * 2026-09-22: *"select by … date range"*). The column's value — `sortValue`
+   * or `dataIndex` — must be an ISO instant or a `YYYY-MM-DD` day; it is
+   * compared as the local calendar day it falls on, bounds included. A row
+   * with no date is filtered OUT while a range is set, the rule a facet
+   * already follows for a row with no value.
+   */
+  dateRange?: boolean;
 };
+
+/** A date filter's bounds as local `YYYY-MM-DD` days; either may be open. */
+type DayRange = readonly [string | null, string | null];
 
 export interface ProTableProps<T> extends Omit<
   DataTableProps<T>,
@@ -108,6 +133,74 @@ export interface ProTableProps<T> extends Omit<
   selectable?: boolean;
   /** Rendered beside the "N selected" line once something is ticked. */
   bulkActions?: (selected: T[], clear: () => void) => ReactNode;
+  /**
+   * Keep this list's search, filters and sort on this device, under this
+   * name (owner ask 2026-09-21: *"all the things of the user input will be
+   * saved locally"*). A page's own list sets it; a list inside a dialog does
+   * not, because a picker that opens already narrowed by last week's search
+   * is a picker that looks empty.
+   */
+  persistKey?: string;
+}
+
+/** The filter map as the header writes it: column key → picked values. */
+function parseFilters(v: unknown): Record<string, string[]> | undefined {
+  if (!isRecord(v)) return undefined;
+  return Object.fromEntries(
+    Object.entries(v)
+      .filter(([, picked]) => Array.isArray(picked))
+      .map(([k, picked]) => [
+        k,
+        (picked as unknown[]).filter((x): x is string => typeof x === "string"),
+      ]),
+  );
+}
+
+function parseRanges(v: unknown): Record<string, DayRange> | undefined {
+  if (!isRecord(v)) return undefined;
+  const day = (x: unknown) =>
+    typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x) ? x : null;
+  return Object.fromEntries(
+    Object.entries(v)
+      .filter(([, r]) => Array.isArray(r) && r.length === 2)
+      .map(([k, r]) => [
+        k,
+        [day((r as unknown[])[0]), day((r as unknown[])[1])],
+      ]),
+  );
+}
+
+/** The local calendar day a column value falls on, or undefined. */
+function dayOfValue(v: string | number | undefined): string | undefined {
+  if (v === undefined || v === "") return undefined;
+  const d = dayjs(v);
+  return d.isValid() ? d.format("YYYY-MM-DD") : undefined;
+}
+
+/** Is a range doing anything? */
+const rangeSet = (r: DayRange | undefined) =>
+  r !== undefined && (r[0] !== null || r[1] !== null);
+
+/** The picker's value for a stored range. */
+const pickerValue = (
+  r: DayRange | undefined,
+): [Dayjs | null, Dayjs | null] | null =>
+  rangeSet(r)
+    ? [r![0] ? dayjs(r![0]) : null, r![1] ? dayjs(r![1]) : null]
+    : null;
+
+/** The stored range for what the picker reports. */
+const fromPicker = (v: [Dayjs | null, Dayjs | null] | null): DayRange => [
+  v?.[0] ? v[0].format("YYYY-MM-DD") : null,
+  v?.[1] ? v[1].format("YYYY-MM-DD") : null,
+];
+
+function parseSort(v: unknown): { key: string; order: SortOrder } | undefined {
+  if (!isRecord(v) || typeof v.key !== "string") return undefined;
+  const order = v.order;
+  return order === "ascend" || order === "descend" || order === null
+    ? { key: v.key, order }
+    : undefined;
 }
 
 /** Reads a column's raw cell value, honouring antd's array `dataIndex` form. */
@@ -174,6 +267,7 @@ export function ProTable<T extends object>({
   bulkActions,
   resetKey,
   rowKey,
+  persistKey,
   ...rest
 }: ProTableProps<T>) {
   const { compact } = useLayoutMode();
@@ -181,8 +275,25 @@ export function ProTable<T extends object>({
   const {
     token: { colorTextSecondary, colorFillTertiary, colorBorderSecondary },
   } = theme.useToken();
-  const [query, setQuery] = useState("");
-  const [filters, setFilters] = useState<Record<string, string[]>>({});
+  const kept = (part: string) =>
+    persistKey === undefined ? null : draftKey(`list.${persistKey}.${part}`);
+  const [query, setQuery] = usePersistentState<string>(
+    kept("search"),
+    "",
+    asString,
+  );
+  const [filters, setFilters] = usePersistentState<Record<string, string[]>>(
+    kept("filters"),
+    {},
+    parseFilters,
+  );
+  const [ranges, setRanges] = usePersistentState<Record<string, DayRange>>(
+    kept("ranges"),
+    {},
+    parseRanges,
+  );
+  const setRange = (key: string, v: [Dayjs | null, Dayjs | null] | null) =>
+    setRanges((r) => ({ ...r, [key]: fromPicker(v) }));
   const [selectedKeys, setSelectedKeys] = useState<Key[]>([]);
   /**
    * Which column is sorted, and which way.
@@ -191,15 +302,22 @@ export function ProTable<T extends object>({
    * wants to open newest-first still does. antd would normally own this, but
    * it cannot: it only ever sees one page (see the docblock).
    */
-  const [sort, setSort] = useState<{ key: string; order: SortOrder }>(() => {
-    const i = columns.findIndex((c) => c.defaultSortOrder);
-    return i < 0
-      ? { key: "", order: null }
-      : {
-          key: colKey(columns[i]!, i),
-          order: columns[i]!.defaultSortOrder as SortOrder,
-        };
-  });
+  const [sort, setSort] = usePersistentState<{
+    key: string;
+    order: SortOrder;
+  }>(
+    kept("sort"),
+    () => {
+      const i = columns.findIndex((c) => c.defaultSortOrder);
+      return i < 0
+        ? { key: "", order: null }
+        : {
+            key: colKey(columns[i]!, i),
+            order: columns[i]!.defaultSortOrder as SortOrder,
+          };
+    },
+    parseSort,
+  );
 
   const searchCols = columns.filter((c) => c.searchable);
   /**
@@ -221,6 +339,10 @@ export function ProTable<T extends object>({
   const facetCols = columns
     .map((col, index) => ({ col, key: colKey(col, index) }))
     .filter((c) => c.col.facet);
+  /** The date-filtered columns, keyed the same way. */
+  const dateCols = columns
+    .map((col, index) => ({ col, key: colKey(col, index) }))
+    .filter((c) => c.col.dateRange);
 
   /** Distinct values per filterable column, in alphabetical order. */
   const facetOptions = useMemo(() => {
@@ -255,6 +377,14 @@ export function ProTable<T extends object>({
         const v = facetOf(col, row);
         if (v === undefined || !picked.includes(v)) return false;
       }
+      for (const { col, key } of dateCols) {
+        const r = ranges[key];
+        if (!rangeSet(r)) continue;
+        const day = dayOfValue(valueOf(col, row));
+        if (day === undefined) return false;
+        if (r![0] !== null && day < r![0]) return false;
+        if (r![1] !== null && day > r![1]) return false;
+      }
       if (!needle) return true;
       // No column opted into search → search everything with a dataIndex,
       // which is the sane default for a list nobody has tuned yet.
@@ -275,7 +405,7 @@ export function ProTable<T extends object>({
     return kept
       .slice()
       .sort((a, b) => dir * compare(valueOf(col, a), valueOf(col, b)));
-  }, [dataSource, query, filters, sort, columns]);
+  }, [dataSource, query, filters, ranges, sort, columns]);
 
   /**
    * Every column gets its header controls: sort arrows, and a filter dropdown
@@ -293,6 +423,7 @@ export function ProTable<T extends object>({
           sortValue,
           searchValue,
           defaultSortOrder,
+          dateRange,
           ...antCol
         } = col;
         const key = colKey(col, i);
@@ -318,9 +449,49 @@ export function ProTable<T extends object>({
                 filterSearch: options.length > FILTER_SEARCH_THRESHOLD,
               }
             : {}),
+          ...(dateRange
+            ? {
+                // A control only, like the facets: the range is this
+                // component's state and the filtering happens above.
+                filtered: rangeSet(ranges[key]),
+                filterDropdown: ({ close }: { close: () => void }) => (
+                  <Flex vertical gap={SPACE.sm} style={{ padding: SPACE.sm }}>
+                    <DatePicker.RangePicker
+                      // Inside the dropdown, not in a portal of its own: a
+                      // click on the calendar must not read as a click
+                      // outside the filter, which closes it.
+                      getPopupContainer={(node) =>
+                        node.parentElement ?? document.body
+                      }
+                      value={pickerValue(ranges[key])}
+                      onChange={(v) => setRange(key, v)}
+                      allowEmpty={[true, true]}
+                      format="DD MMM YYYY"
+                      placeholder={[
+                        t("proTable.dateFrom", "From"),
+                        t("proTable.dateUntil", "Until"),
+                      ]}
+                    />
+                    <Flex justify="space-between">
+                      <Button
+                        size="small"
+                        type="link"
+                        disabled={!rangeSet(ranges[key])}
+                        onClick={() => setRange(key, null)}
+                      >
+                        {t("proTable.dateReset", "Reset")}
+                      </Button>
+                      <Button size="small" type="primary" onClick={close}>
+                        {t("proTable.dateDone", "OK")}
+                      </Button>
+                    </Flex>
+                  </Flex>
+                ),
+              }
+            : {}),
         };
       }) as AntColumns<T>,
-    [columns, facetOptions, filters, sort],
+    [columns, facetOptions, filters, ranges, sort],
   );
 
   const selected = useMemo(() => {
@@ -332,13 +503,62 @@ export function ProTable<T extends object>({
 
   const clear = () => setSelectedKeys([]);
 
-  const activeFilterCount = Object.values(filters).reduce(
-    (n, v) => n + v.length,
-    0,
-  );
+  const activeFilterCount =
+    Object.values(filters).reduce((n, v) => n + v.length, 0) +
+    dateCols.filter(({ key }) => rangeSet(ranges[key])).length;
+
+  /**
+   * Every picked value as its own chip, with the way to take just it off.
+   *
+   * A facet contributes one chip per value; a date range contributes one for
+   * the whole range, because half a range is not a filter anybody set.
+   */
+  const activeFilters = useMemo(() => {
+    const nameOf = (col: ProColumn<T>) =>
+      col.facetLabel ??
+      (typeof col.title === "string" ? col.title : undefined) ??
+      "";
+    const out: {
+      key: string;
+      column: string;
+      value: string;
+      remove: () => void;
+    }[] = [];
+    for (const { col, key } of facetCols) {
+      for (const value of filters[key] ?? []) {
+        out.push({
+          key,
+          column: nameOf(col),
+          value,
+          remove: () =>
+            setFilters((f) => ({
+              ...f,
+              [key]: (f[key] ?? []).filter((v) => v !== value),
+            })),
+        });
+      }
+    }
+    for (const { col, key } of dateCols) {
+      const r = ranges[key];
+      if (!rangeSet(r)) continue;
+      out.push({
+        key,
+        column: nameOf(col),
+        value: [r?.[0], r?.[1]].filter(Boolean).join(" – "),
+        remove: () =>
+          setRanges((v) => {
+            const next = { ...v };
+            delete next[key];
+            return next;
+          }),
+      });
+    }
+    return out;
+  }, [facetCols, dateCols, filters, ranges]);
   // The phone layout has no column headers to hang a filter on, so the selects
   // come back there — driving the very same state. See the docblock.
-  const showToolbarFilters = compact && facetCols.length > 0;
+  const showToolbarFilters =
+    compact && (facetCols.length > 0 || dateCols.length > 0);
   const hasToolbar =
     search ||
     showToolbarFilters ||
@@ -404,16 +624,61 @@ export function ProTable<T extends object>({
                   />
                 );
               })}
-            {/* Shown in BOTH layouts. On a desktop the header funnels are easy
-                to set and easy to forget — one lit icon among nine columns —
-                so the one control that clears them all has to be visible from
-                outside the header. */}
+            {showToolbarFilters &&
+              dateCols.map(({ col, key }) => (
+                <DatePicker.RangePicker
+                  key={key}
+                  value={pickerValue(ranges[key])}
+                  onChange={(v) => setRange(key, v)}
+                  allowEmpty={[true, true]}
+                  format="DD MMM YYYY"
+                  aria-label={
+                    col.facetLabel ??
+                    (typeof col.title === "string" ? col.title : undefined)
+                  }
+                  placeholder={[
+                    t("proTable.dateFrom", "From"),
+                    t("proTable.dateUntil", "Until"),
+                  ]}
+                />
+              ))}
+            {/* One chip per picked value, in BOTH layouts (owner ask
+                2026-09-23: *"if there is like filter pls put it down instead
+                of just saying clear 2 filters, so that I can cancel out one
+                of the filter"*). A count told you how many were on and left
+                you opening funnels to find which; a chip names it and its ×
+                takes off that one alone. */}
             {activeFilterCount > 0 && (
-              <Button type="link" size="small" onClick={() => setFilters({})}>
-                {t("proTable.clearFilters", "Clear filters ({{count}})", {
-                  count: activeFilterCount,
-                })}
-              </Button>
+              <Flex wrap align="center" gap={SPACE.xs}>
+                {activeFilters.map((f) => (
+                  <Tag
+                    key={`${f.key}:${f.value}`}
+                    closable
+                    onClose={f.remove}
+                    aria-label={t(
+                      "proTable.removeFilter",
+                      "Remove {{filter}}",
+                      {
+                        filter: `${f.column} ${f.value}`,
+                      },
+                    )}
+                  >
+                    <span style={{ opacity: 0.65 }}>{f.column}</span> {f.value}
+                  </Tag>
+                ))}
+                {activeFilterCount > 1 && (
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() => {
+                      setFilters({});
+                      setRanges({});
+                    }}
+                  >
+                    {t("proTable.clearFilters", "Clear all")}
+                  </Button>
+                )}
+              </Flex>
             )}
             {toolbar}
           </Flex>
@@ -467,7 +732,7 @@ export function ProTable<T extends object>({
         dataSource={rows}
         // Search and filters are new questions, so both send the pager back to
         // page one — see DataTable's `resetKey`.
-        resetKey={`${String(resetKey ?? "")}|${query}|${JSON.stringify(filters)}`}
+        resetKey={`${String(resetKey ?? "")}|${query}|${JSON.stringify(filters)}|${JSON.stringify(ranges)}`}
         /**
          * Where a header click lands. antd hands back the whole filter map and
          * the sorter it just changed; both become this component's state, and

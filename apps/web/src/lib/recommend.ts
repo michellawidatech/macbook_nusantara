@@ -65,6 +65,7 @@ import {
   type BasketLine,
 } from "./pricing.js";
 import { costIndex, type UnitCost } from "./service.js";
+import { averageCost, stockLevels } from "./stock.js";
 
 export type RecommendationKind = "UPGRADE" | "ADDON";
 
@@ -115,7 +116,10 @@ export type WhyReason =
   | { readonly kind: "NO_HISTORY"; readonly withProducts: string };
 
 export interface Recommendation {
-  readonly serial: string;
+  /** The unit to add — absent on a counted product, which is added by variant. */
+  readonly serial?: string;
+  /** A counted product's variant — an accessory, added as one more piece. */
+  readonly skuId?: string;
   readonly kind: RecommendationKind;
   readonly title: string;
   readonly variant: string;
@@ -205,7 +209,11 @@ const STALE_DAYS = 90;
 const IDEAL_STEP = 0.2;
 
 interface Resolved {
-  readonly unit: Unit;
+  /** What identifies the candidate: its serial, or `sku:<id>` when counted. */
+  readonly key: string;
+  /** The unit — null for a counted product, which has none (2026-09-19). */
+  readonly unit: Unit | null;
+  readonly skuId: string;
   readonly name: string;
   readonly variant: string;
   readonly category: string;
@@ -243,6 +251,13 @@ interface Index {
   readonly cost: (unit: Unit) => UnitCost;
 }
 
+/** What a candidate cost the shop: its unit's cost, or a counted product's average. */
+function costOfCandidate(db: MockDb, ix: Index, r: Resolved): UnitCost {
+  if (r.unit) return ix.cost(r.unit);
+  const avg = averageCost(db, r.skuId);
+  return { buy: avg, shippingTax: 0, repair: 0, total: avg };
+}
+
 function buildIndex(db: MockDb): Index {
   const skus = new Map(db.skus.map((s) => [s.id, s]));
   const models = new Map(db.models.map((m) => [m.id, m]));
@@ -258,10 +273,20 @@ function buildIndex(db: MockDb): Index {
 }
 
 function resolve(ix: Index, unit: Unit): Resolved | null {
-  const sku = ix.skus.get(unit.skuId);
+  return resolveSku(ix, unit.skuId, unit);
+}
+
+function resolveSku(
+  ix: Index,
+  skuId: string,
+  unit: Unit | null = null,
+): Resolved | null {
+  const sku = ix.skus.get(skuId);
   const model = sku && ix.models.get(sku.modelId);
   if (!sku || !model) return null;
   return {
+    key: unit ? unit.serial : `sku:${skuId}`,
+    skuId,
     unit,
     name: sku.name,
     variant: sku.variantLabel,
@@ -313,16 +338,27 @@ function sameKind(a: Resolved, b: Resolved): boolean {
   return small.every((axis) => large.includes(axis));
 }
 
-/** Everything sellable today that is not already in the basket. */
+/**
+ * Everything sellable today that is not already in the basket: every unit,
+ * and every counted product with a piece left over what the basket holds.
+ */
 function shelf(
   db: MockDb,
   ix: Index,
   inBasket: ReadonlySet<string>,
+  countedInBasket: ReadonlyMap<string, number>,
 ): Resolved[] {
-  return db.units
+  const units = db.units
     .filter((u) => u.status === "TERSEDIA" && !inBasket.has(u.serial))
-    .map((u) => resolve(ix, u))
-    .filter((r): r is Resolved => r !== null);
+    .map((u) => resolve(ix, u));
+  const counted = [...stockLevels(db.stockMoves)].map(([skuId, at]) => {
+    let held = 0;
+    for (const n of at.values()) held += n;
+    return held - (countedInBasket.get(skuId) ?? 0) > 0
+      ? resolveSku(ix, skuId)
+      : null;
+  });
+  return [...units, ...counted].filter((r): r is Resolved => r !== null);
 }
 
 /**
@@ -348,9 +384,12 @@ function pastBaskets(db: MockDb, ix: Index): Baskets {
   for (const order of db.orders) {
     const m = new Set<string>();
     const c = new Set<string>();
-    for (const serial of order.serials) {
-      const unit = ix.units.get(serial);
-      const sku = unit && ix.skus.get(unit.skuId);
+    const skuIds = [
+      ...order.serials.map((serial) => ix.units.get(serial)?.skuId),
+      ...(order.lines ?? []).map((l) => l.skuId),
+    ];
+    for (const skuId of skuIds) {
+      const sku = skuId === undefined ? undefined : ix.skus.get(skuId);
       const model = sku && ix.models.get(sku.modelId);
       if (!model) continue;
       m.add(model.id);
@@ -501,12 +540,12 @@ function bundleFor(
 ): { code: string; name: string } | undefined {
   for (const d of db.discounts) {
     if (d.type !== "BUNDLE" || !isRedeemable(d)) continue;
-    if (!scopeMatches(db, d.scope, candidate.unit.serial)) continue;
+    const piece = candidate.unit
+      ? { serial: candidate.unit.serial, price: candidate.price }
+      : { skuId: candidate.skuId, price: candidate.price };
+    if (!scopeMatches(db, d.scope, piece)) continue;
     const before = bundleProgress(db, d, lines);
-    const after = bundleProgress(db, d, [
-      ...lines,
-      { serial: candidate.unit.serial, price: candidate.price },
-    ]);
+    const after = bundleProgress(db, d, [...lines, piece]);
     if (after.complete > before.complete) {
       return { code: d.code, name: d.name };
     }
@@ -571,21 +610,29 @@ export function recommendFor(
   lines: readonly BasketLine[],
   now: number = Date.now(),
 ): Recommendation[] {
-  const basketSerials = new Set(lines.map((l) => l.serial));
-  if (basketSerials.size === 0) return [];
+  const basketSerials = new Set(
+    lines.map((l) => l.serial).filter((s): s is string => !!s),
+  );
+  const countedInBasket = new Map<string, number>();
+  for (const l of lines) {
+    if (l.serial || !l.skuId) continue;
+    countedInBasket.set(l.skuId, (countedInBasket.get(l.skuId) ?? 0) + 1);
+  }
+  if (basketSerials.size === 0 && countedInBasket.size === 0) return [];
 
   // Indexed once, then threaded down — see `Index`. Everything below used to
   // rescan the whole store per candidate.
   const ix = buildIndex(db);
-  const basket = [...basketSerials]
-    .map((serial) => {
+  const basket = [
+    ...[...basketSerials].map((serial) => {
       const unit = ix.units.get(serial);
       return unit ? resolve(ix, unit) : null;
-    })
-    .filter((r): r is Resolved => r !== null);
+    }),
+    ...[...countedInBasket.keys()].map((skuId) => resolveSku(ix, skuId)),
+  ].filter((r): r is Resolved => r !== null);
   if (basket.length === 0) return [];
 
-  const available = shelf(db, ix, basketSerials);
+  const available = shelf(db, ix, basketSerials, countedInBasket);
   const baskets = pastBaskets(db, ix);
   const out: Recommendation[] = [];
 
@@ -594,7 +641,7 @@ export function recommendFor(
   // co-purchase evidence is not merely thin here, it is the wrong question.
   // Scored on the step itself, then on what the shop makes and how long the
   // machine has been sitting.
-  const upgrades: (Recommendation & { serial: string })[] = [];
+  const upgrades: Recommendation[] = [];
   const seenUpgrade = new Set<string>();
   for (const line of basket) {
     for (const cand of available) {
@@ -603,8 +650,8 @@ export function recommendFor(
       // "Accessory" basket happily proposed a hub as an upgrade over a sleeve.
       if (!sameKind(cand, line)) continue;
       if (cand.price <= line.price) continue;
-      if (seenUpgrade.has(cand.unit.serial)) continue;
-      seenUpgrade.add(cand.unit.serial);
+      if (seenUpgrade.has(cand.key)) continue;
+      seenUpgrade.add(cand.key);
 
       const step = cand.price - line.price;
       const { score, signals } = combine(WEIGHTS.UPGRADE, {
@@ -613,21 +660,21 @@ export function recommendFor(
           detail: `${rp(step)} (${pct(step / line.price)})`,
         },
         margin: {
-          value: marginScore(cand.price, ix.cost(cand.unit)),
-          detail: pct(marginScore(cand.price, ix.cost(cand.unit))),
+          value: marginScore(cand.price, costOfCandidate(db, ix, cand)),
+          detail: pct(marginScore(cand.price, costOfCandidate(db, ix, cand))),
         },
         age: {
-          value: ageScore(intakeOf(ix, cand.unit.serial), now),
+          value: cand.unit ? ageScore(intakeOf(ix, cand.unit.serial), now) : 0,
         },
       });
       upgrades.push({
-        serial: cand.unit.serial,
+        ...(cand.unit ? { serial: cand.unit.serial } : { skuId: cand.skuId }),
         kind: "UPGRADE",
         title: cand.name,
         variant: cand.variant,
         price: cand.price,
-        ...(cand.unit.grade ? { grade: cand.unit.grade } : {}),
-        description: cand.unit.description,
+        ...(cand.unit?.grade ? { grade: cand.unit.grade } : {}),
+        description: cand.unit?.description ?? "",
         why: {
           kind: "STEP_UP",
           step,
@@ -659,11 +706,13 @@ export function recommendFor(
    *    second sleeve, whatever colour it is.
    */
   const basketModels = new Set(basket.map((b) => b.modelId));
-  const takenByUpgrade = new Set(out.map((r) => r.serial));
+  const takenByUpgrade = new Set(
+    out.map((r) => r.serial ?? `sku:${r.skuId ?? ""}`),
+  );
   const addonCandidates = available.filter(
     (c) =>
       !basketModels.has(c.modelId) &&
-      !takenByUpgrade.has(c.unit.serial) &&
+      !takenByUpgrade.has(c.key) &&
       !basket.some((line) => sameKind(c, line)),
   );
 
@@ -672,8 +721,8 @@ export function recommendFor(
   for (const cand of addonCandidates) {
     const note = bundleFor(db, lines, cand);
     const found = bestRule(baskets, basket, cand);
-    const margin = marginScore(cand.price, ix.cost(cand.unit));
-    const age = ageScore(intakeOf(ix, cand.unit.serial), now);
+    const margin = marginScore(cand.price, costOfCandidate(db, ix, cand));
+    const age = cand.unit ? ageScore(intakeOf(ix, cand.unit.serial), now) : 0;
 
     // Discounted for a backed-off rule — see `CATEGORY_BACKOFF`. Applied to
     // both history signals rather than to one, because the reason to distrust
@@ -711,13 +760,13 @@ export function recommendFor(
     });
 
     addons.push({
-      serial: cand.unit.serial,
+      ...(cand.unit ? { serial: cand.unit.serial } : { skuId: cand.skuId }),
       kind: "ADDON",
       title: cand.name,
       variant: cand.variant,
       price: cand.price,
-      ...(cand.unit.grade ? { grade: cand.unit.grade } : {}),
-      description: cand.unit.description,
+      ...(cand.unit?.grade ? { grade: cand.unit.grade } : {}),
+      description: cand.unit?.description ?? "",
       // What the evidence actually is, including when there is none: "no past
       // receipt has carried both yet" is a true and useful thing to be able to
       // say to a customer, and a made-up statistic is not. Phrased at the call

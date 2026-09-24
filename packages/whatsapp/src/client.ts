@@ -163,3 +163,139 @@ export async function sendText(input: SendTextInput): Promise<SendTextResult> {
 
   return { waMessageId, simulated: false };
 }
+
+/** What `uploadMedia` needs: the bytes, and what they are. */
+export interface UploadMediaInput {
+  readonly credentials: WhatsAppCredentials;
+  readonly data: Uint8Array;
+  /** `image/jpeg`, `image/png`. Graph refuses anything it does not recognise. */
+  readonly contentType: string;
+  /** Only for the multipart part name; Graph does not store it. */
+  readonly fileName?: string;
+  readonly fetchImpl?: typeof fetch;
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Put one image on Graph's media endpoint and get its id back.
+ *
+ * ## Why an upload rather than a link
+ *
+ * Graph's image message takes either `{ link }` or `{ id }`. A link is simpler
+ * and is what most integrations use — and it cannot work here: this shop's
+ * server is a Mac mini behind Tailscale with no public origin, so there is no
+ * URL Meta's fetcher could resolve. Uploading pushes the bytes to Meta over the
+ * connection the worker already has.
+ *
+ * It is also the better shape on its own terms. A link would mean publishing
+ * every QC photograph of every unit at a guessable address, for as long as the
+ * message might be read; a media id is scoped to this number and expires on
+ * Meta's own schedule.
+ *
+ * Throws on failure, exactly as `sendText` does and for the same reason: the
+ * caller is the outbox worker and the throw is what drives the backoff.
+ */
+export async function uploadMedia(
+  input: UploadMediaInput,
+): Promise<{ mediaId: string | null; simulated: boolean }> {
+  const { credentials, data, contentType } = input;
+  if (!canSend(credentials)) return { mediaId: null, simulated: true };
+
+  const doFetch = input.fetchImpl ?? fetch;
+  const url = `https://graph.facebook.com/${credentials.graphVersion}/${credentials.phoneNumberId}/media`;
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", contentType);
+  form.append(
+    "file",
+    // `Uint8Array` rather than a Node Buffer: `Blob` copies the bytes it is
+    // given and a Buffer is a view over a pooled allocation, so handing one
+    // over directly can attach a neighbour's memory to the request.
+    new Blob([new Uint8Array(data)], { type: contentType }),
+    input.fileName ?? "photo",
+  );
+
+  const response = await doFetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${credentials.whatsappToken}` },
+    body: form,
+    signal: AbortSignal.timeout(input.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+  });
+  const text = await response.text();
+  let parsed: { id?: string; error?: GraphError } = {};
+  try {
+    parsed = text ? (JSON.parse(text) as typeof parsed) : {};
+  } catch {
+    throw new Error(
+      `WhatsApp media upload failed: HTTP ${response.status}, non-JSON body`,
+    );
+  }
+  if (parsed.error) {
+    throw new Error(`WhatsApp media upload failed: ${describe(parsed.error)}`);
+  }
+  if (!response.ok) {
+    throw new Error(`WhatsApp media upload failed: HTTP ${response.status}`);
+  }
+  if (!parsed.id) {
+    throw new Error("WhatsApp media upload failed: Graph returned no media id");
+  }
+  return { mediaId: parsed.id, simulated: false };
+}
+
+export interface SendImageInput {
+  readonly credentials: WhatsAppCredentials;
+  readonly to: string;
+  /** A media id from `uploadMedia`. */
+  readonly mediaId: string;
+  readonly caption?: string;
+  readonly fetchImpl?: typeof fetch;
+  readonly timeoutMs?: number;
+}
+
+/** Send one image that has already been uploaded. Throws on failure. */
+export async function sendImage(
+  input: SendImageInput,
+): Promise<SendTextResult> {
+  const { credentials, to, mediaId } = input;
+  if (!canSend(credentials)) return { waMessageId: null, simulated: true };
+
+  const doFetch = input.fetchImpl ?? fetch;
+  const url = `https://graph.facebook.com/${credentials.graphVersion}/${credentials.phoneNumberId}/messages`;
+  const caption = input.caption?.trim();
+  const response = await doFetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${credentials.whatsappToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: "image",
+      image: { id: mediaId, ...(caption ? { caption } : {}) },
+    }),
+    signal: AbortSignal.timeout(input.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+  });
+
+  const text = await response.text();
+  let parsed: GraphSendResponse = {};
+  try {
+    parsed = text ? (JSON.parse(text) as GraphSendResponse) : {};
+  } catch {
+    throw new Error(
+      `WhatsApp image send failed: HTTP ${response.status}, non-JSON body`,
+    );
+  }
+  if (parsed.error) {
+    throw new Error(`WhatsApp image send failed: ${describe(parsed.error)}`);
+  }
+  if (!response.ok) {
+    throw new Error(`WhatsApp image send failed: HTTP ${response.status}`);
+  }
+  const waMessageId = parsed.messages?.[0]?.id;
+  if (!waMessageId) {
+    throw new Error("WhatsApp image send failed: Graph returned no message id");
+  }
+  return { waMessageId, simulated: false };
+}

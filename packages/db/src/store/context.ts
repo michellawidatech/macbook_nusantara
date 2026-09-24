@@ -13,12 +13,14 @@ import type { z } from "zod";
 import type {
   CollectionName,
   PAYMENT_STATES,
+  PoFeeKind,
   SALE_SOURCES,
   SingletonName,
   serverSchemas,
 } from "@nusantara/store";
 import type { Tx } from "../client.js";
 import type {
+  FeeKind,
   OpnameStatus,
   PayStatus,
   PayTarget,
@@ -292,6 +294,7 @@ const LOCKABLE = new Set([
   "UnitNote",
   "StockIn",
   "StockAdjustment",
+  "StockMove",
   "Expense",
   "ManualIncome",
   "PaymentLog",
@@ -444,6 +447,21 @@ export const PAY_TARGET_FROM: Record<PayTarget, "ORDER" | "TAX" | "SHIPPING"> =
     PAJAK: "TAX",
     ONGKIR: "SHIPPING",
   };
+
+/** An invoice expense's kind — `PurchaseOrderFee.kind`. */
+export const FEE_KIND_OF: Record<PoFeeKind, FeeKind> = {
+  SHIPPING: "ONGKIR",
+  TAX: "PAJAK",
+  CUSTOMS: "BEACUKAI",
+  OTHER: "LAIN",
+};
+
+export const FEE_KIND_FROM: Record<FeeKind, PoFeeKind> = {
+  ONGKIR: "SHIPPING",
+  PAJAK: "TAX",
+  BEACUKAI: "CUSTOMS",
+  LAIN: "OTHER",
+};
 
 export const RESERVATION_STATUS_OF: Record<
   "ACTIVE" | "DONE" | "CANCELLED",

@@ -1,12 +1,41 @@
 /**
- * The serial tracker — one serial's whole life, append-only: received,
- * QC'd, moved, reserved, sold, returned, serviced, found or lost.
+ * S/N Tracking — every serial the shop holds, and each one's whole life,
+ * append-only: received, QC'd, moved, reserved, sold, returned, serviced,
+ * found or lost.
+ *
+ * ## Two views on one route (owner ask 2026-09-19)
+ *
+ * Without `?serial=` the page is a LIST of every serial the store holds —
+ * Serial, Unit, Warehouse, its last movement, and a *Check history* button.
+ * It filters by category, product and unit (one tree, in the Unit column's
+ * header — `components/CatalogueFilter`) and by the date of each serial's
+ * newest ledger row, which sits above the table: a date range is two
+ * calendars, and a header dropdown is no place for two calendars.
+ *
+ * With `?serial=` it is that serial's history, unchanged: the unit card, the
+ * lifecycle and the raw ledger. The history gets a back arrow to the list —
+ * there are no breadcrumbs (CLAUDE.md, 2026-08-26) — and the list stays
+ * MOUNTED behind it, hidden, so coming back finds the same search, filters,
+ * sort and page instead of a list started over. The serial stays in the URL,
+ * so a bookmarked `/stock/history?serial=…` still lands on the history; no
+ * screen links here any more — a serial elsewhere opens a popup (2026-09-21).
+ *
+ * A scan opens a serial from either view, and so does Enter in the search box
+ * when what was typed names a serial the store holds (`serialToOpen`, which
+ * reads the shop's sticker and the case's bare number the way every other
+ * serial field does). Anything else typed only narrows the list.
+ *
+ * *Last movement* is a column the owner did not list, and it is there on
+ * purpose: the list filters on it, and a filter on a value nobody can see is a
+ * filter nobody can check. It also keeps Warehouse honest — a sold unit still
+ * carries the location it left from, and "Sold" beside it is what says the
+ * unit is no longer on that shelf.
  *
  * ## Why this reads the store and not the API (2026-09-07)
  *
  * It was migrated to `GET /api/katalog/unit` ahead of every screen that WRITES
- * a unit, and those all still write the browser store. So a machine accepted
- * at Inbound & QC never appeared here — not late, never — and the page could
+ * a unit, and those all still write the browser store. So a unit accepted at
+ * Inbound & QC never appeared here — not late, never — and the page could
  * only ever show the seed. The owner reported it as "I accept a product into
  * the inventory and it did not load in the serial tracker", which is exactly
  * what a read migrated ahead of its writes looks like from the shop floor.
@@ -14,194 +43,70 @@
  * CLAUDE.md's own rule for the migration is that pages sharing an id space
  * move together — the three inbound pages had to be reverted for the same
  * reason on 2026-09-02. This page and Inbound & QC share the unit and the
- * ledger, so this comes back and they go over together.
+ * ledger, so this comes back and they go over together. The list added on
+ * 2026-09-19 reads the store for the same reason.
  *
  * Nothing is lost by waiting: `packages/db`'s `unitTimeline`,
  * `GET /api/katalog/unit/:serial` and `lib/unitsApi.ts` all stay, tested, for
  * the day the writes move. Four things are gained meanwhile, and they are the
  * ones a person at the counter notices — the rack, the QC description, the
- * store barcode on a reprint, and a machine appearing the moment it is
- * accepted.
+ * store barcode on a reprint, and a unit appearing the moment it is accepted.
  *
- * The timeline *enriches* each event by looking sideways at the order,
- * reservation, purchase order and return tables. None of that is stored on the
- * event: it is joined at render time through the document CODE the event
- * carries, so the ledger below stays exactly what was written and this stays a
- * reading of it. The raw ledger card is the unembellished truth, and it is
- * deliberately still on the page.
+ * The history itself — the unit card, the lifecycle and the raw ledger — is
+ * `components/SerialHistory`, since 2026-09-21: every other screen's serial
+ * opens it in a popup now (`SerialLink`) instead of linking here, and this
+ * page shows the same component in place.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import {
-  Button,
-  Card,
-  Descriptions,
-  Empty,
-  Flex,
-  Result,
-  Select,
-  Timeline,
-  Typography,
-} from "antd";
-import { PrinterOutlined } from "@ant-design/icons";
+import { useSearchParams } from "react-router-dom";
+import { Button, Card, DatePicker, Input, Typography, theme } from "antd";
+import { HistoryOutlined } from "@ant-design/icons";
+import type { Dayjs } from "dayjs";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
-import { LongText } from "../../components/LongText";
-import { EnumTag } from "../../components/EnumTag";
-import { GradeTag } from "../../components/GradeTag";
-import { FilterBar } from "../../components/FilterBar";
-import { PrintLabelsModal } from "../../components/LabelSheet";
-import { fmtRp, fmtDateTime } from "../../lib/format.js";
-import { labelFor } from "../../lib/labels.js";
+import { SerialHistory } from "../../components/SerialHistory";
+import {
+  CatalogueFilterPanel,
+  CatalogueFilterSelect,
+} from "../../components/CatalogueFilter";
+import { fmtDateTime, fmtNone } from "../../lib/format.js";
+import { PAGE_SEARCH_ATTR } from "../../lib/keyboardNav";
 import { useDb } from "../../mock/store.js";
 import { resolveSerialQuery } from "../../lib/serialInput.js";
-import type { MockDb, UnitEvent } from "../../mock/seed.js";
+import {
+  catalogueTree,
+  filterTrackerRows,
+  serialToOpen,
+  trackerRows,
+  type TrackerRow,
+} from "../../lib/serialTracker.js";
+import type { MockDb } from "../../mock/seed.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
-import { labelOf, UNIT_EVENT, UNIT_STATUS } from "../../i18n/enumLabels.js";
+import { useLayoutMode } from "../../layouts/useLayoutMode";
+import { SPACE, TYPE } from "../../theme/tokens";
+import { labelOf, UNIT_EVENT } from "../../i18n/enumLabels.js";
+import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
+import { asListOf, asString } from "../../lib/draftGuards.js";
 
 /**
- * What an event was part of, resolved from the document code it carries.
- *
- * A hold is named on the way in AND on the way out, so a machine held,
- * released, and held again by somebody else narrates the right person on all
- * four rows. The page used to search the store for a reservation mentioning
- * the serial and take the first match, which named whoever was first on every
- * one of them.
- *
- * Keyed on the event TYPE as well as the code, because the same purchase order
- * is on a machine's arrival and on its QC pass, and only the first of those is
- * "arrived from". An event with no document says nothing rather than guessing:
- * a line of grey text under every entry is noise, and a wrong one is worse.
+ * The nearest ancestor that scrolls — `Layout.Content`, in this app's shell,
+ * which is the scroll box for an ordinary page rather than the window.
  */
-type Context =
-  | { kind: "SALE"; orderCode: string; customerName?: string; price?: number }
-  | { kind: "HOLD"; customerName?: string; channelName?: string }
-  | { kind: "SUPPLIER_RETURN"; returnCode: string; supplierName: string }
-  | { kind: "ARRIVAL"; supplierName: string }
-  | null;
-
-function contextOf(db: MockDb, e: UnitEvent): Context {
-  const ref = e.refCode;
-  if (ref === undefined || ref === "") return null;
-
-  if (e.type === "TERJUAL") {
-    const order = db.orders.find((o) => o.code === ref);
-    if (!order) return null;
-    const customer = db.customers.find((c) => c.id === order.customerId);
-    return {
-      kind: "SALE",
-      orderCode: order.code,
-      ...(customer ? { customerName: customer.name } : {}),
-      // What THIS machine was charged, not what the receipt totalled: a
-      // receipt with a laptop and a mouse on it would otherwise narrate the
-      // mouse as having sold for both.
-      ...(order.prices[e.serial] === undefined
-        ? {}
-        : { price: order.prices[e.serial] }),
-    };
+function scrollParent(el: HTMLElement | null): HTMLElement | null {
+  for (let p = el?.parentElement ?? null; p !== null; p = p.parentElement) {
+    const { overflowY } = getComputedStyle(p);
+    if (overflowY === "auto" || overflowY === "scroll") return p;
   }
-
-  if (e.type === "DIRESERVASI" || e.type === "RESERVASI_BATAL") {
-    const hold = db.reservations.find((r) => r.code === ref);
-    if (!hold) return null;
-    const customer = db.customers.find((c) => c.id === hold.customerId);
-    const channel = db.reservationSources.find((s) => s.id === hold.sourceId);
-    return {
-      kind: "HOLD",
-      ...(customer ? { customerName: customer.name } : {}),
-      ...(channel ? { channelName: channel.name } : {}),
-    };
-  }
-
-  if (e.type === "RETUR_SUPPLIER") {
-    const ret = db.returns.find((r) => r.code === ref);
-    const supplier = db.suppliers.find((s) => s.id === ret?.supplierId);
-    if (!ret || !supplier) return null;
-    return {
-      kind: "SUPPLIER_RETURN",
-      returnCode: ret.code,
-      supplierName: supplier.name,
-    };
-  }
-
-  if (e.type === "DITERIMA") {
-    const po = db.pos.find((p) => p.code === ref);
-    const supplier = db.suppliers.find((s) => s.id === po?.supplierId);
-    if (!supplier) return null;
-    return { kind: "ARRIVAL", supplierName: supplier.name };
-  }
-
   return null;
 }
 
-/**
- * The one-line context for an event.
- *
- * The WORDING lives here because it is user-facing copy and has to go through
- * the catalogue. Returns null when there is nothing to add, so the timeline
- * does not grow a row of empty grey text under every entry.
- */
-function contextLine(
-  ctx: Context,
-  locationName: string | undefined,
-  t: (k: string, d: string, v?: Record<string, unknown>) => string,
-): string | null {
-  if (!ctx) return locationName ?? null;
-  if (ctx.kind === "SALE") {
-    return [
-      t("snTracking.ctxSold", "Sold on {{code}}", { code: ctx.orderCode }),
-      ctx.customerName &&
-        t("snTracking.ctxSoldTo", "to {{who}}", { who: ctx.customerName }),
-      ctx.price != null &&
-        t("snTracking.ctxSoldFor", "for {{amount}}", {
-          amount: fmtRp(Number(ctx.price)),
-        }),
-    ]
-      .filter(Boolean)
-      .join(" ");
-  }
-  if (ctx.kind === "HOLD") {
-    return [
-      ctx.customerName
-        ? t("snTracking.ctxHeldFor", "Held for {{who}}", {
-            who: ctx.customerName,
-          })
-        : t("snTracking.ctxHeld", "Held"),
-      ctx.channelName &&
-        t("snTracking.ctxCameFrom", "— came in from {{channel}}", {
-          channel: ctx.channelName,
-        }),
-    ]
-      .filter(Boolean)
-      .join(" ");
-  }
-  if (ctx.kind === "SUPPLIER_RETURN") {
-    return t("snTracking.ctxReturned", "{{code}} → {{supplier}}", {
-      code: ctx.returnCode,
-      supplier: ctx.supplierName,
-    });
-  }
-  return t(
-    "snTracking.ctxArrived",
-    "Waiting for QC — arrived from {{supplier}}",
-    {
-      supplier: ctx.supplierName,
-    },
-  );
-}
-
-/** How many serials the picker offers before it asks for a narrower search. */
-const PICKER_LIMIT = 50;
-
 export function StockHistoryPage() {
-  const [printing, setPrinting] = useState(false);
-  const [pickerQuery, setPickerQuery] = useState("");
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const db = useDb();
   const [params, setParams] = useSearchParams();
   const serial = params.get("serial") ?? undefined;
+  const top = useRef<HTMLDivElement>(null);
 
   /** Every origin code the shop has issued, for reading a store barcode. */
   const supplierCodes = useMemo(
@@ -211,346 +116,313 @@ export function StockHistoryPage() {
   /** Every serial the store holds — what a query is resolved against. */
   const knownSerials = useMemo(() => db.units.map((u) => u.serial), [db.units]);
 
-  /*
-   * A scan jumps straight to the serial rather than going through the picker,
-   * and it is resolved first (owner ask 2026-09-08).
-   *
-   * A machine carries both barcodes and the counter reads whichever faces
-   * them, so a scan of the shop's own sticker has to have its origin code
-   * taken off before it can find anything. `resolveSerialQuery` also puts the
-   * marker back on a bare read, which is the case a plain lookup missed: the
-   * store holds `SC02740137JKM` and the case prints `C02740137JKM`.
-   */
-  const resolve = (raw: string) =>
-    resolveSerialQuery(raw, knownSerials, supplierCodes);
+  /** Open one serial's history. A push, so the browser's Back returns here. */
+  const open = (next: string) => setParams({ serial: next });
 
+  /*
+   * A scan jumps straight to the serial, from the list or from another
+   * serial's history, and it is resolved first (owner ask 2026-09-08).
+   *
+   * A unit carries both barcodes and the counter reads whichever faces them,
+   * so a scan of the shop's own sticker has to have its origin code taken off
+   * before it can find anything. `resolveSerialQuery` also puts the marker
+   * back on a bare read, which is the case a plain lookup missed: the store
+   * holds `SC02740137JKM` and the case prints `C02740137JKM`. A serial the
+   * store does not hold is still opened — the history answers it with the
+   * "not in the system" card and the way to intake.
+   */
   useScanTarget((scanned) => {
-    const clean = resolve(scanned);
-    if (clean) setParams({ serial: clean });
+    const clean = resolveSerialQuery(scanned, knownSerials, supplierCodes);
+    if (clean) open(clean);
   });
 
-  const unit = db.units.find((u) => u.serial === serial);
-  const sku = db.skus.find((s) => s.id === unit?.skuId);
-  const model = db.models.find((m) => m.id === sku?.modelId);
-  const po = db.pos.find((p) => p.id === unit?.poId);
-  const supplier = db.suppliers.find((s) => s.id === po?.supplierId);
-
-  /** This unit's ledger, oldest first — the order it was written in. */
-  const events = useMemo(
-    () =>
-      db.events
-        .filter((e) => e.serial === serial)
-        .slice()
-        .sort((a, b) => a.seq - b.seq),
-    [db.events, serial],
-  );
-
-  /**
-   * The picker's options.
-   *
-   * Filtered over the store rather than asked of a server, and capped: a shop
-   * with thousands of serials would otherwise render every one of them into a
-   * dropdown on every keystroke.
+  /*
+   * Each view starts at its top. The two share one scroll box, so without
+   * this a history opened from row forty of the list would open forty rows
+   * down — past the unit card, which is the part somebody came for.
    */
-  const options = useMemo(() => {
-    const typed = pickerQuery.trim();
-    /*
-     * Matched against BOTH what was typed and what it resolves to.
-     *
-     * Somebody typing the number off the case types `C02740…`, which is not a
-     * substring of anything the store holds only because the marker is
-     * missing from the front — so a substring search alone finds nothing and
-     * the picker looks empty. Resolving first means the machine appears while
-     * the marker is still absent from the box.
-     */
-    const q = typed.toLowerCase();
-    const hit = typed === "" ? "" : resolve(typed).toLowerCase();
-    return db.units
-      .filter((u) => {
-        if (q === "") return true;
-        const s = db.skus.find((k) => k.id === u.skuId);
-        const serial = u.serial.toLowerCase();
-        return (
-          serial.includes(q) ||
-          serial === hit ||
-          (s?.name ?? "").toLowerCase().includes(q) ||
-          (s?.variantLabel ?? "").toLowerCase().includes(q)
-        );
-      })
-      .slice(0, PICKER_LIMIT)
-      .map((u) => {
-        const s = db.skus.find((k) => k.id === u.skuId);
-        return {
-          value: u.serial,
-          label:
-            `${u.serial} — ${s?.name ?? ""} ${s?.variantLabel ?? ""}`.trim(),
-        };
-      });
-    // `resolve` closes over the store, which changes identity every render;
-    // the query and the serials are what actually decide this list. This
-    // project's eslint config has no exhaustive-deps rule to disable, so the
-    // reason is stated rather than suppressed.
-  }, [db.units, db.skus, pickerQuery, knownSerials, supplierCodes]);
-
-  /** A serial that was asked for and is not in the store. */
-  const missing = serial !== undefined && unit === undefined;
-
-  const locationNameOf = (id: string | undefined) =>
-    db.warehouses.find((w) => w.id === id)?.name;
+  useEffect(() => {
+    const box = scrollParent(top.current);
+    if (box !== null) box.scrollTop = 0;
+  }, [serial]);
 
   return (
-    <PageContainer title={t("snTracking.sNTracking", "S/N Tracking")}>
-      <Flex vertical gap={16}>
-        <Card>
-          <FilterBar>
-            <Select
-              showSearch
-              allowClear
-              style={{ width: 480 }}
-              value={serial}
-              placeholder={t(
-                "snTracking.searchASerialNumberTo",
-                "Search a serial number to see its full lifecycle",
-              )}
-              optionFilterProp="label"
-              filterOption={false}
-              onSearch={setPickerQuery}
-              options={options}
-              onChange={(v) => setParams(v ? { serial: v } : {})}
-            />
-          </FilterBar>
-        </Card>
-        {!unit && serial === undefined && (
-          <Card>
-            <Empty
-              description={t(
-                "snTracking.pickASerialEveryUnit",
-                "Pick a serial — every unit is tracked from the day it arrives, forever.",
-              )}
-            />
-          </Card>
+    <PageContainer
+      title={t("snTracking.sNTracking", "S/N Tracking")}
+      {...(serial === undefined ? {} : { backTo: "/stock/history" })}
+    >
+      <div ref={top}>
+        <div hidden={serial !== undefined}>
+          <SerialList db={db} supplierCodes={supplierCodes} onOpen={open} />
+        </div>
+        {serial !== undefined && (
+          <SerialHistory db={db} serial={serial} onBack={() => setParams({})} />
         )}
-        {/* A serial that was asked for and does not exist is a recoverable
-            state, not an error: the value stays on screen, and the two things
-            worth doing next are one click away. */}
-        {missing && (
-          <Card>
-            <Result
-              status="404"
-              title={serial}
-              subTitle={t(
-                "snTracking.noUnitWithThisSerial",
-                "No unit with this serial is in the system. If it has just arrived, it may still be waiting at intake.",
-              )}
-              extra={[
-                <Button
-                  key="intake"
-                  type="primary"
-                  onClick={() => navigate("/inbound")}
-                >
-                  {t("snTracking.checkIntake", "Check intake")}
-                </Button>,
-                <Button key="clear" onClick={() => setParams({})}>
-                  {t("snTracking.clear", "Clear")}
-                </Button>,
-              ]}
-            />
-          </Card>
-        )}
-        {unit && (
-          <>
-            <Card
-              title={`${unit.serial} — ${sku?.name ?? ""} ${sku?.variantLabel ?? ""}`.trim()}
-              // The one screen that shows a single serial in full is the one
-              // where a staff member has already found the unit they want a
-              // sticker for, so the action belongs in the card's own corner.
-              extra={
-                <Button
-                  icon={<PrinterOutlined />}
-                  onClick={() => setPrinting(true)}
-                >
-                  {t("snTracking.printLabel", "Print label")}
-                </Button>
-              }
-            >
-              <Descriptions
-                // Facts about one unit: three across on a desktop, two on a
-                // tablet, and one per line on a phone, where a three-column
-                // description list wraps its own labels off their values.
-                column={{ xs: 1, sm: 2, md: 3 }}
-                items={[
-                  {
-                    key: "st",
-                    label: t("snTracking.status", "Status"),
-                    children: <EnumTag map={UNIT_STATUS} value={unit.status} />,
-                  },
-                  {
-                    key: "wh",
-                    label: t("snTracking.warehouse", "Warehouse"),
-                    children: locationNameOf(unit.locationId) ?? "—",
-                  },
-                  {
-                    key: "rk",
-                    label: t("snTracking.location", "Location"),
-                    children:
-                      db.racks.find((r) => r.id === unit.rackId)?.name ?? "—",
-                  },
-                  {
-                    // New or a letter (owner ask 2026-08-28). This is the one
-                    // screen that shows a single machine in full, and it is
-                    // also where a regrade lands: a unit that went out sealed
-                    // and came back second-hand is graded at the return desk,
-                    // and this is where somebody looks it up afterwards.
-                    key: "g",
-                    label: t("snTracking.grade", "Grade"),
-                    children: <GradeTag grade={unit.grade} />,
-                  },
-                  {
-                    key: "b",
-                    label: t("snTracking.buyPrice", "Buy price"),
-                    children: fmtRp(unit.buy),
-                  },
-                  {
-                    key: "p",
-                    label: t("snTracking.sellingPrice", "Selling price"),
-                    // The variant's price. This machine has no price of its
-                    // own since 2026-08-27, and what it eventually SOLD for is
-                    // on the order, not here.
-                    children: sku ? fmtRp(sku.price) : "—",
-                  },
-                  {
-                    key: "d",
-                    label: t("snTracking.description", "Description"),
-                    children: unit.description === "" ? "—" : unit.description,
-                  },
-                  {
-                    key: "po",
-                    label: t("snTracking.fromPo", "From PO"),
-                    children: po?.code ?? "—",
-                  },
-                ]}
-              />
-            </Card>
-            <Card title={t("snTracking.lifecycle", "Lifecycle")}>
-              <Timeline
-                items={events.map((e) => {
-                  const context = contextLine(
-                    contextOf(db, e),
-                    locationNameOf(e.locationId),
-                    t,
-                  );
-                  return {
-                    color:
-                      e.type === "TERJUAL"
-                        ? "blue"
-                        : e.type === "OPNAME_HILANG" ||
-                            e.type === "RETUR_SUPPLIER"
-                          ? "red"
-                          : e.type === "QC_SELESAI"
-                            ? "green"
-                            : e.type === "DITERIMA"
-                              ? "orange"
-                              : "gray",
-                    children: (
-                      <>
-                        <Typography.Text strong>
-                          {labelOf(UNIT_EVENT, e.type, t)}
-                        </Typography.Text>{" "}
-                        <Typography.Text type="secondary">
-                          · {fmtDateTime(e.at)} · {e.staff}
-                          {e.refCode ? ` · ${e.refCode}` : ""}
-                        </Typography.Text>
-                        {context && <div>{context}</div>}
-                        {e.note && (
-                          <Typography.Text
-                            type="secondary"
-                            style={{ display: "block" }}
-                          >
-                            {e.note}
-                          </Typography.Text>
-                        )}
-                      </>
-                    ),
-                  };
-                })}
-              />
-            </Card>
-            <Card
-              title={t(
-                "snTracking.rawLedgerAppendOnly",
-                "Raw ledger (append-only)",
-              )}
-            >
-              <ProTable
-                rowKey="id"
-                size="small"
-                dataSource={events}
-                searchPlaceholder={t(
-                  "snTracking.searchEventNoteOrReference",
-                  "Search event, note or reference",
-                )}
-                // One unit's whole life. Long-lived serials run to dozens of
-                // events, so the ledger loads in pages like every other list.
-                resetKey={serial}
-                columns={[
-                  { title: "#", dataIndex: "seq", width: 50 },
-                  {
-                    title: t("snTracking.when", "When"),
-                    dataIndex: "at",
-                    render: fmtDateTime,
-                  },
-                  {
-                    title: t("snTracking.event", "Event"),
-                    dataIndex: "type",
-                    facet: true,
-                    searchable: true,
-                    sortValue: (e) => labelOf(UNIT_EVENT, e.type, t),
-                    render: (v) => labelOf(UNIT_EVENT, v, t),
-                  },
-                  {
-                    title: t("snTracking.from", "From"),
-                    dataIndex: "fromStatus",
-                    facet: true,
-                  },
-                  {
-                    title: t("snTracking.to", "To"),
-                    dataIndex: "toStatus",
-                    facet: true,
-                  },
-                  {
-                    title: t("snTracking.ref", "Ref"),
-                    dataIndex: "refCode",
-                    searchable: true,
-                    render: (v) => v ?? "—",
-                  },
-                  {
-                    title: t("snTracking.note", "Note"),
-                    dataIndex: "note",
-                    searchable: true,
-                    width: 340,
-                    render: (v: string | undefined) => <LongText>{v}</LongText>,
-                  },
-                  {
-                    title: t("snTracking.by", "By"),
-                    dataIndex: "staff",
-                    facet: true,
-                  },
-                ]}
-              />
-            </Card>
-
-            <PrintLabelsModal
-              open={printing}
-              onClose={() => setPrinting(false)}
-              // The store form of the barcode, which is what the shop's own
-              // phones scan. The supplier's origin code is two hops the page
-              // already holds — unit → purchase order → supplier — and it is
-              // why a reprint from here now matches a reprint from Inventory.
-              labels={[labelFor(unit, sku, model, supplier?.code)]}
-            />
-          </>
-        )}
-      </Flex>
+      </div>
     </PageContainer>
+  );
+}
+
+/**
+ * Every serial the store holds (owner ask 2026-09-19) — see the page's
+ * docblock for what it shows and why.
+ *
+ * The search, the tree and the date range narrow the rows HERE, before
+ * `ProTable` sees them, because none of the three is something `ProTable`
+ * can hold: its search cannot be asked what Enter should open, and its
+ * header filters are flat lists of a column's own values. `ProTable` still
+ * sorts and pages what it is handed.
+ */
+function SerialList({
+  db,
+  supplierCodes,
+  onOpen,
+}: {
+  db: MockDb;
+  supplierCodes: readonly string[];
+  onOpen: (serial: string) => void;
+}) {
+  const { t } = useTranslation();
+  const { compact } = useLayoutMode();
+  const {
+    token: { colorTextSecondary },
+  } = theme.useToken();
+  // The list's own search and filters, kept on this device like every other
+  // list's (2026-09-21). The date range is left out: a "last movement" window
+  // picked yesterday is rarely the question today.
+  const [query, setQuery] = usePersistentState<string>(
+    draftKey("list.serials.query"),
+    "",
+    asString,
+  );
+  const [skus, setSkus] = usePersistentState<string[]>(
+    draftKey("list.serials.products"),
+    [],
+    asListOf((v): v is string => typeof v === "string"),
+  );
+  const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
+
+  const all = useMemo(
+    () => trackerRows(db),
+    // The five tables the list reads, rather than the store object, whose
+    // identity changes whenever anything anywhere in it moves.
+    [db.units, db.skus, db.models, db.warehouses, db.events],
+  );
+  const tree = useMemo(() => catalogueTree(all), [all]);
+
+  // Whole days, in the shop's own time: "moved on the 12th" means any time
+  // that day, not the instant the calendar's midnight happens to name.
+  const movedFrom = range?.[0]?.startOf("day").valueOf();
+  const movedTo = range?.[1]?.endOf("day").valueOf();
+
+  const rows = useMemo(
+    () =>
+      filterTrackerRows(all, {
+        query,
+        supplierCodes,
+        skuIds: skus,
+        movedFrom,
+        movedTo,
+      }),
+    [all, query, supplierCodes, skus, movedFrom, movedTo],
+  );
+
+  /** What Enter opens: a serial the store holds, named outright. */
+  const openTyped = (value: string) => {
+    const hit = serialToOpen(
+      value,
+      all.map((r) => r.serial),
+      supplierCodes,
+    );
+    if (hit !== null) onOpen(hit);
+  };
+
+  const filtering = skus.length > 0 || range !== null;
+
+  return (
+    <Card>
+      <ProTable<TrackerRow>
+        persistKey="serials"
+        rowKey="serial"
+        dataSource={rows}
+        search={false}
+        // Search, tree and dates are new questions, so each sends the pager
+        // back to page one — see DataTable's `resetKey`.
+        resetKey={`${query}|${skus.join()}|${movedFrom ?? ""}|${movedTo ?? ""}`}
+        toolbar={
+          <>
+            <Input.Search
+              allowClear
+              // What `/` jumps to (owner ask 2026-09-15) — this page's
+              // search, in place of the one `ProTable` would draw.
+              {...{ [PAGE_SEARCH_ATTR]: "" }}
+              value={query}
+              placeholder={t(
+                "snTracking.searchPlaceholder",
+                "Search or scan a serial, product or warehouse",
+              )}
+              aria-label={t(
+                "snTracking.searchPlaceholder",
+                "Search or scan a serial, product or warehouse",
+              )}
+              onChange={(e) => setQuery(e.target.value)}
+              onSearch={(value, _e, info) => {
+                // The clear button reports as a search of nothing.
+                if (info?.source !== "clear") openTyped(value);
+              }}
+              style={{ width: compact ? undefined : 320 }}
+            />
+            {/* On a phone there is no column header, so the tree the Unit
+                column carries on a desktop is drawn here instead — one
+                state, two controls, as ProTable does with its own. */}
+            {compact && (
+              <CatalogueFilterSelect
+                tree={tree}
+                value={skus}
+                onChange={setSkus}
+              />
+            )}
+            <DatePicker.RangePicker
+              value={range}
+              onChange={(v) => setRange(v && (v[0] || v[1]) ? v : null)}
+              allowEmpty={[true, true]}
+              format="DD MMM YYYY"
+              placeholder={[
+                t("snTracking.movedSince", "Moved since"),
+                t("snTracking.movedUntil", "Moved until"),
+              ]}
+              aria-label={t("snTracking.movedBetween", "Last movement between")}
+            />
+            {/* Visible from outside the header, because a lit funnel among
+                five column titles is easy to set and easy to forget —
+                ProTable's own reasoning for its link of the same name. */}
+            {filtering && (
+              <Button
+                type="link"
+                size="small"
+                onClick={() => {
+                  setSkus([]);
+                  setRange(null);
+                }}
+              >
+                {t("snTracking.clearFilters", "Clear filters")}
+              </Button>
+            )}
+          </>
+        }
+        columns={[
+          {
+            title: t("snTracking.serial", "Serial"),
+            dataIndex: "serial",
+            render: (v: string) => (
+              <Typography.Text style={{ fontFamily: "monospace" }}>
+                {v}
+              </Typography.Text>
+            ),
+          },
+          {
+            title: t("snTracking.unit", "Unit"),
+            key: "unit",
+            sortValue: (r) => `${r.product} ${r.variant}`,
+            render: (_, r) => (
+              <>
+                <Typography.Text strong>
+                  {r.product || fmtNone()}
+                </Typography.Text>
+                <Typography.Text
+                  type="secondary"
+                  style={{ display: "block", fontSize: TYPE.sm }}
+                >
+                  {r.variant}
+                </Typography.Text>
+              </>
+            ),
+            // The header filter, on a desktop. antd draws the funnel and
+            // the dropdown; the state and the narrowing are the list's.
+            ...(compact
+              ? {}
+              : {
+                  filtered: skus.length > 0,
+                  filterDropdown: ({ close }: { close: () => void }) => (
+                    <CatalogueFilterPanel
+                      tree={tree}
+                      value={skus}
+                      onChange={setSkus}
+                      onDone={close}
+                    />
+                  ),
+                }),
+          },
+          {
+            title: t("snTracking.warehouse", "Warehouse"),
+            dataIndex: "warehouse",
+            render: (v: string) => v || fmtNone(),
+          },
+          {
+            title: t("snTracking.lastMovement", "Last movement"),
+            key: "last",
+            // Newest first: "what just happened" is the question a list of
+            // every serial is most often opened to answer.
+            defaultSortOrder: "descend",
+            sortValue: (r) =>
+              r.last === undefined ? undefined : Date.parse(r.last.at),
+            render: (_, r) =>
+              r.last === undefined ? (
+                fmtNone()
+              ) : (
+                <>
+                  <Typography.Text>
+                    {labelOf(UNIT_EVENT, r.last.type, t)}
+                  </Typography.Text>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ display: "block", fontSize: TYPE.sm }}
+                  >
+                    {fmtDateTime(r.last.at)}
+                  </Typography.Text>
+                </>
+              ),
+          },
+          {
+            // Blank by convention: DataTable drops an untitled column to the
+            // foot of the card on a phone, where buttons belong.
+            title: "",
+            key: "actions",
+            width: 160,
+            render: (_, r) => (
+              <Button
+                size="small"
+                icon={<HistoryOutlined />}
+                // The visible words first, so somebody driving the page by
+                // voice can say what they see.
+                aria-label={t(
+                  "snTracking.checkHistoryAria",
+                  "Check history of {{serial}}",
+                  { serial: r.serial },
+                )}
+                onClick={() => onOpen(r.serial)}
+              >
+                {t("snTracking.checkHistory", "Check history")}
+              </Button>
+            ),
+          },
+        ]}
+      />
+      {rows.length !== all.length && (
+        <Typography.Text
+          style={{
+            display: "block",
+            marginTop: SPACE.sm,
+            fontSize: TYPE.sm,
+            color: colorTextSecondary,
+          }}
+        >
+          {t("proTable.narrowed", "Showing {{shown}} of {{total}}", {
+            shown: rows.length,
+            total: all.length,
+          })}
+        </Typography.Text>
+      )}
+    </Card>
   );
 }

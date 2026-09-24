@@ -4,19 +4,13 @@
  * > *"Accessories do not have serial number, and in stock opname, they will
  * > only be counted and validated by qty, not serial."* (owner ask 2026-09-15)
  *
- * ## What this does NOT change
+ * ## A counted product has no units at all (owner decision 2026-09-19)
  *
- * A `Unit` row per item, and a serial on it. The serial is the subject of this
- * database — it is what a `UnitEvent` names, what an `OrderItem` sold and what
- * `Unit.buy` is the cost of — and a sleeve that has been bought, shelved and
- * sold has all of those facts about it just as a MacBook does. Taking the row
- * away would mean a second kind of stock that every screen has to learn.
- *
- * What changes is who the serial is FOR. On a tracked category it is a
- * number a person reads off the machine, types, scans and searches by. On a
- * counted one nobody ever sees it: Inbound & QC stops asking, a stock take
- * asks for a number instead, and the app mints one (`countedSerial`) so the
- * ledger still has something to name.
+ * Until 2026-09-19 a counted item was still a `Unit` with a minted `QTY-…`
+ * serial nobody read. The owner took that out — *"purely by qty … in the
+ * database too"* — so a counted category's stock is a quantity on the
+ * `StockMove` ledger (`lib/stock.ts`) and nothing else. This module only
+ * answers WHICH categories those are; `lib/stock.ts` is how they are held.
  *
  * ## Per category, and from the database
  *
@@ -77,29 +71,4 @@ export function countedCategories(
   cat: Pick<TrackingCatalogue, "categories">,
 ): string[] {
   return cat.categories.filter((c) => !c.tracksSerial).map((c) => c.name);
-}
-
-/**
- * The prefix on a serial the app minted rather than read off a machine.
- *
- * Visible on purpose. A counted item's serial is an internal handle, and
- * anybody who does meet one — on a timeline, in a search — should be able to
- * tell at a glance that it is not a number printed on anything.
- */
-export const COUNTED_SERIAL_PREFIX = "QTY-";
-
-/** Is this a serial the app minted for a counted item? */
-export function isCountedSerial(serial: string): boolean {
-  return serial.startsWith(COUNTED_SERIAL_PREFIX);
-}
-
-/**
- * Mint a handle for one counted item.
- *
- * `skuId` and a per-call `n` rather than a random string, so the same intake
- * run produces the same handles twice — which is what lets a commit be
- * retried after a refused one without minting a second set.
- */
-export function countedSerial(skuId: string, n: number): string {
-  return `${COUNTED_SERIAL_PREFIX}${skuId.toUpperCase()}-${n}`;
 }

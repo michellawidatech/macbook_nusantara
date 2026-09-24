@@ -1,5 +1,5 @@
 /**
- * A stock take that finds a machine the shop has never booked in — the owner's
+ * A stock take that finds a unit the shop has never booked in — the owner's
  * ask of 2026-08-31, driven end to end.
  *
  * The pure rules live in `test/opnameScope.test.ts`. What can only be checked
@@ -8,7 +8,7 @@
  * - a draft writes nothing, however much the counter fills in;
  * - posting creates the unit, in QC, with a genesis event and nothing else;
  * - a serial the shop already owns is never offered the button, because that
- *   machine exists and needs moving rather than making.
+ *   unit exists and needs moving rather than making.
  *
  * Every one of those is a promise about a moment rather than about a value, so
  * a unit test of the store could hold while the page broke.
@@ -44,7 +44,7 @@ beforeEach(() => {
     d.opnames = d.opnames.filter((o) => o.id !== SESSION);
     d.units = d.units.filter((u) => u.serial !== FOUND);
     d.events = d.events.filter((e) => e.serial !== FOUND);
-    // One real machine moved out of the counted warehouse, so the
+    // One real unit moved out of the counted warehouse, so the
     // "already ours" case is a fixture rather than a hope about the seed.
     const away = d.units.find(
       (u) => u.status === "TERSEDIA" && u.locationId === d.myWarehouseId,
@@ -122,9 +122,10 @@ async function closeDialog() {
 /**
  * Count one serial through the scan box, then go to the review step.
  *
- * Two clicks since 2026-09-01: *Review & finish* now lands on the expected
- * list — the owner's "before Review & Finish, show all the product that is
- * supposed to be in that scope" — and the confirmation is one step further on.
+ * One click again since 2026-09-19. From 2026-09-01 *Review & finish* landed
+ * on an expected-in-this-scope list with the confirmation one step further on;
+ * the counting table now shows every expected unit from the start, so that
+ * step was folded away and the button lands on the review itself.
  */
 async function count(serial: string) {
   const box = screen.getByPlaceholderText(/Scan or type a serial/i);
@@ -134,12 +135,28 @@ async function count(serial: string) {
   await userEvent.click(
     screen.getByRole("button", { name: /Review & finish/i }),
   );
-  await userEvent.click(
-    screen.getByRole("button", { name: /Continue to review/i }),
-  );
 }
 
-describe("a machine the shop never booked in", () => {
+describe("leaving a count", () => {
+  it("saves the last scan even when somebody clicks away at once", async () => {
+    // The autosave waits 1.2 s for a burst of scans to end, and leaving the
+    // page cleared that wait. The in-app tabs hid it — a hidden tab stayed
+    // mounted — and since they went (2026-09-21) leaving is an unmount again.
+    const page = renderSession();
+    const box = screen.getByPlaceholderText(/Scan or type a serial/i);
+    await userEvent.click(box);
+    await userEvent.paste(elsewhereSerial);
+    await userEvent.keyboard("{Enter}");
+    page.unmount();
+
+    // Filed where the page files it: a unit that lives elsewhere is a
+    // discrepancy, not a find — but it is on the saved count either way.
+    const saved = snapshot().opnames.find((o) => o.id === SESSION)!;
+    expect([...saved.counted, ...saved.unknown]).toContain(elsewhereSerial);
+  });
+});
+
+describe("a unit the shop never booked in", () => {
   it("offers the button only for a serial the system has never seen", async () => {
     renderSession();
     await count(FOUND);
@@ -151,7 +168,7 @@ describe("a machine the shop never booked in", () => {
   });
 
   it("does not offer it for a unit that is simply in the wrong place", async () => {
-    // A machine the shop already owns needs MOVING, not making. A second row
+    // A unit the shop already owns needs MOVING, not making. A second row
     // for it would be a duplicate of a laptop that exists.
     renderSession();
     await count(elsewhereSerial);
@@ -171,7 +188,7 @@ describe("a machine the shop never booked in", () => {
     await screen.findByRole("dialog");
 
     // The dialog is open, the decision is half made, and the database has not
-    // heard of this machine. That is the promise a draft makes.
+    // heard of this unit. That is the promise a draft makes.
     expect(snapshot().units.some((u) => u.serial === FOUND)).toBe(false);
     expect(snapshot().events.some((e) => e.serial === FOUND)).toBe(false);
     await closeDialog();
@@ -185,7 +202,7 @@ describe("a machine the shop never booked in", () => {
     );
     const dialog = await screen.findByRole("dialog");
 
-    // Posting is where a note becomes a machine in stock. Not a consequence
+    // Posting is where a note becomes a unit in stock. Not a consequence
     // to discover afterwards in a toast that has already gone.
     expect(
       within(dialog).getByText(/enters QC, not the shelf/i),
@@ -195,7 +212,7 @@ describe("a machine the shop never booked in", () => {
 });
 
 /**
- * Posting, which is where the decision becomes a machine.
+ * Posting, which is where the decision becomes a unit.
  *
  * The draft is seeded with the decision already made rather than made through
  * the dialog — reopening a saved draft is a real path, and rc-select under
@@ -206,10 +223,10 @@ describe("posting a count that found one", () => {
   const SKU = "m-pro13-2016-v1";
 
   /**
-   * A count of ONE EMPTY RACK, on which one unrecorded machine turned up.
+   * A count of ONE EMPTY RACK, on which one unrecorded unit turned up.
    *
    * The scope is doing real work here rather than dressing the fixture. A
-   * count of the whole warehouse expects two dozen machines, so posting it
+   * count of the whole warehouse expects two dozen units, so posting it
    * would stop at "23 units still need a description" — the missing-note gate,
    * which is correct and has nothing to do with what these tests are about.
    * Narrowing to a rack nothing is filed on leaves the surplus as the only
@@ -239,18 +256,14 @@ describe("posting a count that found one", () => {
   });
 
   /**
-   * A draft opens on the counting screen, so the review is three clicks away —
-   * the page deliberately withholds it until somebody says they are done
-   * counting, and since 2026-09-01 there is an expected-list step in between.
-   * See `OpnameSessionPage`'s docblock on what is not shown, and on `phase`.
+   * A draft opens on the counting screen, so the review is one click away —
+   * the page asks for the notes and the posting only once somebody says they
+   * are done counting. See `phase` in `OpnameSessionPage`.
    */
   async function review() {
     renderSession();
     await userEvent.click(
       screen.getByRole("button", { name: /Review & finish/i }),
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: /Continue to review/i }),
     );
   }
 
@@ -263,7 +276,7 @@ describe("posting a count that found one", () => {
     );
   }
 
-  it("warns that the machine is about to exist, before the button is pressed", async () => {
+  it("warns that the unit is about to exist, before the button is pressed", async () => {
     await review();
     await userEvent.click(screen.getByRole("button", { name: /Post count/i }));
     const confirm = await screen.findByRole("dialog");
@@ -309,7 +322,7 @@ describe("posting a count that found one", () => {
 
     const events = snapshot().events.filter((e) => e.serial === FOUND);
     // Exactly one. The `DICATAT` the unknown list writes for everything else
-    // must not also fire here, or the machine's first day would read twice.
+    // must not also fire here, or the unit's first day would read twice.
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       type: "OPNAME_DITEMUKAN",

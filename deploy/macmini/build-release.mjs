@@ -154,6 +154,7 @@ const ENTRIES = {
   staff: "apps/api/src/cli/upsert-staff.ts",
   accounts: "apps/api/src/cli/seed-accounts.ts",
   knowledge: "apps/api/src/cli/import-knowledge.ts",
+  chatbot: "apps/api/src/cli/chatbot-doctor.ts",
 };
 
 /** The generated client stays a directory of files next to the bundles. */

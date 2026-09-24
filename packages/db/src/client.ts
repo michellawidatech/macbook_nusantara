@@ -71,10 +71,10 @@ function envFilePath(): string {
  * Prisma's own, the one it would read anyway — and its whole purpose is to put
  * that value in front of the guard instead of behind it.
  */
-function urlFromEnvFile(): string | undefined {
+function urlFromEnvFile(path: string): string | undefined {
   let text: string;
   try {
-    text = readFileSync(envFilePath(), "utf8");
+    text = readFileSync(path, "utf8");
   } catch {
     return undefined;
   }
@@ -96,18 +96,21 @@ function urlFromEnvFile(): string | undefined {
 /**
  * The connection this process may open, checked.
  *
- * `env` is a parameter rather than a read of `process.env` at module scope
- * (01 §7), so a test can drive it. The file is consulted only when the shell
+ * `env` and `envFile` are parameters rather than reads at module scope
+ * (01 §7), so a test can drive them — `packages/db/.env` is gitignored, and a
+ * test that read the developer's copy passed on every laptop and failed on
+ * CI's clean checkout (2026-09-18). The file is consulted only when the shell
  * is silent, which is the precedence Prisma itself applies.
  */
 export function resolveConnection(
   env: Record<string, string | undefined> = process.env,
+  envFile: string = envFilePath(),
 ): ResolvedDatabase {
   const fromShell = env["DATABASE_URL"]?.trim();
   if (fromShell !== undefined && fromShell !== "") {
     return resolveDatabaseUrl(env);
   }
-  return resolveDatabaseUrl({ ...env, DATABASE_URL: urlFromEnvFile() });
+  return resolveDatabaseUrl({ ...env, DATABASE_URL: urlFromEnvFile(envFile) });
 }
 
 let singleton: PrismaClient | undefined;

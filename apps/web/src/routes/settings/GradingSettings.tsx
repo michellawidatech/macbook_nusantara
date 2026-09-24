@@ -118,7 +118,7 @@ export function GradingSettings() {
       }),
       content: t(
         "settings.gradingRemoveCriterionBody",
-        "Its options go with it, and every rule that mentions it stops checking it. Grades already given to machines are untouched.",
+        "Its options go with it, and every rule that mentions it stops checking it. Grades already given to units are untouched.",
       ),
       okButtonProps: { danger: true },
       onOk: () =>
@@ -196,7 +196,7 @@ export function GradingSettings() {
             }
           />
           {rule.conditions.length === 0 && (
-            <Tag>{t("settings.gradingCatchAll", "matches every machine")}</Tag>
+            <Tag>{t("settings.gradingCatchAll", "matches every unit")}</Tag>
           )}
           <Flex gap={4} style={{ marginInlineStart: "auto" }}>
             <Tooltip title={t("settings.gradingCheckEarlier", "Check earlier")}>
@@ -288,7 +288,7 @@ export function GradingSettings() {
           <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
             {t(
               "settings.gradingIntro",
-              "What QC checks a machine against, per category, and which combinations make each grade. The grade button on Inbound & QC reads this — and the person grading can always overwrite the answer.",
+              "What QC checks a unit against, per category, and which combinations make each grade. The grade button on Inbound & QC reads this — and the person grading can always overwrite the answer.",
             )}
           </Typography.Paragraph>
           <Flex vertical gap={4} style={{ maxWidth: 320 }}>
@@ -425,7 +425,7 @@ export function GradingSettings() {
               )}
               description={t(
                 "settings.gradingHowRulesReadBody",
-                "A rule fits when the inspected machine matches every condition it sets — a criterion left on “Any” is not checked. A rule with no conditions fits every machine, so it belongs last, as the catch-all.",
+                "A rule fits when the inspected unit matches every condition it sets — a criterion left on “Any” is not checked. A rule with no conditions fits every unit, so it belongs last, as the catch-all.",
               )}
             />
             {rules.length === 0 ? (

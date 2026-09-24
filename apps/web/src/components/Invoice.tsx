@@ -30,7 +30,7 @@ import type { CSSProperties } from "react";
 import { Button, Modal, Typography } from "antd";
 import { PrinterOutlined } from "@ant-design/icons";
 import { fmtRp, fmtDate } from "../lib/format.js";
-import { paymentsOf, saleBalance } from "../lib/salePayments.js";
+import { orderBalance, paymentsOf } from "../lib/salePayments.js";
 import { marketplacePayMethod } from "../lib/channels.js";
 // No `t` on purpose: the faktur is a print template and is deliberately
 // outside the language switch, so it takes the English label.
@@ -116,21 +116,38 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
   const salesman = db.salesmen.find((s) => s.id === order.salesmanId);
   /** The bill in parts, and what it comes to. See `lib/salePayments.ts`. */
   const parts = paymentsOf(order);
-  const balance = saleBalance(order.total, parts);
-  const subtotal = order.serials.reduce(
-    (t, s) => t + (order.prices[s] ?? 0),
-    0,
-  );
-  const lines = order.serials.map((serial) => {
-    const unit = db.units.find((u) => u.serial === serial);
-    const sku = unit && db.skus.find((k) => k.id === unit.skuId);
-    return {
-      serial,
-      name: sku ? `${sku.name} ${sku.variantLabel}` : serial,
-      description: unit?.description ?? "",
-      price: order.prices[serial] ?? 0,
-    };
-  });
+  // Returns included: the bill after them, net of what was handed back.
+  const balance = orderBalance(order);
+  const counted = order.lines ?? [];
+  const subtotal =
+    order.serials.reduce((t, s) => t + (order.prices[s] ?? 0), 0) +
+    counted.reduce((t, l) => t + l.price * l.qty, 0);
+  const lines = [
+    ...order.serials.map((serial) => {
+      const unit = db.units.find((u) => u.serial === serial);
+      const sku = unit && db.skus.find((k) => k.id === unit.skuId);
+      return {
+        key: serial,
+        serial,
+        name: sku ? `${sku.name} ${sku.variantLabel}` : serial,
+        description: unit?.description ?? "",
+        price: order.prices[serial] ?? 0,
+      };
+    }),
+    // A counted product has no serial to print (2026-09-19): the line says
+    // how many and what each cost instead, and the serial cell says "None" —
+    // in English whatever the app's language, like the rest of the faktur.
+    ...counted.map((l) => {
+      const sku = db.skus.find((k) => k.id === l.skuId);
+      return {
+        key: l.id,
+        serial: "None",
+        name: sku ? `${sku.name} ${sku.variantLabel}` : l.skuId,
+        description: `${l.qty} × ${fmtRp(l.price)}`,
+        price: l.price * l.qty,
+      };
+    }),
+  ];
 
   const cell: CSSProperties = {
     padding: "6px 8px",
@@ -278,7 +295,7 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
         </thead>
         <tbody>
           {lines.map((l, i) => (
-            <tr key={l.serial}>
+            <tr key={l.key}>
               <td style={{ ...cell, verticalAlign: "top", color: "#666" }}>
                 {i + 1}
               </td>

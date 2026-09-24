@@ -88,14 +88,15 @@ function rng(seed: number): () => number {
  * is the live one, and several test files truncate the whole schema before
  * calling `seed()`.
  *
- * `forPo` is true for the owner's three ways of paying a supplier — cash, a
- * transfer and a marketplace (owner revision 2026-09-15: *"The payment method
- * is wrong, it should be Cash, Transfer, and Marketplace"*). A card was on the
- * list until then and is not any more; stock bought through a marketplace
- * checkout is paid through it, which is what replaced it. Migration
- * `20260915090000_po_payment_methods` says the same to a database that already
- * exists, and `apps/web/src/mock/seed.ts` says it to the browser — all three
- * have to agree, or the till and the API offer different lists.
+ * `forPo` is true for the two ways a supplier is paid — cash and a transfer
+ * (owner revision 2026-09-21). A card left the list on 2026-09-15 and
+ * MARKETPLACE, which replaced it then, left on 2026-09-21: a supplier payment
+ * asks how the SHOP's own money moved, and an escrow balance is not an answer
+ * to that. Migrations `20260915090000_po_payment_methods` and
+ * `20260921090000_po_payment_methods_cash_and_transfer` say the same to a
+ * database that already exists, and `apps/web/src/mock/seed.ts` says it to the
+ * browser — all three have to agree, or the till and the API offer different
+ * lists.
  *
  * `builtIn` marks the rows application code reads by `code` (MARKETPLACE
  * drives Shopee escrow), which staff may rename or deactivate but never drop.
@@ -114,6 +115,21 @@ const PAYMENT_METHODS = [
   // paid by cash, transfer or card, and the allocation that later puts it
   // against an invoice carries that same method.
   { id: "pm_qris", code: "QRIS", label: "QRIS", forPo: false, forSale: true },
+  {
+    /*
+     * Money that settles a debt without passing through either of the shop's
+     * pots (owner ask 2026-09-23): *"Transfer from other bank for
+     * expense/deposit to supplier, which does not reduce the bank balance in
+     * the POS."* The owner pays a supplier from an account this app does not
+     * keep, so the invoice is settled and the balance must not move.
+     * `lib/accounts.ts` maps it to no pot, which is what makes that true.
+     */
+    id: "pm_transfer_luar",
+    code: "TRANSFER_LUAR",
+    label: "Transfer from another bank",
+    forPo: true,
+    forSale: false,
+  },
   {
     // `forPo`, because a supplier deposit is nearly always a transfer.
     id: "pm_transfer",
@@ -158,10 +174,16 @@ const PAYMENT_METHODS = [
     forSale: true,
   },
   {
+    // NOT `forPo` since 2026-09-21 (owner revision): the invoice form offers
+    // Cash and Bank transfer and nothing else. An escrow balance is not a way
+    // of moving the shop's own money, which is the only question a supplier
+    // payment asks. Still `forSale` — it is what a marketplace sale is written
+    // with. Migration `20260921090000_po_payment_methods_cash_and_transfer`
+    // says the same to a database that already exists.
     id: "pm_marketplace",
     code: "MARKETPLACE",
     label: "Marketplace escrow",
-    forPo: true,
+    forPo: false,
     forSale: true,
   },
 ] as const;
@@ -600,17 +622,9 @@ export async function seed(
         allocatedFee: rp(l.allocatedFee),
       })),
     });
-    const fees = [
-      ...(po.shippingFee > 0
-        ? [{ label: "Ongkir", kind: "ONGKIR" as const, amount: po.shippingFee }]
-        : []),
-      ...(po.taxFee > 0
-        ? [{ label: "Pajak", kind: "PAJAK" as const, amount: po.taxFee }]
-        : []),
-    ];
     await db.purchaseOrderFee.createMany({
-      data: fees.map((f, i) => ({
-        id: `${po.id}-fee-${i + 1}`,
+      data: po.fees.map((f) => ({
+        id: f.id,
         poId: po.id,
         label: f.label,
         kind: f.kind,
@@ -830,6 +844,29 @@ export async function seed(
       }
     }
 
+    // Accessories on the receipt, by quantity — lines with no unit
+    // (2026-09-19). Their cost is the moving average the TERJUAL stock moves
+    // below carry.
+    for (const [i, l] of o.countedLines.entries()) {
+      await db.orderItem.create({
+        data: {
+          id: l.id,
+          orderId: o.id,
+          unitId: null,
+          skuId: l.skuId,
+          name: l.name,
+          variant: l.variant,
+          qty: l.qty,
+          price: rp(l.price),
+          sub: rp(l.sub),
+          cogs: rp(l.cogs),
+          listPrice: rp(l.listPrice),
+          returnedQty: 0,
+          sortOrder: o.builtLines.length + i,
+        },
+      });
+    }
+
     for (const p of o.payments) {
       const cash = p.method === "TUNAI";
       await db.payment.create({
@@ -852,6 +889,33 @@ export async function seed(
   }
   log(`penjualan: ${shop.orders.length} order`);
 
+  // --- counted products: the stock ledger ----------------------------------
+  // Accessories have no units (2026-09-19); what a shelf holds of one is the
+  // sum of these rows.
+  await db.stockMove.createMany({
+    data: shop.stockMoves.map((m) => ({
+      id: m.id,
+      skuId: m.skuId,
+      locationId: m.locationId,
+      qty: m.qty,
+      unitCost: rp(m.cost),
+      type: m.type,
+      at: when(m.at),
+      refCode:
+        m.orderId !== undefined
+          ? shop.orders.find((o) => o.id === m.orderId)!.code
+          : m.poId !== undefined
+            ? shop.purchaseOrders.find((p) => p.id === m.poId)!.code
+            : null,
+      purchaseOrderId: m.poId ?? null,
+      poItemId: m.poLineId ?? null,
+      orderId: m.orderId ?? null,
+      orderItemId: m.orderLineId ?? null,
+      staffId: m.staffId,
+    })),
+  });
+  log(`stok per jumlah: ${shop.stockMoves.length} pergerakan`);
+
   // --- what was paid to suppliers ------------------------------------------
   for (const po of shop.purchaseOrders) {
     for (const p of po.payments) {
@@ -863,6 +927,7 @@ export async function seed(
           methodId: methodId(p.method),
           amount: rp(p.rupiah),
           appliedTo: p.appliedTo,
+          poFeeId: p.feeId ?? null,
           status: "LUNAS",
           paidAt: when(p.at),
           staffId: "staff_owner",

@@ -13,20 +13,43 @@
  * rebuild works that way now (owner decision 2026-08-24): the list is what
  * staff open the page for, and a form occupying the top of it is a form they
  * scroll past all day.
+ *
+ * ## The columns (owner brief 2026-09-19)
+ *
+ * Order | Supplier | Date | Payment status | Total price | Total paid |
+ * actions. A partly paid invoice says what is still unpaid under its status
+ * — the figure somebody paying suppliers is actually looking for — and every
+ * row carries *Add payment* and *Delete* as buttons as well as behind a
+ * right-click. The warehouse and the product count left the list; both are
+ * on the order's own page.
  */
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { App, Card, Dropdown, Flex, Tag, Tooltip, Typography } from "antd";
-import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
+import {
+  App,
+  Button,
+  Card,
+  Dropdown,
+  Flex,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import {
+  DeleteOutlined,
+  PlusOutlined,
+  WalletOutlined,
+} from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { OrphanQcCard } from "../../components/OrphanQcCard";
-import { fmtRp, fmtDate } from "../../lib/format.js";
+import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import { mutate, useDb } from "../../mock/store.js";
 import {
   PO_PAYMENT_STATUS_COLOR,
   PO_PAYMENT_STATUS_LABEL,
   PO_PAYMENT_STATUSES,
+  poClosed,
   poDeletion,
   poPaymentStatus,
   poTotals,
@@ -43,11 +66,11 @@ interface Row {
   /** Where the MONEY stands — the column that replaced Stage (2026-09-15). */
   readonly payment: PoPaymentStatus;
   readonly paymentLabel: string;
-  readonly lines: number;
   readonly total: number;
   readonly paid: number;
   readonly outstanding: number;
-  readonly warehouse: string;
+  /** Filed away: read-only until reopened, so no payment can be added. */
+  readonly closed: boolean;
 }
 
 export function InboundPage() {
@@ -91,7 +114,7 @@ export function InboundPage() {
         ),
         content: t(
           "inboundList.cannotDeleteBody",
-          "{{count}} machine(s) on it have already left QC: {{serials}}. An invoice is the only record of what a machine cost, so deal with those first — reopen them in QC, or adjust them out of stock.",
+          "{{count}} unit(s) on it have already left QC: {{serials}}. An invoice is the only record of what a unit cost, so deal with those first — reopen them in QC, or adjust them out of stock.",
           { count: blockers.length, serials: blockers.join(", ") },
         ),
       });
@@ -109,7 +132,7 @@ export function InboundPage() {
             )
           : t(
               "inboundList.deleteBodyWithUnits",
-              "Its lines and its payments stop counting, and {{count}} machine(s) still waiting in QC go with it. Money already paid stays on the supplier's account.",
+              "Its lines and its payments stop counting, and {{count}} unit(s) still waiting in QC go with it. Money already paid stays on the supplier's account.",
               { count: takes.length },
             ),
       okText: t("inboundList.delete", "Delete"),
@@ -141,10 +164,13 @@ export function InboundPage() {
             id: po.id,
             code: po.code,
             supplier:
-              db.suppliers.find((s) => s.id === po.supplierId)?.name ?? "—",
+              db.suppliers.find((s) => s.id === po.supplierId)?.name ??
+              fmtNone(),
             // The escape hatch the owner kept: an invoice number, or an
             // explicit "none", never a silently blank cell.
-            invoice: po.noInvoice ? "No invoice" : po.invoice,
+            invoice: po.noInvoice
+              ? t("inboundList.noInvoice", "No invoice")
+              : po.invoice,
             date: po.date,
             payment,
             // Translated HERE rather than at the cell, because a facet and a
@@ -152,12 +178,10 @@ export function InboundPage() {
             // the filter English options on an Indonesian page, which is
             // exactly the leak `test/i18n.test.ts` exists to catch.
             paymentLabel: t(PO_PAYMENT_STATUS_LABEL[payment]),
-            lines: po.items.length,
             total: totals.total,
             paid: totals.paid,
             outstanding: totals.outstanding,
-            warehouse:
-              db.warehouses.find((w) => w.id === po.locationId)?.name ?? "—",
+            closed: poClosed(po),
           };
         }),
     [db, t],
@@ -223,6 +247,7 @@ export function InboundPage() {
       </Dropdown>
       <Card>
         <ProTable<Row>
+          persistKey="inbound"
           rowKey="id"
           dataSource={rows}
           searchPlaceholder={t(
@@ -280,42 +305,51 @@ export function InboundPage() {
               searchable: true,
             },
             {
-              title: t("inboundList.ordered", "Ordered"),
+              title: t("inboundList.date", "Date"),
               dataIndex: "date",
               sortValue: (r) => r.date,
               render: (v: string) => fmtDate(v),
             },
             {
-              title: t("inboundList.warehouse", "Warehouse"),
-              dataIndex: "warehouse",
-              facet: true,
-            },
-            {
               /*
-               * Payment, not stage (owner revision 2026-09-15). What staff
-               * bring to this list is "who are we still paying?" — where the
-               * GOODS have got to is answered by the Products column beside
-               * it and by the order's own page. See `poPaymentStatus`.
+               * Where the money stands (owner revision 2026-09-15), with what
+               * is still unpaid under a partly paid invoice (owner brief
+               * 2026-09-19). An open invoice owes its whole total, which the
+               * column beside it already says.
                */
               title: t("inboundList.paymentStatus", "Payment status"),
               dataIndex: "paymentLabel",
               facet: true,
+              // The filter lists what the cell says. Without this the facet
+              // falls back to `sortValue`, which is an index, not a word.
+              facetValue: (r) => r.paymentLabel,
               sortValue: (r) => PO_PAYMENT_STATUSES.indexOf(r.payment),
               render: (_: unknown, r) => (
-                <Tag color={PO_PAYMENT_STATUS_COLOR[r.payment]}>
-                  {r.paymentLabel}
-                </Tag>
+                <Flex vertical align="start" gap={2}>
+                  <Tag color={PO_PAYMENT_STATUS_COLOR[r.payment]}>
+                    {r.paymentLabel}
+                  </Tag>
+                  {r.payment === "PARTIALLY_PAID" && r.outstanding > 0 && (
+                    <Typography.Text
+                      type="danger"
+                      style={{ fontSize: 12, whiteSpace: "nowrap" }}
+                    >
+                      {t("inboundList.unpaidAmount", "{{amount}} unpaid", {
+                        amount: fmtRp(r.outstanding),
+                      })}
+                    </Typography.Text>
+                  )}
+                </Flex>
               ),
             },
             {
-              title: t("inboundList.products", "Products"),
-              dataIndex: "lines",
+              title: t("inboundList.totalPrice", "Total price"),
+              dataIndex: "total",
               align: "right",
-              width: 110,
-              sortValue: (r) => r.lines,
-              // A dash, not a zero. An order with no lines is the owner's
-              // paid-first case, and "0" reads as a mistake someone made
-              // rather than a step that has not happened yet.
+              sortValue: (r) => r.total,
+              // Muted, with a tooltip saying why it is zero: an order with no
+              // lines yet is the owner's paid-first case, and a bare zero
+              // reads as a mistake.
               render: (v: number) =>
                 v === 0 ? (
                   <Tooltip
@@ -324,40 +358,22 @@ export function InboundPage() {
                       "Products not entered yet — add them when the goods arrive",
                     )}
                   >
-                    <Typography.Text type="secondary">—</Typography.Text>
+                    <Typography.Text type="secondary">
+                      {fmtRp(0)}
+                    </Typography.Text>
                   </Tooltip>
-                ) : (
-                  v
-                ),
-            },
-            {
-              title: t("inboundList.invoiced", "Invoiced"),
-              dataIndex: "total",
-              align: "right",
-              sortValue: (r) => r.total,
-              render: (v: number) =>
-                v === 0 ? (
-                  <Typography.Text type="secondary">—</Typography.Text>
                 ) : (
                   fmtRp(v)
                 ),
             },
             {
-              title: t("inboundList.paid", "Paid"),
+              title: t("inboundList.totalPaid", "Total paid"),
               dataIndex: "paid",
               align: "right",
               sortValue: (r) => r.paid,
               render: (v: number, r) => (
                 <Flex vertical align="end">
-                  <span>{v === 0 ? "—" : fmtRp(v)}</span>
-                  {r.outstanding > 0 && (
-                    <Typography.Text
-                      type="danger"
-                      style={{ fontSize: 12, whiteSpace: "nowrap" }}
-                    >
-                      {fmtRp(r.outstanding)} owed
-                    </Typography.Text>
-                  )}
+                  <span>{fmtRp(v)}</span>
                   {v > 0 && r.total === 0 && (
                     <Typography.Text
                       type="secondary"
@@ -369,6 +385,72 @@ export function InboundPage() {
                       )}
                     </Typography.Text>
                   )}
+                </Flex>
+              ),
+            },
+            {
+              // The row's two errands as buttons (owner brief 2026-09-19);
+              // the right-click menu still offers Delete. Clicks stop here so
+              // the row behind them does not open the order as well.
+              title: "",
+              key: "actions",
+              align: "right",
+              width: 200,
+              render: (_: unknown, r) => (
+                <Flex
+                  gap={4}
+                  justify="end"
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                >
+                  <Tooltip
+                    title={
+                      r.closed
+                        ? t(
+                            "inboundList.addPaymentClosed",
+                            "Closed — reopen the invoice to record a payment.",
+                          )
+                        : undefined
+                    }
+                  >
+                    <span>
+                      <Button
+                        size="small"
+                        icon={<WalletOutlined aria-hidden />}
+                        disabled={r.closed}
+                        aria-label={t(
+                          "inboundList.addPaymentAria",
+                          "Add a payment to {{code}}",
+                          { code: r.code },
+                        )}
+                        onClick={() =>
+                          navigate(`/inbound/${r.id}`, {
+                            state: { pay: true },
+                          })
+                        }
+                      >
+                        {t("inboundList.addPayment", "Add payment")}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                  <Tooltip
+                    title={t("inboundList.deleteOrder", "Delete this order")}
+                  >
+                    <Button
+                      size="small"
+                      danger
+                      type="text"
+                      icon={<DeleteOutlined aria-hidden />}
+                      aria-label={t(
+                        "inboundList.deleteAria",
+                        "Delete {{code}}",
+                        {
+                          code: r.code,
+                        },
+                      )}
+                      onClick={() => askDelete(r.id)}
+                    />
+                  </Tooltip>
                 </Flex>
               ),
             },

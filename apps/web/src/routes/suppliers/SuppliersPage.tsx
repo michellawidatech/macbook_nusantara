@@ -68,6 +68,7 @@ import {
   Modal,
   Select,
   Statistic,
+  Switch,
   Table,
   Tag,
   Tooltip,
@@ -79,8 +80,9 @@ import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { PageContainer } from "../../components/PageContainer";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
-import { fmtRp, fmtDate } from "../../lib/format.js";
+import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import { poTotals } from "../../lib/inbound.js";
+import { openingPaidOf } from "../../lib/debtPayments.js";
 import {
   allocationProblems,
   remainingOf,
@@ -130,6 +132,8 @@ export function SuppliersPage() {
     /** Optional — an invoice the shop already knows this deposit is for. */
     poId?: string;
     note?: string;
+    /** `SupplierDeposit.inBalance` — the payment switch (2026-09-22). */
+    inBalance?: boolean;
   }>();
   /**
    * How much of the open deposit goes against each invoice, keyed by invoice.
@@ -175,6 +179,7 @@ export function SuppliersPage() {
             invoices,
             db.deposits,
             s.openingBalance ?? 0,
+            openingPaidOf(s),
           ),
         }))
         // The ones the shop owes most, first. This is a page somebody opens
@@ -203,7 +208,11 @@ export function SuppliersPage() {
    */
   const openDeposit = () => {
     depForm.resetFields();
-    depForm.setFieldsValue({ method: "TRANSFER", at: dayjs() });
+    depForm.setFieldsValue({
+      method: "TRANSFER",
+      at: dayjs(),
+      inBalance: true,
+    });
   };
 
   /**
@@ -236,6 +245,9 @@ export function SuppliersPage() {
           method: v.method,
           at,
           ...(v.note ? { note: v.note } : {}),
+          // The payment switch (owner answer 2026-09-22): off for money the
+          // owner sent from their own account, so the balance is untouched.
+          ...(v.inBalance === false ? { inBalance: false } : {}),
           staff: currentStaffName(),
           allocations:
             po && put > 0
@@ -559,6 +571,7 @@ export function SuppliersPage() {
       {
         amount: supplier.openingBalance ?? 0,
         ...(supplier.openingBalanceAt ? { at: supplier.openingBalanceAt } : {}),
+        payments: supplier.openingPayments ?? [],
       },
     );
 
@@ -801,7 +814,7 @@ export function SuppliersPage() {
                         {
                           title: t("supplier.note", "Note"),
                           key: "note",
-                          render: (_, d) => d.note ?? "—",
+                          render: (_, d) => d.note ?? fmtNone(),
                         },
                         {
                           title: t("supplier.amount", "Amount"),
@@ -944,7 +957,9 @@ export function SuppliersPage() {
                                   </Link>
                                 ) : (
                                   <Typography.Text>
-                                    {e.method ? methodLabel(e.method) : "—"}
+                                    {e.method
+                                      ? methodLabel(e.method)
+                                      : fmtNone()}
                                   </Typography.Text>
                                 )}
                                 {(e.note || (po && e.method)) && (
@@ -1012,7 +1027,7 @@ export function SuppliersPage() {
                     >
                       {[r.supplier.code, r.supplier.phone]
                         .filter(Boolean)
-                        .join(" · ") || "—"}
+                        .join(" · ") || fmtNone()}
                     </Typography.Text>
                   </Flex>
                 ),
@@ -1074,7 +1089,7 @@ export function SuppliersPage() {
                 align: "right",
                 render: (_, r) =>
                   r.account.unallocated === 0 ? (
-                    "—"
+                    fmtRp(0)
                   ) : (
                     <Typography.Text type="warning">
                       {fmtRp(r.account.unallocated)}
@@ -1158,12 +1173,6 @@ export function SuppliersPage() {
         onCancel={() => setDepositTo(null)}
         onOk={saveDeposit}
       >
-        <Typography.Paragraph type="secondary">
-          {t(
-            "supplier.depositHint",
-            "Money paid in advance. It sits against the supplier until you decide which invoice it settles.",
-          )}
-        </Typography.Paragraph>
         <Form form={depForm} layout="vertical">
           <Form.Item
             name="amount"
@@ -1227,6 +1236,17 @@ export function SuppliersPage() {
           <Form.Item name="note" label={t("supplier.note", "Note")}>
             <Input placeholder={t("supplier.notePlaceholder", "Optional")} />
           </Form.Item>
+          <Form.Item
+            name="inBalance"
+            valuePropName="checked"
+            label={t("debtPay.inBalance", "Counts in the shop's balance")}
+            extra={t(
+              "supplier.inBalanceHint",
+              "Turn off when the money did not come out of the shop's cash or bank.",
+            )}
+          >
+            <Switch />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -1262,7 +1282,7 @@ export function SuppliersPage() {
             label={t("supplier.codeLabel", "Origin code")}
             tooltip={t(
               "supplier.codeHint",
-              "Two capitals. It goes on the front of every store barcode printed for a machine bought from them, so a serial says which pallet it came off.",
+              "Two capitals. It goes on the front of every store barcode printed for a unit bought from them, so a serial says which pallet it came off.",
             )}
           >
             <Input maxLength={2} placeholder="AS" />
@@ -1474,12 +1494,6 @@ export function SuppliersPage() {
         onCancel={() => setOpeningFor(null)}
         onOk={saveOpening}
       >
-        <Typography.Paragraph type="secondary">
-          {t(
-            "supplier.openingHint",
-            "An unpaid bill from before this app. No invoice here is about it, so it is stated once and added to what the invoices say.",
-          )}
-        </Typography.Paragraph>
         <Form form={openForm} layout="vertical">
           <Form.Item
             name="amount"

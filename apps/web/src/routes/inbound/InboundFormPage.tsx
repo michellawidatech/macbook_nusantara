@@ -51,13 +51,46 @@ import {
 import { DeleteOutlined, SaveOutlined } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { FooterToolbar } from "../../components/FooterToolbar";
-import { EditableTable } from "../../components/EditableTable";
-import { SkuPicker } from "../../components/SkuPicker";
-import { CountInput, COUNT_COLUMN_WIDTH } from "../../components/CountInput";
+import { skuFullName } from "../../components/SkuPicker";
+import { skuTracksSerial } from "../../lib/serialTracking.js";
 import { MoneyInput } from "../../components/MoneyInput";
+import { CommitMoneyInput } from "../../components/CommitMoneyInput";
 import { RP_SYMBOL } from "../../components/money";
-import { fmtRp } from "../../lib/format.js";
-import { useDb, mutate, nextId, docCode } from "../../mock/store.js";
+import { fmtRp, fmtNone } from "../../lib/format.js";
+import { BatteryFields } from "../../components/BatteryFields";
+import { UnitDetailsModal } from "../../components/UnitDetailsModal";
+import { PurchaseLinesTable } from "./PurchaseLinesTable.js";
+import { pieceCosts, type PurchaseLine } from "../../lib/invoiceLines.js";
+import {
+  batteryPatch,
+  defaultBatteryModeOfSku,
+  type BatteryDraft,
+  type BatteryMode,
+} from "../../lib/battery.js";
+import {
+  NEW_GRADE,
+  conditionOf,
+  needsDescription,
+} from "../../lib/condition.js";
+import { GRADES } from "../../lib/grading.js";
+import { joinDescription } from "../../lib/inboundQc.js";
+import {
+  BASE_MAX_LENGTH,
+  BASE_MIN_LENGTH,
+  normaliseScan,
+  SERIAL_FIELD_MAX_LENGTH,
+} from "../../lib/serialScan.js";
+import { readSerialInput, serialConditionOf } from "../../lib/serialInput.js";
+import { wasScannedText } from "../../lib/scanner.js";
+import { SPACE, TYPE } from "../../theme/tokens";
+import {
+  useDb,
+  mutate,
+  nextId,
+  docCode,
+  appendEvent,
+  ensureQcDescription,
+} from "../../mock/store.js";
 import { FORM_CENTRE } from "../../theme/tokens";
 import { usePersistentState } from "../../hooks/usePersistentState";
 import {
@@ -67,11 +100,67 @@ import {
   type InboundDraft,
 } from "../../lib/inboundDraft.js";
 import { useTranslation } from "react-i18next";
+import type { MockDb, Po, PoItem } from "../../mock/seed.js";
 
+/**
+ * What the popup behind a line has been told about one of its units (owner
+ * ask 2026-09-20: *"a modal popup for the user to fill: Serial, grade,
+ * battery, sell price"*, plus the description that gates acceptance).
+ *
+ * Held here until the order is saved, and written onto the unit the serial
+ * mints in the same mutation — the order's own page does the same thing with
+ * its `qcDrafts`.
+ */
+interface UnitDraft {
+  key: string;
+  /** What is in the serial box — judged once the unit has a grade. */
+  serial: string;
+  /**
+   * The text in the box has not been judged yet, and how it arrived: it is
+   * being typed, or it waits for the grade (2026-09-21) — and on a new unit a
+   * scan and a typed serial are held to different rules. Absent once judged.
+   */
+  pending?: "scan" | "typed";
+  grade?: string;
+  battery: BatteryDraft;
+  description: string[];
+  price?: number;
+}
+
+/**
+ * One LINE of the order (owner ask 2026-09-20: *"user will input: unit, qty,
+ * price … it will not automatically expand the unit below it"*).
+ *
+ * This reverses the one-row-per-unit shape of 2026-09-19. A line is a product,
+ * a quantity, one price and a discount; two units of one product that cost
+ * different money are two lines, which is the owner's own answer to the
+ * question. The units behind it live in `units`, filled in from the popup.
+ */
 interface Line {
+  key: string;
   skuId?: string;
   qty: number;
   unitCost?: number;
+  discount?: number;
+  units: UnitDraft[];
+}
+
+const blankUnit = (): UnitDraft => ({
+  key: nextId("qcd"),
+  serial: "",
+  battery: {},
+  description: [],
+});
+
+/** As many unit drafts as the line has pieces — never fewer, never more. */
+function sized(units: readonly UnitDraft[], qty: number): UnitDraft[] {
+  const want = Math.max(0, Math.floor(qty));
+  if (units.length === want) return [...units];
+  if (units.length > want) return units.slice(0, want);
+  return [
+    ...units,
+    ...Array.from({ length: want - units.length }, () => blankUnit()),
+  ];
 }
 
 const STEPS = [
@@ -155,8 +244,31 @@ export function InboundFormPage() {
     restored?.discountPct,
   );
   const [lines, setLines] = useState<Line[]>(() =>
-    (restored?.lines ?? []).map((l) => ({ ...l })),
+    (restored?.lines ?? []).map((l) => ({
+      key: nextId("pol"),
+      ...(l.skuId === undefined ? {} : { skuId: l.skuId }),
+      qty: Math.max(1, l.qty || 1),
+      ...(l.unitCost === undefined ? {} : { unitCost: l.unitCost }),
+      ...(l.discount === undefined ? {} : { discount: l.discount }),
+      units: (l.units ?? []).map((u) => ({
+        key: nextId("qcd"),
+        serial: u.serial,
+        ...(u.pending === undefined ? {} : { pending: u.pending }),
+        ...(u.grade === undefined ? {} : { grade: u.grade }),
+        battery: {
+          ...(u.health === undefined ? {} : { health: u.health }),
+          ...(u.cycleCount === undefined ? {} : { cycleCount: u.cycleCount }),
+          ...(u.fcc === undefined ? {} : { fcc: u.fcc }),
+        },
+        description: [...(u.description ?? [])],
+        ...(u.price === undefined ? {} : { price: u.price }),
+      })),
+    })),
   );
+  /** Which line's units are open. Null for none. */
+  const [detailsKey, setDetailsKey] = useState<string | null>(null);
+  /** Serial boxes whose text was refused — outlined in red until it changes. */
+  const [serialFault, setSerialFault] = useState<Record<string, boolean>>({});
 
   /**
    * The mirror. One effect over every answer, so nothing can be added to the
@@ -177,7 +289,24 @@ export function InboundFormPage() {
       discountMode,
       ...(discount === undefined ? {} : { discount }),
       ...(discountPct === undefined ? {} : { discountPct }),
-      lines,
+      lines: lines.map((l) => ({
+        ...(l.skuId === undefined ? {} : { skuId: l.skuId }),
+        qty: l.qty,
+        ...(l.unitCost === undefined ? {} : { unitCost: l.unitCost }),
+        ...(l.discount === undefined ? {} : { discount: l.discount }),
+        units: l.units.map((u) => ({
+          serial: u.serial,
+          ...(u.pending === undefined ? {} : { pending: u.pending }),
+          ...(u.grade === undefined ? {} : { grade: u.grade }),
+          ...(u.battery.health == null ? {} : { health: u.battery.health }),
+          ...(u.battery.cycleCount == null
+            ? {}
+            : { cycleCount: u.battery.cycleCount }),
+          ...(u.battery.fcc == null ? {} : { fcc: u.battery.fcc }),
+          description: u.description,
+          ...(u.price === undefined ? {} : { price: u.price }),
+        })),
+      })),
     });
   }, [
     setStored,
@@ -211,10 +340,25 @@ export function InboundFormPage() {
     () => db.paymentMethods.filter((m) => m.forPo && m.active),
     [db.paymentMethods],
   );
-  const subtotal = lines.reduce(
-    (t, l) => t + (l.unitCost ?? 0) * (l.qty || 0),
-    0,
-  );
+  /** What a line is worth, net of the discount knocked off that line. */
+  const lineTotal = (l: Line) =>
+    Math.max(0, (l.unitCost ?? 0) * (l.qty || 0) - (l.discount ?? 0));
+  const subtotal = lines.reduce((t, l) => t + lineTotal(l), 0);
+  /** Pieces on the invoice — what the expenses are spread over. */
+  const pieceCount = lines.reduce((n, l) => n + Math.max(0, l.qty || 0), 0);
+  const charges = (shippingFee ?? 0) + (taxFee ?? 0);
+  /**
+   * A line's COGS: what is owed for it plus its share of the invoice's
+   * expenses (owner ask 2026-09-20: *"display total (+ COGS based on the tax +
+   * shipping fee displayed before)"*). Evenly by the piece, which is how
+   * `lib/landedCost.ts` spreads them once the order exists — a courier charges
+   * by the box.
+   */
+  const lineCogs = (l: Line) =>
+    lineTotal(l) +
+    (pieceCount === 0
+      ? 0
+      : Math.round((charges * Math.max(0, l.qty || 0)) / pieceCount));
   /**
    * What the discount is worth in rupiah, whichever way it was entered.
    *
@@ -250,6 +394,123 @@ export function InboundFormPage() {
   };
 
   /**
+   * One line of the form as the `PoItem`s the store holds.
+   *
+   * A counted product (an accessory) is ONE row of a quantity — it is never
+   * priced or identified piece by piece (2026-09-19). Everything else is one
+   * row per piece, because that row is what a unit is pinned to
+   * (`PoItem.serial`) and what the invoice's expenses are spread over
+   * (`lib/landedCost.ts`). The SCREEN still shows one line, which is the
+   * whole of the owner's 2026-09-20 ask — see `lib/invoiceLines.ts`.
+   *
+   * The line's discount is spread over its pieces, so the rupiah add back up
+   * to what was negotiated and each unit's `buy` is what it really cost.
+   */
+  const itemsOf = (
+    l: Line,
+    /** The serial a unit is filed under — its box, judged. */
+    serialOf: (u: UnitDraft) => string = (u) => u.serial,
+  ) => {
+    const skuId = l.skuId!;
+    const qty = Math.max(1, Math.floor(l.qty || 1));
+    const unitCost = l.unitCost ?? 0;
+    const discount = Math.min(l.discount ?? 0, unitCost * qty);
+    if (!skuTracksSerial(db, skuId)) {
+      return [
+        {
+          id: nextId("poi"),
+          skuId,
+          serial: null,
+          qty,
+          unitCost,
+          ...(discount > 0 ? { discount } : {}),
+        },
+      ];
+    }
+    const costs = pieceCosts(qty, unitCost, discount);
+    return Array.from({ length: qty }, (_, i) => {
+      const off = unitCost - (costs[i] ?? unitCost);
+      const unit = l.units[i];
+      const serial = unit ? serialOf(unit).trim() : "";
+      return {
+        id: nextId("poi"),
+        skuId,
+        serial: serial === "" ? null : serial,
+        qty: 1,
+        unitCost,
+        ...(off > 0 ? { discount: off } : {}),
+      };
+    });
+  };
+
+  /**
+   * The units the form was told about, as real units in QC.
+   *
+   * The same thing the order's own page does when a serial is read into a row
+   * (`identify` in `InboundDetailPage`): the unit and its `DITERIMA` go in one
+   * mutation, and what the popup answered — battery, description, grade, sell
+   * price — is written onto it in the same breath. Without this the serials
+   * somebody typed on the way in would be thrown away at Save.
+   *
+   * A draft mints nothing. A draft is paperwork nobody has acted on, and a
+   * unit is a machine on a shelf.
+   *
+   * `made` is each line's own `PoItem`s, by line key — never a filter on the
+   * product, which would run two lines of one variant together and give the
+   * second line's serials the first line's prices.
+   */
+  const receive = (
+    d: MockDb,
+    order: Po,
+    made: ReadonlyMap<string, readonly PoItem[]>,
+    serialOf: (u: UnitDraft) => string,
+  ) => {
+    let any = false;
+    for (const l of lines) {
+      if (!l.skuId || !skuTracksSerial(db, l.skuId)) continue;
+      const mine = made.get(l.key) ?? [];
+      l.units.forEach((u, i) => {
+        const serial = serialOf(u).trim();
+        const line = mine[i];
+        if (serial === "" || line === undefined) return;
+        if (d.units.some((x) => x.serial === serial)) return;
+        any = true;
+        const battery = batteryPatch(
+          u.battery,
+          defaultBatteryModeOfSku(d, l.skuId!),
+        );
+        d.units.push({
+          serial,
+          skuId: l.skuId!,
+          status: "QC",
+          locationId: order.locationId,
+          buy: line.unitCost - (line.discount ?? 0),
+          description:
+            u.description.length === 0
+              ? ""
+              : joinDescription(
+                  u.description
+                    .map((w) => ensureQcDescription(d, w))
+                    .filter(Boolean),
+                ),
+          poId: order.id,
+          price: u.price ?? d.skus.find((x) => x.id === l.skuId)?.price ?? 0,
+          ...(u.grade === undefined ? {} : { grade: u.grade }),
+          ...battery,
+        });
+        appendEvent(d, serial, {
+          type: "DITERIMA",
+          toStatus: "QC",
+          refCode: order.code,
+          note: `Received against ${order.code}`,
+        });
+      });
+    }
+    // A unit in hand is the proof the goods came.
+    if (any) order.status = "RECEIVED";
+  };
+
+  /**
    * Write the order — as a draft, or as one that has been placed.
    *
    * *Save draft* is the fallback the owner asked for on every step: a real
@@ -269,7 +530,57 @@ export function InboundFormPage() {
       setStep(0);
       return;
     }
+    /*
+     * A placed order makes a unit of every serial the popup was given, so each
+     * has to be recordable NOW (2026-09-21): a grade to say which rule it is
+     * held to, and a pass under that rule. Refused rather than dropped — a
+     * serial left behind at Save is a serial nobody typed twice. A draft
+     * makes no unit and is not asked.
+     */
+    const judged = new Map<string, string>();
+    const notReady: string[] = [];
+    if (status !== "DRAFT") {
+      for (const l of lines) {
+        if (!l.skuId || !skuTracksSerial(db, l.skuId)) continue;
+        for (const u of l.units) {
+          if (u.serial.trim() === "") continue;
+          if (
+            u.pending === undefined &&
+            serialFault[u.key] !== true &&
+            serialConditionOf(u.grade) !== undefined
+          ) {
+            continue;
+          }
+          const read = readSerialInput(u.serial, {
+            scanned: u.pending === "scan",
+            condition: serialConditionOf(u.grade),
+          });
+          if (read.ok) judged.set(u.key, read.serial);
+          else notReady.push(u.key);
+        }
+      }
+    }
+    if (notReady.length > 0) {
+      setSerialFault((f) => ({
+        ...f,
+        ...Object.fromEntries(notReady.map((k) => [k, true])),
+      }));
+      message.error(
+        t(
+          "inboundForm.serialsNotReady",
+          "{{count}} serial(s) cannot be recorded yet — each needs its unit's grade, and a new unit's must pass its check. Open Units on the line to finish them, or save a draft.",
+          { count: notReady.length },
+        ),
+      );
+      return;
+    }
+    const serialOf = (u: UnitDraft) => judged.get(u.key) ?? u.serial;
     const id = nextId("po");
+    // Built once, outside the mutation, so the units can be tied back to the
+    // very `PoItem`s that were written for their line.
+    const made = new Map<string, PoItem[]>(
+      lines.filter((l) => l.skuId).map((l) => [l.key, itemsOf(l, serialOf)]),
+    );
     mutate((d) => {
       const supplierId =
         d.suppliers.find(
@@ -290,15 +601,7 @@ export function InboundFormPage() {
         noInvoice,
         date: date!.format("YYYY-MM-DD"),
         locationId: warehouseId,
-        items: lines
-          .filter((l) => l.skuId)
-          .map((l) => ({
-            id: nextId("poi"),
-            skuId: l.skuId!,
-            serial: null,
-            qty: l.qty || 1,
-            unitCost: l.unitCost ?? 0,
-          })),
+        items: [...made.values()].flat(),
         payments: paid
           ? [
               {
@@ -309,11 +612,38 @@ export function InboundFormPage() {
               },
             ]
           : [],
-        shippingFee: shippingFee ?? 0,
-        taxFee: taxFee ?? 0,
+        // The form's two boxes are the invoice's first two expenses; anything
+        // else owed on the delivery is added on the order's page, where each
+        // expense also says whether it joins the machines' cost (2026-09-18).
+        fees: [
+          ...(shippingFee
+            ? [
+                {
+                  id: nextId("pof"),
+                  kind: "SHIPPING" as const,
+                  label: "",
+                  amount: shippingFee,
+                  inCogs: true,
+                },
+              ]
+            : []),
+          ...(taxFee
+            ? [
+                {
+                  id: nextId("pof"),
+                  kind: "TAX" as const,
+                  label: "",
+                  amount: taxFee,
+                  inCogs: true,
+                },
+              ]
+            : []),
+        ],
         discount: discountRp,
         status,
       });
+      const saved = d.pos.find((x) => x.id === id);
+      if (saved && status !== "DRAFT") receive(d, saved, made, serialOf);
     });
     // The order IS the draft now, so the device's copy has done its job.
     // Leaving it behind would offer to restore this order onto the next one.
@@ -344,6 +674,10 @@ export function InboundFormPage() {
           <AutoComplete
             value={supplier}
             onChange={setSupplier}
+            // Named, because `Form.Item`'s label only binds to a field with an
+            // id and none of these have one — see `CountInput` on why an
+            // anonymous box in this app is a bug rather than a detail.
+            aria-label={t("inboundForm.supplier", "Supplier")}
             placeholder={t(
               "inboundForm.searchOrTypeANew",
               "Search or type a new supplier name",
@@ -446,6 +780,7 @@ export function InboundFormPage() {
           >
             <MoneyInput
               style={{ width: "100%" }}
+              aria-label={t("inboundForm.totalPaidNow", "Total paid now")}
               value={paid}
               onChange={money(setPaid)}
             />
@@ -453,6 +788,7 @@ export function InboundFormPage() {
           <Form.Item label={t("inboundForm.shippingFee", "Shipping fee")}>
             <MoneyInput
               style={{ width: "100%" }}
+              aria-label={t("inboundForm.shippingFee", "Shipping fee")}
               value={shippingFee}
               onChange={money(setShippingFee)}
             />
@@ -460,6 +796,7 @@ export function InboundFormPage() {
           <Form.Item label={t("inboundForm.taxFee", "Tax fee")}>
             <MoneyInput
               style={{ width: "100%" }}
+              aria-label={t("inboundForm.taxFee", "Tax fee")}
               value={taxFee}
               onChange={money(setTaxFee)}
             />
@@ -469,128 +806,409 @@ export function InboundFormPage() {
     </Card>
   );
 
+  const editLine = (key: string, patch: Partial<Line>) =>
+    setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
+
+  const editUnit = (
+    lineKey: string,
+    unitKey: string,
+    patch: Partial<UnitDraft>,
+  ) =>
+    setLines((ls) =>
+      ls.map((l) =>
+        l.key === lineKey
+          ? {
+              ...l,
+              units: l.units.map((u) =>
+                u.key === unitKey ? { ...u, ...patch } : u,
+              ),
+            }
+          : l,
+      ),
+    );
+
   /**
-   * The product lines.
-   *
-   * Rewritten 2026-09-01 on three owner complaints, all of which are really one
-   * complaint — this is a form and it was being drawn as a table:
-   *
-   * - *Add product* was in the card header, above a grid you read downwards,
-   *   and mouse-only. It is under the last row now, where the next row is
-   *   about to appear, and ⌘⏎ does the same from inside any cell.
-   * - Qty collapsed to about one character when the window narrowed, with the
-   *   stepper arrows sitting on what was left. `CountInput` holds three digits
-   *   open and `EditableTable` stops the grid compressing at all.
-   * - Below `md` the row becomes a card of labelled full-width fields rather
-   *   than five slivers behind a sideways scroll.
-   *
-   * The empty state lost its own *Add product* button with the move: it was
-   * repeated there (owner decision 2026-08-26) precisely BECAUSE the real one
-   * was a whole table away, and two buttons a few pixels apart is worse than
-   * the problem it solved.
+   * The lines as the shared table reads them. The form has no invoice yet —
+   * no `PoItem`s, no units — so the counts a saved order fills in are all
+   * zero except what the popup has been told.
    */
-  const addLine = () => setLines((ls) => [...ls, { qty: 1 }]);
-  const editLine = (i: number, patch: Partial<Line>) =>
-    setLines((ls) => ls.map((x, j) => (i === j ? { ...x, ...patch } : x)));
+  const lineViews: PurchaseLine[] = lines.map((l) => {
+    const qty = Math.max(0, l.qty || 0);
+    const counted = l.skuId !== undefined && !skuTracksSerial(db, l.skuId);
+    const total = lineTotal(l);
+    return {
+      key: l.key,
+      skuId: l.skuId ?? "",
+      lines: [],
+      qty,
+      unitCost: l.unitCost ?? 0,
+      discount: l.discount ?? 0,
+      counted,
+      notArrived: 0,
+      received: l.units.filter((u) => u.serial.trim() !== "").length,
+      subtotal: (l.unitCost ?? 0) * qty,
+      total,
+      invoiced: total,
+      units: [],
+    };
+  });
+
+  const openLine = lines.find((l) => l.key === detailsKey);
+  const openSku = openLine?.skuId;
+  const batteryMode: BatteryMode =
+    openSku === undefined ? "HEALTH" : defaultBatteryModeOfSku(db, openSku);
+  const clearFault = (unitKey: string) =>
+    setSerialFault((f) => {
+      if (!f[unitKey]) return f;
+      const next = { ...f };
+      delete next[unitKey];
+      return next;
+    });
+
+  /**
+   * The serial, judged the way every other serial box in the app judges one
+   * (`lib/serialInput.ts`, the owner's rules of 2026-09-21): a NEW unit's scan
+   * must be `S` and ten to twelve and loses its `S`, its typed serial is ten
+   * to twelve, and `I`/`O` read as `1`/`0`; a second-hand one is taken as
+   * read. Not judged at all while the unit has no grade — the text waits in
+   * its box with a note of whether it was a scan, and `pickGrade` judges it.
+   * Refused on blur, so a half-typed serial is not red from its first
+   * character, and the box keeps what was typed.
+   */
+  const commitSerial = (
+    lineKey: string,
+    u: UnitDraft,
+    raw: string,
+    /** A grade picked just now, releasing a serial held for want of one. */
+    over?: { readonly grade: string | undefined },
+  ) => {
+    const typed = normaliseScan(raw);
+    const gradePatch = over ? { grade: over.grade } : {};
+    if (typed === "") {
+      clearFault(u.key);
+      editUnit(lineKey, u.key, {
+        serial: "",
+        pending: undefined,
+        ...gradePatch,
+      });
+      return;
+    }
+    const scanned = u.pending === "scan" ? true : wasScannedText(typed);
+    const pending = scanned ? ("scan" as const) : ("typed" as const);
+    const grade = over ? over.grade : u.grade;
+    const read = readSerialInput(typed, {
+      scanned,
+      condition: serialConditionOf(grade),
+    });
+    if (!read.ok) {
+      editUnit(lineKey, u.key, { serial: typed, pending, ...gradePatch });
+      // Waiting for the grade is not a fault: the amber line under the box
+      // says what it waits for.
+      if (read.reason === "needs-grade") return clearFault(u.key);
+      setSerialFault((f) => ({ ...f, [u.key]: true }));
+      message.error(
+        t(
+          "inboundForm.serialRefused",
+          "{{serial}} is not a new unit's serial — the number on the case is {{min}}–{{max}} characters, its barcode an S and then the same.",
+          { serial: typed, min: BASE_MIN_LENGTH, max: BASE_MAX_LENGTH },
+        ),
+      );
+      return;
+    }
+    const clash = lines.some((l) =>
+      l.units.some((x) => x.key !== u.key && x.serial === read.serial),
+    );
+    if (clash) {
+      setSerialFault((f) => ({ ...f, [u.key]: true }));
+      editUnit(lineKey, u.key, { serial: typed, pending, ...gradePatch });
+      message.error(
+        t("inboundForm.serialTwice", "{{serial}} is already on this order.", {
+          serial: read.serial,
+        }),
+      );
+      return;
+    }
+    clearFault(u.key);
+    editUnit(lineKey, u.key, {
+      serial: read.serial,
+      pending: undefined,
+      ...gradePatch,
+    });
+  };
+
+  /**
+   * A grade — and the serial judged under the rule it decides, when there is
+   * something to judge: a serial still waiting, or a second-hand one (taken
+   * as read) that is now a new unit's and has to pass a new unit's check. A
+   * serial already judged is not judged again under the same rule.
+   */
+  const pickGrade = (lineKey: string, u: UnitDraft, grade?: string) => {
+    const after = serialConditionOf(grade);
+    const rejudge =
+      after !== undefined &&
+      u.serial.trim() !== "" &&
+      (u.pending !== undefined ||
+        (after === "NEW" && serialConditionOf(u.grade) !== "NEW"));
+    if (rejudge) commitSerial(lineKey, u, u.serial, { grade });
+    else editUnit(lineKey, u.key, { grade });
+  };
+
+  const detailsModal = openLine !== undefined && (
+    <UnitDetailsModal<UnitDraft & { n: number }>
+      open
+      onClose={() => setDetailsKey(null)}
+      product={
+        openSku === undefined
+          ? t("inboundForm.pickAProduct", "Pick a product")
+          : (() => {
+              const sku = db.skus.find((x) => x.id === openSku);
+              return sku ? `${sku.code} — ${skuFullName(sku)}` : openSku;
+            })()
+      }
+      subtitle={t(
+        "inboundForm.detailsSubtitle",
+        "{{count}} unit(s) · {{price}} each · {{cogs}} COGS for the line",
+        {
+          count: openLine.qty,
+          price: fmtRp(openLine.unitCost ?? 0),
+          cogs: fmtRp(lineCogs(openLine)),
+        },
+      )}
+      rows={openLine.units.map((u, i) => ({ ...u, n: i + 1 }))}
+      onAddUnit={() =>
+        // The quantity follows the serials (owner ask 2026-09-20).
+        setLines((ls) =>
+          ls.map((l) =>
+            l.key === openLine.key
+              ? { ...l, qty: l.qty + 1, units: [...l.units, blankUnit()] }
+              : l,
+          ),
+        )
+      }
+      serial={(u) => (
+        <Flex vertical gap={4}>
+          <Input
+            size="small"
+            data-scan-target=""
+            maxLength={SERIAL_FIELD_MAX_LENGTH}
+            value={u.serial}
+            status={
+              serialFault[u.key]
+                ? "error"
+                : u.serial.trim() === "" ||
+                    serialConditionOf(u.grade) === undefined
+                  ? "warning"
+                  : undefined
+            }
+            aria-invalid={serialFault[u.key] ? true : undefined}
+            placeholder={t("inbound.scanOrType", "Scan or type the serial")}
+            aria-label={t("inbound.serial", "Serial")}
+            onChange={(e) => {
+              // Capitals whatever the keyboard is doing (owner ask 2026-09-01).
+              // Unjudged until the box is left — and typed, now: a note of a
+              // scan was about the old text. A scanner typing into the box is
+              // told apart on Enter by `wasScannedText`.
+              editUnit(openLine.key, u.key, {
+                serial: e.target.value.toUpperCase(),
+                pending: "typed",
+              });
+              clearFault(u.key);
+            }}
+            onPressEnter={(e) => {
+              e.preventDefault();
+              commitSerial(openLine.key, u, e.currentTarget.value);
+            }}
+            onBlur={(e) => commitSerial(openLine.key, u, e.target.value)}
+          />
+          {serialFault[u.key] && (
+            <Typography.Text
+              type="danger"
+              style={{ fontSize: TYPE.sm, lineHeight: 1.3 }}
+            >
+              {t("inboundForm.serialFault", "Check this against the sticker.")}
+            </Typography.Text>
+          )}
+          {!serialFault[u.key] &&
+            u.serial.trim() !== "" &&
+            serialConditionOf(u.grade) === undefined && (
+              <Typography.Text
+                type="warning"
+                style={{ fontSize: TYPE.sm, lineHeight: 1.3 }}
+              >
+                {t("inbound.serialHintGrade", "Pick the grade to record it")}
+              </Typography.Text>
+            )}
+        </Flex>
+      )}
+      grade={(u) => (
+        <Select<string>
+          size="small"
+          style={{ width: "100%" }}
+          showSearch
+          allowClear
+          optionFilterProp="label"
+          value={u.grade}
+          placeholder={t("inbound.gradePlaceholder", "Grade")}
+          aria-label={t("inbound.grade", "Grade")}
+          options={[NEW_GRADE, ...GRADES].map((g) => ({
+            value: g,
+            label: g === NEW_GRADE ? t("inbound.gradeNew", "New") : g,
+          }))}
+          onChange={(v?: string) => pickGrade(openLine.key, u, v)}
+        />
+      )}
+      battery={(u) => (
+        <BatteryFields
+          fallback={batteryMode}
+          value={u.battery}
+          size="small"
+          idPrefix={`inbound-form-battery-${u.key}`}
+          onChange={(next) => editUnit(openLine.key, u.key, { battery: next })}
+        />
+      )}
+      description={(u) => {
+        const wants = needsDescription(conditionOf(u.grade));
+        return (
+          <Select<string[]>
+            mode="tags"
+            size="small"
+            style={{ width: "100%" }}
+            value={u.description}
+            placeholder={
+              wants
+                ? t(
+                    "inbound.conditionPlaceholder",
+                    "Condition, marks, what is in the box…",
+                  )
+                : t("inbound.describeOptional", "Optional on a new unit")
+            }
+            aria-label={t("inbound.description", "Description")}
+            tokenSeparators={[","]}
+            options={db.qcDescriptions
+              .filter((x) => x.active)
+              .map((x) => ({ value: x.label }))}
+            onChange={(next) =>
+              editUnit(openLine.key, u.key, { description: next })
+            }
+          />
+        );
+      }}
+      sellPrice={(u) => {
+        const asking =
+          openSku === undefined
+            ? null
+            : (db.skus.find((x) => x.id === openSku)?.price ?? null);
+        return (
+          <CommitMoneyInput
+            id={`inbound-form-sell-${u.key}`}
+            label={t("inbound.sellPrice", "Sell price")}
+            value={u.price ?? asking}
+            {...(asking === null ? {} : { placeholder: fmtRp(asking) })}
+            onChange={(v) =>
+              editUnit(openLine.key, u.key, { price: v ?? undefined })
+            }
+            onCommit={(v) =>
+              editUnit(openLine.key, u.key, { price: v ?? undefined })
+            }
+          />
+        );
+      }}
+      footer={
+        <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+          {t(
+            "inboundForm.detailsFooter",
+            "Nothing here is required to save the order. Every serial entered becomes a unit in QC the moment the order is saved.",
+          )}
+        </Typography.Text>
+      }
+    />
+  );
 
   const productStep = (
     <Card
       // Wider than FORM_CENTRE allows: this step is a line-item grid, not a
-      // form read top to bottom, and five columns do not fit in a 720px
-      // measure. Centred all the same.
-      style={{ maxWidth: 1100, width: "100%", marginInline: "auto" }}
+      // form read top to bottom. Centred all the same.
+      style={{ maxWidth: 1180, width: "100%", marginInline: "auto" }}
       title={t("inboundForm.products", "Products")}
     >
       <Typography.Paragraph type="secondary">
-        Optional. If the goods have not arrived and nobody knows what was
-        bought, leave this empty — the order saves anyway, and the products get
-        added from the order page when the boxes land.
-      </Typography.Paragraph>
-      <EditableTable<Line>
-        rowKey={(_, i) => String(i)}
-        dataSource={lines}
-        onAdd={addLine}
-        addLabel={t("inboundForm.addProduct", "Add product")}
-        emptyText={t(
-          "inboundForm.noProductsYet",
-          "No products yet. Add new or leave it as is",
+        {t(
+          "inboundForm.productsOptional",
+          "Optional. If the goods have not arrived and nobody knows what was bought, leave this empty — the order saves anyway, and the products get added from the order page when the boxes land.",
         )}
-        columns={[
-          {
-            title: t("inboundForm.product", "Product"),
-            key: "product",
-            // Fixed, like every other column here (owner complaint
-            // 2026-09-01). A product label runs to seventy characters —
-            // `PRO 13" 2016 i5 8/128 NTB — MacBook Pro 13 2016 i5 / 8GB /
-            // 128GB / NTB` — and a column sized to fit one on a single line
-            // took the room out of Qty and Total. It wraps to a second line in
-            // its own cell instead; see `EditableTable`.
-            width: 360,
-            render: (_, l, i) => (
-              <SkuPicker
-                skus={db.skus}
-                placeholder={t("inboundForm.pickAProduct", "Pick a product")}
-                // The column header names this box for anyone reading the
-                // screen; nothing names it for anyone hearing it.
-                aria-label={t("inboundForm.product", "Product")}
-                value={l.skuId}
-                onChange={(v) => editLine(i, { skuId: v })}
-              />
-            ),
-          },
-          {
-            title: t("inboundForm.qty", "Qty"),
-            key: "qty",
-            width: COUNT_COLUMN_WIDTH,
-            render: (_, l, i) => (
-              <CountInput
-                min={1}
-                precision={0}
-                value={l.qty}
-                aria-label={t("inboundForm.qty", "Qty")}
-                // Empty is a state on the way to a number, not zero: clearing
-                // the box to retype it must not silently make the line free.
-                onChange={(v) => editLine(i, { qty: v ?? 1 })}
-              />
-            ),
-          },
-          {
-            title: t("inboundForm.unitCost", "Unit cost"),
-            key: "unitCost",
-            width: 190,
-            render: (_, l, i) => (
-              <MoneyInput
-                value={l.unitCost}
-                aria-label={t("inboundForm.unitCost", "Unit cost")}
-                onChange={(v) => editLine(i, { unitCost: v ?? undefined })}
-              />
-            ),
-          },
-          {
-            // "Total", not "Line total" (owner decision 2026-08-26): the
-            // column already sits inside a row, so "line" is a word the layout
-            // is saying for it.
-            title: t("inboundForm.total", "Total"),
-            key: "total",
-            align: "right",
-            width: 150,
-            render: (_, l) => fmtRp((l.unitCost ?? 0) * (l.qty || 0)),
-          },
-          {
-            title: "",
-            key: "remove",
-            width: 48,
-            render: (_, __, i) => (
-              <Button
-                type="text"
-                icon={<DeleteOutlined />}
-                aria-label={t("inboundForm.removeProduct", "Remove product")}
-                onClick={() => setLines((ls) => ls.filter((_, j) => j !== i))}
-              />
-            ),
-          },
-        ]}
-      />
+      </Typography.Paragraph>
+      <Flex vertical gap={SPACE.md}>
+        <PurchaseLinesTable
+          lines={lineViews}
+          skus={db.skus}
+          cogsOf={(view) => {
+            const l = lines.find((x) => x.key === view.key);
+            return l === undefined ? 0 : lineCogs(l);
+          }}
+          onSetProduct={(view, skuId) =>
+            setLines((ls) =>
+              ls.map((l) =>
+                l.key === view.key
+                  ? {
+                      ...l,
+                      skuId,
+                      units: skuTracksSerial(db, skuId)
+                        ? sized(l.units, l.qty)
+                        : [],
+                    }
+                  : l,
+              ),
+            )
+          }
+          onSetQty={(view, qty) =>
+            setLines((ls) =>
+              ls.map((l) =>
+                l.key === view.key
+                  ? {
+                      ...l,
+                      qty,
+                      units:
+                        l.skuId !== undefined && !skuTracksSerial(db, l.skuId)
+                          ? []
+                          : sized(l.units, qty),
+                    }
+                  : l,
+              ),
+            )
+          }
+          onSetCost={(view, v) =>
+            editLine(view.key, { unitCost: v ?? undefined })
+          }
+          onSetDiscount={(view, v) =>
+            editLine(view.key, { discount: v ?? undefined })
+          }
+          onOpenDetails={(view) => setDetailsKey(view.key)}
+          // The one way a product gets onto the order (owner ask
+          // 2026-09-20: the separate product-and-quantity bar under the table
+          // is gone). Adds a blank line under the last one and lands the caret
+          // in its picker; ⌘⏎ from inside any cell does the same.
+          onAddLine={() =>
+            setLines((ls) => [...ls, { key: nextId("pol"), qty: 1, units: [] }])
+          }
+          actions={(view) => (
+            <Button
+              type="text"
+              danger
+              icon={<DeleteOutlined aria-hidden />}
+              aria-label={t("inboundForm.removeLine", "Remove line {{n}}", {
+                n: lines.findIndex((l) => l.key === view.key) + 1,
+              })}
+              onClick={() =>
+                setLines((ls) => ls.filter((l) => l.key !== view.key))
+              }
+            />
+          )}
+          emptyText={t(
+            "inboundForm.noLinesYet",
+            "No products yet. Add one below, or leave it as is.",
+          )}
+        />
+      </Flex>
     </Card>
   );
 
@@ -603,17 +1221,17 @@ export function InboundFormPage() {
             {
               key: "s",
               label: t("inboundForm.supplier", "Supplier"),
-              children: supplier ?? "—",
+              children: supplier ?? fmtNone(),
             },
             {
               key: "i",
               label: t("inboundForm.invoice", "Invoice"),
-              children: noInvoice ? "No invoice" : invoice || "—",
+              children: noInvoice ? "No invoice" : invoice || fmtNone(),
             },
             {
               key: "d",
               label: t("inboundForm.ordered", "Ordered"),
-              children: date?.format("DD MMM YYYY") ?? "—",
+              children: date?.format("DD MMM YYYY") ?? fmtNone(),
             },
             {
               key: "w",
@@ -624,9 +1242,11 @@ export function InboundFormPage() {
               key: "p",
               label: t("inboundForm.products", "Products"),
               children:
-                lines.filter((l) => l.skuId).length === 0
-                  ? "Not entered yet"
-                  : `${lines.filter((l) => l.skuId).length} line(s)`,
+                pieceCount === 0
+                  ? t("inboundForm.notEnteredYet", "Not entered yet")
+                  : t("inboundForm.unitCount", "{{count}} unit(s)", {
+                      count: pieceCount,
+                    }),
             },
           ]}
         />
@@ -712,7 +1332,9 @@ export function InboundFormPage() {
           </Flex>
           {outstanding > 0 && (
             <Flex justify="space-between">
-              <Typography.Text type="danger">Still owed</Typography.Text>
+              <Typography.Text type="danger">
+                {t("inboundForm.stillOwed", "Still owed")}
+              </Typography.Text>
               <Typography.Text type="danger">
                 {fmtRp(outstanding)}
               </Typography.Text>
@@ -789,15 +1411,22 @@ export function InboundFormPage() {
         {step === 2 && reviewStep}
       </Flex>
 
+      {detailsModal}
+
       <FooterToolbar
         info={
           <Typography.Text>
-            {lines.filter((l) => l.skuId).length} product(s) ·{" "}
-            <strong>{fmtRp(total)}</strong>
+            {t("inboundForm.unitCount", "{{count}} unit(s)", {
+              count: pieceCount,
+            })}{" "}
+            · <strong>{fmtRp(total)}</strong>
             {outstanding > 0 && (
               <Typography.Text type="danger">
                 {" "}
-                · {fmtRp(outstanding)} owed
+                ·{" "}
+                {t("inboundForm.owedAmount", "{{amount}} owed", {
+                  amount: fmtRp(outstanding),
+                })}
               </Typography.Text>
             )}
           </Typography.Text>

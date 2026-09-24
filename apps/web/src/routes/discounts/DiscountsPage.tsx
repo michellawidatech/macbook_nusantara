@@ -5,6 +5,7 @@
  * "12 uses, all of them in the first three days, all on MacBook Air" is a
  * decision about whether to run it again.
  */
+import { countedLineLabels, piecesSold } from "../../lib/stock.js";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -80,6 +81,7 @@ export function DiscountsPage() {
     >
       <Card>
         <ProTable
+          persistKey="discounts"
           rowKey="id"
           dataSource={db.discounts}
           searchPlaceholder={t(
@@ -327,8 +329,12 @@ export function DiscountsPage() {
                   {
                     title: t("discounts.units", "Units"),
                     key: "units",
-                    sortValue: (o) => o.serials.length,
-                    render: (_, o) => o.serials.join(", "),
+                    sortValue: (o) => piecesSold(o),
+                    render: (_, o) =>
+                      [
+                        ...o.serials,
+                        ...countedLineLabels(db.skus, o.lines),
+                      ].join(", "),
                   },
                   {
                     title: t("discounts.takenOff", "Taken off"),

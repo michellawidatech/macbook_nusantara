@@ -20,6 +20,7 @@
  * with it — `PaymentsPanel` asks for one on any part marked DUE, which is what
  * makes a promise to pay a date somebody can chase rather than a note.
  */
+import { countedLineLabels } from "../../lib/stock.js";
 import { useState } from "react";
 import {
   App,
@@ -48,18 +49,21 @@ import { DataTable } from "../../components/DataTable";
 import { FilterBar } from "../../components/FilterBar";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { PaymentsModal } from "../../components/PaymentsModal";
-import { fmtRp, fmtDate, fmtDateTime } from "../../lib/format.js";
+import { fmtRp, fmtDate, fmtDateTime, fmtNone } from "../../lib/format.js";
 import {
+  billAfterReturns,
   customerBalance,
   isSettled,
+  orderBalance,
   paymentsOf,
-  saleBalance,
+  refundedOf,
   type SalePayment,
 } from "../../lib/salePayments.js";
 import { diffPayments } from "../../lib/paymentEdits.js";
 import { TYPE } from "../../theme/tokens";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import { useDb, mutate, nextId, currentStaffName } from "../../mock/store.js";
+import { openingOwed } from "../../lib/debtPayments.js";
 import type { Customer, Order } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
 
@@ -81,7 +85,9 @@ export function CustomersPage() {
   const ordersOf = (id: string) => db.orders.filter((o) => o.customerId === id);
   /** What one customer owes across every sale of theirs. */
   const balanceOf = (c: Customer) =>
-    customerBalance(c.id, db.orders, c.openingBalance);
+    // Net of what has been paid off it since (2026-09-22): the figure is
+    // what they owed on the day, and `owed` is what they owe now.
+    customerBalance(c.id, db.orders, openingOwed(c));
   const refName = (id?: string) =>
     db.referralSources.find((r) => r.id === id)?.name;
 
@@ -133,17 +139,17 @@ export function CustomersPage() {
    * `diffPayments` turns the before and after into the log rows that make an
    * edit safe to allow at all. See `lib/paymentEdits.ts`.
    */
-  const savePayments = (order: Order, next: SalePayment[], reason: string) => {
+  const savePayments = (order: Order, next: SalePayment[]) => {
     const rows = diffPayments(paymentsOf(order), next, {
       at: new Date().toISOString(),
       staff: currentStaffName(),
-      ...(reason ? { reason } : {}),
     });
     mutate((d) => {
       const o = d.orders.find((x) => x.id === order.id);
       if (!o) return;
       o.payments = next;
-      o.settled = isSettled(o.total, next);
+      // Against the bill AFTER returns, net of what was handed back.
+      o.settled = isSettled(billAfterReturns(o), next, refundedOf(o));
       for (const row of rows) {
         d.paymentLog.push({ id: nextId("plog"), ...row });
       }
@@ -199,7 +205,7 @@ export function CustomersPage() {
               title: t("customers.address", "Address"),
               dataIndex: "address",
               ellipsis: true,
-              render: (v) => v || "—",
+              render: (v) => v || fmtNone(),
             },
             {
               title: t("customers.knowsUsFrom", "Knows us from"),
@@ -207,7 +213,7 @@ export function CustomersPage() {
                 refName(c.referralSourceId) ? (
                   <Tag>{refName(c.referralSourceId)}</Tag>
                 ) : (
-                  "—"
+                  fmtNone()
                 ),
             },
             {
@@ -237,7 +243,11 @@ export function CustomersPage() {
               render: (_, c) => {
                 const b = balanceOf(c);
                 if (b.owed === 0 && b.pending === 0) {
-                  return <Typography.Text type="secondary">—</Typography.Text>;
+                  return (
+                    <Typography.Text type="secondary">
+                      {fmtRp(0)}
+                    </Typography.Text>
+                  );
                 }
                 return (
                   <Flex vertical align="flex-end" gap={0}>
@@ -339,12 +349,12 @@ export function CustomersPage() {
                 {
                   key: "a",
                   label: t("customers.address", "Address"),
-                  children: viewing.address || "—",
+                  children: viewing.address || fmtNone(),
                 },
                 {
                   key: "r",
                   label: t("customers.referral", "Referral"),
-                  children: refName(viewing.referralSourceId) ?? "—",
+                  children: refName(viewing.referralSourceId) ?? fmtNone(),
                 },
                 ...(viewing.openingBalance
                   ? [
@@ -383,7 +393,10 @@ export function CustomersPage() {
                 },
                 {
                   title: t("customers.serials", "Serials"),
-                  render: (_, o) => o.serials.join(", "),
+                  render: (_, o) =>
+                    [...o.serials, ...countedLineLabels(db.skus, o.lines)].join(
+                      ", ",
+                    ),
                 },
                 {
                   title: t("customers.total", "Total"),
@@ -398,7 +411,7 @@ export function CustomersPage() {
                    */
                   title: t("customers.money", "Money"),
                   render: (_, o) => {
-                    const b = saleBalance(o.total, paymentsOf(o));
+                    const b = orderBalance(o);
                     if (b.fullySettled) {
                       return (
                         <Tag color="green">
@@ -485,8 +498,9 @@ export function CustomersPage() {
 
       <PaymentsModal
         open={paying !== null}
+        orderId={paying?.id ?? ""}
         code={paying?.code ?? ""}
-        total={paying?.total ?? 0}
+        total={paying ? billAfterReturns(paying) : 0}
         payments={paying ? paymentsOf(paying) : []}
         log={
           paying
@@ -498,11 +512,8 @@ export function CustomersPage() {
                 .sort((a, b) => b.at.localeCompare(a.at))
             : []
         }
-        methods={db.paymentMethods
-          .filter((m) => m.forSale && m.active)
-          .map((m) => ({ value: m.code, label: m.label }))}
         onClose={() => setPaying(null)}
-        onSave={(next, reason) => paying && savePayments(paying, next, reason)}
+        onSave={(next) => paying && savePayments(paying, next)}
       />
 
       <Modal

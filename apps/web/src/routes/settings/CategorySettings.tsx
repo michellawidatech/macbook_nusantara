@@ -22,7 +22,7 @@
  * in keep the serials they were given — they are what the ledger names — which
  * is why turning tracking off does not go back and rewrite anything.
  */
-import { Alert, Card, Flex, Switch, Table, Typography } from "antd";
+import { Alert, Card, Flex, Switch, Table, Tooltip, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { mutate, useDb } from "../../mock/store.js";
 import { countedCategories } from "../../lib/serialTracking.js";
@@ -30,6 +30,34 @@ import { countedCategories } from "../../lib/serialTracking.js";
 export function CategorySettings() {
   const { t } = useTranslation();
   const db = useDb();
+  /**
+   * What the category holds today, of the kind it is now (2026-09-19). A
+   * tracked category's stock is units; a counted one's is quantities on the
+   * stock ledger. Switching kind with either on hand would strand it — units
+   * nobody may scan, or pieces no screen reads — so the switch waits for the
+   * category to be empty.
+   */
+  const heldIn = (name: string, tracks: boolean): number => {
+    const skus = new Set(
+      db.skus
+        .filter(
+          (s) => db.models.find((m) => m.id === s.modelId)?.category === name,
+        )
+        .map((s) => s.id),
+    );
+    if (tracks) {
+      return db.units.filter(
+        (u) =>
+          skus.has(u.skuId) &&
+          u.status !== "TERJUAL" &&
+          u.status !== "RETUR_SUPPLIER" &&
+          u.status !== "HILANG",
+      ).length;
+    }
+    return db.stockMoves
+      .filter((m) => skus.has(m.skuId))
+      .reduce((n, m) => n + m.qty, 0);
+  };
 
   const rows = db.categories.map((c) => ({
     ...c,
@@ -48,7 +76,7 @@ export function CategorySettings() {
           )}
           description={t(
             "settings.categoryTrackingBody",
-            "A tracked category is identified machine by machine: QC asks for the serial, and a stock take scans each one. A counted category is not — an accessory has no serial anybody reads, so QC takes it in without one and a stock take answers with a number. Machines already in stock keep the serials they have.",
+            "A tracked category is identified unit by unit: QC asks for the serial, and a stock take scans each one. A counted category is not — an accessory has no serial anybody reads, so QC takes it in without one and a stock take answers with a number. Units already in stock keep the serials they have.",
           )}
         />
         <Table
@@ -72,22 +100,38 @@ export function CategorySettings() {
               key: "tracks",
               align: "right" as const,
               width: 180,
-              render: (_: unknown, r: (typeof rows)[number]) => (
-                <Switch
-                  checked={r.tracksSerial}
-                  aria-label={t(
-                    "settings.trackedBySerialAria",
-                    "Track {{name}} by serial",
-                    { name: r.name },
-                  )}
-                  onChange={(on) =>
-                    mutate((d) => {
-                      const row = d.categories.find((c) => c.id === r.id);
-                      if (row) row.tracksSerial = on;
-                    })
-                  }
-                />
-              ),
+              render: (_: unknown, r: (typeof rows)[number]) => {
+                const held = heldIn(r.name, r.tracksSerial);
+                return (
+                  <Tooltip
+                    title={
+                      held > 0
+                        ? t(
+                            "settings.trackedBySerialLocked",
+                            "{{count}} in stock. Sell, return or adjust them out before changing how this category is kept.",
+                            { count: held },
+                          )
+                        : undefined
+                    }
+                  >
+                    <Switch
+                      checked={r.tracksSerial}
+                      disabled={held > 0}
+                      aria-label={t(
+                        "settings.trackedBySerialAria",
+                        "Track {{name}} by serial",
+                        { name: r.name },
+                      )}
+                      onChange={(on) =>
+                        mutate((d) => {
+                          const row = d.categories.find((c) => c.id === r.id);
+                          if (row) row.tracksSerial = on;
+                        })
+                      }
+                    />
+                  </Tooltip>
+                );
+              },
             },
           ]}
         />

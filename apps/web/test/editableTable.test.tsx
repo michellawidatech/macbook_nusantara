@@ -15,10 +15,10 @@
  */
 import { useState } from "react";
 import { App as AntdApp } from "antd";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EditableTable } from "../src/components/EditableTable.js";
 import {
   CountInput,
@@ -274,22 +274,22 @@ describe("the inbound order form's Products step", () => {
     return user;
   }
 
-  it("offers Add product once, under the table", async () => {
+  it("offers Add a product once, under the table", async () => {
     await openProducts();
-    const buttons = screen.getAllByRole("button", { name: /Add product/ });
+    const buttons = screen.getAllByRole("button", { name: /Add a product/ });
     // One, not two: the empty state carried a duplicate (owner decision
     // 2026-08-26) precisely because the real button was a whole table away in
     // the card header. Moving it under the rows retires that.
     expect(buttons).toHaveLength(1);
   });
 
-  it("adds a product line on Ctrl+Enter and lands in its picker", async () => {
+  it("adds a line on Ctrl+Enter and lands in its picker", async () => {
     const user = await openProducts();
-    await user.click(screen.getByRole("button", { name: /Add product/ }));
-    const qty = screen.getByLabelText("Qty");
-    await user.click(qty);
+    await user.click(screen.getByRole("button", { name: /Add a product/ }));
+    const price = screen.getAllByLabelText(/^Unit price of /)[0]!;
+    await user.click(price);
     await user.keyboard("{Control>}{Enter}{/Control}");
-    expect(screen.getAllByLabelText("Qty")).toHaveLength(2);
+    expect(screen.getAllByLabelText(/^Unit price of /)).toHaveLength(2);
     // The product picker of the new line, which is antd's combobox input.
     expect(document.activeElement).toBe(
       screen.getAllByRole("combobox", { name: "Product" })[1],
@@ -298,12 +298,40 @@ describe("the inbound order form's Products step", () => {
 
   it("keeps Qty typable — three digits and its arrows", async () => {
     const user = await openProducts();
-    await user.click(screen.getByRole("button", { name: /Add product/ }));
+    await user.click(screen.getByRole("button", { name: /Add a product/ }));
     const qty = screen.getByLabelText("Qty");
     expect(qty.closest(`.${COUNT_INPUT_CLASS}`)).not.toBeNull();
-    await user.clear(qty);
-    await user.type(qty, "144");
+    await userEvent.clear(qty);
+    await userEvent.type(qty, "144");
     expect(qty).toHaveValue("144");
+  });
+
+  it("adds one line of that quantity, priced once", async () => {
+    // Owner ask 2026-09-20: *"user will input: unit, qty, price … it will not
+    // automatically expand the unit below it."*
+    const user = await openProducts();
+    const code = getDb().skus.find((s) => s.id === "m-pro13-2016-v1")!.code;
+    await user.click(screen.getByRole("button", { name: /Add a product/ }));
+    const picker = screen.getByRole("combobox", { name: "Product" });
+    fireEvent.mouseDown(picker);
+    fireEvent.change(picker, { target: { value: code } });
+    const option = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>(
+        `.ant-select-item-option[title="${CSS.escape(code)}"]`,
+      );
+      if (!found) throw new Error("option not open");
+      return found;
+    });
+    fireEvent.click(option);
+    const qty = screen.getByLabelText("Qty");
+    await userEvent.clear(qty);
+    await userEvent.type(qty, "3{Enter}");
+
+    // ONE row, of three, with one price box and one discount box.
+    expect(screen.getAllByLabelText("Qty")).toHaveLength(1);
+    expect(screen.getByLabelText("Qty")).toHaveValue("3");
+    expect(screen.getAllByLabelText(/^Unit price of /)).toHaveLength(1);
+    expect(screen.getAllByLabelText(/^Discount on /)).toHaveLength(1);
   });
 });
 
@@ -327,6 +355,15 @@ describe("a product label that will not fit on one line", () => {
     );
   }
 
+  /**
+   * The invoice's lines — product, qty, one price, a discount. One table on
+   * the page since 2026-09-20; the folded *Inbound* section it doubled is
+   * gone, so there is nothing to open.
+   */
+  function openInvoice(): HTMLElement {
+    return document.querySelector(".nusantara-editable-table") as HTMLElement;
+  }
+
   it("shows the code and the model name as two separate lines", () => {
     setViewport(DESKTOP);
     const [first] = skusOnPo5();
@@ -334,7 +371,7 @@ describe("a product label that will not fit on one line", () => {
     // The code goes in the picker; the model and variant go under it, where
     // they are free to take a second line. Both are on screen — the split is
     // about where the text sits, not about hiding half of it.
-    expect(screen.getByText(first!.code)).toBeInTheDocument();
+    expect(screen.getAllByText(first!.code).length).toBeGreaterThan(0);
     const full = screen.getByText(`${first!.name} ${first!.variantLabel}`);
     expect(full).toBeInTheDocument();
     // …and the long half is NOT inside the box, which is what stops it asking
@@ -345,37 +382,44 @@ describe("a product label that will not fit on one line", () => {
   it("holds every column, so Qty and Total keep their own width", () => {
     setViewport(DESKTOP);
     openOrder();
-    const table = document.querySelector(
-      ".nusantara-editable-table table",
-    ) as HTMLElement;
+    const editor = openInvoice();
+    const table = editor.querySelector("table") as HTMLElement;
     // Fixed, not auto: rc-table only picks `fixed` on its own when a column is
     // pinned, and `auto` is what let the product label take Qty's room.
     expect(table.style.tableLayout).toBe("fixed");
-    const widths = [
-      ...document.querySelectorAll(".nusantara-editable-table colgroup col"),
-    ].map((c) => (c as HTMLElement).style.width);
+    const widths = [...editor.querySelectorAll("colgroup col")].map(
+      (c) => (c as HTMLElement).style.width,
+    );
     expect(widths).toEqual([
-      "340px",
-      `${COUNT_COLUMN_WIDTH}px`,
-      "190px",
-      "150px",
+      "44px",
+      "300px",
+      `${COUNT_COLUMN_WIDTH + 24}px`,
       "170px",
+      "170px",
+      "150px",
+      "150px",
+      "260px",
     ]);
   });
 
   it("becomes a card of labelled fields below md", () => {
     setViewport(PHONE);
-    const [first] = skusOnPo5();
     openOrder();
-    const editor = document.querySelector(".nusantara-editable-table")!;
+    const editor = openInvoice();
     expect(editor.querySelector("table")).toBeNull();
-    // The card's heading, so a stacked row still says which line it is.
-    expect(screen.getByText(first!.name)).toBeInTheDocument();
-    // Every cell is still there and still typable, now at full width.
-    expect(screen.getAllByRole("combobox", { name: "Product" })).toHaveLength(
-      2,
-    );
-    expect(screen.getAllByLabelText("Quantity")).toHaveLength(2);
-    expect(screen.getAllByLabelText("Unit cost")).toHaveLength(2);
+    // Every cell is still there and still typable, now at full width: one
+    // card per line, each with its product, its quantity, its one price and
+    // its discount.
+    expect(editor.querySelectorAll(".nusantara-stacked-row")).toHaveLength(2);
+    expect(
+      editor.querySelectorAll('[role="combobox"][aria-label="Product"]'),
+    ).toHaveLength(2);
+    expect(editor.querySelectorAll('[aria-label="Qty"]')).toHaveLength(2);
+    expect(
+      editor.querySelectorAll('[aria-label^="Unit price of "]'),
+    ).toHaveLength(2);
+    expect(
+      editor.querySelectorAll('[aria-label^="Discount on "]'),
+    ).toHaveLength(2);
   });
 });

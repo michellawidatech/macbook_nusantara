@@ -38,6 +38,7 @@ import {
 } from "./reference.js";
 import { chats, corrections, personas } from "./singletons.js";
 import { adjustments, events, stockIns, unitNotes, units } from "./units.js";
+import { stockMoves } from "./stock.js";
 
 export const ADAPTERS: { readonly [C in CollectionName]: Adapter<C> } = {
   paymentMethods,
@@ -67,6 +68,7 @@ export const ADAPTERS: { readonly [C in CollectionName]: Adapter<C> } = {
   services,
   settlements,
   events,
+  stockMoves,
   unitNotes,
   stockIns,
   adjustments,

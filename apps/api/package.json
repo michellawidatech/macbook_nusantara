@@ -10,7 +10,8 @@
     "dev": "tsx watch src/server.ts",
     "staff": "tsx src/cli/upsert-staff.ts",
     "accounts": "tsx src/cli/seed-accounts.ts",
-    "knowledge": "tsx src/cli/import-knowledge.ts"
+    "knowledge": "tsx src/cli/import-knowledge.ts",
+    "chatbot": "tsx src/cli/chatbot-doctor.ts"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",

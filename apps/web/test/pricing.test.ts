@@ -19,15 +19,27 @@ import {
   type BasketLine,
 } from "../src/lib/pricing.js";
 import { recommendFor } from "../src/lib/recommend.js";
+import { onHand } from "../src/lib/stock.js";
 
 let db: MockDb;
 
 /** The seeded "any 2 accessories for Rp1.000.000". */
 const gearup = (d: MockDb) => d.discounts.find((x) => x.code === "GEARUP2")!;
 
-/** The cheapest available unit of a given model, as a basket line. */
+/**
+ * The cheapest available unit of a given model, as a basket line — or, for a
+ * counted product (an accessory, 2026-09-19), one piece of a variant the
+ * shelf holds, named by its SKU.
+ */
 function lineFor(d: MockDb, modelId: string): BasketLine {
   const skuIds = d.skus.filter((s) => s.modelId === modelId).map((s) => s.id);
+  const stocked = d.stockMoves.find((m) => skuIds.includes(m.skuId));
+  if (stocked) {
+    return {
+      skuId: stocked.skuId,
+      price: d.skus.find((s) => s.id === stocked.skuId)!.price,
+    };
+  }
   const unit = d.units.find(
     (u) => skuIds.includes(u.skuId) && u.status === "TERSEDIA",
   )!;
@@ -46,18 +58,18 @@ beforeEach(() => {
 describe("scopeMatches", () => {
   it('matches everything under "All products"', () => {
     const line = lineFor(db, "m-air-m2");
-    expect(scopeMatches(db, "All products", line.serial)).toBe(true);
+    expect(scopeMatches(db, "All products", line)).toBe(true);
   });
 
   it("matches on a category name, which is what the form stores", () => {
     const sleeve = lineFor(db, "m-sleeve");
-    expect(scopeMatches(db, "Accessory", sleeve.serial)).toBe(true);
-    expect(scopeMatches(db, "MacBook Air", sleeve.serial)).toBe(false);
+    expect(scopeMatches(db, "Accessory", sleeve)).toBe(true);
+    expect(scopeMatches(db, "MacBook Air", sleeve)).toBe(false);
   });
 
   it("matches on a model name too", () => {
     const air = lineFor(db, "m-air-m2");
-    expect(scopeMatches(db, "MacBook Air M2", air.serial)).toBe(true);
+    expect(scopeMatches(db, "MacBook Air M2", air)).toBe(true);
   });
 
   it("does not match a serial the shop has never held", () => {
@@ -218,9 +230,15 @@ describe("recommendFor", () => {
     expect(accessories[0]!.bundle?.code).toBe("GEARUP2");
   });
 
-  it("only ever recommends serials that are actually in stock", () => {
+  it("only ever recommends what is actually in stock", () => {
     const air = lineFor(db, "m-air-m2");
     for (const r of recommendFor(db, [air])) {
+      // A counted product is recommended by variant, and only while the
+      // stock ledger holds a piece of it (2026-09-19).
+      if (r.skuId) {
+        expect(onHand(db.stockMoves, r.skuId)).toBeGreaterThan(0);
+        continue;
+      }
       const unit = db.units.find((u) => u.serial === r.serial)!;
       expect(unit.status).toBe("TERSEDIA");
       // The price is the variant's, and a SKU always has one — so "in stock"

@@ -107,8 +107,11 @@ export interface InventoriRow {
   readonly attrs: Record<string, string>;
 }
 
-/** A serial is at most 15 characters (Inbound & QC). */
-const serialParam = z.string().trim().min(1).max(15);
+/**
+ * A serial is at most 23 characters — the Inbound field's width, since a
+ * second-hand serial is taken as read (2026-09-21).
+ */
+const serialParam = z.string().trim().min(1).max(23);
 
 const pickerQuery = z.object({
   q: z.string().trim().max(64).optional(),

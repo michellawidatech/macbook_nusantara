@@ -62,6 +62,11 @@ export interface SupplierDeposit {
   readonly method: string;
   readonly at: string;
   readonly note?: string;
+  /**
+   * False when the money never left the shop's cash or bank — the half of a
+   * payment's switch that a remainder carries onto a deposit (2026-09-22).
+   */
+  readonly inBalance?: boolean;
   readonly staff: string;
   /** Where the money has been put since. */
   readonly allocations: readonly DepositAllocation[];
@@ -141,6 +146,8 @@ export function supplierAccount(
   invoices: readonly LedgerInvoice[],
   deposits: readonly SupplierDeposit[],
   openingBalance = 0,
+  /** Σ `Supplier.openingPayments` — paid off the opening balance since (2026-09-22). */
+  openingPaid = 0,
 ): SupplierAccount {
   let invoiced = 0;
   let paid = 0;
@@ -157,7 +164,8 @@ export function supplierAccount(
   }
   unpaidDates.sort();
   const owedOnInvoices = Math.max(0, invoiced - paid);
-  const owed = owedOnInvoices + Math.max(0, openingBalance);
+  const owed =
+    owedOnInvoices + Math.max(0, Math.max(0, openingBalance) - openingPaid);
   const unallocated = deposits
     .filter((d) => d.supplierId === supplierId)
     .reduce((n, d) => n + remainingOf(d), 0);
@@ -322,7 +330,18 @@ export function supplierHistory(
   supplierId: string,
   invoices: readonly HistoryInvoice[],
   deposits: readonly SupplierDeposit[],
-  opening?: { readonly amount: number; readonly at?: string },
+  opening?: {
+    readonly amount: number;
+    readonly at?: string;
+    /** `Supplier.openingPayments`: money paid off it since (2026-09-22). */
+    readonly payments?: readonly {
+      readonly id: string;
+      readonly at: string;
+      readonly amount: number;
+      readonly method: string;
+      readonly note?: string;
+    }[];
+  },
 ): LedgerEntry[] {
   const out: LedgerEntry[] = [];
   for (const inv of invoices) {
@@ -386,6 +405,17 @@ export function supplierHistory(
       at: opening.at ?? "",
       amount: opening.amount,
       direction: "CHARGE",
+    });
+  }
+  for (const p of opening?.payments ?? []) {
+    out.push({
+      id: `openpay-${p.id}`,
+      kind: "PAYMENT",
+      at: p.at,
+      amount: p.amount,
+      direction: "PAYMENT",
+      method: p.method,
+      ...(p.note ? { note: p.note } : {}),
     });
   }
   return out.sort((a, b) => b.at.localeCompare(a.at));

@@ -30,14 +30,43 @@
  * DOM. `hooks/usePersistentState.ts` is what wires it to a real one.
  */
 
-/** Where auto-save lives. Versioned, so a shape change cannot half-restore. */
-export const INBOUND_DRAFT_KEY = "nusantara.inbound.draft.v1";
+/**
+ * Where auto-save lives. Versioned, so a shape change cannot half-restore.
+ *
+ * Bumped to v2 on 2026-09-20: a line is a product, a quantity and one price
+ * again, carrying the units it stands for. A v1 draft held one line per unit,
+ * so restoring it here would show five rows of one where the person typed
+ * "five", and offering that back under the new rules would be a lie about
+ * what they had typed.
+ */
+export const INBOUND_DRAFT_KEY = "nusantara.inbound.draft.v2";
+
+/** One unit of a line, as the order form's popup holds it. */
+export interface InboundDraftUnit {
+  readonly serial: string;
+  /**
+   * The serial has not been judged yet, and how it arrived — it waits for the
+   * unit's grade (2026-09-21), and on a new unit a scan and a typed serial
+   * are held to different rules.
+   */
+  readonly pending?: "scan" | "typed";
+  readonly grade?: string;
+  readonly health?: number;
+  readonly cycleCount?: number;
+  readonly fcc?: number;
+  readonly description?: readonly string[];
+  readonly price?: number;
+}
 
 /** One line of the order, exactly as the form's `Line` holds it. */
 export interface InboundDraftLine {
   readonly skuId?: string;
   readonly qty: number;
   readonly unitCost?: number;
+  /** Knocked off this line (owner ask 2026-09-20). */
+  readonly discount?: number;
+  /** What the popup behind the line has been told so far. */
+  readonly units?: readonly InboundDraftUnit[];
 }
 
 /** Everything the wizard knows, in one value. */
@@ -83,10 +112,36 @@ export function parseInboundDraft(stored: unknown): InboundDraft | undefined {
   for (const raw of d.lines) {
     if (typeof raw !== "object" || raw === null) return undefined;
     const l = raw as Record<string, unknown>;
+    const units: InboundDraftUnit[] = [];
+    if (Array.isArray(l.units)) {
+      for (const rawUnit of l.units) {
+        if (typeof rawUnit !== "object" || rawUnit === null) return undefined;
+        const u = rawUnit as Record<string, unknown>;
+        const words = Array.isArray(u.description)
+          ? u.description.filter((w): w is string => typeof w === "string")
+          : [];
+        units.push({
+          serial: typeof u.serial === "string" ? u.serial : "",
+          ...(u.pending === "scan" || u.pending === "typed"
+            ? { pending: u.pending }
+            : {}),
+          ...(str(u.grade) === undefined ? {} : { grade: str(u.grade)! }),
+          ...(num(u.health) === undefined ? {} : { health: num(u.health)! }),
+          ...(num(u.cycleCount) === undefined
+            ? {}
+            : { cycleCount: num(u.cycleCount)! }),
+          ...(num(u.fcc) === undefined ? {} : { fcc: num(u.fcc)! }),
+          ...(words.length === 0 ? {} : { description: words }),
+          ...(num(u.price) === undefined ? {} : { price: num(u.price)! }),
+        });
+      }
+    }
     lines.push({
       ...(str(l.skuId) === undefined ? {} : { skuId: str(l.skuId)! }),
       qty: num(l.qty) ?? 1,
       ...(num(l.unitCost) === undefined ? {} : { unitCost: num(l.unitCost)! }),
+      ...(num(l.discount) === undefined ? {} : { discount: num(l.discount)! }),
+      ...(units.length === 0 ? {} : { units }),
     });
   }
   const step = num(d.step);
@@ -133,7 +188,12 @@ export function inboundDraftHasContent(draft: InboundDraft): boolean {
     draft.discount !== undefined ||
     draft.discountPct !== undefined ||
     draft.lines.some(
-      (l) => l.skuId !== undefined || l.unitCost !== undefined || l.qty > 1,
+      (l) =>
+        l.skuId !== undefined ||
+        l.unitCost !== undefined ||
+        l.discount !== undefined ||
+        l.qty > 1 ||
+        (l.units ?? []).some((u) => u.serial.trim() !== ""),
     )
   );
 }

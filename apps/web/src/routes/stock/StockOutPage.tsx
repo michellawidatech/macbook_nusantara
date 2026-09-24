@@ -42,6 +42,7 @@
  * the upsell half.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import dayjs from "dayjs";
 import { useSearchParams } from "react-router-dom";
 import {
   App,
@@ -49,10 +50,12 @@ import {
   Button,
   Card,
   Checkbox,
+  DatePicker,
   Descriptions,
   Flex,
   Form,
   Input,
+  InputNumber,
   Modal,
   Result,
   Select,
@@ -79,8 +82,15 @@ import { PageContainer } from "../../components/PageContainer";
 import { GradeTag } from "../../components/GradeTag";
 import { ProTable } from "../../components/ProTable";
 import { MoneyInput } from "../../components/MoneyInput";
+import {
+  RP_SYMBOL,
+  groupRupiah,
+  moneyFormatter,
+  moneyParser,
+} from "../../components/money";
+import { RequiredAsterisk } from "../../theme/RequiredAsterisk";
 import { InvoiceModal } from "../../components/Invoice";
-import { fmtRp, fmtDate, fmtDateTime } from "../../lib/format.js";
+import { fmtRp, fmtDate, fmtDateTime, fmtNone } from "../../lib/format.js";
 import {
   BATTERY_GRADE_COLOR,
   batterySettingsFrom,
@@ -123,23 +133,52 @@ import {
   useDb,
   mutate,
   nextId,
+  currentStaffName,
   docCode,
   appendEvent,
   purgeQcPhotos,
 } from "../../mock/store.js";
 import {
   SALE_CHANNELS,
-  holdsFunds,
   channelOf,
   type SaleSource,
 } from "../../lib/channels.js";
 import { gradeForCondition } from "../../lib/condition.js";
-import { resolveSerialQuery } from "../../lib/serialInput.js";
+import { resolveSerialQuery, serialNamedBy } from "../../lib/serialInput.js";
+import { EnumTag } from "../../components/EnumTag";
+import { UNIT_STATUS } from "../../i18n/enumLabels.js";
+import { skuTracksSerial } from "../../lib/serialTracking.js";
+import { averageCost, onHand, takeFrom } from "../../lib/stock.js";
 import { priceOf as unitListPrice } from "../../lib/unitPrice.js";
-import { isSettled, type SalePayment } from "../../lib/salePayments.js";
-import { PaymentsPanel } from "../../components/PaymentsPanel.js";
+import { isSettled } from "../../lib/salePayments.js";
+import {
+  TILL_METHODS,
+  isMarketplaceMethod,
+  partsForChannel,
+  refMissing,
+  saleRefNeeded,
+  tillMethod,
+  tillPayments,
+  tillProblems,
+  tillRows,
+  toggleTillMethod,
+  type TillMethod,
+  type TillPart,
+  type TillProblem,
+  type TillRow,
+} from "../../lib/tillPayments.js";
 import { costIndex } from "../../lib/service.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
+import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
+import {
+  FIELD,
+  asBoolean,
+  asListOf,
+  asOneOf,
+  asShape,
+  asString,
+  hasShape,
+} from "../../lib/draftGuards.js";
 import { useLayoutMode } from "../../layouts/useLayoutMode.js";
 import { TradeInDialog } from "./TradeInDialog.js";
 import type { Order, OrderFee } from "../../mock/seed.js";
@@ -150,6 +189,74 @@ interface Line {
   /** What this customer is being charged. Undefined means "the list price". */
   price?: number;
 }
+
+/**
+ * Some pieces of a counted product — an accessory — on the sale
+ * (2026-09-19). No serial: which mouse goes out is not a question anybody
+ * asks, only how many.
+ */
+interface QtyLine {
+  id: string;
+  skuId: string;
+  qty: number;
+  /** Per piece. Undefined means the variant's asking price. */
+  price?: number;
+}
+
+/*
+ * The sale being built, kept on this device (owner ask 2026-09-21: *"all the
+ * things of the user input will be saved locally"*).
+ *
+ * The in-app tab strip used to keep a half-built sale alive while somebody
+ * glanced at Inventory; it is gone, so everything typed here is written to
+ * `localStorage` as it is typed and read back when the till opens — after a
+ * navigation, a reload, or in a browser tab the till was dragged into. What a
+ * finished sale clears is what `submit` resets, exactly as before.
+ *
+ * Each value is read through a guard (`lib/draftGuards.ts`): a draft written by
+ * an older build that no longer fits is dropped, not rendered.
+ */
+const TILL_DRAFT = (name: string) => draftKey(`till.${name}`);
+const isLine = (v: unknown): v is Line =>
+  hasShape(v, { serial: FIELD.optString, price: FIELD.optNumber });
+const isQtyLine = (v: unknown): v is QtyLine =>
+  hasShape(v, {
+    id: FIELD.string,
+    skuId: FIELD.string,
+    qty: FIELD.number,
+    price: FIELD.optNumber,
+  });
+const isTillPart = (v: unknown): v is TillPart =>
+  hasShape(v, {
+    method: (m) => TILL_METHODS.some((x) => x.key === m),
+    split: FIELD.optNumber,
+    paid: FIELD.optNumber,
+    ref: FIELD.optString,
+  });
+const isFee = (v: unknown): v is OrderFee =>
+  hasShape(v, { id: FIELD.string, label: FIELD.string, amount: FIELD.number });
+const isTradeIn = (v: unknown): v is TradeInLine =>
+  hasShape(v, {
+    id: FIELD.string,
+    label: FIELD.string,
+    value: FIELD.number,
+    serial: FIELD.optString,
+    note: FIELD.optString,
+    skuId: FIELD.optString,
+    grade: FIELD.optString,
+    condition: (c) => c === undefined || c === "NEW" || c === "SECOND",
+  });
+const isText = (v: unknown): v is string => typeof v === "string";
+/** An empty basket still shows its one empty line. */
+const parseLines = (v: unknown): Line[] | undefined => {
+  const lines = asListOf(isLine)(v);
+  return lines === undefined || lines.length === 0 ? undefined : lines;
+};
+const parseAddress = asShape<AddressParts>(
+  Object.fromEntries(Object.keys(EMPTY_ADDRESS).map((k) => [k, FIELD.string])),
+);
+const parseChannel = asOneOf<SaleSource>(SALE_CHANNELS.map((c) => c.value));
+const parseStep = asOneOf<"PRODUCTS" | "PAYMENT">(["PRODUCTS", "PAYMENT"]);
 
 /**
  * A reservation's channel maps onto the sale's channel where the two mean the
@@ -357,10 +464,21 @@ export function StockOutPage() {
   const { message } = App.useApp();
   const { compact } = useLayoutMode();
   const [params, setParams] = useSearchParams();
-  const [lines, setLines] = useState<Line[]>([
-    { serial: params.get("serial") ?? undefined },
-  ]);
-  const [customerId, setCustomerId] = useState<string>();
+  const [lines, setLines] = usePersistentState<Line[]>(
+    TILL_DRAFT("lines"),
+    [{}],
+    parseLines,
+  );
+  const [qtyLines, setQtyLines] = usePersistentState<QtyLine[]>(
+    TILL_DRAFT("qtyLines"),
+    [],
+    asListOf(isQtyLine),
+  );
+  const [customerId, setCustomerId] = usePersistentState<string | undefined>(
+    TILL_DRAFT("customer"),
+    undefined,
+    asString,
+  );
   /**
    * The discount, as a code and nothing else (owner revision 2026-09-01).
    *
@@ -371,51 +489,87 @@ export function StockOutPage() {
    * group by. A price agreed at the counter is now a *bargain* on the line it
    * was agreed on, which is what it always actually was.
    */
-  const [discountId, setDiscountId] = useState<string>();
-  const [source, setSource] = useState<SaleSource>("OFFLINE");
-  const [referralId, setReferralId] = useState<string>();
-  const [shipped, setShipped] = useState(false);
+  const [discountId, setDiscountId] = usePersistentState<string | undefined>(
+    TILL_DRAFT("discount"),
+    undefined,
+    asString,
+  );
+  const [source, setSource] = usePersistentState<SaleSource>(
+    TILL_DRAFT("channel"),
+    "OFFLINE",
+    parseChannel,
+  );
+  const [referralId, setReferralId] = usePersistentState<string | undefined>(
+    TILL_DRAFT("referral"),
+    undefined,
+    asString,
+  );
+  const [shipped, setShipped] = usePersistentState<boolean>(
+    TILL_DRAFT("shipped"),
+    false,
+    asBoolean,
+  );
   /**
    * The shipping address, held in parts and composed on submit.
    *
    * `lib/address.ts` explains why: the order stores one line, but asking for
    * one line is how half of them arrived without a postcode.
    */
-  const [address, setAddress] = useState<AddressParts>(EMPTY_ADDRESS);
+  const [address, setAddress] = usePersistentState<AddressParts>(
+    TILL_DRAFT("address"),
+    EMPTY_ADDRESS,
+    parseAddress,
+  );
   /**
    * A saved address of the chosen customer, when one was picked from the
    * dropdown (owner ask 2026-09-01). Held as the composed line rather than
    * parsed back into parts: `composeAddress` is one-way, and guessing which
    * comma was the kecamatan is exactly the mess the parts form exists to end.
    */
-  const [savedAddressId, setSavedAddressId] = useState<string>();
+  const [savedAddressId, setSavedAddressId] = usePersistentState<
+    string | undefined
+  >(TILL_DRAFT("savedAddress"), undefined, asString);
   /**
-   * How the customer is paying, as a `PaymentMethod` CODE.
+   * How the customer is paying: the chips picked, in the order they were
+   * picked, with what was typed for each (owner revision 2026-09-19 — see
+   * `lib/tillPayments.ts`). Transfer, Cash, Shopee, Tokopedia; several at
+   * once is a split, and a lowered "actual paid" is a part payment.
    *
-   * A code and not a label since 2026-09-09. It held the label — "Cash",
-   * "Bank transfer" — which read fine on a receipt and made the field a
-   * different type from the one `Order.payMethod` documents, from the one the
-   * fixture writes, and from the one prisma's `Payment.methodId` resolves to.
-   * The cash-and-bank balance is what made that cost something: it sorts a
-   * movement by its method, and a method spelled the way a person renamed it
-   * in Settings belongs to no pot at all. The label is looked up wherever one
-   * is shown, which is what every other code in this app already does.
+   * Every payment is still written with a `PaymentMethod` CODE, never a label
+   * (2026-09-09): the cash-and-bank balance sorts a movement by that field.
    */
-  const [payMethod, setPayMethod] = useState("TUNAI");
-  /** The chosen method, spelled for a person. Labels live in Settings. */
-  const payMethodLabel =
-    db.paymentMethods.find((m) => m.code === payMethod)?.label ?? payMethod;
+  const [payParts, setPayParts] = usePersistentState<readonly TillPart[]>(
+    TILL_DRAFT("payParts"),
+    [{ method: "TUNAI" }],
+    asListOf(isTillPart),
+  );
   /**
-   * Is this bill being paid in more than one way (owner ask 2026-09-08)?
-   *
-   * Off by default, and the chips above are the fast path. Most sales are one
-   * payment and putting a payment GRID in front of every one of them would
-   * make the common case pay for the rare one — which is the mistake the
-   * accordion till of 2026-09-01 was reverted for.
+   * The SALE's own marketplace order number — only asked when its channel is a
+   * marketplace and no part is paid through one (`saleRefNeeded`). A Shopee or
+   * Tokopedia part carries its own, in its row (owner revision 2026-09-21).
    */
-  const [splitting, setSplitting] = useState(false);
-  const [splitParts, setSplitParts] = useState<SalePayment[]>([]);
-  const [salesmanId, setSalesmanId] = useState<string>();
+  const [payRef, setPayRef] = usePersistentState<string>(
+    TILL_DRAFT("payRef"),
+    "",
+    asString,
+  );
+  /** When the customer promised to pay what they still owe, if they said. */
+  const [payDueAt, setPayDueAt] = usePersistentState<string | undefined>(
+    TILL_DRAFT("payDueAt"),
+    undefined,
+    asString,
+  );
+  /**
+   * Set once *Pay & finish* has found the payment incomplete, so the boxes
+   * that need an answer say so in red — not before, or a box would be red
+   * from the moment the page opened.
+   */
+  const [payChecked, setPayChecked] = useState(false);
+  const [salesmanId, setSalesmanId] = usePersistentState<string | undefined>(
+    TILL_DRAFT("salesperson"),
+    undefined,
+    asString,
+  );
   /**
    * Which of the till's two steps is on screen (owner revision 2026-09-01).
    *
@@ -432,7 +586,11 @@ export function StockOutPage() {
    * them. Not a wizard — the sale can be finished from either step, and *Go
    * back to products* is one click.
    */
-  const [step, setStep] = useState<"PRODUCTS" | "PAYMENT">("PRODUCTS");
+  const [step, setStep] = usePersistentState<"PRODUCTS" | "PAYMENT">(
+    TILL_DRAFT("step"),
+    "PRODUCTS",
+    parseStep,
+  );
   /** Scroll target, so moving between steps starts at the top. */
   const detailsRef = useRef<HTMLDivElement>(null);
   const goToPayment = () => {
@@ -454,9 +612,17 @@ export function StockOutPage() {
       }
     });
   };
-  const [shelfQuery, setShelfQuery] = useState("");
+  const [shelfQuery, setShelfQuery] = usePersistentState<string>(
+    TILL_DRAFT("search"),
+    "",
+    asString,
+  );
   /** The catalogue's category chip. Undefined is "Semua". */
-  const [category, setCategory] = useState<string>();
+  const [category, setCategory] = usePersistentState<string | undefined>(
+    TILL_DRAFT("category"),
+    undefined,
+    asString,
+  );
   /**
    * Which variant's serials are being chosen between.
    *
@@ -475,7 +641,11 @@ export function StockOutPage() {
    * one receipt. Each row carries its own category and amount; `saleTotals`
    * sums them and `Order.fees` stores the breakdown.
    */
-  const [fees, setFees] = useState<OrderFee[]>([]);
+  const [fees, setFees] = usePersistentState<OrderFee[]>(
+    TILL_DRAFT("fees"),
+    [],
+    asListOf(isFee),
+  );
   const addFee = () =>
     setFees((prev) => [...prev, { id: nextId("fee"), label: "", amount: 0 }]);
   const setFee = (id: string, patch: Partial<OrderFee>) =>
@@ -487,7 +657,11 @@ export function StockOutPage() {
   /** How many suggestions are shown before "See more". */
   const [showAllSuggestions, setShowAllSuggestions] = useState(false);
   /** Machines taken in against the bill. See `TradeInDialog`. */
-  const [tradeIns, setTradeIns] = useState<TradeInLine[]>([]);
+  const [tradeIns, setTradeIns] = usePersistentState<TradeInLine[]>(
+    TILL_DRAFT("tradeIns"),
+    [],
+    asListOf(isTradeIn),
+  );
   const [tradeOpen, setTradeOpen] = useState(false);
   const [discountOpen, setDiscountOpen] = useState(false);
   /** The basket line whose price breakdown is open — the eye button. */
@@ -529,7 +703,11 @@ export function StockOutPage() {
    */
   const [catalogueOpen, setCatalogueOpen] = useState(false);
   /** Reservations this sale is fulfilling, so submitting can close them. */
-  const [fromReservations, setFromReservations] = useState<string[]>([]);
+  const [fromReservations, setFromReservations] = usePersistentState<string[]>(
+    TILL_DRAFT("reservations"),
+    [],
+    asListOf(isText),
+  );
   const [ncForm] = Form.useForm<{ name: string; phone: string }>();
 
   const sellable = useMemo(
@@ -587,7 +765,8 @@ export function StockOutPage() {
       (s) => s.id === picked[0]!.sourceId,
     )?.name;
     const mapped = channel ? SOURCE_BY_RESERVATION[channel] : undefined;
-    if (mapped) setSource((prev) => (prev === "OFFLINE" ? mapped : prev));
+    // Only over the default: a channel somebody picked is their answer.
+    if (mapped && source === "OFFLINE") pickChannel(mapped);
     setFromReservations((prev) => [
       ...new Set([...prev, ...picked.map((r) => r.id)]),
     ]);
@@ -599,6 +778,54 @@ export function StockOutPage() {
       }),
     );
   };
+
+  /*
+   * Arriving with a unit to sell (`?serial=`, Inventory's "sell"). It joins
+   * the basket kept on this device rather than replacing it, and the param is
+   * cleared once taken, so a refresh does not put back a line somebody has
+   * since removed.
+   */
+  const serialParam = params.get("serial");
+  useEffect(() => {
+    if (!serialParam) return;
+    setLines((prev) =>
+      prev.some((l) => l.serial === serialParam)
+        ? prev
+        : [...prev.filter((l) => l.serial), { serial: serialParam }],
+    );
+    const next = new URLSearchParams(params);
+    next.delete("serial");
+    setParams(next, { replace: true });
+  }, [serialParam]);
+
+  /*
+   * A basket kept on this device can outlive its units: another till may have
+   * sold one, or a hold may have been released, since the line was added. Such
+   * a line comes off the sale, and the person is told which — before they are
+   * halfway through taking the money for it.
+   */
+  useEffect(() => {
+    const gone = lines
+      .map((l) => l.serial)
+      .filter(
+        (serial): serial is string =>
+          serial !== undefined && !sellable.some((u) => u.serial === serial),
+      );
+    if (gone.length === 0) return;
+    setLines((prev) => {
+      const kept = prev.filter(
+        (l) => l.serial === undefined || !gone.includes(l.serial),
+      );
+      return kept.length > 0 ? kept : [{}];
+    });
+    message.warning(
+      t(
+        "pos.draftUnitGone",
+        "{{serials}} is no longer for sale and was taken off this sale.",
+        { serials: gone.join(", ") },
+      ),
+    );
+  }, [sellable]);
 
   // Arriving from the Reservations page's "sell this now" button. The param is
   // cleared once consumed so a refresh does not re-apply it over later edits.
@@ -643,6 +870,14 @@ export function StockOutPage() {
   };
   const priceOf = listedPriceOf;
 
+  /** A counted product's asking price per piece — the variant's. */
+  const countedListPrice = (skuId: string) =>
+    db.skus.find((s) => s.id === skuId)?.price ?? 0;
+  /** What one piece of a counted product costs the shop — the moving average. */
+  const countedCost = (skuId: string) => averageCost(db, skuId);
+  /** Pieces of a counted product the shop holds, everywhere. */
+  const countedOnHand = (skuId: string) => onHand(db.stockMoves, skuId);
+
   /**
    * The basket, resolved to the prices that will actually be charged.
    *
@@ -651,19 +886,27 @@ export function StockOutPage() {
    * rules are handed.
    */
   const basket: BasketLine[] = useMemo(
-    () =>
-      lines
+    () => [
+      ...lines
         .filter((l) => l.serial)
         .map((l) => ({
           serial: l.serial!,
           price: l.price ?? priceOf(l.serial) ?? 0,
         })),
+      // One entry per PIECE of a counted product: a bundle counts pieces.
+      ...qtyLines.flatMap((q) =>
+        Array.from({ length: q.qty }, () => ({
+          skuId: q.skuId,
+          price: q.price ?? countedListPrice(q.skuId),
+        })),
+      ),
+    ],
     // `db.skus` as well as `db.units`: an un-overridden line is priced through
     // `priceOf` → `skuOf` → `db.skus`, so a variant repriced on the Products
     // page while this sale is open must reach the basket. Without it the
     // basket, the discount fits, the suggestions and the totals all go on
     // quoting the old asking price. `totals` below already lists both.
-    [lines, db.units, db.skus],
+    [lines, qtyLines, db.units, db.skus],
   );
   const rule = db.discounts.find((x) => x.id === discountId);
 
@@ -700,47 +943,116 @@ export function StockOutPage() {
     () => costIndex(db),
     [db.pos, db.units, db.events, db.services],
   );
+  /** The unit lines alone, for the arithmetic that is per unit. */
+  const unitBasket = basket.filter((l) => l.serial);
   const totals = useMemo(
     () =>
       saleTotals({
-        prices: basket.map((l) => l.price),
-        listPrices: basket.map((l) => priceOf(l.serial) ?? l.price),
+        prices: [
+          ...unitBasket.map((l) => l.price),
+          ...qtyLines.map(
+            (q) => (q.price ?? countedListPrice(q.skuId)) * q.qty,
+          ),
+        ],
+        listPrices: [
+          ...unitBasket.map((l) => priceOf(l.serial) ?? l.price),
+          ...qtyLines.map((q) => countedListPrice(q.skuId) * q.qty),
+        ],
         // What each machine ACTUALLY cost the shop: what it was bought for,
         // its share of its invoice's shipping and tax (owner ask 2026-09-15 —
         // *"divided across all units evenly for the COGS and margin
         // calculation"*), and every repair charged against it (2026-09-08). A
         // margin that leaves either out flatters every machine that came by
         // courier or went to the bench.
-        costs: basket.map((l) => {
-          const u = db.units.find((x) => x.serial === l.serial);
-          return u ? costOf(u).total : 0;
-        }),
+        costs: [
+          ...unitBasket.map((l) => {
+            const u = db.units.find((x) => x.serial === l.serial);
+            return u ? costOf(u).total : 0;
+          }),
+          ...qtyLines.map((q) => countedCost(q.skuId) * q.qty),
+        ],
         discount: discountValue,
         extra: liveFees,
         tradeIns,
       }),
-    [basket, db.units, db.skus, costOf, discountValue, liveFees, tradeIns],
+    [
+      basket,
+      qtyLines,
+      db.units,
+      db.skus,
+      db.stockMoves,
+      costOf,
+      discountValue,
+      liveFees,
+      tradeIns,
+    ],
   );
   const total = totals.total;
 
   /**
-   * The one payment the chips describe — what an unsplit sale records.
+   * The payment chips with their arithmetic done — each part's split, what
+   * was paid on it and what is still owed (`lib/tillPayments.ts`).
    *
-   * PENDING on a marketplace channel and SETTLED otherwise, which is exactly
-   * what `Order.settled` meant before this and exactly what `holdsFunds`
-   * decides. Nothing about the common sale changes; the fact is simply stored
-   * as a row that can be corrected rather than as a boolean that cannot.
+   * Against `total`, what is left to COLLECT after a trade-in. The payments
+   * are money, and a traded-in unit is not: they used to be written against
+   * the bill before the trade-in, so a Rp10jt sale with a Rp2jt trade-in put
+   * Rp10jt of cash in a drawer that had received eight.
    */
-  const defaultParts = (): SalePayment[] => [
-    {
-      id: `${Date.now()}-1`,
-      method: holdsFunds(source) ? "MARKETPLACE" : payMethod,
-      amount: totals.order.total,
-      state: holdsFunds(source) ? "PENDING" : "SETTLED",
-      ...(holdsFunds(source) ? { channel: source } : {}),
-      at: new Date().toISOString(),
-    },
-  ];
+  const payRows = tillRows(total, payParts);
+  /** Change one payment row — what was typed against one chip. */
+  const setPart = (i: number, patch: Partial<TillPart>) =>
+    setPayParts((parts) =>
+      parts.map((p, j) => (j === i ? { ...p, ...patch } : p)),
+    );
+  /** The sale's own number is asked only when no part can carry one. */
+  const saleRefShown = saleRefNeeded(source, payParts);
+  const saleRef = saleRefShown ? payRef : "";
+  const payProblems = tillProblems({
+    total,
+    source,
+    parts: payParts,
+    ref: saleRef,
+  });
+  /** A method, spelled for a person. Shopee and Tokopedia are names. */
+  const methodLabel = (m: TillMethod): string =>
+    m === "TRANSFER"
+      ? t("pos.methodTransfer", "Transfer")
+      : m === "TUNAI"
+        ? t("pos.methodCash", "Cash")
+        : m === "SHOPEE"
+          ? "Shopee"
+          : "Tokopedia";
+  /** Why the payment cannot be recorded yet, in a sentence. */
+  const payProblemText = (p: TillProblem): string => {
+    switch (p) {
+      case "NO_METHOD":
+        return t("pos.payNeedsMethod", "Pick how the customer is paying.");
+      case "SPLIT_OVER":
+        return t(
+          "pos.paySplitOver",
+          "The split amounts come to {{over}} more than the total.",
+          { over: fmtRp(payRows.splitOver) },
+        );
+      case "PAID_OVER":
+        return t(
+          "pos.payPaidOver",
+          "Actual paid cannot be more than its split amount.",
+        );
+      case "NO_REF":
+        return t(
+          "pos.payNeedsRefs",
+          "Type the marketplace's order number for every Shopee or Tokopedia payment.",
+        );
+    }
+  };
+  /**
+   * A channel, and the chip it implies: a Shopee sale is paid through Shopee
+   * and a Tokopedia sale through Tokopedia (`partsForChannel`).
+   */
+  const pickChannel = (next: SaleSource) => {
+    setPayParts((parts) => partsForChannel(next, source, parts));
+    setSource(next);
+  };
 
   /** The catalogue, and the chips above it. */
   const catalogue = useMemo(
@@ -749,8 +1061,9 @@ export function StockOutPage() {
         query: shelfQuery,
         category,
         taken: lines.map((l) => l.serial).filter(Boolean) as string[],
+        takenQty: Object.fromEntries(qtyLines.map((q) => [q.skuId, q.qty])),
       }),
-    [db, shelfQuery, category, lines],
+    [db, shelfQuery, category, lines, qtyLines],
   );
   /** Chips come from ALL sellable stock, so they do not vanish as you filter. */
   const categories = useMemo(() => shelfCategories(shelfRows(db)), [db]);
@@ -810,19 +1123,37 @@ export function StockOutPage() {
     : suggestions.slice(0, SUGGESTIONS_SHOWN);
 
   /** Lines priced under what the shop paid — flagged, never silently allowed. */
-  const belowCost = lines.filter((l) => {
-    if (!l.serial) return false;
-    const unit = db.units.find((u) => u.serial === l.serial);
-    const asking = l.price ?? priceOf(l.serial) ?? 0;
-    return unit !== undefined && asking > 0 && asking < costOf(unit).total;
-  });
+  const belowCost = [
+    ...lines.filter((l) => {
+      if (!l.serial) return false;
+      const unit = db.units.find((u) => u.serial === l.serial);
+      const asking = l.price ?? priceOf(l.serial) ?? 0;
+      return unit !== undefined && asking > 0 && asking < costOf(unit).total;
+    }),
+    ...qtyLines.filter((q) => {
+      const asking = q.price ?? countedListPrice(q.skuId);
+      return asking > 0 && asking < countedCost(q.skuId);
+    }),
+  ];
 
   const submit = () => {
     const chosen = lines.filter((l) => l.serial);
-    if (chosen.length === 0)
+    const counted = qtyLines.filter((q) => q.qty > 0);
+    if (chosen.length === 0 && counted.length === 0)
       return void message.warning(
         t("pos.pickAtLeastOne", "Pick at least one unit from inventory."),
       );
+    // A counted product can only go out if the shelf holds it — another
+    // till may have sold the last one since this basket was built.
+    const short = counted.find((q) => countedOnHand(q.skuId) < q.qty);
+    if (short) {
+      return void message.error(
+        t("pos.countedShort", "Only {{count}} {{product}} left in stock.", {
+          count: countedOnHand(short.skuId),
+          product: countedName(short.skuId),
+        }),
+      );
+    }
     // A loss-making line is sometimes deliberate — clearing dead stock,
     // honouring a promise — so it is named in the confirmation dialog rather
     // than refused here. What it will not do is go through unnoticed.
@@ -877,9 +1208,15 @@ export function StockOutPage() {
       // repriced variant would otherwise rewrite history. See `Order.listPrices`.
       listPrices[l.serial!] = listed;
     }
-    // Split or not, the sale is a list of payments from here on.
-    const parts =
-      splitting && splitParts.length > 0 ? splitParts : defaultParts();
+    // What the chips say, as the payment list every finance screen reads.
+    const parts = tillPayments({
+      total,
+      parts: payParts,
+      at: new Date().toISOString(),
+      ...(payDueAt ? { dueAt: payDueAt } : {}),
+      ...(saleRef.trim() ? { ref: saleRef } : {}),
+      newId: () => nextId("pay"),
+    });
     const order: Order = {
       id: nextId("o"),
       code,
@@ -888,6 +1225,17 @@ export function StockOutPage() {
       serials: chosen.map((l) => l.serial!),
       prices,
       listPrices,
+      ...(counted.length === 0
+        ? {}
+        : {
+            lines: counted.map((q) => ({
+              id: q.id,
+              skuId: q.skuId,
+              qty: q.qty,
+              price: q.price ?? countedListPrice(q.skuId),
+              listPrice: countedListPrice(q.skuId),
+            })),
+          }),
       discount: discountValue,
       discountId,
       source,
@@ -895,20 +1243,16 @@ export function StockOutPage() {
       referralSourceId: referralId,
       // Composed here, from the parts the form collected — see lib/address.ts.
       shippingAddress: shipped ? composeAddress(address) : undefined,
-      // A marketplace sale has no payment method to pick — the customer paid
-      // the marketplace — so the field records which one is holding it.
-      payMethod: holdsFunds(source) ? "MARKETPLACE" : payMethod,
+      // The headline method: the first one picked. Each part carries its
+      // own on `payments`; a marketplace is the MARKETPLACE code.
+      payMethod: tillMethod(payParts[0]?.method ?? "TUNAI").code,
       /*
        * The bill in parts, and `settled` as a projection over them (owner ask
-       * 2026-09-08).
-       *
-       * A sale nobody split records exactly the one payment it always did —
-       * `defaultParts()` builds it from the chips — so nothing changes for the
-       * common case except that the fact is now stored as a row rather than as
-       * a boolean, and the same row can be corrected later.
+       * 2026-09-08). A trade-in that covers the whole bill leaves nothing to
+       * pay, which is settled rather than forever "unpaid".
        */
       payments: parts,
-      settled: isSettled(totals.order.total, parts),
+      settled: total === 0 || isSettled(total, parts),
       extra: totals.extra || undefined,
       /*
        * `extra` above is the TOTAL and this is its label; `fees` below is the
@@ -942,6 +1286,32 @@ export function StockOutPage() {
 
     let closed = 0;
     mutate((d) => {
+      /*
+       * The counted lines leave the shelf on the stock ledger (2026-09-19):
+       * one TERJUAL per location a line is taken from — this till's own first
+       * — each carrying the moving average as it stood before the sale, which
+       * is this line's cost for good.
+       */
+      const at = new Date().toISOString();
+      for (const q of counted) {
+        const cost = averageCost(d, q.skuId);
+        const from = takeFrom(d.stockMoves, q.skuId, q.qty, d.myWarehouseId);
+        for (const part of from ?? []) {
+          d.stockMoves.push({
+            id: nextId("sm"),
+            skuId: q.skuId,
+            locationId: part.locationId,
+            qty: -part.qty,
+            cost,
+            type: "TERJUAL",
+            at,
+            refCode: code,
+            orderId: order.id,
+            orderLineId: q.id,
+            staff: currentStaffName(),
+          });
+        }
+      }
       for (const l of chosen) {
         const unit = d.units.find((u) => u.serial === l.serial)!;
         const price = prices[l.serial!]!;
@@ -1044,6 +1414,25 @@ export function StockOutPage() {
        */
       for (const x of tradeIns) {
         const serial = (x.serial ?? "").trim().toUpperCase();
+        // An accessory is a quantity, not a unit (2026-09-19): the piece goes
+        // onto the stock ledger at what the shop allowed for it, and nothing
+        // is minted.
+        if (x.skuId && !skuTracksSerial(d, x.skuId)) {
+          d.stockMoves.push({
+            id: nextId("sm"),
+            skuId: x.skuId,
+            locationId: d.myWarehouseId,
+            qty: 1,
+            cost: x.value,
+            type: "TUKAR_TAMBAH",
+            at,
+            refCode: code,
+            orderId: order.id,
+            note: x.label,
+            staff: currentStaffName(),
+          });
+          continue;
+        }
         if (serial === "") continue;
         if (d.units.some((u) => u.serial === serial)) continue;
         d.units.push({
@@ -1103,11 +1492,10 @@ export function StockOutPage() {
           t("pos.holdsCollected", "{{count}} held unit(s) collected.", {
             count: closed,
           }),
-        holdsFunds(source) &&
+        parts.some((p) => p.state === "PENDING") &&
           t(
             "pos.marketplacePendingToast",
-            "{{channel}} has not released the balance yet — confirm it in Income & Expense once it lands.",
-            { channel: channelOf(source)?.label ?? source },
+            "The marketplace has not paid this out yet — mark it received under Pending & Receivables once it lands.",
           ),
       ]
         .filter(Boolean)
@@ -1119,6 +1507,7 @@ export function StockOutPage() {
     // counting change.
     setRecorded(order);
     setLines([{}]);
+    setQtyLines([]);
     setCustomerId(undefined);
     setDiscountId(undefined);
     setShipped(false);
@@ -1131,9 +1520,14 @@ export function StockOutPage() {
     setFromReservations([]);
     // The channel, the payment method and the salesperson are deliberately NOT
     // reset. They are the same answer for a whole shift — a counter selling
-    // ten machines in an afternoon sells all ten offline, in cash, under one
+    // ten units in an afternoon sells all ten offline, in cash, under one
     // name — and a till that forgets them between sales asks the same three
-    // questions ten times.
+    // questions ten times. A SPLIT is not a shift's answer, though: the next
+    // sale starts on the first method alone, with nothing typed.
+    setPayParts((parts) => [{ method: parts[0]?.method ?? "TUNAI" }]);
+    setPayRef("");
+    setPayDueAt(undefined);
+    setPayChecked(false);
   };
 
   /** Put a unit on the sale as a new line. */
@@ -1152,7 +1546,39 @@ export function StockOutPage() {
    * dialog offering one option is a tap the queue pays for nothing (owner
    * revision 2026-08-27). The single machine goes straight in the basket.
    */
+  /**
+   * One more piece of a counted product — its line grows, or it gets one.
+   * Never past what the shelf holds.
+   */
+  const addCounted = (skuId: string) => {
+    const already = qtyLines.find((q) => q.skuId === skuId)?.qty ?? 0;
+    if (already + 1 > countedOnHand(skuId)) {
+      message.warning(
+        t("pos.countedShort", "Only {{count}} {{product}} left in stock.", {
+          count: countedOnHand(skuId),
+          product: countedName(skuId),
+        }),
+      );
+      return;
+    }
+    setQtyLines((prev) =>
+      prev.some((q) => q.skuId === skuId)
+        ? prev.map((q) => (q.skuId === skuId ? { ...q, qty: q.qty + 1 } : q))
+        : [...prev, { id: nextId("ol"), skuId, qty: 1 }],
+    );
+  };
+
+  /** A counted product, as the basket names it. */
+  const countedName = (skuId: string) => {
+    const sku = db.skus.find((s) => s.id === skuId);
+    return sku ? `${sku.name} ${sku.variantLabel}` : skuId;
+  };
+
   const pickFromRow = (row: (typeof catalogue)[number]) => {
+    if (row.counted) {
+      addCounted(row.sku.id);
+      return;
+    }
     const taken = new Set(lines.map((l) => l.serial));
     const left = row.units.filter((u) => !taken.has(u.serial));
     if (left.length === 1) {
@@ -1219,6 +1645,64 @@ export function StockOutPage() {
 
   useScanTarget(scanOntoSale);
 
+  /** Every serial the shop holds — what a typed one is looked up in. */
+  const allSerials = useMemo(() => db.units.map((u) => u.serial), [db.units]);
+
+  /**
+   * The search box, which is also a serial box (owner ask 2026-09-21): *"when
+   * we type in serial number, we should automatically add the unit instead of
+   * showing the unit name and choosing it manually."*
+   *
+   * The moment the text names one unit outright — whole, and not the head of
+   * a longer serial the shop also holds (`serialNamedBy`) — a sellable unit
+   * goes into the basket and the box empties for the next one. Anything else
+   * is a search, exactly as before. Read-only, so nothing is validated: a
+   * serial the shop holds is found however it is typed (`resolveSerialQuery`).
+   */
+  const typeIntoShelf = (value: string) => {
+    const serial = serialNamedBy(value, allSerials);
+    if (
+      serial !== null &&
+      sellable.some((u) => u.serial === serial) &&
+      !lines.some((l) => l.serial === serial)
+    ) {
+      addSuggestion(serial);
+      setShelfQuery("");
+      return;
+    }
+    setShelfQuery(value);
+  };
+
+  /**
+   * Enter in the search box: a serial the shop holds goes on the sale now —
+   * or is told why not, as a scan would be. A product search is left alone.
+   */
+  const enterShelf = (value: string) => {
+    const serial = resolveSerialQuery(value, allSerials);
+    if (!db.units.some((u) => u.serial === serial)) return;
+    if (
+      sellable.some((u) => u.serial === serial) &&
+      !lines.some((l) => l.serial === serial)
+    ) {
+      addSuggestion(serial);
+      setShelfQuery("");
+      return;
+    }
+    scanOntoSale(serial);
+  };
+
+  /** A unit the box names that cannot go on this sale, and why not. */
+  const namedButNotSellable = (() => {
+    const serial = serialNamedBy(shelfQuery, allSerials);
+    if (serial === null) return null;
+    const unit = db.units.find((u) => u.serial === serial);
+    if (!unit) return null;
+    if (lines.some((l) => l.serial === serial)) return { unit, onSale: true };
+    return sellable.some((u) => u.serial === serial)
+      ? null
+      : { unit, onSale: false };
+  })();
+
   /**
    * The catalogue — one row per variant, with what is left of it.
    *
@@ -1282,13 +1766,40 @@ export function StockOutPage() {
       <Input.Search
         allowClear
         value={shelfQuery}
-        onChange={(e) => setShelfQuery(e.target.value)}
+        onChange={(e) => typeIntoShelf(e.target.value)}
+        onSearch={enterShelf}
         placeholder={t(
           "pos.searchOrScan",
-          "Search a product or variant — or scan a serial, which drops straight into the basket",
+          "Search a product or variant — or type or scan a serial, which goes straight into the basket",
         )}
-        style={{ marginBottom: 12 }}
+        aria-label={t("pos.searchShelf", "Search the stock")}
+        style={{ marginBottom: namedButNotSellable ? 4 : 12 }}
       />
+      {namedButNotSellable && (
+        <Flex gap={6} align="center" wrap style={{ marginBottom: 12 }}>
+          {namedButNotSellable.onSale ? (
+            <Typography.Text type="warning" style={{ fontSize: 12 }}>
+              {t("pos.alreadyOnSale", "{{serial}} is already on this sale.", {
+                serial: namedButNotSellable.unit.serial,
+              })}
+            </Typography.Text>
+          ) : (
+            <>
+              <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                {t(
+                  "pos.namedNotSellable",
+                  "{{serial}} cannot be sold — it is",
+                  { serial: namedButNotSellable.unit.serial },
+                )}
+              </Typography.Text>
+              <EnumTag
+                map={UNIT_STATUS}
+                value={namedButNotSellable.unit.status}
+              />
+            </>
+          )}
+        </Flex>
+      )}
 
       {/*
        * Category chips. Built from ALL sellable stock rather than from the
@@ -1436,13 +1947,13 @@ export function StockOutPage() {
                 and the order somebody reads a receipt in: what it is, then
                 which one. */}
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {sku?.variantLabel ?? "—"}
+              {sku?.variantLabel ?? fmtNone()}
             </Typography.Text>
             <Typography.Text
               type="secondary"
               style={{ fontSize: 12, fontFamily: "monospace" }}
             >
-              {l.serial ?? "—"}
+              {l.serial ?? fmtNone()}
             </Typography.Text>
           </Flex>
           <Flex gap={0}>
@@ -1520,6 +2031,92 @@ export function StockOutPage() {
   };
 
   /**
+   * A counted product on the sale: how many, and what each goes for. No
+   * serial and no eye button — a mouse's cost is the moving average, the
+   * same for every piece, and the margin dialog is about a unit.
+   */
+  const qtyCartLine = (q: QtyLine) => {
+    const sku = db.skus.find((s) => s.id === q.skuId);
+    const listed = countedListPrice(q.skuId);
+    const charged = q.price ?? listed;
+    const negotiated = charged !== listed && listed > 0;
+    const setLine = (patch: Partial<QtyLine>) =>
+      setQtyLines((prev) =>
+        prev.map((x) => (x.id === q.id ? { ...x, ...patch } : x)),
+      );
+    return (
+      <Flex vertical gap={6} key={q.id}>
+        <Flex justify="space-between" align="flex-start" gap={8}>
+          <Flex vertical style={{ minWidth: 0 }}>
+            <Typography.Text strong ellipsis>
+              {sku?.name ?? q.skuId}
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {sku?.variantLabel ?? fmtNone()}
+            </Typography.Text>
+          </Flex>
+          <Tooltip title={t("pos.removeThisLine", "Remove this line")}>
+            <Button
+              type="text"
+              danger
+              size="small"
+              aria-label={t("pos.removeLineAria", "Remove {{serial}}", {
+                serial: countedName(q.skuId),
+              })}
+              icon={<DeleteOutlined />}
+              onClick={() =>
+                setQtyLines((prev) => prev.filter((x) => x.id !== q.id))
+              }
+            />
+          </Tooltip>
+        </Flex>
+        <Flex gap={8} align="center">
+          <InputNumber
+            min={1}
+            max={Math.max(1, countedOnHand(q.skuId))}
+            precision={0}
+            style={{ width: 88 }}
+            value={q.qty}
+            aria-label={t("pos.lineQty", "How many {{product}}", {
+              product: countedName(q.skuId),
+            })}
+            onChange={(v) =>
+              setLine({
+                qty: Math.max(
+                  1,
+                  Math.min(countedOnHand(q.skuId), Math.floor(v ?? 1)),
+                ),
+              })
+            }
+          />
+          <MoneyInput
+            style={{ flex: 1 }}
+            value={charged}
+            aria-label={t(
+              "pos.linePiecePrice",
+              "Price per piece of {{product}}",
+              {
+                product: countedName(q.skuId),
+              },
+            )}
+            onChange={(v) => setLine({ price: v ?? undefined })}
+          />
+          {negotiated && (
+            <Tag
+              color={charged < listed ? "orange" : "green"}
+              style={{ marginInlineEnd: 0 }}
+            >
+              {charged < listed
+                ? t("pos.bargained", "Bargain")
+                : t("pos.upsold", "Upsell")}
+            </Tag>
+          )}
+        </Flex>
+      </Flex>
+    );
+  };
+
+  /**
    * Suggestions, under the basket in the right pane (owner ask 2026-09-01).
    *
    * They used to sit in the optional details section, which is folded shut on
@@ -1555,7 +2152,7 @@ export function StockOutPage() {
       }
     >
       <Table
-        rowKey="serial"
+        rowKey={(r) => r.serial ?? `sku:${r.skuId ?? ""}`}
         dataSource={shownSuggestions}
         pagination={false}
         size="small"
@@ -1609,7 +2206,12 @@ export function StockOutPage() {
                 <Typography.Text strong style={{ whiteSpace: "nowrap" }}>
                   {fmtRp(r.price)}
                 </Typography.Text>
-                <Button size="small" onClick={() => addSuggestion(r.serial)}>
+                <Button
+                  size="small"
+                  onClick={() =>
+                    r.skuId ? addCounted(r.skuId) : addSuggestion(r.serial!)
+                  }
+                >
                   {t("pos.addToSale", "Add")}
                 </Button>
               </Flex>
@@ -1759,7 +2361,23 @@ export function StockOutPage() {
                 style={{ flex: "1 1 180px" }}
                 disabled={basket.length === 0}
                 danger={belowCost.length > 0}
-                onClick={() => setConfirming(true)}
+                onClick={() => {
+                  // Asked here, not in the dialog: the boxes that need an
+                  // answer are on this page, and they turn red to say which.
+                  if (payProblems.length > 0) {
+                    setPayChecked(true);
+                    message.warning(payProblemText(payProblems[0]!));
+                    const card = document.getElementById("till-payment");
+                    if (typeof card?.scrollIntoView === "function") {
+                      card.scrollIntoView({
+                        behavior: "smooth",
+                        block: "start",
+                      });
+                    }
+                    return;
+                  }
+                  setConfirming(true);
+                }}
               >
                 {t("pos.payAndFinish", "Pay & finish")}
               </Button>
@@ -1896,6 +2514,7 @@ export function StockOutPage() {
         ) : (
           <Flex vertical gap={16}>
             {lines.map((l, i) => (l.serial ? cartLine(l, i) : null))}
+            {qtyLines.map(qtyCartLine)}
           </Flex>
         )}
       </Card>
@@ -2063,7 +2682,7 @@ export function StockOutPage() {
               icon={<SwapOutlined />}
               onClick={() => setTradeOpen(true)}
             >
-              {t("pos.tradeIn", "Trade-in (take the customer's machine)")}
+              {t("pos.tradeIn", "Trade-in (take the customer's unit)")}
             </Button>
             {tradeIns.map((x) => (
               <Flex key={x.id} justify="space-between" align="center" gap={8}>
@@ -2098,7 +2717,7 @@ export function StockOutPage() {
         title={t("pos.additionalFee", "Additional fee")}
         extra={
           <Typography.Text type="secondary">
-            {totals.extra > 0 ? fmtRp(totals.extra) : "—"}
+            {fmtRp(totals.extra)}
           </Typography.Text>
         }
       >
@@ -2116,7 +2735,7 @@ export function StockOutPage() {
             <Typography.Text type="secondary">
               {t(
                 "pos.noFeesYet",
-                "Nothing extra on this sale. Add a charge for delivery, a bag, a setup — anything the customer is paying for beyond the machines.",
+                "Nothing extra on this sale. Add a charge for delivery, a bag, a setup — anything the customer is paying for beyond the units.",
               )}
             </Typography.Text>
           )}
@@ -2180,12 +2799,14 @@ export function StockOutPage() {
       </Card>
       <Card
         key="pay"
+        id="till-payment"
         title={t("pos.channelAndPayment", "Channel & payment method")}
         extra={
           <Typography.Text type="secondary">
             {[
               channelOf(source)?.label ?? source,
-              holdsFunds(source) ? t("pos.escrow", "escrow") : payMethodLabel,
+              payParts.map((p) => methodLabel(p.method)).join(" + ") ||
+                fmtNone(),
             ].join(" · ")}
           </Typography.Text>
         }
@@ -2205,7 +2826,8 @@ export function StockOutPage() {
                   size="small"
                   shape="round"
                   type={source === c.value ? "primary" : "default"}
-                  onClick={() => setSource(c.value)}
+                  aria-pressed={source === c.value}
+                  onClick={() => pickChannel(c.value)}
                 >
                   {t(c.label)}
                 </Button>
@@ -2213,95 +2835,304 @@ export function StockOutPage() {
             </Flex>
           </Flex>
 
+          {/*
+           * How it is paid (owner revision 2026-09-19): four chips, any number
+           * of them. One is the whole bill; several are a split, listed below
+           * with the amounts. `lib/tillPayments.ts` has the arithmetic.
+           */}
           <Flex vertical gap={6}>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {t("pos.paymentUpper", "PAYMENT")}
             </Typography.Text>
-            {holdsFunds(source) ? (
-              <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                {t(
-                  "pos.marketplaceHolds",
-                  "{{channel}} is holding the money — confirm it in Income & Expense once it lands.",
-                  { channel: channelOf(source)?.label ?? source },
-                )}
+            <Flex gap={6} wrap>
+              {TILL_METHODS.map((m) => {
+                const on = payParts.some((p) => p.method === m.key);
+                return (
+                  <Button
+                    key={m.key}
+                    size="small"
+                    shape="round"
+                    type={on ? "primary" : "default"}
+                    aria-pressed={on}
+                    // "Shopee" is a channel chip as well; this one is paying.
+                    aria-label={t("pos.payBy", "Pay by {{method}}", {
+                      method: methodLabel(m.key),
+                    })}
+                    onClick={() =>
+                      setPayParts((parts) =>
+                        toggleTillMethod(total, parts, m.key),
+                      )
+                    }
+                  >
+                    {methodLabel(m.key)}
+                  </Button>
+                );
+              })}
+            </Flex>
+            {payChecked && payProblems.includes("NO_METHOD") && (
+              <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                {payProblemText("NO_METHOD")}
               </Typography.Text>
-            ) : (
-              <Flex gap={6} wrap>
-                {db.paymentMethods
-                  .filter((m) => m.forSale && m.active)
-                  .map((m) => (
-                    <Button
-                      key={m.code}
-                      size="small"
-                      shape="round"
-                      type={payMethod === m.code ? "primary" : "default"}
-                      onClick={() => setPayMethod(m.code)}
-                    >
-                      {m.label}
-                    </Button>
-                  ))}
-              </Flex>
             )}
           </Flex>
 
-          {/*
-           * Split payment (owner ask 2026-09-08).
-           *
-           * *"Customer can do a split payment … 5jt in cash and 5jt more
-           * in tokopedia."* The chips above stay: they are the fast
-           * path, and the fast path is most sales. This opens when the
-           * bill is not one payment — and once it is open, the chips
-           * describe the FIRST part rather than the whole sale.
-           *
-           * The parts are what get written; the chips are what they are
-           * seeded from. A sale nobody splits records exactly the one
-           * payment it always did.
-           */}
-          <Flex vertical gap={6}>
-            <Flex justify="space-between" align="center" wrap gap={6}>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {t("pos.splitUpper", "SPLIT THIS BILL")}
-              </Typography.Text>
-              {!splitting && (
-                <Button
+          {payRows.rows.length > 0 && total > 0 && (
+            <Flex vertical gap={8}>
+              {/*
+               * One row per method picked, as a table (owner revision
+               * 2026-09-21): the method, how much of the bill goes through it,
+               * and the one thing each kind still asks — cash and a transfer,
+               * what was actually handed over; Shopee and Tokopedia, their own
+               * order number. A Shopee part and a Tokopedia part are two
+               * orders on two platforms, so they are two numbers.
+               */}
+              <div
+                role="group"
+                aria-label={t("pos.paymentAmounts", "Payment amounts")}
+              >
+                <Table<TillRow>
                   size="small"
-                  onClick={() => {
-                    setSplitting(true);
-                    setSplitParts(defaultParts());
-                  }}
-                >
-                  {t("pos.splitIt", "Pay in parts")}
-                </Button>
+                  pagination={false}
+                  rowKey="method"
+                  tableLayout="fixed"
+                  dataSource={[...payRows.rows]}
+                  columns={[
+                    {
+                      title: t("pos.payMethodCol", "Payment method"),
+                      key: "method",
+                      width: "24%",
+                      render: (_: unknown, r: TillRow) => (
+                        <Typography.Text strong>
+                          {methodLabel(r.method)}
+                        </Typography.Text>
+                      ),
+                    },
+                    {
+                      title: t("pos.amountPaidCol", "Amount paid"),
+                      key: "amount",
+                      width: "36%",
+                      render: (_: unknown, r: TillRow, i: number) =>
+                        r.splitEditable ? (
+                          <InputNumber<number>
+                            style={{ width: "100%" }}
+                            min={0}
+                            precision={0}
+                            prefix={RP_SYMBOL}
+                            formatter={moneyFormatter}
+                            parser={moneyParser}
+                            status={
+                              payChecked && payRows.splitOver > 0
+                                ? "error"
+                                : undefined
+                            }
+                            aria-label={t(
+                              "pos.amountPaidFor",
+                              "Amount paid, {{method}}",
+                              { method: methodLabel(r.method) },
+                            )}
+                            value={r.split}
+                            onChange={(v) => setPart(i, { split: v ?? 0 })}
+                          />
+                        ) : (
+                          // The last row takes what the others leave, so it
+                          // always adds up — nobody does the subtraction.
+                          <Typography.Text>
+                            {fmtRp(r.split)}
+                            {payRows.rows.length > 1 && (
+                              <Typography.Text
+                                type="secondary"
+                                style={{ fontSize: 12 }}
+                              >
+                                {" "}
+                                {t("pos.theRest", "the rest")}
+                              </Typography.Text>
+                            )}
+                          </Typography.Text>
+                        ),
+                    },
+                    {
+                      title: t(
+                        "pos.actualPaidOrRefCol",
+                        "Actual paid / Reference number",
+                      ),
+                      key: "actual",
+                      render: (_: unknown, r: TillRow, i: number) => {
+                        const part = payParts[i]!;
+                        const label = methodLabel(r.method);
+                        if (!r.paidEditable) {
+                          // Shopee and Tokopedia: paid in full at the
+                          // marketplace's own checkout, so what this row still
+                          // needs is the number that checkout gave the order.
+                          const missing = payChecked && refMissing(part);
+                          return (
+                            <Flex vertical gap={2}>
+                              <Input
+                                value={part.ref ?? ""}
+                                onChange={(e) =>
+                                  setPart(i, { ref: e.target.value })
+                                }
+                                placeholder={t(
+                                  "pos.refPlaceholderFor",
+                                  "{{method}} order number",
+                                  { method: label },
+                                )}
+                                status={missing ? "error" : undefined}
+                                aria-label={t(
+                                  "pos.refFor",
+                                  "Reference number, {{method}}",
+                                  { method: label },
+                                )}
+                                aria-required
+                              />
+                              {missing && (
+                                <Typography.Text
+                                  type="danger"
+                                  style={{ fontSize: 12 }}
+                                >
+                                  {t(
+                                    "pos.refRequired",
+                                    "The order number is required.",
+                                  )}
+                                </Typography.Text>
+                              )}
+                            </Flex>
+                          );
+                        }
+                        const paidOver =
+                          part.paid !== undefined && part.paid > r.split;
+                        return (
+                          <Flex vertical gap={2}>
+                            {/*
+                             * Empty by default (owner revision 2026-09-21),
+                             * with the amount as the placeholder. Empty means
+                             * "all of it", which is what an absent `paid` has
+                             * always meant — so the ordinary sale is one fewer
+                             * thing to clear, and a part payment is typed into
+                             * an empty box rather than over a number.
+                             */}
+                            <InputNumber<number>
+                              style={{ width: "100%" }}
+                              min={0}
+                              precision={0}
+                              prefix={RP_SYMBOL}
+                              formatter={moneyFormatter}
+                              parser={moneyParser}
+                              placeholder={groupRupiah(r.split)}
+                              status={paidOver ? "error" : undefined}
+                              aria-label={t(
+                                "pos.actualPaidFor",
+                                "Actual paid, {{method}}",
+                                { method: label },
+                              )}
+                              value={part.paid ?? null}
+                              onChange={(v) =>
+                                setPart(i, { paid: v ?? undefined })
+                              }
+                            />
+                            {paidOver ? (
+                              <Typography.Text
+                                type="danger"
+                                style={{ fontSize: 12 }}
+                              >
+                                {payProblemText("PAID_OVER")}
+                              </Typography.Text>
+                            ) : (
+                              r.owed > 0 && (
+                                <Typography.Text
+                                  type="danger"
+                                  style={{ fontSize: 12 }}
+                                >
+                                  {t(
+                                    "pos.stillOwedOn",
+                                    "{{amount}} still owed",
+                                    { amount: fmtRp(r.owed) },
+                                  )}
+                                </Typography.Text>
+                              )
+                            )}
+                          </Flex>
+                        );
+                      },
+                    },
+                  ]}
+                />
+              </div>
+              {payRows.splitOver > 0 && (
+                <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                  {payProblemText("SPLIT_OVER")}
+                </Typography.Text>
+              )}
+              {/*
+               * A part payment is a debt (piutang), and a debt gets a date
+               * (owner ask 2026-09-09) — optional, because a customer who
+               * says "next week" has not given one.
+               */}
+              {payRows.owed > 0 && (
+                <Flex gap={8} align="center" wrap>
+                  <Typography.Text type="danger">
+                    {t("pos.customerOwesAmount", "Customer owes {{amount}}", {
+                      amount: fmtRp(payRows.owed),
+                    })}
+                  </Typography.Text>
+                  <DatePicker
+                    size="small"
+                    value={payDueAt ? dayjs(payDueAt) : null}
+                    placeholder={t("pos.dueDate", "Due date")}
+                    aria-label={t(
+                      "pos.dueDateAria",
+                      "When the customer will pay",
+                    )}
+                    onChange={(d) =>
+                      setPayDueAt(d ? d.endOf("day").toISOString() : undefined)
+                    }
+                  />
+                </Flex>
               )}
             </Flex>
-            {splitting ? (
-              <Flex vertical gap={6}>
-                <PaymentsPanel
-                  total={totals.total}
-                  value={splitParts}
-                  onChange={setSplitParts}
-                  methods={db.paymentMethods
-                    .filter((m) => m.forSale && m.active)
-                    .map((m) => ({ value: m.code, label: m.label }))}
-                />
-                <Button
-                  size="small"
-                  type="text"
-                  onClick={() => setSplitting(false)}
-                  style={{ alignSelf: "flex-start" }}
-                >
-                  {t("pos.splitCancel", "One payment after all")}
-                </Button>
-              </Flex>
-            ) : (
+          )}
+
+          {/*
+           * The SALE's own order number, for the one case no row can carry it:
+           * the channel is a marketplace and nothing is paid through one — a
+           * TikTok sale, or a Shopee sale taken in cash. Owner brief
+           * 2026-09-19: "Add required field for Payment references on
+           * Shopee/tokopedia/tiktok".
+           */}
+          {saleRefShown && (
+            <Flex vertical gap={6}>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {t(
-                  "pos.splitHint",
-                  "Cash now and the rest on a marketplace, a deposit with a due date — anything that is not one payment.",
-                )}
+                {t("pos.paymentRefUpper", "PAYMENT REFERENCE")}
+                <RequiredAsterisk />
               </Typography.Text>
-            )}
-          </Flex>
+              <Input
+                value={payRef}
+                onChange={(e) => setPayRef(e.target.value)}
+                placeholder={t(
+                  "pos.channelOrderNo",
+                  "{{channel}} order number",
+                  { channel: channelOf(source)?.label ?? source },
+                )}
+                status={
+                  payChecked && payRef.trim() === "" ? "error" : undefined
+                }
+                aria-label={t("pos.paymentRef", "Payment reference")}
+                aria-required
+              />
+              {payChecked && payRef.trim() === "" && (
+                <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                  {payProblemText("NO_REF")}
+                </Typography.Text>
+              )}
+            </Flex>
+          )}
+          {payParts.some((p) => isMarketplaceMethod(p.method)) && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {t(
+                "pos.marketplaceHoldsPart",
+                "The marketplace holds its part until it pays out — mark it received under Pending & Receivables.",
+              )}
+            </Typography.Text>
+          )}
         </Flex>
       </Card>
       <Card
@@ -2507,7 +3338,7 @@ export function StockOutPage() {
               >
                 {t("pos.willBeSavedAs", "Will be saved as:")}{" "}
                 <Typography.Text>
-                  {composeAddress(address) || "—"}
+                  {composeAddress(address) || fmtNone()}
                 </Typography.Text>
               </Typography.Paragraph>
               {customerId && (
@@ -2764,9 +3595,9 @@ export function StockOutPage() {
                       ),
                     },
                     // The parts, and only the ones that are actually there:
-                    // a trade-in has no invoice behind it and most machines
-                    // have never been to a repairer, and four rows of an em
-                    // dash is a dialog nobody reads twice.
+                    // a trade-in has no invoice behind it and most units have
+                    // never been to a repairer, and four rows of Rp 0 is a
+                    // dialog nobody reads twice.
                     ...(paid.shippingTax === 0 && paid.repair === 0
                       ? []
                       : [
@@ -2802,14 +3633,14 @@ export function StockOutPage() {
                     {
                       key: "cost",
                       label: t("pos.whatWePaid", "What the shop paid"),
-                      children: cost > 0 ? fmtRp(cost) : "—",
+                      children: fmtRp(cost),
                     },
                     {
                       key: "margin",
                       label: t("pos.margin", "Margin"),
                       children:
                         margin === null ? (
-                          "—"
+                          "0%"
                         ) : (
                           <Typography.Text
                             strong
@@ -2851,7 +3682,7 @@ export function StockOutPage() {
        */}
       <Modal
         open={pickingSku !== undefined}
-        title={t("pos.whichMachine", "Which machine?")}
+        title={t("pos.whichMachine", "Which unit?")}
         footer={
           <Button type="primary" onClick={() => setPickingSku(undefined)}>
             {t("pos.done", "Done")}
@@ -3077,7 +3908,7 @@ export function StockOutPage() {
             items={[
               {
                 key: "n",
-                label: t("pos.itemsLabel", "Machines"),
+                label: t("pos.itemsLabel", "Units"),
                 children: t("pos.itemCount", "{{count}} item(s)", {
                   count: basket.length,
                 }),
@@ -3099,10 +3930,54 @@ export function StockOutPage() {
               {
                 key: "p",
                 label: t("pos.paymentUpper", "PAYMENT"),
-                children: holdsFunds(source)
-                  ? t("pos.escrow", "escrow")
-                  : payMethodLabel,
+                children:
+                  payRows.rows.length === 0 ? (
+                    fmtNone()
+                  ) : (
+                    <Flex vertical gap={2}>
+                      {payRows.rows.map((r, i) => (
+                        <span key={r.method}>
+                          {methodLabel(r.method)} · {fmtRp(r.paid)}
+                          {/* Each marketplace part with its own number —
+                              the one its payout will arrive under. */}
+                          {payParts[i]?.ref?.trim() &&
+                          isMarketplaceMethod(r.method)
+                            ? ` · ${t("pos.refShort", "Ref {{ref}}", {
+                                ref: payParts[i]!.ref!.trim(),
+                              })}`
+                            : ""}
+                        </span>
+                      ))}
+                    </Flex>
+                  ),
               },
+              ...(payRows.owed > 0
+                ? [
+                    {
+                      key: "owed",
+                      label: t("pos.customerOwes", "Customer owes"),
+                      children: (
+                        <Typography.Text type="danger">
+                          {fmtRp(payRows.owed)}
+                          {payDueAt
+                            ? ` · ${t("pos.dueOn", "due {{date}}", {
+                                date: fmtDate(payDueAt),
+                              })}`
+                            : ""}
+                        </Typography.Text>
+                      ),
+                    },
+                  ]
+                : []),
+              ...(saleRefShown
+                ? [
+                    {
+                      key: "ref",
+                      label: t("pos.paymentRef", "Payment reference"),
+                      children: payRef.trim(),
+                    },
+                  ]
+                : []),
               ...(customer
                 ? [
                     {
@@ -3129,12 +4004,11 @@ export function StockOutPage() {
               )}
             />
           )}
-          {holdsFunds(source) && (
+          {payParts.some((p) => isMarketplaceMethod(p.method)) && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {t(
-                "pos.marketplaceHolds",
-                "{{channel}} is holding the money — confirm it in Income & Expense once it lands.",
-                { channel: channelOf(source)?.label ?? source },
+                "pos.marketplaceHoldsPart",
+                "The marketplace holds its part until it pays out — mark it received under Pending & Receivables.",
               )}
             </Typography.Text>
           )}
@@ -3257,7 +4131,7 @@ export function StockOutPage() {
                 <Flex vertical gap={2}>
                   {heldItems(db, r).map((i) => (
                     <span key={i.id}>
-                      {skuOf(i.serial)?.name ?? "?"}{" "}
+                      {skuOf(i.serial)?.name ?? fmtNone()}{" "}
                       {skuOf(i.serial)?.variantLabel ?? ""}{" "}
                       <Typography.Text type="secondary">
                         {i.serial}
@@ -3273,12 +4147,12 @@ export function StockOutPage() {
               facet: true,
               sortValue: (r) =>
                 db.reservationSources.find((s) => s.id === r.sourceId)?.name ??
-                "—",
+                fmtNone(),
               render: (_, r) => {
                 const name = db.reservationSources.find(
                   (s) => s.id === r.sourceId,
                 )?.name;
-                return name ? <Tag>{name}</Tag> : "—";
+                return name ? <Tag>{name}</Tag> : fmtNone();
               },
             },
             {

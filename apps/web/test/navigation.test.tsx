@@ -36,7 +36,7 @@ describe("navigation", () => {
     expect(stock?.children?.map((c) => c.label)).toEqual([
       "Inbound & QC",
       "New Transaction",
-      "Inventory & Stock Movement",
+      "Inventory",
       "Stock Opname",
       "S/N Tracking",
       // Machines away at a repairer (owner ask 2026-09-08). Between tracking
@@ -73,7 +73,7 @@ describe("navigation", () => {
         {
           section: "Stock",
           path: "/stock/inventory",
-          label: "Inventory & Stock Movement",
+          label: "Inventory",
         },
       ],
     );

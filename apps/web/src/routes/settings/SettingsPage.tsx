@@ -8,6 +8,7 @@
  * history, so everything is deactivated instead and stops being offered in new
  * forms while the old records keep resolving.
  */
+import { piecesSold } from "../../lib/stock.js";
 import { useState } from "react";
 import {
   App,
@@ -31,7 +32,6 @@ import {
 import { EditOutlined } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { CategorySettings } from "./CategorySettings.js";
-import { GradingSettings } from "./GradingSettings.js";
 import { ScannerSettings } from "./ScannerSettings.js";
 import { StaffAccountsSettings } from "./StaffAccountsSettings.js";
 import { ChangePasswordForm } from "../../components/ChangePasswordForm.js";
@@ -39,7 +39,7 @@ import { useSession } from "../../lib/session.js";
 import { DataTable } from "../../components/DataTable";
 import { ProTable } from "../../components/ProTable";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
-import { fmtRp } from "../../lib/format.js";
+import { fmtNone, fmtRp } from "../../lib/format.js";
 import { upsellOn } from "../../lib/pos.js";
 import {
   SUPPLIER_CODE_LENGTH,
@@ -300,6 +300,7 @@ export function SettingsPage() {
           </Button>
         </Form>
         <ProTable
+          persistKey="settings.locations"
           rowKey="id"
           dataSource={db.racks}
           searchPlaceholder={t("settings.searchALocation", "Search a location")}
@@ -395,7 +396,7 @@ export function SettingsPage() {
         const row = d.suppliers.find((x) => x.id === target.id)!;
         row.name = v.name.trim();
         // An emptied optional field goes back to absent rather than being
-        // stored as "", so "—" keeps meaning "nobody filled this in".
+        // stored as "", so "None" keeps meaning "nobody filled this in".
         row.phone = v.phone?.trim() || undefined;
         row.address = v.address?.trim() || undefined;
         row.code = v.code?.trim().toUpperCase() || undefined;
@@ -524,6 +525,7 @@ export function SettingsPage() {
         </Button>
       </Form>
       <ProTable
+        persistKey="settings.suppliers"
         rowKey="id"
         dataSource={db.suppliers}
         searchPlaceholder={t(
@@ -563,7 +565,9 @@ export function SettingsPage() {
                     "Serials scanned in from this supplier will be refused until it has a two-letter code.",
                   )}
                 >
-                  <Typography.Text type="secondary">—</Typography.Text>
+                  <Typography.Text type="secondary">
+                    {fmtNone()}
+                  </Typography.Text>
                 </Tooltip>
               ),
           },
@@ -572,12 +576,12 @@ export function SettingsPage() {
             key: "phone",
             searchable: true,
             sortValue: (s) => s.phone ?? "",
-            // Plain text now, and the muted dash is the only thing left of the
-            // old inline editor: an unset optional field should still read as
-            // "nobody filled this in" rather than as data.
+            // Plain text now, and the muted "None" is the only thing left of
+            // the old inline editor: an unset optional field should still read
+            // as "nobody filled this in" rather than as data.
             render: (_, s) => (
               <Typography.Text type={s.phone ? undefined : "secondary"}>
-                {s.phone ?? "—"}
+                {s.phone ?? fmtNone()}
               </Typography.Text>
             ),
           },
@@ -588,7 +592,7 @@ export function SettingsPage() {
             sortValue: (s) => s.address ?? "",
             render: (_, s) => (
               <Typography.Text type={s.address ? undefined : "secondary"}>
-                {s.address ?? "—"}
+                {s.address ?? fmtNone()}
               </Typography.Text>
             ),
           },
@@ -607,7 +611,7 @@ export function SettingsPage() {
               db.returns.filter((r) => r.supplierId === s.id).length,
             render: (_, s) => {
               const n = db.returns.filter((r) => r.supplierId === s.id).length;
-              return n > 0 ? <Tag color="orange">{n}</Tag> : "—";
+              return n > 0 ? <Tag color="orange">{n}</Tag> : 0;
             },
           },
           {
@@ -739,7 +743,7 @@ export function SettingsPage() {
             ]}
             extra={t(
               "settings.supplierCodeHelp",
-              "Goes on the front of every serial scanned in from this supplier. A machine whose own barcode reads SBJ347203KLM is stored — and its sticker printed — as ASBJ347203KLM, and the scanner takes either.",
+              "Goes on the front of every serial scanned in from this supplier. A unit whose own barcode reads SBJ347203KLM is stored — and its sticker printed — as ASBJ347203KLM, and the scanner takes either.",
             )}
           >
             <Input
@@ -871,7 +875,7 @@ export function SettingsPage() {
                 const n =
                   db.adjustments.filter((a) => a.reasonId === r.id).length +
                   db.returns.filter((x) => x.reason === r.label).length;
-                return n > 0 ? `${n} record(s)` : "—";
+                return n > 0 ? `${n} record(s)` : 0;
               },
             },
             {
@@ -1050,7 +1054,7 @@ export function SettingsPage() {
     const orders = db.orders.filter((o) => o.salesmanId === id);
     return {
       orders: orders.length,
-      units: orders.reduce((t, o) => t + o.serials.length, 0),
+      units: orders.reduce((t, o) => t + piecesSold(o), 0),
       revenue: orders.reduce((t, o) => t + o.total, 0),
       upsell: orders.reduce((t, o) => t + upsellOn(o), 0),
     };
@@ -1095,6 +1099,7 @@ export function SettingsPage() {
         </Button>
       </Form>
       <ProTable
+        persistKey="settings.people"
         rowKey="id"
         dataSource={db.salesmen}
         searchPlaceholder={t("settings.searchAName", "Search a name")}
@@ -1169,7 +1174,7 @@ export function SettingsPage() {
                   {fmtRp(upsell)}
                 </Typography.Text>
               ) : (
-                "—"
+                fmtRp(0)
               );
             },
           },
@@ -1417,9 +1422,10 @@ export function SettingsPage() {
    * - **The commission** comes OFF a payout, and is per channel, because that
    *   is what each platform actually publishes.
    *
-   * Both are starting points a person overrides: a marketplace price can be
-   * typed per machine, and a withdrawal's fees are typed per payout. Neither
-   * is a rule the app enforces against what the bank says.
+   * The markup is applied to a variant's dearest unit on sale since
+   * 2026-09-19 — one listing price per variant, no per-unit override — while a
+   * withdrawal's fees stay a starting point typed per payout. Neither is a
+   * rule the app enforces against what the bank says.
    */
   const marketplace = (
     <Card title={t("settings.marketplace", "Marketplace pricing & fees")}>
@@ -1430,8 +1436,8 @@ export function SettingsPage() {
           </Typography.Text>
           <Typography.Text type="secondary">
             {t(
-              "settings.listingMarkupHint",
-              "Added to a machine's store price to suggest its marketplace price. Overridable per machine.",
+              "settings.listingMarkupVariantHint",
+              "Added to the highest store price among a variant's units on sale; that is the variant's marketplace price.",
             )}
           </Typography.Text>
           <InputNumber
@@ -1608,11 +1614,15 @@ export function SettingsPage() {
             label: t("settings.tabCategories", "Product categories"),
             children: <CategorySettings />,
           },
-          {
-            key: "grading",
-            label: t("settings.tabGrading", "Grading"),
-            children: <GradingSettings />,
-          },
+          /*
+           * ⚠️ Grading configuration is hidden (owner ask 2026-09-20: *"make
+           * the grading configuration disabled for now"*). The tab drew
+           * `GradingSettings`, which is still on disk and still tested — the
+           * criteria, the conditions and the per-grade rule table are the
+           * only place those are editable, so switching this back on is one
+           * line. Every screen that offered the checklist BUTTON lost it in
+           * the same revision; a grade is picked by hand now.
+           */
           {
             key: "sup",
             label: t("settings.tabSuppliers", "Suppliers"),

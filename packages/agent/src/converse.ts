@@ -42,6 +42,8 @@ import {
   checkReply,
   holdingMessage,
   isHandoffTopic,
+  PARALLEL_CAPABILITIES,
+  type AgentCapabilities,
   type HandoffTopic,
   type ReplyProblem,
   type Route,
@@ -134,6 +136,11 @@ export interface ConverseInput {
   /** A note for the model beside the customer's latest message — the likeliest answers. */
   readonly hint?: string;
   /**
+   * What the bot may do for itself (policy.ts). Defaults to the 2026-09-18
+   * design, so a caller that has not thought about it gets the cautious one.
+   */
+  readonly capabilities?: AgentCapabilities;
+  /**
    * Called with whatever the SDK threw before this loop gives up.
    *
    * The loop still fails soft — the caller gets `null` and the inbox keeps
@@ -160,13 +167,29 @@ export interface ConverseResult {
   /** Which tools ran, in order. Surfaced in the UI so staff can see the grounding. */
   readonly toolsUsed: string[];
   readonly steps: number;
-  /** What the answer rests on: approved-answer handles, `store`, `catalog`, `greeting`. */
+  /** What the answer rests on: approved-answer handles, `store`, `catalog`, `stock`, `greeting`. */
   readonly sources: string[];
+  /**
+   * Photo handles the answer asked to send (`UnitNotePhoto.id`), in order.
+   *
+   * The worker turns each into its own outbox row after the text. They are
+   * never fetched here: an image in this loop would be an image in the prompt
+   * cache, and the model has no business seeing one it is only forwarding.
+   */
+  readonly photos?: string[];
   /** Set when the turn ended with a person. The caller stamps PERLU_STAF. */
   readonly handoff?: ConverseHandoff;
 }
 
 const TERMINAL = new Set(["reply", "handoff_to_staff"]);
+
+/** The handles a `unit_photos` result offered, read back defensively. */
+function photoIdsIn(output: unknown): string[] {
+  if (output === null || typeof output !== "object") return [];
+  const ids = (output as { photoIds?: unknown }).photoIds;
+  if (!Array.isArray(ids)) return [];
+  return ids.filter((x): x is string => typeof x === "string" && x !== "");
+}
 
 /** One short line, trimmed, for the colleague's note. */
 const note = (v: unknown, fallback: string): string => {
@@ -212,8 +235,21 @@ export async function converse(
   );
 
   const toolsUsed: string[] = [];
-  const tools = toolsFor(ctx, { handoffOnly: route != null });
+  const capabilities = input.capabilities ?? PARALLEL_CAPABILITIES;
+  const tools = toolsFor(ctx, {
+    handoffOnly: route != null,
+    capabilities,
+  });
   const catalogResults: string[] = [];
+  /*
+   * What the shelf said this turn, so a price the bot quotes can be checked
+   * against it exactly as a price from an approved answer is. Without this,
+   * `checkReply` would refuse every figure the stock tools returned and the
+   * capability would be on in name only.
+   */
+  const stockResults: string[] = [];
+  /** The photo handles `unit_photos` offered, so `reply` cannot invent one. */
+  const offeredPhotos = new Set<string>();
   const open = storeOpenAt(ctx.now);
 
   /** The code handing over, in the shop's fixed words. */
@@ -295,6 +331,9 @@ export async function converse(
       } else if (c.toLowerCase() === "catalog" && catalogResults.length > 0) {
         texts.push(...catalogResults);
         sources.push("catalog");
+      } else if (c.toLowerCase() === "stock" && stockResults.length > 0) {
+        texts.push(...stockResults);
+        sources.push("stock");
       } else if (c.toLowerCase() === "greeting") {
         sources.push("greeting");
       } else {
@@ -315,7 +354,24 @@ export async function converse(
         steps,
       );
     }
-    return { reply: message, rawReply: raw, toolsUsed, steps, sources };
+    /*
+     * Only handles `unit_photos` actually offered this turn. A model asked for
+     * a list of ids will sometimes produce a plausible-looking one, and the
+     * cost of an invented handle is the shop sending a stranger a photograph
+     * of a machine nobody asked about.
+     */
+    const photos = String(args["photos"] ?? "")
+      .split(/[\s,;]+/)
+      .map((x) => x.trim())
+      .filter((x) => offeredPhotos.has(x));
+    return {
+      reply: message,
+      rawReply: raw,
+      toolsUsed,
+      steps,
+      sources,
+      ...(photos.length > 0 ? { photos } : {}),
+    };
   };
 
   try {
@@ -374,6 +430,16 @@ export async function converse(
             typeof v === "bigint" ? v.toString() : v,
           );
           if (use.name === "lookup_catalog") catalogResults.push(content);
+          if (
+            use.name === "search_stock" ||
+            use.name === "check_serial" ||
+            use.name === "browse_catalog"
+          ) {
+            stockResults.push(content);
+          }
+          if (use.name === "unit_photos") {
+            for (const id of photoIdsIn(output)) offeredPhotos.add(id);
+          }
           return {
             type: "tool_result" as const,
             tool_use_id: use.id,

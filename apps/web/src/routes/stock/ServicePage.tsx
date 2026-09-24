@@ -72,12 +72,12 @@ import {
   PlusOutlined,
   RollbackOutlined,
 } from "@ant-design/icons";
-import { Link } from "react-router-dom";
+import { SerialLink } from "../../components/SerialLink";
 import { useTranslation } from "react-i18next";
 import { PageContainer } from "../../components/PageContainer";
 import { GradeTag } from "../../components/GradeTag";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
-import { fmtRp, fmtDate } from "../../lib/format.js";
+import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import {
   SERVICE_FEE_KINDS,
   benchRows,
@@ -139,7 +139,7 @@ export function ServicePage() {
     return u && db.skus.find((k) => k.id === u.skuId);
   };
   const warehouseName = (id: string | undefined) =>
-    db.warehouses.find((w) => w.id === id)?.name ?? "—";
+    db.warehouses.find((w) => w.id === id)?.name ?? fmtNone();
   /** Found by `Location.kind`: `wh-4` is this shop's bench, not every shop's. */
   const bench = serviceLocationOf(db.warehouses);
 
@@ -315,7 +315,7 @@ export function ServicePage() {
         <Flex gap={SPACE.md} wrap>
           <Card style={{ flex: 1, minWidth: 200 }}>
             <Statistic
-              title={t("service.away", "Machines away")}
+              title={t("service.away", "Units away")}
               value={rows.length}
             />
           </Card>
@@ -327,7 +327,7 @@ export function ServicePage() {
             <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
               {t(
                 "service.spentHint",
-                "Added to what each machine cost, so the margin is honest.",
+                "Added to what each unit cost, so the margin is honest.",
               )}
             </Typography.Text>
           </Card>
@@ -378,10 +378,8 @@ export function ServicePage() {
                   render: (_, r) => {
                     const sku = skuOf(r.serial);
                     return (
-                      <Flex vertical gap={0}>
-                        <Link to={`/stock/history?serial=${r.serial}`}>
-                          {r.serial}
-                        </Link>
+                      <Flex vertical gap={0} align="flex-start">
+                        <SerialLink serial={r.serial} />
                         <Typography.Text
                           type="secondary"
                           style={{ fontSize: TYPE.sm }}
@@ -397,7 +395,7 @@ export function ServicePage() {
                 {
                   title: t("service.problem", "Problem"),
                   key: "note",
-                  render: (_, r) => r.rec.note ?? "—",
+                  render: (_, r) => r.rec.note ?? fmtNone(),
                 },
                 {
                   title: t("service.sentFrom", "Sent from"),
@@ -484,7 +482,7 @@ export function ServicePage() {
                       title: t("service.feeLabel", "What for"),
                       key: "label",
                       render: (_: unknown, f: (typeof r.rec.fees)[number]) =>
-                        f.label ?? "—",
+                        f.label ?? fmtNone(),
                     },
                     {
                       title: t("service.feeWhen", "When"),
@@ -548,10 +546,8 @@ export function ServicePage() {
                 render: (_, r) => {
                   const sku = skuOf(r.serial);
                   return (
-                    <Flex vertical gap={0}>
-                      <Link to={`/stock/history?serial=${r.serial}`}>
-                        {r.serial}
-                      </Link>
+                    <Flex vertical gap={0} align="flex-start">
+                      <SerialLink serial={r.serial} />
                       <Typography.Text
                         type="secondary"
                         style={{ fontSize: TYPE.sm }}
@@ -573,7 +569,7 @@ export function ServicePage() {
               {
                 title: t("service.problem", "Problem"),
                 key: "note",
-                render: (_, r) => r.rec.note ?? "—",
+                render: (_, r) => r.rec.note ?? fmtNone(),
               },
               {
                 title: t("service.sentFrom", "Sent from"),
@@ -730,7 +726,7 @@ export function ServicePage() {
           <Typography.Paragraph type="secondary">
             {t(
               "service.editChargeHint",
-              "It was {{amount}}. The old figure stays on the machine's timeline.",
+              "It was {{amount}}. The old figure stays on the unit's timeline.",
               { amount: fmtRp(editingFee.fee.amount) },
             )}
           </Typography.Paragraph>
@@ -802,7 +798,7 @@ export function ServicePage() {
             label={t("service.transferFee", "Cost of moving it back")}
             tooltip={t(
               "service.transferFeeHint",
-              "The courier back, if there was one. It joins the repair cost on this machine.",
+              "The courier back, if there was one. It joins the repair cost on this unit.",
             )}
           >
             <InputNumber

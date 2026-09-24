@@ -29,8 +29,8 @@ import {
   setScannerSettings,
   type ScannerSettings as Settings,
 } from "../../lib/scanner.js";
-import { readBarcode, resolveScannedSerial } from "../../lib/serialScan.js";
-import { StoreLabelTag } from "../../components/StoreLabelTag.js";
+import { readBarcode } from "../../lib/serialScan.js";
+import { resolveSerialQuery } from "../../lib/serialInput.js";
 import { useDb } from "../../mock/store.js";
 import { FORM_CENTRE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
@@ -55,32 +55,24 @@ export function ScannerSettings() {
   const slowest = last && last.gaps.length > 0 ? Math.max(...last.gaps) : null;
   const broke = last?.rawGaps.filter((g) => g >= settings.burstGapMs) ?? [];
 
-  /** Which barcode the last scan was, if it was either of them. */
-  const codes = db.suppliers.map((x) => x.code ?? "");
-  const read = last ? readBarcode(last.serial, { supplierCodes: codes }) : null;
+  /** Whether the last scan was one of Apple's serial barcodes. */
+  const read = last ? readBarcode(last.serial) : null;
   const shape = read?.ok ? read : null;
   /**
    * The unit this read names, if the shop holds one.
    *
-   * Through `resolveScannedSerial` rather than a bare lookup, because that is
+   * Through `resolveSerialQuery` rather than a bare lookup, because that is
    * what the sales floor does with a scan and this panel is meant to tell
    * somebody what their scanner will actually achieve out there — a scan of
-   * Apple's barcode finds the machine, and the answer should say so.
+   * Apple's barcode finds the unit, and the answer should say so.
    */
   const resolved = last
-    ? resolveScannedSerial(
+    ? resolveSerialQuery(
         last.serial,
         db.units.map((u) => u.serial),
-        codes,
       )
     : "";
   const matched = db.units.some((u) => u.serial === resolved) ? resolved : null;
-  /** The origin code the matched unit's own sticker would carry. */
-  const supplierCodeOfSerial = (serial: string) => {
-    const unit = db.units.find((u) => u.serial === serial);
-    const po = db.pos.find((p) => p.id === unit?.poId);
-    return db.suppliers.find((x) => x.id === po?.supplierId)?.code;
-  };
 
   return (
     <Flex vertical gap={16}>
@@ -90,7 +82,7 @@ export function ScannerSettings() {
           showIcon
           title={t(
             "scanner.noSetupNeededOnThis",
-            "No setup needed on this machine.",
+            "No setup needed on this device.",
           )}
           description={t(
             "scanner.aScannerIsAKeyboard",
@@ -192,62 +184,47 @@ export function ScannerSettings() {
             </Typography.Title>
 
             {/*
-             * Which of the machine's two barcodes that was (owner ask
-             * 2026-09-01).
-             *
-             * This panel is where somebody goes to find out what their scanner
-             * is actually sending, so it is the honest place to answer "is
-             * this the original or the store barcode, and does the shop know
-             * this machine". It files nothing — `classifyBarcode` rather than
-             * `readBarcode`, because the origin of the goods is a fact about
-             * an ORDER and there is no order here.
+             * Whether that was a serial barcode, and whether the shop holds
+             * the unit (owner asks 2026-09-01 and 2026-09-21). This panel is
+             * where somebody goes to find out what their scanner is actually
+             * sending, so it answers both — and files nothing.
              */}
-            {shape === null ? (
-              <Alert
-                type="warning"
-                showIcon
-                title={t(
-                  "scanner.neitherBarcode",
-                  "That is neither of a machine's two barcodes.",
-                )}
-                description={t(
-                  "scanner.neitherBarcodeWhy",
-                  "A serial barcode is S plus 10–12 characters, and the shop's own sticker is a two-letter supplier code plus the same. This is most likely one of the regulatory or part-number barcodes beside them.",
-                )}
-              />
-            ) : (
-              <Flex gap={8} wrap align="center">
-                <Tag color={shape.kind === "STORE" ? "green" : "blue"}>
-                  {shape.kind === "STORE"
-                    ? t("scanner.storeBarcode", "Store barcode")
-                    : t("scanner.originalBarcode", "Original barcode")}
+            <Flex gap={8} wrap align="center">
+              {shape === null ? (
+                <Tag color="gold">
+                  {t("scanner.notASerialBarcode", "Not a serial barcode")}
                 </Tag>
-                <Typography.Text type="secondary">
-                  {shape.kind === "STORE"
-                    ? t(
-                        "scanner.storeBarcodeRead",
-                        "Supplier {{code}} · serial {{serial}}",
-                        { code: shape.supplierCode, serial: shape.serial },
-                      )
-                    : t("scanner.originalBarcodeRead", "Serial {{serial}}", {
-                        serial: shape.serial,
-                      })}
-                </Typography.Text>
-                {/* The owner's "display if it already has the store barcode or
-                    not", answered about the MACHINE rather than about the
-                    read: a scan of Apple's barcode still belongs to a unit
-                    whose sticker may well already be printed. */}
-                {matched ? (
-                  <StoreLabelTag
-                    serial={matched}
-                    supplierCode={supplierCodeOfSerial(matched)}
-                  />
-                ) : (
-                  <Tag>
-                    {t("scanner.notInStock", "No unit with this serial yet")}
+              ) : (
+                <>
+                  <Tag color="blue">
+                    {t("scanner.serialBarcode", "Serial barcode")}
                   </Tag>
+                  <Typography.Text type="secondary">
+                    {t("scanner.originalBarcodeRead", "Serial {{serial}}", {
+                      serial: shape.serial,
+                    })}
+                  </Typography.Text>
+                </>
+              )}
+              {matched ? (
+                <Tag color="green">
+                  {t("scanner.inStockAs", "In stock as {{serial}}", {
+                    serial: matched,
+                  })}
+                </Tag>
+              ) : (
+                <Tag>
+                  {t("scanner.notInStock", "No unit with this serial yet")}
+                </Tag>
+              )}
+            </Flex>
+            {shape === null && (
+              <Typography.Text type="secondary">
+                {t(
+                  "scanner.notASerialBarcodeWhy",
+                  "A serial barcode is S plus 10–12 characters. A new unit is taken in only from one; a second-hand unit's barcode is taken as read.",
                 )}
-              </Flex>
+              </Typography.Text>
             )}
 
             {broke.length > 0 ? (

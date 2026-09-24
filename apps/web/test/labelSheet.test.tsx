@@ -12,11 +12,10 @@ import type { LabelDatum } from "../src/lib/labels.js";
 /**
  * A sticker for a serial.
  *
- * `barcode` defaults to the STORE form — the origin code in front of the whole
- * serial — because that is what a real sticker carries since the owner's
- * correction of 2026-09-01. The fault tests below pass their own.
+ * `barcode` defaults to the serial itself — what a real sticker carries since
+ * the owner retired the supplier-code "store barcode" on 2026-09-21.
  */
-const label = (serial: string, barcode = `AS${serial}`): LabelDatum => ({
+const label = (serial: string, barcode = serial): LabelDatum => ({
   serial,
   barcode,
   line1: 'PRO 13" 2017',
@@ -35,12 +34,12 @@ const withSetup = (patch: Partial<LabelSetup>): LabelSetup => ({
 });
 
 describe("LabelSheet", () => {
-  it("prints the STORE barcode as text as well as encoding it", () => {
+  it("prints the serial as text as well as encoding it", () => {
     // The sticker's text and its symbol have to be the same string, or nobody
-    // can check one against the other by eye. Since 2026-09-01 both are the
-    // store form — the origin code in front of the machine's own serial.
-    render(<LabelSheet labels={[label("SB23746938X")]} />);
-    expect(screen.getByText("ASSB23746938X")).toBeInTheDocument();
+    // can check one against the other by eye. Both are the serial as stored —
+    // nothing in front of it since 2026-09-21.
+    render(<LabelSheet labels={[label("C02740137JKM")]} />);
+    expect(screen.getByText("C02740137JKM")).toBeInTheDocument();
     expect(screen.getByText('PRO 13" 2017')).toBeInTheDocument();
     expect(screen.getByText("i5 8/128 NTB")).toBeInTheDocument();
   });
@@ -95,9 +94,8 @@ describe("LabelSheet", () => {
     // 49. `test/code128.test.ts` owns the encoding; this only checks that
     // choosing Code 128 actually draws one. Unlike the QR it is synchronous.
     // One rect per module of the Code 128, so the count moves with the
-    // encoded string's length — which grew by the two-letter origin code when
-    // the sticker started carrying the store barcode.
-    expect(container.querySelectorAll("svg rect").length).toBe(55);
+    // encoded string's length.
+    expect(container.querySelectorAll("svg rect").length).toBe(49);
   });
 
   it("omits the second line rather than printing an empty one", () => {
@@ -106,7 +104,7 @@ describe("LabelSheet", () => {
         labels={[
           {
             serial: "SB1234567890",
-            barcode: "ASSB1234567890",
+            barcode: "SB1234567890",
             line1: "Magic Mouse",
             line2: "",
           },
@@ -115,7 +113,7 @@ describe("LabelSheet", () => {
     );
     const cell = cells(container)[0]!;
     // The QR block's serial and one code line, and no stray blank element.
-    expect(cell.textContent).toBe("ASSB1234567890Magic Mouse");
+    expect(cell.textContent).toBe("SB1234567890Magic Mouse");
   });
 
   describe("pagination", () => {

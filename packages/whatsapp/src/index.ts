@@ -5,9 +5,13 @@
 
 export {
   canSend,
+  sendImage,
   sendText,
+  uploadMedia,
+  type SendImageInput,
   type SendTextInput,
   type SendTextResult,
+  type UploadMediaInput,
   type WhatsAppCredentials,
 } from "./client.js";
 export {

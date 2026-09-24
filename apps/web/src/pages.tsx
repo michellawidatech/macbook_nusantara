@@ -1,22 +1,18 @@
 /**
- * Every screen the shell can put in a tab, in one table (2026-09-15).
+ * Every screen the shell can show, in one table (2026-09-15).
  *
- * `App.tsx` renders these as the router's own `<Route>`s — which is what makes
- * a URL resolve — and `AppTabs.tsx` renders the same elements again, one per
- * open tab, so a tab that is not on screen stays mounted. One table rather
- * than two, because a page listed in one and not the other is either a route
- * with no tab or a tab with no route, and both fail silently.
+ * `App.tsx` renders these as the router's own `<Route>`s, which is what makes
+ * a URL resolve. Until 2026-09-21 the in-app tab strip rendered them a second
+ * time, one mounted copy per open tab; the owner asked for the strip to go
+ * (*"remove the tab view but the user must be able to drag the feature and
+ * open it in another tab"*), so the browser's own tabs do that job and this is
+ * a table with one reader.
  *
  * REDIRECTS ARE NOT HERE. `/stock/adjustment` is on its way to
- * `/stock/inventory`, and a tab opened for it would be a tab for an address
- * about to be replaced — see `visitLocation`. They stay in `App.tsx`, which is
- * where the router needs them and where nothing else looks.
- *
- * `isPage` is the question the tab layer asks about a URL, and it is answered
- * from this list rather than from a second copy of it.
+ * `/stock/inventory`; redirects stay in `App.tsx`, which is where the router
+ * needs them and where nothing else looks.
  */
-import { matchPath } from "react-router-dom";
-import type { PageRoute } from "./layouts/tabs.js";
+import type { ReactNode } from "react";
 import { InventoryPage } from "./routes/stock/InventoryPage.js";
 import { ReturnsPage } from "./routes/returns/ReturnsPage.js";
 import { InboundPage } from "./routes/inbound/InboundPage.js";
@@ -34,10 +30,20 @@ import { DiscountsPage } from "./routes/discounts/DiscountsPage.js";
 import { IncomeExpensePage } from "./routes/finance/CashflowPage.js";
 import { TransactionsPage } from "./routes/finance/TransactionsPage.js";
 import { ReceivablesPage } from "./routes/finance/ReceivablesPage.js";
+import {
+  PayablePage,
+  ReceivablePage,
+} from "./routes/finance/PayableReceivablePage.js";
 import { ChatbotPage } from "./routes/chatbot/ChatbotPage.js";
 import { CustomersPage } from "./routes/customers/CustomersPage.js";
 import { SuppliersPage } from "./routes/suppliers/SuppliersPage.js";
 import { SettingsPage } from "./routes/settings/SettingsPage.js";
+
+/** One screen, at the path the router matches it on. */
+export interface PageRoute {
+  readonly path: string;
+  readonly element: ReactNode;
+}
 
 export const PAGE_ROUTES: readonly PageRoute[] = [
   { path: "/stock/inventory", element: <InventoryPage /> },
@@ -57,13 +63,10 @@ export const PAGE_ROUTES: readonly PageRoute[] = [
   { path: "/finance/income-expense", element: <IncomeExpensePage /> },
   { path: "/finance/transactions", element: <TransactionsPage /> },
   { path: "/finance/receivables", element: <ReceivablesPage /> },
+  { path: "/finance/receivable", element: <ReceivablePage /> },
+  { path: "/finance/payable", element: <PayablePage /> },
   { path: "/chat", element: <ChatbotPage /> },
   { path: "/customers", element: <CustomersPage /> },
   { path: "/suppliers", element: <SuppliersPage /> },
   { path: "/settings", element: <SettingsPage /> },
 ];
-
-/** Does this URL name a page — as opposed to a redirect, or nothing at all? */
-export function isPagePath(pathname: string): boolean {
-  return PAGE_ROUTES.some((r) => matchPath(r.path, pathname) !== null);
-}

@@ -10,7 +10,8 @@
 # `staff` creates or resets one account (a password on stdin, or --initial).
 # Both force a new password at the next sign-in when they hand out the initial
 # one. `knowledge <file> --by ersen` loads the owner's answer sheet into the
-# chatbot (docs/chatbot-rag.md).
+# chatbot (docs/chatbot-rag.md), and `chatbot` walks the whole WhatsApp path
+# and says which half of it is broken (docs/chatbot-runbook.md).
 #
 # Configuration comes from $NUSANTARA_HOME/etc (default /opt/nusantara/etc):
 # common.env for everything plus one file per process, so the API never holds
@@ -36,11 +37,19 @@ case $proc in
   staff)     envfile=;            heap=256 ;;
   accounts)  envfile=;            heap=256 ;;
   knowledge) envfile=;            heap=256 ;;
-  *) print -u2 "usage: run api|webhook|worker|staff|accounts|knowledge [args…]"; exit 64 ;;
+  # The doctor reads the WEBHOOK's and the WORKER's configuration, because the
+  # whole point of it is to find the half that is not configured. It is the one
+  # process here that legitimately loads both files, and it prints whether a
+  # secret is SET and never what it is.
+  chatbot)   envfile=;            heap=256 ;;
+  *) print -u2 "usage: run api|webhook|worker|staff|accounts|knowledge|chatbot [args…]"; exit 64 ;;
 esac
 
 load $home/etc/common.env
 [[ -n $envfile ]] && load $home/etc/$envfile
+if [[ $proc == chatbot ]]; then
+  for f in webhook.env worker.env; do [[ -r $home/etc/$f ]] && load $home/etc/$f; done
+fi
 
 # Prisma's engine and argon2 are native code for one CPU. Say so here rather
 # than as a dlopen error three frames deep.

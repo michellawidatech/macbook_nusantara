@@ -24,13 +24,19 @@ export type FillPlan =
   | { readonly kind: "full" };
 
 export function planSerialFill(
-  serial: string,
+  /**
+   * The scan — or every string it could be filed under (2026-09-21: a sealed
+   * unit's barcode is filed without its `S`, a second-hand one as read), so a
+   * double scan is caught whichever way the first one was filed.
+   */
+  serial: string | readonly string[],
   rows: readonly FillRow[],
   isKnownSerial: (serial: string) => boolean,
 ): FillPlan {
-  if (isKnownSerial(serial)) return { kind: "exists" };
+  const forms = typeof serial === "string" ? [serial] : serial;
+  if (forms.some(isKnownSerial)) return { kind: "exists" };
 
-  const clash = rows.find((r) => r.shown === serial);
+  const clash = rows.find((r) => forms.includes(r.shown));
   if (clash !== undefined) return { kind: "duplicate", rowKey: clash.key };
 
   const target = rows.find((r) => r.shown === "");

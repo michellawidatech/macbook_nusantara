@@ -30,7 +30,9 @@
  */
 import type { MockDb, Sku, Unit } from "../mock/seed.js";
 import { gradeRank } from "./condition.js";
+import { fmtNone } from "./format.js";
 import { priceOf, priceRange, type PriceRange } from "./unitPrice.js";
+import { stockLevels } from "./stock.js";
 
 /** One row of the till's catalogue: a variant, and what is left of it. */
 export interface ShelfRow {
@@ -59,6 +61,12 @@ export interface ShelfRow {
   readonly price: PriceRange;
   /** True when a machine of this variant is on hold for somebody. */
   readonly anyReserved: boolean;
+  /**
+   * A counted product — an accessory (2026-09-19). It has no units: `units`
+   * is empty, `remaining` is what the stock ledger holds less what the basket
+   * has taken, and a tap adds one more piece instead of opening a chooser.
+   */
+  readonly counted: boolean;
 }
 
 /**
@@ -109,6 +117,8 @@ export function shelfRows(
     readonly query?: string;
     readonly category?: string;
     readonly taken?: readonly string[];
+    /** Pieces of counted products already in the basket, by variant. */
+    readonly takenQty?: Readonly<Record<string, number>>;
   } = {},
 ): ShelfRow[] {
   const taken = new Set(opts.taken ?? []);
@@ -126,7 +136,7 @@ export function shelfRows(
     const sku = db.skus.find((s) => s.id === skuId);
     if (!sku) continue;
     const category =
-      db.models.find((m) => m.id === sku.modelId)?.category ?? "—";
+      db.models.find((m) => m.id === sku.modelId)?.category ?? fmtNone();
 
     if (opts.category && opts.category !== category) continue;
     if (q !== "") {
@@ -176,6 +186,36 @@ export function shelfRows(
       // it.
       price: priceRange(left.map((u) => priceOf(u, sku.price))),
       anyReserved: left.some((u) => u.status === "DIRESERVASI"),
+      counted: false,
+    });
+  }
+
+  // Counted products, off the stock ledger rather than off units. A variant
+  // with nothing on any shelf is not listed — it was never "on the shelf".
+  for (const [skuId, at] of stockLevels(db.stockMoves)) {
+    const sku = db.skus.find((s) => s.id === skuId);
+    if (!sku) continue;
+    const category =
+      db.models.find((m) => m.id === sku.modelId)?.category ?? fmtNone();
+    if (opts.category && opts.category !== category) continue;
+    if (q !== "") {
+      const hay = [sku.name, sku.variantLabel, sku.code]
+        .join(" ")
+        .toLowerCase();
+      if (!hay.includes(q)) continue;
+    }
+    let held = 0;
+    for (const n of at.values()) held += n;
+    if (held <= 0) continue;
+    rows.push({
+      sku,
+      category,
+      units: [],
+      remaining: Math.max(0, held - (opts.takenQty?.[skuId] ?? 0)),
+      grades: [],
+      price: priceRange([sku.price]),
+      anyReserved: false,
+      counted: true,
     });
   }
 
@@ -451,13 +491,26 @@ export function saleTotals(input: {
  * Zero for an order written before the snapshot existed, which is the honest
  * answer — those tills had no way to record that anything was negotiated.
  */
+/** A counted line as the two snapshots read it. */
+interface PricedLine {
+  readonly qty: number;
+  readonly price: number;
+  readonly listPrice?: number;
+}
+
 export function upsellOn(order: {
   readonly serials: readonly string[];
   readonly prices: Readonly<Record<string, number>>;
   readonly listPrices?: Readonly<Record<string, number>>;
+  readonly lines?: readonly PricedLine[];
 }): number {
-  if (!order.listPrices) return 0;
   let total = 0;
+  for (const l of order.lines ?? []) {
+    if (l.listPrice !== undefined && l.price > l.listPrice) {
+      total += (l.price - l.listPrice) * l.qty;
+    }
+  }
+  if (!order.listPrices) return total;
   for (const serial of order.serials) {
     const charged = order.prices[serial];
     const listed = order.listPrices[serial];
@@ -472,9 +525,15 @@ export function bargainOn(order: {
   readonly serials: readonly string[];
   readonly prices: Readonly<Record<string, number>>;
   readonly listPrices?: Readonly<Record<string, number>>;
+  readonly lines?: readonly PricedLine[];
 }): number {
-  if (!order.listPrices) return 0;
   let total = 0;
+  for (const l of order.lines ?? []) {
+    if (l.listPrice !== undefined && l.price < l.listPrice) {
+      total += (l.listPrice - l.price) * l.qty;
+    }
+  }
+  if (!order.listPrices) return total;
   for (const serial of order.serials) {
     const charged = order.prices[serial];
     const listed = order.listPrices[serial];

@@ -38,16 +38,32 @@ describe("which pot a method belongs to", () => {
     expect(accountOfMethod("")).toBeUndefined();
   });
 
-  it("offers exactly the owner's three for an adjustment", () => {
+  it("offers the owner's three for an adjustment, plus the one that moves no pot", () => {
     expect([...ADJUSTMENT_METHOD_CODES]).toEqual([
       "TUNAI",
       "TRANSFER",
       "KARTU_KREDIT",
+      "TRANSFER_LUAR",
     ]);
-    // And every one of them can be placed, or the balance could not count it.
-    for (const code of ADJUSTMENT_METHOD_CODES) {
+    // Each of the three can be placed, or the balance could not count it.
+    for (const code of ["TUNAI", "TRANSFER", "KARTU_KREDIT"]) {
       expect(accountOfMethod(code)).toBeDefined();
     }
+  });
+
+  it("gives TRANSFER_LUAR no pot, so it settles and moves neither balance", () => {
+    // Owner ask 2026-09-23: *"Transfer from other bank for expense/deposit to
+    // supplier, which does not reduce the bank balance in the POS."* It is a
+    // named answer rather than the unmapped default — the two read the same
+    // here and mean different things, so the switch names it explicitly.
+    expect(accountOfMethod("TRANSFER_LUAR")).toBeUndefined();
+    const out = balancesOf([{ method: "TRANSFER_LUAR", amount: -5_000_000 }], {
+      cash: 1_000_000,
+      bank: 9_000_000,
+    });
+    expect(out.cash).toBe(1_000_000);
+    expect(out.bank).toBe(9_000_000);
+    expect(out.unassigned).toBe(-5_000_000);
   });
 });
 

@@ -47,8 +47,23 @@ import {
  */
 const MAX_BYTES = 6 * 1024 * 1024;
 
+/**
+ * Photos taken of a unit whose serial is not known yet (owner revision
+ * 2026-09-19: nothing on Inbound & QC waits for the serial). The caller holds
+ * them and writes them onto the unit, with `addQcPhoto`, in the mutation that
+ * mints it.
+ */
+export interface DraftPhotos {
+  readonly photos: readonly { readonly id: string; readonly url: string }[];
+  readonly onAdd: (urls: string[]) => void;
+  readonly onRemove: (id: string) => void;
+}
+
 export interface UnitPhotosProps {
-  serial: string;
+  /** The unit, once it exists. Ignored while `draft` is given. */
+  serial?: string;
+  /** Photos held for a unit that has no serial yet. */
+  draft?: DraftPhotos;
   /**
    * Show the add and remove controls. Off where the pictures are evidence
    * being read rather than evidence being gathered — a posted stock count, a
@@ -62,7 +77,8 @@ export interface UnitPhotosProps {
 }
 
 export function UnitPhotos({
-  serial,
+  serial = "",
+  draft,
   editable = false,
   size = 44,
   max = 3,
@@ -76,7 +92,7 @@ export function UnitPhotos({
     token: { colorBorderSecondary, colorTextSecondary, borderRadius },
   } = theme.useToken();
 
-  const photos = qcPhotosOf(db, serial);
+  const photos = draft ? draft.photos : qcPhotosOf(db, serial);
 
   const choose = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -115,6 +131,15 @@ export function UnitPhotos({
     // Toasts and writes only once the reads are done — never inside a state
     // updater, and never inside `mutate`.
     if (urls.length === 0) return;
+    if (draft) {
+      draft.onAdd(urls);
+      message.success(
+        t("photos.addedDraft", "{{count}} photo(s) added.", {
+          count: urls.length,
+        }),
+      );
+      return;
+    }
     mutate((d) => {
       for (const url of urls) addQcPhoto(d, serial, url);
     });
@@ -127,7 +152,8 @@ export function UnitPhotos({
   };
 
   const drop = (photoId: string) => {
-    mutate((d) => removeQcPhoto(d, serial, photoId));
+    if (draft) draft.onRemove(photoId);
+    else mutate((d) => removeQcPhoto(d, serial, photoId));
     message.success(t("photos.removed", "Photo removed."));
   };
 
@@ -153,7 +179,11 @@ export function UnitPhotos({
                 src={p.url}
                 width={size}
                 height={size}
-                alt={t("photos.alt", "Photo of {{serial}}", { serial })}
+                alt={
+                  serial
+                    ? t("photos.alt", "Photo of {{serial}}", { serial })
+                    : t("photos.altDraft", "Photo of this unit")
+                }
                 style={{
                   objectFit: "cover",
                   borderRadius,
@@ -218,6 +248,10 @@ export function UnitPhotos({
             // OS sheet offering BOTH the camera and the gallery, and half of
             // these pictures were taken before anyone reached this screen.
             hidden
+            // And `display: none` as well: inside an antd `Form`, antd's own
+            // `input[type='file'] { display: block }` outranks the `hidden`
+            // attribute, and a bare "Choose Files" appeared in the QC dialog.
+            style={{ display: "none" }}
             onChange={(e) => {
               void choose(e.target.files);
               // Cleared so choosing the same file twice fires `change` twice —
@@ -242,11 +276,18 @@ export function UnitPhotos({
             </Button>
           ) : (
             <Tooltip
-              title={t(
-                "photos.addHint",
-                "Photograph the condition of {{serial}}",
-                { serial },
-              )}
+              title={
+                serial
+                  ? t(
+                      "photos.addHint",
+                      "Photograph the condition of {{serial}}",
+                      { serial },
+                    )
+                  : t(
+                      "photos.addHintDraft",
+                      "Photograph the condition of this unit",
+                    )
+              }
             >
               <Button
                 size="small"

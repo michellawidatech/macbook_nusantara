@@ -9,8 +9,6 @@ import { describe, expect, it } from "vitest";
 import {
   categoryTracksSerial,
   countedCategories,
-  countedSerial,
-  isCountedSerial,
   skuTracksSerial,
   type TrackingCatalogue,
 } from "../src/lib/serialTracking.js";
@@ -74,25 +72,5 @@ describe("skuTracksSerial", () => {
 describe("countedCategories", () => {
   it("names the ones the shop counts", () => {
     expect(countedCategories(cat)).toEqual(["Accessory"]);
-  });
-});
-
-describe("the handle a counted item carries", () => {
-  it("is recognisable as one the app minted", () => {
-    // Anybody who meets one — on a timeline, in a search — should be able to
-    // tell at a glance that it is not a number printed on anything.
-    const s = countedSerial("sku-case-PI-2026/09-0001", 3);
-    expect(isCountedSerial(s)).toBe(true);
-    expect(s).toContain("SKU-CASE");
-    expect(s.endsWith("-3")).toBe(true);
-  });
-
-  it("does not claim a real serial is one", () => {
-    expect(isCountedSerial("SC02740137JKM")).toBe(false);
-  });
-
-  it("is stable, so retrying a refused commit mints no second set", () => {
-    expect(countedSerial("sku-case", 1)).toBe(countedSerial("sku-case", 1));
-    expect(countedSerial("sku-case", 1)).not.toBe(countedSerial("sku-case", 2));
   });
 });

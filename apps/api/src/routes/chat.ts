@@ -32,6 +32,7 @@ import type { PrismaClient } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import { ApiError } from "../errors.js";
 import {
+  agentCapabilities,
   anthropicClient,
   buildAgentPrompt,
   converse,
@@ -162,6 +163,16 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
       ]);
 
       const now = new Date();
+      /*
+       * The same capability the worker runs under (2026-09-21), read from the
+       * same variable — a Draft that answers differently from the bot is a
+       * Draft nobody can use to see what the bot would have said.
+       *
+       * The RESERVE capability is still withheld below, and the two are not
+       * the same thing: what the bot may KNOW is a shop policy, and what a
+       * button press may WRITE is a property of this endpoint.
+       */
+      const capabilities = agentCapabilities(process.env);
       const turns = parsed.data.turns;
       const last = turns[turns.length - 1];
       const customerText = last?.role === "user" ? last.text : "";
@@ -182,6 +193,7 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
         now,
         openNow: storeOpenAt(now),
         customerText,
+        capabilities,
       });
 
       let failure: unknown;
@@ -199,8 +211,11 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
         turns,
         knowledge,
         storeFacts,
+        capabilities,
         // The same two reads the worker makes of the customer's latest words.
-        route: customerText ? routeMessage(customerText) : null,
+        route: customerText
+          ? routeMessage(customerText, { capabilities })
+          : null,
         hint: customerText
           ? matchesNote(knowledge, matchesFor(knowledge, customerText))
           : undefined,

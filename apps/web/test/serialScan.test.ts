@@ -1,368 +1,186 @@
 /**
- * The two barcodes a machine carries, as the owner restated them on
- * 2026-09-01.
- *
- * ```
- *   original   S  + 10–12          11–13 characters
- *   store      II + S + 10–12      13–15 characters
- * ```
- *
- * The whole file is a spec for `lib/serialScan.ts`, and the thing worth
- * holding honest is that **`Unit.serial` is Apple's barcode**: nothing is
- * prefixed at intake, the store form is derived for the sticker, and a read of
- * either barcode comes back as the same serial.
+ * What a serial barcode looks like, and what a serial is — the owner's rules of
+ * 2026-09-21: Apple's barcode is `S` and then ten to twelve, the serial is the
+ * ten to twelve, and nothing puts a supplier code on either.
  */
 import { describe, expect, it } from "vitest";
 import {
+  BARE_PATTERN,
   BASE_MAX_LENGTH,
   BASE_MIN_LENGTH,
+  ORIGINAL_PATTERN,
+  correctScanConfusables,
   inspectStoredSerial,
-  isOriginalBarcode,
   isPrintableSerial,
-  isStoreBarcode,
-  isValidSerial,
   normaliseScan,
   readBarcode,
-  resolveScannedSerial,
-  storeBarcodeOf,
+  readTypedSealed,
   suggestSupplierCode,
-  markTypedSerial,
-  OLDER_MODEL_PATTERN,
   validateSerial,
-  ORIGINAL_PATTERN,
-  STORE_PATTERN,
 } from "../src/lib/serialScan.js";
 
-/** Apel Segar and Makmur Jaya — the two codes the seed issues. */
-const CODES = ["AS", "MJ"];
-const OPTS = { supplierCodes: CODES } as const;
-
-/** The owner's own example, in both forms. */
-const ORIGINAL = "SBJ347203KLM";
-// `AS` + the WHOLE original, S included — which is the correction. Written
-// out rather than interpolated so the string a reader sees is the string.
-const STORE = "ASSBJ347203KLM";
+/** A post-2010 serial: twelve. */
+const SERIAL = "C02740137JKM";
+/** Its barcode, as a scanner reads it. */
+const BARCODE = `S${SERIAL}`;
 
 describe("the shapes themselves", () => {
-  it("an original barcode is S and then ten to twelve", () => {
-    expect(isOriginalBarcode(ORIGINAL)).toBe(true);
-    expect(isOriginalBarcode("SDQXFPXWCK7")).toBe(true); // S + 10
-    expect(isOriginalBarcode("SBJ347203KLMN")).toBe(true); // S + 12
+  it("a barcode is S and then ten to twelve", () => {
+    expect(ORIGINAL_PATTERN.test(BARCODE)).toBe(true);
+    expect(ORIGINAL_PATTERN.test("SDQXFPXWCK7")).toBe(true); // the owner's own
+    expect(ORIGINAL_PATTERN.test(SERIAL)).toBe(false);
+    expect(ORIGINAL_PATTERN.test("S123456789")).toBe(false); // S + nine
+    expect(ORIGINAL_PATTERN.test("S1234567890123")).toBe(false); // S + thirteen
   });
 
-  it("refuses one that is short, long, or unmarked", () => {
-    expect(isOriginalBarcode("SBJ347203")).toBe(false); // S + 9
-    expect(isOriginalBarcode("SBJ347203KLMNO")).toBe(false); // S + 13
-    expect(isOriginalBarcode("BJ347203KLM")).toBe(false); // no marker
+  it("a serial is ten to twelve", () => {
+    expect(BARE_PATTERN.test(SERIAL)).toBe(true);
+    expect(BARE_PATTERN.test("DQXFPXWCK7")).toBe(true);
+    expect(BARE_PATTERN.test("123456789")).toBe(false);
+    expect(BARE_PATTERN.test("1234567890123")).toBe(false);
   });
 
-  it("a store barcode is two issued letters, then a whole original", () => {
-    // The S is KEPT — that is the correction. `ASBJ…` is `AS` + `SBJ…`.
-    expect(isStoreBarcode(STORE, CODES)).toBe(true);
-    expect(STORE).toBe(`AS${ORIGINAL}`);
-  });
-
-  it("is not a store barcode when nobody issued those two letters", () => {
-    // Membership, not shape. `XX` looks exactly like an origin code and is
-    // not one, so taking it for one would bite two characters off a barcode
-    // this shop has never printed.
-    expect(isStoreBarcode("XXSBJ347203KLM", CODES)).toBe(false);
-  });
-
-  it("is not a store barcode without the S behind the code", () => {
-    // The old scheme stripped it. Keeping it is what makes the two windows
-    // impossible to confuse.
-    expect(isStoreBarcode("ASBJ347203KLMN", ["AS"])).toBe(false);
-  });
-
-  it("the two patterns can never both match one string", () => {
-    // The property the whole design rests on: a store barcode is exactly two
-    // characters longer than the original inside it, so no read is both.
-    for (const s of [
-      ORIGINAL,
-      STORE,
-      "SDQXFPXWCK7",
-      "ASSDQXFPXWCK7",
-      "SBJ347203KLMN",
-      "MJSBJ347203KLMN",
-    ]) {
-      expect(ORIGINAL_PATTERN.test(s) && STORE_PATTERN.test(s)).toBe(false);
-    }
+  it("keeps the window where the owner set it", () => {
+    expect([BASE_MIN_LENGTH, BASE_MAX_LENGTH]).toEqual([10, 12]);
   });
 });
 
-describe("reading a barcode", () => {
-  it("reads Apple's own and stores it unchanged", () => {
-    // Nothing is prefixed. This is the correction of 2026-09-01 in one line.
-    expect(readBarcode(ORIGINAL, OPTS)).toEqual({
-      ok: true,
-      scanned: ORIGINAL,
-      kind: "ORIGINAL",
-      serial: ORIGINAL,
-      supplierCode: "",
-    });
+describe("reading a sealed unit's barcode", () => {
+  it("takes the S off and hands back the serial", () => {
+    const r = readBarcode(BARCODE);
+    expect(r).toMatchObject({ ok: true, serial: SERIAL, corrected: false });
   });
 
-  it("reads the shop's sticker back to the same serial", () => {
-    expect(readBarcode(STORE, OPTS)).toEqual({
-      ok: true,
-      scanned: STORE,
-      kind: "STORE",
-      serial: ORIGINAL,
-      supplierCode: "AS",
-    });
+  it("takes the owner's ten-character example", () => {
+    const r = readBarcode("SDQXFPXWCK7");
+    expect(r.ok && r.serial).toBe("DQXFPXWCK7");
   });
 
-  it("needs no supplier to file a serial, which is the point", () => {
-    // The old reader took the PO's supplier and prefixed with it, so a
-    // supplier with no code could not take stock in at all.
-    expect(readBarcode(ORIGINAL).ok).toBe(true);
+  it("refuses a read with no S — the wrong barcode on the box", () => {
+    const r = readBarcode(SERIAL);
+    expect(r).toMatchObject({ ok: false, reason: "no-marker" });
   });
 
-  it("refuses anything that does not begin with S", () => {
-    // The owner's rule, absolute: *"if not begin with S don't accept"*. Twelve
-    // perfectly well-formed characters, and still refused — because that is
-    // what the regulatory barcode beside the serial looks like.
-    expect(readBarcode("BJ347203KLMN", OPTS)).toMatchObject({
-      ok: false,
-      reason: "no-marker",
-    });
-  });
-
-  it("refuses two capitals nobody issued in front of a serial", () => {
-    expect(readBarcode("XXSBJ347203KLM", OPTS)).toMatchObject({
-      ok: false,
-      reason: "no-marker",
-    });
-  });
-
-  it("refuses a short read and a long one, and says which", () => {
-    expect(readBarcode("SBJ347203", OPTS)).toMatchObject({
+  it("refuses a short read and a long one", () => {
+    expect(readBarcode("S123456789")).toMatchObject({
       ok: false,
       reason: "length",
-      length: 9,
+      length: 10,
     });
-    // Two scans into one field with no Enter between them.
-    expect(readBarcode(`${ORIGINAL}${ORIGINAL}`, OPTS)).toMatchObject({
+    expect(readBarcode(`S${SERIAL}${SERIAL}`)).toMatchObject({
       ok: false,
       reason: "length",
     });
   });
 
-  it("refuses an I or an O, which Apple never prints", () => {
-    expect(readBarcode("SBJ34I203KLM", OPTS)).toMatchObject({
-      ok: false,
-      reason: "confusable",
-    });
-    expect(readBarcode("SBJ34O203KLM", OPTS)).toMatchObject({
-      ok: false,
-      reason: "confusable",
-    });
-    // The digits they are misread as are fine.
-    expect(readBarcode("SBJ341203KLM", OPTS).ok).toBe(true);
-    expect(readBarcode("SBJ340203KLM", OPTS).ok).toBe(true);
-  });
-
-  it("judges the store form by the serial inside it", () => {
-    // Anything true of an original barcode has to be true of the one wrapped
-    // in a store barcode, or the same machine would pass one way and fail the
-    // other.
-    expect(readBarcode("ASSBJ34I203KLM", OPTS)).toMatchObject({
-      ok: false,
-      reason: "confusable",
-    });
-  });
-
-  it("upper-cases and trims before judging, because a scan is not a typist", () => {
-    expect(readBarcode(`  ${ORIGINAL.toLowerCase()}  `, OPTS)).toMatchObject({
+  it("reads an I as a 1 and an O as a 0, and says so", () => {
+    const r = readBarcode("SC0274O137JKI");
+    expect(r).toMatchObject({
       ok: true,
-      serial: ORIGINAL,
+      serial: "C02740137JK1",
+      corrected: true,
     });
   });
 
-  it("refuses punctuation inside a right-length read", () => {
-    expect(readBarcode("SBJ-347203KL", OPTS)).toMatchObject({
-      ok: false,
-      reason: "charset",
-    });
-  });
-
-  it("says nothing arrived rather than guessing", () => {
-    expect(readBarcode("   ", OPTS)).toMatchObject({
-      ok: false,
-      reason: "empty",
-    });
-  });
-
-  it("reads a store barcode whose own code begins with S", () => {
-    // The case the old scheme could not settle. `SB` + `SDQXFPXWCK7` has an S
-    // at index 0 AND at index 2, and only one reading survives: the store form
-    // is tested first and demands an issued code with an S behind it, which
-    // `S` alone cannot satisfy.
-    expect(readBarcode("SBSDQXFPXWCK7", { supplierCodes: ["SB"] })).toEqual({
+  it("upper-cases and trims before judging", () => {
+    expect(readBarcode(`  ${BARCODE.toLowerCase()}\n`)).toMatchObject({
       ok: true,
-      scanned: "SBSDQXFPXWCK7",
-      kind: "STORE",
-      serial: "SDQXFPXWCK7",
-      supplierCode: "SB",
+      serial: SERIAL,
     });
   });
-});
 
-describe("storeBarcodeOf", () => {
-  it("puts the origin code in front of the whole serial", () => {
-    expect(storeBarcodeOf(ORIGINAL, "AS")).toBe(STORE);
-  });
-
-  it("refuses to build one without a supplier code", () => {
-    // A half-formed sticker is worse than none: it prints, it scans, and it
-    // scans as nothing.
-    expect(storeBarcodeOf(ORIGINAL, undefined)).toBeNull();
-    expect(storeBarcodeOf(ORIGINAL, "A")).toBeNull();
-  });
-
-  it("refuses to build one from a serial that is not an original barcode", () => {
-    expect(storeBarcodeOf("BJ347203KLM", "AS")).toBeNull();
-  });
-
-  it("round-trips: the sticker reads back to the serial it was made from", () => {
-    const sticker = storeBarcodeOf(ORIGINAL, "AS")!;
-    expect(readBarcode(sticker, OPTS)).toMatchObject({ serial: ORIGINAL });
+  it("refuses punctuation and nothing at all", () => {
+    expect(readBarcode("SC02-40137JKM")).toMatchObject({ reason: "charset" });
+    expect(readBarcode("   ")).toMatchObject({ reason: "empty" });
   });
 });
 
-describe("markTypedSerial — the marker somebody had no reason to type", () => {
-  it("puts the S back on a bare serial read off the case", () => {
-    // The owner's *"if the barcode is typed and is 10–12 digit, auto-add S"*.
-    // The marker is printed under the bars, not on the case, so the number a
-    // person is copying does not have one — and the field used to refuse it.
-    expect(markTypedSerial("BJ347203KLM")).toBe("SBJ347203KLM");
-    expect(isValidSerial(markTypedSerial("BJ347203KLM"))).toBe(true);
+describe("reading a sealed unit's typed serial", () => {
+  it("takes ten to twelve as it is", () => {
+    expect(readTypedSealed(SERIAL)).toMatchObject({ ok: true, serial: SERIAL });
+    expect(readTypedSealed("dqxfpxwck7")).toMatchObject({
+      ok: true,
+      serial: "DQXFPXWCK7",
+    });
   });
 
-  it("takes an older model's eleven characters as well as a modern twelve", () => {
-    // `OLDER_MODEL_PATTERN` is the shape this exists for: pre-2010 Macs carry
-    // eleven characters, everything since carries twelve.
-    const older = "C02DQXFPXWC";
-    expect(OLDER_MODEL_PATTERN.test(older)).toBe(true);
-    expect(older).toHaveLength(11);
-    expect(markTypedSerial(older)).toBe(`S${older}`);
-    expect(markTypedSerial("C02DQXFPXWCK")).toBe("SC02DQXFPXWCK");
+  it("reads I and O as 1 and 0 on the keyboard too (owner answer)", () => {
+    expect(readTypedSealed("CO274O137JKM")).toMatchObject({
+      ok: true,
+      serial: "C02740137JKM",
+      corrected: true,
+    });
   });
 
-  it("upper-cases what was typed in lower case", () => {
-    expect(markTypedSerial("bj347203klm")).toBe("SBJ347203KLM");
+  it("drops the S off a whole barcode typed from under the bars", () => {
+    expect(readTypedSealed(BARCODE)).toMatchObject({
+      ok: true,
+      serial: SERIAL,
+    });
   });
 
-  it("never marks a serial that is already one", () => {
-    // The trap this closes. `SBJ347203KL` is eleven characters, so it is both
-    // a legal marked serial (S + ten) and a legal bare one — and marking it
-    // twice would file the machine under SSBJ347203KL, which no scan of it
-    // will ever match.
-    expect(markTypedSerial("SBJ347203KL")).toBe("SBJ347203KL");
-    expect(markTypedSerial(ORIGINAL)).toBe(ORIGINAL);
+  it("keeps the S of a ten-character serial that begins with one", () => {
+    // Without its first letter it is nine — no barcode — so it is a serial.
+    expect(readTypedSealed("SQXFPXWCK7")).toMatchObject({
+      ok: true,
+      serial: "SQXFPXWCK7",
+    });
   });
 
-  it("leaves anything it cannot rescue for validateSerial to refuse", () => {
-    // Too short to be either form, and a marked serial three characters
-    // short. Both come back untouched and are refused by name.
-    expect(markTypedSerial("BJ34720")).toBe("BJ34720");
-    expect(validateSerial(markTypedSerial("BJ34720"))).toBe("no-marker");
-    expect(markTypedSerial("SBJ347203")).toBe("SBJ347203");
-    expect(validateSerial(markTypedSerial("SBJ347203"))).toBe("length");
-  });
-
-  it("does not rescue a scan — that is the whole point of the marker", () => {
-    // Not a property of this function but of its one caller: a scan is passed
-    // through untouched, because a barcode that arrived without an S was
-    // aimed at the regulatory code beside the serial's. `readBarcode` is what
-    // a scan goes through, and it refuses the same string this would mark.
-    expect(readBarcode("BJ347203KLM", OPTS)).toMatchObject({
+  it("refuses a length no serial has", () => {
+    expect(readTypedSealed("123456789")).toMatchObject({
       ok: false,
-      reason: "no-marker",
+      reason: "length",
+    });
+    expect(readTypedSealed("C02740137JKMXYZ")).toMatchObject({
+      ok: false,
+      reason: "length",
     });
   });
 });
 
-describe("validateSerial — the typed route", () => {
-  it("holds a typed serial to the same shape as a scanned one", () => {
-    // The owner's *"if any barcode is not adhering to this rule then do not
-    // accept"*. The old rules let a hand-keyed serial through on length alone.
-    expect(isValidSerial(ORIGINAL)).toBe(true);
-    expect(validateSerial("BJ347203KLM")).toBe("no-marker");
-    expect(validateSerial("SBJ347203")).toBe("length");
-    expect(validateSerial("SBJ-347203KL")).toBe("charset");
-    expect(validateSerial("")).toBe("empty");
+describe("validateSerial", () => {
+  it("holds a sealed unit's stored serial to ten to twelve", () => {
+    expect(validateSerial(SERIAL)).toBeNull();
+    expect(validateSerial(BARCODE.padEnd(14, "X"))).toBe("length");
+    expect(validateSerial("C02/40137JKM")).toBe("charset");
   });
 
-  it("lets an I or an O through, unlike a scan", () => {
-    // Deliberate. That rule catches a SCANNER misreading a 1 or a 0, and the
-    // person typing is the one witness who can see the machine. It becomes a
-    // warning at print time instead.
-    expect(isValidSerial("SBJ34I203KLM")).toBe(true);
-    expect(inspectStoredSerial("SBJ34I203KLM")).toMatchObject({
-      fault: "confusable",
-      level: "warning",
-    });
-  });
-});
-
-describe("resolveScannedSerial — the sales floor", () => {
-  const KNOWN = [ORIGINAL, "SDQXFPXWCK7"];
-
-  it("returns a stored serial untouched", () => {
-    expect(resolveScannedSerial(ORIGINAL, KNOWN, CODES)).toBe(ORIGINAL);
-  });
-
-  it("finds the unit from the shop's own sticker", () => {
-    // The whole reason this function exists: the counter reads whichever
-    // barcode faces them.
-    expect(resolveScannedSerial(STORE, KNOWN, CODES)).toBe(ORIGINAL);
-  });
-
-  it("still finds it under a code the shop has since retired", () => {
-    // `readBarcode` will not strip two letters it cannot vouch for, and that
-    // is right on the way IN. Out here a serial that EXISTS is proof enough,
-    // or machines labelled by a supplier who has left become unscannable.
-    expect(resolveScannedSerial(STORE, KNOWN, [])).toBe(ORIGINAL);
-  });
-
-  it("hands back anything it cannot place, so the caller says unknown", () => {
-    expect(resolveScannedSerial("SZZ999999ZZZ", KNOWN, CODES)).toBe(
-      "SZZ999999ZZZ",
-    );
-    expect(resolveScannedSerial("not a serial", KNOWN, CODES)).toBe(
-      "NOT A SERIAL",
-    );
-  });
-
-  it("says nothing about nothing", () => {
-    expect(resolveScannedSerial("", KNOWN, CODES)).toBe("");
+  it("asks a second-hand one only that it is there", () => {
+    expect(validateSerial("anything-at-all", { strict: false })).toBeNull();
+    expect(validateSerial("  ", { strict: false })).toBe("empty");
   });
 });
 
 describe("inspectStoredSerial — the way out, onto a sticker", () => {
-  it("passes a serial in the current shape", () => {
-    expect(inspectStoredSerial(ORIGINAL)).toBeNull();
+  it("passes a serial in either era's shape", () => {
+    expect(inspectStoredSerial(SERIAL)).toBeNull();
+    expect(inspectStoredSerial(BARCODE)).toBeNull();
   });
 
-  it("refuses to print an empty one, and only that", () => {
-    expect(inspectStoredSerial("")).toMatchObject({ level: "error" });
+  it("has nothing to say about length — a second-hand serial is taken as read", () => {
+    expect(inspectStoredSerial("C02")).toBeNull();
+  });
+
+  it("refuses to print an empty one", () => {
+    expect(inspectStoredSerial("")).toEqual({ fault: "empty", level: "error" });
     expect(isPrintableSerial("")).toBe(false);
   });
 
-  it("warns about a serial that predates the rules but still prints it", () => {
-    // Everything taken in before the correction. The shop may well still have
-    // the machine, and refusing would leave it with no label at all.
-    expect(inspectStoredSerial("C02AA111AAAX")).toMatchObject({
-      fault: "shape",
+  it("warns about an I, an O, or punctuation, and prints anyway", () => {
+    expect(inspectStoredSerial("C0274O137JKM")).toEqual({
+      fault: "confusable",
       level: "warning",
     });
-    expect(isPrintableSerial("C02AA111AAAX")).toBe(true);
+    expect(inspectStoredSerial("C02-740137")).toEqual({
+      fault: "charset",
+      level: "warning",
+    });
+    expect(isPrintableSerial("C0274O137JKM")).toBe(true);
   });
 
   it("refuses characters no symbology can carry", () => {
-    expect(inspectStoredSerial("SBJ3472 03KL")).toMatchObject({
+    expect(inspectStoredSerial("C02740137JK€")).toEqual({
       fault: "unencodable",
       level: "error",
     });
@@ -370,19 +188,17 @@ describe("inspectStoredSerial — the way out, onto a sticker", () => {
 });
 
 describe("the small helpers", () => {
-  it("normalises a scan the way every entry point does", () => {
-    expect(normaliseScan("  sbj347203klm ")).toBe(ORIGINAL);
+  it("normalises a read the way every entry point does", () => {
+    expect(normaliseScan("  sc02 7401 37jk \n")).toBe("SC02740137JK");
+  });
+
+  it("maps only the two letters Apple leaves out", () => {
+    expect(correctScanConfusables("IOXO1")).toBe("10X01");
   });
 
   it("suggests a supplier code from a name, dropping the legal form", () => {
     expect(suggestSupplierCode("CV Apel Segar")).toBe("AS");
-    expect(suggestSupplierCode("PT Makmur Jaya")).toBe("MJ");
-    expect(suggestSupplierCode("Sinar")).toBe("SI");
-    expect(suggestSupplierCode("PT")).toBe("");
-  });
-
-  it("keeps the base window where the owner set it", () => {
-    // Guards the two numbers every rule in the file is written against.
-    expect([BASE_MIN_LENGTH, BASE_MAX_LENGTH]).toEqual([10, 12]);
+    expect(suggestSupplierCode("PT Mac Jaya")).toBe("MJ");
+    expect(suggestSupplierCode("Batam")).toBe("BA");
   });
 });

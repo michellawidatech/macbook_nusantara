@@ -27,6 +27,8 @@
 import type {
   MockDb,
   Po,
+  PoFee,
+  PoFeeKind,
   PoPayment,
   PoPaymentFor,
   Unit,
@@ -275,23 +277,47 @@ export function canReopenQc(unit: Unit): boolean {
   return ["TERSEDIA", "SERVIS", "RETUR_SUPPLIER"].includes(unit.status);
 }
 
+/**
+ * The bucket a payment for this expense is filed under — `Payment.appliedTo`.
+ *
+ * The schema's `PayTarget` has three members (goods, shipping, tax) and an
+ * expense has four kinds, so customs and anything else file under tax, which
+ * is where every non-shipping charge sat before expenses were a list. The
+ * payment's `feeId` is what says which expense it really paid; this only keeps
+ * the older bucket column truthful for anything that still reads it.
+ */
+export function payTargetOfFee(kind: PoFeeKind): PoPaymentFor {
+  return kind === "SHIPPING" ? "SHIPPING" : "TAX";
+}
+
+/** One side of an invoice's money: what it is worth and what has been paid. */
+export interface Standing {
+  readonly due: number;
+  readonly paid: number;
+  /** Never negative: an overpayment is a supplier credit, not a negative debt. */
+  readonly owed: number;
+}
+
+/** One expense, and what has been paid against it. */
+export interface FeeStanding extends Standing {
+  readonly fee: PoFee;
+}
+
 /** What an order costs and what is still owed. */
 export interface PoTotals {
   /** Σ line totals, ignoring lines the supplier never sent. */
   readonly subtotal: number;
-  /** Shipping + tax, less any negotiated discount. */
-  readonly fees: number;
+  /** Σ the invoice's expenses — shipping, tax, customs, anything. */
+  readonly expenses: number;
   readonly total: number;
   readonly paid: number;
   /** Never negative: an overpayment is a supplier credit, not a negative debt. */
   readonly outstanding: number;
   readonly fullyPaid: boolean;
-  /** What each bucket is worth on the invoice. Sums to `total`. */
-  readonly due: Readonly<Record<PoPaymentFor, number>>;
-  /** What has actually been transferred against each bucket. */
-  readonly paidFor: Readonly<Record<PoPaymentFor, number>>;
-  /** Still owed per bucket, never negative — same rule as `outstanding`. */
-  readonly owedFor: Readonly<Record<PoPaymentFor, number>>;
+  /** The goods: the subtotal less the discount, and what was paid for them. */
+  readonly goods: Standing;
+  /** Every expense, in the invoice's order, and what was paid against each. */
+  readonly feeStandings: readonly FeeStanding[];
 }
 
 /**
@@ -306,48 +332,82 @@ export interface PoTotals {
  * an overpayment. That is correct rather than awkward: until someone says what
  * was bought, the shop genuinely holds credit with that supplier, and the
  * screen says "paid Rp X, nothing invoiced yet".
+ *
+ * ## Which expense a payment paid (2026-09-18)
+ *
+ * A payment that names its expense (`feeId`) paid that expense. One recorded
+ * before expenses were a list names only a bucket — shipping, or tax, which
+ * held every other charge — and is spread over that bucket's expenses in
+ * order, each filled before the next. What no expense can take, like a
+ * payment against a bucket that has none, counts towards the goods: it is
+ * money the supplier was paid on this invoice all the same.
  */
 export function poTotals(po: Po): PoTotals {
+  // Net of each line's own discount (owner ask 2026-09-20). `po.discount` is
+  // the one negotiated off the whole order and is taken off below; this one
+  // was given on particular goods, so it belongs to their line total.
   const subtotal = po.items
     .filter((i) => !i.notReceived)
-    .reduce((t, i) => t + i.unitCost * i.qty, 0);
-  const fees = po.shippingFee + po.taxFee - po.discount;
-  const total = Math.max(0, subtotal + fees);
+    .reduce(
+      (t, i) => t + Math.max(0, i.unitCost * i.qty - (i.discount ?? 0)),
+      0,
+    );
+  const expenses = po.fees.reduce((t, f) => t + f.amount, 0);
+  const total = Math.max(0, subtotal + expenses - po.discount);
   const paid = po.payments.reduce((t, p) => t + p.amount, 0);
+
+  const paidFee = new Map(po.fees.map((f) => [f.id, 0]));
+  let paidGoods = 0;
+  /** Money that names a bucket and no expense. */
+  const unlinked = { SHIPPING: 0, TAX: 0 };
+  for (const p of po.payments) {
+    if (p.feeId !== undefined && paidFee.has(p.feeId)) {
+      paidFee.set(p.feeId, paidFee.get(p.feeId)! + p.amount);
+      continue;
+    }
+    const bucket = paymentFor(p);
+    if (bucket === "ORDER") paidGoods += p.amount;
+    else unlinked[bucket] += p.amount;
+  }
+  for (const bucket of ["SHIPPING", "TAX"] as const) {
+    let left = unlinked[bucket];
+    for (const fee of po.fees) {
+      if (left <= 0) break;
+      if (payTargetOfFee(fee.kind) !== bucket) continue;
+      const room = Math.max(0, fee.amount - paidFee.get(fee.id)!);
+      const take = Math.min(room, left);
+      paidFee.set(fee.id, paidFee.get(fee.id)! + take);
+      left -= take;
+    }
+    paidGoods += left;
+  }
 
   // The discount comes off the GOODS, which is where it was negotiated: a
   // supplier knocking a million off does not reduce the forwarder's bill.
   // Clamped at zero, so a discount larger than the goods it was given against
-  // never turns the bucket into a credit the shipping bucket would have to
-  // absorb — the three then sum to slightly more than `total`, which is a
-  // rounding of an invoice nobody has ever written rather than an error worth
-  // machinery.
-  const due: Record<PoPaymentFor, number> = {
-    ORDER: Math.max(0, subtotal - po.discount),
-    SHIPPING: po.shippingFee,
-    TAX: po.taxFee,
-  };
-  const paidFor: Record<PoPaymentFor, number> = {
-    ORDER: 0,
-    SHIPPING: 0,
-    TAX: 0,
-  };
-  for (const p of po.payments) paidFor[paymentFor(p)] += p.amount;
-
+  // never turns into a credit an expense would have to absorb.
+  const goodsDue = Math.max(0, subtotal - po.discount);
   return {
     subtotal,
-    fees,
+    expenses,
     total,
     paid,
     outstanding: Math.max(0, total - paid),
     fullyPaid: total > 0 && paid >= total,
-    due,
-    paidFor,
-    owedFor: {
-      ORDER: Math.max(0, due.ORDER - paidFor.ORDER),
-      SHIPPING: Math.max(0, due.SHIPPING - paidFor.SHIPPING),
-      TAX: Math.max(0, due.TAX - paidFor.TAX),
+    goods: {
+      due: goodsDue,
+      paid: paidGoods,
+      owed: Math.max(0, goodsDue - paidGoods),
     },
+    feeStandings: po.fees.map((fee) => {
+      const feePaid = paidFee.get(fee.id)!;
+      return {
+        fee,
+        due: fee.amount,
+        paid: feePaid,
+        owed: Math.max(0, fee.amount - feePaid),
+      };
+    }),
   };
 }
 
@@ -376,37 +436,37 @@ export const PO_STATUS_LABEL: Record<Po["status"], string> = {
 };
 
 /**
- * Where an invoice stands on MONEY — three answers (owner revision 2026-09-15).
+ * Where an invoice stands on MONEY — three answers (owner revision 2026-09-15,
+ * renamed 2026-09-18).
  *
- * > *"Per invoice should have 3 status 'open' for unpaid, 'close' for paid,
- * > 'paid full' for fully paid. Remove the 'Stage', it should be payment
- * > status instead."* … *"Open is not paid yet, Closed is paid but not fully,
- * > and Paid in Full for paid all."*
+ * > *"I think we can change the payment status of each invoice to be 'open',
+ * > 'partially paid', and 'fully paid'."*
  *
- * This REPLACES `poStage` on the list and on the order's own header. A stage
- * answered "how far have the goods got", which every screen behind the row
- * already shows — the Products column counts the lines, Serials & QC shows
- * every machine and what was decided about it — while the question staff
- * actually bring to this list is who is still owed money.
+ * The middle one was called "Closed" until 2026-09-18, which said the
+ * opposite of what it meant — and "closing" an invoice is a different act on
+ * the same screen (`Po.closedAt`), so the codes changed with the words.
  *
- * `poStage` and `unitStage` stay: a UNIT's stage is what the QC grid tags and
- * what the reopen dialog names, and that has nothing to do with payment.
+ * This REPLACED `poStage` on the list and on the order's own header on
+ * 2026-09-15. A stage answered "how far have the goods got", which the order's
+ * own page already shows, while the question staff bring to the list is who is
+ * still owed money. `poStage` and `unitStage` stay: a UNIT's stage is what the
+ * reopen dialog names, and that has nothing to do with payment.
  *
- * ## Why an unpriced invoice with money against it is CLOSED, not paid
+ * ## Why an unpriced invoice with money against it is partly paid
  *
  * An order with no lines yet and a transfer against it is the owner's
- * paid-first case (see `poTotals`). It cannot be `PAID_IN_FULL`, because
- * nobody knows what full is; it is not `OPEN` either, because money has moved.
- * Partly paid is the honest reading and the one that keeps the row in front of
+ * paid-first case (see `poTotals`). It cannot be fully paid, because nobody
+ * knows what full is; it is not open either, because money has moved. Partly
+ * paid is the honest reading and the one that keeps the row in front of
  * whoever has to finish it.
  */
 export type PoPaymentStatus =
   /** Nothing has been paid against it. */
   | "OPEN"
   /** Something has, but not all of it. */
-  | "CLOSED"
+  | "PARTIALLY_PAID"
   /** Settled in full. */
-  | "PAID_IN_FULL";
+  | "FULLY_PAID";
 
 /**
  * In English, because this is a module-level constant with no `t` in scope —
@@ -416,30 +476,30 @@ export type PoPaymentStatus =
  */
 export const PO_PAYMENT_STATUS_LABEL: Record<PoPaymentStatus, string> = {
   OPEN: "Open",
-  CLOSED: "Closed",
-  PAID_IN_FULL: "Paid in full",
+  PARTIALLY_PAID: "Partially paid",
+  FULLY_PAID: "Fully paid",
 };
 
 export const PO_PAYMENT_STATUS_COLOR: Record<PoPaymentStatus, string> = {
   // Red rather than grey: an invoice nobody has paid anything against is the
   // one this column exists to surface.
   OPEN: "red",
-  CLOSED: "gold",
-  PAID_IN_FULL: "green",
+  PARTIALLY_PAID: "gold",
+  FULLY_PAID: "green",
 };
 
 /** Ordered as the money moves, for a facet that reads like a progression. */
 export const PO_PAYMENT_STATUSES: readonly PoPaymentStatus[] = [
   "OPEN",
-  "CLOSED",
-  "PAID_IN_FULL",
+  "PARTIALLY_PAID",
+  "FULLY_PAID",
 ];
 
 /** Which of the three an invoice is at. Derived — there is no column for it. */
 export function poPaymentStatus(po: Po): PoPaymentStatus {
   const { paid, fullyPaid } = poTotals(po);
-  if (fullyPaid) return "PAID_IN_FULL";
-  return paid > 0 ? "CLOSED" : "OPEN";
+  if (fullyPaid) return "FULLY_PAID";
+  return paid > 0 ? "PARTIALLY_PAID" : "OPEN";
 }
 
 /**

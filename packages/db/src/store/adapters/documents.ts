@@ -13,13 +13,15 @@
  * not written (`Order_total_arithmetic_check` holds the figure before the
  * trade-in; the browser's `total` is after it).
  */
-import { deepEqual } from "@nusantara/store";
+import { byFeeOrder, deepEqual } from "@nusantara/store";
 import type { ScanResult } from "../../../generated/client/index.js";
 import { StoreValidationError } from "../errors.js";
 import {
   type Adapter,
   type RowOf,
   type WriteContext,
+  FEE_KIND_FROM,
+  FEE_KIND_OF,
   OPNAME_STATUS_FROM,
   PAY_STATUS_OF_STATE,
   PAY_TARGET_FROM,
@@ -117,7 +119,10 @@ async function syncPoItems(ctx: WriteContext, po: Po): Promise<void> {
       spec: sku?.variantLabel ?? null,
       qty: item.qty,
       unitCost: item.unitCost,
-      lineTotal: BigInt(item.qty) * item.unitCost,
+      discount: item.discount ?? 0n,
+      // Net of the line's own discount: `lineTotal` is what is owed for the
+      // line, and the CHECK keeps the discount inside it.
+      lineTotal: BigInt(item.qty) * item.unitCost - (item.discount ?? 0n),
       notReceived: item.notReceived ?? false,
       sortOrder,
       removedAt: null,
@@ -155,44 +160,48 @@ async function syncPoItems(ctx: WriteContext, po: Po): Promise<void> {
   }
 }
 
+/**
+ * The invoice's expenses, one `PurchaseOrderFee` row each (owner ask
+ * 2026-09-18). Synced by key like the lines: updated where the row exists,
+ * created where it does not, and marked removed — never deleted — where the
+ * browser dropped it, because a payment may still name it.
+ */
 async function syncPoFees(ctx: WriteContext, po: Po): Promise<void> {
   const { tx } = ctx;
-  const fees = await tx.purchaseOrderFee.findMany({
+  const existing = await tx.purchaseOrderFee.findMany({
     where: { poId: po.id },
-    orderBy: { id: "asc" },
   });
-  const shipping = fees.filter((f) => f.kind === "ONGKIR");
-  const tax = fees.filter((f) => f.kind !== "ONGKIR");
-  for (const [kind, label, amount, rows] of [
-    ["ONGKIR", "Ongkir", po.shippingFee, shipping],
-    ["PAJAK", "Pajak", po.taxFee, tax],
-  ] as const) {
-    const [first, ...rest] = rows;
-    if (first === undefined) {
-      if (amount > 0n) {
-        await tx.purchaseOrderFee.create({
-          data: {
-            id: `${po.id}~${kind.toLowerCase()}`,
-            poId: po.id,
-            label,
-            kind,
-            amount,
-          },
-        });
-      }
-    } else if (first.amount !== amount) {
-      await tx.purchaseOrderFee.update({
-        where: { id: first.id },
-        data: { amount },
+  const left = new Map(existing.map((f) => [f.id, f]));
+  for (const fee of po.fees) {
+    if (fee.amount < 0n) {
+      throw new StoreValidationError(
+        "Biaya tidak boleh negatif.",
+        "pos",
+        po.id,
+      );
+    }
+    const data = {
+      label: fee.label,
+      kind: FEE_KIND_OF[fee.kind],
+      amount: fee.amount,
+      inCogs: fee.inCogs,
+      removedAt: null,
+    };
+    if (left.has(fee.id)) {
+      left.delete(fee.id);
+      await tx.purchaseOrderFee.update({ where: { id: fee.id }, data });
+    } else {
+      await tx.purchaseOrderFee.create({
+        data: { id: fee.id, poId: po.id, ...data },
       });
     }
-    for (const extra of rest) {
-      if (extra.amount !== 0n) {
-        await tx.purchaseOrderFee.update({
-          where: { id: extra.id },
-          data: { amount: 0n },
-        });
-      }
+  }
+  for (const fee of left.values()) {
+    if (fee.removedAt === null) {
+      await tx.purchaseOrderFee.update({
+        where: { id: fee.id },
+        data: { removedAt: ctx.now },
+      });
     }
   }
 }
@@ -201,10 +210,20 @@ async function syncPoPayments(ctx: WriteContext, po: Po): Promise<void> {
   const { tx } = ctx;
   const existing = await tx.payment.findMany({ where: { poId: po.id } });
   const left = new Map(existing.map((p) => [p.id, p]));
+  const feeIds = new Set(po.fees.map((f) => f.id));
   for (const [sortOrder, p] of po.payments.entries()) {
     if (p.amount <= 0n) {
       throw new StoreValidationError(
         "Pembayaran harus lebih dari nol.",
+        "pos",
+        po.id,
+      );
+    }
+    // An expense of THIS invoice, still on it. The foreign key alone would
+    // take another invoice's expense, or one taken off this one.
+    if (p.feeId !== undefined && !feeIds.has(p.feeId)) {
+      throw new StoreValidationError(
+        "Pembayaran menunjuk biaya yang tidak ada di faktur ini.",
         "pos",
         po.id,
       );
@@ -218,6 +237,10 @@ async function syncPoPayments(ctx: WriteContext, po: Po): Promise<void> {
       paidAt: at,
       recordedAt: at,
       fromDepositId: p.fromDepositId ?? null,
+      poFeeId: p.feeId ?? null,
+      // Absent means it went through the shop, as every payment did before
+      // the switch (owner answer 2026-09-22).
+      inBalance: p.inBalance ?? true,
       sortOrder,
       voidedAt: null,
     };
@@ -335,7 +358,7 @@ export const pos: Adapter<"pos"> = {
             },
           },
         },
-        fees: true,
+        fees: { where: { removedAt: null } },
         payments: {
           where: { voidedAt: null },
           orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
@@ -357,6 +380,7 @@ export const pos: Adapter<"pos"> = {
         serial: i.serials[0]?.serial ?? null,
         qty: i.qty,
         unitCost: i.unitCost,
+        discount: i.discount === 0n ? undefined : i.discount,
         notReceived: i.notReceived ? true : undefined,
       })),
       payments: p.payments.map((pay) => ({
@@ -366,13 +390,22 @@ export const pos: Adapter<"pos"> = {
         at: isoOf(pay.recordedAt ?? pay.paidAt ?? p.orderedAt),
         appliedTo: PAY_TARGET_FROM[pay.appliedTo],
         fromDepositId: pay.fromDepositId ?? undefined,
+        feeId: pay.poFeeId ?? undefined,
+        // Only a `false` is said; true is the absent key the browser wrote.
+        inBalance: pay.inBalance ? undefined : false,
       })),
-      shippingFee: sum(
-        p.fees.filter((f) => f.kind === "ONGKIR").map((f) => f.amount),
-      ),
-      taxFee: sum(
-        p.fees.filter((f) => f.kind !== "ONGKIR").map((f) => f.amount),
-      ),
+      // In one order on every till, whatever order the rows were written in:
+      // the ids are random tokens, and a list that reshuffles on each poll is
+      // a list nobody can find their place in. `byFeeOrder` is the browser's.
+      fees: p.fees
+        .map((f) => ({
+          id: f.id,
+          kind: FEE_KIND_FROM[f.kind],
+          label: f.label,
+          amount: f.amount,
+          inCogs: f.inCogs,
+        }))
+        .sort(byFeeOrder),
       discount: p.discount,
       status: PO_STATUS_FROM[p.status],
       closedAt: optionalIso(p.closedAt),
@@ -387,8 +420,10 @@ export const pos: Adapter<"pos"> = {
         await cancelPo(ctx, r.key);
         continue;
       }
-      const subtotal = sum(n.items.map((i) => BigInt(i.qty) * i.unitCost));
-      const feesTotal = n.shippingFee + n.taxFee;
+      const subtotal = sum(
+        n.items.map((i) => BigInt(i.qty) * i.unitCost - (i.discount ?? 0n)),
+      );
+      const feesTotal = sum(n.fees.map((f) => f.amount));
       const gross = subtotal + feesTotal - n.discount;
       const orderedAt = dateOfDay(n.date);
       const existing =
@@ -432,11 +467,8 @@ export const pos: Adapter<"pos"> = {
       }
       if (r.base === undefined || !deepEqual(r.base.items, n.items))
         await syncPoItems(ctx, n);
-      if (
-        r.base === undefined ||
-        r.base.shippingFee !== n.shippingFee ||
-        r.base.taxFee !== n.taxFee
-      ) {
+      // Before the payments: a payment names its expense by foreign key.
+      if (r.base === undefined || !deepEqual(r.base.fees, n.fees)) {
         await syncPoFees(ctx, n);
       }
       if (r.base === undefined || !deepEqual(r.base.payments, n.payments)) {
@@ -474,6 +506,7 @@ export const deposits: Adapter<"deposits"> = {
       method: d.method.code,
       at: isoOf(d.at),
       note: d.note ?? undefined,
+      inBalance: d.inBalance ? undefined : false,
       staff: d.staff.name,
       allocations: d.allocations.map((a) => ({
         id: a.id,
@@ -497,6 +530,7 @@ export const deposits: Adapter<"deposits"> = {
         methodId: await ctx.paymentMethodId(n.method),
         at: instantOf(n.at),
         note: blankToNull(n.note),
+        inBalance: n.inBalance ?? true,
       };
       if (r.base === undefined) {
         await tx.supplierDeposit.create({
@@ -685,10 +719,20 @@ async function syncSaleLines(
       sku: { name: string; variantLabel: string | null };
     }
   >,
+  /**
+   * The sale was already in the database before this commit. A unit that
+   * joins it then — the replacement an exchange hands over (2026-09-21) —
+   * adds what it cost to `Order.cogs`, which a NEW sale is given whole when
+   * its row is created. The counted half does the same from its `TERJUAL`
+   * moves (`adapters/stock.ts`).
+   */
+  alreadyWritten: boolean,
 ): Promise<void> {
   const { tx } = ctx;
+  // Unit lines only: a counted product's line has no unit and is kept by
+  // `syncCountedLines`.
   const existing = await tx.orderItem.findMany({
-    where: { orderId: sale.id },
+    where: { orderId: sale.id, unitId: { not: null } },
     select: {
       id: true,
       unitId: true,
@@ -748,6 +792,88 @@ async function syncSaleLines(
       where: { id: unit.id },
       data: { soldOrderItemId: item.id },
     });
+    if (alreadyWritten) {
+      await tx.order.update({
+        where: { id: sale.id },
+        data: { cogs: { increment: unit.buy } },
+      });
+    }
+  }
+  if (left.size > 0) {
+    throw new StoreValidationError(
+      "Baris penjualan tidak bisa dihapus — catat retur.",
+      "orders",
+      sale.id,
+    );
+  }
+}
+
+/**
+ * A sale's counted lines — accessories, by quantity (2026-09-19) — as
+ * `OrderItem` rows with no unit, keyed by the browser's line id. The cost is
+ * not written here: it arrives with the `TERJUAL` stock moves naming the line
+ * (`adapters/stock.ts`), later in the same commit.
+ */
+async function syncCountedLines(ctx: WriteContext, sale: Sale): Promise<void> {
+  const { tx } = ctx;
+  const existing = await tx.orderItem.findMany({
+    where: { orderId: sale.id, unitId: null },
+    select: { id: true },
+  });
+  const left = new Set(existing.map((i) => i.id));
+  const lines = sale.lines ?? [];
+  const skus = await tx.sku.findMany({
+    where: { id: { in: lines.map((l) => l.skuId) } },
+    select: { id: true, name: true, variantLabel: true },
+  });
+  const skuOf = new Map(skus.map((s) => [s.id, s]));
+  for (const [i, l] of lines.entries()) {
+    const sku = skuOf.get(l.skuId);
+    if (sku === undefined) {
+      throw new StoreValidationError(
+        `Produk ${l.skuId} tidak ditemukan.`,
+        "orders",
+        sale.id,
+      );
+    }
+    const returned = l.returnedQty ?? 0;
+    const data = {
+      skuId: l.skuId,
+      name: sku.name,
+      variant: sku.variantLabel,
+      qty: l.qty,
+      price: l.price,
+      sub: l.price * BigInt(l.qty),
+      listPrice: l.listPrice ?? null,
+      returnedQty: returned,
+      sortOrder: sale.serials.length + i,
+    };
+    if (left.has(l.id)) {
+      left.delete(l.id);
+      await tx.orderItem.update({
+        where: { id: l.id },
+        data: {
+          ...data,
+          ...(returned > 0 ? { returnReason: "Retur pelanggan" } : {}),
+        },
+      });
+      if (returned > 0) {
+        await tx.orderItem.updateMany({
+          where: { id: l.id, returnedAt: null },
+          data: { returnedAt: ctx.now },
+        });
+      }
+      continue;
+    }
+    await tx.orderItem.create({
+      data: {
+        id: l.id,
+        orderId: sale.id,
+        unitId: null,
+        ...data,
+        cogs: 0n,
+      },
+    });
   }
   if (left.size > 0) {
     throw new StoreValidationError(
@@ -776,6 +902,11 @@ async function syncSalePayments(ctx: WriteContext, sale: Sale): Promise<void> {
       recordedAt: at,
       channel: p.channel === undefined ? null : PLATFORM_OF_SOURCE[p.channel],
       note: blankToNull(p.note),
+      // The marketplace's order number (owner ask 2026-09-19) — the key a
+      // payout report is matched on. `Payment.ref` has been in the schema
+      // since the supplier side needed one.
+      ref: blankToNull(p.ref),
+      inBalance: p.inBalance ?? true,
       sortOrder,
       voidedAt: null,
     };
@@ -795,6 +926,42 @@ async function syncSalePayments(ctx: WriteContext, sale: Sale): Promise<void> {
       });
     }
   }
+  /*
+   * Money handed back — a return that refunds (owner brief 2026-09-19). The
+   * same table, the other direction: settled the moment it is recorded,
+   * because a refund is recorded when it is paid.
+   */
+  for (const [i, r] of (sale.refunds ?? []).entries()) {
+    if (r.amount <= 0n) continue;
+    const at = instantOf(r.at);
+    const data = {
+      methodId: await ctx.paymentMethodId(r.method),
+      amount: r.amount,
+      status: PAY_STATUS_OF_STATE.SETTLED,
+      paidAt: at,
+      dueAt: null,
+      recordedAt: at,
+      channel: null,
+      note: blankToNull(r.note),
+      sortOrder: (sale.payments?.length ?? 0) + i,
+      voidedAt: null,
+    };
+    if (left.has(r.id)) {
+      left.delete(r.id);
+      await tx.payment.update({ where: { id: r.id }, data });
+    } else {
+      await tx.payment.create({
+        data: {
+          id: r.id,
+          orderId: sale.id,
+          direction: "KELUAR",
+          appliedTo: "BARANG",
+          staffId: ctx.staffId,
+          ...data,
+        },
+      });
+    }
+  }
   for (const p of left.values()) {
     if (p.voidedAt === null) {
       await tx.payment.update({
@@ -802,6 +969,47 @@ async function syncSalePayments(ctx: WriteContext, sale: Sale): Promise<void> {
         data: { voidedAt: ctx.now },
       });
     }
+  }
+}
+
+/**
+ * What returns took off a sale's bill (owner brief 2026-09-19) — the table
+ * the return flow was always meant to fill (see `OrderAdjustment.code`).
+ * Append-only: an adjustment is a record that something happened, so one
+ * that disappears from the browser's copy is refused rather than deleted.
+ */
+async function syncOrderAdjustments(
+  ctx: WriteContext,
+  sale: Sale,
+): Promise<void> {
+  const { tx } = ctx;
+  const existing = await tx.orderAdjustment.findMany({
+    where: { orderId: sale.id },
+  });
+  const left = new Map(existing.map((a) => [a.id, a]));
+  for (const a of sale.adjustments ?? []) {
+    const data = {
+      type: a.type,
+      code: blankToNull(a.code),
+      amount: a.amount,
+      reason: a.reason,
+      at: instantOf(a.at),
+    };
+    if (left.has(a.id)) {
+      left.delete(a.id);
+      await tx.orderAdjustment.update({ where: { id: a.id }, data });
+    } else {
+      await tx.orderAdjustment.create({
+        data: { id: a.id, orderId: sale.id, staffId: ctx.staffId, ...data },
+      });
+    }
+  }
+  if (left.size > 0) {
+    throw new StoreValidationError(
+      "Penyesuaian penjualan tidak bisa dihapus.",
+      "orders",
+      sale.id,
+    );
   }
 }
 
@@ -829,6 +1037,7 @@ export const orders: Adapter<"orders"> = {
           orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
           include: { method: { select: { code: true } } },
         },
+        adjustments: { orderBy: [{ at: "asc" }, { id: "asc" }] },
         payMethod: { select: { code: true } },
       },
     });
@@ -839,7 +1048,13 @@ export const orders: Adapter<"orders"> = {
           : [{ serial: i.unit.serial, price: i.price, listPrice: i.listPrice }],
       );
       const listed = lines.filter((l) => l.listPrice !== null);
+      // A counted product's line — an accessory, no unit (2026-09-19).
+      const counted = o.items.filter((i) => i.unitId === null);
       const afterTrade = o.total - o.tradeCredit;
+      // What the customer paid, and what was handed back — one table, told
+      // apart by direction.
+      const paidIn = o.payments.filter((p) => p.direction === "MASUK");
+      const paidOut = o.payments.filter((p) => p.direction === "KELUAR");
       return {
         id: o.id,
         code: o.code,
@@ -853,18 +1068,29 @@ export const orders: Adapter<"orders"> = {
             : Object.fromEntries(
                 listed.map((l) => [l.serial, l.listPrice as bigint]),
               ),
+        lines:
+          counted.length === 0
+            ? undefined
+            : counted.map((i) => ({
+                id: i.id,
+                skuId: i.skuId,
+                qty: i.qty,
+                price: i.price,
+                listPrice: i.listPrice ?? undefined,
+                returnedQty: i.returnedQty > 0 ? i.returnedQty : undefined,
+              })),
         discount: o.discount,
         discountId: o.discountId ?? undefined,
         source: SOURCE_OF_PLATFORM[o.platform],
         salesmanId: o.salespersonId ?? undefined,
         referralSourceId: o.referralSourceId ?? undefined,
         shippingAddress: o.shippingAddress ?? undefined,
-        payMethod: o.payMethod?.code ?? o.payments[0]?.method.code ?? "TUNAI",
+        payMethod: o.payMethod?.code ?? paidIn[0]?.method.code ?? "TUNAI",
         settled: o.status === "LUNAS",
         payments:
-          o.payments.length === 0
+          paidIn.length === 0
             ? undefined
-            : o.payments.map((p) => ({
+            : paidIn.map((p) => ({
                 id: p.id,
                 method: p.method.code,
                 amount: p.amount,
@@ -876,6 +1102,29 @@ export const orders: Adapter<"orders"> = {
                 at: isoOf(p.recordedAt ?? p.paidAt ?? o.ts),
                 dueAt: optionalIso(p.dueAt),
                 note: p.note ?? undefined,
+                ref: p.ref ?? undefined,
+                inBalance: p.inBalance ? undefined : false,
+              })),
+        refunds:
+          paidOut.length === 0
+            ? undefined
+            : paidOut.map((p) => ({
+                id: p.id,
+                method: p.method.code,
+                amount: p.amount,
+                at: isoOf(p.recordedAt ?? p.paidAt ?? o.ts),
+                note: p.note ?? undefined,
+              })),
+        adjustments:
+          o.adjustments.length === 0
+            ? undefined
+            : o.adjustments.map((a) => ({
+                id: a.id,
+                type: a.type,
+                code: a.code ?? undefined,
+                amount: a.amount,
+                reason: a.reason,
+                at: isoOf(a.at),
               })),
         extra: o.extra === 0n ? undefined : o.extra,
         extraNote: o.extraNote ?? undefined,
@@ -943,7 +1192,9 @@ export const orders: Adapter<"orders"> = {
         }
       }
 
-      const subtotal = sum(n.serials.map((s) => n.prices[s]!));
+      const subtotal =
+        sum(n.serials.map((s) => n.prices[s]!)) +
+        sum((n.lines ?? []).map((l) => l.price * BigInt(l.qty)));
       const extra = n.extra ?? 0n;
       const tradeCredit = sum((n.tradeIns ?? []).map((x) => x.value));
       const bill = subtotal - n.discount + extra;
@@ -962,7 +1213,8 @@ export const orders: Adapter<"orders"> = {
           n.id,
         );
       }
-      const paidTotal =
+      const refunded = sum((n.refunds ?? []).map((x) => x.amount));
+      const paidIn =
         n.payments === undefined
           ? n.settled
             ? bill
@@ -972,6 +1224,8 @@ export const orders: Adapter<"orders"> = {
                 .filter((p) => p.state === "SETTLED")
                 .map((p) => p.amount),
             );
+      // Net of what was handed back; never below nothing (Order_money_nonneg).
+      const paidTotal = paidIn > refunded ? paidIn - refunded : 0n;
       const customer =
         n.customerId === null
           ? null
@@ -1026,7 +1280,10 @@ export const orders: Adapter<"orders"> = {
         !deepEqual(r.base.prices, n.prices) ||
         !deepEqual(r.base.listPrices, n.listPrices)
       ) {
-        await syncSaleLines(ctx, n, units);
+        await syncSaleLines(ctx, n, units, r.base !== undefined);
+      }
+      if (r.base === undefined || !deepEqual(r.base.lines, n.lines)) {
+        await syncCountedLines(ctx, n);
       }
 
       if (r.base === undefined || !deepEqual(r.base.fees, n.fees)) {
@@ -1100,10 +1357,18 @@ export const orders: Adapter<"orders"> = {
       }
 
       if (
-        n.payments !== undefined &&
-        (r.base === undefined || !deepEqual(r.base.payments, n.payments))
+        (n.payments !== undefined || n.refunds !== undefined) &&
+        (r.base === undefined ||
+          !deepEqual(r.base.payments, n.payments) ||
+          !deepEqual(r.base.refunds, n.refunds))
       ) {
         await syncSalePayments(ctx, n);
+      }
+      if (
+        r.base === undefined ||
+        !deepEqual(r.base.adjustments, n.adjustments)
+      ) {
+        await syncOrderAdjustments(ctx, n);
       }
       ctx.touch("orders", n.id);
     }

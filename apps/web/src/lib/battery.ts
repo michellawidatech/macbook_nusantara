@@ -1,15 +1,15 @@
 /**
  * A battery: how it is recorded, how it prints, and how it filters.
  *
- * ## Two readings, a default, and a switch (owner asks 2026-09-08, 2026-09-15)
+ * ## Two readings, decided by the model (owner asks 2026-09-08, 2026-09-19)
  *
  * A battery is recorded as a **health percentage**, or as a **cycle count**
- * and a **full charge capacity**. Which of the two a machine STARTS on comes
- * from its model — Apple silicon, or anything released in 2021 or later,
- * starts on health; the Intel machines of 2020 and before start on cycles —
- * and whoever enters the battery can switch that one machine to the other
- * reading. A machine that has a reading is read the way it was recorded. See
- * `defaultBatteryMode` for the rule, `batteryModeOf` for the switch, and
+ * and a **full charge capacity**. Which of the two comes from the model and
+ * nothing else — Apple silicon, or anything released in 2021 or later, is
+ * health; Intel units of 2020 and before are cycles. The per-unit switch of
+ * 2026-09-15 is gone (*"the system is the one that must determine"*), and a
+ * unit's own numbers never override it. See `defaultBatteryMode` for the
+ * rule, and
  * `readBattery` for the one function every column and filter goes through.
  *
  * Everything above the divider is the health half, unchanged. The cycle half
@@ -39,6 +39,7 @@
  * makes both unrepresentable. Good is `>= goodMin`, fair is `>= fairMin`, and
  * anything below `fairMin` is bad, so the three always tile 0–100 exactly once.
  */
+import { fmtNone } from "./format.js";
 
 /** The two numbers the bands are derived from. Configurable in Settings. */
 export interface BatteryThresholds {
@@ -192,9 +193,13 @@ export function batteryBand(
   return batteryBands(thresholds).find((b) => b.grade === grade)!.label;
 }
 
-/** The cell: `91%`, or an em dash. Never a bare `0` for a missing reading. */
+/**
+ * The cell: `91%`, or "None". Never a bare `0` for a missing reading — the
+ * one place the owner's "0 if numerical" (2026-09-21) does not reach, because
+ * 0% is a reading, and a dead battery.
+ */
 export function fmtBatteryHealth(health: number | null | undefined): string {
-  if (health == null || !Number.isFinite(health)) return "—";
+  if (health == null || !Number.isFinite(health)) return fmtNone();
   return `${health}%`;
 }
 
@@ -206,7 +211,7 @@ export function batteryGuide(
   return (
     `Battery health as a percentage of original capacity. ` +
     `Good is ${goodMin}% and above, fair is ${fairMin}–${goodMin - 1}%, ` +
-    `and poor is under ${fairMin}%. Blank means nobody has measured it yet. ` +
+    `and poor is under ${fairMin}%. None means nobody has measured it yet. ` +
     `The thresholds are set in Settings.`
   );
 }
@@ -382,9 +387,10 @@ export function isAppleSilicon(
  * is the Intel machines of 2020 and before. An unknown year with no chip in
  * sight is health, for the reason `batteryEra` gives.
  *
- * A default, not a verdict. The machine can be switched where its battery is
- * entered, and a machine that HAS a reading is read the way it was recorded —
- * see `batteryModeOf`.
+ * The verdict, not a default (owner 2026-09-19): every battery editor asks for
+ * this reading and every column shows it. Nothing about a unit's own numbers
+ * overrides it — the deployment starts on a fresh database, so there is no
+ * unit recorded the other way to keep.
  */
 export function defaultBatteryMode(
   model: BatteryModelFacts | undefined,
@@ -398,39 +404,6 @@ export interface BatteryReadings {
   readonly batteryHealth?: number | null;
   readonly cycleCount?: number | null;
   readonly fcc?: number | null;
-}
-
-const isReading = (v: number | null | undefined): v is number =>
-  v != null && Number.isFinite(v);
-
-/**
- * The reading a unit's own numbers are in, or `null` when they do not say.
- *
- * A percentage and no count is a health machine; a count or a capacity and no
- * percentage is a cycles machine. Nothing recorded says nothing — and neither
- * does both, which is a row from before the switch (typed before 2026-09-08,
- * or imported) that the default has to decide between.
- */
-export function recordedBatteryMode(unit: BatteryReadings): BatteryMode | null {
-  const health = isReading(unit.batteryHealth);
-  const cycles = isReading(unit.cycleCount) || isReading(unit.fcc);
-  if (health === cycles) return null;
-  return health ? "HEALTH" : "CYCLES";
-}
-
-/**
- * How one machine's battery is read: the way it was recorded, else its default.
- *
- * The recording wins because it is a fact about the machine and the default is
- * a guess about its model. Somebody switched a 2019 Pro to health because that
- * Pro showed them a percentage; reading its 91% back as "— cycles" would lose
- * the reading on the very screen it was typed into.
- */
-export function batteryModeOf(
-  unit: BatteryReadings,
-  fallback: BatteryMode,
-): BatteryMode {
-  return recordedBatteryMode(unit) ?? fallback;
 }
 
 /**
@@ -535,7 +508,7 @@ export function cycleBands(
  * battery facet over a mixed shelf.
  */
 export interface BatteryReading {
-  /** Which reading this is: what the unit recorded, else its default. */
+  /** Which reading this is — the model's (`defaultBatteryMode`). */
   readonly mode: BatteryMode;
   /** HEALTH only. */
   readonly health?: number;
@@ -561,26 +534,19 @@ export const DEFAULT_BATTERY_SETTINGS: BatterySettings = {
 };
 
 /**
- * Read one machine's battery, in whichever reading it was recorded in.
+ * Read one unit's battery, in the reading its model is recorded in.
  *
- * `fallback` is the machine's default — `defaultBatteryMode` — and decides only
- * where the unit's own numbers do not (`batteryModeOf`). A release year is
- * still accepted in its place, read through `batteryEra`, for callers written
- * before 2026-09-15; it cannot see a chip, so it opens a 2020 M1 with no
- * reading on the wrong one.
- *
- * What sits in the other reading's fields is ignored, not promoted: a legacy
- * row carrying both is shown in its default reading and nothing else.
+ * `mode` is `defaultBatteryMode`. A release year is still accepted in its
+ * place, read through `batteryEra`, for callers written before 2026-09-15; it
+ * cannot see a chip, so it reads a 2020 M1 as cycles. What sits in the other
+ * reading's fields is ignored.
  */
 export function readBattery(
   unit: BatteryReadings,
   fallback: BatteryMode | number | null | undefined,
   settings: BatterySettings = DEFAULT_BATTERY_SETTINGS,
 ): BatteryReading {
-  const mode = batteryModeOf(
-    unit,
-    typeof fallback === "string" ? fallback : batteryEra(fallback),
-  );
+  const mode = typeof fallback === "string" ? fallback : batteryEra(fallback);
   if (mode === "CYCLES") {
     const cc = unit.cycleCount ?? undefined;
     const fcc = unit.fcc ?? undefined;
@@ -601,15 +567,15 @@ export function readBattery(
   };
 }
 
-/** The cell: `312 cycles`, or an em dash. Never a bare `0` for no reading. */
+/** The cell: `312 cycles`, or "None". Never a bare `0` for no reading. */
 export function fmtCycleCount(cc: number | null | undefined): string {
-  if (cc == null || !Number.isFinite(cc)) return "—";
+  if (cc == null || !Number.isFinite(cc)) return fmtNone();
   return `${cc.toLocaleString("id-ID")} cycles`;
 }
 
-/** The cell: `4.312 mAh`, or an em dash. */
+/** The cell: `4.312 mAh`, or "None" — 0 mAh would be a dead battery. */
 export function fmtFcc(fcc: number | null | undefined): string {
-  if (fcc == null || !Number.isFinite(fcc)) return "—";
+  if (fcc == null || !Number.isFinite(fcc)) return fmtNone();
   return `${fcc.toLocaleString("id-ID")} mAh`;
 }
 
@@ -669,7 +635,7 @@ export function batteryEraGuide(
   const { goodMax, fairMax } = settings.cycles;
   return t(
     "battery.guide",
-    "Apple silicon Macs and any model from 2021 on start on battery health; older machines start on cycle count and full charge capacity, and any machine can be switched where its battery is entered. Health: good is {{goodMin}}% and above, fair is {{fairMin}}–{{fairTop}}%, poor is under {{fairMin}}%. Cycles: good is {{goodMax}} or fewer, fair is up to {{fairMax}}, poor is above that. Blank means nobody has measured it yet.",
+    "Apple silicon Macs and any model from 2021 on record battery health; older Intel units record cycle count and full charge capacity. Health: good is {{goodMin}}% and above, fair is {{fairMin}}–{{fairTop}}%, poor is under {{fairMin}}%. Cycles: good is {{goodMax}} or fewer, fair is up to {{fairMax}}, poor is above that. Blank means nobody has measured it yet.",
     { goodMin, fairMin, fairTop: goodMin - 1, goodMax, fairMax },
   );
 }
@@ -687,39 +653,26 @@ export type BatteryField = "health" | "cycleCount" | "fcc";
  * the store holds".
  */
 export interface BatteryDraft {
-  /**
-   * The reading this machine was switched to (2026-09-15), or absent when
-   * nobody has switched it — the draft's own numbers, then the machine's
-   * default, decide then. See `batteryDraftMode`.
-   */
-  readonly mode?: BatteryMode;
   readonly health?: number | null;
   readonly cycleCount?: number | null;
   readonly fcc?: number | null;
 }
 
 /**
- * Which reading a draft is in: the switch, else its numbers, else the default.
+ * Which reading a draft is in: the unit's model's, always (owner 2026-09-19).
  *
- * The order a stored unit is read in (`batteryModeOf`) with the person's
- * choice in front, so the boxes on screen and the fields `batteryPatch` writes
- * are always the same boxes.
+ * *"Remove battery health & cycle option, the system is the one that must
+ * determine."* The per-unit switch of 2026-09-15 is gone, and so is reading
+ * the mode back off whichever numbers happen to be in the draft: an Intel
+ * unit is typed as cycles and FCC, Apple silicon or 2021+ as health, and
+ * nobody at the bench chooses. Kept as a function so every editor still asks
+ * one place.
  */
 export function batteryDraftMode(
-  draft: BatteryDraft,
+  _draft: BatteryDraft,
   fallback: BatteryMode,
 ): BatteryMode {
-  return (
-    draft.mode ??
-    batteryModeOf(
-      {
-        batteryHealth: draft.health,
-        cycleCount: draft.cycleCount,
-        fcc: draft.fcc,
-      },
-      fallback,
-    )
-  );
+  return fallback;
 }
 
 /** Every field a reading asks for, so an editor can render and validate one list. */
@@ -765,17 +718,9 @@ export function isBatteryDraftInRange(
   );
 }
 
-/**
- * What a unit already holds, as a draft — the starting point of an edit.
- *
- * The recorded reading is pinned as the draft's `mode`, so emptying a box to
- * retype it does not flip the editor to the machine's default halfway through.
- * Nothing recorded pins nothing, and the default decides.
- */
+/** What a unit already holds, as a draft — the starting point of an edit. */
 export function batteryDraftOf(unit: BatteryReadings): BatteryDraft {
-  const recorded = recordedBatteryMode(unit);
   return {
-    ...(recorded === null ? {} : { mode: recorded }),
     health: unit.batteryHealth ?? null,
     cycleCount: unit.cycleCount ?? null,
     fcc: unit.fcc ?? null,
@@ -783,46 +728,27 @@ export function batteryDraftOf(unit: BatteryReadings): BatteryDraft {
 }
 
 /**
- * A draft as the three columns a `Unit` carries.
- *
- * Writes the draft's reading (`batteryDraftMode`) and clears the other one —
- * one battery, one set of numbers — which is how a machine switched from
- * cycles to health stops reporting a count nobody can check against it.
- *
- * Except when the chosen reading is EMPTY, and that exception is the point:
- * then the other reading is passed through as the draft holds it. Flicking the
- * switch and leaving the new boxes blank records nothing, and a switch that
- * records nothing must not have erased the reading somebody took. Emptying the
- * boxes that hold the numbers is how numbers are cleared.
+ * A draft as the three columns a `Unit` carries: the model's pair, and the
+ * other reading cleared — one battery, one set of numbers.
  *
  * Out-of-range values are dropped for the same reason `identify` drops them: a
  * refusal that never reached the store must not arrive by another door.
  */
 export function batteryPatch(
   draft: BatteryDraft,
-  fallback: BatteryMode,
+  mode: BatteryMode,
 ): { batteryHealth?: number; cycleCount?: number; fcc?: number } {
   const keep = (field: BatteryField) => {
     const v = draft[field];
     return v == null || !isBatteryFieldInRange(field, v) ? undefined : v;
   };
-  const all = {
-    batteryHealth: keep("health"),
-    cycleCount: keep("cycleCount"),
-    fcc: keep("fcc"),
-  };
-  if (batteryDraftMode(draft, fallback) === "HEALTH") {
-    return all.batteryHealth === undefined
-      ? all
-      : {
-          batteryHealth: all.batteryHealth,
-          cycleCount: undefined,
-          fcc: undefined,
-        };
-  }
-  return all.cycleCount === undefined && all.fcc === undefined
-    ? all
-    : { batteryHealth: undefined, cycleCount: all.cycleCount, fcc: all.fcc };
+  return mode === "HEALTH"
+    ? { batteryHealth: keep("health"), cycleCount: undefined, fcc: undefined }
+    : {
+        batteryHealth: undefined,
+        cycleCount: keep("cycleCount"),
+        fcc: keep("fcc"),
+      };
 }
 
 /** The minimum a catalogue has to expose for a battery to know its default. */
@@ -854,12 +780,12 @@ export function defaultBatteryModeOfSku(
   return defaultBatteryMode(model, sku);
 }
 
-/** How one stored machine is read: its recording, else its SKU's default. */
+/** How one stored unit is read: its SKU's model decides. */
 export function batteryModeOfUnit(
-  unit: BatteryReadings & { readonly skuId: string },
+  unit: { readonly skuId: string },
   cat: BatteryCatalogue,
 ): BatteryMode {
-  return batteryModeOf(unit, defaultBatteryModeOfSku(cat, unit.skuId));
+  return defaultBatteryModeOfSku(cat, unit.skuId);
 }
 
 /**

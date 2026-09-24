@@ -36,6 +36,21 @@ export const UNIT_STATUS: Record<string, TagLabel> = {
   HILANG: { label: "Lost", color: "red" },
 };
 
+/**
+ * `StockMove.type` — why a counted product's quantity moved (2026-09-19).
+ * Worded as the units' timeline words the same doors.
+ */
+export const STOCK_MOVE: Record<string, string> = {
+  MASUK: "Arrived on an invoice",
+  MASUK_BATAL: "Arrival undone",
+  TERJUAL: "Sold",
+  RETUR_PELANGGAN: "Returned by customer",
+  TUKAR_TAMBAH: "Taken in on a trade-in",
+  OPNAME: "Stock count difference",
+  KOREKSI: "Adjustment",
+  RETUR_SUPPLIER: "Returned to supplier",
+};
+
 /** `UnitEvent.type` — what the lifecycle timeline calls each append-only row. */
 export const UNIT_EVENT: Record<string, string> = {
   // Owner's wording: a unit that has just arrived has NOT been through QC yet,
@@ -116,9 +131,9 @@ export const ORDER_SOURCE_PHRASE: Record<string, string> = Object.fromEntries(
  *
  * Enum-ish values are SCREAMING_CASE by convention across this codebase, which
  * makes an unmapped one cheap to recognise — and worth recognising, because the
- * two failure modes deserve different copy. A value that is absent is "—",
- * the em dash this app already prints for an empty cell. A value that is
- * PRESENT but unmapped is "Unknown": rendering "—" there would claim the unit
+ * two failure modes deserve different copy. A value that is absent is "None",
+ * what this app prints for an empty cell (`fmtNone`). A value that is
+ * PRESENT but unmapped is "Unknown": rendering "None" there would claim the unit
  * has no status when what actually happened is that the enum grew a member the
  * UI has not been taught yet. Anything else is already human text and is passed
  * through untouched.
@@ -126,7 +141,7 @@ export const ORDER_SOURCE_PHRASE: Record<string, string> = Object.fromEntries(
 const ENUM_TOKEN = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$/;
 
 function fallback(raw: string | null | undefined, t?: TFunction): string {
-  if (raw == null || raw === "") return "—";
+  if (raw == null || raw === "") return t ? t("common.none", "None") : "None";
   if (!ENUM_TOKEN.test(raw)) return raw;
   return t ? t("common.unknownValue", "Unknown") : "Unknown";
 }

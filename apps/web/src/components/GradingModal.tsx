@@ -34,6 +34,7 @@ import {
   type GradingSelection,
 } from "../lib/grading.js";
 import { useDb } from "../mock/store.js";
+import { GradingChecklist } from "./GradingChecklist.js";
 
 export function GradingModal({
   open,
@@ -137,7 +138,7 @@ export function GradingModal({
   return (
     <Modal
       open={open}
-      title={t("grading.title", "Grade this machine")}
+      title={t("grading.title", "Grade this unit")}
       footer={null}
       width={560}
       onCancel={onClose}
@@ -155,44 +156,11 @@ export function GradingModal({
             })}`}
         </Typography.Text>
 
-        {criteria.length === 0 ? (
-          <Alert
-            type="info"
-            showIcon
-            title={t(
-              "grading.noConfig",
-              "Nothing is configured for “{{category}}”",
-              { category },
-            )}
-            description={t(
-              "grading.noConfigBody",
-              "Settings → Grading is where a category gets its checklist. Until then, pick the letter by hand below.",
-            )}
-          />
-        ) : (
-          <Flex vertical gap={10}>
-            {criteria.map((c) => (
-              <Flex key={c.id} vertical gap={4}>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {c.name}
-                </Typography.Text>
-                <Select
-                  allowClear
-                  value={selection[c.id]}
-                  placeholder={t("grading.notChecked", "Not checked")}
-                  aria-label={c.name}
-                  options={c.options.map((o) => ({
-                    value: o.id,
-                    label: o.label,
-                  }))}
-                  onChange={(v?: string) =>
-                    setSelection((sel) => ({ ...sel, [c.id]: v }))
-                  }
-                />
-              </Flex>
-            ))}
-          </Flex>
-        )}
+        <GradingChecklist
+          category={category}
+          selection={selection}
+          onChange={setSelection}
+        />
 
         <Flex align="flex-end" gap={16} wrap>
           {criteria.length > 0 && (
@@ -239,7 +207,7 @@ export function GradingModal({
             title={t("grading.cTitle", "Grade C — worth a second thought")}
             description={t(
               "grading.cBody",
-              "A machine this worn is often better returned to the supplier or sent to the bench than put on the shelf.",
+              "A unit this worn is often better returned to the supplier or sent to the bench than put on the shelf.",
             )}
             action={cActions?.(finish)}
           />

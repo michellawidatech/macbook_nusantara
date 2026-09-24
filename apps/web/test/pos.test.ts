@@ -27,9 +27,10 @@ const unit = (over: Partial<Unit> & Pick<Unit, "serial">): Unit => ({
 });
 
 /** Just enough store for the catalogue to be built from. */
-const db = (units: Unit[]): MockDb =>
+const db = (units: Unit[], stockMoves: MockDb["stockMoves"] = []): MockDb =>
   ({
     units,
+    stockMoves,
     skus: [
       {
         id: "sku-air",
@@ -64,6 +65,31 @@ const db = (units: Unit[]): MockDb =>
   }) as unknown as MockDb;
 
 describe("shelfRows", () => {
+  it("lists a counted product off the stock ledger, one row with a quantity", () => {
+    // Accessories are quantities, not units (2026-09-19).
+    const move = (qty: number, locationId: string) => ({
+      id: `sm-${locationId}-${qty}`,
+      skuId: "sku-mouse",
+      locationId,
+      qty,
+      cost: 500_000,
+      type: "MASUK" as const,
+      at: "2026-09-01T10:00:00.000Z",
+      staff: "Michella",
+    });
+    const rows = shelfRows(db([], [move(3, "wh-1"), move(2, "wh-2")]), {
+      takenQty: { "sku-mouse": 1 },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      counted: true,
+      remaining: 4,
+      units: [],
+      category: "Accessory",
+    });
+    expect(rows[0]!.price.min).toBe(950_000);
+  });
+
   it("is one row per variant, with the machines behind it counted", () => {
     // The whole point of the 2026-08-27 rebuild. Listing serials was honest
     // and useless: a customer points at a machine and says "the Air", and
@@ -199,8 +225,16 @@ describe("what a machine costs the till", () => {
   const po = (over: Partial<Po> = {}): Po =>
     ({
       id: "po-1",
-      shippingFee: 300_000,
-      taxFee: 100_000,
+      fees: [
+        {
+          id: "f1",
+          kind: "SHIPPING",
+          label: "",
+          amount: 300_000,
+          inCogs: true,
+        },
+        { id: "f2", kind: "TAX", label: "", amount: 100_000, inCogs: true },
+      ],
       items: [
         {
           id: "it-1",

@@ -114,6 +114,39 @@ export function holdsFunds(source: string): boolean {
 }
 
 /**
+ * The marketplaces money can actually be SITTING at, waiting on a payout.
+ *
+ * > *"For pending payment it is actually just when the payment method is from
+ * > shopee and tokopedia, hard coded."* — owner, 2026-09-20
+ *
+ * Hard-coded, and a different question from `holdsFunds` above, which is why
+ * it is a second list rather than a second flag on the same one:
+ *
+ * - `holdsFunds` asks **"did this SALE settle at the till?"** — of a channel
+ *   the sale came from. TikTok is true, because a TikTok sale is not cash in
+ *   the drawer.
+ * - this asks **"can money be waiting HERE?"** — of a payment. The till
+ *   offers four payment methods and TikTok is not one of them
+ *   (`lib/tillPayments.ts`, owner answer 2026-09-19), so nothing can be paid
+ *   through it and nothing can be waiting at it.
+ *
+ * Getting these two confused is what put an unpaid walk-in sale on the
+ * "waiting at a marketplace" table: `legacyPayments` reads an unsettled order
+ * written before the payment list existed as one PENDING payment carrying the
+ * ORDER's channel, so every kind of unpaid sale answered "pending". Money a
+ * person owes and money a platform holds are the two things Receivables exists
+ * to keep apart.
+ *
+ * When the shop starts taking TikTok payments this gains one entry, here, and
+ * both screens follow.
+ */
+export const HOLDING_CHANNELS: readonly SaleSource[] = ["SHOPEE", "TOKOPEDIA"];
+
+export function holdsPendingMoney(channel: string): boolean {
+  return (HOLDING_CHANNELS as readonly string[]).includes(channel);
+}
+
+/**
  * The payment method written onto a marketplace sale.
  *
  * There is no method to pick — the customer paid the marketplace, not the
