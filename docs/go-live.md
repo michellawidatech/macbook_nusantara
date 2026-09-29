@@ -178,8 +178,16 @@ The last line must print `CORS_ORIGIN='https://nusantara-mini.tail903811.ts.net'
 sudo sed -i '' -E "s#^CORS_ORIGIN=.*#CORS_ORIGIN='https://nusantara-mini.tail903811.ts.net'#" /opt/nusantara/etc/api.env
 ```
 
-Leave the API stopped. The pipeline starts it (phase 4) on the new release,
-after the migrations — an old release on an empty database would only confuse.
+**2.6 Load the API again before tagging.** The installer only RESTARTS a
+service launchd already holds, and `bootout` in 2.2 took it out of launchd's
+list altogether — the first deploy on 2026-09-29 applied every migration and
+then refused to install for exactly that reason. The old release will start
+against an empty database and log errors for a minute; nobody is using it,
+and the pipeline replaces it.
+
+```bash
+sudo launchctl bootstrap system /Library/LaunchDaemons/local.nusantara.api.plist; sleep 3; sudo launchctl list | grep nusantara
+```
 
 ---
 
@@ -203,7 +211,7 @@ If an existing rule has `"src": ["*"]`, change it to `"autogroup:member"` —
 
 Then **Settings → Trust credentials → New credential → OpenID Connect**:
 issuer GitHub, subject
-`repo:michellawidatech/macbook_nusantara:environment:prod`, scope *Auth keys:
+`repo:michellawidatech@300295019/macbook_nusantara@1333015804:environment:prod` (GitHub sends the account and repository IDs; the bare `repo:owner/name:…` form is refused with a 403 — the credential page shows the subject it received), scope *Auth keys:
 write*, tag `tag:ci`. Note the client ID and audience.
 
 **3.2 The deploy key and the installer. LAPTOP:**

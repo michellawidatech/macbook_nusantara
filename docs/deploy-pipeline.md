@@ -84,7 +84,7 @@ drops off the tailnet every 180 days, and the till and the pipeline go with it.
 
 **The CI's identity** — preferred, because nothing secret is stored in GitHub:
 **Settings → Trust credentials → New credential → OpenID Connect**, issuer
-**GitHub**, subject `repo:michellawidatech/macbook_nusantara:environment:prod`,
+**GitHub**, subject `repo:michellawidatech@300295019/macbook_nusantara@1333015804:environment:prod` (GitHub sends the account and repository IDs; the bare `repo:owner/name:…` form is refused with a 403 — the credential page shows the subject it received),
 scope **Auth keys: write**, tag `tag:ci`. It gives a client ID and an audience.
 
 The alternative is an OAuth client with the same scope and tag, which gives a
