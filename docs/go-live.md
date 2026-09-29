@@ -16,20 +16,20 @@ is the machine's full runbook and `docs/deploy-pipeline.md` the pipeline's.
 
 **What this guide ends with**
 
-- The old database kept whole under a new name, `nusantara_pos_prod_old_20260929`.
-  Nothing is dropped. It can be renamed back in one command.
+- The old database DROPPED (owner decision, 2026-09-29), after a `pg_dump`
+  of it that stays in `/opt/nusantara/backups/` and on a disk off the mini.
+  That file is the only way back.
 - A fresh `nusantara_pos_prod` with all 40 migrations, and ONLY the master
-  data: 4 warehouses, 8 categories, the catalogue, suppliers, customers and 4
-  salespeople. No stock, no prices, no sales, no balances.
+  data: 4 warehouses, 16 categories, 369 products, 64 suppliers, 20 customers
+  and 4 salespeople. No stock, no prices, no sales, no balances.
 - The current release, installed by the pipeline, with the app's own sign-in.
 - Every later `v*` tag pushed from `main` deploys itself.
 - The POS reachable from the tailnet only.
 
-**Why rename rather than a new database name.** The code pins production to
+**Why the new database has the same name.** The code pins production to
 the name `nusantara_pos_prod` (`packages/db/src/environment.ts`), and so do the
 nightly backup and the pipeline's safety check. A new name would mean changing
 three guards whose whole job is to stop the wrong database being written to.
-Renaming the OLD one keeps every guard as it is and keeps the old data.
 
 **Why all 40 migrations.** A migration builds the database's STRUCTURE — its
 tables and columns — not its data. The code expects the structure all 40
@@ -64,11 +64,26 @@ complaining.
 3. **DNS** → MagicDNS on, HTTPS Certificates on (already, since the address
    works).
 
-**LAPTOP.** Open the Tailscale app and connect. Then:
+**LAPTOP.** Here `tailscale status` answers "Tailscale is stopped" — the
+laptop is signed in but switched off, so it cannot see the mini's name (which
+is why ssh said "Could not resolve hostname"). Open the **Tailscale** app from
+the menu bar (the icon near the clock) and switch it **on / Connect**, or:
+
+```bash
+tailscale up
+```
+
+Then this must list `nusantara-mini` and show the laptop without "offline":
 
 ```bash
 tailscale status | head -3
 ```
+
+**MINI.** The mini is fine: Homebrew's `tailscale` daemon runs as root and
+lists the machines. The "currently in use" message is a SECOND copy — the
+Tailscale Mac app — finding the daemon already taken. Do not open that app on
+the mini; if it is set to open at login, remove it: System Settings → General
+→ Login Items → Tailscale → minus.
 
 **MINI.** Allow SSH for `mac`: System Settings → General → Sharing → **Remote
 Login** on, "Allow access for: Only these users" → `mac`.
@@ -81,7 +96,7 @@ ssh mac@nusantara-mini 'echo reached; whoami'
 
 ---
 
-## Phase 2 — Put the old database aside and make a new one (MINI)
+## Phase 2 — Back up and drop the old database, make a new one (MINI)
 
 Do this out of hours: the POS is down from step 2.2 until phase 4 ends.
 
@@ -105,13 +120,21 @@ sudo launchctl bootout system/local.nusantara.api; sleep 2; sudo launchctl list 
 
 `local.nusantara.api` should be gone from the list.
 
-**2.3 Rename the old database** (nothing is deleted):
+**2.3 Check the backup can be read, then drop the old database.** The check
+lists what is inside the dump without restoring it; a dump that cannot be
+read is not a backup. Only if it prints a large number (thousands of lines)
+run the second command. **The drop cannot be undone** — afterwards the dump
+is the only copy of the old data.
 
 ```bash
-/opt/homebrew/opt/postgresql@16/bin/psql -d postgres -c 'ALTER DATABASE nusantara_pos_prod RENAME TO nusantara_pos_prod_old_20260929'
+/opt/homebrew/opt/postgresql@16/bin/pg_restore --list ~/nusantara-20260929-before-golive.dump | wc -l
 ```
 
-If it says another session is using it, run this and repeat 2.3:
+```bash
+/opt/homebrew/opt/postgresql@16/bin/psql -d postgres -c 'DROP DATABASE nusantara_pos_prod'
+```
+
+If it says another session is using it, run this and repeat the drop:
 `/opt/homebrew/opt/postgresql@16/bin/psql -d postgres -c "select pid, usename, application_name from pg_stat_activity where datname='nusantara_pos_prod'"`
 (and paste the output to me rather than killing anything).
 
@@ -268,11 +291,11 @@ python3 tools/b2soft/extract.py "$HOME/Export Files" build/b2soft-masters --mast
 cat build/b2soft-masters/masters-audit.txt
 ```
 
-Read the audit before going on: it lists every product left out (not in the
-eight categories) and every duplicate or missing phone number. Rehearsed
-2026-09-29 on a scratch database: warehouses 4, salesmen 4, suppliers 64,
-customers 38, categories 8, models 143, variants 345, and every consistency
-check `OK`.
+Read the audit before going on: it lists the 19 sales channels B2Soft kept
+as customers (Shopee, Tokped, Instagram…) and skips, the three extra ERSEN
+suppliers, and every customer with no phone number. Rehearsed 2026-09-29 on a
+scratch database: warehouses 4, salesmen 4, suppliers 64, customers 20,
+categories 16, models 159, variants 369, and every consistency check `OK`.
 
 **5.2 Import it, through a tunnel, as the owner.** Terminal 1 (leave it open;
 asks for `mac`'s password):
@@ -297,7 +320,7 @@ Check, in the same terminal:
 read -s "OWNER_PW?Owner DB password: " && echo && psql "postgresql://nusantara:${OWNER_PW}@127.0.0.1:55432/nusantara_pos_prod" -tAc 'select (select count(*) from "Location"),(select count(*) from "Category"),(select count(*) from "Sku"),(select count(*) from "Supplier"),(select count(*) from "Customer"),(select count(*) from "Salesperson"),(select count(*) from "Unit"),(select count(*) from "Order")'; unset OWNER_PW
 ```
 
-Expected `4|8|345|64|38|4|0|0`. Close terminal 1 (Ctrl-C).
+Expected `4|16|369|64|20|4|0|0`. Close terminal 1 (Ctrl-C).
 
 ---
 
@@ -378,12 +401,9 @@ later release) because the code can be rolled back and the database cannot.
 
 **Roll back the code** (seconds, MINI): `sudo /usr/local/libexec/nusantara-deploy rollback`
 
-**Go back to the old database** (only if the owner decides; MINI, API stopped
-first):
+**Look at the old data** (only if ever needed; MINI): restore the dump into
+a database of ANOTHER name, never over `nusantara_pos_prod`:
 
 ```bash
-PSQL=/opt/homebrew/opt/postgresql@16/bin/psql; $PSQL -d postgres -c 'ALTER DATABASE nusantara_pos_prod RENAME TO nusantara_pos_prod_new_unused' -c 'ALTER DATABASE nusantara_pos_prod_old_20260929 RENAME TO nusantara_pos_prod'
+/opt/homebrew/opt/postgresql@16/bin/createdb nusantara_old_lookup && /opt/homebrew/opt/postgresql@16/bin/pg_restore --no-owner -d nusantara_old_lookup ~/nusantara-20260929-before-golive.dump
 ```
-
-(The old database is at 23 migrations; the current release would need the
-pipeline to migrate it forward.)

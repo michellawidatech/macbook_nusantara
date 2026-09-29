@@ -16,7 +16,8 @@ needs fifteen workbooks the shop does not want to hand over. This reads only:
 and writes ONE chunk labelled `reference`, which
 `import:b2soft … --master-only` commits. The owner's answers that shape it:
 
-- Eight categories and nothing else. A product whose category is not one of
+- The owner's eight categories plus one per kind of product they do not
+  cover (iMac, iPhone, …). A product whose category is not one of
   them is left out and listed in `masters-audit.txt`, never filed under a
   guess.
 - No price (`Std. Jual` / `Std. Beli` ignored): every variant starts at Rp 0
@@ -33,11 +34,19 @@ from . import catalogue as C
 from . import reports as R
 from .documents import USAGE_CUSTOMER, WALK_IN, phone_of
 
-CATEGORIES = ("MacBook Air", "MacBook Pro", "iPad", "Mac mini", "Accessories", "Charger", "Box", "Sparepart")
+# The owner's eight, then the ones the owner asked to be created for what the
+# eight do not cover (2026-09-29: "new categories").
+CATEGORIES = ("MacBook Air", "MacBook Pro", "iPad", "Mac mini", "Accessories", "Charger", "Box", "Sparepart",
+              "iMac", "Mac Studio", "MacBook", "Studio Display", "iPhone", "Apple Watch", "Apple Pencil",
+              "Other Laptop")
 COUNTED = {"Accessories", "Charger", "Box", "Sparepart"}
-# `catalogue.category_of` speaks the history importer's names; two of its
-# categories are these under another name.
-RENAMED = {"Aksesoris": "Accessories"}
+# `catalogue.category_of` speaks the history importer's names; these are the
+# same categories under the name the owner uses.
+RENAMED = {"Aksesoris": "Accessories", "Laptop lain": "Other Laptop"}
+# B2Soft filed its sales channels as customers. The till asks the channel of
+# every sale, so they are not people and are not imported (owner, 2026-09-29).
+CHANNEL_CUSTOMERS = ("SHOPEE", "TOKPED", "TOKOPEDIA", "TIKTOK", "AKULAKU", "INSTAGRAM", "FACEBOOK", "OLX",
+                     "CAROUSELL", "GOOGLE MAPS", "THREADS", "CHAT GPT")
 SERVICE_WAREHOUSE = "04"
 SHOP_WAREHOUSE = "02"
 
@@ -82,6 +91,9 @@ def build(src: Path, salesmen: list[str], created_at: str) -> tuple[dict, list[s
         if name in (WALK_IN, USAGE_CUSTOMER):
             audit.append(f"customer {name!r} skipped — the walk-in / the shop itself, not a person")
             continue
+        if name.upper().startswith(CHANNEL_CUSTOMERS):
+            audit.append(f"customer {name!r} skipped — a sales channel, not a person")
+            continue
         if name.upper() in seen:
             audit.append(f"customer {name!r} appears again (code {p.code}); kept the first (code {seen[name.upper()]})")
             continue
@@ -107,7 +119,7 @@ def build(src: Path, salesmen: list[str], created_at: str) -> tuple[dict, list[s
         model = cat.models[sku["modelId"]]
         category = RENAMED.get(model["category"], model["category"])
         if category not in CATEGORIES:
-            audit.append(f"product {p.name!r} skipped — category {model['category']!r} is not one of the eight")
+            audit.append(f"product {p.name!r} skipped — category {model['category']!r} is not a category this import creates")
             continue
         if model["id"] not in kept_models:
             kept_models.add(model["id"])

@@ -2306,17 +2306,19 @@ Decisions that outlived those documents:
 - **Go-live: a fresh database, master data only — 2026-09-29.** *"We just
   want the master product, category/grouping, supplier, salesman, and customer
   data."* The Mac mini's `nusantara_pos_prod` held a full B2Soft history
-  import nobody wanted; `docs/go-live.md` renames it to
-  `nusantara_pos_prod_old_20260929` (kept, never dropped) and builds a fresh
-  one under the pinned name, because `environment.ts`, `ops/backup` and the
-  pipeline all guard on it.
+  import nobody wanted; `docs/go-live.md` dumps it, DROPS it (owner decision
+  — the dump is the only copy) and builds a fresh one under the same pinned
+  name, because `environment.ts`, `ops/backup` and the pipeline all guard on
+  it.
   - `extract.py --masters-only --salesmen A,B,…` (`b2soft/masters.py`) reads
     FIVE workbooks and writes one `reference` chunk for `import:b2soft
     --master-only`. `Supplier List.xlsx` is the supplier file (same layout as
-    Master Supplier with Credit). Eight categories — MacBook Air, MacBook Pro,
-    iPad, Mac mini, Accessories, Charger, Box, Sparepart, the last four
-    counted; a product outside them is LEFT OUT and listed in
-    `masters-audit.txt`, never filed under a guess. No prices (every variant
+    Master Supplier with Credit). The owner's eight categories — MacBook Air,
+    MacBook Pro, iPad, Mac mini, Accessories, Charger, Box, Sparepart, the
+    last four counted — plus one per kind they do not cover (iMac, iPhone,
+    Apple Watch, …; owner: "new categories"). B2Soft's sales channels filed as
+    customers (SHOPEE…, TOKPED…, INSTAGRAM…, `CHANNEL_CUSTOMERS`) are skipped
+    and listed in `masters-audit.txt`. No prices (every variant
     Rp 0), no stock, no balances. Warehouse 04 (Gudang Masuk Belum QC) is the
     service bench (`SERVIS`), 02 the shop.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
