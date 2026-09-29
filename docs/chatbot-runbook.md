@@ -99,9 +99,14 @@ shop's own number.
 
 ## What the bot may do
 
-One variable, `AGENT_CAPABILITIES` in `/opt/nusantara/etc/worker.env`, and it
-is read by both the worker and the /chat Draft button
-(`agentCapabilities`, packages/agent/src/policy.ts).
+Since 2026-09-29: **four switches on /chat** — Stock, Price, Reservations,
+Photos — stored as `AppSetting` rows and changed by the owner on the page; the
+worker reads them at the start of every pass. `AGENT_CAPABILITIES` in
+`/opt/nusantara/etc/worker.env` is only the answer for a switch nobody has
+pressed (`capabilitiesFromSettings`, packages/agent/src/policy.ts). Price,
+Reservations and Photos each need Stock on. A switch that is off sends its
+kind of question to a person, with an action item on the chat. The table
+below is the two extremes: every switch off, and every switch on.
 
 | | unset (the default) | `live` |
 |---|---|---|
@@ -118,7 +123,7 @@ is read by both the worker and the /chat Draft button
 | trade-in and buy-back quotes, shipping quotes | → a person | → a person |
 | complaints, faults, warranty, returns | → a person | → a person |
 | a photo the CUSTOMER sent | → a person | → a person |
-| cancelling a booking | → a person | → a person |
+| checking, moving, cancelling a booking | → a person | ✅ |
 
 **The default is the cautious one, deliberately.** The live design is right
 only once the stock in this database is the shop's real stock; a variable

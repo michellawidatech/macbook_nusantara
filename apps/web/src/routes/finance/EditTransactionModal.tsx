@@ -41,6 +41,8 @@ import dayjs from "dayjs";
 import { useTranslation } from "react-i18next";
 import { PaymentsPanel } from "../../components/PaymentsPanel";
 import { SALE_CHANNELS, type SaleSource } from "../../lib/channels.js";
+import { customerLine } from "../../lib/customers.js";
+import { isBookClosed } from "../../lib/bookClose.js";
 import { resolveSerialQuery } from "../../lib/serialInput.js";
 import {
   billAfterReturns,
@@ -59,7 +61,7 @@ import {
   useDb,
 } from "../../mock/store.js";
 import type { Order } from "../../mock/seed.js";
-import { SPACE, TYPE } from "../../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 
 /** One unit line on the sale, while it is being edited. */
 interface UnitLine {
@@ -147,6 +149,18 @@ export function EditTransactionModal({
 
   const save = () => {
     if (order === null) return;
+    // The book, closed over this date (owner ask 2026-09-24). Transaction
+    // History already disables the button; this is the writer refusing, so no
+    // other door into this dialog can get around it.
+    if (isBookClosed(order.ts, db.settings)) {
+      message.error(
+        t(
+          "editSale.bookClosed",
+          "The book is closed over this date. Reopen it on Transaction History first.",
+        ),
+      );
+      return;
+    }
     const kept = lines.filter((l) => l.serial.trim() !== "");
     const serials = kept.map((l) => l.serial.trim());
     if (new Set(serials).size !== serials.length) {
@@ -307,7 +321,7 @@ export function EditTransactionModal({
               placeholder={t("piutang.walkIn", "Walk-in")}
               options={db.customers.map((c) => ({
                 value: c.id,
-                label: c.name,
+                label: customerLine(c),
               }))}
             />
           </Form.Item>
@@ -325,7 +339,7 @@ export function EditTransactionModal({
           {
             title: t("editSale.serial", "Serial number"),
             key: "serial",
-            width: 260,
+            width: COLUMN.serial,
             render: (_, l) => (
               <Input
                 size="small"
@@ -360,7 +374,7 @@ export function EditTransactionModal({
           {
             title: "",
             key: "remove",
-            width: 44,
+            width: COLUMN.action,
             render: (_, l) => (
               <Button
                 type="text"

@@ -83,7 +83,8 @@ import {
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
-import { fmtDateTime, fmtNone } from "../../lib/format.js";
+import { fmtDateTime, fmtNone, fmtRp } from "../../lib/format.js";
+import { customerLabel } from "../../lib/customers.js";
 import {
   agentStatus,
   draftReply,
@@ -92,6 +93,8 @@ import {
 } from "../../lib/chatApi.js";
 import { markHandled, sendReply, setAutoReply } from "../../lib/inboxApi.js";
 import { handoffTopicLabel } from "../../lib/handoffTopics.js";
+import { BotSwitches } from "./BotSwitches.js";
+import { ActionItems, ActionKindTag } from "./ActionItems.js";
 import { useInbox } from "../../hooks/useInbox.js";
 import { useAgentConfig } from "../../hooks/useAgentConfig.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
@@ -579,6 +582,7 @@ export function ChatInbox() {
       <Flex vertical gap={16} style={{ flex: 1, minHeight: 0 }}>
         {agentBanner}
         {loadBanner}
+        <BotSwitches />
 
         {/* `minHeight: 0`, never a pixel floor. The old `minHeight: 520` was a
             floor rather than a cap, so this row could only ever grow — which
@@ -639,7 +643,7 @@ export function ChatInbox() {
                       <List.Item.Meta
                         title={
                           <Flex justify="space-between" gap={8}>
-                            <span>{c.name ?? c.phone}</span>
+                            <span>{customerLabel(c)}</span>
                             {/* Which chats a person has taken on, visible
                                 without opening each one — otherwise the only
                                 way to find them is to click through the list. */}
@@ -648,6 +652,10 @@ export function ChatInbox() {
                                 {t("chat.you", "you")}
                               </Tag>
                             )}
+                            {/* What the bot left to do here, by kind. */}
+                            {(c.openActions ?? []).slice(0, 2).map((k) => (
+                              <ActionKindTag key={k} kind={k} />
+                            ))}
                             {/* The bot gave this one to a person: the list a
                                 colleague works through first (2026-09-18). */}
                             {c.handoff ? (
@@ -826,6 +834,15 @@ export function ChatInbox() {
                     }
                   />
                 )}
+                {/* The tasks the bot left, each behind a dialog, so nobody has
+                    to read the conversation to know what is asked. Here and
+                    not in the context panel, which a phone does not draw. */}
+                <ActionItems
+                  phone={conversation.phone}
+                  actions={conversation.actions ?? []}
+                  profile={conversation.profile ?? null}
+                  onChanged={refresh}
+                />
                 {/* The message history. `minHeight: 0` is what finally makes
                     this `overflowY: auto` do anything: without it this flex
                     item sizes to its content and pushes the page taller
@@ -1098,6 +1115,50 @@ export function ChatInbox() {
                           No customer summary yet. This number has not bought
                           anything, so the shop knows only what is in this
                           conversation.
+                        </Typography.Text>
+                      )}
+                    </Section>
+
+                    {/* The customer's own words about themselves, saved by
+                        the bot as they come up (owner ask 2026-09-29). Shown
+                        as what they SAID: none of it is checked. */}
+                    <Section
+                      title={t("chat.whatTheyToldUs", "What they told the bot")}
+                    >
+                      {conversation.profile ? (
+                        <>
+                          {conversation.profile.name && (
+                            <Field label={t("chat.name", "Name")}>
+                              {conversation.profile.name}
+                            </Field>
+                          )}
+                          {conversation.profile.useCase && (
+                            <Field label={t("chat.usesItFor", "Uses it for")}>
+                              {conversation.profile.useCase}
+                            </Field>
+                          )}
+                          {conversation.profile.budget && (
+                            <Field label={t("chat.budget", "Budget")}>
+                              {fmtRp(Number(conversation.profile.budget))}
+                            </Field>
+                          )}
+                          {conversation.profile.currentDevice && (
+                            <Field label={t("chat.usesNow", "Uses now")}>
+                              {conversation.profile.currentDevice}
+                            </Field>
+                          )}
+                          {conversation.profile.preference && (
+                            <Field label={t("chat.wants", "Wants")}>
+                              {conversation.profile.preference}
+                            </Field>
+                          )}
+                        </>
+                      ) : (
+                        <Typography.Text type="secondary">
+                          {t(
+                            "chat.noProfileYet",
+                            "Nothing yet. The bot asks their name, what they need it for and their budget, and saves the answers here.",
+                          )}
                         </Typography.Text>
                       )}
                     </Section>

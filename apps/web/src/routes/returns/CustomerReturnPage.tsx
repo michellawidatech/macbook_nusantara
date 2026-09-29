@@ -1,41 +1,63 @@
 /**
  * Returns and exchanges from customers (owner brief 2026-09-19, reshaped
- * 2026-09-21).
+ * 2026-09-21, simplified 2026-09-25, the charge moved 2026-09-26).
  *
- * ## The form
+ * ## The form — ONE transaction, and a picker
  *
- * *"Either they input the serial or the transaction. Only then, show the unit
- * for replacement in the inventory."* A serial scanned or typed finds the sale
- * it is out on, adds it to the return and ticks it; a sale can also be added
- * by hand. One return can take units back from SEVERAL sales — *"even with 2
- * transactions the units can be mixed (1 from transaction 1, 1 from
- * transaction 2)"* — so every sale is its own block: its units still with the
- * customer, what each sold for, and an additional expense charged against it
- * (a missing charger, a cracked corner). Counted products come back by
- * quantity.
+ * *"Make it simpler, the user only need to fill: Transaction number (only 1
+ * transaction at a time). When we typed & enter, it will open up a popup
+ * modal, showing all the unit … and a select button on each product, by
+ * default is select all, then 'Select {n} unit'. Then it will add the units
+ * to the table."*
  *
- * Once a sale is on the form, *Exchange for* searches the inventory — scan a
- * serial, or type a product, a variant or a code — and any number of units and
- * counted products can go out instead: *"it could have 1 unit to return but 2
- * units to be exchanged. It will still sit in the same sale."* With units back
- * from more than one sale, the form asks which sale the replacements go out
- * on; the newest is the default.
+ * So the form asks one question. The box takes the shop's own transaction
+ * number, the marketplace order number the customer quotes, or a serial read
+ * off the unit in their hand — one question (*which sale is this?*) asked
+ * three ways — and Enter opens the picker: every unit still out on that sale
+ * with its name, serial, price and grade, scrolling past a screenful, each
+ * with a tick and all of them ticked. *Select n units* puts them in the
+ * table: **Unit name | Unit serial**, and the button that takes a row off.
  *
- * Laid out as two TABLES side by side since 2026-09-21 (owner: *"enlarge/widen
- * the modal popup, and make it table instead of per individual and put reason
- * as well as the date on top. Make the return on the left then the exchange
- * on the right"*): the reason and the date across the top, what comes back
- * on the left — every listed sale's units in one table, each sale's code
- * spanning its rows — and what goes out on the right. They stack on a
- * narrow screen.
+ * What went, and why it could: the LIST of sales (a return spanning two
+ * transactions is now two returns), the Transaction column that told one
+ * sale's rows from another's, the per-row Condition Select (see `Pick.grade`),
+ * and the price column — a unit is worth what it sold for, which is a fact
+ * about the sale rather than something to read off a row while recording one.
  *
- * ## The history
+ * ## The charge — one per return, or one per exchange unit (2026-09-26)
  *
- * One row per return, three columns (owner, same day: *"do not make it
- * complicated"*): the transaction number with its marketplace reference, every
- * product that came back on its own line, and the units that went out
- * instead, each with its condition. Every serial opens its history in a
- * popup (`SerialLink`). Receiving a unit is a button on its own line.
+ * *"The additional price is per exchange unit, and if no exchange, we can add
+ * 1 additional fee per return (not per product). Make the exchange unit price
+ * read only in that return window."*
+ *
+ * It used to be a money box on every row of the return table, which asked the
+ * bench to decide how a single restocking charge divided over three units
+ * coming back on one receipt. It is one figure now: **Additional fee** under
+ * the return table on a plain return, and a per-row **Additional price**
+ * column on the exchange table when something goes out — because there the
+ * charge is about the unit the customer is taking.
+ *
+ * Either way it is `feeTotal`, and it comes off the CREDIT (`creditOf`), not
+ * off the replacement's price: what a replacement goes out at is the unit's
+ * own asking price and this window no longer edits it. The two readings are
+ * the same money — a smaller credit and a dearer replacement move the refund
+ * and the top-up by exactly the same amount — and taking it off the credit
+ * leaves `Order.prices` saying what the shop asks, so the sale invents
+ * neither a bargain nor an upsell out of a swap fee.
+ *
+ * ## The exchange — asked for, not assumed
+ *
+ * *"Add '+ Exchange unit' and it will show another table below it, but do not
+ * show all the unit first — make it like a dropdown showing the serial &
+ * name. The table shows: Unit name | Serial Unit | price."*
+ *
+ * Under the return table, and hidden behind one button until somebody presses
+ * it: most returns exchange for nothing, and the always-open list of the
+ * whole shelf was the tallest thing on the dialog. The dropdown searches the
+ * same fields the list used to and takes a scanned serial the same way, since
+ * a Select's search box is an input like any other. The button is disabled
+ * until something is coming back, which is the 2026-09-19 rule: *"only then,
+ * show the unit for replacement."*
  *
  * ## The money — `lib/returns.ts`
  *
@@ -49,19 +71,19 @@
  * returns, the adjustments, the replacements going out, every sale's payments
  * and their log — is ONE mutation.
  *
- * ## Receiving the unit — unchanged (owner ask 2026-08-28)
+ * ## Receiving the unit — there is no step (owner ask 2026-09-23)
  *
- * A recorded return waits for the unit. *Receive* opens the QC panel under
- * the return: condition, description and a grade, then back into stock — the
- * description, the regrade and the `RETUR_PELANGGAN` in ONE transaction,
- * because a moment in which a unit that went out New is back on the shelf
- * still graded New is the moment somebody sells it.
+ * *"Auto record it, no need to add additional to receive it."* A return is
+ * ARRIVED as it is recorded: the row, the regrade and the `RETUR_PELANGGAN`
+ * are ONE transaction, because a moment in which a unit that went out New is
+ * back on the shelf still graded New is the moment somebody sells it.
  *
  * ## Refunds in a Shopee file
  *
- * *Check a Shopee file*, on the history card, reads the seller balance report
+ * *Check a Shopee file*, in the page header, reads the seller balance report
  * for orders Shopee refunded and offers to record each one's return —
- * `ShopeeRefundCheck.tsx`.
+ * `ShopeeRefundCheck.tsx`. The dialog is here and the button is on
+ * `ReturnsPage`, so `checkOpen` is a prop.
  *
  * The reason list is Settings' (`db.reasons`, activity `RETURN_CUSTOMER`);
  * "Other" asks for a sentence.
@@ -70,16 +92,14 @@ import { useMemo, useState } from "react";
 import {
   Alert,
   App,
+  AutoComplete,
   Button,
-  Checkbox,
-  Col,
   DatePicker,
   Flex,
   Form,
   Input,
   InputNumber,
   Modal,
-  Row,
   Select,
   Table,
   Typography,
@@ -87,15 +107,16 @@ import {
 import {
   CloseOutlined,
   DeleteOutlined,
+  PlusOutlined,
   SearchOutlined,
-  UploadOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { MoneyInput } from "../../components/MoneyInput";
 import { GradeTag } from "../../components/GradeTag";
-import { fmtRp, fmtDate } from "../../lib/format.js";
+import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
+import { customerLabel } from "../../lib/customers.js";
 import { gradeForCondition } from "../../lib/condition.js";
-import { resolveSerialQuery, serialNamedBy } from "../../lib/serialInput.js";
+import { resolveSerialQuery } from "../../lib/serialInput.js";
 import { skuTracksSerial } from "../../lib/serialTracking.js";
 import { priceOf } from "../../lib/unitPrice.js";
 import {
@@ -104,6 +125,7 @@ import {
   paymentsOf,
   refundedOf,
 } from "../../lib/salePayments.js";
+import { paymentRefOf } from "../../lib/saleStatus.js";
 import { diffPayments } from "../../lib/paymentEdits.js";
 import {
   averageCost,
@@ -141,12 +163,14 @@ import { useTranslation } from "react-i18next";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import {
   FIELD,
+  asBoolean,
   asListOf,
   asOneOf,
   asString,
   hasShape,
   isRecord,
 } from "../../lib/draftGuards.js";
+import { COLUMN, TYPE } from "../../theme/tokens";
 import { ShopeeRefundCheck } from "./ShopeeRefundCheck";
 
 /** The label that turns on the "specify" field. Matched case-insensitively. */
@@ -159,41 +183,46 @@ type MoneyMethod = (typeof MONEY_METHODS)[number];
 /** One unit of a sale, as the form's checklist holds it. */
 interface Pick {
   readonly on: boolean;
-  /** Charged against the unit — comes off what it is worth back. */
-  readonly expense: number | null;
   /**
    * The grade the unit is coming back in (owner ask 2026-09-21, evening).
    *
-   * A returned unit is second-hand and its grade often changes on the way in;
-   * the return form used to defer that to the receive-QC step, but the owner
-   * wants it decided at the moment the return is recorded. `undefined` leaves
-   * the unit's current grade alone, which is also the empty state a new pick
-   * opens in.
+   * A returned unit is second-hand and its grade often changes on the way in.
+   * ⚠️ The FORM stopped asking on 2026-09-25 — the owner's column list for
+   * the row is Unit name, Unit serial and Additional price, and no more — so
+   * nothing sets this now and every unit comes back at
+   * `gradeForCondition("SECOND", …)`, which is what the shelf said before
+   * 2026-09-21. The field, the write path and the draft guard all stay:
+   * the history's *Edit* dialog still corrects a return's condition, and it
+   * is one Select away from coming back here if the owner asks for it.
+   * `undefined` leaves the unit's current grade alone.
    */
   readonly grade?: string | null;
 }
 
-/** Pieces of a counted line coming back, and what is charged against them. */
+/** Pieces of a counted line coming back. */
 interface QtyPick {
   readonly qty: number;
-  readonly expense: number | null;
 }
 
 /**
- * Something going out in exchange, as the form holds it. `price` null is the
- * default: a unit's own price, a counted product's per piece.
+ * Something going out in exchange, as the form holds it.
+ *
+ * No price: what a replacement goes out at is the unit's own asking price, and
+ * this window cannot change it (owner ask 2026-09-26). `extra` is what the
+ * shop charges ON TOP of that for the swap — per exchange unit, which is where
+ * the additional price lives now.
  */
 type Replacement =
   | {
       readonly kind: "UNIT";
       readonly serial: string;
-      readonly price: number | null;
+      readonly extra: number | null;
     }
   | {
       readonly kind: "COUNTED";
       readonly skuId: string;
       readonly qty: number;
-      readonly price: number | null;
+      readonly extra: number | null;
     };
 
 /** One thing coming back, as the submit writes it. */
@@ -202,14 +231,12 @@ type Back =
       readonly kind: "UNIT";
       readonly saleId: string;
       readonly serial: string;
-      readonly expense: number | null;
     }
   | {
       readonly kind: "COUNTED";
       readonly saleId: string;
       readonly lineId: string;
       readonly qty: number;
-      readonly expense: number | null;
     };
 
 /** A replacement, resolved against the store. */
@@ -226,8 +253,10 @@ interface ChosenRow {
   readonly held?: number;
   /** The asking price — a unit's own, a counted product's per piece. */
   readonly ask: number;
-  /** What it goes out at, per piece. */
+  /** What it goes out at, per piece. Read-only here: it IS the asking price. */
   readonly price: number;
+  /** Charged on top of the whole row for the swap. */
+  readonly extra: number;
 }
 
 /** A listed sale, as the form reads it. */
@@ -241,25 +270,25 @@ interface SaleView {
   readonly countedBack: {
     readonly line: OrderLine;
     readonly qty: number;
-    readonly expense: number | null;
   }[];
-  /** What its ticked units and lines are worth back. */
+  /** What its ticked units and lines are worth back, before the fee. */
   readonly credit: number;
 }
 
 /**
- * One row of the form's return table: a unit, a counted line, or a sale with
- * nothing left out — which still needs a row, or it could not be taken off.
+ * One row of the form's return table: a unit, or a counted line.
+ *
+ * Every row is something that IS coming back since 2026-09-25 — the picker
+ * decides that, not this table — so there is no longer a row for a sale with
+ * nothing left out, and nothing spans anything: one transaction at a time
+ * means one sale's code, and it is on the line above the table.
  */
 type BackRow = {
   readonly key: string;
   readonly sale: Order;
-  /** How many rows the sale's code spans: all of them on its first, 0 after. */
-  readonly span: number;
 } & (
   | { readonly kind: "UNIT"; readonly serial: string }
   | { readonly kind: "COUNTED"; readonly line: OrderLine }
-  | { readonly kind: "EMPTY" }
 );
 
 /*
@@ -283,56 +312,74 @@ const recordOf =
         ) as Record<string, T>)
       : undefined;
 const parsePicks = recordOf((v): v is Pick =>
-  hasShape(v, { on: FIELD.boolean, expense: isMoney }),
+  hasShape(v, { on: FIELD.boolean }),
 );
-/** The set of grade letters (plus NEW) the condition Select offers. */
-const GRADE_OPTIONS: readonly string[] = ["NEW", "A", "B", "C"];
 const parseQtyPicks = recordOf((v): v is QtyPick =>
-  hasShape(v, { qty: FIELD.number, expense: isMoney }),
+  hasShape(v, { qty: FIELD.number }),
 );
+/** A money box that may be empty. The return's own fee is one. */
+const parseFee = (v: unknown): number | null | undefined =>
+  typeof v === "number" && Number.isFinite(v) ? v : undefined;
 const parseIds = asListOf((v): v is string => typeof v === "string");
 const parseReplacements = asListOf(
   (v): v is Replacement =>
     hasShape(v, {
       kind: (k) => k === "UNIT",
       serial: FIELD.string,
-      price: isMoney,
+      extra: isMoney,
     }) ||
     hasShape(v, {
       kind: (k) => k === "COUNTED",
       skuId: FIELD.string,
       qty: FIELD.number,
-      price: isMoney,
+      extra: isMoney,
     }),
 );
 /** A picked date travels as its ISO string. */
 const parseDay = (v: unknown): string | undefined =>
   typeof v === "string" && dayjs(v).isValid() ? v : undefined;
 
-/** How many of the replacement search's rows show before it scrolls. */
-const RESULT_ROWS = 8;
-const RESULT_ROW_HEIGHT = 38;
+/** How tall the picker's list gets before it scrolls (owner ask). */
+const PICKER_HEIGHT = 360;
 
-/** What one thing coming back is worth on its sale: price less expense. */
+/**
+ * What one thing coming back is worth on its sale: what it sold for.
+ *
+ * Gross since 2026-09-26. What the shop charges for the return came off here
+ * unit by unit until then; it is ONE figure for the whole return now (or one
+ * per exchange unit), so it is taken off the sale's credit rather than off
+ * each thing on it — and these are also the WEIGHTS the credit is split back
+ * over (`splitByWeight`), which have to be the gross prices or a fee would be
+ * subtracted twice.
+ */
 function worthOn(order: Order, back: Back): number {
   if (back.kind === "UNIT") {
-    return Math.max(0, (order.prices[back.serial] ?? 0) - (back.expense ?? 0));
+    return Math.max(0, order.prices[back.serial] ?? 0);
   }
   const line = order.lines?.find((l) => l.id === back.lineId);
-  return line === undefined
-    ? 0
-    : Math.max(0, line.price * back.qty - (back.expense ?? 0));
+  return line === undefined ? 0 : Math.max(0, line.price * back.qty);
 }
 
 export function CustomerReturnPanel({
   addOpen,
   onCloseAdd,
   onOpenAdd,
+  checkOpen = false,
+  onCloseCheck,
 }: {
   addOpen: boolean;
   onCloseAdd: () => void;
   /** Open the Add-return form — what a Shopee refund's *Record return* does. */
   onOpenAdd: () => void;
+  /**
+   * Whether the Shopee-file check is open.
+   *
+   * Controlled from the page, because the button that opens it is in the page
+   * header now (owner ask 2026-09-25) and the dialog is here. The panel used
+   * to own both; it draws no button of its own any more.
+   */
+  checkOpen?: boolean;
+  onCloseCheck?: () => void;
 }) {
   const { t } = useTranslation();
   const db = useDb();
@@ -403,21 +450,49 @@ export function CustomerReturnPanel({
     "",
     asString,
   );
+  /**
+   * The one additional charge on a PLAIN return (owner ask 2026-09-26).
+   *
+   * *"If no exchange, we can add 1 additional fee per return (not per
+   * product)."* A restocking charge, the courier who fetched the unit — one
+   * figure about the return, where it used to be a box on every row of it.
+   * With something going out in exchange the charge is per exchange unit
+   * instead and this is not asked for; the value is kept, so closing the
+   * exchange brings it back.
+   */
+  const [returnFee, setReturnFee] = usePersistentState<number | null>(
+    RETURN_DRAFT("fee"),
+    null,
+    parseFee,
+  );
   /** What goes out in exchange — any number of units and counted products. */
   const [replacements, setReplacements] = usePersistentState<Replacement[]>(
     RETURN_DRAFT("replacements"),
     [],
     parseReplacements,
   );
-  /** The sale the replacements go out on, when the return spans several. */
-  const [into, setInto] = usePersistentState<string | undefined>(
-    RETURN_DRAFT("into"),
-    undefined,
-    asString,
+  /**
+   * Whether the exchange half is showing (owner ask 2026-09-25).
+   *
+   * Hidden until *+ Exchange unit* is pressed: most returns are plain, and a
+   * search box and an empty table under every one of them was the larger
+   * half of the form asking a question nobody had.
+   */
+  const [exchangeOpen, setExchangeOpen] = usePersistentState<boolean>(
+    RETURN_DRAFT("exchangeOpen"),
+    false,
+    asBoolean,
   );
-  const [query, setQuery] = useState("");
+  /**
+   * The sale whose units are being picked, and which of them are ticked.
+   *
+   * Not kept on this device: it is open for the few seconds between typing a
+   * transaction number and pressing *Select n units*, and a dialog that
+   * reopens itself on a page somebody came back to is a dialog in the way.
+   */
+  const [picking, setPicking] = useState<Order | null>(null);
+  const [pickSel, setPickSel] = useState<Record<string, boolean>>({});
   const [tried, setTried] = useState(false);
-  const [checkOpen, setCheckOpen] = useState(false);
 
   const reasons = db.reasons.filter(
     (r) => r.activity === "RETURN_CUSTOMER" && r.active,
@@ -445,8 +520,10 @@ export function CustomerReturnPanel({
   /** What the unit IS — product and variant. */
   const productLabel = (serial: string) =>
     skuLabel(skuOfSerial(serial), serial);
-  const customerName = (o: Order) =>
-    db.customers.find((c) => c.id === o.customerId)?.name;
+  const customerName = (o: Order) => {
+    const c = db.customers.find((x) => x.id === o.customerId);
+    return c ? customerLabel(c) : undefined;
+  };
 
   /** Serials already on a return that has not been received yet. */
   const pendingBack = useMemo(
@@ -477,18 +554,11 @@ export function CustomerReturnPanel({
     const countedBack = countedOut.flatMap((line) => {
       const pick = qtyPicks[line.id];
       const qty = Math.min(line.qty - (line.returnedQty ?? 0), pick?.qty ?? 0);
-      return qty > 0 ? [{ line, qty, expense: pick?.expense ?? null }] : [];
+      return qty > 0 ? [{ line, qty }] : [];
     });
     const credit =
       ticked.reduce(
-        (n, serial) =>
-          n +
-          worthOn(sale, {
-            kind: "UNIT",
-            saleId: id,
-            serial,
-            expense: picks[serial]?.expense ?? null,
-          }),
+        (n, serial) => n + worthOn(sale, { kind: "UNIT", saleId: id, serial }),
         0,
       ) +
       countedBack.reduce(
@@ -499,7 +569,6 @@ export function CustomerReturnPanel({
             saleId: id,
             lineId: x.line.id,
             qty: x.qty,
-            expense: x.expense,
           }),
         0,
       );
@@ -528,7 +597,8 @@ export function CustomerReturnPanel({
           label: skuLabel(sku, r.serial),
           qty: 1,
           ask,
-          price: r.price ?? ask,
+          price: ask,
+          extra: Math.max(0, r.extra ?? 0),
         },
       ];
     }
@@ -544,11 +614,24 @@ export function CustomerReturnPanel({
         qty: Math.max(1, Math.min(held, r.qty)),
         held,
         ask: sku.price,
-        price: r.price ?? sku.price,
+        price: sku.price,
+        extra: Math.max(0, r.extra ?? 0),
       },
     ];
   });
   const replacementTotal = chosen.reduce((n, c) => n + c.price * c.qty, 0);
+  /**
+   * What the shop charges for this return, whichever way it was asked for.
+   *
+   * Per EXCHANGE UNIT when something goes out, ONE figure for the whole return
+   * when nothing does (owner ask 2026-09-26). Either way it comes off the
+   * credit: the customer gets that much less back, or pays that much more for
+   * the swap — the same arithmetic, which is why one number is enough for both.
+   */
+  const feeTotal =
+    chosen.length > 0
+      ? chosen.reduce((n, c) => n + c.extra, 0)
+      : Math.max(0, returnFee ?? 0);
   /** Picked, and gone from the shelf since — said, not silently dropped. */
   const stale = replacements
     .filter((r) => !chosen.some((c) => c.replacement === r))
@@ -559,28 +642,43 @@ export function CustomerReturnPanel({
     replacements.flatMap((r) => (r.kind === "UNIT" ? [r.serial] : [])),
   );
 
-  /** The sale the replacements go out on: the one named, else the newest. */
-  const target: SaleView | undefined =
-    involved.find((v) => v.sale.id === into) ??
-    involved.reduce<SaleView | undefined>(
-      (a, b) => (a === undefined || b.sale.ts > a.sale.ts ? b : a),
-      undefined,
-    );
+  /**
+   * The sale the replacements go out on — the one the form is about.
+   *
+   * One transaction at a time since 2026-09-25 (owner ask), so there is no
+   * longer anything to choose between: the list that used to hold several
+   * sales holds one, and the "Put the replacements on" Select that asked
+   * which of them a replacement belonged to is gone with it. `views` and
+   * `involved` are still lists because `planReturn` takes one and the
+   * submit walks it.
+   */
+  const target: SaleView | undefined = involved[0];
 
-  const inputOf = (v: SaleView): ReturnSaleInput => ({
+  /**
+   * A sale's credit with the return's fee taken off it.
+   *
+   * Off the FIRST sale only: the fee is one charge for the return, and a
+   * return holds one transaction since 2026-09-25 — but `planReturn` still
+   * takes a list, so saying which one it lands on is what stops a second sale
+   * ever being charged the same fee twice.
+   */
+  const creditOf = (gross: number, first: boolean) =>
+    Math.max(0, gross - (first ? feeTotal : 0));
+
+  const inputOf = (v: SaleView, i: number): ReturnSaleInput => ({
     id: v.sale.id,
     code: v.sale.code,
     bill: billAfterReturns(v.sale),
     payments: paymentsOf(v.sale),
     refunded: refundedOf(v.sale),
-    credit: v.credit,
+    credit: creditOf(v.credit, i === 0),
   });
   /** What the return does to the money, for the lines that ask for action. */
   const preview =
     involved.length === 0
       ? undefined
       : planReturn({
-          sales: involved.map(inputOf),
+          sales: involved.map((v, i) => inputOf(v, i)),
           ...(chosen.length > 0 && target !== undefined
             ? {
                 exchange: { total: replacementTotal, into: target.sale.id },
@@ -608,26 +706,21 @@ export function CustomerReturnPanel({
     // `db` is read only for the catalogue `skuTracksSerial` walks.
   }, [db.stockMoves, db.skus, db.models, db.categories, skuById]);
 
-  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const matches = (...fields: (string | undefined)[]) => {
-    if (words.length === 0) return true;
-    const hay = fields.filter(Boolean).join(" ").toLowerCase();
-    return words.every((w) => hay.includes(w));
-  };
-  const unitResults = db.units
-    .filter((u) => u.status === "TERSEDIA" && !chosenSerials.has(u.serial))
-    .filter((u) => {
-      const sku = skuById.get(u.skuId);
-      return matches(u.serial, sku?.name, sku?.variantLabel, sku?.code);
-    })
-    .sort(
-      (a, b) =>
-        productLabel(a.serial).localeCompare(productLabel(b.serial)) ||
-        a.serial.localeCompare(b.serial),
-    );
-  const countedResults = counted.filter((c) =>
-    matches(c.sku.name, c.sku.variantLabel, c.sku.code),
-  );
+  /**
+   * The sales the transaction box offers while somebody types.
+   *
+   * The whole list, filtered by antd against the label — a shop with three
+   * years of receipts has a few thousand, which a virtualised Select renders
+   * without complaint. The label is what the box searches: the shop's code,
+   * the customer, the date, and the marketplace order number the customer
+   * quotes when the return came through Shopee.
+   */
+  const saleOptions = db.orders.map((o) => ({
+    value: o.id,
+    label: [o.code, paymentRefOf(paymentsOf(o)), customerName(o), fmtDate(o.ts)]
+      .filter(Boolean)
+      .join(" — "),
+  }));
 
   const reset = () => {
     setLookup("");
@@ -639,8 +732,10 @@ export function CustomerReturnPanel({
     setReasonDetail("");
     setDatePicked(undefined);
     setReplacements([]);
-    setInto(undefined);
-    setQuery("");
+    setReturnFee(null);
+    setExchangeOpen(false);
+    setPicking(null);
+    setPickSel({});
     setTried(false);
     setPaymentRef("");
   };
@@ -650,41 +745,111 @@ export function CustomerReturnPanel({
     onCloseAdd();
   };
 
-  /** Put a sale on the return, if it is not on it already. */
-  const addSale = (id: string) =>
-    setSaleIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
-
-  /** Take a sale off the return, with whatever was ticked on it. */
-  const removeSale = (sale: Order) => {
-    setSaleIds((ids) => ids.filter((x) => x !== sale.id));
-    setPicks((m) => {
-      const next = { ...m };
-      for (const s of sale.serials) delete next[s];
-      return next;
-    });
-    setQtyPicks((m) => {
-      const next = { ...m };
-      for (const l of sale.lines ?? []) delete next[l.id];
-      return next;
-    });
-    if (into === sale.id) setInto(undefined);
+  /**
+   * Put a sale on the return, REPLACING whatever was on it.
+   *
+   * One transaction at a time (owner ask 2026-09-25): a second number typed
+   * into the box is a correction, not a second block, so the first sale's
+   * ticks go with it rather than being left behind on a sale nobody can see.
+   */
+  const addSale = (id: string) => {
+    setSaleIds((ids) => (ids[0] === id && ids.length === 1 ? ids : [id]));
+    if (saleIds[0] !== id) {
+      setPicks({});
+      setQtyPicks({});
+    }
   };
 
-  /** A serial scanned or typed: add the sale it is out on, ticked. */
-  const find = () => {
-    const serial = resolveSerialQuery(lookup, allSerials, supplierCodes);
-    const order = serial ? saleOfSerial(db.orders, serial) : undefined;
-    if (!order || statusOf(serial) !== "TERJUAL" || pendingBack.has(serial)) {
-      setLookupMiss(serial || lookup);
+  /** Take the sale off the return, with everything that was ticked on it. */
+  const removeSale = () => {
+    setSaleIds([]);
+    setPicks({});
+    setQtyPicks({});
+  };
+
+  /** Everything of a sale that could come back: its units, then its pieces. */
+  const openPicker = (order: Order) => {
+    const out = returnableSerials(order, db.orders, statusOf, pendingBack);
+    const lines = countedOutOf(order);
+    if (out.length === 0 && lines.length === 0) {
+      setLookupMiss(order.code);
       return;
     }
     setLookupMiss(null);
-    addSale(order.id);
-    setPicks((m) => ({
-      ...m,
-      [serial]: { on: true, expense: m[serial]?.expense ?? null },
-    }));
+    // Everything ticked to start with (owner ask 2026-09-25: "by default is
+    // select all"). A whole sale coming back is the common return; a partial
+    // one is untick-and-count, which is less work than tick-them-all.
+    setPickSel({
+      ...Object.fromEntries(out.map((serial) => [`u:${serial}`, true])),
+      ...Object.fromEntries(lines.map((l) => [`c:${l.id}`, true])),
+    });
+    setPicking(order);
+  };
+
+  /**
+   * What the box holds, resolved: the shop's own transaction number, a
+   * marketplace's order number, or a serial out with a customer.
+   *
+   * The owner asked for the transaction number (2026-09-25) and the 2026-09-19
+   * brief asked for the serial; they are one box because they are one
+   * question — *which sale is this?* — and the bench has whichever of the two
+   * is in front of it.
+   */
+  const find = () => {
+    const text = lookup.trim();
+    if (text === "") return;
+    const wanted = text.toUpperCase();
+    const byCode = db.orders.find(
+      (o) =>
+        o.code.toUpperCase() === wanted ||
+        // A marketplace's own order number, which is what a Shopee or
+        // Tokopedia return quotes. It lives on the sale's payments, one per
+        // marketplace part (2026-09-21).
+        (paymentRefOf(paymentsOf(o)) ?? "")
+          .toUpperCase()
+          .split(", ")
+          .includes(wanted),
+    );
+    if (byCode !== undefined) {
+      setLookup("");
+      openPicker(byCode);
+      return;
+    }
+    const serial = resolveSerialQuery(lookup, allSerials, supplierCodes);
+    const order = serial ? saleOfSerial(db.orders, serial) : undefined;
+    if (!order || statusOf(serial) !== "TERJUAL" || pendingBack.has(serial)) {
+      setLookupMiss(text);
+      return;
+    }
     setLookup("");
+    openPicker(order);
+  };
+
+  /** *Select n units*: what was ticked becomes the return's rows. */
+  const confirmPick = () => {
+    const order = picking;
+    if (order === null) return;
+    const out = returnableSerials(order, db.orders, statusOf, pendingBack);
+    const lines = countedOutOf(order);
+    addSale(order.id);
+    setPicks(
+      Object.fromEntries(
+        out
+          .filter((serial) => pickSel[`u:${serial}`])
+          .map((serial) => [serial, { on: true }]),
+      ),
+    );
+    setQtyPicks(
+      Object.fromEntries(
+        lines
+          .filter((l) => pickSel[`c:${l.id}`])
+          // A counted line comes back whole: the picker is a list of things,
+          // not a list of numbers, and a part-returned accessory is a second
+          // return rather than a stepper on every row of the dialog.
+          .map((l) => [l.id, { qty: l.qty - (l.returnedQty ?? 0) }]),
+      ),
+    );
+    setPicking(null);
   };
 
   /**
@@ -699,23 +864,15 @@ export function CustomerReturnPanel({
     addSale(saleId);
     setPicks((m) => ({
       ...m,
-      ...Object.fromEntries(
-        out.map((s) => [s, { on: true, expense: m[s]?.expense ?? null }]),
-      ),
+      ...Object.fromEntries(out.map((s) => [s, { on: true }])),
     }));
     setQtyPicks((m) => ({
       ...m,
       ...Object.fromEntries(
-        lines.map((l) => [
-          l.id,
-          {
-            qty: l.qty - (l.returnedQty ?? 0),
-            expense: m[l.id]?.expense ?? null,
-          },
-        ]),
+        lines.map((l) => [l.id, { qty: l.qty - (l.returnedQty ?? 0) }]),
       ),
     }));
-    setCheckOpen(false);
+    onCloseCheck?.();
     onOpenAdd();
   };
 
@@ -734,7 +891,7 @@ export function CustomerReturnPanel({
     setReplacements((list) =>
       list.some((r) => r.kind === "UNIT" && r.serial === serial)
         ? list
-        : [...list, { kind: "UNIT", serial, price: null }],
+        : [...list, { kind: "UNIT", serial, extra: null }],
     );
   };
 
@@ -745,7 +902,7 @@ export function CustomerReturnPanel({
         (r) => r.kind === "COUNTED" && r.skuId === skuId,
       );
       if (at < 0)
-        return [...list, { kind: "COUNTED", skuId, qty: 1, price: null }];
+        return [...list, { kind: "COUNTED", skuId, qty: 1, extra: null }];
       return list.map((r, i) =>
         i === at && r.kind === "COUNTED"
           ? { ...r, qty: Math.min(held, r.qty + 1) }
@@ -755,7 +912,7 @@ export function CustomerReturnPanel({
 
   const editReplacement = (
     key: string,
-    patch: { price?: number | null; qty?: number },
+    patch: { extra?: number | null; qty?: number },
   ) =>
     setReplacements((list) =>
       list.map((r) =>
@@ -764,11 +921,11 @@ export function CustomerReturnPanel({
           : r.kind === "UNIT"
             ? {
                 ...r,
-                ...(patch.price !== undefined ? { price: patch.price } : {}),
+                ...(patch.extra !== undefined ? { extra: patch.extra } : {}),
               }
             : {
                 ...r,
-                ...(patch.price !== undefined ? { price: patch.price } : {}),
+                ...(patch.extra !== undefined ? { extra: patch.extra } : {}),
                 ...(patch.qty !== undefined ? { qty: patch.qty } : {}),
               },
       ),
@@ -780,49 +937,6 @@ export function CustomerReturnPanel({
         (r) => (r.kind === "UNIT" ? `u:${r.serial}` : `c:${r.skuId}`) !== key,
       ),
     );
-
-  /** The unit on the shelf a scan or a typed serial names, if one does. */
-  const sellableSerial = (text: string): string | undefined => {
-    const serial = resolveSerialQuery(text, allSerials, supplierCodes);
-    return statusOf(serial) === "TERSEDIA" ? serial : undefined;
-  };
-
-  /**
-   * The search box. A whole serial — scanned, or typed to its last character —
-   * goes straight in and the box clears; but not while a LONGER serial could
-   * still be being typed, or a half-typed one would be grabbed the moment it
-   * happened to spell a shorter one.
-   */
-  const onQuery = (text: string) => {
-    // The till's rule (`serialNamedBy`), so the two boxes cannot disagree.
-    const serial = serialNamedBy(text, allSerials);
-    if (serial !== null && statusOf(serial) === "TERSEDIA") {
-      addUnit(serial);
-      setQuery("");
-      return;
-    }
-    setQuery(text);
-  };
-
-  /** Enter: whatever serial the box holds, whole or not. */
-  const onQueryEnter = () => {
-    const serial = sellableSerial(query);
-    if (serial !== undefined) {
-      addUnit(serial);
-      setQuery("");
-      return;
-    }
-    const known = resolveSerialQuery(query, allSerials, supplierCodes);
-    if (unitBySerial.has(known)) {
-      message.warning(
-        t(
-          "returnCustomer.notForSale",
-          "{{serial}} is not on the shelf to sell.",
-          { serial: known },
-        ),
-      );
-    }
-  };
 
   const submit = () => {
     setTried(true);
@@ -857,7 +971,6 @@ export function CustomerReturnPanel({
         kind: "UNIT" as const,
         saleId: v.sale.id,
         serial,
-        expense: picks[serial]?.expense ?? null,
       })),
     );
     const countedBacks: Extract<Back, { kind: "COUNTED" }>[] = involved.flatMap(
@@ -867,7 +980,6 @@ export function CustomerReturnPanel({
           saleId: v.sale.id,
           lineId: x.line.id,
           qty: x.qty,
-          expense: x.expense,
         })),
     );
     const codeOf = new Map<Back, string>();
@@ -952,7 +1064,7 @@ export function CustomerReturnPanel({
         saleOrder.map((id) => [id, paymentsOf(orderOf(id)!)] as const),
       );
       const plan = planReturn({
-        sales: saleOrder.map((id) => {
+        sales: saleOrder.map((id, i) => {
           const o = orderOf(id)!;
           return {
             id,
@@ -960,7 +1072,10 @@ export function CustomerReturnPanel({
             bill: billAfterReturns(o),
             payments: paymentsOf(o),
             refunded: refundedOf(o),
-            credit: backsOn(id).reduce((n, b) => n + worthOn(o, b), 0),
+            credit: creditOf(
+              backsOn(id).reduce((n, b) => n + worthOn(o, b), 0),
+              i === 0,
+            ),
           };
         }),
         ...(intoId === undefined
@@ -1315,47 +1430,53 @@ export function CustomerReturnPanel({
     </Flex>
   );
 
-  // ── The form's left table: what can come back ──────────────────────────
+  // ── The form's table: what is coming back ──────────────────────────────
   /*
-   * Every listed sale's units and counted lines in ONE table (owner ask
-   * 2026-09-21: "make it table instead of per individual"). A sale's rows sit
-   * together and its code spans them, with the button that takes the sale off
-   * the return; a sale with nothing left out gets one row that says so, so it
-   * can still be taken off.
+   * One row per thing coming back: Unit name | Unit serial, and the button
+   * that takes the row off again.
+   *
+   * The Additional price column left on 2026-09-26 (owner ask): *"the
+   * additional price is per exchange unit, and if no exchange, we can add 1
+   * additional fee per return (not per product)."* A charge for taking a
+   * return is one charge — the courier, the restocking — and asking for it on
+   * every row invited it to be typed on every row.
+   *
+   * This table is the ANSWER now, not the question. Which units come back is
+   * decided in the picker that opens off the transaction number, so the
+   * whole sale is no longer listed here waiting to be ticked — and with one
+   * transaction at a time the Transaction column that told one sale's rows
+   * from another's has nothing left to say.
    */
-  const backRows: BackRow[] = views.flatMap((v): BackRow[] => {
-    const rows = [
-      ...v.returnable.map((serial) => ({
-        key: `u:${serial}`,
-        kind: "UNIT" as const,
-        sale: v.sale,
-        serial,
-      })),
-      ...v.countedOut.map((line) => ({
-        key: `c:${line.id}`,
-        kind: "COUNTED" as const,
-        sale: v.sale,
-        line,
-      })),
-    ];
-    if (rows.length === 0) {
-      return [{ key: `e:${v.sale.id}`, kind: "EMPTY", sale: v.sale, span: 1 }];
-    }
-    return rows.map((r, i) => ({ ...r, span: i === 0 ? rows.length : 0 }));
-  });
+  const backRows: BackRow[] = views.flatMap((v): BackRow[] => [
+    ...v.ticked.map((serial) => ({
+      key: `u:${serial}`,
+      kind: "UNIT" as const,
+      sale: v.sale,
+      serial,
+    })),
+    ...v.countedBack.map((x) => ({
+      key: `c:${x.line.id}`,
+      kind: "COUNTED" as const,
+      sale: v.sale,
+      line: x.line,
+    })),
+  ]);
 
-  const setExpense = (row: BackRow, value: number | null) => {
+  /** Take one row off the return without reopening the picker. */
+  const dropRow = (row: BackRow) => {
     if (row.kind === "UNIT") {
-      setPicks((m) => ({
-        ...m,
-        [row.serial]: { on: true, expense: value },
-      }));
-    } else if (row.kind === "COUNTED") {
-      setQtyPicks((m) => ({
-        ...m,
-        [row.line.id]: { qty: m[row.line.id]?.qty ?? 0, expense: value },
-      }));
+      setPicks((m) => {
+        const next = { ...m };
+        delete next[row.serial];
+        return next;
+      });
+      return;
     }
+    setQtyPicks((m) => {
+      const next = { ...m };
+      delete next[row.line.id];
+      return next;
+    });
   };
 
   const returnTable = (
@@ -1370,348 +1491,226 @@ export function CustomerReturnPanel({
         dataSource={backRows}
         locale={{
           emptyText: t(
-            "returnCustomer.nothingListed",
-            "Scan the serial coming back, or add its sale.",
+            "returnCustomer.nothingPicked",
+            "Type the transaction number above and pick the units.",
           ),
         }}
         columns={[
           {
-            key: "pick",
-            width: 64,
-            render: (_: unknown, r: BackRow) => {
-              if (r.kind === "UNIT") {
-                return (
-                  <Checkbox
-                    checked={picks[r.serial]?.on ?? false}
-                    aria-label={t(
-                      "returnCustomer.tickAria",
-                      "{{serial}} is coming back",
-                      { serial: r.serial },
-                    )}
-                    onChange={(e) =>
-                      setPicks((m) => ({
-                        ...m,
-                        [r.serial]: {
-                          on: e.target.checked,
-                          expense: m[r.serial]?.expense ?? null,
-                        },
-                      }))
-                    }
-                  />
-                );
-              }
-              if (r.kind === "COUNTED") {
-                const left = r.line.qty - (r.line.returnedQty ?? 0);
-                return (
-                  <InputNumber
-                    size="small"
-                    min={0}
-                    max={left}
-                    precision={0}
-                    style={{ width: 60 }}
-                    value={qtyPicks[r.line.id]?.qty ?? 0}
-                    aria-label={t(
-                      "returnCustomer.qtyBackAria",
-                      "How many {{product}} are coming back",
-                      {
-                        product: skuLabel(
-                          skuById.get(r.line.skuId),
-                          r.line.skuId,
-                        ),
-                      },
-                    )}
-                    onChange={(value) => {
-                      const qty = Math.max(
-                        0,
-                        Math.min(left, Math.floor(value ?? 0)),
-                      );
-                      setQtyPicks((m) => ({
-                        ...m,
-                        [r.line.id]: {
-                          qty,
-                          expense: m[r.line.id]?.expense ?? null,
-                        },
-                      }));
-                    }}
-                  />
-                );
-              }
-              return null;
-            },
-          },
-          {
-            title: t("returnCustomer.transaction", "Transaction"),
-            key: "sale",
-            width: 196,
-            onCell: (r: BackRow) => ({ rowSpan: r.span }),
-            render: (_: unknown, r: BackRow) => (
-              <Flex gap={4} align="flex-start" justify="space-between">
-                <Flex vertical gap={0} style={{ minWidth: 0 }}>
-                  <Typography.Text strong style={{ whiteSpace: "nowrap" }}>
-                    {r.sale.code}
-                  </Typography.Text>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {[customerName(r.sale), fmtDate(r.sale.ts)]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </Typography.Text>
-                </Flex>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<CloseOutlined />}
-                  aria-label={t(
-                    "returnCustomer.removeSale",
-                    "Take {{code}} off this return",
-                    { code: r.sale.code },
-                  )}
-                  onClick={() => removeSale(r.sale)}
-                />
-              </Flex>
-            ),
-          },
-          {
-            title: t("returnCustomer.unitCol", "Unit"),
+            title: t("returnCustomer.unitName", "Unit name"),
             key: "unit",
-            onCell: (r: BackRow) => (r.kind === "EMPTY" ? { colSpan: 3 } : {}),
-            render: (_: unknown, r: BackRow) => {
-              if (r.kind === "EMPTY") {
-                return (
-                  <Typography.Text type="secondary">
-                    {t(
-                      "returnCustomer.nothingOut",
-                      "Every unit of this sale is already back, or on its way.",
-                    )}
-                  </Typography.Text>
-                );
-              }
-              if (r.kind === "COUNTED") {
-                const sku = skuById.get(r.line.skuId);
-                return (
-                  <Flex vertical gap={0}>
-                    <Typography.Text>
-                      {skuLabel(sku, r.line.skuId)}
-                    </Typography.Text>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {t(
-                        "returnCustomer.countedOut",
-                        "{{code}} · {{count}} still with the customer",
-                        {
-                          code: sku?.code ?? "",
-                          count: r.line.qty - (r.line.returnedQty ?? 0),
-                        },
-                      )}
-                    </Typography.Text>
-                  </Flex>
-                );
-              }
-              return (
-                <Flex vertical gap={0}>
-                  <Typography.Text>{productLabel(r.serial)}</Typography.Text>
-                  <Flex gap={6} align="center" wrap>
-                    <GradeTag grade={unitOf(r.serial)?.grade} plain />
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontFamily: "monospace", fontSize: 12 }}
-                    >
-                      {r.serial}
-                    </Typography.Text>
-                  </Flex>
-                </Flex>
-              );
-            },
-          },
-          {
-            // Condition of the unit as it comes back (owner ask 2026-09-21).
-            // Editable per row so a machine returned worn can be regraded
-            // here, and the shelf reflects that as soon as the receive-QC
-            // completes. Ignored for counted lines — a piece has no grade.
-            title: t("returnCustomer.conditionCol", "Condition"),
-            key: "grade",
-            width: 130,
-            onCell: (r: BackRow) => (r.kind === "EMPTY" ? { colSpan: 0 } : {}),
-            render: (_: unknown, r: BackRow) => {
-              if (r.kind !== "UNIT") return null;
-              const off = !(picks[r.serial]?.on ?? false);
-              const current =
-                picks[r.serial]?.grade ?? unitOf(r.serial)?.grade ?? null;
-              return (
-                <Select
-                  size="small"
-                  disabled={off}
-                  value={current}
-                  aria-label={t(
-                    "returnCustomer.conditionAria",
-                    "Condition of {{serial}} on return",
-                    { serial: r.serial },
-                  )}
-                  style={{ width: 110 }}
-                  options={GRADE_OPTIONS.map((g) => ({ value: g, label: g }))}
-                  onChange={(v: string) =>
-                    setPicks((m) => ({
-                      ...m,
-                      [r.serial]: {
-                        on: m[r.serial]?.on ?? true,
-                        expense: m[r.serial]?.expense ?? null,
-                        grade: v,
-                      },
-                    }))
-                  }
-                />
-              );
-            },
-          },
-          {
-            title: t("returnCustomer.priceCol", "Price"),
-            key: "price",
-            align: "right" as const,
-            onCell: (r: BackRow) => (r.kind === "EMPTY" ? { colSpan: 0 } : {}),
             render: (_: unknown, r: BackRow) =>
               r.kind === "UNIT" ? (
-                <Typography.Text style={{ whiteSpace: "nowrap" }}>
-                  {fmtRp(r.sale.prices[r.serial] ?? 0)}
+                <Typography.Text>{productLabel(r.serial)}</Typography.Text>
+              ) : (
+                <Typography.Text>
+                  {`${skuLabel(skuById.get(r.line.skuId), r.line.skuId)} ×${
+                    qtyPicks[r.line.id]?.qty ?? 0
+                  }`}
                 </Typography.Text>
-              ) : r.kind === "COUNTED" ? (
-                <Typography.Text style={{ whiteSpace: "nowrap" }}>
-                  {t("returnCustomer.eachPrice", "{{price}} each", {
-                    price: fmtRp(r.line.price),
-                  })}
-                </Typography.Text>
-              ) : null,
+              ),
           },
           {
-            title: t("returnCustomer.expenseCol", "Additional expense"),
-            key: "expense",
-            width: 150,
-            onCell: (r: BackRow) => (r.kind === "EMPTY" ? { colSpan: 0 } : {}),
-            render: (_: unknown, r: BackRow) => {
-              if (r.kind === "EMPTY") return null;
-              const name =
-                r.kind === "UNIT"
-                  ? r.serial
-                  : skuLabel(skuById.get(r.line.skuId), r.line.skuId);
-              const off =
-                r.kind === "UNIT"
-                  ? !(picks[r.serial]?.on ?? false)
-                  : (qtyPicks[r.line.id]?.qty ?? 0) === 0;
-              const value =
-                r.kind === "UNIT"
-                  ? picks[r.serial]?.expense
-                  : qtyPicks[r.line.id]?.expense;
-              return (
-                <Form.Item noStyle>
-                  <MoneyInput
-                    disabled={off}
-                    value={value ?? undefined}
-                    aria-label={t(
-                      "returnCustomer.expenseFor",
-                      "Additional expense on {{serial}}",
-                      { serial: name },
-                    )}
-                    onChange={(v) => setExpense(r, v)}
-                  />
-                </Form.Item>
-              );
-            },
+            title: t("returnCustomer.unitSerial", "Unit serial"),
+            key: "serial",
+            width: COLUMN.serial,
+            render: (_: unknown, r: BackRow) =>
+              r.kind === "UNIT" ? (
+                <Typography.Text
+                  style={{ fontFamily: "monospace", fontSize: TYPE.sm }}
+                >
+                  {r.serial}
+                </Typography.Text>
+              ) : (
+                // A counted product has no serial — it is a quantity
+                // (2026-09-19), and the cell says so rather than a dash
+                // (2026-09-21).
+                <Typography.Text type="secondary">{fmtNone()}</Typography.Text>
+              ),
+          },
+          {
+            title: "",
+            key: "remove",
+            width: COLUMN.action,
+            render: (_: unknown, r: BackRow) => (
+              <Button
+                type="text"
+                size="small"
+                icon={<DeleteOutlined />}
+                aria-label={t(
+                  "returnCustomer.removeBack",
+                  "Take {{item}} off",
+                  {
+                    item:
+                      r.kind === "UNIT"
+                        ? r.serial
+                        : skuLabel(skuById.get(r.line.skuId), r.line.skuId),
+                  },
+                )}
+                onClick={() => dropRow(r)}
+              />
+            ),
           },
         ]}
       />
     </div>
   );
 
-  // ── The form's right table: what goes out instead ──────────────────────
-  /** The search's result list — units on the shelf, then counted products. */
-  const resultList = (
-    <div
-      role="group"
-      aria-label={t("returnCustomer.inventoryList", "Units in the inventory")}
-      style={{
-        maxHeight: RESULT_ROWS * RESULT_ROW_HEIGHT,
-        overflowY: "auto",
-      }}
-    >
-      {unitResults.length === 0 && countedResults.length === 0 ? (
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {t("returnCustomer.noMatch", "Nothing in stock matches.")}
-        </Typography.Text>
-      ) : null}
-      {unitResults.map((u) => {
-        const sku = skuById.get(u.skuId);
-        return (
-          <Button
-            key={u.serial}
-            type="text"
-            block
-            aria-label={t("returnCustomer.addReplacement", "Add {{item}}", {
-              item: u.serial,
-            })}
-            onClick={() => addUnit(u.serial)}
-            style={{
-              height: "auto",
-              minHeight: RESULT_ROW_HEIGHT,
-              paddingBlock: 4,
-              paddingInline: 8,
-            }}
-          >
-            <Flex align="center" gap={8} style={{ width: "100%", minWidth: 0 }}>
-              <Typography.Text
-                ellipsis
-                style={{ flex: 1, minWidth: 0, textAlign: "left" }}
-              >
-                {skuLabel(sku, u.serial)}
-              </Typography.Text>
-              <GradeTag grade={u.grade} plain />
-              <Typography.Text
-                type="secondary"
-                style={{ fontFamily: "monospace", fontSize: 12 }}
-              >
-                {u.serial}
-              </Typography.Text>
-              <Typography.Text style={{ whiteSpace: "nowrap" }}>
-                {fmtRp(priceOf(u, sku?.price ?? 0))}
-              </Typography.Text>
-            </Flex>
-          </Button>
-        );
+  // ── The picker: every unit on the sale, all ticked ─────────────────────
+  /*
+   * Owner ask 2026-09-25: *"When we typed & enter, it will open up a popup
+   * modal, showing all the unit (unit name, serial, price, grade), if lots of
+   * unit make it scrollable, and a select button on each product, by default
+   * is select all, then 'Select {n} unit'."*
+   *
+   * antd's own `rowSelection` is what draws the ticks, which also gives the
+   * header's select-all for free — untick-a-few is the whole point of opening
+   * on everything ticked.
+   */
+  interface PickRow {
+    readonly key: string;
+    readonly name: string;
+    readonly serial: string | undefined;
+    readonly price: number;
+    readonly grade: string | undefined;
+  }
+  const pickRows: PickRow[] =
+    picking === null
+      ? []
+      : [
+          ...returnableSerials(picking, db.orders, statusOf, pendingBack).map(
+            (serial): PickRow => ({
+              key: `u:${serial}`,
+              name: productLabel(serial),
+              serial,
+              price: picking.prices[serial] ?? 0,
+              grade: unitOf(serial)?.grade,
+            }),
+          ),
+          ...countedOutOf(picking).map((line): PickRow => {
+            const left = line.qty - (line.returnedQty ?? 0);
+            return {
+              key: `c:${line.id}`,
+              name: `${skuLabel(skuById.get(line.skuId), line.skuId)} ×${left}`,
+              serial: undefined,
+              price: line.price * left,
+              grade: undefined,
+            };
+          }),
+        ];
+  const pickedKeys = pickRows.filter((r) => pickSel[r.key]).map((r) => r.key);
+
+  const pickerModal = (
+    <Modal
+      open={picking !== null}
+      onCancel={() => setPicking(null)}
+      onOk={confirmPick}
+      destroyOnHidden
+      width={720}
+      okButtonProps={{ disabled: pickedKeys.length === 0 }}
+      okText={t("returnCustomer.selectNUnits", "Select {{count}} units", {
+        count: pickedKeys.length,
       })}
-      {countedResults.map((c) => (
-        <Button
-          key={c.sku.id}
-          type="text"
-          block
-          aria-label={t("returnCustomer.addReplacement", "Add {{item}}", {
-            item: skuLabel(c.sku, c.sku.id),
-          })}
-          onClick={() => addCounted(c.sku.id, c.held)}
-          style={{
-            height: "auto",
-            minHeight: RESULT_ROW_HEIGHT,
-            paddingBlock: 4,
-            paddingInline: 8,
-          }}
-        >
-          <Flex align="center" gap={8} style={{ width: "100%", minWidth: 0 }}>
-            <Typography.Text
-              ellipsis
-              style={{ flex: 1, minWidth: 0, textAlign: "left" }}
-            >
-              {skuLabel(c.sku, c.sku.id)}
-            </Typography.Text>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {t("returnCustomer.onHand", "{{count}} on hand", {
-                count: c.held,
-              })}
-            </Typography.Text>
-            <Typography.Text style={{ whiteSpace: "nowrap" }}>
-              {t("returnCustomer.eachPrice", "{{price}} each", {
-                price: fmtRp(c.sku.price),
-              })}
-            </Typography.Text>
-          </Flex>
-        </Button>
-      ))}
-    </div>
+      title={t("returnCustomer.pickUnits", "Units on {{code}}", {
+        code: picking?.code ?? "",
+      })}
+    >
+      <Table<PickRow>
+        size="small"
+        rowKey="key"
+        pagination={false}
+        dataSource={pickRows}
+        // Scrolls once the sale is longer than a screenful (owner ask), and
+        // the header's tick stays put above it.
+        scroll={{ y: PICKER_HEIGHT }}
+        rowSelection={{
+          selectedRowKeys: pickedKeys,
+          onChange: (keys) =>
+            setPickSel(Object.fromEntries(keys.map((k) => [String(k), true]))),
+        }}
+        columns={[
+          {
+            title: t("returnCustomer.unitName", "Unit name"),
+            key: "name",
+            render: (_: unknown, r: PickRow) => r.name,
+          },
+          {
+            title: t("returnCustomer.unitSerial", "Unit serial"),
+            key: "serial",
+            width: COLUMN.serial,
+            render: (_: unknown, r: PickRow) =>
+              r.serial === undefined ? (
+                <Typography.Text type="secondary">{fmtNone()}</Typography.Text>
+              ) : (
+                <Typography.Text
+                  style={{ fontFamily: "monospace", fontSize: TYPE.sm }}
+                >
+                  {r.serial}
+                </Typography.Text>
+              ),
+          },
+          {
+            title: t("returnCustomer.priceCol", "Price"),
+            key: "price",
+            width: COLUMN.money,
+            align: "right" as const,
+            render: (_: unknown, r: PickRow) => fmtRp(r.price),
+          },
+          {
+            title: t("returnCustomer.gradeCol", "Grade"),
+            key: "grade",
+            width: COLUMN.grade,
+            render: (_: unknown, r: PickRow) =>
+              r.grade === undefined ? (
+                <Typography.Text type="secondary">{fmtNone()}</Typography.Text>
+              ) : (
+                <GradeTag grade={r.grade} plain />
+              ),
+          },
+        ]}
+      />
+    </Modal>
   );
+
+  // ── The exchange, under the return ─────────────────────────────────────
+  /*
+   * Owner ask 2026-09-25: *"Add '+ Exchange unit' and it will show another
+   * table below it, but do not show all the unit first — make it like a
+   * dropdown showing the serial & name. The table shows: Unit name | Serial
+   * Unit | price."*
+   *
+   * The always-open list of the whole shelf is gone: it was the tallest thing
+   * on a form most of whose returns exchange for nothing. A dropdown asks the
+   * same question in one line and searches the same fields — and a scanned
+   * serial still lands in it, because a Select's search box takes a
+   * keyboard-wedge burst exactly as an Input does.
+   */
+  const shelfOptions = [
+    ...db.units
+      .filter((u) => u.status === "TERSEDIA" && !chosenSerials.has(u.serial))
+      .map((u) => ({
+        value: `u:${u.serial}`,
+        label: `${u.serial} — ${skuLabel(skuById.get(u.skuId), u.serial)}`,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label)),
+    ...counted.map((c) => ({
+      value: `c:${c.sku.id}`,
+      label: t("returnCustomer.countedOption", "{{name}} — {{count}} on hand", {
+        name: skuLabel(c.sku, c.sku.id),
+        count: c.held,
+      }),
+    })),
+  ];
+
+  const pickReplacement = (value: string) => {
+    if (value.startsWith("u:")) {
+      addUnit(value.slice(2));
+      return;
+    }
+    const skuId = value.slice(2);
+    const held = counted.find((c) => c.sku.id === skuId)?.held ?? 0;
+    if (held > 0) addCounted(skuId, held);
+  };
 
   /** What is going out, each with its price. */
   const exchangeTable = (
@@ -1727,86 +1726,97 @@ export function CustomerReturnPanel({
         locale={{
           emptyText: t(
             "returnCustomer.nothingOutYet",
-            "Nothing goes out — a plain return.",
+            "Pick what the customer takes instead.",
           ),
         }}
         columns={[
           {
-            title: t("returnCustomer.unitCol", "Unit"),
+            title: t("returnCustomer.unitName", "Unit name"),
             key: "unit",
-            render: (_: unknown, c: ChosenRow) => {
-              const item = c.unit?.serial ?? c.label;
-              return (
-                <Flex vertical gap={0}>
+            render: (_: unknown, c: ChosenRow) =>
+              c.unit !== undefined ? (
+                <Flex gap={6} align="center" wrap>
                   <Typography.Text>{c.label}</Typography.Text>
-                  {c.unit !== undefined ? (
-                    <Flex gap={6} align="center" wrap>
-                      <GradeTag grade={c.unit.grade} plain />
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontFamily: "monospace", fontSize: 12 }}
-                      >
-                        {c.unit.serial}
-                      </Typography.Text>
-                    </Flex>
-                  ) : (
-                    <Flex gap={6} align="center">
-                      <InputNumber
-                        size="small"
-                        min={1}
-                        max={c.held}
-                        precision={0}
-                        style={{ width: 60 }}
-                        value={c.qty}
-                        aria-label={t(
-                          "returnCustomer.replacementQtyFor",
-                          "How many {{item}}",
-                          { item },
-                        )}
-                        onChange={(value) =>
-                          editReplacement(c.key, {
-                            qty: Math.max(
-                              1,
-                              Math.min(c.held ?? 1, Math.floor(value ?? 1)),
-                            ),
-                          })
-                        }
-                      />
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: 12 }}
-                      >
-                        {t("returnCustomer.onHand", "{{count}} on hand", {
-                          count: c.held ?? 0,
-                        })}
-                      </Typography.Text>
-                    </Flex>
-                  )}
+                  <GradeTag grade={c.unit.grade} plain />
                 </Flex>
-              );
-            },
+              ) : (
+                <Flex gap={6} align="center" wrap>
+                  <Typography.Text>{c.label}</Typography.Text>
+                  <InputNumber
+                    size="small"
+                    min={1}
+                    max={c.held}
+                    precision={0}
+                    style={{ width: 60 }}
+                    value={c.qty}
+                    aria-label={t(
+                      "returnCustomer.replacementQtyFor",
+                      "How many {{item}}",
+                      { item: c.label },
+                    )}
+                    onChange={(value) =>
+                      editReplacement(c.key, {
+                        qty: Math.max(
+                          1,
+                          Math.min(c.held ?? 1, Math.floor(value ?? 1)),
+                        ),
+                      })
+                    }
+                  />
+                </Flex>
+              ),
           },
           {
+            title: t("returnCustomer.serialUnit", "Serial unit"),
+            key: "serial",
+            width: COLUMN.serial,
+            render: (_: unknown, c: ChosenRow) =>
+              c.unit === undefined ? (
+                <Typography.Text type="secondary">{fmtNone()}</Typography.Text>
+              ) : (
+                <Typography.Text
+                  style={{ fontFamily: "monospace", fontSize: TYPE.sm }}
+                >
+                  {c.unit.serial}
+                </Typography.Text>
+              ),
+          },
+          {
+            /*
+             * Read-only (owner ask 2026-09-26): *"make the exchange unit price
+             * read only in that return window."* A replacement goes out at
+             * what the shop asks for it, which is a fact about the unit and is
+             * changed where prices are changed. What this window may add is
+             * the column beside it.
+             */
             title: t("returnCustomer.priceCol", "Price"),
             key: "price",
-            width: 170,
+            width: COLUMN.money,
+            align: "right" as const,
+            render: (_: unknown, c: ChosenRow) => fmtRp(c.price * c.qty),
+          },
+          {
+            title: t("returnCustomer.expenseCol", "Additional price"),
+            key: "extra",
+            width: COLUMN.moneyInput,
             render: (_: unknown, c: ChosenRow) => (
               <Form.Item noStyle>
                 <MoneyInput
-                  value={c.price}
+                  value={c.replacement.extra ?? undefined}
                   aria-label={t(
-                    "returnCustomer.replacementPriceFor",
-                    "Price of {{item}}",
+                    "returnCustomer.extraFor",
+                    "Additional price on {{item}}",
                     { item: c.unit?.serial ?? c.label },
                   )}
-                  onChange={(value) => editReplacement(c.key, { price: value })}
+                  onChange={(value) => editReplacement(c.key, { extra: value })}
                 />
               </Form.Item>
             ),
           },
           {
+            title: "",
             key: "remove",
-            width: 44,
+            width: COLUMN.action,
             render: (_: unknown, c: ChosenRow) => (
               <Button
                 type="text"
@@ -1845,9 +1855,13 @@ export function CustomerReturnPanel({
         <Modal
           open={addOpen}
           onCancel={close}
-          // Wide, because the two tables sit side by side (owner ask
-          // 2026-09-21); antd caps it at the viewport on a smaller screen.
-          width={1360}
+          /*
+           * Narrower since 2026-09-25: the exchange table moved UNDER the
+           * return table (owner ask), so the dialog is one column of four
+           * cells rather than two tables side by side, and 1360px of it was
+           * white space either side of a three-column grid.
+           */
+          width={900}
           title={t("returnCustomer.recordAReturn", "Record a return")}
           destroyOnHidden
           okText={t("returnCustomer.recordReturn", "Record return")}
@@ -1917,161 +1931,215 @@ export function CustomerReturnPanel({
               </Form.Item>
             </Flex>
 
-            <Row gutter={[24, 16]}>
-              {/* Return, on the left: what comes back. */}
-              <Col xs={24} xl={14}>
+            {/*
+             * The one thing the form asks for (owner ask 2026-09-25): *"the
+             * user only need to fill: Transaction number (only 1 transaction
+             * at a time)."* Enter opens the picker. An AutoComplete rather
+             * than a plain box so a half-remembered number offers the sales
+             * it could be — and a serial read off the unit in the customer's
+             * hand still resolves to the sale it went out on, which is the
+             * same question asked with the other label.
+             */}
+            <Flex gap={8} wrap align="flex-start">
+              <Form.Item
+                label={t(
+                  "returnCustomer.transactionNumber",
+                  "Transaction number",
+                )}
+                required
+                style={{ flex: "1 1 320px", marginBottom: 12 }}
+                validateStatus={
+                  lookupMiss || (tried && involved.length === 0)
+                    ? "error"
+                    : undefined
+                }
+                help={
+                  lookupMiss
+                    ? t(
+                        "returnCustomer.noSuchSale",
+                        "{{text}} is not a transaction with anything still out.",
+                        { text: lookupMiss },
+                      )
+                    : undefined
+                }
+              >
+                <AutoComplete
+                  value={lookup}
+                  options={saleOptions}
+                  /*
+                   * Enter belongs to the BOX, not to the list. With the first
+                   * option active by default, a serial typed in full — which
+                   * matches no sale's label and so leaves the list showing
+                   * whatever it was last filtered to — would open the picker
+                   * on whichever sale happened to be highlighted.
+                   */
+                  defaultActiveFirstOption={false}
+                  filterOption={(input, option) =>
+                    (option?.label ?? "")
+                      .toString()
+                      .toLowerCase()
+                      .includes(input.trim().toLowerCase())
+                  }
+                  onChange={(value: string) => {
+                    setLookup(value.toUpperCase());
+                    setLookupMiss(null);
+                  }}
+                  onSelect={(value: string) => {
+                    setLookup("");
+                    const order = db.orders.find((o) => o.id === value);
+                    if (order) openPicker(order);
+                  }}
+                >
+                  <Input
+                    onPressEnter={(e) => {
+                      e.preventDefault();
+                      find();
+                    }}
+                    placeholder={t(
+                      "returnCustomer.typeTheTransaction",
+                      "Type the transaction number, or scan the serial",
+                    )}
+                    style={{ fontFamily: "monospace" }}
+                    aria-label={t(
+                      "returnCustomer.transactionNumber",
+                      "Transaction number",
+                    )}
+                    data-scan-target=""
+                  />
+                </AutoComplete>
+              </Form.Item>
+              <Button
+                icon={<SearchOutlined />}
+                onClick={find}
+                style={{ marginTop: 30 }}
+              >
+                {t("returnCustomer.findSale", "Find the sale")}
+              </Button>
+            </Flex>
+
+            {/* What is coming back. */}
+            {views[0] !== undefined && (
+              <Flex
+                gap={8}
+                align="center"
+                wrap
+                style={{ marginBottom: 8 }}
+                justify="space-between"
+              >
+                <Typography.Text type="secondary">
+                  {[
+                    views[0].sale.code,
+                    customerName(views[0].sale),
+                    fmtDate(views[0].sale.ts),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </Typography.Text>
+                <Flex gap={8}>
+                  <Button
+                    size="small"
+                    onClick={() => openPicker(views[0]!.sale)}
+                  >
+                    {t("returnCustomer.changeUnits", "Change the units")}
+                  </Button>
+                  <Button size="small" onClick={removeSale}>
+                    {t("returnCustomer.startOver", "Start over")}
+                  </Button>
+                </Flex>
+              </Flex>
+            )}
+            {returnTable}
+
+            {/*
+             * One charge for the whole return (owner ask 2026-09-26).
+             *
+             * Drawn only while nothing is going out in exchange: with a
+             * replacement on the form the charge is asked for per exchange
+             * unit instead, in the column beside its price, and two boxes
+             * both meaning "and this much on top" is a sale charged twice.
+             */}
+            {backRows.length > 0 && chosen.length === 0 && (
+              <Form.Item
+                style={{ marginTop: 12, marginBottom: 0, maxWidth: 260 }}
+                label={t("returnCustomer.returnFee", "Additional fee")}
+                tooltip={t(
+                  "returnCustomer.returnFeeHint",
+                  "Charged for taking the return — it comes off what the customer gets back.",
+                )}
+              >
+                <MoneyInput
+                  value={returnFee ?? undefined}
+                  aria-label={t("returnCustomer.returnFee", "Additional fee")}
+                  onChange={(value) => setReturnFee(value)}
+                />
+              </Form.Item>
+            )}
+
+            {/*
+             * The exchange, below (owner ask 2026-09-25). Nothing of it is
+             * drawn until somebody asks for it, and it cannot be asked for
+             * until something is coming back — the 2026-09-19 rule: *"only
+             * then, show the unit for replacement."*
+             */}
+            <div style={{ marginTop: 16 }}>
+              {!exchangeOpen ? (
+                <Button
+                  icon={<PlusOutlined />}
+                  disabled={backRows.length === 0}
+                  onClick={() => setExchangeOpen(true)}
+                >
+                  {t("returnCustomer.addExchangeUnit", "Exchange unit")}
+                </Button>
+              ) : (
                 <Flex vertical gap={8}>
-                  <Typography.Title level={5} style={{ margin: 0 }}>
-                    {t("returnCustomer.returnSide", "Return")}
-                  </Typography.Title>
-                  {/* A serial adds the sale it is out on; or add the sale. */}
-                  <Flex gap={8} wrap align="flex-start">
-                    <Form.Item
-                      style={{ flex: "1 1 220px", marginBottom: 0 }}
-                      validateStatus={lookupMiss ? "warning" : undefined}
-                      help={
-                        lookupMiss
-                          ? t(
-                              "returnCustomer.notSold",
-                              "{{serial}} is not a unit out with a customer. Pick the sale below instead.",
-                              { serial: lookupMiss },
-                            )
-                          : undefined
-                      }
-                    >
-                      <Input
-                        value={lookup}
-                        onChange={(e) =>
-                          setLookup(e.target.value.toUpperCase())
-                        }
-                        onPressEnter={(e) => {
-                          e.preventDefault();
-                          find();
-                        }}
-                        placeholder={t(
-                          "returnCustomer.scanSerial",
-                          "Scan or type the serial coming back",
-                        )}
-                        style={{ fontFamily: "monospace" }}
-                        aria-label={t("returnCustomer.serialLookup", "Serial")}
-                        data-scan-target=""
-                      />
-                    </Form.Item>
-                    <Button icon={<SearchOutlined />} onClick={find}>
-                      {t("returnCustomer.findSale", "Find the sale")}
-                    </Button>
+                  <Flex gap={8} align="center" justify="space-between" wrap>
+                    <Typography.Title level={5} style={{ margin: 0 }}>
+                      {t("returnCustomer.exchangeFor", "Exchange for")}
+                    </Typography.Title>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<CloseOutlined />}
+                      aria-label={t(
+                        "returnCustomer.closeExchange",
+                        "No exchange",
+                      )}
+                      onClick={() => {
+                        setExchangeOpen(false);
+                        setReplacements([]);
+                      }}
+                    />
                   </Flex>
                   <Select
                     showSearch
                     value={null}
                     optionFilterProp="label"
+                    options={shelfOptions}
                     placeholder={t(
-                      "returnCustomer.addSale",
-                      "Add a sale — code or customer",
+                      "returnCustomer.pickReplacement",
+                      "Pick a unit — serial or name",
                     )}
-                    aria-label={t("returnCustomer.transaction", "Transaction")}
-                    options={db.orders
-                      .filter((o) => !saleIds.includes(o.id))
-                      .map((o) => ({
-                        value: o.id,
-                        label: [o.code, customerName(o), fmtDate(o.ts)]
-                          .filter(Boolean)
-                          .join(" — "),
-                      }))}
-                    onChange={(id: string | null) => {
-                      if (id) addSale(id);
-                    }}
+                    aria-label={t(
+                      "returnCustomer.searchReplacementAria",
+                      "Find a replacement in the inventory",
+                    )}
+                    onChange={(value: string) => pickReplacement(value)}
                   />
-                  {returnTable}
-                </Flex>
-              </Col>
-
-              {/* Exchange, on the right: what goes out instead. */}
-              <Col xs={24} xl={10}>
-                <Flex vertical gap={8}>
-                  <Flex vertical gap={0}>
-                    <Typography.Title level={5} style={{ margin: 0 }}>
-                      {t("returnCustomer.exchangeFor", "Exchange for")}
-                    </Typography.Title>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {t(
-                        "returnCustomer.exchangeHint",
-                        "Optional. Scan or search what the customer takes instead.",
+                  {exchangeTable}
+                  {stale.length > 0 && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      title={t(
+                        "returnCustomer.staleReplacements",
+                        "No longer on the shelf, so left out: {{list}}",
+                        { list: stale.join(", ") },
                       )}
-                    </Typography.Text>
-                  </Flex>
-                  {/* Only once something is coming back (owner, 2026-09-21:
-                      "only then, show the unit for replacement"). */}
-                  {views.length === 0 ? (
-                    <Typography.Text type="secondary">
-                      {t(
-                        "returnCustomer.exchangeWaits",
-                        "Add the unit coming back first.",
-                      )}
-                    </Typography.Text>
-                  ) : (
-                    <>
-                      <Input
-                        allowClear
-                        value={query}
-                        prefix={<SearchOutlined />}
-                        onChange={(e) => onQuery(e.target.value)}
-                        onPressEnter={(e) => {
-                          e.preventDefault();
-                          onQueryEnter();
-                        }}
-                        placeholder={t(
-                          "returnCustomer.searchReplacement",
-                          "Scan a serial, or search product, variant or code",
-                        )}
-                        aria-label={t(
-                          "returnCustomer.searchReplacementAria",
-                          "Find a replacement in the inventory",
-                        )}
-                        data-scan-target=""
-                      />
-                      {resultList}
-                      {exchangeTable}
-                      {stale.length > 0 && (
-                        <Alert
-                          type="warning"
-                          showIcon
-                          title={t(
-                            "returnCustomer.staleReplacements",
-                            "No longer on the shelf, so left out: {{list}}",
-                            { list: stale.join(", ") },
-                          )}
-                        />
-                      )}
-                      {involved.length > 1 && chosen.length > 0 && (
-                        <Form.Item
-                          label={t(
-                            "returnCustomer.putOn",
-                            "Put the replacements on",
-                          )}
-                          style={{ marginBottom: 0 }}
-                        >
-                          <Select
-                            value={target?.sale.id}
-                            aria-label={t(
-                              "returnCustomer.putOn",
-                              "Put the replacements on",
-                            )}
-                            options={involved.map((v) => ({
-                              value: v.sale.id,
-                              label: [v.sale.code, customerName(v.sale)]
-                                .filter(Boolean)
-                                .join(" — "),
-                            }))}
-                            onChange={(id: string) => setInto(id)}
-                          />
-                        </Form.Item>
-                      )}
-                    </>
+                    />
                   )}
                 </Flex>
-              </Col>
-            </Row>
+              )}
+            </div>
 
             {/* The money — only what somebody has to act on. */}
             {preview !== undefined &&
@@ -2135,17 +2203,17 @@ export function CustomerReturnPanel({
           </Form>
         </Modal>
 
-        {/* The history card this button used to sit on is gone (owner ask
-            2026-09-23 — one combined table on the page); the check itself is
-            unchanged. */}
-        <div>
-          <Button icon={<UploadOutlined />} onClick={() => setCheckOpen(true)}>
-            {t("returnCustomer.checkShopee", "Check a Shopee file")}
-          </Button>
-        </div>
+        {pickerModal}
+
+        {/*
+         * The check itself is unchanged; only where it is opened from has
+         * moved. It sat on a history card (gone 2026-09-23), then loose under
+         * the table, where it was below everything it is about — it is in the
+         * page header beside the two Add buttons now (owner ask 2026-09-25).
+         */}
         <ShopeeRefundCheck
           open={checkOpen}
-          onClose={() => setCheckOpen(false)}
+          onClose={() => onCloseCheck?.()}
           onRecordReturn={recordFromShopee}
         />
       </Flex>

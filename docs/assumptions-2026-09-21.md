@@ -212,6 +212,12 @@ reports** rather than from a replay. That is what
 the only reading of "only the master product and piutang & utang, please do not
 create a long list of migration data from 2020" that produces the right totals.
 
+⚠️ **Superseded on the supplier side, 2026-09-24.** `Supplier.openingBalance`
+was dropped at the owner's ask (*"we don't track it anymore (remove from
+database schema)"*), so the payable above is no longer imported at all —
+`extract.py` reports each supplier's figure in `audit.xlsx` and carries none of
+it. The customer half stands.
+
 The full-history import still exists and still works — same command without the
 two new flags. It writes 4,328 units and 26,851 events. It is not what you
 asked for.

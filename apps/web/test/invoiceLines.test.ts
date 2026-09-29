@@ -42,6 +42,27 @@ const unit = (serial: string, over: Partial<Unit> = {}): Unit => ({
 });
 
 describe("purchaseLines", () => {
+  it("keeps what came outside the invoice on a row of its own", () => {
+    // Owner ask 2026-09-24: *"add a button called 'Add outside invoice' … and
+    // mark that row as yellow"*. Two pieces of one product at one price, one
+    // billed and one not, are two rows — one of them yellow — so the group
+    // key has to carry the mark. Nothing about the money changes: both lines
+    // keep their price, and their units still cost what they cost.
+    const lines = purchaseLines(
+      po([
+        piece("a"),
+        piece("b", { outsideInvoice: true }),
+        piece("c", { outsideInvoice: true }),
+      ]),
+      [],
+    );
+    expect(lines).toHaveLength(2);
+    expect(lines.map((l) => [l.outsideInvoice, l.qty, l.total])).toEqual([
+      [false, 1, 10_000_000],
+      [true, 2, 20_000_000],
+    ]);
+  });
+
   it("reads five units of one product at one price back as one line of five", () => {
     const lines = purchaseLines(
       po(["a", "b", "c", "d", "e"].map((id) => piece(id))),

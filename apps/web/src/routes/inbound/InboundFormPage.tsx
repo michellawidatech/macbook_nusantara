@@ -82,7 +82,7 @@ import {
 } from "../../lib/serialScan.js";
 import { readSerialInput, serialConditionOf } from "../../lib/serialInput.js";
 import { wasScannedText } from "../../lib/scanner.js";
-import { SPACE, TYPE } from "../../theme/tokens";
+import { SPACE, TYPE, COLUMN } from "../../theme/tokens";
 import {
   useDb,
   mutate,
@@ -844,6 +844,10 @@ export function InboundFormPage() {
       unitCost: l.unitCost ?? 0,
       discount: l.discount ?? 0,
       counted,
+      // The order form IS the invoice being typed, so nothing on it can have
+      // arrived outside itself (2026-09-24). *Add outside invoice* is on the
+      // order's own page, where a delivery is being checked against paper.
+      outsideInvoice: false,
       notArrived: 0,
       received: l.units.filter((u) => u.serial.trim() !== "").length,
       subtotal: (l.unitCost ?? 0) * qty,
@@ -1204,6 +1208,7 @@ export function InboundFormPage() {
           onAddLine={() =>
             setLines((ls) => [...ls, { key: nextId("pol"), qty: 1, units: [] }])
           }
+          actionsWidth={COLUMN.action}
           actions={(view) => (
             <Button
               type="text"

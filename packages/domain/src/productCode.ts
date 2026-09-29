@@ -318,7 +318,8 @@ export function parseProductName(raw: string): ParsedProductName {
    */
   let chipPart = chip?.[1]?.replace(/\s+/g, " ");
   if (head === "" && chip !== null && chip.index === 0) {
-    head = chipPart ?? "";
+    // CHIP has one capture group and it is not optional.
+    head = chipPart!;
     chipPart = undefined;
   }
 

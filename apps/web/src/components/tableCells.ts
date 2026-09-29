@@ -15,6 +15,7 @@
  */
 import type { Key, ReactNode } from "react";
 import type { TableProps } from "antd";
+import { COLUMN } from "../theme/tokens";
 
 export type AntColumns<T> = NonNullable<TableProps<T>["columns"]>;
 export type AntColumn<T> = AntColumns<T>[number];
@@ -101,4 +102,36 @@ export function keyOf<T>(
  */
 export function isActionColumn<T>(col: AntColumn<T>): boolean {
   return col.title === undefined || col.title === "";
+}
+
+/**
+ * The narrowest a table may get before it scrolls sideways (owner ask
+ * 2026-09-28: *"have a minimum width per column so when that's the minimum and
+ * still wider than the screen, it will have scrollable table otherwise no"*).
+ *
+ * Each leaf column counts at its declared `width` (or `minWidth`), and one
+ * that declares neither at `COLUMN.flex`. Handed to antd as `scroll.x`, this
+ * is the table's width with `min-width: 100%` beside it (rc-table's
+ * `scrollTableStyle`), so the table fills whatever the screen gives it and
+ * the scrollbar appears only when the screen is narrower than this sum. It
+ * replaces `max-content`, which sized a table to its content UNWRAPPED — one
+ * long product name and the whole list scrolled on a screen with room to
+ * spare. Columns hidden at this breakpoint are counted anyway, so a tablet
+ * may scroll a few pixels early; that errs on the legible side.
+ *
+ * `extra` is for the columns antd draws itself: a selection tick, an expand
+ * chevron.
+ */
+export function gridMinWidth<T>(columns: AntColumns<T>, extra = 0): number {
+  let total = extra;
+  for (const col of leafColumns(columns)) {
+    const c = col as { width?: number | string; minWidth?: number };
+    total +=
+      typeof c.width === "number"
+        ? c.width
+        : typeof c.minWidth === "number"
+          ? c.minWidth
+          : COLUMN.flex;
+  }
+  return total;
 }

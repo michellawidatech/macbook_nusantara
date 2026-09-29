@@ -44,6 +44,7 @@ import { restoreScans } from "../../lib/opnameCount.js";
 import { ScopeFields, useConditionWord } from "./ScopeFields.js";
 import type { OpnameRec } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
+import { COLUMN } from "../../theme/tokens";
 
 /** How many serials a count has read, expected or not. See `restoreScans`. */
 const scannedIn = (o: OpnameRec | null) =>
@@ -328,7 +329,7 @@ export function OpnamePage() {
                */
               title: "",
               key: "delete",
-              width: 60,
+              width: COLUMN.action,
               render: (_, r) =>
                 r.status === "DRAFT" ? (
                   <Tooltip

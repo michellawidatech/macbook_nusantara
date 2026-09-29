@@ -54,13 +54,25 @@
  */
 export interface AgentCapabilities {
   /**
-   * May the bot read the shelf — stock, prices, a unit's grade and condition?
+   * May the bot read the shelf — which units are in stock, their grade?
    *
-   * With this off, every question about a particular machine goes to a person
+   * With this off, every question about a particular unit goes to a person
    * before the model sees it, which is the whole of the 2026-09-18 design.
+   * The other three switches each need this one: a price, a booking or a
+   * photo is always of a unit on the shelf, and answering any of them says
+   * the unit is there.
    */
   readonly stock: boolean;
-  /** May it book a hold? The ONE write the owner allows (2026-09-21). */
+  /**
+   * May it quote what a unit costs? Off, the stock tools return no figure and
+   * a price question goes to a person (owner ask 2026-09-29). A unit with no
+   * price in the POS goes to a person even when this is on.
+   */
+  readonly price: boolean;
+  /**
+   * May it make, check, move and cancel the customer's own booking? Since
+   * 2026-09-29 this is the whole booking lifecycle, not only making one.
+   */
   readonly reserve: boolean;
   /** May it send the shop's own photos of a unit? */
   readonly photos: boolean;
@@ -69,25 +81,43 @@ export interface AgentCapabilities {
 /** The 2026-09-18 design: answers from the owner's sheet, hands over the rest. */
 export const PARALLEL_CAPABILITIES: AgentCapabilities = {
   stock: false,
+  price: false,
   reserve: false,
   photos: false,
 };
 
-/** The 2026-09-21 design: the bot reads the shelf and may hold a unit. */
+/** Every switch on: the bot reads the shelf, quotes, books and sends photos. */
 export const LIVE_CAPABILITIES: AgentCapabilities = {
   stock: true,
+  price: true,
   reserve: true,
   photos: true,
 };
 
 /**
+ * What the switches actually allow once their dependency is applied: price,
+ * bookings and photos are all about a unit on the shelf, so with Stock off
+ * they are off whatever they say. Stored as set, read through this — so
+ * turning Stock back on restores what somebody chose for the other three.
+ */
+export function effectiveCapabilities(c: AgentCapabilities): AgentCapabilities {
+  return {
+    stock: c.stock,
+    price: c.stock && c.price,
+    reserve: c.stock && c.reserve,
+    photos: c.stock && c.photos,
+  };
+}
+
+/**
  * Read the capability out of an environment.
  *
- * One function so the worker, the API's Draft endpoint and anything else that
- * grows a bot read the SAME variable the same way. The cautious reading is the
- * default, and a value nobody recognises reads as cautious too: the live
- * design is right only once the stock in this database is the shop's real
- * stock, and a typo in an environment file must not be what decides that.
+ * Since 2026-09-29 this is the FALLBACK: the four switches on /chat are
+ * `AppSetting` rows (`CAPABILITY_SETTING_KEYS`), and a switch nobody has ever
+ * pressed falls back to this. The cautious reading is the default, and a
+ * value nobody recognises reads as cautious too: the live design is right
+ * only once the stock in this database is the shop's real stock, and a typo
+ * in an environment file must not be what decides that.
  */
 export function agentCapabilities(
   env: Record<string, string | undefined>,
@@ -95,6 +125,40 @@ export function agentCapabilities(
   return env["AGENT_CAPABILITIES"]?.trim().toLowerCase() === "live"
     ? LIVE_CAPABILITIES
     : PARALLEL_CAPABILITIES;
+}
+
+/** The `AppSetting` key behind each switch on /chat. */
+export const CAPABILITY_SETTING_KEYS: Readonly<
+  Record<keyof AgentCapabilities, string>
+> = {
+  stock: "chatbot.stock",
+  price: "chatbot.price",
+  reserve: "chatbot.reservation",
+  photos: "chatbot.photos",
+};
+
+/**
+ * The switches as stored, over the environment's fallback.
+ *
+ * A row reads `"true"` or `"false"`; anything else — and a key with no row —
+ * falls back to `fallback`, so a shop that has never opened the switches
+ * keeps behaving exactly as its environment file says.
+ */
+export function capabilitiesFromSettings(
+  rows: ReadonlyArray<{ readonly key: string; readonly value: string }>,
+  fallback: AgentCapabilities,
+): AgentCapabilities {
+  const byKey = new Map(rows.map((r) => [r.key, r.value.trim().toLowerCase()]));
+  const read = (k: keyof AgentCapabilities): boolean => {
+    const v = byKey.get(CAPABILITY_SETTING_KEYS[k]);
+    return v === "true" ? true : v === "false" ? false : fallback[k];
+  };
+  return {
+    stock: read("stock"),
+    price: read("price"),
+    reserve: read("reserve"),
+    photos: read("photos"),
+  };
 }
 
 /** Why a conversation went to a person. Stored on the message for the inbox. */
@@ -112,6 +176,7 @@ export const HANDOFF_TOPICS = [
   "warranty_claim",
   "complaint",
   "media",
+  "photos",
   "human",
   "other",
 ] as const;
@@ -188,6 +253,25 @@ const UNIT_DETAILS =
 const RESERVATION =
   /\b(booking|book|keep|tahan|hold|reserve|reservasi|simpan(in|kan)?|titip|dp)\b/i;
 
+/** Letting a booking go, or moving it — both are the booking switch's. */
+const CANCEL_BOOKING =
+  /\b(batal(in|kan)?|cancel|gak\s*jadi|ga\s*jadi|nggak\s*jadi|ngga\s*jadi|reschedule|ganti\s*(jadwal|jam|hari)|undur|majuin|mundurin)\b/i;
+
+/** A request to SEE a unit — the photo switch's. */
+const PHOTO_REQUEST =
+  /\b(foto(nya)?|photo|pic(t)?|picture|gambar(nya)?|video(nya)?|real\s*pic(t)?|liat|lihat)\b/i;
+
+/**
+ * A figure put forward as what the customer wants to pay: "kalau 7jt boleh?",
+ * "7,5 aja ya", "bisa 7.200.000?". Only counted as negotiation with a money
+ * figure beside it (routeMessage).
+ */
+const OFFER =
+  /\b(kalau|kalo|klo)\b[^?]*\d|\d[\d.,]*\s*(jt|juta|rb|ribu|k)?\s*(aja|saja|boleh|bisa|deal)\b|\bbisa\s*(di\s*)?\d|\b(tawar|nawar)\b/i;
+
+/** A budget is a request to pick something, not an offer on a unit. */
+const BUDGET = /\b(budget|bajet|dana(nya)?)\b|\bdapa?t\s+apa\b/i;
+
 const ORDER_PAYMENT =
   /\b(sudah|udah|udh|sdh)\s*(transfer|tf|bayar|kirim\s*bukti)|\bbukti\s*(transfer|tf|bayar|pembayaran)\b|\b(no\.?\s*)?resi\b|\btracking\b|\blacak\b|\bpesanan\s*(saya|aku|sy)\b|\binvoice\b/i;
 
@@ -239,10 +323,24 @@ export function routeMessage(
    * Negotiation goes to a person whatever the bot can read, and that is a
    * decision rather than an oversight: a discount is the owner's to give, and
    * a bot that has the price in front of it is a bot one message away from
-   * discounting it.
+   * discounting it. An OFFER counts as negotiating even without the word
+   * "nego": "kalau 7jt boleh?" names a figure the customer wants to pay.
    */
   if (NEGOTIATION.test(t) && (product || money))
     return { topic: "negotiation", rule: "negotiation+product" };
+  if (OFFER.test(t) && money && !BUDGET.test(t))
+    return { topic: "negotiation", rule: "offer" };
+  if (can.stock) {
+    // The shelf is readable; each of the other switches still decides its
+    // own kind of question (owner ask 2026-09-29).
+    if (!can.price && (asksPrice(t) || money))
+      return { topic: "price", rule: "price_off" };
+    if (!can.photos && PHOTO_REQUEST.test(t))
+      return { topic: "photos", rule: "photos_off" };
+    if (!can.reserve && (RESERVATION.test(t) || CANCEL_BOOKING.test(t)))
+      return { topic: "reservation", rule: "reservation_off" };
+    return null;
+  }
   if (!can.stock) {
     if (BATTERY.test(t)) return { topic: "unit_details", rule: "battery" };
     if (product) {
@@ -273,28 +371,105 @@ export function mentionsProduct(text: string): boolean {
 
 // --- what the bot may send ---------------------------------------------------
 
-/** Every rupiah figure in a text, digits only, so "Rp180.000" and "180.000" agree. */
-function amounts(text: string): string[] {
-  const out: string[] = [];
+/**
+ * Every rupiah figure in a text, as whole rupiah in digits, with where it sits.
+ *
+ * "Rp180.000", "180.000", "180rb", "7,5jt", "7.5 juta" and a bare "7500000"
+ * all count. The bare run of digits is new (2026-09-29): before it, a reply
+ * writing a price without separators was never checked at all.
+ */
+function amountSpans(
+  text: string,
+): Array<{ value: string; start: number; end: number }> {
+  const out: Array<{ value: string; start: number; end: number }> = [];
   const pattern =
-    /rp\.?\s*(\d[\d.,]*)|(\d{1,3}(?:[.,]\d{3})+)|(\d+)\s*(jt|juta|rb|ribu|k)\b/gi;
+    /(?:rp\.?\s*)?(\d+(?:[.,]\d{1,2})?)\s*(jt|juta|jtan|rb|ribu|k)\b|rp\.?\s*(\d{1,3}(?:[.,]\d{3})+|\d+)|(\d{1,3}(?:[.,]\d{3})+)|\b(\d{6,})\b/gi;
   for (const m of text.matchAll(pattern)) {
-    const raw = (m[1] ?? m[2] ?? m[3] ?? "").replace(/[.,]/g, "");
-    const unit = (m[4] ?? "").toLowerCase();
-    const scale =
-      unit === "jt" || unit === "juta"
-        ? 1_000_000
-        : unit === "rb" || unit === "ribu" || unit === "k"
-          ? 1_000
-          : 1;
-    if (raw !== "") out.push(String(Number(raw) * scale));
+    let value: number;
+    if (m[1] !== undefined) {
+      const unit = (m[2] ?? "").toLowerCase();
+      const scale = unit.startsWith("j") ? 1_000_000 : 1_000;
+      value = Math.round(Number(m[1].replace(",", ".")) * scale);
+    } else {
+      value = Number((m[3] ?? m[4] ?? m[5] ?? "").replace(/[.,]/g, ""));
+    }
+    if (!Number.isFinite(value) || value <= 0) continue;
+    const start = m.index ?? 0;
+    out.push({ value: String(value), start, end: start + m[0].length });
   }
   return out;
 }
 
-/** Words that tell a customer a machine is there to be bought. */
+const amounts = (text: string): string[] =>
+  amountSpans(text).map((a) => a.value);
+
+/**
+ * The figure a customer is offering, in whole rupiah, or null.
+ *
+ * The largest figure a person would plausibly pay for a unit — at least
+ * Rp100.000 — because "7,5jt aja, kirim 2 hari ya" names one price and one
+ * number that is not money. Read by code, never by the model: the offer on a
+ * negotiation is what a staff member acts on, and a model asked to extract it
+ * will sometimes round it (owner ask 2026-09-29).
+ */
+export function parseAskPrice(text: string): bigint | null {
+  const values = amountSpans(text.toLowerCase())
+    .map((a) => Number(a.value))
+    .filter((v) => v >= 100_000 && v < 1_000_000_000);
+  if (values.length === 0) return null;
+  return BigInt(Math.max(...values));
+}
+
+/**
+ * The words that name WHICH unit: a chip, a family, a year. Two sentences
+ * that name different ones are about different units — which is what the
+ * price and availability checks below compare.
+ */
+const MODEL_TOKEN =
+  /\b(m[1-5]|i[3579]|20[0-3]\d|air|pro|max|mini|imac|ipad|iphone|watch|airpods|studio|ultra)\b/gi;
+
+export function modelTokens(text: string): string[] {
+  return [
+    ...new Set([...text.toLowerCase().matchAll(MODEL_TOKEN)].map((m) => m[1]!)),
+  ];
+}
+
+/** Words that tell a customer a unit is there to be bought. */
 const AVAILABILITY =
-  /\b(ready|tersedia|masih\s*ada|stok(nya)?\s*(ada|masih)|ada\s*stok|in\s*stock|available)\b/i;
+  /\b(ready|redi|tersedia|masih\s*ada|stok(nya)?\s*(ada|masih)|ada\s*stok|in\s*stock|available)\b|\b(unit|stok)(nya)?\s+(masih\s+)?ada\b|\bbisa\s+(langsung\s+)?(diambil|dikirim|dibeli)\b/i;
+
+/**
+ * "Ada", except where it introduces what a MODEL comes in — "ada varian
+ * 8/256", "ada pilihan warna" — which is the catalogue talking, not the shelf.
+ */
+const ADA_ON_SHELF =
+  /\bada\b(?!\s+(varian|pilihan|konfigurasi|versi|warna|ukuran|yang|model|tipe|beberapa|juga\s+varian))/i;
+
+/**
+ * Does this sentence tell somebody a unit is there? "Ada" alone is how an
+ * Indonesian says yes to anything ("bisa COD?" — "ada kak"), so it only
+ * counts when the sentence names a unit: "Ada kak Air M3 16/512 nya".
+ */
+function claimsAvailability(sentence: string): boolean {
+  return (
+    AVAILABILITY.test(sentence) ||
+    (ADA_ON_SHELF.test(sentence) && modelTokens(sentence).length > 0)
+  );
+}
+
+/**
+ * One unit or one model a stock lookup returned THIS turn, as a fact rather
+ * than as text (2026-09-29). The old check searched the lookup's JSON for the
+ * word "available" — which `{"available": false}` contains.
+ */
+export interface StockFact {
+  /** How the shop names it: "MacBook Air M1 8/256". */
+  readonly label: string;
+  /** Sellable right now. */
+  readonly available: boolean;
+  /** Whole rupiah, digits only — the unit's price, or a model's range ends. */
+  readonly prices: readonly string[];
+}
 
 export type ReplyProblem =
   | "EMPTY"
@@ -307,19 +482,53 @@ export type ReplyProblem =
 /** Longest message the bot may send. A WhatsApp reply, not a brochure. */
 export const MAX_REPLY_CHARS = 1_500;
 
+/** Sentence boundaries that leave "Rp7.500.000" whole. */
+const sentences = (text: string): string[] =>
+  text
+    .split(/(?<=[!?\n])|(?<=\.)\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+/** Where the sentence holding `pos` begins. A dot counts only before a space. */
+function clauseStart(text: string, pos: number): number {
+  for (let i = pos - 1; i >= 0; i -= 1) {
+    const c = text[i];
+    if (c === "\n" || c === "!" || c === "?") return i + 1;
+    if (c === "." && /\s/.test(text[i + 1] ?? "")) return i + 1;
+  }
+  return 0;
+}
+
+const covers = (fact: StockFact, tokens: readonly string[]) => {
+  const own = new Set(modelTokens(fact.label));
+  return tokens.every((t) => own.has(t));
+};
+
 /**
  * Check a reply before it is sent.
  *
- * `sourceTexts` is the text of every source the model cited that exists — an
+ * `sourceTexts` is the text of every non-stock source the model cited — an
  * approved answer, the shop's facts, the catalogue — and `unknownSources`
  * counts citations that named nothing. A greeting cites `greeting`, which
  * brings no text with it: such a reply may carry no figure and no claim.
+ *
+ * `stockFacts` is what the stock lookups returned this turn, present only
+ * when the reply cites `stock`. Against them, since 2026-09-29:
+ *
+ *  - a price must be the price of an AVAILABLE unit, and of a unit the words
+ *    beside it name — the Air M2's price is refused in a sentence about the
+ *    Air M1, although both came back from one search;
+ *  - "ready" (or "ada" beside a named unit) needs an available unit of what
+ *    the sentence names. An approved answer can still say "ready" about
+ *    nothing in particular, as the owner's generic answers do, but never
+ *    about a model — only the shelf can.
  */
 export function checkReply(input: {
   readonly message: string;
   readonly sourceCount: number;
   readonly unknownSources: number;
   readonly sourceTexts: readonly string[];
+  readonly stockFacts?: readonly StockFact[];
 }): ReplyProblem | null {
   const message = input.message.trim();
   if (message === "") return "EMPTY";
@@ -327,15 +536,42 @@ export function checkReply(input: {
   if (input.unknownSources > 0) return "UNKNOWN_SOURCE";
   if (input.sourceCount === 0) return "NO_SOURCE";
 
+  const available = (input.stockFacts ?? []).filter((f) => f.available);
   const allowed = new Set(input.sourceTexts.flatMap(amounts));
-  if (amounts(message).some((a) => !allowed.has(a)))
-    return "AMOUNT_NOT_IN_SOURCE";
 
-  if (
-    AVAILABILITY.test(message) &&
-    !input.sourceTexts.some((s) => AVAILABILITY.test(s))
-  )
-    return "AVAILABILITY_NOT_IN_SOURCE";
+  const spans = amountSpans(message);
+  for (let i = 0; i < spans.length; i += 1) {
+    const a = spans[i]!;
+    if (allowed.has(a.value)) continue;
+    const priced = available.filter((f) => f.prices.includes(a.value));
+    if (priced.length === 0) return "AMOUNT_NOT_IN_SOURCE";
+    // Which unit the words beside the figure name: the clause before it, or
+    // failing that the clause after ("Rp7.500.000 untuk Air M1").
+    const sentenceStart = Math.max(
+      clauseStart(message, a.start),
+      i > 0 ? spans[i - 1]!.end : 0,
+    );
+    let tokens = modelTokens(message.slice(sentenceStart, a.start));
+    if (tokens.length === 0) {
+      const after = message.slice(a.end, spans[i + 1]?.start ?? message.length);
+      tokens = modelTokens(after.split(/[.!?\n]/)[0] ?? "");
+    }
+    if (!priced.some((f) => covers(f, tokens))) return "AMOUNT_NOT_IN_SOURCE";
+  }
+
+  const vouched = input.sourceTexts.some((s) => AVAILABILITY.test(s));
+  const onShelf = new Set(available.flatMap((f) => modelTokens(f.label)));
+  for (const sentence of sentences(message)) {
+    if (!claimsAvailability(sentence)) continue;
+    const tokens = modelTokens(sentence);
+    if (tokens.length === 0) {
+      if (vouched || available.length > 0) continue;
+      return "AVAILABILITY_NOT_IN_SOURCE";
+    }
+    // A named unit: only the shelf can say it is there.
+    if (available.length === 0 || !tokens.every((t) => onShelf.has(t)))
+      return "AVAILABILITY_NOT_IN_SOURCE";
+  }
   return null;
 }
 
@@ -382,7 +618,39 @@ export function holdingMessage(topic: HandoffTopic, open: boolean): string {
       return `Mohon maaf atas kendalanya kak 🙏 Tim kami bantu cek ya. ${when}`;
     case "media":
       return `Terima kasih kak, sudah kami terima 🙏 ${when}`;
+    case "photos":
+      return `Siap kak 😊 Foto unitnya kami siapkan dulu ya. ${when}`;
     default:
       return `Baik kak, kami bantu teruskan ke admin ya 😊 ${when}`;
+  }
+}
+
+// --- what a person is left to do ---------------------------------------------
+
+/** `ChatActionKind` in the schema, spelled here so this file stays Prisma-free. */
+export type ChatActionKind =
+  "NEGOTIATION" | "PRICE" | "STOCK" | "RESERVATION" | "PHOTOS" | "OTHER";
+
+/**
+ * The action item a hand-over leaves behind (owner ask 2026-09-29). Coarser
+ * than the topic on purpose: one open task per kind per chat, so a customer
+ * who asks the price three ways is one PRICE task, not three.
+ */
+export function actionKindOf(topic: HandoffTopic): ChatActionKind {
+  switch (topic) {
+    case "negotiation":
+      return "NEGOTIATION";
+    case "price":
+      return "PRICE";
+    case "stock":
+    case "unit_details":
+    case "recommendation":
+      return "STOCK";
+    case "reservation":
+      return "RESERVATION";
+    case "photos":
+      return "PHOTOS";
+    default:
+      return "OTHER";
   }
 }

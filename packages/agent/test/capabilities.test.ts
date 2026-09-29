@@ -122,10 +122,12 @@ describe("the prompt follows the capability", () => {
     });
     expect(stable).toContain('cite "stock"');
     expect(stable).toContain("Look before you speak");
-    expect(stable).toContain("Find out what they actually need");
+    expect(stable).toContain("Get to know them first");
     expect(stable).toContain("Offer ONE step up");
-    // The one write, said in the rules as well as enforced in `toolsFor`.
-    expect(stable).toContain("create_reservation is the ONE thing");
+    // The booking lifecycle, said in the rules as well as enforced in `toolsFor`.
+    expect(stable).toContain(
+      "make, check, move and cancel THIS customer's own booking",
+    );
     expect(stable).not.toContain("nobody can see today's stock");
   });
 

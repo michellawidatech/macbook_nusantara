@@ -43,9 +43,21 @@ page ── mutate(fn) ▶ store ── diff ── POST /api/store/commit ─�
 These are the non-negotiables of CLAUDE.md, and each is enforced on the server,
 not trusted from the browser.
 
-1. **The ledger is append-only.** An event in a changeset may only be new. The
-   database refuses the rest anyway (`nusantara_app` has no UPDATE or DELETE on
-   `UnitEvent`). The stock movement history — `adjustments`, and a `KOREKSI`
+1. **The ledger is append-only, with two edits the owner admitted on
+   2026-09-23 and nothing else.** An event in a changeset is new. The two
+   exceptions are a row's `serial` following its unit to a corrected serial
+   (`renameEvents` — that column alone, onto the unit that holds the row; the
+   unit itself is renamed in PLACE by the units adapter, same `Unit.id`, so
+   its history stays its own) and the removal of a unit's LAST rows
+   (`removeLastEvents` — never one in the middle, never the last one
+   standing). `commit.ts` admits exactly those two shapes to the events
+   adapter, which judges them in full. The database holds the same line:
+   `nusantara_app` may UPDATE `UnitEvent.serial` and no other column, has no
+   DELETE on the table, and reaches one only through `unit_event_drop_last`,
+   a definer function that refuses the same rows (20260924130000).
+   ⚠️ From 2026-09-23 to 2026-09-24 the adapter admitted both and the gate
+   refused them first, so neither ever reached PostgreSQL — every serial
+   correction came back "Not saved". The stock movement history — `adjustments`, and a `KOREKSI`
    in `stockMoves` — is the one collection written once and CORRECTABLE
    afterwards (2026-09-24): when, why, what was said, and a unit's battery
    reading may change; the unit, the direction, the quantity and whose hand
@@ -151,13 +163,17 @@ Every field below was browser-only and marked ⚠️ in `seed.ts`. The migration
   `SupplierDeposit`, `DepositAllocation`, `OpnameScopeLocation`,
   `OpnameScopeRack`, `OpnameScopeCategory`, `OpnameScopeCondition`,
   `OpnameSurplus`, `StoreChange`.
-- **New columns.** `Supplier.code/address/openingBalance/openingBalanceAt`;
-  `Customer.openingBalance/openingBalanceAt` and `phone` nullable (B2Soft has
-  none — owner answer 2026-09-13); `CatalogModel.identifier/source`;
+- **New columns.** `Supplier.code/address` (~~`openingBalance`,
+  `openingBalanceAt`~~ — dropped 2026-09-24, the owner stopped tracking a
+  supplier's debt from before this app, and `Payment.supplierId` went with
+  them); `Customer.openingBalance/openingBalanceAt` and `phone` nullable
+  (B2Soft has none — owner answer 2026-09-13); `CatalogModel.identifier/source`;
   `Unit.rackId/price/marketPrice/purchaseOrderId`; `UnitEvent.unitReturnId` (the event's `refCode` is projected from its document link);
-  `PurchaseOrder.discount`; `PurchaseOrderItem.notReceived/discount` (the
-  second is money off ONE line, owner ask 2026-09-20 — the first stays the
-  discount negotiated off the whole order);
+  `PurchaseOrder.discount`;
+  `PurchaseOrderItem.notReceived/discount/outsideInvoice` (money off ONE line,
+  owner ask 2026-09-20 — `PurchaseOrder.discount` stays the one negotiated off
+  the whole order — and, 2026-09-24, a line the shop took in that the
+  supplier's paper never billed);
   `Payment.channel/note/recordedAt/fromDepositId/voidedAt`;
   `Order.salespersonId/shippingAddress/payMethod/grossTotal/netReceived/reservationId`;
   `OrderItem.listPrice`; `TradeIn.skuId/condition/grade`;

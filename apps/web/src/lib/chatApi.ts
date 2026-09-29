@@ -116,3 +116,35 @@ export const saveCorrection = (body: {
     method: "POST",
     body,
   });
+
+/**
+ * The four switches on /chat (owner ask 2026-09-29): what the bot may answer
+ * for itself. `reserve` covers making, checking, moving and cancelling a
+ * booking. Each switch that is off sends its kind of question to a person.
+ */
+export interface BotCapabilities {
+  stock: boolean;
+  price: boolean;
+  reserve: boolean;
+  photos: boolean;
+}
+
+export interface BotCapabilitiesState {
+  /** As pressed. */
+  set: BotCapabilities;
+  /**
+   * What that allows: price, bookings and photos are all about a unit on the
+   * shelf, so each is off while Stock is.
+   */
+  effective: BotCapabilities;
+}
+
+export const getCapabilities = () =>
+  api<BotCapabilitiesState>("/api/chat/capabilities");
+
+/** The owner's call — the server answers 403 to anybody else. */
+export const setCapabilities = (body: Partial<BotCapabilities>) =>
+  api<BotCapabilitiesState>("/api/chat/capabilities", {
+    method: "PUT",
+    body,
+  });

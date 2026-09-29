@@ -41,7 +41,7 @@ import type { ReactNode } from "react";
 import { Button, Flex, Modal, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { EditableTable } from "./EditableTable";
-import { SPACE, TYPE } from "../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../theme/tokens";
 
 /** The least a row has to be for this table to draw it. */
 export interface UnitDetailRow {
@@ -108,13 +108,13 @@ export function UnitDetailsModal<R extends UnitDetailRow>({
       key: "serial",
       // A new unit's serial is ten to twelve; a second-hand one is taken as
       // read. Sized for a serial, not for a sentence.
-      width: 180,
+      width: COLUMN.serial,
       render: (_: unknown, r: R) => serial(r),
     },
     {
       title: t("inbound.grade", "Grade"),
       key: "grade",
-      width: 120,
+      width: COLUMN.grade,
       render: (_: unknown, r: R) => grade(r),
     },
     {
@@ -134,7 +134,7 @@ export function UnitDetailsModal<R extends UnitDetailRow>({
     {
       title: t("inbound.sellPrice", "Sell price"),
       key: "sell",
-      width: 160,
+      width: COLUMN.money,
       render: (_: unknown, r: R) => sellPrice(r),
     },
     ...(actions
@@ -144,7 +144,7 @@ export function UnitDetailsModal<R extends UnitDetailRow>({
             // than labelling a row of buttons as if it were a field.
             title: "",
             key: "actions",
-            width: 230,
+            width: COLUMN.actionsPair,
             align: "right" as const,
             render: (_: unknown, r: R) => actions(r),
           },

@@ -49,7 +49,7 @@ import { RP_SYMBOL, moneyFormatter, moneyParser } from "./money";
 import { fmtRp } from "../lib/format.js";
 import { channelOf } from "../lib/channels.js";
 import { settlementTotals, type SettlementFee } from "../lib/marketplace.js";
-import { SPACE } from "../theme/tokens";
+import { COLUMN, SPACE } from "../theme/tokens";
 
 export interface SettleModalProps {
   readonly open: boolean;
@@ -167,7 +167,7 @@ export function SettleModal({
             {
               title: t("settle.feeAmount", "Amount"),
               key: "amount",
-              width: 190,
+              width: COLUMN.money,
               align: "right",
               render: (_, f) => (
                 <InputNumber
@@ -193,7 +193,7 @@ export function SettleModal({
             {
               title: "",
               key: "remove",
-              width: 44,
+              width: COLUMN.action,
               render: (_, f) => (
                 <Button
                   type="text"

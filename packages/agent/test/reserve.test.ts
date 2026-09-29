@@ -179,7 +179,6 @@ const ctx = (over: Partial<ToolContext> = {}): ToolContext => ({
   writesUsed: new Set<string>(),
   onError: (tool, err) => {
     // A swallowed error would make every failure here look identical.
-    // eslint-disable-next-line no-console
     console.error(`[${tool}]`, err);
   },
   ...over,

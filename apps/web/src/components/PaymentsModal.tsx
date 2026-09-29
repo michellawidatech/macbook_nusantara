@@ -12,7 +12,15 @@
  * no longer demands a sentence before saving.
  */
 import { useEffect, useState } from "react";
-import { Collapse, Empty, Flex, Modal, Timeline, Typography } from "antd";
+import {
+  Alert,
+  Collapse,
+  Empty,
+  Flex,
+  Modal,
+  Timeline,
+  Typography,
+} from "antd";
 import { useTranslation } from "react-i18next";
 import { PaymentsPanel } from "./PaymentsPanel";
 import { fmtRp, fmtDateTime } from "../lib/format.js";
@@ -31,6 +39,13 @@ export interface PaymentsModalProps {
   readonly log: readonly PaymentLogEntry[];
   readonly onClose: () => void;
   readonly onSave: (next: SalePayment[]) => void;
+  /**
+   * The book is closed over this sale's date (owner ask 2026-09-24): the grid
+   * reads and takes nothing, and there is no Save. The change history is
+   * still open, because reading what was corrected is the one thing a closed
+   * period does not stop.
+   */
+  readonly locked?: boolean;
 }
 
 export function PaymentsModal({
@@ -42,6 +57,7 @@ export function PaymentsModal({
   log,
   onClose,
   onSave,
+  locked = false,
 }: PaymentsModalProps) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState<SalePayment[]>([]);
@@ -62,13 +78,30 @@ export function PaymentsModal({
       title={t("payEdit.title", "Payments — {{code}}", { code })}
       okText={t("payEdit.save", "Save")}
       onOk={() => onSave(draft)}
+      {...(locked
+        ? {
+            okButtonProps: { style: { display: "none" } },
+            cancelText: t("common.close", "Close"),
+          }
+        : {})}
     >
       <Flex vertical gap={SPACE.md}>
+        {locked && (
+          <Alert
+            type="info"
+            showIcon
+            message={t(
+              "payEdit.bookClosed",
+              "The book is closed over this date. Reopen it on Transaction History to change this sale's money.",
+            )}
+          />
+        )}
         <PaymentsPanel
           orderId={orderId}
           total={total}
           value={draft}
           onChange={setDraft}
+          readOnly={locked}
         />
 
         <Collapse

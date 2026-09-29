@@ -35,19 +35,28 @@
  * > supposed to be there, mark it as arrived & start service, and adjust the
  * > fee."*
  *
- * So the screen is two tables. **Expected** is what has been sent and not yet
- * signed for — the machines somebody at warehouse 4 should be able to find on
- * the receiving shelf this morning, and the list they check the van against.
- * **On the bench** is everything that has arrived, which is where the work and
- * all the money are. A machine crosses from one to the other by somebody
- * confirming it, and that confirmation is what moves `Unit.locationId`: before
- * this, sending a machine put it in warehouse 4 instantly and the bench had a
- * list of machines that were not there.
+ * That was two tables — **Expected**, sent and not signed for, and **On the
+ * bench**, arrived — until the owner asked for **one** (2026-09-25):
+ * *Serial | Problem | Sent from | Quoted | actions*. The three steps did not
+ * change, only the number of lists: signing a unit in is the tick on a row
+ * that has not had it, and it is still the thing that moves
+ * `Unit.locationId`. Before that confirmation existed, sending a unit put it
+ * in warehouse 4 instantly and the bench had a list of units that were not
+ * there.
  *
  * Every charge is editable afterwards, which is the third step — *"not only
  * add but also reduce"*. A repairer who quotes Rp900k and bills Rp650k is the
  * ordinary case; see `editFee` in lib/service.ts for why the row is corrected
- * rather than removed.
+ * rather than removed. The charges are behind the row, which is the one door
+ * to correcting one and why the merge did not take the expansion with it.
+ *
+ * ⚠️ Three columns went with the split and nothing replaced them: **Grade**,
+ * **Away** (the days-gone tag, amber past a fortnight) and **Cost now**
+ * (`costOfUnit` — bought, its share of the invoice's shipping and tax, and
+ * every repair). The money is still recorded and still reaches every margin;
+ * this screen just stopped printing the total. `BenchRow` still carries
+ * `grade`-adjacent fields, `days`, `total`, `buy`, `shippingTax` and
+ * `earlierRepair`, so putting any of them back is a column.
  */
 import { useMemo, useState } from "react";
 import {
@@ -62,20 +71,13 @@ import {
   Select,
   Statistic,
   Table,
-  Tag,
   Tooltip,
   Typography,
 } from "antd";
-import {
-  CheckOutlined,
-  EditOutlined,
-  PlusOutlined,
-  RollbackOutlined,
-} from "@ant-design/icons";
+import { EditOutlined, InboxOutlined, PlusOutlined } from "@ant-design/icons";
 import { SerialLink } from "../../components/SerialLink";
 import { useTranslation } from "react-i18next";
 import { PageContainer } from "../../components/PageContainer";
-import { GradeTag } from "../../components/GradeTag";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import {
@@ -83,7 +85,6 @@ import {
   benchRows,
   editFee,
   serviceLocationOf,
-  splitBench,
   visitCost,
   type BenchRow,
   type ServiceFee,
@@ -96,7 +97,7 @@ import {
   useDb,
   currentStaffName,
 } from "../../mock/store.js";
-import { SPACE, TYPE } from "../../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 
 export function ServicePage() {
   const { t } = useTranslation();
@@ -131,7 +132,6 @@ export function ServicePage() {
     () => benchRows(db),
     [db.services, db.units, db.pos, db.events],
   );
-  const { expected, onBench } = useMemo(() => splitBench(rows), [rows]);
 
   const unitOf = (serial: string) => db.units.find((u) => u.serial === serial);
   const skuOf = (serial: string) => {
@@ -145,36 +145,13 @@ export function ServicePage() {
 
   const totalCost = rows.reduce((n, r) => n + r.cost, 0);
 
-  /**
-   * Sign a machine in at the bench (owner ask 2026-09-09).
-   *
-   * This is the moment the unit actually MOVES: status and location together
-   * in one `mutate`, which is this database's whole rule. Until somebody here
-   * has seen the machine, warehouse 4 does not claim to hold it — the alterna-
-   * tive is a warehouse view listing machines that are still in a van, which is
-   * exactly what this replaced.
-   *
-   * The status is already SERVIS and stays SERVIS; nothing about arriving
-   * makes a machine sellable. The event is appended anyway, because "arrived
-   * at the bench on the 9th" is a fact somebody chasing a repair asks for.
+  /*
+   * ~~`markArrived`~~ went on 2026-09-25 (owner: *"no need to mark as
+   * 'received' first"*). A unit now MOVES to the bench in the same
+   * transaction that promises it to a repairer, so there is nothing left to
+   * confirm — see the note on the table below, and `sendToService` in
+   * InboundDetailPage / the adjustment in InventoryPage, which write it.
    */
-  const markArrived = (row: BenchRow) => {
-    const at = new Date().toISOString();
-    mutate((d) => {
-      const i = d.services.findIndex((r) => r.id === row.rec.id);
-      if (i >= 0) d.services[i] = { ...d.services[i]!, arrivedAt: at };
-      appendEvent(d, row.serial, {
-        type: "DICATAT",
-        ...(bench ? { toLocationId: bench } : {}),
-        note: `Arrived at service — ${warehouseName(bench)}`,
-      });
-    });
-    message.success(
-      t("service.arrivedOk", "{{serial}} is at the bench. Work can start.", {
-        serial: row.serial,
-      }),
-    );
-  };
 
   /**
    * Record a charge, or correct one already recorded.
@@ -336,124 +313,29 @@ export function ServicePage() {
               title={t("service.bench", "Bench")}
               value={warehouseName(bench)}
             />
-            {expected.length > 0 && (
-              <Typography.Text type="warning" style={{ fontSize: TYPE.sm }}>
-                {t("service.expectedCount", "{{n}} on the way", {
-                  n: expected.length,
-                })}
-              </Typography.Text>
-            )}
           </Card>
         </Flex>
 
         {/*
-         * What the bench is waiting for (owner ask 2026-09-09).
+         * ONE table (owner ask 2026-09-25), where there were two — Expected
+         * and On the bench. The split was this screen's own argument, that
+         * "did the van arrive" and "what is this repair costing" are
+         * different jobs; the owner's answer is that they are one list of
+         * units that are not here.
          *
-         * Only drawn when something is on its way: an empty table headed
-         * "Expected" every day of the year teaches people to stop reading the
-         * top of the screen, and the machines that matter are underneath it.
+         * And there is no arrival step at all any more — *"no need to mark as
+         * 'received' first"*, same ask. This REVERSES 2026-09-09, and the
+         * thing that decision protected had to be moved rather than dropped:
+         * a unit promised to a repairer is now MOVED to the bench in the same
+         * transaction, so the bench's warehouse holds what the bench holds. It
+         * was the confirmation that wrote the location, and without one the
+         * alternative is `wh-4` holding nothing again — the 2026-09-08 bug.
          */}
-        {expected.length > 0 && (
-          <Card
-            title={t("service.expected", "Expected at the bench")}
-            extra={
-              <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
-                {t(
-                  "service.expectedHint",
-                  "Sent, and not signed for yet. Confirm one when you have it in your hands — that is what puts it in {{bench}}.",
-                  { bench: warehouseName(bench) },
-                )}
-              </Typography.Text>
-            }
-          >
-            <Table<BenchRow>
-              size="small"
-              rowKey={(r) => r.rec.id}
-              dataSource={expected}
-              pagination={false}
-              columns={[
-                {
-                  title: t("service.serial", "Serial"),
-                  key: "serial",
-                  render: (_, r) => {
-                    const sku = skuOf(r.serial);
-                    return (
-                      <Flex vertical gap={0} align="flex-start">
-                        <SerialLink serial={r.serial} />
-                        <Typography.Text
-                          type="secondary"
-                          style={{ fontSize: TYPE.sm }}
-                        >
-                          {sku
-                            ? `${sku.name} ${sku.variantLabel}`
-                            : t("service.unknownProduct", "Unknown product")}
-                        </Typography.Text>
-                      </Flex>
-                    );
-                  },
-                },
-                {
-                  title: t("service.problem", "Problem"),
-                  key: "note",
-                  render: (_, r) => r.rec.note ?? fmtNone(),
-                },
-                {
-                  title: t("service.sentFrom", "Sent from"),
-                  key: "from",
-                  width: 170,
-                  render: (_, r) => warehouseName(r.rec.fromLocationId),
-                },
-                {
-                  /*
-                   * How long it has been in transit. Amber past three days,
-                   * which for two warehouses in one city is long enough to
-                   * telephone the courier about — a different threshold from
-                   * the fortnight a repair gets, because a different thing has
-                   * gone wrong.
-                   */
-                  title: t("service.sentWhen", "Sent"),
-                  key: "days",
-                  width: 130,
-                  render: (_, r) => (
-                    <Tag color={r.days >= 3 ? "orange" : "default"}>
-                      {t("service.nDaysAgo", "{{n}} days ago", { n: r.days })}
-                    </Tag>
-                  ),
-                },
-                {
-                  title: t("service.quoted", "Quoted so far"),
-                  key: "cost",
-                  width: 160,
-                  align: "right",
-                  render: (_, r) => fmtRp(r.cost),
-                },
-                {
-                  title: "",
-                  key: "actions",
-                  width: 210,
-                  render: (_, r) => (
-                    <Flex justify="end">
-                      <Button
-                        size="small"
-                        type="primary"
-                        icon={<CheckOutlined />}
-                        onClick={() => markArrived(r)}
-                      >
-                        {t("service.markArrived", "Arrived — start service")}
-                      </Button>
-                    </Flex>
-                  ),
-                },
-              ]}
-            />
-          </Card>
-        )}
-
-        <Card title={t("service.onTheBench", "On the bench")}>
+        <Card title={t("service.atService", "At service")}>
           <Table<BenchRow>
             size="small"
             rowKey={(r) => r.rec.id}
-            dataSource={onBench}
+            dataSource={rows}
             pagination={false}
             locale={{
               emptyText: t(
@@ -473,7 +355,7 @@ export function ServicePage() {
                     {
                       title: t("service.feeKind", "Charge"),
                       key: "kind",
-                      width: 140,
+                      width: COLUMN.status,
                       render: (_: unknown, f: (typeof r.rec.fees)[number]) =>
                         SERVICE_FEE_KINDS.find((k) => k.value === f.kind)
                           ?.label ?? f.kind,
@@ -487,14 +369,14 @@ export function ServicePage() {
                     {
                       title: t("service.feeWhen", "When"),
                       key: "at",
-                      width: 140,
+                      width: COLUMN.date,
                       render: (_: unknown, f: (typeof r.rec.fees)[number]) =>
                         fmtDate(f.at),
                     },
                     {
                       title: t("service.feeAmount", "Amount"),
                       key: "amount",
-                      width: 150,
+                      width: COLUMN.money,
                       align: "right",
                       render: (_: unknown, f: (typeof r.rec.fees)[number]) =>
                         fmtRp(f.amount),
@@ -509,7 +391,7 @@ export function ServicePage() {
                        */
                       title: "",
                       key: "edit",
-                      width: 56,
+                      width: COLUMN.action,
                       render: (_: unknown, f: (typeof r.rec.fees)[number]) => (
                         <Tooltip
                           title={t("service.editFee", "Change this charge")}
@@ -561,12 +443,6 @@ export function ServicePage() {
                 },
               },
               {
-                title: t("service.grade", "Grade"),
-                key: "grade",
-                width: 90,
-                render: (_, r) => <GradeTag grade={unitOf(r.serial)?.grade} />,
-              },
-              {
                 title: t("service.problem", "Problem"),
                 key: "note",
                 render: (_, r) => r.rec.note ?? fmtNone(),
@@ -574,123 +450,67 @@ export function ServicePage() {
               {
                 title: t("service.sentFrom", "Sent from"),
                 key: "from",
-                width: 160,
+                width: 170,
                 render: (_, r) => warehouseName(r.rec.fromLocationId),
               },
               {
                 /*
-                 * How long it has been gone, which is the question this screen
-                 * is opened to answer. Amber past a fortnight — the point at
-                 * which a repairer needs telephoning rather than waiting for.
+                 * What the repair has cost so far — the fees on THIS visit.
+                 * The lines behind the row say what it is made of, and are
+                 * where one of them is corrected.
                  */
-                title: t("service.days", "Away"),
-                key: "days",
-                width: 110,
-                render: (_, r) => (
-                  <Tag color={r.days >= 14 ? "orange" : "default"}>
-                    {t("service.nDays", "{{n}} days", { n: r.days })}
-                  </Tag>
-                ),
-              },
-              {
-                title: t("service.cost", "Repair so far"),
+                title: t("service.quoted", "Quoted"),
                 key: "cost",
-                width: 160,
+                width: COLUMN.money,
                 align: "right",
                 render: (_, r) => fmtRp(r.cost),
               },
               {
                 /*
-                 * Everything the machine has cost — `costOfUnit`: bought, its
-                 * share of its invoice's shipping and tax, and every repair,
-                 * this one included. The number it now has to sell above, and
-                 * the whole reason the fees are recorded: a Rp4jt machine with
-                 * Rp800k of repair in it is a Rp4.8jt machine, and a till
-                 * quoting Rp4.5jt for it is losing money. The lines under it
-                 * say what it is made of.
+                 * Two buttons, both labelled (owner ask 2026-09-25). They were
+                 * icons, and an icon is fine for a row action nobody has to
+                 * find; these two ARE the screen — everything a bench does to
+                 * a unit at a repairer is one of them.
                  */
-                title: t("service.total", "Cost now"),
-                key: "total",
-                width: 170,
-                align: "right",
-                render: (_, r) => (
-                  <Flex vertical align="flex-end" gap={0}>
-                    <Typography.Text strong>{fmtRp(r.total)}</Typography.Text>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: TYPE.sm }}
-                    >
-                      {t("service.wasBought", "bought {{amount}}", {
-                        amount: fmtRp(r.buy),
-                      })}
-                    </Typography.Text>
-                    {r.shippingTax > 0 && (
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: TYPE.sm }}
-                      >
-                        {t("service.shippingTax", "shipping & tax {{amount}}", {
-                          amount: fmtRp(r.shippingTax),
-                        })}
-                      </Typography.Text>
-                    )}
-                    {r.earlierRepair > 0 && (
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: TYPE.sm }}
-                      >
-                        {t(
-                          "service.earlierRepairs",
-                          "earlier repairs {{amount}}",
-                          { amount: fmtRp(r.earlierRepair) },
-                        )}
-                      </Typography.Text>
-                    )}
-                  </Flex>
-                ),
-              },
-              {
                 title: "",
                 key: "actions",
-                width: 96,
+                width: COLUMN.actionsWide,
                 render: (_, r) => (
-                  <Flex gap={4} justify="end">
-                    <Tooltip title={t("service.addFee", "Add a charge")}>
-                      <Button
-                        size="small"
-                        type="text"
-                        icon={<PlusOutlined />}
-                        aria-label={t(
-                          "service.addFeeAria",
-                          "Add a charge to {{serial}}",
-                          { serial: r.serial },
-                        )}
-                        onClick={() => {
-                          setAddingTo(r);
-                          feeForm.setFieldsValue({ kind: "LABOUR" });
-                        }}
-                      />
-                    </Tooltip>
-                    <Tooltip
-                      title={t("service.sendBack", "Put it back in stock")}
+                  <Flex gap={SPACE.xs} justify="end">
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<PlusOutlined />}
+                      aria-label={t(
+                        "service.addFeeAria",
+                        "Add a charge to {{serial}}",
+                        { serial: r.serial },
+                      )}
+                      onClick={() => {
+                        setAddingTo(r);
+                        feeForm.setFieldsValue({ kind: "LABOUR" });
+                      }}
                     >
-                      <Button
-                        size="small"
-                        type="text"
-                        icon={<RollbackOutlined />}
-                        aria-label={t(
-                          "service.sendBackAria",
-                          "Put {{serial}} back in stock",
-                          { serial: r.serial },
-                        )}
-                        onClick={() => {
-                          setReturning(r);
-                          backForm.setFieldsValue({
-                            locationId: r.rec.fromLocationId,
-                          });
-                        }}
-                      />
-                    </Tooltip>
+                      {t("service.charge", "Charge")}
+                    </Button>
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<InboxOutlined />}
+                      aria-label={t(
+                        "service.sendBackAria",
+                        "Put {{serial}} back in stock",
+                        { serial: r.serial },
+                      )}
+                      onClick={() => {
+                        setReturning(r);
+                        backForm.setFieldsValue({
+                          locationId: r.rec.fromLocationId,
+                        });
+                      }}
+                    >
+                      {t("service.backInStockShort", "Back in stock")}
+                    </Button>
                   </Flex>
                 ),
               },

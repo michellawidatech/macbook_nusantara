@@ -43,6 +43,7 @@
  * Pure: no React, no store. `test/payableReceivable.test.ts` is the spec.
  */
 import { holdsPendingMoney } from "./channels.js";
+import { customerLabel } from "./customers.js";
 import { openingOwed, openingPaidOf } from "./debtPayments.js";
 import { poTotals } from "./inbound.js";
 import { orderBalance, isOverdue, paymentsOf } from "./salePayments.js";
@@ -61,8 +62,6 @@ export interface PayableRow {
   readonly total: number;
   readonly paid: number;
   readonly owed: number;
-  /** A debt from before this app: `Supplier.openingBalance`. No invoice. */
-  readonly opening: boolean;
 }
 
 /** One supplier's payable, with its invoices under it. */
@@ -88,12 +87,7 @@ export interface PayableGroup {
  */
 export function payableGroups(
   invoices: readonly Po[],
-  suppliers: readonly {
-    readonly id: string;
-    readonly name: string;
-    readonly openingBalance?: number;
-    readonly openingPayments?: readonly { readonly amount: number }[];
-  }[],
+  suppliers: readonly { readonly id: string; readonly name: string }[],
 ): PayableGroup[] {
   const nameOf = new Map(suppliers.map((s) => [s.id, s.name]));
   const groups = new Map<string, PayableRow[]>();
@@ -124,44 +118,21 @@ export function payableGroups(
       total,
       paid,
       owed: outstanding,
-      opening: false,
     });
   }
 
   /*
-   * Debt from before this app, stated once on the supplier
-   * (`Supplier.openingBalance`, 2026-09-08). There is no invoice for it and
-   * there never will be — deliberately not a fake purchase order, which would
-   * put phantom stock in the ledger. What has been paid off it since
-   * (`Supplier.openingPayments`, 2026-09-22) comes off what is owed; the
-   * figure itself is never rewritten.
+   * ~~The opening balance.~~ `Supplier.openingBalance` went on 2026-09-24
+   * (*"we don't track it anymore"*). A supplier's payable is its open
+   * invoices and nothing before them.
    */
-  for (const s of suppliers) {
-    const opening = Math.max(0, s.openingBalance ?? 0);
-    const owed = openingOwed(s);
-    if (owed <= 0) continue;
-    push(s.id, {
-      key: `opening-${s.id}`,
-      supplierId: s.id,
-      supplierName: s.name,
-      code: "",
-      at: "",
-      total: opening,
-      paid: openingPaidOf(s),
-      owed,
-      opening: true,
-    });
-  }
 
   const out: PayableGroup[] = [];
   for (const [supplierId, rows] of groups) {
     // Oldest first inside a group: an invoice outstanding for six weeks is the
-    // one the supplier rings about, and an opening balance is older than any
-    // of them.
-    const sorted = [...rows].sort(
-      (a, b) =>
-        Number(b.opening) - Number(a.opening) || a.at.localeCompare(b.at),
-    );
+    // one the supplier rings about (owner ask 2026-09-24: *"the inbound is
+    // listed per the earliest date"*).
+    const sorted = [...rows].sort((a, b) => a.at.localeCompare(b.at));
     const dated = sorted.map((r) => r.at).filter((at) => at !== "");
     out.push({
       supplierId,
@@ -292,7 +263,8 @@ export function receivableGroups(
     push(key, {
       key: o.id,
       customerId: key,
-      customerName: customer?.name ?? walkInLabel,
+      // The name, or the number when that is all there is (2026-09-24).
+      customerName: customer ? customerLabel(customer) : walkInLabel,
       phone: customer?.phone ?? "",
       code: o.code,
       at: o.ts,
@@ -312,7 +284,7 @@ export function receivableGroups(
     push(c.id, {
       key: `opening-${c.id}`,
       customerId: c.id,
-      customerName: c.name,
+      customerName: customerLabel(c),
       phone: c.phone ?? "",
       code: "",
       at: "",

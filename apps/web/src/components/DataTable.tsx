@@ -48,9 +48,10 @@ import {
 } from "react";
 import { Card, Empty, Flex, Pagination, Table, Typography, theme } from "antd";
 import type { TableProps } from "antd";
-import { SPACE, TYPE, WEIGHT } from "../theme/tokens";
+import { COLUMN, SPACE, TYPE, WEIGHT } from "../theme/tokens";
 import { useLayoutMode } from "../layouts/useLayoutMode";
 import {
+  gridMinWidth,
   cellContent,
   isActionColumn,
   keyOf,
@@ -358,8 +359,18 @@ export function DataTable<T extends object>({
       size={size ?? "middle"}
       // A tablet is wide enough for a grid and still too narrow for eight
       // columns, so the desktop table keeps its own horizontal scroll rather
-      // than compressing every cell to a two-character column.
-      scroll={scroll ?? { x: "max-content" }}
+      // than compressing every cell to a two-character column — but only
+      // once the columns are at their minimums (2026-09-28). Above that the
+      // table fills the screen and nothing scrolls; see `gridMinWidth`.
+      scroll={
+        scroll ?? {
+          x: gridMinWidth(
+            columns,
+            (rest.rowSelection ? COLUMN.antdControl : 0) +
+              (rest.expandable ? COLUMN.antdControl : 0),
+          ),
+        }
+      }
       footer={paginated ? () => pager : undefined}
     />
   );

@@ -46,6 +46,9 @@ afterAll(async () => {
 beforeEach(async () => {
   // Memory first: coveredThroughId is an FK to WaMessage, onDelete Restrict.
   await db.waThreadMemory.deleteMany({});
+  // ChatAction points at WaMessage, Unit and Customer (2026-09-29).
+  await db.chatAction.deleteMany({});
+  await db.customerProfile.deleteMany({});
   await db.waMessage.deleteMany({});
 });
 

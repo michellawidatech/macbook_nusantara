@@ -51,8 +51,8 @@ export const HELD_STATUSES: readonly UnitStatus[] = [
 
 /**
  * Statuses a unit can be sold from today: on the shelf, or held for a named
- * customer. What a line's sell price and value are taken over — a unit in QC
- * has not been priced yet and one at a repairer is not for sale.
+ * customer. What a line's value is taken over — a unit in QC or at a repairer
+ * is not for sale. Its sell price also counts any held unit priced at Inbound.
  */
 export const SELLABLE_STATUSES: readonly UnitStatus[] = [
   "TERSEDIA",
@@ -138,7 +138,11 @@ export interface InventoryLine {
    * repairs and left the expense share out.
    */
   readonly cost: PriceRange;
-  /** What the sellable units on this line ask over the counter. */
+  /**
+   * What the units on this line ask over the counter: every sellable unit,
+   * plus any unit not yet on sale that has its own price already (set at
+   * Inbound). `value` stays sellable-only.
+   */
   readonly store: PriceRange;
   /** What the sellable units would fetch at their own asking prices. */
   readonly value: number;
@@ -251,6 +255,11 @@ export function inventoryLines(
       );
     const count = (s: UnitStatus) => mine.filter((u) => u.status === s).length;
     const sellable = mine.filter(isSellable);
+    // A unit still in QC or at a repairer is not for sale, but one that was
+    // PRICED at Inbound already says what it will ask (owner report
+    // 2026-09-28: a sell price set in the Inbound popup read Rp 0 here). Only
+    // its own price counts — one that has none has not been priced yet.
+    const asking = mine.filter((u) => isSellable(u) || u.price != null);
     lines.push({
       key,
       ...base,
@@ -263,7 +272,7 @@ export function inventoryLines(
       onHand: mine.length,
       buy: priceRange(mine.map((u) => u.buy)),
       cost: priceRange(mine.map((u) => opts.costOf(u))),
-      store: priceRange(sellable.map((u) => priceOf(u, base.listPrice))),
+      store: priceRange(asking.map((u) => priceOf(u, base.listPrice))),
       // A SUM over the units, not a count times the catalogue price (owner
       // revision 2026-09-08): each one asks its own money.
       value: sellable.reduce((t, u) => t + priceOf(u, base.listPrice), 0),

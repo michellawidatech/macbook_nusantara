@@ -26,6 +26,7 @@ import { InboxOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { DataTable } from "../../components/DataTable";
 import { fmtRp, fmtNone } from "../../lib/format.js";
+import { customerLabel } from "../../lib/customers.js";
 import { readXlsx, XlsxError, type XlsxSheet } from "../../lib/xlsxRead.js";
 import {
   returnNamesOrder,
@@ -156,8 +157,10 @@ export function ShopeeRefundCheck({
     }
   };
 
-  const customerName = (o: Order) =>
-    db.customers.find((c) => c.id === o.customerId)?.name;
+  const customerName = (o: Order) => {
+    const c = db.customers.find((x) => x.id === o.customerId);
+    return c ? customerLabel(c) : undefined;
+  };
 
   /** What the sale was: its units and its counted lines, one per line. */
   const saleCell = (r: RefundRow): ReactNode => {

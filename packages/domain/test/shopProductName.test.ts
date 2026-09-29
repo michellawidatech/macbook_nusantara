@@ -196,6 +196,19 @@ describe("parseProductName — reading B2Soft's own rows back", () => {
     }
   });
 
+  it("takes a sizeless name apart but does not call it recognised", () => {
+    // A Mac mini has no screen, and "recognised" asks for size, configuration
+    // and chip — so its parts are read and the flag stays false.
+    expect(parseProductName("MAC MINI 2018 I3 8/128")).toEqual({
+      line: "MAC MINI",
+      year: "2018",
+      chip: "I3",
+      ram: "8GB",
+      ssd: "128GB",
+      recognised: false,
+    });
+  });
+
   it("says nothing about an empty name rather than guessing", () => {
     expect(parseProductName("   ")).toEqual({ line: "", recognised: false });
   });

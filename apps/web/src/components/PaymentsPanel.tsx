@@ -50,7 +50,7 @@ import {
   type PaymentState,
   type SalePayment,
 } from "../lib/salePayments.js";
-import { SPACE, TYPE } from "../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../theme/tokens";
 
 export interface PaymentsPanelProps {
   /** The sale, so a derived shortfall row is filed under a stable id. */
@@ -140,7 +140,7 @@ export function PaymentsPanel({
           {
             title: t("pay.method", "Payment method"),
             key: "method",
-            width: 240,
+            width: COLUMN.choice,
             render: (_, p) => {
               const key = tillMethodOfPayment(p);
               const options = TILL_METHODS.map((m) => ({
@@ -181,7 +181,7 @@ export function PaymentsPanel({
           {
             title: t("pay.status", "Status"),
             key: "status",
-            width: 170,
+            width: COLUMN.choice,
             render: (_, p) => {
               const marketplace = p.channel !== undefined;
               return (
@@ -210,7 +210,7 @@ export function PaymentsPanel({
           {
             title: t("pay.amount", "Amount"),
             key: "amount",
-            width: 180,
+            width: COLUMN.money,
             align: "right",
             render: (_, p) => (
               <InputNumber
@@ -234,7 +234,7 @@ export function PaymentsPanel({
                 {
                   title: "",
                   key: "remove",
-                  width: 44,
+                  width: COLUMN.action,
                   render: (_: unknown, p: SalePayment) => (
                     <Button
                       type="text"

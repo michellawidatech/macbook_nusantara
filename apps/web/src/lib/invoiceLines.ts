@@ -86,6 +86,12 @@ export interface PurchaseLine {
    * ledger, with no units under it and no serial to ask for.
    */
   readonly counted: boolean;
+  /**
+   * The shop took these in and the supplier's paper never billed them (owner
+   * ask 2026-09-24). A mark: the money is unchanged, the row is yellow, and
+   * the units are listed under the table.
+   */
+  readonly outsideInvoice: boolean;
 }
 
 /**
@@ -119,8 +125,13 @@ export function pieceCosts(
   );
 }
 
-/** The key lines are grouped on: one product at one price. */
-const groupKey = (item: PoItem) => JSON.stringify([item.skuId, item.unitCost]);
+/**
+ * The key lines are grouped on: one product at one price, and on one side of
+ * the invoice — a product taken in outside the paper is its own row, because
+ * that is the row the owner asked to see in yellow (2026-09-24).
+ */
+const groupKey = (item: PoItem) =>
+  JSON.stringify([item.skuId, item.unitCost, item.outsideInvoice === true]);
 
 export function purchaseLines(
   po: Pick<Po, "id" | "items">,
@@ -169,6 +180,7 @@ export function purchaseLines(
       unitCost: first.unitCost,
       lines,
       counted,
+      outsideInvoice: first.outsideInvoice === true,
       discount,
       qty: lines.reduce((n, i) => n + pieces(i), 0),
       notArrived: lines

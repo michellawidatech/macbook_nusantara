@@ -45,6 +45,7 @@ import {
 } from "./ShopeeSettlementImport.js";
 import { PaymentsModal } from "../../components/PaymentsModal";
 import { fmtRp, fmtDate, fmtDateTime, fmtNone } from "../../lib/format.js";
+import { customerLabel } from "../../lib/customers.js";
 import { channelOf, holdsPendingMoney } from "../../lib/channels.js";
 import { diffPayments } from "../../lib/paymentEdits.js";
 import {
@@ -72,7 +73,8 @@ import {
   currentStaffName,
 } from "../../mock/store.js";
 import type { MockDb, Order } from "../../mock/seed.js";
-import { SPACE, TYPE } from "../../theme/tokens";
+import { isBookClosed } from "../../lib/bookClose.js";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 
 /**
  * One marketplace payment, waiting or withdrawn.
@@ -140,7 +142,10 @@ export function ReceivablesPage() {
         payment: p,
         channel,
         channelLabel: channelLabel(channel),
-        customer: customerOf(o)?.name ?? t("piutang.walkIn", "Walk-in"),
+        customer: (() => {
+          const c = customerOf(o);
+          return c ? customerLabel(c) : t("piutang.walkIn", "Walk-in");
+        })(),
         at: o.ts,
         gross: settlement?.gross ?? p.amount,
         ...(settlement === undefined ? {} : { settlement }),
@@ -472,7 +477,7 @@ export function ReceivablesPage() {
               {
                 title: t("piutang.channel", "Channel"),
                 key: "channel",
-                width: 140,
+                width: COLUMN.status,
                 facet: true,
                 facetLabel: t("piutang.anyChannel", "Any channel"),
                 facetValue: (r) => r.channelLabel,
@@ -484,7 +489,7 @@ export function ReceivablesPage() {
               {
                 title: t("piutang.transactionNo", "Transaction number"),
                 key: "order",
-                width: 180,
+                width: COLUMN.code,
                 searchable: true,
                 searchValue: (r) => r.order.code,
                 sortValue: (r) => r.order.code,
@@ -500,7 +505,7 @@ export function ReceivablesPage() {
                  */
                 title: t("piutang.refNo", "Reference number"),
                 key: "ref",
-                width: 190,
+                width: COLUMN.code,
                 searchable: true,
                 searchValue: (r) => r.payment.ref ?? "",
                 sortValue: (r) => r.payment.ref ?? "",
@@ -516,7 +521,7 @@ export function ReceivablesPage() {
               {
                 title: t("piutang.customer", "Customer"),
                 key: "customer",
-                width: 170,
+                width: COLUMN.code,
                 searchable: true,
                 searchValue: (r) => r.customer,
                 sortValue: (r) => r.customer,
@@ -525,14 +530,14 @@ export function ReceivablesPage() {
               {
                 title: t("piutang.when", "Date"),
                 key: "at",
-                width: 130,
+                width: COLUMN.date,
                 sortValue: (r) => Date.parse(r.at),
                 render: (_, r) => fmtDate(r.at),
               },
               {
                 title: t("piutang.amount", "Amount"),
                 key: "amount",
-                width: 160,
+                width: COLUMN.money,
                 align: "right",
                 sortValue: (r) => r.gross,
                 render: (_, r) => fmtRp(r.gross),
@@ -540,7 +545,7 @@ export function ReceivablesPage() {
               {
                 title: t("piutang.landed", "Received"),
                 key: "received",
-                width: 230,
+                width: COLUMN.money,
                 align: "right",
                 sortValue: (r) => r.settlement?.received ?? -1,
                 render: (_, r) => receivedCell(r),
@@ -557,7 +562,7 @@ export function ReceivablesPage() {
                 // symbol on the next reads as two different kinds of row.
                 title: "",
                 key: "actions",
-                width: 96,
+                width: COLUMN.actions,
                 render: (_, r) => (
                   <Flex gap={4}>
                     {r.settlement === undefined ? (
@@ -683,6 +688,7 @@ export function ReceivablesPage() {
           same event, and has to write the same log. */}
       <PaymentsModal
         open={editingPay !== null}
+        locked={isBookClosed(editingPay?.ts, db.settings)}
         orderId={editingPay?.id ?? ""}
         code={editingPay?.code ?? ""}
         total={editingPay ? billAfterReturns(editingPay) : 0}

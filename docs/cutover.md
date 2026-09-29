@@ -27,15 +27,26 @@ Measured on the real export, `~/Export Files`, 2026-09-21:
 | customers | 38 |
 | salespeople | 15 |
 | **owed by customers** | **Rp1.560.030.931** across 9 customers |
-| **owed to suppliers** | **Rp6.887.861.193** across 10 suppliers |
+| ~~**owed to suppliers**~~ | ⚠️ **not imported since 2026-09-24** — see below |
 | units, sales, purchase orders, stock moves | **none** |
 
-Three years of documents become two numbers per party. That is deliberate, and
-it is what `Customer.openingBalance` and `Supplier.openingBalance` were added
-for (2026-09-08, 2026-09-13): *debt from before this app, stated once*. They
-are not fake invoices — an invented invoice would put phantom stock in the
-ledger and be counted by every report that walks documents — and they appear on
-Customers, Suppliers, Receivables and Payable & Receivable.
+Three years of documents become one number per customer. That is deliberate,
+and it is what `Customer.openingBalance` was added for (2026-09-08,
+2026-09-13): *debt from before this app, stated once*. It is not a fake
+invoice — an invented invoice would put phantom stock in the ledger and be
+counted by every report that walks documents — and it appears on Customers and
+on Receivable.
+
+⚠️ **The supplier half is gone (2026-09-24.)** The owner stopped tracking a
+supplier's debt from before this app — *"we don't track it anymore (remove
+from database schema)"* — so `Supplier.openingBalance` and `Payment.supplierId`
+were dropped. The Rp6.887.861.193 of payable this table used to carry has
+nowhere to land: after the cutover, Payable lists the inbound invoices this
+app records and nothing before them. `extract.py` still reports each
+supplier's figure in `audit.xlsx` (*"Saldo awal supplier tidak dibawa"*), and
+`emit.py`'s summary says `payable: 0` rather than claiming an import that did
+not happen. Carrying it again would need a new owner decision and a new
+migration.
 
 **Rp11 is left behind**, on an internal pseudo-account called `PEMAKAIAN TOKO`
 that is in the aged report and in no customer list. The extractor names it
@@ -129,8 +140,8 @@ then eight `OK` lines. Then:
 
 ```sql
 SELECT count(*), sum("openingBalance") FROM "Customer" WHERE "openingBalance" > 0;  -- 9,  1560030931
-SELECT count(*), sum("openingBalance") FROM "Supplier" WHERE "openingBalance" > 0;  -- 10, 6887861193
 SELECT count(*) FROM "Unit";                                                        -- 0
+-- No supplier line: the column was dropped on 2026-09-24 (see above).
 ```
 
 ## 5. Logins

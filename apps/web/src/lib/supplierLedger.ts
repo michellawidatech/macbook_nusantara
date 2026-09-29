@@ -31,14 +31,14 @@
  * unallocated remainder is a real figure the shop can see rather than a
  * discrepancy somebody discovers at year end.
  *
- * ## The opening balance
+ * ## ~~The opening balance~~ (gone 2026-09-24)
  *
- * *"Per supplier we might have an unpaid transaction from years ago."* There
- * is no invoice in this system for those and there never will be — they
- * predate it. An opening balance is that debt, stated once, and it is added to
- * what the invoices say. It is deliberately NOT a fake purchase order: an
- * invented invoice would put phantom stock in the ledger and would be counted
- * by every report that walks purchase orders.
+ * *"Per supplier we might have an unpaid transaction from years ago"* was
+ * answered by `Supplier.openingBalance` for a fortnight. The owner withdrew
+ * it — *"remove the column 'Utang lama' or the amount from previous app, we
+ * don't track it anymore (remove from database schema)"* — and the column,
+ * `Payment.supplierId` and the payments that hung off it went with it. What
+ * the shop owes a supplier is its open inbound invoices and nothing else.
  *
  * Money is whole rupiah, as everywhere in the mock layer.
  *
@@ -51,8 +51,8 @@
  * ⚠️ Mock-only. Prisma has `Payment` with a nullable `poId`, so a deposit is
  * ALMOST expressible — a payment with no order — but nothing there records the
  * supplier it was paid to (the supplier is reached through the order), and
- * nothing records an allocation. That is one nullable `supplierId` column plus
- * a `PaymentAllocation` table, and an owner decision.
+ * nothing records an allocation. `Payment.supplierId` was that column for two
+ * days and went on 2026-09-24 with the opening balance it was added for.
  */
 export interface SupplierDeposit {
   readonly id: string;
@@ -108,9 +108,13 @@ export interface SupplierAccount {
   readonly paid: number;
   /** What the invoices still owe. */
   readonly owedOnInvoices: number;
-  /** Debt from before this system. Stated once — see the header. */
-  readonly openingBalance: number;
-  /** Everything the shop owes: the invoices plus the opening balance. */
+  /**
+   * Everything the shop owes — the invoices, and nothing else. Debt from
+   * before this app went on 2026-09-24 with `Supplier.openingBalance`
+   * (*"we don't track it anymore"*), so this and `owedOnInvoices` are the
+   * same figure; both are kept because they are different questions and one
+   * of them could grow another term again.
+   */
   readonly owed: number;
   /** Money paid in advance and not yet put against anything. */
   readonly unallocated: number;
@@ -145,9 +149,6 @@ export function supplierAccount(
   supplierId: string,
   invoices: readonly LedgerInvoice[],
   deposits: readonly SupplierDeposit[],
-  openingBalance = 0,
-  /** Σ `Supplier.openingPayments` — paid off the opening balance since (2026-09-22). */
-  openingPaid = 0,
 ): SupplierAccount {
   let invoiced = 0;
   let paid = 0;
@@ -164,8 +165,7 @@ export function supplierAccount(
   }
   unpaidDates.sort();
   const owedOnInvoices = Math.max(0, invoiced - paid);
-  const owed =
-    owedOnInvoices + Math.max(0, Math.max(0, openingBalance) - openingPaid);
+  const owed = owedOnInvoices;
   const unallocated = deposits
     .filter((d) => d.supplierId === supplierId)
     .reduce((n, d) => n + remainingOf(d), 0);
@@ -174,7 +174,6 @@ export function supplierAccount(
     invoiced,
     paid,
     owedOnInvoices,
-    openingBalance: Math.max(0, openingBalance),
     owed,
     unallocated,
     netOwed: Math.max(0, owed - unallocated),
@@ -287,9 +286,7 @@ export type LedgerEntryKind =
   /** Money sent in advance, against nothing yet. */
   | "DEPOSIT"
   /** Part of a deposit put against an invoice. Moves nothing. */
-  | "ALLOCATION"
-  /** Debt from before this system. */
-  | "OPENING";
+  | "ALLOCATION";
 
 export interface LedgerEntry {
   readonly id: string;
@@ -330,18 +327,6 @@ export function supplierHistory(
   supplierId: string,
   invoices: readonly HistoryInvoice[],
   deposits: readonly SupplierDeposit[],
-  opening?: {
-    readonly amount: number;
-    readonly at?: string;
-    /** `Supplier.openingPayments`: money paid off it since (2026-09-22). */
-    readonly payments?: readonly {
-      readonly id: string;
-      readonly at: string;
-      readonly amount: number;
-      readonly method: string;
-      readonly note?: string;
-    }[];
-  },
 ): LedgerEntry[] {
   const out: LedgerEntry[] = [];
   for (const inv of invoices) {
@@ -395,28 +380,6 @@ export function supplierHistory(
         ...(a.note ? { note: a.note } : {}),
       });
     }
-  }
-  if (opening && opening.amount > 0) {
-    out.push({
-      id: `open-${supplierId}`,
-      kind: "OPENING",
-      // Undated debt sorts to the bottom rather than to 1970: it predates
-      // everything here by definition, and an invented date is a claim.
-      at: opening.at ?? "",
-      amount: opening.amount,
-      direction: "CHARGE",
-    });
-  }
-  for (const p of opening?.payments ?? []) {
-    out.push({
-      id: `openpay-${p.id}`,
-      kind: "PAYMENT",
-      at: p.at,
-      amount: p.amount,
-      direction: "PAYMENT",
-      method: p.method,
-      ...(p.note ? { note: p.note } : {}),
-    });
   }
   return out.sort((a, b) => b.at.localeCompare(a.at));
 }

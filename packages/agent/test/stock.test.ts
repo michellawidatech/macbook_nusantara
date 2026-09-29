@@ -11,7 +11,11 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient, truncateAll } from "@nusantara/db";
-import { dispatchTool, type ToolContext } from "../src/index.js";
+import {
+  LIVE_CAPABILITIES,
+  dispatchTool,
+  type ToolContext,
+} from "../src/index.js";
 
 const URL =
   process.env["TEST_DATABASE_URL"] ??
@@ -106,9 +110,16 @@ async function unit(opts: {
   });
 }
 
-const ctx: ToolContext = { from: "628111000321", now: NOW };
-const search = (args: Record<string, unknown> = {}) =>
-  dispatchTool(db, "search_stock", args, ctx) as Promise<
+const ctx: ToolContext = {
+  from: "628111000321",
+  now: NOW,
+  capabilities: LIVE_CAPABILITIES,
+};
+const search = (
+  args: Record<string, unknown> = {},
+  over: Partial<ToolContext> = {},
+) =>
+  dispatchTool(db, "search_stock", args, { ...ctx, ...over }) as Promise<
     Record<string, unknown>
   >;
 
@@ -125,12 +136,7 @@ describe("what counts as sellable", () => {
     expect(JSON.stringify(out)).not.toContain("HELD");
   });
 
-  it("cannot hold a sellable unit with no asking price", async () => {
-    // Until 2026-08-27 this was a CHECK on a nullable `Unit.price`: the
-    // database refused a sellable unit that nobody had priced. The column is
-    // gone and the guarantee is stronger for it — the price is `Sku.price`,
-    // which is NOT NULL, so "in stock" and "has a price" are now the same set
-    // and there is no unpriced state left to refuse.
+  it("quotes the variant's price for a unit that has none of its own", async () => {
     await unit({ id: "s5", serial: "PRICED", status: "TERSEDIA" });
 
     const out = (await search()) as { units: Array<{ price?: string }> };
@@ -140,9 +146,9 @@ describe("what counts as sellable", () => {
     expect(out.units[0]!.price).toMatch(/^Rp\s15\.500\.000$/);
   });
 
-  it("quotes one price for every unit of a variant, whatever their grade", async () => {
-    // The point of the move. Two machines, same spec, different condition —
-    // and the bot must not invent a difference in what the shop asks for them.
+  it("quotes each unit's own price over its variant's (2026-09-08)", async () => {
+    // Two units, same spec, different condition: the POS prices them apart,
+    // and the bot must quote what the till will charge (audit 2026-09-29).
     await unit({ id: "s7", serial: "MINT", status: "TERSEDIA" });
     await db.unit.create({
       data: {
@@ -154,15 +160,52 @@ describe("what counts as sellable", () => {
         buy: 11_000_000n,
         landed: 11_000_000n,
         grade: "C",
+        price: 13_000_000n,
         intakeAt: NOW,
         version: 1,
       },
     });
 
-    const out = (await search()) as { units: Array<{ price: string }> };
+    const out = (await search()) as {
+      units: Array<{ serial: string; price: string }>;
+    };
+    const bySerial = new Map(out.units.map((u) => [u.serial, u.price]));
+    expect(bySerial.get("MINT")).toMatch(/15\.500\.000/);
+    expect(bySerial.get("SCUFFED")).toMatch(/13\.000\.000/);
+  });
 
-    expect(out.units).toHaveLength(2);
-    expect(new Set(out.units.map((u) => u.price)).size).toBe(1);
+  it("says a unit priced 0 has no price, so the bot hands it over", async () => {
+    await db.unit.create({
+      data: {
+        id: "s9",
+        serial: "ZERO",
+        skuId: "sku_s",
+        status: "TERSEDIA",
+        locationId: "loc_s",
+        buy: 11_000_000n,
+        landed: 11_000_000n,
+        grade: "B",
+        price: 0n,
+        intakeAt: NOW,
+        version: 1,
+      },
+    });
+    const out = (await search()) as {
+      units: Array<{ price: string | null; priceNote?: string }>;
+    };
+    expect(out.units[0]!.price).toBeNull();
+    expect(out.units[0]!.priceNote).toMatch(/handoff_to_staff/);
+  });
+
+  it("shows no price at all with the price switch off", async () => {
+    await unit({ id: "s10", serial: "HIDDEN", status: "TERSEDIA" });
+    const out = await search(
+      { maxPrice: 1 },
+      { capabilities: { ...LIVE_CAPABILITIES, price: false } },
+    );
+    // The budget is ignored too: filtering by it would reveal the price.
+    expect(out).toMatchObject({ matched: 1 });
+    expect(JSON.stringify(out)).not.toMatch(/Rp|price/);
   });
 
   it("never lists an archived unit", async () => {

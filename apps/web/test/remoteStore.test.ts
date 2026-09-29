@@ -248,7 +248,10 @@ describe("the store against a server", () => {
     const reasons: string[] = [];
     const stop = onStoreError((m) => reasons.push(m));
     const done = mutate((d) => {
+      // Both, not just the name: a customer is a name OR a number since
+      // 2026-09-24, so clearing one alone is a row the contract accepts.
       d.customers[0]!.name = "";
+      d.customers[0]!.phone = "";
     });
     expect(await done).toBe(false);
     expect(fake.commits).toHaveLength(0);

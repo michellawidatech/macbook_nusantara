@@ -47,6 +47,7 @@ import {
   type HandoffTopic,
   type ReplyProblem,
   type Route,
+  type StockFact,
 } from "./policy.js";
 import type { AgentPrompt } from "./prompt.js";
 import { sanitiseReply } from "./sanitise.js";
@@ -155,6 +156,8 @@ export interface ConverseHandoff {
   readonly topic: HandoffTopic;
   /** For the colleague, from the model or from the refusal that forced it. */
   readonly summary: string;
+  /** The unit it is about, when the model named one (a stock lookup's serial). */
+  readonly serial?: string;
   /** Why the code, not the model, handed it over — for the log. */
   readonly forcedBy?: "route" | ReplyProblem | "no_terminal_tool";
 }
@@ -179,6 +182,82 @@ export interface ConverseResult {
   readonly photos?: string[];
   /** Set when the turn ended with a person. The caller stamps PERLU_STAF. */
   readonly handoff?: ConverseHandoff;
+  /**
+   * The bookings this turn committed, whatever became of the reply. A hold is
+   * its own transaction, so it stands even when the words that would have
+   * announced it are refused — and the caller must be able to see it.
+   */
+  readonly bookings?: readonly BookingWrite[];
+}
+
+/** A booking write that succeeded this turn. */
+export interface BookingWrite {
+  readonly tool:
+    "create_reservation" | "reschedule_reservation" | "cancel_reservation";
+  readonly code: string;
+  readonly when?: string;
+}
+
+const str = (v: unknown): v is string => typeof v === "string" && v !== "";
+const digitsOf = (price: unknown): string[] =>
+  str(price) ? [price.replace(/\D/g, "")].filter(Boolean) : [];
+
+/**
+ * What a stock lookup said, as facts (policy.ts `StockFact`) rather than as
+ * text. `checkReply` used to search the JSON for the word "available", which
+ * `{"available": false}` contains (audit 2026-09-29).
+ */
+export function stockFactsOf(tool: string, output: unknown): StockFact[] {
+  if (output === null || typeof output !== "object") return [];
+  const o = output as Record<string, unknown>;
+  const unit = (u: unknown, available: boolean): StockFact[] => {
+    if (u === null || typeof u !== "object") return [];
+    const r = u as Record<string, unknown>;
+    const name = [r["model"], r["variant"]].filter(str).join(" ");
+    return name
+      ? [{ label: name, available, prices: digitsOf(r["price"]) }]
+      : [];
+  };
+  const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+  switch (tool) {
+    case "search_stock":
+      return list(o["units"]).flatMap((u) => unit(u, true));
+    case "check_serial":
+      return o["found"] === true ? unit(o, o["available"] === true) : [];
+    case "find_unit_photos":
+      return str(o["serial"]) ? unit(o, true) : [];
+    case "create_reservation":
+      return list(o["alternatives"]).flatMap((u) => unit(u, true));
+    case "browse_catalog":
+      return list(o["categories"]).flatMap((c) => {
+        const cat = (c ?? {}) as Record<string, unknown>;
+        return list(cat["models"]).flatMap((m) => {
+          const r = (m ?? {}) as Record<string, unknown>;
+          if (!str(r["model"])) return [];
+          return [
+            {
+              label:
+                `${str(cat["category"]) ? cat["category"] : ""} ${r["model"]}`.trim(),
+              available:
+                typeof r["available"] === "number" && r["available"] > 0,
+              prices: [...digitsOf(r["priceFrom"]), ...digitsOf(r["priceTo"])],
+            },
+          ];
+        });
+      });
+    default:
+      return [];
+  }
+}
+
+/** The fixed line that tells a customer about a booking the bot made. */
+function bookingLine(b: BookingWrite): string {
+  if (b.tool === "cancel_reservation")
+    return `Booking ${b.code} sudah kami batalkan ya kak.`;
+  const when = b.when ? ` untuk ${b.when} WIB` : "";
+  return b.tool === "reschedule_reservation"
+    ? `Booking ${b.code} sudah kami pindahkan${when} ya kak.`
+    : `Unitnya sudah kami tahan dengan kode booking ${b.code}${when} ya kak.`;
 }
 
 const TERMINAL = new Set(["reply", "handoff_to_staff"]);
@@ -247,7 +326,9 @@ export async function converse(
    * `checkReply` would refuse every figure the stock tools returned and the
    * capability would be on in name only.
    */
-  const stockResults: string[] = [];
+  const stockFacts: StockFact[] = [];
+  let stockLooked = false;
+  const bookings: BookingWrite[] = [];
   /** The photo handles `unit_photos` offered, so `reply` cannot invent one. */
   const offeredPhotos = new Set<string>();
   const open = storeOpenAt(ctx.now);
@@ -259,14 +340,28 @@ export async function converse(
     forcedBy: ConverseHandoff["forcedBy"],
     steps: number,
   ): ConverseResult => {
-    const line = holdingMessage(topic, open);
+    // A booking made this turn is announced whatever else happened: the
+    // unit is held either way, and a customer who is not told is a customer
+    // who does not come (audit 2026-09-29).
+    const line = [
+      ...bookings.map(bookingLine),
+      holdingMessage(topic, open),
+    ].join("\n");
+    const booked = bookings.map((b) => b.code).join(", ");
     return {
       reply: line,
       rawReply: line,
       toolsUsed,
       steps,
       sources: [],
-      handoff: { topic, summary, forcedBy },
+      handoff: {
+        topic,
+        summary: booked
+          ? `${summary} Bot sudah membuat/mengubah booking ${booked}.`
+          : summary,
+        forcedBy,
+      },
+      ...(bookings.length ? { bookings } : {}),
     };
   };
 
@@ -278,6 +373,10 @@ export async function converse(
       ? args["topic"]
       : (route?.topic ?? "other");
     const summary = note(args["summary"], "Pelanggan perlu dibantu staf.");
+    const serial =
+      typeof args["serial"] === "string" && args["serial"].trim() !== ""
+        ? args["serial"].trim().slice(0, 40)
+        : undefined;
     const raw =
       typeof args["customer_message"] === "string"
         ? args["customer_message"]
@@ -286,23 +385,33 @@ export async function converse(
     if (checkHoldingMessage(message) !== null) {
       // An empty line, or one carrying a figure or a stock promise: the
       // customer gets the shop's fixed words instead of the model's.
-      const line = holdingMessage(topic, open);
+      const line = [
+        ...bookings.map(bookingLine),
+        holdingMessage(topic, open),
+      ].join("\n");
       return {
         reply: line,
         rawReply: raw || line,
         toolsUsed,
         steps,
         sources: [],
-        handoff: { topic, summary },
+        handoff: { topic, summary, ...(serial ? { serial } : {}) },
+        ...(bookings.length ? { bookings } : {}),
       };
     }
+    // The model's own hand-over line may not mention the booking it made, so
+    // the fixed booking line goes first unless it already carries the code.
+    const told = bookings
+      .filter((b) => !message.includes(b.code))
+      .map(bookingLine);
     return {
-      reply: message,
+      reply: [...told, message].join("\n"),
       rawReply: raw,
       toolsUsed,
       steps,
       sources: [],
-      handoff: { topic, summary },
+      handoff: { topic, summary, ...(serial ? { serial } : {}) },
+      ...(bookings.length ? { bookings } : {}),
     };
   };
 
@@ -331,8 +440,8 @@ export async function converse(
       } else if (c.toLowerCase() === "catalog" && catalogResults.length > 0) {
         texts.push(...catalogResults);
         sources.push("catalog");
-      } else if (c.toLowerCase() === "stock" && stockResults.length > 0) {
-        texts.push(...stockResults);
+      } else if (c.toLowerCase() === "stock" && stockLooked) {
+        // Facts, not text: see `stockFactsOf`.
         sources.push("stock");
       } else if (c.toLowerCase() === "greeting") {
         sources.push("greeting");
@@ -345,10 +454,13 @@ export async function converse(
       sourceCount: sources.length,
       unknownSources: unknown,
       sourceTexts: texts,
+      ...(sources.includes("stock") ? { stockFacts } : {}),
     });
     if (problem !== null) {
       return forced(
-        "other",
+        // A figure nothing vouched for is a price question somebody has to
+        // answer, and the action item should say so.
+        problem === "AMOUNT_NOT_IN_SOURCE" ? "price" : "other",
         `Balasan bot ditahan (${problem}): "${message.slice(0, 160)}"`,
         problem,
         steps,
@@ -364,13 +476,17 @@ export async function converse(
       .split(/[\s,;]+/)
       .map((x) => x.trim())
       .filter((x) => offeredPhotos.has(x));
+    const told = bookings
+      .filter((b) => !message.includes(b.code))
+      .map(bookingLine);
     return {
-      reply: message,
+      reply: [...told, message].join("\n"),
       rawReply: raw,
       toolsUsed,
       steps,
       sources,
       ...(photos.length > 0 ? { photos } : {}),
+      ...(bookings.length ? { bookings } : {}),
     };
   };
 
@@ -425,6 +541,7 @@ export async function converse(
             : await dispatchTool(db, use.name, use.input, {
                 ...ctx,
                 knowledge,
+                capabilities,
               });
           const content = JSON.stringify(output, (_k, v) =>
             typeof v === "bigint" ? v.toString() : v,
@@ -433,12 +550,30 @@ export async function converse(
           if (
             use.name === "search_stock" ||
             use.name === "check_serial" ||
-            use.name === "browse_catalog"
+            use.name === "browse_catalog" ||
+            use.name === "find_unit_photos"
           ) {
-            stockResults.push(content);
+            stockLooked = true;
           }
-          if (use.name === "unit_photos") {
+          stockFacts.push(...stockFactsOf(use.name, output));
+          if (use.name === "unit_photos" || use.name === "find_unit_photos") {
             for (const id of photoIdsIn(output)) offeredPhotos.add(id);
+          }
+          if (
+            (use.name === "create_reservation" ||
+              use.name === "reschedule_reservation" ||
+              use.name === "cancel_reservation") &&
+            output !== null &&
+            typeof output === "object" &&
+            (output as { ok?: unknown }).ok === true &&
+            typeof (output as { code?: unknown }).code === "string"
+          ) {
+            const o = output as { code: string; when?: unknown };
+            bookings.push({
+              tool: use.name,
+              code: o.code,
+              ...(typeof o.when === "string" ? { when: o.when } : {}),
+            });
           }
           return {
             type: "tool_result" as const,

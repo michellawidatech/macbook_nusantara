@@ -32,6 +32,7 @@ import { useDb, mutate, nextId } from "../../mock/store.js";
 import { useTranslation } from "react-i18next";
 import type { Knowledge } from "../../mock/seed.js";
 import { KnowledgeImport } from "./KnowledgeImport.js";
+import { COLUMN } from "../../theme/tokens";
 
 export function KnowledgePanel() {
   const db = useDb();
@@ -163,7 +164,7 @@ export function KnowledgePanel() {
             // which the bare word "Edit" repeated down a column never did.
             title: "",
             key: "actions",
-            width: 64,
+            width: COLUMN.actions,
             fixed: "right",
             render: (_, k) => (
               <Tooltip title={t("common.edit", "Edit")}>

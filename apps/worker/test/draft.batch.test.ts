@@ -54,6 +54,9 @@ beforeEach(async () => {
   // WaThreadMemory.coveredThroughId is an FK to WaMessage with onDelete:
   // Restrict, so the memory rows have to go first.
   await db.waThreadMemory.deleteMany({});
+  // ChatAction points at WaMessage, Unit and Customer (2026-09-29).
+  await db.chatAction.deleteMany({});
+  await db.customerProfile.deleteMany({});
   await db.waMessage.deleteMany({});
 });
 
@@ -824,6 +827,68 @@ describe("handing a customer to a person", () => {
     expect((await pass(scripted(["halo kak 😊"]).client)).drafted).toBe(1);
   });
 
+  it("leaves one action item per kind, with the bot's note for the colleague", async () => {
+    await inbound({
+      id: "a.1",
+      from: SENDER,
+      text: "air m1 bisa 7jt ga kak?",
+      ts: ago(60_000),
+    });
+    await pass(
+      scripted([
+        handsOver(
+          "negotiation",
+          "Nego Air M1 ke 7jt",
+          "Admin kami cek dulu ya kak 🙏",
+        ),
+      ]).client,
+    );
+    const action = await db.chatAction.findFirstOrThrow({
+      where: { from: SENDER },
+    });
+    expect(action).toMatchObject({
+      kind: "NEGOTIATION",
+      status: "OPEN",
+      summary: "Nego Air M1 ke 7jt",
+      askPrice: 7_000_000n,
+    });
+  });
+
+  it("moves the offer on the open negotiation when the customer changes it before anybody answers", async () => {
+    await inbound({
+      id: "n.1",
+      from: SENDER,
+      text: "air m1 bisa 7jt ga kak?",
+      ts: ago(60_000),
+    });
+    await pass(
+      scripted([
+        handsOver(
+          "negotiation",
+          "Nego Air M1",
+          "Admin kami cek dulu ya kak 🙏",
+        ),
+      ]).client,
+    );
+    // Held: the bot says nothing more, but the new figure is still read.
+    await inbound({
+      id: "n.2",
+      from: SENDER,
+      text: "kalau 7,2jt deh kak",
+      ts: ago(20_000),
+    });
+    const quiet = scripted([]);
+    await pass(quiet.client);
+    expect(quiet.calls).toHaveLength(0);
+
+    const actions = await db.chatAction.findMany({ where: { from: SENDER } });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      askPrice: 7_200_000n,
+      customerText: "kalau 7,2jt deh kak",
+    });
+  });
+
   it("replaces a reply the policy refuses with the shop's holding line", async () => {
     await inbound({ id: "p.1", from: SENDER, text: "halo", ts: ago(20_000) });
 
@@ -833,8 +898,9 @@ describe("handing a customer to a person", () => {
       where: { from: SENDER },
     });
     expect(row.status).toBe("PERLU_STAF");
+    // A figure nothing vouched for is a price question (2026-09-29).
     expect(row.entities).toMatchObject({
-      handoff: { topic: "other", forcedBy: "AMOUNT_NOT_IN_SOURCE" },
+      handoff: { topic: "price", forcedBy: "AMOUNT_NOT_IN_SOURCE" },
     });
     const body = (
       (await db.outbox.findFirstOrThrow()).payload as { body: string }

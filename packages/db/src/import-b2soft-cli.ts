@@ -223,7 +223,9 @@ function withoutBalances(changes: unknown): unknown {
   const collections = (
     changes as { collections?: Record<string, { rows?: unknown[] }> }
   ).collections;
-  for (const name of ["customers", "suppliers"]) {
+  // Customers only since 2026-09-24: a supplier has no opening balance to
+  // strip, because the column is gone.
+  for (const name of ["customers"]) {
     for (const row of collections?.[name]?.rows ?? []) {
       const next = (row as { next?: Record<string, unknown> }).next;
       if (next) {

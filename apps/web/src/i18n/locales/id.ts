@@ -474,33 +474,19 @@ export const id: Record<string, string> = {
   "service.spent": "Biaya servis",
   "service.spentHint":
     "Ditambahkan ke modal tiap unit, supaya marginnya jujur.",
-  "service.shippingTax": "ongkir & pajak {{amount}}",
-  "service.earlierRepairs": "servis sebelumnya {{amount}}",
   "service.bench": "Lokasi servis",
-  "service.onTheBench": "Sedang diservis",
-  // Yang masih di jalan, dan konfirmasi kedatangannya (2026-09-09).
-  "service.expected": "Ditunggu di meja servis",
-  "service.expectedCount": "{{n}} dalam perjalanan",
-  "service.expectedHint":
-    "Sudah dikirim, belum ditandatangani. Konfirmasi kalau unitnya sudah di tangan — itu yang mencatatnya masuk {{bench}}.",
-  "service.markArrived": "Sudah sampai — mulai servis",
-  "service.arrivedOk":
-    "{{serial}} sudah di meja servis. Pengerjaan bisa mulai.",
-  "service.sentWhen": "Dikirim",
-  "service.nDaysAgo": "{{n}} hari lalu",
-  "service.quoted": "Perkiraan sejauh ini",
+  // Satu tabel sejak 2026-09-25; kolom Grade, Lama dan Modal sekarang ikut
+  // hilang bersama pembagian Ditunggu / Sedang diservis.
+  "service.atService": "Sedang di servis",
+  "service.quoted": "Perkiraan",
   "service.nothingAway": "Tidak ada unit yang sedang diservis.",
   "service.serial": "Serial",
-  "service.grade": "Grade",
   "service.problem": "Keluhan",
   "service.sentFrom": "Dikirim dari",
-  "service.days": "Lama",
-  "service.nDays": "{{n}} hari",
-  "service.cost": "Biaya sejauh ini",
-  "service.total": "Modal sekarang",
-  "service.wasBought": "beli {{amount}}",
   "service.unknownProduct": "Produk tidak dikenal",
-  "service.addFee": "Tambah biaya",
+  // Dua tombol berlabel sejak 2026-09-25; tidak ada lagi konfirmasi tiba.
+  "service.charge": "Biaya",
+  "service.backInStockShort": "Kembali ke stok",
   "service.addFeeAria": "Tambah biaya untuk {{serial}}",
   "service.addChargeTo": "Biaya untuk {{serial}}",
   "service.feeKind": "Jenis biaya",
@@ -518,7 +504,6 @@ export const id: Record<string, string> = {
     "Sebelumnya {{amount}}. Angka lamanya tetap tercatat di riwayat unit.",
   "service.saveCharge": "Simpan perubahan",
   "service.feeEdited": "Biaya {{serial}} sekarang {{amount}}.",
-  "service.sendBack": "Kembalikan ke stok",
   "service.sendBackAria": "Kembalikan {{serial}} ke stok",
   "service.backTitle": "Kembalikan {{serial}} ke stok",
   "service.backOk": "Kembali ke stok",
@@ -754,11 +739,10 @@ export const id: Record<string, string> = {
   "inbound.serviceProblem": "Keluhannya apa",
   "inbound.serviceProblemHint": "Opsional — yang perlu dicek meja servis",
   "inbound.serviceSentHere": "{{serial}} sudah ada di meja servis.",
-  "inbound.serviceSentShipping":
-    "{{serial}} dalam perjalanan ke {{bench}}. Konfirmasi di sana setelah barangnya sampai.",
+  "inbound.serviceSentShipping": "{{serial}} sekarang ada di {{bench}}.",
   "inbound.serviceShip": "Kirim ke {{bench}}",
   "inbound.serviceShipHint":
-    "Matikan kalau unitnya sudah ada di meja servis, atau kalau tukang servisnya yang menjemput. Kedatangannya tetap dikonfirmasi sebelum pengerjaan dimulai.",
+    "Matikan kalau tukang servisnya yang menjemput, atau kalau unitnya tidak dipindahkan. Kalau dinyalakan, unitnya langsung tercatat di meja servis.",
   "inbound.serviceShipLabel": "Kirim ke meja servis",
   "inbound.serviceShippingFee": "Ongkir ke sana",
   "inbound.serviceShippingFeeHint":
@@ -1052,6 +1036,7 @@ export const id: Record<string, string> = {
   "inventory.battery": "Baterai",
   "inventory.batteryBandsAria": "Arti rentang baterai",
   "inventory.description": "Deskripsi",
+  "inventory.photos": "Foto",
   "inventory.inStock": "Ada stok",
   "inventory.nAvailable": "{{n}} tersedia",
   "inventory.nInQc": "{{n}} di QC",
@@ -1303,6 +1288,7 @@ export const id: Record<string, string> = {
   "snTracking.ctxSoldFor": "seharga {{amount}}",
   "snTracking.ctxSoldTo": "ke {{who}}",
   "snTracking.description": "Deskripsi",
+  "snTracking.photos": "Foto",
   "snTracking.event": "Kejadian",
   "snTracking.fromPo": "Dari PO",
   "snTracking.lifecycle": "Perjalanan hidup",
@@ -1941,6 +1927,7 @@ export const id: Record<string, string> = {
 
   // ── Shell — PageContainer ────────────────────────────────────────────
   "page.back": "Kembali",
+  "page.actions": "Aksi halaman",
 
   // ── ProTable / DataTable ─────────────────────────────────────────────
   "proTable.clearFilters": "Bersihkan semua",
@@ -2056,6 +2043,31 @@ export const id: Record<string, string> = {
   "returns.date": "Tanggal",
   "returns.party": "Supplier / pelanggan",
   "returns.reason": "Alasan",
+  // Koreksi dan penarikan retur (permintaan pemilik 2026-09-25).
+  "returns.reasonDetail": "Keterangan tambahan",
+  "returns.conditionOf": "Kondisi {{serial}}",
+  "returns.withdrawn": "Ditarik",
+  "returns.editReturn": "Koreksi",
+  "returns.editReturnAria": "Koreksi retur {{code}}",
+  "returns.editTitle": "Koreksi {{code}}",
+  "returns.saveEdit": "Simpan koreksi",
+  "returns.editSaved": "Retur sudah dikoreksi.",
+  "returns.undoReturn": "Tarik retur ini",
+  "returns.undoReturnAria": "Tarik retur {{code}}",
+  "returns.undoTitle": "Tarik retur ini?",
+  "returns.undoOk": "Tarik",
+  "returns.undoBody":
+    "{{code}} tetap ada di riwayat dengan tanda ditarik, dan semua unit di dalamnya kembali ke posisi sebelum retur. Transaksinya kembali berutang sebesar nilai retur. Uang yang sudah dikembalikan tetap tercatat keluar — tagih sendiri atau perbaiki pembayarannya.",
+  "returns.undone": "{{code}} sudah ditarik.",
+  "returns.undoDoneAlready": "Retur ini sudah ditarik.",
+  "returns.undoUnitMoved":
+    "Ada unit di retur ini yang sudah terjual, dibooking, atau dipindahkan. Batalkan dari tempatnya sekarang.",
+  "returns.undoMarketplace":
+    "Retur ini membatalkan uang yang ditahan marketplace, dan tidak ada catatan bagian mana yang dipotong. Perbaiki pembayaran transaksinya saja.",
+  "returns.undoExchange":
+    "Retur ini adalah tukar unit. Uang pelanggan sudah berpindah ke transaksi lain, jadi tidak bisa dikembalikan otomatis.",
+  "returns.undoBooksClosed":
+    "Transaksinya ada di periode yang sudah ditutup. Buka dulu bukunya.",
   "returns.product": "Produk",
   "returns.serial": "Nomor seri",
   "returns.condition": "Kondisi",
@@ -3068,7 +3080,7 @@ export const id: Record<string, string> = {
   "inbound.unitPriceOfLine": "Harga satuan {{product}}",
   "inbound.discountTooBig":
     "Diskon tidak boleh lebih besar dari nilai barisnya ({{amount}}).",
-  "inbound.openDetails": "Unit ({{done}}/{{total}})",
+  "inbound.openDetails": "Lihat semua unit ({{done}}/{{total}})",
   "inbound.openDetailsAria": "Serial dan QC untuk {{product}}",
   "inbound.detailsSubtitle":
     "{{count}} unit · {{price}} per unit · HPP baris {{cogs}}",
@@ -3383,12 +3395,15 @@ export const id: Record<string, string> = {
     "Semua unit transaksi ini sudah kembali, atau sedang dalam perjalanan.",
   "returnCustomer.unitCol": "Unit",
   "returnCustomer.priceCol": "Harga",
-  "returnCustomer.expenseCol": "Biaya tambahan",
+  "returnCustomer.expenseCol": "Harga tambahan",
   "returnCustomer.tickAria": "{{serial}} dikembalikan",
   "returnCustomer.qtyBackAria": "Berapa {{product}} yang dikembalikan",
   "returnCustomer.countedOut": "{{code}} · {{count}} masih di pelanggan",
   "returnCustomer.eachPrice": "{{price}} per pcs",
-  "returnCustomer.expenseFor": "Biaya tambahan untuk {{serial}}",
+  "returnCustomer.extraFor": "Harga tambahan untuk {{item}}",
+  "returnCustomer.returnFee": "Biaya tambahan",
+  "returnCustomer.returnFeeHint":
+    "Biaya untuk menerima retur — dipotong dari uang yang dikembalikan ke pelanggan.",
   "returnCustomer.handBack": "Kembalikan {{amount}}",
   "returnCustomer.customerPays":
     "Pelanggan membayar {{amount}} untuk penukaran",
@@ -3418,7 +3433,6 @@ export const id: Record<string, string> = {
   "returnCustomer.removeSale": "Keluarkan {{code}} dari retur ini",
   "returnCustomer.replacementGone":
     "{{item}} sudah tidak ada di rak — pilih pengganti lain.",
-  "returnCustomer.replacementPriceFor": "Harga {{item}}",
   "returnCustomer.replacementQtyFor": "Jumlah {{item}}",
   "returnCustomer.searchReplacement":
     "Scan serial, atau cari produk, varian atau kode",
@@ -3429,9 +3443,29 @@ export const id: Record<string, string> = {
   "returnCustomer.returnSide": "Retur",
   "returnCustomer.returnTable": "Unit yang dikembalikan",
   "returnCustomer.exchangeTable": "Unit yang keluar",
+  "returnCustomer.unitName": "Nama unit",
+  "returnCustomer.unitSerial": "Serial unit",
+  "returnCustomer.serialUnit": "Serial unit",
+  "returnCustomer.gradeCol": "Grade",
+  "returnCustomer.transactionNumber": "Nomor transaksi",
+  "returnCustomer.typeTheTransaction":
+    "Ketik nomor transaksi, atau pindai serialnya",
+  "returnCustomer.noSuchSale":
+    "{{text}} bukan transaksi yang masih ada barangnya di pelanggan.",
+  "returnCustomer.pickUnits": "Unit pada {{code}}",
+  "returnCustomer.selectNUnits": "Pilih {{count}} unit",
+  "returnCustomer.nothingPicked":
+    "Ketik nomor transaksi di atas, lalu pilih unitnya.",
+  "returnCustomer.removeBack": "Keluarkan {{item}}",
+  "returnCustomer.changeUnits": "Ubah unitnya",
+  "returnCustomer.startOver": "Mulai ulang",
+  "returnCustomer.addExchangeUnit": "Unit tukar",
+  "returnCustomer.closeExchange": "Tanpa tukar",
+  "returnCustomer.pickReplacement": "Pilih unit — serial atau nama",
+  "returnCustomer.countedOption": "{{name}} — stok {{count}}",
   "returnCustomer.nothingListed":
     "Scan serial yang dikembalikan, atau tambahkan transaksinya.",
-  "returnCustomer.nothingOutYet": "Tidak ada yang keluar — retur biasa.",
+  "returnCustomer.nothingOutYet": "Pilih unit pengganti untuk pelanggan.",
   "returnCustomer.exchangeWaits": "Tambahkan dulu unit yang dikembalikan.",
   "returnCustomer.transactionRef": "Nomor transaksi / referensi",
   "returnCustomer.exchangeUnit": "Unit pengganti",
@@ -3683,4 +3717,128 @@ export const id: Record<string, string> = {
   "products.namingHint":
     "Konvensi toko: lini, ukuran, tahun atau chip, prosesor. Unit Apple silicon dinamai dengan chip-nya, bukan tahunnya.",
   "products.eGAir13": 'mis. AIR 13" 2020 I5, atau AIR 13" M2',
+  // ── 2026-09-24: a debt names its debtor (see CLAUDE.md) ──────────────────
+  "pos.payNeedsDebtor":
+    "{{amount}} belum dibayar — isi nama atau nomor telepon pelanggan (salah satu cukup).",
+  "pos.customerNeeded": "Wajib diisi — ada sisa yang belum dibayar",
+  "pos.nameOrPhone": "Nama atau nomor telepon — salah satu cukup.",
+  "customers.nameOrPhone": "Nama atau nomor telepon — salah satu cukup.",
+  // The debt dialog's second door: the document's number.
+  "debtPay.fromTransaction": "Atau mulai dari transaksi",
+  "debtPay.fromInvoice": "Atau mulai dari nomor inbound",
+  "debtPay.findTransaction": "Ketik nomor transaksi atau nomor pesanan",
+  "debtPay.findInvoice": "Ketik nomor inbound",
+  "debtPay.noSuchDocument": "Tidak ada sisa tagihan dengan nomor itu.",
+
+  // ── Inbound: the unit's own row actions, read-only viewing, outside the
+  //    invoice (owner asks 2026-09-24) ──────────────────────────────────────
+  "inbound.editInvoice": "Edit invoice",
+  "inbound.doneEditing": "Selesai mengedit",
+  "inbound.saveInvoice": "Simpan invoice",
+  "inbound.editingBanner": "Anda sedang mengedit invoice ini",
+  "inbound.scanReadOnly":
+    "Invoice ini hanya bisa dibaca. Tekan Edit invoice sebelum memindai.",
+  "inbound.paidInFullTitle": "Invoice ini sudah lunas",
+  "inbound.paidInFullBody":
+    "Tutup sekarang? Invoice yang ditutup hanya bisa dibaca — unit, baris, dan uangnya berhenti menerima perubahan. Anda bisa membukanya lagi kapan saja.",
+  "inbound.keepOpen": "Biarkan terbuka",
+  "inbound.deleteUnitRow": "Hapus unit ini",
+  "inbound.deleteUnitRowAria": "Hapus unit {{n}}",
+  "inbound.deleteUnitRowTitle": "Hapus {{what}}?",
+  "inbound.deleteUnitRowOk": "Hapus unit",
+  "inbound.deleteUnitRowBody":
+    "Barisnya keluar dari invoice. Kalau supplier menagihnya tapi tidak pernah mengirimnya, tandai Tidak datang saja — itu menjaganya tetap di invoice.",
+  "inbound.deleteUnitRowBodySerial":
+    "Unit, serialnya, dan semua yang tercatat atasnya ikut terhapus, dan invoice kehilangan barisnya. Kalau supplier menagihnya tapi tidak pernah mengirimnya, tandai Tidak datang saja — itu menjaganya tetap di invoice.",
+  "inbound.addOutside": "Tambahkan diluar invoice",
+  "inbound.addOutsideHint":
+    "Toko menerimanya tetapi tidak tertagih di invoice supplier. Barisnya ditandai kuning; harganya tidak berubah.",
+  "inbound.notArrivedSection": "Ditagih tapi tidak datang",
+  "inbound.outsideSection": "Datang diluar invoice",
+  "inbound.exceptionLine": "{{count}} × {{product}}",
+
+  // ── Transaction History: closing the book (owner ask 2026-09-24) ─────────
+  "transactions.closeBook": "Tutup buku",
+  "transactions.closeBookAsk":
+    "Kunci semua transaksi sampai dengan tanggal ini.",
+  "transactions.closeBookDate": "Tutup buku sampai",
+  "transactions.closeBookTitle": "Tutup buku sampai {{date}}?",
+  "transactions.closeBookBody":
+    "{{count}} transaksi pada atau sebelum tanggal itu menjadi hanya-baca: tidak bisa diubah, dan tidak menerima pembayaran lagi. Buku bisa dibuka lagi kapan saja.",
+  "transactions.closeBookOk": "Tutup buku",
+  "transactions.bookClosedTitle": "Buku sudah ditutup",
+  "transactions.bookClosedBody":
+    "Semua transaksi sampai {{date}} hanya bisa dibaca dan tidak menerima pembayaran lagi. Buka kembali buku untuk memperbaikinya.",
+  "transactions.reopenBook": "Buka kembali buku",
+  "transactions.editLocked":
+    "Buku sudah ditutup untuk tanggal ini. Buka kembali untuk mengubah transaksi ini.",
+  "payEdit.bookClosed":
+    "Buku sudah ditutup untuk tanggal ini. Buka kembali di Riwayat Transaksi untuk mengubah uang transaksi ini.",
+  "editSale.bookClosed":
+    "Buku sudah ditutup untuk tanggal ini. Buka kembali di Riwayat Transaksi dulu.",
+
+  // ── Payable & Receivable, grouped per party (owner ask 2026-09-24) ───────
+  "utang.invoiceCount": "{{count}} invoice belum lunas",
+  "utang.saleCount": "{{count}} transaksi belum lunas",
+  "utang.selectedLabel": "{{count}} dipilih",
+  "debtPay.recordPartyAria": "Catat pembayaran untuk {{name}}",
+
+  // ── Chatbot: switches, action items, profile (2026-09-29) ────────────────
+  "chatSwitch.title": "Bot boleh menjawab",
+  "chatSwitch.stock": "Stok",
+  "chatSwitch.stockHint": "Apakah unit tersedia, dan grade-nya.",
+  "chatSwitch.price": "Harga",
+  "chatSwitch.priceHint":
+    "Harga unit, dari POS. Unit tanpa harga selalu diteruskan ke Anda.",
+  "chatSwitch.reservations": "Reservasi",
+  "chatSwitch.reservationsHint":
+    "Membuat, mengecek, memindah, dan membatalkan booking milik pelanggan itu sendiri.",
+  "chatSwitch.photos": "Foto",
+  "chatSwitch.photosHint": "Mengirim foto QC toko untuk sebuah unit.",
+  "chatSwitch.onMeans": "Nyala: bot menjawab ini sendiri.",
+  "chatSwitch.offMeans": "Mati: diteruskan ke Anda, dengan tugas.",
+  "chatSwitch.ownerOnly": "Hanya pemilik yang bisa mengubah ini.",
+  "chatSwitch.needsStock": "Perlu Stok dinyalakan.",
+  "chatSwitch.saveFailed": "Saklar tidak bisa diubah.",
+  "chatAction.negotiation": "Nego",
+  "chatAction.price": "Harga",
+  "chatAction.stock": "Stok",
+  "chatAction.reservation": "Booking",
+  "chatAction.photos": "Foto",
+  "chatAction.other": "Perlu Anda",
+  "chatAction.offers": "menawar {{price}}",
+  "chatAction.answerOffer": "Jawab tawaran",
+  "chatAction.open": "Buka",
+  "chatAction.offerQueued":
+    "Tawaran masuk antrean. Terkirim dalam beberapa detik.",
+  "chatAction.offerFailed": "Tawaran tidak bisa dikirim.",
+  "chatAction.doneFailed": "Tidak bisa ditandai selesai.",
+  "chatAction.markDone": "Tugas beres",
+  "chatAction.close": "Tutup",
+  "chatAction.sendOffer": "Kirim tawaran",
+  "chatAction.offerMoved":
+    "Pelanggan mengubah tawarannya saat ini terbuka: {{from}} → {{to}}.",
+  "chatAction.unit": "Unit",
+  "chatAction.noUnit": "Belum disebut — cek chat untuk unit yang mana.",
+  "chatAction.ourPrice": "Harga kita",
+  "chatAction.cost": "Modal",
+  "chatAction.customerOffer": "Tawaran pelanggan",
+  "chatAction.theyWrote": "Tulisan pelanggan",
+  "chatAction.aboutThem": "Tentang pelanggan",
+  "chatAction.budget": "budget {{budget}}",
+  "chatAction.yourPrice": "Harga Anda",
+  "chatAction.priceRequired": "Isi harga yang Anda terima.",
+  "chatAction.marginAt": "Margin di harga ini: {{margin}}",
+  "chatAction.messageToCustomer": "Pesan untuk pelanggan",
+  "chatAction.messageRequired": "Tulis pesan yang dibaca pelanggan.",
+  "chatAction.answerInChat":
+    "Balas di chat, lalu tekan Tugas beres — atau Tandai selesai di chat untuk menutup semua tugas sekaligus.",
+  "chat.whatTheyToldUs": "Yang diceritakan ke bot",
+  "chat.usesItFor": "Dipakai untuk",
+  "chat.budget": "Budget",
+  "chat.usesNow": "Pakai sekarang",
+  "chat.wants": "Keinginan",
+  "chat.noProfileYet":
+    "Belum ada. Bot menanyakan nama, kebutuhan, dan budget pelanggan, lalu menyimpan jawabannya di sini.",
+  "handoff.photos": "Minta foto",
 };

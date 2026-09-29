@@ -115,7 +115,15 @@ export function createApp(deps: CreateAppDeps): Express {
 
   // 01 §2: one router per section, longer prefixes first.
   api.use("/katalog", katalogRouter(db));
-  api.use("/chat", chatRouter({ db, logger, anthropic: deps.anthropic ?? {} }));
+  api.use(
+    "/chat",
+    chatRouter({
+      db,
+      logger,
+      anthropic: deps.anthropic ?? {},
+      requireOwner: requireOwner(logger),
+    }),
+  );
   api.use("/inbox", inboxRouter(db));
   api.use("/reservations", reservationsRouter(db));
   api.use("/inbound", inboundRouter(db));

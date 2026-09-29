@@ -49,7 +49,7 @@ import { z } from "zod";
 import { Prisma, enqueueOutbox, type PrismaClient } from "@nusantara/db";
 import { currentRequestId } from "@nusantara/logging";
 import { isWithinWindow, windowClosesAt } from "@nusantara/whatsapp";
-import { phoneForms } from "@nusantara/agent";
+import { askingPrice, phoneForms } from "@nusantara/agent";
 import { ApiError, notFound } from "../errors.js";
 
 /**
@@ -67,6 +67,101 @@ const phoneParam = z
 const replyBody = z.object({
   text: z.string().trim().min(1).max(4_000),
 });
+
+/** Whole rupiah as a digit string — money never crosses as a number. */
+const rupiah = z
+  .string()
+  .trim()
+  .regex(/^\d{1,12}$/, "whole rupiah, digits only")
+  .transform((v) => BigInt(v))
+  .refine((v) => v > 0n, "must be more than 0");
+
+const offerBody = z.object({
+  /** What the shop will take. */
+  price: rupiah,
+  /** Exactly what the customer reads — the modal pre-fills it, staff may edit. */
+  text: z.string().trim().min(1).max(4_000),
+});
+
+/** Every action a conversation shows: all open ones and the latest few done. */
+const ACTION_SELECT = {
+  id: true,
+  kind: true,
+  status: true,
+  topic: true,
+  summary: true,
+  customerText: true,
+  listPrice: true,
+  askPrice: true,
+  staffPrice: true,
+  createdAt: true,
+  updatedAt: true,
+  resolvedAt: true,
+  resolvedBy: { select: { name: true } },
+  unit: {
+    select: {
+      serial: true,
+      grade: true,
+      price: true,
+      landed: true,
+      sku: {
+        select: {
+          name: true,
+          variantLabel: true,
+          price: true,
+          model: { select: { name: true } },
+        },
+      },
+    },
+  },
+} as const;
+
+type ActionRow = Prisma.ChatActionGetPayload<{ select: typeof ACTION_SELECT }>;
+
+/**
+ * One action item as the Chat page draws it (owner ask 2026-09-29): enough to
+ * act on without reading the conversation. `listPrice` is what the POS asks
+ * NOW, since a colleague answering a negotiation must quote today's price;
+ * the snapshot stands in only when the action names no unit. `cost` is the
+ * unit's landed cost — the "modal" a staff member negotiates down to, which
+ * is shown to staff here and never reaches a tool the bot can call.
+ */
+function actionJson(a: ActionRow) {
+  const live = a.unit ? askingPrice(a.unit) : null;
+  const money = (v: bigint | null | undefined) =>
+    v == null ? null : v.toString();
+  return {
+    id: a.id,
+    kind: a.kind,
+    status: a.status,
+    topic: a.topic,
+    summary: a.summary,
+    customerText: a.customerText,
+    unit: a.unit
+      ? {
+          serial: a.unit.serial,
+          name: [
+            a.unit.sku.model.name,
+            a.unit.sku.variantLabel ?? a.unit.sku.name,
+          ]
+            .filter(Boolean)
+            .join(" "),
+          grade: a.unit.grade,
+        }
+      : null,
+    listPrice: money(a.unit ? live : a.listPrice),
+    cost: money(a.unit?.landed),
+    askPrice: money(a.askPrice),
+    staffPrice: money(a.staffPrice),
+    createdAt: a.createdAt.toISOString(),
+    updatedAt: a.updatedAt.toISOString(),
+    resolvedAt: a.resolvedAt?.toISOString() ?? null,
+    resolvedBy: a.resolvedBy?.name ?? null,
+  };
+}
+
+/** Recently finished actions a conversation still shows. */
+const DONE_ACTIONS_SHOWN = 5;
 
 const autoReplyBody = z.object({
   /** True: the bot answers this customer. False: a person does. */
@@ -196,6 +291,14 @@ export function inboxRouter(db: PrismaClient): Router {
       `);
 
       const now = new Date();
+      // Open action items per thread, so the list can say what is waiting.
+      const open = await db.chatAction.groupBy({
+        by: ["from", "kind"],
+        where: { status: "OPEN" },
+      });
+      const kindsOf = new Map<string, string[]>();
+      for (const o of open)
+        kindsOf.set(o.from, [...(kindsOf.get(o.from) ?? []), o.kind]);
       const threads = rows
         .map((r) => ({
           phone: r.phone,
@@ -209,6 +312,8 @@ export function inboxRouter(db: PrismaClient): Router {
           pending: r.pending,
           /** False means a person is handling this one, not the bot. */
           autoReply: r.autoReply,
+          /** The kinds of the thread's open action items (NEGOTIATION, PRICE…). */
+          openActions: kindsOf.get(r.phone) ?? [],
           /**
            * Set while the bot has handed this thread to a person and nobody
            * has answered — the one list a colleague needs to work through.
@@ -278,7 +383,7 @@ export function inboxRouter(db: PrismaClient): Router {
       // endpoint because the Chat page needs them at exactly the moment it
       // opens a conversation, and a second round trip would only make the
       // panel populate later than the messages beside it.
-      const [memory, customer] = await Promise.all([
+      const [memory, customer, actions, profile] = await Promise.all([
         db.waThreadMemory.findUnique({
           where: { from: phone.data },
           select: {
@@ -302,6 +407,31 @@ export function inboxRouter(db: PrismaClient): Router {
             phone: true,
             createdAt: true,
             referralSource: { select: { name: true } },
+          },
+        }),
+        Promise.all([
+          db.chatAction.findMany({
+            where: { from: phone.data, status: "OPEN" },
+            select: ACTION_SELECT,
+            orderBy: { updatedAt: "desc" },
+          }),
+          db.chatAction.findMany({
+            where: { from: phone.data, status: "DONE" },
+            select: ACTION_SELECT,
+            orderBy: { resolvedAt: "desc" },
+            take: DONE_ACTIONS_SHOWN,
+          }),
+        ]).then(([o, d]) => [...o, ...d]),
+        // What the customer told the bot about themselves (remember_customer).
+        db.customerProfile.findUnique({
+          where: { from: phone.data },
+          select: {
+            name: true,
+            useCase: true,
+            budget: true,
+            currentDevice: true,
+            preference: true,
+            updatedAt: true,
           },
         }),
       ]);
@@ -402,6 +532,22 @@ export function inboxRouter(db: PrismaClient): Router {
                     total: lastOrder.total.toString(),
                   }
                 : null,
+            }
+          : null,
+        /** Open action items first, then the latest few done. */
+        actions: actions.map(actionJson),
+        /**
+         * What the customer has told the bot about themselves — their own
+         * words, unverified. Null until they have said anything.
+         */
+        profile: profile
+          ? {
+              name: profile.name,
+              useCase: profile.useCase,
+              budget: profile.budget?.toString() ?? null,
+              currentDevice: profile.currentDevice,
+              preference: profile.preference,
+              updatedAt: profile.updatedAt.toISOString(),
             }
           : null,
         messages: messages.map((m) => ({
@@ -556,19 +702,32 @@ export function inboxRouter(db: PrismaClient): Router {
       const staff = req.staff;
       if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
 
-      const { count } = await db.waMessage.updateMany({
-        where: {
-          from: phone.data,
-          direction: "IN",
-          status: { in: ["BARU", "PERLU_STAF"] },
-        },
-        data: {
-          status: "DIJAWAB_STAF",
-          answeredByAgent: false,
-          answeredById: staff.id,
-          answeredAt: new Date(),
-        },
-      });
+      const handledAt = new Date();
+      const [{ count }] = await db.$transaction([
+        db.waMessage.updateMany({
+          where: {
+            from: phone.data,
+            direction: "IN",
+            status: { in: ["BARU", "PERLU_STAF"] },
+          },
+          data: {
+            status: "DIJAWAB_STAF",
+            answeredByAgent: false,
+            answeredById: staff.id,
+            answeredAt: handledAt,
+          },
+        }),
+        // Dealt with means every task it left is dealt with too.
+        db.chatAction.updateMany({
+          where: { from: phone.data, status: "OPEN" },
+          data: {
+            status: "DONE",
+            resolvedAt: handledAt,
+            resolvedById: staff.id,
+            updatedAt: handledAt,
+          },
+        }),
+      ]);
       if (count === 0) {
         const exists = await db.waMessage.findFirst({
           where: { from: phone.data },
@@ -577,6 +736,135 @@ export function inboxRouter(db: PrismaClient): Router {
         if (!exists) throw notFound("Percakapan");
       }
       res.json({ closed: count });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * POST /api/inbox/:phone/actions/:id/offer — answer a negotiation (owner ask
+   * 2026-09-29): the price the shop will take, and the sentence carrying it.
+   *
+   * One transaction, exactly as a reply by hand: the action closes with the
+   * price recorded, the answer lands on the customer's newest message, every
+   * waiting row is closed (which lifts the bot's hold), and the send is
+   * queued. The customer's offer is not re-read here — the modal showed the
+   * figure the worker last saw, and the staff member answered that.
+   */
+  router.post("/:phone/actions/:id/offer", async (req, res, next) => {
+    try {
+      const phone = phoneParam.safeParse(req.params["phone"]);
+      if (!phone.success)
+        throw new ApiError(400, "VALIDASI", "Nomor WhatsApp tidak valid.");
+      const parsed = offerBody.safeParse(req.body);
+      if (!parsed.success)
+        throw new ApiError(400, "VALIDASI", "Harga dan pesan wajib diisi.");
+      const staff = req.staff;
+      if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
+
+      const action = await db.chatAction.findFirst({
+        where: { id: String(req.params["id"]), from: phone.data },
+        select: { id: true, status: true },
+      });
+      if (!action) throw notFound("Tugas");
+      if (action.status !== "OPEN")
+        throw new ApiError(409, "KONFLIK", "Tugas ini sudah diselesaikan.");
+
+      const latest = await db.waMessage.findFirst({
+        where: { from: phone.data, direction: "IN" },
+        orderBy: { ts: "desc" },
+        select: { id: true, ts: true },
+      });
+      if (!latest) throw notFound("Percakapan");
+      if (!isWithinWindow(latest.ts)) {
+        throw new ApiError(
+          409,
+          "KONFLIK",
+          "Jendela 24 jam sudah tutup. Balasan bebas tidak akan terkirim — gunakan template yang sudah disetujui.",
+        );
+      }
+
+      const now = new Date();
+      await db.$transaction(async (tx) => {
+        const { count } = await tx.chatAction.updateMany({
+          where: { id: action.id, status: "OPEN" },
+          data: {
+            status: "DONE",
+            staffPrice: parsed.data.price,
+            resolvedAt: now,
+            resolvedById: staff.id,
+            updatedAt: now,
+          },
+        });
+        if (count !== 1)
+          throw new ApiError(409, "KONFLIK", "Tugas ini sudah diselesaikan.");
+        await tx.waMessage.update({
+          where: { id: latest.id },
+          data: {
+            replyText: parsed.data.text,
+            status: "DIJAWAB_STAF",
+            answeredByAgent: false,
+            answeredById: staff.id,
+            answeredAt: now,
+          },
+        });
+        await tx.waMessage.updateMany({
+          where: {
+            from: phone.data,
+            direction: "IN",
+            status: { in: ["BARU", "PERLU_STAF"] },
+            id: { not: latest.id },
+          },
+          data: {
+            status: "DIJAWAB_STAF",
+            answeredById: staff.id,
+            answeredAt: now,
+          },
+        });
+        await enqueueOutbox(tx, {
+          kind: "WA_REPLY",
+          payload: {
+            to: phone.data,
+            body: parsed.data.text,
+            inReplyTo: latest.id,
+          },
+          requestId: currentRequestId() ?? null,
+        });
+      });
+      res.status(201).json({ id: action.id, status: "QUEUED" });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * POST /api/inbox/:phone/actions/:id/done — the task was dealt with some
+   * other way. Nothing is sent. The thread's waiting messages are untouched:
+   * a reply, or Mark handled, is what lifts the bot's hold.
+   */
+  router.post("/:phone/actions/:id/done", async (req, res, next) => {
+    try {
+      const phone = phoneParam.safeParse(req.params["phone"]);
+      if (!phone.success)
+        throw new ApiError(400, "VALIDASI", "Nomor WhatsApp tidak valid.");
+      const staff = req.staff;
+      if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
+      const now = new Date();
+      const { count } = await db.chatAction.updateMany({
+        where: {
+          id: String(req.params["id"]),
+          from: phone.data,
+          status: "OPEN",
+        },
+        data: {
+          status: "DONE",
+          resolvedAt: now,
+          resolvedById: staff.id,
+          updatedAt: now,
+        },
+      });
+      if (count === 0) throw notFound("Tugas");
+      res.json({ done: true });
     } catch (err) {
       next(err);
     }

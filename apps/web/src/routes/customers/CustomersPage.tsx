@@ -50,6 +50,7 @@ import { FilterBar } from "../../components/FilterBar";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { PaymentsModal } from "../../components/PaymentsModal";
 import { fmtRp, fmtDate, fmtDateTime, fmtNone } from "../../lib/format.js";
+import { customerLabel, hasContact } from "../../lib/customers.js";
 import {
   billAfterReturns,
   customerBalance,
@@ -60,6 +61,7 @@ import {
   type SalePayment,
 } from "../../lib/salePayments.js";
 import { diffPayments } from "../../lib/paymentEdits.js";
+import { isBookClosed } from "../../lib/bookClose.js";
 import { TYPE } from "../../theme/tokens";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import { useDb, mutate, nextId, currentStaffName } from "../../mock/store.js";
@@ -93,28 +95,34 @@ export function CustomersPage() {
 
   const save = () =>
     form.validateFields().then((v) => {
-      const { openingBalance, ...rest } = v;
+      const { openingBalance, name, phone, ...rest } = v;
       const opening =
         typeof openingBalance === "number" && openingBalance > 0
           ? openingBalance
           : undefined;
       const now = new Date().toISOString();
+      // Either may be empty, never both (owner ask 2026-09-24; the form's
+      // rule): the phone since the B2Soft customers arrived without one
+      // (owner answer 2026-09-13), the name since a debt at the till may be
+      // recorded against a number alone.
+      const contact = {
+        name: (name ?? "").trim(),
+        phone: (phone ?? "").trim(),
+      };
       mutate((d) => {
         if (editing === "new") {
           d.customers.unshift({
             id: nextId("c"),
             createdAt: now,
             ...rest,
-            // Optional since the B2Soft customers arrived without one (owner
-            // answer 2026-09-13): staff add the number when they have it.
-            phone: rest.phone ?? "",
+            ...contact,
             ...(opening === undefined
               ? {}
               : { openingBalance: opening, openingBalanceAt: now }),
           });
         } else if (editing) {
           const c = d.customers.find((x) => x.id === editing.id)!;
-          Object.assign(c, rest, { phone: rest.phone ?? "" });
+          Object.assign(c, rest, contact);
           // The date says when the old debt was stated, so it moves only when
           // the figure does — fixing a phone number is not a new statement.
           if (opening === undefined) {
@@ -301,7 +309,7 @@ export function CustomersPage() {
                       aria-label={t(
                         "customers.historyAria",
                         "Purchase history for {{name}}",
-                        { name: c.name },
+                        { name: customerLabel(c) },
                       )}
                       onClick={() => setViewing(c)}
                     />
@@ -312,7 +320,7 @@ export function CustomersPage() {
                       type="text"
                       icon={<EditOutlined />}
                       aria-label={t("customers.editAria", "Edit {{name}}", {
-                        name: c.name,
+                        name: customerLabel(c),
                       })}
                       onClick={() => {
                         setEditing(c);
@@ -498,6 +506,7 @@ export function CustomersPage() {
 
       <PaymentsModal
         open={paying !== null}
+        locked={isBookClosed(paying?.ts, db.settings)}
         orderId={paying?.id ?? ""}
         code={paying?.code ?? ""}
         total={paying ? billAfterReturns(paying) : 0}
@@ -522,11 +531,32 @@ export function CustomersPage() {
         onCancel={() => setEditing(null)}
         onOk={save}
       >
+        {/* A name OR a phone number — either is enough (owner ask 2026-09-24,
+            the same rule the till's Add customer follows). The rule sits on
+            the name box and re-runs when the number changes. */}
         <Form form={form} layout="vertical">
           <Form.Item
             name="name"
             label={t("customers.name", "Name")}
-            rules={[{ required: true }]}
+            dependencies={["phone"]}
+            rules={[
+              {
+                validator: (_, value: string | undefined) =>
+                  hasContact({
+                    name: value,
+                    phone: form.getFieldValue("phone"),
+                  })
+                    ? Promise.resolve()
+                    : Promise.reject(
+                        new Error(
+                          t(
+                            "customers.nameOrPhone",
+                            "A name or a phone number — either is enough.",
+                          ),
+                        ),
+                      ),
+              },
+            ]}
           >
             <Input />
           </Form.Item>

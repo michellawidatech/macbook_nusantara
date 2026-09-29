@@ -160,6 +160,7 @@ import {
   type UnitCondition,
 } from "../../lib/condition.js";
 import type { OpnameSurplus, Unit } from "../../mock/seed.js";
+import { COLUMN } from "../../theme/tokens";
 
 /** Statuses that mean the warehouse should physically be holding the unit. */
 const IN_STOCK = ["TERSEDIA", "DIRESERVASI", "QC"];
@@ -1803,7 +1804,7 @@ export function OpnameSessionPage() {
                 title: t("opname.expectedQty", "Expected"),
                 dataIndex: "expected",
                 align: "right" as const,
-                width: 110,
+                width: COLUMN.money,
               },
               {
                 title: t("opname.foundQty", "How many are there?"),
@@ -1846,7 +1847,7 @@ export function OpnameSessionPage() {
               {
                 title: t("opname.status", "Status"),
                 key: "status",
-                width: 160,
+                width: COLUMN.choice,
                 render: (_: unknown, r: CountedProduct) => countedStatusTag(r),
               },
             ]}
@@ -2218,7 +2219,7 @@ export function OpnameSessionPage() {
                 title: t("opname.expectedQty", "Expected"),
                 dataIndex: "expected",
                 align: "right" as const,
-                width: 110,
+                width: COLUMN.money,
               },
               {
                 title: t("opname.countedQty", "Counted"),

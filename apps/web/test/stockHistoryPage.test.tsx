@@ -24,7 +24,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StockHistoryPage } from "../src/routes/stock/StockHistoryPage.js";
-import { getDb, mutate } from "../src/mock/store.js";
+import { addQcPhoto, getDb, mutate } from "../src/mock/store.js";
 import { deliverScan } from "../src/lib/scanner.js";
 import { fmtRp } from "../src/lib/format.js";
 import { latestEvents } from "../src/lib/serialTracker.js";
@@ -78,6 +78,7 @@ beforeEach(() => {
     const mine = new Set([SERIAL, OTHER]);
     d.units = d.units.filter((u) => !mine.has(u.serial));
     d.events = d.events.filter((e) => !mine.has(e.serial));
+    d.unitNotes = d.unitNotes.filter((n) => !mine.has(n.serial));
     d.reservations = d.reservations.filter((r) => !r.id.startsWith("rsv-tl"));
   });
 });
@@ -428,5 +429,32 @@ describe("the list of every serial (owner ask 2026-09-19)", () => {
     expect(
       screen.getByText(`Showing ${ipads.length} of ${db.units.length}`),
     ).toBeInTheDocument();
+  });
+});
+
+describe("a unit's QC photographs (owner ask 2026-09-29)", () => {
+  const PHOTO = "data:image/png;base64,iVBORw0KGgo=";
+
+  it("are on the unit card", async () => {
+    addUnit();
+    mutate((d) => addQcPhoto(d, SERIAL, PHOTO));
+    renderPage();
+    await settle();
+    expect(screen.getAllByAltText(`Photo of ${SERIAL}`).length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it("are on the unit's row of the list", async () => {
+    addUnit();
+    // Newest movement first: put this unit on the list's first page.
+    mutate((d) => {
+      for (const e of d.events)
+        if (e.serial === SERIAL) e.at = "2099-01-01T00:00:00.000Z";
+      addQcPhoto(d, SERIAL, PHOTO);
+    });
+    renderPage(null);
+    await settle();
+    expect(screen.getAllByAltText(`Photo of ${SERIAL}`)).toHaveLength(1);
   });
 });

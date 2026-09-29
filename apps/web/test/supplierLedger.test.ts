@@ -79,18 +79,13 @@ describe("supplierAccount", () => {
     expect(a.openInvoices).toBe(1);
   });
 
-  it("adds a debt from before this system", () => {
-    // "Per supplier we might have an unpaid transaction from years ago." It is
-    // stated once and added — never invented as a purchase order, which would
-    // put phantom stock in the ledger.
-    const a = supplierAccount(
-      "sup-1",
-      [inv({ total: 0, paid: 0 })],
-      [],
-      7_500_000,
-    );
-    expect(a.openingBalance).toBe(7_500_000);
-    expect(a.owed).toBe(7_500_000);
+  it("owes nothing beyond its invoices", () => {
+    // `Supplier.openingBalance` went on 2026-09-24 — *"we don't track it
+    // anymore"* — so a supplier with no open invoice is owed nothing, whatever
+    // B2Soft used to say about them.
+    const a = supplierAccount("sup-1", [inv({ total: 0, paid: 0 })], []);
+    expect(a.owed).toBe(0);
+    expect(a.owedOnInvoices).toBe(0);
   });
 
   it("shows a supplier holding too much as being in credit", () => {
@@ -258,14 +253,8 @@ describe("supplierHistory", () => {
         }),
       ],
       [deposit({ at: "2026-09-03" })],
-      { amount: 7_500_000, at: "2026-07-01" },
     );
-    expect(rows.map((r) => r.kind)).toEqual([
-      "PAYMENT",
-      "DEPOSIT",
-      "INVOICE",
-      "OPENING",
-    ]);
+    expect(rows.map((r) => r.kind)).toEqual(["PAYMENT", "DEPOSIT", "INVOICE"]);
     // Newest first — this list is read from the top.
     expect(rows[0]!.at).toBe("2026-09-04");
     // The supplier's own number rides along, for the telephone call.
@@ -332,15 +321,10 @@ describe("supplierHistory", () => {
     expect(rows).toEqual([]);
   });
 
-  it("says nothing about an opening balance of zero", () => {
-    const rows = supplierHistory("sup-1", [], [], { amount: 0 });
-    expect(rows).toEqual([]);
-  });
-
-  it("sorts undated old debt to the bottom rather than to 1970", () => {
-    const rows = supplierHistory("sup-1", [invoice()], [], {
-      amount: 7_500_000,
-    });
-    expect(rows[rows.length - 1]!.kind).toBe("OPENING");
+  it("has no row for a debt from before this app", () => {
+    // `Supplier.openingBalance` and its OPENING row went on 2026-09-24. The
+    // account is its invoices, its payments and its deposits.
+    const rows = supplierHistory("sup-1", [invoice()], []);
+    expect(rows.every((r) => r.kind !== ("OPENING" as never))).toBe(true);
   });
 });

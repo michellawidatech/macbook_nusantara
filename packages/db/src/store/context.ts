@@ -118,6 +118,15 @@ export class WriteContext {
   readonly archivedSerials = new Set<string>();
   /** The first event time per serial in this changeset — a new unit's intake. */
   readonly firstEventAt = new Map<string, Date>();
+  /**
+   * Serials this commit corrects, old → new, read off the ledger rows whose
+   * `serial` is the only thing that changed (owner decision 2026-09-23). The
+   * units adapter renames the unit row in place for each pair — the same
+   * `Unit.id`, its history following — rather than archiving one unit and
+   * minting another, which is what a removed key and an inserted one would
+   * otherwise mean. Filled by the commit before any adapter writes.
+   */
+  readonly serialRenames = new Map<string, string>();
   /** Per-commit memo for lookups an adapter repeats. */
   readonly memo = new Map<string, unknown>();
   /**

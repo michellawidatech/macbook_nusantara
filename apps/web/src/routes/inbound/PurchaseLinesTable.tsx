@@ -19,6 +19,15 @@
  * invoice is what this table is; the popup behind each line is where the
  * units are.
  *
+ * ## Two marks, two colours (owner ask 2026-09-24)
+ *
+ * A line the shop took in that the supplier never billed is **yellow**
+ * (`PoItem.outsideInvoice`, added from *Add outside invoice* below the table);
+ * a line with pieces that never turned up is **red**. Red wins where a line is
+ * both. Neither changes the money — see `PurchaseLine.outsideInvoice` — and
+ * what they are FOR is the list under the table, which is the same two facts
+ * gathered where somebody chasing a supplier can read them at once.
+ *
  * ## Tab is the way in
  *
  * Tab off the discount box opens the line's popup, so the whole line can be
@@ -29,7 +38,7 @@
  */
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { Button, Flex, Tooltip, Typography } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { InboxOutlined, PlusOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { EditableTable } from "../../components/EditableTable";
 import { SkuPicker, skuFullName } from "../../components/SkuPicker";
@@ -39,7 +48,7 @@ import { fmtRp, fmtNone } from "../../lib/format.js";
 import { priceRange } from "../../lib/unitPrice.js";
 import type { PurchaseLine } from "../../lib/invoiceLines.js";
 import type { Sku } from "../../mock/seed.js";
-import { SPACE, TYPE } from "../../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 
 /** The DOM id of a line's price box — where adding a line puts the caret. */
 export const lineCostFieldId = (key: string) => `po-line-cost-${key}`;
@@ -58,12 +67,36 @@ const lineSellFieldId = (key: string) => `po-line-sell-${key}`;
  * (`.purchase-lines` in global.css) — the product's name and a line's
  * "n received" sit under theirs.
  */
-const INPUT_COLUMN_WIDTH = 176;
-const PRODUCT_COLUMN_WIDTH = 260;
-const MONEY_COLUMN_WIDTH = 150;
-/** The buttons: Units, or a counted line's arrival, plus the row's icons. */
-const ACTIONS_COLUMN_WIDTH = 280;
-const UNITS_COLUMN_WIDTH = 170;
+/*
+ * Each the least its content needs (owner ask 2026-09-28: *"make the table
+ * more compact and each column only have width that are necessary"*), summed
+ * to 1120 — what a 1440 screen leaves the Units card beside an open sider —
+ * so the row fits there and scrolls only on a narrower screen or at a higher
+ * zoom. A box is `Rp 120.000.000` at the small input size plus this table's
+ * 6px cell padding (`.purchase-lines` in global.css); a printed figure is `Rp 36.471.427`. Wider screens spread the
+ * surplus over every column in proportion.
+ */
+const INPUT_COLUMN_WIDTH = 132;
+/*
+ * Wide enough for the whole shop code in the picker's box (owner report
+ * 2026-09-29: `AIR 13" 2020…` cut off). The box is an `<input>` and cannot
+ * wrap, so the column has to fit the code; the model name under it still
+ * wraps. This lifts the sum to 1216, so at 1440 with the sider open the row
+ * now scrolls a little — the name being readable was the owner's call.
+ */
+const PRODUCT_COLUMN_WIDTH = 248;
+const MONEY_COLUMN_WIDTH = 112;
+const NUMBER_COLUMN_WIDTH = 32;
+/** "Lihat semua unit (12/12)" — the Indonesian is the longer label. */
+const UNITS_COLUMN_WIDTH = 184;
+/** The row's own buttons, when a screen passes any: it says how wide. */
+const ACTIONS_COLUMN_WIDTH = COLUMN.actions;
+
+/** What the table paints a row: red for missing, yellow for unbilled. */
+export function purchaseLineClass(l: PurchaseLine): string {
+  if (l.notArrived > 0) return "row-not-arrived";
+  return l.outsideInvoice ? "row-outside-invoice" : "";
+}
 
 export interface PurchaseLinesTableProps {
   readonly lines: readonly PurchaseLine[];
@@ -90,6 +123,8 @@ export interface PurchaseLinesTableProps {
   readonly onSetSellPrice?: (line: PurchaseLine, value: number | null) => void;
   /** The line's own buttons — not arrived, remove, whatever the page offers. */
   readonly actions?: (line: PurchaseLine) => ReactNode;
+  /** How wide `actions` needs — one icon is not a labelled button and two. */
+  readonly actionsWidth?: number;
   /** A blank line at the end, for the page that lets one be added. */
   readonly onAddLine?: () => void;
   readonly emptyText?: ReactNode;
@@ -122,6 +157,7 @@ export function PurchaseLinesTable({
   sellPriceOf,
   onSetSellPrice,
   actions,
+  actionsWidth,
   onAddLine,
   emptyText,
 }: PurchaseLinesTableProps) {
@@ -196,7 +232,7 @@ export function PurchaseLinesTable({
     {
       title: "#",
       key: "n",
-      width: 44,
+      width: NUMBER_COLUMN_WIDTH,
       responsive: ["md" as const],
       render: (_: unknown, __: PurchaseLine, i: number) => (
         <Typography.Text type="secondary">{i + 1}</Typography.Text>
@@ -386,32 +422,46 @@ export function PurchaseLinesTable({
     },
     {
       title: "",
-      key: "actions",
-      width: actions ? ACTIONS_COLUMN_WIDTH : UNITS_COLUMN_WIDTH,
+      key: "units",
+      width: UNITS_COLUMN_WIDTH,
       align: "right" as const,
-      render: (_: unknown, l: PurchaseLine) => (
-        <Flex gap={SPACE.xs} justify="end" align="center" wrap>
-          {!l.counted && (
-            <Button
-              size="small"
-              disabled={l.skuId === ""}
-              onClick={() => onOpenDetails(l)}
-              aria-label={t(
-                "inbound.openDetailsAria",
-                "Serials and QC for {{product}}",
-                { product: productName(l.skuId) },
-              )}
-            >
-              {t("inbound.openDetails", "Units ({{done}}/{{total}})", {
-                done: l.received,
-                total: l.qty,
-              })}
-            </Button>
-          )}
-          {actions?.(l)}
-        </Flex>
-      ),
+      // At the end of the row, reachable without scrolling because the row
+      // now fits the screen (owner ask 2026-09-28) rather than because the
+      // button moved.
+      render: (_: unknown, l: PurchaseLine) =>
+        l.counted ? null : (
+          <Button
+            size="small"
+            disabled={l.skuId === ""}
+            onClick={() => onOpenDetails(l)}
+            aria-label={t(
+              "inbound.openDetailsAria",
+              "Serials and QC for {{product}}",
+              { product: productName(l.skuId) },
+            )}
+          >
+            {t("inbound.openDetails", "See all units ({{done}}/{{total}})", {
+              done: l.received,
+              total: l.qty,
+            })}
+          </Button>
+        ),
     },
+    ...(actions
+      ? [
+          {
+            title: "",
+            key: "actions",
+            width: actionsWidth ?? ACTIONS_COLUMN_WIDTH,
+            align: "right" as const,
+            render: (_: unknown, l: PurchaseLine) => (
+              <Flex gap={SPACE.xs} justify="end" align="center" wrap>
+                {actions?.(l)}
+              </Flex>
+            ),
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -419,6 +469,7 @@ export function PurchaseLinesTable({
       size="small"
       rowKey="key"
       className="qc-table purchase-lines"
+      rowClassName={purchaseLineClass}
       dataSource={lines}
       rowTitle={(l) => productName(l.skuId)}
       emptyText={
@@ -453,21 +504,34 @@ export function AddLineBar({
   ariaLabel,
   qtyAriaLabel,
   hint,
+  outsideInvoice = false,
 }: {
   readonly skus: readonly Sku[];
-  readonly onAdd: (skuId: string, qty: number) => void;
+  readonly onAdd: (
+    skuId: string,
+    qty: number,
+    /** True from *Add outside invoice* — the supplier never billed it. */
+    outsideInvoice: boolean,
+  ) => void;
   /** Different per bar, so two on one page are two named fields. */
   readonly ariaLabel: string;
   readonly qtyAriaLabel: string;
   readonly hint: string;
+  /**
+   * Draw the second button (owner ask 2026-09-24: *"when adding a product,
+   * add a button called 'Add outside invoice' … and mark that row as
+   * yellow"*). Off on the order FORM, where the invoice is being typed in for
+   * the first time and everything on it is by definition on it.
+   */
+  readonly outsideInvoice?: boolean;
 }) {
   const { t } = useTranslation();
   const [addSku, setAddSku] = useState<string | undefined>();
   const [addQty, setAddQty] = useState<number | null>(1);
 
-  const add = () => {
+  const add = (outside: boolean) => {
     if (!addSku) return;
-    onAdd(addSku, Math.max(1, Math.floor(addQty ?? 1)));
+    onAdd(addSku, Math.max(1, Math.floor(addQty ?? 1)), outside);
     setAddSku(undefined);
     setAddQty(1);
   };
@@ -496,23 +560,117 @@ export function AddLineBar({
           onKeyDown={(e) => {
             if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
             e.preventDefault();
-            add();
+            add(false);
           }}
         />
         <Button
           type="primary"
           icon={<PlusOutlined aria-hidden />}
           disabled={!addSku || !((addQty ?? 0) >= 1)}
-          onClick={add}
+          onClick={() => add(false)}
         >
           {t("inbound.addLineOf", "Add {{count}} unit(s)", {
             count: Math.max(1, Math.floor(addQty ?? 1)),
           })}
         </Button>
+        {outsideInvoice && (
+          <Tooltip
+            title={t(
+              "inbound.addOutsideHint",
+              "The shop took these in and the supplier's paper never billed them. The row is marked yellow; what they cost is unchanged.",
+            )}
+          >
+            <Button
+              icon={<InboxOutlined aria-hidden />}
+              disabled={!addSku || !((addQty ?? 0) >= 1)}
+              onClick={() => add(true)}
+            >
+              {t("inbound.addOutside", "Add outside invoice")}
+            </Button>
+          </Tooltip>
+        )}
       </Flex>
       <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
         {hint}
       </Typography.Text>
+    </Flex>
+  );
+}
+
+/**
+ * What did not go to plan on this delivery, under the table (owner ask
+ * 2026-09-24).
+ *
+ * > *"Then on the bottom of the Unit section, make a section to list all the
+ * > unit that arrived outside the invoice and not arrived. Show the unit only
+ * > and not the serial."*
+ *
+ * Two short lists, in the colours their rows carry above: the products the
+ * supplier billed and never sent, and the products that turned up unbilled.
+ * Product and a count — **no serials**, which is the point of the ask: this is
+ * the paragraph somebody reads down the telephone to a supplier, and a serial
+ * is an answer to a different question. Nothing is drawn when both are empty,
+ * which is every ordinary delivery.
+ */
+export function InvoiceExceptions({
+  lines,
+  skus,
+}: {
+  readonly lines: readonly PurchaseLine[];
+  readonly skus: readonly Sku[];
+}) {
+  const { t } = useTranslation();
+  const name = (skuId: string) => {
+    const sku = skus.find((s) => s.id === skuId);
+    return sku
+      ? skuFullName(sku)
+      : t("inbound.noProductYet", "the unpicked lines");
+  };
+  const missing = lines.filter((l) => l.notArrived > 0);
+  // A line whose pieces never came is already in the list above it; listing it
+  // twice would say the supplier both over- and under-sent one product.
+  const unbilled = lines.filter((l) => l.outsideInvoice && l.notArrived === 0);
+  if (missing.length === 0 && unbilled.length === 0) return null;
+
+  const list = (
+    title: string,
+    rows: readonly PurchaseLine[],
+    count: (l: PurchaseLine) => number,
+    dot: string,
+  ) =>
+    rows.length === 0 ? null : (
+      <Flex vertical gap={2} style={{ flex: "1 1 280px", minWidth: 0 }}>
+        <Typography.Text strong style={{ fontSize: TYPE.sm }}>
+          <span aria-hidden style={{ color: dot }}>
+            ●
+          </span>{" "}
+          {title}
+        </Typography.Text>
+        {rows.map((l) => (
+          <Typography.Text key={l.key} type="secondary">
+            {t("inbound.exceptionLine", "{{count}} × {{product}}", {
+              count: count(l),
+              product: name(l.skuId),
+            })}
+          </Typography.Text>
+        ))}
+      </Flex>
+    );
+
+  return (
+    <Flex gap={SPACE.lg} wrap>
+      {list(
+        t("inbound.notArrivedSection", "Billed and never arrived"),
+        missing,
+        (l) => l.notArrived,
+        "var(--nusantara-error, #ff4d4f)",
+      )}
+      {list(
+        t("inbound.outsideSection", "Arrived outside the invoice"),
+        unbilled,
+        (l) => l.qty,
+        "var(--nusantara-warning, #faad14)",
+      )}
     </Flex>
   );
 }

@@ -461,6 +461,13 @@ body {
 .purchase-lines .ant-table-tbody > tr > td {
   vertical-align: top;
 }
+/* Tighter than `.qc-table`'s 10px (2026-09-28): the row is sized to fit a
+   1440 screen, and 4px a side across ten columns is the difference between
+   a nine-digit price showing whole and being cut. */
+.purchase-lines .ant-table-cell,
+.purchase-lines .ant-table-thead > tr > th {
+  padding-inline: 6px !important;
+}
 /*
  * The two anchored columns and the anchored action column need a surface of
  * their own — a fixed cell floats over the rows scrolling under it, and antd
@@ -812,4 +819,63 @@ body {
 .unit-popup-table .ant-table-thead > tr > th {
   padding-block: 6px !important;
   padding-inline: 8px !important;
+}
+
+/*
+ * The two marks on an invoice line (owner ask 2026-09-24): *"add a button
+ * called 'Add outside invoice' … and mark that row as yellow. If there is a
+ * unit that is not arrived, mark it as red."*
+ *
+ * On the CELLS and important, for the reason `.debt-row-full` records — a row
+ * background under antd's own cell fill never shows — and mixed into the
+ * surface rather than stated, so both read in light and dark. Red wins where a
+ * line is both: a unit nobody has is the more urgent of the two facts.
+ */
+.row-outside-invoice > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 16%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.row-outside-invoice:hover > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 24%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.row-not-arrived > td,
+.nusantara-stacked-row.row-not-arrived > .ant-card {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-error, #ff4d4f) 12%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.row-not-arrived:hover > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-error, #ff4d4f) 20%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.nusantara-stacked-row.row-outside-invoice > .ant-card {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 16%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+
+/*
+ * Every table scrolls sideways only when it must (owner ask 2026-09-28).
+ * `DataTable` and `EditableTable` hand antd their column minimums as
+ * `scroll.x`, which rc-table turns into an inline `overflow-x: auto` on this
+ * box. A plain antd `<Table>` gets no such box: it squeezes its columns to
+ * their narrowest content and, past that, spills out of its card. This makes
+ * the spill a scrollbar instead — the same rule, reached from the other end.
+ */
+.ant-table-content {
+  overflow-x: auto;
 }

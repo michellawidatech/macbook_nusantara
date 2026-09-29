@@ -56,6 +56,8 @@ beforeEach(async () => {
   await db.order.deleteMany({});
   await db.reservationItem.deleteMany({});
   await db.reservation.deleteMany({});
+  await db.chatAction.deleteMany({});
+  await db.customerProfile.deleteMany({});
   await db.customer.deleteMany({});
   await db.staff.deleteMany({ where: { id: "staff_crm" } });
   // The whole schema, not a hand-written chain of deleteMany in

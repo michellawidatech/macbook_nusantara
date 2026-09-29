@@ -19,6 +19,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InboundDetailPage } from "../src/routes/inbound/InboundDetailPage.js";
+import { pressPageAction } from "./pageActions.js";
 import { getDb, mutate } from "../src/mock/store.js";
 import type { MockDb } from "../src/mock/seed.js";
 import { skuTracksSerial } from "../src/lib/serialTracking.js";
@@ -96,7 +97,7 @@ const settle = () =>
   });
 
 function renderOrder() {
-  return render(
+  const rendered = render(
     <AntdApp>
       <MemoryRouter initialEntries={[`/inbound/${ORDER}`]}>
         <Routes>
@@ -105,6 +106,14 @@ function renderOrder() {
       </MemoryRouter>
     </AntdApp>,
   );
+  /*
+   * Into edit mode. The page opens read-only since 2026-09-24 — *"when
+   * viewing an inbound it should be display only first"* — and every test in
+   * this file is about the bench WORKING the invoice: the scanner is off
+   * until somebody presses this, which is the point of it.
+   */
+  pressPageAction(/Edit invoice/);
+  return rendered;
 }
 
 /**
@@ -933,7 +942,7 @@ describe("the invoice's lines", () => {
     expect(lineQty()).toHaveValue("3");
     expect(
       screen.getByRole("button", { name: /Serials and QC for/ }),
-    ).toHaveTextContent("Units (0/3)");
+    ).toHaveTextContent("See all units (0/3)");
     // One price box for the line, never one per unit.
     expect(screen.getAllByLabelText(/^Unit price of /)).toHaveLength(1);
   });
@@ -1211,27 +1220,55 @@ describe("a closed invoice", () => {
 });
 
 /**
- * Sending a machine for a repair — owner revision 2026-09-09. The dialog asks
- * rather than confirms, the machine does not arrive by being sent, and the
+ * Sending a unit for a repair. The dialog asks rather than confirms, and the
  * charges it asks for land on the visit it opens.
+ *
+ * ⚠️ There is no arrival to wait for since 2026-09-25 (owner: *"no need to
+ * mark as 'received' first"*), so the visit opens already arrived and a unit
+ * that travels is filed at the bench in the SAME transaction. The 2026-09-09
+ * confirmation used to be the only thing that wrote `Unit.locationId`;
+ * without one, nothing else would, and warehouse 4 would hold nothing —
+ * which is the bug `Location.kind` was introduced to fix on 2026-09-08.
  */
 describe("sending a machine to service", () => {
-  it("opens a visit that has not arrived, and leaves the machine where it is", async () => {
+  it("opens an arrived visit and files the unit at the bench", async () => {
+    // *Send it to the bench* is on by default: the bench is a different
+    // building, and a unit graded in warehouse 1 has to get there.
+    const serial = await described();
+    await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
+    await userEvent.click(await okButton("Send to service"));
+
+    const db = snapshot();
+    const unit = db.units.find((u) => u.serial === serial)!;
+    const bench = db.warehouses.find((w) => w.kind === "SERVIS")!;
+    expect(unit.status).toBe("SERVIS");
+    expect(unit.locationId).toBe(bench.id);
+    const visit = db.services.find((r) => r.serial === serial)!;
+    expect(visit.arrivedAt).toBeTruthy();
+    expect(visit.raisedBy).toBe("QC");
+    // Where it set out from is on the visit, which is what sends it back.
+    expect(visit.fromLocationId).not.toBe(bench.id);
+  });
+
+  it("leaves a unit nobody is shipping where it is", async () => {
+    // The repairer-collects case, or a unit already at the bench: it stops
+    // being sellable, and it has not travelled, so it has not moved.
     const serial = await described();
     const before = snapshot().units.find(
       (u) => u.serial === serial,
     )!.locationId;
-
     await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
+    const dialog = await lastDialog();
+    await userEvent.click(within(dialog).getByRole("switch"));
     await userEvent.click(await okButton("Send to service"));
 
     const db = snapshot();
     const unit = db.units.find((u) => u.serial === serial)!;
     expect(unit.status).toBe("SERVIS");
     expect(unit.locationId).toBe(before);
-    const visit = db.services.find((r) => r.serial === serial)!;
-    expect(visit.arrivedAt).toBeUndefined();
-    expect(visit.raisedBy).toBe("QC");
+    expect(
+      db.services.find((r) => r.serial === serial)!.arrivedAt,
+    ).toBeTruthy();
   });
 
   it("puts the courier and the quote on the visit it opens", async () => {

@@ -40,6 +40,7 @@ import { useDb, mutate, nextId } from "../../mock/store.js";
 import type { CatalogModel, Sku } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
 import { parseProductName, shopProductName } from "../../lib/productCode.js";
+import { COLUMN } from "../../theme/tokens";
 
 function combos(axes: { name: string; values: string[] }[]): string[] {
   return axes.reduce<string[]>(
@@ -502,7 +503,7 @@ export function ProductsPage() {
             {
               title: "",
               key: "actions",
-              width: 60,
+              width: COLUMN.actions,
               render: (_, m) => (
                 <Tooltip title={t("products.variants", "Variants")}>
                   <Button
@@ -673,7 +674,7 @@ export function ProductsPage() {
                   // is hidden, and none in the normal one is.
                   title: t("products.status", "Status"),
                   key: "state",
-                  width: 130,
+                  width: COLUMN.status,
                   facet: true,
                   sortValue: (c) =>
                     db.models.some((m) => m.identifier === c.identifier)
@@ -696,7 +697,7 @@ export function ProductsPage() {
                   // is scrolled to.
                   title: "",
                   key: "actions",
-                  width: 120,
+                  width: COLUMN.actions,
                   fixed: "right",
                   render: (_, c) => {
                     const off = hidden.has(c.key);
@@ -1021,7 +1022,7 @@ export function ProductsPage() {
                     title: t("products.price", "Price"),
                     key: "price",
                     align: "right",
-                    width: 190,
+                    width: COLUMN.money,
                     render: (_, s) => (
                       <MoneyInput
                         value={s.price > 0 ? s.price : undefined}
@@ -1038,7 +1039,7 @@ export function ProductsPage() {
                   {
                     title: "",
                     key: "remove",
-                    width: 46,
+                    width: COLUMN.action,
                     render: (_, s) => {
                       const held = db.units.some((u) => u.skuId === s.id);
                       return (

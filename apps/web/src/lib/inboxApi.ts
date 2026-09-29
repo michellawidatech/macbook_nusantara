@@ -41,6 +41,8 @@ export interface InboxThread {
   autoReply: boolean;
   /** Set while the bot has handed this thread to a person and nobody answered. */
   handoff: Handoff | null;
+  /** The kinds of this thread's open action items. */
+  openActions: ChatActionKind[];
   /**
    * ISO, or null once the 24-hour window has closed.
    *
@@ -96,6 +98,54 @@ export interface InboxConversation {
    * than filling the panel with guesses.
    */
   customer: InboxCustomer | null;
+  /** Open action items first, then the latest few done. */
+  actions: ChatAction[];
+  /** What the customer told the bot about themselves. Null until they did. */
+  profile: CustomerProfile | null;
+}
+
+export type ChatActionKind =
+  "NEGOTIATION" | "PRICE" | "STOCK" | "RESERVATION" | "PHOTOS" | "OTHER";
+
+/**
+ * The task a hand-over left for a person (owner ask 2026-09-29) — enough to
+ * act on without reading the conversation. Money is whole rupiah as a string.
+ */
+export interface ChatAction {
+  id: string;
+  kind: ChatActionKind;
+  status: "OPEN" | "DONE";
+  /** The finer reason, a handoff topic. */
+  topic: string;
+  /** The bot's note for the colleague. */
+  summary: string;
+  /** The customer's words that raised it, or last changed it. */
+  customerText: string | null;
+  unit: { serial: string; name: string; grade: string | null } | null;
+  /** What the POS asks for the unit now. */
+  listPrice: string | null;
+  /** The unit's landed cost — the shop's floor. Staff only. */
+  cost: string | null;
+  /** NEGOTIATION: what the customer offered, kept current until answered. */
+  askPrice: string | null;
+  /** What the shop answered with. */
+  staffPrice: string | null;
+  createdAt: string;
+  /** Moves when the customer changes their offer. */
+  updatedAt: string;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+}
+
+/** The customer's own words about themselves. Unverified. */
+export interface CustomerProfile {
+  name: string | null;
+  useCase: string | null;
+  /** Whole rupiah as a string. */
+  budget: string | null;
+  currentDevice: string | null;
+  preference: string | null;
+  updatedAt: string;
 }
 
 /**
@@ -178,3 +228,24 @@ export const setAutoReply = (phone: string, enabled: boolean) =>
     method: "PUT",
     body: { enabled },
   });
+
+/**
+ * Answer a negotiation: the price, and exactly what the customer reads. Closes
+ * the task, lifts the bot's hold on the thread, and queues the send.
+ */
+export const offerAction = (
+  phone: string,
+  id: string,
+  body: { price: string; text: string },
+) =>
+  api<{ id: string; status: "QUEUED" }>(
+    `/api/inbox/${encodeURIComponent(phone)}/actions/${encodeURIComponent(id)}/offer`,
+    { method: "POST", body },
+  );
+
+/** The task was dealt with some other way. Nothing is sent. */
+export const finishAction = (phone: string, id: string) =>
+  api<{ done: true }>(
+    `/api/inbox/${encodeURIComponent(phone)}/actions/${encodeURIComponent(id)}/done`,
+    { method: "POST" },
+  );

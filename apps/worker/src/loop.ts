@@ -49,6 +49,7 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     maxBatch: config.maxBatch,
     agentStaffId: config.agentStaffId,
     capabilities: config.capabilities,
+    reservationGraceMs: config.reservationGraceMs,
   });
 
   const send = await sendPass({

@@ -200,16 +200,19 @@ export const racks: Adapter<"racks"> = {
 // ---------------------------------------------------------------------------
 
 /*
- * `Supplier.openingBalance` and `Customer.openingBalance` are debts no invoice
- * or sale explains, so money paid against one is a `Payment` naming the party
- * itself (owner answer 2026-09-22) — `Payment_one_parent_check` allows exactly
- * one of order, invoice, supplier and customer. The opening figure is never
- * rewritten: what was owed on the day and what has been paid since are two
- * facts, and the page subtracts one from the other.
+ * `Customer.openingBalance` is a debt no sale explains, so money paid against
+ * one is a `Payment` naming the customer itself (owner answer 2026-09-22) —
+ * `Payment_one_parent_check` allows exactly one of order, invoice and
+ * customer. The opening figure is never rewritten: what was owed on the day
+ * and what has been paid since are two facts, and the page subtracts one from
+ * the other.
+ *
+ * The supplier half of this went on 2026-09-24 with `Supplier.openingBalance`
+ * (*"we don't track it anymore"*), and `Payment.supplierId` with it.
  */
 
 type OpeningPayment = NonNullable<
-  RowOf<"suppliers">["openingPayments"]
+  RowOf<"customers">["openingPayments"]
 >[number];
 
 /** The rows `openingPaymentsOf` reads — `include` them on the party. */
@@ -252,14 +255,13 @@ function openingPaymentsOf(
  */
 async function syncOpeningPayments(
   ctx: WriteContext,
-  collection: "suppliers" | "customers",
   partyId: string,
   list: readonly OpeningPayment[],
 ): Promise<void> {
   const { tx } = ctx;
-  const supplier = collection === "suppliers";
+  const collection = "customers" as const;
   const existing = await tx.payment.findMany({
-    where: supplier ? { supplierId: partyId } : { customerId: partyId },
+    where: { customerId: partyId },
     select: { id: true, voidedAt: true },
   });
   const left = new Map(existing.map((p) => [p.id, p]));
@@ -290,11 +292,10 @@ async function syncOpeningPayments(
       await tx.payment.create({
         data: {
           id: p.id,
-          supplierId: supplier ? partyId : null,
-          customerId: supplier ? null : partyId,
-          // The shop pays a supplier and is paid by a customer — the CHECKs
-          // Payment_supplier_direction_check / _customer_ hold it to that.
-          direction: supplier ? "KELUAR" : "MASUK",
+          customerId: partyId,
+          // A customer pays the shop — Payment_customer_direction_check holds
+          // it to that.
+          direction: "MASUK",
           staffId: ctx.staffId,
           ...data,
         },
@@ -330,7 +331,6 @@ export const suppliers: Adapter<"suppliers"> = {
     const rows = await tx.supplier.findMany({
       where: byId(keys),
       orderBy: [{ createdAt: "asc" }, { name: "asc" }],
-      include: { openingPayments: OPENING_PAYMENTS },
     });
     return rows.map((s) => ({
       id: s.id,
@@ -340,12 +340,6 @@ export const suppliers: Adapter<"suppliers"> = {
       // existed; a row written since carries its own.
       address: s.address ?? s.note ?? undefined,
       code: s.code ?? undefined,
-      openingBalance: s.openingBalance ?? undefined,
-      openingBalanceAt: optionalIso(s.openingBalanceAt),
-      openingPayments: openingPaymentsOf(
-        s.openingPayments,
-        s.openingBalanceAt ?? s.createdAt,
-      ),
     }));
   },
   lock: (tx, keys) => lockRows(tx, "Supplier", "id", keys),
@@ -359,11 +353,6 @@ export const suppliers: Adapter<"suppliers"> = {
         wa: blankToNull(n.phone),
         address: blankToNull(n.address),
         code: n.code ?? null,
-        openingBalance: n.openingBalance ?? null,
-        openingBalanceAt:
-          n.openingBalanceAt === undefined
-            ? null
-            : instantOf(n.openingBalanceAt),
       };
       if (r.base === undefined) {
         await tx.supplier.create({
@@ -371,15 +360,6 @@ export const suppliers: Adapter<"suppliers"> = {
         });
       } else {
         await tx.supplier.update({ where: { id: n.id }, data });
-      }
-      // After the supplier row, which a new payment's foreign key names.
-      if (openingPaymentsChanged(r.base, n)) {
-        await syncOpeningPayments(
-          ctx,
-          "suppliers",
-          n.id,
-          n.openingPayments ?? [],
-        );
       }
       ctx.touch("suppliers", n.id);
     }
@@ -741,12 +721,7 @@ export const customers: Adapter<"customers"> = {
         await syncAddresses(ctx, n.id, n.addresses ?? []);
       }
       if (openingPaymentsChanged(r.base, n)) {
-        await syncOpeningPayments(
-          ctx,
-          "customers",
-          n.id,
-          n.openingPayments ?? [],
-        );
+        await syncOpeningPayments(ctx, n.id, n.openingPayments ?? []);
       }
       ctx.touch("customers", n.id);
     }

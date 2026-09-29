@@ -72,6 +72,7 @@ import { DataTable } from "../../components/DataTable";
 import { EnumTag } from "../../components/EnumTag";
 import { LongText } from "../../components/LongText";
 import { GradeTag } from "../../components/GradeTag";
+import { UnitPhotos } from "../../components/UnitPhotos";
 import { CostInfoButton } from "../../components/CostBreakdown";
 import { PrintLabelsModal } from "../../components/LabelSheet";
 import { UnitEditModal } from "./UnitEditModal";
@@ -100,11 +101,11 @@ import {
   PriceEditorModal,
   type PriceEdit,
 } from "../../components/PriceEditorModal.js";
-import { appendEvent, mutate, useDb } from "../../mock/store.js";
+import { appendEvent, mutate, qcPhotosOf, useDb } from "../../mock/store.js";
 import { STOCK_MOVE, UNIT_STATUS, labelOf } from "../../i18n/enumLabels.js";
 import { averageCost, stockLevels } from "../../lib/stock.js";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
-import { SPACE, TYPE } from "../../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
 import type { StockMove, Unit } from "../../mock/seed.js";
 
@@ -404,7 +405,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
     {
       title: t("inventory.grade", "Grade"),
       key: "grade",
-      width: 90,
+      width: COLUMN.grade,
       render: (_: unknown, u: Unit) => <GradeTag grade={u.grade} />,
     },
     // No battery for a category the shop counts rather than identifies: a
@@ -445,7 +446,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       title: t("inventory.status", "Status"),
       dataIndex: "status",
       key: "status",
-      width: 130,
+      width: COLUMN.status,
       render: (v: string) => <EnumTag map={UNIT_STATUS} value={v} />,
     },
     {
@@ -463,9 +464,28 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       title: t("inventory.description", "Description"),
       dataIndex: "description",
       key: "description",
-      width: 260,
+      width: 200,
       render: (v: string) => <LongText>{v}</LongText>,
     },
+    // The QC photographs of this serial (owner ask 2026-09-29), read-only:
+    // they are gathered at Inbound & QC and at a stock count, and this popup
+    // is where somebody checks a unit's condition before quoting it. Counted
+    // lines have no serial to photograph.
+    ...(line.tracksSerial
+      ? [
+          {
+            title: t("inventory.photos", "Photos"),
+            key: "photos",
+            width: COLUMN.actionsPair,
+            render: (_: unknown, u: Unit) =>
+              qcPhotosOf(db, u.serial).length === 0 ? (
+                fmtNone()
+              ) : (
+                <UnitPhotos serial={u.serial} size={36} max={3} />
+              ),
+          },
+        ]
+      : []),
     {
       /*
        * What the invoice charged for this unit — its "Unit price", as Inbound
@@ -475,7 +495,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
        */
       title: t("inventory.unitPrice", "Unit price"),
       key: "buy",
-      width: 170,
+      width: COLUMN.money,
       align: "right" as const,
       render: (_: unknown, u: Unit) => {
         const cost = costOf(u);
@@ -507,7 +527,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
        */
       title: t("inventory.sellPrice", "Sell price"),
       key: "price",
-      width: 150,
+      width: COLUMN.money,
       align: "right" as const,
       render: (_: unknown, u: Unit) => (
         <Flex vertical align="flex-end" gap={0}>
@@ -528,7 +548,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       // things anybody opens this popup to do.
       title: "",
       key: "actions",
-      width: 88,
+      width: COLUMN.actions,
       render: (_: unknown, u: Unit) => (
         <Flex gap={4}>
           <Tooltip title={t("inventory.priceChange", "Price change")}>
@@ -570,6 +590,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
         // should be one trip to the printer, not three.
         bulkActions={(selected, clear) => (
           <Button
+            type="primary"
             icon={<PrinterOutlined />}
             onClick={() => {
               const picked = selected.flatMap((l) => l.units);
@@ -658,7 +679,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
           {
             title: t("inventory.grade", "Grade"),
             key: "grade",
-            width: 76,
+            width: COLUMN.grade,
             facet: true,
             facetLabel: t("inventory.anyGrade", "Any grade"),
             // An empty line has no units and so no grade — not "ungraded".
@@ -699,7 +720,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
              */
             title: t("inventory.qty", "Qty"),
             key: "qty",
-            width: 110,
+            width: COLUMN.qty,
             align: "right",
             sortValue: (l) => l.onHand,
             render: (_, l) => {
@@ -740,7 +761,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
              */
             title: t("inventory.unitPrice", "Unit price"),
             key: "buy",
-            width: 160,
+            width: COLUMN.money,
             align: "right",
             sortValue: (l) => (l.buy.count === 0 ? undefined : l.buy.min),
             render: (_, l) =>
@@ -771,7 +792,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
              */
             title: t("inventory.sellPrice", "Sell price"),
             key: "sell",
-            width: 180,
+            width: COLUMN.money,
             align: "right",
             sortValue: (l) => (l.store.count === 0 ? undefined : l.store.min),
             render: (_, l) => {
@@ -805,7 +826,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
             // where its two buttons read best anyway.
             title: t("inventory.action", "Action"),
             key: "actions",
-            width: 200,
+            width: COLUMN.actionsWide,
             fixed: compact ? undefined : "right",
             render: (_, l) => (
               <Flex gap={SPACE.xs} wrap>

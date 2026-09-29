@@ -33,11 +33,14 @@ import { ProTable } from "./ProTable";
 import { LongText } from "./LongText";
 import { EnumTag } from "./EnumTag";
 import { GradeTag } from "./GradeTag";
+import { UnitPhotos } from "./UnitPhotos";
 import { PrintLabelsModal } from "./LabelSheet";
 import { fmtRp, fmtDateTime, fmtNone } from "../lib/format.js";
+import { customerLabel } from "../lib/customers.js";
 import { labelFor } from "../lib/labels.js";
 import { priceOf } from "../lib/unitPrice.js";
 import type { MockDb, UnitEvent } from "../mock/seed.js";
+import { qcPhotosOf } from "../mock/store.js";
 import { TYPE } from "../theme/tokens";
 import { labelOf, UNIT_EVENT, UNIT_STATUS } from "../i18n/enumLabels.js";
 
@@ -85,7 +88,7 @@ function contextOf(db: MockDb, e: UnitEvent): Context {
     return {
       kind: "SALE",
       orderCode: order.code,
-      ...(customer ? { customerName: customer.name } : {}),
+      ...(customer ? { customerName: customerLabel(customer) } : {}),
       // What THIS unit was charged, not what the receipt totalled: a receipt
       // with a laptop and a mouse on it would otherwise narrate the mouse as
       // having sold for both.
@@ -102,7 +105,7 @@ function contextOf(db: MockDb, e: UnitEvent): Context {
     const channel = db.reservationSources.find((s) => s.id === hold.sourceId);
     return {
       kind: "HOLD",
-      ...(customer ? { customerName: customer.name } : {}),
+      ...(customer ? { customerName: customerLabel(customer) } : {}),
       ...(channel ? { channelName: channel.name } : {}),
     };
   }
@@ -362,6 +365,20 @@ export function SerialHistory({
               label: t("snTracking.fromPo", "From PO"),
               children: po?.code ?? fmtNone(),
             },
+            {
+              // Every QC photograph, larger than a list's thumbnails: this is
+              // the one screen that shows a single unit in full (owner ask
+              // 2026-09-29). Purged at the sale, so a sold unit says None.
+              key: "ph",
+              label: t("snTracking.photos", "Photos"),
+              span: "filled",
+              children:
+                qcPhotosOf(db, unit.serial).length === 0 ? (
+                  fmtNone()
+                ) : (
+                  <UnitPhotos serial={unit.serial} size={72} max={8} />
+                ),
+            },
           ]}
         />
       </Card>
@@ -465,7 +482,7 @@ export function SerialHistory({
               title: t("snTracking.note", "Note"),
               dataIndex: "note",
               searchable: true,
-              width: 340,
+              width: 200,
               render: (v: string | undefined) => <LongText>{v}</LongText>,
             },
             {

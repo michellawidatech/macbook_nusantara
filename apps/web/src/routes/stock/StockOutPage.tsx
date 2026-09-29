@@ -152,6 +152,11 @@ import { averageCost, onHand, takeFrom } from "../../lib/stock.js";
 import { priceOf as unitListPrice } from "../../lib/unitPrice.js";
 import { isSettled } from "../../lib/salePayments.js";
 import {
+  customerLabel,
+  customerLine,
+  hasContact,
+} from "../../lib/customers.js";
+import {
   TILL_METHODS,
   isMarketplaceMethod,
   partsForChannel,
@@ -183,6 +188,7 @@ import { useLayoutMode } from "../../layouts/useLayoutMode.js";
 import { TradeInDialog } from "./TradeInDialog.js";
 import type { Order, OrderFee } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
+import { COLUMN } from "../../theme/tokens";
 
 interface Line {
   serial?: string;
@@ -1012,7 +1018,11 @@ export function StockOutPage() {
     source,
     parts: payParts,
     ref: saleRef,
+    // A debt needs somebody to collect it from (owner ask 2026-09-24).
+    debtor: customer ?? null,
   });
+  /** Something is owed and nobody is named — the customer box goes red. */
+  const debtorMissing = payChecked && payProblems.includes("NO_DEBTOR");
   /** A method, spelled for a person. Shopee and Tokopedia are names. */
   const methodLabel = (m: TillMethod): string =>
     m === "TRANSFER"
@@ -1042,6 +1052,12 @@ export function StockOutPage() {
         return t(
           "pos.payNeedsRefs",
           "Type the marketplace's order number for every Shopee or Tokopedia payment.",
+        );
+      case "NO_DEBTOR":
+        return t(
+          "pos.payNeedsDebtor",
+          "{{amount}} is still owed — add the customer's name or phone number (either is enough).",
+          { amount: fmtRp(payRows.owed) },
         );
     }
   };
@@ -1750,6 +1766,7 @@ export function StockOutPage() {
           >
             <span>
               <Button
+                type="primary"
                 icon={<ClockCircleOutlined />}
                 disabled={activeReservations.length === 0}
                 onClick={() => setReservationPickerOpen(true)}
@@ -2208,6 +2225,7 @@ export function StockOutPage() {
                 </Typography.Text>
                 <Button
                   size="small"
+                  type="primary"
                   onClick={() =>
                     r.skuId ? addCounted(r.skuId) : addSuggestion(r.serial!)
                   }
@@ -2367,7 +2385,13 @@ export function StockOutPage() {
                   if (payProblems.length > 0) {
                     setPayChecked(true);
                     message.warning(payProblemText(payProblems[0]!));
-                    const card = document.getElementById("till-payment");
+                    // The customer's box is on its own card, below the
+                    // payment's; scroll to the one the first problem is on.
+                    const card = document.getElementById(
+                      payProblems[0] === "NO_DEBTOR"
+                        ? "till-customer"
+                        : "till-payment",
+                    );
                     if (typeof card?.scrollIntoView === "function") {
                       card.scrollIntoView({
                         behavior: "smooth",
@@ -2430,6 +2454,7 @@ export function StockOutPage() {
           </Button>
           <Button
             block
+            type="primary"
             icon={<ClockCircleOutlined />}
             disabled={activeReservations.length === 0}
             onClick={() => setReservationPickerOpen(true)}
@@ -3137,30 +3162,40 @@ export function StockOutPage() {
       </Card>
       <Card
         key="delivery"
+        id="till-customer"
         title={t("pos.customerDetail", "Customer detail")}
         extra={
-          <Typography.Text type="secondary">
+          <Typography.Text type={debtorMissing ? "danger" : "secondary"}>
             {customer
-              ? `${customer.name} · ${customer.phone}`
-              : t("pos.noCustomer", "Not recorded")}
+              ? customerLine(customer)
+              : debtorMissing
+                ? t("pos.customerNeeded", "Needed — something is owed")
+                : t("pos.noCustomer", "Not recorded")}
           </Typography.Text>
         }
       >
         <Form layout="vertical">
           <Flex gap={12} align="end" wrap>
+            {/* Required only while the sale leaves something owed (owner ask
+                2026-09-24): a debt needs somebody to collect it from, and a
+                sale paid in full still needs nobody. */}
             <Form.Item
               label={t("pos.customer", "Customer")}
+              required={payRows.owed > 0}
+              validateStatus={debtorMissing ? "error" : undefined}
+              help={debtorMissing ? payProblemText("NO_DEBTOR") : undefined}
               style={{ flex: "1 1 320px", marginBottom: 12 }}
             >
               <Select
                 showSearch
                 allowClear
                 value={customerId}
+                status={debtorMissing ? "error" : undefined}
                 optionFilterProp="label"
                 placeholder={t("pos.searchNameOrPhone", "Search name or phone")}
                 options={db.customers.map((c) => ({
                   value: c.id,
-                  label: `${c.name} · ${c.phone}`,
+                  label: customerLine(c),
                 }))}
                 onChange={(v) => {
                   setCustomerId(v);
@@ -3171,6 +3206,7 @@ export function StockOutPage() {
             </Form.Item>
             <Form.Item style={{ marginBottom: 12 }}>
               <Button
+                type="primary"
                 icon={<UserAddOutlined />}
                 onClick={() => setNewCustomerOpen(true)}
               >
@@ -3188,12 +3224,12 @@ export function StockOutPage() {
                 {
                   key: "n",
                   label: t("pos.name", "Name"),
-                  children: customer.name,
+                  children: customer.name || fmtNone(),
                 },
                 {
                   key: "p",
                   label: t("pos.phoneNumber", "Phone number"),
-                  children: customer.phone,
+                  children: customer.phone || fmtNone(),
                 },
               ]}
             />
@@ -3983,7 +4019,7 @@ export function StockOutPage() {
                     {
                       key: "who",
                       label: t("pos.customer", "Customer"),
-                      children: customer.name,
+                      children: customerLabel(customer),
                     },
                   ]
                 : []),
@@ -4181,7 +4217,7 @@ export function StockOutPage() {
             {
               title: "",
               key: "actions",
-              width: 90,
+              width: COLUMN.actionsPair,
               render: (_, r) => (
                 <Button
                   type="primary"
@@ -4203,36 +4239,56 @@ export function StockOutPage() {
         onOk={() =>
           ncForm.validateFields().then((v) => {
             const id = nextId("c");
+            const added = {
+              id,
+              name: (v.name ?? "").trim(),
+              phone: (v.phone ?? "").trim(),
+              createdAt: new Date().toISOString(),
+            };
             mutate((d) => {
-              d.customers.push({
-                id,
-                name: v.name,
-                phone: v.phone,
-                createdAt: new Date().toISOString(),
-              });
+              d.customers.push(added);
             });
             setCustomerId(id);
             setNewCustomerOpen(false);
             ncForm.resetFields();
             message.success(
-              t("pos.customerAdded", "{{name}} added.", { name: v.name }),
+              t("pos.customerAdded", "{{name}} added.", {
+                name: customerLabel(added),
+              }),
             );
           })
         }
       >
+        {/* A name OR a phone number — either is enough (owner ask 2026-09-24).
+            The rule sits on the name box and re-runs when the number changes,
+            so it clears the moment either is typed. */}
         <Form form={ncForm} layout="vertical">
           <Form.Item
             name="name"
             label={t("pos.name", "Name")}
-            rules={[{ required: true }]}
+            dependencies={["phone"]}
+            rules={[
+              {
+                validator: (_, value: string | undefined) =>
+                  hasContact({
+                    name: value,
+                    phone: ncForm.getFieldValue("phone"),
+                  })
+                    ? Promise.resolve()
+                    : Promise.reject(
+                        new Error(
+                          t(
+                            "pos.nameOrPhone",
+                            "A name or a phone number — either is enough.",
+                          ),
+                        ),
+                      ),
+              },
+            ]}
           >
             <Input />
           </Form.Item>
-          <Form.Item
-            name="phone"
-            label={t("pos.phoneNumber", "Phone number")}
-            rules={[{ required: true }]}
-          >
+          <Form.Item name="phone" label={t("pos.phoneNumber", "Phone number")}>
             <Input placeholder="+62…" />
           </Form.Item>
         </Form>

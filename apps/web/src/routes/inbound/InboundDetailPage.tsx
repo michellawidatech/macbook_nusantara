@@ -180,7 +180,7 @@ import { planSerialFill, type FillPlan } from "../../lib/scanFill.js";
 import { rendered } from "../../lib/rendered.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
 import { wasScannedText } from "../../lib/scanner.js";
-import { SPACE, TYPE } from "../../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import {
   PO_FEE_KIND_LABEL,
   PO_PAYMENT_FOR_LABEL,
@@ -206,9 +206,11 @@ import {
 } from "../../mock/store.js";
 import {
   AddLineBar,
+  InvoiceExceptions,
   PurchaseLinesTable,
   lineCostFieldId,
 } from "./PurchaseLinesTable.js";
+import { InboxSlashOutlined } from "../../components/InboxSlashIcon";
 import { UnitDetailsModal } from "../../components/UnitDetailsModal";
 import { ExpenseModal } from "./ExpenseModal.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
@@ -920,7 +922,7 @@ export function InboundDetailPage() {
    */
   const scanSerial = async (raw: string) => {
     if (raw.trim() === "") return;
-    // A closed order takes nothing, and the scanner is the one input on this
+    // A locked order takes nothing, and the scanner is the one input on this
     // page that no `disabled` prop can reach — it listens at the document.
     const target = getDb().pos.find((p) => p.id === poId);
     if (target && poClosed(target)) {
@@ -928,6 +930,18 @@ export function InboundDetailPage() {
         t(
           "inbound.scanClosed",
           "This invoice is closed. Reopen it before recording anything.",
+        ),
+      );
+      return;
+    }
+    // Read-only means read-only for the scanner too (2026-09-24). It is the
+    // one input a `disabled` prop cannot reach, so a bench that scanned onto a
+    // page nobody had put into edit would mint units invisibly.
+    if (!editing) {
+      message.info(
+        t(
+          "inbound.scanReadOnly",
+          "This invoice is read-only. Press Edit invoice before scanning.",
         ),
       );
       return;
@@ -1456,6 +1470,26 @@ export function InboundDetailPage() {
    * Reopen.
    */
   const closed = poClosed(po);
+  /**
+   * An open invoice opens READ-ONLY too (owner ask 2026-09-24).
+   *
+   * > *"When viewing an inbound it should be display only first, and add an
+   * > 'Edit Invoice' button to edit it next to Close invoice."*
+   *
+   * Every field on this page writes on change rather than through a Save
+   * (2026-09-15), which is right while somebody is working and wrong the other
+   * ninety per cent of the time: an invoice opened to check a figure is one
+   * stray keystroke from being a different invoice. So the same gate the
+   * closed state already had does the work — one `locked`, everywhere that
+   * used to ask `closed` — and *Edit invoice* is what lifts it.
+   *
+   * It is per visit, not stored: the page is opened to read far more often
+   * than to change, so read-only is what it should be on arrival every time.
+   * A CLOSED invoice cannot be unlocked at all; reopening it is the way in,
+   * which is the whole point of closing it.
+   */
+  const [editing, setEditing] = useState(false);
+  const locked = closed || !editing;
 
   const bench = serviceLocationOf(db.warehouses);
   const benchName =
@@ -1513,10 +1547,19 @@ export function InboundDetailPage() {
   };
 
   /**
-   * A unit that needs a repair (owner revision 2026-09-09). The machine does
-   * not arrive by being sent: the location moves when somebody at the bench
-   * confirms it turned up (/stock/service). What happens immediately is the
-   * status — a machine promised to a repairer is not sellable from then on.
+   * A unit that needs a repair.
+   *
+   * ⚠️ The location moves NOW (owner ask 2026-09-25: *"no need to mark as
+   * 'received' first"*), which REVERSES the 2026-09-09 rule that a unit does
+   * not arrive by being sent. The confirmation at /stock/service was what
+   * wrote `Unit.locationId`, so with it gone something else has to, or the
+   * bench's warehouse holds nothing and the shelf it left still counts it.
+   * The status goes to SERVIS in the same breath, as it always did — a unit
+   * promised to a repairer is not sellable from that moment.
+   *
+   * The courier fee and the "does it travel" question stay: what a journey
+   * COSTS is still a fact, and it is asked for while the number is on the
+   * desk. What went is only the second confirmation.
    */
   const sendToService = () => {
     const serial = sendingToService!;
@@ -1528,12 +1571,21 @@ export function InboundDetailPage() {
         ensureReason(d, "ADJUSTMENT", reasonLabel);
         const travelling =
           v.ship && bench !== undefined && bench !== u.locationId;
+        /*
+         * ⚠️ Read BEFORE the event, which writes the projection. The visit is
+         * what sends the unit back afterwards, so `fromLocationId` has to be
+         * where it SET OUT from — read after, it is the bench, and *Back in
+         * stock* would default to returning it to the bench it is already on.
+         * `InventoryPage`'s adjustment reads its `cameFrom` the same way.
+         */
+        const cameFrom = u.locationId;
         appendEvent(d, serial, {
           type: "DICATAT",
           toStatus: "SERVIS",
+          ...(travelling ? { toLocationId: bench } : {}),
           refCode: po.code,
           note: travelling
-            ? `Sent to service — on its way to ${benchName}`
+            ? `Sent to service — ${benchName}`
             : "Sent to service",
         });
         // The rack belongs to the warehouse it is leaving.
@@ -1564,9 +1616,10 @@ export function InboundDetailPage() {
         d.services.push({
           id: nextId("svc"),
           serial,
-          fromLocationId: u.locationId,
+          fromLocationId: cameFrom,
           openedAt: now,
-          ...(travelling ? {} : { arrivedAt: now }),
+          // Always. There is no arrival step to set it later (2026-09-25).
+          arrivedAt: now,
           fees,
           ...(v.note ? { note: v.note } : {}),
           raisedBy: "QC",
@@ -1580,7 +1633,7 @@ export function InboundDetailPage() {
         v.ship && bench
           ? t(
               "inbound.serviceSentShipping",
-              "{{serial}} is on its way to {{bench}}. Confirm it there when it arrives.",
+              "{{serial}} is now at {{bench}}.",
               { serial, bench: benchName },
             )
           : t(
@@ -1674,30 +1727,11 @@ export function InboundDetailPage() {
     );
   };
 
-  /**
-   * Remove a serial read in by mistake — only while the unit is still in QC,
-   * the one period in which nothing has happened to it beyond arriving. The
-   * row it leaves behind is still on the invoice, so it goes back to waiting.
+  /*
+   * ~~`removeSerial`~~ and ~~`removeFromInvoice`~~ went on 2026-09-24. They
+   * were the two halves of *"delete serial → delete row"*, which the owner
+   * replaced with one button: `deleteUnitRow` below.
    */
-  const removeSerial = (serial: string) =>
-    modal.confirm({
-      title: t("inbound.removeSerialTitle", "Remove this serial row?"),
-      content: t(
-        "inbound.removeSerialBody",
-        "{{serial}} and everything recorded against it go. If a product line still expects the unit, the row comes back empty, waiting for a serial.",
-        { serial },
-      ),
-      okText: t("inbound.removeSerialOk", "Remove row"),
-      okButtonProps: { danger: true },
-      onOk: () =>
-        editOrder(({ d, order }) => {
-          d.units = d.units.filter((x) => x.serial !== serial);
-          d.events = d.events.filter((e) => e.serial !== serial);
-          for (const item of order.items) {
-            if (item.serial === serial) item.serial = null;
-          }
-        }),
-    });
 
   /**
    * The supplier invoiced it and never sent it — or it did turn up after all.
@@ -1713,27 +1747,60 @@ export function InboundDetailPage() {
     });
 
   /**
-   * A row that should never have been on the invoice — typed twice, the wrong
-   * quantity. Not the same as Not arrived, which keeps the machine invoiced.
+   * One button, the whole row (owner ask 2026-09-24).
+   *
+   * > *"In unit level, the flow is no longer delete serial → delete row, but
+   * > immediately delete that unit row."*
+   *
+   * So the unit, its events, its held QC answers AND its piece of the invoice
+   * all go in one confirm, where they used to be `removeSerial` followed by
+   * `removeFromInvoice` — two menu items, in an order nobody could guess, the
+   * first of which left an empty row behind that looked like a bug.
+   *
+   * Only ever a row still in QC or still waiting. A unit that has been
+   * accepted, reserved or sold is not deletable from anywhere — the invoice is
+   * the only record of what it cost — which is the rule `poDeletion` already
+   * holds a whole order to, and `actionsCell` never offers the button on such
+   * a row.
    */
-  const removeFromInvoice = (row: ReceivingRow) =>
+  const deleteUnitRow = (row: ReceivingRow) => {
+    const serial = row.unit?.serial;
+    const what =
+      serial ?? t("inbound.unitN", "unit {{n}}", { n: numberOf(row) });
     modal.confirm({
-      title: t("inbound.removeRowTitle", "Remove this unit from the invoice?"),
-      content: t(
-        "inbound.removeRowBody",
-        "Use this when the row was added by mistake. If the supplier invoiced it but never sent it, mark it Not arrived instead — that keeps it on the invoice.",
-      ),
-      okText: t("inbound.removeRowOk", "Remove from invoice"),
+      title: t("inbound.deleteUnitRowTitle", "Delete {{what}}?", { what }),
+      content: serial
+        ? t(
+            "inbound.deleteUnitRowBodySerial",
+            "The unit, its serial and everything recorded against it go, and the invoice loses the line it stood on. If the supplier billed it and never sent it, mark it Not arrived instead — that keeps it on the invoice.",
+          )
+        : t(
+            "inbound.deleteUnitRowBody",
+            "The row comes off the invoice. If the supplier billed it and never sent it, mark it Not arrived instead — that keeps it on the invoice.",
+          ),
+      okText: t("inbound.deleteUnitRowOk", "Delete unit"),
       okButtonProps: { danger: true },
       onOk: () => {
-        editOrder(({ order, lineOf }) => {
+        editOrder(({ d, order, lineOf }) => {
+          if (serial !== undefined) {
+            d.units = d.units.filter((x) => x.serial !== serial);
+            d.events = d.events.filter((e) => e.serial !== serial);
+          }
           const line = lineOf(row);
-          if (!line) return;
-          order.items = order.items.filter((i) => i.id !== line.id);
+          if (line) {
+            order.items = order.items.filter((i) => i.id !== line.id);
+          } else if (serial !== undefined) {
+            // A unit with no line of its own — an orphan. Nothing to remove
+            // from the invoice, and nothing left pointing at it either.
+            for (const item of order.items) {
+              if (item.serial === serial) item.serial = null;
+            }
+          }
         });
         forget(row.key);
       },
     });
+  };
 
   /**
    * A machine on the order that no line accounts for, put on the invoice at
@@ -1766,10 +1833,16 @@ export function InboundDetailPage() {
   const arrivedOf = (itemId: string) => arrivedQty(db.stockMoves, itemId);
 
   /** More of a counted product: its open line grows, or it gets one. */
-  const addCounted = (skuId: string, qty: number) => {
+  const addCounted = (skuId: string, qty: number, outside = false) => {
     let id = "";
+    const mark = outside ? { outsideInvoice: true as const } : {};
     editOrder(({ order }) => {
-      const line = order.items.find((i) => i.skuId === skuId && !i.notReceived);
+      const line = order.items.find(
+        (i) =>
+          i.skuId === skuId &&
+          !i.notReceived &&
+          (i.outsideInvoice === true) === outside,
+      );
       if (line) {
         line.qty += qty;
         id = line.id;
@@ -1779,7 +1852,7 @@ export function InboundDetailPage() {
       order.items = insertAfterGroup(
         order.items,
         order.items.filter((i) => i.skuId === skuId),
-        [{ id, skuId, serial: null, qty, unitCost: 0 }],
+        [{ id, skuId, serial: null, qty, unitCost: 0, ...mark }],
       );
     });
     if (id) focusSoon(lineCostFieldId(id));
@@ -1969,30 +2042,44 @@ export function InboundDetailPage() {
    * finds it here.
    */
   const piecesOf = (order: Po, l: PurchaseLine) =>
-    order.items.filter((i) => i.skuId === l.skuId && i.unitCost === l.unitCost);
+    order.items.filter(
+      (i) =>
+        i.skuId === l.skuId &&
+        i.unitCost === l.unitCost &&
+        // On one side of the invoice or the other (2026-09-24): a product the
+        // supplier billed and the same product taken in unbilled are two rows,
+        // and an edit to one must not reach the other.
+        (i.outsideInvoice === true) === l.outsideInvoice,
+    );
 
   /**
    * More of a product: one line of that quantity, never a row per unit
    * (owner ask 2026-09-20). The caret goes to the new line's price, which is
    * the next thing anybody types.
    */
-  const addLines = (skuId: string, qty: number) => {
-    if (closed) return;
+  const addLines = (skuId: string, qty: number, outside = false) => {
+    if (locked) return;
     if (isCounted(skuId)) {
-      addCounted(skuId, qty);
+      addCounted(skuId, qty, outside);
       return;
     }
     const ids: string[] = [];
+    const mark = outside ? { outsideInvoice: true as const } : {};
     editOrder(({ order }) => {
       const added: PoItem[] = [];
       for (let i = 0; i < qty; i += 1) {
         const id = nextId("poi");
         ids.push(id);
-        added.push({ id, skuId, serial: null, qty: 1, unitCost: 0 });
+        added.push({ id, skuId, serial: null, qty: 1, unitCost: 0, ...mark });
       }
       order.items = insertAfterGroup(
         order.items,
-        order.items.filter((i) => i.skuId === skuId && i.unitCost === 0),
+        order.items.filter(
+          (i) =>
+            i.skuId === skuId &&
+            i.unitCost === 0 &&
+            (i.outsideInvoice === true) === outside,
+        ),
         added,
       );
     });
@@ -2398,7 +2485,7 @@ export function InboundDetailPage() {
                 showSearch
                 optionFilterProp="label"
                 style={{ width: "100%" }}
-                disabled={closed}
+                disabled={locked}
                 aria-label={t("inbound.supplier", "Supplier")}
                 value={supplier?.id}
                 placeholder={t("inbound.pickSupplier", "Pick a supplier")}
@@ -2421,7 +2508,7 @@ export function InboundDetailPage() {
               <Flex vertical gap={4}>
                 <Input
                   style={{ width: "100%" }}
-                  disabled={closed || po.noInvoice}
+                  disabled={locked || po.noInvoice}
                   aria-label={t("inbound.invoice", "Invoice")}
                   placeholder={
                     po.noInvoice
@@ -2446,7 +2533,7 @@ export function InboundDetailPage() {
                  * which state the invoice was in.
                  */}
                 <Checkbox
-                  disabled={closed}
+                  disabled={locked}
                   checked={po.noInvoice === true}
                   onChange={(e) => {
                     const on = e.target.checked;
@@ -2472,7 +2559,7 @@ export function InboundDetailPage() {
             children: (
               <DatePicker
                 style={{ width: "100%" }}
-                disabled={closed}
+                disabled={locked}
                 allowClear={false}
                 aria-label={t("inbound.ordered", "Ordered")}
                 // A named month cannot be read the American way round.
@@ -2494,7 +2581,7 @@ export function InboundDetailPage() {
             children: (
               <Select
                 style={{ width: "100%" }}
-                disabled={closed}
+                disabled={locked}
                 aria-label={t("inbound.warehouse", "Warehouse")}
                 value={po.locationId}
                 options={db.warehouses.map((w) => ({
@@ -2515,7 +2602,7 @@ export function InboundDetailPage() {
             children: (
               <Select
                 style={{ width: "100%" }}
-                disabled={closed}
+                disabled={locked}
                 aria-label={t("inbound.orderStatus", "Order status")}
                 value={po.status}
                 options={PO_STATUSES.map((code) => ({
@@ -2572,11 +2659,11 @@ export function InboundDetailPage() {
 
   /** A row's product and serial are the bench's while it waits or sits in QC. */
   const rowOpen = (r: ReceivingRow) =>
-    !closed && (r.unit === null ? !r.notArrived : r.unit.status === "QC");
+    !locked && (r.unit === null ? !r.notArrived : r.unit.status === "QC");
 
   /** A row's money is editable a little longer — see `MONEY_EDITABLE`. */
   const moneyOpen = (r: ReceivingRow) =>
-    !closed &&
+    !locked &&
     (r.unit === null ? !r.notArrived : MONEY_EDITABLE.includes(r.unit.status));
 
   const serialCell = (r: ReceivingRow) => {
@@ -2619,7 +2706,7 @@ export function InboundDetailPage() {
           // Tells the scanner this box is where a scan was aimed, so a burst
           // typed into it lands natively instead of being reported as a stray.
           data-scan-target=""
-          disabled={closed}
+          disabled={locked}
           // Generous on purpose: a second-hand serial is taken as read and
           // held to no length, and a box that stopped short would swallow the
           // end of one without a word.
@@ -2994,29 +3081,40 @@ export function InboundDetailPage() {
         onClick: () => serial !== null && rejectToSupplier(serial),
       });
 
-    if (!closed) {
+    /**
+     * Not arrived, and delete — on the UNIT, on every row that is still open
+     * (owner ask 2026-09-24: *"The delete row button, not arrived button
+     * should be on unit level and not item SKU level"*).
+     *
+     * Both used to live on the line, where they were a decision about every
+     * piece of a product at once, and the row's own delete was buried in the
+     * More menu in two halves: *Remove this serial*, then *Remove from
+     * invoice*. *"In unit level, the flow is no longer delete serial → delete
+     * row, but immediately delete that unit row."* So there is one button and
+     * it takes the whole row — `deleteUnitRow` — and it is drawn, not hidden.
+     */
+    const notArrived = (r2: ReceivingRow) =>
+      decision({
+        key: "not-arrived",
+        tip: t("inbound.markNotArrived", "Not arrived"),
+        aria: t("inbound.notArrivedAria", "Unit {{n}} did not arrive", { n }),
+        icon: <InboxSlashOutlined aria-hidden />,
+        onClick: () => void toggleNotArrived(r2),
+      });
+    const deleteRow = (r2: ReceivingRow) =>
+      decision({
+        key: "delete-row",
+        tip: t("inbound.deleteUnitRow", "Delete this unit"),
+        aria: t("inbound.deleteUnitRowAria", "Delete unit {{n}}", { n }),
+        icon: <DeleteOutlined aria-hidden />,
+        danger: true,
+        onClick: () => deleteUnitRow(r2),
+      });
+
+    if (!locked) {
       if (state === "WAITING" || state === "NO_PRODUCT") {
         shown.push(accept(null, false), service(null), giveBack(null));
-        if (r.itemId !== null) {
-          shown.push(
-            decision({
-              key: "not-arrived",
-              tip: t("inbound.markNotArrived", "Not arrived"),
-              aria: t("inbound.notArrivedAria", "Unit {{n}} did not arrive", {
-                n,
-              }),
-              icon: <StopOutlined aria-hidden />,
-              onClick: () => void toggleNotArrived(r),
-            }),
-          );
-          item(
-            "remove-row",
-            t("inbound.removeRowMenu", "Remove from invoice"),
-            <DeleteOutlined aria-hidden />,
-            () => removeFromInvoice(r),
-            true,
-          );
-        }
+        if (r.itemId !== null) shown.push(notArrived(r), deleteRow(r));
       } else if (state === "NOT_ARRIVED") {
         shown.push(
           <Button
@@ -3032,13 +3130,7 @@ export function InboundDetailPage() {
           >
             {t("inbound.arrivedAfterAll", "It arrived")}
           </Button>,
-        );
-        item(
-          "remove-row",
-          t("inbound.removeRowMenu", "Remove from invoice"),
-          <DeleteOutlined aria-hidden />,
-          () => removeFromInvoice(r),
-          true,
+          deleteRow(r),
         );
       } else if (state === "IN_QC") {
         const serial = r.unit!.serial;
@@ -3047,13 +3139,8 @@ export function InboundDetailPage() {
           service(serial),
           giveBack(serial),
         );
-        item(
-          "remove-serial",
-          t("inbound.removeSerialMenu", "Remove this serial"),
-          <DeleteOutlined aria-hidden />,
-          () => removeSerial(serial),
-          true,
-        );
+        if (r.itemId !== null) shown.push(notArrived(r));
+        shown.push(deleteRow(r));
       } else if (r.unit) {
         // Decided. Service and a return are said on the row, because they are
         // why the row stopped taking input; an accepted unit says so quietly.
@@ -3162,7 +3249,7 @@ export function InboundDetailPage() {
         },
       )}
       rows={openLine.units.map(({ row, n }) => ({ key: row.key, n, row }))}
-      {...(closed
+      {...(locked
         ? {}
         : {
             /*
@@ -3217,13 +3304,13 @@ export function InboundDetailPage() {
           {
             title: t("inbound.serial", "Serial"),
             key: "serial",
-            width: 180,
+            width: COLUMN.serial,
             render: (_: unknown, r: ReceivingRow) => serialCell(r),
           },
           {
             title: t("inbound.grade", "Grade"),
             key: "grade",
-            width: 120,
+            width: COLUMN.grade,
             render: (_: unknown, r: ReceivingRow) => gradeCell(r),
           },
           {
@@ -3241,13 +3328,13 @@ export function InboundDetailPage() {
           {
             title: t("inbound.sellPrice", "Sell price"),
             key: "sell",
-            width: 160,
+            width: COLUMN.money,
             render: (_: unknown, r: ReceivingRow) => sellCell(r),
           },
           {
             title: "",
             key: "actions",
-            width: 230,
+            width: COLUMN.actions,
             align: "right" as const,
             render: (_: unknown, r: ReceivingRow) => actionsCell(r),
           },
@@ -3258,7 +3345,7 @@ export function InboundDetailPage() {
 
   /** A counted line's arrival, which is the one thing it has instead of units. */
   const countedActions = (l: PurchaseLine) => {
-    if (!l.counted || closed || l.notArrived > 0) return null;
+    if (!l.counted || locked || l.notArrived > 0) return null;
     const missing = l.qty - l.received;
     // Every row of the group, not just its first: a line imported as two rows
     // of one product at one price is one row on screen and two on the ledger.
@@ -3315,8 +3402,12 @@ export function InboundDetailPage() {
       title={t("inbound.unitsSection", "Units")}
       extra={
         <Flex gap={8} wrap justify="end">
-          {!closed && !arrived && summary.waiting > 0 && (
-            <Button icon={<InboxOutlined aria-hidden />} onClick={markArrived}>
+          {!locked && !arrived && summary.waiting > 0 && (
+            <Button
+              type="primary"
+              icon={<InboxOutlined aria-hidden />}
+              onClick={markArrived}
+            >
               {t("inbound.markArrived", "Mark arrived")}
             </Button>
           )}
@@ -3325,7 +3416,7 @@ export function InboundDetailPage() {
            * each unit's Accept N times, not a different decision: same gate,
            * same event. Disabled rather than hidden when none is ready.
            */}
-          {!closed && units.length > 0 && (
+          {!locked && units.length > 0 && (
             <Tooltip
               title={
                 readyToAccept.length === 0
@@ -3341,6 +3432,7 @@ export function InboundDetailPage() {
             >
               <span>
                 <Button
+                  type="primary"
                   icon={<CheckOutlined aria-hidden />}
                   disabled={readyToAccept.length === 0}
                   onClick={acceptAll}
@@ -3354,6 +3446,7 @@ export function InboundDetailPage() {
           )}
           {units.length > 0 && (
             <Button
+              type="primary"
               icon={<PrinterOutlined aria-hidden />}
               onClick={() => setPrinting(labelsFor(units, db.skus, db.models))}
             >
@@ -3367,7 +3460,7 @@ export function InboundDetailPage() {
         <PurchaseLinesTable
           lines={lines}
           skus={db.skus}
-          closed={closed}
+          closed={locked}
           cogsOf={lineCogs}
           onSetProduct={setLineProduct}
           onSetQty={setLineQty}
@@ -3388,72 +3481,92 @@ export function InboundDetailPage() {
               </Typography.Text>
             </>
           }
-          actions={(l) =>
-            closed ? null : (
-              <>
-                {countedActions(l)}
-                <Tooltip
-                  title={
-                    l.notArrived > 0
-                      ? t("inbound.arrivedAfterAll", "It arrived")
-                      : t("inbound.markNotArrived", "Not arrived")
-                  }
-                >
-                  <Button
-                    size="small"
-                    type="text"
-                    icon={
-                      l.notArrived > 0 ? (
-                        <UndoOutlined aria-hidden />
-                      ) : (
-                        <StopOutlined aria-hidden />
-                      )
-                    }
-                    aria-label={
-                      l.notArrived > 0
-                        ? t(
-                            "inbound.lineArrivedAria",
-                            "{{product}} arrived after all",
+          /*
+           * Not arrived and Delete moved to the UNIT on 2026-09-24. They stay
+           * on the LINE for a counted product, which has no units to put them
+           * on: an accessory line IS the quantity, so the line is the only
+           * level at which anybody can say a box of chargers never came.
+           */
+          // Only while a counted line can be acted on: a column of nothing
+          // on every other invoice was width the row could not spare
+          // (2026-09-28).
+          actionsWidth={COLUMN.actionsWide}
+          actions={
+            locked || !lines.some((l) => l.counted)
+              ? undefined
+              : (l) =>
+                  !l.counted ? null : (
+                    <>
+                      {countedActions(l)}
+                      <Tooltip
+                        title={
+                          l.notArrived > 0
+                            ? t("inbound.arrivedAfterAll", "It arrived")
+                            : t("inbound.markNotArrived", "Not arrived")
+                        }
+                      >
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={
+                            l.notArrived > 0 ? (
+                              <UndoOutlined aria-hidden />
+                            ) : (
+                              <InboxSlashOutlined aria-hidden />
+                            )
+                          }
+                          aria-label={
+                            l.notArrived > 0
+                              ? t(
+                                  "inbound.lineArrivedAria",
+                                  "{{product}} arrived after all",
+                                  { product: skuLabel(l.skuId) },
+                                )
+                              : t(
+                                  "inbound.lineNotArrivedAria",
+                                  "{{product}} did not arrive",
+                                  { product: skuLabel(l.skuId) },
+                                )
+                          }
+                          onClick={() => toggleLineNotArrived(l)}
+                        />
+                      </Tooltip>
+                      <Tooltip
+                        title={t(
+                          "inbound.invoiceRemove",
+                          "Remove from the invoice",
+                        )}
+                      >
+                        <Button
+                          size="small"
+                          type="text"
+                          danger
+                          icon={<DeleteOutlined aria-hidden />}
+                          aria-label={t(
+                            "inbound.invoiceRemoveAria",
+                            "Remove {{product}}",
                             { product: skuLabel(l.skuId) },
-                          )
-                        : t(
-                            "inbound.lineNotArrivedAria",
-                            "{{product}} did not arrive",
-                            { product: skuLabel(l.skuId) },
-                          )
-                    }
-                    onClick={() => toggleLineNotArrived(l)}
-                  />
-                </Tooltip>
-                <Tooltip
-                  title={t("inbound.invoiceRemove", "Remove from the invoice")}
-                >
-                  <Button
-                    size="small"
-                    type="text"
-                    danger
-                    icon={<DeleteOutlined aria-hidden />}
-                    aria-label={t(
-                      "inbound.invoiceRemoveAria",
-                      "Remove {{product}}",
-                      { product: skuLabel(l.skuId) },
-                    )}
-                    onClick={() => removeLine(l)}
-                  />
-                </Tooltip>
-              </>
-            )
+                          )}
+                          onClick={() => removeLine(l)}
+                        />
+                      </Tooltip>
+                    </>
+                  )
           }
         />
+        {/* What did not go to plan, product by product (owner ask
+            2026-09-24). Nothing when the delivery matched the paper. */}
+        <InvoiceExceptions lines={lines} skus={db.skus} />
         {orphanCard}
         {/*
          * A product added from here is a line on the invoice (owner ask
          * 2026-09-19, kept), of a quantity — never a row per unit.
          */}
-        {!closed && (
+        {!locked && (
           <AddLineBar
             skus={db.skus}
             onAdd={addLines}
+            outsideInvoice
             ariaLabel={t(
               "inbound.addUnitProductAria",
               "Product to add to the units",
@@ -3516,7 +3629,7 @@ export function InboundDetailPage() {
         <Typography.Text style={{ whiteSpace: "nowrap" }}>
           {fmtRp(s.due)}
         </Typography.Text>
-        {!closed && (
+        {!locked && (
           <Button
             size="small"
             type="text"
@@ -3548,15 +3661,17 @@ export function InboundDetailPage() {
       extra={
         <Flex gap={8} wrap justify="end">
           <Button
+            type="primary"
             icon={<PlusOutlined aria-hidden />}
-            disabled={closed}
+            disabled={locked}
             onClick={() => setExpense("new")}
           >
             {t("inbound.addExpense", "Add expense")}
           </Button>
           <Button
+            type="primary"
             icon={<PlusOutlined aria-hidden />}
-            disabled={closed}
+            disabled={locked}
             onClick={() => {
               setPaying({});
               setPayMethod("TUNAI");
@@ -3679,7 +3794,7 @@ export function InboundDetailPage() {
                */
               title: "",
               key: "actions",
-              width: 80,
+              width: COLUMN.actions,
               render: (_, p) => {
                 const fromDeposit = p.fromDepositId !== undefined;
                 return (
@@ -3697,7 +3812,7 @@ export function InboundDetailPage() {
                       <Button
                         size="small"
                         type="text"
-                        disabled={closed || fromDeposit}
+                        disabled={locked || fromDeposit}
                         aria-label={t(
                           "inbound.editPaymentAria",
                           "Edit the payment of {{amount}}",
@@ -3727,7 +3842,7 @@ export function InboundDetailPage() {
                         size="small"
                         type="text"
                         danger
-                        disabled={closed || fromDeposit}
+                        disabled={locked || fromDeposit}
                         aria-label={t(
                           "inbound.deletePaymentAria",
                           "Delete the payment of {{amount}}",
@@ -3842,11 +3957,11 @@ export function InboundDetailPage() {
       : (target as PoPaymentFor);
     const method = payMethod;
     const amount = payAmount;
-    const editing = paying?.id;
+    const editingId = paying?.id;
     const inBalance = payInBalance;
     mutate((d) => {
       const order = d.pos.find((p) => p.id === po.id)!;
-      if (editing === undefined) {
+      if (editingId === undefined) {
         order.payments.push({
           id: nextId("pp"),
           method,
@@ -3858,7 +3973,7 @@ export function InboundDetailPage() {
         });
         return;
       }
-      const row = order.payments.find((x) => x.id === editing);
+      const row = order.payments.find((x) => x.id === editingId);
       if (row === undefined) return;
       // `at` is left alone: it is when the money MOVED.
       row.method = method;
@@ -3872,7 +3987,7 @@ export function InboundDetailPage() {
     setPayAmount(undefined);
     setPaying(null);
     message.success(
-      editing
+      editingId
         ? t("inbound.paymentUpdated", "Payment updated.")
         : t(
             "inbound.paymentRecordedFor",
@@ -3885,6 +4000,36 @@ export function InboundDetailPage() {
             },
           ),
     );
+    offerToClose();
+  };
+
+  /**
+   * The invoice has just been paid off — ask whether to close it (owner ask
+   * 2026-09-24: *"When the user add payment and the inbound is fully paid, add
+   * popup modal to ask the user to close the invoice or not"*).
+   *
+   * Asked, not done: an invoice can be settled and still have a unit waiting
+   * for a serial, and closing it would lock the bench out of the work it is
+   * halfway through. Read from the STORE rather than from `totals`, which is
+   * the render before this payment.
+   */
+  const offerToClose = () => {
+    const after = getDb().pos.find((p) => p.id === po.id);
+    if (!after || poClosed(after) || !poTotals(after).fullyPaid) return;
+    modal.confirm({
+      title: t("inbound.paidInFullTitle", "This invoice is paid in full"),
+      content: t(
+        "inbound.paidInFullBody",
+        "Close it now? A closed invoice is read-only — its units, its lines and its money all stop taking changes. You can reopen it at any time.",
+      ),
+      okText: t("inbound.closeOk", "Close invoice"),
+      cancelText: t("inbound.keepOpen", "Leave it open"),
+      onOk: () =>
+        mutate((d) => {
+          d.pos.find((p) => p.id === po.id)!.closedAt =
+            new Date().toISOString();
+        }),
+    });
   };
 
   const photosRowData = photosRow
@@ -3895,10 +4040,48 @@ export function InboundDetailPage() {
     <PageContainer
       title={po.code}
       backTo="/inbound"
+      /*
+       * While the invoice is unlocked the code and its two decisions stay on
+       * screen (owner ask 2026-09-25): Serials & QC is a long grid, and the
+       * bench works down it — the moment *Save invoice* scrolls away is the
+       * moment somebody leaves the page open and editable behind them.
+       */
+      stickyHeader={editing}
+      banner={
+        editing ? (
+          <Alert
+            type="warning"
+            showIcon
+            title={t("inbound.editingBanner", "You're editing this invoice")}
+          />
+        ) : undefined
+      }
       actions={
         closed
           ? undefined
           : [
+              /*
+               * Edit invoice, beside Close invoice (owner ask 2026-09-24).
+               * The page arrives read-only; this is the one thing on it that
+               * is not, and pressing it again puts the page back — nothing is
+               * saved by leaving edit, because every field writes on change.
+               */
+              {
+                key: "edit",
+                // "Save invoice" is the owner's word for it (2026-09-25).
+                // Nothing is saved BY it — every field on the page writes on
+                // change — but the button that ends an edit is the one staff
+                // look for to save, and calling it anything else is a page
+                // people leave unlocked.
+                label: editing
+                  ? t("inbound.saveInvoice", "Save invoice")
+                  : t("inbound.editInvoice", "Edit invoice"),
+                icon: editing ? <CheckOutlined /> : <EditOutlined />,
+                // The page's one call to action, so it is the green one and
+                // *Close invoice* beside it is not (owner ask 2026-09-25).
+                type: "primary",
+                onClick: () => setEditing((v) => !v),
+              },
               {
                 key: "close",
                 label: t("inbound.closeInvoice", "Close invoice"),
@@ -3935,6 +4118,18 @@ export function InboundDetailPage() {
             }
           />
         )}
+        {/*
+         * No banner while the page is merely read-only (owner ask
+         * 2026-09-25). *Edit invoice* is in the header, beside *Close
+         * invoice*, which is where the page's other decisions are and where
+         * somebody looks for one; a paragraph under the title saying the page
+         * is a page was a line to scroll past on every visit. A CLOSED
+         * invoice still gets its banner above — that one reports a state
+         * somebody chose and has to undo, and so, since later the same day,
+         * does an invoice being EDITED: that one is `banner` on the header,
+         * pinned with the code and the two buttons rather than left here to
+         * scroll away.
+         */}
         {header}
         {unitsCard}
         {money}
@@ -4053,7 +4248,7 @@ export function InboundDetailPage() {
               })}
               tooltip={t(
                 "inbound.serviceShipHint",
-                "Leave this off if the unit is already at the bench, or if the repairer collects it. The bench confirms the arrival either way before work starts.",
+                "Leave this off if the repairer collects it, or if the unit is not moving. Turning it on files the unit at the bench straight away.",
               )}
             >
               <Switch />

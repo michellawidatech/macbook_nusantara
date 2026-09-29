@@ -29,6 +29,7 @@ import { InboundFormPage } from "../src/routes/inbound/InboundFormPage.js";
 import { InboundDetailPage } from "../src/routes/inbound/InboundDetailPage.js";
 import { getDb } from "../src/mock/store.js";
 import type { MockDb } from "../src/mock/seed.js";
+import { pressPageAction } from "./pageActions.js";
 
 /**
  * What `Grid.useBreakpoint` is told the window is.
@@ -353,6 +354,11 @@ describe("a product label that will not fit on one line", () => {
         </AntdApp>
       </MemoryRouter>,
     );
+    // The page opens read-only since 2026-09-24 (*"it should be display only
+    // first"*), and this suite is about the boxes. The read-only banner that
+    // used to carry a second copy of this button went on 2026-09-25, so the
+    // header action is the only one — and below `md` that is a float fan.
+    pressPageAction(/Edit invoice/);
   }
 
   /**
@@ -392,16 +398,19 @@ describe("a product label that will not fit on one line", () => {
     );
     // One width for every box since 2026-09-24 — Qty, Unit price, Discount
     // and Sell price — and a narrower one for the two figures only printed.
+    // Each the least its content needs since 2026-09-28, summing to the 1120
+    // a 1440 screen leaves the card, with See all units at the end — bar
+    // the Unit column, widened 2026-09-29 so the product code shows whole.
     expect(widths).toEqual([
-      "44px",
-      "260px",
-      "176px",
-      "176px",
-      "176px",
-      "176px",
-      "150px",
-      "150px",
-      "280px",
+      "32px",
+      "248px",
+      "132px",
+      "132px",
+      "132px",
+      "132px",
+      "112px",
+      "112px",
+      "184px",
     ]);
   });
 

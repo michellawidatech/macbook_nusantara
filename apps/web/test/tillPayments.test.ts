@@ -383,3 +383,96 @@ describe("one order number per marketplace part (owner revision 2026-09-21)", ()
     ).toEqual([{ method: "SHOPEE", ref: "2609SHP04" }]);
   });
 });
+
+describe("a debt names its debtor (owner ask 2026-09-24)", () => {
+  const short: TillPart[] = [{ method: "TUNAI", paid: 3_000_000 }];
+
+  it("refuses a sale that leaves something owed against nobody", () => {
+    expect(
+      tillProblems({
+        total: 10_000_000,
+        source: "OFFLINE",
+        parts: short,
+        ref: "",
+      }),
+    ).toEqual(["NO_DEBTOR"]);
+    expect(
+      tillProblems({
+        total: 10_000_000,
+        source: "OFFLINE",
+        parts: short,
+        ref: "",
+        debtor: null,
+      }),
+    ).toEqual(["NO_DEBTOR"]);
+    // A record with neither a name nor a number is nobody.
+    expect(
+      tillProblems({
+        total: 10_000_000,
+        source: "OFFLINE",
+        parts: short,
+        ref: "",
+        debtor: { name: " ", phone: "" },
+      }),
+    ).toEqual(["NO_DEBTOR"]);
+  });
+
+  it("takes a name or a phone number — either is enough", () => {
+    expect(
+      tillProblems({
+        total: 10_000_000,
+        source: "OFFLINE",
+        parts: short,
+        ref: "",
+        debtor: { name: "Budi", phone: "" },
+      }),
+    ).toEqual([]);
+    expect(
+      tillProblems({
+        total: 10_000_000,
+        source: "OFFLINE",
+        parts: short,
+        ref: "",
+        debtor: { name: "", phone: "+62811223344" },
+      }),
+    ).toEqual([]);
+  });
+
+  it("asks nobody's name on a sale paid in full", () => {
+    expect(
+      tillProblems({
+        total: 10_000_000,
+        source: "OFFLINE",
+        parts: [{ method: "TUNAI" }],
+        ref: "",
+      }),
+    ).toEqual([]);
+    // A marketplace part is paid in full by construction: no debt, no name.
+    expect(
+      tillProblems({
+        total: 10_000_000,
+        source: "SHOPEE",
+        parts: [{ method: "SHOPEE", ref: "241019ABCDEF" }],
+        ref: "",
+      }),
+    ).toEqual([]);
+  });
+
+  it("comes after the payment table's own problems", () => {
+    // The toast names the first problem, and the customer's box is the one
+    // not on the payment table.
+    expect(
+      tillProblems({
+        total: 10_000_000,
+        source: "OFFLINE",
+        // Rp1jt paid on an Rp11jt split: the split overshoots the bill AND
+        // Rp10jt is still owed, against nobody.
+        parts: [
+          { method: "TUNAI", split: 11_000_000, paid: 1_000_000 },
+          { method: "TRANSFER" },
+        ],
+        ref: "",
+      }),
+    ).toEqual(["SPLIT_OVER", "NO_DEBTOR"]);
+  });
+});

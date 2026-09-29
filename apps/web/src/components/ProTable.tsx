@@ -127,10 +127,31 @@ export interface ProTableProps<T> extends Omit<
   search?: boolean;
   /** Extra controls dropped into the toolbar, after the search box. */
   toolbar?: ReactNode;
-  /** Right-hand side of the toolbar — a primary action, a count, a segmented view switch. */
-  extra?: ReactNode;
+  /**
+   * Right-hand side of the toolbar — a primary action, a count, a segmented
+   * view switch. A function is handed what is currently ticked, which is how
+   * Payable and Receivable put the SELECTED total beside *Add payment*
+   * (owner ask 2026-09-24) rather than always the whole page's.
+   */
+  extra?: ReactNode | ((selected: T[]) => ReactNode);
   /** Turn on row selection. Wide viewports only; see this file's docblock. */
   selectable?: boolean;
+  /**
+   * The rows carry `children` and are drawn as a tree (owner ask 2026-09-24:
+   * Payable is *"a expandable column per supplier"*).
+   *
+   * Two things follow, and neither is worth making a caller remember. Row
+   * selection becomes `checkStrictly: false`, so ticking a supplier ticks its
+   * invoices and the page can total the LEAVES; and the phone keeps the grid
+   * instead of becoming cards, for the reason `DataTable` already keeps it for
+   * an expandable table — a child row has nowhere to go in a card, and hiding
+   * it is worse than scrolling sideways.
+   *
+   * Searching, filtering and sorting still run over the TOP level only: a
+   * group is what the list is of, and its `searchValue` is what carries its
+   * children's numbers into the search box.
+   */
+  treeData?: boolean;
   /** Rendered beside the "N selected" line once something is ticked. */
   bulkActions?: (selected: T[], clear: () => void) => ReactNode;
   /**
@@ -264,6 +285,7 @@ export function ProTable<T extends object>({
   toolbar,
   extra,
   selectable = false,
+  treeData = false,
   bulkActions,
   resetKey,
   rowKey,
@@ -498,8 +520,20 @@ export function ProTable<T extends object>({
     if (!selectable) return [];
     const keyOf = (r: T, i: number) =>
       typeof rowKey === "function" ? rowKey(r, i) : String(raw(r, rowKey));
-    return rows.filter((r, i) => selectedKeys.includes(keyOf(r, i)));
-  }, [selectable, rows, selectedKeys, rowKey]);
+    const out: T[] = [];
+    // Depth-first, because a tree's ticks land on children as well as parents
+    // and a page totalling only the top level would read zero for a supplier
+    // whose invoices were ticked one at a time.
+    const walk = (list: readonly T[]) => {
+      list.forEach((r, i) => {
+        if (selectedKeys.includes(keyOf(r, i))) out.push(r);
+        const kids = (r as { children?: readonly T[] }).children;
+        if (treeData && kids) walk(kids);
+      });
+    };
+    walk(rows);
+    return out;
+  }, [selectable, treeData, rows, selectedKeys, rowKey]);
 
   const clear = () => setSelectedKeys([]);
 
@@ -687,12 +721,12 @@ export function ProTable<T extends object>({
               its own, and space-between does nothing for a line holding a
               single item — it would sit flush LEFT. Same trap FooterToolbar
               documents. */}
-          {extra && (
+          {extra !== undefined && extra !== false && (
             <Flex
               gap={SPACE.sm}
               style={compact ? undefined : { marginLeft: "auto" }}
             >
-              {extra}
+              {typeof extra === "function" ? extra(selected) : extra}
             </Flex>
           )}
         </Flex>
@@ -727,6 +761,7 @@ export function ProTable<T extends object>({
 
       <DataTable
         {...rest}
+        {...(treeData ? { cards: false } : {})}
         rowKey={rowKey}
         columns={tableColumns}
         dataSource={rows}
@@ -760,6 +795,8 @@ export function ProTable<T extends object>({
             ? {
                 selectedRowKeys: selectedKeys,
                 onChange: (keys) => setSelectedKeys(keys),
+                // A supplier's tick is its invoices' ticks (see `treeData`).
+                ...(treeData ? { checkStrictly: false } : {}),
               }
             : undefined
         }

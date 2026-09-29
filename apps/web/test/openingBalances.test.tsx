@@ -10,6 +10,7 @@
 import type { ReactNode } from "react";
 import { App as AntdApp } from "antd";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { CustomersPage } from "../src/routes/customers/CustomersPage.js";
@@ -46,8 +47,15 @@ describe("a debt from before this app", () => {
     // on Receivable and nowhere else.
     const customer = oweFromBefore();
     page(<ReceivablePage />);
+    // Grouped per customer since 2026-09-24: the debt is a row UNDER them,
+    // and the chevron is what a person opens to see which document it is.
+    const name = await screen.findAllByText(customer.name);
+    expect(name.length).toBeGreaterThan(0);
+    const rowOf = name[0]!.closest("tr")!;
+    await userEvent.click(
+      rowOf.querySelector<HTMLElement>(".ant-table-row-expand-icon")!,
+    );
     expect(await screen.findByText("From before this app")).toBeTruthy();
-    expect(screen.getAllByText(customer.name).length).toBeGreaterThan(0);
     expect(
       screen.getAllByText((text) => text.includes(fmtRp(OLD_DEBT))).length,
     ).toBeGreaterThan(0);

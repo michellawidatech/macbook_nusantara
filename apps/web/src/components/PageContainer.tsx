@@ -65,6 +65,19 @@ export interface PageContainerProps {
    */
   extra?: ReactNode;
   /**
+   * A strip pinned under the title row, inside the sticky block.
+   *
+   * For a state the page is IN that somebody has to leave again — an invoice
+   * being edited, a count still open. It rides along when `stickyHeader` is
+   * set, so scrolling to the bottom of a long grid does not scroll away the
+   * only sign that the page is unlocked.
+   *
+   * ⚠️ Not a place for prose. A banner that merely describes the screen is
+   * the line under the title that was taken off every page on 2026-09-25;
+   * this is for something that is temporarily true and can be turned off.
+   */
+  banner?: ReactNode;
+  /**
    * Where the back arrow beside the title goes. Omit on a page the sidebar
    * itself can reach.
    *
@@ -133,6 +146,7 @@ export function PageContainer({
   title,
   actions,
   extra,
+  banner,
   backTo,
   children,
   fill = false,
@@ -254,6 +268,7 @@ export function PageContainer({
             </Flex>
           )}
         </Flex>
+        {banner}
       </Flex>
 
       {children}
@@ -275,6 +290,11 @@ export function PageContainer({
             type={actions[0].type === "primary" ? "primary" : "default"}
             icon={actions[0].icon}
             tooltip={actions[0].label}
+            // The tooltip is not a NAME — it appears on hover, which a phone
+            // does not have, and a screen reader reads the icon's glyph
+            // instead. Every page action is icon-only here, so each one has
+            // to say what it is.
+            aria-label={actions[0].label}
             // FloatButton has no `disabled`, so a disabled action is shown
             // greyed and made inert rather than vanishing — a control that
             // disappears when it cannot be used is a control the user hunts
@@ -295,12 +315,14 @@ export function PageContainer({
             trigger="click"
             type="primary"
             icon={<MoreOutlined />}
+            aria-label={t("page.actions", "Page actions")}
           >
             {actions.map(({ key, label, icon, onClick, disabled }) => (
               <FloatButton
                 key={key}
                 icon={icon}
                 tooltip={label}
+                aria-label={label}
                 style={
                   disabled ? { opacity: 0.5, pointerEvents: "none" } : undefined
                 }

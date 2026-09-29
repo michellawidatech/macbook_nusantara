@@ -36,6 +36,8 @@ export function handoffTopicLabel(t: TFunction, topic: string): string {
       return t("handoff.complaint", "Complaint");
     case "media":
       return t("handoff.media", "Photo or file");
+    case "photos":
+      return t("handoff.photos", "Wants photos");
     case "human":
       return t("handoff.human", "Wants a person");
     default:

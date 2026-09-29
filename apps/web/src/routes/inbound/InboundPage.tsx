@@ -56,6 +56,7 @@ import {
   type PoPaymentStatus,
 } from "../../lib/inbound.js";
 import { useTranslation } from "react-i18next";
+import { COLUMN } from "../../theme/tokens";
 
 interface Row {
   readonly id: string;
@@ -395,7 +396,7 @@ export function InboundPage() {
               title: "",
               key: "actions",
               align: "right",
-              width: 200,
+              width: COLUMN.actionsPair,
               render: (_: unknown, r) => (
                 <Flex
                   gap={4}
@@ -416,6 +417,7 @@ export function InboundPage() {
                     <span>
                       <Button
                         size="small"
+                        type="primary"
                         icon={<WalletOutlined aria-hidden />}
                         disabled={r.closed}
                         aria-label={t(

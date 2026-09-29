@@ -86,33 +86,23 @@ export interface Supplier {
    * exists in the store; retiring it is a separate decision.
    */
   code?: string;
-  /**
-   * What the shop owed this supplier before this system existed (owner ask
-   * 2026-09-08).
-   *
-   * *"Per supplier we might have an unpaid transaction from years ago, so make
-   * sure we can input how much we owe them."* There is no invoice here for
-   * those and there never will be. Stated once, added to what the invoices
-   * say — deliberately NOT a fake purchase order, which would put phantom
-   * stock in the ledger and be counted by every report that walks orders.
-   *
-   * ⚠️ Mock-only. Prisma's `Supplier` has no such column; it wants a
-   * `BigInt @default(0)`, plus an owner decision.
+  /*
+   * ~~`openingBalance`~~ — what the shop owed this supplier before this
+   * system existed (owner ask 2026-09-08) — went on 2026-09-24: *"remove the
+   * column 'Utang lama' or the amount from previous app, we don't track it
+   * anymore (remove from database schema)"*. So did `Payment.supplierId`,
+   * which existed only to pay one off. What a supplier is owed is its open
+   * inbound invoices.
    */
-  openingBalance?: number;
-  /** When that balance was stated, so the card can say how old it is. */
-  openingBalanceAt?: string;
-  /** What has been paid off `openingBalance` since. See `OpeningPayment`. */
-  openingPayments?: OpeningPayment[];
 }
 /**
- * Money paid against a debt from before this app — a supplier's or a
- * customer's `openingBalance` (owner answer 2026-09-22: the old debt is the
- * oldest row of Add payment, and is paid first).
+ * Money paid against a debt from before this app — a customer's
+ * `openingBalance` (owner answer 2026-09-22: the old debt is the oldest row of
+ * Add payment, and is paid first). The supplier side of this went on
+ * 2026-09-24 with `Supplier.openingBalance`.
  *
- * A `Payment` naming the supplier or customer directly (`Payment.supplierId`,
- * `Payment.customerId`), because there is no invoice or sale for it to hang
- * off. The opening figure is never rewritten: what was owed on the day and
+ * A `Payment` naming the customer directly (`Payment.customerId`), because
+ * there is no sale for it to hang off. The opening figure is never rewritten: what was owed on the day and
  * what has been paid since are two facts, and `openingOwed` is the difference.
  */
 export interface OpeningPayment {
@@ -398,6 +388,17 @@ export interface PoItem {
    * whole point of recording it — but not towards what arrived.
    */
   notReceived?: boolean;
+  /**
+   * The shop took it in and the supplier's paper never billed it (owner ask
+   * 2026-09-24: *"add a button called 'Add outside invoice' … and mark that
+   * row as yellow"*). The mirror of `notReceived`.
+   *
+   * A MARK and nothing else (owner answer): the line keeps its price, so its
+   * units still cost what they cost and the invoice's COGS is still the whole
+   * delivery. What it buys is a yellow row and a place in the list under the
+   * Units card. `PurchaseOrderItem.outsideInvoice` carries it.
+   */
+  outsideInvoice?: boolean;
 }
 
 /**
@@ -632,9 +633,9 @@ export interface Customer {
   /**
    * What this customer owed before this app existed, stated once — the
    * B2Soft account balance that no invoice explains (owner answer
-   * 2026-09-13: receivables "need to combine all"). Same footing as
-   * `Supplier.openingBalance`: deliberately not a fake sale, which would put
-   * a receipt in Transaction History for something nobody sold.
+   * 2026-09-13: receivables "need to combine all"). Deliberately not a fake
+   * sale, which would put a receipt in Transaction History for something
+   * nobody sold.
    */
   openingBalance?: number;
   openingBalanceAt?: string;
@@ -1420,6 +1421,16 @@ export interface AppSettings {
   /** When the opening balances were entered, so the card can say so. */
   openingBalanceAt?: string;
   /**
+   * The book is closed up to here — every sale dated on or before this
+   * instant is read-only and takes no further money (owner ask 2026-09-24:
+   * *"add a close book button to close and lock all the transaction"*).
+   *
+   * `lib/bookClose.ts` is the rule. Absent or blank means the book is open,
+   * which is what it is until somebody closes it. Mirrors an `AppSetting`
+   * row (`finance.booksClosedAt`), so it needs no column of its own.
+   */
+  booksClosedAt?: string;
+  /**
    * Who the shop is, as printed at the top of every faktur.
    *
    * These four were a `const SHOP` in `components/Invoice.tsx` until
@@ -1617,11 +1628,6 @@ export function buildSeed(): MockDb {
     ...(s.phone === undefined ? {} : { phone: s.phone }),
     ...(s.address === undefined ? {} : { address: s.address }),
     ...(s.code === undefined ? {} : { code: s.code }),
-    // One supplier carries a debt from before this system, so the "how much do
-    // we owe them?" card has something to demonstrate (owner ask 2026-09-08).
-    ...(s.id === shop.suppliers[1]?.id
-      ? { openingBalance: 7_500_000, openingBalanceAt: iso(60, 9) }
-      : {}),
   }));
   /**
    * A deposit with money still on it, and an old debt (owner ask 2026-09-08).

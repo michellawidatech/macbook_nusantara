@@ -26,13 +26,17 @@
  * holding line as the text — so staff see what the bot would have done.
  */
 
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import { z } from "zod";
 import type { PrismaClient } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import { ApiError } from "../errors.js";
 import {
+  CAPABILITY_SETTING_KEYS,
   agentCapabilities,
+  effectiveCapabilities,
+  loadCapabilities,
+  type AgentCapabilities,
   anthropicClient,
   buildAgentPrompt,
   converse,
@@ -107,10 +111,92 @@ export interface ChatRouterDeps {
   readonly logger: Logger;
   /** Injected, never read from `process.env` here — 01 §7. */
   readonly anthropic: AnthropicEnv;
+  /**
+   * Guards the shop-wide switches. Optional so a test building the router on
+   * its own still works; absent, any signed-in staff member may change them.
+   */
+  readonly requireOwner?: RequestHandler;
 }
 
-export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
+/** The four switches on /chat. Each optional: PUT changes what it names. */
+const capabilitiesBody = z
+  .object({
+    stock: z.boolean(),
+    price: z.boolean(),
+    reserve: z.boolean(),
+    photos: z.boolean(),
+  })
+  .partial()
+  .strict();
+
+/** What the page shows: as set, and what that actually allows. */
+const capabilitiesJson = (set: AgentCapabilities) => ({
+  set,
+  effective: effectiveCapabilities(set),
+});
+
+export function chatRouter({
+  db,
+  logger,
+  anthropic,
+  requireOwner,
+}: ChatRouterDeps): Router {
   const router = Router();
+  const ownerOnly: RequestHandler =
+    requireOwner ?? ((_req, _res, next) => next());
+
+  /**
+   * GET /api/chat/capabilities — the four switches (owner ask 2026-09-29):
+   * what the bot may answer about stock, prices, bookings and photos. A
+   * switch nobody has pressed reads as the environment says.
+   */
+  router.get("/capabilities", async (_req, res, next) => {
+    try {
+      res.json(
+        capabilitiesJson(
+          await loadCapabilities(db, agentCapabilities(process.env)),
+        ),
+      );
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * PUT /api/chat/capabilities — flip one or more switches. The owner's call:
+   * it decides what the bot tells every customer. The worker reads the rows
+   * at the start of its next pass, so no deploy and no restart.
+   */
+  router.put("/capabilities", ownerOnly, async (req, res, next) => {
+    try {
+      const parsed = capabilitiesBody.safeParse(req.body);
+      if (!parsed.success)
+        throw new ApiError(400, "VALIDASI", "Nilai saklar tidak valid.");
+      const now = new Date();
+      await db.$transaction(
+        Object.entries(parsed.data).map(([k, v]) => {
+          const key = CAPABILITY_SETTING_KEYS[k as keyof AgentCapabilities];
+          const value = v ? "true" : "false";
+          return db.appSetting.upsert({
+            where: { key },
+            update: { value, updatedAt: now },
+            create: { key, value, updatedAt: now },
+          });
+        }),
+      );
+      const saved = await loadCapabilities(db, agentCapabilities(process.env));
+      logger.info(
+        {
+          evt: "chat.capabilities.changed",
+          ctx: { staffId: req.staff?.id, set: saved },
+        },
+        "the chatbot's switches changed",
+      );
+      res.json(capabilitiesJson(saved));
+    } catch (err) {
+      next(err);
+    }
+  });
 
   router.get("/status", (_req, res) => {
     res.json({
@@ -148,19 +234,22 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
         );
       }
 
-      const [knowledge, storeFacts, persona, stored] = await Promise.all([
-        loadKnowledgeBase(db),
-        loadStoreFacts(db).then(renderStoreFacts),
-        db.persona.findFirst({
-          where: { active: true },
-          select: { prompt: true },
-        }),
-        db.agentCorrection.findMany({
-          select: { original: true, corrected: true, note: true },
-          orderBy: { createdAt: "desc" },
-          take: MAX_CORRECTIONS,
-        }),
-      ]);
+      const [knowledge, storeFacts, persona, stored, capabilities] =
+        await Promise.all([
+          loadKnowledgeBase(db),
+          loadStoreFacts(db).then(renderStoreFacts),
+          db.persona.findFirst({
+            where: { active: true },
+            select: { prompt: true },
+          }),
+          db.agentCorrection.findMany({
+            select: { original: true, corrected: true, note: true },
+            orderBy: { createdAt: "desc" },
+            take: MAX_CORRECTIONS,
+          }),
+          // The switches on /chat, exactly as the worker reads them.
+          loadCapabilities(db, agentCapabilities(process.env)),
+        ]);
 
       const now = new Date();
       /*
@@ -172,7 +261,6 @@ export function chatRouter({ db, logger, anthropic }: ChatRouterDeps): Router {
        * the same thing: what the bot may KNOW is a shop policy, and what a
        * button press may WRITE is a property of this endpoint.
        */
-      const capabilities = agentCapabilities(process.env);
       const turns = parsed.data.turns;
       const last = turns[turns.length - 1];
       const customerText = last?.role === "user" ? last.text : "";

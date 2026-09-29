@@ -59,28 +59,22 @@ model Location {
 }
 
 model Supplier {
-  id               String    @id @default(cuid())
-  name             String    @unique
-  wa               String?
-  note             String?
-  active           Boolean
-  createdAt        DateTime
+  id        String   @id @default(cuid())
+  name      String   @unique
+  wa        String?
+  note      String?
+  active    Boolean
+  createdAt DateTime
   /// The two-letter origin code in front of the store barcode (owner ask
   /// 2026-08-28). Nullable: every supplier before the scheme has none.
-  code             String?   @unique @db.Char(2)
-  address          String?
-  /// What the shop owed this supplier before this system existed (owner ask
-  /// 2026-09-08). Null means never stated, which is not the same fact as 0.
-  openingBalance   BigInt?
-  openingBalanceAt DateTime?
+  code      String?  @unique @db.Char(2)
+  address   String?
 
   purchaseOrders  PurchaseOrder[]
   supplierReturns SupplierReturn[]
   warrantyClaims  WarrantyClaim[]
   unitReturns     UnitReturn[]
   deposits        SupplierDeposit[]
-  /// Paid against `openingBalance` — see `Payment.supplierId`.
-  openingPayments Payment[]
 }
 
 // ============================================================================
@@ -134,25 +128,29 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderItem {
-  id           String    @id @default(cuid())
-  poId         String
-  skuId        String?
-  produk       String
-  spec         String?
-  qty          Int
-  unitCost     BigInt
+  id             String    @id @default(cuid())
+  poId           String
+  skuId          String?
+  produk         String
+  spec           String?
+  qty            Int
+  unitCost       BigInt
   /// Knocked off THIS line, in whole rupiah (owner ask 2026-09-20: "product
   /// name > QTY > price > discount > display total"). `PurchaseOrder.discount`
   /// is the one negotiated off the whole order; this is the one a supplier
   /// writes against a single line. It comes off the line total, and therefore
   /// off what each of the line's units cost.
-  discount     BigInt    @default(0)
-  lineTotal    BigInt
-  allocatedFee BigInt
+  discount       BigInt    @default(0)
+  lineTotal      BigInt
+  allocatedFee   BigInt
   /// The supplier never sent it. Still counts towards what was INVOICED.
-  notReceived  Boolean   @default(false)
-  removedAt    DateTime?
-  sortOrder    Int       @default(0)
+  notReceived    Boolean   @default(false)
+  /// The shop took it in and the supplier's paper never billed it (owner ask
+  /// 2026-09-24). The mirror of `notReceived`, and a MARK only: the line keeps
+  /// its price, so its units still cost what they cost.
+  outsideInvoice Boolean   @default(false)
+  removedAt      DateTime?
+  sortOrder      Int       @default(0)
 
   po  PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Restrict)
   sku Sku?          @relation(fields: [skuId], references: [id], onDelete: Restrict)
@@ -405,6 +403,7 @@ model Sku {
   opnameSurplus    OpnameSurplus[]
   opnameCounts     OpnameCount[]
   stockMoves       StockMove[]
+  chatActions      ChatAction[]
 }
 
 // ============================================================================
@@ -480,6 +479,7 @@ model Unit {
   returns             UnitReturn[]              @relation("UnitReturnUnit")
   exchanges           UnitReturn[]              @relation("UnitReturnExchange")
   serviceVisits       ServiceVisit[]
+  chatActions         ChatAction[]
 }
 
 model UnitAttribute {
@@ -768,6 +768,8 @@ model Customer {
   addresses        CustomerAddress[]
   /// Paid against `openingBalance` — see `Payment.customerId`.
   openingPayments  Payment[]
+  chatActions      ChatAction[]
+  chatProfiles     CustomerProfile[]
 }
 
 model Order {
@@ -887,17 +889,17 @@ model TradeIn {
   sku   Sku?  @relation(fields: [skuId], references: [id], onDelete: Restrict)
 }
 
-/// CHECK (amount > 0) and CHECK (num_nonnulls(orderId, poId, supplierId,
-/// customerId) = 1) — invariants 6 and 7 — are hand-written in migrations
-/// (08 §2), with a supplier's payment KELUAR and a customer's MASUK.
+/// CHECK (amount > 0) and CHECK (num_nonnulls(orderId, poId, customerId) = 1)
+/// — invariants 6 and 7 — are hand-written in migrations (08 §2), with a
+/// customer's payment MASUK.
 model Payment {
   id            String       @id @default(cuid())
   orderId       String?
   poId          String?
-  /// A debt from before this app (`Supplier.openingBalance`,
-  /// `Customer.openingBalance`; owner 2026-09-22) has no invoice or sale to
-  /// hang a payment off, so the payment names the party instead.
-  supplierId    String?
+  /// A debt from before this app (`Customer.openingBalance`; owner
+  /// 2026-09-22) has no sale to hang a payment off, so the payment names the
+  /// customer instead. The supplier side of this went on 2026-09-24 with
+  /// `Supplier.openingBalance`.
   customerId    String?
   direction     PayDirection
   methodId      String
@@ -945,7 +947,6 @@ model Payment {
 
   order       Order?            @relation(fields: [orderId], references: [id], onDelete: Restrict)
   po          PurchaseOrder?    @relation(fields: [poId], references: [id], onDelete: Restrict)
-  supplier    Supplier?         @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   customer    Customer?         @relation(fields: [customerId], references: [id], onDelete: Restrict)
   staff       Staff             @relation(fields: [staffId], references: [id], onDelete: Restrict)
   shift       Shift?            @relation(fields: [shiftId], references: [id], onDelete: Restrict)
@@ -960,7 +961,6 @@ model Payment {
   // but not here is one Prisma emits a DROP for on the next migration.
   @@index([methodId])
   @@index([poFeeId])
-  @@index([supplierId])
   @@index([customerId])
 }
 
@@ -1127,6 +1127,7 @@ model Staff {
   serviceFees              ServiceFee[]
   deposits                 SupplierDeposit[]
   allocations              DepositAllocation[]
+  chatActionsResolved      ChatAction[]        @relation("ChatActionResolvedBy")
 }
 
 model StaffSession {
@@ -1552,6 +1553,7 @@ model WaMessage {
 
   coveredThreadMemories WaThreadMemory[]
   corrections           AgentCorrection[]
+  chatActions           ChatAction[]
 
   // Declared here because they exist in the database. Both were hand-written
   // into 20260820002832 without a matching @@index, so every `migrate dev`
@@ -1601,6 +1603,74 @@ model WaThreadMemory {
   coveredThrough WaMessage? @relation(fields: [coveredThroughId], references: [id], onDelete: Restrict)
   directiveBy    Staff?     @relation("WaThreadMemoryDirectedBy", fields: [directiveById], references: [id], onDelete: Restrict)
   autoReplyBy    Staff?     @relation("WaThreadMemoryAutoReplyBy", fields: [autoReplyById], references: [id], onDelete: Restrict)
+}
+
+/// Something a person has to do for a chat customer (owner ask 2026-09-29):
+/// the bot handed a conversation over, and this is the task it left behind —
+/// a negotiation to answer, a price nobody has set, a booking it may not
+/// make. One OPEN row per (from, kind): a second hand-over of the same kind
+/// updates the row rather than stacking a new one, which is how a customer
+/// raising their offer before anybody answers moves `askPrice` in place.
+model ChatAction {
+  id           String           @id @default(cuid())
+  /// wa_id — the thread, as WaMessage and WaThreadMemory name it.
+  from         String
+  customerId   String?
+  kind         ChatActionKind
+  status       ChatActionStatus @default(OPEN)
+  /// policy.ts HANDOFF_TOPICS — the finer reason inside the kind.
+  topic        String
+  /// The bot's note for the colleague, so nobody re-reads the conversation.
+  summary      String
+  /// The customer's own words that raised or last updated it.
+  customerText String?
+  unitId       String?
+  skuId        String?
+  /// What the POS asked when the action was raised (Unit.price, else Sku.price).
+  listPrice    BigInt?
+  /// NEGOTIATION: the customer's offer, read from their message by code.
+  askPrice     BigInt?
+  /// What the staff member answered with.
+  staffPrice   BigInt?
+  /// The newest inbound message this row has read.
+  messageId    String?
+  createdAt    DateTime
+  updatedAt    DateTime
+  resolvedAt   DateTime?
+  resolvedById String?
+
+  customer   Customer?  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  unit       Unit?      @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  sku        Sku?       @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  message    WaMessage? @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  resolvedBy Staff?     @relation("ChatActionResolvedBy", fields: [resolvedById], references: [id], onDelete: Restrict)
+
+  @@index([from, status])
+  @@index([status, updatedAt])
+}
+
+/// What the bot has learned about the person on the other end of a chat
+/// (owner ask 2026-09-29: "the goal is always to get to know the user first").
+/// Keyed by wa_id, because most people who write in have never bought
+/// anything and have no Customer row; `customerId` links one once there is.
+/// Every field is what the customer SAID — none of it is verified.
+model CustomerProfile {
+  id            String   @id @default(cuid())
+  /// wa_id
+  from          String   @unique
+  customerId    String?
+  name          String?
+  /// What they want it for: kuliah, editing video, kantor…
+  useCase       String?
+  /// Whole rupiah, as the customer stated it.
+  budget        BigInt?
+  /// What they use now.
+  currentDevice String?
+  /// Anything else they asked for: colour, size, "yang ringan".
+  preference    String?
+  updatedAt     DateTime
+
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
 }
 
 model AgentCache {
@@ -2001,6 +2071,20 @@ enum OutboxStatus {
 enum WaDirection {
   IN
   OUT
+}
+
+enum ChatActionKind {
+  NEGOTIATION
+  PRICE
+  STOCK
+  RESERVATION
+  PHOTOS
+  OTHER
+}
+
+enum ChatActionStatus {
+  OPEN
+  DONE
 }
 
 enum WaMsgStatus {

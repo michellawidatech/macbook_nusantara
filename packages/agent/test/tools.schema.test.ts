@@ -44,10 +44,14 @@ const ALLOWED = [
   "search_knowledge",
   "lookup_catalog",
   "unit_photos",
+  "find_unit_photos",
   "handoff_to_staff",
   "reply",
   "create_reservation",
+  "check_reservation",
+  "reschedule_reservation",
   "cancel_reservation",
+  "remember_customer",
 ] as const;
 
 const names = () => ANTHROPIC_TOOLS.map((t) => t.name).sort();
@@ -68,31 +72,22 @@ describe("the tool whitelist", () => {
   });
 
   it("splits reads from writes, so the boundary is readable in code", () => {
-    // ONE write since 2026-09-21 (owner: *"the only write operation is to make
-    // a reservation"*). `cancel_reservation` still exists and `dispatchTool`
-    // still answers it — the staff Draft path and these tests reach it — but it
-    // is no longer on the list a customer's conversation can be offered.
-    expect([...WRITE_TOOLS].sort()).toEqual(["create_reservation"]);
+    // The booking lifecycle since 2026-09-29 (owner: "make / check / edit /
+    // cancel reservation"), all of it behind the Reservations switch. The
+    // profile write is the customer's own words about themselves.
+    expect([...WRITE_TOOLS].sort()).toEqual([
+      "cancel_reservation",
+      "create_reservation",
+      "reschedule_reservation",
+    ]);
     // Every read tool is a tool, and none of them is a write or a terminal.
     expect([...READ_TOOLS].sort()).toEqual(
       [...ALLOWED]
-        .filter((n) => n !== "reply")
-        .filter((n) => n !== "create_reservation" && n !== "cancel_reservation")
+        .filter((n) => n !== "reply" && n !== "remember_customer")
+        .filter((n) => !(WRITE_TOOLS as readonly string[]).includes(n))
         .sort(),
     );
     expect([...TERMINAL_TOOLS].sort()).toEqual(["handoff_to_staff", "reply"]);
-  });
-
-  it("keeps a way to undo the write, off the model's list", () => {
-    /*
-     * A booking takes a real unit out of stock, so there has to be a way back.
-     * It is a person's now: `/reservations` releases a hold, and a customer
-     * asking to cancel is routed to staff (policy.ts `RESERVATION`) — which is
-     * also where somebody can ask them why before the unit goes back on the
-     * shelf.
-     */
-    expect(names()).toContain("cancel_reservation");
-    expect(WRITE_TOOLS).not.toContain("cancel_reservation");
   });
 
   it("offers a customer's conversation no stock, price, order or booking tool during the parallel operation", () => {
@@ -123,7 +118,7 @@ describe("the tool whitelist", () => {
     }
   });
 
-  it("offers the shelf and ONE write when the capability is on (2026-09-21)", () => {
+  it("offers the shelf and the booking lifecycle when every switch is on", () => {
     const ctx = {
       from: "628111000111",
       now: new Date(),
@@ -137,13 +132,49 @@ describe("the tool whitelist", () => {
       "check_serial",
       "browse_catalog",
       "unit_photos",
+      "find_unit_photos",
       "lookup_customer",
       "create_reservation",
+      "check_reservation",
+      "reschedule_reservation",
+      "cancel_reservation",
     ]) {
       expect(offered).toContain(wanted);
     }
-    // The one write the owner allows, and nothing beside it.
-    expect(offered).not.toContain("cancel_reservation");
+  });
+
+  it("follows each switch on its own, and none of them without Stock", () => {
+    const ctx = {
+      from: "628111000111",
+      now: new Date(),
+      reserve: { write: noDb, staffId: "staff_agent" },
+    };
+    const offered = (c: Partial<typeof LIVE_CAPABILITIES>) =>
+      toolsFor(ctx, { capabilities: { ...LIVE_CAPABILITIES, ...c } }).map(
+        (t) => t.name,
+      );
+    expect(offered({ reserve: false })).not.toContain("create_reservation");
+    expect(offered({ reserve: false })).not.toContain("cancel_reservation");
+    expect(offered({ photos: false })).not.toContain("find_unit_photos");
+    // Price, photos and bookings are all about a unit on the shelf.
+    const noStock = offered({ stock: false });
+    for (const hidden of [
+      "search_stock",
+      "find_unit_photos",
+      "create_reservation",
+    ]) {
+      expect(noStock).not.toContain(hidden);
+    }
+  });
+
+  it("offers remember_customer only to a caller that may write a profile", () => {
+    const base = { from: "628111000111", now: new Date() };
+    expect(toolsFor(base).map((t) => t.name)).not.toContain(
+      "remember_customer",
+    );
+    expect(
+      toolsFor({ ...base, profile: { write: noDb } }).map((t) => t.name),
+    ).toContain("remember_customer");
   });
 
   it("withholds the write from a caller with no reserve capability", () => {
@@ -160,7 +191,14 @@ describe("the tool whitelist", () => {
   it("withholds photos when only the stock capability is on", () => {
     const offered = toolsFor(
       { from: "628111000111", now: new Date() },
-      { capabilities: { stock: true, reserve: false, photos: false } },
+      {
+        capabilities: {
+          stock: true,
+          price: true,
+          reserve: false,
+          photos: false,
+        },
+      },
     ).map((t) => t.name);
     expect(offered).toContain("search_stock");
     expect(offered).not.toContain("unit_photos");

@@ -257,6 +257,12 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     openingCash: z.optional(money),
     openingBank: z.optional(money),
     openingBalanceAt: instant.optional(),
+    /**
+     * The book is closed up to here (owner ask 2026-09-24): every sale on or
+     * before it is read-only and takes no further money. `AppSetting`
+     * `finance.booksClosedAt`; absent means the book is open.
+     */
+    booksClosedAt: instant.optional(),
     shopName: text.optional(),
     shopTagline: text.optional(),
     shopAddress: text.optional(),
@@ -288,11 +294,14 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
   });
 
   /*
-   * Money paid against a debt from before this app — `Supplier.openingBalance`
-   * or `Customer.openingBalance` (owner answer 2026-09-22). A `Payment` naming
-   * the supplier or the customer directly, because there is no invoice or sale
-   * for it to hang off. The opening figure itself is never rewritten: what was
-   * owed on the day and what has been paid since are two facts.
+   * Money paid against a debt from before this app — `Customer.openingBalance`
+   * (owner answer 2026-09-22). A `Payment` naming the customer directly,
+   * because there is no sale for it to hang off. The opening figure itself is
+   * never rewritten: what was owed on the day and what has been paid since are
+   * two facts.
+   *
+   * The SUPPLIER half of this went on 2026-09-24 (*"we don't track it anymore
+   * (remove from database schema)"*), and `Payment.supplierId` with it.
    */
   const openingPayment = z.strictObject({
     id,
@@ -313,9 +322,6 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
       .string()
       .regex(/^[A-Z]{2}$/)
       .optional(),
-    openingBalance: z.optional(money),
-    openingBalanceAt: instant.optional(),
-    openingPayments: z.array(openingPayment).optional(),
   });
 
   const reason = z.strictObject({
@@ -494,6 +500,13 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
          */
         discount: z.optional(money),
         notReceived: z.boolean().optional(),
+        /*
+         * Taken in although the supplier's paper never billed it (owner ask
+         * 2026-09-24) — the mirror of `notReceived`. Optional for the same
+         * reason `discount` is: a changeset extracted before the column
+         * existed still commits, and reads as a line that was on the invoice.
+         */
+        outsideInvoice: z.boolean().optional(),
       }),
     ),
     payments: z.array(
@@ -554,20 +567,32 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     staff: text,
   });
 
-  const customer = z.strictObject({
-    id,
-    name: z.string().min(1),
-    phone: text,
-    address: text.optional(),
-    addresses: z
-      .array(z.strictObject({ id, label: text.optional(), line: text }))
-      .optional(),
-    referralSourceId: id.optional(),
-    createdAt: instant,
-    openingBalance: z.optional(money),
-    openingBalanceAt: instant.optional(),
-    openingPayments: z.array(openingPayment).optional(),
-  });
+  /**
+   * A customer is a name OR a phone number — either is enough, neither is
+   * refused (owner ask 2026-09-24: a debt at the till may be recorded
+   * against a number alone). `Customer.name` is NOT NULL in prisma and
+   * empty here means "recorded by number"; `phone` empty means "no number
+   * yet", which is how the B2Soft customers arrived (2026-09-13).
+   */
+  const customer = z
+    .strictObject({
+      id,
+      name: text,
+      phone: text,
+      address: text.optional(),
+      addresses: z
+        .array(z.strictObject({ id, label: text.optional(), line: text }))
+        .optional(),
+      referralSourceId: id.optional(),
+      createdAt: instant,
+      openingBalance: z.optional(money),
+      openingBalanceAt: instant.optional(),
+      openingPayments: z.array(openingPayment).optional(),
+    })
+    .refine((c) => c.name.trim() !== "" || c.phone.trim() !== "", {
+      message: "a customer needs a name or a phone number",
+      path: ["name"],
+    });
 
   const salePayment = z.strictObject({
     id,

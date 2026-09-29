@@ -30,6 +30,7 @@ import { describeDiscountText } from "../../lib/discountText.js";
 import { useDb, mutate } from "../../mock/store.js";
 import type { Discount } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
+import { COLUMN } from "../../theme/tokens";
 
 /**
  * The state a discount is in.
@@ -131,7 +132,7 @@ export function DiscountsPage() {
               title: t("discounts.kind", "Kind"),
               key: "kind",
               facet: true,
-              width: 110,
+              width: COLUMN.status,
               sortValue: (d) =>
                 d.type === "PCT"
                   ? "Percentage"

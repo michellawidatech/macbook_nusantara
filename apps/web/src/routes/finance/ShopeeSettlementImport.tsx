@@ -120,7 +120,7 @@ import type { SettlementDraft } from "../../lib/marketplace.js";
 import { skuTracksSerial } from "../../lib/serialTracking.js";
 import { nextId, useDb } from "../../mock/store.js";
 import type { MockDb, Order } from "../../mock/seed.js";
-import { SPACE, TYPE } from "../../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 
 /** One waiting Shopee payment, as this screen needs it. */
 export interface PendingShopeePayment {
@@ -777,7 +777,7 @@ export function ShopeeSettlementImport({
               {
                 title: t("shopeeImport.orderNominal", "Order nominal"),
                 key: "gross",
-                width: 150,
+                width: COLUMN.money,
                 align: "right" as const,
                 render: (_: unknown, r: PreviewRow) => fmtRp(r.gross),
               },

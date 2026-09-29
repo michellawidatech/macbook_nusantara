@@ -79,6 +79,7 @@ import {
   stockHistorySkuId,
   type StockHistoryRow,
 } from "../../lib/stockHistory.js";
+import { serviceLocationOf } from "../../lib/service.js";
 import { skuTracksSerial } from "../../lib/serialTracking.js";
 import { averageCost, onHand, takeFrom } from "../../lib/stock.js";
 import { EnumTag } from "../../components/EnumTag";
@@ -121,7 +122,7 @@ import {
   currentStaffName,
 } from "../../mock/store.js";
 import { tagOf, UNIT_STATUS } from "../../i18n/enumLabels.js";
-import { SPACE, TYPE } from "../../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import type {
   Adjustment,
   AdjustmentKind,
@@ -596,22 +597,28 @@ export function InventoryPage() {
            * the machine never appeared on the bench and its repair cost
            * nothing.
            *
-           * It does NOT move the machine (owner revision 2026-09-09). The
-           * bench signs a machine in when it has it in its hands, and that
-           * confirmation is what writes the location; until then the machine
-           * is honestly still where it was, on the Expected table. The rack
-           * goes now, because the machine comes off the shelf when it is
-           * picked up.
+           * ⚠️ It MOVES the unit to the bench (owner ask 2026-09-25: *"no
+           * need to mark as 'received' first"*), which reverses the
+           * 2026-09-09 rule that the bench signs a unit in. That confirmation
+           * was what wrote the location, so with it gone this has to, or the
+           * shelf the unit left goes on counting it. The rack goes with it,
+           * because the unit comes off the shelf when it is picked up.
            */
           const goingToService = kind === "OUT" && outStatus === "SERVIS";
           // Read BEFORE the event, which writes the projection — the visit has
           // to record where the machine set out from.
           const cameFrom = existing.locationId;
           if (goingToService) existing.rackId = undefined;
+          const serviceBench = serviceLocationOf(d.warehouses);
           appendEvent(d, serial, {
             type: "KOREKSI",
             toStatus: kind === "IN" ? "TERSEDIA" : outStatus,
-            toLocationId: kind === "IN" ? locationId : undefined,
+            toLocationId:
+              kind === "IN"
+                ? locationId
+                : goingToService
+                  ? serviceBench
+                  : undefined,
             note: [
               `${kind === "IN" ? "Adjusted in" : "Adjusted out"} — ${label}`,
               kind === "OUT" ? statusLabel(outStatus) : undefined,
@@ -627,6 +634,8 @@ export function InventoryPage() {
               serial,
               fromLocationId: cameFrom,
               openedAt: at,
+              // Always: there is no arrival step to set it later (2026-09-25).
+              arrivedAt: at,
               fees: [],
               ...(description ? { note: description } : {}),
               raisedBy: "ADJUSTMENT",
@@ -689,7 +698,11 @@ export function InventoryPage() {
 
   const addAction = (
     <Flex gap={SPACE.sm}>
-      <Button icon={<LoginOutlined />} onClick={() => openAdd("IN")}>
+      <Button
+        type="primary"
+        icon={<LoginOutlined />}
+        onClick={() => openAdd("IN")}
+      >
         {t("stock.stockIn", "Stock in")}
       </Button>
       <Button
@@ -771,7 +784,7 @@ export function InventoryPage() {
           {
             title: t("stock.type", "Type"),
             key: "kind",
-            width: 100,
+            width: COLUMN.status,
             facet: true,
             facetLabel: t("stock.inAndOut", "In and out"),
             sortValue: (a) =>
@@ -817,7 +830,7 @@ export function InventoryPage() {
             title: t("stock.description", "Description"),
             dataIndex: "description",
             searchable: true,
-            width: 320,
+            width: 200,
             render: (v) => <LongText>{v}</LongText>,
           },
           {
@@ -861,7 +874,7 @@ export function InventoryPage() {
             // the foot of the card on a phone, where buttons belong.
             title: "",
             key: "actions",
-            width: 56,
+            width: COLUMN.actions,
             render: (_, a) => (
               <Tooltip title={t("stock.editMovement", "Edit")}>
                 <Button
@@ -929,6 +942,10 @@ export function InventoryPage() {
                 key: "in",
                 label: t("stock.stockIn", "Stock in"),
                 icon: <LoginOutlined />,
+                // A peer of Stock out, so it is green too (owner ask
+                // 2026-09-25) — one green and one white beside it said one of
+                // the two doors was the lesser one, which it is not.
+                type: "primary",
                 onClick: () => openAdd("IN"),
               },
               {
@@ -1345,7 +1362,7 @@ export function InventoryPage() {
               {
                 title: "",
                 key: "remove",
-                width: 56,
+                width: COLUMN.action,
                 render: (_, r) => (
                   <Tooltip
                     title={t("stock.removeThisLine", "Remove this line")}
@@ -1424,7 +1441,7 @@ export function InventoryPage() {
               {
                 title: t("stock.qty", "Qty"),
                 key: "qty",
-                width: 120,
+                width: COLUMN.qty,
                 render: (_, c) => (
                   <InputNumber
                     min={1}
@@ -1445,7 +1462,7 @@ export function InventoryPage() {
               {
                 title: "",
                 key: "remove",
-                width: 56,
+                width: COLUMN.action,
                 render: (_, c) => (
                   <Tooltip
                     title={t("stock.removeThisLine", "Remove this line")}

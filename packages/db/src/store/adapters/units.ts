@@ -10,9 +10,14 @@
  * event and the unit it moved — and this file refuses anything that would make
  * the two disagree:
  *
- * - an event is only ever NEW. Changing or removing one is refused, and the
- *   database would refuse it anyway (`nusantara_app` has no UPDATE or DELETE
- *   on `UnitEvent`);
+ * - an event is NEW, with two exceptions the owner decided on 2026-09-23 and
+ *   nothing else: its `serial` may follow its unit to a corrected serial
+ *   (`renameEvents` — that column alone, and only onto the unit that holds
+ *   the row), and a unit's LAST rows may be taken back (`removeLastEvents` —
+ *   never one in the middle, never the last one standing). The database
+ *   holds the same line: `nusantara_app` may UPDATE `UnitEvent.serial` and
+ *   no other column, and its one door to a DELETE is `unit_event_drop_last`,
+ *   which refuses the same rows (migration 20260924130000);
  * - events are continuous: `seq` is the previous plus one, and `fromStatus`
  *   is the status the previous event left;
  * - the commit then checks each unit row against where its ledger now leaves
@@ -28,6 +33,17 @@
  * not deleted: it is archived, a `DIARSIPKAN` event says who removed it, and
  * its serial is moved aside (`SC02…~ARSIP~<time>`) so the same machine can be
  * typed in again. Projection leaves archived units and their history out.
+ *
+ * ## A serial corrected
+ *
+ * The browser keys a unit by its serial, so a correction arrives as the old
+ * row removed and a new one inserted. The ledger rows that travel with it say
+ * it is one unit (`WriteContext.serialRenames`), and that unit is renamed in
+ * PLACE — same `Unit.id`, its notes and its invoice line following — never
+ * archived and minted again, which would strand its history on a unit that
+ * no longer exists and then refuse to move it. ⚠️ That is exactly what
+ * happened from 2026-09-23 to 2026-09-24, behind a gate in `commit.ts` that
+ * refused the renamed rows first: every serial correction was "Not saved".
  */
 import { deepEqual } from "@nusantara/store";
 import type { Prisma, Tx } from "../../client.js";
@@ -35,6 +51,7 @@ import { StoreValidationError } from "../errors.js";
 import {
   type Adapter,
   type RowOf,
+  type RowWrite,
   type WriteContext,
   blankToNull,
   instantOf,
@@ -223,6 +240,94 @@ async function archiveUnit(ctx: WriteContext, serial: string): Promise<void> {
   ctx.touch("units", serial);
 }
 
+/**
+ * Rename a unit in place: the same row, the same id, under a corrected serial
+ * (owner decision 2026-09-23). Every copy of the serial the database keeps
+ * beside the unit's own follows it here — its notes and the invoice line it
+ * came in on; its ledger rows arrive renamed in the same changeset and the
+ * events adapter carries them (`renameEvents`). Rows that name the unit by
+ * id — its intake decision, its adjustments — read the new serial by
+ * themselves and are touched so every till redraws them.
+ */
+async function renameUnit(
+  ctx: WriteContext,
+  from: string,
+  to: string,
+  data: Prisma.UnitUncheckedUpdateInput,
+): Promise<string> {
+  const { tx } = ctx;
+  const unit = await tx.unit.findFirst({
+    where: { serial: from, archivedAt: null },
+    select: { id: true },
+  });
+  if (unit === null) {
+    throw new StoreValidationError(
+      `Unit ${from} tidak ditemukan.`,
+      "units",
+      from,
+    );
+  }
+  // An archived serial is moved aside (`~ARSIP~`), so any row under `to` is
+  // a live unit and the correction would merge two units.
+  const taken = await tx.unit.findFirst({
+    where: { serial: to },
+    select: { id: true },
+  });
+  if (taken !== null) {
+    throw new StoreValidationError(
+      `Serial ${to} sudah dipakai unit lain.`,
+      "units",
+      to,
+    );
+  }
+  await tx.unit.update({
+    where: { id: unit.id },
+    data: { ...data, serial: to, version: { increment: 1 } },
+  });
+  await tx.unitNote.updateMany({
+    where: { unitId: unit.id },
+    data: { serial: to },
+  });
+  for (const n of await tx.unitNote.findMany({
+    where: { unitId: unit.id },
+    select: { id: true },
+  })) {
+    ctx.touch("unitNotes", n.id);
+  }
+  const lines = await tx.purchaseOrderItemSerial.findMany({
+    where: { serial: from },
+    select: { item: { select: { poId: true } } },
+  });
+  if (lines.length > 0) {
+    await tx.purchaseOrderItemSerial.updateMany({
+      where: { serial: from },
+      data: { serial: to },
+    });
+    for (const l of lines) ctx.touch("pos", l.item.poId);
+  }
+  for (const s of await tx.stockIn.findMany({
+    where: { unitId: unit.id },
+    select: { id: true },
+  })) {
+    ctx.touch("stockIns", s.id);
+  }
+  for (const a of await tx.stockAdjustment.findMany({
+    where: { unitId: unit.id },
+    select: { id: true },
+  })) {
+    ctx.touch("adjustments", a.id);
+  }
+  ctx.rememberUnit(from, null);
+  ctx.rememberUnit(to, unit.id);
+  // Where the commit found it, under the name it now has — the ledger check
+  // and any event appended under the new serial start from there.
+  const before = ctx.unitsBefore.get(from);
+  if (before !== undefined) ctx.unitsBefore.set(to, before);
+  // Gone under the old serial, for every till.
+  ctx.touch("units", from);
+  return unit.id;
+}
+
 export const units: Adapter<"units"> = {
   collection: "units",
   async project(tx, _ctx, keys) {
@@ -270,10 +375,27 @@ export const units: Adapter<"units"> = {
   lock: (tx, keys) => lockRows(tx, "Unit", "serial", keys),
   async write(ctx, rows) {
     const { tx } = ctx;
+    /*
+     * A serial corrected arrives as two rows — the old key removed, the new
+     * one inserted — and the renamed ledger rows in the same changeset say
+     * which is which (`ctx.serialRenames`). Paired here, so the removal is
+     * not an archive and the insert is not a fresh unit.
+     */
+    const renamedFrom = new Map<string, RowWrite<RowOf<"units">>>();
+    for (const r of rows) {
+      if (r.next !== undefined) continue;
+      const to = ctx.serialRenames.get(r.key);
+      if (to === undefined) continue;
+      const inserted = rows.some(
+        (x) => x.key === to && x.base === undefined && x.next !== undefined,
+      );
+      if (inserted) renamedFrom.set(to, r);
+    }
+    const renamedAway = new Set([...renamedFrom.values()].map((r) => r.key));
     for (const r of rows) {
       const n = r.next;
       if (n === undefined) {
-        await archiveUnit(ctx, r.key);
+        if (!renamedAway.has(r.key)) await archiveUnit(ctx, r.key);
         continue;
       }
       const data = {
@@ -290,7 +412,10 @@ export const units: Adapter<"units"> = {
         purchaseOrderId: n.poId,
       };
       let unitId: string;
-      if (r.base === undefined) {
+      const from = renamedFrom.get(r.key);
+      if (from !== undefined) {
+        unitId = await renameUnit(ctx, from.key, n.serial, data);
+      } else if (r.base === undefined) {
         const created = await tx.unit.create({
           data: {
             serial: n.serial,
@@ -315,14 +440,16 @@ export const units: Adapter<"units"> = {
         siklus: n.cycleCount,
         kapasitas: n.fcc,
       };
-      const had = r.base && {
-        baterai: r.base.batteryHealth,
-        siklus: r.base.cycleCount,
-        kapasitas: r.base.fcc,
+      // The row the unit was — under its old serial, if it was just corrected.
+      const was = from?.base ?? r.base;
+      const had = was && {
+        baterai: was.batteryHealth,
+        siklus: was.cycleCount,
+        kapasitas: was.fcc,
       };
       if (
-        r.base === undefined ||
-        r.base.skuId !== n.skuId ||
+        was === undefined ||
+        was.skuId !== n.skuId ||
         !deepEqual(had, battery)
       ) {
         await syncBattery(ctx, unitId, n.skuId, battery);
@@ -738,20 +865,41 @@ async function removeLastEvents(
     }
   }
 
-  await tx.unitEvent.deleteMany({ where: { id: { in: [...found.keys()] } } });
+  // The database takes them off, and only these: `unit_event_drop_last` is
+  // the one door the app role has to a DELETE on the ledger, and it refuses
+  // any row that is not the top of its unit's chain or is the last one
+  // standing — the checks above, held a second time where no code path can
+  // skip them (migration 20260924130000).
+  const ids = [...found.keys()];
+  const [result] = await tx.$queryRaw<{ n: number }[]>`
+    SELECT unit_event_drop_last(${ids}::text[]) AS n`;
+  if ((result?.n ?? 0) !== ids.length) {
+    throw new StoreValidationError("Riwayat unit tidak terhapus.", "events");
+  }
   for (const d of dropped) ctx.touch("events", d.id);
 
-  // What the ledger says NOW, so the projection is checked against it.
+  // What the ledger says NOW, so the projection is checked against it. The
+  // location is the newest surviving row that moved the unit — what the
+  // browser reads off that row's projection — not the unit's own column,
+  // which still says where the dropped row sent it.
   const after = await lastEvents(tx, [...perUnit.keys()]);
   for (const [unitId, entry] of perUnit) {
     const last = after.get(unitId);
     if (last === undefined) continue;
+    const moved =
+      last.toLocationId ??
+      (
+        await tx.unitEvent.findFirst({
+          where: { unitId, toLocationId: { not: null } },
+          orderBy: { seq: "desc" },
+          select: { toLocationId: true },
+        })
+      )?.toLocationId ??
+      ctx.unitsBefore.get(entry.serial)?.locationId ??
+      "";
     ctx.ledgerAfter.set(entry.serial, {
       status: last.toStatus,
-      locationId:
-        last.toLocationId ??
-        ctx.unitsBefore.get(entry.serial)?.locationId ??
-        "",
+      locationId: moved,
     });
   }
 }
@@ -867,7 +1015,16 @@ export const unitNotes: Adapter<"unitNotes"> = {
       } else {
         await tx.unitNote.update({
           where: { id: n.id },
-          data: { body: n.body, tag: n.tag ?? null },
+          data: {
+            body: n.body,
+            tag: n.tag ?? null,
+            // A note follows its unit to a corrected serial (2026-09-24). The
+            // unit is renamed first, so the serial resolves — or it does not,
+            // and a note renamed on its own is refused with it.
+            ...(r.base.serial === n.serial
+              ? {}
+              : { serial: n.serial, unitId: await ctx.unitId(n.serial) }),
+          },
         });
       }
       const existing = await tx.unitNotePhoto.findMany({

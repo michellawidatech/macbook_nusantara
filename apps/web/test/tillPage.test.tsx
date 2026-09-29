@@ -537,7 +537,7 @@ describe("paying a bill in more than one way", () => {
     expect(order.settled).toBe(true);
   });
 
-  it("records what is still owed when less was paid (piutang)", async () => {
+  it("records what is still owed when less was paid (piutang) — against somebody", async () => {
     renderTill();
     await pickFirstMachine();
     await goToPayment();
@@ -547,14 +547,36 @@ describe("paying a bill in more than one way", () => {
     await userEvent.paste("3000000");
     expect(screen.getByText(/Customer owes/)).toBeInTheDocument();
 
+    // A debt needs somebody to collect it from (owner ask 2026-09-24):
+    // refused on this page, on the customer's box, and nothing is written.
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Pay & finish$/ }),
+    );
+    expect(
+      await screen.findAllByText(/add the customer's name or phone number/),
+    ).not.toHaveLength(0);
+    expect(snapshot().orders).toHaveLength(0);
+
+    // A phone number alone is enough — "either is fine".
+    await userEvent.click(screen.getByRole("button", { name: /Add customer/ }));
+    const d = await dialog();
+    await userEvent.type(d.getByLabelText("Phone number"), "+62811000999");
+    await userEvent.click(d.getByRole("button", { name: /^OK$/ }));
+    expect(
+      await screen.findByText(/\+62811000999 added\./),
+    ).toBeInTheDocument();
+
     await payAndFinish();
 
-    const order = snapshot().orders[0]!;
+    const db = snapshot();
+    const order = db.orders[0]!;
     expect(order.payments!.map((p) => [p.state, p.amount])).toEqual([
       ["SETTLED", 3_000_000],
       ["DUE", 7_000_000],
     ]);
     expect(order.settled).toBe(false);
+    const debtor = db.customers.find((c) => c.id === order.customerId);
+    expect(debtor).toMatchObject({ name: "", phone: "+62811000999" });
   });
 
   it("will not record a marketplace part without its own order number", async () => {

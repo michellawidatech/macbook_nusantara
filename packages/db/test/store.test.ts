@@ -1068,6 +1068,238 @@ describe("a till's commit", () => {
     });
     expect(row?.status).toBe("BATAL");
   }, 180_000);
+
+  /*
+   * The ledger's two admitted edits (owner decision 2026-09-23), reachable
+   * since 2026-09-24. Until then the append-only gate in commit.ts refused
+   * both before the events adapter saw them: every serial correction at
+   * Inbound & QC and every unit swap in Transaction History was "Not saved".
+   */
+  it("carries a unit's history, notes and invoice line to a corrected serial", async () => {
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const unit = (shop["units"] as Row[]).find(
+      (u) =>
+        u["status"] === "QC" && events.some((e) => e["serial"] === u["serial"]),
+    )!;
+    const from = unit["serial"] as string;
+    const to = `${from}X`;
+    const mine = events.filter((e) => e["serial"] === from);
+    const po = (shop["pos"] as Row[]).find((p) =>
+      (p["items"] as Row[]).some((i) => i["serial"] === from),
+    )!;
+    // A QC note under the old serial, and not sent again: the Inbound & QC
+    // correction renames the unit, its events and its invoice line, nothing
+    // else — the database carries the rest.
+    const note = {
+      id: "note-rename-1",
+      serial: from,
+      body: "Goresan tipis di tutup",
+      staff: "Michella",
+      at: "2026-09-13T04:00:00.000Z",
+      photos: [],
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore({ unitNotes: [] }, { unitNotes: [note] }),
+      ),
+    });
+    const before = await db.unit.findUniqueOrThrow({
+      where: { serial: from },
+      select: { id: true },
+    });
+
+    // What the browser sends (InboundDetailPage's `renameUnit`): the old key
+    // removed, the new one inserted, the ledger and the invoice line renamed.
+    const result = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { units: [unit], events: mine, pos: [po] },
+          {
+            units: [{ ...unit, serial: to }],
+            events: mine.map((e) => ({ ...e, serial: to })),
+            pos: [
+              {
+                ...po,
+                items: (po["items"] as Row[]).map((i) =>
+                  i["serial"] === from ? { ...i, serial: to } : i,
+                ),
+              },
+            ],
+          },
+        ),
+      ),
+    });
+
+    // One unit, renamed in place — not an archive and a fresh unit.
+    const after = await db.unit.findUniqueOrThrow({
+      where: { serial: to },
+      select: { id: true, archivedAt: true },
+    });
+    expect(after.id).toBe(before.id);
+    expect(after.archivedAt).toBeNull();
+    expect(await db.unit.count({ where: { serial: from } })).toBe(0);
+    // Its history is still its own: the same rows, under the new name.
+    const ledger = await db.unitEvent.findMany({
+      where: { unitId: before.id },
+      orderBy: { seq: "asc" },
+      select: { id: true, serial: true },
+    });
+    expect(ledger.map((e) => e.id)).toEqual(mine.map((e) => e["id"]));
+    expect(new Set(ledger.map((e) => e.serial))).toEqual(new Set([to]));
+    // The copies the database keeps beside the unit follow it.
+    expect(
+      (await db.unitNote.findUniqueOrThrow({ where: { id: note.id } })).serial,
+    ).toBe(to);
+    expect(
+      await db.purchaseOrderItemSerial.count({ where: { serial: from } }),
+    ).toBe(0);
+    expect(
+      await db.purchaseOrderItemSerial.count({ where: { serial: to } }),
+    ).toBe(1);
+
+    // Every till is told: the old serial is gone; the unit, its note and its
+    // invoice are redrawn.
+    expect(result.removed["units"]).toEqual([from]);
+    expect((result.rows["units"] as Row[]).map((u) => u["serial"])).toEqual([
+      to,
+    ]);
+    expect((result.rows["unitNotes"] as Row[]).map((n) => n["serial"])).toEqual(
+      [to],
+    );
+    expect((result.rows["pos"] as Row[]).map((r) => r["id"])).toEqual([
+      po["id"],
+    ]);
+
+    // And the shop reads back as one unit with the same facts.
+    const back = decodeStore(
+      (await snapshotStore(db, { staffId: ACTOR })).db,
+    ) as unknown as Record<string, Row[]>;
+    expect(back["units"]!.some((u) => u["serial"] === from)).toBe(false);
+    const renamed = back["units"]!.find((u) => u["serial"] === to)!;
+    expect(comparable(renamed)).toBe(comparable({ ...unit, serial: to }));
+    expect(back["events"]!.filter((e) => e["serial"] === to)).toHaveLength(
+      mine.length,
+    );
+    expect(back["events"]!.some((e) => e["serial"] === from)).toBe(false);
+  }, 180_000);
+
+  it("refuses to move a unit's history onto another unit, or a serial another unit holds", async () => {
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const units = shop["units"] as Row[];
+    const unit = units.find(
+      (u) =>
+        u["status"] === "QC" && events.some((e) => e["serial"] === u["serial"]),
+    )!;
+    const other = units.find((u) => u["serial"] !== unit["serial"])!;
+    const mine = events.filter((e) => e["serial"] === unit["serial"]);
+    const commit = (
+      before: Record<string, Row[]>,
+      after: Record<string, Row[]>,
+    ) =>
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(diffStore(before, after)),
+      });
+
+    // The ledger rows renamed onto a unit that exists, without the unit row:
+    // two units' histories would merge.
+    await expect(
+      commit(
+        { events: mine },
+        { events: mine.map((e) => ({ ...e, serial: other["serial"] })) },
+      ),
+    ).rejects.toThrow(/dipindahkan/);
+    // A serial the shop already holds is a row somebody else has.
+    await expect(
+      commit(
+        { units: [unit], events: mine },
+        {
+          units: [{ ...unit, serial: other["serial"] }],
+          events: mine.map((e) => ({ ...e, serial: other["serial"] })),
+        },
+      ),
+    ).rejects.toBeInstanceOf(StoreConflictError);
+    // Anything beside the serial is still a rewrite of the ledger.
+    const to = `${unit["serial"]}X`;
+    await expect(
+      commit(
+        { units: [unit], events: mine },
+        {
+          units: [{ ...unit, serial: to }],
+          events: mine.map((e) => ({ ...e, serial: to, note: "diubah" })),
+        },
+      ),
+    ).rejects.toThrow(/tidak bisa diubah/);
+  }, 180_000);
+
+  it("takes a sold unit's last event back — never one in the middle, never the last one standing", async () => {
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const unit = (shop["units"] as Row[]).find(
+      (u) =>
+        u["status"] === "TERJUAL" &&
+        events.filter((e) => e["serial"] === u["serial"]).length >= 3,
+    )!;
+    const serial = unit["serial"] as string;
+    const mine = events
+      .filter((e) => e["serial"] === serial)
+      .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const last = mine[mine.length - 1]!;
+    const previous = mine[mine.length - 2]!;
+    const commit = (
+      before: Record<string, Row[]>,
+      after: Record<string, Row[]>,
+    ) =>
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(diffStore(before, after)),
+      });
+
+    // In the middle: the chain is not rebuilt around a hole.
+    await expect(
+      commit({ events: mine }, { events: mine.filter((e) => e !== previous) }),
+    ).rejects.toThrow(/terakhir/);
+    // The last row, with the unit still saying what that row said: the
+    // projection must follow the ledger, in the same commit.
+    await expect(
+      commit({ events: mine }, { events: mine.slice(0, -1) }),
+    ).rejects.toThrow(/riwayatnya/);
+    // The last row, the unit put back where its history now leaves it —
+    // Transaction History's swap, `removeLastEvent` in the browser.
+    await commit(
+      { units: [unit], events: mine },
+      {
+        units: [
+          {
+            ...unit,
+            status: previous["toStatus"],
+            locationId: previous["locationId"],
+          },
+        ],
+        events: mine.slice(0, -1),
+      },
+    );
+    const row = await db.unit.findUniqueOrThrow({
+      where: { serial },
+      select: { status: true, locationId: true },
+    });
+    expect(row.status).toBe(previous["toStatus"]);
+    expect(row.locationId).toBe(previous["locationId"]);
+    expect(
+      await db.unitEvent.count({ where: { id: last["id"] as string } }),
+    ).toBe(0);
+    expect(await db.unitEvent.count({ where: { serial } })).toBe(
+      mine.length - 1,
+    );
+    // Never the last one standing.
+    await expect(
+      commit({ events: mine.slice(0, -1) }, { events: [] }),
+    ).rejects.toThrow(/harus punya riwayat/);
+  }, 180_000);
 });
 
 describe("money that settles a debt without moving the balance (2026-09-22)", () => {
@@ -1257,115 +1489,23 @@ describe("money that settles a debt without moving the balance (2026-09-22)", ()
     expect(plain["inBalance"]).toBeUndefined();
   }, 180_000);
 
-  it("records, edits and voids a payment against a supplier's opening balance", async () => {
+  it("refuses a supplier's opening balance — the column is gone", async () => {
+    // Owner ask 2026-09-24: *"remove the column 'Utang lama' … we don't track
+    // it anymore (remove from database schema)"*. `Supplier.openingBalance`,
+    // `openingBalanceAt` and `Payment.supplierId` went with it, so the store
+    // contract refuses the keys rather than dropping them silently.
     const shop = await loadDemo();
     const supplier = (shop["suppliers"] as Row[])[0]!;
-    const supplierId = supplier["id"] as string;
-    const later = new Date(NOW.getTime() + 60_000).toISOString();
-
-    const owed = {
-      ...supplier,
-      openingBalance: 10_000_000,
-      openingBalanceAt: "2026-09-01T00:00:00.000Z",
-      openingPayments: [
-        {
-          id: "op_sup_1",
-          method: "TRANSFER",
-          amount: 4_000_000,
-          at: NOW.toISOString(),
-          note: "Cicilan 1",
-          inBalance: false,
-        },
-      ],
-    };
-    const saved = await commitRow("suppliers", supplier, owed);
-    expect(saved["openingPayments"]).toEqual(owed.openingPayments);
-    expect(saved["openingBalance"]).toBe(10_000_000);
-    const row = await db.payment.findUniqueOrThrow({
-      where: { id: "op_sup_1" },
-      include: { method: { select: { code: true } } },
-    });
-    expect(row).toMatchObject({
-      supplierId,
-      customerId: null,
-      orderId: null,
-      poId: null,
-      direction: "KELUAR",
-      status: "LUNAS",
-      appliedTo: "BARANG",
-      amount: 4_000_000n,
-      note: "Cicilan 1",
-      inBalance: false,
-      staffId: ACTOR,
-      voidedAt: null,
-    });
-    expect(row.method.code).toBe("TRANSFER");
-    expect(row.paidAt?.toISOString()).toBe(NOW.toISOString());
-    expect(row.recordedAt?.toISOString()).toBe(NOW.toISOString());
-
-    // Corrected: a different amount, no note, and it went through the shop.
-    const corrected = {
-      ...saved,
-      openingPayments: [
-        {
-          id: "op_sup_1",
-          method: "TUNAI",
-          amount: 4_500_000,
-          at: NOW.toISOString(),
-        },
-      ],
-    };
-    const edited = await commitRow("suppliers", saved, corrected);
-    expect(edited["openingPayments"]).toEqual(corrected.openingPayments);
-    expect(
-      await db.payment.findUniqueOrThrow({ where: { id: "op_sup_1" } }),
-    ).toMatchObject({ amount: 4_500_000n, note: null, inBalance: true });
-
-    // Renaming the supplier leaves its payments alone.
-    const renamed = await commitRow("suppliers", edited, {
-      ...edited,
-      name: `${edited["name"] as string} (baru)`,
-    });
-    expect(renamed["openingPayments"]).toEqual(corrected.openingPayments);
-
-    // A second instalment, and the first one taken back: voided, not deleted.
-    const second = {
-      id: "op_sup_2",
-      method: "TRANSFER",
-      amount: 2_000_000,
-      at: later,
-    };
-    const replaced = await commitRow("suppliers", renamed, {
-      ...renamed,
-      openingPayments: [second],
-    });
-    expect(replaced["openingPayments"]).toEqual([second]);
-    const voided = await db.payment.findUniqueOrThrow({
-      where: { id: "op_sup_1" },
-    });
-    expect(voided.voidedAt).not.toBeNull();
-
-    // All of it taken back: the list is absent again, not [].
-    const none = { ...replaced };
-    delete none["openingPayments"];
-    const cleared = await commitRow("suppliers", replaced, none);
-    expect(cleared["openingPayments"]).toBeUndefined();
-    const rows = await db.payment.findMany({
-      where: { supplierId },
-      orderBy: { id: "asc" },
-    });
-    expect(rows.map((p) => [p.id, p.voidedAt !== null])).toEqual([
-      ["op_sup_1", true],
-      ["op_sup_2", true],
-    ]);
-
-    // Nothing is paid by paying nothing.
     await expect(
-      commitRow("suppliers", cleared, {
-        ...cleared,
-        openingPayments: [{ ...second, id: "op_sup_zero", amount: 0 }],
+      commitRow("suppliers", supplier, {
+        ...supplier,
+        openingBalance: 10_000_000,
       }),
-    ).rejects.toThrow(/lebih dari nol/);
+    ).rejects.toThrow();
+    // And a payment can no longer name a supplier at all.
+    await expect(
+      db.$queryRaw`SELECT "supplierId" FROM "Payment" LIMIT 1`,
+    ).rejects.toThrow();
   }, 180_000);
 
   it("records a customer's payment against their opening balance, as money in", async () => {
@@ -1390,7 +1530,6 @@ describe("money that settles a debt without moving the balance (2026-09-22)", ()
       await db.payment.findUniqueOrThrow({ where: { id: "op_cus_1" } }),
     ).toMatchObject({
       customerId: customer["id"],
-      supplierId: null,
       orderId: null,
       poId: null,
       direction: "MASUK",

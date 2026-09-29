@@ -1,24 +1,39 @@
 /**
  * Receivable and Payable — two leaves of Financial & Report (owner ask
- * 2026-09-22), each one flat table, one row per document.
+ * 2026-09-22), each one table grouped by the party it is about.
  *
- * > *"The receivable and the payable supposed to be different navigation tab
- * > and add select/sort per column (select by customer name, date range, phone
- * > number, transaction ID) for receivable, (select by supplier, date range,
- * > inbound number). For each table, provide an action button to record
- * > payment/income … In each table, add a button to add payment."*
+ * > *"In 'Utang' or Payable, make it a expandable column per supplier, and the
+ * > inbound is listed per the earliest date. The 'catat pembayaran' button
+ * > should be on supplier level or transaction level, and it will autofill the
+ * > transaction detail accordingly. Then when the user click per row (can be
+ * > per supplier, per customer, per inbound, per transaction), the total next
+ * > to 'Add payment' should be representative of the actual total/sum of the
+ * > money owed/receivable."* (2026-09-24)
  *
- * They were two tabs of one page for a day (2026-09-21, evening), which is
- * one click between a person and the list they came for; `/finance/payable-
- * receivable` still resolves, to Receivable. Every filter is in the column
- * header, as everywhere in the app — `ProTable`'s facets for names and codes,
- * and its `dateRange` for the date.
+ * ## One party, its documents under it
  *
- * Both buttons open `DebtPaymentModal`. A row's *Record payment* opens it on
- * that party with that document ticked; *Add payment* opens it on nobody.
+ * The rows were flat for three days (2026-09-21, evening) and are a tree
+ * again. A supplier sending three invoices a month was three rows repeating
+ * one name, and the figure anybody acts on — what that supplier is owed in
+ * total — was not on the screen at all. The parent row carries it; the
+ * children are the invoices, **oldest first**, which is the order the supplier
+ * telephones about them in.
+ *
+ * Drawn as antd tree data rather than an expanded panel, because the ticks
+ * have to add up: `treeData` on `ProTable` sets `checkStrictly: false`, so
+ * ticking a supplier ticks its invoices, and the page totals the LEAVES. That
+ * is the last half of the ask — the figure beside *Add payment* is the sum of
+ * what is ticked, and the whole page only while nothing is.
+ *
+ * ## Two buttons, one dialog
+ *
+ * Both open `DebtPaymentModal`. A document's *Record payment* opens it with
+ * that one ticked; a PARTY's opens it with every document of theirs ticked, so
+ * the amount box starts at what they are owed in total. *Add payment* opens it
+ * on nobody.
  *
  * The rows still come out of `lib/payableReceivable.ts` where a test can read
- * them; this file concatenates each group's rows and draws them.
+ * them; this file turns each group into a parent row and draws it.
  */
 import { useMemo, useState } from "react";
 import { Button, Flex, Space, Tag, Typography } from "antd";
@@ -38,12 +53,14 @@ import {
   payableGroups,
   receivableGroups,
   totalOwed,
+  type PayableGroup,
   type PayableRow,
+  type ReceivableGroup,
   type ReceivableRow,
 } from "../../lib/payableReceivable.js";
 import { useDb } from "../../mock/store.js";
 import { exportPdf, exportXlsx } from "../../lib/tableExport.js";
-import { SPACE, TYPE } from "../../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import type { Order } from "../../mock/seed.js";
 import {
   DebtPaymentModal,
@@ -57,11 +74,62 @@ const OWED_COLOUR = "#cf1322";
 /** A file-name stamp — the shop cares which day the export was pulled. */
 const stamp = (now: Date) => now.toISOString().slice(0, 10);
 
-/** What a page says it is owed or owes, beside its button. */
-function OwedFigure({ label, total }: { label: string; total: number }) {
+/**
+ * One row of either table: a party, or one of their documents.
+ *
+ * Deliberately ONE shape rather than a union. antd's tree data puts parents
+ * and children through the same column renderers, so a column that has to ask
+ * `kind` on every cell is simpler to read than one narrowing a union in eight
+ * places. A field a party has no answer for is empty, and the renderer says so
+ * — `docs` is the count under a parent, and is absent on a leaf.
+ */
+interface DebtNode {
+  readonly key: string;
+  readonly kind: "PARTY" | "DOC";
+  readonly partyId: string;
+  readonly partyName: string;
+  /** The document's own number; "" on a party row. */
+  readonly code: string;
+  /** The other side's number — a supplier's invoice, a marketplace order. */
+  readonly otherNo?: string;
+  readonly phone: string;
+  /** A document's date; a party's oldest. Empty means undated. */
+  readonly at: string;
+  readonly total: number;
+  readonly paid: number;
+  readonly owed: number;
+  /** A debt from before this app — no document behind it. */
+  readonly opening: boolean;
+  readonly overdue: boolean;
+  /** How many documents sit under a party row. Absent on a leaf. */
+  readonly docs?: number;
+  /** Every document key under a party — what its button ticks. */
+  readonly docKeys?: readonly string[];
+  readonly children?: readonly DebtNode[];
+}
+
+/**
+ * What a page says it is owed or owes, beside its button.
+ *
+ * `picked` is how many rows are ticked; naming it keeps the figure honest —
+ * "We owe" over a subtotal of three suppliers would read as the shop's whole
+ * payable.
+ */
+function OwedFigure({
+  label,
+  total,
+  picked,
+}: {
+  label: string;
+  total: number;
+  picked: number;
+}) {
+  const { t } = useTranslation();
   return (
     <Typography.Text>
-      {label}{" "}
+      {picked > 0
+        ? t("utang.selectedLabel", "{{count}} selected", { count: picked })
+        : label}{" "}
       <Typography.Text strong style={{ color: OWED_COLOUR }}>
         {fmtRp(total)}
       </Typography.Text>
@@ -69,15 +137,92 @@ function OwedFigure({ label, total }: { label: string; total: number }) {
   );
 }
 
+/** A supplier's group and its invoices, as the table draws them. */
+function payableNodes(groups: readonly PayableGroup[]): DebtNode[] {
+  return groups.map((g) => {
+    const children = g.rows.map<DebtNode>((r) => ({
+      key: r.key,
+      kind: "DOC",
+      partyId: g.supplierId,
+      partyName: g.supplierName,
+      code: r.code,
+      ...(r.invoiceNo === undefined ? {} : { otherNo: r.invoiceNo }),
+      phone: "",
+      at: r.at,
+      total: r.total,
+      paid: r.paid,
+      owed: r.owed,
+      opening: false,
+      overdue: false,
+    }));
+    return {
+      // Never a document's id: antd keys the whole tree from one namespace.
+      key: `party-${g.supplierId}`,
+      kind: "PARTY",
+      partyId: g.supplierId,
+      partyName: g.supplierName,
+      code: "",
+      phone: "",
+      at: g.oldestAt ?? "",
+      total: children.reduce((n, c) => n + c.total, 0),
+      paid: children.reduce((n, c) => n + c.paid, 0),
+      owed: g.owed,
+      opening: false,
+      overdue: false,
+      docs: children.length,
+      docKeys: children.map((c) => c.key),
+      children,
+    };
+  });
+}
+
+/** A customer's group and their unpaid sales. */
+function receivableNodes(groups: readonly ReceivableGroup[]): DebtNode[] {
+  return groups.map((g) => {
+    const children = g.rows.map<DebtNode>((r) => ({
+      key: r.key,
+      kind: "DOC",
+      partyId: g.customerId,
+      partyName: g.customerName,
+      code: r.code,
+      phone: r.phone,
+      at: r.at,
+      total: r.total,
+      paid: r.received,
+      owed: r.owed,
+      opening: r.opening,
+      overdue: r.overdue,
+    }));
+    return {
+      key: `party-${g.customerId}`,
+      kind: "PARTY",
+      partyId: g.customerId,
+      partyName: g.customerName,
+      code: "",
+      phone: g.phone,
+      at: g.rows.map((r) => r.at).filter((a) => a !== "")[0] ?? "",
+      total: children.reduce((n, c) => n + c.total, 0),
+      paid: children.reduce((n, c) => n + c.paid, 0),
+      owed: g.owed,
+      opening: false,
+      overdue: g.overdue,
+      docs: children.length,
+      docKeys: children.map((c) => c.key),
+      children,
+    };
+  });
+}
+
 export function ReceivablePage() {
   const { t, i18n } = useTranslation();
   const db = useDb();
   const walkIn = t("utang.walkIn", "Walk-in customers");
-  const rows = useMemo(
-    () =>
-      receivableGroups(db.orders, db.customers, walkIn).flatMap((g) => g.rows),
+  const groups = useMemo(
+    () => receivableGroups(db.orders, db.customers, walkIn),
     [db.orders, db.customers, walkIn],
   );
+  const rows = useMemo(() => receivableNodes(groups), [groups]);
+  const flat = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
   const total = totalOwed(rows.map((r) => ({ owed: r.owed })));
   /** The sale a "View invoice" button opens on. Null keeps the modal closed. */
   const [openOrder, setOpenOrder] = useState<Order | null>(null);
@@ -98,6 +243,7 @@ export function ReceivablePage() {
       />
       <ReceivableTable
         rows={rows}
+        exportRows={flat}
         total={total}
         shopName={db.settings.shopName ?? ""}
         locale={i18n.language}
@@ -105,7 +251,9 @@ export function ReceivablePage() {
           const o = db.orders.find((x) => x.id === id);
           if (o) setOpenOrder(o);
         }}
-        onRecord={(r) => setPaying({ partyId: r.customerId, rowKey: r.key })}
+        onRecord={(r) =>
+          setPaying({ partyId: r.partyId, rowKeys: r.docKeys ?? [r.key] })
+        }
         onAdd={() => setPaying({ partyId: "" })}
       />
     </PageContainer>
@@ -115,10 +263,12 @@ export function ReceivablePage() {
 export function PayablePage() {
   const { t, i18n } = useTranslation();
   const db = useDb();
-  const rows = useMemo(
-    () => payableGroups(db.pos, db.suppliers).flatMap((g) => g.rows),
+  const groups = useMemo(
+    () => payableGroups(db.pos, db.suppliers),
     [db.pos, db.suppliers],
   );
+  const rows = useMemo(() => payableNodes(groups), [groups]);
+  const flat = useMemo(() => groups.flatMap((g) => g.rows), [groups]);
   const total = totalOwed(rows.map((r) => ({ owed: r.owed })));
   const [paying, setPaying] = useState<DebtPaymentTarget | null>(null);
 
@@ -131,10 +281,13 @@ export function PayablePage() {
       />
       <PayableTable
         rows={rows}
+        exportRows={flat}
         total={total}
         shopName={db.settings.shopName ?? ""}
         locale={i18n.language}
-        onRecord={(r) => setPaying({ partyId: r.supplierId, rowKey: r.key })}
+        onRecord={(r) =>
+          setPaying({ partyId: r.partyId, rowKeys: r.docKeys ?? [r.key] })
+        }
         onAdd={() => setPaying({ partyId: "" })}
       />
     </PageContainer>
@@ -148,19 +301,29 @@ export function PayablePage() {
  * two written out.
  */
 
+/** Σ what is ticked, or the whole page when nothing is. */
+function pickedTotal(selected: readonly DebtNode[], whole: number) {
+  const docs = selected.filter((r) => r.kind === "DOC");
+  return docs.length === 0
+    ? { total: whole, picked: 0 }
+    : { total: docs.reduce((n, r) => n + r.owed, 0), picked: docs.length };
+}
+
 function PayableTable({
   rows,
+  exportRows,
   total,
   shopName,
   locale,
   onRecord,
   onAdd,
 }: {
-  rows: readonly PayableRow[];
+  rows: readonly DebtNode[];
+  exportRows: readonly PayableRow[];
   total: number;
   shopName: string;
   locale: string;
-  onRecord: (row: PayableRow) => void;
+  onRecord: (row: DebtNode) => void;
   onAdd: () => void;
 }) {
   const { t } = useTranslation();
@@ -199,11 +362,7 @@ function PayableTable({
           width: 22,
           pdfWeight: 1.4,
           value: (r: PayableRow) =>
-            r.opening
-              ? t("utang.fromBefore", "From before this app")
-              : r.invoiceNo
-                ? `${r.code} · ${r.invoiceNo}`
-                : r.code,
+            r.invoiceNo ? `${r.code} · ${r.invoiceNo}` : r.code,
         },
         {
           key: "total",
@@ -230,7 +389,7 @@ function PayableTable({
           value: (r: PayableRow) => r.owed,
         },
       ] as const,
-      rows,
+      rows: exportRows,
       totals: {
         inboundNo: t("utang.grandTotal", "Grand total"),
         owed: total,
@@ -241,9 +400,11 @@ function PayableTable({
   };
 
   return (
-    <ProTable<PayableRow>
-      persistKey="payable.flat"
+    <ProTable<DebtNode>
+      persistKey="payable.bySupplier"
       rowKey="key"
+      treeData
+      selectable
       dataSource={rows}
       searchPlaceholder={t(
         "utang.searchSupplierOrInvoice",
@@ -258,62 +419,79 @@ function PayableTable({
           onPdf={() => doExport("pdf")}
         />
       }
-      extra={
-        <Flex align="center" gap={SPACE.md} wrap>
-          <OwedFigure label={t("utang.weOweTotal", "We owe")} total={total} />
-          <Button type="primary" icon={<PlusOutlined />} onClick={onAdd}>
-            {t("debtPay.add", "Add payment")}
-          </Button>
-        </Flex>
-      }
+      extra={(selected) => {
+        const { total: shown, picked } = pickedTotal(selected, total);
+        return (
+          <Flex align="center" gap={SPACE.md} wrap>
+            <OwedFigure
+              label={t("utang.weOweTotal", "We owe")}
+              total={shown}
+              picked={picked}
+            />
+            <Button type="primary" icon={<PlusOutlined />} onClick={onAdd}>
+              {t("debtPay.add", "Add payment")}
+            </Button>
+          </Flex>
+        );
+      }}
       columns={[
         {
           title: t("utang.supplier", "Supplier"),
-          dataIndex: "supplierName",
+          key: "supplier",
           searchable: true,
           facet: true,
           facetValue: (r) =>
-            r.supplierName || t("utang.noSupplier", "No supplier named"),
+            r.partyName || t("utang.noSupplier", "No supplier named"),
+          // A supplier's own row carries its invoices' numbers into the
+          // search box: the children are not searched, so without this a
+          // PI code would narrow the list to nothing.
           searchValue: (r) =>
-            `${r.supplierName} ${r.code} ${r.invoiceNo ?? ""}`,
-          sortValue: (r) => r.supplierName,
-          render: (v: string) =>
-            v || (
-              <Typography.Text type="secondary">
-                {t("utang.noSupplier", "No supplier named")}
-              </Typography.Text>
-            ),
+            [
+              r.partyName,
+              ...(r.children ?? []).map((c) => `${c.code} ${c.otherNo ?? ""}`),
+            ].join(" "),
+          sortValue: (r) => r.partyName,
+          render: (_, r) =>
+            r.kind === "PARTY" ? (
+              <Flex vertical gap={0}>
+                <Typography.Text strong>
+                  {r.partyName || (
+                    <Typography.Text type="secondary">
+                      {t("utang.noSupplier", "No supplier named")}
+                    </Typography.Text>
+                  )}
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                  {t("utang.invoiceCount", "{{count}} unpaid invoice(s)", {
+                    count: r.docs ?? 0,
+                  })}
+                </Typography.Text>
+              </Flex>
+            ) : null,
         },
         {
           title: t("utang.date", "Date"),
-          dataIndex: "at",
-          width: 140,
+          key: "at",
+          width: COLUMN.date,
           defaultSortOrder: "ascend",
           dateRange: true,
-          render: (v: string) => (v === "" ? fmtNone() : fmtDate(v)),
+          sortValue: (r) => r.at,
+          render: (_, r) => (r.at === "" ? fmtNone() : fmtDate(r.at)),
         },
         {
           title: t("utang.inboundNumber", "Inbound number"),
           key: "inbound",
-          width: 220,
-          facet: true,
-          facetValue: (r) =>
-            r.opening ? t("utang.fromBefore", "From before this app") : r.code,
-          sortValue: (r) => r.code,
+          width: COLUMN.code,
           render: (_, r) =>
-            r.opening ? (
-              <Typography.Text type="secondary">
-                {t("utang.fromBefore", "From before this app")}
-              </Typography.Text>
-            ) : (
+            r.kind === "PARTY" ? null : (
               <Flex vertical gap={0}>
                 <Link to={`/inbound/${r.key}`}>{r.code}</Link>
-                {r.invoiceNo && (
+                {r.otherNo && (
                   <Typography.Text
                     type="secondary"
                     style={{ fontSize: TYPE.sm }}
                   >
-                    {r.invoiceNo}
+                    {r.otherNo}
                   </Typography.Text>
                 )}
               </Flex>
@@ -322,7 +500,7 @@ function PayableTable({
         {
           title: t("utang.total", "Total amount"),
           key: "total",
-          width: 160,
+          width: COLUMN.money,
           align: "right",
           sortValue: (r) => r.total,
           render: (_, r) => fmtRp(r.total),
@@ -330,7 +508,7 @@ function PayableTable({
         {
           title: t("utang.settled", "Paid"),
           key: "paid",
-          width: 160,
+          width: COLUMN.money,
           align: "right",
           sortValue: (r) => r.paid,
           render: (_, r) => fmtRp(r.paid),
@@ -338,7 +516,7 @@ function PayableTable({
         {
           title: t("utang.owed", "Owed"),
           key: "owed",
-          width: 160,
+          width: COLUMN.money,
           align: "right",
           sortValue: (r) => r.owed,
           render: (_, r) => (
@@ -350,19 +528,23 @@ function PayableTable({
         {
           title: "",
           key: "actions",
-          width: 150,
+          width: COLUMN.actionsPair,
           render: (_, r) => (
             <RecordPaymentButton
               onClick={() => onRecord(r)}
-              label={t(
-                "debtPay.recordRowAria",
-                "Record a payment on {{code}}",
-                {
-                  code: r.opening
-                    ? t("utang.fromBefore", "From before this app")
-                    : r.code,
-                },
-              )}
+              label={
+                r.kind === "PARTY"
+                  ? t(
+                      "debtPay.recordPartyAria",
+                      "Record a payment to {{name}}",
+                      {
+                        name: r.partyName,
+                      },
+                    )
+                  : t("debtPay.recordRowAria", "Record a payment on {{code}}", {
+                      code: r.code,
+                    })
+              }
             />
           ),
         },
@@ -373,6 +555,7 @@ function PayableTable({
 
 function ReceivableTable({
   rows,
+  exportRows,
   total,
   shopName,
   locale,
@@ -380,12 +563,13 @@ function ReceivableTable({
   onRecord,
   onAdd,
 }: {
-  rows: readonly ReceivableRow[];
+  rows: readonly DebtNode[];
+  exportRows: readonly ReceivableRow[];
   total: number;
   shopName: string;
   locale: string;
   onViewInvoice: (orderId: string) => void;
-  onRecord: (row: ReceivableRow) => void;
+  onRecord: (row: DebtNode) => void;
   onAdd: () => void;
 }) {
   const { t } = useTranslation();
@@ -460,7 +644,7 @@ function ReceivableTable({
           value: (r: ReceivableRow) => r.owed,
         },
       ] as const,
-      rows,
+      rows: exportRows,
       totals: {
         code: t("utang.grandTotal", "Grand total"),
         owed: total,
@@ -471,9 +655,11 @@ function ReceivableTable({
   };
 
   return (
-    <ProTable<ReceivableRow>
-      persistKey="receivable.flat"
+    <ProTable<DebtNode>
+      persistKey="receivable.byCustomer"
       rowKey="key"
+      treeData
+      selectable
       dataSource={rows}
       searchPlaceholder={t(
         "utang.searchCustomerOrOrder",
@@ -488,71 +674,92 @@ function ReceivableTable({
           onPdf={() => doExport("pdf")}
         />
       }
-      extra={
-        <Flex align="center" gap={SPACE.md} wrap>
-          <OwedFigure
-            label={t("utang.owedToUsTotal", "Customers owe")}
-            total={total}
-          />
-          <Button type="primary" icon={<PlusOutlined />} onClick={onAdd}>
-            {t("debtPay.add", "Add payment")}
-          </Button>
-        </Flex>
-      }
+      extra={(selected) => {
+        const { total: shown, picked } = pickedTotal(selected, total);
+        return (
+          <Flex align="center" gap={SPACE.md} wrap>
+            <OwedFigure
+              label={t("utang.owedToUsTotal", "Customers owe")}
+              total={shown}
+              picked={picked}
+            />
+            <Button type="primary" icon={<PlusOutlined />} onClick={onAdd}>
+              {t("debtPay.add", "Add payment")}
+            </Button>
+          </Flex>
+        );
+      }}
       columns={[
         {
           title: t("utang.customer", "Customer"),
-          dataIndex: "customerName",
+          key: "customer",
           searchable: true,
           facet: true,
-          searchValue: (r) => `${r.customerName} ${r.phone} ${r.code}`,
-          sortValue: (r) => r.customerName,
-          render: (v: string, r) => (
-            <Flex align="center" gap={SPACE.xs}>
-              <Typography.Text strong>{v}</Typography.Text>
-              {r.overdue && (
-                <Tag color="error">{t("utang.overdue", "Overdue")}</Tag>
-              )}
-            </Flex>
-          ),
+          facetValue: (r) => r.partyName,
+          searchValue: (r) =>
+            [
+              r.partyName,
+              r.phone,
+              ...(r.children ?? []).map((c) => c.code),
+            ].join(" "),
+          sortValue: (r) => r.partyName,
+          render: (_, r) =>
+            r.kind === "PARTY" ? (
+              <Flex vertical gap={0}>
+                <Flex align="center" gap={SPACE.xs}>
+                  <Typography.Text strong>{r.partyName}</Typography.Text>
+                  {r.overdue && (
+                    <Tag color="error">{t("utang.overdue", "Overdue")}</Tag>
+                  )}
+                </Flex>
+                <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+                  {t("utang.saleCount", "{{count}} unpaid transaction(s)", {
+                    count: r.docs ?? 0,
+                  })}
+                </Typography.Text>
+              </Flex>
+            ) : null,
         },
         {
           title: t("utang.date", "Date"),
-          dataIndex: "at",
-          width: 140,
+          key: "at",
+          width: COLUMN.date,
           defaultSortOrder: "ascend",
           dateRange: true,
-          render: (v: string) => (v === "" ? fmtNone() : fmtDate(v)),
+          sortValue: (r) => r.at,
+          render: (_, r) => (r.at === "" ? fmtNone() : fmtDate(r.at)),
         },
         {
           title: t("utang.phone", "Phone number"),
-          dataIndex: "phone",
-          width: 160,
+          key: "phone",
+          width: COLUMN.code,
           facet: true,
+          facetValue: (r) => r.phone,
           sortValue: (r) => r.phone,
-          render: (v: string) => v || fmtNone(),
+          render: (_, r) => (r.kind === "PARTY" ? r.phone || fmtNone() : null),
         },
         {
           title: t("utang.transactionId", "Transaction ID"),
           key: "code",
-          width: 180,
-          facet: true,
-          facetValue: (r) =>
-            r.opening ? t("utang.fromBefore", "From before this app") : r.code,
-          sortValue: (r) => r.code,
+          width: COLUMN.code,
           render: (_, r) =>
-            r.opening ? (
+            r.kind === "PARTY" ? null : r.opening ? (
               <Typography.Text type="secondary">
                 {t("utang.fromBefore", "From before this app")}
               </Typography.Text>
             ) : (
-              r.code
+              <Flex align="center" gap={SPACE.xs}>
+                <span>{r.code}</span>
+                {r.overdue && (
+                  <Tag color="error">{t("utang.overdue", "Overdue")}</Tag>
+                )}
+              </Flex>
             ),
         },
         {
           title: t("utang.total", "Total amount"),
           key: "total",
-          width: 150,
+          width: COLUMN.money,
           align: "right",
           sortValue: (r) => r.total,
           render: (_, r) => fmtRp(r.total),
@@ -560,15 +767,15 @@ function ReceivableTable({
         {
           title: t("utang.settled", "Paid"),
           key: "paid",
-          width: 150,
+          width: COLUMN.money,
           align: "right",
-          sortValue: (r) => r.received,
-          render: (_, r) => fmtRp(r.received),
+          sortValue: (r) => r.paid,
+          render: (_, r) => fmtRp(r.paid),
         },
         {
           title: t("utang.owed", "Owed"),
           key: "owed",
-          width: 150,
+          width: COLUMN.money,
           align: "right",
           sortValue: (r) => r.owed,
           render: (_, r) => (
@@ -580,10 +787,13 @@ function ReceivableTable({
         {
           title: "",
           key: "actions",
-          width: 280,
+          // At the floor a document's two buttons stack; with room to spare
+          // they stand side by side (2026-09-28: the table fits a 1440 screen
+          // rather than scrolling for a button's sake).
+          width: COLUMN.actionsPair,
           render: (_, r) => (
-            <Space>
-              {!r.opening && (
+            <Space wrap size={[8, 4]}>
+              {r.kind === "DOC" && !r.opening && (
                 <Button
                   size="small"
                   icon={<FileTextOutlined />}
@@ -594,15 +804,23 @@ function ReceivableTable({
               )}
               <RecordPaymentButton
                 onClick={() => onRecord(r)}
-                label={t(
-                  "debtPay.recordRowAria",
-                  "Record a payment on {{code}}",
-                  {
-                    code: r.opening
-                      ? t("utang.fromBefore", "From before this app")
-                      : r.code,
-                  },
-                )}
+                label={
+                  r.kind === "PARTY"
+                    ? t(
+                        "debtPay.recordPartyAria",
+                        "Record a payment to {{name}}",
+                        { name: r.partyName },
+                      )
+                    : t(
+                        "debtPay.recordRowAria",
+                        "Record a payment on {{code}}",
+                        {
+                          code: r.opening
+                            ? t("utang.fromBefore", "From before this app")
+                            : r.code,
+                        },
+                      )
+                }
               />
             </Space>
           ),

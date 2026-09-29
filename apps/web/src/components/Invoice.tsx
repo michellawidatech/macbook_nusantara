@@ -30,6 +30,7 @@ import type { CSSProperties } from "react";
 import { Button, Modal, Typography } from "antd";
 import { PrinterOutlined } from "@ant-design/icons";
 import { fmtRp, fmtDate } from "../lib/format.js";
+import { customerLabel } from "../lib/customers.js";
 import { orderBalance, paymentsOf } from "../lib/salePayments.js";
 import { marketplacePayMethod } from "../lib/channels.js";
 // No `t` on purpose: the faktur is a print template and is deliberately
@@ -82,7 +83,8 @@ function billedTo(
     : undefined;
   if (!customer) return { name: "WALK-IN CUSTOMER" };
   return {
-    name: customer.name.toUpperCase(),
+    // The name, or the number when that is all the shop has of them.
+    name: customerLabel(customer).toUpperCase(),
     ...(customer.phone ? { phone: customer.phone } : {}),
     ...((order.shippingAddress ?? customer.address)
       ? { address: order.shippingAddress ?? customer.address }

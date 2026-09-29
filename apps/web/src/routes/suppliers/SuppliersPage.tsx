@@ -82,7 +82,6 @@ import { PageContainer } from "../../components/PageContainer";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import { poTotals } from "../../lib/inbound.js";
-import { openingPaidOf } from "../../lib/debtPayments.js";
 import {
   allocationProblems,
   remainingOf,
@@ -98,7 +97,7 @@ import {
 } from "../../lib/supplierLedger.js";
 import { mutate, nextId, useDb, currentStaffName } from "../../mock/store.js";
 import type { Po, Supplier } from "../../mock/seed.js";
-import { SPACE, TYPE } from "../../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 
 interface SupplierRow {
   readonly key: string;
@@ -115,7 +114,6 @@ export function SuppliersPage() {
     deposit: SupplierDeposit;
     supplier: Supplier;
   } | null>(null);
-  const [openingFor, setOpeningFor] = useState<Supplier | null>(null);
   /** The add-a-supplier dialog. See `saveSupplier`. */
   const [adding, setAdding] = useState(false);
   const [addForm] = Form.useForm<{
@@ -123,7 +121,6 @@ export function SuppliersPage() {
     code?: string;
     phone?: string;
     address?: string;
-    openingBalance?: number;
   }>();
   const [depForm] = Form.useForm<{
     amount: number;
@@ -143,7 +140,6 @@ export function SuppliersPage() {
    * through a dialog that could only ever name one.
    */
   const [allocDraft, setAllocDraft] = useState<Record<string, number>>({});
-  const [openForm] = Form.useForm<{ amount: number }>();
 
   /**
    * Every invoice as the ledger sees it.
@@ -174,13 +170,7 @@ export function SuppliersPage() {
         .map((s) => ({
           key: s.id,
           supplier: s,
-          account: supplierAccount(
-            s.id,
-            invoices,
-            db.deposits,
-            s.openingBalance ?? 0,
-            openingPaidOf(s),
-          ),
+          account: supplierAccount(s.id, invoices, db.deposits),
         }))
         // The ones the shop owes most, first. This is a page somebody opens
         // before making a transfer.
@@ -345,14 +335,6 @@ export function SuppliersPage() {
           ...(code ? { code } : {}),
           ...(v.phone ? { phone: v.phone } : {}),
           ...(v.address ? { address: v.address } : {}),
-          // Stated once, here, rather than as an invented purchase order —
-          // see `Supplier.openingBalance`.
-          ...(v.openingBalance
-            ? {
-                openingBalance: v.openingBalance,
-                openingBalanceAt: new Date().toISOString(),
-              }
-            : {}),
         });
       });
       setAdding(false);
@@ -528,20 +510,6 @@ export function SuppliersPage() {
     );
   };
 
-  const saveOpening = () =>
-    openForm.validateFields().then((v) => {
-      const supplier = openingFor!;
-      mutate((d) => {
-        const s = d.suppliers.find((x) => x.id === supplier.id);
-        if (!s) return;
-        s.openingBalance = v.amount;
-        s.openingBalanceAt = new Date().toISOString();
-      });
-      setOpeningFor(null);
-      openForm.resetFields();
-      message.success(t("supplier.openingSaved", "Opening balance saved."));
-    });
-
   /** The history rows for one supplier, built where the store is in scope. */
   const historyOf = (supplier: Supplier): LedgerEntry[] =>
     supplierHistory(
@@ -568,11 +536,6 @@ export function SuppliersPage() {
           };
         }),
       db.deposits,
-      {
-        amount: supplier.openingBalance ?? 0,
-        ...(supplier.openingBalanceAt ? { at: supplier.openingBalanceAt } : {}),
-        payments: supplier.openingPayments ?? [],
-      },
     );
 
   const methodLabel = (code: string) =>
@@ -588,7 +551,6 @@ export function SuppliersPage() {
         label: t("supplier.entryAllocation", "Deposit used"),
         color: "default",
       },
-      OPENING: { label: t("supplier.entryOpening", "From before") },
     };
 
   return (
@@ -694,27 +656,27 @@ export function SuppliersPage() {
                         {
                           title: t("supplier.date", "Date"),
                           key: "date",
-                          width: 130,
+                          width: COLUMN.date,
                           render: (_, po) => fmtDate(po.date),
                         },
                         {
                           title: t("supplier.total", "Total"),
                           key: "total",
-                          width: 160,
+                          width: COLUMN.money,
                           align: "right",
                           render: (_, po) => fmtRp(poTotals(po).total),
                         },
                         {
                           title: t("supplier.paid", "Paid"),
                           key: "paid",
-                          width: 160,
+                          width: COLUMN.money,
                           align: "right",
                           render: (_, po) => fmtRp(poTotals(po).paid),
                         },
                         {
                           title: t("supplier.outstanding", "Outstanding"),
                           key: "outstanding",
-                          width: 170,
+                          width: COLUMN.money,
                           align: "right",
                           render: (_, po) => {
                             const out = outstandingOf(po);
@@ -784,7 +746,7 @@ export function SuppliersPage() {
                               {
                                 title: t("supplier.when", "When"),
                                 key: "at",
-                                width: 140,
+                                width: COLUMN.date,
                                 render: (
                                   _: unknown,
                                   a: (typeof d.allocations)[number],
@@ -793,7 +755,7 @@ export function SuppliersPage() {
                               {
                                 title: t("supplier.amount", "Amount"),
                                 key: "amount",
-                                width: 160,
+                                width: COLUMN.money,
                                 align: "right",
                                 render: (
                                   _: unknown,
@@ -808,7 +770,7 @@ export function SuppliersPage() {
                         {
                           title: t("supplier.when", "When"),
                           key: "at",
-                          width: 140,
+                          width: COLUMN.date,
                           render: (_, d) => fmtDate(d.at),
                         },
                         {
@@ -819,14 +781,14 @@ export function SuppliersPage() {
                         {
                           title: t("supplier.amount", "Amount"),
                           key: "amount",
-                          width: 160,
+                          width: COLUMN.money,
                           align: "right",
                           render: (_, d) => fmtRp(d.amount),
                         },
                         {
                           title: t("supplier.left", "Unallocated"),
                           key: "left",
-                          width: 170,
+                          width: COLUMN.money,
                           align: "right",
                           render: (_, d) => {
                             const left = remainingOf(d);
@@ -842,7 +804,7 @@ export function SuppliersPage() {
                         {
                           title: "",
                           key: "actions",
-                          width: 96,
+                          width: COLUMN.actions,
                           render: (_, d) =>
                             remainingOf(d) === 0 ? null : (
                               <Flex gap={4} justify="end">
@@ -926,7 +888,7 @@ export function SuppliersPage() {
                         {
                           title: t("supplier.when", "When"),
                           key: "at",
-                          width: 130,
+                          width: COLUMN.date,
                           render: (_, e) =>
                             e.at
                               ? fmtDate(e.at)
@@ -935,7 +897,7 @@ export function SuppliersPage() {
                         {
                           title: t("supplier.what", "What"),
                           key: "kind",
-                          width: 140,
+                          width: COLUMN.status,
                           render: (_, e) => (
                             <Tag color={ENTRY[e.kind].color}>
                               {ENTRY[e.kind].label}
@@ -991,7 +953,7 @@ export function SuppliersPage() {
                            */
                           title: t("supplier.amount", "Amount"),
                           key: "amount",
-                          width: 170,
+                          width: COLUMN.money,
                           align: "right",
                           render: (_, e) =>
                             e.direction === "CHARGE" ? (
@@ -1035,57 +997,28 @@ export function SuppliersPage() {
               {
                 title: t("supplier.openInvoices", "Open invoices"),
                 key: "open",
-                width: 140,
+                width: COLUMN.action,
                 align: "right",
                 render: (_, r) => r.account.openInvoices,
               },
               {
                 title: t("supplier.invoiced", "Invoiced"),
                 key: "invoiced",
-                width: 170,
+                width: COLUMN.money,
                 align: "right",
                 render: (_, r) => fmtRp(r.account.invoiced),
               },
               {
                 title: t("supplier.paid", "Paid"),
                 key: "paid",
-                width: 170,
+                width: COLUMN.money,
                 align: "right",
                 render: (_, r) => fmtRp(r.account.paid),
               },
               {
-                /*
-                 * Debt from before this system, stated once. Editable here
-                 * because there is nowhere else it could be: no invoice in
-                 * this database is about it, and inventing one would put
-                 * phantom stock in the ledger.
-                 */
-                title: t("supplier.oldDebt", "From before"),
-                key: "opening",
-                width: 170,
-                align: "right",
-                render: (_, r) => (
-                  <Button
-                    type="link"
-                    size="small"
-                    style={{ paddingInline: 0 }}
-                    onClick={() => {
-                      setOpeningFor(r.supplier);
-                      openForm.setFieldsValue({
-                        amount: r.supplier.openingBalance ?? 0,
-                      });
-                    }}
-                  >
-                    {r.account.openingBalance > 0
-                      ? fmtRp(r.account.openingBalance)
-                      : t("supplier.addOldDebt", "Add")}
-                  </Button>
-                ),
-              },
-              {
                 title: t("supplier.onDepositCol", "On deposit"),
                 key: "deposit",
-                width: 170,
+                width: COLUMN.money,
                 align: "right",
                 render: (_, r) =>
                   r.account.unallocated === 0 ? (
@@ -1105,7 +1038,7 @@ export function SuppliersPage() {
                  */
                 title: t("supplier.netOwed", "Owed now"),
                 key: "net",
-                width: 190,
+                width: COLUMN.money,
                 align: "right",
                 render: (_, r) => (
                   <Flex vertical align="flex-end" gap={0}>
@@ -1139,7 +1072,7 @@ export function SuppliersPage() {
               {
                 title: "",
                 key: "actions",
-                width: 56,
+                width: COLUMN.actions,
                 render: (_, r) => (
                   <Tooltip title={t("supplier.addDeposit", "Record a deposit")}>
                     <Button
@@ -1293,23 +1226,6 @@ export function SuppliersPage() {
           <Form.Item name="address" label={t("supplier.address", "Address")}>
             <Input.TextArea rows={2} />
           </Form.Item>
-          <Form.Item
-            name="openingBalance"
-            label={t("supplier.oldDebtLabel", "What we already owe them")}
-            tooltip={t(
-              "supplier.oldDebtHint",
-              "An unpaid bill from before this app. There is no invoice here for it and there never will be, so it is stated once and added to what the invoices say.",
-            )}
-          >
-            <InputNumber
-              min={0}
-              precision={0}
-              prefix={RP_SYMBOL}
-              formatter={moneyFormatter}
-              parser={moneyParser}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
         </Form>
       </Modal>
 
@@ -1383,7 +1299,7 @@ export function SuppliersPage() {
                     {
                       title: t("supplier.date", "Date"),
                       key: "date",
-                      width: 120,
+                      width: COLUMN.date,
                       render: (_, po) => fmtDate(po.date),
                     },
                     {
@@ -1396,7 +1312,7 @@ export function SuppliersPage() {
                     {
                       title: t("supplier.putAgainst", "Put against it"),
                       key: "amount",
-                      width: 190,
+                      width: COLUMN.money,
                       render: (_, po) => (
                         <Flex gap={4} align="center">
                           <InputNumber
@@ -1483,33 +1399,6 @@ export function SuppliersPage() {
               </Flex>
             );
           })()}
-      </Modal>
-
-      <Modal
-        open={openingFor !== null}
-        title={t("supplier.openingTitle", "What we owed {{name}} before", {
-          name: openingFor?.name ?? "",
-        })}
-        okText={t("supplier.openingOk", "Save")}
-        onCancel={() => setOpeningFor(null)}
-        onOk={saveOpening}
-      >
-        <Form form={openForm} layout="vertical">
-          <Form.Item
-            name="amount"
-            label={t("supplier.amount", "Amount")}
-            rules={[{ required: true }]}
-          >
-            <InputNumber
-              min={0}
-              precision={0}
-              prefix={RP_SYMBOL}
-              formatter={moneyFormatter}
-              parser={moneyParser}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-        </Form>
       </Modal>
     </PageContainer>
   );

@@ -124,6 +124,7 @@ async function syncPoItems(ctx: WriteContext, po: Po): Promise<void> {
       // line, and the CHECK keeps the discount inside it.
       lineTotal: BigInt(item.qty) * item.unitCost - (item.discount ?? 0n),
       notReceived: item.notReceived ?? false,
+      outsideInvoice: item.outsideInvoice ?? false,
       sortOrder,
       removedAt: null,
     };
@@ -382,6 +383,7 @@ export const pos: Adapter<"pos"> = {
         unitCost: i.unitCost,
         discount: i.discount === 0n ? undefined : i.discount,
         notReceived: i.notReceived ? true : undefined,
+        outsideInvoice: i.outsideInvoice ? true : undefined,
       })),
       payments: p.payments.map((pay) => ({
         id: pay.id,

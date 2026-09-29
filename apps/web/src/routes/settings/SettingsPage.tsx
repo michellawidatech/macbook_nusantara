@@ -54,7 +54,7 @@ import {
   CYCLE_COUNT_MAX,
   thresholdsFrom,
 } from "../../lib/battery.js";
-import { FORM_CENTRE, SPACE } from "../../theme/tokens";
+import { COLUMN, FORM_CENTRE, SPACE } from "../../theme/tokens";
 import { Link } from "react-router-dom";
 import { SALE_CHANNELS } from "../../lib/channels.js";
 import { commissionPctOf } from "../../lib/marketplace.js";
@@ -550,7 +550,7 @@ export function SettingsPage() {
              */
             title: t("settings.supplierCode", "Code"),
             key: "code",
-            width: 120,
+            width: COLUMN.code,
             searchable: true,
             sortValue: (s) => s.code ?? "",
             render: (_, s) =>
@@ -620,7 +620,7 @@ export function SettingsPage() {
             // foot of a card on a phone.
             title: "",
             key: "actions",
-            width: 60,
+            width: COLUMN.actions,
             render: (_, s) => (
               <Tooltip title={t("settings.editSupplier", "Edit supplier")}>
                 <Button

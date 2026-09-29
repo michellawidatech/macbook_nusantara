@@ -60,7 +60,12 @@ function renderPanel() {
 async function chooseOption(
   control: HTMLElement,
   option: string,
-  { search = true }: { search?: boolean } = {},
+  {
+    search = true,
+    // The exchange dropdown's labels are "SERIAL — product name", so a test
+    // that knows the serial cannot name the whole title (2026-09-25).
+    startsWith = false,
+  }: { search?: boolean; startsWith?: boolean } = {},
 ) {
   fireEvent.mouseDown(control);
   if (search) fireEvent.change(control, { target: { value: option } });
@@ -74,7 +79,10 @@ async function chooseOption(
       open[open.length - 1]?.querySelectorAll<HTMLElement>(
         ".ant-select-item-option",
       ) ?? [],
-    ).find((el) => el.getAttribute("title") === option);
+    ).find((el) => {
+      const title = el.getAttribute("title") ?? "";
+      return startsWith ? title.startsWith(option) : title === option;
+    });
     if (!found) throw new Error(`no option “${option}” open`);
     return found;
   });
@@ -135,12 +143,41 @@ const returnOf = (serial: string) =>
 const unit = (serial: string) =>
   getDb().units.find((u) => u.serial === serial)!;
 
+/** What comes back — the ONE table the form keeps (owner ask 2026-09-25). */
+const backTable = () =>
+  screen.getByRole("group", { name: "Units coming back" });
+
+/** What goes out instead. */
+const outTable = () => screen.getByRole("group", { name: "Units going out" });
+
+/**
+ * The 2026-09-25 flow: a serial (or a transaction number) in the one box,
+ * Enter, then *Select n units* on the picker that opens with everything
+ * ticked. The unit is in the return table afterwards.
+ */
 async function scanBack(serial: string) {
   await userEvent.type(
-    screen.getByPlaceholderText("Scan or type the serial coming back"),
+    screen.getByLabelText("Transaction number"),
     `${serial}{Enter}`,
   );
-  expect(screen.getByLabelText(`${serial} is coming back`)).toBeChecked();
+  await userEvent.click(
+    await screen.findByRole("button", { name: /^Select \d+ units?$/ }),
+  );
+  expect(within(backTable()).getByText(serial)).toBeInTheDocument();
+}
+
+/** Open the exchange half — hidden behind *Exchange unit* since 2026-09-25. */
+async function openExchange() {
+  // An icon Button's accessible name carries the icon too, so this is a
+  // regex rather than the exact string.
+  const button = screen.queryByRole("button", { name: /Exchange unit/ });
+  if (button) await userEvent.click(button);
+}
+
+/** Put something on the exchange, by serial or by product name. */
+async function exchangeFor(label: string) {
+  await openExchange();
+  await chooseOption(searchBox(), label, { startsWith: true });
 }
 
 /** The Record-a-return dialog: the combined history has a Reason column too. */
@@ -311,15 +348,92 @@ describe("taking a unit back", () => {
   });
 });
 
+describe("the additional charge (owner, 2026-09-26)", () => {
+  /**
+   * *"The additional price is per exchange unit, and if no exchange, we can
+   * add 1 additional fee per return (not per product)."*
+   */
+  const feeBox = () =>
+    screen.getByRole("spinbutton", { name: "Additional fee" });
+
+  it("takes ONE fee for the whole return off what is handed back", async () => {
+    sellOne([paid("p-ret-fee-1", 5_000_000)]);
+    renderPanel();
+    await scanBack(SOLD);
+    await pickReason();
+    // Not a box per row any more: the return table asks for nothing.
+    expect(within(backTable()).queryAllByRole("spinbutton")).toHaveLength(0);
+
+    await userEvent.type(feeBox(), "250000");
+    expect(screen.getByText("Hand back Rp 4.750.000")).toBeInTheDocument();
+    await record();
+
+    const o = order();
+    // The credit is what the unit sold for, less the one charge — and the
+    // Rp250.000 is simply money the shop kept: nothing moved, so nothing is
+    // recorded for it beyond the smaller credit.
+    expect(o.adjustments).toMatchObject([{ type: "RETUR", amount: 4_750_000 }]);
+    expect(o.refunds).toMatchObject([{ method: "TUNAI", amount: 4_750_000 }]);
+    expect(orderBalance(o)).toMatchObject({ total: 250_000, customerOwes: 0 });
+    // Handed back, so the Refund expense says the same figure.
+    expect(getDb().expenses[0]).toMatchObject({
+      kind: "REFUND",
+      amount: 4_750_000,
+    });
+  });
+
+  it("charges it per exchange unit instead, and leaves the price read-only", async () => {
+    sellOne([paid("p-ret-fee-2", 5_000_000)]);
+    renderPanel();
+    await scanBack(SOLD);
+    await pickReason();
+    await exchangeFor(SPARE);
+    // The one-per-return box goes the moment something is going out: two
+    // boxes both meaning "and this much on top" is a sale charged twice.
+    expect(
+      screen.queryByRole("spinbutton", { name: "Additional fee" }),
+    ).toBeNull();
+    // Rp6jt out for Rp5jt back, before anything extra.
+    expect(
+      screen.getByText("Customer pays Rp 1.000.000 for the exchange"),
+    ).toBeInTheDocument();
+
+    await userEvent.type(
+      screen.getByRole("spinbutton", { name: `Additional price on ${SPARE}` }),
+      "500000",
+    );
+    expect(
+      screen.getByText("Customer pays Rp 1.500.000 for the exchange"),
+    ).toBeInTheDocument();
+    await record();
+
+    const o = order();
+    // The replacement is recorded at the shop's asking price — the charge is
+    // not folded into it, so the sale invents no upsell out of a swap fee.
+    expect(o.prices[SPARE]).toBe(6_000_000);
+    expect(o.adjustments).toMatchObject([{ type: "RETUR", amount: 4_500_000 }]);
+    expect(o.payments!.map((p) => [p.state, p.amount])).toEqual([
+      ["SETTLED", 5_000_000],
+      ["SETTLED", 1_500_000],
+    ]);
+    expect(orderBalance(o)).toMatchObject({
+      total: 6_500_000,
+      customerOwes: 0,
+    });
+    expect(getDb().incomes[0]).toMatchObject({
+      reason: "REFUND",
+      amount: 1_500_000,
+    });
+  });
+});
+
 describe("exchanging (owner, 2026-09-21)", () => {
   it("records no money back when the replacement is cheaper", async () => {
     sellOne([paid("p-ret-3", 5_000_000)]);
     renderPanel();
     await scanBack(SOLD);
     await pickReason();
-    await userEvent.click(
-      screen.getByRole("button", { name: new RegExp(`Add ${CHEAP}`) }),
-    );
+    await exchangeFor(CHEAP);
     // Rp4jt out for Rp5jt back: nothing to hand back, nothing to take.
     expect(screen.queryByText(/Hand back/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Customer pays/)).not.toBeInTheDocument();
@@ -349,11 +463,9 @@ describe("exchanging (owner, 2026-09-21)", () => {
     renderPanel();
     await scanBack(SOLD);
     await pickReason();
-    await userEvent.click(
-      screen.getByRole("button", { name: new RegExp(`Add ${SPARE}`) }),
-    );
-    await userEvent.type(searchBox(), SPARE2);
-    expect(screen.getByLabelText(`Price of ${SPARE2}`)).toBeInTheDocument();
+    await exchangeFor(SPARE);
+    await exchangeFor(SPARE2);
+    expect(within(outTable()).getByText("Rp 3.000.000")).toBeInTheDocument();
     // Rp6jt + Rp3jt out, Rp5jt back.
     expect(
       screen.getByText("Customer pays Rp 4.000.000 for the exchange"),
@@ -403,7 +515,7 @@ describe("exchanging (owner, 2026-09-21)", () => {
     expect(within(dialog).getByText("Lifecycle")).toBeInTheDocument();
   });
 
-  it("takes units back from two sales and puts the replacements on the chosen one", async () => {
+  it("holds ONE transaction: a second number replaces the first", async () => {
     sellOne([paid("p-ret-5a", 5_000_000)]);
     sell({
       id: ORDER2,
@@ -411,98 +523,80 @@ describe("exchanging (owner, 2026-09-21)", () => {
       ts: "2026-09-12T03:00:00.000Z",
       serial: SOLD2,
       price: 3_000_000,
-      payments: [
-        paid("p-ret-5b", 3_000_000, {
-          method: "TRANSFER",
-          at: "2026-09-12T03:00:00.000Z",
-        }),
-      ],
+      payments: [paid("p-ret-5b", 3_000_000, { method: "TRANSFER" })],
     });
     renderPanel();
     await scanBack(SOLD);
+    // Owner ask 2026-09-25: "only 1 transaction at a time". The second sale
+    // is a correction, not a second block — and the first sale's units go
+    // with it rather than being left ticked on a sale nobody can see.
     await scanBack(SOLD2);
-    // Both sales in the ONE table of what comes back.
-    const back = screen.getByRole("group", { name: "Units coming back" });
-    expect(within(back).getByText(CODE)).toBeInTheDocument();
-    expect(within(back).getByText(CODE2)).toBeInTheDocument();
+    expect(within(backTable()).queryByText(SOLD)).toBeNull();
     await pickReason();
-    await userEvent.type(searchBox(), SPARE);
-    await userEvent.type(searchBox(), SPARE2);
-    // The newer sale is the default; put them on the first one instead.
-    await chooseOption(screen.getByLabelText("Put the replacements on"), CODE, {
-      search: false,
-    });
-    // Rp9jt out, Rp5jt + Rp3jt back.
-    expect(
-      screen.getByText("Customer pays Rp 1.000.000 for the exchange"),
-    ).toBeInTheDocument();
     await record();
 
-    const a = order(ORDER);
-    const b = order(ORDER2);
-    expect(a.serials).toEqual([SOLD, SPARE, SPARE2]);
-    expect(b.serials).toEqual([SOLD2]);
-    // The second sale's Rp3jt moved over, as the transfer it was, on the day
-    // it arrived; the customer pays the last Rp1jt now.
-    expect(a.payments!.map((p) => [p.method, p.state, p.amount])).toEqual([
-      ["TUNAI", "SETTLED", 5_000_000],
-      ["TRANSFER", "SETTLED", 3_000_000],
-      ["TUNAI", "SETTLED", 1_000_000],
+    expect(order(ORDER).adjustments ?? []).toEqual([]);
+    expect(order(ORDER2).adjustments).toMatchObject([
+      { type: "RETUR", amount: 3_000_000 },
     ]);
-    expect(a.payments![1]).toMatchObject({ at: "2026-09-12T03:00:00.000Z" });
-    expect(a.payments![1]!.note).toContain(CODE2);
-    expect(b.payments ?? []).toEqual([]);
-    expect(a.adjustments).toMatchObject([{ type: "RETUR", amount: 5_000_000 }]);
-    expect(b.adjustments).toMatchObject([{ type: "RETUR", amount: 3_000_000 }]);
-    expect(a.refunds ?? []).toEqual([]);
-    expect(b.refunds ?? []).toEqual([]);
-    expect(orderBalance(a)).toMatchObject({
-      total: 9_000_000,
-      customerOwes: 0,
-      fullySettled: true,
-    });
-    expect(orderBalance(b)).toMatchObject({ total: 0, customerOwes: 0 });
-    expect(a.settled).toBe(true);
-    expect(b.settled).toBe(true);
-    const retA = returnOf(SOLD);
-    const retB = returnOf(SOLD2);
-    expect(retA).toMatchObject({ exchangeSerial: SPARE, fee: 1_000_000 });
-    expect(retB).toMatchObject({ exchangeSerial: SPARE });
-    expect(retB.fee).toBeUndefined();
-    // Every change to money is in the log.
-    const log = getDb().paymentLog.filter((l) => l.reason?.includes(retA.code));
-    expect(log.map((l) => l.action).sort()).toEqual([
-      "ADDED",
-      "ADDED",
-      "REMOVED",
-    ]);
-    // One row for the whole exchange: both sales named on it, both units
-    // back inside it.
-    const tr = historyRow(retA.code);
-    expect(historyRow(retB.code)).toBe(tr);
-    const row = cells(tr);
-    expect(row.sale.textContent).toContain(CODE);
-    expect(row.sale.textContent).toContain(CODE2);
-    const popup = await openRow(retA.code);
-    expect(within(popup).getByText(SOLD)).toBeInTheDocument();
-    expect(within(popup).getByText(SOLD2)).toBeInTheDocument();
+    expect(unit(SOLD).status).toBe("TERJUAL");
+    expect(unit(SOLD2).status).toBe("TERSEDIA");
   });
 
-  it("adds a unit the moment its whole serial is typed into the search", async () => {
+  it("finds the sale by its transaction number, and opens on every unit", async () => {
+    sellOne([paid("p-ret-5c", 5_000_000)]);
+    renderPanel();
+    await userEvent.type(
+      screen.getByLabelText("Transaction number"),
+      `${CODE}{Enter}`,
+    );
+    // The picker: the sale's units, named and priced, everything ticked.
+    const dialog = (await screen.findByText(`Units on ${CODE}`)).closest(
+      "[role='dialog']",
+    ) as HTMLElement;
+    expect(within(dialog).getByText(SOLD)).toBeInTheDocument();
+    expect(within(dialog).getByText("Rp 5.000.000")).toBeInTheDocument();
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /Select 1 units/ }),
+    );
+    expect(within(backTable()).getByText(SOLD)).toBeInTheDocument();
+  });
+
+  it("leaves out a unit unticked in the picker", async () => {
+    sellOne([paid("p-ret-5d", 5_000_000)]);
+    renderPanel();
+    await userEvent.type(
+      screen.getByLabelText("Transaction number"),
+      `${CODE}{Enter}`,
+    );
+    const dialog = (await screen.findByText(`Units on ${CODE}`)).closest(
+      "[role='dialog']",
+    ) as HTMLElement;
+    // Untick the one unit: the button counts down, and refuses an empty pick.
+    await userEvent.click(
+      within(dialog).getAllByRole("checkbox").slice(-1)[0]!,
+    );
+    expect(
+      within(dialog).getByRole("button", { name: /Select 0 units/ }),
+    ).toBeDisabled();
+  });
+
+  it("keeps the exchange shut until it is asked for, then picks by serial", async () => {
     sellOne([paid("p-ret-6", 5_000_000)]);
     renderPanel();
     await scanBack(SOLD);
+    // Owner ask 2026-09-25: a dropdown, not the whole shelf on the page.
+    expect(screen.queryByLabelText(`Additional price on ${SPARE}`)).toBeNull();
+    await exchangeFor(SPARE);
+    // The price is READ-ONLY here since 2026-09-26 (owner ask): text, not a
+    // box. What this window may type is the additional price beside it.
+    expect(within(outTable()).getByText("Rp 6.000.000")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: new RegExp(`Add ${SPARE}`) }),
+      screen.getByLabelText(`Additional price on ${SPARE}`),
     ).toBeInTheDocument();
-    await userEvent.type(searchBox(), SPARE.toLowerCase());
-    const price = screen.getByLabelText(`Price of ${SPARE}`);
-    expect((price as HTMLInputElement).value).toBe("6.000.000");
-    expect((searchBox() as HTMLInputElement).value).toBe("");
-    // It left the list it was picked from: a unit cannot go out twice.
-    expect(
-      screen.queryByRole("button", { name: new RegExp(`Add ${SPARE}`) }),
-    ).not.toBeInTheDocument();
+    // One row, one unit: the shelf list drops what has been picked, so
+    // there is nothing to pick twice.
+    expect(screen.getAllByLabelText(/^Additional price on /)).toHaveLength(1);
   });
 
   it("says so when a picked replacement is sold elsewhere, and leaves it out", async () => {
@@ -510,7 +604,7 @@ describe("exchanging (owner, 2026-09-21)", () => {
     renderPanel();
     await scanBack(SOLD);
     await pickReason();
-    await userEvent.type(searchBox(), SPARE);
+    await exchangeFor(SPARE);
     expect(
       screen.getByText("Customer pays Rp 1.000.000 for the exchange"),
     ).toBeInTheDocument();
@@ -523,7 +617,7 @@ describe("exchanging (owner, 2026-09-21)", () => {
     expect(
       screen.getByText(`No longer on the shelf, so left out: ${SPARE}`),
     ).toBeInTheDocument();
-    expect(screen.queryByLabelText(`Price of ${SPARE}`)).toBeNull();
+    expect(screen.queryByLabelText(`Additional price on ${SPARE}`)).toBeNull();
     // With nothing going out it is a plain return again.
     expect(screen.getByText("Hand back Rp 5.000.000")).toBeInTheDocument();
   });
@@ -537,9 +631,7 @@ describe("exchanging (owner, 2026-09-21)", () => {
     await pickReason();
     const sku = getDb().skus.find((s) => s.id === MOUSE)!;
     const name = `${sku.name} ${sku.variantLabel}`;
-    await userEvent.click(
-      screen.getByRole("button", { name: new RegExp(`Add ${name}`) }),
-    );
+    await exchangeFor(name);
     expect(screen.getByLabelText(`How many ${name}`)).toBeInTheDocument();
     await record();
 

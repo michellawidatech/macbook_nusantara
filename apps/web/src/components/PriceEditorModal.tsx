@@ -63,7 +63,7 @@ import {
   type ListedUnit,
 } from "../lib/unitPrice.js";
 import type { UnitCost } from "../lib/service.js";
-import { SPACE, TYPE } from "../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../theme/tokens";
 
 /** One unit as this grid needs it. A store `Unit` is one. */
 export interface PriceEditorUnit extends ListedUnit {
@@ -235,7 +235,7 @@ export function PriceEditorModal({
           {
             title: t("price.grade", "Grade"),
             key: "grade",
-            width: 80,
+            width: COLUMN.grade,
             render: (_: unknown, u: PriceEditorUnit) => (
               <GradeTag grade={u.grade} />
             ),
@@ -246,7 +246,7 @@ export function PriceEditorModal({
             // repairs, not a number a repricing may touch.
             title: t("price.cogs", "COGS"),
             key: "cost",
-            width: 170,
+            width: COLUMN.money,
             align: "right",
             render: (_: unknown, u: PriceEditorUnit) => (
               <Flex align="center" justify="flex-end" gap={SPACE.xs}>
@@ -274,7 +274,7 @@ export function PriceEditorModal({
               </Flex>
             ),
             key: "price",
-            width: 240,
+            width: COLUMN.money,
             align: "right",
             render: (_: unknown, u: PriceEditorUnit) => {
               const value = typed(u);

@@ -56,6 +56,8 @@ import {
   matchesNote,
   renderStoreFacts,
   routeMessage,
+  loadCapabilities,
+  PARALLEL_CAPABILITIES,
   type AgentCapabilities,
   storeOpenAt,
   type AgentClient,
@@ -74,6 +76,7 @@ import {
 import type { Logger } from "@nusantara/logging";
 import { isWithinWindow } from "@nusantara/whatsapp";
 import { DEFAULT_PERSONA } from "@nusantara/agent";
+import { refreshOffers, upsertChatAction } from "./actions.js";
 
 export interface DraftDeps {
   readonly db: PrismaClient;
@@ -108,6 +111,11 @@ export interface DraftDeps {
    * database is the shop's data today.
    */
   readonly capabilities?: AgentCapabilities;
+  /**
+   * How long after a missed appointment a bot booking is released (the
+   * expiry pass's grace), so a booking can tell the customer until when.
+   */
+  readonly reservationGraceMs?: number;
   /** How far a sender's clock may run ahead before we stop believing it. */
   readonly skewToleranceMs?: number;
   /** Injectable so a test can drive the debounce without waiting. */
@@ -310,6 +318,11 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   const maxBatch = deps.maxBatch ?? DEFAULT_MAX_BATCH;
   const skewMs = deps.skewToleranceMs ?? DEFAULT_SKEW_MS;
 
+  // Code only, no model, so it runs with or without a credential: a customer
+  // who changes their offer while a colleague is still looking moves the
+  // figure on the task that colleague has open.
+  await refreshOffers(db, logger, now());
+
   // Dormant, not broken. 06 §12: with no credential "the pipeline degrades to
   // persist-only" — messages keep landing and keep showing in the inbox, and a
   // human answers them. Rows are deliberately left at BARU rather than being
@@ -355,19 +368,24 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   // (docs/chatbot-rag.md) — read once, indexed once, and rendered once into
   // the cached half of the prompt, which is then byte-identical for every
   // thread in the pass.
-  const [knowledge, storeFacts, persona, corrections] = await Promise.all([
-    loadKnowledgeBase(db),
-    loadStoreFacts(db).then(renderStoreFacts),
-    db.persona.findFirst({
-      where: { active: true },
-      select: { prompt: true },
-    }),
-    db.agentCorrection.findMany({
-      select: { original: true, corrected: true, note: true },
-      orderBy: { createdAt: "desc" },
-      take: MAX_CORRECTIONS,
-    }),
-  ]);
+  const [knowledge, storeFacts, persona, corrections, capabilities] =
+    await Promise.all([
+      loadKnowledgeBase(db),
+      loadStoreFacts(db).then(renderStoreFacts),
+      db.persona.findFirst({
+        where: { active: true },
+        select: { prompt: true },
+      }),
+      db.agentCorrection.findMany({
+        select: { original: true, corrected: true, note: true },
+        orderBy: { createdAt: "desc" },
+        take: MAX_CORRECTIONS,
+      }),
+      // The four switches on /chat (owner ask 2026-09-29), read each pass so a
+      // switch pressed on the Chat page applies to the next message. The
+      // environment's `AGENT_CAPABILITIES` answers for a switch never pressed.
+      loadCapabilities(db, deps.capabilities ?? PARALLEL_CAPABILITIES),
+    ]);
   const knowledgeText = knowledgeBlock(knowledge);
 
   let drafted = 0;
@@ -378,6 +396,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   // laptop, to save a few seconds on a queue that is almost always empty.
   for (const candidate of due) {
     const from = candidate.from;
+    // Outside the try, so the race handler below can see what was booked.
+    let outcome: ConverseResult | null = null;
+    let anchorId: string | null = null;
     try {
       // The batch this reply will answer, frozen before the model call.
       // `id` breaks the tie because `ts` is Meta's SECONDS and a fast burst
@@ -391,6 +412,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       if (batch.length === 0) continue;
       const batchIds = batch.map((m) => m.id);
       const anchor = batch[batch.length - 1]!;
+      anchorId = anchor.id;
 
       // Outside the window a free-form reply cannot be delivered (06 §11), so
       // drafting one would burn a model call to queue a send Graph will reject.
@@ -431,7 +453,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         persona: persona?.prompt ?? DEFAULT_PERSONA,
         storeFacts,
         knowledge: knowledgeText,
-        ...(deps.capabilities ? { capabilities: deps.capabilities } : {}),
+        capabilities,
         // Newest first out of the database, oldest first into the prompt, so
         // the most recent correction is the last thing the model reads.
         corrections: [...corrections].reverse().map((c) => ({
@@ -455,7 +477,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       // and which of the owner's answers it most looks like (retrieval.ts).
       const route = routeMessage(current, {
         hasMedia: batch.some((m) => m.msgType !== "text"),
-        capabilities: deps.capabilities,
+        capabilities,
       });
       const hint = matchesNote(knowledge, matchesFor(knowledge, current));
 
@@ -479,8 +501,18 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
             "a grounding tool failed",
           ),
         ...(deps.agentStaffId
-          ? { reserve: { write: db, staffId: deps.agentStaffId } }
+          ? {
+              reserve: {
+                write: db,
+                staffId: deps.agentStaffId,
+                ...(deps.reservationGraceMs !== undefined
+                  ? { graceMs: deps.reservationGraceMs }
+                  : {}),
+              },
+            }
           : {}),
+        // What the customer says about themselves (remember_customer).
+        profile: { write: db },
       };
 
       let failure: unknown;
@@ -494,12 +526,13 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         storeFacts,
         route,
         hint,
-        capabilities: deps.capabilities,
+        capabilities,
         onError: (err) => {
           failure = err;
         },
       });
 
+      outcome = result;
       if (!result) {
         // Fail soft, never silent (the converse docblock's own rule): the
         // customer gets a human, and the reason lands in the log where somebody
@@ -570,6 +603,19 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           kind: "WA_REPLY",
           payload: { to: from, body: result.reply, inReplyTo: anchor.id },
         });
+        // The task the hand-over leaves, in the same transaction as the
+        // hand-over itself, so the inbox never shows one without the other.
+        if (result.handoff) {
+          await upsertChatAction(tx, {
+            from,
+            topic: result.handoff.topic,
+            summary: result.handoff.summary,
+            customerText: current,
+            ...(result.handoff.serial ? { serial: result.handoff.serial } : {}),
+            messageId: anchor.id,
+            now: answeredAt,
+          });
+        }
         /*
          * The photographs the answer offered, one row each, queued AFTER the
          * reply (owner ask 2026-09-21). Order matters and is cheap to get
@@ -625,6 +671,38 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           },
           "the thread was answered while the agent was drafting — discarding the draft",
         );
+        // The draft is dropped, but a booking made while drafting is not: it
+        // was its own transaction. Nobody will tell the customer unless a
+        // person is told to (audit 2026-09-29).
+        const booked = outcome?.bookings ?? [];
+        if (booked.length > 0 && anchorId) {
+          const codes = booked.map((b) => b.code).join(", ");
+          await db
+            .$transaction((tx) =>
+              upsertChatAction(tx, {
+                from,
+                topic: "reservation",
+                summary:
+                  `Bot membuat/mengubah booking ${codes}, tapi staf membalas lebih dulu ` +
+                  "sehingga pelanggan belum diberi tahu. Sampaikan kode bookingnya.",
+                customerText: "",
+                messageId: anchorId!,
+                now: now(),
+              }),
+            )
+            .catch((e: unknown) =>
+              logger.error(
+                {
+                  evt: "worker.action.failed",
+                  ctx: { from },
+                  ...(e instanceof Error
+                    ? { err: { name: e.name, message: e.message } }
+                    : {}),
+                },
+                "could not record the unannounced booking",
+              ),
+            );
+        }
         continue;
       }
       // One bad thread must not stop the pass. The rows stay BARU and the next
@@ -692,6 +770,24 @@ async function escalate(
       where: { id: { in: batchIds }, status: "BARU" },
       data: { status: "PERLU_STAF", intent: "staf:other" },
     });
+    if (count > 0) {
+      const rows = await tx.waMessage.findMany({
+        where: { id: { in: batchIds } },
+        orderBy: [{ ts: "asc" }, { id: "asc" }],
+        select: { from: true, text: true },
+      });
+      await upsertChatAction(tx, {
+        from: rows[0]!.from,
+        topic: "other",
+        summary,
+        customerText: rows
+          .map((r) => r.text ?? "")
+          .filter(Boolean)
+          .join("\n"),
+        messageId: anchorId,
+        now: new Date(),
+      });
+    }
     await tx.waMessage.updateMany({
       where: { id: anchorId, status: "PERLU_STAF" },
       data: {

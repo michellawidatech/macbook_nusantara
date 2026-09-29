@@ -15,7 +15,7 @@ import type { Po } from "../src/mock/seed.js";
 import type { ReceivableSale } from "../src/lib/payableReceivable.js";
 const SUPPLIERS = [
   { id: "sup-1", name: "CV Apel Segar" },
-  { id: "sup-2", name: "PT Buah Digital", openingBalance: 5_000_000 },
+  { id: "sup-2", name: "PT Buah Digital" },
 ];
 function po(over: Partial<Po> & Pick<Po, "id" | "code">): Po {
   return {
@@ -147,13 +147,11 @@ describe("payable — what the shop owes suppliers", () => {
     );
     expect(groups[0]).toMatchObject({ owed: 10_000_000 });
   });
-  it("carries a supplier's debt from before this app", () => {
-    const groups = payableGroups([], SUPPLIERS);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]).toMatchObject({ supplierId: "sup-2", owed: 5_000_000 });
-    // No invoice, so no date — deliberately not a fake purchase order.
-    expect(groups[0]!.oldestAt).toBeUndefined();
-    expect(groups[0]!.rows[0]).toMatchObject({ opening: true, code: "" });
+  it("carries no debt from before this app", () => {
+    // `Supplier.openingBalance` went on 2026-09-24 — *"we don't track it
+    // anymore (remove from database schema)"*. A supplier with no open
+    // invoice is on no list, whatever B2Soft used to say they were owed.
+    expect(payableGroups([], SUPPLIERS)).toEqual([]);
   });
   it("adds the invoice's expenses to what is owed", () => {
     const groups = payableGroups(

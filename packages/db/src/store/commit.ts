@@ -50,6 +50,7 @@ import {
   type StoreMode,
   WriteContext,
   recordStoreChanges,
+  sameApartFrom,
   takeStoreLock,
 } from "./context.js";
 import { StoreConflictError, StoreValidationError } from "./errors.js";
@@ -243,6 +244,11 @@ function translate(e: unknown): unknown {
         `Data yang dirujuk tidak ada (${String(e.meta?.["field_name"] ?? e.meta?.["constraint"] ?? e.message.trim().split("\n").slice(-1)[0] ?? "")}).`,
       );
     }
+    // A check raised inside raw SQL — `unit_event_drop_last` refusing a row
+    // that is not the last of its unit — in the words it was raised with.
+    if (e.code === "P2010" && e.meta?.["code"] === "23514") {
+      return new StoreValidationError(String(e.meta?.["message"] ?? e.message));
+    }
     if (e.code === "P2025" || e.code === "P2034") {
       return new StoreConflictError(
         "store",
@@ -257,6 +263,42 @@ function translate(e: unknown): unknown {
     }
   }
   return e;
+}
+
+/** Two decoded ledger rows that differ in `serial` and in nothing else. */
+function onlySerialDiffers(base: unknown, next: unknown): boolean {
+  const a = base as Record<string, unknown>;
+  const b = next as Record<string, unknown>;
+  return (
+    a["serial"] !== b["serial"] && sameApartFrom(a, b, new Set(["serial"]))
+  );
+}
+
+/**
+ * The serial corrections a changeset carries, old → new: every ledger row
+ * whose `serial` is the only field that changed (owner decision 2026-09-23).
+ * The units adapter renames the unit row in place for each, so its history
+ * stays its own. One serial sent two ways is two units, not a correction.
+ */
+function renamesIn(plans: readonly Plan[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const rows = plans.find((p) => p.name === "events")?.rows ?? [];
+  for (const r of rows) {
+    if (r.base === undefined || r.next === undefined) continue;
+    if (!onlySerialDiffers(r.base, r.next)) continue;
+    const from = (r.base as { serial: string }).serial;
+    const to = (r.next as { serial: string }).serial;
+    const had = out.get(from);
+    if (had !== undefined && had !== to) {
+      throw new StoreValidationError(
+        `Serial ${from} dikoreksi menjadi dua serial berbeda (${had}, ${to}).`,
+        "events",
+        r.key,
+      );
+    }
+    out.set(from, to);
+  }
+  return out;
 }
 
 async function verifyLedger(ctx: WriteContext): Promise<void> {
@@ -316,38 +358,36 @@ export async function commitStore(
     plans.map((p) => p.rows.map((r) => r.next)),
   );
   // Some rows are written once and never again, whatever they were based on —
-  // say so before asking whether the base is stale. The one removal allowed is
-  // a unit's events leaving with the unit archived in the same commit; the one
-  // edit allowed is a correction to the stock movement history, whose fields
-  // the adapter judges (`CORRECTABLE`).
-  const removedUnits = new Set(
-    (plans.find((p) => p.name === "units")?.rows ?? [])
-      .filter((r) => r.next === undefined)
-      .map((r) => r.key),
-  );
+  // say so before asking whether the base is stale. The exceptions, each
+  // judged in full by its adapter: a correction to the stock movement history
+  // (`CORRECTABLE`), and the ledger's two admitted edits (owner decision
+  // 2026-09-23) — a row's `serial` following its unit to a corrected serial,
+  // and the removal of a unit's LAST rows, or of all of them with the unit
+  // archived in the same commit. ⚠️ Until 2026-09-24 this loop refused both
+  // shapes before the events adapter ever saw them, so every serial
+  // correction at Inbound & QC and every unit swap in Transaction History
+  // came back "Not saved" — the adapter's checks were unreachable.
+  const serialRenames = renamesIn(plans);
   for (const p of plans) {
     const correctable = CORRECTABLE.has(p.name);
     if (!APPEND_ONLY.has(p.name) && !correctable) continue;
     for (const r of p.rows) {
       if (r.base === undefined) continue;
       if (correctable && r.next !== undefined) continue;
-      const serial = (r.base as { serial?: string }).serial;
-      const archiving =
+      if (
         p.name === "events" &&
-        r.next === undefined &&
-        serial !== undefined &&
-        removedUnits.has(serial);
-      if (!archiving) {
-        throw new StoreValidationError(
-          p.name === "events"
-            ? "Riwayat unit tidak bisa diubah atau dihapus."
-            : correctable
-              ? `Catatan ${p.name} tidak bisa dihapus.`
-              : `Catatan ${p.name} tidak bisa diubah setelah tersimpan.`,
-          p.name,
-          r.key,
-        );
-      }
+        (r.next === undefined || onlySerialDiffers(r.base, r.next))
+      )
+        continue;
+      throw new StoreValidationError(
+        p.name === "events"
+          ? "Riwayat unit tidak bisa diubah — hanya serialnya yang boleh dikoreksi, dan hanya kejadian terakhirnya yang boleh dihapus."
+          : correctable
+            ? `Catatan ${p.name} tidak bisa dihapus.`
+            : `Catatan ${p.name} tidak bisa diubah setelah tersimpan.`,
+        p.name,
+        r.key,
+      );
     }
   }
   if (mode === "import" && provisional.size > 0) {
@@ -366,6 +406,7 @@ export async function commitStore(
           mode,
           input.now ?? new Date(),
         );
+        for (const [from, to] of serialRenames) ctx.serialRenames.set(from, to);
 
         // 2. Numbers.
         const codes: Record<string, string> = {};

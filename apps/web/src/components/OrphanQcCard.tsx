@@ -68,6 +68,7 @@ import {
   appendEvent,
   ensureQcDescription,
 } from "../mock/store.js";
+import { COLUMN } from "../theme/tokens";
 
 export function OrphanQcCard() {
   const { t } = useTranslation();
@@ -339,7 +340,7 @@ export function OrphanQcCard() {
           {
             title: "",
             key: "actions",
-            width: 180,
+            width: COLUMN.actionsPair,
             render: (_, u) => (
               <Flex gap={8} justify="end">
                 <Tooltip

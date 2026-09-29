@@ -59,6 +59,9 @@ beforeEach(async () => {
   // onDelete: Restrict, so deleting messages while a cursor points at one
   // fails rather than cascading.
   await db.waThreadMemory.deleteMany({});
+  // ChatAction points at WaMessage, Unit and Customer (2026-09-29).
+  await db.chatAction.deleteMany({});
+  await db.customerProfile.deleteMany({});
   await db.waMessage.deleteMany({});
 });
 

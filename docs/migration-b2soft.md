@@ -68,7 +68,7 @@ name stops the extract instead of being misread.
 | Salespeople | all still work there | 15 active `Salesperson` rows; every sale credits its B2Soft salesman |
 | Which receivable | combine all | every open invoice, plus the customer's B2Soft balance above it as `Customer.openingBalance` |
 | Marketplace money | pending vs due | open Shopee/Tokopedia/TikTok/Akulaku sales are `PENDING`; everyone else `DUE` at J. Tempo |
-| Supplier balances | trust the payables report; the extra is investor money still owed | the balance above the open invoices is `Supplier.openingBalance` |
+| Supplier balances | trust the payables report; the extra is investor money still owed | ⚠️ **not carried since 2026-09-24**: `Supplier.openingBalance` was dropped (*"we don't track it anymore"*), so the balance above the open invoices is reported in `audit.xlsx` and imported nowhere |
 | Returns without serials | infer | an SR line takes the serial sold to that customer just before it; a serial sold twice with nothing between gets a return one second before the resale |
 | The five non-Apple serials in stock | delete | not migrated; their purchase lines keep the money with no machine |
 | Accessories | pseudo-serials | `AKS-<barcode>-<nnnn>`, first in first out, history included |

@@ -355,11 +355,11 @@ export function benchRows(
 /**
  * The machines the bench is waiting for, and the ones it has.
  *
- * Two lists rather than one with a column, because they are two different
- * jobs. The first is *did the van arrive* — answered by walking to the shelf
- * and looking, and nothing else can be done to those machines until it is.
- * The second is *what is this repair costing*, which is the screen's real
- * work. A single table sorted by anything at all would interleave them.
+ * ⚠️ The page no longer draws two TABLES from this — the owner asked for one
+ * (2026-09-25), and a row that has not arrived is told apart by carrying the
+ * *Arrived* tick. What survives here is the rule itself: `arrived` is what
+ * `ServiceRec.arrivedAt` means, the count of what is still on the way is on
+ * the Bench card, and this is where a test can read the definition.
  */
 export function splitBench(rows: readonly BenchRow[]): {
   readonly expected: BenchRow[];

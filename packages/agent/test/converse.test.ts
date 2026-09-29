@@ -127,8 +127,10 @@ describe("an answer", () => {
       [replies("Halo kak, Air M1 nya 7jt ya", "greeting")],
       "halo kak",
     ).result;
+    // A figure nothing vouched for is a price question (2026-09-29): the
+    // action item it leaves is a PRICE task.
     expect(sneaky?.handoff).toMatchObject({
-      topic: "other",
+      topic: "price",
       forcedBy: "AMOUNT_NOT_IN_SOURCE",
     });
   });

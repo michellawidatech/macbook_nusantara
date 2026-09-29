@@ -31,15 +31,26 @@ const REPORT = balanceReport([
   payoutRow("2026-09-20 11:00:00", "260920NOSALE01", "-5000.00", "2"),
 ]);
 
+/**
+ * The panel plus the one button the PAGE draws for it — since 2026-09-25
+ * *Check a Shopee file* is a `PageContainer` action on `ReturnsPage` and
+ * `checkOpen` is a prop, so the harness stands in for that page.
+ */
 function Harness() {
   const [open, setOpen] = useState(false);
+  const [checkOpen, setCheckOpen] = useState(false);
   return (
     <AntdApp>
       <MemoryRouter>
+        <button type="button" onClick={() => setCheckOpen(true)}>
+          Check a Shopee file
+        </button>
         <CustomerReturnPanel
           addOpen={open}
           onCloseAdd={() => setOpen(false)}
           onOpenAdd={() => setOpen(true)}
+          checkOpen={checkOpen}
+          onCloseCheck={() => setCheckOpen(false)}
         />
       </MemoryRouter>
     </AntdApp>
@@ -157,9 +168,14 @@ describe("checking a Shopee file for refunds", () => {
         name: `Record the return of ${SHOPEE_CODE}`,
       }),
     );
-    // The ordinary form, on that sale, its unit ticked.
+    // The ordinary form, on that sale, its unit already on the return —
+    // the picker is skipped, because the file has said what came back.
     expect(await screen.findByText("Record a return")).toBeInTheDocument();
-    expect(screen.getByLabelText(`${REFUNDED} is coming back`)).toBeChecked();
+    expect(
+      within(
+        screen.getByRole("group", { name: "Units coming back" }),
+      ).getByText(REFUNDED),
+    ).toBeInTheDocument();
 
     const reason = getDb().reasons.find(
       (r) => r.activity === "RETURN_CUSTOMER" && r.active,

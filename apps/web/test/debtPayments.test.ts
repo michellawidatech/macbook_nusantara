@@ -230,24 +230,12 @@ describe("opening balances", () => {
     expect(openingOwed({ ...party, openingBalance: 1_000_000 })).toBe(0);
   });
 
-  it("nets the payments off Payable's old-debt row, figure untouched", () => {
-    const groups = payableGroups(
+  it("has no old-debt row on Payable at all", () => {
+    // `Supplier.openingBalance` went on 2026-09-24 (*"we don't track it
+    // anymore"*), so a supplier with no open invoice is on no list.
+    expect(payableGroups([], [{ id: "sup-1", name: "CV Apel Segar" }])).toEqual(
       [],
-      [
-        {
-          id: "sup-1",
-          name: "CV Apel Segar",
-          openingBalance: 7_500_000,
-          openingPayments: [openingPayment(2_000_000, BASE, "op-1")],
-        },
-      ],
     );
-    expect(groups[0]!.rows[0]).toMatchObject({
-      opening: true,
-      total: 7_500_000,
-      paid: 2_000_000,
-      owed: 5_500_000,
-    });
   });
 
   it("drops the old-debt row from Receivable once it is paid off", () => {

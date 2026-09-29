@@ -73,10 +73,10 @@ describe("inventoryLines", () => {
     }
   });
 
-  it("gives the sell price over the sellable units, as a range only where they disagree", () => {
+  it("gives the sell price over the sellable units and any already priced, as a range only where they disagree", () => {
     for (const l of lines) {
       const prices = l.units
-        .filter(isSellable)
+        .filter((u) => isSellable(u) || u.price != null)
         .map((u) => priceOf(u, l.listPrice));
       expect(l.store.count).toBe(prices.length);
       if (prices.length > 0) {
@@ -85,10 +85,30 @@ describe("inventoryLines", () => {
         expect(l.store.single).toBe(l.store.min === l.store.max);
       }
     }
-    // A line wholly in QC asks nothing yet — it has not been priced.
-    const inQc = lines.find((l) => l.qc === l.onHand);
-    expect(inQc, "the seed should hold a unit in QC").toBeDefined();
+    // A line wholly in QC with no price of its own asks nothing yet…
+    const inQc = lines.find(
+      (l) => l.qc === l.onHand && l.units.every((u) => u.price == null),
+    );
+    expect(inQc, "the seed should hold an unpriced unit in QC").toBeDefined();
     expect(inQc!.store.count).toBe(0);
+  });
+
+  it("shows the price set at Inbound on a unit still in QC (2026-09-28)", () => {
+    const u = db.units.find((x) => x.status === "QC")!;
+    const priced = db.units.map((x) =>
+      x.serial === u.serial ? { ...x, price: 13_000_000 } : x,
+    );
+    const line = inventoryLines(priced, db, { costOf: total }).find((l) =>
+      l.units.some((x) => x.serial === u.serial),
+    )!;
+    expect(line.store.max).toBeGreaterThanOrEqual(13_000_000);
+    expect(line.store.count).toBeGreaterThan(0);
+    // Still not stock value: it cannot be sold until QC passes it.
+    expect(line.value).toBe(
+      line.units
+        .filter(isSellable)
+        .reduce((t, x) => t + priceOf(x, line.listPrice), 0),
+    );
   });
 
   it("gives the unit price — Unit.buy — over every unit held, QC included", () => {
@@ -132,10 +152,15 @@ describe("inventoryLines", () => {
 
   it("lists a line's available units first, and counts each status once", () => {
     const base = db.units.find((u) => u.status === "TERSEDIA")!;
+    // Unpriced off the shelf, as a unit is before its price is set.
     const copy = (serial: string, status: Unit["status"]): Unit => ({
       ...base,
       serial,
       status,
+      price:
+        status === "TERSEDIA" || status === "DIRESERVASI"
+          ? base.price
+          : undefined,
     });
     const [line, ...rest] = inventoryLines(
       [

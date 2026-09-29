@@ -138,6 +138,87 @@ export const LAYOUT = {
 } as const;
 
 /**
+ * Column widths, by what the column HOLDS (owner ask 2026-09-25: *"for all
+ * the table, make the width per column more equal, but adjust to the most
+ * likely width"*).
+ *
+ * Every table in this app used to pick its own number. A survey on
+ * 2026-09-25 found 44, 46, 48, 56, 60, 64, 76, 80, 88, 90, 96, 100, 110, 120,
+ * 130, 140, 150, 160, 170, 180, 190, 200, 216, 220, 230, 240, 250, 260, 270,
+ * 280, 300, 320 and 340 in use — so a date was 110px on one screen and 160 on
+ * the next, and two lists of the same documents side by side lined up on
+ * nothing. The cost is not only cosmetic: antd hands the leftover width to
+ * the columns that declared none, so one over-wide neighbour squeezes the
+ * column somebody is actually reading.
+ *
+ * The rule these encode is the owner's: **equal, adjusted to the most likely
+ * content**. Columns holding the same KIND of thing get the same width
+ * everywhere, and that width is what the longest realistic value needs —
+ * `Rp 12.500.000` for money, `SC02740137JKM` at 12px monospace for a serial,
+ * `21 Sep 2026` for a date.
+ *
+ * ⚠️ These are for columns whose content has a KNOWN shape. A column of
+ * product names, addresses or free text still takes no width and absorbs the
+ * slack — a table where every column is fixed either scrolls sideways or
+ * leaves a gap at the end.
+ *
+ * **They are MINIMUMS, and tight ones** (owner ask 2026-09-28: *"each column
+ * only have width that are necessary … have a minimum width per column so
+ * when that's the minimum and still wider than the screen, it will have
+ * scrollable table otherwise no"*). A table is as wide as the screen gives
+ * it and scrolls sideways only when these, summed (`gridMinWidth` in
+ * `components/tableCells.ts`), do not fit — which is also what makes a table
+ * follow the browser's zoom: at 125% the same screen holds fewer CSS pixels
+ * and the sum decides again. Each figure is the content plus antd's 16px cell
+ * padding either side, and nothing more.
+ */
+export const COLUMN = {
+  /** A tick, a radio, a drag handle. */
+  tick: 48,
+  /** One icon button. */
+  action: 56,
+  /** A count, a quantity stepper, or a short "n available" line. */
+  qty: 96,
+  /**
+   * The condition: a NEW/A/B/C tag, or the Select that picks one. Sized for
+   * the Select — a column that is a tag on one screen and a control on the
+   * next has to fit the control, or the bench gets a box it cannot read.
+   */
+  grade: 120,
+  /** Two icon buttons. */
+  actions: 104,
+  /** `21 Sep 2026`, and a second line under it. */
+  date: 120,
+  /** A tag carrying one word — a channel, "On hold", "Bought". */
+  tag: 120,
+  /** A tag carrying a phrase — "Partially paid", "From customer". */
+  status: 144,
+  /** `Rp 12.500.000`, right-aligned, under a heading of its own. */
+  money: 136,
+  /** A money INPUT: the box, its thousands separators and its padding. */
+  moneyInput: 144,
+  /** A `Select`: a reason, a method, a warehouse. */
+  choice: 160,
+  /** `SI-2026/09-0042`, a supplier's invoice number, a phone number. */
+  code: 148,
+  /** One button carrying its word, or a word beside an icon. */
+  actionsPair: 188,
+  /** Two buttons that both carry a phrase — *Set price* / *Print barcode*. */
+  actionsWide: 248,
+  /** `SC02740137JKM` at 12px monospace. */
+  serial: 140,
+  /**
+   * What a column that declares NO width is counted at when a table sums its
+   * minimum — a name, an address, a count, free text. Only the scroll
+   * decision reads it: the browser still gives such a column at least its
+   * longest word, and the slack above that.
+   */
+  flex: 120,
+  /** A tick or an expand chevron antd draws itself, as it draws them. */
+  antdControl: 32,
+} as const;
+
+/**
  * The style that centres a form. Spread onto the `<Form>` or the `<Card>` that
  * wraps it.
  *

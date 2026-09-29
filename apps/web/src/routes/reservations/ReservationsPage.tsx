@@ -70,6 +70,7 @@ import { EnumTag } from "../../components/EnumTag";
 import { GradeTag } from "../../components/GradeTag";
 import { LongText } from "../../components/LongText";
 import { fmtDateTime, fmtNone } from "../../lib/format.js";
+import { customerLabel } from "../../lib/customers.js";
 import { itemState, reprojectHolds } from "../../lib/reservations.js";
 import {
   appendEvent,
@@ -82,6 +83,7 @@ import {
 // the render layer does not change when this page goes back to the API.
 import type { Hold, HoldItem, HoldState } from "../../lib/reservationsApi.js";
 import { tagOf, RESERVATION_STATUS } from "../../i18n/enumLabels.js";
+import { COLUMN } from "../../theme/tokens";
 
 /** Machines still waiting to be collected on this hold. */
 const heldOf = (r: Hold): readonly HoldItem[] =>
@@ -192,7 +194,7 @@ export function ReservationsPage() {
         id: r.id,
         code: r.code,
         customerId: r.customerId,
-        customerName: customer?.name ?? fmtNone(),
+        customerName: customer ? customerLabel(customer) : fmtNone(),
         phone: customer?.phone ?? null,
         scheduledFor: r.when,
         note: r.note === "" ? null : r.note,
@@ -474,7 +476,7 @@ export function ReservationsPage() {
               />
             ),
             key: "pick",
-            width: 48,
+            width: COLUMN.tick,
             render: (_, item) => {
               const state = item.state;
               // `ReservationItem.unitId` is nullable in the schema, so an item
@@ -519,7 +521,7 @@ export function ReservationsPage() {
           {
             title: t("reservations.serial", "Serial"),
             dataIndex: "serial",
-            width: 180,
+            width: COLUMN.serial,
           },
           {
             // The dialog exists because picking among near-identical machines
@@ -527,13 +529,13 @@ export function ReservationsPage() {
             // half of what that decision is made on.
             title: t("reservations.grade", "Grade"),
             key: "grade",
-            width: 90,
+            width: COLUMN.grade,
             render: (_, item) => <GradeTag grade={item.grade ?? undefined} />,
           },
           {
             title: t("reservations.status", "Status"),
             key: "state",
-            width: 130,
+            width: COLUMN.tag,
             render: (_, item) => (
               <EnumTag
                 map={RESERVATION_STATUS}
@@ -573,7 +575,7 @@ export function ReservationsPage() {
               {
                 title: t("reservations.customer", "Customer"),
                 key: "customer",
-                width: 180,
+                width: COLUMN.code,
                 searchable: true,
                 facet: true,
                 sortValue: (r) => r.customerName,
@@ -589,7 +591,9 @@ export function ReservationsPage() {
               {
                 title: t("reservations.when", "When"),
                 dataIndex: "scheduledFor",
-                width: 170,
+                // A date with its time on a second line (2026-09-28: widths
+                // are the least the content needs).
+                width: COLUMN.date,
                 // A hold made through chat may carry no appointment at all —
                 // the customer never named one — so the cell has to say that
                 // rather than render an empty box.
@@ -598,7 +602,7 @@ export function ReservationsPage() {
               {
                 title: t("reservations.product", "Product"),
                 key: "product",
-                width: 240,
+                width: 152,
                 searchable: true,
                 searchValue: (r) => r.items.map((i) => i.productName).join(" "),
                 sortValue: (r) => r.items[0]?.productName ?? "",
@@ -617,7 +621,7 @@ export function ReservationsPage() {
                 // serial. That is what "serial per product" asked for.
                 title: t("reservations.serial", "Serial"),
                 key: "serials",
-                width: 180,
+                width: COLUMN.serial,
                 searchable: true,
                 searchValue: (r) => r.items.map((i) => i.serial).join(" "),
                 render: (_, r) => (
@@ -633,7 +637,7 @@ export function ReservationsPage() {
               {
                 title: t("reservations.cameFrom", "Came from"),
                 key: "source",
-                width: 130,
+                width: COLUMN.tag,
                 facet: true,
                 sortValue: (r) => r.channelName ?? fmtNone(),
                 render: (_, r) =>
@@ -642,16 +646,16 @@ export function ReservationsPage() {
               {
                 title: t("reservations.note", "Note"),
                 dataIndex: "note",
-                // Wide enough for the sentence or two staff actually write —
-                // "collecting Saturday, wants the charger checked" — instead
-                // of the ellipsis a 140px column made of it.
-                width: 340,
+                // A floor, not a size (2026-09-28): the sentence or two staff
+                // write wraps over two lines here and takes a wider screen's
+                // slack. 140 was the ellipsis nobody could read.
+                width: 152,
                 render: (v: string) => <LongText>{v}</LongText>,
               },
               {
                 title: t("reservations.status", "Status"),
                 dataIndex: "status",
-                width: 150,
+                width: COLUMN.status,
                 facet: true,
                 sortValue: (r) => tagOf(RESERVATION_STATUS, r.status, t).label,
                 render: (v: string, r) => {
@@ -683,7 +687,8 @@ export function ReservationsPage() {
                 // the foot of the card on a phone, where buttons belong.
                 title: "",
                 key: "actions",
-                width: 100,
+                // One small button, "Units" (2026-09-28: the least it needs).
+                width: 112,
                 render: (_, r) => {
                   const held = heldOf(r).flatMap((i) =>
                     i.serial ? [i.serial] : [],

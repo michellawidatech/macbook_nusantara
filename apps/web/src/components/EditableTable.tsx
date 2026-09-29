@@ -45,6 +45,7 @@ import { SPACE, TYPE, WEIGHT } from "../theme/tokens";
 import { useLayoutMode } from "../layouts/useLayoutMode";
 import {
   cellContent,
+  gridMinWidth,
   isActionColumn,
   keyOf,
   leafColumns,
@@ -299,7 +300,12 @@ export function EditableTable<T extends object>({
   const stacked = leaves.filter(inStackedLayout);
   const fields = stacked.filter((c) => !isActionColumn(c));
   const actions = stacked.filter(isActionColumn);
-  const gridWidth = scrollX ?? declaredWidth(leaves) ?? "max-content";
+  // Every column declared: their sum, laid out `fixed`. Otherwise the same sum
+  // with the open columns counted at their floor, laid out `auto` so they can
+  // wrap and take the slack — never `max-content`, which refused to wrap and
+  // scrolled a grid that fitted (2026-09-28).
+  const declared = declaredWidth(leaves);
+  const gridWidth = scrollX ?? declared ?? gridMinWidth(leaves);
 
   const heading = (record: T, index: number): ReactNode =>
     rowTitle
@@ -457,7 +463,11 @@ export function EditableTable<T extends object>({
        * of Qty's pocket. `fixed` cannot be set when the width is
        * `max-content`, because there is then no total to divide.
        */
-      tableLayout={typeof gridWidth === "number" ? "fixed" : undefined}
+      tableLayout={
+        typeof gridWidth === "number" && (scrollX !== undefined || declared)
+          ? "fixed"
+          : undefined
+      }
       onRow={(record, index) => ({
         ...(onRow?.(record, index) ?? {}),
         ...rowMarker(index ?? 0),

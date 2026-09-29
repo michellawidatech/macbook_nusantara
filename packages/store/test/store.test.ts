@@ -279,3 +279,27 @@ describe("provisional document codes", () => {
     });
   });
 });
+
+describe("a customer is a name or a phone number (owner ask 2026-09-24)", () => {
+  const customer = (extra: Record<string, unknown>) => ({
+    id: "cus-1",
+    createdAt: "2026-09-24T03:00:00.000Z",
+    ...extra,
+  });
+
+  it("carries one recorded by number alone, and one by name alone", () => {
+    expect(
+      encodeRow("customers", customer({ name: "", phone: "+62811223344" })),
+    ).toMatchObject({ name: "", phone: "+62811223344" });
+    // The B2Soft customers: a name and no number (2026-09-13).
+    expect(
+      encodeRow("customers", customer({ name: "Budi", phone: "" })),
+    ).toMatchObject({ name: "Budi", phone: "" });
+  });
+
+  it("refuses one with neither", () => {
+    expect(() =>
+      encodeRow("customers", customer({ name: " ", phone: "" })),
+    ).toThrow();
+  });
+});

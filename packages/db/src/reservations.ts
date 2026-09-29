@@ -534,6 +534,59 @@ export async function releaseHold(
   };
 }
 
+// --- moving ----------------------------------------------------------------
+
+export interface RescheduleHoldInput {
+  /** The chat branch only: the sender's own phone, and optionally a code. */
+  readonly target: { readonly phone: string; readonly code?: string };
+  readonly scheduledFor: Date;
+  readonly at: Date;
+  readonly policy?: HoldPolicy;
+}
+
+/**
+ * Move an open hold to another day or time (owner ask 2026-09-29: the bot may
+ * "make / check / edit / cancel" a booking).
+ *
+ * Same lock, same phone-scoped resolution and same schedule policy as the two
+ * functions above, so a customer cannot move a stranger's booking by naming
+ * its code, and the bot cannot move one outside opening hours. The units stay
+ * held throughout — nothing about them changes — so no `UnitEvent` is written:
+ * the ledger records what happened to a unit, and a new appointment time is
+ * not something that happened to one.
+ *
+ * @throws HoldNotFoundError | AmbiguousHoldError | HoldAlreadySettledError
+ * @throws BookingInPastError | BookingTooFarAheadError | OutsideStoreHoursError
+ */
+export async function rescheduleHold(
+  tx: Tx,
+  input: RescheduleHoldInput,
+): Promise<{ id: string; code: string; scheduledFor: Date }> {
+  assertSchedule(input.scheduledFor, input.at, input.policy);
+  await advisoryLock(tx, `hold:${input.target.phone}`);
+  const target = await resolveTarget(tx, {
+    phone: input.target.phone,
+    ...(input.target.code ? { code: input.target.code } : {}),
+  });
+  const [locked] = await tx.$queryRaw<
+    { id: string; code: string; status: ReservationStatus }[]
+  >(
+    Prisma.sql`
+      SELECT id, code, status FROM "Reservation" WHERE id = ${target.id} FOR UPDATE
+    `,
+  );
+  if (!locked) throw new HoldNotFoundError(target.code);
+  if (locked.status !== "TERJADWAL")
+    throw new HoldAlreadySettledError(locked.code, locked.status);
+
+  await tx.reservation.update({
+    where: { id: locked.id },
+    data: { scheduledFor: input.scheduledFor },
+  });
+  await recordStoreChanges(tx, [["reservations", locked.id]]);
+  return { id: locked.id, code: locked.code, scheduledFor: input.scheduledFor };
+}
+
 // --- projection ------------------------------------------------------------
 
 /**

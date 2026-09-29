@@ -72,7 +72,8 @@ import {
 } from "../../components/CatalogueFilter";
 import { fmtDateTime, fmtNone } from "../../lib/format.js";
 import { PAGE_SEARCH_ATTR } from "../../lib/keyboardNav";
-import { useDb } from "../../mock/store.js";
+import { qcPhotosOf, useDb } from "../../mock/store.js";
+import { UnitPhotos } from "../../components/UnitPhotos";
 import { resolveSerialQuery } from "../../lib/serialInput.js";
 import {
   catalogueTree,
@@ -84,7 +85,7 @@ import {
 import type { MockDb } from "../../mock/seed.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
-import { SPACE, TYPE } from "../../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import { labelOf, UNIT_EVENT } from "../../i18n/enumLabels.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { asListOf, asString } from "../../lib/draftGuards.js";
@@ -354,6 +355,19 @@ function SerialList({
                 }),
           },
           {
+            // The serial's QC photographs, read-only (owner ask 2026-09-29).
+            // A sold unit has none: they are purged at the sale.
+            title: t("snTracking.photos", "Photos"),
+            key: "photos",
+            width: COLUMN.actionsPair,
+            render: (_, r) =>
+              qcPhotosOf(db, r.serial).length === 0 ? (
+                fmtNone()
+              ) : (
+                <UnitPhotos serial={r.serial} size={36} max={3} />
+              ),
+          },
+          {
             title: t("snTracking.warehouse", "Warehouse"),
             dataIndex: "warehouse",
             render: (v: string) => v || fmtNone(),
@@ -388,7 +402,7 @@ function SerialList({
             // foot of the card on a phone, where buttons belong.
             title: "",
             key: "actions",
-            width: 160,
+            width: COLUMN.actionsPair,
             render: (_, r) => (
               <Button
                 size="small"

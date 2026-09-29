@@ -104,7 +104,7 @@ describe("the order form's products", () => {
     expect(screen.getAllByLabelText(/^Discount on /)).toHaveLength(1);
     expect(
       screen.getByRole("button", { name: /Serials and QC for/ }),
-    ).toHaveTextContent("Units (0/3)");
+    ).toHaveTextContent("See all units (0/3)");
   });
 
   it("puts the caret in the new line's picker", async () => {

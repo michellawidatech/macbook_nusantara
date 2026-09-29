@@ -41,10 +41,13 @@
  */
 import { useMemo, useState } from "react";
 import {
+  Alert,
   App,
   Button,
   Card,
+  DatePicker,
   Flex,
+  Modal,
   Statistic,
   Tag,
   Tooltip,
@@ -55,12 +58,15 @@ import {
   DownloadOutlined,
   EditOutlined,
   FileTextOutlined,
+  LockOutlined,
+  UnlockOutlined,
 } from "@ant-design/icons";
-import dayjs from "dayjs";
+import dayjs, { type Dayjs } from "dayjs";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { InvoiceModal } from "../../components/Invoice";
 import { fmtRp, fmtDate, fmtDateTime, fmtNone } from "../../lib/format.js";
+import { customerLabel } from "../../lib/customers.js";
 import { currentStaffName, mutate, nextId, useDb } from "../../mock/store.js";
 import type { Order } from "../../mock/seed.js";
 import { EditTransactionModal } from "./EditTransactionModal";
@@ -82,7 +88,8 @@ import {
   type SaleReturnStatus,
 } from "../../lib/saleStatus.js";
 import { labelOf, ORDER_SOURCE } from "../../i18n/enumLabels.js";
-import { SPACE, TYPE } from "../../theme/tokens";
+import { booksClosedAt, endOfDay, isBookClosed } from "../../lib/bookClose.js";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
 
 /**
@@ -157,10 +164,48 @@ function toCsv(
 export function TransactionsPage() {
   const { t } = useTranslation();
   const db = useDb();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [reprint, setReprint] = useState<Order | null>(null);
   /** Null when the editor is shut; the sale it is about when open. */
   const [editing, setEditing] = useState<Order | null>(null);
+  /** The Close book dialog's date, or null while it is shut. */
+  const [closingTo, setClosingTo] = useState<Dayjs | null>(null);
+
+  /**
+   * The book (owner ask 2026-09-24: *"add a close book button to close and
+   * lock all the transaction"*). `lib/bookClose.ts` is the rule; this is the
+   * button and what it disables.
+   */
+  const closedTo = booksClosedAt(db.settings);
+  const locked = (at: string) => isBookClosed(at, db.settings);
+
+  const closeBook = () => {
+    const day = closingTo;
+    if (day === null) return;
+    const at = endOfDay(day.toDate());
+    const count = sales.filter((r) => r.at <= at).length;
+    setClosingTo(null);
+    modal.confirm({
+      title: t("transactions.closeBookTitle", "Close the book to {{date}}?", {
+        date: fmtDate(at),
+      }),
+      content: t(
+        "transactions.closeBookBody",
+        "{{count}} transaction(s) on or before that day become read-only: no edits, and no further payments against them. You can reopen the book at any time.",
+        { count },
+      ),
+      okText: t("transactions.closeBookOk", "Close the book"),
+      onOk: () =>
+        mutate((d) => {
+          d.settings.booksClosedAt = at;
+        }),
+    });
+  };
+
+  const reopenBook = () =>
+    mutate((d) => {
+      delete d.settings.booksClosedAt;
+    });
 
   /*
    * The words for each status, in a switch rather than a lookup table so
@@ -196,7 +241,10 @@ export function TransactionsPage() {
     mutate((d) => {
       for (const order of orders) {
         const o = d.orders.find((x) => x.id === order.id);
-        if (!o) continue;
+        // A closed period does not take money (owner answer 2026-09-24). The
+        // button is already hidden for such a row; this is the writer saying
+        // the same thing, because `orders` is whatever was ticked.
+        if (!o || locked(o.ts)) continue;
         const before = paymentsOf(o);
         if (!before.some((p) => p.state === "PENDING")) continue;
         const next = before.map((p) =>
@@ -268,7 +316,9 @@ export function TransactionsPage() {
           code: o.code,
           ...(ref === undefined ? {} : { ref }),
           channel: labelOf(ORDER_SOURCE, o.source, t),
-          customer: customer?.name ?? t("piutang.walkIn", "Walk-in"),
+          customer: customer
+            ? customerLabel(customer)
+            : t("piutang.walkIn", "Walk-in"),
           salesperson:
             o.salesmanId === undefined
               ? undefined
@@ -368,6 +418,32 @@ export function TransactionsPage() {
       title={t("transactions.transactionHistory", "Transaction History")}
     >
       <Flex vertical gap={16}>
+        {closedTo !== undefined && (
+          /*
+           * The banner IS the way back, one click, for the reason the closed
+           * invoice's banner gives: a lock nobody can lift is a lock people
+           * work around.
+           */
+          <Alert
+            type="info"
+            showIcon
+            title={t("transactions.bookClosedTitle", "The book is closed")}
+            description={t(
+              "transactions.bookClosedBody",
+              "Every transaction up to {{date}} is read-only and takes no further payments. Reopen the book to correct one.",
+              { date: fmtDate(closedTo) },
+            )}
+            action={
+              <Button
+                size="small"
+                icon={<UnlockOutlined />}
+                onClick={reopenBook}
+              >
+                {t("transactions.reopenBook", "Reopen the book")}
+              </Button>
+            }
+          />
+        )}
         <Flex gap={16} wrap>
           <Card style={{ flex: 1, minWidth: 200 }}>
             <Statistic
@@ -415,12 +491,20 @@ export function TransactionsPage() {
             )}
             selectable
             extra={
-              <Button
-                icon={<DownloadOutlined />}
-                onClick={() => exportCsv(sales)}
-              >
-                {t("transactions.exportAll", "Export all")}
-              </Button>
+              <Flex gap={SPACE.sm} wrap>
+                <Button
+                  icon={<LockOutlined />}
+                  onClick={() => setClosingTo(dayjs())}
+                >
+                  {t("transactions.closeBook", "Close book")}
+                </Button>
+                <Button
+                  icon={<DownloadOutlined />}
+                  onClick={() => exportCsv(sales)}
+                >
+                  {t("transactions.exportAll", "Export all")}
+                </Button>
+              </Flex>
             }
             bulkActions={(selected, clear) => {
               const received = selected.reduce(
@@ -452,12 +536,18 @@ export function TransactionsPage() {
                       nothing else — a withdrawal whose fees somebody wants
                       itemised is `Receive` on Pending Payment, which keeps a
                       settlement document. */}
-                  {selected.some((r) => r.balance.pending > 0) && (
+                  {selected.some(
+                    (r) => r.balance.pending > 0 && !locked(r.at),
+                  ) && (
                     <Button
                       size="small"
                       icon={<CheckCircleOutlined />}
                       onClick={() => {
-                        settlePending(selected.map((r) => r.order));
+                        settlePending(
+                          selected
+                            .filter((r) => !locked(r.at))
+                            .map((r) => r.order),
+                        );
                         clear();
                       }}
                     >
@@ -471,7 +561,7 @@ export function TransactionsPage() {
               {
                 title: t("transactions.orderNumber", "Order number"),
                 key: "order",
-                width: 170,
+                width: COLUMN.code,
                 // Newest first, by when it was sold — which is also the order
                 // the SI codes run in.
                 defaultSortOrder: "descend",
@@ -485,7 +575,7 @@ export function TransactionsPage() {
               {
                 title: t("transactions.referenceId", "Reference ID"),
                 key: "ref",
-                width: 170,
+                width: COLUMN.code,
                 searchable: true,
                 searchValue: (r) => r.ref ?? "",
                 sortValue: (r) => r.ref ?? "",
@@ -501,7 +591,7 @@ export function TransactionsPage() {
               {
                 title: t("transactions.date", "Date"),
                 key: "at",
-                width: 140,
+                width: COLUMN.date,
                 dateRange: true,
                 facetLabel: t("transactions.date", "Date"),
                 sortValue: (r) => Date.parse(r.at),
@@ -510,7 +600,7 @@ export function TransactionsPage() {
               {
                 title: t("transactions.channel", "Channel"),
                 key: "channel",
-                width: 130,
+                width: COLUMN.tag,
                 facet: true,
                 facetLabel: t("transactions.channel", "Channel"),
                 facetValue: (r) => r.channel,
@@ -520,7 +610,6 @@ export function TransactionsPage() {
               {
                 title: t("transactions.customer", "Customer"),
                 key: "customer",
-                width: 170,
                 searchable: true,
                 searchValue: (r) => r.customer,
                 sortValue: (r) => r.customer,
@@ -562,7 +651,7 @@ export function TransactionsPage() {
               {
                 title: t("transactions.serialNumber", "Serial number"),
                 key: "serial",
-                width: 190,
+                width: COLUMN.serial,
                 searchable: true,
                 searchValue: (r) => r.lines.map((l) => l.serial).join(" "),
                 render: (_, r) =>
@@ -590,7 +679,7 @@ export function TransactionsPage() {
               {
                 title: t("transactions.paymentStatus", "Payment status"),
                 key: "payStatus",
-                width: 160,
+                width: COLUMN.status,
                 facet: true,
                 facetLabel: t("transactions.paymentStatus", "Payment status"),
                 facetValue: (r) => payLabel(r.payStatus),
@@ -632,7 +721,7 @@ export function TransactionsPage() {
                 title: t("transactions.received", "Received"),
                 key: "received",
                 align: "right",
-                width: 160,
+                width: COLUMN.money,
                 sortValue: (r) => r.balance.settled,
                 render: (_, r) => (
                   <Flex vertical align="flex-end" gap={0}>
@@ -655,7 +744,7 @@ export function TransactionsPage() {
                 // the foot of the card on a phone, where buttons belong.
                 title: "",
                 key: "actions",
-                width: 96,
+                width: COLUMN.actions,
                 render: (_, r) => (
                   <Flex gap={4}>
                     <Tooltip
@@ -673,18 +762,30 @@ export function TransactionsPage() {
                       />
                     </Tooltip>
                     <Tooltip
-                      title={t("transactions.editSale", "Edit transaction")}
+                      title={
+                        locked(r.at)
+                          ? t(
+                              "transactions.editLocked",
+                              "The book is closed over this date. Reopen it to change this sale.",
+                            )
+                          : t("transactions.editSale", "Edit transaction")
+                      }
                     >
-                      <Button
-                        size="small"
-                        aria-label={t(
-                          "transactions.editSaleAria",
-                          "Edit {{code}}",
-                          { code: r.code },
-                        )}
-                        icon={<EditOutlined />}
-                        onClick={() => setEditing(r.order)}
-                      />
+                      {/* A span, so a disabled button still answers a hover:
+                          antd's Tooltip needs an element that fires events. */}
+                      <span>
+                        <Button
+                          size="small"
+                          disabled={locked(r.at)}
+                          aria-label={t(
+                            "transactions.editSaleAria",
+                            "Edit {{code}}",
+                            { code: r.code },
+                          )}
+                          icon={<EditOutlined />}
+                          onClick={() => setEditing(r.order)}
+                        />
+                      </span>
                     </Tooltip>
                   </Flex>
                 ),
@@ -699,6 +800,37 @@ export function TransactionsPage() {
         order={editing}
         onClose={() => setEditing(null)}
       />
+
+      {/*
+       * Close book. A date, because a book is closed to a day and not "now":
+       * the shop closes September in October, and the transactions of the days
+       * in between must stay live.
+       */}
+      <Modal
+        open={closingTo !== null}
+        title={t("transactions.closeBook", "Close book")}
+        okText={t("transactions.closeBookOk", "Close the book")}
+        onCancel={() => setClosingTo(null)}
+        onOk={closeBook}
+        okButtonProps={{ disabled: closingTo === null }}
+        destroyOnHidden
+      >
+        <Flex vertical gap={SPACE.sm}>
+          <Typography.Text>
+            {t(
+              "transactions.closeBookAsk",
+              "Lock every transaction up to and including this day.",
+            )}
+          </Typography.Text>
+          <DatePicker
+            value={closingTo}
+            onChange={setClosingTo}
+            allowClear={false}
+            style={{ width: "100%" }}
+            aria-label={t("transactions.closeBookDate", "Close the book to")}
+          />
+        </Flex>
+      </Modal>
 
       <InvoiceModal
         db={db}

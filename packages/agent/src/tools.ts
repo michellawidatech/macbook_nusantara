@@ -46,6 +46,8 @@ import {
   TXN_TIMEOUTS,
   createHold,
   releaseHold,
+  rescheduleHold,
+  recordStoreChanges,
   AmbiguousHoldError,
   BookingInPastError,
   BookingTooFarAheadError,
@@ -64,6 +66,7 @@ import { isStrongMatch } from "./retrieval.js";
 import {
   HANDOFF_TOPICS,
   PARALLEL_CAPABILITIES,
+  effectiveCapabilities,
   type AgentCapabilities,
 } from "./policy.js";
 import { lookupCatalog } from "./systemFacts.js";
@@ -104,7 +107,25 @@ export interface ToolContext {
     readonly write: PrismaClient;
     /** The reserved agent Staff row. A `UnitEvent` must be attributable. */
     readonly staffId: string;
+    /**
+     * How long after a missed appointment the worker's expiry pass lets the
+     * hold go, so a booking can tell the customer until when it is held
+     * rather than leaving the model to make that up.
+     */
+    readonly graceMs?: number;
   };
+  /**
+   * Present when the caller may record what the customer says about
+   * themselves (`remember_customer`, owner ask 2026-09-29). The worker passes
+   * it; the staff Draft page does not, because a draft must not write.
+   */
+  readonly profile?: { readonly write: PrismaClient };
+  /**
+   * The shop's switches (policy.ts). Read by the tools that can say a price,
+   * so a figure is left out of a result the price switch forbids — the model
+   * cannot quote what it was never shown.
+   */
+  readonly capabilities?: AgentCapabilities;
   /** Writes already made this turn, so a retry cannot double-book. */
   readonly writesUsed?: Set<string>;
   /**
@@ -478,6 +499,13 @@ const HANDOFF: Anthropic.Tool = {
         description:
           "For the colleague, in Indonesian: what the customer wants, naming the model or specification if they gave one.",
       },
+      serial: {
+        type: "string",
+        maxLength: 40,
+        description:
+          "The serial of the unit this is about, when a stock lookup gave you one — so the " +
+          "colleague sees the unit and its price without reading the chat.",
+      },
       customer_message: {
         type: "string",
         maxLength: 600,
@@ -572,17 +600,130 @@ const CANCEL_RESERVATION: Anthropic.Tool = {
   },
 };
 
+/**
+ * The shop's photos of the best unit that fits a description (owner ask
+ * 2026-09-29): "if there are several, pick the best one — the most expensive —
+ * tell the price, then ask whether they want to see another unit with better
+ * specs or a better price; if there is only one, send its picture".
+ */
+const FIND_UNIT_PHOTOS: Anthropic.Tool = {
+  name: "find_unit_photos",
+  description:
+    "Photos of a unit for a customer who asked to see one by model rather than by serial. Picks " +
+    "the most expensive matching unit that has photos and returns its photo handles, which you " +
+    "pass to reply as 'photos'. You never see the pictures, so describe nothing about them. " +
+    "Follow the guidance in the result about offering another unit.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        maxLength: 120,
+        description:
+          "The model as the customer named it, for example 'air m2' or 'pro 14 m3 grade a'.",
+      },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+};
+
+const CHECK_RESERVATION: Anthropic.Tool = {
+  name: "check_reservation",
+  description:
+    "This customer's own open bookings: the code, the day and time, and the unit held. Takes no " +
+    "arguments, it is always about this conversation.",
+  input_schema: {
+    type: "object",
+    properties: {},
+    required: [],
+    additionalProperties: false,
+  },
+};
+
+const RESCHEDULE_RESERVATION: Anthropic.Tool = {
+  name: "reschedule_reservation",
+  description:
+    "Move this customer's own booking to another day or time. The unit stays held. Only ever " +
+    "touches this customer's own booking. Call it only once they have given the new day and time.",
+  input_schema: {
+    type: "object",
+    properties: {
+      when: {
+        type: "string",
+        maxLength: 20,
+        description:
+          "The NEW Jakarta local date and time as YYYY-MM-DDTHH:MM. Work out the real date from " +
+          "the shop facts first. Never send a word like besok.",
+      },
+      code: {
+        type: "string",
+        maxLength: 30,
+        description:
+          "The booking code, for example RV-2026/08-000012, if the customer has more than one.",
+      },
+    },
+    required: ["when"],
+    additionalProperties: false,
+  },
+};
+
+/**
+ * What the customer has told the bot about themselves (owner ask 2026-09-29:
+ * "the goal is always to get to know the user first, store the user data").
+ * Every field is the customer's own words; none of it is shop state.
+ */
+const REMEMBER_CUSTOMER: Anthropic.Tool = {
+  name: "remember_customer",
+  description:
+    "Save what the customer has just told you about themselves, so the shop remembers it and " +
+    "you never ask twice. Call it whenever they tell you their name, what they will use the " +
+    "unit for, their budget, what they use now or a preference. Only what they actually said.",
+  input_schema: {
+    type: "object",
+    properties: {
+      name: { type: "string", maxLength: 80, description: "Their name." },
+      use_case: {
+        type: "string",
+        maxLength: 160,
+        description:
+          "What they want it for, in a few words: kuliah, editing video, kantor.",
+      },
+      budget: {
+        type: "integer",
+        minimum: 1,
+        description:
+          "The budget they stated, in whole rupiah. 15 juta is 15000000.",
+      },
+      current_device: {
+        type: "string",
+        maxLength: 120,
+        description: "What they use now, if they said.",
+      },
+      preference: {
+        type: "string",
+        maxLength: 200,
+        description: "Anything else they want: size, colour, light, a grade.",
+      },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+};
+
 /** Reads, plus the escalation exit. */
 export const READ_TOOLS = [
   "search_stock",
   "check_serial",
   "unit_photos",
+  "find_unit_photos",
   "store_info",
   "browse_catalog",
   "lookup_customer",
   "check_order",
   "search_knowledge",
   "lookup_catalog",
+  "check_reservation",
   "handoff_to_staff",
 ] as const;
 
@@ -620,10 +761,27 @@ export const STOCK_TOOLS = [
   "search_stock",
   "check_serial",
   "browse_catalog",
-  "unit_photos",
   "lookup_customer",
   "check_order",
 ] as const;
+
+/** The photo switch's tools. */
+export const PHOTO_TOOLS = ["unit_photos", "find_unit_photos"] as const;
+
+/**
+ * The booking switch's tools — the whole lifecycle since 2026-09-29 (owner:
+ * "make / check / edit / cancel reservation"). Each is scoped to the sender's
+ * phone from the WhatsApp envelope, never an argument.
+ */
+export const RESERVATION_TOOLS = [
+  "create_reservation",
+  "check_reservation",
+  "reschedule_reservation",
+  "cancel_reservation",
+] as const;
+
+/** Offered whenever the caller can record a profile, whatever the switches. */
+export const PROFILE_TOOLS = ["remember_customer"] as const;
 
 /**
  * Writes: offered only to a caller holding a reserve capability.
@@ -635,13 +793,18 @@ export const STOCK_TOOLS = [
  * thing a model can see. A customer asking to cancel goes to a person, which
  * is also where somebody can ask them why.
  */
-export const WRITE_TOOLS = ["create_reservation"] as const;
+export const WRITE_TOOLS = [
+  "create_reservation",
+  "reschedule_reservation",
+  "cancel_reservation",
+] as const;
 
 /** The complete surface. Changing this array is a policy decision. */
 export const ANTHROPIC_TOOLS: Anthropic.Tool[] = [
   SEARCH_STOCK,
   CHECK_SERIAL,
   UNIT_PHOTOS,
+  FIND_UNIT_PHOTOS,
   STORE_INFO,
   BROWSE_CATALOG,
   LOOKUP_CUSTOMER,
@@ -651,7 +814,10 @@ export const ANTHROPIC_TOOLS: Anthropic.Tool[] = [
   HANDOFF,
   REPLY,
   CREATE_RESERVATION,
+  CHECK_RESERVATION,
+  RESCHEDULE_RESERVATION,
   CANCEL_RESERVATION,
+  REMEMBER_CUSTOMER,
 ];
 
 /**
@@ -674,24 +840,22 @@ export function toolsFor(
     capabilities?: AgentCapabilities;
   } = {},
 ): Anthropic.Tool[] {
-  const can = opts.capabilities ?? PARALLEL_CAPABILITIES;
+  const can = effectiveCapabilities(opts.capabilities ?? PARALLEL_CAPABILITIES);
   const names = new Set<string>(CUSTOMER_TOOLS);
-  if (can.stock) {
-    for (const n of STOCK_TOOLS) {
-      // The photo tool is its own capability: a shop may want the bot quoting
-      // stock without it sending pictures it has not looked at.
-      if (n === "unit_photos" && !can.photos) continue;
-      names.add(n);
-    }
-  }
+  if (ctx.profile !== undefined) for (const n of PROFILE_TOOLS) names.add(n);
+  if (can.stock) for (const n of STOCK_TOOLS) names.add(n);
+  // The photo tools are their own switch: a shop may want the bot quoting
+  // stock without it sending pictures nobody has looked at.
+  if (can.photos) for (const n of PHOTO_TOOLS) names.add(n);
   /*
-   * A write needs BOTH the shop's policy and the caller's own capability. The
-   * staff Draft page passes no `reserve` capability at all, because pressing
-   * Draft should propose a sentence and not book a reservation — so a booking
-   * tool reaching it would be a button with a side effect nobody asked for.
+   * A booking needs BOTH the shop's switch and the caller's own capability.
+   * The staff Draft page passes no `reserve` capability at all, because
+   * pressing Draft should propose a sentence and not book a reservation — so
+   * a booking tool reaching it would be a button with a side effect nobody
+   * asked for.
    */
   if (can.reserve && ctx.reserve !== undefined) {
-    for (const n of WRITE_TOOLS) names.add(n);
+    for (const n of RESERVATION_TOOLS) names.add(n);
   }
   if (opts.handoffOnly) names.delete("reply");
   return ANTHROPIC_TOOLS.filter((t) => names.has(t.name));
@@ -797,11 +961,7 @@ function tokens(query: string): string[] {
  * previous build had the same predicate in two places, they drifted, and a
  * customer was told "stok 4 unit" and then watched the booking fail.
  */
-function stockWhere(args: {
-  query?: string;
-  minPrice?: bigint;
-  maxPrice?: bigint;
-}) {
+function stockWhere(args: { query?: string }) {
   // An unusable query narrows to nothing rather than widening to everything.
   // "%" must not list the whole shop.
   const words = args.query ? tokens(args.query) : [];
@@ -811,21 +971,12 @@ function stockWhere(args: {
     status: "TERSEDIA" as const,
     archivedAt: null,
     ...(grade ? { grade } : {}),
-    // Price lives on the SKU, so a budget filter is a filter on the variant.
-    // No `not: null` any more — `Sku.price` is NOT NULL, so "in stock" and
-    // "has a price" are the same set and the old guard against an unpriced
-    // unit reaching a customer has nothing left to guard.
+    // The budget is NOT filtered here since 2026-09-29: a unit's price is
+    // `Unit.price ?? Sku.price` and Prisma cannot compare a COALESCE, so
+    // `searchStock` filters on `askingPrice` after the read.
     sku: {
       archived: false,
       model: { archived: false },
-      ...(args.minPrice !== undefined || args.maxPrice !== undefined
-        ? {
-            price: {
-              ...(args.minPrice !== undefined ? { gte: args.minPrice } : {}),
-              ...(args.maxPrice !== undefined ? { lte: args.maxPrice } : {}),
-            },
-          }
-        : {}),
     },
     // An empty serial is valid text and can never be a real one. A NUL byte
     // would be the obvious sentinel and Postgres rejects it outright.
@@ -877,9 +1028,44 @@ const label = (u: {
   ...(u.sku.variantLabel ? { variant: u.sku.variantLabel } : {}),
 });
 
+/**
+ * What THIS unit asks: its own price, else its variant's (owner revision
+ * 2026-09-08 — price is per unit, `Sku.price` is only where one starts). Null
+ * when the POS holds no price, or holds 0: the bot must never quote a unit the
+ * shop has not priced, and 0 is a price nobody set (owner ask 2026-09-29).
+ */
+export function askingPrice(u: {
+  readonly price: bigint | null;
+  readonly sku: { readonly price: bigint };
+}): bigint | null {
+  const p = u.price ?? u.sku.price;
+  return p > 0n ? p : null;
+}
+
+const NO_PRICE_NOTE =
+  "The shop has not set a price for this unit. Do NOT state, estimate or round one. If the " +
+  "customer wants the price, use handoff_to_staff with topic price and this unit's serial.";
+
+/** The price fields of a result, as the price switch allows them. */
+function quote(
+  p: bigint | null,
+  ctx: ToolContext,
+): { price?: string | null; priceNote?: string } {
+  if (!effectiveCapabilities(ctx.capabilities ?? PARALLEL_CAPABILITIES).price)
+    return {};
+  return p === null
+    ? { price: null, priceNote: NO_PRICE_NOTE }
+    : { price: formatRupiah(p) };
+}
+
+const pricesOn = (ctx: ToolContext) =>
+  effectiveCapabilities(ctx.capabilities ?? PARALLEL_CAPABILITIES).price;
+
 const UNIT_SELECT = {
   serial: true,
   grade: true,
+  // What THIS unit asks (2026-09-08). Null falls back to the variant's.
+  price: true,
   sku: {
     select: {
       name: true,
@@ -893,38 +1079,63 @@ const UNIT_SELECT = {
   },
 } as const;
 
-async function searchStock(db: PrismaClient, args: Record<string, unknown>) {
+/** How many rows a price-aware search reads before filtering in code. */
+const PRICE_SCAN_LIMIT = 500;
+
+async function searchStock(
+  db: PrismaClient,
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+) {
   const query = String(args["query"] ?? "").trim();
   const num = (v: unknown): bigint | undefined =>
     typeof v === "number" && Number.isFinite(v) && v > 0
       ? BigInt(Math.floor(v))
       : undefined;
-  const where = stockWhere({
-    query,
-    minPrice: num(args["minPrice"]),
-    maxPrice: num(args["maxPrice"]),
-  });
-  const sort = String(args["sort"] ?? "newest");
-  const orderBy =
-    sort === "cheapest"
-      ? ({ sku: { price: "asc" } } as const)
-      : sort === "priciest"
-        ? ({ sku: { price: "desc" } } as const)
-        : ({ intakeAt: "desc" } as const);
+  // With the price switch off a budget is not the bot's to apply: filtering
+  // or sorting by price would say what things cost without saying a figure.
+  const priced = pricesOn(ctx);
+  const minPrice = priced ? num(args["minPrice"]) : undefined;
+  const maxPrice = priced ? num(args["maxPrice"]) : undefined;
+  const sort = priced ? String(args["sort"] ?? "newest") : "newest";
+  const where = stockWhere({ query });
 
-  const [units, total] = await Promise.all([
-    db.unit.findMany({
-      where,
-      select: UNIT_SELECT,
-      orderBy,
-      take: SEARCH_LIMIT,
-    }),
-    db.unit.count({ where }),
-  ]);
+  const rows = await db.unit.findMany({
+    where,
+    select: { ...UNIT_SELECT, intakeAt: true },
+    orderBy: { intakeAt: "desc" },
+    take: PRICE_SCAN_LIMIT,
+  });
+  let units = rows.filter((u) => {
+    if (minPrice === undefined && maxPrice === undefined) return true;
+    const p = askingPrice(u);
+    if (p === null) return false;
+    return (
+      (minPrice === undefined || p >= minPrice) &&
+      (maxPrice === undefined || p <= maxPrice)
+    );
+  });
+  if (sort === "cheapest" || sort === "priciest") {
+    const dir = sort === "cheapest" ? 1 : -1;
+    units = [...units].sort((a, b) => {
+      const pa = askingPrice(a);
+      const pb = askingPrice(b);
+      if (pa === null) return 1;
+      if (pb === null) return -1;
+      return pa === pb ? 0 : (pa < pb ? -1 : 1) * dir;
+    });
+  }
+  const total =
+    rows.length < PRICE_SCAN_LIMIT ||
+    minPrice !== undefined ||
+    maxPrice !== undefined
+      ? units.length
+      : await db.unit.count({ where });
+  const shown = units.slice(0, SEARCH_LIMIT);
 
   return {
     matched: total,
-    showing: units.length,
+    showing: shown.length,
     // `matched` is for the model's judgement, and reading it out as a headline
     // is what made the bot sound like a query result: "ada 90 unit bahkan".
     // Answering "how many are left" is a fair question and still gets a number.
@@ -932,7 +1143,7 @@ async function searchStock(db: PrismaClient, args: Record<string, unknown>) {
       "matched is how many sellable units fit this search. Answer with the number when the " +
       "customer actually asked how many are left. Otherwise do not lead with it, just say what " +
       "there is and pick the one that suits them.",
-    ...(total > units.length
+    ...(total > shown.length
       ? {
           // This note used to end "Ask the customer what they need so you can
           // narrow it down", and a tool result is read as an instruction: a
@@ -941,22 +1152,26 @@ async function searchStock(db: PrismaClient, args: Record<string, unknown>) {
           // narrowing that was wanted is of the SEARCH, and the model is the
           // one holding the query.
           note:
-            `${total} units match and these ${units.length} are an arbitrary slice of them, not ` +
+            `${total} units match and these ${shown.length} are an arbitrary slice of them, not ` +
             `the best ones. Narrow the SEARCH rather than asking the customer to narrow it for ` +
             `you: search again with a query naming the kind of machine they need, and sort by ` +
             `price so the list means something. Then recommend from what comes back.`,
         }
       : {}),
-    units: units.map((u) => ({
+    units: shown.map((u) => ({
       serial: u.serial,
       ...label(u),
       ...(u.grade ? { grade: u.grade } : {}),
-      price: formatRupiah(u.sku.price),
+      ...quote(askingPrice(u), ctx),
     })),
   };
 }
 
-async function checkSerial(db: PrismaClient, args: Record<string, unknown>) {
+async function checkSerial(
+  db: PrismaClient,
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+) {
   const serial = String(args["serial"] ?? "").trim();
   if (!serial) return { error: "No serial given." };
 
@@ -966,6 +1181,7 @@ async function checkSerial(db: PrismaClient, args: Record<string, unknown>) {
       ...UNIT_SELECT,
       status: true,
       archivedAt: true,
+      price: true,
       // Spelled out rather than spread, because this select REPLACES the one
       // in UNIT_SELECT rather than merging with it — `price` has to be named
       // again here or the quote falls off the answer.
@@ -1005,7 +1221,7 @@ async function checkSerial(db: PrismaClient, args: Record<string, unknown>) {
     ...(unit.grade ? { grade: unit.grade } : {}),
     available,
     ...(available
-      ? { price: formatRupiah(unit.sku.price) }
+      ? quote(askingPrice(unit), ctx)
       : {
           note: "This unit is not available. You do not know why, so do not speculate.",
         }),
@@ -1090,50 +1306,52 @@ async function unitPhotos(db: PrismaClient, args: Record<string, unknown>) {
   };
 }
 
-async function browseCatalog(db: PrismaClient) {
-  const where = stockWhere({});
-  // Counts only. The price range used to be `_min`/`_max` over the units in
-  // each group, which was the right question while a unit carried its own
-  // price; now every unit of a SKU quotes the SKU's price, so the range across
-  // a model is the range across its VARIANTS and comes from the rows below.
-  const grouped = await db.unit.groupBy({
-    by: ["skuId"],
-    where,
-    _count: { _all: true },
-  });
-  if (grouped.length === 0) return { categories: [] };
+/** How many units a catalogue overview reads. Counts past it are approximate. */
+const BROWSE_SCAN_LIMIT = 2_000;
 
-  const skus = await db.sku.findMany({
-    where: { id: { in: grouped.map((g) => g.skuId).slice(0, 200) } },
+async function browseCatalog(db: PrismaClient, ctx: ToolContext) {
+  // Read as units rather than grouped by SKU (2026-09-29): a unit's price is
+  // its own, so the range across a model is the range across its UNITS, and
+  // Prisma cannot group on a COALESCE.
+  const units = await db.unit.findMany({
+    where: stockWhere({}),
     select: {
-      id: true,
-      name: true,
       price: true,
-      model: { select: { name: true, category: { select: { name: true } } } },
+      sku: {
+        select: {
+          price: true,
+          model: {
+            select: { name: true, category: { select: { name: true } } },
+          },
+        },
+      },
     },
+    take: BROWSE_SCAN_LIMIT,
   });
-  const byId = new Map(skus.map((s) => [s.id, s]));
+  if (units.length === 0) return { categories: [] };
 
   const cats = new Map<
     string,
     Map<string, { available: number; min: bigint | null; max: bigint | null }>
   >();
-  for (const g of grouped) {
-    const sku = byId.get(g.skuId);
-    if (!sku) continue;
-    const cat = sku.model.category.name;
-    const model = sku.model.name;
+  for (const u of units) {
+    const cat = u.sku.model.category.name;
+    const model = u.sku.model.name;
     const models = cats.get(cat) ?? new Map();
     const cur = models.get(model) ?? { available: 0, min: null, max: null };
-    cur.available += g._count._all;
+    cur.available += 1;
     // Still BigInt, and still the easiest leak in the whole file to miss —
-    // `toolJson` would fail the turn on one. `Sku.price` is NOT NULL, so the
-    // null checks the unit column needed are gone.
-    if (cur.min === null || sku.price < cur.min) cur.min = sku.price;
-    if (cur.max === null || sku.price > cur.max) cur.max = sku.price;
+    // `toolJson` would fail the turn on one. An unpriced unit is counted and
+    // never widens the range.
+    const p = askingPrice(u);
+    if (p !== null) {
+      if (cur.min === null || p < cur.min) cur.min = p;
+      if (cur.max === null || p > cur.max) cur.max = p;
+    }
     models.set(model, cur);
     cats.set(cat, models);
   }
+  const priced = pricesOn(ctx);
 
   return {
     categories: [...cats.entries()].slice(0, 8).map(([category, models]) => ({
@@ -1142,8 +1360,8 @@ async function browseCatalog(db: PrismaClient) {
       models: [...models.entries()].slice(0, 8).map(([model, m]) => ({
         model,
         available: m.available,
-        ...(rp(m.min) ? { priceFrom: rp(m.min) } : {}),
-        ...(rp(m.max) ? { priceTo: rp(m.max) } : {}),
+        ...(priced && rp(m.min) ? { priceFrom: rp(m.min) } : {}),
+        ...(priced && rp(m.max) ? { priceTo: rp(m.max) } : {}),
       })),
     })),
   };
@@ -1493,6 +1711,7 @@ export function parseJakarta(when: string): Date | null {
 async function alternativesFor(
   db: PrismaClient,
   skuId: string | null,
+  ctx: ToolContext,
 ): Promise<Array<Record<string, unknown>>> {
   if (!skuId) return [];
   const units = await db.unit.findMany({
@@ -1504,7 +1723,7 @@ async function alternativesFor(
   return units.map((u) => ({
     serial: u.serial,
     ...label(u),
-    price: formatRupiah(u.sku.price),
+    ...quote(askingPrice(u), ctx),
   }));
 }
 
@@ -1589,13 +1808,23 @@ async function createReservation(
       TXN_TIMEOUTS,
     );
 
+    const graceMs = ctx.reserve.graceMs;
+    const until =
+      graceMs !== undefined ? new Date(at.getTime() + graceMs) : null;
     return toolJson({
       ok: true,
       code: hold.code,
       when: `${jakartaDate(at)} ${jakartaTime(at)}`,
       serial,
+      // Stated so the model has a real answer to "until when", instead of
+      // one it would otherwise make up.
+      ...(until
+        ? { heldUntil: `${jakartaDate(until)} ${jakartaTime(until)}` }
+        : {}),
       guidance:
-        "Give the customer the booking code and confirm the unit is now held for them.",
+        "Give the customer the booking code and the appointment, and confirm the unit is now " +
+        "held for them" +
+        (until ? " until heldUntil." : ". Do not state until when."),
     });
   } catch (err) {
     // Ordinary answers, not failures. These are converted before anything else,
@@ -1612,7 +1841,7 @@ async function createReservation(
         err instanceof UnitNotAvailableError
           ? (err.units[0]?.skuId ?? null)
           : null;
-      const alternatives = await alternativesFor(write, skuId);
+      const alternatives = await alternativesFor(write, skuId, ctx);
       return toolJson({
         unavailable: true,
         serial,
@@ -1732,6 +1961,258 @@ async function cancelReservation(
   }
 }
 
+// --- photos by model ---------------------------------------------------------
+
+/**
+ * The best unit to show for a model, and its photos (owner ask 2026-09-29).
+ *
+ * "Best" is the owner's word, and the owner's reading of it: the most
+ * expensive of the matching units that have photos — the grade and the
+ * configuration are what the price already reflects. Units nobody has priced
+ * rank last, since the shop cannot yet say what they are worth.
+ */
+async function findUnitPhotos(
+  db: PrismaClient,
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+) {
+  const query = String(args["query"] ?? "").trim();
+  if (!query) return { error: "No model given." };
+  const units = await db.unit.findMany({
+    where: stockWhere({ query }),
+    select: {
+      ...UNIT_SELECT,
+      notes: {
+        select: {
+          photos: { select: { id: true }, orderBy: { sortOrder: "asc" } },
+        },
+        orderBy: { at: "desc" },
+      },
+    },
+    orderBy: { intakeAt: "desc" },
+    take: 200,
+  });
+  if (units.length === 0)
+    return { found: false, note: "No unit on sale matches this." };
+
+  const withPhotos = units
+    .map((u) => ({ u, ids: u.notes.flatMap((n) => n.photos).map((p) => p.id) }))
+    .filter((x) => x.ids.length > 0)
+    .sort((a, b) => {
+      const pa = askingPrice(a.u);
+      const pb = askingPrice(b.u);
+      if (pa === pb) return 0;
+      if (pa === null) return 1;
+      if (pb === null) return -1;
+      return pa > pb ? -1 : 1;
+    });
+  if (withPhotos.length === 0) {
+    return {
+      found: true,
+      photoIds: [],
+      matching: units.length,
+      note:
+        "None of the matching units has photos yet. Say a colleague will send some, and use " +
+        "handoff_to_staff with topic photos.",
+    };
+  }
+
+  const best = withPhotos[0]!;
+  const others = units.length - 1;
+  return {
+    found: true,
+    serial: best.u.serial,
+    ...label(best.u),
+    ...(best.u.grade ? { grade: best.u.grade } : {}),
+    ...quote(askingPrice(best.u), ctx),
+    photoIds: best.ids.slice(0, MAX_UNIT_PHOTOS),
+    otherMatchingUnits: others,
+    guidance:
+      "Pass photoIds to reply as 'photos'. You have not seen the pictures, so say nothing about " +
+      "what is in them. Say which unit this is" +
+      (pricesOn(ctx) ? " and its price if one is given" : "") +
+      "." +
+      (others > 0
+        ? ` There are ${others} other matching unit(s): ask whether they would like to see ` +
+          "another one, with better specs or a better price."
+        : " It is the only matching unit."),
+  };
+}
+
+// --- the customer's own bookings -------------------------------------------
+
+async function checkReservation(db: PrismaClient, ctx: ToolContext) {
+  const phones = phoneForms(ctx.from);
+  const holds = await db.reservation.findMany({
+    where: { phone: { in: phones }, status: "TERJADWAL" },
+    select: {
+      code: true,
+      scheduledFor: true,
+      items: {
+        select: {
+          sku: { select: { name: true, variantLabel: true } },
+          unit: { select: { serial: true } },
+        },
+        take: 5,
+      },
+    },
+    orderBy: { createdAt: "desc" },
+    take: RESERVATION_LIMIT,
+  });
+  if (holds.length === 0)
+    return { none: true, note: "This customer has no open booking." };
+  return {
+    bookings: holds.map((r) => ({
+      code: r.code,
+      ...(r.scheduledFor
+        ? {
+            when: `${jakartaDate(r.scheduledFor)} ${jakartaTime(r.scheduledFor)}`,
+          }
+        : {}),
+      units: r.items.map((i) => ({
+        name: [i.sku?.name, i.sku?.variantLabel].filter(Boolean).join(" "),
+        ...(i.unit?.serial ? { serial: i.unit.serial } : {}),
+      })),
+    })),
+  };
+}
+
+async function rescheduleReservation(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+) {
+  if (!ctx.reserve)
+    return { error: "Booking is not available on this channel." };
+  const at = parseJakarta(String(args["when"] ?? ""));
+  if (!at)
+    return {
+      needWhen: true,
+      note: "The date was not understood. Send it as YYYY-MM-DDTHH:MM in Jakarta time.",
+    };
+  const code = String(args["code"] ?? "").trim();
+  try {
+    const moved = await ctx.reserve.write.$transaction(
+      (tx) =>
+        rescheduleHold(tx, {
+          target: { phone: toE164(ctx.from), ...(code ? { code } : {}) },
+          scheduledFor: at,
+          at: ctx.now,
+          policy: {
+            requireFuture: true,
+            maxBookingDays: MAX_BOOKING_DAYS,
+            storeHours: STORE_HOURS,
+          },
+        }),
+      TXN_TIMEOUTS,
+    );
+    return toolJson({
+      ok: true,
+      code: moved.code,
+      when: `${jakartaDate(at)} ${jakartaTime(at)}`,
+      guidance: "Confirm the new day and time and repeat the booking code.",
+    });
+  } catch (err) {
+    if (err instanceof HoldNotFoundError)
+      return err.ref === null
+        ? { none: true }
+        : { notFound: true, code: err.ref };
+    if (err instanceof AmbiguousHoldError)
+      return { ambiguous: true, codes: err.codes };
+    if (err instanceof HoldAlreadySettledError)
+      return { notFound: true, code: err.code };
+    if (err instanceof BookingInPastError) return { pastDate: true };
+    if (err instanceof BookingTooFarAheadError)
+      return { tooFarAhead: true, maxDays: err.maxDays };
+    if (err instanceof OutsideStoreHoursError)
+      return {
+        closedThen: true,
+        hours: `${err.openHour}:00 to ${err.closeHour}:00`,
+        guidance:
+          "The shop is shut at that time. Offer a time inside opening hours instead.",
+      };
+    ctx.onError?.("reschedule_reservation", err);
+    return { error: "Could not move the booking. Hand this to a colleague." };
+  }
+}
+
+// --- what the customer told us ----------------------------------------------
+
+const clip = (v: unknown, max: number): string | undefined => {
+  const t = typeof v === "string" ? v.replace(/\s+/g, " ").trim() : "";
+  return t ? t.slice(0, max) : undefined;
+};
+
+/**
+ * Keep what the customer said about themselves (owner ask 2026-09-29).
+ *
+ * Upserted on the wa_id, one field at a time, so "nama saya Budi" and, three
+ * messages later, "buat editing" each add to the profile and neither erases
+ * the other. A name also creates the Customer row when the shop has none —
+ * CREATE only, never an edit, which is what the agent role's INSERT-only
+ * grant on Customer already says (20260820002832).
+ */
+async function rememberCustomer(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+) {
+  if (!ctx.profile) return { error: "Not available here." };
+  const name = clip(args["name"], 80);
+  const useCase = clip(args["use_case"], 160);
+  const currentDevice = clip(args["current_device"], 120);
+  const preference = clip(args["preference"], 200);
+  const rawBudget = args["budget"];
+  const budget =
+    typeof rawBudget === "number" &&
+    Number.isFinite(rawBudget) &&
+    rawBudget >= 1
+      ? BigInt(Math.floor(rawBudget))
+      : undefined;
+  const fields = {
+    ...(name ? { name } : {}),
+    ...(useCase ? { useCase } : {}),
+    ...(currentDevice ? { currentDevice } : {}),
+    ...(preference ? { preference } : {}),
+    ...(budget !== undefined ? { budget } : {}),
+  };
+  if (Object.keys(fields).length === 0) return { saved: false };
+
+  const db = ctx.profile.write;
+  const phones = phoneForms(ctx.from);
+  await db.$transaction(async (tx) => {
+    let customer = await tx.customer.findFirst({
+      where: { phone: { in: phones } },
+      select: { id: true },
+    });
+    if (!customer && name) {
+      customer = await tx.customer.create({
+        data: { phone: toE164(ctx.from), name, createdAt: ctx.now },
+        select: { id: true },
+      });
+      // A customer the bot met for the first time is a row every till lists.
+      await recordStoreChanges(tx, [["customers", customer.id]]);
+    }
+    await tx.customerProfile.upsert({
+      where: { from: ctx.from },
+      update: {
+        ...fields,
+        ...(customer ? { customerId: customer.id } : {}),
+        updatedAt: ctx.now,
+      },
+      create: {
+        from: ctx.from,
+        ...fields,
+        ...(customer ? { customerId: customer.id } : {}),
+        updatedAt: ctx.now,
+      },
+    });
+  }, TXN_TIMEOUTS);
+  return {
+    saved: true,
+    guidance:
+      "Saved. Do not tell the customer you saved anything; just carry on.",
+  };
+}
+
 // --- dispatch --------------------------------------------------------------
 
 /**
@@ -1760,10 +2241,12 @@ export async function dispatchTool(
   try {
     let out: unknown;
     if (name === "store_info") out = await storeInfo(db, args, ctx);
-    else if (name === "search_stock") out = await searchStock(db, args);
-    else if (name === "check_serial") out = await checkSerial(db, args);
+    else if (name === "search_stock") out = await searchStock(db, args, ctx);
+    else if (name === "check_serial") out = await checkSerial(db, args, ctx);
     else if (name === "unit_photos") out = await unitPhotos(db, args);
-    else if (name === "browse_catalog") out = await browseCatalog(db);
+    else if (name === "find_unit_photos")
+      out = await findUnitPhotos(db, args, ctx);
+    else if (name === "browse_catalog") out = await browseCatalog(db, ctx);
     else if (name === "lookup_customer") out = await lookupCustomer(db, ctx);
     else if (name === "check_order") out = await checkOrder(db, args, ctx);
     else if (name === "search_knowledge")
@@ -1774,6 +2257,12 @@ export async function dispatchTool(
       out = await createReservation(args, ctx);
     else if (name === "cancel_reservation")
       out = await cancelReservation(args, ctx);
+    else if (name === "check_reservation")
+      out = await checkReservation(db, ctx);
+    else if (name === "reschedule_reservation")
+      out = await rescheduleReservation(args, ctx);
+    else if (name === "remember_customer")
+      out = await rememberCustomer(args, ctx);
     else return { error: `Unknown tool ${name}.` };
 
     // The gate. A BigInt reaching JSON.stringify in the loop throws, which is

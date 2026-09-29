@@ -31,6 +31,7 @@ import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { AdjustmentPanel } from "./AdjustmentPanel";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
+import { customerLabel } from "../../lib/customers.js";
 import { accountOfMethod } from "../../lib/accounts.js";
 import { paymentsOf } from "../../lib/salePayments.js";
 import { useDb } from "../../mock/store.js";
@@ -41,6 +42,7 @@ import {
 } from "../../mock/seed.js";
 import { labelOf } from "../../i18n/enumLabels.js";
 import { useTranslation } from "react-i18next";
+import { COLUMN } from "../../theme/tokens";
 
 /** Category label maps, derived from `seed.ts` so there is one vocabulary. */
 const INCOME_REASON: Record<string, string> = Object.fromEntries(
@@ -220,27 +222,8 @@ export function IncomeExpensePage() {
         status: "SETTLED",
       });
     }
-    // Payments off a debt from before this app, both directions.
-    for (const sup of db.suppliers) {
-      for (const p of sup.openingPayments ?? []) {
-        out.push({
-          key: `sop-${sup.id}-${p.id}`,
-          at: p.at,
-          direction: "EXPENSE",
-          category: "SUPPLIER",
-          method: methodLabel(p.method),
-          methodCode: p.method,
-          inBalance: p.inBalance !== false,
-          description:
-            p.note?.trim() ||
-            t("cashflow.oldDebtTo", "{{name}} — debt from before this app", {
-              name: sup.name,
-            }),
-          amount: p.amount,
-          status: "SETTLED",
-        });
-      }
-    }
+    // Payments off a debt from before this app. Customers only since
+    // 2026-09-24: a supplier's old debt is no longer recorded at all.
     for (const c of db.customers) {
       for (const p of c.openingPayments ?? []) {
         out.push({
@@ -254,7 +237,7 @@ export function IncomeExpensePage() {
           description:
             p.note?.trim() ||
             t("cashflow.oldDebtTo", "{{name}} — debt from before this app", {
-              name: c.name,
+              name: customerLabel(c),
             }),
           amount: p.amount,
           status: "SETTLED",
@@ -355,7 +338,7 @@ export function IncomeExpensePage() {
             {
               title: t("finance.date", "Date"),
               dataIndex: "at",
-              width: 120,
+              width: COLUMN.date,
               defaultSortOrder: "descend",
               dateRange: true,
               facetLabel: t("finance.date", "Date"),
@@ -364,7 +347,7 @@ export function IncomeExpensePage() {
             {
               title: t("finance.type", "Type"),
               key: "type",
-              width: 120,
+              width: COLUMN.status,
               facet: true,
               facetLabel: t("finance.type", "Type"),
               facetValue: (r: Row) => typeLabel(r.direction),
@@ -388,7 +371,7 @@ export function IncomeExpensePage() {
             {
               title: t("finance.method", "Payment method"),
               key: "method",
-              width: 160,
+              width: COLUMN.status,
               facet: true,
               facetLabel: t("finance.method", "Payment method"),
               facetValue: (r: Row) => r.method,
@@ -404,14 +387,14 @@ export function IncomeExpensePage() {
             {
               title: t("finance.transactionId", "Transaction ID"),
               dataIndex: "orderCode",
-              width: 150,
+              width: COLUMN.code,
               searchable: true,
               render: (v?: string) => v ?? fmtNone(),
             },
             {
               title: t("finance.amount", "Amount"),
               key: "amount",
-              width: 150,
+              width: COLUMN.money,
               align: "right",
               sortValue: (r: Row) =>
                 r.direction === "INCOME" ? r.amount : -r.amount,
@@ -428,7 +411,7 @@ export function IncomeExpensePage() {
             {
               title: t("finance.status", "Status"),
               dataIndex: "status",
-              width: 170,
+              width: COLUMN.status,
               facet: true,
               facetLabel: t("finance.status", "Status"),
               facetValue: (r: Row) => statusLabel(r.status, t),
@@ -448,7 +431,7 @@ export function IncomeExpensePage() {
             {
               title: t("finance.latestBalance", "Latest balance"),
               key: "balance",
-              width: 160,
+              width: COLUMN.money,
               align: "right",
               render: (_: unknown, r: Row) => {
                 const b = balanceAtRow.get(r.key);

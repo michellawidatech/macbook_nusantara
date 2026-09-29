@@ -64,6 +64,7 @@ import {
 } from "../../mock/seed.js";
 import { labelOf } from "../../i18n/enumLabels.js";
 import { ADJUSTMENT_METHOD_CODES } from "../../lib/accounts.js";
+import { COLUMN } from "../../theme/tokens";
 
 /** Derived, not duplicated: `seed.ts` stays the one list of categories. */
 const EXPENSE_KIND: Record<string, string> = Object.fromEntries(
@@ -373,7 +374,7 @@ export function AdjustmentPanel({
                 // out of the drawer" is how a float is reconciled at closing.
                 title: t("adjust.method", "How the money moved"),
                 dataIndex: "method",
-                width: 170,
+                width: COLUMN.status,
                 facet: true,
                 facetLabel: t("adjust.method", "How the money moved"),
                 sortValue: (r: Row) => r.method,

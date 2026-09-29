@@ -75,9 +75,22 @@
  * marketplace and nothing is paid through one — a TikTok sale, which has no
  * chip, or a Shopee sale somebody took in cash (`saleRefNeeded`).
  *
+ * ## A debt names its debtor (owner ask 2026-09-24)
+ *
+ * > *"When we record a new transaction and the user owe something, they need
+ * > to add names or phone number (either is fine)."*
+ *
+ * A sale that leaves something owed (`owed > 0` — an Actual paid below its
+ * split) cannot be recorded against nobody: Receivable would list a debt with
+ * no one to telephone, and "Walk-in customers" is a heading, not a person.
+ * `tillProblems` reports `NO_DEBTOR` until the sale names a customer with a
+ * name OR a phone number (`lib/customers.ts` — either is enough). A sale paid
+ * in full is still recordable without anyone, which is nine sales in ten.
+ *
  * Pure: no React, no store. `test/tillPayments.test.ts` is the spec.
  */
 import { holdsFunds, type SaleSource } from "./channels.js";
+import { hasContact, type CustomerContact } from "./customers.js";
 import type { SalePayment } from "./salePayments.js";
 
 /** One of the four chips. */
@@ -274,7 +287,9 @@ export type TillProblem =
   /** A part says more was paid than its split. */
   | "PAID_OVER"
   /** A marketplace part, or a marketplace sale, without its order number. */
-  | "NO_REF";
+  | "NO_REF"
+  /** Something is owed and the sale names nobody with a name or a number. */
+  | "NO_DEBTOR";
 
 export function tillProblems(input: {
   readonly total: number;
@@ -282,11 +297,16 @@ export function tillProblems(input: {
   readonly parts: readonly TillPart[];
   /** The sale's own number — consulted only when `saleRefNeeded`. */
   readonly ref: string;
+  /**
+   * The customer on the sale, if one is picked — consulted only when
+   * something is owed. Absent or null is a walk-in.
+   */
+  readonly debtor?: CustomerContact | null;
 }): TillProblem[] {
   const out: TillProblem[] = [];
   const bill = whole(input.total);
   if (bill > 0 && input.parts.length === 0) out.push("NO_METHOD");
-  const { rows, splitOver } = tillRows(bill, input.parts);
+  const { rows, splitOver, owed } = tillRows(bill, input.parts);
   if (splitOver > 0) out.push("SPLIT_OVER");
   if (
     input.parts.some(
@@ -306,6 +326,11 @@ export function tillProblems(input: {
     (saleRefNeeded(input.source, input.parts) && saleRef === "")
   ) {
     out.push("NO_REF");
+  }
+  // Last, because it is the one problem not on the payment table: the box
+  // that answers it is the customer's, and the toast names the first problem.
+  if (owed > 0 && !(input.debtor && hasContact(input.debtor))) {
+    out.push("NO_DEBTOR");
   }
   return out;
 }
