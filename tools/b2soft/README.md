@@ -17,6 +17,19 @@ B2Soft is still the shop's book of record (2026-09-18); leave it off for the
 full history at cutover. `docs/migration-b2soft.md` has the findings, the
 owner's decisions and the figures from the rehearsal.
 
+## Master data from five workbooks only (2026-09-29)
+
+```bash
+python3 tools/b2soft/extract.py "$HOME/Export Files" build/b2soft-masters --masters-only --salesmen ERSEN,RIRIN,HARDI,DINA
+APP_ENV=prod DATABASE_URL="$OWNER_URL" pnpm --filter @nusantara/db import:b2soft build/b2soft-masters --master-only
+```
+
+Reads `Master Data Tanpa Gudang`, `Master Gudang`, `Master Pelanggan`,
+`Supplier List` and `Salesman List` and nothing else, and writes the reference
+chunk plus `masters-audit.txt` (products left out, duplicates, missing
+phones). `b2soft/masters.py` has the owner's rules; `docs/go-live.md` the
+production run.
+
 ## What extract.py writes
 
 | file                        | what                                                                             |

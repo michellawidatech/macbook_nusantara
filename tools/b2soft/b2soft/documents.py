@@ -121,10 +121,14 @@ def build(si: dict[str, Invoice], pi: dict[str, Invoice], summary: dict[str, tup
             row["phone"] = phone
         if address:
             row["address"] = address
+        # Supplier.openingBalance went on 2026-09-24 ("we don't track it
+        # anymore"). What B2Soft says is still owed above the open invoices is
+        # reported in the audit and carried nowhere: a supplier's payable in
+        # this app is its inbound invoices and nothing else.
         opening = owes - invoiced
         if opening > 0:
-            row.update(openingBalance=money(opening), openingBalanceAt=opened)
-            flag("Saldo awal supplier", name, f"B2Soft Rp{owes:,} − faktur terbuka Rp{invoiced:,} = Rp{opening:,}")
+            flag("Saldo awal supplier tidak dibawa", name,
+                 f"B2Soft Rp{owes:,} − faktur terbuka Rp{invoiced:,} = Rp{opening:,} tidak diimpor")
         elif opening < 0:
             flag("Saldo supplier di bawah faktur", name, f"B2Soft Rp{owes:,}, faktur terbuka Rp{invoiced:,}")
         if len(ps) > 1:

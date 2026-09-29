@@ -179,12 +179,17 @@ def balances_only(docs: Documents, L: Ledger, piutang: dict, hutang: dict) -> li
     across 38 customers and the payable 7.1 bn across 64 suppliers, spread over
     hundreds of documents from 2023 onwards.
 
-    `Customer.openingBalance` and `Supplier.openingBalance` exist for exactly
-    this (2026-09-08, 2026-09-13): *debt from before this app, stated once*.
-    They are deliberately not fake invoices — an invented invoice would put
-    phantom stock in the ledger and be counted by every report that walks
-    documents — and they already appear on Customers, Suppliers, Receivables
-    and the new Payable & Receivable screen.
+    `Customer.openingBalance` exists for exactly this (2026-09-08,
+    2026-09-13): *debt from before this app, stated once*. It is deliberately
+    not a fake invoice — an invented invoice would put phantom stock in the
+    ledger and be counted by every report that walks documents.
+
+    ⚠️ The SUPPLIER half went on 2026-09-24 (*"we don't track it anymore
+    (remove from database schema)"*). The payable this used to carry —
+    Rp6.89 bn across 64 suppliers — has nowhere to land: after the cutover,
+    Payable lists the inbound invoices this app records and nothing before
+    them. `payable` in the summary is reported as zero so the number is not
+    quietly claimed to have been imported.
 
     ## Where the figures come from
 
@@ -230,7 +235,9 @@ def balances_only(docs: Documents, L: Ledger, piutang: dict, hutang: dict) -> li
 
     customers, suppliers = by_party(piutang), by_party(hutang)
     receivable = apply("customers", customers)
-    payable = apply("suppliers", suppliers)
+    # Nothing to apply on the supplier side since 2026-09-24; `unplaced` still
+    # lists every supplier the aged report names, which is now all of them.
+    payable = 0
     return ([dict(label="reference",
                   probe=dict(collection="warehouses", key=rows["warehouses"][0]["id"]),
                   changes=dict(collections={k: dict(rows=v) for k, v in reference.items()}, singletons={}))],

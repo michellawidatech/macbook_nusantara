@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from b2soft import audit, catalogue, documents, emit, ledger, reports as R  # noqa: E402
+from b2soft import audit, catalogue, documents, emit, ledger, masters, reports as R  # noqa: E402
 
 
 def main() -> int:
@@ -36,8 +36,16 @@ def main() -> int:
     ap.add_argument("--balances-only", action="store_true",
                     help="master data plus what is owed, as opening balances, and no history at all "
                          "(owner ask 2026-09-21). One chunk. See b2soft/emit.py balances_only().")
+    ap.add_argument("--masters-only", action="store_true",
+                    help="read ONLY the five master workbooks (products, warehouses, customers, suppliers, "
+                         "salesmen) and write the reference chunk: no history, no stock, no prices, no balances "
+                         "(owner ask 2026-09-29). See b2soft/masters.py.")
+    ap.add_argument("--salesmen", default="",
+                    help="with --masters-only: comma-separated names to import, e.g. ERSEN,RIRIN,HARDI,DINA")
     args = ap.parse_args()
     src, out = Path(args.source).expanduser(), Path(args.out)
+    if args.masters_only:
+        return masters_only(src, out, [n for n in args.salesmen.split(",") if n.strip()])
 
     si = R.detail(src / "Laporan Penjualan Detail.xlsx", "SI")
     pi = R.detail(src / "Laporan Pembelian Detil.xlsx", "PI")
@@ -99,6 +107,29 @@ def main() -> int:
     for k, v in report["figures"].items():
         print(f"  {k:40s} {v:>16,}")
     print("flags:", ", ".join(f"{t} {n}" for t, n in sorted(report["topics"].items(), key=lambda x: -x[1])))
+    return 0
+
+
+def masters_only(src: Path, out: Path, salesmen: list[str]) -> int:
+    if not salesmen:
+        print("--masters-only needs --salesmen NAME,NAME,…", file=sys.stderr)
+        return 2
+    now = datetime.now(timezone.utc)
+    chunk, notes = masters.build(src, salesmen, now.strftime("%Y-%m-%dT%H:%M:%S.000Z"))
+    folder = out / "chunks"
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in folder.glob("*.json"):
+        old.unlink()
+    name = "000-reference.json"
+    (folder / name).write_text(json.dumps(chunk, ensure_ascii=False, separators=(",", ":")))
+    rows = {k: len(v["rows"]) for k, v in chunk["changes"]["collections"].items()}
+    manifest = dict(source=str(src), generatedAt=now.isoformat(timespec="seconds"),
+                    cutoff=now.strftime("%Y-%m-%dT%H:%M:%S.000Z"), staffName=emit.STAFF,
+                    chunks=[dict(file=f"chunks/{name}", label="reference", probe=chunk["probe"], rows=rows)])
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+    (out / "masters-audit.txt").write_text("".join(f"{line}\n" for line in notes))
+    print(f"wrote {out / 'manifest.json'}: " + ", ".join(f"{k} {n}" for k, n in rows.items()))
+    print(f"{len(notes)} notes in {out / 'masters-audit.txt'} — read them before importing")
     return 0
 
 

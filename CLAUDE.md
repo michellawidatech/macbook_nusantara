@@ -650,9 +650,12 @@ Decisions that outlived those documents:
     Deliberately NOT a fake purchase order: an invented invoice would put
     phantom stock in the ledger and be counted by every report that walks
     orders.
-  - ⚠️ Mock-only: `MockDb.deposits`, `Supplier.openingBalance`. Prisma's
-    `Payment` has a nullable `poId` so a deposit is ALMOST expressible, but
-    nothing records which supplier it was paid to, or an allocation.
+  - ⚠️ Mock-only: `MockDb.deposits`. Prisma's `Payment` has a nullable `poId`
+    so a deposit is ALMOST expressible, but nothing records which supplier it
+    was paid to, or an allocation. ~~`Supplier.openingBalance`~~ became a
+    column on 2026-09-13 and was **dropped again on 2026-09-24** — the owner
+    stopped tracking a supplier's debt from before this app — and
+    `Payment.supplierId` went with it.
 - **The balance is two pots, 2026-09-09.** *"We need to separate the cash
   balance and the bank balance. So for the payment method for both income and
   expense, it is: Cash, transfer (bank), and credit card."* One figure could
@@ -1706,11 +1709,12 @@ Decisions that outlived those documents:
     the running balance goes deeply negative: it has supplier payments and no
     opening cash or bank.
   - **The old debt is the oldest row and is paid first** (owner answer).
-    `Supplier.openingPayments` / `Customer.openingPayments` are `Payment`
-    rows naming the party (`Payment.supplierId`, `.customerId`); the opening
-    figure is never rewritten, and `openingOwed` is the difference — every
-    reader (Payable, Receivable, `supplierAccount`, `customerBalance`,
-    `supplierHistory`) nets it.
+    `Customer.openingPayments` are `Payment` rows naming the customer
+    (`Payment.customerId`); the opening figure is never rewritten, and
+    `openingOwed` is the difference — every reader (Receivable,
+    `customerBalance`) nets it. ⚠️ The SUPPLIER half went on 2026-09-24 with
+    `Supplier.openingBalance`, so `supplierAccount` and `supplierHistory` read
+    invoices, payments and deposits and nothing else.
   - **What the money becomes** is `lib/debtPayments.ts`: an invoice takes it
     on the goods, then each unpaid expense by `feeId`; a sale shrinks its
     promises (`DUE`, and pending on a channel that holds no money), records
@@ -1723,7 +1727,9 @@ Decisions that outlived those documents:
   - Migration `20260922090000_payment_balance_switch_and_opening_payments`
     (owner-approved): the three columns, two FKs, and invariant 7 widened to
     exactly one of `orderId`/`poId`/`supplierId`/`customerId`, a supplier's
-    payment KELUAR and a customer's MASUK. ⚠️ `comparable()` in
+    payment KELUAR and a customer's MASUK. ⚠️ The SUPPLIER half of all of
+    this was reversed on 2026-09-24 (`20260924160000`): invariant 7 is three
+    parents again and `Payment.supplierId` is gone. The customer half stands. ⚠️ `comparable()` in
     `packages/store/src/wire.ts` treats `false` as empty, so two tills
     flipping the same switch at once are not reported as a conflict.
 - **The money screens, reshaped 2026-09-23.** Seven owner asks, and two of
@@ -1752,9 +1758,9 @@ Decisions that outlived those documents:
     still belong to the same unit** (`renameEvents`). Every other edit is
     still refused, `verifyLedger` still checks the projection against whatever
     is now the last row, and `commit.ts` locks a unit named only by a REMOVED
-    event. `mock/store.ts` gained `removeLastEvent` for the same reason. The
-    rename half also fixes a live bug: `renameUnit` at Inbound & QC has
-    rewritten `UnitEvent.serial` since 2026-09-01 and the store refused it.
+    event. `mock/store.ts` gained `removeLastEvent` for the same reason.
+    ⚠️ Neither edit reached PostgreSQL until 2026-09-24 — see "The ledger's
+    two edits actually land" below.
   - **Transaction History** is Order number | Reference ID | Date | Channel |
     Customer | Unit | Serial number | Payment status | Received | Download
     invoice · Edit transaction. The page's own range picker is gone — the Date
@@ -1871,7 +1877,448 @@ Decisions that outlived those documents:
     lines under their boxes, and centring a two-line cell beside a one-line
     one is what put the Qty box half a line above Unit price. The order
     form's products card lost its 1180px cap. `editableTable.test.tsx` pins
-    the widths.
+    the widths. The button reads **See all units (n/qty)** (2026-09-28).
+- **The ledger's two edits actually land, 2026-09-24.** *"Why I cannot edit
+  the serial number in the inbound."* Because the 2026-09-23 change never
+  worked: the append-only gate in `packages/db/src/store/commit.ts` refused
+  every changed or removed `events` row before the adapter's `renameEvents`
+  / `removeLastEvents` ran, so a serial corrected at Inbound & QC or in
+  Inventory's Edit unit, and a unit swapped in Transaction History, showed
+  for a moment and came back "Not saved — Riwayat unit tidak bisa diubah
+  atau dihapus." Verified by committing each against the store test database
+  before the fix and after.
+  - **The gate admits exactly the two shapes** — a row whose `serial` is the
+    only field that changed, and a removal — and the adapter still judges
+    both in full. `renamesIn` reads the corrections (old → new) off those
+    rows into `WriteContext.serialRenames`.
+  - **A unit is renamed in PLACE.** `units` is keyed by serial in the store
+    contract, so a correction arrives as the old key removed and the new one
+    inserted; the units adapter used to archive the one and mint the other,
+    after which `renameEvents` refused to move the history onto a different
+    `Unit.id`. `renameUnit` (units.ts) updates the same row, carries
+    `UnitNote.serial` and `PurchaseOrderItemSerial.serial` with it, and
+    touches the unit's notes, invoice, intake and adjustment rows so every
+    till redraws them. A note the browser renames itself resolves to the same
+    unit; renamed on its own it is refused.
+  - **The database holds the line** (migration
+    `20260924130000_ledger_serial_rename_and_last_event`): `nusantara_app`
+    gets UPDATE on `UnitEvent.serial` — that column alone, so the deploy's
+    `t|f|t|f|t` grant check and the 20260913 self-check read as before — and
+    `unit_event_drop_last(text[])`, a SECURITY DEFINER function that is its
+    one door to a DELETE on the ledger and refuses any row that is not the
+    top of its unit's chain or is the last one standing. Table-level DELETE
+    stays revoked; `removeLastEvents` calls the function.
+  - `removeLastEvents` now expects the unit's location to be the newest
+    surviving row that moved it — what the browser reads off that row — not
+    the unit's own column, which still said where the dropped row sent it.
+  - What still names the unit by its OLD serial after a correction: an
+    opname scan or surplus row and a trade-in record (denormalised, history
+    of what was read), and in the browser any collection `renameUnit` /
+    `UnitEditModal` do not rewrite (adjustments, services, returns, holds,
+    sales) until the page reloads — those project through the unit on
+    Postgres and read right after one.
+  - `packages/db/test/store.test.ts` commits a rename, a move onto another
+    unit (refused), a serial another unit holds (conflict), a last-event
+    removal, a middle one (refused) and the last one standing (refused);
+    `invariants.test.ts` checks the grants and the function as
+    `nusantara_app`.
+- **A debt names its debtor, 2026-09-24.** *"When we record a new transaction
+  and the user owe something, they need to add names or phone number (either
+  is fine)."* — and, the same hour: *"When adding receivables payment, they
+  can start from transaction instead of the customer."*
+  - **The till refuses a sale that leaves something owed against nobody.**
+    `tillProblems` reports `NO_DEBTOR` (last, after the payment table's own
+    problems) whenever `owed > 0` and the sale names no customer with a name
+    or a phone number; the customer box goes red with the sentence under it,
+    the star on it appears only while something is owed, and *Pay & finish*
+    scrolls to that card. A sale paid in full still needs nobody — the
+    walk-in-paying-cash test is unchanged.
+  - **A customer is a name OR a number** (`lib/customers.ts`: `hasContact`,
+    `customerLabel`, `customerLine`). The till's *Add customer* demanded both;
+    it and Settings → Customers now take either, and `packages/store` refuses
+    a customer with neither (`name` may be empty; it was `min(1)`). Prisma's
+    `Customer.name` is NOT NULL and unchanged — empty means "recorded by
+    number". Every screen that printed `customer.name` prints
+    `customerLabel` now: the number stands in where there is no name, on the
+    invoice, Transaction History, Receivable, S/N Tracking, reservations,
+    returns and the chat list. ⚠️ Write new customer copy through it; a bare
+    `.name` is blank for a phone-only customer.
+  - **The debt dialog has a second door** (`DebtPaymentModal`): beside the
+    party's box, a finder over every document with money owed — the shop's
+    code, the marketplace order number and the customer, or the supplier's
+    invoice number on Payable — picks the party and ticks that row. A second
+    document of the same party adds to the ticks; another party's starts
+    over. It is also the only way into a walk-in sale's debt from *Add
+    payment*, since the walk-in heading is not on the party list. Amount
+    moved to the second row to make room.
+  - ⚠️ `EditTransactionModal` is NOT gated: editing a recorded sale can still
+    leave a debt against nobody. Same rule, different door — not asked for.
+- **Five asks, 2026-09-24 (later).** Two of them change the schema.
+  - **A unit's row owns Not arrived and Delete** — *"the delete row button,
+    not arrived button should be on unit level and not item SKU level"*. Both
+    were on the LINE, where they were a decision about every piece of a
+    product at once. On the row they are drawn buttons, not menu items, and
+    delete is ONE press: `deleteUnitRow` takes the unit, its events, its held
+    QC answers and its piece of the invoice together, because *"the flow is no
+    longer delete serial → delete row"*. `removeSerial` and `removeFromInvoice`
+    are gone. Offered only while the row is open (waiting, not arrived, in
+    QC) — a unit that has left QC is not deletable anywhere, the rule
+    `poDeletion` already holds a whole order to.
+    - ⚠️ They stay on the LINE for a **counted product**, which has no units to
+      put them on: an accessory line IS the quantity.
+    - Not arrived is `components/InboxSlashIcon` now, not `StopOutlined`
+      (owner ask). A circle with a bar says "forbidden"; a unit the supplier
+      never sent is not forbidden, it did not turn up. Drawn from antd's own
+      `InboxOutlined` path with a masked diagonal, because the mask draws its
+      own hole and a slash painted in the page colour works in one theme only.
+  - **An inbound opens read-only** — *"when viewing an inbound it should be
+    display only first, and add an 'Edit Invoice' button to edit it next to
+    Close invoice."* One `locked = closed || !editing` replaces every
+    `closed` that gated an EDIT; `closed` still means closed. Every field on
+    the page writes on change (2026-09-15), which is right while somebody
+    works and wrong the rest of the time. ⚠️ The **scanner** is gated too and
+    explicitly: it listens at the document, so no `disabled` prop reaches it,
+    and a bench scanning onto a page nobody had unlocked would mint units
+    invisibly. Per visit, never stored.
+  - **Paying an invoice off offers to close it.** `offerToClose` reads the
+    STORE after the payment — `totals` is the render before it — and asks;
+    it never closes by itself, because an invoice can be settled with a unit
+    still waiting for a serial.
+  - **The book closes** (`lib/bookClose.ts`, `AppSetting`
+    `finance.booksClosedAt`, no column) — *"for the transaction, add a close
+    book button to close and lock all the transaction."* The parallel is
+    `Po.closedAt`: that makes one purchase read-only, this makes a PERIOD of
+    sales read-only. A sale on or before the closing instant takes no edit
+    **and no new payment** (owner answer), so `DebtPaymentModal` drops it from
+    what it offers and `PaymentsModal` opens read-only. Reopenable by one
+    button, for the reason the closed invoice's banner gives.
+    ⚠️ `endOfDay` is LOCAL: closing "the 30th" in Jakarta is 16:59 UTC, and
+    taking the date at face value would leave seven hours of it open.
+  - **A line can arrive outside the invoice** — *"add a button called 'Add
+    outside invoice' / 'Tambahkan diluar invoice' and mark that row as
+    yellow"*. `PurchaseOrderItem.outsideInvoice` (migration
+    `20260924160000`, owner-approved) is the mirror of `notReceived`: that one
+    is billed and never sent, this one is sent and never billed. A **MARK
+    only** (owner answer): the line keeps its price, so its units still cost
+    what they cost and the invoice's COGS is still the whole delivery. Yellow
+    row; a line with pieces that never came is red, and red wins where a line
+    is both. `InvoiceExceptions` under the table lists both, product and a
+    count — **no serials**, which is the point: it is what somebody reads down
+    the telephone to a supplier.
+    ⚠️ The mark is a **grouping axis**, so `piecesOf` matches on it as well as
+    on product and price. Without that, an edit to the billed row would reach
+    the unbilled one.
+    ⚠️ Off on the order FORM: that screen IS the invoice being typed, so
+    nothing on it can have arrived outside itself.
+  - **`Supplier.openingBalance` is gone, and `Payment.supplierId` with it** —
+    *"remove the column 'Utang lama' or the amount from previous app, we don't
+    track it anymore (remove from database schema)"*, and the owner asked for
+    the whole feature rather than two orphaned columns. Invariant 7 is back to
+    three parents; the supplier direction CHECK went with it. What the shop
+    owes a supplier is its open inbound invoices and nothing before them.
+    `Customer.openingBalance` is untouched — the ask was the supplier side.
+    ⚠️ The B2Soft cutover loaded Rp6.89 bn of payable this way
+    (`--with-balances`). It has nowhere to land now: `emit.py` reports
+    `payable: 0` rather than claiming an import, and `documents.py` flags each
+    supplier's uncarried balance in the audit. The receivable half is
+    unchanged.
+  - **Payable and Receivable are grouped per party again** — *"make it a
+    expandable column per supplier, and the inbound is listed per the earliest
+    date … the total next to 'Add payment' should be representative."* antd
+    TREE data, not an expanded panel, because the ticks have to add up:
+    `ProTable`'s new `treeData` sets `checkStrictly: false`, so ticking a
+    supplier ticks its invoices and the page totals the LEAVES. `extra` may be
+    a function of what is ticked, which is how the figure beside *Add payment*
+    follows the selection and falls back to the whole page.
+    - **Two Record-payment buttons**: a party's hands `DebtPaymentTarget`
+      every document under it, a document's hands its own —
+      *"it will autofill the transaction detail accordingly."*
+    - ⚠️ `treeData` also forces `cards: false`, for the reason `DataTable`
+      already keeps the grid for an `expandable` table: a child row has
+      nowhere to go in a card, and hiding it is worse than scrolling sideways.
+    - ⚠️ A test that wants a document row has to open the chevron first
+      (`.ant-table-row-expand-icon`); `openingBalances.test.tsx` does.
+- **Three screens pared back, 2026-09-25.**
+  - **Check a Shopee file is a page action.** It sat loose under the Returns
+    table, which put the thing you DO about a refund below every refund
+    already dealt with. It is in the header now beside *From customer* and
+    *To supplier*; the dialog stays in `CustomerReturnPanel` and `checkOpen`
+    is a prop `ReturnsPage` owns. Not kept on this device — it opens a file
+    picker, and reopening to ask for a file nobody has chosen again is wrong.
+  - **The read-only inbound banner is gone.** *Edit invoice* is in the header
+    beside *Close invoice*, which is where the page's other decisions are;
+    a paragraph under the title announcing that a page is a page was a line to
+    scroll past on every visit. Everything the banner gated is unchanged — the
+    fields are still disabled, the scanner is still off, and the toast on a
+    scan still says to press Edit invoice. A **closed** invoice keeps its
+    banner: that one reports a state somebody chose and has to undo.
+    ⚠️ It was drawn on EVERY viewport, and the header action is not: below
+    `md` a `PageContainer` action is a `FloatButton` fan behind a neutral
+    glyph, and its members are not in the DOM until the fan is opened. Since
+    `test/setup.ts` answers "no" to every media query, that is every test —
+    which is why `inboundQcPage.test.tsx` pressed the BANNER's button and why
+    62 of its tests failed the moment the banner went. `test/pageActions.ts`
+    (`pressPageAction`) is the one way a test presses a page action now.
+    The float buttons gained `aria-label` with it: a tooltip is not a name on
+    a device with no hover, and every page action there is icon-only.
+  - **The service bench is ONE table** — *Serial | Problem | Sent from |
+    Quoted | actions* — where it was two (Expected, On the bench). Add a
+    charge is a money icon, back in stock an inbox icon.
+    ⚠️ Signing a unit in did NOT go: it is the tick drawn only on rows that
+    have not had it, and it is still what moves `Unit.locationId` to the
+    bench. Without it warehouse 4 lists units that are in a van.
+    `splitBench` stays — the Bench card still reports "n on the way" — and the
+    charges are still behind the row, which is the one door to correcting one.
+    ⚠️ Three columns went with the split and nothing replaced them: **Grade**,
+    **Away** (days gone, amber past a fortnight) and **Cost now**
+    (`costOfUnit`). The money is still recorded and still reaches every
+    margin; this screen stopped printing the total. `BenchRow` still carries
+    `days`, `total`, `buy`, `shippingTax` and `earlierRepair`, so any of them
+    is a column away from coming back.
+- **Three more, 2026-09-25 (later).**
+  - **A return row can be corrected and taken back.** *Correct it* changes the
+    return's own facts — when, why, and the condition each unit was recorded
+    at — and nothing else: which units came back and what they were worth are
+    what the money was computed from, so changing one of those is a take-back
+    and a fresh return. *Delete* is a **cancel**, not a delete:
+    `ReturnRec.status` has carried `CANCELLED` since the beginning for the QC
+    rejection that named the wrong unit, and this is the same thing. The
+    document stays in the history marked Withdrawn.
+    - **The undo restores the BILL and lets the debt re-derive.** Removing the
+      sale's `RETUR` adjustment puts the bill back up, and since 2026-09-23
+      the DUE row is derived (`withOwed`), so the debt the return cancelled
+      comes back by itself — nothing has to remember what was cut.
+    - ⚠️ **The refund STAYS**, deliberately. A customer handed Rp5jt who then
+      has the return taken back holds the unit AND the shop's money, so they
+      owe Rp5jt more than the original bill — which is what `saleBalance`
+      computes, because it subtracts `refunded` from what is settled. Deleting
+      the refund row would claim the money never left the drawer.
+    - **What it refuses**, each because it cannot be proved rather than out of
+      caution: a unit that has moved on (`UNIT_MOVED`); a sale on a
+      marketplace channel or still holding a PENDING part (`MARKETPLACE` —
+      `applyReturnCredit` records nothing about which pending part it cut); an
+      exchange (`EXCHANGE` — `planReturn` moves money between sales as copies);
+      a closed period (`BOOKS_CLOSED`). `lib/returnUndo.ts` is the rule,
+      `test/returnUndo.test.ts` and `test/returnUndoPage.test.tsx` the review.
+    - A counted piece is reversed by an OPPOSITE `KOREKSI` move, never by
+      removing the `RETUR_PELANGGAN` one: that ledger is append-only.
+  - **The service bench has no arrival step** — *"no need to mark as
+    'received' first, so action button is only '+ Charge' and 'Back in
+    stock'"*. This REVERSES 2026-09-09, and what that decision protected had
+    to move rather than go: sending a unit to service now MOVES it to the
+    bench in the same transaction (`sendToService` on `/inbound/:id`, and the
+    Inventory adjustment), and `ServiceRec.arrivedAt` is set when the visit
+    opens. Without that `wh-4` would hold nothing again, which is the
+    2026-09-08 bug. The row's two actions are labelled buttons now, not icons.
+    ⚠️ `splitBench` is dormant and still tested — an old row with no
+    `arrivedAt` still lists, and the rule is where a test can read it.
+    ⚠️ The visit's `fromLocationId` must be read BEFORE `appendEvent`, which
+    writes the projection: read after, it is the bench, and *Back in stock*
+    then offers to return the unit to the warehouse it is already in.
+    `InventoryPage`'s adjustment already read its `cameFrom` that way; the
+    inbound one did not have to until the unit started moving at send.
+  - **The calls to action are green.** *Add payment* (inbound list and the
+    debt rows), *Edit invoice*, *Print labels* (inbound and Inventory's bulk
+    action), *Add expense*, *Record payment*, the till's *Add*,
+    *Reservations (n)* and *Add customer*, and *Stock in* beside *Stock out*.
+    The rule where the owner's list ran out: a button that OPENS a form or
+    performs its card's own action is primary; a secondary alternative beside
+    one is not — which is why *Close invoice*, *To supplier*, *Check a Shopee
+    file* and *Import from AppleDB* stay white, and the till's money panel is
+    untouched (its dark panel already owns the one button that finishes a
+    sale). A `disabled` primary still renders grey, so a locked invoice reads
+    as locked.
+- **Five asks, 2026-09-25 (later still).** Four of them are the return desk;
+  one is every table in the app.
+  - **An invoice being edited says so, and says it wherever you have scrolled
+    to.** *"When editing an inbound, make the transaction number and the 'save
+    invoice', 'close invoice', add a yellow sticky alert 'You're editing this
+    invoice'."* `PageContainer` gained `banner` — a strip pinned under the
+    title row, inside the block `stickyHeader` pins — and `/inbound/:id`
+    passes both while `editing`. Serials & QC is a long grid and the bench
+    works down it; the moment the button that ends the edit scrolls away is
+    the moment somebody leaves the page open and writable behind them.
+    *Done editing* is **Save invoice** now, the owner's own word. Nothing is
+    saved BY it — every field on the page still writes on change (2026-09-15)
+    — but the button that ends an edit is the one staff look for to save.
+    ⚠️ `banner` is not a place for prose: a line that merely describes the
+    screen is what came off every page earlier the same day.
+  - **Column widths are a token table** (`COLUMN` in theme/tokens.ts), by what
+    the column HOLDS: a date is 136 everywhere, money 168, a code 180, a
+    serial 200, a status tag 150, a grade 120, a quantity 104, one icon button
+    56, two 104, a labelled button 188, two labelled ones 248. A survey that
+    morning found thirty-three different pixel widths in use, so a date was
+    110 on one screen and 160 on the next and two lists of the same documents
+    lined up on nothing. It is not only cosmetic: antd hands the leftover
+    width to the columns that declared none, so one over-wide neighbour
+    squeezes the column somebody is reading. 74 columns across 28 files.
+    ⚠️ Only for columns whose content has a KNOWN shape. A product name, an
+    address or free text still takes no width and absorbs the slack — a table
+    where every column is fixed either scrolls sideways or ends in a gap.
+    ⚠️ The `width` on a `tableExport` column is a CHARACTER count for the
+    .xlsx/.pdf writers, not pixels. Those are untouched and must stay so.
+  - **They are MINIMUMS, and a table scrolls only below their sum**
+    (2026-09-28: *"have a minimum width per column so when that's the minimum
+    and still wider than the screen, it will have scrollable table otherwise
+    no"*). `gridMinWidth` (components/tableCells.ts) sums every leaf column —
+    its `width`, else `COLUMN.flex` (120), plus `COLUMN.antdControl` (32) for
+    a tick or chevron antd draws — and `DataTable` and `EditableTable`
+    hand that to antd as `scroll.x`, which rc-table draws as `width: x;
+    min-width: 100%`: the table fills the screen and scrolls only when the
+    screen (or the zoom) leaves less than the sum. `max-content` is gone — it
+    sized a list to its content UNWRAPPED, so one long name scrolled a list
+    that fitted. A plain antd `<Table>` gets the same rule from
+    `.ant-table-content { overflow-x: auto }` in global.css. The tokens were
+    cut to content + padding the same day (money 136, date 120, code 148,
+    serial 140, status 144, money input 144, choice 160, qty 96, and a new
+    `tag` 120 for a one-word tag). Checked in a browser at 1440 with the
+    sider open (1120px of card): every list fits except **Transaction
+    History**, whose eleven columns sum to 1332 and scroll by design. The
+    inbound lines table sums to exactly 1120 with 6px cell padding
+    (`.purchase-lines`) — which is what fits a nine-digit price in its box —
+    and its actions column is drawn only while an unlocked invoice holds a
+    counted line. **See all units** is back at the row's end. Receivable's
+    two row buttons stack at the column's floor rather than widening it.
+  - **The return row's two buttons carry their words** — *Edit* and *Delete* —
+    where they were a pencil and a bin on a row that also opens something.
+  - **Recording a return is one transaction and a picker.** *"Make it simpler,
+    the user only need to fill: Transaction number (only 1 transaction at a
+    time). When we typed & enter, it will open up a popup modal, showing all
+    the unit (unit name, serial, price, grade), if lots of unit make it
+    scrollable, and a select button on each product, by default is select all,
+    then 'Select {n} unit'. Then it will add the units to the table. For each
+    row, display: Unit name | Unit serial | Additional price."*
+    - The box takes the shop's transaction number, the marketplace order
+      number the customer quotes, or a serial — one question asked three ways
+      — and Enter opens the picker. antd's own `rowSelection` draws the ticks,
+      which is also where the select-all comes from.
+    - **A second number REPLACES the first**, with its ticks: the list of
+      sales is gone, and a return spanning two transactions is two returns.
+      `planReturn` still takes a list and still moves money between sales —
+      `test/returns.test.ts` covers that — so this is the UI narrowing, not
+      the rule.
+    - ⚠️ **The per-row Condition Select went with the price column**, four days
+      after it arrived: the owner's list for the row is three cells. Nothing
+      sets `Pick.grade` now, so a returned unit comes back at
+      `gradeForCondition("SECOND", …)` — what the shelf said before
+      2026-09-21 — and the history's *Edit* dialog is where a condition is
+      corrected. The field, the write path and the draft guard all stay.
+    - A counted line comes back WHOLE: the picker is a list of things, not a
+      list of numbers, and a part-returned accessory is a second return.
+  - **The exchange is asked for, not assumed.** *"Add '+ Exchange unit' and it
+    will show another table below it, but do not show all the unit first —
+    make it like a dropdown showing the serial & name. The table shows: Unit
+    name | Serial Unit | price."* Under the return table, hidden behind one
+    button, and the always-open list of the whole shelf is gone — it was the
+    tallest thing on a dialog most of whose returns exchange for nothing. The
+    dropdown searches the same fields and takes a scanned serial the same way,
+    because a Select's search box is an input like any other. The two-column
+    layout went with it, so the dialog is 900px rather than 1360.
+    ⚠️ `defaultActiveFirstOption={false}` on the transaction AutoComplete:
+    Enter belongs to the box, or a serial typed in full would open the picker
+    on whichever sale was highlighted.
+- **The return's charge, moved 2026-09-26.** *"The additional price is per
+  exchange unit, and if no exchange, we can add 1 additional fee per return
+  (not per product). Make the exchange unit price read only in that return
+  window."* It was a money box on every row of the return table, which asked
+  the bench how one restocking charge divides over three units coming back on
+  one receipt.
+  - **The return table is Unit name | Unit serial** and the row's delete. A
+    plain return asks for ONE **Additional fee** under it; with something
+    going out the exchange table asks per row instead, in an **Additional
+    price** column, and the return-level box is not drawn — two boxes both
+    meaning "and this much on top" is a sale charged twice. The kept value
+    comes back if the exchange is closed again.
+  - **The exchange unit's price is read-only** — a replacement goes out at the
+    shop's asking price, and repricing is done where prices are done.
+  - **Either way it is one number off the CREDIT** (`feeTotal`, `creditOf`),
+    not added to the replacement's price. The two readings move the refund and
+    the top-up by exactly the same amount, and taking it off the credit leaves
+    `Order.prices` saying what the shop asks — so a swap fee invents neither a
+    bargain nor an upsell out of `Order.listPrices`.
+  - `worthOn` is GROSS now, because it is also the weight `splitByWeight`
+    divides the credit back over: netting the fee there as well would subtract
+    it twice. `Pick.expense`, `QtyPick.expense` and `Back.expense` are gone;
+    `Replacement.price` became `Replacement.extra` (an older draft is dropped
+    by `parseReplacements`, which is what the guard is for).
+  - ⚠️ Nothing new is stored. The charge shows up only as a smaller RETUR
+    adjustment — money the shop kept never moved, so there is no row for it —
+    which is exactly what the per-unit expense did. `ReturnRec.fee` still
+    holds the exchange top-up and is still read by nothing.
+- **Photos are shown per serial, 2026-09-29.** Inventory's unit popup (tracked
+  lines only), the S/N Tracking list and the unit card in `SerialHistory` each
+  draw the serial's QC photos through `UnitPhotos`, **read-only** — they are
+  taken at Inbound & QC and at a stock count, and nowhere else. A serial with
+  no photos says None, and a sold unit always does: its photos were purged at
+  the sale.
+- **The chatbot's four switches, action items and profile, 2026-09-29.**
+  *"Create a toggle for stock, price, make/check/edit/cancel reservation and
+  send image. If off, escalate to a human with an action item and a summary."*
+  An audit the same day found three ways a false reply got past `checkReply`.
+  - **The switches are `AppSetting` rows** (`chatbot.stock`, `.price`,
+    `.reservation`, `.photos`), on /chat above the inbox, owner-only to change
+    (`PUT /api/chat/capabilities`), read by the worker every pass.
+    `AGENT_CAPABILITIES` is now only the answer for a switch nobody pressed.
+    Price, Reservations and Photos each need Stock (`effectiveCapabilities`):
+    every one is about a unit on the shelf.
+  - **Reservations is the whole lifecycle**: make, check, move
+    (`rescheduleHold`, packages/db — no UnitEvent, the unit stays held) and
+    cancel, each scoped to the sender's phone. This REVERSES 2026-09-21's
+    "the only write is making a reservation".
+  - **Price is the unit's** (`askingPrice` = `Unit.price ?? Sku.price`); the
+    bot quoted `Sku.price` since 2026-09-08. A price of null or 0 is shown to
+    the model as "no price — hand over", and with the price switch off no
+    figure (and no budget filter) reaches it at all.
+  - **`checkReply` checks FACTS, not words** (`StockFact`,
+    `stockFactsOf`). It used to search the stock JSON for "available", which
+    `{"available": false}` contains; it matched a price against every price
+    of the turn, so one unit's price could be quoted for another; and "ada kak
+    Air M3" passed because "ada" was not a claim. Now: a price must be an
+    AVAILABLE unit's, of the unit the words beside it name (`modelTokens`); an
+    availability claim naming a unit needs that unit on the shelf; "ada" next
+    to a named unit is a claim, "ada varian" is not. `test/switches.test.ts`.
+  - **A booking is always told.** A hold commits mid-turn; if the reply is
+    then refused the fixed booking line (with the code) is prepended, and if a
+    staff reply beats the draft the worker files a RESERVATION action saying
+    the customer was not told.
+  - **Photos by model** (`find_unit_photos`): the most expensive matching
+    unit with photos, its price if the switch allows, and an offer to show
+    another unit when there are more (owner's rule).
+  - **Every hand-over leaves a `ChatAction`** (migration
+    `20260929090000_chat_actions_and_customer_profile`, owner-approved): one
+    OPEN row per (thread, kind) — a partial unique index — with the bot's
+    summary, the unit, the POS price and, for a NEGOTIATION, the customer's
+    offer read by CODE (`parseAskPrice`). `refreshOffers` upserts a newer
+    offer while the thread is held. /chat draws open tasks above the messages
+    and opens each one's dialog once by itself; the negotiation dialog shows
+    our price, the cost (`Unit.landed`, "modal") and the offer, and *Send
+    offer* records `staffPrice`, closes the task, answers the chat and lifts
+    the hold in one transaction. Mark handled closes every open task.
+  - An offer ("kalau 7jt boleh?", "7,5jt aja") is negotiation even without
+    the word "nego", and always goes to a person.
+  - **`CustomerProfile`** holds what the customer told the bot about
+    themselves (`remember_customer`: name, use, budget, current device,
+    preference), keyed by wa_id; a name also creates the `Customer` row.
+    Shown under "What they told the bot" on /chat. The prompt asks for these
+    first, in both modes.
+  - Grants: `nusantara_agent` and `nusantara_app` get SELECT/INSERT/UPDATE on
+    both tables and no DELETE.
+- **Go-live: a fresh database, master data only — 2026-09-29.** *"We just
+  want the master product, category/grouping, supplier, salesman, and customer
+  data."* The Mac mini's `nusantara_pos_prod` held a full B2Soft history
+  import nobody wanted; `docs/go-live.md` renames it to
+  `nusantara_pos_prod_old_20260929` (kept, never dropped) and builds a fresh
+  one under the pinned name, because `environment.ts`, `ops/backup` and the
+  pipeline all guard on it.
+  - `extract.py --masters-only --salesmen A,B,…` (`b2soft/masters.py`) reads
+    FIVE workbooks and writes one `reference` chunk for `import:b2soft
+    --master-only`. `Supplier List.xlsx` is the supplier file (same layout as
+    Master Supplier with Credit). Eight categories — MacBook Air, MacBook Pro,
+    iPad, Mac mini, Accessories, Charger, Box, Sparepart, the last four
+    counted; a product outside them is LEFT OUT and listed in
+    `masters-audit.txt`, never filed under a guess. No prices (every variant
+    Rp 0), no stock, no balances. Warehouse 04 (Gudang Masuk Belum QC) is the
+    service bench (`SERVIS`), 02 the shop.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
@@ -1925,6 +2372,9 @@ there is the comment/DM ingest this build has not written yet.
 - `python3 tools/b2soft/extract.py "$HOME/Export Files" build/b2soft` then
   `APP_ENV=prod DATABASE_URL="$OWNER_URL" pnpm --filter @nusantara/db import:b2soft build/b2soft --master-only`
   — the B2Soft migration: read the export (no database), then import it.
+  For master data from just the five master workbooks:
+  `python3 tools/b2soft/extract.py "$HOME/Export Files" build/b2soft-masters --masters-only --salesmen ERSEN,RIRIN,HARDI,DINA`
+  (docs/go-live.md phase 5).
   `--master-only` is the reference data alone (production, during the parallel
   operation); leave it off at cutover for the whole history
 - `TEST_DATABASE_URL=… pnpm --filter @nusantara/db test` — the db suite. It is
