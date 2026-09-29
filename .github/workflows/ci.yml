@@ -239,6 +239,13 @@ jobs:
     permissions:
       contents: read # the release assets
       id-token: write # Tailscale workload identity federation
+    # Naming the shell is what turns on pipefail. Without it a step runs as
+    # `bash -e`, and `ssh mini install … | tee install.txt` exits with tee's
+    # status: on 2026-09-29 a refused install, and any failed backup or
+    # migration piped the same way, showed green.
+    defaults:
+      run:
+        shell: bash
     env:
       VERSION: ${{ needs.release.outputs.version }}
       DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
