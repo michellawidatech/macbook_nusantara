@@ -6,6 +6,13 @@ import react from "@vitejs/plugin-react";
 // behind one nginx — SameSite=Lax on a cross-origin dev setup would not.
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      // Components copied from xinchuan call react-i18next; this build is
+      // English-only, so a tiny shim interpolates their inline defaults.
+      "react-i18next": new URL("./src/i18n/shim.ts", import.meta.url).pathname,
+    },
+  },
   server: {
     port: 3000,
     // A neighbouring project squatting on :3000 must fail loudly rather than

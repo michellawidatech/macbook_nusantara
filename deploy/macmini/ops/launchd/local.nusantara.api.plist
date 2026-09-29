@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The API on :4000. A LaunchDaemon: install root:wheel 644 in /Library/LaunchDaemons
+  and it starts at boot with nobody logged in, and comes back if it dies.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>local.nusantara.api</string>
+	<key>UserName</key>
+	<string>_nusantara</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/nusantara/current/ops/run</string>
+		<string>api</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/opt/nusantara/var</string>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/opt/nusantara</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>StandardOutPath</key>
+	<string>/opt/nusantara/logs/api.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/nusantara/logs/api.log</string>
+</dict>
+</plist>

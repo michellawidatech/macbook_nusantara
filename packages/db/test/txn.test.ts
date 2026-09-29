@@ -218,16 +218,24 @@ describe("withUnitLocks — 08 §3 ordered locking", () => {
 });
 
 describe("appendUnitEvent — 08 §1 and §4", () => {
-  /** Arrival. Until this runs the unit has no history, so nothing else is legal. */
+  /**
+   * Arrival + QC pass — two events, leaving the unit TERSEDIA at seq 2.
+   * Until this runs the unit has no history, so nothing else is legal.
+   */
   const intake = (serial: string) =>
-    db.$transaction((tx) =>
-      appendUnitEvent(tx, {
+    db.$transaction(async (tx) => {
+      await appendUnitEvent(tx, {
         serial,
         type: "DITERIMA",
         staffId: STAFF,
         toLocationId: LOC,
-      }),
-    );
+      });
+      return appendUnitEvent(tx, {
+        serial,
+        type: "QC_SELESAI",
+        staffId: STAFF,
+      });
+    });
 
   it("is the only legal first event", async () => {
     await expect(
@@ -254,7 +262,7 @@ describe("appendUnitEvent — 08 §1 and §4", () => {
     const ev = await db.$transaction((tx) =>
       appendUnitEvent(tx, { serial: "SER-A", type: "TERJUAL", staffId: STAFF }),
     );
-    expect(ev.seq).toBe(2);
+    expect(ev.seq).toBe(3);
     expect(ev.toStatus).toBe("TERJUAL");
   });
 
@@ -269,12 +277,13 @@ describe("appendUnitEvent — 08 §1 and §4", () => {
     );
 
     expect(ev.seq).toBe(1);
-    expect(ev.toStatus).toBe("TERSEDIA");
+    // Arrival is no longer sellable — QC is (owner decision 2026-08-15).
+    expect(ev.toStatus).toBe("QC");
 
     const unit = await db.unit.findUniqueOrThrow({
       where: { serial: "SER-A" },
     });
-    expect(unit.status).toBe("TERSEDIA");
+    expect(unit.status).toBe("QC");
     expect(unit.version).toBe(2); // projection bumped the optimistic lock
   });
 
@@ -363,7 +372,7 @@ describe("appendUnitEvent — 08 §1 and §4", () => {
       appendUnitEvent(tx, { serial: "SER-A", type: "DICATAT", staffId: STAFF }),
     );
     const ev = await db.unitEvent.findFirstOrThrow({
-      where: { serial: "SER-A", seq: 2 },
+      where: { serial: "SER-A", seq: 3 },
     });
     expect(ev.serial).toBe("SER-A");
     expect(ev.toLocationId).toBeNull(); // a note does not move anything
@@ -386,7 +395,7 @@ describe("appendUnitEvent — 08 §1 and §4", () => {
       ),
     ).rejects.toThrow(IllegalUnitTransitionError);
 
-    expect(await db.unitEvent.count({ where: { serial: "SER-A" } })).toBe(2);
+    expect(await db.unitEvent.count({ where: { serial: "SER-A" } })).toBe(3);
   });
 
   it("rolls the projection back with the event when the transaction fails", async () => {
@@ -406,7 +415,8 @@ describe("appendUnitEvent — 08 §1 and §4", () => {
       where: { serial: "SER-A" },
     });
     expect(unit.status).toBe("TERSEDIA");
-    expect(await db.unitEvent.count()).toBe(1); // only the intake survived
+    // only the intake pair (arrival + QC pass) survived
+    expect(await db.unitEvent.count()).toBe(2);
   });
 
   it("keeps seq gapless under concurrent appends to one unit", async () => {
@@ -435,7 +445,8 @@ describe("appendUnitEvent — 08 §1 and §4", () => {
       })
     ).map((e) => e.seq);
 
-    expect(seqs).toEqual(Array.from({ length: N + 1 }, (_, i) => i + 1));
+    // + 2: the intake pair (arrival + QC pass) precedes the N notes.
+    expect(seqs).toEqual(Array.from({ length: N + 2 }, (_, i) => i + 1));
   });
 
   it("stays gapless under serializable isolation too", async () => {
@@ -461,7 +472,8 @@ describe("appendUnitEvent — 08 §1 and §4", () => {
       })
     ).map((e) => e.seq);
 
-    expect(seqs).toEqual(Array.from({ length: N + 1 }, (_, i) => i + 1));
+    // + 2: the intake pair (arrival + QC pass) precedes the N notes.
+    expect(seqs).toEqual(Array.from({ length: N + 2 }, (_, i) => i + 1));
   });
 });
 

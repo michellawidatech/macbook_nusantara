@@ -1,0 +1,153 @@
+/**
+ * What the bot may answer for itself — four switches for the whole shop
+ * (owner ask 2026-09-29): Stock, Price, Reservations, Photos.
+ *
+ * On, the bot answers from the POS. Off, that kind of question goes to a
+ * person, and the conversation gets an action item with the bot's note, so
+ * nobody has to read the chat to know what is being asked.
+ *
+ * Price, Reservations and Photos each need Stock: every one of them is about
+ * a unit on the shelf, and answering any of them says the unit is there. They
+ * keep their own setting while Stock is off and are drawn disabled, so
+ * turning Stock back on restores what somebody chose.
+ *
+ * Only the owner can change them (the server says 403 to anybody else); staff
+ * see them, because knowing what the bot will and will not answer is what
+ * tells them which chats will land on their desk.
+ */
+import { useEffect, useState } from "react";
+import { App, Card, Flex, Switch, Tooltip, Typography } from "antd";
+import { useTranslation } from "react-i18next";
+import {
+  getCapabilities,
+  setCapabilities,
+  type BotCapabilities,
+  type BotCapabilitiesState,
+} from "../../lib/chatApi.js";
+import { useSession } from "../../lib/session.js";
+
+type Key = keyof BotCapabilities;
+
+export function BotSwitches() {
+  const { t } = useTranslation();
+  const { message } = App.useApp();
+  const session = useSession();
+  const isOwner = session.data?.role === "OWNER";
+  const [state, setState] = useState<BotCapabilitiesState | null>(null);
+  const [saving, setSaving] = useState<Key | null>(null);
+
+  useEffect(() => {
+    getCapabilities()
+      .then(setState)
+      .catch(() => setState(null));
+  }, []);
+
+  const switches: Array<{ key: Key; label: string; hint: string }> = [
+    {
+      key: "stock",
+      label: t("chatSwitch.stock", "Stock"),
+      hint: t(
+        "chatSwitch.stockHint",
+        "Whether a unit is in stock, and its grade.",
+      ),
+    },
+    {
+      key: "price",
+      label: t("chatSwitch.price", "Price"),
+      hint: t(
+        "chatSwitch.priceHint",
+        "What a unit costs, from the POS. A unit with no price always goes to you.",
+      ),
+    },
+    {
+      key: "reserve",
+      label: t("chatSwitch.reservations", "Reservations"),
+      hint: t(
+        "chatSwitch.reservationsHint",
+        "Make, check, move and cancel the customer's own booking.",
+      ),
+    },
+    {
+      key: "photos",
+      label: t("chatSwitch.photos", "Photos"),
+      hint: t("chatSwitch.photosHint", "Send the shop's QC photos of a unit."),
+    },
+  ];
+
+  const flip = async (key: Key, value: boolean) => {
+    setSaving(key);
+    try {
+      setState(await setCapabilities({ [key]: value }));
+    } catch (err) {
+      message.error(
+        err instanceof Error
+          ? err.message
+          : t("chatSwitch.saveFailed", "Could not change that switch."),
+      );
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  if (!state) return null;
+
+  return (
+    <Card size="small">
+      <Flex wrap gap={16} align="center">
+        <Typography.Text strong>
+          {t("chatSwitch.title", "The bot may answer")}
+        </Typography.Text>
+        {switches.map((s) => {
+          const needsStock = s.key !== "stock" && !state.set.stock;
+          const reason = !isOwner
+            ? t("chatSwitch.ownerOnly", "Only the owner can change this.")
+            : needsStock
+              ? t("chatSwitch.needsStock", "Needs Stock on.")
+              : null;
+          return (
+            <Tooltip
+              key={s.key}
+              title={
+                <>
+                  {s.hint}
+                  <br />
+                  {state.effective[s.key]
+                    ? t(
+                        "chatSwitch.onMeans",
+                        "On: the bot answers this itself.",
+                      )
+                    : t(
+                        "chatSwitch.offMeans",
+                        "Off: it goes to you, with an action item.",
+                      )}
+                  {reason && (
+                    <>
+                      <br />
+                      {reason}
+                    </>
+                  )}
+                </>
+              }
+            >
+              <Flex align="center" gap={6}>
+                <Switch
+                  size="small"
+                  checked={state.effective[s.key]}
+                  disabled={!isOwner || needsStock}
+                  loading={saving === s.key}
+                  onChange={(v) => void flip(s.key, v)}
+                  aria-label={s.label}
+                />
+                <Typography.Text
+                  type={state.effective[s.key] ? undefined : "secondary"}
+                >
+                  {s.label}
+                </Typography.Text>
+              </Flex>
+            </Tooltip>
+          );
+        })}
+      </Flex>
+    </Card>
+  );
+}

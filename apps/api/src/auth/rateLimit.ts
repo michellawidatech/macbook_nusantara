@@ -30,6 +30,12 @@ export interface LoginLimiter {
   check(username: string, ip: string): LimitDecision;
   recordFailure(username: string, ip: string): void;
   recordSuccess(username: string, ip: string): void;
+  /**
+   * Forget one username's failures — an owner has just reset that account, so
+   * whatever delay its old password earned is moot. The address buckets stay:
+   * they belong to whoever was guessing, not to the account.
+   */
+  clearUser(username: string): void;
   /** Drop expired buckets. The map is small (~3 staff) but not unbounded. */
   sweep(): void;
 }
@@ -94,6 +100,10 @@ export function createLoginLimiter(
 
     recordSuccess(username, ip) {
       for (const key of keysFor(username, ip)) buckets.delete(key);
+    },
+
+    clearUser(username) {
+      buckets.delete(`u:${username.toLowerCase()}`);
     },
 
     sweep() {

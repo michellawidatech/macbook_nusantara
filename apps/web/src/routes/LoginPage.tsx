@@ -1,45 +1,61 @@
-/**
- * The login screen — 02 §5 and §12.
- *
- * "A failed login names the reason and keeps the username" (S8's constraint):
- * the username input is never cleared, focus returns to the password field,
- * and the message is the server's own Indonesian text.
- */
-
-import { useRef, useState, type FormEvent } from "react";
+import { useRef, useState } from "react";
+import { Alert, Button, Card, Flex, Form, Input, Typography } from "antd";
+import { LockOutlined, UserOutlined } from "@ant-design/icons";
+import type { InputRef } from "antd";
+import { useTranslation } from "react-i18next";
+import { BrandMark } from "../components/BrandMark.js";
 import { ApiOfflineError, ApiRequestError } from "../lib/api.js";
-import { useI18n } from "../lib/i18n.js";
 import { useLogin } from "../lib/session.js";
-import styles from "./LoginPage.module.css";
+import { SPACE } from "../theme/tokens";
 
+/**
+ * Sign in — the app's own, since Auth0 was retired (owner ask 2026-09-18).
+ *
+ * "A failed login names the reason and keeps the username" (S8's constraint,
+ * which this screen had before Auth0 and has again): the username is never
+ * cleared, the password is, and focus goes back to it — the username is almost
+ * always right and the password is the field to retype.
+ *
+ * Every failure reads the same ("wrong username or password") because the API
+ * answers every failure the same; saying which half was wrong would tell a
+ * stranger which usernames exist.
+ *
+ * The username box does not capitalise or autocorrect: a phone keyboard
+ * turning `ersen` into `Ersen` is the most common way to fail here. The API
+ * forgives the capital anyway (routes/auth.ts `findForLogin`).
+ *
+ * There is deliberately no language switch here. It lives in the account menu,
+ * and nobody picks a language before they have signed in.
+ */
 export function LoginPage() {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const login = useLogin();
+  const [form] = Form.useForm<{ username: string; password: string }>();
+  const passwordRef = useRef<InputRef>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  // Controlled, so a failed attempt cannot lose what was typed.
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const passwordRef = useRef<HTMLInputElement>(null);
-
-  const message =
-    login.error === null || login.error === undefined
-      ? null
-      : login.error instanceof ApiOfflineError
-        ? t("login.offline")
-        : login.error instanceof ApiRequestError
-          ? login.error.message
-          : t("login.failed");
-
-  const onSubmit = (e: FormEvent) => {
-    e.preventDefault();
+  const submit = (values: { username: string; password: string }) => {
+    setError(null);
     login.mutate(
-      { username, password },
+      { username: values.username.trim(), password: values.password },
       {
-        onError: () => {
-          // 02 §3: on a failed submit, focus the first field with an error and
-          // announce it. The username is almost always right; the password is
-          // the field to retype.
-          setPassword("");
+        onError: (e) => {
+          setError(
+            e instanceof ApiOfflineError
+              ? t(
+                  "login.offline",
+                  "The server cannot be reached. Check the connection and try again.",
+                )
+              : e instanceof ApiRequestError && e.status === 429
+                ? t(
+                    "login.tooMany",
+                    "Too many attempts. Wait a few minutes, then try again.",
+                  )
+                : e instanceof ApiRequestError && e.status === 401
+                  ? t("login.wrong", "Wrong username or password.")
+                  : e.message,
+          );
+          form.setFieldValue("password", "");
           passwordRef.current?.focus();
         },
       },
@@ -47,52 +63,96 @@ export function LoginPage() {
   };
 
   return (
-    <main className={styles.page}>
-      <form className={styles.card} onSubmit={onSubmit} noValidate>
-        <h1 className={styles.title}>{t("login.title")}</h1>
+    <Flex
+      align="center"
+      justify="center"
+      style={{ minHeight: "100vh", padding: SPACE.md }}
+    >
+      <Card style={{ width: "100%", maxWidth: 380 }}>
+        <Flex align="center" gap={SPACE.sm} style={{ marginBottom: SPACE.sm }}>
+          <BrandMark size={32} />
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            {t("app.name", "Macbook Nusantara")}
+          </Typography.Title>
+        </Flex>
+        <Typography.Paragraph type="secondary">
+          {t("login.subtitle", "Sign in with your staff account.")}
+        </Typography.Paragraph>
 
         {/* aria-live so the failure is announced without stealing focus. */}
-        <div className={styles.messageSlot} role="status" aria-live="polite">
-          {message === null ? null : (
-            <p className={styles.error} data-testid="login-error">
-              {message}
-            </p>
+        <div role="status" aria-live="polite">
+          {error !== null && (
+            <Alert
+              type="error"
+              showIcon
+              message={error}
+              style={{ marginBottom: SPACE.md }}
+            />
           )}
         </div>
 
-        <label className={styles.field}>
-          <span className={styles.label}>{t("login.username")}</span>
-          <input
-            className={styles.input}
-            name="username"
-            autoComplete="username"
-            autoFocus
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-          />
-        </label>
-
-        <label className={styles.field}>
-          <span className={styles.label}>{t("login.password")}</span>
-          <input
-            ref={passwordRef}
-            className={styles.input}
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </label>
-
-        <button
-          type="submit"
-          className={styles.submit}
-          disabled={login.isPending}
+        <Form
+          form={form}
+          layout="vertical"
+          requiredMark={false}
+          onFinish={submit}
         >
-          {login.isPending ? t("login.submitting") : t("login.submit")}
-        </button>
-      </form>
-    </main>
+          <Form.Item
+            name="username"
+            label={t("login.username", "Username")}
+            rules={[
+              {
+                required: true,
+                whitespace: true,
+                message: t("login.usernameRequired", "Type your username."),
+              },
+            ]}
+          >
+            <Input
+              prefix={<UserOutlined />}
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              autoFocus
+            />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label={t("login.password", "Password")}
+            rules={[
+              {
+                required: true,
+                message: t("login.passwordRequired", "Type your password."),
+              },
+            ]}
+          >
+            <Input.Password
+              ref={passwordRef}
+              prefix={<LockOutlined />}
+              autoComplete="current-password"
+            />
+          </Form.Item>
+          <Button
+            type="primary"
+            htmlType="submit"
+            block
+            loading={login.isPending}
+          >
+            {t("login.signIn", "Sign in")}
+          </Button>
+        </Form>
+
+        <Typography.Paragraph
+          type="secondary"
+          style={{ marginTop: SPACE.md, marginBottom: 0 }}
+        >
+          {t(
+            "login.forgot",
+            "Forgot your password? Ask the owner to reset it from Settings → Staff accounts.",
+          )}
+        </Typography.Paragraph>
+      </Card>
+    </Flex>
   );
 }

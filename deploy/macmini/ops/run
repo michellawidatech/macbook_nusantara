@@ -1,0 +1,66 @@
+#!/bin/zsh
+# Start one Nusantara process. launchd calls this for api, webhook and worker;
+# a person calls it for the two account CLIs:
+#
+#   sudo -u _nusantara /opt/nusantara/current/ops/run accounts --owner ersen
+#   sudo -u _nusantara /opt/nusantara/current/ops/run staff \
+#     --username ersen --name 'Ersen' --role OWNER --initial
+#
+# `accounts` gives every salesperson a login on the shop's initial password;
+# `staff` creates or resets one account (a password on stdin, or --initial).
+# Both force a new password at the next sign-in when they hand out the initial
+# one. `knowledge <file> --by ersen` loads the owner's answer sheet into the
+# chatbot (docs/chatbot-rag.md), and `chatbot` walks the whole WhatsApp path
+# and says which half of it is broken (docs/chatbot-runbook.md).
+#
+# Configuration comes from $NUSANTARA_HOME/etc (default /opt/nusantara/etc):
+# common.env for everything plus one file per process, so the API never holds
+# the webhook's APP_SECRET.
+setopt err_exit no_unset pipe_fail
+
+home=${NUSANTARA_HOME:-/opt/nusantara}
+release=${0:A:h:h}   # the release this script shipped in, symlinks resolved
+proc=${1:-}
+(( $# )) && shift
+
+die() { print -u2 -- "nusantara/run: $*"; exit 78 }   # 78 = EX_CONFIG
+
+load() {
+  [[ -r $1 ]] || die "cannot read $1"
+  set -a; source $1; set +a
+}
+
+case $proc in
+  api)       envfile=api.env;     heap=384 ;;
+  webhook)   envfile=webhook.env; heap=256 ;;
+  worker)    envfile=worker.env;  heap=256 ;;
+  staff)     envfile=;            heap=256 ;;
+  accounts)  envfile=;            heap=256 ;;
+  knowledge) envfile=;            heap=256 ;;
+  # The doctor reads the WEBHOOK's and the WORKER's configuration, because the
+  # whole point of it is to find the half that is not configured. It is the one
+  # process here that legitimately loads both files, and it prints whether a
+  # secret is SET and never what it is.
+  chatbot)   envfile=;            heap=256 ;;
+  *) print -u2 "usage: run api|webhook|worker|staff|accounts|knowledge|chatbot [args…]"; exit 64 ;;
+esac
+
+load $home/etc/common.env
+[[ -n $envfile ]] && load $home/etc/$envfile
+if [[ $proc == chatbot ]]; then
+  for f in webhook.env worker.env; do [[ -r $home/etc/$f ]] && load $home/etc/$f; done
+fi
+
+# Prisma's engine and argon2 are native code for one CPU. Say so here rather
+# than as a dlopen error three frames deep.
+built=$(sed -n 's/^arch=//p' $release/RELEASE)
+[[ $built == $(uname -m) ]] || die "this release was built for $built; this machine is $(uname -m)"
+
+# /api/health answers with it, and the deploy pipeline refuses a switch whose
+# API does not name the release it just installed (ops/nusantara-deploy).
+export NUSANTARA_RELEASE=$(sed -n 's/^version=//p' $release/RELEASE)
+
+export NODE_ENV=production
+export NODE_OPTIONS="--max-old-space-size=$heap"
+cd $release
+exec ${NODE_BIN:-node} app/$proc.mjs "$@"

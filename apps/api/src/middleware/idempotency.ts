@@ -23,6 +23,23 @@ export interface IdempotencyDeps {
   readonly ttlMs: number;
 }
 
+/**
+ * A body naming a password is never fingerprinted or stored.
+ *
+ * The fingerprint is an unsalted SHA-256 of the body, and the stored response
+ * sits in a table the app role reads: a remembered hash of a password is a
+ * password waiting for a dictionary. Changing a password is not something a
+ * double-click can duplicate anyway — the second attempt fails on the old one.
+ * Same key rule as the log redaction (`packages/logging/src/redact.ts`).
+ */
+function carriesPassword(body: unknown): boolean {
+  return (
+    body !== null &&
+    typeof body === "object" &&
+    Object.keys(body).some((k) => /password/i.test(k))
+  );
+}
+
 /** A stable fingerprint of what was asked for. */
 function fingerprint(method: string, route: string, body: unknown): string {
   return createHash("sha256")
@@ -47,7 +64,8 @@ export function idempotency({ db, ttlMs }: IdempotencyDeps): RequestHandler {
           key === undefined ||
           key === "" ||
           !MUTATING.has(req.method) ||
-          req.staff === undefined
+          req.staff === undefined ||
+          carriesPassword(req.body)
         ) {
           next();
           return;
@@ -114,28 +132,30 @@ function captureAndStore(
   res.json = (body: unknown): Response => {
     const status = res.statusCode;
 
-    if (status < 500) {
-      const now = new Date();
-      // Fire-and-forget: a failure to remember must not fail the request the
-      // customer is waiting on. A missed record costs a duplicate on retry,
-      // which the unique constraint below still catches most of the time.
-      void deps.db.idempotencyKey
-        .create({
-          data: {
-            ...input,
-            statusCode: status,
-            // Express has already applied the BigInt replacer for the wire, but
-            // this copy is serialized here, so apply it again.
-            responseBody: JSON.stringify(body, (_k, v) =>
-              typeof v === "bigint" ? v.toString() : v,
-            ),
-            createdAt: now,
-            expiresAt: new Date(now.getTime() + deps.ttlMs),
-          },
-        })
-        .catch(() => undefined);
-    }
+    if (status >= 500) return originalJson(body);
 
-    return originalJson(body);
+    const now = new Date();
+    // Remembered BEFORE the answer leaves. It used to be fire-and-forget, so a
+    // retry that arrived faster than the INSERT found no key and was written a
+    // second time — the one thing this middleware exists to prevent (CI caught
+    // it on a slow runner, 2026-09-29). A failure to remember still must not
+    // fail the request the customer is waiting on, so it is swallowed.
+    void deps.db.idempotencyKey
+      .create({
+        data: {
+          ...input,
+          statusCode: status,
+          // Express has already applied the BigInt replacer for the wire, but
+          // this copy is serialized here, so apply it again.
+          responseBody: JSON.stringify(body, (_k, v) =>
+            typeof v === "bigint" ? v.toString() : v,
+          ),
+          createdAt: now,
+          expiresAt: new Date(now.getTime() + deps.ttlMs),
+        },
+      })
+      .catch(() => undefined)
+      .then(() => originalJson(body));
+    return res;
   };
 }

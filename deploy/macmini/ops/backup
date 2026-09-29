@@ -1,0 +1,31 @@
+#!/bin/zsh
+# Nightly database dump. launchd runs it at 22:30 (local.nusantara.backup).
+# Keeps 30 days in $NUSANTARA_HOME/backups — copy that folder OFF this machine:
+# a backup on the disk it protects is not a backup.
+#
+# An optional label goes into the file name: the deploy pipeline dumps with
+# `predeploy-<version>` before any migration runs (ops/nusantara-deploy), so
+# the dump to restore after a bad release is the one that names it.
+setopt err_exit no_unset pipe_fail
+
+home=${NUSANTARA_HOME:-/opt/nusantara}
+pgbin=${PG_BIN:-/opt/homebrew/opt/postgresql@16/bin}
+dest=$home/backups
+label=${1:-}
+[[ -z $label || $label =~ '^[A-Za-z0-9][A-Za-z0-9._-]*$' ]] || { print -u2 "backup: not a label: $label"; exit 64 }
+file=$dest/nusantara-$(date +%Y%m%d-%H%M)${label:+-$label}.dump
+
+# The owner role, because it can read every table — including
+# _prisma_migrations, which predates the read-only role's default grants.
+export PGPASSFILE=$home/etc/pgpass
+mkdir -p $dest
+
+# Custom format: compressed, and pg_restore can pick single tables out of it.
+$pgbin/pg_dump --host=127.0.0.1 --username=nusantara --dbname=nusantara_pos_prod \
+  --format=custom --file=$file.partial
+# A dump pg_restore cannot read is not a backup either.
+$pgbin/pg_restore --list $file.partial > /dev/null
+mv $file.partial $file
+
+find $dest -name 'nusantara-*.dump' -mtime +30 -delete
+print "backup ok: $file ($(du -h $file | cut -f1))"

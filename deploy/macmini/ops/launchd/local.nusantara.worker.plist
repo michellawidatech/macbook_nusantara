@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The chatbot worker: the unattended draft pass and the outbox drain. Listens on
+  nothing. Free here, where Render charged $7/mo for it.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>local.nusantara.worker</string>
+	<key>UserName</key>
+	<string>_nusantara</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/nusantara/current/ops/run</string>
+		<string>worker</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/opt/nusantara/var</string>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/opt/nusantara</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>StandardOutPath</key>
+	<string>/opt/nusantara/logs/worker.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/nusantara/logs/worker.log</string>
+</dict>
+</plist>

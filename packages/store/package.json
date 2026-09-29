@@ -1,0 +1,21 @@
+{
+  "name": "@nusantara/store",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The POS store contract — the shape the browser reads, the changeset it commits, the wire encoding — shared by apps/web and packages/db",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

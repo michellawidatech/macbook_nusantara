@@ -16,6 +16,7 @@ import {
 } from "@nusantara/domain";
 import { Prisma, type Tx } from "./client.js";
 import { withUnitLocks } from "./withUnitLocks.js";
+import { recordStoreChanges } from "./store/context.js";
 
 export interface AppendUnitEventInput {
   /** The subject of this database (08 §1). Events are addressed by serial. */
@@ -31,6 +32,8 @@ export interface AppendUnitEventInput {
   readonly purchaseOrderId?: string | null;
   readonly claimId?: string | null;
   readonly opnameSessionId?: string | null;
+  /** The hold this event belongs to, on DIRESERVASI and RESERVASI_BATAL. */
+  readonly reservationId?: string | null;
   readonly costDelta?: bigint;
   readonly requestId?: string | null;
   readonly note?: string | null;
@@ -132,6 +135,7 @@ export async function appendUnitEvent(
       purchaseOrderId: input.purchaseOrderId ?? null,
       claimId: input.claimId ?? null,
       opnameSessionId: input.opnameSessionId ?? null,
+      reservationId: input.reservationId ?? null,
       costDelta: input.costDelta ?? 0n,
       staffId: input.staffId,
       requestId: input.requestId ?? null,
@@ -149,6 +153,12 @@ export async function appendUnitEvent(
       version: { increment: 1 },
     },
   });
+  // Every till polls the store's change feed; a machine moved from here (a
+  // hold the agent booked, an arrival over /api/inbound) must reach it too.
+  await recordStoreChanges(tx, [
+    ["events", event.id],
+    ["units", unit.serial],
+  ]);
 
   return {
     id: event.id,

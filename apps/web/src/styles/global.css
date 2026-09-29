@@ -1,12 +1,14 @@
-/* Global resets and the one focus-ring rule the whole app inherits. */
-
-@import "./tokens.css";
-
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
+/*
+ * antd owns the reset. This file only holds what antd cannot: the document
+ * box, and the handful of phone behaviours that are browser quirks rather than
+ * design decisions.
+ *
+ * Mobile first, literally: every rule here is written for the small screen and
+ * the media query below only ever ADDS the phone-specific overrides — there is
+ * no desktop rule waiting to be un-done. The one media query is `md` (767px),
+ * the same boundary `useLayoutMode` calls `compact`. Two numbers for one idea
+ * is how a layout ends up half-switched.
+ */
 
 html,
 body,
@@ -15,32 +17,865 @@ body,
   margin: 0;
 }
 
+/* Light console by owner design brief; antd surfaces sit on this. */
 body {
-  font-family: var(--font-sans);
-  font-size: var(--t-md);
-  line-height: var(--lh-normal);
-  color: var(--c-ink);
-  background: var(--c-surface-sunken);
-  -webkit-font-smoothing: antialiased;
+  background: #f5f5f5;
+  /* Safari on iOS grows text in a rotated landscape column unless told not
+     to. It is not a zoom the user asked for. */
+  -webkit-text-size-adjust: 100%;
+  /* The grey flash antd's own :active states already replace. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 /*
- * 01 §5: "Every interactive element has a visible focus ring. No `outline:
- * none` without a replacement." Declared once, here, so no component has to
- * remember — and :focus-visible keeps it off mouse clicks.
+ * The layout is a sticky header over a scrolling column, so nothing here is
+ * allowed to widen the document itself: one over-wide table and the whole page
+ * pans sideways, taking the header's alignment with it. Wide content scrolls
+ * inside its own box (see DataTable's `scroll.x`), never in the body.
  */
-:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: var(--r-sm);
+body {
+  overflow-x: hidden;
 }
 
-/* Respect a user who has asked for less motion. */
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
+@media (max-width: 767px) {
+  /*
+   * iOS Safari zooms the viewport when a focused field's text is under 16px,
+   * and then leaves it zoomed — so on a phone, tapping the serial-number box
+   * silently breaks every subsequent layout decision this app makes. antd's
+   * base is 14px by design (dense console), which is right everywhere except
+   * inside a field a thumb is about to focus.
+   *
+   * !important because antd v6 injects its component CSS at runtime, so a
+   * plain class selector here wins or loses depending on injection order —
+   * which is not something a layout should depend on.
+   */
+  .ant-input,
+  .ant-input-outlined,
+  .ant-input-number-input,
+  .ant-select-single .ant-select-selector,
+  .ant-select-multiple .ant-select-selection-search-input,
+  .ant-picker-input > input,
+  textarea.ant-input {
+    font-size: 16px !important;
   }
+
+  /*
+   * Filter and inline-form controls carry desktop widths at their call sites
+   * (a 340px search box, a 300px status select, a 260px label field). Those
+   * are right at 1440px and impossible at 375.
+   *
+   * The widths are inline styles on the controls themselves, and an inline
+   * style cannot be overridden by the parent component that lays them out —
+   * only by a stylesheet. So a container opts in by wearing this class and the
+   * widths are released here, in the one place that already knows what "phone"
+   * means, instead of every page branching on the breakpoint itself.
+   *
+   * The list is antd's control roots rather than `> *` because these controls
+   * are usually grandchildren: a `Form.Item` wraps them, and it is the `Input`
+   * inside that carries the width.
+   */
+  .responsive-controls > *,
+  .responsive-controls .ant-form-item,
+  .responsive-controls .ant-input,
+  .responsive-controls .ant-input-affix-wrapper,
+  .responsive-controls .ant-input-number,
+  .responsive-controls .ant-select,
+  .responsive-controls .ant-picker,
+  .responsive-controls .ant-btn {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+}
+
+/*
+ * Printing one invoice.
+ *
+ * The sheet is mounted inside an antd Modal, which is a portal at the end of
+ * <body> sitting on top of the whole app. Rather than build a second window or
+ * an off-screen iframe — a popup a shop laptop blocks, and an iframe whose
+ * styles have to be duplicated — everything is made invisible and the sheet is
+ * made visible again.
+ *
+ * `visibility`, not `display`, on purpose: hiding the ancestors with `display:
+ * none` would take the sheet down with them, because the sheet is INSIDE them.
+ * Visibility is the one property a descendant can un-inherit.
+ *
+ * The sheet is then pulled to the page origin, since a modal is positioned
+ * partway down a scrolled viewport and would otherwise print onto page three.
+ */
+/* Only the print stylesheet below ever shows this. See `.label-print-only`. */
+.label-print-only {
+  display: none;
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  .invoice-print-root,
+  .invoice-print-root * {
+    visibility: visible !important;
+  }
+
+  .invoice-print-root {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    box-shadow: none !important;
+  }
+
+  /* Buttons, modal chrome and the "what happens next" note are screen-only. */
+  .no-print,
+  .no-print * {
+    display: none !important;
+  }
+
+  /* A line item must not be split across two sheets of paper. */
+  .invoice-print-root tr,
+  .invoice-print-root table {
+    page-break-inside: avoid;
+  }
+
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
+
+  /*
+   * Serial labels on sticker stock.
+   *
+   * Same visibility switch as the invoice, but the geometry is the opposite:
+   * an invoice wants a 12mm margin and a sticker sheet wants none, because the
+   * die-cut positions are absolute and any page margin shifts every label off
+   * its backing. `@page` cannot be scoped to an element, so the sheet claims a
+   * NAMED page instead — that is the one way both roots can print correctly
+   * from the same stylesheet without one overwriting the other.
+   */
+  .label-print-root,
+  .label-print-root * {
+    visibility: visible !important;
+  }
+
+  .label-print-root {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    page: label-sheet;
+  }
+
+  /*
+   * The unscaled sheet, which exists only to be printed.
+   *
+   * The dialog shows a `transform: scale`d preview so a whole 210mm page fits
+   * on screen (see `ScaledSheet`), and a transform is inherited by the printer
+   * as faithfully as by the screen — a preview at 0.8 would print at 0.8, and
+   * every sticker would miss its backing by a growing margin down the page.
+   * So the preview is `.no-print` and this second, untransformed copy is what
+   * the paper gets. It is `display: none` on screen and only here.
+   */
+  .label-print-only {
+    display: block !important;
+  }
+
+  /* A sticker split across two sheets of paper is a wasted sticker. */
+  .label-cell {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /*
+   * The DEFAULT sheet size, and only the default.
+   *
+   * Page setup became a per-print decision on 2026-08-28 — A4, F4, Letter, or
+   * a thermal roll whose page is one sticker — and a stylesheet cannot hold a
+   * decision somebody makes in a dialog. `LabelSheet` emits a `<style>` with
+   * the chosen size, which is later in the document than this file and
+   * therefore wins; `@page` has no selector, so document order is the only
+   * lever either of them has. This stays as what prints if that element is
+   * ever missing.
+   */
+  @page label-sheet {
+    size: A4 portrait;
+    margin: 0;
+  }
+}
+
+/*
+ * The primary button's green gradient, and the gold accent.
+ *
+ * Scoped to `.ant-btn-color-primary.ant-btn-variant-solid`, which is antd 6's
+ * class pair for a filled primary. Targeting that pair rather than a legacy
+ * `.ant-btn-primary` is what keeps the gradient off everything it should not
+ * touch: a danger button is `color-dangerous`, and link, text and outlined
+ * buttons are other `variant-*` values. None of them match, so none of them
+ * need an exception written for them.
+ *
+ * `background-image`, not `background` — antd's own `background-color` stays
+ * underneath as the fallback, so the button is the right green even in the
+ * frame before ThemeProvider publishes the custom properties, and in any
+ * browser that drops the gradient.
+ *
+ * Disabled is excluded explicitly. antd greys a disabled primary via
+ * background-color, which a background-image would paint straight over,
+ * leaving a button that looks pressable and is not.
+ */
+.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(
+    .ant-btn-disabled
+  ) {
+  background-image: linear-gradient(
+    135deg,
+    var(--nusantara-gradient-from) 0%,
+    var(--nusantara-gradient-to) 100%
+  );
+  border-color: transparent;
+}
+
+/* Hover and active shift the gradient rather than recolouring it, so the
+   button keeps its identity through the whole press. */
+.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(
+    .ant-btn-disabled
+  ):hover {
+  background-image: linear-gradient(
+    135deg,
+    var(--nusantara-gradient-to) 0%,
+    var(--nusantara-gradient-from) 100%
+  );
+}
+
+.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(
+    .ant-btn-disabled
+  ):active {
+  background-image: linear-gradient(
+    135deg,
+    var(--nusantara-gradient-to) 0%,
+    var(--nusantara-gradient-to) 100%
+  );
+}
+
+/*
+ * Gold, and the only place it is load-bearing: the focus ring on a primary
+ * button. Gold sits at roughly 1.7:1 on this page background — nowhere near
+ * the 3:1 a focus indicator needs — but against the green button beneath it,
+ * it clears comfortably. That is the whole reason the accent is used ON the
+ * green and never on the page, and why it is never text.
+ */
+.ant-btn-color-primary.ant-btn-variant-solid:focus-visible {
+  outline: 2px solid var(--nusantara-gold);
+  outline-offset: 1px;
+}
+
+/*
+ * The Chatbot page's tabs, and the two rules that keep the inbox scrolling
+ * inside itself instead of growing the page.
+ *
+ * `ChatbotPage` bounds the `Tabs` element with `flex: 1; min-height: 0`, but
+ * that only bounds the OUTER box. antd renders a tab strip and then a chain of
+ * wrappers it gives no height to — so the height stops there and the inbox's
+ * three `overflow: auto` panes below have nothing to scroll within.
+ *
+ * There is no prop for this: `Tabs` takes `style` for the root and nothing for
+ * the holder, so it is a stylesheet rule or a fork of the component.
+ * `min-height: 0` on each is what lets a flex child shrink below its content —
+ * without it every box refuses to be smaller than the message list and the
+ * whole chain is inert.
+ *
+ * ⚠️ The selectors below are antd **6**'s, and getting that wrong broke both
+ * tabs at once (fixed 2026-08-26). antd 5 nested
+ * `.ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane`; antd 6
+ * renames the outer two to `.ant-tabs-body-holder > .ant-tabs-body` and calls
+ * each PANE `.ant-tabs-content`, flagged `-active` or `-hidden`. Written
+ * against the old names, the rules landed on nothing useful and — far worse —
+ * `.ant-tabs-content` matched every pane, so `display: flex` overrode the
+ * `display: none` antd puts on the hidden one. The inbox stayed mounted and
+ * visible at its full 6,000px under the Knowledge tab, which is why Knowledge
+ * "showed no table": its card was rendered, six thousand pixels below the fold
+ * of a page whose `fill` mode clips its own overflow. Only the ACTIVE pane may
+ * be given a height here; a hidden one must be left alone to stay hidden.
+ */
+.chatbot-tabs {
+  display: flex;
+  flex-direction: column;
+}
+.chatbot-tabs > .ant-tabs-body-holder,
+.chatbot-tabs .ant-tabs-body,
+.chatbot-tabs .ant-tabs-content-active {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/*
+ * A QC row the paperwork no longer accounts for — a quantity that came down
+ * after the machine was already graded. `lib/inboundQc.ts` explains why such a
+ * row is kept rather than deleted; this is what "shown in red" means.
+ *
+ * Tinted from antd's own error token rather than a literal pink, so it stays
+ * legible in dark mode — where a hard-coded `#fff1f0` is a white block with
+ * white text on it. `color-mix` against the container colour keeps the tint at
+ * the same *strength* in both schemes instead of the same *lightness*.
+ *
+ * The `>` and the cell-level selector are both needed: antd paints
+ * `background` on the `td`, not the `tr`, so a rule on the row alone is
+ * covered over. `!important` beats antd's own hover rule, which is the one
+ * state where the warning would otherwise vanish under the pointer.
+ */
+/*
+ * The till's total panel (owner revision 2026-08-27).
+ *
+ * A dark surface under the one number the cashier reads out loud and the
+ * customer checks. On a panel carrying eight other controls it has to be the
+ * thing the eye lands on, and weight alone did not do it — the figure sat in a
+ * column of figures that all looked like each other.
+ *
+ * The colour is the theme's own primary, mixed down rather than picked: a
+ * hard-coded green would be the wrong green the moment the brand colour moves,
+ * and would be the SAME green in dark mode, where it needs to sit against a
+ * dark page rather than a white one.
+ */
+.pos-total .ant-card-body {
+  /* The mark's own deep green, the nav's colour, in both schemes (2026-09-19).
+     It was the primary darkened 8%, which followed the primary to a green
+     too light for white text once the dark scheme got its own brighter seed. */
+  background: var(--nusantara-brand-deep, #0f5648);
+  color: #ffffff;
+  border-radius: inherit;
+}
+
+/*
+ * The panel's own action, inverted: a white button with the deep green on it
+ * (owner report 2026-09-19 — "highlighted as dark green which is hard to
+ * see"). A green primary on a dark green panel was the one thing on the till
+ * nobody could pick out, and it is the button every sale ends on. Same
+ * treatment as the nav's selected pill. A below-cost sale keeps its red.
+ */
+.pos-total
+  .pos-pay-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(
+    .ant-btn-disabled
+  ) {
+  background: #ffffff;
+  background-image: none;
+  color: var(--nusantara-brand-deep, #0f5648);
+  border-color: #ffffff;
+  font-weight: 600;
+}
+.pos-total
+  .pos-pay-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(
+    .ant-btn-disabled
+  ):hover {
+  background: #e7f4ee;
+  background-image: none;
+  color: var(--nusantara-brand-deep, #0f5648);
+}
+/* Everything inside inherits the light-on-dark, including antd's own type
+   helpers, which would otherwise paint their own grey on it. */
+.pos-total .ant-card-body,
+.pos-total .ant-typography {
+  color: #ffffff;
+}
+.pos-total .ant-typography-danger {
+  /* Still a warning, but one that can be read on a dark green. */
+  color: #ffa39e;
+}
+
+/*
+ * A catalogue row is a click target, so it has to look like one under the
+ * hand. Hover and focus share a rule because a keyboard user is aiming at the
+ * same thing a mouse is.
+ */
+.pos-shelf-row {
+  border-radius: 8px;
+  transition: background 120ms ease;
+}
+.pos-shelf-row:hover,
+.pos-shelf-row:focus-visible {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-primary, #14532d) 8%,
+    var(--nusantara-surface, #ffffff)
+  );
+  outline: none;
+}
+.pos-shelf-row:focus-visible {
+  box-shadow: 0 0 0 2px var(--nusantara-primary, #14532d);
+}
+.pos-shelf-row[aria-disabled="true"]:hover {
+  background: transparent;
+}
+
+/*
+ * The Serials & QC grid.
+ *
+ * Tightened on 2026-08-27 to 6px, and loosened again on 2026-09-09 at the
+ * owner's report: *"the spacing now is a bit odd (too dense, spacing and
+ * fields are not aligned)"*. Both readings were right about different grids.
+ * The 2026-08-27 one held a serial, a description and a status; this one holds
+ * a serial, a condition toggle, a description, one or two battery boxes, a
+ * service fee, TWO price boxes with captions, a grade, a photo, a status and
+ * two buttons — and at 6px those stopped reading as separate fields and
+ * started reading as one wall of controls.
+ *
+ * 10px is antd `small`'s own 8 plus two: enough that a box has a margin of
+ * quiet around it, still tight enough that the machines waiting on the bench
+ * fit on a screen, which is what the tightening was for.
+ *
+ * `vertical-align: middle` is the alignment half of the same report. A cell's
+ * default is `baseline`, which lines up the first line of text in each cell —
+ * so a column holding one input sat level with the FIRST of a column holding
+ * two, and every row stepped down to the right. Centring makes a row read as
+ * one band whatever each cell contains, which is what "aligned" means to
+ * somebody looking at the grid rather than at the box model.
+ *
+ * Nothing here touches font size: the cell that matters most is a serial being
+ * checked against a sticker.
+ */
+.qc-table .ant-table-cell {
+  padding-block: 10px !important;
+  padding-inline: 10px !important;
+  vertical-align: middle;
+}
+/* The header sits on the same rhythm as the rows it names. */
+.qc-table .ant-table-thead > tr > th {
+  padding-block: 8px !important;
+  padding-inline: 10px !important;
+}
+/*
+ * The inbound lines table (owner ask 2026-09-24: "every input field will have
+ * the same size and is in 1 row"). Every column is declared and every box
+ * fills its column, and the cells align to the TOP rather than the middle:
+ * the product's name and a line's "n received" are second lines under their
+ * boxes, and centring a two-line cell beside a one-line one is what put the
+ * Qty box half a line above the Unit price box.
+ */
+.purchase-lines .ant-table-tbody > tr > td {
+  vertical-align: top;
+}
+/* Tighter than `.qc-table`'s 10px (2026-09-28): the row is sized to fit a
+   1440 screen, and 4px a side across ten columns is the difference between
+   a nine-digit price showing whole and being cut. */
+.purchase-lines .ant-table-cell,
+.purchase-lines .ant-table-thead > tr > th {
+  padding-inline: 6px !important;
+}
+/*
+ * The two anchored columns and the anchored action column need a surface of
+ * their own — a fixed cell floats over the rows scrolling under it, and antd
+ * paints it from the table background, which is transparent on an over-quota
+ * row. Without this the red of such a row shows THROUGH the serial that names
+ * it, which is the one cell that has to stay legible.
+ */
+.qc-table .ant-table-cell-fix-left,
+.qc-table .ant-table-cell-fix-right {
+  background: var(--nusantara-surface, #ffffff);
+}
+.row-over-quota .ant-table-cell-fix-left,
+.row-over-quota .ant-table-cell-fix-right {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-error, #ff4d4f) 12%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+
+.row-over-quota > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-error, #ff4d4f) 12%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.row-over-quota:hover > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-error, #ff4d4f) 20%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+
+/*
+ * The nav column, since it went dark green (owner ask 2026-09-01).
+ *
+ * Everything antd draws in the sider foot, the drawer and the phone header
+ * picks its colour for a LIGHT surface: a text button is `colorText`, the
+ * scanner chip's "Scanner ready" is `colorSuccess`, a divider is a near-white
+ * hairline. On `BRAND_DEEP` those land between 1.4:1 and 3.4:1.
+ *
+ * Repainted here rather than by threading a colour through six components,
+ * because the fact being expressed is about a REGION — "inside the nav" — and
+ * a region is what a class selector is for. The nav Menu itself is not in
+ * here: it is themed properly, through a nested ConfigProvider (see
+ * `navTheme` in theme/theme.ts).
+ *
+ * `--nusantara-nav-*` are published by ThemeProvider from `NAV` in tokens.ts,
+ * so this file holds no colour of its own.
+ */
+.nusantara-nav-foot,
+.nusantara-nav-foot .ant-typography,
+.nusantara-nav-foot .ant-btn-color-default.ant-btn-variant-text {
+  color: var(--nusantara-nav-text);
+}
+
+/* The wordmark, the account name on hover, and anything deliberately bright. */
+.nusantara-nav-foot .ant-typography-success {
+  /* Still the "ready" colour, lifted so it reads on the green. antd's own
+     colorSuccess is 3.4:1 here; this is 8.1:1. */
+  color: #a7f3d0;
+}
+.nusantara-nav-foot .ant-typography-warning {
+  color: #fcd34d;
+}
+
+/* A text button inside the nav lifts on hover the way a menu item does,
+   rather than taking antd's light-surface fill. */
+.nusantara-nav-foot .ant-btn-color-default.ant-btn-variant-text:hover {
+  background: var(--nusantara-nav-hover);
+  color: var(--nusantara-nav-text-strong);
+}
+
+/* The drawer's close button and title sit on the same ground. */
+.nusantara-nav-foot .ant-drawer-close {
+  color: var(--nusantara-nav-text);
+}
+
+/*
+ * The two buttons on the till's dark total panel.
+ *
+ * Both sit on `.pos-total`, which is a near-black green, and both would
+ * otherwise be drawn for a white card: antd's default button is a white fill
+ * with dark text, and a DISABLED primary is grey-on-grey. On this panel the
+ * first is a white slab and the second is a smudge.
+ *
+ * `.pos-pay-btn:disabled` is the owner's ask of 2026-09-01 — white text when
+ * nothing is in the basket, rather than the greyed label antd draws. A
+ * translucent white ground keeps it plainly unavailable while the label stays
+ * fully legible (white on the panel behind it is over 5:1), so the button
+ * reads as the one you are about to press once a product is on the sale.
+ *
+ * The `!important` is not decoration: antd's disabled rule is a two-class
+ * selector carrying its own colour, and this has to outrank it.
+ */
+.pos-total .pos-pay-btn:disabled,
+.pos-total .pos-pay-btn.ant-btn-disabled {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.18) !important;
+  background-image: none !important;
+  border-color: transparent !important;
+}
+
+/* The secondary button beside it — outlined in white rather than filled, so
+   the primary keeps the weight. */
+.pos-total .pos-detail-btn {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.45);
+  color: #ffffff;
+}
+.pos-total .pos-detail-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: #ffffff;
+  color: #ffffff;
+}
+
+/*
+ * A whole-number cell, held open at three digits (owner ask 2026-09-01).
+ *
+ * The complaint was Qty on the inbound order form: narrow the window and the
+ * column collapsed until the box held about one character, with the stepper
+ * arrows on top of what was left. The column widths and the table's `scroll.x`
+ * are the other half of the fix (see `EditableTable`); this is the floor under
+ * the input itself, so a cell cannot be squeezed below usable even by a caller
+ * who forgets the column width.
+ *
+ *   3ch    the digits. `ch` is the width of a "0" in the field's own font,
+ *          which is the only unit that survives the 16px iOS bump above —
+ *          a pixel figure would be computed against the 14px desktop face and
+ *          come up short on the one screen where this was reported.
+ *   22px   antd's horizontal padding, 11 each side.
+ *    2px   the border.
+ *   22px   the stepper column. It is absolutely positioned, so without this it
+ *          sits ON TOP of the third digit rather than beside it.
+ *    8px   caret room, so a full "999" does not touch the arrows.
+ *
+ * `min-width`, never `width`: a cell with room to spare should use it, and in
+ * `EditableTable`'s stacked layout the field is full width like every other.
+ */
+.nusantara-count-input.ant-input-number,
+.nusantara-count-input .ant-input-number {
+  min-width: calc(3ch + 54px);
+}
+
+/*
+ * One row of a line-item editor, stacked (see `EditableTable`).
+ *
+ * Below `md` the grid stops being a grid: a row becomes a card of labelled
+ * fields, each full width, because a five-column form on a 375px screen is
+ * five slivers and a horizontal scrollbar nobody finds. The controls inside
+ * carry desktop widths at their call sites — a 260px product Select, a 190px
+ * money box — and an inline style can only be released by a stylesheet, which
+ * is what this is. Same trick, and the same reasoning, as
+ * `.responsive-controls` above; separate from it because this one applies at
+ * every width the stacked layout is used at, not only on a phone.
+ */
+.nusantara-stacked-cell > *,
+.nusantara-stacked-cell .ant-input,
+.nusantara-stacked-cell .ant-input-affix-wrapper,
+.nusantara-stacked-cell .ant-input-number,
+.nusantara-stacked-cell .ant-select,
+.nusantara-stacked-cell .ant-picker,
+.nusantara-stacked-cell .ant-space-compact {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+/* The count field keeps its floor even here — it is a minimum, not a width,
+   and a stacked cell is wider than it anyway. */
+.nusantara-stacked-cell .nusantara-count-input.ant-input-number {
+  min-width: calc(3ch + 54px) !important;
+}
+
+/* An over-quota QC row keeps its warning when the grid becomes cards. The
+   grid rule above paints `> td`, which a stacked row does not have. */
+.nusantara-stacked-row.row-over-quota > .ant-card {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-error, #ff4d4f) 12%,
+    var(--nusantara-surface, #ffffff)
+  );
+}
+
+/*
+ * A value wraps inside its column instead of widening it (owner complaint
+ * 2026-09-01).
+ *
+ * `PRO 13" 2016 i5 8/128 NTB — MacBook Pro 13 2016 i5 / 8GB / 128GB / NTB` is
+ * one legitimate product label, and a cell showing it on a single `nowrap`
+ * line asked its column for around 700px. rc-table gave it, and paid for it
+ * out of the neighbours: Qty came out narrower than its own stepper arrows and
+ * "Rp 3.900.000" broke across three lines in a 150px Total column.
+ *
+ * The picker itself cannot be fixed here — antd 6 renders a Select's chosen
+ * value as a real `<input>`, and an input is one line whatever CSS says — so
+ * `SkuPicker` splits the label instead. What is left for a stylesheet is every
+ * OTHER cell: a total, a description, a status.
+ */
+/* Same rule for a read-only cell: a long total or description takes a second
+   line rather than pushing the column out. Wrapping only — no `word-break`,
+   which would split a twelve-character serial across two lines mid-string. */
+.nusantara-editable-table .ant-table-cell {
+  white-space: normal;
+}
+
+/*
+ * A list row that is a control (owner ask 2026-09-15 — *"All of the UI has to
+ * be keyboard friendly"*).
+ *
+ * `DataTable`'s `keyboardRows` puts a row in the tab order; this is what makes
+ * the focus visible. `:focus-visible` rather than `:focus`, so a row opened
+ * with the mouse does not paint a ring on the way out — the browser's own
+ * heuristic for "did this come from the keyboard" is better than any this
+ * could invent.
+ *
+ * `outline-offset` is negative because the ring is INSIDE the row: a table row
+ * has no padding of its own, and an outline drawn outside one is clipped by
+ * the row below it.
+ */
+.nusantara-keyboard-row:focus-visible {
+  outline: 2px solid var(--ant-color-primary, #047857);
+  outline-offset: -2px;
+}
+
+/* The phone's card layout of the same list. There the row IS a card, which has
+   its own radius, so the ring follows it. */
+.ant-card.nusantara-keyboard-row:focus-visible {
+  outline-offset: 1px;
+  border-radius: var(--ant-border-radius-lg, 8px);
+}
+
+/*
+ * Inbound's machines (owner revision 2026-09-18).
+ *
+ * A row whose product changed is only TINTED when it is part of a real
+ * difference from the invoice — a swap of two names is a price correction and
+ * stays plain (`invoiceChanges`). Warning, not error: the machine is fine, the
+ * paperwork disagrees with it. Tinted from the theme's own tokens, for the
+ * reason `.row-over-quota` gives.
+ */
+.receiving-row-different > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 10%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.nusantara-stacked-row.receiving-row-different > .ant-card {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 10%,
+    var(--nusantara-surface, #ffffff)
+  );
+}
+/*
+ * The Shopee upload's rows (owner ask 2026-09-21): yellow where what Shopee
+ * paid does not match its published fees, and at the top; dimmed where the
+ * file does not mention the sale yet. The same warning tint as a changed
+ * inbound row, a step stronger because here it is the whole point of the view.
+ */
+.shopee-row-mismatch > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 18%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.shopee-row-absent > td {
+  opacity: 0.6;
+}
+/*
+ * Add payment's allocation table (2026-09-22): green is a bill this payment
+ * settles, yellow one it pays in part. On the CELLS and important, because
+ * every such row is also a selected row, and antd paints its selected tint on
+ * the cells — a row background underneath would never show.
+ */
+.debt-row-full > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-success, #52c41a) 16%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.debt-row-partial > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 20%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.shopee-legend-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-inline-end: 6px;
+  vertical-align: -1px;
+  border-radius: 3px;
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 18%,
+    var(--nusantara-surface, #ffffff)
+  );
+  border: 1px solid var(--nusantara-warning, #faad14);
+}
+
+/* A machine the supplier never sent: still on the invoice, so still listed,
+   and quieter than the ones that came. */
+.receiving-row-not-arrived > td {
+  opacity: 0.65;
+}
+
+/* What the delivery changed about the invoice, under the machines. */
+.receiving-changes {
+  padding: 12px 16px;
+  border-radius: 8px;
+  border-left: 3px solid var(--nusantara-warning, #faad14);
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 8%,
+    var(--nusantara-surface, #ffffff)
+  );
+}
+
+/* The grading checklist folded open inside the QC dialog. */
+.qc-checklist {
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px dashed
+    color-mix(in srgb, var(--nusantara-primary, #047857) 35%, transparent);
+}
+
+/*
+ * Inventory's unit popup (owner ask 2026-09-23: *"enlarge the modal popup and
+ * adjust the spacing in the table so that it is not too far apart"*).
+ *
+ * The dialog got wider so a unit's row fits without wrapping; left alone, the
+ * same widening spreads eight cells across 1440px and the serial ends up a
+ * hand's width from the price on its own row. Tighter padding and a fixed
+ * layout keep the row reading as one line.
+ */
+.unit-popup-table .ant-table-cell {
+  padding-block: 8px !important;
+  padding-inline: 8px !important;
+  vertical-align: middle;
+}
+.unit-popup-table .ant-table-thead > tr > th {
+  padding-block: 6px !important;
+  padding-inline: 8px !important;
+}
+
+/*
+ * The two marks on an invoice line (owner ask 2026-09-24): *"add a button
+ * called 'Add outside invoice' … and mark that row as yellow. If there is a
+ * unit that is not arrived, mark it as red."*
+ *
+ * On the CELLS and important, for the reason `.debt-row-full` records — a row
+ * background under antd's own cell fill never shows — and mixed into the
+ * surface rather than stated, so both read in light and dark. Red wins where a
+ * line is both: a unit nobody has is the more urgent of the two facts.
+ */
+.row-outside-invoice > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 16%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.row-outside-invoice:hover > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 24%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.row-not-arrived > td,
+.nusantara-stacked-row.row-not-arrived > .ant-card {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-error, #ff4d4f) 12%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.row-not-arrived:hover > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-error, #ff4d4f) 20%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.nusantara-stacked-row.row-outside-invoice > .ant-card {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 16%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+
+/*
+ * Every table scrolls sideways only when it must (owner ask 2026-09-28).
+ * `DataTable` and `EditableTable` hand antd their column minimums as
+ * `scroll.x`, which rc-table turns into an inline `overflow-x: auto` on this
+ * box. A plain antd `<Table>` gets no such box: it squeezes its columns to
+ * their narrowest content and, past that, spills out of its card. This makes
+ * the spill a scrollbar instead — the same rule, reached from the other end.
+ */
+.ant-table-content {
+  overflow-x: auto;
 }

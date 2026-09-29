@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Same deviations as apps/web, same reasons: this package renders in a
+    // browser via Vite, so it needs DOM libs, the automatic JSX runtime and
+    // bundler-style resolution for .css imports.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["vite/client"],
+    "noEmit": true
+  },
+  "include": ["src", "test", "vitest.config.ts"]
+}

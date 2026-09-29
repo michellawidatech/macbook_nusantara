@@ -2,6 +2,10 @@
 // no I/O, no clock. Everything here is total and deterministic.
 
 export * from "./unitState.js";
+export * from "./reservationState.js";
 export * from "./money.js";
 export * from "./fees.js";
 export * from "./checks.js";
+export * from "./productCode.js";
+export * from "./credentials.js";
+export * from "./qaText.js";

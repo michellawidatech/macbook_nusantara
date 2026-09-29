@@ -1,0 +1,91 @@
+#!/bin/zsh
+# Publish the Meta webhook, and only the Meta webhook, on a public HTTPS URL.
+#
+#   sudo ./whatsapp-funnel up        # start it, print the callback URL
+#   sudo ./whatsapp-funnel status    # what is published right now
+#   sudo ./whatsapp-funnel down      # stop publishing it
+#
+# ## Why this exists
+#
+# The webhook listens on 127.0.0.1:3001 and nothing else on the shop's network
+# can reach it. Caddy serves the POS on :8080 and `tailscale serve` publishes
+# THAT over the tailnet — privately, to the shop's own devices. Meta is not on
+# the tailnet, so on 2026-09-21 the shop had a working chatbot that had never
+# received a single message: `WaRawEvent` was empty, because nothing had ever
+# been delivered to it.
+#
+# ## What it publishes, and what it does not
+#
+#   443   tailscale serve   the whole POS      TAILNET ONLY (unchanged)
+#   8443  tailscale funnel  /webhook           PUBLIC
+#
+# Funnel is public by definition, so what is behind it matters. Only
+# `/webhook` is mapped, so the POS, /api, the store and the sign-in form stay
+# on :443 where only the tailnet reaches them. The endpoint that IS published
+# fails closed on its own terms: no APP_SECRET is a 503, a bad signature is a
+# 401, and the verify handshake needs a token that matches
+# (apps/whatsapp-webhook/src/app.ts).
+#
+# Funnel only listens on 443, 8443 or 10000 — Tailscale's own rule — which is
+# why this is 8443 and why the callback URL carries a port.
+#
+# ## Before it will work
+#
+#   1. Funnel must be allowed for this node in the tailnet policy file:
+#        "nodeAttrs": [{ "target": ["tag:prod"], "attr": ["funnel"] }]
+#      Without it Tailscale prints the exact line to add and stops.
+#   2. HTTPS must be enabled for the tailnet (Admin console → DNS → HTTPS
+#      Certificates). `tailscale cert` is what fails first if it is not.
+#   3. The webhook must be running: `sudo launchctl kickstart -k
+#      system/local.nusantara.webhook`, and `curl 127.0.0.1:3001/health`.
+setopt err_exit no_unset pipe_fail
+
+ts=${TAILSCALE_BIN:-/Applications/Tailscale.app/Contents/MacOS/Tailscale}
+[[ -x $ts ]] || ts=$(command -v tailscale) || {
+  print -u2 "whatsapp-funnel: tailscale not found; set TAILSCALE_BIN"
+  exit 78
+}
+
+port=${WEBHOOK_PORT:-3001}
+public=${FUNNEL_PORT:-8443}
+
+name() {
+  # The node's own DNS name, which is what the callback URL has to be.
+  $ts status --json | /usr/bin/sed -n 's/.*"DNSName":"\([^"]*\)".*/\1/p' | head -1 | /usr/bin/sed 's/\.$//'
+}
+
+case ${1:-} in
+  up)
+    # `--bg` so it survives this shell; Tailscale stores it and restores it on
+    # reboot, which is what makes this a one-time step rather than a login item.
+    $ts funnel --bg --https=$public --set-path=/webhook \
+      "http://127.0.0.1:${port}/webhook"
+    host=$(name)
+    print
+    print "Callback URL for the Meta dashboard:"
+    print "  https://${host}:${public}/webhook"
+    print
+    print "In Meta → WhatsApp → Configuration:"
+    print "  1. Paste that URL and the VERIFY_TOKEN from /opt/nusantara/etc/webhook.env"
+    print "  2. Press Verify and save. The handshake is a GET; the log line is"
+    print "     evt=webhook.verified in /opt/nusantara/logs/webhook.log"
+    print "  3. Subscribe to the 'messages' field. Without that subscription the"
+    print "     URL verifies and NOTHING is ever delivered to it — which is the"
+    print "     failure this script was written for."
+    ;;
+  down)
+    $ts funnel --https=$public --set-path=/webhook off
+    print "funnel off for :${public}/webhook"
+    ;;
+  status|"")
+    $ts funnel status || true
+    print
+    print "webhook health:"
+    /usr/bin/curl -fsS --max-time 5 "http://127.0.0.1:${port}/health" || \
+      print -u2 "  UNREACHABLE — the webhook is not running on :${port}"
+    ;;
+  *)
+    print -u2 "usage: whatsapp-funnel up|down|status"
+    exit 64
+    ;;
+esac

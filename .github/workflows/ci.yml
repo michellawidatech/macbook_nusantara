@@ -2,11 +2,19 @@ name: CI
 
 on:
   push:
-    branches: [main]
-    # The only way into prod. Cutting a tag is the deliberate act that a
-    # required-reviewer gate would otherwise be (docs/environments.md).
+    # Every branch, not only main: the work happens on feature branches, and
+    # until 2026-09-18 a push there was checked by nothing at all.
+    branches: ["**"]
+    # The only way into prod. Pushing a v* tag builds the release and deploys
+    # it to the shop's Mac mini (docs/deploy-pipeline.md); cutting a tag is the
+    # deliberate act a required-reviewer gate would otherwise be.
     tags: ["v*"]
-  pull_request:
+  # "Run workflow" on a v* tag redeploys that tag — the pipeline's rollback. It
+  # reuses the tarball already attached to the tag's GitHub Release.
+  #
+  # No pull_request trigger: every push is already checked, and a pull request
+  # shows the checks of its head commit. Both at once ran every job twice
+  # against the plan's 2,000 free minutes.
   workflow_dispatch:
 
 # A second push to the same branch makes the first one's answer worthless.
@@ -60,6 +68,14 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres
+          # The role tests (packages/db/test/invariants.test.ts,
+          # agentRole.test.ts) log in as nusantara, nusantara_app and
+          # nusantara_agent with NO password, because the developer cluster
+          # trusts localhost. The image's default, scram-sha-256, refused
+          # every one of them — the failure CI reported from 2026-08-19. A
+          # container that lives and dies with this job loses nothing by
+          # trusting its own loopback.
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -72,7 +88,9 @@ jobs:
       SUPERUSER_URL: postgresql://postgres:postgres@localhost:5432/postgres
       # The DSN the suites fall back to is a local trust-auth socket, so CI has
       # to name its own. Not a secret: it reaches a throwaway container that
-      # lives and dies with this job.
+      # lives and dies with this job. turbo.json lists both under the test
+      # task's passThroughEnv — turbo's strict env mode hands a task nothing
+      # undeclared, and without that every suite silently used its fallback.
       TEST_DATABASE_URL: postgresql://nusantara:nusantara@localhost:5432/nusantara_pos_test
       DATABASE_URL: postgresql://nusantara:nusantara@localhost:5432/nusantara_pos_test
 
@@ -134,53 +152,261 @@ jobs:
       - name: Test
         run: pnpm test
 
-  # Which environment a commit has earned. A pull request clears dev, a merge
-  # to main clears stage, and a v* tag clears prod — the promotion model in
-  # docs/environments.md.
-  #
-  # This job deploys nothing, and says so. The four apps have no hosting target
-  # yet, and a placeholder step that reported success without shipping would be
-  # worse than an absent one. What it does do is real: referencing a GitHub
-  # Environment enforces that environment's branch policy (stage accepts only
-  # main, prod only v* tags), records the deployment, and is where per-
-  # environment secrets attach once there is something to deploy.
-  promote:
-    name: Promote
+  # The sealed release for the Mac mini (deploy/macmini/build-release.mjs), built
+  # here and never on the Mac mini itself: that release exists so the shop's
+  # machine holds compiled output and no source, and a runner that checked the
+  # repo out there would undo it. An Apple silicon runner also produces the
+  # darwin-arm64 Prisma engine and argon2 binary the Mac mini loads.
+  release:
+    name: Build the release (Apple silicon)
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: [static, test]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: macos-15
+    timeout-minutes: 20
     permissions:
-      contents: read
-      deployments: write
-    environment:
-      name: ${{ startsWith(github.ref, 'refs/tags/v') && 'prod' || github.ref == 'refs/heads/main' && 'stage' || 'dev' }}
+      contents: write # create the tag's GitHub Release and attach the build
+    outputs:
+      version: ${{ steps.name.outputs.version }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
-      - name: Record what cleared, and what did not happen
-        env:
-          # Source of truth is ENVIRONMENT_DATABASE in
-          # packages/db/src/environment.ts; this mirrors it for the summary
-          # only, and nothing here connects to a database.
-          TARGET: ${{ startsWith(github.ref, 'refs/tags/v') && 'prod' || github.ref == 'refs/heads/main' && 'stage' || 'dev' }}
-        run: |
-          case "$TARGET" in
-            dev)   database=nusantara_pos_rebuild ;;
-            stage) database=nusantara_pos_stage ;;
-            prod)  database=nusantara_pos_prod ;;
-          esac
+      - uses: actions/checkout@v4
 
+      # The tag names the release; the commit makes a moved tag visible. A
+      # redeploy of an old tag finds its tarball already attached and reuses
+      # those exact bytes — a rebuild would be a different release under the
+      # same name, and the Mac mini refuses that (ops/nusantara-deploy).
+      - name: Name the release
+        id: name
+        run: |
+          version="${GITHUB_REF_NAME}-${GITHUB_SHA::7}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' 2>/dev/null |
+            grep -qx "nusantara-$version.tar.gz"; then
+            echo "built=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::nusantara-$version is already on the $GITHUB_REF_NAME release — reusing it"
+          else
+            echo "built=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: ./.github/actions/setup
+        if: steps.name.outputs.built != 'true'
+
+      - name: Build
+        if: steps.name.outputs.built != 'true'
+        env:
+          NUSANTARA_VERSION: ${{ steps.name.outputs.version }}
+        run: node deploy/macmini/build-release.mjs
+
+      # The tarball is what ships. The source maps never go to the shop, but a
+      # crash report from it is unreadable without them, so they live here —
+      # private, like the repository.
+      - name: Attach it to the GitHub Release
+        if: steps.name.outputs.built != 'true'
+        env:
+          VERSION: ${{ steps.name.outputs.version }}
+        run: |
+          cd build/macmini
+          shasum -a 256 "nusantara-$VERSION.tar.gz" > "nusantara-$VERSION.tar.gz.sha256"
+          tar -czf "nusantara-$VERSION-sourcemaps.tar.gz" -C maps "$VERSION"
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            "nusantara-$VERSION.tar.gz" \
+            "nusantara-$VERSION.tar.gz.sha256" \
+            "nusantara-$VERSION-sourcemaps.tar.gz"
+
+  # Delivered over Tailscale: the job joins the tailnet as an ephemeral tag:ci
+  # node, and the tailnet policy lets that tag reach the Mac mini's SSH port and
+  # nothing else. The deploy key there has a forced command, so all the job can
+  # do on the machine is ask ops/nusantara-deploy for one of its four verbs.
+  #
+  # The `prod` environment admits only v* tags, and holds every credential this
+  # job uses — no branch can reach any of them.
+  deploy:
+    name: Deploy to the Mac mini
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: prod
+    # One deploy at a time, and never cancelled halfway: a migration cut off
+    # mid-run is worse than a deploy that waited.
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    permissions:
+      contents: read # the release assets
+      id-token: write # Tailscale workload identity federation
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER || 'nusantara-deploy' }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Check the prod environment is configured
+        env:
+          HAS_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY != '' }}
+          HAS_OWNER_URL: ${{ secrets.PROD_OWNER_DATABASE_URL != '' }}
+          HAS_TS_CLIENT: ${{ secrets.TS_OAUTH_CLIENT_ID != '' }}
+          HAS_TS_SECRET: ${{ secrets.TS_OAUTH_SECRET != '' }}
+          TS_AUDIENCE: ${{ vars.TS_AUDIENCE }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          missing=()
+          [ -n "$DEPLOY_HOST" ] || missing+=("variable DEPLOY_HOST")
+          [ -n "$DEPLOY_KNOWN_HOSTS" ] || missing+=("variable DEPLOY_KNOWN_HOSTS")
+          [ "$HAS_SSH_KEY" = true ] || missing+=("secret DEPLOY_SSH_KEY")
+          [ "$HAS_OWNER_URL" = true ] || missing+=("secret PROD_OWNER_DATABASE_URL")
+          [ "$HAS_TS_CLIENT" = true ] || missing+=("secret TS_OAUTH_CLIENT_ID")
+          [ -n "$TS_AUDIENCE" ] || [ "$HAS_TS_SECRET" = true ] ||
+            missing+=("variable TS_AUDIENCE (or secret TS_OAUTH_SECRET)")
+          if [ ${#missing[@]} -gt 0 ]; then
+            for m in "${missing[@]}"; do echo "::error::the prod environment has no $m (docs/deploy-pipeline.md)"; done
+            exit 1
+          fi
+
+      # The migrations and the Prisma CLI come from the tag's own checkout, so
+      # the schema that is applied is exactly the one the release was built on.
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      - name: Download the release
+        run: |
+          gh release download "$GITHUB_REF_NAME" --dir release \
+            --pattern "nusantara-$VERSION.tar.gz" --pattern "nusantara-$VERSION.tar.gz.sha256"
+          (cd release && sha256sum -c "nusantara-$VERSION.tar.gz.sha256")
+
+      # Preferred: workload identity federation — GitHub's own OIDC token is
+      # exchanged for a Tailscale one, and no Tailscale secret is stored here.
+      - name: Join the tailnet (workload identity)
+        if: vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:ci
+          ping: ${{ vars.DEPLOY_HOST }}
+
+      - name: Join the tailnet (OAuth client)
+        if: vars.TS_AUDIENCE == ''
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          ping: ${{ vars.DEPLOY_HOST }}
+
+      # The host key is pinned from a variable, never learned on first contact:
+      # a runner that trusted whatever answered would hand the tarball and the
+      # owner's password to it.
+      - name: Set up SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host mini
+            HostName $DEPLOY_HOST
+            User $DEPLOY_USER
+            IdentityFile ~/.ssh/deploy
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+            ConnectTimeout 30
+            ServerAliveInterval 15
+            ServerAliveCountMax 8
+          EOF
+
+      - name: What is live now
+        run: |
+          ssh mini status | tee status.txt
+          have=$(sed -n 's/^installer=//p' status.txt)
+          want=$(sed -n 's/^INSTALLER_VERSION=//p' deploy/macmini/ops/nusantara-deploy)
+          if [ "$have" != "$want" ]; then
+            echo "::warning::the Mac mini runs nusantara-deploy $have, the repo has $want — re-run setup-deploy-access there (docs/deploy-pipeline.md)"
+          fi
+
+      - name: Back up the database
+        run: ssh mini backup "predeploy-$VERSION" | tee backup.txt
+
+      # Migrations before code, as the owner, through the same tunnel the
+      # runbook uses by hand (docs/deploy-macmini.md §3). The deploy key may
+      # forward exactly this one port.
+      - name: Migrate
+        env:
+          OWNER_URL: ${{ secrets.PROD_OWNER_DATABASE_URL }}
+        run: |
+          case "$OWNER_URL" in
+            *@127.0.0.1:55432/nusantara_pos_prod*) ;;
+            *) echo "::error::PROD_OWNER_DATABASE_URL must point at the tunnel: postgresql://nusantara:…@127.0.0.1:55432/nusantara_pos_prod"; exit 1 ;;
+          esac
+          ssh -f -N -M -S "$RUNNER_TEMP/tunnel" -o ExitOnForwardFailure=yes \
+            -L 55432:127.0.0.1:5432 mini
+          DATABASE_URL="$OWNER_URL" pnpm --filter @nusantara/db exec prisma migrate deploy | tee migrate.txt
+
+      # `prisma migrate status` lies in this project, so the database is asked
+      # directly: every migration this tag carries is applied and finished,
+      # none is left half-done, and the API's role still holds exactly the
+      # privileges that make the ledger append-only. Anything else stops the
+      # deploy here, before the new code is switched on.
+      - name: Verify the schema (ask the database, not Prisma)
+        env:
+          OWNER_URL: ${{ secrets.PROD_OWNER_DATABASE_URL }}
+        run: |
+          q() { psql "$OWNER_URL" -v ON_ERROR_STOP=1 -tAc "$1"; }
+          ls packages/db/prisma/migrations | grep '^[0-9]' | sort > expected.txt
+          q "select migration_name from _prisma_migrations where finished_at is not null and rolled_back_at is null order by 1" | sort > applied.txt
+          missing=$(comm -23 expected.txt applied.txt)
+          if [ -n "$missing" ]; then echo "::error::not applied: $missing"; exit 1; fi
+          extra=$(comm -13 expected.txt applied.txt)
+          if [ -n "$extra" ]; then echo "::notice::the database is ahead of this tag (a rollback?): $extra"; fi
+          failed=$(q "select count(*) from _prisma_migrations where finished_at is null and rolled_back_at is null")
+          if [ "$failed" != 0 ]; then echo "::error::$failed migration(s) started and never finished"; exit 1; fi
+          grants=$(q "select has_table_privilege('nusantara_app','\"Unit\"','SELECT'), has_table_privilege('nusantara_app','\"Unit\"','DELETE'), has_table_privilege('nusantara_app','\"UnitEvent\"','INSERT'), has_table_privilege('nusantara_app','\"UnitEvent\"','UPDATE'), has_table_privilege('nusantara_app','\"UnitNotePhoto\"','DELETE')")
+          if [ "$grants" != "t|f|t|f|t" ]; then echo "::error::nusantara_app's grants are $grants, not t|f|t|f|t — the ledger is not append-only"; exit 1; fi
+          echo "$(wc -l < applied.txt | tr -d ' ') migrations applied, grants t|f|t|f|t"
+
+      - name: Close the tunnel
+        if: always()
+        run: ssh -S "$RUNNER_TEMP/tunnel" -O exit mini 2> /dev/null || true
+
+      # The installer on the Mac mini checks the hash and the tarball's shape,
+      # unpacks, switches `current`, restarts, and waits for the API to answer
+      # as this exact version — and switches back by itself if it does not.
+      - name: Install on the Mac mini
+        run: |
+          sha=$(cut -d' ' -f1 "release/nusantara-$VERSION.tar.gz.sha256")
+          ssh mini install "$VERSION" "$sha" < "release/nusantara-$VERSION.tar.gz" | tee install.txt
+
+      # Optional: the same answer from outside, through `tailscale serve`. Needs
+      # the tailnet policy to let tag:ci reach port 443 as well as 22.
+      - name: Check from the tailnet
+        if: vars.DEPLOY_PUBLIC_URL != ''
+        env:
+          URL: ${{ vars.DEPLOY_PUBLIC_URL }}
+        run: curl -fsS --max-time 20 "$URL/api/health" | grep -F "\"release\":\"$VERSION\""
+
+      - name: Summary
+        if: always()
+        run: |
           {
-            echo "### Cleared for \`$TARGET\`"
+            echo "### \`nusantara-$VERSION\` → Mac mini"
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| Environment | \`$TARGET\` |"
-            echo "| Database | \`$database\` |"
-            echo "| Ref | \`${GITHUB_REF#refs/}\` |"
+            echo "| Tag | \`$GITHUB_REF_NAME\` |"
             echo "| Commit | \`${GITHUB_SHA:0:7}\` |"
+            echo "| Was live | \`$(sed -n 's/^current=//p' status.txt 2> /dev/null)\` |"
+            echo "| Backup | $(sed -n 's/^backup ok: //p' backup.txt 2> /dev/null) |"
             echo
-            echo "Static gates and the PostgreSQL suites both passed."
-            echo
-            echo "**Nothing was deployed.** There is no hosting target for the"
-            echo "four apps yet, so this job records the environment and stops."
-            echo "See \`docs/environments.md\`."
+            echo '```'
+            cat install.txt 2> /dev/null || echo "(not installed)"
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

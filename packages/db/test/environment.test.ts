@@ -10,7 +10,10 @@
  * it decides before a connection is opened.
  */
 
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   APP_ENVIRONMENTS,
   DatabaseEnvironmentError,
@@ -20,6 +23,7 @@ import {
   resolveAppEnvironment,
   resolveDatabaseUrl,
 } from "../src/environment.js";
+import { resolveConnection } from "../src/client.js";
 
 const dsn = (database: string) =>
   `postgresql://nusantara@localhost:5432/${database}`;
@@ -137,5 +141,92 @@ describe("resolveDatabaseUrl", () => {
       url,
       database: "nusantara_pos_test",
     });
+  });
+});
+
+/**
+ * The guard's wiring, not its rules.
+ *
+ * `resolveDatabaseUrl` was written, tested and never called — `db()` was a bare
+ * `new PrismaClient()`, so the refusal above protected nothing at runtime.
+ * `resolveConnection` is the seam that fixes that, and it has one job the
+ * resolver cannot do alone: agree with Prisma about WHERE the URL comes from.
+ *
+ * Prisma Client 6 reads `packages/db/.env` by itself when the shell is silent
+ * (verified against the real client, not assumed). A guard that read only the
+ * environment would pass a process whose connection then came from the file.
+ * So these cases are about precedence and coverage, not about the four
+ * refusals — those are already covered above.
+ *
+ * Each case writes its own file. `packages/db/.env` is gitignored, and when
+ * these read the developer's copy they passed on every laptop and failed on
+ * CI's clean checkout (2026-09-18).
+ */
+describe("resolveConnection", () => {
+  const dir = mkdtempSync(join(tmpdir(), "nusantara-env-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  let files = 0;
+  const envFile = (text: string): string => {
+    files += 1;
+    const path = join(dir, `${files}.env`);
+    writeFileSync(path, text);
+    return path;
+  };
+
+  it("checks the shell's URL when there is one", () => {
+    const url = dsn("nusantara_pos_test");
+    expect(resolveConnection({ DATABASE_URL: url })).toEqual({
+      environment: "dev",
+      url,
+      database: "nusantara_pos_test",
+    });
+  });
+
+  it("refuses the retired database from the shell", () => {
+    expect(() =>
+      resolveConnection({ DATABASE_URL: dsn(RETIRED_DATABASE) }),
+    ).toThrow(DatabaseEnvironmentError);
+  });
+
+  it("falls back to the file, which is what Prisma would have read", () => {
+    const file = envFile(
+      `# local\nexport DATABASE_URL="${dsn("nusantara_pos_rebuild")}"\n`,
+    );
+    expect(resolveConnection({}, file)).toEqual({
+      environment: "dev",
+      url: dsn("nusantara_pos_rebuild"),
+      database: "nusantara_pos_rebuild",
+    });
+  });
+
+  it("checks the file's URL too — the hole this seam closed", () => {
+    // Before it, a silent shell meant Prisma opened the file's database
+    // unchecked.
+    const file = envFile(`DATABASE_URL=${dsn(RETIRED_DATABASE)}\n`);
+    expect(() => resolveConnection({}, file)).toThrow(DatabaseEnvironmentError);
+  });
+
+  it("refuses when neither the shell nor the file names a database", () => {
+    // CI's clean checkout has no file, and a process must not guess one.
+    expect(() => resolveConnection({}, join(dir, "absent.env"))).toThrow(
+      DatabaseEnvironmentError,
+    );
+  });
+
+  it("prefers the shell over the file, the order Prisma itself applies", () => {
+    const file = envFile(`DATABASE_URL=${dsn("nusantara_pos_rebuild")}\n`);
+    const url = dsn("nusantara_pos_test");
+    expect(resolveConnection({ DATABASE_URL: url }, file).url).toBe(url);
+    expect(resolveConnection({}, file).url).toBe(dsn("nusantara_pos_rebuild"));
+  });
+
+  it("treats a blank shell value as absent rather than as a broken DSN", () => {
+    // `DATABASE_URL=` in a shell profile is how a variable gets unset by
+    // accident. Reading it literally would fail with "not a connection string"
+    // and send somebody hunting a typo in a URL that is not there.
+    const file = envFile(`DATABASE_URL='${dsn("nusantara_pos_rebuild")}'\n`);
+    const resolved = resolveConnection({ DATABASE_URL: "   " }, file);
+    expect(resolved).toEqual(resolveConnection({}, file));
+    expect(resolved.database).toBe("nusantara_pos_rebuild");
   });
 });

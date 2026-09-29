@@ -1,0 +1,604 @@
+import { describe, expect, it } from "vitest";
+import type { Po, PoFee, Unit } from "../src/mock/seed.js";
+import {
+  canReopenQc,
+  paymentFor,
+  poClosed,
+  poDeletion,
+  poPaymentStatus,
+  poStage,
+  poStageFromCounts,
+  poTotals,
+  unitStage,
+} from "../src/lib/inbound.js";
+
+const po = (over: Partial<Po> = {}): Po => ({
+  id: "po-t",
+  code: "PI-T",
+  supplierId: "sup-1",
+  invoice: "INV-1",
+  date: "2026-08-24",
+  locationId: "wh-1",
+  items: [],
+  payments: [],
+  fees: [],
+  discount: 0,
+  status: "ORDERED",
+  ...over,
+});
+
+/** One expense of the invoice. In COGS unless said otherwise. */
+const fee = (
+  id: string,
+  kind: PoFee["kind"],
+  amount: number,
+  over: Partial<PoFee> = {},
+): PoFee => ({ id, kind, label: "", amount, inCogs: true, ...over });
+
+const unit = (over: Partial<Unit> = {}): Unit => ({
+  serial: "S1",
+  skuId: "sku-1",
+  status: "QC",
+  locationId: "wh-1",
+  buy: 1_000_000,
+  description: "",
+  poId: "po-t",
+  ...over,
+});
+
+const line = (id: string, cost: number, notReceived = false) => ({
+  id,
+  skuId: "sku-1",
+  serial: null,
+  qty: 1,
+  unitCost: cost,
+  ...(notReceived ? { notReceived: true } : {}),
+});
+
+describe("unitStage", () => {
+  it("is Arrived while the box is open but nothing is recorded", () => {
+    expect(unitStage(unit())).toBe("ARRIVED");
+  });
+
+  it("becomes In QC once anything at all has been recorded", () => {
+    // A price used to count here, and stopped on 2026-08-27 when it moved to
+    // the variant: the same number now sits on every unit of a SKU including
+    // the ones nobody has unboxed, so it says nothing about THIS machine.
+    // What is left is what someone recorded about this one.
+    expect(unitStage(unit({ description: "Mulus" }))).toBe("IN_QC");
+    expect(unitStage(unit({ batteryHealth: 91 }))).toBe("IN_QC");
+  });
+
+  it("is In inventory once QC let it out", () => {
+    expect(unitStage(unit({ status: "TERSEDIA", description: "Mulus" }))).toBe(
+      "IN_INVENTORY",
+    );
+  });
+});
+
+describe("poStage", () => {
+  it("is Pending for an order paid before anyone knew what it bought", () => {
+    // Story 3. Fully paid, no lines, no units — and still Pending, because
+    // nothing has physically turned up.
+    const p = po({
+      payments: [{ id: "p1", method: "TUNAI", amount: 18_500_000, at: "x" }],
+    });
+    expect(poStage(p, [])).toBe("PENDING");
+  });
+
+  it("is Pending until somebody says the goods turned up", () => {
+    // `po.status` is the only thing that can say so since 2026-08-26. Arrival
+    // used to mint a unit per line-quantity, so "are there units?" stood in
+    // for "has it arrived?"; now a unit exists only once a serial has been
+    // read off a machine, and an order can be on the bench with none read.
+    const p = po({ items: [line("a", 1), line("b", 1)] });
+    expect(poStage(p, [unit()])).toBe("PENDING");
+  });
+
+  it("is Arrived once received, with every serial still unread", () => {
+    const p = po({ status: "RECEIVED", items: [line("a", 1), line("b", 1)] });
+    expect(poStage(p, [])).toBe("ARRIVED");
+  });
+
+  it("counts quantities, not lines, when deciding what is still out", () => {
+    // One line of qty 3 is three machines. Counting lines (the reading until
+    // 2026-08-26) let one graded unit satisfy the whole line, so the order
+    // read "In inventory" with two machines nobody had touched.
+    const three = { ...line("a", 1), qty: 3 };
+    const p = po({ status: "RECEIVED", items: [three] });
+    const graded = unit({
+      serial: "S1",
+      status: "TERSEDIA",
+      description: "Mulus",
+    });
+    expect(poStage(p, [graded])).toBe("ARRIVED");
+  });
+
+  it("ignores a line the supplier never sent when deciding completeness", () => {
+    // Story 2: one line will never arrive, so one unit IS the whole order.
+    const p = po({
+      status: "RECEIVED",
+      items: [line("a", 1), line("b", 1, true)],
+    });
+    expect(poStage(p, [unit()])).toBe("ARRIVED");
+  });
+
+  it("reports the least-far unit, not the furthest", () => {
+    // Nine graded and one still in its box is not a finished order — showing
+    // it as done is how the tenth unit gets forgotten.
+    const p = po({ status: "RECEIVED", items: [line("a", 1), line("b", 1)] });
+    const graded = unit({
+      serial: "S1",
+      status: "TERSEDIA",
+      description: "Mulus",
+    });
+    const untouched = unit({ serial: "S2" });
+    expect(poStage(p, [graded, untouched])).toBe("ARRIVED");
+  });
+
+  it("is In inventory only when every unit got there", () => {
+    const p = po({ status: "RECEIVED", items: [line("a", 1), line("b", 1)] });
+    const a = unit({ serial: "S1", status: "TERSEDIA", description: "Mulus" });
+    const b = unit({ serial: "S2", status: "TERSEDIA", description: "Mulus" });
+    expect(poStage(p, [a, b])).toBe("IN_INVENTORY");
+  });
+
+  it("ignores units belonging to another order", () => {
+    const p = po({ status: "RECEIVED", items: [line("a", 1)] });
+    const mine = unit({
+      serial: "S1",
+      status: "TERSEDIA",
+      description: "Mulus",
+    });
+    const theirs = unit({ serial: "S9", poId: "po-other" });
+    expect(poStage(p, [mine, theirs])).toBe("IN_INVENTORY");
+  });
+});
+
+describe("poTotals", () => {
+  it("adds the expenses and takes off the negotiated discount", () => {
+    const t = poTotals(
+      po({
+        items: [line("a", 4_000_000), line("b", 3_000_000)],
+        fees: [fee("f1", "SHIPPING", 150_000), fee("f2", "TAX", 50_000)],
+        discount: 100_000,
+      }),
+    );
+    expect(t.subtotal).toBe(7_000_000);
+    expect(t.expenses).toBe(200_000);
+    expect(t.total).toBe(7_100_000);
+  });
+
+  it("owes an expense whether or not it joins the machines' cost", () => {
+    // Owner ask 2026-09-18: "divide it to COGS per unit or not" decides what
+    // a machine cost, never what the supplier is owed.
+    const t = poTotals(
+      po({
+        items: [line("a", 1_000_000)],
+        fees: [fee("f1", "OTHER", 40_000, { inCogs: false })],
+      }),
+    );
+    expect(t.total).toBe(1_040_000);
+    expect(t.outstanding).toBe(1_040_000);
+  });
+
+  it("does not charge for a line the supplier never sent", () => {
+    const t = poTotals(
+      po({ items: [line("a", 4_000_000), line("b", 3_000_000, true)] }),
+    );
+    expect(t.subtotal).toBe(4_000_000);
+  });
+
+  it("tracks a deposit as an outstanding balance", () => {
+    // Item 8: pay part now, finish later.
+    const t = poTotals(
+      po({
+        items: [line("a", 5_000_000)],
+        payments: [{ id: "p", method: "DEPOSIT", amount: 2_000_000, at: "x" }],
+      }),
+    );
+    expect(t.paid).toBe(2_000_000);
+    expect(t.outstanding).toBe(3_000_000);
+    expect(t.fullyPaid).toBe(false);
+  });
+
+  it("treats an overpayment as settled, never as a negative debt", () => {
+    const t = poTotals(
+      po({
+        items: [line("a", 1_000_000)],
+        payments: [{ id: "p", method: "TUNAI", amount: 3_000_000, at: "x" }],
+      }),
+    );
+    expect(t.outstanding).toBe(0);
+    expect(t.fullyPaid).toBe(true);
+  });
+
+  it("reports money paid against an order with nothing invoiced yet", () => {
+    // Story 3 again: the shop holds credit with that supplier, and the screen
+    // has to be able to say so rather than showing a zero.
+    const t = poTotals(
+      po({
+        payments: [{ id: "p", method: "TUNAI", amount: 18_500_000, at: "x" }],
+      }),
+    );
+    expect(t.total).toBe(0);
+    expect(t.paid).toBe(18_500_000);
+    expect(t.outstanding).toBe(0);
+    // Not "fully paid": there is nothing to have paid FOR.
+    expect(t.fullyPaid).toBe(false);
+  });
+
+  it("never lets a discount push a total below zero", () => {
+    const t = poTotals(po({ items: [line("a", 100)], discount: 10_000 }));
+    expect(t.total).toBe(0);
+  });
+});
+
+describe("closing an invoice", () => {
+  it("outranks whatever the goods would have said", () => {
+    // The order is finished with because a person said so — a machine still
+    // sitting in QC does not make it unfinished any more (owner revision
+    // 2026-08-27). Without the short-circuit this would read "Arrived".
+    const p = po({
+      status: "RECEIVED",
+      items: [line("a", 1_000_000)],
+      closedAt: "2026-08-27T04:00:00.000Z",
+    });
+    expect(poStage(p, [])).toBe("CLOSED");
+    expect(poClosed(p)).toBe(true);
+  });
+
+  it("is not closed by an empty string", () => {
+    // `delete` is what reopening does, but a serialised store that round-trips
+    // through a form could hand back "" — and "" is not a date.
+    expect(poClosed(po({ closedAt: "" }))).toBe(false);
+    expect(poClosed(po())).toBe(false);
+  });
+});
+
+describe("paymentFor", () => {
+  it("reads a payment from before the buckets existed as the goods", () => {
+    // Shipping and tax were separate figures long before anyone could pay them
+    // separately, so a bare transfer was always against the machines. The
+    // alternative — a fourth, unlabelled bucket — would strand every row the
+    // shop already has.
+    expect(paymentFor({ id: "p", method: "TUNAI", amount: 1, at: "x" })).toBe(
+      "ORDER",
+    );
+  });
+});
+
+describe("poTotals by bucket", () => {
+  const paid = (
+    id: string,
+    amount: number,
+    appliedTo?: "ORDER" | "TAX" | "SHIPPING",
+  ) => ({
+    id,
+    method: "TUNAI",
+    amount,
+    at: "x",
+    ...(appliedTo && { appliedTo }),
+  });
+
+  it("splits what is owed the way the invoice is built", () => {
+    const t = poTotals(
+      po({
+        items: [line("a", 10_000_000)],
+        fees: [fee("f1", "SHIPPING", 250_000), fee("f2", "TAX", 100_000)],
+      }),
+    );
+    expect(t.goods.due).toBe(10_000_000);
+    expect(t.feeStandings.map((s) => [s.fee.id, s.due])).toEqual([
+      ["f1", 250_000],
+      ["f2", 100_000],
+    ]);
+    // The standings are the invoice, seen a second way.
+    expect(t.goods.due + t.feeStandings.reduce((n, s) => n + s.due, 0)).toBe(
+      t.total,
+    );
+  });
+
+  it("takes the discount off the goods, not off the forwarder", () => {
+    // A supplier knocking a million off the machines does not reduce what the
+    // forwarder charges to ship them.
+    const t = poTotals(
+      po({
+        items: [line("a", 10_000_000)],
+        fees: [fee("f1", "SHIPPING", 250_000)],
+        discount: 1_000_000,
+      }),
+    );
+    expect(t.goods.due).toBe(9_000_000);
+    expect(t.feeStandings[0]!.due).toBe(250_000);
+  });
+
+  it("settles the expense a payment names, and only that one", () => {
+    const t = poTotals(
+      po({
+        items: [line("a", 10_000_000)],
+        fees: [fee("f1", "SHIPPING", 250_000), fee("f2", "OTHER", 50_000)],
+        payments: [{ ...paid("p1", 250_000, "SHIPPING"), feeId: "f1" }],
+      }),
+    );
+    // The whole question the card exists to answer: the ongkir is paid, the
+    // packing crate and the machines are not.
+    expect(t.feeStandings.map((s) => s.owed)).toEqual([0, 50_000]);
+    expect(t.goods).toEqual({ due: 10_000_000, paid: 0, owed: 10_000_000 });
+    // And the order overall still owes what it owes.
+    expect(t.outstanding).toBe(10_050_000);
+  });
+
+  it("reads a payment filed under a bucket against that bucket's expenses", () => {
+    // Paid before expenses had names: "Shipping" was the bucket, and the
+    // bucket's expenses take it in order, each filled before the next.
+    const t = poTotals(
+      po({
+        items: [line("a", 1_000_000)],
+        fees: [
+          fee("f1", "SHIPPING", 100_000),
+          fee("f2", "SHIPPING", 100_000),
+          fee("f3", "CUSTOMS", 70_000),
+        ],
+        payments: [paid("p1", 150_000, "SHIPPING"), paid("p2", 70_000, "TAX")],
+      }),
+    );
+    expect(t.feeStandings.map((s) => s.paid)).toEqual([
+      100_000, 50_000, 70_000,
+    ]);
+    expect(t.goods.paid).toBe(0);
+  });
+
+  it("counts what no expense can take towards the goods", () => {
+    // A shipping payment on an invoice with no shipping expense is still
+    // money the supplier was paid on this invoice.
+    const t = poTotals(
+      po({
+        items: [line("a", 1_000_000)],
+        payments: [paid("p1", 200_000, "SHIPPING")],
+      }),
+    );
+    expect(t.goods.paid).toBe(200_000);
+    expect(t.goods.owed).toBe(800_000);
+  });
+
+  it("never turns an overpaid expense into a credit", () => {
+    // Same rule as `outstanding`: paying the forwarder too much is a credit
+    // with the forwarder, not a discount on the machines.
+    const t = poTotals(
+      po({
+        items: [line("a", 1_000_000)],
+        fees: [fee("f1", "SHIPPING", 100_000)],
+        payments: [{ ...paid("p1", 500_000, "SHIPPING"), feeId: "f1" }],
+      }),
+    );
+    expect(t.feeStandings[0]!.owed).toBe(0);
+    expect(t.goods.owed).toBe(1_000_000);
+  });
+});
+
+describe("canReopenQc", () => {
+  it("takes back the three decisions QC itself makes", () => {
+    // The owner's ask: staff accept the wrong machine, or send the wrong one
+    // back, and the remedy has to be on the row where the mistake was made.
+    expect(canReopenQc(unit({ status: "TERSEDIA" }))).toBe(true);
+    expect(canReopenQc(unit({ status: "SERVIS" }))).toBe(true);
+    expect(canReopenQc(unit({ status: "RETUR_SUPPLIER" }))).toBe(true);
+  });
+
+  it("stops where the machine stops being the shop's alone", () => {
+    // Reserved or sold means somebody outside this screen has acted on it, and
+    // pulling such a unit back to a QC bench would be a claim about a machine
+    // that is promised to a customer or already gone.
+    expect(canReopenQc(unit({ status: "DIRESERVASI" }))).toBe(false);
+    expect(canReopenQc(unit({ status: "TERJUAL" }))).toBe(false);
+    expect(canReopenQc(unit({ status: "HILANG" }))).toBe(false);
+  });
+});
+
+describe("poStageFromCounts — the same rule, from the API's counts", () => {
+  const row = (
+    over: Partial<Parameters<typeof poStageFromCounts>[0]> = {},
+  ) => ({
+    status: "DITERIMA",
+    closedAt: null,
+    qty: 2,
+    identified: 2,
+    accepted: 2,
+    inQc: 0,
+    describedInQc: 0,
+    returned: 0,
+    onService: 0,
+    ...over,
+  });
+
+  it("answers CLOSED before anything derived", () => {
+    // Closing is a statement ABOUT the derived answer: somebody looked at
+    // whatever this would have said and filed the order anyway.
+    expect(
+      poStageFromCounts(
+        row({
+          closedAt: "2026-09-01T00:00:00.000Z",
+          identified: 0,
+          accepted: 0,
+        }),
+      ),
+    ).toBe("CLOSED");
+  });
+
+  it("is PENDING until the goods are marked received", () => {
+    expect(poStageFromCounts(row({ status: "DIPESAN" }))).toBe("PENDING");
+    expect(poStageFromCounts(row({ status: "DRAF" }))).toBe("PENDING");
+  });
+
+  it("is PENDING when received with nothing on it — story 3", () => {
+    expect(poStageFromCounts(row({ qty: 0, identified: 0, accepted: 0 }))).toBe(
+      "PENDING",
+    );
+  });
+
+  it("is ARRIVED while any expected machine has no serial", () => {
+    // Quantities, not lines: one graded unit does not satisfy a line of two.
+    expect(poStageFromCounts(row({ qty: 2, identified: 1, accepted: 1 }))).toBe(
+      "ARRIVED",
+    );
+  });
+
+  it("is ARRIVED while a machine in QC has no description", () => {
+    // A serial and nothing else is a machine nobody has looked at.
+    expect(
+      poStageFromCounts(row({ accepted: 0, inQc: 2, describedInQc: 0 })),
+    ).toBe("ARRIVED");
+  });
+
+  it("is IN_QC once every machine in QC has been described", () => {
+    expect(
+      poStageFromCounts(row({ accepted: 0, inQc: 2, describedInQc: 2 })),
+    ).toBe("IN_QC");
+  });
+
+  it("takes the LEAST-far machine, not the furthest", () => {
+    // Nine graded and one still in its box is not a finished order — showing
+    // it as "In inventory" is how the tenth machine gets forgotten.
+    expect(
+      poStageFromCounts(
+        row({
+          qty: 10,
+          identified: 10,
+          accepted: 9,
+          inQc: 1,
+          describedInQc: 0,
+        }),
+      ),
+    ).toBe("ARRIVED");
+  });
+
+  it("reports a returned or serviced machine over an accepted one", () => {
+    expect(poStageFromCounts(row({ accepted: 1, returned: 1 }))).toBe(
+      "REJECTED",
+    );
+    expect(poStageFromCounts(row({ accepted: 1, onService: 1 }))).toBe(
+      "ON_SERVICE",
+    );
+  });
+
+  it("is IN_INVENTORY only when every machine is through", () => {
+    expect(poStageFromCounts(row())).toBe("IN_INVENTORY");
+  });
+});
+
+describe("poPaymentStatus", () => {
+  /** An invoice for a million, paid `paid` of it. */
+  const billed = (paid: number) =>
+    po({
+      items: [line("i1", 1_000_000)],
+      payments:
+        paid === 0
+          ? []
+          : [{ id: "p1", method: "TUNAI", amount: paid, at: "2026-09-01" }],
+    });
+
+  it("is Open while nothing has been paid", () => {
+    expect(poPaymentStatus(billed(0))).toBe("OPEN");
+  });
+
+  it("is Partially paid once part of it has", () => {
+    // Owner revision 2026-09-18: "open, partially paid, and fully paid". It
+    // was called Closed, which said the opposite of what it meant.
+    expect(poPaymentStatus(billed(1))).toBe("PARTIALLY_PAID");
+    expect(poPaymentStatus(billed(999_999))).toBe("PARTIALLY_PAID");
+  });
+
+  it("is Fully paid at the total, and above it", () => {
+    expect(poPaymentStatus(billed(1_000_000))).toBe("FULLY_PAID");
+    // An overpayment is a supplier credit, not a half-paid invoice.
+    expect(poPaymentStatus(billed(1_500_000))).toBe("FULLY_PAID");
+  });
+
+  it("counts the expenses, not just the goods", () => {
+    // Shipping and tax are owed to somebody. An invoice whose machines are
+    // settled and whose ongkir is not has not been paid in full.
+    const withOngkir = po({
+      items: [line("i1", 1_000_000)],
+      fees: [fee("f1", "SHIPPING", 300_000)],
+      payments: [
+        { id: "p1", method: "TUNAI", amount: 1_000_000, at: "2026-09-01" },
+      ],
+    });
+    expect(poPaymentStatus(withOngkir)).toBe("PARTIALLY_PAID");
+  });
+
+  it("calls an unpriced invoice with money against it part-paid", () => {
+    // The owner's paid-first case: a transfer before anybody knew what it
+    // bought. It cannot be paid in full — nobody knows what full is — and it
+    // is not untouched either.
+    const paidFirst = po({
+      items: [],
+      payments: [
+        { id: "p1", method: "TRANSFER", amount: 5_000_000, at: "2026-09-01" },
+      ],
+    });
+    expect(poPaymentStatus(paidFirst)).toBe("PARTIALLY_PAID");
+  });
+
+  it("does not read a discounted-to-nothing order as settled", () => {
+    // Total zero and nothing paid is Open, not "paid in full": there is no
+    // evidence anybody did anything.
+    expect(poPaymentStatus(po())).toBe("OPEN");
+  });
+});
+
+describe("poDeletion", () => {
+  it("takes the machines still waiting in QC with it", () => {
+    const order = po();
+    const d = poDeletion(order, [
+      unit({ serial: "S2" }),
+      unit({ serial: "S1" }),
+    ]);
+    expect(d.allowed).toBe(true);
+    // Sorted, so the dialog names them in an order that does not depend on
+    // which was scanned first.
+    expect(d.takes).toEqual(["S1", "S2"]);
+    expect(d.blockers).toEqual([]);
+  });
+
+  it("is refused by a machine that has left QC, and names it", () => {
+    const d = poDeletion(po(), [
+      unit({ serial: "S1" }),
+      unit({ serial: "S2", status: "TERSEDIA" }),
+    ]);
+    expect(d.allowed).toBe(false);
+    expect(d.blockers).toEqual(["S2"]);
+    // The QC machine is still listed: the dialog that refuses says what it
+    // WOULD have taken, so the reader can see the whole invoice.
+    expect(d.takes).toEqual(["S1"]);
+  });
+
+  it("is refused by a machine already sent back to the supplier", () => {
+    // A supplier return is a decision somebody made against this invoice.
+    // Deleting the invoice would leave the return pointing at nothing.
+    const d = poDeletion(po(), [
+      unit({ serial: "S1", status: "RETUR_SUPPLIER" }),
+    ]);
+    expect(d.allowed).toBe(false);
+  });
+
+  it("ignores machines that came off another invoice", () => {
+    const d = poDeletion(po(), [
+      unit({ serial: "S9", poId: "po-other", status: "TERSEDIA" }),
+    ]);
+    expect(d.allowed).toBe(true);
+    expect(d.takes).toEqual([]);
+  });
+
+  it("is allowed on an invoice that has been paid", () => {
+    // Money paid against an invoice that turned out not to exist is money
+    // paid to that supplier, which the supplier's own account tracks.
+    const paid = po({
+      payments: [
+        { id: "p1", method: "TUNAI", amount: 5_000_000, at: "2026-09-01" },
+      ],
+    });
+    expect(poDeletion(paid, []).allowed).toBe(true);
+  });
+});

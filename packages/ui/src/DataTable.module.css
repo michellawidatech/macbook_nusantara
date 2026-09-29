@@ -1,0 +1,202 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-height: 0;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.density {
+  padding: var(--s-1) var(--s-3);
+  font: inherit;
+  font-size: var(--t-xs);
+  font-weight: var(--fw-medium);
+  color: var(--c-ink-muted);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-full);
+  cursor: pointer;
+}
+
+.scroll {
+  overflow: auto;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  min-height: 0;
+}
+
+.table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: var(--t-sm);
+}
+
+.th,
+.thRight {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--s-2) var(--s-3);
+  text-align: left;
+  font-weight: var(--fw-medium);
+  color: var(--c-ink-muted);
+  background: var(--c-surface-sunken);
+  border-bottom: 1px solid var(--c-border);
+  white-space: nowrap;
+}
+
+.thRight {
+  text-align: right;
+}
+
+.sortButton {
+  padding: 0;
+  font: inherit;
+  font-weight: var(--fw-medium);
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* Wide enough to hit, visible on hover/focus, keyboard-operable. */
+.resizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 9px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+.resizer:hover,
+.resizer:focus-visible {
+  background: var(--c-accent-faint);
+}
+
+.td,
+.tdRight {
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--c-border);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.tdRight {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Ellipsis is the default; wrapping is opt-in per column (02 §8). */
+.truncate {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wrapCell {
+  display: block;
+  white-space: normal;
+}
+
+.rowNormal {
+  height: 44px;
+}
+
+.rowCompact {
+  height: 32px;
+}
+
+.rowNormal:hover,
+.rowCompact:hover {
+  background: var(--c-surface-sunken);
+}
+
+.rowSelected {
+  background: var(--c-accent-faint);
+}
+
+/* The 600 ms duplicate-scan pulse (02 §2). Motion-reduced users still see the
+   final highlighted state, so nothing is colour-and-motion only. */
+.rowHighlight {
+  background: var(--c-warning-faint);
+}
+
+.checkCell {
+  width: 36px;
+  padding: var(--s-2);
+  text-align: center;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.emptyWrap {
+  padding: var(--s-6);
+  text-align: center;
+  color: var(--c-ink-muted);
+}
+
+.bulkBar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-4);
+  color: var(--c-ink-inverse);
+  background: var(--c-ink);
+  border-radius: var(--r-md);
+  box-shadow: var(--e-2);
+}
+
+.bulkCount {
+  font-size: var(--t-sm);
+  font-weight: var(--fw-bold);
+}
+
+.bulkAction {
+  padding: var(--s-1) var(--s-3);
+  font: inherit;
+  font-size: var(--t-sm);
+  color: var(--c-ink-inverse);
+  background: rgb(255 255 255 / 16%);
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.bulkAction:hover {
+  background: rgb(255 255 255 / 28%);
+}
+
+.bulkClear {
+  margin-left: auto;
+  padding: var(--s-1) var(--s-3);
+  font: inherit;
+  font-size: var(--t-sm);
+  color: var(--c-ink-inverse);
+  background: none;
+  border: 1px solid rgb(255 255 255 / 40%);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

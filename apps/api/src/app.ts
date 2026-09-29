@@ -14,11 +14,28 @@ import type { PrismaClient } from "@nusantara/db";
 import { type Logger, requestLogger } from "@nusantara/logging";
 import type { ApiConfig } from "./config.js";
 import { errorHandler, notFoundHandler } from "./errors.js";
-import { requireAuth, requireOwner } from "./auth/middleware.js";
+import {
+  requireAuth,
+  requireOwner,
+  requirePasswordChanged,
+} from "./auth/middleware.js";
 import { createLoginLimiter, type LoginLimiter } from "./auth/rateLimit.js";
 import { idempotency } from "./middleware/idempotency.js";
+import { securityHeaders } from "./middleware/securityHeaders.js";
+import { cors } from "./middleware/cors.js";
 import { authRouter } from "./routes/auth.js";
 import { katalogRouter } from "./routes/katalog.js";
+import { inboundRouter } from "./routes/inbound.js";
+import { chatRouter } from "./routes/chat.js";
+import { inboxRouter } from "./routes/inbox.js";
+import { reservationsRouter } from "./routes/reservations.js";
+import { kontrolRouter } from "./routes/kontrol.js";
+import { storeRouter } from "./routes/store.js";
+import { staffRouter } from "./routes/staff.js";
+import type { AnthropicEnv } from "@nusantara/agent";
+
+/** Four phone photographs as base64, with room to spare. */
+const STORE_BODY_LIMIT = "25mb";
 
 export interface CreateAppDeps {
   readonly db: PrismaClient;
@@ -26,6 +43,12 @@ export interface CreateAppDeps {
   readonly logger: Logger;
   /** Injectable so a test can drive the limiter's clock. */
   readonly limiter?: LoginLimiter;
+  /**
+   * Anthropic credentials for the chat agent. Passed in like everything else
+   * (01 §7) so a fail-closed test can prove the agent stays dormant without
+   * reading the developer's shell.
+   */
+  readonly anthropic?: AnthropicEnv;
 }
 
 export function createApp(deps: CreateAppDeps): Express {
@@ -34,9 +57,9 @@ export function createApp(deps: CreateAppDeps): Express {
 
   const app = express();
 
-  // Behind nginx in production: trust one proxy hop so req.ip is the client's
-  // address and not the proxy's. Rate limiting per IP depends on it.
-  app.set("trust proxy", 1);
+  // Who is a proxy, so req.ip is the client's address and not the proxy's —
+  // the login limiter keys on it. See `ApiConfig.trustProxy`.
+  app.set("trust proxy", config.trustProxy);
   app.disable("x-powered-by");
 
   // 01 §4: money is BigInt whole rupiah, serialized as a JSON string. One
@@ -45,15 +68,35 @@ export function createApp(deps: CreateAppDeps): Express {
     typeof value === "bigint" ? value.toString() : value,
   );
 
+  // First, so every response carries them — including the 404 from
+  // notFoundHandler and the 500 from errorHandler (08 §9).
+  app.use(securityHeaders({ https: config.cookieSecure }));
+
   app.use(requestLogger({ logger }));
-  app.use(express.json({ limit: config.bodyLimit }));
+
+  // Before the body parser: a preflight has no body worth reading, and a
+  // rejected cross-origin caller should not get as far as allocating one.
+  app.use(cors({ allowedOrigins: config.corsOrigin }));
+
+  // A store commit can carry QC photographs (docs/store-on-postgres.md), so it
+  // alone gets a large body; every other endpoint keeps the small limit.
+  const smallJson = express.json({ limit: config.bodyLimit });
+  const storeJson = express.json({ limit: STORE_BODY_LIMIT });
+  app.use((req, res, next) =>
+    (req.path === "/api/store/commit" ? storeJson : smallJson)(req, res, next),
+  );
   app.use(cookieParser());
 
   const api = Router();
 
   // Public (01 §4): health and auth. Everything else sits behind requireAuth.
   api.get("/health", (_req, res) => {
-    res.json({ ok: true, app: "api", env: config.env });
+    res.json({
+      ok: true,
+      app: "api",
+      env: config.env,
+      release: config.release,
+    });
   });
 
   // One instance, used by the auth router's authenticated mutations and by
@@ -64,15 +107,39 @@ export function createApp(deps: CreateAppDeps): Express {
   api.use("/auth", authRouter({ db, config, logger, limiter, idempotent }));
 
   api.use(requireAuth({ db, config }));
+  // A session on a password somebody else chose may do nothing below this line
+  // until it has chosen its own (owner ask 2026-09-18). /auth, above, is where
+  // it does that.
+  api.use(requirePasswordChanged());
   api.use(idempotent);
 
   // 01 §2: one router per section, longer prefixes first.
   api.use("/katalog", katalogRouter(db));
+  api.use(
+    "/chat",
+    chatRouter({
+      db,
+      logger,
+      anthropic: deps.anthropic ?? {},
+      requireOwner: requireOwner(logger),
+    }),
+  );
+  api.use("/inbox", inboxRouter(db));
+  api.use("/reservations", reservationsRouter(db));
+  api.use("/inbound", inboundRouter(db));
+  api.use("/store", storeRouter(db));
 
-  // The owner-only guard, wired since S6 so its rejection is provable.
-  api.get("/kontrol/audit", requireOwner(logger), (_req, res) => {
-    res.json({ entries: [] });
-  });
+  // Owner-only, and the guard is passed in rather than applied here so the
+  // mount keeps saying who may reach it. Wired since S6 for the rejection; the
+  // body answered a hardcoded empty list until the router behind it was real.
+  api.use(
+    "/kontrol",
+    kontrolRouter({ db, requireOwner: requireOwner(logger) }),
+  );
+  api.use(
+    "/staff",
+    staffRouter({ db, logger, limiter, requireOwner: requireOwner(logger) }),
+  );
 
   app.use("/api", api);
   app.use(notFoundHandler);

@@ -13,7 +13,14 @@ import {
 
 describe("08 §4 — the unit state machine", () => {
   it("intake is the only way in", () => {
-    expect(statusAfter(null, "DITERIMA")).toBe("TERSEDIA");
+    expect(statusAfter(null, "DITERIMA")).toBe("QC");
+    // The second genesis (owner ask 2026-08-31): a machine found at a stock
+    // take that the shop never booked in. It enters at QC and not on the
+    // shelf — nobody has graded, described or costed it.
+    expect(statusAfter(null, "OPNAME_DITEMUKAN")).toBe("QC");
+    expect(statusAfter("QC", "QC_SELESAI")).toBe("TERSEDIA");
+    expect(statusAfter("QC", "RETUR_SUPPLIER")).toBe("RETUR_SUPPLIER");
+    expect(statusAfter("QC", "KOREKSI")).toBe("KOREKSI_KELUAR");
     expect(statusAfter(null, "TERJUAL")).toBeNull();
     // A unit that does not exist cannot be moved or noted.
     expect(statusAfter(null, "DIPINDAH")).toBeNull();
@@ -26,6 +33,10 @@ describe("08 §4 — the unit state machine", () => {
     expect(statusAfter("TERSEDIA", "TERJUAL")).toBe("TERJUAL");
     expect(statusAfter("TERSEDIA", "RETUR_SUPPLIER")).toBe("RETUR_SUPPLIER");
     expect(statusAfter("TERSEDIA", "OPNAME_HILANG")).toBe("HILANG");
+    // The same event from a unit that already exists goes somewhere else, and
+    // the pair is the reason `statusAfter` matches on (from, type) rather than
+    // on the type alone: a written-off machine that turns up has been graded
+    // before, so it goes back on the shelf.
     expect(statusAfter("HILANG", "OPNAME_DITEMUKAN")).toBe("TERSEDIA");
     expect(statusAfter("TERSEDIA", "KOREKSI")).toBe("KOREKSI_KELUAR");
     expect(statusAfter("TERJUAL", "RETUR_PELANGGAN")).toBe("TERSEDIA");
@@ -74,12 +85,18 @@ describe("08 §4 — the unit state machine", () => {
   });
 
   it("lists the legal next statuses", () => {
-    expect(legalTargets(null)).toEqual(["TERSEDIA"]);
+    expect(legalTargets(null)).toEqual(["QC"]);
+    expect(legalTargets("QC").sort()).toEqual(
+      ["KOREKSI_KELUAR", "RETUR_SUPPLIER", "TERSEDIA"].sort(),
+    );
     expect(legalTargets("TERSEDIA").sort()).toEqual(
       [
         "DIRESERVASI",
         "HILANG",
         "KOREKSI_KELUAR",
+        // Back to the bench: a machine accepted into stock by mistake
+        // (2026-08-27). See the QC_DIBUKA arrows.
+        "QC",
         "RETUR_SUPPLIER",
         "TERJUAL",
       ].sort(),
@@ -131,7 +148,8 @@ describe("08 §4 — the unit state machine", () => {
 
   it("returns the projected status on a legal transition", () => {
     expect(assertTransition("SER-001", "TERSEDIA", "TERJUAL")).toBe("TERJUAL");
-    expect(assertTransition("SER-001", null, "DITERIMA")).toBe("TERSEDIA");
+    expect(assertTransition("SER-001", null, "DITERIMA")).toBe("QC");
+    expect(assertTransition("SER-001", "QC", "QC_SELESAI")).toBe("TERSEDIA");
   });
 
   it("only ever names statuses the ERD declares", () => {
@@ -139,5 +157,50 @@ describe("08 §4 — the unit state machine", () => {
       expect(UNIT_STATUSES).toContain(t.to);
       if (t.from !== null) expect(UNIT_STATUSES).toContain(t.from);
     }
+  });
+});
+
+describe("taking a QC decision back", () => {
+  it("puts an accepted machine back on the bench", () => {
+    // The owner's ask of 2026-08-27: staff accept the wrong machine into
+    // stock, and the remedy has to be an arrow rather than a stock adjustment
+    // that tells the story wrong.
+    expect(statusAfter("TERSEDIA", "QC_DIBUKA")).toBe("QC");
+  });
+
+  it("takes back a supplier return raised against the wrong serial", () => {
+    // RETUR_SUPPLIER stopped being terminal for exactly this. A return that
+    // really happened is final; one raised ten minutes ago against the wrong
+    // machine is a mistake, and the machine is still on the bench.
+    expect(statusAfter("RETUR_SUPPLIER", "QC_DIBUKA")).toBe("QC");
+    expect(isTerminal("RETUR_SUPPLIER")).toBe(false);
+  });
+
+  it("leaves a machine somebody else has acted on alone", () => {
+    // Reserved or sold means the shop no longer has it to itself. Those are
+    // corrected where they happened — the reservation, the sale.
+    expect(statusAfter("DIRESERVASI", "QC_DIBUKA")).toBeNull();
+    expect(statusAfter("TERJUAL", "QC_DIBUKA")).toBeNull();
+    expect(statusAfter("HILANG", "QC_DIBUKA")).toBeNull();
+    // And a unit already in QC has no decision to take back.
+    expect(statusAfter("QC", "QC_DIBUKA")).toBeNull();
+  });
+
+  it("does not collide with the adjustment arrow it sits beside", () => {
+    // The reason this is its own event type: KOREKSI already leaves TERSEDIA,
+    // and two meanings for one (from, type) pair would make `statusAfter`
+    // ambiguous about where the unit lands.
+    expect(statusAfter("TERSEDIA", "KOREKSI")).toBe("KOREKSI_KELUAR");
+    expect(statusAfter("QC", "KOREKSI")).toBe("KOREKSI_KELUAR");
+  });
+
+  it("lets a returned unit carry a note now that it is not final", () => {
+    // A consequence of leaving TERMINAL_STATUSES rather than a separate
+    // decision, and the right one: "supplier confirmed the credit" is a thing
+    // somebody needs to write on a returned machine.
+    expect(statusAfter("RETUR_SUPPLIER", "DICATAT")).toBe("RETUR_SUPPLIER");
+    // Refunded and written-off units stay closed to it.
+    expect(statusAfter("REFUND_KLAIM", "DICATAT")).toBeNull();
+    expect(statusAfter("KOREKSI_KELUAR", "DICATAT")).toBeNull();
   });
 });

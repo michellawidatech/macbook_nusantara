@@ -28,6 +28,7 @@ const UNIQUE_VIOLATION = "23505";
 const FOREIGN_KEY_VIOLATION = "23503";
 const NOT_NULL_VIOLATION = "23502";
 const CHECK_VIOLATION = "23514";
+const UNDEFINED_COLUMN = "42703";
 const INSUFFICIENT_PRIVILEGE = "42501";
 
 let owner: Client; // nusantara — owns the schema, writes the fixtures
@@ -72,6 +73,12 @@ async function seed() {
     `INSERT INTO "Staff" (id, username, name, role, "canApprove", active, "passwordHash", "createdAt")
      VALUES ($1,'kasir','Kasir','STAFF',false,true,'x',now())`,
     [STAFF],
+  );
+  // Payment.method became an FK to this table on 2026-08-24, so a fixture that
+  // records a payment needs the method to exist first.
+  await owner.query(
+    `INSERT INTO "PaymentMethod" (id, code, label, "builtIn", "forPo", "forSale", active, "sortOrder", "createdAt")
+     VALUES ('pm_tunai','TUNAI','Cash',true,true,true,true,1,now())`,
   );
   await owner.query(
     `INSERT INTO "Category" (id, name, "sortOrder", "marginMode", "marginMin", "marginMax", "createdAt")
@@ -224,16 +231,16 @@ describe("08 §2 — the fifteen invariants", () => {
     await rejectsWith(
       () =>
         owner.query(
-          `INSERT INTO "Payment" (id, "orderId", direction, method, amount, status, "staffId")
-           VALUES ('p0',$1,'MASUK','TUNAI',0,'LUNAS',$2)`,
+          `INSERT INTO "Payment" (id, "orderId", direction, "methodId", amount, status, "staffId")
+           VALUES ('p0',$1,'MASUK','pm_tunai',0,'LUNAS',$2)`,
           [ORDER, STAFF],
         ),
       CHECK_VIOLATION,
     );
 
     await owner.query(
-      `INSERT INTO "Payment" (id, "orderId", direction, method, amount, status, "staffId")
-       VALUES ('p1',$1,'MASUK','TUNAI',12000000,'LUNAS',$2)`,
+      `INSERT INTO "Payment" (id, "orderId", direction, "methodId", amount, status, "staffId")
+       VALUES ('p1',$1,'MASUK','pm_tunai',12000000,'LUNAS',$2)`,
       [ORDER, STAFF],
     );
     // The txn-level half of invariant 6: overpayment is detectable in the same
@@ -249,8 +256,8 @@ describe("08 §2 — the fifteen invariants", () => {
   it("7. a payment belongs to exactly one parent", async () => {
     const pay = (id: string, orderId: string | null, poId: string | null) =>
       owner.query(
-        `INSERT INTO "Payment" (id, "orderId", "poId", direction, method, amount, status, "staffId")
-         VALUES ($1,$2,$3,'MASUK','TUNAI',1000,'LUNAS',$4)`,
+        `INSERT INTO "Payment" (id, "orderId", "poId", direction, "methodId", amount, status, "staffId")
+         VALUES ($1,$2,$3,'MASUK','pm_tunai',1000,'LUNAS',$4)`,
         [id, orderId, poId, STAFF],
       );
 
@@ -275,6 +282,71 @@ describe("08 §2 — the fifteen invariants", () => {
     await pay("ok2", null, "po1");
   });
 
+  it("7b. a payment against an opening balance names the customer, and flows the right way", async () => {
+    // Owner answer 2026-09-22: a debt from before this app has no invoice or
+    // sale, so the payment's one parent is the supplier or the customer.
+    await owner.query(
+      `INSERT INTO "Supplier" (id, name, active, "createdAt") VALUES ('sup1','Supplier A',true,now())`,
+    );
+    await owner.query(
+      `INSERT INTO "Customer" (id, name, "createdAt") VALUES ('cus1','Pelanggan A',now())`,
+    );
+    /*
+     * Three parents since 2026-09-24, not four: `Payment.supplierId` went with
+     * `Supplier.openingBalance`, which was the only thing it carried. A
+     * supplier is still paid — through `poId`, against an invoice.
+     */
+    const pay = (
+      id: string,
+      parents: { orderId?: string; poId?: string; customerId?: string },
+      direction: "MASUK" | "KELUAR",
+    ) =>
+      owner.query(
+        `INSERT INTO "Payment" (id, "orderId", "poId", "customerId", direction, "methodId", amount, status, "staffId")
+         VALUES ($1,$2,$3,$4,$5,'pm_tunai',1000,'LUNAS',$6)`,
+        [
+          id,
+          parents.orderId ?? null,
+          parents.poId ?? null,
+          parents.customerId ?? null,
+          direction,
+          STAFF,
+        ],
+      );
+
+    // Two parents, each of which exists — the CHECK refuses, not a key.
+    await rejectsWith(
+      () => pay("two1", { orderId: ORDER, customerId: "cus1" }, "MASUK"),
+      CHECK_VIOLATION,
+    );
+    // No parent at all is the same CHECK from the other side.
+    await rejectsWith(() => pay("none1", {}, "MASUK"), CHECK_VIOLATION);
+    // The shop is paid by a customer, never the reverse: that is a refund,
+    // and a refund belongs to the sale it undoes.
+    await rejectsWith(
+      () => pay("wrong2", { customerId: "cus1" }, "KELUAR"),
+      CHECK_VIOLATION,
+    );
+    // A party that does not exist is a foreign key failing.
+    await rejectsWith(
+      () => pay("ghost", { customerId: "nobody" }, "MASUK"),
+      FOREIGN_KEY_VIOLATION,
+    );
+    // The column itself is gone (2026-09-24).
+    await rejectsWith(
+      () => owner.query(`SELECT "supplierId" FROM "Payment" LIMIT 1`),
+      UNDEFINED_COLUMN,
+    );
+
+    await pay("cus_ok", { customerId: "cus1" }, "MASUK");
+    // Money the owner paid personally still counts against the debt; the
+    // switch defaults to "it went through the shop".
+    const { rows } = await owner.query<{ inBalance: boolean }>(
+      `SELECT "inBalance" FROM "Payment" WHERE id = 'cus_ok'`,
+    );
+    expect(rows.map((r) => r.inBalance)).toEqual([true]);
+  });
+
   it("8. money is never negative where it cannot be, and quantities are positive", async () => {
     const line = (id: string, qty: number, price: number) =>
       owner.query(
@@ -296,8 +368,8 @@ describe("08 §2 — the fifteen invariants", () => {
 
   it("9. a discount cannot be used past its limit", async () => {
     await owner.query(
-      `INSERT INTO "Discount" (id, code, pct, "usageLimit", used, active, scope)
-       VALUES ('d1','LEBARAN',10,2,2,true,'SEMUA')`,
+      `INSERT INTO "Discount" (id, code, type, pct, "usageLimit", used, active, scope)
+       VALUES ('d1','LEBARAN','PCT',10,2,2,true,'SEMUA')`,
     );
 
     // The live mechanism: the WHERE is the lock, so the update simply misses.
@@ -474,6 +546,43 @@ describe("08 §2 — the fifteen invariants", () => {
       () => app.query(`DELETE FROM "UnitEvent" WHERE id = 'ue1'`),
       INSUFFICIENT_PRIVILEGE,
     );
+
+    // The two edits the owner admitted on 2026-09-23, and the database's own
+    // line around them (20260924130000): a row's serial may follow its unit
+    // to a corrected one — that column and no other...
+    await app.query(
+      `UPDATE "UnitEvent" SET serial = 'SER-001X' WHERE id = 'ue1'`,
+    );
+    await rejectsWith(
+      () => app.query(`UPDATE "UnitEvent" SET seq = 9 WHERE id = 'ue1'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    // ...and a unit's last rows may be taken back through the one function
+    // that can, which refuses the last one standing and anything under the
+    // top of the chain.
+    await rejectsWith(
+      () => app.query(`SELECT unit_event_drop_last(ARRAY['ue1'])`),
+      CHECK_VIOLATION,
+    );
+    await owner.query(
+      `INSERT INTO "UnitEvent" (id, "unitId", serial, seq, type, at, "toStatus", "costDelta", "staffId")
+       VALUES ('ue2',$1,'SER-001X',2,'QC_SELESAI',now(),'TERSEDIA',0,$2),
+              ('ue3',$1,'SER-001X',3,'TERJUAL',now(),'TERJUAL',0,$2)`,
+      [UNIT, STAFF],
+    );
+    await rejectsWith(
+      () => app.query(`SELECT unit_event_drop_last(ARRAY['ue2'])`),
+      CHECK_VIOLATION,
+    );
+    const { rows } = await app.query<{ n: number }>(
+      `SELECT unit_event_drop_last(ARRAY['ue3','ue2']) AS n`,
+    );
+    expect(rows[0]!.n).toBe(2);
+    const { rows: left } = await owner.query<{ id: string }>(
+      `SELECT id FROM "UnitEvent" WHERE "unitId" = $1 ORDER BY seq`,
+      [UNIT],
+    );
+    expect(left.map((r) => r.id)).toEqual(["ue1"]);
   });
 
   it("15. a unit always has a location", async () => {
@@ -498,5 +607,63 @@ describe("the app role has no DELETE anywhere", () => {
       () => app.query(`DELETE FROM "Unit" WHERE id = $1`, [UNIT]),
       INSUFFICIENT_PRIVILEGE,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("the ledger's two admitted edits (2026-09-23, in the database 2026-09-24)", () => {
+  it("grants the serial column and the drop-last function, and nothing beside them", async () => {
+    // Column grant and a definer function only, so the table-level UPDATE and
+    // DELETE that the 20260913 self-check and the deploy's grant query read
+    // stay false.
+    const { rows } = await owner.query(
+      `SELECT has_column_privilege('nusantara_app','"UnitEvent"','serial','UPDATE')   AS serial,
+              has_column_privilege('nusantara_app','"UnitEvent"','toStatus','UPDATE') AS to_status,
+              has_column_privilege('nusantara_app','"UnitEvent"','seq','UPDATE')      AS seq,
+              has_table_privilege('nusantara_app','"UnitEvent"','UPDATE')             AS table_update,
+              has_table_privilege('nusantara_app','"UnitEvent"','DELETE')             AS table_delete,
+              has_function_privilege('nusantara_app','unit_event_drop_last(text[])','EXECUTE')   AS drop_last,
+              has_function_privilege('nusantara_agent','unit_event_drop_last(text[])','EXECUTE') AS agent_drop_last`,
+    );
+    expect(rows[0]).toEqual({
+      serial: true,
+      to_status: false,
+      seq: false,
+      table_update: false,
+      table_delete: false,
+      drop_last: true,
+      agent_drop_last: false,
+    });
+  });
+});
+
+describe("the stock movement history (2026-09-24)", () => {
+  it("is correctable per column and never as a ledger", async () => {
+    // What a person can get wrong is granted; what the row IS is not. Column
+    // grants only, so the table-level UPDATE that the 20260913 self-check and
+    // the deploy's grant query read stays false.
+    const { rows } = await owner.query(
+      `SELECT has_column_privilege('nusantara_app','"StockAdjustment"','description','UPDATE') AS adj_description,
+              has_column_privilege('nusantara_app','"StockAdjustment"','at','UPDATE')          AS adj_at,
+              has_column_privilege('nusantara_app','"StockAdjustment"','unitId','UPDATE')      AS adj_unit,
+              has_column_privilege('nusantara_app','"StockAdjustment"','kind','UPDATE')        AS adj_kind,
+              has_column_privilege('nusantara_app','"StockMove"','note','UPDATE')              AS move_note,
+              has_column_privilege('nusantara_app','"StockMove"','qty','UPDATE')               AS move_qty,
+              has_table_privilege('nusantara_app','"StockMove"','UPDATE')                      AS move_table,
+              has_table_privilege('nusantara_app','"StockAdjustment"','UPDATE')                AS adj_table,
+              has_table_privilege('nusantara_app','"StockMove"','DELETE')                      AS move_delete`,
+    );
+    expect(rows[0]).toEqual({
+      adj_description: true,
+      adj_at: true,
+      adj_unit: false,
+      adj_kind: false,
+      move_note: true,
+      move_qty: false,
+      move_table: false,
+      adj_table: false,
+      move_delete: false,
+    });
   });
 });

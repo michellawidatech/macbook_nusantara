@@ -1,9 +1,21 @@
 <!doctype html>
-<html lang="id">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Nusantara POS</title>
+    <!-- viewport-fit=cover is what makes env(safe-area-inset-*) report a real
+         number on a notched phone; without it the insets are always 0 and the
+         shell's bottom padding silently does nothing. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <!-- One SVG at every size. `BrandMark` renders this same file in the
+         sidebar, so the tab and the app cannot show different marks. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- The mark's own ground, so the browser chrome on Android and the iOS
+         status bar sit in the same green rather than the primary button's. -->
+    <meta name="theme-color" content="#0f5648" />
+    <title>Macbook Nusantara</title>
   </head>
   <body>
     <div id="root"></div>

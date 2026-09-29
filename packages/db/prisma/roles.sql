@@ -1,4 +1,4 @@
--- Database roles for Nusantara POS (08 §9).
+-- Database roles for Macbook Nusantara (08 §9).
 --
 -- Run ONCE per cluster, as a superuser:
 --     psql -U <superuser> -h localhost -d postgres -f packages/db/prisma/roles.sql

@@ -1,0 +1,23 @@
+{
+  "name": "@nusantara/agent",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The shop's chat agent \u2014 persona, grounding tools, conversation loop",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1",
+    "@nusantara/db": "workspace:^",
+    "@nusantara/domain": "workspace:^"
+  }
+}

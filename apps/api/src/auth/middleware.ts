@@ -9,7 +9,7 @@ import type { RequestHandler } from "express";
 import type { PrismaClient } from "@nusantara/db";
 import { type Logger, setStaffId } from "@nusantara/logging";
 import type { ApiConfig } from "../config.js";
-import { forbidden, unauthenticated } from "../errors.js";
+import { ApiError, forbidden, unauthenticated } from "../errors.js";
 import { hashSessionToken } from "./credentials.js";
 
 export interface AuthenticatedStaff {
@@ -18,6 +18,11 @@ export interface AuthenticatedStaff {
   readonly name: string;
   readonly role: "OWNER" | "STAFF";
   readonly canApprove: boolean;
+  /**
+   * Still on a password somebody else chose. `requirePasswordChanged` turns
+   * every business route away until it is false.
+   */
+  readonly mustChangePassword: boolean;
 }
 
 declare module "express-serve-static-core" {
@@ -65,6 +70,7 @@ export function requireAuth({ db, config }: AuthDeps): RequestHandler {
                 role: true,
                 canApprove: true,
                 active: true,
+                mustChangePassword: true,
               },
             },
           },
@@ -86,6 +92,7 @@ export function requireAuth({ db, config }: AuthDeps): RequestHandler {
           name: session.staff.name,
           role: session.staff.role,
           canApprove: session.staff.canApprove,
+          mustChangePassword: session.staff.mustChangePassword,
         };
         req.sessionId = session.id;
 
@@ -96,6 +103,34 @@ export function requireAuth({ db, config }: AuthDeps): RequestHandler {
         next(error);
       }
     })();
+  };
+}
+
+/**
+ * The first sign-in gate (owner ask 2026-09-18).
+ *
+ * An account on the shop's initial password — or on one an owner set while
+ * resetting it — is known to more people than its owner. Such a session may
+ * read who it is and choose a new password (both live on the auth router,
+ * mounted before this) and nothing else: every other route answers
+ * 403 GANTI_SANDI, which the SPA reads as "show the change-password screen".
+ *
+ * Server-side, per request, from the row `requireAuth` just read — the SPA
+ * showing that screen is a courtesy, never the control (08 §9).
+ */
+export function requirePasswordChanged(): RequestHandler {
+  return (req, _res, next) => {
+    if (req.staff?.mustChangePassword === true) {
+      next(
+        new ApiError(
+          403,
+          "GANTI_SANDI",
+          "Ganti kata sandi Anda dulu sebelum melanjutkan.",
+        ),
+      );
+      return;
+    }
+    next();
   };
 }
 

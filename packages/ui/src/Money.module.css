@@ -1,0 +1,16 @@
+.money,
+.negative,
+.zero {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.negative {
+  color: var(--c-danger);
+  font-weight: var(--fw-medium);
+}
+
+.zero {
+  color: var(--c-ink-muted);
+  font-style: italic;
+}

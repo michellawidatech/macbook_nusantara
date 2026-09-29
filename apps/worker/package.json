@@ -2,14 +2,26 @@
   "name": "@nusantara/worker",
   "version": "0.0.0",
   "private": true,
-  "description": "Outbox sender + scheduled jobs (no port)",
+  "description": "Draft + outbox pipeline: answers inbound WhatsApp and sends the queue (no port)",
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --config ../../vitest.config.ts"
+    "test": "vitest run",
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts"
   },
   "devDependencies": {
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@nusantara/agent": "workspace:^",
+    "@nusantara/db": "workspace:^",
+    "@nusantara/logging": "workspace:^",
+    "@nusantara/whatsapp": "workspace:^",
+    "zod": "^4.4.3"
   }
 }

@@ -1,0 +1,88 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-2);
+}
+
+.field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.label {
+  font-size: var(--t-sm);
+  font-weight: var(--fw-medium);
+  color: var(--c-ink-muted);
+}
+
+.input {
+  padding: var(--s-2) var(--s-3);
+  font: inherit;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  color: var(--c-ink);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-sm);
+}
+
+.readyChip,
+.reclaimChip {
+  padding: var(--s-2) var(--s-3);
+  font: inherit;
+  font-size: var(--t-xs);
+  font-weight: var(--fw-medium);
+  border-radius: var(--r-full);
+  white-space: nowrap;
+}
+
+.readyChip {
+  color: var(--c-success);
+  background: var(--c-success-faint);
+  border: 1px solid transparent;
+  cursor: default;
+}
+
+.reclaimChip {
+  color: var(--c-warning);
+  background: var(--c-warning-faint);
+  border: 1px solid var(--c-warning);
+  cursor: pointer;
+}
+
+/* Reserved so a message never shifts the layout under a scanning hand. */
+.messages {
+  min-height: 1.5rem;
+  font-size: var(--t-sm);
+}
+
+.unknown {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--c-danger);
+}
+
+.duplicate {
+  color: var(--c-warning);
+}
+
+.recovery {
+  padding: var(--s-1) var(--s-2);
+  font: inherit;
+  font-size: var(--t-xs);
+  font-weight: var(--fw-medium);
+  color: var(--c-accent);
+  background: var(--c-accent-faint);
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}

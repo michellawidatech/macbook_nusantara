@@ -10,7 +10,15 @@
       "cache": false,
       "persistent": true
     },
-    "test": {},
+    "test": {
+      "passThroughEnv": [
+        "TEST_DATABASE_URL",
+        "DATABASE_URL",
+        "TEST_PGHOST",
+        "TEST_PGPORT",
+        "TEST_PGDATABASE"
+      ]
+    },
     "typecheck": {}
   }
 }
