@@ -3853,4 +3853,7 @@ export const id: Record<string, string> = {
   "trade.save": "Simpan",
   "pos.editTradeIn": "Ubah tukar tambah {{label}}",
   "inventory.rack": "Rak",
+  "discount.editDiscount": "Ubah Diskon",
+  "discount.notFound": "Diskon ini tidak ada.",
+  "discounts.editAria": "Ubah {{name}}",
 };

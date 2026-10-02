@@ -60,6 +60,7 @@ export const PAGE_ROUTES: readonly PageRoute[] = [
   { path: "/products", element: <ProductsPage /> },
   { path: "/discounts", element: <DiscountsPage /> },
   { path: "/discounts/new", element: <DiscountFormPage /> },
+  { path: "/discounts/:discountId/edit", element: <DiscountFormPage /> },
   { path: "/finance/income-expense", element: <IncomeExpensePage /> },
   { path: "/finance/transactions", element: <TransactionsPage /> },
   { path: "/finance/receivables", element: <ReceivablesPage /> },

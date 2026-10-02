@@ -20,7 +20,7 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
@@ -183,6 +183,27 @@ export function DiscountsPage() {
                 const s = statusOf(d);
                 return <Tag color={s.color}>{t(s.label)}</Tag>;
               },
+            },
+            {
+              // Correcting a discount (owner ask 2026-10-02). The row opens
+              // its usage history, so this stops the click like the switch.
+              title: "",
+              key: "edit",
+              width: COLUMN.actionsPair,
+              render: (_, d) => (
+                <span role="presentation" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    size="small"
+                    icon={<EditOutlined />}
+                    aria-label={t("discounts.editAria", "Edit {{name}}", {
+                      name: d.name,
+                    })}
+                    onClick={() => navigate(`/discounts/${d.id}/edit`)}
+                  >
+                    {t("common.edit", "Edit")}
+                  </Button>
+                </span>
+              ),
             },
             {
               title: t("discounts.on", "On"),
