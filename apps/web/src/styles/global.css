@@ -822,6 +822,24 @@ body {
 }
 
 /*
+ * Inventory's units, nested under their line since 2026-10-02 rather than in
+ * a 1440px popup. antd pads the expanded row on every side; at a laptop's
+ * width that padding is exactly what pushed Sell price under the pinned
+ * per-unit buttons, so the nested table is given the row's full width.
+ */
+.inventory-lines .ant-table-expanded-row > .ant-table-cell {
+  padding: 0 !important;
+}
+.inventory-lines .ant-table-expanded-row-fixed {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+/* antd indents a nested table 40px to sit under the chevron. */
+.inventory-lines .ant-table-expanded-row .ant-table {
+  margin: 0 !important;
+}
+
+/*
  * The two marks on an invoice line (owner ask 2026-09-24): *"add a button
  * called 'Add outside invoice' … and mark that row as yellow. If there is a
  * unit that is not arrived, mark it as red."*

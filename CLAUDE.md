@@ -1078,7 +1078,7 @@ Decisions that outlived those documents:
     per-unit box anywhere. `Unit.marketPrice` still exists and still counts.
   - **Inventory is flat** (p4): one line per variant × grade × warehouse,
     unit price and sell price as ranges, *Set price* / *Print barcode*; a line
-    opens a popup of its units with an "i" per unit breaking down the COGS
+    opens a popup of its units (⚠️ nested under the line since 2026-10-02) with an "i" per unit breaking down the COGS
     (`components/CostBreakdown`). **Export stock** (p5) writes .xlsx after
     B2Soft's PERSEDIAAN BARANG, with `lib/xlsxWrite.ts` — no dependency.
   - **S/N Tracking** (p6) lists every serial (filters: category / product /
@@ -2321,6 +2321,17 @@ Decisions that outlived those documents:
     and listed in `masters-audit.txt`. No prices (every variant
     Rp 0), no stock, no balances. Warehouse 04 (Gudang Masuk Belum QC) is the
     service bench (`SERVIS`), 02 the shop.
+- **Inventory's units are nested again, 2026-10-02.** *"Instead of showing
+  popup in the UI when a row is clicked, use nested column."* A click on a line
+  (or its chevron) opens its units UNDER it, several lines at once; the lines
+  themselves stay flat — one level, never the product → grade → serial tree
+  of 2026-09-08. The nested table dropped Grade and the warehouse (a line IS
+  one grade in one warehouse, so the row above says both) and its Where
+  became Rack, which is what lets it fit a 1440px screen with the nav open
+  together with `.inventory-lines` in global.css stripping antd's padding and
+  40px indent from the expanded row. The per-unit buttons are pinned right.
+  ⚠️ An expanding table keeps its grid on a phone (DataTable), so Inventory
+  is no longer cards there.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

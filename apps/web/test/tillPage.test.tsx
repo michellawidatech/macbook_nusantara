@@ -759,6 +759,53 @@ describe("taking a machine in part-exchange", () => {
     ).toEqual(["DITERIMA"]);
   });
 
+  it("corrects a trade-in already on the sale, in place", async () => {
+    // Owner ask 2026-10-02: a trade-in could only be deleted and typed again.
+    // Its own serial: the test above already stocked TRADED.
+    const barcode = "SC02TRADE009";
+    const filed = "C02TRADE009";
+    renderTill();
+    await pickFirstMachine();
+
+    await goToPayment();
+    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
+    let d = await dialog();
+    await chooseOption(d.getByLabelText(/^Product/), TILL_PRODUCT);
+    await userEvent.type(d.getByLabelText(/Description/), "Air 2017");
+    await userEvent.type(d.getByLabelText(/Serial/), barcode);
+    await userEvent.click(d.getByLabelText(/Price/));
+    await userEvent.paste("2000000");
+    await userEvent.click(d.getByText("New"));
+    await userEvent.click(d.getByRole("button", { name: "Add it" }));
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Edit trade-in Air 2017" }),
+    );
+    d = await dialog();
+    // It opens on what it said.
+    expect(d.getByLabelText(/Description/)).toHaveValue("Air 2017");
+    const desc = d.getByLabelText(/Description/);
+    await userEvent.clear(desc);
+    await userEvent.type(desc, "Air 2017, dent on lid");
+    const price = d.getByLabelText(/Price/);
+    await userEvent.clear(price);
+    await userEvent.click(price);
+    await userEvent.paste("1500000");
+    await userEvent.click(d.getByRole("button", { name: "Save" }));
+
+    await payAndFinish();
+
+    const order = snapshot().orders[0]!;
+    // Replaced, not added beside the old one.
+    expect(order.tradeIns).toHaveLength(1);
+    expect(order.tradeIns![0]!.label).toBe("Air 2017, dent on lid");
+    expect(order.tradeIns![0]!.value).toBe(1_500_000);
+    expect(order.total).toBe(8_500_000);
+    expect(snapshot().units.find((u) => u.serial === filed)!.buy).toBe(
+      1_500_000,
+    );
+  });
+
   it("will not take a trade-in whose serial is not a real barcode", async () => {
     // The same shape rule intake enforces, for the same reason: this dialog
     // MINTS a unit, and a machine filed under a malformed serial is one no

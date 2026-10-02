@@ -24,6 +24,7 @@ import {
 import {
   CloudDownloadOutlined,
   DeleteOutlined,
+  EditOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
   PlusOutlined,
@@ -145,6 +146,35 @@ export function ProductsPage() {
     ssd: string[];
     price: number;
   }>();
+
+  /**
+   * The variant whose SKU is being corrected (owner ask 2026-10-02). A model
+   * brought in from AppleDB, or variants generated from its axes, carry a
+   * machine-made code (`SKU_HIBGR8C90134KEFC`) that nobody can look up or
+   * match against B2Soft's stock list, and there was no way to change one.
+   */
+  const [skuEditing, setSkuEditing] = useState<Sku | null>(null);
+  const [skuForm] = Form.useForm<{ code: string; price: number }>();
+  const openSkuEdit = (s: Sku) => setSkuEditing(s);
+  const submitSkuEdit = () =>
+    skuForm
+      .validateFields()
+      .then((v) => {
+        const s = skuEditing!;
+        const code = v.code.trim().toUpperCase();
+        mutate((d) => {
+          const sku = d.skus.find((k) => k.id === s.id)!;
+          sku.code = code;
+          sku.price = v.price ?? 0;
+        });
+        setSkuEditing(null);
+        message.success(t("products.skuSaved", "{{code}} saved.", { code }));
+      })
+      .catch(() => {
+        // The refusal is already painted under the box that failed.
+      });
+  const skuModel =
+    skuEditing && db.models.find((m) => m.id === skuEditing.modelId);
 
   const [variantOpen, setVariantOpen] = useState(false);
   const [variantForm] = Form.useForm<{ variantLabel: string; price: number }>();
@@ -444,6 +474,24 @@ export function ProductsPage() {
                           u.skuId === s.id &&
                           ["TERSEDIA", "DIRESERVASI"].includes(u.status),
                       ).length,
+                  },
+                  {
+                    title: "",
+                    key: "edit",
+                    width: COLUMN.actionsPair,
+                    align: "right",
+                    render: (_, s) => (
+                      <Button
+                        size="small"
+                        icon={<EditOutlined />}
+                        aria-label={t("products.editSkuAria", "Edit {{code}}", {
+                          code: s.code,
+                        })}
+                        onClick={() => openSkuEdit(s)}
+                      >
+                        {t("common.edit", "Edit")}
+                      </Button>
+                    ),
                   },
                 ]}
               />
@@ -1108,6 +1156,100 @@ export function ProductsPage() {
           </Form.Item>
           <Form.Item name="price" label={t("products.listPrice", "List price")}>
             <MoneyInput />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={t("products.editSku", "Edit SKU")}
+        open={skuEditing !== null}
+        onCancel={() => setSkuEditing(null)}
+        onOk={submitSkuEdit}
+        okText={t("products.saveSku", "Save")}
+        destroyOnHidden
+      >
+        {skuEditing && (
+          <Typography.Paragraph type="secondary">
+            {skuEditing.name}
+            {skuEditing.variantLabel ? ` · ${skuEditing.variantLabel}` : ""}
+          </Typography.Paragraph>
+        )}
+        <Form
+          form={skuForm}
+          layout="vertical"
+          initialValues={
+            skuEditing
+              ? {
+                  code: skuEditing.code,
+                  price: skuEditing.price > 0 ? skuEditing.price : undefined,
+                }
+              : undefined
+          }
+        >
+          <Form.Item
+            name="code"
+            label={t("products.skuCode", "SKU code")}
+            normalize={(v: string) => v.toUpperCase()}
+            rules={[
+              {
+                required: true,
+                whitespace: true,
+                message: t("products.skuCodeRequired", "Give the SKU a code"),
+              },
+              {
+                // `Sku.code` is unique in the schema; saying so here beats a
+                // refused commit after the dialog has closed.
+                validator: (_, v: string | undefined) =>
+                  v !== undefined &&
+                  db.skus.some(
+                    (k) =>
+                      k.id !== skuEditing?.id &&
+                      k.code === v.trim().toUpperCase(),
+                  )
+                    ? Promise.reject(
+                        new Error(
+                          t(
+                            "products.skuCodeTaken",
+                            "Another variant already uses this code",
+                          ),
+                        ),
+                      )
+                    : Promise.resolve(),
+              },
+            ]}
+            extra={
+              skuEditing &&
+              skuModel && (
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ paddingInline: 0 }}
+                  onClick={() =>
+                    skuForm.setFieldsValue({
+                      code: freeSkuCode(
+                        new Set(
+                          db.skus
+                            .filter((k) => k.id !== skuEditing.id)
+                            .map((k) => k.code),
+                        ),
+                        skuCodeFor(
+                          skuModel.name,
+                          skuModel.releaseYear,
+                          skuEditing.variantLabel,
+                        ),
+                      ),
+                    })
+                  }
+                >
+                  {t("products.useShopNaming", "Use the shop's naming")}
+                </Button>
+              )
+            }
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item name="price" label={t("products.listPrice", "List price")}>
+            <MoneyInput placeholder={t("products.notPriced", "not priced")} />
           </Form.Item>
         </Form>
       </Modal>

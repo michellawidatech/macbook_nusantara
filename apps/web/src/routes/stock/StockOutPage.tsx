@@ -72,6 +72,7 @@ import {
   PlusOutlined,
   ClockCircleOutlined,
   DeleteOutlined,
+  EditOutlined,
   EyeOutlined,
   GiftOutlined,
   ShoppingCartOutlined,
@@ -669,6 +670,8 @@ export function StockOutPage() {
     asListOf(isTradeIn),
   );
   const [tradeOpen, setTradeOpen] = useState(false);
+  /** The trade-in line being corrected, when the dialog is editing one. */
+  const [tradeEditing, setTradeEditing] = useState<TradeInLine | null>(null);
   const [discountOpen, setDiscountOpen] = useState(false);
   /** The basket line whose price breakdown is open — the eye button. */
   const [inspecting, setInspecting] = useState<number | null>(null);
@@ -2719,6 +2722,22 @@ export function StockOutPage() {
                   <Typography.Text>−{fmtRp(x.value)}</Typography.Text>
                   <Button
                     type="text"
+                    size="small"
+                    aria-label={t(
+                      "pos.editTradeIn",
+                      "Edit trade-in {{label}}",
+                      {
+                        label: x.label,
+                      },
+                    )}
+                    icon={<EditOutlined />}
+                    onClick={() => {
+                      setTradeEditing(x);
+                      setTradeOpen(true);
+                    }}
+                  />
+                  <Button
+                    type="text"
                     danger
                     size="small"
                     aria-label={t(
@@ -3840,10 +3859,23 @@ export function StockOutPage() {
       <TradeInDialog
         open={tradeOpen}
         db={db}
-        onCancel={() => setTradeOpen(false)}
-        onAdd={(draft) => {
-          setTradeIns((prev) => [...prev, { id: nextId("ti"), ...draft }]);
+        {...(tradeEditing ? { initial: tradeEditing } : {})}
+        onCancel={() => {
           setTradeOpen(false);
+          setTradeEditing(null);
+        }}
+        onAdd={(draft) => {
+          // An edit replaces the line where it stands, under its own id.
+          const editing = tradeEditing;
+          setTradeIns((prev) =>
+            editing
+              ? prev.map((y) =>
+                  y.id === editing.id ? { id: editing.id, ...draft } : y,
+                )
+              : [...prev, { id: nextId("ti"), ...draft }],
+          );
+          setTradeOpen(false);
+          setTradeEditing(null);
         }}
       />
 

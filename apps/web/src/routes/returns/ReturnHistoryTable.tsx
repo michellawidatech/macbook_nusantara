@@ -542,11 +542,19 @@ export function ReturnHistoryTable() {
           style: { cursor: "pointer" },
         })}
         keyboardRows={(r) => r.codes.join(", ")}
+        /*
+         * The five content columns share the width evenly (owner ask
+         * 2026-10-01): none declares a `width`, so a FIXED layout splits what
+         * the actions column leaves between them equally — an auto one sizes
+         * them by content, which is what made them uneven. The `minWidth`s
+         * are only the floor `gridMinWidth` sums for the scroll decision.
+         */
+        tableLayout="fixed"
         columns={[
           {
             title: t("returns.type", "Type"),
             key: "side",
-            width: COLUMN.status,
+            minWidth: COLUMN.status,
             facet: true,
             facetLabel: t("returns.type", "Type"),
             facetValue: (r) => sideLabel(r.side),
@@ -560,7 +568,7 @@ export function ReturnHistoryTable() {
           {
             title: t("returns.document", "Transaction / inbound"),
             key: "document",
-            width: COLUMN.code,
+            minWidth: COLUMN.code,
             searchable: true,
             searchValue: (r) => [...r.documents, ...r.codes].join(" "),
             sortValue: (r) => r.documents[0] ?? "",
@@ -583,7 +591,7 @@ export function ReturnHistoryTable() {
           {
             title: t("returns.date", "Date"),
             key: "date",
-            width: COLUMN.date,
+            minWidth: COLUMN.date,
             defaultSortOrder: "descend",
             dateRange: true,
             facetLabel: t("returns.date", "Date"),
@@ -593,7 +601,7 @@ export function ReturnHistoryTable() {
           {
             title: t("returns.party", "Supplier / customer"),
             key: "party",
-            width: COLUMN.code,
+            minWidth: COLUMN.code,
             searchable: true,
             searchValue: (r) => r.party,
             sortValue: (r) => r.party,

@@ -3841,4 +3841,16 @@ export const id: Record<string, string> = {
   "chat.noProfileYet":
     "Belum ada. Bot menanyakan nama, kebutuhan, dan budget pelanggan, lalu menyimpan jawabannya di sini.",
   "handoff.photos": "Minta foto",
+  "products.skuSaved": "{{code}} disimpan.",
+  "products.editSkuAria": "Ubah {{code}}",
+  "products.editSku": "Ubah SKU",
+  "products.saveSku": "Simpan",
+  "products.skuCode": "Kode SKU",
+  "products.skuCodeRequired": "Isi kode SKU",
+  "products.skuCodeTaken": "Kode ini sudah dipakai varian lain",
+  "products.useShopNaming": "Pakai penamaan toko",
+  "trade.editTitle": "Ubah tukar tambah",
+  "trade.save": "Simpan",
+  "pos.editTradeIn": "Ubah tukar tambah {{label}}",
+  "inventory.rack": "Rak",
 };

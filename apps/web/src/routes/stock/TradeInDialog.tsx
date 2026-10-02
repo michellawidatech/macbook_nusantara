@@ -51,6 +51,7 @@
  * variant, and the store refuses a unit with none (`skuId` is required in
  * `packages/store`) — which would have refused the whole sale with it.
  */
+import { useEffect } from "react";
 import { Flex, Form, Input, Modal, Segmented, Select } from "antd";
 import { useTranslation } from "react-i18next";
 import { MoneyInput } from "../../components/MoneyInput";
@@ -106,11 +107,19 @@ interface TradeInFields {
 export function TradeInDialog({
   open,
   db,
+  initial,
   onCancel,
   onAdd,
 }: {
   open: boolean;
   db: MockDb;
+  /**
+   * A trade-in already on the sale, to correct (owner ask 2026-10-02: *"they
+   * are supposed to be able to edit the unit trade-ins"*). The dialog opens
+   * on its answers and hands back the corrected draft through `onAdd`; the
+   * caller puts it back in the same place. Absent, the dialog adds a new one.
+   */
+  initial?: TradeInDraft;
   onCancel: () => void;
   onAdd: (draft: TradeInDraft) => void;
 }) {
@@ -130,6 +139,28 @@ export function TradeInDialog({
   const reset = () => {
     form.resetFields();
   };
+
+  // Opening on an existing trade-in fills the form with what it said. The
+  // grade box holds a LETTER; a sealed unit's stored grade is `NEW`, which is
+  // the condition, not a letter, so it stays empty.
+  useEffect(() => {
+    if (!open || initial === undefined) return;
+    form.setFieldsValue({
+      skuId: initial.skuId,
+      category: categoryOfSku(initial.skuId),
+      serial: initial.serial,
+      condition: initial.condition ?? "SECOND",
+      grade:
+        initial.condition === "NEW" || initial.grade === "NEW"
+          ? undefined
+          : initial.grade,
+      label: initial.label,
+      value: initial.value,
+      note: initial.note,
+    });
+    // `categoryOfSku` reads `db`, which changes on every store write; the
+    // form is filled once per opening, not again under somebody typing.
+  }, [open, initial, form]);
 
   const close = () => {
     reset();
@@ -219,8 +250,12 @@ export function TradeInDialog({
   return (
     <Modal
       open={open}
-      title={t("trade.title", "Trade-Ins")}
-      okText={t("trade.add", "Add it")}
+      title={
+        initial
+          ? t("trade.editTitle", "Edit trade-in")
+          : t("trade.title", "Trade-Ins")
+      }
+      okText={initial ? t("trade.save", "Save") : t("trade.add", "Add it")}
       onCancel={close}
       onOk={submit}
       width={640}
