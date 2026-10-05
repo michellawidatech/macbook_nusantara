@@ -24,11 +24,7 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import {
-  DeleteOutlined,
-  EditOutlined,
-  PlusOutlined,
-} from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
