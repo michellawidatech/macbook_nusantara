@@ -6,7 +6,8 @@
  * Nothing here is ever removed. Every one of these rows is pointed at by
  * history — a sale names its payment method, an expense its category — so a
  * removal is refused and the page offers "inactive" instead, which is what
- * every one of these screens already does.
+ * every one of these screens already does. The one exception is a discount
+ * no sale has redeemed (`removeUnusedDiscount`).
  */
 import { deepEqual } from "@nusantara/store";
 import type { Tx } from "../../client.js";
@@ -806,7 +807,10 @@ export const discounts: Adapter<"discounts"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("discounts", r.key);
+      if (n === undefined) {
+        await removeUnusedDiscount(ctx, r.key);
+        continue;
+      }
       const data = {
         code: n.code,
         description: n.name,
@@ -832,6 +836,37 @@ export const discounts: Adapter<"discounts"> = {
     }
   },
 };
+
+/**
+ * The one removal in this file (owner decision 2026-10-02): a discount no sale
+ * has redeemed is deleted outright, because it is litter rather than history —
+ * nothing points at it but its own SKU list. One that has been used is refused
+ * and stays switchable off, since a receipt names it. Both tests read the
+ * DATABASE, not the browser's copy: a till may have redeemed the code since
+ * this page loaded. `Order.discountId` is ON DELETE RESTRICT besides, so a
+ * redemption racing this commit fails the DELETE rather than orphaning a sale.
+ */
+async function removeUnusedDiscount(
+  ctx: WriteContext,
+  id: string,
+): Promise<void> {
+  const { tx } = ctx;
+  const row = await tx.discount.findUnique({
+    where: { id },
+    select: { used: true, _count: { select: { orders: true } } },
+  });
+  if (row === null) return;
+  if (row.used > 0 || row._count.orders > 0) {
+    throw new StoreValidationError(
+      `Diskon ini sudah dipakai di penjualan dan tidak bisa dihapus — nonaktifkan saja (discounts ${id}).`,
+      "discounts",
+      id,
+    );
+  }
+  await tx.discountSku.deleteMany({ where: { discountId: id } });
+  await tx.discount.delete({ where: { id } });
+  ctx.touch("discounts", id);
+}
 
 // ---------------------------------------------------------------------------
 // Money typed in by hand

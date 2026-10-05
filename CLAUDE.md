@@ -2332,6 +2332,19 @@ Decisions that outlived those documents:
   40px indent from the expanded row. The per-unit buttons are pinned right.
   ⚠️ An expanding table keeps its grid on a phone (DataTable), so Inventory
   is no longer cards there.
+- **A discount nobody has used can be deleted, 2026-10-02** (owner decision,
+  chosen over hiding one or a Delete that only switched it off). The row's
+  *Delete* sits beside *Edit*, behind a Popconfirm; one a sale has redeemed —
+  `used > 0` OR any order carrying its id, because the two can disagree — is
+  drawn disabled and points at the On switch. ⚠️ This is the app's **third
+  hard delete**, and on Postgres the first real one through the store (a
+  draft stock count is cancelled to `BATAL` there). `removeUnusedDiscount` in
+  `adapters/reference.ts` asks the DATABASE, not the browser's copy, and takes
+  the `DiscountSku` rows with it; `Order.discountId` is ON DELETE RESTRICT, so
+  a redemption racing the commit fails the DELETE rather than orphaning a
+  sale. Migration `20261002090000_discount_delete_unused` grants
+  `nusantara_app` DELETE on `Discount` and `DiscountSku` and nothing else. Do
+  not generalise it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

@@ -69,8 +69,9 @@ devices on the tailnet: the price is the Tailscale app on every staff device.
 Meta cannot join a tailnet, so the webhook, if WhatsApp moves here, goes public
 through `tailscale funnel` on a port of its own (§8). A Cloudflare Tunnel on a
 domain the shop owns does the same jobs without the app on every device; it
-was this runbook's first design, and is in git history (`git show
-f6f5f3c:docs/deploy-macmini.md`).
+was this runbook's first design, and is now how the POS is reached at
+`https://pos.macbooknusantara.com` — `docs/public-domain.md`, alongside the
+tailnet address rather than instead of it.
 
 Assumed: an Apple Silicon Mac mini (every model since late 2020) on macOS 14 or
 later, and an Apple Silicon machine to build on — GitHub's `macos-15` runner

@@ -1,5 +1,7 @@
 /**
- * Manage discounts — usage, window, status; deactivate rather than delete.
+ * Manage discounts — usage, window, status. A discount no sale has redeemed
+ * can be deleted outright (owner decision 2026-10-02); one that has been used
+ * is named on a receipt, so it is switched off instead.
  * Clicking a discount opens where it was actually redeemed, which is the
  * question the `used` counter raises and cannot answer: 12 uses is a number,
  * "12 uses, all of them in the first three days, all on MacBook Air" is a
@@ -15,12 +17,18 @@ import {
   Drawer,
   Empty,
   Flex,
+  Popconfirm,
   Statistic,
   Switch,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
-import { EditOutlined, PlusOutlined } from "@ant-design/icons";
+import {
+  DeleteOutlined,
+  EditOutlined,
+  PlusOutlined,
+} from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
@@ -30,7 +38,7 @@ import { describeDiscountText } from "../../lib/discountText.js";
 import { useDb, mutate } from "../../mock/store.js";
 import type { Discount } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
-import { COLUMN } from "../../theme/tokens";
+import { COLUMN, SPACE } from "../../theme/tokens";
 
 /**
  * The state a discount is in.
@@ -66,6 +74,13 @@ export function DiscountsPage() {
         .sort((a, b) => b.ts.localeCompare(a.ts))
     : [];
   const redeemed = usage.reduce((t, o) => t + o.discount, 0);
+  /**
+   * A discount a sale has redeemed is on a receipt and cannot be deleted. The
+   * counter and the order list are both asked, because they can disagree —
+   * see the note in the drawer below.
+   */
+  const isRedeemed = (d: Discount) =>
+    d.used > 0 || db.orders.some((o) => o.discountId === d.id);
 
   return (
     <PageContainer
@@ -185,25 +200,93 @@ export function DiscountsPage() {
               },
             },
             {
-              // Correcting a discount (owner ask 2026-10-02). The row opens
-              // its usage history, so this stops the click like the switch.
+              // Correcting a discount, and deleting one nobody has used (owner
+              // asks 2026-10-02). The row opens its usage history, so this
+              // stops the click like the switch.
               title: "",
               key: "edit",
               width: COLUMN.actionsPair,
-              render: (_, d) => (
-                <span role="presentation" onClick={(e) => e.stopPropagation()}>
-                  <Button
-                    size="small"
-                    icon={<EditOutlined />}
-                    aria-label={t("discounts.editAria", "Edit {{name}}", {
-                      name: d.name,
-                    })}
-                    onClick={() => navigate(`/discounts/${d.id}/edit`)}
+              render: (_, d) => {
+                const redeemed = isRedeemed(d);
+                return (
+                  <Flex
+                    gap={SPACE.xs}
+                    justify="end"
+                    role="presentation"
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    {t("common.edit", "Edit")}
-                  </Button>
-                </span>
-              ),
+                    <Button
+                      size="small"
+                      icon={<EditOutlined />}
+                      aria-label={t("discounts.editAria", "Edit {{name}}", {
+                        name: d.name,
+                      })}
+                      onClick={() => navigate(`/discounts/${d.id}/edit`)}
+                    >
+                      {t("common.edit", "Edit")}
+                    </Button>
+                    {redeemed ? (
+                      <Tooltip
+                        title={t(
+                          "discounts.deleteBlocked",
+                          "Used on a sale, so it stays on record. Switch it off instead.",
+                        )}
+                      >
+                        <span>
+                          <Button
+                            size="small"
+                            danger
+                            disabled
+                            icon={<DeleteOutlined />}
+                            aria-label={t(
+                              "discounts.deleteAria",
+                              "Delete {{name}}",
+                              { name: d.name },
+                            )}
+                          >
+                            {t("common.delete", "Delete")}
+                          </Button>
+                        </span>
+                      </Tooltip>
+                    ) : (
+                      <Popconfirm
+                        title={t(
+                          "discounts.deleteConfirm",
+                          "Delete {{name}}?",
+                          { name: d.name },
+                        )}
+                        description={t(
+                          "deleteAction.confirmDetail",
+                          "This cannot be undone.",
+                        )}
+                        okText={t("common.delete", "Delete")}
+                        cancelText={t("common.cancel", "Cancel")}
+                        okButtonProps={{ danger: true }}
+                        onConfirm={() =>
+                          mutate((x) => {
+                            x.discounts = x.discounts.filter(
+                              (y) => y.id !== d.id,
+                            );
+                          })
+                        }
+                      >
+                        <Button
+                          size="small"
+                          danger
+                          icon={<DeleteOutlined />}
+                          aria-label={t(
+                            "discounts.deleteAria",
+                            "Delete {{name}}",
+                            { name: d.name },
+                          )}
+                        >
+                          {t("common.delete", "Delete")}
+                        </Button>
+                      </Popconfirm>
+                    )}
+                  </Flex>
+                );
+              },
             },
             {
               title: t("discounts.on", "On"),

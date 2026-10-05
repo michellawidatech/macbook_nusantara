@@ -610,6 +610,23 @@ describe("the app role has no DELETE anywhere", () => {
   });
 });
 
+describe("an unused discount can be deleted (2026-10-02)", () => {
+  it("grants DELETE on the discount tables to the app alone", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_app','"Discount"','DELETE')      AS app_discount,
+              has_table_privilege('nusantara_app','"DiscountSku"','DELETE')   AS app_sku,
+              has_table_privilege('nusantara_agent','"Discount"','DELETE')    AS agent_discount,
+              has_table_privilege('nusantara_app','"Discount"','TRUNCATE')    AS app_truncate`,
+    );
+    expect(rows[0]).toEqual({
+      app_discount: true,
+      app_sku: true,
+      agent_discount: false,
+      app_truncate: false,
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 
 describe("the ledger's two admitted edits (2026-09-23, in the database 2026-09-24)", () => {

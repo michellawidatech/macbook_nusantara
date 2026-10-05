@@ -3856,4 +3856,8 @@ export const id: Record<string, string> = {
   "discount.editDiscount": "Ubah Diskon",
   "discount.notFound": "Diskon ini tidak ada.",
   "discounts.editAria": "Ubah {{name}}",
+  "discounts.deleteAria": "Hapus {{name}}",
+  "discounts.deleteConfirm": "Hapus {{name}}?",
+  "discounts.deleteBlocked":
+    "Sudah dipakai di penjualan, jadi tetap tercatat. Nonaktifkan saja.",
 };
