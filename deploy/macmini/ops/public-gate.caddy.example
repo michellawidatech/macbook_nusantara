@@ -1,0 +1,13 @@
+# Copy to /opt/nusantara/etc/caddy/public-gate.caddy on the Mac mini
+# (docs/public-domain.md §5) and put the real hash in place of HASH.
+#
+# Only requests that came through Cloudflare carry Cf-Connecting-IP; tailscale
+# serve, the deploy's health check and anything else on loopback do not, so the
+# tailnet sees no prompt.
+#
+# Two bare directives, not a `route`: a route sorts AFTER `handle`, and the
+# Caddyfile's handle blocks answer every request first.
+@public header Cf-Connecting-IP *
+basic_auth @public {
+	nusantara HASH
+}

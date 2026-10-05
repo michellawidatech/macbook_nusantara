@@ -7,11 +7,11 @@ without the Tailscale app; the three other `pos.` names redirect to it, and
 every apex stays free for a landing site later.
 
 ```
-staff (anywhere) ─https─▶ Cloudflare edge ─▶ Cloudflare Access (staff e-mails only)
+staff (anywhere) ─https─▶ Cloudflare edge (TLS, http→https)
                                 │
                      outbound tunnel, started BY the Mac mini
                                 ▼
-                    cloudflared ─▶ Caddy 127.0.0.1:8080 ─┬─ /      the SPA
+                    cloudflared ─▶ Caddy 127.0.0.1:8080 ─┬─ /      the SPA     (shop-password gate, §5)
                                                          └─ /api   API :4000
 staff (tailnet)  ─https─▶ tailscale serve :443 ─▶ the same Caddy   (unchanged)
 Meta             ─https─▶ tailscale funnel :8443 ─▶ webhook        (unchanged)
@@ -57,7 +57,7 @@ Before step 4, in Settings → Staff accounts:
 - every account nobody uses is **switched off**;
 - nobody is left on "must change password".
 
-Cloudflare Access (step 5) closes this hole as well, but do not rely on one
+The public gate (step 5) closes this hole as well, but do not rely on one
 lock for it.
 
 ## 1. Cloudflare — add the four domains
@@ -149,29 +149,44 @@ creates the DNS record itself (a proxied CNAME to `<id>.cfargotunnel.com`).
 `http://` is correct: that hop is inside the Mac mini over loopback, and the
 tunnel itself is encrypted. Browsers only see Cloudflare's certificate.
 
-## 5. Cloudflare Access — staff e-mails only
+## 5. The public gate — one shop password in front of the POS
 
 Without this the sign-in form is on the open internet, and every bug behind
 it is one request from anybody. With it, nobody reaches even the sign-in form
-without a one-time code sent to an address on the list.
+without the shop's gate password.
 
-*Zero Trust → Access → Applications* → **Add an application** → **Self-hosted**:
+Cloudflare Access was the first plan and is the better lock (a code per
+e-mail), but the Zero Trust sign-up demands a credit card, which the shop
+declined on 2026-10-05. The gate is Caddy's `basic_auth`, applied ONLY to
+requests carrying `Cf-Connecting-IP` — i.e. those that came through the tunnel.
+The tailnet address, the deploy's health check and anything else on loopback
+see no prompt.
 
-- Name `Nusantara POS`, session duration **1 month**.
-- Public hostname `pos.macbooknusantara.com`, path empty.
-- *Policies → Add a policy*: name `Staff`, action **Allow**, include
-  **Emails** → each staff member's address. Not *Emails ending in*
-  `@gmail.com` — that admits everyone with Gmail.
-- *Login methods*: **One-time PIN** (on by default).
+The hash lives on the Mac mini, never in the release:
+`ops/Caddyfile` imports `/opt/nusantara/etc/caddy/*.caddy`, and **no file
+there means no gate** — the check in §8 is what catches that.
 
-A staff member opens the address, types their e-mail, types the six-digit
-code Cloudflare mails them, then sees the POS sign-in as before — once a month
-per device. When the month runs out the app's background requests fail until
-the page is reloaded; the reload asks for a code again.
+On the Mac mini, as its admin account:
 
-To remove a person: take them out of the `Staff` policy, revoke them under
-*Zero Trust → My Team → Users*, and switch their account off in Settings →
-Staff accounts.
+```bash
+sudo mkdir -p /opt/nusantara/etc/caddy
+```
+
+```bash
+HASH=$(/opt/homebrew/bin/caddy hash-password) && sed "s#HASH#$HASH#" /opt/nusantara/current/ops/public-gate.caddy.example | sudo tee /opt/nusantara/etc/caddy/public-gate.caddy >/dev/null && sudo chmod 644 /opt/nusantara/etc/caddy/public-gate.caddy
+```
+
+`hash-password` asks for the password twice and prints only a bcrypt hash.
+Choose a long one (four unrelated words); the username is `nusantara`.
+
+```bash
+sudo /opt/homebrew/bin/caddy validate --config /opt/nusantara/current/ops/Caddyfile --adapter caddyfile && sudo launchctl kickstart -k system/local.nusantara.caddy
+```
+
+A staff member opens the address, the browser asks for the username and
+password, and remembers them; then the POS sign-in as before. To change the
+password: run the second command again and restart Caddy — everyone is asked
+once more.
 
 ## 6. The Mac mini's API config
 
@@ -209,8 +224,8 @@ The apexes stay empty until there is a landing site.
 
 From a phone NOT on Tailscale:
 
-1. `https://pos.macbooknusantara.com` → Cloudflare's e-mail page → code → the
-   POS sign-in → sign in.
+1. `https://pos.macbooknusantara.com` → the browser's username/password
+   prompt (the gate) → the POS sign-in → sign in.
 2. `https://pos.mac-nus.com` → lands on `https://pos.macbooknusantara.com`.
 
 From the laptop:
@@ -219,8 +234,8 @@ From the laptop:
 curl -sI https://pos.macbooknusantara.com | grep -i -E '^(HTTP|location)'
 ```
 
-`302` to `….cloudflareaccess.com` — Access asking who you are. A `200` means
-Access is NOT in front; go back to step 5.
+`401` — the gate asking for its password. A `200` means the gate is NOT in
+front (the file in step 5 is missing); go back to step 5.
 
 ```bash
 for h in pos.mac-nus.com pos.mac-nus.my.id pos.macbooknusantara.my.id; do curl -sI https://$h | grep -i -E '^location'; done

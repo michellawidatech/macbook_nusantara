@@ -21,6 +21,12 @@
 	bind 127.0.0.1 [::1]
 	encode zstd gzip
 
+	# The public gate (docs/public-domain.md §5): a shared shop password in
+	# front of everything that arrives through the Cloudflare tunnel. It lives
+	# on the Mac mini, not in the release — the hash is a secret's cousin — so
+	# a missing file means NO gate; §8 of that doc checks it is there.
+	import /opt/nusantara/etc/caddy/*.caddy
+
 	@backend path /api /api/*
 	handle @backend {
 		reverse_proxy 127.0.0.1:4000
