@@ -4,12 +4,18 @@
 # script and nusantara-deploy side by side:
 #
 #   sudo zsh setup-deploy-access 'ssh-ed25519 AAAA… github-actions@nusantara'
+#   sudo zsh setup-deploy-access --stage 'ssh-ed25519 AAAA… github-actions-stage@nusantara'
 #
 # It creates the hidden account the CI logs in as, installs nusantara-deploy
 # root-owned where no release can overwrite it, gives the account exactly one
 # sudo right — to run that script — and pins the CI's key to it with a forced
 # command, so the key cannot open a shell, cannot forward anything except one
-# tunnel to PostgreSQL, and cannot run anything but the script's four verbs.
+# tunnel to PostgreSQL, and cannot run anything but the script's verbs.
+#
+# The account holds TWO keys, each pinned on its own line: the shop's, from the
+# `prod` GitHub Environment, and staging's (`--stage`), from the `stage` one,
+# whose forced command names `--stage` itself — so the key a branch can reach
+# can only ever act on staging (docs/staging.md). Setting one keeps the other.
 #
 # Re-running it is how a new nusantara-deploy or a rotated key reaches the
 # machine. It changes nothing else.
@@ -26,12 +32,19 @@ here=${0:A:h}
 die() { print -u2 -- "setup-deploy-access: $*"; exit 1 }
 
 (( EUID == 0 )) || die "run it with sudo"
-(( $# == 1 )) || die "usage: sudo zsh setup-deploy-access 'ssh-ed25519 AAAA… comment'"
+kind=prod
+if [[ ${1:-} == --stage ]]; then
+  kind=stage
+  shift
+fi
+(( $# == 1 )) || die "usage: sudo zsh setup-deploy-access [--stage] 'ssh-ed25519 AAAA… comment'"
 key=$1
 [[ $key =~ '^ssh-ed25519 [A-Za-z0-9+/]+={0,2}( [A-Za-z0-9@._+-]+)?$' ]] ||
   die "that is not one ssh-ed25519 public key line"
 [[ -f $here/nusantara-deploy ]] || die "nusantara-deploy must sit next to this script"
 [[ -d /opt/nusantara/releases ]] || die "/opt/nusantara is not set up yet — docs/deploy-macmini.md §2 first"
+[[ $kind == prod || -d /opt/nusantara-stage/releases ]] ||
+  die "/opt/nusantara-stage is not set up yet — docs/staging.md §1 first"
 zsh -n $here/nusantara-deploy || die "$here/nusantara-deploy does not parse"
 
 # 1. The account: hidden (a UID under 500 keeps it off the login window), no
@@ -78,17 +91,44 @@ grep -q '^#includedir /private/etc/sudoers.d' /etc/sudoers ||
   print -u2 "⚠️  /etc/sudoers has no '#includedir /private/etc/sudoers.d' — the rule above is never read"
 print "installed $sudoers"
 
-# 4. The key, pinned to the installer. `restrict` turns off the pty, agent and
+# 4. The keys, pinned to the installer. `restrict` turns off the pty, agent and
 #    every forwarding; `port-forwarding` + `permitopen` turn back on exactly the
 #    one tunnel the migrations use. $SSH_ORIGINAL_COMMAND is expanded by the
-#    account's shell and reaches the script as ONE argument.
+#    account's shell and reaches the script as ONE argument — after `--stage`
+#    on staging's line, which the client cannot remove.
+#
+#    The file is rewritten whole each time, so the key NOT being set is read
+#    back out of it first: a staging line is the one whose command says
+#    `--stage`, and any other pinned line is the shop's.
+keys=$home/.ssh/authorized_keys
+keyre='(ssh-ed25519 [A-Za-z0-9+/]+={0,2}( [A-Za-z0-9@._+-]+)?)$'
+typeset -A pinned
+pinned[$kind]=$key
+if [[ -r $keys ]]; then
+  for line in ${(f)"$(<$keys)"}; do
+    [[ $line == restrict,* && $line =~ $keyre ]] || continue
+    if [[ $line == *'nusantara-deploy --stage '* ]]; then k=stage; else k=prod; fi
+    [[ $k == $kind ]] || pinned[$k]=$match[1]
+  done
+fi
+other=prod; [[ $kind == prod ]] && other=stage
+blob_of() { local -a w=(${=1}); print -r -- ${w[2]:-} }   # the key itself, not its comment
+[[ -z ${pinned[$other]:-} || "$(blob_of ${pinned[$other]})" != "$(blob_of $key)" ]] ||
+  die "that key is already pinned for $other — staging and the shop need a key each"
 {
-  print -r -- '# GitHub Actions deploy key: runs nusantara-deploy and opens one tunnel to PostgreSQL. Nothing else.'
-  print -r -- 'restrict,port-forwarding,permitopen="127.0.0.1:5432",command="/usr/bin/sudo -n /usr/local/libexec/nusantara-deploy \"$SSH_ORIGINAL_COMMAND\""' "$key"
-} >$home/.ssh/authorized_keys
-chown ${user}:staff $home/.ssh/authorized_keys
-chmod 600 $home/.ssh/authorized_keys
-print "pinned the key in $home/.ssh/authorized_keys"
+  if [[ -n ${pinned[prod]:-} ]]; then
+    print -r -- '# GitHub Actions deploy key (prod): runs nusantara-deploy and opens one tunnel to PostgreSQL. Nothing else.'
+    print -r -- 'restrict,port-forwarding,permitopen="127.0.0.1:5432",command="/usr/bin/sudo -n /usr/local/libexec/nusantara-deploy \"$SSH_ORIGINAL_COMMAND\""' "${pinned[prod]}"
+  fi
+  if [[ -n ${pinned[stage]:-} ]]; then
+    print -r -- '# GitHub Actions deploy key (stage): the same, and only ever on staging (docs/staging.md).'
+    print -r -- 'restrict,port-forwarding,permitopen="127.0.0.1:5432",command="/usr/bin/sudo -n /usr/local/libexec/nusantara-deploy --stage \"$SSH_ORIGINAL_COMMAND\""' "${pinned[stage]}"
+  fi
+} >$keys.next
+chown ${user}:staff $keys.next
+chmod 600 $keys.next
+mv -f $keys.next $keys
+print "pinned the $kind key in $keys${pinned[$other]:+ (the $other key is kept)}"
 
 # 5. Proof, and what GitHub needs.
 sudo -l -U $user | grep -qF "NOPASSWD: $installer" || die "sudo does not show the rule for $user"
@@ -96,7 +136,7 @@ launchctl print system/com.openssh.sshd >/dev/null 2>&1 ||
   print -u2 "⚠️  Remote Login looks off: System Settings → General → Sharing → Remote Login"
 
 print "
-Done. For GitHub → Settings → Environments → prod:
+Done. For GitHub → Settings → Environments → $kind:
   variable DEPLOY_USER         $user
   variable DEPLOY_KNOWN_HOSTS  <DEPLOY_HOST> $(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)
 (<DEPLOY_HOST> is this machine's MagicDNS name, e.g. nusantara-mini.tailXXXX.ts.net)"

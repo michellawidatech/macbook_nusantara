@@ -13,13 +13,23 @@
 # chatbot (docs/chatbot-rag.md), and `chatbot` walks the whole WhatsApp path
 # and says which half of it is broken (docs/chatbot-runbook.md).
 #
-# Configuration comes from $NUSANTARA_HOME/etc (default /opt/nusantara/etc):
-# common.env for everything plus one file per process, so the API never holds
-# the webhook's APP_SECRET.
+# Configuration comes from $NUSANTARA_HOME/etc: common.env for everything plus
+# one file per process, so the API never holds the webhook's APP_SECRET.
+#
+# NUSANTARA_HOME is the install this release sits in — the directory holding
+# its releases/ — so /opt/nusantara for the shop and /opt/nusantara-stage for
+# staging (docs/staging.md), and the same command typed under either path
+# reads that install's configuration. Set it only to rehearse elsewhere.
 setopt err_exit no_unset pipe_fail
 
-home=${NUSANTARA_HOME:-/opt/nusantara}
 release=${0:A:h:h}   # the release this script shipped in, symlinks resolved
+if [[ -n ${NUSANTARA_HOME:-} ]]; then
+  home=$NUSANTARA_HOME
+elif [[ ${release:h:t} == releases ]]; then
+  home=${release:h:h}
+else
+  home=/opt/nusantara
+fi
 proc=${1:-}
 (( $# )) && shift
 
@@ -46,6 +56,15 @@ case $proc in
 esac
 
 load $home/etc/common.env
+
+# Before anything else is read. Staging's database is a copy of the shop's —
+# its customers' numbers and its Outbox of replies not yet sent included — so a
+# worker there would message real people, some of them a second time. Only
+# prod talks to WhatsApp.
+if [[ $proc == (worker|webhook) && ${APP_ENV:-} != prod ]]; then
+  die "$proc runs on prod only; APP_ENV is '${APP_ENV:-}' in $home/etc/common.env"
+fi
+
 [[ -n $envfile ]] && load $home/etc/$envfile
 if [[ $proc == chatbot ]]; then
   for f in webhook.env worker.env; do [[ -r $home/etc/$f ]] && load $home/etc/$f; done

@@ -252,6 +252,14 @@ sudo grep auth.login.failed /opt/nusantara/logs/api.log | tail -1
 The `ip` must be the phone's carrier address, not `127.0.0.1` — otherwise
 every visitor shares one throttle bucket (step 6).
 
+## Staging
+
+`staging-pos.macbooknusantara.com` is a second route on the same tunnel, to
+`127.0.0.1:8081` — staging's own Caddy, behind its own copy of the gate
+(`docs/staging.md`). One level deep, deliberately: the zone's free
+certificate is `*.macbooknusantara.com`, and `staging.pos.…` would be refused by
+every browser.
+
 ## What stays as it was
 
 - `tailscale serve` and `https://nusantara-mini.tail903811.ts.net` — a second

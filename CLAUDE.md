@@ -2345,6 +2345,35 @@ Decisions that outlived those documents:
   sale. Migration `20261002090000_discount_delete_unused` grants
   `nusantara_app` DELETE on `Discount` and `DiscountSku` and nothing else. Do
   not generalise it.
+- **Staging is a second install on the Mac mini, 2026-10-06.** *"Create
+  staging env … staging.pos.macbooknusantara.com."* It is
+  **`staging-pos.macbooknusantara.com`** (owner's choice once told why): the
+  zone's free certificate is `*.macbooknusantara.com`, one level, and a
+  two-level name needs Advanced Certificate Manager. `docs/staging.md` is the
+  runbook.
+  - `/opt/nusantara-stage`, API `:4001`, Caddy `:8081`, launchd
+    `local.nusantara-stage.{api,caddy}`, database `nusantara_pos_stage`, a
+    route on the same tunnel. A push to `main` deploys it; Run workflow on any
+    branch deploys that branch (`stage-release` needs `static`, not `test`).
+  - **Its data is a copy of the shop's** — `nusantara-deploy --stage refresh`,
+    as the cluster's superuser over the socket, which is the one login that
+    may drop and create a database. The workflow's `refresh_staging_data`
+    input runs it BEFORE migrating, because staging's code may be ahead of the
+    shop's schema.
+  - **One Caddyfile, one `ops/`, two installs.** The Caddyfile reads
+    `{$NUSANTARA_HOME|CADDY_PORT|API_PORT|CADDY_ADMIN}` with prod's values as
+    defaults (prod's parse is unchanged), and `ops/run` finds its install from
+    the `releases/` it sits in.
+  - ⚠️ **Staging never runs the worker or the webhook.** The copy carries
+    every customer's number and the shop's unsent Outbox. The installer loads
+    only api and caddy for it, and `ops/run` refuses both unless
+    `APP_ENV=prod`. Do not weaken either.
+  - ⚠️ **Staging refuses to go up without the shop-password gate file** — the
+    shop's own address does not, and on 2026-10-06 answered 200 without one.
+  - The `stage` key is pinned to `nusantara-deploy --stage` (installer 2,
+    `setup-deploy-access --stage`), so the key a branch can reach cannot name
+    the shop. Roles are cluster-wide, though: staging's owner password IS the
+    shop's.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
@@ -2419,7 +2448,11 @@ there is the comment/DM ingest this build has not written yet.
   commit to the Mac mini (`docs/deploy-pipeline.md`). `v2026.09.18` itself is
   taken (a failed run at `f6f5f3c`). Rollback in seconds, on the Mac mini:
   `sudo /usr/local/libexec/nusantara-deploy rollback`
-- Ports: web 3000, api 4000, webhook 3001, monitor 4100
+- `gh workflow run CI --ref <branch>` — deploy a branch to staging
+  (`-f refresh_staging_data=true` for a fresh copy of the shop's data first);
+  a push to `main` does it by itself (`docs/staging.md`)
+- Ports: web 3000, api 4000, webhook 3001, monitor 4100; on the Mac mini,
+  staging's api 4001 and Caddy 8081 beside the shop's 4000 and 8080
 - Database: `nusantara_pos_rebuild` on `localhost:5432`, role `nusantara`
 - Meta: App ID `2157052578394015`, WABA `1701973881546032`,
   `PHONE_NUMBER_ID` `1200651716467039`, Graph **v25.0** (one constant, both

@@ -28,6 +28,13 @@ the command line says: the deploy key has a forced command, so the job cannot
 open a shell there, and the script accepts four verbs — `status`, `backup`,
 `install` and `rollback` — and nothing else.
 
+**Staging rides the same pipeline** (2026-10-06, `docs/staging.md`): a push to
+`main`, or Run workflow on a branch, builds the same release and hands it to the
+same installer through a second key, pinned to `nusantara-deploy --stage`,
+which acts on `/opt/nusantara-stage` and nothing else and adds one verb,
+`refresh`. Installer 2 is the one that knows the difference; for the shop it
+behaves as installer 1 did and adds `target=prod` to `status`.
+
 ## Why it has this shape
 
 - **The release is built on GitHub, never on the Mac mini.** The release exists
@@ -218,3 +225,4 @@ once no deployed code reads the old shape.
 | `deploy/macmini/ops/setup-deploy-access` | the one-time setup on the Mac mini |
 | `deploy/macmini/ops/run` | exports `NUSANTARA_RELEASE`, which `/api/health` reports |
 | `deploy/macmini/ops/backup` | takes the `predeploy-<version>` label |
+| `docs/staging.md` | the `stage-release` and `stage-deploy` jobs, and `--stage` |
