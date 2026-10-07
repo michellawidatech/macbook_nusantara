@@ -65,6 +65,18 @@ About twenty minutes: the Mac mini, Tailscale, GitHub, Cloudflare. The commands
 for the Mac mini run as its admin account — Screen Sharing or SSH over
 Tailscale, as in `docs/public-domain.md` §4.
 
+**§1–4 are one script**, `deploy/macmini/ops/setup-staging`, and one line from
+the repository on your laptop — after §3's `ssh-keygen`. It asks for the
+admin password once (one SSH connection carries all three steps), for `sudo`,
+and for the gate's password twice:
+
+```bash
+ssh -o ControlMaster=yes -o ControlPath=/tmp/nus-%C -o ControlPersist=300 -fN mac@nusantara-mini && scp -o ControlPath=/tmp/nus-%C deploy/macmini/ops/nusantara-deploy deploy/macmini/ops/setup-deploy-access deploy/macmini/ops/setup-staging mac@nusantara-mini:/tmp/ && ssh -t -o ControlPath=/tmp/nus-%C mac@nusantara-mini "sudo zsh /tmp/setup-staging '$(cat ~/nusantara-stage-deploy-key.pub)'"
+```
+
+It keeps whatever is already there, so it is safe to run again. The sections
+below are what it does, step by step.
+
 ### 1. The Mac mini — the install and its configuration
 
 ```bash
