@@ -178,8 +178,14 @@ does not exist.
 
 Tailscale admin console → **Settings → Trust credentials → New credential →
 OpenID Connect**: issuer **GitHub**, subject
-`repo:michellawidatech/macbook_nusantara:environment:stage`, scope **Auth
-keys: write**, tag `tag:ci`. It gives a client ID and an audience. The shop's
+`repo:michellawidatech@300295019/macbook_nusantara@1333015804:environment:stage`,
+scope **Auth keys: write**, tag `tag:ci`. It gives a client ID and an audience.
+⚠️ The repository uses GitHub's *immutable* subject, which carries the owner's
+and the repository's ids; the short `repo:michellawidatech/macbook_nusantara:…`
+form never matches and the join fails with *"token exchange failed with status
+403"* (the first staging deploy, 2026-10-08). `gh api
+repos/michellawidatech/macbook_nusantara/actions/oidc/customization/sub` prints
+the prefix. The shop's
 credential names `environment:prod` and does not admit a staging job; the
 `tag:ci` grant to the Mac mini's port 22 already covers this one.
 
@@ -286,7 +292,7 @@ those minutes count ten-fold against the free 2,000.
 | | |
 |---|---|
 | Check the stage environment is configured | §6 — the error names what is missing |
-| Join the tailnet | §5: the credential's subject must end `environment:stage` |
+| Join the tailnet: *token exchange failed with status 403* | §5: the credential's subject is the long, id-carrying form and ends `environment:stage` |
 | What is live on staging now: the usage line, or *"refused the staging key"* | the Mac mini runs installer 1, or the key was pinned without `--stage` — §3 again |
 | Migrate: `database "nusantara_pos_stage" does not exist` | §4 was skipped |
 | Install: *"holds no gate file"* | §2 |

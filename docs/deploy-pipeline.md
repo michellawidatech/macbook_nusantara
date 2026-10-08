@@ -91,8 +91,14 @@ drops off the tailnet every 180 days, and the till and the pipeline go with it.
 
 **The CI's identity** — preferred, because nothing secret is stored in GitHub:
 **Settings → Trust credentials → New credential → OpenID Connect**, issuer
-**GitHub**, subject `repo:michellawidatech/macbook_nusantara:environment:prod`,
+**GitHub**, subject
+`repo:michellawidatech@300295019/macbook_nusantara@1333015804:environment:prod`,
 scope **Auth keys: write**, tag `tag:ci`. It gives a client ID and an audience.
+The repository uses GitHub's *immutable* subject, which carries the owner's and
+the repository's ids; the short `repo:owner/name:…` form fails the join with
+*"token exchange failed with status 403"*. `gh api
+repos/michellawidatech/macbook_nusantara/actions/oidc/customization/sub` prints
+the prefix.
 
 The alternative is an OAuth client with the same scope and tag, which gives a
 client ID and a secret. The workflow takes either (step 3).
