@@ -292,7 +292,13 @@ cpSync(join(ROOT, "apps", "web", "dist"), join(stage, "web"), {
 cpSync(join(HERE, "ops"), join(stage, "ops"), { recursive: true });
 // nusantara-deploy and setup-deploy-access ride along so an admin at the Mac
 // mini can reinstall them from the live release; neither runs from here.
-for (const f of ["run", "backup", "nusantara-deploy", "setup-deploy-access", "setup-staging"]) {
+for (const f of [
+  "run",
+  "backup",
+  "nusantara-deploy",
+  "setup-deploy-access",
+  "setup-staging",
+]) {
   chmodSync(join(stage, "ops", f), 0o755);
 }
 writeFileSync(
