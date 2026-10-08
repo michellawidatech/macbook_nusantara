@@ -222,15 +222,18 @@ Then keep the private key in your password manager or delete it:
 
 ### 7. Cloudflare — the address
 
-**Zero Trust → Networks → Tunnels → `nusantara-mini` → Edit → Published
-application routes** (*Public Hostname* on older dashboards) → **Add**:
+**Networking → Tunnels → `macbook-nusantara` → Routes → Add route →
+Published application** (the tunnel is named `macbook-nusantara`, not after
+the Mac mini):
 
-| Subdomain | Domain | Path | Type | URL |
-|---|---|---|---|---|
-| `staging-pos` | `macbooknusantara.com` | *(empty)* | HTTP | `127.0.0.1:8081` |
+| Subdomain | Domain | Path | Service URL |
+|---|---|---|---|
+| `staging-pos` | `macbooknusantara.com` | *(empty)* | `http://localhost:8081` |
 
-Cloudflare makes the DNS record. Nothing changes on the Mac mini: the
-connector there takes its routes from the dashboard.
+The shop's route beside it is `pos.macbooknusantara.com` →
+`http://localhost:8080`. Cloudflare makes the DNS record. Nothing changes on
+the Mac mini: the connector there takes its routes from the dashboard. Done
+2026-10-08.
 
 ### 8. The first deploy
 
