@@ -272,6 +272,33 @@ every browser.
 - The deploy pipeline and SSH, tailnet-only.
 - The shop's router: untouched, nothing forwarded.
 
+## When the address answers Cloudflare error 1033 (or HTTP 530)
+
+The tunnel has no connector: Cloudflare is up and the Mac mini's
+`cloudflared` is not talking to it. *Networking → Tunnels →
+macbook-nusantara* says **Down, 0 replicas**. Seen 2026-10-06 → 10-08:
+
+1. **Is the POS itself up?** On the Mac mini, Safari → `http://localhost:8080`.
+   If it is not, the Mac mini is probably at the password screen after a
+   restart (FileVault starts nothing until somebody types it).
+2. **What does `cloudflared` say?** In Terminal on the Mac mini:
+
+   ```bash
+   sudo launchctl kickstart -k system/com.cloudflare.cloudflared; sleep 15; sudo tail -n 15 /Library/Logs/com.cloudflare.cloudflared.err.log
+   ```
+
+3. **`Failed to read token file: …/com.cloudflare.cloudflared/token`** — the
+   service lost its key (what happened on 2026-10-06). Copy the install command
+   from the tunnel's Overview page (*Install cloudflared connector → macOS*, the
+   copy button), then on the Mac mini:
+
+   ```bash
+   sudo cloudflared service uninstall
+   ```
+
+   and paste the copied `sudo cloudflared service install eyJ…`. The address
+   answers within half a minute. The key never leaves the Mac mini's Terminal.
+
 ## Undo
 
 *Zero Trust → Networks → Tunnels → nusantara-mini → Delete*, then on the Mac
