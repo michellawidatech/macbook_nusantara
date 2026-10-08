@@ -1331,3 +1331,63 @@ describe("a counted product's sell price", () => {
     expect(moves.map((m) => m.qty)).toEqual([2]);
   });
 });
+
+/**
+ * The sell price box holds THIS unit's price; what the variant asks is the
+ * grey hint behind it (owner report 2026-10-08: *"why the price cannot be
+ * removed"*). The go-live import priced every variant at Rp 0, and filled in
+ * as a value that zero sat in every box and came straight back when emptied.
+ */
+describe("a unit's sell price", () => {
+  const stored = () => snapshot().units.find((u) => u.serial === SERIAL)!;
+
+  /** Run with the order's product asking `price`, and put it back after. */
+  async function asking<T>(price: number, run: () => Promise<T>) {
+    const was = snapshot().skus.find((s) => s.id === SKU)!.price;
+    mutate((d) => {
+      d.skus.find((s) => s.id === SKU)!.price = price;
+    });
+    try {
+      return await run();
+    } finally {
+      mutate((d) => {
+        d.skus.find((s) => s.id === SKU)!.price = was;
+      });
+    }
+  }
+
+  it("leaves a Rp 0 variant's box empty, and files no price on the unit", () =>
+    asking(0, async () => {
+      await renderUnits();
+      const box = inRow("Sell price") as HTMLInputElement;
+      expect(box.value).toBe("");
+      expect(box.placeholder).toBe("");
+
+      await scanGraded();
+      expect(stored().price).toBeUndefined();
+      expect((inRow("Sell price") as HTMLInputElement).value).toBe("");
+    }));
+
+  it("can be emptied, and the unit then quotes its variant", () =>
+    asking(9_500_000, async () => {
+      await renderUnits();
+      expect((inRow("Sell price") as HTMLInputElement).placeholder).toMatch(
+        /9\.500\.000$/,
+      );
+      await scanGraded();
+      expect(stored().price).toBe(9_500_000);
+
+      const box = inRow("Sell price");
+      await userEvent.clear(box);
+      await userEvent.type(box, "8750000");
+      await userEvent.tab();
+      await settle();
+      expect(stored().price).toBe(8_750_000);
+
+      await userEvent.clear(inRow("Sell price"));
+      await userEvent.tab();
+      await settle();
+      expect(stored().price).toBeUndefined();
+      expect((inRow("Sell price") as HTMLInputElement).value).toBe("");
+    }));
+});

@@ -102,7 +102,7 @@ import { CommitMoneyInput } from "../../components/CommitMoneyInput";
 import { EditableTable } from "../../components/EditableTable";
 import { EnumTag } from "../../components/EnumTag";
 import { PrintLabelsModal } from "../../components/LabelSheet";
-import { isPriceInRange } from "../../lib/unitPrice.js";
+import { isPriceInRange, startingPrice } from "../../lib/unitPrice.js";
 import { labelsFor, type LabelDatum } from "../../lib/labels.js";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import {
@@ -225,6 +225,14 @@ const serialFieldId = (key: string) => `receiving-serial-${key}`;
 const descFieldId = (key: string) => `receiving-desc-${key}`;
 const gradeFieldId = (key: string) => `receiving-grade-${key}`;
 const sellFieldId = (key: string) => `receiving-sell-${key}`;
+
+/**
+ * The widest a unit row's buttons get: *Accept* with its word, then service,
+ * return, not arrived, delete and photos as icons — plus the cell's padding.
+ * Measured, not guessed; at `COLUMN.actionsPair` they spilled left over the
+ * sell price box (owner report 2026-10-08).
+ */
+const UNIT_ACTIONS_WIDTH = 264;
 
 /**
  * The statuses in which a machine's money can still be corrected here.
@@ -693,6 +701,14 @@ export function InboundDetailPage() {
     /** QC answered before the serial — written in this same mutation. */
     qc?: QcDraft,
   ) => {
+    /*
+     * Priced from the moment the unit exists: what the bench typed, or what
+     * the shop asks for the product it turned out to be. It is the asking
+     * price, and QC's job is to move it where the unit deserves. A variant
+     * asking Rp 0 has not been priced, and its unit is not either.
+     */
+    const start =
+      price ?? startingPrice(d.skus.find((x) => x.id === skuId)?.price);
     d.units.push({
       serial,
       skuId,
@@ -701,12 +717,7 @@ export function InboundDetailPage() {
       buy: unitCost,
       description: "",
       poId: order.id,
-      /*
-       * Priced from the moment the machine exists: what the bench typed, or
-       * what the shop asks for the product it turned out to be. It is the
-       * asking price, and QC's job is to move it where the machine deserves.
-       */
-      price: price ?? d.skus.find((x) => x.id === skuId)?.price ?? 0,
+      ...(start === undefined ? {} : { price: start }),
     });
     if (line) line.serial = serial;
     appendEvent(d, serial, {
@@ -1125,9 +1136,11 @@ export function InboundDetailPage() {
     if (next === row.unit.price) return;
     mutate((d) => {
       const u = d.units.find((x) => x.serial === serial)!;
-      // Never left blank on a machine that exists: an empty box means "back
-      // to what the shop asks", not "unpriced".
-      u.price = next ?? d.skus.find((x) => x.id === u.skuId)?.price ?? 0;
+      // An empty box takes the unit's own price away, and the unit quotes
+      // what its variant asks (`priceOf`) — the hint the box shows. Writing
+      // that figure in instead made a Rp 0 variant's box impossible to empty.
+      if (next === undefined) delete u.price;
+      else u.price = next;
     });
   };
 
@@ -2291,7 +2304,9 @@ export function InboundDetailPage() {
         // The asking price follows the product until somebody has priced this
         // unit: still the old product's price means nobody has.
         if (u.price !== undefined && u.price === was?.price && now) {
-          u.price = now.price;
+          const start = startingPrice(now.price);
+          if (start === undefined) delete u.price;
+          else u.price = start;
         }
         u.skuId = to;
         appendEvent(d, u.serial, {
@@ -2952,18 +2967,26 @@ export function InboundDetailPage() {
       return <Typography.Text type="secondary">{fmtRp(0)}</Typography.Text>;
     }
     const asking = skuOf(actualSkuOf(r))?.price ?? null;
-    const stored = r.unit ? (r.unit.price ?? asking) : asking;
-    const typed = prices[r.key];
-    const shown = typed !== undefined ? typed : stored;
+    const own = r.unit?.price ?? null;
     if (!moneyOpen(r)) {
-      return <Typography.Text>{fmtRp(shown)}</Typography.Text>;
+      return <Typography.Text>{fmtRp(own ?? asking)}</Typography.Text>;
     }
+    /*
+     * The box holds THIS unit's price and nothing else; what the variant asks
+     * is the grey hint behind it (owner report 2026-10-08: "why the price
+     * cannot be removed"). Filled in as a value, a variant at Rp 0 — every
+     * variant the go-live import made — put a Rp 0 in every box that came
+     * straight back the moment it was emptied.
+     */
+    const typed = prices[r.key];
     return (
       <CommitMoneyInput
         id={sellFieldId(r.key)}
         label={t("inbound.sellPrice", "Sell price")}
-        value={shown}
-        placeholder={asking === null ? undefined : fmtRp(asking)}
+        value={typed !== undefined ? typed : own}
+        placeholder={
+          startingPrice(asking) === undefined ? undefined : fmtRp(asking)
+        }
         onChange={(v) => setPrices((p) => ({ ...p, [r.key]: v }))}
         onCommit={(v) => commitSellPrice(r, v)}
       />
@@ -3266,6 +3289,7 @@ export function InboundDetailPage() {
       description={({ row }) => descriptionCell(row)}
       sellPrice={({ row }) => sellCell(row)}
       actions={({ row }) => actionsCell(row)}
+      actionsWidth={UNIT_ACTIONS_WIDTH}
     />
   );
 

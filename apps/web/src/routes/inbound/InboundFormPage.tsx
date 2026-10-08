@@ -57,6 +57,7 @@ import { MoneyInput } from "../../components/MoneyInput";
 import { CommitMoneyInput } from "../../components/CommitMoneyInput";
 import { RP_SYMBOL } from "../../components/money";
 import { fmtRp, fmtNone } from "../../lib/format.js";
+import { startingPrice } from "../../lib/unitPrice.js";
 import { BatteryFields } from "../../components/BatteryFields";
 import { UnitDetailsModal } from "../../components/UnitDetailsModal";
 import { PurchaseLinesTable } from "./PurchaseLinesTable.js";
@@ -479,6 +480,8 @@ export function InboundFormPage() {
           u.battery,
           defaultBatteryModeOfSku(d, l.skuId!),
         );
+        const start =
+          u.price ?? startingPrice(d.skus.find((x) => x.id === l.skuId)?.price);
         d.units.push({
           serial,
           skuId: l.skuId!,
@@ -494,7 +497,9 @@ export function InboundFormPage() {
                     .filter(Boolean),
                 ),
           poId: order.id,
-          price: u.price ?? d.skus.find((x) => x.id === l.skuId)?.price ?? 0,
+          // What the bench typed, or what the variant asks — never a Rp 0
+          // nobody typed (`startingPrice`).
+          ...(start === undefined ? {} : { price: start }),
           ...(u.grade === undefined ? {} : { grade: u.grade }),
           ...battery,
         });
@@ -1106,8 +1111,12 @@ export function InboundFormPage() {
           <CommitMoneyInput
             id={`inbound-form-sell-${u.key}`}
             label={t("inbound.sellPrice", "Sell price")}
-            value={u.price ?? asking}
-            {...(asking === null ? {} : { placeholder: fmtRp(asking) })}
+            // The unit's own price; the variant's is the hint behind it, so
+            // an emptied box stays empty (owner report 2026-10-08).
+            value={u.price ?? null}
+            {...(startingPrice(asking) === undefined
+              ? {}
+              : { placeholder: fmtRp(asking) })}
             onChange={(v) =>
               editUnit(openLine.key, u.key, { price: v ?? undefined })
             }
