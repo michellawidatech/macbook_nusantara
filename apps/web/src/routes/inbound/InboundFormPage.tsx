@@ -102,6 +102,7 @@ import {
 } from "../../lib/inboundDraft.js";
 import { useTranslation } from "react-i18next";
 import type { MockDb, Po, PoItem } from "../../mock/seed.js";
+import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
 /**
  * What the popup behind a line has been told about one of its units (owner
@@ -761,7 +762,7 @@ export function InboundFormPage() {
               style={{ width: "100%" }}
               options={db.warehouses.map((w) => ({
                 value: w.id,
-                label: w.name,
+                label: warehouseLabel(w),
               }))}
             />
           </Form.Item>
@@ -1264,7 +1265,7 @@ export function InboundFormPage() {
             {
               key: "w",
               label: t("inboundForm.arrivingAt", "Arriving at"),
-              children: db.warehouses.find((w) => w.id === warehouseId)?.name,
+              children: warehouseLabelOf(db.warehouses, warehouseId),
             },
             {
               key: "p",

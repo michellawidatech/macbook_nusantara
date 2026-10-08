@@ -27,6 +27,7 @@ import {
 } from "../../mock/store.js";
 import { FORM_CENTRE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
+import { warehouseLabelOf } from "../../lib/warehouses.js";
 
 /** The label that turns on the "specify" field. Matched case-insensitively. */
 const OTHER = "other";
@@ -66,7 +67,7 @@ export function SupplierReturnPanel({
     return k ? `${k.name} ${k.variantLabel}` : fmtNone();
   };
   const warehouseName = (id: string) =>
-    db.warehouses.find((w) => w.id === id)?.name ?? id;
+    warehouseLabelOf(db.warehouses, id) ?? id;
 
   /** Counted products the shop holds, and where. */
   const levels = stockLevels(db.stockMoves);

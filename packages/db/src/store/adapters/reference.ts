@@ -105,6 +105,7 @@ export const warehouses: Adapter<"warehouses"> = {
     });
     return rows.map((r) => ({
       id: r.id,
+      code: r.code,
       name: r.name,
       active: r.active,
       kind: r.kind,
@@ -121,9 +122,10 @@ export const warehouses: Adapter<"warehouses"> = {
         await tx.location.create({
           data: {
             id: n.id,
-            // `code` is unique and printed on nothing the browser shows; the
-            // id is already unique, so it serves.
-            code: n.id,
+            // The shop's number for it (2026-10-08), printed beside the name
+            // on every screen. A warehouse made without one takes its id,
+            // which is unique and so satisfies the column's index.
+            code: n.code ?? n.id,
             name: n.name,
             kind: n.kind ?? "GUDANG",
             active: n.active,
@@ -136,6 +138,7 @@ export const warehouses: Adapter<"warehouses"> = {
           data: {
             name: n.name,
             active: n.active,
+            ...(n.code === undefined ? {} : { code: n.code }),
             ...(n.kind === undefined ? {} : { kind: n.kind }),
           },
         });

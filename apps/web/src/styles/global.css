@@ -413,6 +413,17 @@ body {
 .pos-shelf-row[aria-disabled="true"]:hover {
   background: transparent;
 }
+/*
+ * The row's grade, left of the name (owner ask 2026-10-08). One width on
+ * every row, holding a tag or nothing, so the names line up down the list;
+ * wide enough for "New" / "Baru", and a letter sits in its middle.
+ */
+.pos-shelf-grade {
+  flex: none;
+  width: 44px;
+  display: flex;
+  justify-content: center;
+}
 
 /*
  * The Serials & QC grid.

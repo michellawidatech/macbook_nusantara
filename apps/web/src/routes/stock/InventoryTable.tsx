@@ -109,6 +109,7 @@ import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
 import type { StockMove, Unit } from "../../mock/seed.js";
+import { warehouseLabelOf } from "../../lib/warehouses.js";
 
 /** A quantity cell: the number, or a muted zero that does not shout. */
 function Qty({ n, strong }: { n: number; strong?: boolean }) {
@@ -192,9 +193,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
   const skuPriceOf = (skuId: string) =>
     db.skus.find((s) => s.id === skuId)?.price ?? 0;
   const warehouseName = (id: string | undefined) =>
-    id === undefined
-      ? undefined
-      : (db.warehouses.find((w) => w.id === id)?.name ?? id);
+    id === undefined ? undefined : (warehouseLabelOf(db.warehouses, id) ?? id);
   const rackName = (id?: string) => db.racks.find((r) => r.id === id)?.name;
   const gradeLabel = (grade: string | undefined) =>
     gradeText(grade, t("grade.new", "New")) ??

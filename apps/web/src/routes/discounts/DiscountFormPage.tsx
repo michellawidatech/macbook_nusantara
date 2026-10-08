@@ -31,6 +31,7 @@ import { useTranslation } from "react-i18next";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { useFormDraft } from "../../hooks/useFormDraft";
 import { asOneOf, isRecord } from "../../lib/draftGuards.js";
+import { scopeKindOf, type DiscountScopeKind } from "../../lib/pricing.js";
 
 type DiscountType = "PCT" | "NOMINAL" | "BUNDLE";
 
@@ -129,6 +130,26 @@ function DiscountForm({ editing }: { editing?: Discount }) {
     navigate("/discounts");
   };
 
+  /** A stored scope, as the form's two questions. */
+  const scopeFields = (scope: string) => {
+    const kind = scopeKindOf(db, scope);
+    return kind === "ALL"
+      ? { scopeKind: kind }
+      : { scopeKind: kind, scopeTarget: scope };
+  };
+  const scopeKind = Form.useWatch("scopeKind", form) as
+    DiscountScopeKind | undefined;
+  /** Every category, by name — what `scopeOf` looks a category up by. */
+  const categoryNames = [
+    ...new Set([
+      ...db.categories.map((c) => c.name),
+      ...db.models.map((m) => m.category),
+    ]),
+  ].sort((a, b) => a.localeCompare(b));
+  const productNames = [...new Set(db.models.map((m) => m.name))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+
   const submit = (v: {
     name: string;
     code: string;
@@ -139,7 +160,8 @@ function DiscountForm({ editing }: { editing?: Discount }) {
     bundlePriceRp?: number;
     usageLimit?: number;
     range?: [dayjs.Dayjs, dayjs.Dayjs];
-    scope: string;
+    scopeKind?: DiscountScopeKind;
+    scopeTarget?: string;
   }) => {
     if (
       db.discounts.some(
@@ -163,7 +185,13 @@ function DiscountForm({ editing }: { editing?: Discount }) {
       usageLimit: countOf(v.usageLimit),
       fromDate: v.range?.[0]?.format("YYYY-MM-DD"),
       toDate: v.range?.[1]?.format("YYYY-MM-DD"),
-      scope: v.scope,
+      // Stored as it always was — "All products", a category name or a
+      // product (model) name — which is what the store contract and
+      // Postgres's `scopeOf` read. The kind is the form's question only.
+      scope:
+        v.scopeKind === "CATEGORY" || v.scopeKind === "PRODUCT"
+          ? (v.scopeTarget ?? "")
+          : "All products",
     };
     mutate((d) => {
       if (editing) {
@@ -214,7 +242,7 @@ function DiscountForm({ editing }: { editing?: Discount }) {
                       editing.toDate ? dayjs(editing.toDate) : null,
                     ]
                   : undefined,
-                scope: editing.scope,
+                ...scopeFields(editing.scope),
               }
             : undefined
         }
@@ -375,28 +403,69 @@ function DiscountForm({ editing }: { editing?: Discount }) {
               >
                 <DatePicker.RangePicker format="DD MMM YYYY" />
               </Form.Item>
+              {/*
+               * All, a category or a product (owner ask 2026-10-08). It was
+               * one list of every model with the categories appended as
+               * "Category: …", which made the two hard to tell apart and put
+               * the categories under a hundred and sixty models. The kind
+               * first, then which one.
+               */}
               <Form.Item
-                name="scope"
+                name="scopeKind"
                 label={t("discount.appliesTo", "Applies to")}
-                initialValue="All products"
-                style={{ width: 280 }}
+                initialValue="ALL"
               >
-                <Select
+                <Segmented<DiscountScopeKind>
                   options={[
                     {
-                      value: "All products",
+                      value: "ALL",
                       label: t("discount.allProducts", "All products"),
                     },
-                    ...db.models.map((m) => ({ value: m.name, label: m.name })),
-                    ...[...new Set(db.models.map((m) => m.category))].map(
-                      (c) => ({
-                        value: c,
-                        label: `Category: ${c}`,
-                      }),
-                    ),
+                    {
+                      value: "CATEGORY",
+                      label: t("discount.scopeCategory", "Category"),
+                    },
+                    {
+                      value: "PRODUCT",
+                      label: t("discount.scopeProduct", "Product"),
+                    },
                   ]}
+                  // A category name is not a product name: what was picked
+                  // under the other kind goes.
+                  onChange={() => form.setFieldValue("scopeTarget", undefined)}
                 />
               </Form.Item>
+              {scopeKind === "CATEGORY" && (
+                <Form.Item
+                  name="scopeTarget"
+                  label={t("discount.whichCategory", "Which category")}
+                  rules={[{ required: true }]}
+                  style={{ width: 280 }}
+                >
+                  <Select
+                    showSearch
+                    placeholder={t(
+                      "discount.pickCategory",
+                      "Choose a category",
+                    )}
+                    options={categoryNames.map((c) => ({ value: c, label: c }))}
+                  />
+                </Form.Item>
+              )}
+              {scopeKind === "PRODUCT" && (
+                <Form.Item
+                  name="scopeTarget"
+                  label={t("discount.whichProduct", "Which product")}
+                  rules={[{ required: true }]}
+                  style={{ width: 320 }}
+                >
+                  <Select
+                    showSearch
+                    placeholder={t("discount.pickProduct", "Choose a product")}
+                    options={productNames.map((m) => ({ value: m, label: m }))}
+                  />
+                </Form.Item>
+              )}
             </Flex>
             <Typography.Text type="secondary">
               Usage counts when a sale redeems the code in Stock Out.

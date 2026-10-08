@@ -5,12 +5,13 @@
  * which hands the form text. And a discount could not be corrected at all.
  */
 import { App as AntdApp } from "antd";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscountFormPage } from "../src/routes/discounts/DiscountFormPage.js";
 import { getDb, mutate } from "../src/mock/store.js";
+import { scopeKindOf } from "../src/lib/pricing.js";
 
 vi.setConfig({ testTimeout: 90_000 });
 
@@ -37,7 +38,7 @@ beforeEach(() => {
   localStorage.clear();
   mutate((d) => {
     d.discounts = d.discounts.filter(
-      (x) => !["ZZPCT10", "ZZEDIT", "ZZEDITED"].includes(x.code),
+      (x) => !["ZZPCT10", "ZZEDIT", "ZZEDITED", "ZZSCOPE"].includes(x.code),
     );
   });
 });
@@ -114,5 +115,86 @@ describe("editing a discount", () => {
     expect(
       await screen.findByText("This discount does not exist."),
     ).toBeInTheDocument();
+  });
+});
+
+/** Pick an option, by its text, in the Select labelled `label`. */
+async function choose(label: string, text: string) {
+  const box = screen.getByRole("combobox", { name: label });
+  fireEvent.mouseDown(box);
+  const option = await waitFor(() => {
+    const open = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".ant-select-dropdown:not(.ant-select-dropdown-hidden)",
+      ),
+    );
+    const found = Array.from(
+      open[open.length - 1]?.querySelectorAll<HTMLElement>(
+        ".ant-select-item-option",
+      ) ?? [],
+    ).find((el) => el.textContent === text);
+    if (!found) throw new Error(`no option ${text} open`);
+    return found;
+  });
+  fireEvent.click(option);
+}
+
+describe("what a discount applies to (owner ask 2026-10-08)", () => {
+  it("is all, a category or a product, asked as two questions", async () => {
+    const db = getDb();
+    const category = db.categories[0]!.name;
+    const product = db.models[0]!.name;
+    renderAt("/discounts/new");
+    await userEvent.type(screen.getByLabelText("Name"), "Scoped");
+    await userEvent.type(screen.getByLabelText("Code"), "zzscope");
+    await userEvent.type(
+      screen.getByLabelText("Percentage off", {
+        selector: "input.ant-input-number-input",
+      }),
+      "5",
+    );
+
+    // All products by default, with nothing more to ask.
+    expect(
+      screen.queryByRole("combobox", { name: "Which category" }),
+    ).toBeNull();
+    await userEvent.click(screen.getByText("Category"));
+    await choose("Which category", category);
+    // Switching kind drops the other kind's answer.
+    await userEvent.click(screen.getByText("Product"));
+    expect(
+      screen.queryByRole("combobox", { name: "Which category" }),
+    ).toBeNull();
+    await choose("Which product", product);
+
+    await userEvent.click(screen.getByText("Save discount").closest("button")!);
+    await screen.findByText("the list");
+    expect(byCode("ZZSCOPE")!.scope).toBe(product);
+  });
+
+  it("refuses a category scope with no category chosen", async () => {
+    renderAt("/discounts/new");
+    await userEvent.type(screen.getByLabelText("Name"), "Scoped");
+    await userEvent.type(screen.getByLabelText("Code"), "zzscope");
+    await userEvent.type(
+      screen.getByLabelText("Percentage off", {
+        selector: "input.ant-input-number-input",
+      }),
+      "5",
+    );
+    await userEvent.click(screen.getByText("Category"));
+    await userEvent.click(screen.getByText("Save discount").closest("button")!);
+    expect(
+      await screen.findByText(/Which category.*required|required/i),
+    ).toBeTruthy();
+    expect(byCode("ZZSCOPE")).toBeUndefined();
+  });
+
+  it("reads a saved scope back as its kind, category first", () => {
+    const db = getDb();
+    expect(scopeKindOf(db, "All products")).toBe("ALL");
+    expect(scopeKindOf(db, "")).toBe("ALL");
+    expect(scopeKindOf(db, db.categories[0]!.name)).toBe("CATEGORY");
+    expect(scopeKindOf(db, db.models[0]!.name)).toBe("PRODUCT");
   });
 });

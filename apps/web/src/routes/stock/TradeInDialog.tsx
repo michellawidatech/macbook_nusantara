@@ -55,6 +55,7 @@ import { useEffect } from "react";
 import { Flex, Form, Input, Modal, Segmented, Select } from "antd";
 import { useTranslation } from "react-i18next";
 import { MoneyInput } from "../../components/MoneyInput";
+import { SkuPicker } from "../../components/SkuPicker";
 import {
   BASE_MAX_LENGTH,
   BASE_MIN_LENGTH,
@@ -243,9 +244,9 @@ export function TradeInDialog({
         // messages the form has already painted under the boxes that failed.
       });
 
-  const productOptions = db.skus
-    .filter((k) => !category || categoryOfSku(k.id) === category)
-    .map((k) => ({ value: k.id, label: `${k.name} ${k.variantLabel}` }));
+  const pickable = db.skus.filter(
+    (k) => !category || categoryOfSku(k.id) === category,
+  );
 
   return (
     <Modal
@@ -281,15 +282,14 @@ export function TradeInDialog({
               },
             ]}
           >
-            <Select
-              showSearch
-              allowClear
-              optionFilterProp="label"
-              placeholder={t(
-                "trade.searchProduct",
-                "Search a product or variant",
-              )}
-              options={productOptions}
+            {/* The shop's product code in the box — `AIR 13" 2020 I5
+                8/256` — and the model under it, as Inbound picks one
+                (owner ask 2026-10-08). Searchable by either. */}
+            <SkuPicker
+              skus={pickable}
+              aria-label={t("trade.product", "Product")}
+              // The Form.Item supplies the real value and onChange.
+              onChange={() => undefined}
             />
           </Form.Item>
           <Form.Item

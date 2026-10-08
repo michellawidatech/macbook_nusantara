@@ -56,6 +56,8 @@ export interface SkuPickerProps {
   status?: "warning" | "error";
   /** Names the box, where the column header cannot. Required — see `CountInput`. */
   "aria-label": string;
+  /** What a `Form.Item` hands its control, so its label points at the box. */
+  id?: string;
 }
 
 export function SkuPicker({
@@ -66,6 +68,7 @@ export function SkuPicker({
   placeholder,
   status,
   "aria-label": ariaLabel,
+  id,
 }: SkuPickerProps) {
   const { t } = useTranslation();
   const chosen = skus.find((s) => s.id === value);
@@ -92,6 +95,7 @@ export function SkuPicker({
         onChange={onChange}
         status={status}
         aria-label={ariaLabel}
+        {...(id === undefined ? {} : { id })}
         placeholder={
           placeholder ?? t("skuPicker.pick", "Search a code or a model name")
         }

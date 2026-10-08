@@ -248,6 +248,22 @@ export function serialNamedBy(
   return hit;
 }
 
+/**
+ * Does a part-typed serial FILTER to this one? The till's serial chooser
+ * (owner ask 2026-10-08) narrows its list as somebody types.
+ *
+ * A substring, not a whole serial, and through the same readings a search
+ * box uses — with and without the barcode's `S`, and `I`/`O` read as `1`/`0`
+ * — so the case and the barcode both find the unit. An empty query matches
+ * everything.
+ */
+export function serialMatchesQuery(raw: string, serial: string): boolean {
+  const input = normaliseScan(raw);
+  if (input === "") return true;
+  const stored = normaliseScan(serial);
+  return readingsOf(input).some((r) => stored.includes(r));
+}
+
 /*
  * The COPY for a refusal lives at its call sites, not here, and that is on
  * purpose.

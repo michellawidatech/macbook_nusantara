@@ -1126,9 +1126,9 @@ Decisions that outlived those documents:
     (`SEED.primaryDark`, primary text 5.5:1); the till's total panel and the
     active app tab use `BRAND_DEEP`, and the panel's main button is white.
     `test/theme.test.ts` checks the contrast.
-  - ⚠️ Schema gaps still open: `Location.code` is not in the store (the
-    export names warehouses by name), and a settlement's note lives on the
-    payments because `Settlement` has only `reason`.
+  - ⚠️ Schema gaps still open: ~~`Location.code` is not in the store~~ (it
+    is since 2026-10-08 — see "Four asks"), and a settlement's note lives on
+    the payments because `Settlement` has only `reason`.
 - **Counted products are quantities, in the database too — 2026-09-19.**
   *"For accessories literally don't record any individual measurements like
   code, no need, that should purely be by qty"* — and, asked how far: the
@@ -2374,6 +2374,42 @@ Decisions that outlived those documents:
     `setup-deploy-access --stage`), so the key a branch can reach cannot name
     the shop. Roles are cluster-wide, though: staging's owner password IS the
     shop's.
+- **Four asks, 2026-10-08.**
+  - **The till's catalogue is one row per variant AND grade** — *"per row is
+    per unit with same grade and same spec, then the grade is on the left
+    next to the unit."* This REVISES 2026-08-27's one-row-per-variant: a row
+    with a New, an A and a C quoted three shelves' prices in one range.
+    `shelfRows` groups on (sku, grade) and a row carries `key` and `grade`
+    (`grades` is gone); the grade sits in a fixed-width slot left of the name
+    (`.pos-shelf-grade`) so the names line up, counted products included. The
+    "last one skips the chooser" rule now applies per grade row, so more taps
+    go straight into the basket. The chooser has a **serial search**
+    (`serialMatchesQuery`, the search-box readings as a substring) focused on
+    open, and Enter takes the unit once it has narrowed to one.
+    ⚠️ It is focused by a `setTimeout` after open, not `autoFocus` (the
+    Modal's focus trap takes the caret to its first button) and not
+    `afterOpenChange` (it waits for an animation frame a background tab never
+    draws).
+  - **A discount applies to all, a category or a product**, asked as two
+    questions: a Segmented, then which one. `Discount.scope` is still the one
+    string the store and `scopeOf` read; `scopeKindOf` reads it back in
+    Postgres's order (category first). The list prints "Category: …" /
+    "Product: …".
+  - **The trade-in's product box is `SkuPicker`** — the shop code
+    (`AIR 13" 2020 I5 8/256`) in the box and the model under it, as Inbound
+    picks one. Tests pick by `sku.code`.
+  - **A warehouse prints its number: "01 · Gudang Utama"** — the shop has
+    used 01–04 for six years. `lib/warehouses.ts` (`warehouseLabel`) is the
+    one place; every screen that named a warehouse goes through it. The
+    number is `Location.code`, which already existed: the store contract
+    gained an optional `code`, the adapter projects and writes it, and
+    Settings → Warehouses edits it (a new one is offered the next free
+    number, a duplicate is refused). The adapter used to fill the column with
+    the id, so the go-live import left `wh-01`…`wh-04`; data-only migration
+    `20261008090000_location_code_is_the_shop_number` takes the number back
+    out of every code that is still that id copy. The importer
+    (`masters.py`, `documents.py`) now writes `code` itself, and the fixture's
+    codes are `01`–`04`. A code equal to the id prints as the name alone.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

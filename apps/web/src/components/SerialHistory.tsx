@@ -43,6 +43,7 @@ import type { MockDb, UnitEvent } from "../mock/seed.js";
 import { qcPhotosOf } from "../mock/store.js";
 import { TYPE } from "../theme/tokens";
 import { labelOf, UNIT_EVENT, UNIT_STATUS } from "../i18n/enumLabels.js";
+import { warehouseLabelOf } from "../lib/warehouses.js";
 
 /**
  * What an event was part of, resolved from the document code it carries.
@@ -231,7 +232,7 @@ export function SerialHistory({
   );
 
   const locationNameOf = (id: string | undefined) =>
-    db.warehouses.find((w) => w.id === id)?.name;
+    warehouseLabelOf(db.warehouses, id);
 
   /*
    * A serial that was asked for and does not exist is a recoverable state, not

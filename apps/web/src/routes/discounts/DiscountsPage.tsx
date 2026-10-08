@@ -29,7 +29,7 @@ import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { fmtRp, fmtDate, fmtDateTime } from "../../lib/format.js";
-import { describeDiscount } from "../../lib/pricing.js";
+import { describeDiscount, scopeKindOf } from "../../lib/pricing.js";
 import { describeDiscountText } from "../../lib/discountText.js";
 import { useDb, mutate } from "../../mock/store.js";
 import type { Discount } from "../../mock/seed.js";
@@ -58,6 +58,14 @@ function statusOf(d: Discount): { label: string; color: string } {
 export function DiscountsPage() {
   const { t } = useTranslation();
   const db = useDb();
+  /** A discount's scope, saying which of the three it is (2026-10-08). */
+  const scopeText = (scope: string) => {
+    const kind = scopeKindOf(db, scope);
+    if (kind === "ALL") return t("discount.allProducts", "All products");
+    return kind === "CATEGORY"
+      ? t("discounts.scopeCategoryOf", "Category: {{name}}", { name: scope })
+      : t("discounts.scopeProductOf", "Product: {{name}}", { name: scope });
+  };
   const navigate = useNavigate();
   const { compact } = useLayoutMode();
   const [opened, setOpened] = useState<Discount | null>(null);
@@ -181,7 +189,7 @@ export function DiscountsPage() {
               dataIndex: "scope",
               facet: true,
               searchable: true,
-              render: (v) => <Tag>{v}</Tag>,
+              render: (v: string) => <Tag>{scopeText(v)}</Tag>,
             },
             {
               title: t("discounts.status", "Status"),
@@ -335,7 +343,7 @@ export function DiscountsPage() {
                 {
                   key: "s",
                   label: t("discounts.appliesTo", "Applies to"),
-                  children: discount.scope,
+                  children: scopeText(discount.scope),
                 },
                 {
                   key: "w",

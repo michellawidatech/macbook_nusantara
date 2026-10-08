@@ -48,6 +48,13 @@ export type UnitStatus =
 
 export interface Warehouse {
   id: string;
+  /**
+   * `Location.code` — the shop's own number, `01`…`04` (owner ask
+   * 2026-10-08: they have used them for six years). Printed beside the name
+   * through `warehouseLabel`; optional because a warehouse can be made
+   * without one.
+   */
+  code?: string;
   name: string;
   active: boolean;
   /**
@@ -1612,6 +1619,7 @@ export function buildSeed(): MockDb {
   const shop = buildShop();
   const warehouses: Warehouse[] = shop.locations.map((l) => ({
     id: l.id,
+    code: l.code,
     name: l.name,
     active: true,
     kind: l.kind,

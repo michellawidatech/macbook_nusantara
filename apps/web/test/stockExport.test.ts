@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { buildSeed, type Unit } from "../src/mock/seed.js";
 import { HELD_STATUSES, isSellable } from "../src/lib/inventory.js";
 import { priceOf } from "../src/lib/unitPrice.js";
+import { warehouseLabelOf } from "../src/lib/warehouses.js";
 import {
   DEFAULT_STOCK_EXPORT_COLUMNS,
   EVERYTHING,
@@ -120,9 +121,7 @@ describe("stockReport — which units, and how they are grouped", () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(r.groups.length).toBeGreaterThan(1);
     for (const g of r.groups) {
-      expect(g.warehouse).toBe(
-        db.warehouses.find((w) => w.id === g.locationId)!.name,
-      );
+      expect(g.warehouse).toBe(warehouseLabelOf(db.warehouses, g.locationId));
       expect(g.qty).toBe(g.lines.reduce((n, l) => n + l.qty, 0));
     }
   });

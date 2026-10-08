@@ -215,6 +215,7 @@ import { UnitDetailsModal } from "../../components/UnitDetailsModal";
 import { ExpenseModal } from "./ExpenseModal.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { isRecord } from "../../lib/draftGuards.js";
+import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
 /**
  * The DOM ids of a row's boxes — what Enter and the scanner hand the caret
@@ -1505,8 +1506,7 @@ export function InboundDetailPage() {
   const locked = closed || !editing;
 
   const bench = serviceLocationOf(db.warehouses);
-  const benchName =
-    db.warehouses.find((w) => w.id === bench)?.name ?? bench ?? "";
+  const benchName = warehouseLabelOf(db.warehouses, bench) ?? bench ?? "";
 
   /** An expense's name as the page shows it: its label, else its kind. */
   const feeName = (fee: PoFee) =>
@@ -2005,7 +2005,7 @@ export function InboundDetailPage() {
   };
 
   const warehouseName = (id: string) =>
-    db.warehouses.find((w) => w.id === id)?.name ?? id;
+    warehouseLabelOf(db.warehouses, id) ?? id;
 
   // ── The invoice's lines ─────────────────────────────────────────────────
 
@@ -2601,7 +2601,7 @@ export function InboundDetailPage() {
                 value={po.locationId}
                 options={db.warehouses.map((w) => ({
                   value: w.id,
-                  label: w.name,
+                  label: warehouseLabel(w),
                 }))}
                 onChange={(v: string) =>
                   setPo((order) => {

@@ -98,6 +98,7 @@ import {
   currentStaffName,
 } from "../../mock/store.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
+import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
 export function ServicePage() {
   const { t } = useTranslation();
@@ -139,7 +140,7 @@ export function ServicePage() {
     return u && db.skus.find((k) => k.id === u.skuId);
   };
   const warehouseName = (id: string | undefined) =>
-    db.warehouses.find((w) => w.id === id)?.name ?? fmtNone();
+    warehouseLabelOf(db.warehouses, id) ?? fmtNone();
   /** Found by `Location.kind`: `wh-4` is this shop's bench, not every shop's. */
   const bench = serviceLocationOf(db.warehouses);
 
@@ -610,7 +611,7 @@ export function ServicePage() {
               // finished with is somewhere it can be sold from.
               options={db.warehouses
                 .filter((w) => w.active && w.id !== bench)
-                .map((w) => ({ value: w.id, label: w.name }))}
+                .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
             />
           </Form.Item>
           <Form.Item

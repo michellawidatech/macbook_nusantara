@@ -11,7 +11,14 @@
  * answers, 2026-08-27).
  */
 import { App as AntdApp } from "antd";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -82,8 +89,11 @@ async function chooseOption(control: HTMLElement, option: string) {
   fireEvent.click(item);
 }
 
-/** The variant this file stocks, as the trade-in's product list names it. */
-const TILL_PRODUCT = "Till Test Air 8GB / 256GB";
+/**
+ * The variant this file stocks, as the trade-in's product list names it: by
+ * its shop code, the way Inbound picks a product (owner ask 2026-10-08).
+ */
+const TILL_PRODUCT = "TILL-1";
 
 beforeEach(() => {
   /*
@@ -196,6 +206,20 @@ async function openCatalogue() {
   if (add) await userEvent.click(add);
 }
 
+/** The catalogue row of Till Test Air in one grade. */
+function tillAirRow(grade: string): RegExp {
+  return new RegExp(`Choose a Till Test Air.*grade ${grade}$`);
+}
+
+/** Make the B unit an A too, so the A row has a real choice. */
+function bothGradeA() {
+  act(() => {
+    mutate((d) => {
+      d.units.find((u) => u.serial === "TILLBBB00002")!.grade = "A";
+    });
+  });
+}
+
 /**
  * Put the shop's only variant in the basket, through the chooser when there
  * is one.
@@ -209,8 +233,11 @@ async function openCatalogue() {
  */
 async function pickFirstMachine(serial = "TILLAAA00001") {
   await openCatalogue();
+  // A row is a variant in ONE grade (owner ask 2026-10-08), so the unit is
+  // found on its own grade's row.
+  const grade = snapshot().units.find((u) => u.serial === serial)?.grade;
   await userEvent.click(
-    screen.getByRole("button", { name: /Choose a Till Test Air/ }),
+    screen.getByRole("button", { name: tillAirRow(grade ?? "") }),
   );
   // By the button's own `aria-label`, which names the machine — walking the
   // DOM for the row would be a test that breaks on a layout change rather
@@ -275,11 +302,27 @@ describe("selling a counted product", () => {
 });
 
 describe("picking a machine", () => {
-  it("lists variants with a count, not one row per serial", async () => {
+  it("lists one row per variant and grade, with a count (owner ask 2026-10-08)", async () => {
     renderTill();
     await openCatalogue();
-    // Two machines, one row. The rebuild's whole premise: a customer points at
-    // a model, and forty rows of C02XY… is not an answer to that.
+    // An A and a B are two rows — "per row is per unit with same grade and
+    // same spec" — best grade first.
+    const rows = screen.getAllByRole("button", {
+      name: /Choose a Till Test Air/,
+    });
+    expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual([
+      "Choose a Till Test Air 8GB / 256GB, grade A",
+      "Choose a Till Test Air 8GB / 256GB, grade B",
+    ]);
+    expect(screen.getAllByText("1 left")).toHaveLength(2);
+  });
+
+  it("lists units of one grade on one row, not one row per serial", async () => {
+    bothGradeA();
+    renderTill();
+    await openCatalogue();
+    // The rebuild's whole premise: a customer points at a model, and forty
+    // rows of C02XY… is not an answer to that.
     expect(
       screen.getAllByRole("button", { name: /Choose a Till Test Air/ }),
     ).toHaveLength(1);
@@ -306,19 +349,47 @@ describe("picking a machine", () => {
   });
 
   it("asks which one when there is a choice, and says what tells them apart", async () => {
+    bothGradeA();
     renderTill();
     await openCatalogue();
     await userEvent.click(
-      screen.getByRole("button", { name: /Choose a Till Test Air/ }),
+      screen.getByRole("button", { name: tillAirRow("A") }),
     );
 
-    // The owner's answer of 2026-08-27. Both machines are offered, and the
-    // grade is why you would choose between them.
+    // The owner's answer of 2026-08-27. Both machines are offered, each with
+    // the QC note that is why you would choose between them.
     const d = await dialog();
     expect(d.getByText("TILLAAA00001")).toBeTruthy();
     expect(d.getByText("TILLBBB00002")).toBeTruthy();
     expect(d.getByLabelText("Pick TILLAAA00001")).toBeTruthy();
     expect(d.getByLabelText("Pick TILLBBB00002")).toBeTruthy();
+  });
+
+  it("narrows the chooser by serial, and Enter takes the one left (owner ask 2026-10-08)", async () => {
+    bothGradeA();
+    renderTill();
+    await openCatalogue();
+    await userEvent.click(
+      screen.getByRole("button", { name: tillAirRow("A") }),
+    );
+    const d = await dialog();
+    const search = d.getByRole("searchbox", { name: "Search the serial" });
+    // The caret is in it, so the serial can be typed straight away.
+    await waitFor(() => expect(search).toHaveFocus());
+
+    await userEvent.type(search, "bbb");
+    expect(d.queryByLabelText("Pick TILLAAA00001")).toBeNull();
+    expect(d.getByLabelText("Pick TILLBBB00002")).toBeTruthy();
+
+    await userEvent.type(search, "{Enter}");
+    // On the sale, and the box is empty for the next one.
+    expect(search).toHaveValue("");
+    expect(d.getByText("1 on this sale: TILLBBB00002")).toBeTruthy();
+    expect(d.getByLabelText("Pick TILLAAA00001")).toBeTruthy();
+    expect(d.queryByLabelText("Pick TILLBBB00002")).toBeNull();
+
+    await userEvent.type(search, "zzz");
+    expect(d.getByText("No unit here has a serial like that.")).toBeTruthy();
   });
 
   it("puts a unit in the basket the moment its serial is typed (owner ask 2026-09-21)", async () => {
@@ -351,6 +422,7 @@ describe("picking a machine", () => {
   });
 
   it("counts the picked machine off the row without hiding it", async () => {
+    bothGradeA();
     renderTill();
     await pickFirstMachine();
 
@@ -950,10 +1022,7 @@ describe("taking a machine in part-exchange", () => {
     await goToPayment();
     await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
     const d = await dialog();
-    await chooseOption(
-      d.getByLabelText(/^Product/),
-      `${sleeve.name} ${sleeve.variantLabel}`,
-    );
+    await chooseOption(d.getByLabelText(/^Product/), sleeve.code);
     // No box for a number nobody reads off an accessory.
     await vi.waitFor(() => expect(d.queryByLabelText(/Serial/)).toBeNull());
     await userEvent.type(d.getByLabelText(/Description/), "Sleeve bekas");
@@ -1062,10 +1131,11 @@ describe("the price a machine actually goes out at", () => {
 
 describe("buying two of the same variant", () => {
   it("leaves the chooser open until every machine is taken", async () => {
+    bothGradeA();
     renderTill();
     await openCatalogue();
     await userEvent.click(
-      screen.getByRole("button", { name: /Choose a Till Test Air/ }),
+      screen.getByRole("button", { name: tillAirRow("A") }),
     );
 
     // First of two. The dialog stays: the owner's ask is that a customer
@@ -1115,16 +1185,14 @@ describe("phone and desktop", () => {
     // clickable by clicking it through `pickFirstMachine`.
     await openCatalogue();
     expect(
-      screen.getByRole("button", { name: /Choose a Till Test Air/ }),
+      screen.getByRole("button", { name: tillAirRow("A") }),
     ).toBeInTheDocument();
   });
 
   it("puts it in a column on a desktop, with no Add product button", () => {
     useDesktopViewport();
     renderTill();
-    expect(
-      screen.getByRole("button", { name: /Choose a Till Test Air/ }),
-    ).toBeVisible();
+    expect(screen.getByRole("button", { name: tillAirRow("A") })).toBeVisible();
     expect(screen.queryByRole("button", { name: /Add product/ })).toBeNull();
   });
 

@@ -129,6 +129,7 @@ import type {
   MockDb,
   UnitStatus,
 } from "../../mock/seed.js";
+import { warehouseLabel } from "../../lib/warehouses.js";
 
 /** Rows the modal opens with — the owner's "typically three or four". */
 const BLANK_ROWS = 1;
@@ -1058,7 +1059,7 @@ export function InventoryPage() {
                   onChange={setLocationId}
                   options={db.warehouses
                     .filter((w) => w.active)
-                    .map((w) => ({ value: w.id, label: w.name }))}
+                    .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
                   style={{ width: "100%" }}
                 />
               </Form.Item>
