@@ -195,14 +195,24 @@ export function PurchaseLinesTable({
         .map((u) => u.row.unit?.price)
         .filter((p): p is number => typeof p === "number" && p > 0);
       const range = priceRange(asked);
+      if (range.count === 0 || range.single) {
+        return (
+          <Typography.Text type="secondary" style={{ whiteSpace: "nowrap" }}>
+            {range.count === 0 ? fmtNone() : fmtRp(range.min)}
+          </Typography.Text>
+        );
+      }
+      // A range is two figures on two lines: on one, it is twice the width
+      // the column was sized for and runs over Total beside it.
       return (
-        <Typography.Text type="secondary" style={{ whiteSpace: "nowrap" }}>
-          {range.count === 0
-            ? fmtNone()
-            : range.single
-              ? fmtRp(range.min)
-              : `${fmtRp(range.min)} – ${fmtRp(range.max)}`}
-        </Typography.Text>
+        <Flex vertical>
+          <Typography.Text type="secondary" style={{ whiteSpace: "nowrap" }}>
+            {`${fmtRp(range.min)} –`}
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ whiteSpace: "nowrap" }}>
+            {fmtRp(range.max)}
+          </Typography.Text>
+        </Flex>
       );
     }
     if (sellPriceOf === undefined || l.skuId === "") return null;
