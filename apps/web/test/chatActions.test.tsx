@@ -5,7 +5,7 @@
  * the price and the sentence carrying it in one press.
  */
 import { App as AntdApp } from "antd";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatAction } from "../src/lib/inboxApi.js";
@@ -125,5 +125,59 @@ describe("any other task", () => {
     draw([{ ...NEGOTIATION, status: "DONE" }]);
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("the one line under the conversation header", () => {
+  it("is one line for several tasks, and Open takes the first", async () => {
+    const user = userEvent.setup();
+    draw([NEGOTIATION, { ...NEGOTIATION, id: "a2", kind: "PRICE" }]);
+    // The first task's dialog opens by itself; close it to see the line.
+    const closes = within(await screen.findByRole("dialog")).getAllByRole(
+      "button",
+      { name: "Close" },
+    );
+    await user.click(closes[closes.length - 1]!);
+    const line = screen.getByRole("status", { name: "Needs a person" });
+    expect(line).toHaveTextContent("Negotiation");
+    expect(line).toHaveTextContent("Nego Air M1");
+    expect(line).toHaveTextContent("+1 more");
+    expect(within(line).getAllByRole("button", { name: "Open" })).toHaveLength(
+      1,
+    );
+    await user.click(within(line).getByRole("button", { name: "Open" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "MacBook Air M1 8/256",
+    );
+  });
+
+  it("carries a hand-over with no task, and Mark handled", async () => {
+    const user = userEvent.setup();
+    const onMarkHandled = vi.fn();
+    render(
+      <AntdApp>
+        <ActionItems
+          phone="628123"
+          actions={[]}
+          profile={null}
+          onChanged={vi.fn()}
+          handoff={{
+            topic: "stock",
+            summary: "Cari Air M2 baru",
+            forcedBy: null,
+            at: null,
+          }}
+          onMarkHandled={onMarkHandled}
+        />
+      </AntdApp>,
+    );
+    const line = screen.getByRole("status", { name: "Needs a person" });
+    expect(line).toHaveTextContent("Stock");
+    expect(line).toHaveTextContent("Cari Air M2 baru");
+    expect(within(line).queryByRole("button", { name: "Open" })).toBeNull();
+    await user.click(
+      within(line).getByRole("button", { name: "Mark handled" }),
+    );
+    expect(onMarkHandled).toHaveBeenCalled();
   });
 });

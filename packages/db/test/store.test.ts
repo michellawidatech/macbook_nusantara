@@ -300,6 +300,87 @@ describe("a till's commit", () => {
     expect(written["staff"]).toBe("Store Test");
   }, 180_000);
 
+  it("ends the customer's chatbot lead when they buy (chatbot v2)", async () => {
+    const shop = await loadDemo();
+    const unit = (shop["units"] as Row[]).find(
+      (u) => u["status"] === "TERSEDIA",
+    )!;
+    const buyer = (shop["customers"] as Row[]).find(
+      (c) => typeof c["phone"] === "string" && c["phone"] !== "",
+    )!;
+    const waId = String(buyer["phone"]).replace(/\D/g, "");
+    await db.waThreadMemory.deleteMany({ where: { from: waId } });
+    await db.waThreadMemory.create({
+      data: {
+        from: waId,
+        summaryTurns: 0,
+        clarifyCount: 0,
+        updatedAt: NOW,
+        leadScore: 90,
+        leadAt: new Date(NOW.getTime() - 3_600_000),
+      },
+    });
+    const serial = unit["serial"] as string;
+    const seq = (shop["events"] as Row[]).filter(
+      (e) => e["serial"] === serial,
+    ).length;
+    const code = "SI-2026/09-Tlead123";
+    const sale = {
+      id: "o_lead_test",
+      code,
+      ts: NOW.toISOString(),
+      customerId: buyer["id"],
+      serials: [serial],
+      prices: { [serial]: 5_000_000 },
+      discount: 0,
+      source: "OFFLINE",
+      payMethod: "TUNAI",
+      settled: true,
+      payments: [
+        {
+          id: "p_lead_test",
+          method: "TUNAI",
+          amount: 5_000_000,
+          state: "SETTLED",
+          at: NOW.toISOString(),
+        },
+      ],
+      total: 5_000_000,
+    };
+    const event = {
+      id: "ev_lead_test",
+      serial,
+      seq: seq + 1,
+      type: "TERJUAL",
+      at: NOW.toISOString(),
+      fromStatus: "TERSEDIA",
+      toStatus: "TERJUAL",
+      locationId: unit["locationId"],
+      note: `Sold on ${code}`,
+      refCode: code,
+      staff: "Michella",
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [], units: [unit], events: [] },
+          {
+            orders: [sale],
+            units: [{ ...unit, status: "TERJUAL" }],
+            events: [event],
+          },
+        ),
+      ),
+    });
+    const mem = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: waId },
+    });
+    expect(mem.leadClearedAt).not.toBeNull();
+    expect(mem.leadClearedAt!.getTime()).toBeGreaterThan(mem.leadAt!.getTime());
+    await db.waThreadMemory.deleteMany({ where: { from: waId } });
+  }, 180_000);
+
   /*
    * Counted products are quantities on `StockMove` (2026-09-19): a sale is an
    * `OrderItem` with no unit plus a TERJUAL move, and its cost reaches the

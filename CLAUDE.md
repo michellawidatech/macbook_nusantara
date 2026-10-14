@@ -40,7 +40,8 @@ Decisions that outlived those documents:
     it. `/stock/adjustment` redirects here. `?adjust=IN|OUT` opens the batch
     editor, which is how a posted stock opname records a late movement.
   - **Chatbot** (`/chat`) is the inbox and the knowledge base as two tabs.
-    `/chat/knowledge` redirects here.
+    `/chat/knowledge` redirects here. ⚠️ Four tabs since 2026-10-15 — see
+    "Chatbot v2" below.
 - **Price is per variant, not per serial** (owner revision 2026-08-27, which
   reverses the 2026-08-15 decision). `Sku.price` is the only sellable price;
   `Unit.price` and its CHECK are gone. QC no longer asks for a price and shows
@@ -2437,6 +2438,49 @@ Decisions that outlived those documents:
     `lookup_catalog` and the hand-over stay in the worker.
     ⚠️ The agent client uses the real `fetch`, never the tick's `fetchImpl` —
     that one is the Graph stub in tools/wa-local.
+
+  - **Steps 4–6 are in (2026-10-15).** ⚠️ v2 is behind `AppSetting
+    chatbot.pipeline` and stays **v1 until the owner switches it** in /chat →
+    Settings; both pipelines write an `AgentRun` per turn.
+    - **The Sales Advisor IS `converse`** — with `model`, `forcedToolUse:
+      false` (Sonnet 5.5 refuses `tool_choice: any`; plain text is read as a
+      reply citing `greeting`, which `checkReply` still holds to),
+      `excludeTools` (no POS tools) and `preloaded` (Operations' facts,
+      photos, bookings). Do not fork the loop: the v1 checks are the v2
+      checks because it is one loop.
+    - **A booking is two steps and the second is code.** Operations has
+      `propose_reservation` (holds nothing, 30 min, `assertSchedule` exported
+      from `packages/db` so it is refused for a hold's reasons);
+      `confirm_reservation` is in `CODE_ONLY_TOOLS`, never in a model's tool
+      list, and `runPipeline` calls it only on the router's `confirm` with a
+      proposal open. `/api/agent/v1` lets it through on the booking switch +
+      `writes`, not on `toolsFor`.
+    - ⚠️ **No model array reaches a query** (`tools.schema.test.ts`): the
+      new list arguments — `remember_customer`'s usage/apps/preferences/about
+      and `propose_reservation`'s serials — are comma-separated strings.
+    - The lead: router score ≥ threshold sets `leadAt` (agent role); staff's
+      `leadStaffAt`/`leadClearedAt` on the profile; a sale writes
+      `leadClearedAt` in the orders adapter. `isLead` is the one reading.
+    - **The /chat screen is four tabs** — Chat · Knowledge Base · Evaluation ·
+      Settings — and this REPLACES the 2026-08-26 "inbox and knowledge base as
+      two tabs". Chat is three columns (`ThreadList`, the conversation with
+      `ReplyRating` 👍/👎, `CustomerProfilePanel`); Settings holds the switches,
+      Testers, the pipeline, the lead threshold, the three agents' personas and
+      the `Simulator` (a dry run: no reserve, no profile, no run row). The old
+      "Fix this", the Context panel, the banners and stacked task cards are
+      gone; an open task is one line under the header (`ActionItems`).
+      ⚠️ Removed with them: the staff **directive** box (the column and the
+      worker's use of it are unchanged — nothing on the screen writes it now)
+      and the "customer since / orders" block.
+    - Server side: `apps/api/src/routes/inboxV2.ts` (read, lead, profile,
+      facts, media) and `chatV2.ts` (evaluations, agents, settings,
+      simulate); `.context/chatbot-v2-api-contract.md` was the contract.
+    - ⏳ **Step 7 (measure) needs a Console API key** —
+      `docs/chatbot-v2-design.md` §10 has the procedure and the SQL.
+  - ⚠️ `apps/web/test/transactionsPage.test.tsx` hard-coded `SI-2026/09-…`
+    codes and broke on 1 October: the demo seed numbers documents by their
+    month, relative to today. It finds seed sales by number now
+    (`seedCode`); write new seed-code assertions that way.
 
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's

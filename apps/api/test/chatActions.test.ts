@@ -330,10 +330,13 @@ describe("the customer profile", () => {
     const res = await request(app)
       .get(`/api/inbox/${PHONE}`)
       .set("Cookie", staffCookie);
+    // A budget saved before the range existed reads as a range of one.
     expect(res.body.profile).toMatchObject({
       name: "Budi",
       useCase: "editing video",
-      budget: "15000000",
+      budgetMin: "15000000",
+      budgetMax: "15000000",
+      facts: [],
     });
   });
 });

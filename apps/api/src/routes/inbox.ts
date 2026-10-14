@@ -56,6 +56,14 @@ import {
   phoneForms,
 } from "@nusantara/agent";
 import { ApiError, notFound } from "../errors.js";
+import {
+  evaluationsFor,
+  leadJson,
+  listExtras,
+  profileJson,
+  registerInboxV2,
+  reservationsFor,
+} from "./inboxV2.js";
 
 /**
  * A `wa_id` as Meta writes it: digits only, country code first, no `+`.
@@ -304,8 +312,28 @@ export function inboxRouter(db: PrismaClient): Router {
       const kindsOf = new Map<string, string[]>();
       for (const o of open)
         kindsOf.set(o.from, [...(kindsOf.get(o.from) ?? []), o.kind]);
+      // Chatbot v2: unread, the three tags and the best name (inboxV2.ts).
+      const extras = await listExtras(
+        db,
+        rows.map((r) => r.phone),
+      );
       const threads = rows
         .map((r) => ({
+          ...(() => {
+            const x = extras.get(r.phone);
+            const escalation =
+              r.handoffAt !== null || (kindsOf.get(r.phone) ?? []).length > 0;
+            return {
+              displayName: x?.displayName ?? null,
+              unread: x?.unread ?? 0,
+              tags: {
+                lead: x?.lead ?? false,
+                reservation: x?.reservation ?? false,
+                escalation,
+              },
+              leadScore: x?.leadScore ?? null,
+            };
+          })(),
           phone: r.phone,
           name: r.name,
           channel: "WHATSAPP" as const,
@@ -427,18 +455,17 @@ export function inboxRouter(db: PrismaClient): Router {
             take: DONE_ACTIONS_SHOWN,
           }),
         ]).then(([o, d]) => [...o, ...d]),
-        // What the customer told the bot about themselves (remember_customer).
-        db.customerProfile.findUnique({
-          where: { from: phone.data },
-          select: {
-            name: true,
-            useCase: true,
-            budget: true,
-            currentDevice: true,
-            preference: true,
-            updatedAt: true,
-          },
-        }),
+        // What the customer told the bot about themselves (remember_customer),
+        // and what a colleague added — the v2 profile (inboxV2.ts).
+        profileJson(db, phone.data),
+      ]);
+      const [lead, reservations, evaluations] = await Promise.all([
+        leadJson(db, phone.data),
+        reservationsFor(db, phone.data),
+        evaluationsFor(
+          db,
+          messages.filter((m) => m.replyText).map((m) => m.id),
+        ),
       ]);
 
       // Counts rather than rows: the panel says "3 pesanan", and shipping the
@@ -545,16 +572,11 @@ export function inboxRouter(db: PrismaClient): Router {
          * What the customer has told the bot about themselves — their own
          * words, unverified. Null until they have said anything.
          */
-        profile: profile
-          ? {
-              name: profile.name,
-              useCase: profile.useCase,
-              budget: profile.budget?.toString() ?? null,
-              currentDevice: profile.currentDevice,
-              preference: profile.preference,
-              updatedAt: profile.updatedAt.toISOString(),
-            }
-          : null,
+        profile,
+        /** The 🔥 tag: whether, the router's last score, and whose. */
+        lead,
+        /** Open holds under this number, by the bot or at the counter. */
+        reservations,
         messages: messages.map((m) => ({
           id: m.id,
           waMessageId: m.waMessageId,
@@ -577,6 +599,8 @@ export function inboxRouter(db: PrismaClient): Router {
                 byAgent: m.answeredByAgent,
                 by: m.answeredBy?.name ?? null,
                 at: m.answeredAt?.toISOString() ?? null,
+                /** The newest staff verdict on this reply (Evaluation). */
+                evaluation: evaluations.get(m.id) ?? null,
               }
             : null,
         })),
@@ -967,6 +991,8 @@ export function inboxRouter(db: PrismaClient): Router {
       next(err);
     }
   });
+
+  registerInboxV2(router, db);
 
   return router;
 }

@@ -44,6 +44,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // The shared test database must not stay on v2: every other worker suite
+  // drafts on whatever pipeline the setting names.
+  await owner.appSetting.deleteMany({ where: { key: PIPELINE_SETTING_KEY } });
   await owner.$disconnect();
   await agent.$disconnect();
 });

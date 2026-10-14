@@ -31,6 +31,7 @@ import { z } from "zod";
 import type { PrismaClient } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import { ApiError } from "../errors.js";
+import { registerChatV2 } from "./chatV2.js";
 import {
   CAPABILITY_SETTING_KEYS,
   MAX_TESTERS,
@@ -629,6 +630,8 @@ export function chatRouter({
       next(err);
     }
   });
+
+  registerChatV2(router, { db, logger, anthropic, ownerOnly });
 
   return router;
 }

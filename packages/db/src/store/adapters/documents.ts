@@ -1272,6 +1272,17 @@ export const orders: Adapter<"orders"> = {
               unitRows[0]?.locationId ?? (await defaultLocationId(ctx)),
           },
         });
+        // Chatbot v2: a sale ends the customer's 🔥 lead (owner, 2026-10-14:
+        // "it will clear at sale"). Their WhatsApp thread is keyed by the
+        // bare digits of the number on the order; nothing happens for a
+        // customer who never wrote in.
+        const waId = customer?.phone?.replace(/\D/g, "") ?? "";
+        if (waId) {
+          await tx.waThreadMemory.updateMany({
+            where: { from: waId },
+            data: { leadClearedAt: ctx.now },
+          });
+        }
       } else {
         await tx.order.update({ where: { id: n.id }, data });
       }

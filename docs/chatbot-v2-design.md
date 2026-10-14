@@ -332,25 +332,60 @@ Top tabs: **Chat · Knowledge Base · Evaluation · Settings** *(owner)*.
 
 Each step ships on its own and leaves the bot working.
 
-1. **Migration + layout.** The additive schema and the full-width app.
-   ✅ Done 2026-10-14 (`20261014120000_chatbot_v2_threads_profiles_and_evaluation`).
-2. **Throughput.** The thread lease, a parallel pool and the shorter debounce,
-   on today's single agent. This fixes the 25-concurrent problem first.
-   ✅ Done 2026-10-15. Waits are 3 s (question) / 6 s / ~11 s (filler) /
-   20 s ("nanti"). ⚠️ Found on the way: the Mac mini's worker connects as
-   `nusantara_app` (common.env), not `nusantara_agent`, so the summary pass's
-   updates have been refused in production. `worker.env.example` now sets
-   the agent role; the lease is granted to both so neither setup stalls.
-3. **REST boundary.** `/api/agent/v1/*` with the scoped token. Today's tools
-   switch to calling it.
-   ✅ Done 2026-10-15 — see §4. Switched on by `AGENT_API_URL` +
-   `AGENT_API_SECRET` in worker.env and the same secret in api.env.
-4. **Three agents.** Router, Operations and Advisor, plus `AgentRun` traces,
-   behind a setting (`chatbot.pipeline = v1|v2`) so the owner can switch back
-   in one click.
-5. **Appointment flow.** Proposal → confirm, plus the lead tag and its clear on
-   sale.
-6. **UI.** Chat with three columns and tags, the profile panel, Agents with the
-   simulator, Evaluation, Settings.
-7. **Measure.** Run on the sandbox (`tools/wa-local`) with the testers:
-   latency, cost per turn and the evaluation list. Only then go live.
+1. **Migration + layout.** ✅ 2026-10-14
+   (`20261014120000_chatbot_v2_threads_profiles_and_evaluation`); the app is
+   full width.
+2. **Throughput.** ✅ 2026-10-15. Thread lease, 8 lanes, 16 a tick; waits 3 s
+   (question) / 6 s / ~11 s (filler) / 20 s ("nanti"). The worker runs as
+   `nusantara_agent` and refuses any other role in production —
+   `docs/worker-agent-role.md` is the Mac mini step.
+3. **REST boundary.** ✅ 2026-10-15 — see §4. On with `AGENT_API_URL` +
+   `AGENT_API_SECRET` (worker.env) and the same secret in api.env.
+4. **Three agents.** ✅ 2026-10-15. `packages/agent/src/pipeline.ts`
+   (`agents.ts` holds names, tasks, models, default prompts and the price
+   table). Behind `AppSetting chatbot.pipeline` — **v1 until the owner
+   switches it in Settings**, and switching back is the same switch. Every
+   turn (v1 too) writes an `AgentRun` with its steps, tokens, cost and latency.
+5. **Appointment flow.** ✅ 2026-10-15. `propose_reservation` (Operations,
+   holds nothing, 30-minute life, same schedule rules as a hold) →
+   `confirm_reservation` (code only, on the router's `confirm` with a proposal
+   open). The lead: the router's score sets the bot's half at the threshold
+   (Settings, default 60); staff set or clear it on the profile; a sale clears
+   it (`documents.ts` adapter).
+6. **UI.** ✅ 2026-10-15. Chat (list with tags and unread · bubbles with
+   👍/👎 · profile), Knowledge Base (unchanged), Evaluation, Settings (switches,
+   Testers, pipeline, lead threshold, the three agents' personas, simulator).
+   The API side is `apps/api/src/routes/inboxV2.ts` and `chatV2.ts`.
+7. **Measure.** ⏳ Needs a Console API key — see below. Then go live.
+
+## 10. Measuring before go-live (step 7)
+
+Nothing here can be measured with a Claude Code / Pro / Max login: Anthropic
+refuses those tokens outside Claude Code. With a Console key:
+
+1. Put `ANTHROPIC_API_KEY` in the environment `tools/wa-local/up` reads (or the
+   sandbox's api.env/worker.env) and start it on `nusantara_pos_chatbot`.
+2. In /chat → Settings switch **Pipeline** to *Three agents (v2)*.
+3. Use the **simulator** for the scripted cases (a greeting; "ada macbook pro
+   16 m3?"; "minta fotonya"; "besok jam 2 saya ke toko, nama Budi" then "iya";
+   "kalau 30jt boleh?"; a question only the knowledge base answers). Each bot
+   bubble shows its cost, latency and steps.
+4. Then real chats from the tester numbers through the WhatsApp link. Every
+   turn is an `AgentRun`:
+
+   ```sql
+   SELECT pipeline, count(*) AS turns,
+          round(avg("latencyMs")) AS avg_ms,
+          percentile_disc(0.9) WITHIN GROUP (ORDER BY "latencyMs") AS p90_ms,
+          round(avg("costMicros") / 1e6, 4) AS avg_usd,
+          round(sum("costMicros") / 1e6, 2) AS total_usd,
+          round(100.0 * sum("cachedTokens") / nullif(sum("inputTokens"), 0)) AS cached_pct
+     FROM "AgentRun"
+    WHERE NOT "dryRun" AND "createdAt" > now() - interval '1 day'
+    GROUP BY pipeline;
+   ```
+
+   The design's targets: a reply within ~10 s of the customer's last message
+   (the wait plus `avg_ms`), and about $0.005–0.012 a turn.
+5. Rate the replies (👍/👎) and work through Evaluation → Needs review before
+   switching production to v2.

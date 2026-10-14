@@ -162,6 +162,13 @@ export interface ProTableProps<T> extends Omit<
    * is a picker that looks empty.
    */
   persistKey?: string;
+  /**
+   * What the header filters start at, column key → picked values (the facet
+   * values, so the labels a `facetValue` gives). For a list whose useful
+   * view is a slice — the chatbot's evaluations open on "bad, still open".
+   * Shown as chips like any other filter, so it is one × away from the lot.
+   */
+  defaultFilters?: Record<string, string[]>;
 }
 
 /** The filter map as the header writes it: column key → picked values. */
@@ -290,6 +297,7 @@ export function ProTable<T extends object>({
   resetKey,
   rowKey,
   persistKey,
+  defaultFilters,
   ...rest
 }: ProTableProps<T>) {
   const { compact } = useLayoutMode();
@@ -306,7 +314,7 @@ export function ProTable<T extends object>({
   );
   const [filters, setFilters] = usePersistentState<Record<string, string[]>>(
     kept("filters"),
-    {},
+    () => defaultFilters ?? {},
     parseFilters,
   );
   const [ranges, setRanges] = usePersistentState<Record<string, DayRange>>(

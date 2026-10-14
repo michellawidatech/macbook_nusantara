@@ -50,6 +50,33 @@ export interface InboxThread {
    * must say so rather than looking functional.
    */
   windowClosesAt: string | null;
+  /** Customer.name, else the name they told the bot, else Meta's. */
+  displayName: string | null;
+  /** Inbound messages after the staff read marker. */
+  unread: number;
+  /** The three markers the list draws as icons. */
+  tags: ThreadTags;
+  /** The router's last 0–100 lead score, or null. */
+  leadScore: number | null;
+}
+
+export interface ThreadTags {
+  /** Marked as a lead, by the bot or by staff. */
+  lead: boolean;
+  /** An open (TERJADWAL) hold for this number. */
+  reservation: boolean;
+  /** Handed to a person, or an open action item. */
+  escalation: boolean;
+}
+
+export type EvaluationRating = "GOOD" | "BAD";
+export type EvaluationStatus = "OPEN" | "APPLIED" | "DISMISSED";
+
+/** Staff's verdict on one bot reply, as the bubble shows it. */
+export interface ReplyEvaluation {
+  id: string;
+  rating: EvaluationRating;
+  status: EvaluationStatus;
 }
 
 /** What the shop said back, hanging off the message it answered. */
@@ -59,6 +86,8 @@ export interface InboxReply {
   /** Staff name, or null when the bot wrote it. */
   by: string | null;
   at: string | null;
+  /** Staff's verdict on this reply, or null while nobody has rated it. */
+  evaluation?: ReplyEvaluation | null;
 }
 
 export interface InboxMessage {
@@ -104,6 +133,25 @@ export interface InboxConversation {
   actions: ChatAction[];
   /** What the customer told the bot about themselves. Null until they did. */
   profile: CustomerProfile | null;
+  /** Whether this thread is a lead, and whose call that was. */
+  lead: LeadState;
+  /** The customer's open holds. */
+  reservations: InboxReservation[];
+}
+
+export interface LeadState {
+  on: boolean;
+  /** The router's last 0–100 score. */
+  score: number | null;
+  by: "BOT" | "STAFF" | null;
+}
+
+export interface InboxReservation {
+  code: string;
+  /** ISO — the visit time, when one was agreed. */
+  scheduledFor: string | null;
+  status: "TERJADWAL";
+  units: Array<{ serial: string | null; name: string }>;
 }
 
 export type ChatActionKind =
@@ -139,16 +187,51 @@ export interface ChatAction {
   resolvedBy: string | null;
 }
 
-/** The customer's own words about themselves. Unverified. */
+export type ProfileFactKind = "USAGE" | "APP" | "PREFERENCE" | "ABOUT";
+
+/** One thing the customer said about themselves, as a tag. */
+export interface ProfileFact {
+  id: string;
+  kind: ProfileFactKind;
+  value: string;
+  source: "BOT" | "STAFF";
+}
+
+/**
+ * The customer's own words about themselves, plus the bot's estimates.
+ * Unverified. Money is whole rupiah as a string.
+ */
 export interface CustomerProfile {
   name: string | null;
+  /** The bot's guess — always shown labelled as an estimate. */
+  ageEstimate: string | null;
+  /** Job or school, the bot's guess. */
+  occupation: string | null;
+  budgetMin: string | null;
+  budgetMax: string | null;
+  /** The old free-text "use", still shown if set. */
   useCase: string | null;
-  /** Whole rupiah as a string. */
-  budget: string | null;
   currentDevice: string | null;
+  /** The old free-text preference. */
   preference: string | null;
+  facts: ProfileFact[];
   updatedAt: string;
 }
+
+/** The fields staff may correct in place. Budget as a rupiah string or null. */
+export type ProfilePatch = Partial<
+  Pick<
+    CustomerProfile,
+    | "name"
+    | "ageEstimate"
+    | "occupation"
+    | "budgetMin"
+    | "budgetMax"
+    | "useCase"
+    | "currentDevice"
+    | "preference"
+  >
+>;
 
 /**
  * The per-thread bot switch, and who last pressed it.
@@ -251,3 +334,49 @@ export const finishAction = (phone: string, id: string) =>
     `/api/inbox/${encodeURIComponent(phone)}/actions/${encodeURIComponent(id)}/done`,
     { method: "POST" },
   );
+
+/** Every message up to now counts as read by staff. */
+export const markRead = (phone: string) =>
+  api<{ ok: true }>(`/api/inbox/${encodeURIComponent(phone)}/read`, {
+    method: "POST",
+  });
+
+/** Staff marks this thread a lead, or clears it (both halves). */
+export const setLead = (phone: string, lead: boolean) =>
+  api<{ lead: boolean }>(`/api/inbox/${encodeURIComponent(phone)}/lead`, {
+    method: "PUT",
+    body: { lead },
+  });
+
+/** Correct what the bot recorded about this customer. */
+export const patchProfile = (phone: string, body: ProfilePatch) =>
+  api<CustomerProfile>(`/api/inbox/${encodeURIComponent(phone)}/profile`, {
+    method: "PATCH",
+    body,
+  });
+
+export const addProfileFact = (
+  phone: string,
+  body: { kind: ProfileFactKind; value: string },
+) =>
+  api<{ fact: ProfileFact }>(
+    `/api/inbox/${encodeURIComponent(phone)}/profile/facts`,
+    { method: "POST", body },
+  );
+
+/** Soft: the server stamps `removedAt`. */
+export const removeProfileFact = (phone: string, id: string) =>
+  api<{ ok: true }>(
+    `/api/inbox/${encodeURIComponent(phone)}/profile/facts/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+
+/**
+ * Queue a unit's QC photos (at most three) to this customer. 409 when the
+ * 24-hour window has closed, 404 for an unknown serial or one with no photos.
+ */
+export const attachMedia = (phone: string, serial: string) =>
+  api<{ queued: number }>(`/api/inbox/${encodeURIComponent(phone)}/media`, {
+    method: "POST",
+    body: { serial },
+  });

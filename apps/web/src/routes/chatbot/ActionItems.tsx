@@ -3,8 +3,8 @@
  * *"show an interactive modal for any action the staff need to do, so they
  * don't have to re-read the entire conversation"*.
  *
- * One row per open task above the messages — on a phone too, where the
- * context panel is not drawn — and a dialog behind each. A negotiation's
+ * One line under the conversation header — on a phone too — and a dialog
+ * behind each task. A negotiation's
  * dialog is a form: our price, the unit's cost (modal), the customer's offer
  * and a box for the shop's answer, which sends the offer and closes the task
  * in one press. Every other kind shows the bot's note, the customer's words
@@ -37,7 +37,17 @@ import {
   type ChatAction,
   type ChatActionKind,
   type CustomerProfile,
+  type Handoff,
 } from "../../lib/inboxApi.js";
+import { handoffTopicLabel } from "../../lib/handoffTopics.js";
+
+/** "Rp a – Rp b", one figure, or None. */
+export function budgetText(min: string | null, max: string | null): string {
+  if (min && max && min !== max)
+    return `${fmtRp(Number(min))} – ${fmtRp(Number(max))}`;
+  const one = min ?? max;
+  return one ? fmtRp(Number(one)) : fmtNone();
+}
 
 export function actionKindLabel(t: TFunction, kind: ChatActionKind): string {
   switch (kind) {
@@ -92,13 +102,28 @@ export interface ActionItemsProps {
   profile: CustomerProfile | null;
   /** Refetch the conversation after a write. */
   onChanged: () => void;
+  /** The thread's open hand-over, drawn on the same line when there is one. */
+  handoff?: Handoff | null;
+  /** "Mark handled": closes the hand-over and every task at once. */
+  onMarkHandled?: () => void;
+  marking?: boolean;
 }
 
+/**
+ * ONE line under the conversation header (owner ask 2026-10-15) — an orange
+ * tag, the bot's note and *Open*. It replaced a yellow banner and a stack of
+ * cards, which between them pushed the conversation half off the screen.
+ * More than one open task says "+n more"; *Open* takes the oldest, and the
+ * next one is on the line once that is done.
+ */
 export function ActionItems({
   phone,
   actions,
   profile,
   onChanged,
+  handoff = null,
+  onMarkHandled,
+  marking = false,
 }: ActionItemsProps) {
   const { t } = useTranslation();
   const open = actions.filter((a) => a.status === "OPEN");
@@ -119,42 +144,61 @@ export function ActionItems({
   }, [phone, open.map((a) => a.id).join(",")]);
 
   const current = actions.find((a) => a.id === openId) ?? null;
+  const first = open[0];
 
-  if (open.length === 0) return null;
+  if (!first && !handoff) return null;
+  const label = first
+    ? actionKindLabel(t, first.kind)
+    : handoffTopicLabel(t, handoff!.topic);
+  const summary = first?.summary ?? handoff?.summary ?? "";
   return (
     <>
-      <Flex vertical gap={6} style={{ marginBottom: 12 }}>
-        {open.map((a) => (
-          <Alert
-            key={a.id}
-            type={a.kind === "NEGOTIATION" ? "warning" : "info"}
-            showIcon={false}
-            title={
-              <Flex gap={8} align="center" wrap>
-                <ActionKindTag kind={a.kind} />
-                <Typography.Text>{a.summary}</Typography.Text>
-                {a.kind === "NEGOTIATION" && a.askPrice && (
-                  <Typography.Text type="secondary">
-                    {t("chatAction.offers", "offers {{price}}", {
-                      price: money(a.askPrice),
-                    })}
-                  </Typography.Text>
-                )}
-              </Flex>
-            }
-            action={
-              <Button
-                size="small"
-                type="primary"
-                onClick={() => setOpenId(a.id)}
-              >
-                {a.kind === "NEGOTIATION"
-                  ? t("chatAction.answerOffer", "Answer offer")
-                  : t("chatAction.open", "Open")}
-              </Button>
-            }
-          />
-        ))}
+      <Flex
+        align="center"
+        gap={8}
+        role="status"
+        aria-label={t("chatAction.lineLabel", "Needs a person")}
+        style={{ minWidth: 0 }}
+      >
+        <Tag color="orange" style={{ marginInline: 0, flexShrink: 0 }}>
+          {label}
+        </Tag>
+        <Typography.Text
+          ellipsis={{ tooltip: summary }}
+          style={{ flex: 1, minWidth: 0 }}
+        >
+          {summary}
+          {first?.kind === "NEGOTIATION" && first.askPrice
+            ? ` · ${t("chatAction.offers", "offers {{price}}", {
+                price: money(first.askPrice),
+              })}`
+            : ""}
+        </Typography.Text>
+        {open.length > 1 && (
+          <Typography.Text type="secondary" style={{ flexShrink: 0 }}>
+            {t("chatAction.more", "+{{n}} more", { n: open.length - 1 })}
+          </Typography.Text>
+        )}
+        {first && (
+          <Button
+            size="small"
+            type="primary"
+            style={{ flexShrink: 0 }}
+            onClick={() => setOpenId(first.id)}
+          >
+            {t("chatAction.open", "Open")}
+          </Button>
+        )}
+        {handoff && onMarkHandled && (
+          <Button
+            size="small"
+            style={{ flexShrink: 0 }}
+            loading={marking}
+            onClick={onMarkHandled}
+          >
+            {t("chat.markHandled", "Mark handled")}
+          </Button>
+        )}
       </Flex>
       {current && (
         <ActionModal
@@ -340,21 +384,30 @@ function ActionModal({
           <Descriptions.Item label={t("chatAction.theyWrote", "They wrote")}>
             {action.customerText?.trim() || fmtNone()}
           </Descriptions.Item>
-          {profile && (profile.name || profile.useCase || profile.budget) && (
-            <Descriptions.Item label={t("chatAction.aboutThem", "About them")}>
-              {[
-                profile.name,
-                profile.useCase,
-                profile.budget
-                  ? t("chatAction.budget", "budget {{budget}}", {
-                      budget: fmtRp(Number(profile.budget)),
-                    })
-                  : null,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </Descriptions.Item>
-          )}
+          {profile &&
+            (profile.name ||
+              profile.useCase ||
+              profile.budgetMin ||
+              profile.budgetMax) && (
+              <Descriptions.Item
+                label={t("chatAction.aboutThem", "About them")}
+              >
+                {[
+                  profile.name,
+                  profile.useCase,
+                  profile.budgetMin || profile.budgetMax
+                    ? t("chatAction.budget", "budget {{budget}}", {
+                        budget: budgetText(
+                          profile.budgetMin,
+                          profile.budgetMax,
+                        ),
+                      })
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </Descriptions.Item>
+            )}
         </Descriptions>
 
         {negotiation && (
