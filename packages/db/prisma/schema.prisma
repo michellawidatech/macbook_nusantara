@@ -1601,7 +1601,12 @@ model WaThreadMemory {
   /// pass skips it entirely and answers every other thread as before. Defaults
   /// true, so a number nobody has ruled on is answered by the bot — the
   /// behaviour every thread had before this column existed.
-  autoReply        Boolean   @default(true)
+  /// ⚠️ `dbgenerated`, not `@default(true)`: with a plain default Prisma
+  /// sends `true` in every INSERT, and the agent role holds no INSERT on this
+  /// staff-owned column — so every memory row the worker tried to create was
+  /// refused (found 2026-10-15, apps/worker/test/agentRole.test.ts). The
+  /// database's own DEFAULT true is unchanged; Prisma now leaves it to it.
+  autoReply        Boolean   @default(dbgenerated("true"))
   autoReplyAt      DateTime?
   autoReplyById    String?
   /// agent-owned. The worker's claim on this thread: only the holder may

@@ -21,6 +21,7 @@ import { hasCredential } from "@nusantara/agent";
 import { canSend } from "@nusantara/whatsapp";
 import { loadEnvFile, loadWorkerConfig } from "./config.js";
 import { run } from "./loop.js";
+import { checkDatabaseRole } from "./role.js";
 
 /** Resolved from this file, not from `process.cwd()` — see server.ts in the webhook. */
 function defaultEnvFile(): string {
@@ -78,9 +79,18 @@ export function main(): void {
     requestStop = resolve;
   });
 
-  logger.info({ evt: "worker.started" }, "worker started");
-
-  void run({ db, logger, config, stop })
+  // Before the first pass, so a worker on the wrong role writes nothing at
+  // all rather than everything but the columns its passes depend on — and
+  // `run` is never entered, not even for one tick.
+  void checkDatabaseRole(db, process.env["APP_ENV"] ?? "dev", logger)
+    .then(async (ok) => {
+      if (!ok) {
+        process.exitCode = 78; // EX_CONFIG, as ops/run uses for bad config
+        return;
+      }
+      logger.info({ evt: "worker.started" }, "worker started");
+      await run({ db, logger, config, stop });
+    })
     .catch((err: unknown) => {
       logger.error(
         {

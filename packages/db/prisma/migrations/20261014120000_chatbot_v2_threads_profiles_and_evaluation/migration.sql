@@ -331,15 +331,10 @@ GRANT UPDATE ("leaseUntil", "leasedBy", "leadScore", "leadAt")
 GRANT UPDATE ("leadStaffAt", "leadStaffById", "leadClearedAt", "readAt")
   ON "WaThreadMemory" TO nusantara_app;
 
--- ⚠️ The lease alone is ALSO granted to nusantara_app. It is coordination
--- between worker processes, not content either side owns, and on 2026-10-14
--- the Mac mini's worker connects with common.env's DATABASE_URL — that is,
--- as nusantara_app — although every pass in apps/worker is written for
--- nusantara_agent (worker.env.example now says so). Without this a deploy
--- that has not repointed the worker would claim no thread and answer nobody.
--- (nusantara_app already holds table-level INSERT here, so the INSERT path
--- needs no grant.)
-GRANT UPDATE ("leaseUntil", "leasedBy") ON "WaThreadMemory" TO nusantara_app;
+-- The lease is the worker's alone. The worker runs as nusantara_agent and the
+-- POS as nusantara_app, and they stay separate (owner, 2026-10-15); a worker
+-- started as any other role refuses to run in production
+-- (apps/worker/src/role.ts, docs/worker-agent-role.md).
 
 -- Profile facts: the bot adds what it hears, staff add and take back.
 GRANT SELECT, INSERT, UPDATE ON "CustomerProfileFact" TO nusantara_agent, nusantara_app;

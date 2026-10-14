@@ -2404,13 +2404,20 @@ Decisions that outlived those documents:
     `test/lease.test.ts` proves one call per thread under overlap, each reply
     carrying only its own customer's words, and the claim as both roles.
     Waits are now 3 s / 6 s / ~11 s / 20 s (`debounce.ts`, was 4/10/18/45).
-    ⚠️ **The Mac mini's worker connects as `nusantara_app`** (common.env's
-    `DATABASE_URL`; worker.env never overrode it), although every pass is
-    written for `nusantara_agent` — so in production the summary pass's
-    updates are refused and swallowed. `worker.env.example` now carries the
-    agent-role URL; the Mac mini's own worker.env needs the same line, with the
-    agent password from go-live step 2.4. The lease is granted to both roles so
-    neither setup stops answering.
+    ⚠️ **The worker logs in as `nusantara_agent`, and the roles stay
+    separate** (owner, 2026-10-15). The Mac mini's worker had inherited
+    common.env's `DATABASE_URL` (`nusantara_app`); `docs/worker-agent-role.md`
+    is the step-by-step switch, done on the Mac mini BEFORE the chatbot v2 tag.
+    From that release the worker **refuses to start in prod as any other
+    role** (`apps/worker/src/role.ts`, exit 78). The lease is the agent's
+    alone. `apps/worker/test/agentRole.test.ts` runs every pass as
+    nusantara_agent — no worker test did before, and it found that the agent
+    role could never CREATE a memory row: Prisma sent `autoReply`'s
+    `@default(true)` in every INSERT and the role holds no INSERT on that
+    staff-owned column. It is `@default(dbgenerated("true"))` now (same DB
+    default, no migration); ⚠️ `prisma migrate diff` therefore also emits a
+    no-op `ALTER COLUMN "autoReply" SET DEFAULT true` — strip it like the two
+    index drops.
     The webhook does NOT refuse a non-numeric `from` (the design's first draft
     did): WhatsApp usernames may send a sender id that is not a phone number.
   - **Step 3 is in (2026-10-15): the POS behind `/api/agent/v1`.** The POS

@@ -167,10 +167,9 @@ describe("the thread lease", () => {
     });
   });
 
-  // The Mac mini's worker logs in as nusantara_app today and is meant to log
-  // in as nusantara_agent (worker.env.example). The lease must work as both,
-  // or a deploy answers nobody.
-  for (const role of ["nusantara_agent", "nusantara_app"]) {
+  // The role production gives the worker (docs/worker-agent-role.md). That
+  // nusantara_app is refused is agentRole.test.ts's claim.
+  for (const role of ["nusantara_agent"]) {
     it(`claims and releases as ${role}`, async () => {
       const client = new PrismaClient({
         datasources: { db: { url: asRole(role) } },
