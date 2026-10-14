@@ -156,6 +156,73 @@ describe("the chatbot's switches", () => {
   });
 });
 
+describe("the tester numbers", () => {
+  it("start empty, and staff may read them", async () => {
+    const res = await request(app)
+      .get("/api/chat/testers")
+      .set("Cookie", staffCookie);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ numbers: [] });
+  });
+
+  it("are the owner's to change", async () => {
+    const res = await request(app)
+      .put("/api/chat/testers")
+      .set("Cookie", staffCookie)
+      .send({ numbers: ["08980092978"] });
+    expect(res.status).toBe(403);
+  });
+
+  it("are stored as wa_ids however they were typed, once each", async () => {
+    const res = await request(app)
+      .put("/api/chat/testers")
+      .set("Cookie", ownerCookie)
+      .send({ numbers: ["0898-0092-978", "+62 898 0092 978", "628111000888"] });
+    expect(res.status).toBe(200);
+    expect(res.body.numbers).toEqual(["628980092978", "628111000888"]);
+
+    const read = await request(app)
+      .get("/api/chat/testers")
+      .set("Cookie", staffCookie);
+    expect(read.body.numbers).toEqual(["628980092978", "628111000888"]);
+  });
+
+  it("refuse an entry that is not a number, rather than dropping it", async () => {
+    const res = await request(app)
+      .put("/api/chat/testers")
+      .set("Cookie", ownerCookie)
+      .send({ numbers: ["08980092978", "ersen"] });
+    expect(res.status).toBe(400);
+  });
+
+  it("mark the message a conversation started over at", async () => {
+    const at = new Date();
+    await db.waMessage.create({
+      data: {
+        waMessageId: "wamid.CA.reset",
+        from: PHONE,
+        text: "/new",
+        msgType: "text",
+        ts: at,
+        direction: "IN",
+        status: "DIJAWAB_AGEN",
+        intent: "sistem:reset",
+        entities: {},
+        answeredByAgent: true,
+        answeredAt: at,
+        replyText: "Chat baru dimulai",
+      },
+    });
+    const res = await request(app)
+      .get(`/api/inbox/${PHONE}`)
+      .set("Cookie", staffCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.messages.map((m: { reset: boolean }) => m.reset)).toEqual([
+      true,
+    ]);
+  });
+});
+
 describe("action items on a conversation", () => {
   it("are listed with the figures a colleague needs, money as strings", async () => {
     await handedOver("kalau 7jt boleh kak?");

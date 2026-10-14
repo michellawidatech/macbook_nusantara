@@ -55,10 +55,10 @@ WhatsApp ─▶ webhook ─▶ WaMessage (BARU)
 ## Retrieval from documents
 
 **Source.** `AgentKnowledge` rows: question, answer, active. Staff edit them on
-/chat → Knowledge; *Import from a document* takes a pasted `Q:`/`A:` sheet;
-`ops/run knowledge <file>` loads one on the server. Both read the text with
-`parseQaText` (packages/domain/src/qaText.ts), skip a question already there,
-and show nothing they have not been asked to save.
+/chat → Knowledge; *Import from a file* takes a spreadsheet of two columns
+(`qaFromRows`, packages/domain/src/qaSheet.ts) and updates an answer the file
+changed; `ops/run knowledge <file>` loads a `Q:`/`A:` document on the server
+(`parseQaText`) and skips a question already there.
 
 **Ranking** (packages/agent/src/retrieval.ts). Customers do not type the
 owner's questions — they type "garansinya brp lama", "co dari shopee bs ambil
@@ -158,8 +158,11 @@ messages against the dev database: 17 calls, ~$0.03 in all.
 
 ## Loading and changing the knowledge
 
-- First load: `ops/run knowledge <file> --by ersen` on the server, or paste the
-  sheet into /chat → Knowledge → Import from a document.
+- First load: `ops/run knowledge <file> --by ersen` on the server (the `Q:` /
+  `A:` document), or /chat → Knowledge → **Import from a file**: an .xlsx or
+  .csv with the question in column A and the answer in column B (2026-10-14).
+  *Download .xlsx* gives the current base in that shape; uploading an edited
+  copy adds what is new and updates what changed, after a preview.
 - Edit an answer, or switch one off, on /chat → Knowledge. The next reply uses
   it; nothing restarts.
 - A question customers keep asking that ends in a hand-over is a missing

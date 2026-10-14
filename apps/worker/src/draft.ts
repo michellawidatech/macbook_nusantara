@@ -46,6 +46,8 @@ import {
   MAX_CORRECTIONS,
   buildAgentPrompt,
   computeWaitMs,
+  isResetCommand,
+  resetPointFor,
   converse,
   hasCredential,
   anthropicClient,
@@ -77,6 +79,7 @@ import type { Logger } from "@nusantara/logging";
 import { isWithinWindow } from "@nusantara/whatsapp";
 import { DEFAULT_PERSONA } from "@nusantara/agent";
 import { refreshOffers, upsertChatAction } from "./actions.js";
+import { resetPass } from "./reset.js";
 
 export interface DraftDeps {
   readonly db: PrismaClient;
@@ -318,6 +321,11 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   const maxBatch = deps.maxBatch ?? DEFAULT_MAX_BATCH;
   const skewMs = deps.skewToleranceMs ?? DEFAULT_SKEW_MS;
 
+  // A tester's `/new` (reset.ts), before anything reads the thread: it closes
+  // the tasks `refreshOffers` would otherwise refresh and lifts the hold the
+  // candidate query below would otherwise stop at.
+  const { testers } = await resetPass({ db, logger, now });
+
   // Code only, no model, so it runs with or without a credential: a customer
   // who changes their offer while a colleague is still looking moves the
   // figure on the task that colleague has open.
@@ -410,6 +418,11 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         select: { id: true, ts: true, text: true, msgType: true },
       });
       if (batch.length === 0) continue;
+      // A `/new` that landed after this pass's reset ran. It is a command,
+      // not a question: leave the thread for the next pass, which resets it
+      // first, rather than hand the model "/new" to answer.
+      if (testers.includes(from) && batch.some((m) => isResetCommand(m.text)))
+        continue;
       const batchIds = batch.map((m) => m.id);
       const anchor = batch[batch.length - 1]!;
       anchorId = anchor.id;
@@ -435,8 +448,16 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         continue;
       }
 
+      // Since a `/new`, when this thread has had one: the turns before it
+      // are still in the inbox and are not this conversation's.
+      const resetAt = await resetPointFor(db, from);
       const history = await db.waMessage.findMany({
-        where: { from, direction: "IN", replyText: { not: null } },
+        where: {
+          from,
+          direction: "IN",
+          replyText: { not: null },
+          ...(resetAt ? { answeredAt: { gt: resetAt } } : {}),
+        },
         orderBy: [{ answeredAt: "desc" }, { ts: "desc" }],
         take: HISTORY_TURNS,
         select: { text: true, replyText: true },

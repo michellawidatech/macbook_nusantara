@@ -109,6 +109,18 @@ export {
 } from "./retrieval.js";
 export { loadCapabilities } from "./switches.js";
 export {
+  MAX_TESTERS,
+  RESET_INTENT,
+  RESET_REPLY,
+  TESTERS_SETTING_KEY,
+  formatTesters,
+  isResetCommand,
+  loadTesters,
+  parseTesters,
+  resetPointFor,
+  toWaId,
+} from "./reset.js";
+export {
   CAPABILITY_SETTING_KEYS,
   HANDOFF_TOPICS,
   LIVE_CAPABILITIES,

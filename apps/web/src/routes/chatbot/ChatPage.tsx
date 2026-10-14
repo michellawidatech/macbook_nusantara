@@ -398,7 +398,14 @@ export function ChatInbox() {
    */
   const draft = async () => {
     if (!conversation || !persona) return;
-    const turns = bubbles.map((b) => ({
+    // A tester's `/new` started the conversation over: the bot drafts from
+    // what came after it, as the worker does (packages/agent reset.ts).
+    const resets = new Set(
+      conversation.messages.filter((m) => m.reset).map((m) => m.id),
+    );
+    const since =
+      bubbles.reduce((at, b, i) => (resets.has(b.messageId) ? i : at), -1) + 1;
+    const turns = bubbles.slice(since).map((b) => ({
       // A message the shop sent is an `assistant` turn whether a person or the
       // bot wrote it — from the model's side they are the same thing: words
       // this shop has already put in front of this customer.

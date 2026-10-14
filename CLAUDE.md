@@ -2321,6 +2321,46 @@ Decisions that outlived those documents:
     and listed in `masters-audit.txt`. No prices (every variant
     Rp 0), no stock, no balances. Warehouse 04 (Gudang Masuk Belum QC) is the
     service bench (`SERVIS`), 02 the shop.
+- **The chatbot, tried out locally — three changes, 2026-10-14.**
+  - **`tools/wa-local/` answers a real WhatsApp chat on a laptop**, through
+    Baileys (WhatsApp Web's protocol — unofficial, so a spare number and LOCAL
+    TESTING ONLY; production is the Cloud API). `up` / `down` run the POS, the
+    real webhook with a secret made up for that laptop, and the real worker
+    loop with its Graph calls answered through `TickDeps.fetchImpl`. On the
+    sandbox database `nusantara_pos_chatbot`; the shop's Meta token is never
+    loaded. ⚠️ Deliberately OUTSIDE the pnpm workspace (its own
+    `pnpm install --ignore-workspace`), so Baileys is in no lockfile CI or a
+    release installs. ⚠️ An allow-list gates both directions: a linked account
+    receives every chat that account receives. ⚠️ Never `pnpm dev` beside it —
+    the ordinary worker loads the real token and drains the same Outbox.
+  - **The knowledge base is a spreadsheet** — *"1 column for questions and 1
+    column for answer"*. /chat → Knowledge has *Download .xlsx* and *Import
+    from a file* (.xlsx or .csv); the pasted `Q:`/`A:` dialog is gone, though
+    `parseQaText` still reads that format for the `knowledge` CLI.
+    `packages/domain/qaSheet.ts` reads rows (column A/B, or wherever a
+    "Question"/"Answer" header row says; a `;`-separated CSV is what Excel
+    writes on an Indonesian machine). **An upload UPDATES an answer the file
+    changed** (owner answer) — the sheet is the source of truth, where a paste
+    only ever added — and the dialog shows new / changed / unchanged, with
+    today's answer under the one replacing it. A question the file leaves out
+    is left alone, and an update never touches the Active switch.
+  - **`/new` starts a tester's chat over** — *"start a new chat and retrieve no
+    context of the user"*. `packages/agent/reset.ts` is the rule,
+    `apps/worker/reset.ts` the write. Three owner answers:
+    **tester numbers only** (`AppSetting` `chatbot.testers`, the *Testers*
+    button beside the switches, owner-only) — a reset has to lift a hand-over
+    hold or the bot stays silent after it, and a customer must not be able to
+    dismiss a colleague's task; from anybody else `/new` is an ordinary
+    message. **The conversation only** — earlier turns, the summary and open
+    tasks are left behind; a customer record the POS holds under that phone is
+    still found. **Nothing is deleted** — the `/new` row is stamped
+    `intent: sistem:reset` and every reader of a thread's past
+    (`resetPointFor`: the draft pass, the summary cursor, *Write it for me*)
+    reads only what was answered after it.
+    ⚠️ It is its own pass AHEAD of the draft pass and outside its candidate
+    query: that query skips a held thread and one with `autoReply` off, which
+    are exactly the threads a reset is for.
+
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

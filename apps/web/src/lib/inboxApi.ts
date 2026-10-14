@@ -69,6 +69,8 @@ export interface InboxMessage {
   direction: "IN" | "OUT";
   status: "BARU" | "DIJAWAB_AGEN" | "PERLU_STAF" | "DIJAWAB_STAF";
   msgType: string;
+  /** A tester's `/new`: the conversation starts over after this message. */
+  reset?: boolean;
   /** Why the bot gave this message to a person, when it did. */
   handoff: Handoff | null;
   reply: InboxReply | null;

@@ -49,7 +49,12 @@ import { z } from "zod";
 import { Prisma, enqueueOutbox, type PrismaClient } from "@nusantara/db";
 import { currentRequestId } from "@nusantara/logging";
 import { isWithinWindow, windowClosesAt } from "@nusantara/whatsapp";
-import { askingPrice, phoneForms } from "@nusantara/agent";
+import {
+  RESET_INTENT,
+  askingPrice,
+  isResetCommand,
+  phoneForms,
+} from "@nusantara/agent";
 import { ApiError, notFound } from "../errors.js";
 
 /**
@@ -558,6 +563,8 @@ export function inboxRouter(db: PrismaClient): Router {
           direction: m.direction,
           status: m.status,
           msgType: m.msgType,
+          /** A tester's `/new`: the conversation starts over after this row. */
+          reset: m.intent === RESET_INTENT && isResetCommand(m.text),
           /** Why the bot gave this message to a person, on the row it answered. */
           handoff:
             m.status === "PERLU_STAF" ||

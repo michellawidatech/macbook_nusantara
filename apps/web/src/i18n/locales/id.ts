@@ -191,18 +191,29 @@ export const id: Record<string, string> = {
   "handoff.media": "Foto atau file",
   "handoff.human": "Minta staf",
   "handoff.other": "Di luar jawaban",
-  "knowledge.import": "Impor dari dokumen",
-  "knowledge.importTitle": "Impor jawaban dari dokumen",
-  "knowledge.importHint":
-    "Tempel seluruh isi dokumen. Tiap pertanyaan diawali “Q:” dan jawabannya “A:”; satu jawaban boleh beberapa baris.",
-  "knowledge.importPaste": "Isi dokumen",
+  "knowledge.download": "Unduh .xlsx",
+  "knowledge.import": "Impor dari file",
+  "knowledge.importTitle": "Impor jawaban dari file",
+  "knowledge.importDrop": "Letakkan file .xlsx atau .csv di sini",
+  "knowledge.importColumns":
+    "Kolom A adalah pertanyaan dan kolom B jawabannya. Baris pertama yang berisi “Question” dan “Answer” dilewati.",
+  "knowledge.importUnreadable":
+    "File ini tidak bisa dibaca. Simpan sebagai .xlsx atau .csv lalu coba lagi.",
+  "knowledge.importFailed": "File tidak bisa dibuka.",
+  "knowledge.importEmpty":
+    "Tidak ada pertanyaan yang punya jawaban di file ini.",
   "knowledge.importUnanswered":
-    "{{n}} pertanyaan tidak punya baris “A:” dan tidak akan diimpor:",
-  "knowledge.importFound": "{{n}} jawaban ditemukan, {{m}} dipilih",
-  "knowledge.importDuplicate": "sudah ada di basis pengetahuan",
+    "{{n}} pertanyaan tidak punya jawaban dan tidak akan diimpor:",
+  "knowledge.importRepeated":
+    "{{n}} pertanyaan muncul dua kali di file; hanya yang pertama dibaca:",
+  "knowledge.importFoundSheet":
+    "{{n}} jawaban di file — {{added}} baru dan {{changed}} berubah dipilih",
+  "knowledge.importNew": "baru",
+  "knowledge.importChanged": "jawaban berubah",
+  "knowledge.importSame": "tidak berubah",
   "knowledge.importOk": "Impor {{n}}",
-  "knowledge.imported":
-    "{{n}} jawaban diimpor — bot memakainya mulai balasan berikutnya.",
+  "knowledge.importedSheet":
+    "{{added}} ditambahkan, {{changed}} diperbarui — bot memakainya mulai balasan berikutnya.",
 
   // ── Staff accounts (Settings, owner only) ─────────────────────────────────
   "staff.title": "Akun staf",
@@ -3800,6 +3811,13 @@ export const id: Record<string, string> = {
   "chatSwitch.ownerOnly": "Hanya pemilik yang bisa mengubah ini.",
   "chatSwitch.needsStock": "Perlu Stok dinyalakan.",
   "chatSwitch.saveFailed": "Saklar tidak bisa diubah.",
+  "chatTesters.button": "Penguji ({{n}})",
+  "chatTesters.title": "Nomor penguji",
+  "chatTesters.hint":
+    "Penguji yang mengirim /new memulai chat dari awal: bot melupakan pesan sebelumnya dan serah-terima yang masih terbuka di chat itu ditutup. Dari nomor lain, /new adalah pesan biasa.",
+  "chatTesters.placeholder": "0812… atau 62812…, lalu Enter",
+  "chatTesters.save": "Simpan",
+  "chatTesters.saveFailed": "Nomor penguji tidak bisa disimpan.",
   "chatAction.negotiation": "Nego",
   "chatAction.price": "Harga",
   "chatAction.stock": "Stok",

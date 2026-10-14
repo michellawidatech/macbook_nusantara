@@ -148,3 +148,17 @@ export const setCapabilities = (body: Partial<BotCapabilities>) =>
     method: "PUT",
     body,
   });
+
+/**
+ * The numbers that may type `/new` to start their conversation over (owner
+ * ask 2026-10-14). For trying the bot out: a reset leaves the earlier turns,
+ * the summary and any open hand-over behind. Written as wa_ids.
+ */
+export const getTesters = () => api<{ numbers: string[] }>("/api/chat/testers");
+
+/** The owner's call — the server answers 403 to anybody else. */
+export const setTesters = (numbers: string[]) =>
+  api<{ numbers: string[] }>("/api/chat/testers", {
+    method: "PUT",
+    body: { numbers },
+  });
