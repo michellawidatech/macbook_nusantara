@@ -2393,6 +2393,26 @@ Decisions that outlived those documents:
   - **The app is full width** (owner, 2026-10-14): `LAYOUT.contentMaxWidth`
     (1600) is gone, so a zoomed-out screen no longer leaves its right third
     empty. Forms are still capped by `formMaxWidth`.
+  - **Step 2 is in (2026-10-15): threads in parallel.** The draft pass answers
+    up to `WORKER_DRAFT_CONCURRENCY` (8) threads at once, 16 a tick, each under
+    a **lease** (`apps/worker/src/lease.ts`): one INSERT … ON CONFLICT that
+    takes `WaThreadMemory.leaseUntil/leasedBy` only when nobody holds an
+    unexpired one (120 s), released when the turn ends. Two lanes or two worker
+    processes never answer one customer; the commit's compare-and-swap stays as
+    the second guard. `draftPass` without `concurrency` is still sequential —
+    tests that script one model across threads depend on it.
+    `test/lease.test.ts` proves one call per thread under overlap, each reply
+    carrying only its own customer's words, and the claim as both roles.
+    Waits are now 3 s / 6 s / ~11 s / 20 s (`debounce.ts`, was 4/10/18/45).
+    ⚠️ **The Mac mini's worker connects as `nusantara_app`** (common.env's
+    `DATABASE_URL`; worker.env never overrode it), although every pass is
+    written for `nusantara_agent` — so in production the summary pass's
+    updates are refused and swallowed. `worker.env.example` now carries the
+    agent-role URL; the Mac mini's own worker.env needs the same line, with the
+    agent password from go-live step 2.4. The lease is granted to both roles so
+    neither setup stops answering.
+    The webhook does NOT refuse a non-numeric `from` (the design's first draft
+    did): WhatsApp usernames may send a sender id that is not a phone number.
 
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's

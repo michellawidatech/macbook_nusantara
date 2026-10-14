@@ -15,6 +15,7 @@
 
 import { readFileSync } from "node:fs";
 import {
+  BASE_WAIT_MS,
   MAX_WAIT_MS,
   MIN_WAIT_MS,
   SUMMARY_EVERY_TURNS,
@@ -60,6 +61,7 @@ export const WORKER_ENV_KEYS = [
   "WORKER_AGENT_STAFF_ID",
   "AGENT_CAPABILITIES",
   "WORKER_MAX_DRAFTS",
+  "WORKER_DRAFT_CONCURRENCY",
   "WORKER_MAX_SENDS",
 ] as const;
 
@@ -110,6 +112,12 @@ export interface WorkerConfig {
   readonly debounceMs: number;
   /** Threads drafted per tick. A cap, so one busy minute cannot fan out. */
   readonly maxDraftsPerTick: number;
+  /**
+   * Threads answered at the same time (chatbot v2, 2026-10-14). Each holds at
+   * most one database connection, so the worker's `connection_limit` must
+   * leave room for it (worker.env.example).
+   */
+  readonly draftConcurrency: number;
   /** Outbox rows sent per tick. */
   readonly maxSendsPerTick: number;
   /** The adaptive wait windows the debounce picks between. */
@@ -168,16 +176,19 @@ export function loadWorkerConfig(
       authToken: env["ANTHROPIC_AUTH_TOKEN"]?.trim() || undefined,
     },
     idlePollMs: int(env["WORKER_POLL_MS"], 2_000),
-    debounceMs: int(env["WORKER_DEBOUNCE_MS"], 8_000),
+    debounceMs: int(env["WORKER_DEBOUNCE_MS"], BASE_WAIT_MS),
     // The base window is the middle of a range now. A direct question is
     // answered sooner and "nanti saya kabarin" waits far longer; see
     // `computeWaitMs`.
     waits: {
       minMs: int(env["WORKER_DEBOUNCE_MIN_MS"], MIN_WAIT_MS),
-      baseMs: int(env["WORKER_DEBOUNCE_MS"], 8_000),
+      baseMs: int(env["WORKER_DEBOUNCE_MS"], BASE_WAIT_MS),
       maxMs: int(env["WORKER_DEBOUNCE_MAX_MS"], MAX_WAIT_MS),
     },
-    maxDraftsPerTick: int(env["WORKER_MAX_DRAFTS"], 5),
+    // 16 a tick, 8 at once: at "10–25 concurrent" (owner, 2026-10-14) a busy
+    // minute drains in two ticks instead of five.
+    maxDraftsPerTick: int(env["WORKER_MAX_DRAFTS"], 16),
+    draftConcurrency: int(env["WORKER_DRAFT_CONCURRENCY"], 8),
     maxBatch: int(env["WORKER_MAX_BATCH"], 30),
     maxSendsPerTick: int(env["WORKER_MAX_SENDS"], 20),
     summaryEveryTurns: int(

@@ -46,6 +46,7 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     anthropic: config.anthropic,
     waits: config.waits,
     maxDraftsPerTick: config.maxDraftsPerTick,
+    concurrency: config.draftConcurrency,
     maxBatch: config.maxBatch,
     agentStaffId: config.agentStaffId,
     capabilities: config.capabilities,

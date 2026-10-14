@@ -371,8 +371,8 @@ describe("batching a burst", () => {
 
 describe("the adaptive wait", () => {
   it("answers a customer who asked a question before one who is still muttering", async () => {
-    // Both last spoke 6 seconds ago: past the 4s question wait, short of the
-    // 8s base window.
+    // Both last spoke 6 seconds ago: past the 3s question wait, short of the
+    // 8s base window this file passes.
     await inbound({
       id: "a.q",
       from: SENDER,
@@ -395,12 +395,13 @@ describe("the adaptive wait", () => {
   });
 
   it("keeps waiting on nanti saya kabarin long after an ordinary message would have been answered", async () => {
-    // 20 seconds: well past the base window, well short of the 45s hold.
+    // 15 seconds: past the base window (8s here) and the filler stretch,
+    // short of the 20s hold (MAX_WAIT_MS since 2026-10-14).
     await inbound({
       id: "w.later",
       from: SENDER,
       text: "nanti saya kabarin ya",
-      ts: ago(20_000),
+      ts: ago(15_000),
     });
 
     const result = await pass(scripted(["siap kak"]).client);

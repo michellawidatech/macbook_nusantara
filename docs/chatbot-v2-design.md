@@ -144,13 +144,20 @@ The worker already reads `ANTHROPIC_API_KEY`.
 
 ## 3. Isolation: "a customer can only touch their own data" *(owner)*
 
-- **At the webhook.** `from` must be digits only, 8–15 long (E.164 without the
-  `+`). Anything else is stored in `WaRawEvent` and never queued.
-- **Thread lease.** The worker claims a thread with
-  `UPDATE … SET leaseUntil = now()+60s, leasedBy = $worker WHERE from = $1 AND
-  (leaseUntil IS NULL OR leaseUntil < now())`. Only the holder may run that
-  thread. N threads run in parallel and the same thread never runs twice. The
-  existing compare-and-swap stays as a second guard.
+- **At the webhook: nothing is refused** *(revised in step 2)*. The first
+  draft said a `from` that is not 8–15 digits would never be queued. It is
+  dropped from the plan: WhatsApp's usernames may deliver a sender id that is
+  not a phone number, and refusing one would lose a real customer without a
+  trace. The rule is enforced where it matters instead — every read is by
+  `from`, the lease is per `from`, and the REST token carries it. Only the
+  booking insists on digits (the `ReservationProposal_from_waid` CHECK),
+  because a hold needs a number the shop can ring.
+- **Thread lease** ✅ *(step 2, `apps/worker/src/lease.ts`)*. One statement
+  inserts the thread's memory row holding the lease, or takes the lease on the
+  existing row only when nobody holds an unexpired one (120 s). Released when
+  the turn ends; a crashed worker's threads free themselves by the clock. The
+  draft pass runs up to `WORKER_DRAFT_CONCURRENCY` (8) threads at once, 16 a
+  tick, and the compare-and-swap at commit stays as a second guard.
 - **Scoped REST token.** For each turn the worker mints a short-lived token,
   signed with a secret shared only between the worker and the API. The token
   carries `{ waId, turnId, capabilities, exp }`. Every `/api/agent/v1/*` route
@@ -313,6 +320,11 @@ Each step ships on its own and leaves the bot working.
    ✅ Done 2026-10-14 (`20261014120000_chatbot_v2_threads_profiles_and_evaluation`).
 2. **Throughput.** The thread lease, a parallel pool and the shorter debounce,
    on today's single agent. This fixes the 25-concurrent problem first.
+   ✅ Done 2026-10-15. Waits are 3 s (question) / 6 s / ~11 s (filler) /
+   20 s ("nanti"). ⚠️ Found on the way: the Mac mini's worker connects as
+   `nusantara_app` (common.env), not `nusantara_agent`, so the summary pass's
+   updates have been refused in production. `worker.env.example` now sets
+   the agent role; the lease is granted to both so neither setup stalls.
 3. **REST boundary.** `/api/agent/v1/*` with the scoped token. Today's tools
    switch to calling it.
 4. **Three agents.** Router, Operations and Advisor, plus `AgentRun` traces,

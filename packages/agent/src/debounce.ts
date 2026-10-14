@@ -32,14 +32,22 @@
  *    caller compares it against a timestamp that is already durable.
  */
 
+/*
+ * Shortened 2026-10-14 for chatbot v2 (owner: a reply within about ten
+ * seconds is fine). Was 4 s / 10 s / 45 s. A question is answered after 3 s,
+ * an ordinary line after 6, filler after ~11, and "nanti saya kabarin" after
+ * 20 — still long enough not to answer a customer who said they would come
+ * back, short enough that one who comes back at once is not kept waiting.
+ */
+
 /** Fastest we answer after the last message — a direct question. */
-export const MIN_WAIT_MS = 4_000;
+export const MIN_WAIT_MS = 3_000;
 
 /** The ordinary quiet window before a burst counts as finished. */
-export const BASE_WAIT_MS = 10_000;
+export const BASE_WAIT_MS = 6_000;
 
 /** Longest we hold off, when the customer has explicitly paused the chat. */
-export const MAX_WAIT_MS = 45_000;
+export const MAX_WAIT_MS = 20_000;
 
 /** Filler stretches the base window by this much. Still typing, not done. */
 export const FILLER_FACTOR = 1.8;

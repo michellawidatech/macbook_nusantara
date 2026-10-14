@@ -80,6 +80,7 @@ import { isWithinWindow } from "@nusantara/whatsapp";
 import { DEFAULT_PERSONA } from "@nusantara/agent";
 import { refreshOffers, upsertChatAction } from "./actions.js";
 import { resetPass } from "./reset.js";
+import { claimThread, inPool, leaseHolder, releaseThread } from "./lease.js";
 
 export interface DraftDeps {
   readonly db: PrismaClient;
@@ -99,6 +100,14 @@ export interface DraftDeps {
   readonly debounceMs?: number;
   readonly waits?: WaitProfile;
   readonly maxDraftsPerTick: number;
+  /**
+   * Threads answered at once (chatbot v2). Absent is 1 — sequential — so a
+   * caller that never asked for parallelism keeps the old behaviour; the
+   * worker's config passes `WORKER_DRAFT_CONCURRENCY` (default 8).
+   */
+  readonly concurrency?: number;
+  /** This process's name on a thread lease. Injectable so a test can be two workers. */
+  readonly leaseHolder?: string;
   /** Messages one reply may cover. A 60-message backlog becomes two replies. */
   readonly maxBatch?: number;
   /** The reserved agent Staff row, so a booking's UnitEvent is attributable. */
@@ -399,10 +408,62 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   let drafted = 0;
   let escalated = 0;
 
-  // Sequential on purpose. Answering five customers at once would open five
-  // model calls and five transactions against a database this shop runs on one
-  // laptop, to save a few seconds on a queue that is almost always empty.
-  for (const candidate of due) {
+  // In parallel since chatbot v2 (2026-10-14: "around 50 customers a day,
+  // 10–25 at once"). It used to be sequential, five threads a tick, which left
+  // the twenty-fifth customer waiting minutes behind the other twenty-four.
+  // Each thread is answered under its LEASE (lease.ts), so a thread is never
+  // answered twice whether by two lanes here or by two worker processes; and
+  // everything a turn reads is read by `from`, so two lanes never see each
+  // other's customer. `concurrency` is the number of lanes, each of which
+  // holds at most one database connection at a time.
+  const holder = deps.leaseHolder ?? leaseHolder();
+  const concurrency = Math.max(1, deps.concurrency ?? 1);
+
+  const answer = async (candidate: Candidate): Promise<void> => {
+    const from = candidate.from;
+    let claimed = false;
+    try {
+      claimed = await claimThread(db, from, holder, now());
+    } catch (err) {
+      logger.error(
+        {
+          evt: "worker.lease.failed",
+          ctx: { from },
+          ...(err instanceof Error
+            ? { err: { name: err.name, message: err.message } }
+            : {}),
+        },
+        "could not claim the thread — leaving it for the next pass",
+      );
+      return;
+    }
+    if (!claimed) {
+      // Another lane or another worker is answering this customer right now.
+      logger.info(
+        { evt: "worker.lease.held", ctx: { from } },
+        "the thread is being answered elsewhere — skipping it",
+      );
+      return;
+    }
+    try {
+      await answerThread(candidate);
+    } finally {
+      await releaseThread(db, from, holder).catch((err: unknown) =>
+        logger.warn(
+          {
+            evt: "worker.lease.release_failed",
+            ctx: { from },
+            ...(err instanceof Error
+              ? { err: { name: err.name, message: err.message } }
+              : {}),
+          },
+          "could not release the thread — it frees itself when the lease expires",
+        ),
+      );
+    }
+  };
+
+  const answerThread = async (candidate: Candidate): Promise<void> => {
     const from = candidate.from;
     // Outside the try, so the race handler below can see what was booked.
     let outcome: ConverseResult | null = null;
@@ -417,12 +478,12 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         take: maxBatch,
         select: { id: true, ts: true, text: true, msgType: true },
       });
-      if (batch.length === 0) continue;
+      if (batch.length === 0) return;
       // A `/new` that landed after this pass's reset ran. It is a command,
       // not a question: leave the thread for the next pass, which resets it
       // first, rather than hand the model "/new" to answer.
       if (testers.includes(from) && batch.some((m) => isResetCommand(m.text)))
-        continue;
+        return;
       const batchIds = batch.map((m) => m.id);
       const anchor = batch[batch.length - 1]!;
       anchorId = anchor.id;
@@ -436,7 +497,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           { evt: "worker.draft.window_closed", ctx: { from } },
           "the 24-hour window has closed — handing the thread to a person",
         );
-        continue;
+        return;
       }
 
       const current = combineBatch(batch);
@@ -445,7 +506,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // for the model to read, and guessing is what costs a sale.
         await escalate(db, batchIds, anchor.id, "nothing_to_read");
         escalated += 1;
-        continue;
+        return;
       }
 
       // Since a `/new`, when this thread has had one: the turns before it
@@ -576,7 +637,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         );
         await escalate(db, batchIds, anchor.id, "no_reply");
         escalated += 1;
-        continue;
+        return;
       }
 
       // One transaction: the answer and the intent to send it commit together,
@@ -724,7 +785,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
               ),
             );
         }
-        continue;
+        return;
       }
       // One bad thread must not stop the pass. The rows stay BARU and the next
       // tick tries again.
@@ -739,7 +800,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         "failed to draft a reply for a thread",
       );
     }
-  }
+  };
+
+  await inPool(due, concurrency, answer);
 
   return { drafted, escalated, dormant: false };
 }
