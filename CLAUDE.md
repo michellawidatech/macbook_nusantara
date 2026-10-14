@@ -2413,6 +2413,23 @@ Decisions that outlived those documents:
     neither setup stops answering.
     The webhook does NOT refuse a non-numeric `from` (the design's first draft
     did): WhatsApp usernames may send a sender id that is not a phone number.
+  - **Step 3 is in (2026-10-15): the POS behind `/api/agent/v1`.** The POS
+    tools (stock, serials, photos, catalogue, and the customer's own profile,
+    orders and bookings) run in the API behind a per-turn token the worker
+    signs (`AGENT_API_SECRET`, in api.env AND worker.env, nowhere else); the
+    worker's `converse` sends them there through `agentApiDispatch` when
+    `AGENT_API_URL` + the secret are set, and runs them locally otherwise.
+    `packages/agent/src/agentApi.ts` is the contract (route table, token,
+    client, `argsFromRequest`); `apps/api/src/routes/agent.ts` the route,
+    mounted BEFORE `requireAuth` because its caller holds no staff session.
+    ⚠️ **No route takes a phone** — `/me` is the token's `waId`, and that is
+    what "a customer can only write to their own data" means here. Keep it
+    so: a new route that reads a customer from a path, query or body undoes
+    the whole boundary. A switched-off tool is 403 (`toolsFor`), a lookup
+    that found nothing 404. `search_knowledge`, `store_info`,
+    `lookup_catalog` and the hand-over stay in the worker.
+    ⚠️ The agent client uses the real `fetch`, never the tick's `fetchImpl` —
+    that one is the Graph stub in tools/wa-local.
 
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's

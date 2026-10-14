@@ -37,6 +37,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { PrismaClient } from "@nusantara/db";
 import type { KnowledgeBase } from "./knowledge.js";
+import type { ToolDispatch } from "./agentApi.js";
 import {
   checkHoldingMessage,
   checkReply,
@@ -150,6 +151,13 @@ export interface ConverseInput {
    * produce the identical blank screen.
    */
   readonly onError?: (err: unknown) => void;
+  /**
+   * Where a tool call goes. Absent, `dispatchTool` runs it here against `db`.
+   * The worker passes `agentApiDispatch` (agentApi.ts) when the agent API is
+   * configured, so the POS tools run behind `/api/agent/v1` under a token
+   * that names this thread's customer and nobody else (chatbot v2 step 3).
+   */
+  readonly dispatch?: ToolDispatch;
 }
 
 export interface ConverseHandoff {
@@ -280,6 +288,8 @@ export async function converse(
   input: ConverseInput,
 ): Promise<ConverseResult | null> {
   const { client, db, ctx, prompt, turns, knowledge, route, onError } = input;
+  const dispatch: ToolDispatch =
+    input.dispatch ?? ((name, args, c) => dispatchTool(db, name, args, c));
   if (turns.length === 0) return null;
 
   const system: Anthropic.TextBlockParam[] = [
@@ -538,7 +548,7 @@ export async function converse(
           toolsUsed.push(use.name);
           const output = TERMINAL.has(use.name)
             ? { error: "not available" }
-            : await dispatchTool(db, use.name, use.input, {
+            : await dispatch(use.name, use.input, {
                 ...ctx,
                 knowledge,
                 capabilities,

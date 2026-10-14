@@ -48,6 +48,14 @@ export interface ApiConfig {
    * does not answer with the version it just installed. Null outside a release.
    */
   readonly release: string | null;
+  /**
+   * Shared with the worker only (chatbot v2 step 3): it signs the per-turn
+   * tokens `/api/agent/v1` accepts. Unset, that route answers 503 and the
+   * worker keeps running its tools locally.
+   */
+  readonly agentApiSecret: string | null;
+  /** The Staff row a bot booking is attributed to — the worker's default. */
+  readonly agentStaffId: string;
 }
 
 const TWELVE_HOURS = 12 * 60 * 60 * 1000;
@@ -89,5 +97,7 @@ export function loadConfig(env: Record<string, string | undefined>): ApiConfig {
     trustProxy: trustProxy(env["TRUST_PROXY"]),
     bodyLimit: env["BODY_LIMIT"] ?? "1mb",
     release: env["NUSANTARA_RELEASE"] || null,
+    agentApiSecret: env["AGENT_API_SECRET"]?.trim() || null,
+    agentStaffId: env["WORKER_AGENT_STAFF_ID"]?.trim() || "staff_agent",
   };
 }

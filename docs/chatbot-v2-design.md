@@ -172,24 +172,40 @@ The worker already reads `ANTHROPIC_API_KEY`.
 
 ## 4. Operations: the REST surface *(owner: use the POS REST API)*
 
-New router `apps/api/src/routes/agent.ts`. It is mounted with its own auth
-(the scoped token, not a staff session) and runs as the database role
-`nusantara_agent`.
+✅ Built in step 3 (2026-10-15): `apps/api/src/routes/agent.ts`, with the
+contract — route table, token, client — in `packages/agent/src/agentApi.ts`.
+Mounted before the staff-session middleware: its caller is the worker, which
+signs a token per turn (`AGENT_API_SECRET`, in api.env and worker.env and
+nowhere else). Unset, the route answers 503 and the worker runs the tools
+itself, so either half can be deployed first.
 
-| Method | Path | Returns |
-|---|---|---|
-| GET | `/api/agent/v1/stock?q=&category=&budgetMin=&budgetMax=` | 200 with matching variants, each with its available units (serial, grade, battery, `price`, `photos: [{id}]`) |
-| GET | `/api/agent/v1/units/:serial` | 200 one unit, or 404 |
-| GET | `/api/agent/v1/units/:serial/photos` | 200 photo handles (ids only, never bytes) |
-| GET | `/api/agent/v1/reservations` | this phone's open holds |
-| POST | `/api/agent/v1/reservations/proposals` | a **proposal** (units, visit time, name); writes nothing to stock |
-| POST | `/api/agent/v1/reservations/proposals/:id/confirm` | the real `Reservation` + `DIRESERVASI` events |
-| PATCH | `/api/agent/v1/reservations/:code` | moves the visit time (`rescheduleHold`) |
-| DELETE | `/api/agent/v1/reservations/:code` | cancels (`RESERVASI_BATAL`), phone-scoped |
+| Method | Path | Tool | Answer |
+|---|---|---|---|
+| GET | `/stock?query=&minPrice=&maxPrice=&sort=` | `search_stock` | 200 matching units |
+| GET | `/units/:serial` | `check_serial` | 200, or **404** with the tool's own words |
+| GET | `/units/:serial/photos` | `unit_photos` | 200 photo handles (ids, never bytes) |
+| GET | `/photos?query=` | `find_unit_photos` | 200 |
+| GET | `/catalog` | `browse_catalog` | 200 |
+| GET | `/me` | `lookup_customer` | 200 the token's customer |
+| PATCH | `/me/profile` | `remember_customer` | 200 |
+| GET | `/me/orders/:code` | `check_order` | 200 |
+| GET | `/me/reservations` | `check_reservation` | 200 this customer's holds |
+| POST | `/me/reservations` | `create_reservation` | 200 |
+| PATCH | `/me/reservations` | `reschedule_reservation` | 200 |
+| DELETE | `/me/reservations?code=` | `cancel_reservation` | 200 |
 
-The functions behind these already exist in `packages/agent/tools.ts` and
-`packages/db`. They move behind the routes; the worker stops holding database
-tools.
+- **Behind each route is the tool that ran in the worker** (`dispatchTool`), so
+  nothing about what the bot can say changed — only where it runs. A tool the
+  switches forbid is **403** (`toolsFor`, the same gate the model's tool list
+  is built from); a token with `writes: false` cannot book.
+- **No route reads a phone.** `/me` is the token's `waId`. A body carrying
+  `phone`, `from` or `waId` is ignored (`apps/api/test/agentApi.test.ts`
+  books as Alice with Bob's number in the body, and Bob cannot see or cancel
+  Alice's hold by its code).
+- **Stays in the worker:** `search_knowledge` (its `K` handles must match the
+  prompt the worker built), `store_info`, `lookup_catalog` and the hand-over —
+  none of them POS data about a unit or a customer.
+- The Operations agent of step 4 calls the same routes.
 
 **Photos** *(owner: WhatsApp uploads, not public links)*. A unit's
 `photos` array carries handles. The Advisor picks up to 3 and the worker writes
@@ -327,6 +343,8 @@ Each step ships on its own and leaves the bot working.
    the agent role; the lease is granted to both so neither setup stalls.
 3. **REST boundary.** `/api/agent/v1/*` with the scoped token. Today's tools
    switch to calling it.
+   ✅ Done 2026-10-15 — see §4. Switched on by `AGENT_API_URL` +
+   `AGENT_API_SECRET` in worker.env and the same secret in api.env.
 4. **Three agents.** Router, Operations and Advisor, plus `AgentRun` traces,
    behind a setting (`chatbot.pipeline = v1|v2`) so the owner can switch back
    in one click.

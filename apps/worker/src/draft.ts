@@ -61,6 +61,9 @@ import {
   loadCapabilities,
   PARALLEL_CAPABILITIES,
   type AgentCapabilities,
+  type AgentApiOptions,
+  agentApiDispatch,
+  dispatchTool,
   storeOpenAt,
   type AgentClient,
   type AnthropicEnv,
@@ -106,6 +109,12 @@ export interface DraftDeps {
    * worker's config passes `WORKER_DRAFT_CONCURRENCY` (default 8).
    */
   readonly concurrency?: number;
+  /**
+   * The POS's agent API. Present, the POS tools go over HTTP with a token for
+   * this turn and this customer (packages/agent agentApi.ts); absent, they
+   * run here against `db`.
+   */
+  readonly agentApi?: AgentApiOptions;
   /** This process's name on a thread lease. Injectable so a test can be two workers. */
   readonly leaseHolder?: string;
   /** Messages one reply may cover. A 60-message backlog becomes two replies. */
@@ -612,6 +621,16 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         onError: (err) => {
           failure = err;
         },
+        ...(deps.agentApi
+          ? {
+              dispatch: agentApiDispatch(
+                deps.agentApi,
+                (name, input, c) => dispatchTool(db, name, input, c),
+                // The anchor row is unique to this batch: one turn, one id.
+                { id: anchor.id, now: at },
+              ),
+            }
+          : {}),
       });
 
       outcome = result;

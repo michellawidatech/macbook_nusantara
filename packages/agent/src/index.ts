@@ -173,3 +173,17 @@ export {
   type SummarizeInput,
   type SummaryTurn,
 } from "./summarize.js";
+export {
+  AGENT_API_ROUTES,
+  AGENT_TOKEN_TTL_MS,
+  REMOTE_TOOLS,
+  agentApiDispatch,
+  argsFromRequest,
+  mintAgentToken,
+  verifyAgentToken,
+  type AgentApiOptions,
+  type AgentClaims,
+  type AgentMethod,
+  type AgentRoute,
+  type ToolDispatch,
+} from "./agentApi.js";

@@ -20,6 +20,7 @@ import {
   MIN_WAIT_MS,
   SUMMARY_EVERY_TURNS,
   agentCapabilities,
+  type AgentApiOptions,
   type AgentCapabilities,
   type AnthropicEnv,
   type WaitProfile,
@@ -62,6 +63,8 @@ export const WORKER_ENV_KEYS = [
   "AGENT_CAPABILITIES",
   "WORKER_MAX_DRAFTS",
   "WORKER_DRAFT_CONCURRENCY",
+  "AGENT_API_URL",
+  "AGENT_API_SECRET",
   "WORKER_MAX_SENDS",
 ] as const;
 
@@ -154,6 +157,14 @@ export interface WorkerConfig {
    * prices off a half-migrated shelf.
    */
   readonly capabilities: AgentCapabilities;
+  /**
+   * The POS's agent API (chatbot v2 step 3): `AGENT_API_URL` +
+   * `AGENT_API_SECRET`. Both set, the stock, photo, customer and booking
+   * tools run behind `/api/agent/v1` under a per-turn token; either missing,
+   * they run here against the database, as before. Null is not an error — it
+   * is how a worker deployed ahead of its API keeps answering.
+   */
+  readonly agentApi: AgentApiOptions | null;
 }
 
 function int(raw: string | undefined, fallback: number): number {
@@ -206,5 +217,12 @@ export function loadWorkerConfig(
     // One reader for the whole repo (packages/agent policy.ts), so the worker
     // and the API's Draft endpoint cannot disagree about what the bot may do.
     capabilities: agentCapabilities(env),
+    agentApi:
+      env["AGENT_API_URL"]?.trim() && env["AGENT_API_SECRET"]?.trim()
+        ? {
+            baseUrl: env["AGENT_API_URL"].trim(),
+            secret: env["AGENT_API_SECRET"].trim(),
+          }
+        : null,
   };
 }

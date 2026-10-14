@@ -47,6 +47,10 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     waits: config.waits,
     maxDraftsPerTick: config.maxDraftsPerTick,
     concurrency: config.draftConcurrency,
+    // The real fetch, deliberately not `deps.fetchImpl`: that one answers for
+    // the Graph API (tools/wa-local injects a fake there), and the agent API
+    // is this machine's own POS.
+    ...(config.agentApi ? { agentApi: config.agentApi } : {}),
     maxBatch: config.maxBatch,
     agentStaffId: config.agentStaffId,
     capabilities: config.capabilities,

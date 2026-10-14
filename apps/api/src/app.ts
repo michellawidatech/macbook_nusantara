@@ -32,6 +32,7 @@ import { reservationsRouter } from "./routes/reservations.js";
 import { kontrolRouter } from "./routes/kontrol.js";
 import { storeRouter } from "./routes/store.js";
 import { staffRouter } from "./routes/staff.js";
+import { agentRouter } from "./routes/agent.js";
 import type { AnthropicEnv } from "@nusantara/agent";
 
 /** Four phone photographs as base64, with room to spare. */
@@ -105,6 +106,19 @@ export function createApp(deps: CreateAppDeps): Express {
   const idempotent = idempotency({ db, ttlMs: config.idempotencyTtlMs });
 
   api.use("/auth", authRouter({ db, config, logger, limiter, idempotent }));
+
+  // The chatbot worker's door into the POS (chatbot v2). Before requireAuth on
+  // purpose: its caller holds a per-turn token, not a staff session, and the
+  // router refuses everything without one (routes/agent.ts).
+  api.use(
+    "/agent/v1",
+    agentRouter({
+      db,
+      logger,
+      secret: config.agentApiSecret,
+      agentStaffId: config.agentStaffId,
+    }),
+  );
 
   api.use(requireAuth({ db, config }));
   // A session on a password somebody else chose may do nothing below this line
