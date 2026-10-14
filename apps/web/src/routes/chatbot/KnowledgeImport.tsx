@@ -1,34 +1,42 @@
 /**
- * Import the owner's answer sheet — paste a document of `Q:` / `A:` pairs and
- * keep the ones you want (owner ask 2026-09-18: "I have compiled lists of
- * questions").
+ * Import the owner's answer sheet from a spreadsheet — one column of
+ * questions, one of answers (owner ask 2026-10-14: *"it is better if we use
+ * excel / csv file"*). It replaces the 2026-09-18 dialog that took a pasted
+ * `Q:` / `A:` document; `parseQaText` still reads that format for the
+ * server's `knowledge` CLI.
  *
- * The pasting is the whole point: the owner writes these in Google Docs, and
- * retyping thirty answers one dialog at a time is how a knowledge base stays
- * empty. `parseQaText` (packages/domain) reads the text — the same reader the
- * server's `knowledge` CLI uses — and every pair is shown before anything is
- * saved, because the parser does not fix a document's mistakes and a person
- * should see a stray line before the bot starts quoting it.
+ * A file somebody keeps is the source of truth, which a paste never was. So a
+ * question the knowledge base already has is no longer skipped: when the
+ * file's answer differs it is offered as a CHANGE, with today's answer shown
+ * under the new one, and it is ticked like a new row (owner answer, same
+ * day). A question the file does not mention is left alone.
  *
- * A question already in the knowledge base (same words, whatever the case,
- * spacing or emoji) is shown and left unticked: importing the same sheet twice
- * must not double every answer.
+ * Every row is shown before anything is saved, for the reason the paste
+ * dialog gave: the reader does not fix a sheet's mistakes, and a person
+ * should see a stray row before the bot starts quoting it. Nothing is
+ * uploaded anywhere — the file is read in this browser.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Alert,
   App,
   Checkbox,
   Flex,
-  Input,
   List,
   Modal,
   Tag,
   Typography,
+  Upload,
 } from "antd";
+import { InboxOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { parseQaText, questionKey } from "@nusantara/domain";
+import type { QaSheet } from "@nusantara/domain";
 import { mutate, nextId, useDb } from "../../mock/store.js";
+import {
+  planKnowledgeImport,
+  readKnowledgeFile,
+} from "../../lib/knowledgeSheet.js";
+import { XlsxError } from "../../lib/xlsxRead.js";
 
 export function KnowledgeImport({
   open,
@@ -40,26 +48,54 @@ export function KnowledgeImport({
   const { t } = useTranslation();
   const { message } = App.useApp();
   const db = useDb();
-  const [text, setText] = useState("");
-  /** Indexes the person unticked. Everything new starts ticked. */
+  const [sheet, setSheet] = useState<QaSheet | null>(null);
+  const [fileName, setFileName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  /** Indexes the person unticked. Everything new or changed starts ticked. */
   const [skipped, setSkipped] = useState<ReadonlySet<number>>(new Set());
+  /** Guards a second file landing while the first is still being read. */
+  const reading = useRef(false);
 
-  const known = useMemo(
-    () => new Set(db.knowledge.map((k) => questionKey(k.question))),
-    [db.knowledge],
+  const rows = useMemo(
+    () => planKnowledgeImport(sheet?.pairs ?? [], db.knowledge),
+    [sheet, db.knowledge],
   );
-  const parsed = useMemo(() => parseQaText(text), [text]);
-  const rows = parsed.pairs.map((p, i) => ({
-    ...p,
-    index: i,
-    duplicate: known.has(questionKey(p.question)),
-  }));
-  const chosen = rows.filter((r) => !r.duplicate && !skipped.has(r.index));
+  const chosen = rows.filter(
+    (r) => r.state !== "same" && !skipped.has(r.index),
+  );
+  const added = chosen.filter((r) => r.state === "new").length;
+  const changed = chosen.length - added;
 
   const close = () => {
-    setText("");
+    setSheet(null);
+    setFileName("");
+    setError(null);
     setSkipped(new Set());
     onClose();
+  };
+
+  const take = async (file: File) => {
+    if (reading.current) return;
+    reading.current = true;
+    try {
+      setSheet(await readKnowledgeFile(file));
+      setFileName(file.name);
+      setError(null);
+    } catch (e) {
+      setSheet(null);
+      setFileName("");
+      setError(
+        e instanceof XlsxError
+          ? t(
+              "knowledge.importUnreadable",
+              "This file could not be read. Save it as .xlsx or .csv and try again.",
+            )
+          : t("knowledge.importFailed", "The file could not be opened."),
+      );
+    } finally {
+      setSkipped(new Set());
+      reading.current = false;
+    }
   };
 
   const save = () => {
@@ -67,20 +103,29 @@ export function KnowledgeImport({
     const now = new Date().toISOString();
     mutate((d) => {
       for (const r of chosen) {
-        d.knowledge.push({
-          id: nextId("k"),
-          question: r.question,
-          answer: r.answer,
-          active: true,
-          updatedAt: now,
-        });
+        const known =
+          r.id === undefined
+            ? undefined
+            : d.knowledge.find((k) => k.id === r.id);
+        if (known) {
+          known.answer = r.answer;
+          known.updatedAt = now;
+        } else {
+          d.knowledge.push({
+            id: nextId("k"),
+            question: r.question,
+            answer: r.answer,
+            active: true,
+            updatedAt: now,
+          });
+        }
       }
     });
     message.success(
       t(
-        "knowledge.imported",
-        "Imported {{n}} answers — the bot uses them on its next reply.",
-        { n: chosen.length },
+        "knowledge.importedSheet",
+        "{{added}} added, {{changed}} updated — the bot uses them on its next reply.",
+        { added, changed },
       ),
     );
     close();
@@ -90,7 +135,7 @@ export function KnowledgeImport({
     <Modal
       open={open}
       width={860}
-      title={t("knowledge.importTitle", "Import answers from a document")}
+      title={t("knowledge.importTitle", "Import answers from a file")}
       okText={t("knowledge.importOk", "Import {{n}}", { n: chosen.length })}
       okButtonProps={{ disabled: chosen.length === 0 }}
       onOk={save}
@@ -98,32 +143,65 @@ export function KnowledgeImport({
       destroyOnHidden
     >
       <Flex vertical gap={12}>
-        <Typography.Text type="secondary">
-          {t(
-            "knowledge.importHint",
-            "Paste the whole document. Each question starts with “Q:” and its answer with “A:”; an answer can run over several lines.",
-          )}
-        </Typography.Text>
-        <Input.TextArea
-          aria-label={t("knowledge.importPaste", "The document's text")}
-          autoSize={{ minRows: 6, maxRows: 12 }}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            setSkipped(new Set());
+        <Upload.Dragger
+          accept=".xlsx,.csv"
+          maxCount={1}
+          showUploadList={false}
+          beforeUpload={(file) => {
+            void take(file as unknown as File);
+            // Read in this browser; there is nothing for antd to upload.
+            return false;
           }}
-          placeholder={"Q: Cod bisa ga kak?\nA: Bisa kak 😊 ..."}
-        />
-        {parsed.unanswered.length > 0 && (
+        >
+          <p className="ant-upload-drag-icon">
+            <InboxOutlined />
+          </p>
+          <p className="ant-upload-text">
+            {fileName === ""
+              ? t("knowledge.importDrop", "Drop an .xlsx or .csv file here")
+              : fileName}
+          </p>
+          <p className="ant-upload-hint">
+            {t(
+              "knowledge.importColumns",
+              "Column A is the question and column B the answer. A first row reading “Question” and “Answer” is skipped.",
+            )}
+          </p>
+        </Upload.Dragger>
+
+        {error !== null && <Alert type="error" showIcon title={error} />}
+        {sheet !== null && rows.length === 0 && (
           <Alert
             type="warning"
             showIcon
-            message={t(
-              "knowledge.importUnanswered",
-              "{{n}} questions have no “A:” line and will not be imported:",
-              { n: parsed.unanswered.length },
+            title={t(
+              "knowledge.importEmpty",
+              "No question with an answer was found in this file.",
             )}
-            description={parsed.unanswered.join(" · ")}
+          />
+        )}
+        {sheet !== null && sheet.unanswered.length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            title={t(
+              "knowledge.importUnanswered",
+              "{{n}} questions have no answer and will not be imported:",
+              { n: sheet.unanswered.length },
+            )}
+            description={sheet.unanswered.join(" · ")}
+          />
+        )}
+        {sheet !== null && sheet.repeated.length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            title={t(
+              "knowledge.importRepeated",
+              "{{n}} questions appear twice in the file; only the first of each is read:",
+              { n: sheet.repeated.length },
+            )}
+            description={sheet.repeated.join(" · ")}
           />
         )}
         {rows.length > 0 && (
@@ -134,9 +212,9 @@ export function KnowledgeImport({
             header={
               <Typography.Text strong>
                 {t(
-                  "knowledge.importFound",
-                  "{{n}} answers found, {{m}} selected",
-                  { n: rows.length, m: chosen.length },
+                  "knowledge.importFoundSheet",
+                  "{{n}} answers in the file — {{added}} new and {{changed}} changed selected",
+                  { n: rows.length, added, changed },
                 )}
               </Typography.Text>
             }
@@ -145,8 +223,8 @@ export function KnowledgeImport({
               <List.Item>
                 <Flex gap={12} align="flex-start" style={{ width: "100%" }}>
                   <Checkbox
-                    checked={!r.duplicate && !skipped.has(r.index)}
-                    disabled={r.duplicate}
+                    checked={r.state !== "same" && !skipped.has(r.index)}
+                    disabled={r.state === "same"}
                     aria-label={r.question}
                     onChange={(e) =>
                       setSkipped((prev) => {
@@ -160,22 +238,37 @@ export function KnowledgeImport({
                   <Flex vertical gap={2} style={{ minWidth: 0, flex: 1 }}>
                     <Flex gap={8} align="center" wrap>
                       <Typography.Text strong>{r.question}</Typography.Text>
-                      {r.duplicate && (
-                        <Tag>
-                          {t(
-                            "knowledge.importDuplicate",
-                            "already in the knowledge base",
-                          )}
+                      {r.state === "new" && (
+                        <Tag color="green">
+                          {t("knowledge.importNew", "new")}
                         </Tag>
+                      )}
+                      {r.state === "changed" && (
+                        <Tag color="gold">
+                          {t("knowledge.importChanged", "answer changed")}
+                        </Tag>
+                      )}
+                      {r.state === "same" && (
+                        <Tag>{t("knowledge.importSame", "no change")}</Tag>
                       )}
                     </Flex>
                     <Typography.Paragraph
-                      type="secondary"
+                      type={r.state === "same" ? "secondary" : undefined}
                       style={{ marginBottom: 0, whiteSpace: "pre-line" }}
                       ellipsis={{ rows: 3, expandable: true }}
                     >
                       {r.answer}
                     </Typography.Paragraph>
+                    {r.current !== undefined && (
+                      <Typography.Paragraph
+                        type="secondary"
+                        delete
+                        style={{ marginBottom: 0, whiteSpace: "pre-line" }}
+                        ellipsis={{ rows: 2, expandable: true }}
+                      >
+                        {r.current}
+                      </Typography.Paragraph>
+                    )}
                   </Flex>
                 </Flex>
               </List.Item>

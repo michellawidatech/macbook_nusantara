@@ -9,3 +9,4 @@ export * from "./checks.js";
 export * from "./productCode.js";
 export * from "./credentials.js";
 export * from "./qaText.js";
+export * from "./qaSheet.js";
