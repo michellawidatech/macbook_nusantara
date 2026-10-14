@@ -2361,6 +2361,39 @@ Decisions that outlived those documents:
     query: that query skips a held thread and one with `autoReply` off, which
     are exactly the threads a reset is for.
 
+- **Chatbot v2, started 2026-10-14** — `docs/chatbot-v2-design.md` is the
+  design and the build order; read it before touching the bot. *"Around 50
+  customers a day, 10–25 at once."* Three agents in code, not n8n — Router
+  (Sonnet 5.5, structured, no prose), Operations (Haiku 4.5, POS REST only)
+  and the Sales Advisor (Sonnet 5.5), who writes every reply. Owner answers:
+  the POS is reached through REST (`/api/agent/v1/*`) with a per-turn token
+  that carries the sender's wa_id — **no route takes a phone**, which is what
+  "a customer can only write to their own data" means; photos stay WhatsApp
+  uploads; 10 s is fine; an appointment is a reservation with a visit time
+  (`Reservation.scheduledFor`); a lead is set by the bot or staff and clears at
+  a sale; one persona per agent; tabs are Chat · Knowledge Base · Evaluation ·
+  Settings, and Settings holds the personas, the simulator, the switches and
+  Testers.
+  - ⚠️ **A Claude Pro/Max (Claude Code) login cannot run the bot.** Anthropic
+    refuses those tokens outside Claude Code and claude.ai. Production needs a
+    Console API key or Console OAuth (`ant auth login`).
+  - **Step 1 is in:** migration
+    `20261014120000_chatbot_v2_threads_profiles_and_evaluation` (additive; owner
+    approved the schema). `WaThreadMemory` gains the lease (agent-owned), the
+    lead in two halves — `leadAt`/`leadScore` the bot's, `leadStaffAt` and
+    `leadClearedAt` staff's — and `readAt`; the column grants keep invariant
+    13 disjoint. `CustomerProfile` gains `budgetMin`/`budgetMax` (backfilled),
+    `ageEstimate`, `occupation` and `CustomerProfileFact` rows.
+    `ReservationProposal(+Item)`, `AgentRun(+Step)`, `AgentEvaluation` and
+    `Persona.agent` (unique) are new. ⚠️ `CustomerProfile.budget` is
+    superseded and kept ONE release for the reader before; drop it after.
+    ⚠️ `prisma migrate diff` wants to drop `Expense_orderId_idx` and
+    `ManualIncome_orderId_idx` (hand-written, never declared) — strip that
+    from any generated migration.
+  - **The app is full width** (owner, 2026-10-14): `LAYOUT.contentMaxWidth`
+    (1600) is gone, so a zoomed-out screen no longer leaves its right third
+    empty. Forms are still capped by `formMaxWidth`.
+
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

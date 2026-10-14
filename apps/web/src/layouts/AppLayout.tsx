@@ -825,7 +825,9 @@ export function AppLayout({ staff }: { staff: Staff }) {
                 ? LAYOUT.contentPadding.compact
                 : LAYOUT.contentPadding.comfortable
             }px + env(safe-area-inset-bottom))`,
-            maxWidth: LAYOUT.contentMaxWidth,
+            // No max width: content fills the screen however far it is zoomed
+            // out (owner, 2026-10-14). It used to stop at 1600px and leave
+            // the right of a wide monitor empty.
             width: "100%",
             // Without this, a wide table inside a fixed-width flex child
             // refuses to shrink and the whole document scrolls sideways —
