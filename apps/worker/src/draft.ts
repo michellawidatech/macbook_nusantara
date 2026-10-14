@@ -62,8 +62,19 @@ import {
   PARALLEL_CAPABILITIES,
   type AgentCapabilities,
   type AgentApiOptions,
+  type AgentStep,
+  type CallUsage,
+  type PipelineResult,
   agentApiDispatch,
+  costMicros,
   dispatchTool,
+  isLead,
+  loadAgentPersonas,
+  loadChatbotSettings,
+  openProposalLine,
+  personaFor,
+  profileLine,
+  runPipeline,
   storeOpenAt,
   type AgentClient,
   type AnthropicEnv,
@@ -394,25 +405,40 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   // (docs/chatbot-rag.md) — read once, indexed once, and rendered once into
   // the cached half of the prompt, which is then byte-identical for every
   // thread in the pass.
-  const [knowledge, storeFacts, persona, corrections, capabilities] =
-    await Promise.all([
-      loadKnowledgeBase(db),
-      loadStoreFacts(db).then(renderStoreFacts),
-      db.persona.findFirst({
-        where: { active: true },
-        select: { prompt: true },
-      }),
-      db.agentCorrection.findMany({
-        select: { original: true, corrected: true, note: true },
-        orderBy: { createdAt: "desc" },
-        take: MAX_CORRECTIONS,
-      }),
-      // The four switches on /chat (owner ask 2026-09-29), read each pass so a
-      // switch pressed on the Chat page applies to the next message. The
-      // environment's `AGENT_CAPABILITIES` answers for a switch never pressed.
-      loadCapabilities(db, deps.capabilities ?? PARALLEL_CAPABILITIES),
-    ]);
+  const [
+    knowledge,
+    storeFacts,
+    persona,
+    corrections,
+    capabilities,
+    settings,
+    agentPersonas,
+  ] = await Promise.all([
+    loadKnowledgeBase(db),
+    loadStoreFacts(db).then(renderStoreFacts),
+    db.persona.findFirst({
+      where: { active: true },
+      select: { prompt: true },
+    }),
+    db.agentCorrection.findMany({
+      select: { original: true, corrected: true, note: true },
+      orderBy: { createdAt: "desc" },
+      take: MAX_CORRECTIONS,
+    }),
+    // The four switches on /chat (owner ask 2026-09-29), read each pass so a
+    // switch pressed on the Chat page applies to the next message. The
+    // environment's `AGENT_CAPABILITIES` answers for a switch never pressed.
+    loadCapabilities(db, deps.capabilities ?? PARALLEL_CAPABILITIES),
+    // Chatbot v2: which pipeline answers (Settings, v1 until the owner
+    // switches), the lead threshold, and the three agents' personas.
+    loadChatbotSettings(db),
+    loadAgentPersonas(db),
+  ]);
   const knowledgeText = knowledgeBlock(knowledge);
+  const v2 = settings.pipeline === "v2";
+  // The v1 voice is the Advisor's until somebody edits the Advisor.
+  const v1Persona = persona?.prompt ?? DEFAULT_PERSONA;
+  const advisorPersona = personaFor("ADVISOR", agentPersonas, v1Persona);
 
   let drafted = 0;
   let escalated = 0;
@@ -541,7 +567,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       const prompt = buildAgentPrompt({
         // A fresh database has no persona row, and production never runs the
         // seed, so the compiled-in voice is the fallback rather than an error.
-        persona: persona?.prompt ?? DEFAULT_PERSONA,
+        persona: v2 ? advisorPersona : v1Persona,
         storeFacts,
         knowledge: knowledgeText,
         capabilities,
@@ -607,31 +633,67 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       };
 
       let failure: unknown;
-      const result = await converse({
-        client,
-        db,
-        ctx,
-        prompt,
-        turns: toTurns([...history].reverse(), current),
-        knowledge,
-        storeFacts,
-        route,
-        hint,
-        capabilities,
-        onError: (err) => {
-          failure = err;
-        },
-        ...(deps.agentApi
-          ? {
-              dispatch: agentApiDispatch(
-                deps.agentApi,
-                (name, input, c) => dispatchTool(db, name, input, c),
-                // The anchor row is unique to this batch: one turn, one id.
-                { id: anchor.id, now: at },
-              ),
-            }
-          : {}),
-      });
+      const dispatch = deps.agentApi
+        ? agentApiDispatch(
+            deps.agentApi,
+            (name, input, c) => dispatchTool(db, name, input, c),
+            // The anchor row is unique to this batch: one turn, one id.
+            { id: anchor.id, now: at },
+          )
+        : undefined;
+      const turns = toTurns([...history].reverse(), current);
+      const v1Calls: CallUsage[] = [];
+      const turnStarted = Date.now();
+      let result: ConverseResult | PipelineResult | null;
+      if (v2) {
+        // Chatbot v2: Router → Operations → Sales Advisor (pipeline.ts).
+        const [profile, openProposal] = await Promise.all([
+          profileLine(db, from),
+          openProposalLine(db, from, at),
+        ]);
+        result = await runPipeline({
+          client,
+          db,
+          ctx,
+          prompt,
+          turns,
+          knowledge,
+          storeFacts,
+          route,
+          ...(hint ? { hint } : {}),
+          capabilities,
+          ...(dispatch ? { dispatch } : {}),
+          personas: {
+            router: personaFor("ROUTER", agentPersonas, v1Persona),
+            operations: personaFor("OPERATIONS", agentPersonas, v1Persona),
+          },
+          summary: memory?.summary ?? null,
+          profile,
+          openProposal,
+          leadThreshold: settings.leadThreshold,
+          onError: (err) => {
+            failure = err;
+          },
+        });
+      } else {
+        result = await converse({
+          client,
+          db,
+          ctx,
+          prompt,
+          turns,
+          knowledge,
+          storeFacts,
+          route,
+          hint,
+          capabilities,
+          onError: (err) => {
+            failure = err;
+          },
+          onCall: (u) => v1Calls.push(u),
+          ...(dispatch ? { dispatch } : {}),
+        });
+      }
 
       outcome = result;
       if (!result) {
@@ -731,6 +793,34 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           await enqueueOutbox(tx, {
             kind: "WA_IMAGE",
             payload: { to: from, photoId, inReplyTo: anchor.id },
+          });
+        }
+        // The turn's trace (Evaluation and Settings read it), and the bot's
+        // half of the 🔥 lead — in the transaction that commits the reply,
+        // so a reply never exists without the record of how it was made.
+        await recordRun(tx, {
+          from,
+          messageId: anchor.id,
+          pipeline: v2 ? "v2" : "v1",
+          result,
+          v1Calls,
+          latencyMs: Date.now() - turnStarted,
+          at: answeredAt,
+        });
+        if ("verdict" in result) {
+          const mem = await tx.waThreadMemory.findUnique({
+            where: { from },
+            select: { leadAt: true, leadStaffAt: true, leadClearedAt: true },
+          });
+          const score = result.verdict.leadScore;
+          await tx.waThreadMemory.updateMany({
+            where: { from },
+            data: {
+              leadScore: score,
+              ...(score >= settings.leadThreshold && !isLead(mem)
+                ? { leadAt: answeredAt }
+                : {}),
+            },
           });
         }
       }, TXN_TIMEOUTS);
@@ -842,6 +932,77 @@ function intentOf(result: ConverseResult): string {
   if (result.sources.includes("catalog")) return "jawab:katalog";
   if (result.sources.includes("store")) return "jawab:toko";
   return "sapaan";
+}
+
+/**
+ * One `AgentRun` and its steps for a committed turn (chatbot v2). A v1 turn
+ * is one agent, the Advisor's seat, one step per model call.
+ */
+async function recordRun(
+  tx: Prisma.TransactionClient,
+  r: {
+    from: string;
+    messageId: string;
+    pipeline: "v1" | "v2";
+    result: ConverseResult | PipelineResult;
+    v1Calls: readonly CallUsage[];
+    latencyMs: number;
+    at: Date;
+  },
+): Promise<void> {
+  const v2 = "verdict" in r.result ? r.result : null;
+  const steps: AgentStep[] = v2
+    ? [...v2.trace]
+    : r.v1Calls.map((u) => ({
+        agent: "ADVISOR" as const,
+        model: u.model,
+        tool: null,
+        ok: true,
+        ms: u.ms,
+        inputTokens: u.inputTokens + u.cachedTokens + u.cacheWriteTokens,
+        cachedTokens: u.cachedTokens,
+        outputTokens: u.outputTokens,
+      }));
+  const sum = (k: "inputTokens" | "cachedTokens" | "outputTokens") =>
+    steps.reduce((n, s) => n + s[k], 0);
+  const cost = v2
+    ? v2.costMicros
+    : r.v1Calls.reduce((n, u) => n + costMicros(u), 0);
+  await tx.agentRun.create({
+    data: {
+      from: r.from,
+      messageId: r.messageId,
+      pipeline: r.pipeline,
+      ...(v2
+        ? {
+            language: v2.verdict.language,
+            tone: v2.verdict.tone,
+            intent: v2.verdict.intent,
+            leadScore: v2.verdict.leadScore,
+            escalateTopic: v2.verdict.escalate,
+          }
+        : {}),
+      outcome: r.result.handoff ? "HANDOFF" : "REPLIED",
+      inputTokens: sum("inputTokens"),
+      cachedTokens: sum("cachedTokens"),
+      outputTokens: sum("outputTokens"),
+      costMicros: BigInt(cost),
+      latencyMs: v2 ? v2.latencyMs : r.latencyMs,
+      createdAt: r.at,
+      steps: {
+        create: steps.map((s, i) => ({
+          sortOrder: i,
+          agent: s.agent,
+          model: s.model,
+          tool: s.tool,
+          ok: s.ok,
+          ms: s.ms,
+          inputTokens: s.inputTokens,
+          outputTokens: s.outputTokens,
+        })),
+      },
+    },
+  });
 }
 
 /**

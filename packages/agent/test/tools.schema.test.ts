@@ -52,6 +52,8 @@ const ALLOWED = [
   "reschedule_reservation",
   "cancel_reservation",
   "remember_customer",
+  // Chatbot v2 step 5: a booking proposal, which holds nothing.
+  "propose_reservation",
 ] as const;
 
 const names = () => ANTHROPIC_TOOLS.map((t) => t.name).sort();
@@ -83,7 +85,12 @@ describe("the tool whitelist", () => {
     // Every read tool is a tool, and none of them is a write or a terminal.
     expect([...READ_TOOLS].sort()).toEqual(
       [...ALLOWED]
-        .filter((n) => n !== "reply" && n !== "remember_customer")
+        .filter(
+          (n) =>
+            n !== "reply" &&
+            n !== "remember_customer" &&
+            n !== "propose_reservation",
+        )
         .filter((n) => !(WRITE_TOOLS as readonly string[]).includes(n))
         .sort(),
     );

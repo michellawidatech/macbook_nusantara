@@ -24,8 +24,10 @@ import type { PrismaClient } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import {
   AGENT_API_ROUTES,
+  CODE_ONLY_TOOLS,
   argsFromRequest,
   dispatchTool,
+  effectiveCapabilities,
   toolsFor,
   verifyAgentToken,
   type AgentClaims,
@@ -125,8 +127,18 @@ export function agentRouter(deps: AgentRouterDeps): Router {
         // The same gate the model's tool list is built from, so a tool the
         // switches forbid is not reachable by calling its URL either.
         const allowed = new Set(
-          toolsFor(ctx, { capabilities: claims.caps }).map((t) => t.name),
+          toolsFor(ctx, { capabilities: claims.caps, proposals: true }).map(
+            (t) => t.name,
+          ),
         );
+        // The confirm is never in a model's tool list; it is the pipeline's
+        // own call, allowed on exactly the terms a booking is.
+        if (
+          claims.writes &&
+          effectiveCapabilities(claims.caps).reserve &&
+          (CODE_ONLY_TOOLS as readonly string[]).includes(route.tool)
+        )
+          allowed.add(route.tool);
         if (!allowed.has(route.tool)) {
           res.status(403).json({ error: "That lookup is switched off." });
           return;

@@ -101,6 +101,9 @@ beforeEach(async () => {
   // ChatAction points at WaMessage, Unit and Customer (2026-09-29).
   await db.chatAction.deleteMany({});
   await db.customerProfile.deleteMany({});
+  // AgentRun points at the message it answered (chatbot v2).
+  await db.agentRunStep.deleteMany({});
+  await db.agentRun.deleteMany({});
   await db.waMessage.deleteMany({});
 });
 

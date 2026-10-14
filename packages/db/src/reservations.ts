@@ -146,7 +146,12 @@ function jakartaHour(at: Date): number {
   );
 }
 
-function assertSchedule(
+/**
+ * The schedule rules a hold is refused for, on their own — exported so the
+ * chatbot's booking PROPOSAL (chatbot v2) is refused for exactly the reasons
+ * the hold it may become would be, before anything is written.
+ */
+export function assertSchedule(
   scheduledFor: Date | null | undefined,
   now: Date,
   policy: HoldPolicy | undefined,

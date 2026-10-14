@@ -72,6 +72,13 @@ export interface AgentClient {
     create(args: CreateArgs): Promise<{
       content: Anthropic.ContentBlock[];
       stop_reason?: string | null;
+      /** Absent from a test's fake; read as zeros. */
+      usage?: Partial<{
+        input_tokens: number;
+        output_tokens: number;
+        cache_read_input_tokens: number | null;
+        cache_creation_input_tokens: number | null;
+      }> | null;
     }>;
   };
 }
@@ -85,6 +92,40 @@ export interface CreateArgs {
   tools?: Anthropic.Tool[];
   tool_choice?: Anthropic.ToolChoice;
   temperature?: number;
+  /**
+   * Chatbot v2: effort for the Sonnet 5.5 agents, and the Router's JSON
+   * schema. Absent on every v1 call.
+   */
+  output_config?: {
+    effort?: "low" | "medium" | "high";
+    format?: { type: "json_schema"; schema: Record<string, unknown> };
+  };
+}
+
+/** One model call's cost and time, for the run's trace (`AgentRunStep`). */
+export interface CallUsage {
+  readonly model: string;
+  readonly ms: number;
+  readonly inputTokens: number;
+  readonly cachedTokens: number;
+  readonly cacheWriteTokens: number;
+  readonly outputTokens: number;
+}
+
+/** Read a response's usage, tolerating a fake with none. */
+export function usageOf(
+  model: string,
+  ms: number,
+  usage: Awaited<ReturnType<AgentClient["messages"]["create"]>>["usage"],
+): CallUsage {
+  return {
+    model,
+    ms,
+    inputTokens: usage?.input_tokens ?? 0,
+    cachedTokens: usage?.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: usage?.cache_creation_input_tokens ?? 0,
+    outputTokens: usage?.output_tokens ?? 0,
+  };
 }
 
 /**
@@ -158,6 +199,32 @@ export interface ConverseInput {
    * that names this thread's customer and nobody else (chatbot v2 step 3).
    */
   readonly dispatch?: ToolDispatch;
+  /**
+   * Chatbot v2 — the Sales Advisor is this loop with these set. All absent,
+   * the loop is the v1 agent, unchanged.
+   */
+  /** The model. Defaults to `AGENT_MODEL`. */
+  readonly model?: string;
+  /**
+   * `tool_choice: any` (the default). Sonnet 5.5 refuses a forced tool
+   * choice, so the Advisor runs on `auto` with effort low; a turn that ends
+   * in plain text is then read as a reply citing only `greeting`, which
+   * `checkReply` still holds to — no figure, no stock claim.
+   */
+  readonly forcedToolUse?: boolean;
+  /** Tools this caller may not see, whatever the switches say. */
+  readonly excludeTools?: ReadonlySet<string>;
+  /** What the Operations agent found, so a reply may cite `stock` and send its photos. */
+  readonly preloaded?: {
+    readonly stockFacts: readonly StockFact[];
+    readonly stockLooked: boolean;
+    readonly photoIds: readonly string[];
+    readonly bookings: readonly BookingWrite[];
+    /** Put beside the customer's message, fenced like every shop note. */
+    readonly note: string;
+  };
+  /** Called after every model call with its tokens and time. */
+  readonly onCall?: (usage: CallUsage) => void;
 }
 
 export interface ConverseHandoff {
@@ -271,7 +338,7 @@ function bookingLine(b: BookingWrite): string {
 const TERMINAL = new Set(["reply", "handoff_to_staff"]);
 
 /** The handles a `unit_photos` result offered, read back defensively. */
-function photoIdsIn(output: unknown): string[] {
+export function photoIdsIn(output: unknown): string[] {
   if (output === null || typeof output !== "object") return [];
   const ids = (output as { photoIds?: unknown }).photoIds;
   if (!Array.isArray(ids)) return [];
@@ -308,7 +375,9 @@ export async function converse(
       "Do not answer it with reply. Use handoff_to_staff: first answer anything an approved " +
       "answer covers, then say warmly that a colleague will check and reply in this chat."
     : "";
-  const shopNote = [routedNote, input.hint ?? ""].filter(Boolean).join("\n\n");
+  const shopNote = [routedNote, input.preloaded?.note ?? "", input.hint ?? ""]
+    .filter(Boolean)
+    .join("\n\n");
   const messages: Anthropic.MessageParam[] = turns.map((t, i) =>
     i === last && t.role === "user" && shopNote
       ? {
@@ -328,7 +397,9 @@ export async function converse(
   const tools = toolsFor(ctx, {
     handoffOnly: route != null,
     capabilities,
-  });
+  }).filter((t) => !input.excludeTools?.has(t.name));
+  const model = input.model ?? AGENT_MODEL;
+  const forcedToolUse = input.forcedToolUse ?? true;
   const catalogResults: string[] = [];
   /*
    * What the shelf said this turn, so a price the bot quotes can be checked
@@ -336,11 +407,11 @@ export async function converse(
    * `checkReply` would refuse every figure the stock tools returned and the
    * capability would be on in name only.
    */
-  const stockFacts: StockFact[] = [];
-  let stockLooked = false;
-  const bookings: BookingWrite[] = [];
+  const stockFacts: StockFact[] = [...(input.preloaded?.stockFacts ?? [])];
+  let stockLooked = input.preloaded?.stockLooked ?? false;
+  const bookings: BookingWrite[] = [...(input.preloaded?.bookings ?? [])];
   /** The photo handles `unit_photos` offered, so `reply` cannot invent one. */
-  const offeredPhotos = new Set<string>();
+  const offeredPhotos = new Set<string>(input.preloaded?.photoIds ?? []);
   const open = storeOpenAt(ctx.now);
 
   /** The code handing over, in the shop's fixed words. */
@@ -502,20 +573,46 @@ export async function converse(
 
   try {
     for (let step = 1; step <= MAX_STEPS; step += 1) {
+      const t0 = Date.now();
       const response = await client.messages.create({
-        model: AGENT_MODEL,
+        model,
         max_tokens: MAX_TOKENS,
-        temperature: TEMPERATURE,
         system,
         tools,
-        tool_choice: { type: "any" },
         messages,
+        ...(forcedToolUse
+          ? { temperature: TEMPERATURE, tool_choice: { type: "any" as const } }
+          : {
+              tool_choice: { type: "auto" as const },
+              output_config: { effort: "low" as const },
+            }),
       });
+      input.onCall?.(usageOf(model, Date.now() - t0, response.usage));
 
       const uses = response.content.filter(
         (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
       );
-      if (uses.length === 0) break;
+      if (uses.length === 0) {
+        // Only reachable on `auto`: words with no tool. They are a reply that
+        // rests on nothing, and `checkReply` treats them so.
+        const text = response.content
+          .filter((b): b is Anthropic.TextBlock => b.type === "text")
+          .map((b) => b.text)
+          .join("\n")
+          .trim();
+        if (!forcedToolUse && text) {
+          toolsUsed.push("reply");
+          if (route)
+            return forced(
+              route.topic,
+              `Dialihkan ke staf (${route.rule}).`,
+              "route",
+              step,
+            );
+          return answer({ message: text, sources: "greeting" }, step);
+        }
+        break;
+      }
 
       // A hand-over wins over a reply sent in the same breath: when the model
       // is of two minds, the person is the safe one.

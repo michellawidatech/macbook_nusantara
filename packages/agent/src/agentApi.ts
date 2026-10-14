@@ -49,6 +49,18 @@ export const AGENT_API_ROUTES: readonly AgentRoute[] = [
   { tool: "create_reservation", method: "POST", path: "/me/reservations" },
   { tool: "reschedule_reservation", method: "PATCH", path: "/me/reservations" },
   { tool: "cancel_reservation", method: "DELETE", path: "/me/reservations" },
+  // Chatbot v2 step 5. A proposal holds nothing; the confirm is called by
+  // the pipeline's CODE on the router's reading of the customer's reply.
+  {
+    tool: "propose_reservation",
+    method: "POST",
+    path: "/me/reservations/proposals",
+  },
+  {
+    tool: "confirm_reservation",
+    method: "POST",
+    path: "/me/reservations/proposals/confirm",
+  },
 ];
 
 /** The tools that cross the wire. Everything else runs in the worker. */
