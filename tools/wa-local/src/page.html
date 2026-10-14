@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>wa-local — chatbot test link</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font:
+          15px/1.5 system-ui,
+          sans-serif;
+      }
+      body {
+        max-width: 760px;
+        margin: 32px auto;
+        padding: 0 16px;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 15px;
+        margin: 28px 0 8px;
+      }
+      .muted {
+        opacity: 0.65;
+      }
+      .card {
+        border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+        border-radius: 10px;
+        padding: 14px 16px;
+      }
+      .warn {
+        border-color: #d48806;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 4px 0;
+      }
+      .row span:first-child {
+        flex: 1;
+      }
+      input,
+      button {
+        font: inherit;
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+        background: transparent;
+        color: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      button.primary {
+        background: #047857;
+        border-color: #047857;
+        color: #fff;
+      }
+      img {
+        background: #fff;
+        padding: 8px;
+        border-radius: 8px;
+        display: block;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      td {
+        padding: 4px 8px 4px 0;
+        vertical-align: top;
+        border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+      }
+      td:nth-child(1),
+      td:nth-child(2),
+      td:nth-child(3) {
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Chatbot test link</h1>
+    <div class="muted">
+      Local testing only, on database <b id="database"></b>. The bot answers
+      only the numbers on the allow-list below.
+    </div>
+
+    <h2>1. WhatsApp account</h2>
+    <div class="card" id="link"></div>
+
+    <h2>2. Numbers the bot may answer</h2>
+    <div class="card">
+      <div id="allow"></div>
+      <form id="add" class="row" style="margin-top: 8px">
+        <span
+          ><input
+            id="number"
+            placeholder="0812… or 62812…"
+            inputmode="tel"
+            style="width: 100%; box-sizing: border-box"
+        /></span>
+        <button class="primary">Allow</button>
+      </form>
+    </div>
+
+    <div id="ignoredWrap" hidden>
+      <h2>Wrote to this account and were ignored</h2>
+      <div class="card warn" id="ignored"></div>
+    </div>
+
+    <h2>Activity</h2>
+    <div class="card"><table id="activity"></table></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const el = (tag, text, attrs = {}) => {
+        const n = document.createElement(tag);
+        if (text != null) n.textContent = text;
+        Object.assign(n, attrs);
+        return n;
+      };
+      const post = (path, number) =>
+        fetch(path, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ number }),
+        })
+          .then((r) => r.json())
+          .then(render);
+
+      let lastQr = null;
+      function render(s) {
+        $("database").textContent = s.database;
+
+        const link = $("link");
+        if (s.link === "connected") {
+          lastQr = null;
+          link.replaceChildren(
+            el("div", "Linked as +" + s.me),
+            el("button", "Unlink", {
+              style: "margin-top:8px",
+              onclick: () => confirm("Unlink this account?") && post("/unlink"),
+            }),
+          );
+        } else if (s.qr) {
+          if (s.qr !== lastQr) {
+            lastQr = s.qr;
+            link.replaceChildren(
+              el(
+                "div",
+                "On the phone: WhatsApp → Linked devices → Link a device, then scan.",
+              ),
+              el("img", null, { src: s.qr, width: 300, height: 300 }),
+              el("div", "The code refreshes by itself.", {
+                className: "muted",
+              }),
+            );
+          }
+        } else {
+          link.replaceChildren(
+            el("div", "Connecting…", { className: "muted" }),
+          );
+        }
+
+        $("allow").replaceChildren(
+          ...(s.allow.length
+            ? s.allow.map((n) => {
+                const row = el("div", null, { className: "row" });
+                row.append(
+                  el("span", "+" + n),
+                  el("button", "Remove", {
+                    onclick: () => post("/disallow", n),
+                  }),
+                );
+                return row;
+              })
+            : [
+                el("div", "Nobody yet — the bot answers no one.", {
+                  className: "muted",
+                }),
+              ]),
+        );
+
+        $("ignoredWrap").hidden = s.ignored.length === 0;
+        $("ignored").replaceChildren(
+          ...s.ignored.map((i) => {
+            const row = el("div", null, { className: "row" });
+            row.append(
+              el("span", "+" + i.number + (i.name ? " · " + i.name : "")),
+              el("button", "Allow", {
+                onclick: () => post("/allow", i.number),
+              }),
+            );
+            return row;
+          }),
+        );
+
+        $("activity").replaceChildren(
+          ...(s.activity.length
+            ? s.activity.map((a) => {
+                const tr = el("tr");
+                tr.append(
+                  el("td", new Date(a.at).toLocaleTimeString()),
+                  el(
+                    "td",
+                    a.dir === "in"
+                      ? "→ in"
+                      : a.dir === "out"
+                        ? "← out"
+                        : "ignored",
+                  ),
+                  el("td", "+" + a.who),
+                  el("td", a.text),
+                );
+                return tr;
+              })
+            : [el("tr", null)]),
+        );
+      }
+
+      $("add").onsubmit = (e) => {
+        e.preventDefault();
+        const v = $("number").value.trim();
+        if (v) post("/allow", v).then(() => ($("number").value = ""));
+      };
+      const tick = () =>
+        fetch("/state")
+          .then((r) => r.json())
+          .then(render)
+          .catch(() => {});
+      tick();
+      setInterval(tick, 2000);
+    </script>
+  </body>
+</html>
