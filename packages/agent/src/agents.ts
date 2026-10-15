@@ -41,6 +41,11 @@ export interface AgentDefinition {
   readonly task: string;
   readonly model: string;
   readonly defaultPrompt: string;
+  /**
+   * What this seat does under the rules-first pipeline (owner, 2026-10-15:
+   * AI only where rules cannot answer) — where it is code, not a model.
+   */
+  readonly inRules: string;
 }
 
 export const AGENT_DEFINITIONS: Readonly<Record<AgentRole, AgentDefinition>> = {
@@ -49,6 +54,8 @@ export const AGENT_DEFINITIONS: Readonly<Record<AgentRole, AgentDefinition>> = {
     name: "Router / Guard",
     task: "Greets, reads the language and tone, finds the intent and scores how ready the customer is to buy.",
     model: ROUTER_MODEL,
+    inRules:
+      "Rules, no AI: reads the intent, product, budget, serial, name and visit time from keywords.",
     defaultPrompt: [
       "You are the front desk of Macbook Nusantara, a shop in Indonesia selling new and",
       "second-hand Apple units. You do not talk to the customer. You read their latest",
@@ -64,6 +71,8 @@ export const AGENT_DEFINITIONS: Readonly<Record<AgentRole, AgentDefinition>> = {
     name: "Operations",
     task: "Checks stock, prices and photos in the POS and prepares bookings.",
     model: OPERATIONS_MODEL,
+    inRules:
+      "No AI: the same POS lookups (stock, price, photos, bookings), called directly by code.",
     defaultPrompt: [
       "You are the shop's operations desk. You look things up in the shop's own system and",
       "report what you found. You never write to the customer, never guess, and never",
@@ -75,6 +84,8 @@ export const AGENT_DEFINITIONS: Readonly<Record<AgentRole, AgentDefinition>> = {
     name: "Sales Advisor",
     task: "Writes every reply: asks what the customer needs, recommends, and keeps their profile.",
     model: ADVISOR_MODEL,
+    inRules:
+      "Templates and the owner's answers word for word. AI only for what no rule covers, and only with a key.",
     // The v1 voice (persona.ts) is the Advisor's default: it is the voice
     // customers already know.
     defaultPrompt: "",

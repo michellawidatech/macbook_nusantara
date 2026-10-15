@@ -53,9 +53,11 @@ function BotMeta({ result }: { result: SimulationResult }) {
   return (
     <Flex vertical gap={2} style={{ marginTop: 6 }}>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {t("chatSim.cost", "AI cost: {{cost}}", {
-          cost: fmtCost(result.costMicros),
-        })}
+        {result.usedAi
+          ? t("chatSim.cost", "AI cost: {{cost}}", {
+              cost: fmtCost(result.costMicros),
+            })
+          : t("chatSim.noAi", "No AI used")}
         {" · "}
         {fmtLatency(result.latencyMs)}
       </Typography.Text>
@@ -137,7 +139,15 @@ export function Simulator() {
     setDraft("");
     setBusy(true);
     try {
-      const result = await simulate(turns);
+      // What the bot's last reply showed, so "yang kedua" means something.
+      const lastShown =
+        [...lines]
+          .reverse()
+          .find(
+            (l): l is Extract<typeof l, { role: "assistant" }> =>
+              l.role === "assistant",
+          )?.result.shown ?? [];
+      const result = await simulate(turns, lastShown);
       if (gen !== generation.current) return;
       setLines((ls) => [
         ...ls,

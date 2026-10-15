@@ -57,6 +57,7 @@ beforeEach(async () => {
   await db.reservationItem.deleteMany({});
   await db.reservation.deleteMany({});
   await db.chatAction.deleteMany({});
+  await db.customerProfileFact.deleteMany({});
   await db.customerProfile.deleteMany({});
   await db.customer.deleteMany({});
   await db.staff.deleteMany({ where: { id: "staff_crm" } });

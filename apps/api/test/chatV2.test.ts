@@ -358,7 +358,8 @@ describe("agents and settings", () => {
     await request(app)
       .get("/api/chat/settings")
       .set("Cookie", staffCookie)
-      .expect(200, { pipeline: "v1", leadThreshold: 60 });
+      // Rules first is the default (owner, 2026-10-15).
+      .expect(200, { pipeline: "rules", leadThreshold: 60 });
     await request(app)
       .put("/api/chat/settings")
       .set("Cookie", staffCookie)
@@ -371,11 +372,44 @@ describe("agents and settings", () => {
       .expect(200, { pipeline: "v2", leadThreshold: 70 });
   });
 
-  it("says the simulator is off without a credential", async () => {
+  it("simulates the rules bot with no credential at all", async () => {
+    const res = await request(app)
+      .post("/api/chat/simulate")
+      .set("Cookie", staffCookie)
+      .send({ turns: [{ role: "user", text: "halo kak" }] })
+      .expect(200);
+    expect(res.body).toMatchObject({
+      pipeline: "rules",
+      usedAi: false,
+      costMicros: 0,
+      handoff: null,
+    });
+    expect(res.body.reply).toMatch(/^Halo kak/);
+    expect(res.body.steps[0]).toMatchObject({
+      agent: "ROUTER",
+      model: "rules",
+    });
+  });
+
+  it("says an AI pipeline is off without a credential", async () => {
+    await request(app)
+      .put("/api/chat/settings")
+      .set("Cookie", ownerCookie)
+      .send({ pipeline: "v1" })
+      .expect(200);
     await request(app)
       .post("/api/chat/simulate")
       .set("Cookie", staffCookie)
       .send({ turns: [{ role: "user", text: "halo" }] })
       .expect(503);
+  });
+
+  it("tells each agent's job under the rules", async () => {
+    const res = await request(app)
+      .get("/api/chat/agents")
+      .set("Cookie", staffCookie);
+    expect(
+      res.body.agents.every((a: { inRules: string }) => a.inRules.length > 0),
+    ).toBe(true);
   });
 });

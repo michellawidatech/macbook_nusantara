@@ -3930,6 +3930,8 @@ export const id: Record<string, string> = {
   "chatAgents.prompt": "Prompt persona",
   "chatSettings.saveFailed": "Pengaturan tidak bisa disimpan.",
   "chatSettings.pipeline": "Alur",
+  "chatSettings.rules": "Aturan dulu (AI hanya cadangan)",
+  "chatSim.noAi": "Tanpa AI",
   "chatSettings.v2": "Tiga agen (v2)",
   "chatSettings.v1": "Satu agen (v1)",
   "chatSettings.leadThreshold": "Ambang prospek",

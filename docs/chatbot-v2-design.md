@@ -1,5 +1,10 @@
 # Chatbot v2 — design (owner-approved 2026-10-14)
 
+> ⚠️ **Revised 2026-10-15 (later): rules first.** The owner chose to minimise
+> AI — *"if the process can be rule based or automated, do not use AI"* — and
+> to keep the interface. The default pipeline is now `rules` (§12); the three
+> AI agents below remain built, tested and selectable in Settings.
+
 Status: **approved 2026-10-14; step 1 built.** Answers given by the owner on
 2026-10-14 are marked *(owner)*; my own choices are marked *(proposed)* and are
 the things to correct first.
@@ -389,3 +394,20 @@ refuses those tokens outside Claude Code. With a Console key:
    (the wait plus `avg_ms`), and about $0.005–0.012 a turn.
 5. Rate the replies (👍/👎) and work through Evaluation → Needs review before
    switching production to v2.
+
+## 12. Rules first (2026-10-15, later) — the default
+
+| Step | How |
+|---|---|
+| 1. Receive (webhook) | no AI — unchanged |
+| 2. Read & classify | **rules** (`rules/understand.ts`): intent, product, budget, serial, which unit, name, visit time, usage/apps/preferences; hand-overs by `routeMessage` as before |
+| 3. Hit the POS | no AI — the same `/api/agent/v1` tools, called by code |
+| 4. Respond | **templates** (`rules/replies.ts`) for greeting, thanks, stock list, price, photos, visit read-back and booking; an owner's answer sent verbatim on a strong match; **AI only** for what is left, and only with a Console key — otherwise a person |
+
+What still needs AI: an open question no rule or approved answer covers
+("which is better for deep learning, the M3 or the M2 Pro?"). With no key
+those go to staff, with an action item, exactly as a v1 hand-over does.
+`test/rulesRun.test.ts` (no model at all) and
+`apps/worker/test/rulesWorker.test.ts` (a full conversation — greeting, stock,
+price of "yang pertama", visit proposal, booking on "iya" — as
+`nusantara_agent` with no credential) are the review.

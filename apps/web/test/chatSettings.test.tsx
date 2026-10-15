@@ -20,6 +20,7 @@ const AGENTS: AgentPersona[] = [
     prompt: "You are the router.",
     isDefault: true,
     updatedAt: null,
+    inRules: "Rules, no AI: reads the intent from keywords.",
   },
   {
     agent: "ADVISOR",
@@ -29,6 +30,7 @@ const AGENTS: AgentPersona[] = [
     prompt: "You are the shop's advisor.",
     isDefault: false,
     updatedAt: "2026-10-14T00:00:00.000Z",
+    inRules: "Templates; AI only for what no rule covers.",
   },
   {
     agent: "OPERATIONS",
@@ -38,6 +40,7 @@ const AGENTS: AgentPersona[] = [
     prompt: "You call the POS.",
     isDefault: true,
     updatedAt: null,
+    inRules: "No AI: direct POS lookups.",
   },
 ];
 
@@ -74,6 +77,9 @@ const RESULT: SimulationResult = {
   ],
   costMicros: 4200,
   latencyMs: 2300,
+  pipeline: "v2",
+  shown: [],
+  usedAi: true,
 };
 
 const saveAgentPrompt = vi.fn(async (agent: string, prompt: string) => ({
@@ -84,18 +90,22 @@ const setChatSettings = vi.fn(async (body: object) => ({
   leadThreshold: 60,
   ...body,
 }));
-const simulate = vi.fn(async (_turns: unknown) => RESULT);
+const simulate = vi.fn(
+  async (_turns: unknown, _lastShown?: unknown): Promise<SimulationResult> =>
+    RESULT,
+);
+let pipeline: "rules" | "v1" | "v2" = "v2";
 
 vi.mock("../src/lib/chatApi.js", async (original) => ({
   ...(await original<typeof import("../src/lib/chatApi.js")>()),
   getCapabilities: async () => ({ set: OFF, effective: OFF }),
   getTesters: async () => ({ numbers: [] }),
-  getChatSettings: async () => ({ pipeline: "v2", leadThreshold: 60 }),
+  getChatSettings: async () => ({ pipeline, leadThreshold: 60 }),
   setChatSettings: (body: object) => setChatSettings(body),
   listAgents: async () => ({ agents: AGENTS }),
   saveAgentPrompt: (a: string, p: string) => saveAgentPrompt(a, p),
   resetAgentPrompt: async () => ({ agent: AGENTS[1] }),
-  simulate: (turns: unknown) => simulate(turns),
+  simulate: (turns: unknown, lastShown?: unknown) => simulate(turns, lastShown),
 }));
 vi.mock("../src/lib/session.js", async (original) => ({
   ...(await original<typeof import("../src/lib/session.js")>()),
@@ -115,6 +125,7 @@ function draw() {
 }
 
 beforeEach(() => {
+  pipeline = "v2";
   saveAgentPrompt.mockClear();
   setChatSettings.mockClear();
   simulate.mockClear();
@@ -178,7 +189,7 @@ describe("the simulator", () => {
     expect(
       await screen.findByText("Halo kak! Ada yang bisa dibantu? 😊"),
     ).toBeInTheDocument();
-    expect(simulate).toHaveBeenCalledWith([{ role: "user", text: "Halo" }]);
+    expect(simulate).toHaveBeenCalledWith([{ role: "user", text: "Halo" }], []);
     const bubble = screen.getByTestId("sim-bot-bubble");
     expect(bubble).toHaveTextContent("AI cost: $0.0042");
     expect(bubble).toHaveTextContent("2.3 s");
@@ -194,11 +205,14 @@ describe("the simulator", () => {
     // The second message carries the first exchange with it.
     await user.type(box, "Air M2 ada?{Enter}");
     await waitFor(() =>
-      expect(simulate).toHaveBeenLastCalledWith([
-        { role: "user", text: "Halo" },
-        { role: "assistant", text: RESULT.reply },
-        { role: "user", text: "Air M2 ada?" },
-      ]),
+      expect(simulate).toHaveBeenLastCalledWith(
+        [
+          { role: "user", text: "Halo" },
+          { role: "assistant", text: RESULT.reply },
+          { role: "user", text: "Air M2 ada?" },
+        ],
+        [],
+      ),
     );
 
     // Start over clears it.
@@ -224,5 +238,43 @@ describe("the simulator", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "no Claude credential",
     );
+  });
+});
+
+describe("rules first (owner, 2026-10-15: AI only where rules cannot answer)", () => {
+  it("shows the rules choice, each agent's rules job, and when no AI was used", async () => {
+    pipeline = "rules";
+    simulate.mockImplementation(async () => ({
+      ...RESULT,
+      reply:
+        "Ada kak 😊 Ini yang ready:\n1. MacBook Air M2 8/256, grade A — Rp 11.900.000",
+      photos: [],
+      costMicros: 0,
+      pipeline: "rules",
+      shown: ["SER1"],
+      usedAi: false,
+    }));
+    const user = userEvent.setup();
+    draw();
+
+    expect(
+      await screen.findByText("Rules first (AI only as fallback)"),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText("Rules, no AI: reads the intent from keywords."),
+    ).toBeInTheDocument();
+
+    const box = await screen.findByRole("textbox", { name: "Your message" });
+    await user.type(box, "ada air m2?{Enter}");
+    const bubble = await screen.findByTestId("sim-bot-bubble");
+    expect(bubble).toHaveTextContent("No AI used");
+    expect(bubble).not.toHaveTextContent("AI cost");
+
+    // The next message carries what the bot showed, so "yang pertama" works.
+    await user.type(box, "yang pertama berapa?{Enter}");
+    await waitFor(() =>
+      expect(simulate).toHaveBeenLastCalledWith(expect.any(Array), ["SER1"]),
+    );
+    simulate.mockImplementation(async () => RESULT);
   });
 });

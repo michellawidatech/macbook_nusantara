@@ -9,13 +9,19 @@ import { formatRupiah } from "@nusantara/domain";
 import type { AgentRole } from "./agents.js";
 import { jakartaDate, jakartaTime } from "./tools.js";
 
-/** `v1` the single agent (the default until the owner switches), `v2` the three. */
+/**
+ * Which bot answers. `rules` — rules and templates first, AI only for what
+ * they cannot answer (owner, 2026-10-15: "if the process can be rule based or
+ * automated, do not use AI") — is the default. `v1` is the single AI agent,
+ * `v2` the three AI agents.
+ */
 export const PIPELINE_SETTING_KEY = "chatbot.pipeline";
 /** From this router score the Advisor offers a visit and the thread is a 🔥 lead. */
 export const LEAD_THRESHOLD_SETTING_KEY = "chatbot.leadThreshold";
 export const DEFAULT_LEAD_THRESHOLD = 60;
 
-export type PipelineName = "v1" | "v2";
+export type PipelineName = "rules" | "v1" | "v2";
+export const PIPELINES: readonly PipelineName[] = ["rules", "v1", "v2"];
 
 export interface ChatbotSettings {
   readonly pipeline: PipelineName;
@@ -32,7 +38,11 @@ export async function loadChatbotSettings(
   const get = (k: string) => rows.find((r) => r.key === k)?.value?.trim();
   const threshold = Number(get(LEAD_THRESHOLD_SETTING_KEY));
   return {
-    pipeline: get(PIPELINE_SETTING_KEY) === "v2" ? "v2" : "v1",
+    pipeline: (PIPELINES as readonly string[]).includes(
+      get(PIPELINE_SETTING_KEY) ?? "",
+    )
+      ? (get(PIPELINE_SETTING_KEY) as PipelineName)
+      : "rules",
     leadThreshold:
       Number.isFinite(threshold) && threshold >= 0 && threshold <= 100
         ? Math.round(threshold)
@@ -45,11 +55,13 @@ export async function loadChatbotSettings(
  * (`leadStaffAt`), whichever is newer, set after the last clear — a sale or a
  * person taking it off (migration 20261014120000).
  */
-export function isLead(m: {
-  readonly leadAt: Date | null;
-  readonly leadStaffAt: Date | null;
-  readonly leadClearedAt: Date | null;
-} | null): boolean {
+export function isLead(
+  m: {
+    readonly leadAt: Date | null;
+    readonly leadStaffAt: Date | null;
+    readonly leadClearedAt: Date | null;
+  } | null,
+): boolean {
   if (!m) return false;
   const set = Math.max(m.leadAt?.getTime() ?? 0, m.leadStaffAt?.getTime() ?? 0);
   return set > 0 && set > (m.leadClearedAt?.getTime() ?? 0);
@@ -160,4 +172,61 @@ export async function openProposalLine(
     )
     .join(", ");
   return `${units} on ${jakartaDate(p.scheduledFor)} ${jakartaTime(p.scheduledFor)} for ${p.custName}`;
+}
+
+/** What the profile already says, so the rules bot does not ask twice. */
+export async function profileKnown(
+  db: PrismaClient,
+  from: string,
+): Promise<{
+  name: string | null;
+  usage: boolean;
+  budget: boolean;
+  apps: boolean;
+}> {
+  const p = await db.customerProfile.findUnique({
+    where: { from },
+    select: {
+      name: true,
+      useCase: true,
+      budget: true,
+      budgetMin: true,
+      budgetMax: true,
+      facts: { where: { removedAt: null }, select: { kind: true } },
+    },
+  });
+  if (!p) return { name: null, usage: false, budget: false, apps: false };
+  return {
+    name: p.name?.trim() || null,
+    usage: Boolean(p.useCase) || p.facts.some((f) => f.kind === "USAGE"),
+    budget: p.budget !== null || p.budgetMin !== null || p.budgetMax !== null,
+    apps: p.facts.some((f) => f.kind === "APP"),
+  };
+}
+
+/**
+ * The serials the bot's last reply showed (`entities.units` on the answered
+ * row), so "yang kedua" and "minta fotonya" know which unit is meant. Read
+ * after a tester's `/new` only.
+ */
+export async function lastShownUnits(
+  db: PrismaClient,
+  from: string,
+  after: Date | null,
+): Promise<string[]> {
+  const row = await db.waMessage.findFirst({
+    where: {
+      from,
+      direction: "IN",
+      replyText: { not: null },
+      answeredByAgent: true,
+      ...(after ? { answeredAt: { gt: after } } : {}),
+    },
+    orderBy: [{ answeredAt: "desc" }, { ts: "desc" }],
+    select: { entities: true },
+  });
+  const units = (row?.entities as { units?: unknown } | null)?.units;
+  return Array.isArray(units)
+    ? units.filter((u): u is string => typeof u === "string").slice(0, 12)
+    : [];
 }

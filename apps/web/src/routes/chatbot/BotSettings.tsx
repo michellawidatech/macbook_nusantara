@@ -232,6 +232,13 @@ export function BotSettings() {
                   }
                   options={[
                     {
+                      value: "rules",
+                      label: t(
+                        "chatSettings.rules",
+                        "Rules first (AI only as fallback)",
+                      ),
+                    },
+                    {
                       value: "v2",
                       label: t("chatSettings.v2", "Three agents (v2)"),
                     },
@@ -309,7 +316,9 @@ export function BotSettings() {
                           </Tag>
                         )}
                       </Flex>
-                      <Typography.Text>{a.task}</Typography.Text>
+                      <Typography.Text>
+                        {settings?.pipeline === "rules" ? a.inRules : a.task}
+                      </Typography.Text>
                       <Typography.Text type="secondary" code>
                         {a.model}
                       </Typography.Text>

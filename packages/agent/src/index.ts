@@ -216,7 +216,10 @@ export {
   DEFAULT_LEAD_THRESHOLD,
   LEAD_THRESHOLD_SETTING_KEY,
   PIPELINE_SETTING_KEY,
+  PIPELINES,
   isLead,
+  lastShownUnits,
+  profileKnown,
   loadAgentPersonas,
   loadChatbotSettings,
   openProposalLine,
@@ -224,3 +227,18 @@ export {
   type ChatbotSettings,
   type PipelineName,
 } from "./v2context.js";
+export {
+  leadScoreOf,
+  runRules,
+  type RulesInput,
+  type RulesResult,
+} from "./rules/run.js";
+export {
+  understand,
+  nameOf,
+  visitTimeOf,
+  type RuleIntent,
+  type Understanding,
+} from "./rules/understand.js";
+export { reply as ruleReplies, unitLine } from "./rules/replies.js";
+export { moneyAmounts } from "./policy.js";

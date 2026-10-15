@@ -65,7 +65,11 @@ import {
   type AgentStep,
   type CallUsage,
   type PipelineResult,
+  type RulesResult,
   agentApiDispatch,
+  lastShownUnits,
+  profileKnown,
+  runRules,
   costMicros,
   dispatchTool,
   isLead,
@@ -368,7 +372,12 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   const client =
     deps.client ??
     (hasCredential(anthropic) ? anthropicClient(anthropic) : null);
-  if (!client) return { drafted: 0, escalated: 0, dormant: true };
+  // The rules-first bot (owner, 2026-10-15) needs no model: without a
+  // credential it still answers everything a rule can and hands the rest to a
+  // person. The two AI pipelines stay dormant without one, as before.
+  const earlySettings = await loadChatbotSettings(db);
+  if (!client && earlySettings.pipeline !== "rules")
+    return { drafted: 0, escalated: 0, dormant: true };
 
   const at = now();
   const candidates = await quietCandidates(
@@ -431,7 +440,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
     loadCapabilities(db, deps.capabilities ?? PARALLEL_CAPABILITIES),
     // Chatbot v2: which pipeline answers (Settings, v1 until the owner
     // switches), the lead threshold, and the three agents' personas.
-    loadChatbotSettings(db),
+    Promise.resolve(earlySettings),
     loadAgentPersonas(db),
   ]);
   const knowledgeText = knowledgeBlock(knowledge);
@@ -644,15 +653,61 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       const turns = toTurns([...history].reverse(), current);
       const v1Calls: CallUsage[] = [];
       const turnStarted = Date.now();
-      let result: ConverseResult | PipelineResult | null;
-      if (v2) {
+      let result: ConverseResult | PipelineResult | RulesResult | null;
+      if (settings.pipeline === "rules") {
+        // Rules and templates first; the single agent only for what no rule
+        // answers, and only when there is a credential (rules/run.ts).
+        const [known, lastShown, openProposal] = await Promise.all([
+          profileKnown(db, from),
+          lastShownUnits(db, from, resetAt),
+          openProposalLine(db, from, at),
+        ]);
+        result = await runRules({
+          db,
+          ctx,
+          text: current,
+          knowledge,
+          capabilities,
+          ...(dispatch ? { dispatch } : {}),
+          route,
+          known,
+          proposalOpen: openProposal !== null,
+          lastShown,
+          leadThreshold: settings.leadThreshold,
+          ...(client
+            ? {
+                ai: async () => {
+                  const calls: CallUsage[] = [];
+                  const r = await converse({
+                    client,
+                    db,
+                    ctx,
+                    prompt,
+                    turns,
+                    knowledge,
+                    storeFacts,
+                    route: null,
+                    hint,
+                    capabilities,
+                    onError: (err) => {
+                      failure = err;
+                    },
+                    onCall: (u) => calls.push(u),
+                    ...(dispatch ? { dispatch } : {}),
+                  });
+                  return { result: r, calls };
+                },
+              }
+            : {}),
+        });
+      } else if (v2) {
         // Chatbot v2: Router → Operations → Sales Advisor (pipeline.ts).
         const [profile, openProposal] = await Promise.all([
           profileLine(db, from),
           openProposalLine(db, from, at),
         ]);
         result = await runPipeline({
-          client,
+          client: client!,
           db,
           ctx,
           prompt,
@@ -677,7 +732,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         });
       } else {
         result = await converse({
-          client,
+          client: client!,
           db,
           ctx,
           prompt,
@@ -759,7 +814,16 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                     },
                   },
                 }
-              : { entities: { sources: result.sources } }),
+              : {
+                  entities: {
+                    sources: result.sources,
+                    // What this reply showed, for the next message's "yang
+                    // kedua" (rules/run.ts, v2context `lastShownUnits`).
+                    ...("shown" in result && result.shown.length > 0
+                      ? { units: [...result.shown] }
+                      : {}),
+                  },
+                }),
           },
         });
         await enqueueOutbox(tx, {
@@ -801,7 +865,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         await recordRun(tx, {
           from,
           messageId: anchor.id,
-          pipeline: v2 ? "v2" : "v1",
+          pipeline: settings.pipeline,
           result,
           v1Calls,
           latencyMs: Date.now() - turnStarted,
@@ -943,7 +1007,7 @@ async function recordRun(
   r: {
     from: string;
     messageId: string;
-    pipeline: "v1" | "v2";
+    pipeline: "rules" | "v1" | "v2";
     result: ConverseResult | PipelineResult;
     v1Calls: readonly CallUsage[];
     latencyMs: number;

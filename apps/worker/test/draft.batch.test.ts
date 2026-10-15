@@ -24,6 +24,20 @@ import { createLogger } from "@nusantara/logging";
 import type { AgentClient, CreateArgs } from "@nusantara/agent";
 import { draftPass } from "../src/draft.js";
 
+/**
+ * These tests are about the single AI agent (pipeline v1). The default is the
+ * rules-first bot since 2026-10-15, so the setting is pinned here.
+ */
+async function pinPipelineV1(client: {
+  appSetting: PrismaClient["appSetting"];
+}) {
+  await client.appSetting.upsert({
+    where: { key: "chatbot.pipeline" },
+    update: { value: "v1" },
+    create: { key: "chatbot.pipeline", value: "v1", updatedAt: new Date() },
+  });
+}
+
 const URL =
   process.env["TEST_DATABASE_URL"] ??
   "postgresql://nusantara@localhost:5432/nusantara_pos_test";
@@ -46,16 +60,19 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await db.appSetting.deleteMany({ where: { key: "chatbot.pipeline" } });
   await db.$disconnect();
 });
 
 beforeEach(async () => {
+  await pinPipelineV1(db);
   await db.outbox.deleteMany({});
   // WaThreadMemory.coveredThroughId is an FK to WaMessage with onDelete:
   // Restrict, so the memory rows have to go first.
   await db.waThreadMemory.deleteMany({});
   // ChatAction points at WaMessage, Unit and Customer (2026-09-29).
   await db.chatAction.deleteMany({});
+  await db.customerProfileFact.deleteMany({});
   await db.customerProfile.deleteMany({});
   // AgentRun points at the message it answered (chatbot v2).
   await db.agentRunStep.deleteMany({});

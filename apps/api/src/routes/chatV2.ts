@@ -32,7 +32,13 @@ import {
   renderStoreFacts,
   routeMessage,
   runPipeline,
+  runRules,
+  converse,
+  costMicros,
   storeOpenAt,
+  type CallUsage,
+  type PipelineResult,
+  type RulesResult,
   type AgentRole,
   type AnthropicEnv,
 } from "@nusantara/agent";
@@ -61,7 +67,7 @@ const evaluationBody = z
 
 const settingsBody = z
   .object({
-    pipeline: z.enum(["v1", "v2"]),
+    pipeline: z.enum(["rules", "v1", "v2"]),
     leadThreshold: z.number().int().min(0).max(100),
   })
   .partial()
@@ -78,6 +84,8 @@ const simulateBody = z
       )
       .min(1)
       .max(40),
+    /** What the simulator's last bot reply showed, for "yang kedua". */
+    lastShown: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
   })
   .strict();
 
@@ -330,6 +338,8 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
         agent,
         name: def.name,
         task: def.task,
+        /** What this seat does when the rules-first pipeline is selected. */
+        inRules: def.inRules,
         model: def.model,
         prompt: row?.prompt ?? (agent === "ADVISOR" ? v1 : def.defaultPrompt),
         isDefault: !row,
@@ -494,12 +504,6 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
           "Pesan terakhir harus dari pelanggan.",
         );
       const client = anthropicClient(anthropic);
-      if (!client)
-        throw new ApiError(
-          503,
-          "KESALAHAN_SERVER",
-          "No Anthropic credential is configured, so the bot is switched off.",
-        );
 
       const [
         knowledge,
@@ -542,28 +546,106 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
         customerText,
         capabilities,
       });
+      // The rules bot needs no model; the two AI pipelines do.
+      if (!client && settings.pipeline !== "rules")
+        throw new ApiError(
+          503,
+          "KESALAHAN_SERVER",
+          "No Anthropic credential is configured, so the bot is switched off.",
+        );
       let failure: unknown;
-      const out = await runPipeline({
-        client,
-        db,
-        // Nobody's number: lookups of "me" find nobody, writes are not offered.
-        ctx: { from: "simulator", now },
-        prompt,
-        turns,
-        knowledge,
-        storeFacts,
-        route: routeMessage(customerText, { capabilities }),
-        hint: matchesNote(knowledge, matchesFor(knowledge, customerText)),
-        capabilities,
-        personas: {
-          router: personaFor("ROUTER", personas, v1),
-          operations: personaFor("OPERATIONS", personas, v1),
-        },
-        leadThreshold: settings.leadThreshold,
-        onError: (err) => {
-          failure = err;
-        },
-      });
+      const ctx = { from: "simulator", now, capabilities };
+      const route = routeMessage(customerText, { capabilities });
+      const hint = matchesNote(knowledge, matchesFor(knowledge, customerText));
+      const singleAgent = async () => {
+        const calls: CallUsage[] = [];
+        const result = await converse({
+          client: client!,
+          db,
+          ctx,
+          prompt,
+          turns,
+          knowledge,
+          storeFacts,
+          route,
+          hint,
+          capabilities,
+          onCall: (u) => calls.push(u),
+          onError: (err) => {
+            failure = err;
+          },
+        });
+        return { result, calls };
+      };
+      let out: PipelineResult | RulesResult | null;
+      if (settings.pipeline === "rules") {
+        out = await runRules({
+          db,
+          // Nobody's number and no writes: a dry run books nothing.
+          ctx,
+          text: customerText,
+          knowledge,
+          capabilities,
+          route,
+          known: { name: null, usage: false, budget: false, apps: false },
+          proposalOpen: false,
+          lastShown: body.data.lastShown ?? [],
+          leadThreshold: settings.leadThreshold,
+          ...(client ? { ai: singleAgent } : {}),
+        });
+      } else if (settings.pipeline === "v1") {
+        const started = Date.now();
+        const { result, calls } = await singleAgent();
+        out = result
+          ? {
+              ...result,
+              verdict: {
+                language: "id",
+                tone: "casual",
+                intent: "other",
+                leadScore: 0,
+                needsOperations: result.toolsUsed.length > 1,
+                operationsBrief: "",
+                escalate: result.handoff?.topic ?? null,
+              },
+              trace: calls.map((c) => ({
+                agent: "ADVISOR" as const,
+                model: c.model,
+                tool: null,
+                ok: true,
+                ms: c.ms,
+                inputTokens:
+                  c.inputTokens + c.cachedTokens + c.cacheWriteTokens,
+                cachedTokens: c.cachedTokens,
+                outputTokens: c.outputTokens,
+              })),
+              costMicros: calls.reduce((n, c) => n + costMicros(c), 0),
+              latencyMs: Date.now() - started,
+            }
+          : null;
+      } else {
+        out = await runPipeline({
+          client: client!,
+          db,
+          // Nobody's number: lookups of "me" find nobody, writes are not offered.
+          ctx: { from: "simulator", now },
+          prompt,
+          turns,
+          knowledge,
+          storeFacts,
+          route,
+          hint,
+          capabilities,
+          personas: {
+            router: personaFor("ROUTER", personas, v1),
+            operations: personaFor("OPERATIONS", personas, v1),
+          },
+          leadThreshold: settings.leadThreshold,
+          onError: (err) => {
+            failure = err;
+          },
+        });
+      }
       if (!out) {
         logger.warn(
           {
@@ -604,6 +686,19 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
         })),
         costMicros: out.costMicros,
         latencyMs: out.latencyMs,
+        pipeline: settings.pipeline,
+        /** Serials this reply showed — send back as `lastShown` next turn. */
+        shown: "shown" in out ? [...out.shown] : [],
+        /** Whether a model answered (false: rules and templates only). */
+        usedAi:
+          "usedAi" in out
+            ? out.usedAi
+            : out.trace.some(
+                (t) =>
+                  t.model !== "" &&
+                  t.model !== "rules" &&
+                  t.model !== "template",
+              ),
       });
     } catch (err) {
       next(err);

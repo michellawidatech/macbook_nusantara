@@ -259,6 +259,8 @@ export interface AgentPersona {
   name: string;
   /** One-line main task (fixed). */
   task: string;
+  /** What this seat does when the rules-first pipeline is selected. */
+  inRules: string;
   model: string;
   /** The persona prompt in force. */
   prompt: string;
@@ -285,7 +287,8 @@ export const resetAgentPrompt = (agent: AgentKey) =>
   );
 
 export interface ChatSettings {
-  pipeline: "v1" | "v2";
+  /** `rules`: rules and templates first, AI only for what they cannot answer. */
+  pipeline: "rules" | "v1" | "v2";
   /** 0–100: the router score above which a thread is a lead. */
   leadThreshold: number;
 }
@@ -322,14 +325,19 @@ export interface SimulationResult {
   /** USD × 1e6. */
   costMicros: number;
   latencyMs: number;
+  pipeline: ChatSettings["pipeline"];
+  /** Serials this reply showed — sent back as `lastShown` next turn. */
+  shown: string[];
+  /** False: answered by rules and templates alone. */
+  usedAi: boolean;
 }
 
 /**
  * A dry run of the bot on a made-up conversation: reads the POS, books
  * nothing, sends nothing, writes nothing. 503 when no Anthropic credential.
  */
-export const simulate = (turns: AgentTurn[]) =>
+export const simulate = (turns: AgentTurn[], lastShown: string[] = []) =>
   api<SimulationResult>("/api/chat/simulate", {
     method: "POST",
-    body: { turns },
+    body: { turns, ...(lastShown.length ? { lastShown } : {}) },
   });

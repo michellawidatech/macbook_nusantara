@@ -44,6 +44,7 @@ beforeEach(async () => {
   await db.outbox.deleteMany({});
   await db.waThreadMemory.deleteMany({});
   await db.chatAction.deleteMany({});
+  await db.customerProfileFact.deleteMany({});
   await db.customerProfile.deleteMany({});
   // AgentRun points at the message it answered (chatbot v2).
   await db.agentRunStep.deleteMany({});

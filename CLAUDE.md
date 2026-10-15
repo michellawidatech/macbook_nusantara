@@ -2482,6 +2482,37 @@ Decisions that outlived those documents:
     month, relative to today. It finds seed sales by number now
     (`seedCode`); write new seed-code assertions that way.
 
+- **Rules first, AI last — 2026-10-15 (later), and this is the DEFAULT bot.**
+  *"If the process can be rule based or automated, do not use AI. Use AI only
+  to do something that the rule base cannot do. But keep the interface."*
+  `AppSetting chatbot.pipeline` is now `rules` | `v1` | `v2`, and **absent
+  means `rules`** (`loadChatbotSettings`). v1 and v2 are unchanged and one
+  click away in /chat → Settings.
+  - `packages/agent/src/rules/`: `understand.ts` reads intent, product query,
+    budget range (incl. "12-15jt"), serial, "yang kedua", name ("atas nama
+    Budi"), visit time ("besok jam 2" → 14:00, a weekday, "20/10"), usage,
+    apps, preferences and occupation — pure, `test/rulesUnderstand.test.ts`.
+    `replies.ts` are templates that print only what a lookup returned (so no
+    `checkReply` is needed). `run.ts` (`runRules`) is the bot: `routeMessage`
+    hand-overs as before → remember profile facts → greeting / thanks /
+    stock list / price / photos / booking proposal / code-confirm / decline
+    by template → a STRONG knowledge-base match sent word for word → the AI
+    fallback (`converse`, v1) only if a credential exists → else a person.
+  - ⚠️ **The worker answers with NO credential in rules mode.** `draftPass`
+    loads the settings before its dormancy check, and only v1/v2 go dormant
+    without a key. The simulator likewise needs one only for v1/v2.
+  - What a reply showed is kept on the answered row (`entities.units`) and
+    read back by `lastShownUnits` — that is what "yang pertama berapa?" and
+    "minta fotonya" resolve against. The trace records the router as model
+    `rules`, the reply as `template` (or the fallback's real model), cost 0.
+  - The Settings agent list shows each seat's `inRules` job while `rules` is
+    selected; the simulator says "No AI used" and sends `lastShown` back.
+  - ⚠️ Tests that exercise the AI agents pin `chatbot.pipeline = v1`
+    (`pinPipelineV1` in four worker test files) — the default moved under them.
+  - ⚠️ **One Claude Code subscription still cannot run the AI fallback** —
+    Anthropic refuses subscription OAuth outside Claude Code. Without a
+    Console key the rules bot runs and the fallback is simply a person.
+
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
