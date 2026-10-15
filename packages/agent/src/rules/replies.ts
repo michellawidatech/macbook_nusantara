@@ -44,6 +44,25 @@ export const reply = {
       : "Sama-sama kak 😊 Kalau ada yang mau ditanyakan lagi, kabari aja ya.";
   },
 
+  /** An acknowledgement ("ok kak"): carry on — the question follows. */
+  ack(lang: Lang): string {
+    return lang === "en" ? "Sure 😊" : "Siap kak 😊";
+  },
+
+  /** They told us about themselves; the next question follows. */
+  noted(lang: Lang): string {
+    return lang === "en"
+      ? "Got it, thanks for letting me know 😊"
+      : "Siap kak, terima kasih infonya 😊";
+  },
+
+  /** Nothing left to ask: offer to pick something out. */
+  offerSearch(lang: Lang): string {
+    return lang === "en"
+      ? "Shall I pick out the units that suit you?"
+      : "Mau saya carikan unit yang paling cocok untuk kakak?";
+  },
+
   stockList(units: readonly ShownUnit[], matched: number, lang: Lang): string {
     const lines = units.map((u, i) => unitLine(u, lang, i + 1)).join("\n");
     const more = matched > units.length ? matched - units.length : 0;
@@ -162,29 +181,82 @@ export const reply = {
       : "Siap kak, gak apa-apa 😊 Kalau mau lihat unit lain, kabari aja ya.";
   },
 
-  /** One curious question, chosen by what the profile still lacks. */
+  /**
+   * The bot always asks what the customer needs until it knows (owner,
+   * 2026-10-15: "the goal of the bot is to always ask about what the user
+   * wants/needs … if they have not figured out the preferences, usage, they
+   * need to always ask"). The first thing the profile lacks, in this order;
+   * the second phrasing when the last reply already asked it the first way,
+   * so a customer who skipped the question is not sent the same words twice.
+   */
   nextQuestion(
-    lacks: { usage: boolean; budget: boolean; apps: boolean },
+    lacks: {
+      usage: boolean;
+      preferences: boolean;
+      budget: boolean;
+      apps: boolean;
+    },
     lang: Lang,
+    lastReply: string | null = null,
   ): string | null {
-    if (lacks.usage)
-      return lang === "en"
-        ? "What will you mainly use it for?"
-        : "Kalau boleh tahu, rencananya dipakai untuk apa kak?";
-    if (lacks.budget)
-      return lang === "en"
-        ? "Roughly what budget do you have in mind?"
-        : "Budgetnya kira-kira di kisaran berapa kak?";
-    if (lacks.apps)
-      return lang === "en"
-        ? "Any specific apps you'll run on it?"
-        : "Ada aplikasi khusus yang bakal sering dipakai kak?";
-    return null;
+    const key = (["usage", "preferences", "budget", "apps"] as const).find(
+      (k) => lacks[k],
+    );
+    if (!key) return null;
+    const [first, second] = QUESTIONS[key][lang];
+    return lastReply?.includes(first) ? second : first;
   },
 
   offerVisit(lang: Lang): string {
     return lang === "en"
       ? "If you'd like to see it in person, I can book a visit — just send your name and a time 😊"
       : "Kalau mau lihat langsung unitnya di toko, bisa saya bookingkan kak — cukup kabari nama dan jam datangnya ya 😊";
+  },
+};
+
+/** What the bot asks to learn a customer's needs, two ways each. */
+const QUESTIONS: Record<
+  "usage" | "preferences" | "budget" | "apps",
+  Record<Lang, readonly [string, string]>
+> = {
+  usage: {
+    id: [
+      "Kalau boleh tahu, rencananya dipakai untuk apa kak?",
+      "Biar saya bantu pilihkan yang pas, kebutuhannya lebih ke apa kak — kuliah, kerja kantor, desain, coding, atau editing video?",
+    ],
+    en: [
+      "What will you mainly use it for?",
+      "So I can pick the right one — is it for study, office work, design, coding or video editing?",
+    ],
+  },
+  preferences: {
+    id: [
+      "Ada preferensi khusus kak? Misalnya mau yang baru atau second, ukuran layar, warna, atau RAM/SSD-nya?",
+      "Untuk unitnya, kakak lebih suka yang baru atau second, dan ukuran layar berapa inch kak?",
+    ],
+    en: [
+      "Any preferences? For example new or second-hand, screen size, colour, or RAM/storage?",
+      "Would you prefer new or second-hand, and which screen size?",
+    ],
+  },
+  budget: {
+    id: [
+      "Budgetnya kira-kira di kisaran berapa kak?",
+      "Supaya rekomendasinya pas, budget maksimalnya berapa ya kak?",
+    ],
+    en: [
+      "Roughly what budget do you have in mind?",
+      "What's the most you'd like to spend?",
+    ],
+  },
+  apps: {
+    id: [
+      "Ada aplikasi khusus yang bakal sering dipakai kak?",
+      "Aplikasi apa saja yang paling sering kakak pakai sehari-hari?",
+    ],
+    en: [
+      "Any specific apps you'll run on it?",
+      "Which apps will you use most?",
+    ],
   },
 };

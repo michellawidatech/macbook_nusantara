@@ -181,6 +181,7 @@ export async function profileKnown(
 ): Promise<{
   name: string | null;
   usage: boolean;
+  preferences: boolean;
   budget: boolean;
   apps: boolean;
 }> {
@@ -189,16 +190,26 @@ export async function profileKnown(
     select: {
       name: true,
       useCase: true,
+      preference: true,
       budget: true,
       budgetMin: true,
       budgetMax: true,
       facts: { where: { removedAt: null }, select: { kind: true } },
     },
   });
-  if (!p) return { name: null, usage: false, budget: false, apps: false };
+  if (!p)
+    return {
+      name: null,
+      usage: false,
+      preferences: false,
+      budget: false,
+      apps: false,
+    };
   return {
     name: p.name?.trim() || null,
     usage: Boolean(p.useCase) || p.facts.some((f) => f.kind === "USAGE"),
+    preferences:
+      Boolean(p.preference) || p.facts.some((f) => f.kind === "PREFERENCE"),
     budget: p.budget !== null || p.budgetMin !== null || p.budgetMax !== null,
     apps: p.facts.some((f) => f.kind === "APP"),
   };

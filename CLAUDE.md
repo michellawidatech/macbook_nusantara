@@ -2534,6 +2534,22 @@ Decisions that outlived those documents:
     `budgetText` (the profile panel uses them). The offer/done API routes stay,
     dormant; their web clients went.
 
+- **The bot always asks what the customer needs — 2026-10-15.** *"The goal of
+  the bot is to always ask about what the user wants/needs … if they have not
+  figured out the preferences, usage, they need to always ask."* In the rules
+  bot every reply that is not a hand-over, a booking read-back or a "what does
+  your booking still need" ends with ONE question about the first thing the
+  profile lacks — usage → preferences → budget → apps (`replies.nextQuestion`,
+  appended in `run.ts` `done()`, so no template can forget it) — asked a
+  second way when the bot's previous reply (`lastReply`) already asked it the
+  first way. `profileKnown` now reports `preferences`. Two new intents keep
+  answers to those questions off a colleague's desk: **`tell`** (only about
+  themselves — "buat kuliah desain", saved and thanked) and **`ack`** ("ok
+  kak" with no booking open). ⚠️ A QUESTION that mentions a fact
+  ("garansinya berapa lama?") stays a question (`QUESTION` in understand.ts).
+  The simulator derives what is "known" from the earlier turns of its
+  made-up conversation.
+
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

@@ -671,6 +671,8 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           ...(dispatch ? { dispatch } : {}),
           route,
           known,
+          // Newest first out of the database: the bot's previous reply.
+          lastReply: history[0]?.replyText ?? null,
           proposalOpen: openProposal !== null,
           lastShown,
           leadThreshold: settings.leadThreshold,

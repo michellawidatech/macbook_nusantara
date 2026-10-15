@@ -27,6 +27,10 @@ export type RuleIntent =
   | "ask_price"
   | "ask_stock"
   | "browse"
+  /** "ok", "siap", "hmm" with nothing open: carry on asking. */
+  | "ack"
+  /** Only about themselves — "buat kuliah desain", "aku mahasiswa". */
+  | "tell"
   | "other";
 
 export interface Understanding {
@@ -387,6 +391,9 @@ const PICK_WORDS: Record<string, number> = {
   third: 2,
 };
 
+const QUESTION =
+  /\?|\b(berapa|brp|apa|apakah|bisa|gimana|bagaimana|kapan|dimana|di mana|kenapa|mengapa|how|what|when|where|why|can|does|do you|is it)\b/i;
+
 const EN =
   /\b(do you|is there|how much|i want|i need|please|price|available|can i|what|which|hello|hi there|thanks|thank you)\b/i;
 const ID =
@@ -446,6 +453,23 @@ export function understand(
     intent = "ask_stock";
   else if (GREETING_ONLY.test(t.trim())) intent = "greeting";
   else if (THANKS.test(t) && t.trim().split(" ").length <= 6) intent = "thanks";
+  else if (CONFIRM.test(t) && t.trim().split(" ").length <= 4) intent = "ack";
+
+  const usage = collect(t, USAGE);
+  const apps = collect(t, APPS);
+  const preferences = collect(t, PREFERENCES);
+  const occupation = collect(t, OCCUPATION)[0] ?? null;
+  // Nothing else asked, but they told us about themselves: that is an answer
+  // to the bot's question, not a question for a person.
+  // A QUESTION that mentions one ("garansinya berapa lama?") is still a
+  // question — its facts are saved, and the knowledge base or a person
+  // answers it.
+  if (
+    intent === "other" &&
+    !QUESTION.test(t) &&
+    (usage.length || apps.length || preferences.length || occupation || name)
+  )
+    intent = "tell";
 
   return {
     language,
@@ -457,9 +481,9 @@ export function understand(
     name,
     when,
     pick,
-    usage: collect(t, USAGE),
-    apps: collect(t, APPS),
-    preferences: collect(t, PREFERENCES),
-    occupation: collect(t, OCCUPATION)[0] ?? null,
+    usage,
+    apps,
+    preferences,
+    occupation,
   };
 }

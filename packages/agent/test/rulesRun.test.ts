@@ -80,7 +80,13 @@ function input(
     capabilities: LIVE,
     dispatch: p.dispatch,
     route: routeMessage(text, { capabilities: LIVE }),
-    known: { name: null, usage: false, budget: false, apps: false },
+    known: {
+      name: null,
+      usage: false,
+      preferences: false,
+      budget: false,
+      apps: false,
+    },
     proposalOpen: false,
     lastShown: [],
     leadThreshold: 60,
@@ -209,7 +215,8 @@ describe("answered by rules, with no AI at all", () => {
 
   it("answers from the owner's sheet, word for word", async () => {
     const out = await run("kak garansinya berapa lama ya?");
-    expect(out.reply).toBe("Garansi toko 1 bulan ya kak 😊");
+    // Word for word — then the bot's question about what they need.
+    expect(out.reply.startsWith("Garansi toko 1 bulan ya kak 😊")).toBe(true);
     expect(out.sources).toEqual(["K1"]);
   });
 
@@ -279,5 +286,90 @@ describe("the AI fallback", () => {
     expect(free.usedAi).toBe(true);
     expect(free.reply).toContain("JNE");
     expect(free.costMicros).toBeGreaterThan(0);
+  });
+});
+
+describe("always asking what the customer needs (owner, 2026-10-15)", () => {
+  const nothingKnown = {
+    name: null,
+    usage: false,
+    preferences: false,
+    budget: false,
+    apps: false,
+  };
+
+  it("ends every reply with a question while the use is unknown", async () => {
+    for (const text of [
+      "halo kak",
+      "makasih kak",
+      "kak garansinya berapa lama ya?",
+    ]) {
+      const out = await run(text);
+      expect(out.reply).toContain("rencananya dipakai untuk apa kak?");
+    }
+  });
+
+  it("asks about preferences next, then budget, then apps", async () => {
+    const out1 = await run("halo kak", pos({}), {
+      known: { ...nothingKnown, usage: true },
+    });
+    expect(out1.reply).toContain("mau yang baru atau second");
+    const out2 = await run("halo kak", pos({}), {
+      known: { ...nothingKnown, usage: true, preferences: true },
+    });
+    expect(out2.reply).toContain("Budgetnya kira-kira");
+    const out3 = await run("halo kak", pos({}), {
+      known: { ...nothingKnown, usage: true, preferences: true, budget: true },
+    });
+    expect(out3.reply).toContain("aplikasi khusus");
+  });
+
+  it("stops asking once it knows", async () => {
+    const out = await run("halo kak", pos({}), {
+      known: {
+        name: "Budi",
+        usage: true,
+        preferences: true,
+        budget: true,
+        apps: true,
+      },
+    });
+    expect(out.reply).not.toContain("?\n");
+    expect(out.reply).toBe(
+      "Halo kak 😊 Selamat datang di Macbook Nusantara. Lagi cari unit apa kak?",
+    );
+  });
+
+  it("counts what the customer says in the same message", async () => {
+    const out = await run("halo kak, buat kuliah desain");
+    expect(out.reply).not.toContain("dipakai untuk apa");
+    expect(out.reply).toContain("mau yang baru atau second");
+  });
+
+  it("asks a skipped question a second way rather than repeating it", async () => {
+    const first = await run("halo kak");
+    const again = await run("ok kak", pos({}), { lastReply: first.reply });
+    expect(again.reply).not.toContain("rencananya dipakai untuk apa kak?");
+    expect(again.reply).toContain("kebutuhannya lebih ke apa kak");
+  });
+
+  it("asks nothing extra on a hand-over or a booking read-back", async () => {
+    const handed = await run("kalau macbook air m2 11jt boleh?");
+    expect(handed.reply).not.toContain("dipakai untuk apa");
+    const proposal = await run(
+      "besok jam 2 saya ke toko, atas nama Budi",
+      pos({
+        propose_reservation: {
+          ok: true,
+          proposed: true,
+          when: "2026-10-16 14:00",
+          custName: "Budi",
+          units: [MBP],
+        },
+        remember_customer: { saved: true },
+      }),
+      { lastShown: [MBP.serial] },
+    );
+    expect(proposal.reply).not.toContain("dipakai untuk apa");
   });
 });

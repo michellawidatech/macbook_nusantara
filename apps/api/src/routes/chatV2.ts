@@ -33,6 +33,7 @@ import {
   routeMessage,
   runPipeline,
   runRules,
+  understand,
   converse,
   costMicros,
   storeOpenAt,
@@ -587,7 +588,29 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
           knowledge,
           capabilities,
           route,
-          known: { name: null, usage: false, budget: false, apps: false },
+          // The simulator keeps no profile, so what the customer said earlier
+          // in this made-up conversation stands in for one — the bot stops
+          // asking once it has been told, as the real one does.
+          known: (() => {
+            const earlier = turns
+              .slice(0, -1)
+              .filter((x) => x.role === "user")
+              .map((x) =>
+                understand(x.text, now, { proposalOpen: false, lastShown: [] }),
+              );
+            return {
+              name: earlier.find((e) => e.name)?.name ?? null,
+              usage: earlier.some((e) => e.usage.length > 0),
+              preferences: earlier.some((e) => e.preferences.length > 0),
+              budget: earlier.some(
+                (e) => e.budgetMin !== null || e.budgetMax !== null,
+              ),
+              apps: earlier.some((e) => e.apps.length > 0),
+            };
+          })(),
+          lastReply:
+            [...turns].reverse().find((x) => x.role === "assistant")?.text ??
+            null,
           proposalOpen: false,
           lastShown: body.data.lastShown ?? [],
           leadThreshold: settings.leadThreshold,

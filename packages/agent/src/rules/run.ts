@@ -61,9 +61,12 @@ export interface RulesInput {
   readonly known: {
     readonly name: string | null;
     readonly usage: boolean;
+    readonly preferences: boolean;
     readonly budget: boolean;
     readonly apps: boolean;
   };
+  /** The bot's previous reply, so its follow-up question is not repeated word for word. */
+  readonly lastReply?: string | null;
   readonly proposalOpen: boolean;
   /** Serials the bot showed in its last reply, in the order it showed them. */
   readonly lastShown: readonly string[];
@@ -95,6 +98,8 @@ const INTENT_OF: Record<RuleIntent, Intent> = {
   ask_price: "ask_price",
   ask_stock: "ask_stock",
   browse: "browse",
+  ack: "other",
+  tell: "browse",
   other: "other",
 };
 
@@ -188,10 +193,20 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     extra: Partial<ConverseResult> & {
       usedAi?: boolean;
       escalate?: string | null;
+      /** False for a reply that already asks the one thing that matters now. */
+      ask?: boolean;
     } = {},
   ): RulesResult => {
-    const { usedAi = false, escalate = null, ...rest } = extra;
-    const message = sanitiseReply(text);
+    const { usedAi = false, escalate = null, ask = true, ...rest } = extra;
+    // Every reply that is not a hand-over ends asking what the customer
+    // still has not told us (owner, 2026-10-15). An AI reply that already
+    // asks something is left alone: two questions in a row reads as a form.
+    let body = text;
+    if (ask && !rest.handoff && !(usedAi && text.includes("?"))) {
+      const q = followUp();
+      if (q && !text.includes(q)) body = `${text}\n\n${q}`;
+    }
+    const message = sanitiseReply(body);
     trace.push({
       agent: "ADVISOR",
       model: usedAi ? "ai" : "template",
@@ -255,10 +270,12 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
 
   const lacks = {
     usage: !input.known.usage && u.usage.length === 0,
+    preferences: !input.known.preferences && u.preferences.length === 0,
     budget: !input.known.budget && u.budgetMin === null && u.budgetMax === null,
     apps: !input.known.apps && u.apps.length === 0,
   };
-  const followUp = () => reply.nextQuestion(lacks, lang);
+  const followUp = () =>
+    reply.nextQuestion(lacks, lang, input.lastReply ?? null);
   const visitOffer = () =>
     caps.reserve && !input.proposalOpen && leadScoreOf(u) >= input.leadThreshold
       ? reply.offerVisit(lang)
@@ -274,8 +291,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
   /** A shelf search and its list — stock, browse, and a price by model. */
   const search = async (): Promise<RulesResult> => {
     const hasBudget = u.budgetMin !== null || u.budgetMax !== null;
-    if (!u.query && !hasBudget)
-      return done(join(reply.whichUnit(lang), followUp()));
+    if (!u.query && !hasBudget) return done(reply.whichUnit(lang));
     const out = await call("search_stock", {
       query: u.query ?? "macbook",
       ...(u.budgetMin !== null && u.budgetMin !== u.budgetMax
@@ -293,12 +309,17 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       sort: hasBudget ? "priciest" : "newest",
     });
     const units = unitsIn(out).slice(0, 3);
-    if (units.length === 0) return done(join(reply.noStock(lang), followUp()));
+    if (units.length === 0) return done(reply.noStock(lang));
     shown.push(...units.map((x) => x.serial));
     const matched =
       typeof out["matched"] === "number" ? out["matched"] : units.length;
     return done(
-      join(reply.stockList(units, matched, lang), followUp() ?? visitOffer()),
+      // The follow-up question comes from done(); the visit is offered only
+      // once there is nothing left to ask.
+      join(
+        reply.stockList(units, matched, lang),
+        followUp() ? null : visitOffer(),
+      ),
       {
         sources: ["stock"],
       },
@@ -312,6 +333,20 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
 
     case "thanks":
       return done(reply.thanks(lang));
+
+    case "ack":
+      return done(
+        followUp()
+          ? reply.ack(lang)
+          : `${reply.ack(lang)} ${reply.offerSearch(lang)}`,
+      );
+
+    case "tell":
+      return done(
+        followUp()
+          ? reply.noted(lang)
+          : `${reply.noted(lang)} ${reply.offerSearch(lang)}`,
+      );
 
     case "confirm": {
       if (!caps.reserve || !ctx.reserve) break;
@@ -379,7 +414,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       const name = u.name ?? input.known.name;
       const missing = { unit: !serial, name: !name, when: !u.when };
       if (missing.unit || missing.name || missing.when)
-        return done(reply.askForVisit(missing, lang));
+        return done(reply.askForVisit(missing, lang), { ask: false });
       const out = await call("propose_reservation", {
         serials: serial!,
         when: u.when!,
@@ -397,6 +432,8 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
             },
             lang,
           ),
+          // The read-back asks for a yes; another question would bury it.
+          { ask: false },
         );
       }
       if (out["closedThen"] || out["pastDate"] || out["tooFarAhead"])
