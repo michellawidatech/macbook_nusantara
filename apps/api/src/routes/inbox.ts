@@ -686,6 +686,19 @@ export function inboxRouter(db: PrismaClient): Router {
           },
         });
 
+        // Answering in the chat is what settles what the bot left for a
+        // person (2026-10-15: the task dialog and its Mark done are gone —
+        // the waiting message is outlined instead). Same close as /handled.
+        await tx.chatAction.updateMany({
+          where: { from: phone.data, status: "OPEN" },
+          data: {
+            status: "DONE",
+            resolvedAt: now,
+            resolvedById: staff.id,
+            updatedAt: now,
+          },
+        });
+
         await enqueueOutbox(tx, {
           kind: "WA_REPLY",
           payload: {

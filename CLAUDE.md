@@ -2290,7 +2290,8 @@ Decisions that outlived those documents:
     OPEN row per (thread, kind) — a partial unique index — with the bot's
     summary, the unit, the POS price and, for a NEGOTIATION, the customer's
     offer read by CODE (`parseAskPrice`). `refreshOffers` upserts a newer
-    offer while the thread is held. /chat draws open tasks above the messages
+    offer while the thread is held. ⚠️ (UI below REMOVED 2026-10-15 — see
+    "A hand-over is an outline".) /chat draws open tasks above the messages
     and opens each one's dialog once by itself; the negotiation dialog shows
     our price, the cost (`Unit.landed`, "modal") and the offer, and *Send
     offer* records `staffPrice`, closes the task, answers the chat and lifts
@@ -2512,6 +2513,26 @@ Decisions that outlived those documents:
   - ⚠️ **One Claude Code subscription still cannot run the AI fallback** —
     Anthropic refuses subscription OAuth outside Claude Code. Without a
     Console key the rules bot runs and the fallback is simply a person.
+
+- **A hand-over is an outline, not a pop-up — 2026-10-15.** *"Do not
+  display [the task dialog], instead just highlight the unanswered chat (add a
+  shadow / outline, not a popup modal)"*, and, asked: remove the dialog AND the
+  one-line task strip. This REVERSES the 2026-09-29 "opens each one's dialog
+  once by itself" and its negotiation form.
+  - `ChatPage` outlines (2px `colorWarning` + a soft glow, no layout shift) a
+    customer bubble waiting on a PERSON: `PERLU_STAF`, or `BARU` while the bot
+    is off for that chat — not a BARU row with the bot on, which the bot
+    answers in seconds. One caption under it: "Needs your reply · {topic}".
+    `data-waiting` marks it for tests. ⚠️ Read the STATUS, not `m.handoff`:
+    the server keeps the note on rows staff have since answered.
+  - **Mark handled** moved into the conversation header, drawn only while a
+    hand-over or an OPEN task exists.
+  - **A staff reply now closes the thread's OPEN `ChatAction`s** in its own
+    transaction (`POST /api/inbox/:phone/reply`) — with Mark done gone they
+    would otherwise never close, and the 🧑 tag reads them.
+  - `ActionItems.tsx` keeps only `ActionKindTag`, `actionKindLabel` and
+    `budgetText` (the profile panel uses them). The offer/done API routes stay,
+    dormant; their web clients went.
 
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's

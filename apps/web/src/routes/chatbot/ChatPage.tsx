@@ -9,8 +9,11 @@
  *    hand-over marker as an icon each, and the unread count. Opening a thread
  *    marks it read (`POST /api/inbox/:phone/read`).
  *  - **The conversation**: bubbles only. The header carries the name, the
- *    number and the per-thread AI switch; an open hand-over or task is ONE
- *    line under it (`ActionItems`). Every bot reply is rated 👍 / 👎
+ *    number, the per-thread AI switch and — while something waits on a
+ *    person — Mark handled. A message the bot handed over is OUTLINED in the
+ *    conversation, with one caption saying why; there is no pop-up and no
+ *    task strip (owner, 2026-10-15: "just highlight the unanswered chat (add
+ *    a shadow / outline, not a popup modal)"). Every bot reply is rated 👍 / 👎
  *    (`ReplyRating`) — that replaced "Fix this". The reply box writes, asks
  *    the bot for a draft, or attaches a unit's QC photos.
  *  - **The profile** (`CustomerProfilePanel`), every field correctable in
@@ -76,7 +79,6 @@ import {
   type ReplyEvaluation,
 } from "../../lib/inboxApi.js";
 import { handoffTopicLabel } from "../../lib/handoffTopics.js";
-import { ActionItems } from "./ActionItems.js";
 import { CustomerProfilePanel } from "./CustomerProfilePanel.js";
 import { ReplyRating } from "./ReplyRating.js";
 import { ThreadList, threadName } from "./ThreadList.js";
@@ -99,6 +101,15 @@ interface Bubble {
   byAgent: boolean;
   by: string | null;
   evaluation: ReplyEvaluation | null;
+  /**
+   * A customer message still waiting on a PERSON: handed over by the bot
+   * (PERLU_STAF), or arrived while the bot is off for this chat (BARU). Not a
+   * BARU row with the bot on — the bot answers that in seconds, and outlining
+   * it would flicker.
+   */
+  waiting: boolean;
+  /** Why the bot handed it over, for the caption under the outline. */
+  waitingTopic: string | null;
 }
 
 /** A column: a card whose body scrolls and nothing else does. */
@@ -192,6 +203,12 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
   const showList = !compact || !active;
   const showConversation = !compact || Boolean(active);
   const windowOpen = conversation ? conversation.windowClosesAt !== null : true;
+  /** Something waits on a person: a hand-over, or a task the bot left. */
+  const waitingOnPerson = Boolean(
+    conversation &&
+    (conversation.handoff !== null ||
+      (conversation.actions ?? []).some((a) => a.status === "OPEN")),
+  );
 
   useEffect(() => {
     const box = messagesRef.current;
@@ -206,7 +223,13 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
   const bubbles = useMemo<Bubble[]>(() => {
     if (!conversation) return [];
     const out: Bubble[] = [];
+    const botOff = !conversation.autoReply.enabled;
     for (const m of conversation.messages) {
+      // Status, not `m.handoff`: the server keeps the hand-over note on a row
+      // staff have since answered (DIJAWAB_STAF), which is no longer waiting.
+      const waiting =
+        m.direction === "IN" &&
+        (m.status === "PERLU_STAF" || (m.status === "BARU" && botOff));
       out.push({
         key: `${m.id}:in`,
         messageId: m.id,
@@ -218,6 +241,11 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
         byAgent: false,
         by: null,
         evaluation: null,
+        waiting,
+        waitingTopic:
+          waiting && m.status === "PERLU_STAF"
+            ? (m.handoff?.topic ?? null)
+            : null,
       });
       if (m.reply) {
         out.push({
@@ -229,6 +257,8 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
           byAgent: m.reply.byAgent,
           by: m.reply.by,
           evaluation: m.reply.evaluation ?? null,
+          waiting: false,
+          waitingTopic: null,
         });
       }
     }
@@ -547,6 +577,15 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
                 />
               </Flex>
             </Tooltip>
+            {waitingOnPerson && (
+              <Button
+                size="small"
+                loading={closing}
+                onClick={() => void handled()}
+              >
+                {t("chat.markHandled", "Mark handled")}
+              </Button>
+            )}
             {compact && (
               <Button
                 size="small"
@@ -558,16 +597,6 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
           </Flex>
         }
       >
-        <ActionItems
-          phone={conversation.phone}
-          actions={conversation.actions ?? []}
-          profile={conversation.profile ?? null}
-          onChanged={refresh}
-          handoff={conversation.handoff}
-          onMarkHandled={() => void handled()}
-          marking={closing}
-        />
-
         <Flex
           ref={messagesRef}
           vertical
@@ -582,12 +611,22 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
               <Flex key={b.key} justify={mine ? "flex-end" : "flex-start"}>
                 <div
                   data-testid={mine && b.byAgent ? "bot-bubble" : undefined}
+                  data-waiting={b.waiting ? "true" : undefined}
                   style={{
                     maxWidth: compact ? "88%" : "72%",
                     padding: "8px 12px",
                     borderRadius: 12,
                     background: mine ? colorPrimaryBg : colorFillTertiary,
                     border: `1px solid ${colorBorderSecondary}`,
+                    // Outline and shadow move nothing: a waiting bubble stands
+                    // out without the conversation reflowing around it.
+                    ...(b.waiting
+                      ? {
+                          outline: `2px solid ${colorWarning}`,
+                          outlineOffset: 1,
+                          boxShadow: `0 0 0 5px color-mix(in srgb, ${colorWarning} 22%, transparent)`,
+                        }
+                      : {}),
                   }}
                 >
                   {mine && (
@@ -604,6 +643,25 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
                     </Typography.Text>
                   )}
                   <div style={{ whiteSpace: "pre-wrap" }}>{b.text}</div>
+                  {b.waiting && (
+                    <Typography.Text
+                      style={{
+                        fontSize: 12,
+                        color: colorWarning,
+                        display: "block",
+                      }}
+                    >
+                      {b.waitingTopic
+                        ? t(
+                            "chat.needsReplyTopic",
+                            "Needs your reply · {{topic}}",
+                            {
+                              topic: handoffTopicLabel(t, b.waitingTopic),
+                            },
+                          )
+                        : t("chat.needsReply", "Needs your reply")}
+                    </Typography.Text>
+                  )}
                   <Flex justify="space-between" align="center" gap={12}>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       {fmtDateTime(b.at)}

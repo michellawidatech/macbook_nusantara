@@ -314,27 +314,6 @@ export const setAutoReply = (phone: string, enabled: boolean) =>
     body: { enabled },
   });
 
-/**
- * Answer a negotiation: the price, and exactly what the customer reads. Closes
- * the task, lifts the bot's hold on the thread, and queues the send.
- */
-export const offerAction = (
-  phone: string,
-  id: string,
-  body: { price: string; text: string },
-) =>
-  api<{ id: string; status: "QUEUED" }>(
-    `/api/inbox/${encodeURIComponent(phone)}/actions/${encodeURIComponent(id)}/offer`,
-    { method: "POST", body },
-  );
-
-/** The task was dealt with some other way. Nothing is sent. */
-export const finishAction = (phone: string, id: string) =>
-  api<{ done: true }>(
-    `/api/inbox/${encodeURIComponent(phone)}/actions/${encodeURIComponent(id)}/done`,
-    { method: "POST" },
-  );
-
 /** Every message up to now counts as read by staff. */
 export const markRead = (phone: string) =>
   api<{ ok: true }>(`/api/inbox/${encodeURIComponent(phone)}/read`, {

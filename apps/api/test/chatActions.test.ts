@@ -314,6 +314,37 @@ describe("action items on a conversation", () => {
       .set("Cookie", staffCookie);
     expect(await db.chatAction.count({ where: { status: "OPEN" } })).toBe(0);
   });
+
+  it("close when a colleague answers in the chat, and only that chat's", async () => {
+    // 2026-10-15: the task dialog and its Mark done are gone; the answer is
+    // what settles the hand-over.
+    const { action } = await handedOver("7jt ya");
+    const now = new Date();
+    const elsewhere = await db.chatAction.create({
+      data: {
+        from: "628980093999",
+        kind: "PRICE",
+        topic: "price",
+        summary: "Harga Air M2",
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+    const res = await request(app)
+      .post(`/api/inbox/${PHONE}/reply`)
+      .set("Cookie", staffCookie)
+      .send({ text: "Bisa kak, 7,2 ya" });
+    expect(res.status).toBe(201);
+    const closed = await db.chatAction.findUniqueOrThrow({
+      where: { id: action.id },
+    });
+    expect(closed.status).toBe("DONE");
+    expect(closed.resolvedById).not.toBeNull();
+    expect(
+      (await db.chatAction.findUniqueOrThrow({ where: { id: elsewhere.id } }))
+        .status,
+    ).toBe("OPEN");
+  });
 });
 
 describe("the customer profile", () => {
