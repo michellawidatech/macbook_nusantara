@@ -101,6 +101,14 @@ describe("parseCsv", () => {
     ]);
   });
 
+  it("looks past a line break inside a quoted first cell for the separator", () => {
+    // A question typed over two lines: the first line of the FILE ends after
+    // the semicolon, not at the break inside the quotes.
+    expect(parseCsv('"Garansi\nberapa lama?";"1 bulan, kak"\n')).toEqual([
+      ["Garansi\nberapa lama?", "1 bulan, kak"],
+    ]);
+  });
+
   it("reads tabs, and drops the byte-order mark Excel adds", () => {
     expect(parseCsv("\uFEFFq\ta\nx\ty")).toEqual([
       ["q", "a"],
