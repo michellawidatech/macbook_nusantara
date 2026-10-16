@@ -40,7 +40,12 @@ describe("intent", () => {
   });
 
   it("asks the price of what was just shown", () => {
-    expect(read("yang kedua berapa?", { proposalOpen: false, lastShown: ["A", "B"] })).toMatchObject({
+    expect(
+      read("yang kedua berapa?", {
+        proposalOpen: false,
+        lastShown: ["A", "B"],
+      }),
+    ).toMatchObject({
       intent: "ask_price",
       pick: 1,
     });
