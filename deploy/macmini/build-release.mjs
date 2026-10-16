@@ -298,6 +298,7 @@ for (const f of [
   "nusantara-deploy",
   "setup-deploy-access",
   "setup-staging",
+  "reset-transactions",
 ]) {
   chmodSync(join(stage, "ops", f), 0o755);
 }

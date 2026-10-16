@@ -2659,6 +2659,22 @@ Decisions that outlived those documents:
   - The menu leaves the section out (`navSectionsFor`) and every `/finance/*`
     page answers `FinanceLocked` (`isFinancePath`, App.tsx).
     `test/financeAccess.test.tsx` fails if a new finance leaf escapes it.
+- **A fresh start keeps the master data, 2026-10-16.** *"Empty the inbound &
+  its unit serial history, transaction, stock opname, service, discount,
+  pending payment, receivable, payable, income & expense so only the master
+  data is in."* `deploy/macmini/ops/reset-transactions` (`--dry-run` first)
+  TRUNCATEs every transaction table — units and their ledger and counted
+  stock included, plus reservations, returns, customers' B2Soft debts and the
+  opening cash/bank — and keeps products, suppliers, customers, staff,
+  settings, the audit log and all chatbot data. ⚠️ A one-off owner decision,
+  not a tool and not a precedent for the never-delete rule. It backs up first,
+  asks for the database's name, runs as one transaction, and uses no CASCADE —
+  a table it forgot that still points at one it empties makes PostgreSQL
+  refuse the lot. `ChatAction.unitId` is the one kept reference into it: the
+  script nulls it and lifts/restores that constraint, since TRUNCATE refuses a
+  referenced table whatever the values. Rehearsed on a seeded throwaway
+  database: FK restored byte-identical, no schema drift, the store loads and
+  commits after it, and every open till reloads (StoreChange restarts at 1).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
