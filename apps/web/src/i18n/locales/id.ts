@@ -234,6 +234,12 @@ export const id: Record<string, string> = {
   "staff.owner": "Pemilik",
   "staff.staff": "Staf",
   "staff.canApprove": "Boleh menyetujui",
+  "staff.canViewFinance": "Keuangan",
+  "staff.canViewFinanceHint":
+    "Boleh membuka Keuangan & Laporan: transaksi, pembayaran, piutang, utang, pemasukan dan pengeluaran.",
+  "finance.lockedTitle": "Keuangan & Laporan dibatasi",
+  "finance.lockedBody":
+    "Minta pemilik menyalakan akses keuangan untuk akun Anda di Pengaturan → Akun staf.",
   "staff.ownerApproves": "Pemilik selalu bisa menyetujui.",
   "staff.canApproveHint":
     "Menyetujui harga di bawah modal dan keputusan lain yang perlu orang kedua.",

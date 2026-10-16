@@ -47,7 +47,7 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { NAV_SECTIONS, matchLeaf } from "./navigation.js";
+import { matchLeaf, navSectionsFor } from "./navigation.js";
 import { useLayoutMode } from "./useLayoutMode.js";
 import { ScannerChip } from "../components/ScannerChip.js";
 import { BrandMark } from "../components/BrandMark.js";
@@ -205,7 +205,7 @@ export function AppLayout({ staff }: { staff: Staff }) {
   // still one target.
   const items = useMemo(
     () =>
-      NAV_SECTIONS.map((s) => ({
+      navSectionsFor(staff).map((s) => ({
         key: s.children ? s.key : (s.path ?? s.key),
         icon: s.icon,
         label: s.path ? <Link to={s.path}>{t(s.label)}</Link> : t(s.label),
@@ -214,7 +214,7 @@ export function AppLayout({ staff }: { staff: Staff }) {
           label: <Link to={c.path}>{t(c.label)}</Link>,
         })),
       })),
-    [t],
+    [t, staff],
   );
 
   const brand = (

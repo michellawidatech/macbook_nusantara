@@ -38,6 +38,7 @@ const ERSEN: Staff = {
   name: "Ersen",
   role: "OWNER",
   canApprove: true,
+  canViewFinance: true,
   mustChangePassword: true,
 };
 
@@ -299,6 +300,7 @@ describe("the owner's account screen", () => {
             name: "Mila",
             role: "STAFF",
             canApprove: false,
+            canViewFinance: false,
             active: true,
             mustChangePassword: true,
             lastLoginAt: null,
@@ -361,6 +363,7 @@ describe("the owner's account screen", () => {
         username: "mila2",
         role: "STAFF",
         canApprove: false,
+        canViewFinance: false,
       }),
     );
     // antd names the dialog with its title too, so the words appear twice.

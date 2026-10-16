@@ -149,6 +149,27 @@ export const NAV_SECTIONS: readonly NavSection[] = [
 ];
 
 /**
+ * Financial & Report is for the accounts the owner named (2026-10-16: "only
+ * Ersen and Dina") — `Staff.canViewFinance`. Everybody else is not shown the
+ * section, and its addresses answer with a refusal (App.tsx). Neither is the
+ * control: the API sends them none of the money behind it.
+ */
+export const FINANCE_SECTION_KEY = "finance";
+
+export function isFinancePath(pathname: string): boolean {
+  return pathname === "/finance" || pathname.startsWith("/finance/");
+}
+
+/** The sections this person may see. */
+export function navSectionsFor(staff: {
+  readonly canViewFinance: boolean;
+}): readonly NavSection[] {
+  return staff.canViewFinance
+    ? NAV_SECTIONS
+    : NAV_SECTIONS.filter((s) => s.key !== FINANCE_SECTION_KEY);
+}
+
+/**
  * Longest-prefix match, so a child route highlights the section that owns it —
  * /discounts/new lights up Discount rather than nothing.
  *

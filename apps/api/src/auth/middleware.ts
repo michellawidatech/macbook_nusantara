@@ -18,6 +18,8 @@ export interface AuthenticatedStaff {
   readonly name: string;
   readonly role: "OWNER" | "STAFF";
   readonly canApprove: boolean;
+  /** May read the shop's money — Financial & Report (owner ask 2026-10-16). */
+  readonly canViewFinance: boolean;
   /**
    * Still on a password somebody else chose. `requirePasswordChanged` turns
    * every business route away until it is false.
@@ -69,6 +71,7 @@ export function requireAuth({ db, config }: AuthDeps): RequestHandler {
                 name: true,
                 role: true,
                 canApprove: true,
+                canViewFinance: true,
                 active: true,
                 mustChangePassword: true,
               },
@@ -92,6 +95,7 @@ export function requireAuth({ db, config }: AuthDeps): RequestHandler {
           name: session.staff.name,
           role: session.staff.role,
           canApprove: session.staff.canApprove,
+          canViewFinance: session.staff.canViewFinance,
           mustChangePassword: session.staff.mustChangePassword,
         };
         req.sessionId = session.id;

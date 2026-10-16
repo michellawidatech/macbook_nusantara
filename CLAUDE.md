@@ -2639,6 +2639,26 @@ Decisions that outlived those documents:
     out of every code that is still that id copy. The importer
     (`masters.py`, `documents.py`) now writes `code` itself, and the fixture's
     codes are `01`–`04`. A code equal to the id prints as the name alone.
+- **Financial & Report is per person, 2026-10-16.** *"In the financial data
+  management, only Ersen and Dina is allowed."* `Staff.canViewFinance`
+  (migration `20261016090000_staff_can_view_finance`, owner-approved,
+  default false; the migration switches it on for every active OWNER and for
+  the login `dina`). **Not implied by OWNER** — Dina is staff, and making her
+  an owner would hand her everybody's passwords. Settings → Staff accounts has
+  the switch (audited per change); `staff --finance` is the CLI's.
+  - **The API is the control, not the menu.** The store sends the whole shop
+    to every browser, so `apps/api/src/auth/financeScope.ts` empties
+    `FINANCE_COLLECTIONS` (packages/store: expenses, incomes, settlements,
+    settlementLog, paymentLog) in the snapshot, strips them from every
+    change-feed and commit answer, and refuses (403) an edit, removal or
+    reorder of them. **An insert passes** — the return desk writes a refund
+    `Expense` and the customer drawer a `paymentLog` line for everybody.
+  - Sale payments live on the ORDER and are not withheld: the till and the
+    return desk cannot work without them. Supplier deposits and invoice
+    payments are not either (`/suppliers` and Inbound are not in the section).
+  - The menu leaves the section out (`navSectionsFor`) and every `/finance/*`
+    page answers `FinanceLocked` (`isFinancePath`, App.tsx).
+    `test/financeAccess.test.tsx` fails if a new finance leaf escapes it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

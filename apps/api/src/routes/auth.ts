@@ -72,6 +72,7 @@ export const STAFF_PUBLIC_SELECT = {
   name: true,
   role: true,
   canApprove: true,
+  canViewFinance: true,
   mustChangePassword: true,
 } as const;
 
@@ -289,6 +290,7 @@ export function authRouter(deps: AuthRouterDeps): Router {
             name: staff.name,
             role: staff.role,
             canApprove: staff.canApprove,
+            canViewFinance: staff.canViewFinance,
             mustChangePassword: staff.mustChangePassword,
           },
           expiresAt: session.expiresAt,

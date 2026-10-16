@@ -70,6 +70,7 @@ function renderShell() {
                       name: "Stub Admin",
                       role: "OWNER",
                       canApprove: true,
+                      canViewFinance: true,
                       mustChangePassword: false,
                     }}
                   />

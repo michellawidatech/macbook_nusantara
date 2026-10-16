@@ -39,7 +39,8 @@ import {
 import { DataTable } from "../../components/DataTable";
 import { ApiRequestError } from "../../lib/api.js";
 import { fmtDateTime } from "../../lib/format.js";
-import type { Staff } from "../../lib/session.js";
+import { sessionKey, type Staff } from "../../lib/session.js";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useCreateAccount,
   useResetPassword,
@@ -53,9 +54,11 @@ interface CreateValues {
   name: string;
   username: string;
   role: "OWNER" | "STAFF";
+  canViewFinance: boolean;
 }
 
 export function StaffAccountsSettings({ me }: { me: Staff }) {
+  const queryClient = useQueryClient();
   const { t } = useTranslation();
   const { message, modal } = App.useApp();
   const accounts = useStaffAccounts();
@@ -265,6 +268,39 @@ export function StaffAccountsSettings({ me }: { me: Staff }) {
             ),
           },
           {
+            // Per person, not per role (owner ask 2026-10-16: "only Ersen and
+            // Dina"). The API withholds the money from everybody else.
+            title: t("staff.canViewFinance", "Finance"),
+            key: "canViewFinance",
+            render: (_, a) => (
+              <Tooltip
+                title={t(
+                  "staff.canViewFinanceHint",
+                  "Can open Financial & Report: transactions, payments, receivable, payable, income and expense.",
+                )}
+              >
+                <Switch
+                  size="small"
+                  checked={a.canViewFinance}
+                  disabled={!a.active}
+                  onChange={(canViewFinance) =>
+                    update
+                      .mutateAsync({ id: a.id, canViewFinance })
+                      .then(() => {
+                        // Your own menu follows at once, not at the next
+                        // session check.
+                        if (a.id === me.id)
+                          void queryClient.invalidateQueries({
+                            queryKey: sessionKey,
+                          });
+                      })
+                      .catch((e: Error) => failed(e))
+                  }
+                />
+              </Tooltip>
+            ),
+          },
+          {
             title: t("staff.status", "Status"),
             key: "status",
             render: (_, a) => status(a),
@@ -328,7 +364,7 @@ export function StaffAccountsSettings({ me }: { me: Staff }) {
         <Form<CreateValues>
           form={form}
           layout="vertical"
-          initialValues={{ role: "STAFF" }}
+          initialValues={{ role: "STAFF", canViewFinance: false }}
           onValuesChange={(changed: Partial<CreateValues>) => {
             if (changed.name !== undefined && !usernameTouched)
               form.setFieldValue(
@@ -343,6 +379,7 @@ export function StaffAccountsSettings({ me }: { me: Staff }) {
                 username: values.username.trim().toLowerCase(),
                 role: values.role,
                 canApprove: values.role === "OWNER",
+                canViewFinance: values.canViewFinance,
               })
               .then(
                 ({ account }) => {
@@ -424,6 +461,17 @@ export function StaffAccountsSettings({ me }: { me: Staff }) {
                 { value: "OWNER", label: t("staff.owner", "Owner") },
               ]}
             />
+          </Form.Item>
+          <Form.Item
+            name="canViewFinance"
+            label={t("staff.canViewFinance", "Finance")}
+            valuePropName="checked"
+            extra={t(
+              "staff.canViewFinanceHint",
+              "Can open Financial & Report: transactions, payments, receivable, payable, income and expense.",
+            )}
+          >
+            <Switch />
           </Form.Item>
           <Typography.Text type="secondary">
             {t(

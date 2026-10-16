@@ -171,6 +171,9 @@ export async function seedAccounts(
             name: c.name,
             role: c.role,
             canApprove: c.role === "OWNER",
+            // The owner can see the money from the start, or nobody could
+            // switch it on for anybody else (Settings → Staff accounts).
+            canViewFinance: c.role === "OWNER",
             active: true,
             passwordHash,
             mustChangePassword: true,
@@ -211,7 +214,7 @@ export async function seedAccounts(
       for (const h of toPromote) {
         await tx.staff.update({
           where: { id: h.id },
-          data: { role: "OWNER", canApprove: true },
+          data: { role: "OWNER", canApprove: true, canViewFinance: true },
         });
         await tx.auditLog.create({
           data: {

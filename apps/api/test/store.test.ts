@@ -326,3 +326,99 @@ describe("/api/store", () => {
     expect(Buffer.from(photo.body as Buffer).equals(png)).toBe(true);
   });
 });
+
+/**
+ * Financial & Report is for the accounts the owner named (2026-10-16): the
+ * money only those screens read is withheld from everybody else by the API,
+ * not merely hidden by the menu.
+ */
+describe("/api/store — finance access", () => {
+  const REFUND = {
+    collections: {
+      expenses: {
+        rows: [
+          {
+            key: "exp_api_1",
+            next: {
+              id: "exp_api_1",
+              kind: "REFUND",
+              amount: "250000",
+              date: "2026-09-13",
+              method: "TUNAI",
+            },
+          },
+        ],
+      },
+    },
+    singletons: {},
+  };
+
+  async function financeCookie(): Promise<string> {
+    await db.staff.create({
+      data: {
+        id: "staff_finance_api",
+        username: "dina_store",
+        name: "Dina",
+        role: "STAFF",
+        canApprove: false,
+        canViewFinance: true,
+        active: true,
+        passwordHash: await hashPassword(PASSWORD),
+        createdAt: NOW,
+      },
+    });
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({ username: "dina_store", password: PASSWORD });
+    return (res.headers["set-cookie"] as unknown as string[])[0]!;
+  }
+
+  it("lets an account without it add a refund, and never shows it the money", async () => {
+    const before = await request(app).get("/api/store").set("Cookie", cookie);
+    const res = await commit(REFUND);
+    expect(res.status).toBe(200);
+    expect(res.body.rows.expenses).toBeUndefined();
+    expect(await db.expense.count()).toBe(1);
+
+    const snap = await request(app).get("/api/store").set("Cookie", cookie);
+    expect(snap.body.db.expenses).toEqual([]);
+    const feed = await request(app)
+      .get(`/api/store/changes?after=${before.body.cursor}`)
+      .set("Cookie", cookie);
+    expect(feed.body.rows.expenses).toBeUndefined();
+
+    const finance = await financeCookie();
+    const theirs = await request(app).get("/api/store").set("Cookie", finance);
+    expect(theirs.body.db.expenses.map((e: { id: string }) => e.id)).toEqual([
+      "exp_api_1",
+    ]);
+    const me = await request(app).get("/api/auth/me").set("Cookie", finance);
+    expect(me.body.staff.canViewFinance).toBe(true);
+  });
+
+  it("refuses an edit to a finance row from an account without it", async () => {
+    await commit(REFUND);
+    const row = REFUND.collections.expenses.rows[0]!;
+    const res = await commit({
+      collections: {
+        expenses: {
+          rows: [
+            {
+              key: row.key,
+              base: row.next,
+              next: { ...row.next, amount: "1" },
+            },
+          ],
+        },
+      },
+      singletons: {},
+    });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("AKSES_DITOLAK");
+    const removal = await commit({
+      collections: { expenses: { rows: [{ key: row.key, base: row.next }] } },
+      singletons: {},
+    });
+    expect(removal.status).toBe(403);
+  });
+});

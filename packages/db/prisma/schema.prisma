@@ -1075,6 +1075,11 @@ model Staff {
   /// initial password, or an owner's reset (owner ask 2026-09-18). A session
   /// of such an account can do nothing but choose a new one.
   mustChangePassword Boolean   @default(false)
+  /// May open Financial & Report and read the money behind it — expenses,
+  /// incomes, payouts and the payment edit logs (owner ask 2026-10-16: "only
+  /// Ersen and Dina"). Per person rather than per role: Dina is staff, and
+  /// making her an owner would also hand her everybody's passwords.
+  canViewFinance     Boolean   @default(false)
   /// ⚠️ Dead since 2026-09-18, when Auth0 was retired for the app's own login.
   /// Kept for one release so the release before it still reads the table it
   /// expects through a deploy (docs/deploy-pipeline.md); drop it after that.

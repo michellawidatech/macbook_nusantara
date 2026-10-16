@@ -384,6 +384,25 @@ describe("the owner's account screen", () => {
     expect(res.status).toBe(200);
     expect(res.body.account).toMatchObject({ role: "OWNER", canApprove: true });
   });
+
+  it("switches finance access per person, not with the role, and audits it", async () => {
+    const owner = await login("ersen", CHOSEN);
+    const promoted = await request(app)
+      .patch("/api/staff/s_kasir")
+      .set("Cookie", owner)
+      .send({ role: "OWNER" });
+    expect(promoted.body.account.canViewFinance).toBe(false);
+    const res = await request(app)
+      .patch("/api/staff/s_kasir")
+      .set("Cookie", owner)
+      .send({ canViewFinance: true });
+    expect(res.status).toBe(200);
+    expect(res.body.account.canViewFinance).toBe(true);
+    const audit = await db.auditLog.findMany({
+      where: { entityId: "s_kasir", field: "canViewFinance" },
+    });
+    expect(audit.map((a) => [a.before, a.after])).toEqual([["false", "true"]]);
+  });
 });
 
 describe("the accounts seeder", () => {

@@ -59,6 +59,7 @@ const createSchema = z.object({
   name: z.string().trim().min(1).max(80),
   role: z.enum(ROLES).default("STAFF"),
   canApprove: z.boolean().optional(),
+  canViewFinance: z.boolean().optional(),
 });
 
 const patchSchema = z
@@ -66,6 +67,7 @@ const patchSchema = z
     name: z.string().trim().min(1).max(80).optional(),
     role: z.enum(ROLES).optional(),
     canApprove: z.boolean().optional(),
+    canViewFinance: z.boolean().optional(),
     active: z.boolean().optional(),
   })
   .refine((p) => Object.keys(p).length > 0, "Tidak ada yang diubah.");
@@ -79,6 +81,7 @@ const LIST_SELECT = {
   name: true,
   role: true,
   canApprove: true,
+  canViewFinance: true,
   active: true,
   mustChangePassword: true,
   lastLoginAt: true,
@@ -92,6 +95,7 @@ type ListedRow = {
   name: string;
   role: "OWNER" | "STAFF";
   canApprove: boolean;
+  canViewFinance: boolean;
   active: boolean;
   mustChangePassword: boolean;
   lastLoginAt: Date | null;
@@ -183,6 +187,8 @@ export function staffRouter(deps: StaffRouterDeps): Router {
               // An owner who cannot approve is a contradiction (03 §Settings,
               // and the staff CLI has always forced it the same way).
               canApprove: role === "OWNER" || (parsed.data.canApprove ?? false),
+              // Not implied by OWNER: the money is per person (2026-10-16).
+              canViewFinance: parsed.data.canViewFinance ?? false,
               active: true,
               passwordHash,
               mustChangePassword: true,
@@ -268,6 +274,9 @@ export function staffRouter(deps: StaffRouterDeps): Router {
           ...(patch.name !== undefined ? { name: patch.name } : {}),
           ...(patch.role !== undefined ? { role: patch.role } : {}),
           ...(patch.active !== undefined ? { active: patch.active } : {}),
+          ...(patch.canViewFinance !== undefined
+            ? { canViewFinance: patch.canViewFinance }
+            : {}),
           ...(patch.canApprove !== undefined || patch.role !== undefined
             ? {
                 canApprove:
@@ -299,6 +308,11 @@ export function staffRouter(deps: StaffRouterDeps): Router {
               ["name", target.name, row.name],
               ["role", target.role, row.role],
               ["canApprove", String(target.canApprove), String(row.canApprove)],
+              [
+                "canViewFinance",
+                String(target.canViewFinance),
+                String(row.canViewFinance),
+              ],
               ["active", String(target.active), String(row.active)],
             ] as const
           ).filter(([, before, after]) => before !== after);

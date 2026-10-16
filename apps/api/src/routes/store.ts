@@ -9,6 +9,9 @@
  *   POST /api/store/commit       a changeset (400: refused, 409: somebody was first)
  *   GET  /api/store/photos/:id   a stored QC photograph
  *
+ * What only Financial & Report reads is scoped by `auth/financeScope.ts`: an
+ * account without `canViewFinance` is sent none of it and may only add to it.
+ *
  * `requireAuth` and `idempotency` are mounted above every business router in
  * app.ts, so a commit needs a live session and a retried commit with the same
  * `Idempotency-Key` is answered from the stored response rather than written
@@ -25,6 +28,11 @@ import {
   type PrismaClient,
 } from "@nusantara/db";
 import { ApiError, notFound, unauthenticated } from "../errors.js";
+import {
+  assertFinanceWritable,
+  scopeDelta,
+  scopeSnapshot,
+} from "../auth/financeScope.js";
 
 function toApiError(e: unknown): unknown {
   if (e instanceof StoreValidationError) {
@@ -50,7 +58,7 @@ export function storeRouter(db: PrismaClient): Router {
       if (!staff) throw unauthenticated();
       const snapshot = await snapshotStore(db, { staffId: staff.id });
       res.set("Cache-Control", "no-store");
-      res.json(snapshot);
+      res.json({ ...snapshot, db: scopeSnapshot(staff, snapshot.db) });
     } catch (e) {
       next(toApiError(e));
     }
@@ -71,7 +79,7 @@ export function storeRouter(db: PrismaClient): Router {
         );
       }
       res.set("Cache-Control", "no-store");
-      res.json(delta);
+      res.json(scopeDelta(staff, delta));
     } catch (e) {
       next(toApiError(e));
     }
@@ -81,11 +89,12 @@ export function storeRouter(db: PrismaClient): Router {
     try {
       const staff = req.staff;
       if (!staff) throw unauthenticated();
+      assertFinanceWritable(staff, req.body);
       const result = await commitStore(db, {
         staffId: staff.id,
         changes: req.body,
       });
-      res.json(result);
+      res.json(scopeDelta(staff, result));
     } catch (e) {
       next(toApiError(e));
     }
