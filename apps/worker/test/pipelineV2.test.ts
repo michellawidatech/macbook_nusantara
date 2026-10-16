@@ -19,7 +19,13 @@ import { draftPass } from "../src/draft.js";
 const URL =
   process.env["TEST_DATABASE_URL"] ??
   "postgresql://nusantara@localhost:5432/nusantara_pos_test";
-const asRole = (role: string) => URL.replace("//nusantara@", `//${role}@`);
+/** Parsed, not string-replaced: CI's URL carries a password (agentRole.test.ts). */
+const asRole = (role: string) => {
+  const u = new globalThis.URL(URL);
+  u.username = role;
+  u.password = "";
+  return u.toString();
+};
 
 const logger = createLogger({ app: "worker", env: "test", level: "fatal" });
 /** Thursday 20 August 2026, 10:00 Jakarta. */

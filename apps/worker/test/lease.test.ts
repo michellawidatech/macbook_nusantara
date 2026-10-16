@@ -20,7 +20,13 @@ const URL =
   "postgresql://nusantara@localhost:5432/nusantara_pos_test";
 
 /** The same database as another role — what the Mac mini's worker logs in as. */
-const asRole = (role: string) => URL.replace("//nusantara@", `//${role}@`);
+/** Parsed, not string-replaced: CI's URL carries a password (agentRole.test.ts). */
+const asRole = (role: string) => {
+  const u = new globalThis.URL(URL);
+  u.username = role;
+  u.password = "";
+  return u.toString();
+};
 
 const logger = createLogger({ app: "worker", env: "test", level: "fatal" });
 

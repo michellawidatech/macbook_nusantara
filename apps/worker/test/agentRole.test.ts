@@ -32,7 +32,19 @@ import { checkDatabaseRole } from "../src/role.js";
 const URL =
   process.env["TEST_DATABASE_URL"] ??
   "postgresql://nusantara@localhost:5432/nusantara_pos_test";
-const asRole = (role: string) => URL.replace("//nusantara@", `//${role}@`);
+/**
+ * The same database as another role. Parsed, not string-replaced: CI's URL
+ * carries a password (`nusantara:nusantara@`), and a replace that matched
+ * only `//nusantara@` left it unchanged — so every "as nusantara_agent" test
+ * quietly ran as the owner and the refusals never happened. The roles log in
+ * without one (trust locally and in CI).
+ */
+const asRole = (role: string) => {
+  const u = new globalThis.URL(URL);
+  u.username = role;
+  u.password = "";
+  return u.toString();
+};
 
 const logger = createLogger({
   app: "worker",
