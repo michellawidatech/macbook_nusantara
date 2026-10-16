@@ -61,6 +61,11 @@ import { commissionPctOf } from "../../lib/marketplace.js";
 import { DEFAULT_MARKETPLACE_MARKUP_PCT } from "../../lib/unitPrice.js";
 import type { ReasonActivity, Supplier } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
+import {
+  warehouseCode,
+  warehouseLabel,
+  warehouseLabelOf,
+} from "../../lib/warehouses.js";
 
 const REASON_ACTIVITIES: {
   value: ReasonActivity;
@@ -91,7 +96,7 @@ export function SettingsPage() {
   const me = useSession().data ?? null;
   const { message, modal } = App.useApp();
   const { compact } = useLayoutMode();
-  const [whForm] = Form.useForm<{ name: string }>();
+  const [whForm] = Form.useForm<{ name: string; code?: string }>();
   const [rackForm] = Form.useForm<{ warehouseId: string; name: string }>();
   const [supForm] = Form.useForm<{
     name: string;
@@ -138,6 +143,27 @@ export function SettingsPage() {
         !["TERJUAL", "RETUR_SUPPLIER"].includes(u.status),
     ).length;
 
+  /**
+   * The next free warehouse number — "05" after 01…04 (owner ask 2026-10-08:
+   * the shop has numbered them for six years). Offered when a warehouse is
+   * added without one.
+   */
+  const nextWarehouseCode = (() => {
+    const taken = db.warehouses
+      .map((w) => Number(warehouseCode(w)))
+      .filter((n) => Number.isInteger(n));
+    return String(Math.max(0, ...taken) + 1).padStart(2, "0");
+  })();
+  /** A number another warehouse already has, or an empty one, is refused. */
+  const codeProblem = (code: string, self?: string) => {
+    if (!code) return t("settings.codeEmpty", "A warehouse needs a number.");
+    return db.warehouses.some((w) => w.id !== self && warehouseCode(w) === code)
+      ? t("settings.codeTaken", "Another warehouse already has {{code}}.", {
+          code,
+        })
+      : null;
+  };
+
   const warehouses = (
     <Flex vertical gap={16}>
       <Card title={t("settings.warehouses", "Warehouses")}>
@@ -152,9 +178,13 @@ export function SettingsPage() {
           className="responsive-controls"
           style={{ marginBottom: 16 }}
           onFinish={(v) => {
+            const code = String(v.code ?? "").trim() || nextWarehouseCode;
+            const problem = codeProblem(code);
+            if (problem) return void message.warning(problem);
             mutate((d) => {
               d.warehouses.push({
                 id: nextId("wh"),
+                code,
                 name: v.name,
                 active: true,
               });
@@ -163,6 +193,14 @@ export function SettingsPage() {
             message.success("Warehouse added.");
           }}
         >
+          <Form.Item name="code">
+            <Input
+              aria-label={t("settings.warehouseNumber", "Number")}
+              placeholder={nextWarehouseCode}
+              maxLength={8}
+              style={{ width: 80 }}
+            />
+          </Form.Item>
           <Form.Item
             name="name"
             rules={[{ required: true, message: t("form.nameIt", "Name it") }]}
@@ -180,6 +218,31 @@ export function SettingsPage() {
           rowKey="id"
           dataSource={db.warehouses}
           columns={[
+            {
+              // The shop's own number for it, 01–04 from B2Soft (owner ask
+              // 2026-10-08). Edited in place, like the name beside it.
+              title: t("settings.warehouseNumber", "Number"),
+              key: "code",
+              width: COLUMN.qty,
+              render: (_, w) => (
+                <Typography.Text
+                  editable={{
+                    onChange: (typed) => {
+                      const code = typed.trim();
+                      if (code === (warehouseCode(w) ?? "")) return;
+                      const problem = codeProblem(code, w.id);
+                      if (problem) return void message.warning(problem);
+                      mutate((d) => {
+                        d.warehouses.find((x) => x.id === w.id)!.code = code;
+                      });
+                    },
+                    tooltip: t("settings.renumber", "Change the number"),
+                  }}
+                >
+                  {warehouseCode(w) ?? ""}
+                </Typography.Text>
+              ),
+            },
             {
               title: t("settings.name", "Name"),
               key: "name",
@@ -282,7 +345,7 @@ export function SettingsPage() {
               style={{ width: 200 }}
               options={db.warehouses.map((w) => ({
                 value: w.id,
-                label: w.name,
+                label: warehouseLabel(w),
               }))}
             />
           </Form.Item>
@@ -309,10 +372,8 @@ export function SettingsPage() {
               title: t("settings.warehouse", "Warehouse"),
               key: "wh",
               facet: true,
-              sortValue: (r) =>
-                db.warehouses.find((w) => w.id === r.warehouseId)?.name,
-              render: (_, r) =>
-                db.warehouses.find((w) => w.id === r.warehouseId)?.name,
+              sortValue: (r) => warehouseLabelOf(db.warehouses, r.warehouseId),
+              render: (_, r) => warehouseLabelOf(db.warehouses, r.warehouseId),
             },
             {
               title: t("settings.location", "Location"),
@@ -1226,7 +1287,7 @@ export function SettingsPage() {
               value={db.myWarehouseId}
               options={db.warehouses
                 .filter((w) => w.active)
-                .map((w) => ({ value: w.id, label: w.name }))}
+                .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
               onChange={(v) =>
                 mutate((d) => {
                   d.myWarehouseId = v;

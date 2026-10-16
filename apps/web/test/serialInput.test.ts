@@ -14,6 +14,7 @@ import {
   readSerialInput,
   resolveSerialQuery,
   serialConditionOf,
+  serialMatchesQuery,
   serialNamedBy,
 } from "../src/lib/serialInput.js";
 
@@ -217,5 +218,18 @@ describe("serialNamedBy — a box that acts the moment it has a serial", () => {
     expect(serialNamedBy("C0274", known)).toBeNull();
     expect(serialNamedBy("MacBook Air", known)).toBeNull();
     expect(serialNamedBy("", known)).toBeNull();
+  });
+});
+
+describe("serialMatchesQuery — the till's chooser narrows as somebody types", () => {
+  it("matches part of a serial, in any case, and everything when empty", () => {
+    expect(serialMatchesQuery("0137j", SERIAL)).toBe(true);
+    expect(serialMatchesQuery("  ", SERIAL)).toBe(true);
+    expect(serialMatchesQuery("9999", SERIAL)).toBe(false);
+  });
+
+  it("finds the unit from its barcode and from a misread I or O", () => {
+    expect(serialMatchesQuery(BARCODE, SERIAL)).toBe(true);
+    expect(serialMatchesQuery("C0274O137", SERIAL)).toBe(true);
   });
 });

@@ -1079,7 +1079,7 @@ Decisions that outlived those documents:
     per-unit box anywhere. `Unit.marketPrice` still exists and still counts.
   - **Inventory is flat** (p4): one line per variant × grade × warehouse,
     unit price and sell price as ranges, *Set price* / *Print barcode*; a line
-    opens a popup of its units with an "i" per unit breaking down the COGS
+    opens a popup of its units (⚠️ nested under the line since 2026-10-02) with an "i" per unit breaking down the COGS
     (`components/CostBreakdown`). **Export stock** (p5) writes .xlsx after
     B2Soft's PERSEDIAAN BARANG, with `lib/xlsxWrite.ts` — no dependency.
   - **S/N Tracking** (p6) lists every serial (filters: category / product /
@@ -1127,9 +1127,9 @@ Decisions that outlived those documents:
     (`SEED.primaryDark`, primary text 5.5:1); the till's total panel and the
     active app tab use `BRAND_DEEP`, and the panel's main button is white.
     `test/theme.test.ts` checks the contrast.
-  - ⚠️ Schema gaps still open: `Location.code` is not in the store (the
-    export names warehouses by name), and a settlement's note lives on the
-    payments because `Settlement` has only `reason`.
+  - ⚠️ Schema gaps still open: ~~`Location.code` is not in the store~~ (it
+    is since 2026-10-08 — see "Four asks"), and a settlement's note lives on
+    the payments because `Settlement` has only `reason`.
 - **Counted products are quantities, in the database too — 2026-09-19.**
   *"For accessories literally don't record any individual measurements like
   code, no need, that should purely be by qty"* — and, asked how far: the
@@ -2550,6 +2550,95 @@ Decisions that outlived those documents:
   The simulator derives what is "known" from the earlier turns of its
   made-up conversation.
 
+- **Inventory's units are nested again, 2026-10-02.** *"Instead of showing
+  popup in the UI when a row is clicked, use nested column."* A click on a line
+  (or its chevron) opens its units UNDER it, several lines at once; the lines
+  themselves stay flat — one level, never the product → grade → serial tree
+  of 2026-09-08. The nested table dropped Grade and the warehouse (a line IS
+  one grade in one warehouse, so the row above says both) and its Where
+  became Rack, which is what lets it fit a 1440px screen with the nav open
+  together with `.inventory-lines` in global.css stripping antd's padding and
+  40px indent from the expanded row. The per-unit buttons are pinned right.
+  ⚠️ An expanding table keeps its grid on a phone (DataTable), so Inventory
+  is no longer cards there.
+- **A discount nobody has used can be deleted, 2026-10-02** (owner decision,
+  chosen over hiding one or a Delete that only switched it off). The row's
+  *Delete* sits beside *Edit*, behind a Popconfirm; one a sale has redeemed —
+  `used > 0` OR any order carrying its id, because the two can disagree — is
+  drawn disabled and points at the On switch. ⚠️ This is the app's **third
+  hard delete**, and on Postgres the first real one through the store (a
+  draft stock count is cancelled to `BATAL` there). `removeUnusedDiscount` in
+  `adapters/reference.ts` asks the DATABASE, not the browser's copy, and takes
+  the `DiscountSku` rows with it; `Order.discountId` is ON DELETE RESTRICT, so
+  a redemption racing the commit fails the DELETE rather than orphaning a
+  sale. Migration `20261002090000_discount_delete_unused` grants
+  `nusantara_app` DELETE on `Discount` and `DiscountSku` and nothing else. Do
+  not generalise it.
+- **Staging is a second install on the Mac mini, 2026-10-06.** *"Create
+  staging env … staging.pos.macbooknusantara.com."* It is
+  **`staging-pos.macbooknusantara.com`** (owner's choice once told why): the
+  zone's free certificate is `*.macbooknusantara.com`, one level, and a
+  two-level name needs Advanced Certificate Manager. `docs/staging.md` is the
+  runbook.
+  - `/opt/nusantara-stage`, API `:4001`, Caddy `:8081`, launchd
+    `local.nusantara-stage.{api,caddy}`, database `nusantara_pos_stage`, a
+    route on the same tunnel. A push to `main` deploys it; Run workflow on any
+    branch deploys that branch (`stage-release` needs `static`, not `test`).
+  - **Its data is a copy of the shop's** — `nusantara-deploy --stage refresh`,
+    as the cluster's superuser over the socket, which is the one login that
+    may drop and create a database. The workflow's `refresh_staging_data`
+    input runs it BEFORE migrating, because staging's code may be ahead of the
+    shop's schema.
+  - **One Caddyfile, one `ops/`, two installs.** The Caddyfile reads
+    `{$NUSANTARA_HOME|CADDY_PORT|API_PORT|CADDY_ADMIN}` with prod's values as
+    defaults (prod's parse is unchanged), and `ops/run` finds its install from
+    the `releases/` it sits in.
+  - ⚠️ **Staging never runs the worker or the webhook.** The copy carries
+    every customer's number and the shop's unsent Outbox. The installer loads
+    only api and caddy for it, and `ops/run` refuses both unless
+    `APP_ENV=prod`. Do not weaken either.
+  - ⚠️ **Staging refuses to go up without the shop-password gate file** — the
+    shop's own address does not, and on 2026-10-06 answered 200 without one.
+  - The `stage` key is pinned to `nusantara-deploy --stage` (installer 2,
+    `setup-deploy-access --stage`), so the key a branch can reach cannot name
+    the shop. Roles are cluster-wide, though: staging's owner password IS the
+    shop's.
+- **Four asks, 2026-10-08.**
+  - **The till's catalogue is one row per variant AND grade** — *"per row is
+    per unit with same grade and same spec, then the grade is on the left
+    next to the unit."* This REVISES 2026-08-27's one-row-per-variant: a row
+    with a New, an A and a C quoted three shelves' prices in one range.
+    `shelfRows` groups on (sku, grade) and a row carries `key` and `grade`
+    (`grades` is gone); the grade sits in a fixed-width slot left of the name
+    (`.pos-shelf-grade`) so the names line up, counted products included. The
+    "last one skips the chooser" rule now applies per grade row, so more taps
+    go straight into the basket. The chooser has a **serial search**
+    (`serialMatchesQuery`, the search-box readings as a substring) focused on
+    open, and Enter takes the unit once it has narrowed to one.
+    ⚠️ It is focused by a `setTimeout` after open, not `autoFocus` (the
+    Modal's focus trap takes the caret to its first button) and not
+    `afterOpenChange` (it waits for an animation frame a background tab never
+    draws).
+  - **A discount applies to all, a category or a product**, asked as two
+    questions: a Segmented, then which one. `Discount.scope` is still the one
+    string the store and `scopeOf` read; `scopeKindOf` reads it back in
+    Postgres's order (category first). The list prints "Category: …" /
+    "Product: …".
+  - **The trade-in's product box is `SkuPicker`** — the shop code
+    (`AIR 13" 2020 I5 8/256`) in the box and the model under it, as Inbound
+    picks one. Tests pick by `sku.code`.
+  - **A warehouse prints its number: "01 · Gudang Utama"** — the shop has
+    used 01–04 for six years. `lib/warehouses.ts` (`warehouseLabel`) is the
+    one place; every screen that named a warehouse goes through it. The
+    number is `Location.code`, which already existed: the store contract
+    gained an optional `code`, the adapter projects and writes it, and
+    Settings → Warehouses edits it (a new one is offered the next free
+    number, a duplicate is refused). The adapter used to fill the column with
+    the id, so the go-live import left `wh-01`…`wh-04`; data-only migration
+    `20261008090000_location_code_is_the_shop_number` takes the number back
+    out of every code that is still that id copy. The importer
+    (`masters.py`, `documents.py`) now writes `code` itself, and the fixture's
+    codes are `01`–`04`. A code equal to the id prints as the name alone.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
@@ -2624,7 +2713,11 @@ there is the comment/DM ingest this build has not written yet.
   commit to the Mac mini (`docs/deploy-pipeline.md`). `v2026.09.18` itself is
   taken (a failed run at `f6f5f3c`). Rollback in seconds, on the Mac mini:
   `sudo /usr/local/libexec/nusantara-deploy rollback`
-- Ports: web 3000, api 4000, webhook 3001, monitor 4100
+- `gh workflow run CI --ref <branch>` — deploy a branch to staging
+  (`-f refresh_staging_data=true` for a fresh copy of the shop's data first);
+  a push to `main` does it by itself (`docs/staging.md`)
+- Ports: web 3000, api 4000, webhook 3001, monitor 4100; on the Mac mini,
+  staging's api 4001 and Caddy 8081 beside the shop's 4000 and 8080
 - Database: `nusantara_pos_rebuild` on `localhost:5432`, role `nusantara`
 - Meta: App ID `2157052578394015`, WABA `1701973881546032`,
   `PHONE_NUMBER_ID` `1200651716467039`, Graph **v25.0** (one constant, both

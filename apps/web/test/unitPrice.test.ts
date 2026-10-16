@@ -15,6 +15,7 @@ import {
   markupOf,
   priceOf,
   priceRange,
+  startingPrice,
   variantMarketPrice,
   variantMarketPrices,
   type ListedUnit,
@@ -254,5 +255,14 @@ describe("variantMarketPrice", () => {
     }
     // The demo shelf has to list something, or this proves nothing.
     expect(all.size).toBeGreaterThan(0);
+  });
+});
+
+describe("startingPrice", () => {
+  it("hands on a variant's asking price, and not a Rp 0 nobody chose", () => {
+    expect(startingPrice(9_500_000)).toBe(9_500_000);
+    expect(startingPrice(0)).toBeUndefined();
+    expect(startingPrice(null)).toBeUndefined();
+    expect(startingPrice(undefined)).toBeUndefined();
   });
 });

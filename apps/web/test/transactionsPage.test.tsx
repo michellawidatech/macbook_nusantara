@@ -42,6 +42,17 @@ function renderPage() {
   );
 }
 
+/**
+ * A seed sale's order number by its sequence. The month in it comes from the
+ * sale's date, which the fixture sets relative to "now" — hard-coding it broke
+ * the moment the calendar turned a month.
+ */
+function seedCode(seq: string): string {
+  const o = getDb().orders.find((x) => x.code.endsWith(`-${seq}`));
+  expect(o).toBeDefined();
+  return o!.code;
+}
+
 /** The card of one sale, found by its order number. */
 function saleCard(code: string): HTMLElement {
   const card = screen.getByText(code).closest(".ant-card");
@@ -56,18 +67,6 @@ beforeEach(() => {
     d.events = d.events.filter((e) => !e.id.startsWith("ev-tx-"));
   });
 });
-
-/**
- * A demo sale's code by its number. The seed dates its documents relative to
- * today and numbers them by their month, so `SI-2026/09-000204` became
- * `SI-2026/10-000204` on the first of October and these tests broke with no
- * change to the page (found 2026-10-15). The number is what is stable.
- */
-function seedCode(number: string): string {
-  const order = getDb().orders.find((o) => o.code.endsWith(`-${number}`));
-  if (!order) throw new Error(`no seed sale numbered ${number}`);
-  return order.code;
-}
 
 /** A sale of one seed unit that the test can shape. */
 function addSale(over: Partial<Order> & Pick<Order, "id" | "code">) {

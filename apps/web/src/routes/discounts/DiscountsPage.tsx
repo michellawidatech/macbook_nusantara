@@ -1,5 +1,7 @@
 /**
- * Manage discounts — usage, window, status; deactivate rather than delete.
+ * Manage discounts — usage, window, status. A discount no sale has redeemed
+ * can be deleted outright (owner decision 2026-10-02); one that has been used
+ * is named on a receipt, so it is switched off instead.
  * Clicking a discount opens where it was actually redeemed, which is the
  * question the `used` counter raises and cannot answer: 12 uses is a number,
  * "12 uses, all of them in the first three days, all on MacBook Air" is a
@@ -15,22 +17,24 @@ import {
   Drawer,
   Empty,
   Flex,
+  Popconfirm,
   Statistic,
   Switch,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { fmtRp, fmtDate, fmtDateTime } from "../../lib/format.js";
-import { describeDiscount } from "../../lib/pricing.js";
+import { describeDiscount, scopeKindOf } from "../../lib/pricing.js";
 import { describeDiscountText } from "../../lib/discountText.js";
 import { useDb, mutate } from "../../mock/store.js";
 import type { Discount } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
-import { COLUMN } from "../../theme/tokens";
+import { COLUMN, SPACE } from "../../theme/tokens";
 
 /**
  * The state a discount is in.
@@ -54,6 +58,14 @@ function statusOf(d: Discount): { label: string; color: string } {
 export function DiscountsPage() {
   const { t } = useTranslation();
   const db = useDb();
+  /** A discount's scope, saying which of the three it is (2026-10-08). */
+  const scopeText = (scope: string) => {
+    const kind = scopeKindOf(db, scope);
+    if (kind === "ALL") return t("discount.allProducts", "All products");
+    return kind === "CATEGORY"
+      ? t("discounts.scopeCategoryOf", "Category: {{name}}", { name: scope })
+      : t("discounts.scopeProductOf", "Product: {{name}}", { name: scope });
+  };
   const navigate = useNavigate();
   const { compact } = useLayoutMode();
   const [opened, setOpened] = useState<Discount | null>(null);
@@ -66,6 +78,13 @@ export function DiscountsPage() {
         .sort((a, b) => b.ts.localeCompare(a.ts))
     : [];
   const redeemed = usage.reduce((t, o) => t + o.discount, 0);
+  /**
+   * A discount a sale has redeemed is on a receipt and cannot be deleted. The
+   * counter and the order list are both asked, because they can disagree —
+   * see the note in the drawer below.
+   */
+  const isRedeemed = (d: Discount) =>
+    d.used > 0 || db.orders.some((o) => o.discountId === d.id);
 
   return (
     <PageContainer
@@ -170,7 +189,7 @@ export function DiscountsPage() {
               dataIndex: "scope",
               facet: true,
               searchable: true,
-              render: (v) => <Tag>{v}</Tag>,
+              render: (v: string) => <Tag>{scopeText(v)}</Tag>,
             },
             {
               title: t("discounts.status", "Status"),
@@ -182,6 +201,95 @@ export function DiscountsPage() {
               render: (_, d) => {
                 const s = statusOf(d);
                 return <Tag color={s.color}>{t(s.label)}</Tag>;
+              },
+            },
+            {
+              // Correcting a discount, and deleting one nobody has used (owner
+              // asks 2026-10-02). The row opens its usage history, so this
+              // stops the click like the switch.
+              title: "",
+              key: "edit",
+              width: COLUMN.actionsPair,
+              render: (_, d) => {
+                const redeemed = isRedeemed(d);
+                return (
+                  <Flex
+                    gap={SPACE.xs}
+                    justify="end"
+                    role="presentation"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Button
+                      size="small"
+                      icon={<EditOutlined />}
+                      aria-label={t("discounts.editAria", "Edit {{name}}", {
+                        name: d.name,
+                      })}
+                      onClick={() => navigate(`/discounts/${d.id}/edit`)}
+                    >
+                      {t("common.edit", "Edit")}
+                    </Button>
+                    {redeemed ? (
+                      <Tooltip
+                        title={t(
+                          "discounts.deleteBlocked",
+                          "Used on a sale, so it stays on record. Switch it off instead.",
+                        )}
+                      >
+                        <span>
+                          <Button
+                            size="small"
+                            danger
+                            disabled
+                            icon={<DeleteOutlined />}
+                            aria-label={t(
+                              "discounts.deleteAria",
+                              "Delete {{name}}",
+                              { name: d.name },
+                            )}
+                          >
+                            {t("common.delete", "Delete")}
+                          </Button>
+                        </span>
+                      </Tooltip>
+                    ) : (
+                      <Popconfirm
+                        title={t(
+                          "discounts.deleteConfirm",
+                          "Delete {{name}}?",
+                          { name: d.name },
+                        )}
+                        description={t(
+                          "deleteAction.confirmDetail",
+                          "This cannot be undone.",
+                        )}
+                        okText={t("common.delete", "Delete")}
+                        cancelText={t("common.cancel", "Cancel")}
+                        okButtonProps={{ danger: true }}
+                        onConfirm={() =>
+                          mutate((x) => {
+                            x.discounts = x.discounts.filter(
+                              (y) => y.id !== d.id,
+                            );
+                          })
+                        }
+                      >
+                        <Button
+                          size="small"
+                          danger
+                          icon={<DeleteOutlined />}
+                          aria-label={t(
+                            "discounts.deleteAria",
+                            "Delete {{name}}",
+                            { name: d.name },
+                          )}
+                        >
+                          {t("common.delete", "Delete")}
+                        </Button>
+                      </Popconfirm>
+                    )}
+                  </Flex>
+                );
               },
             },
             {
@@ -235,7 +343,7 @@ export function DiscountsPage() {
                 {
                   key: "s",
                   label: t("discounts.appliesTo", "Applies to"),
-                  children: discount.scope,
+                  children: scopeText(discount.scope),
                 },
                 {
                   key: "w",

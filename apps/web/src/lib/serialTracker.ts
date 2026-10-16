@@ -36,6 +36,7 @@
  */
 import type { MockDb, UnitEvent, UnitStatus } from "../mock/seed.js";
 import { resolveSerialQuery } from "./serialInput.js";
+import { warehouseLabel } from "./warehouses.js";
 
 /** A unit's newest ledger row, as far as the list is concerned. */
 export interface TrackerMovement {
@@ -105,6 +106,7 @@ export function trackerRows(db: TrackerSource): TrackerRow[] {
     const sku = skus.get(u.skuId);
     const model = sku === undefined ? undefined : models.get(sku.modelId);
     const e = last.get(u.serial);
+    const where = warehouses.get(u.locationId);
     return {
       serial: u.serial,
       skuId: u.skuId,
@@ -114,7 +116,7 @@ export function trackerRows(db: TrackerSource): TrackerRow[] {
       variant: sku?.variantLabel ?? "",
       status: u.status,
       locationId: u.locationId,
-      warehouse: warehouses.get(u.locationId)?.name ?? "",
+      warehouse: where ? warehouseLabel(where) : "",
       ...(e === undefined
         ? {}
         : { last: { type: e.type, at: e.at, seq: e.seq } }),

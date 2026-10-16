@@ -284,3 +284,19 @@ export function isPriceInRange(price: number | null | undefined): boolean {
   if (price == null) return true;
   return Number.isFinite(price) && price >= PRICE_MIN && price <= PRICE_MAX;
 }
+
+/**
+ * The variant's asking price as a new unit's starting price — or none.
+ *
+ * A variant at Rp 0 has not been priced (the go-live import of 2026-09-29
+ * priced none of them), and handing that zero on to a unit is the giveaway
+ * nobody chose that `PricedUnit.price` warns about. Absent, the unit quotes
+ * its variant through `priceOf` like any other unpriced unit, and the sell
+ * price box at Inbound & QC shows the figure as a hint instead of a value it
+ * cannot be emptied of (owner report 2026-10-08).
+ */
+export function startingPrice(
+  asking: number | null | undefined,
+): number | undefined {
+  return asking != null && asking > 0 ? asking : undefined;
+}

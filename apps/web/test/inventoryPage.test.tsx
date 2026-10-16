@@ -86,13 +86,20 @@ function expectedLines(): InventoryLine[] {
   });
 }
 
-/** The table's body rows — the product table, not a dialog's. */
+/**
+ * The table's body rows — the product table's lines, not a dialog's rows nor
+ * the unit rows nested under an opened line.
+ */
 function tableRows(): HTMLElement[] {
   return Array.from(
     document.querySelectorAll<HTMLElement>(
       ".ant-table-tbody > tr.ant-table-row",
     ),
-  ).filter((tr) => tr.closest(".ant-modal") === null);
+  ).filter(
+    (tr) =>
+      tr.closest(".ant-modal") === null &&
+      tr.closest(".ant-table-expanded-row") === null,
+  );
 }
 
 /** The row showing a line: its product, variant and code, grade and warehouse. */
@@ -132,6 +139,18 @@ async function rowFor(line: InventoryLine): Promise<HTMLElement> {
   );
   await settle();
   return rowOf(line);
+}
+
+/**
+ * What an opened line shows under it: the expanded row that follows it
+ * (owner ask 2026-10-02 — nested, not a popup).
+ */
+async function unitsUnder(row: HTMLElement): Promise<HTMLElement> {
+  return waitFor(() => {
+    const next = row.nextElementSibling as HTMLElement | null;
+    expect(next?.classList.contains("ant-table-expanded-row")).toBe(true);
+    return next!;
+  });
 }
 
 /** The modal on top: the last one open. */
@@ -219,15 +238,18 @@ describe("the flat table", () => {
 });
 
 describe("the units behind a line", () => {
-  it("opens on a click with every unit of the line, and its cost taken apart", async () => {
+  it("opens under the line on a click with every unit, and its cost taken apart", async () => {
     renderPage();
     await settle();
     const cost = costIndex(getDb());
     const line = expectedLines().find(
       (l) => l.tracksSerial && l.units.some((u) => u.poId !== null),
     )!;
-    await userEvent.click(within(await rowFor(line)).getByText(line.code));
-    const dialog = await topModal();
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    const dialog = await unitsUnder(row);
+    // Nested, not a popup.
+    expect(document.querySelector(".ant-modal-wrap")).toBeNull();
     for (const u of line.units) {
       expect(within(dialog).getByText(u.serial)).toBeInTheDocument();
     }
@@ -257,8 +279,9 @@ describe("the units behind a line", () => {
     const db = getDb();
     const line = expectedLines().find((l) => !skuTracksSerial(db, l.skuId));
     expect(line, "the seed should hold an accessory").toBeDefined();
-    await userEvent.click(within(await rowFor(line!)).getByText(line!.code));
-    const dialog = await topModal();
+    const row = await rowFor(line!);
+    await userEvent.click(within(row).getByText(line!.code));
+    const dialog = await unitsUnder(row);
     expect(headings(dialog)).not.toContain("Battery");
     expect(headings(dialog)).toContain("Qty");
     expect(
@@ -266,7 +289,25 @@ describe("the units behind a line", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("opens Edit unit above the popup", async () => {
+  it("closes again on a second click", async () => {
+    renderPage();
+    await settle();
+    const line = expectedLines().find((l) => l.tracksSerial)!;
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    await unitsUnder(row);
+    await userEvent.click(within(row).getByText(line.code));
+    await waitFor(() => {
+      const next = row.nextElementSibling as HTMLElement | null;
+      expect(
+        next === null ||
+          !next.classList.contains("ant-table-expanded-row") ||
+          next.style.display === "none",
+      ).toBe(true);
+    });
+  });
+
+  it("opens Edit unit from a unit under the line", async () => {
     // The per-unit action is Edit unit since 2026-09-23 (owner ask), and it
     // opens the dialog that corrects the serial, grade, battery, shelf,
     // description and unit price — not the old warehouse-and-note form.
@@ -274,17 +315,15 @@ describe("the units behind a line", () => {
     await settle();
     const line = expectedLines().find((l) => l.tracksSerial)!;
     const unit = line.units[0]!;
-    await userEvent.click(within(await rowFor(line)).getByText(line.code));
-    const popup = await topModal();
-    await userEvent.click(labelled(popup, `Edit ${unit.serial}`));
-    const title = await screen.findByText("Edit unit", {
-      selector: ".ant-modal-title, .ant-modal-title *",
-    });
-    const wrap = title.closest(".ant-modal-wrap") as HTMLElement;
-    const under = popup.closest(".ant-modal-wrap") as HTMLElement;
-    expect(Number(wrap.style.zIndex)).toBeGreaterThan(
-      Number(under.style.zIndex || 1000),
-    );
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    const nested = await unitsUnder(row);
+    await userEvent.click(labelled(nested, `Edit ${unit.serial}`));
+    expect(
+      await screen.findByText("Edit unit", {
+        selector: ".ant-modal-title, .ant-modal-title *",
+      }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -427,27 +466,17 @@ describe("on a phone", () => {
     });
   });
 
-  it("draws a card per line, and a tap on one opens the same units", async () => {
+  it("keeps its grid, and a tap on a line opens the same units under it", async () => {
+    // An expanding table keeps its grid on a phone — a card has no second
+    // level to open into (DataTable's docblock). Nested since 2026-10-02.
     renderPage();
     await settle();
     const line = expectedLines().find((l) => l.tracksSerial)!;
-    fireEvent.change(
-      screen.getByPlaceholderText(
-        "Search product, specs, code or a serial number",
-      ),
-      { target: { value: line.code } },
-    );
-    await settle();
-    // Nothing expands any more, so the list is cards, not a sideways grid.
-    expect(tableRows()).toHaveLength(0);
-    const card = Array.from(
-      document.querySelectorAll<HTMLElement>(".ant-card"),
-    ).find((c) => (c.textContent ?? "").includes(line.code))!;
-    expect(card).toBeDefined();
-    await userEvent.click(within(card).getByText(line.code));
-    const dialog = await topModal();
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    const nested = await unitsUnder(row);
     for (const u of line.units) {
-      expect(within(dialog).getByText(u.serial)).toBeInTheDocument();
+      expect(within(nested).getByText(u.serial)).toBeInTheDocument();
     }
   });
 });

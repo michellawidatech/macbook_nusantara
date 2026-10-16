@@ -281,6 +281,12 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
 
   const warehouse = z.strictObject({
     id,
+    /**
+     * `Location.code` — the shop's own number for the warehouse, `01` to `04`
+     * from B2Soft (owner ask 2026-10-08). Optional so a changeset written
+     * before it still commits.
+     */
+    code: text.optional(),
     name: text,
     active: z.boolean(),
     kind: z.enum(LOCATION_KINDS).optional(),

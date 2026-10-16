@@ -66,6 +66,12 @@ export interface UnitDetailsModalProps<R extends UnitDetailRow> {
   readonly sellPrice: (row: R) => ReactNode;
   /** The row's own buttons — decisions, photos. Omitted where there are none. */
   readonly actions?: (row: R) => ReactNode;
+  /**
+   * How wide the widest row's buttons are, cell padding included. The column
+   * is laid out `fixed`, so buttons wider than it do not widen it — they
+   * spill left over the sell price (owner report 2026-10-08).
+   */
+  readonly actionsWidth?: number;
   /** Another unit on this line. Omitted when the quantity cannot grow. */
   readonly onAddUnit?: () => void;
   /** Anything the caller wants under the table. */
@@ -84,6 +90,7 @@ export function UnitDetailsModal<R extends UnitDetailRow>({
   description,
   sellPrice,
   actions,
+  actionsWidth = COLUMN.actionsPair,
   onAddUnit,
   footer,
 }: UnitDetailsModalProps<R>) {
@@ -134,7 +141,7 @@ export function UnitDetailsModal<R extends UnitDetailRow>({
     {
       title: t("inbound.sellPrice", "Sell price"),
       key: "sell",
-      width: COLUMN.money,
+      width: COLUMN.moneyInput,
       render: (_: unknown, r: R) => sellPrice(r),
     },
     ...(actions
@@ -144,7 +151,7 @@ export function UnitDetailsModal<R extends UnitDetailRow>({
             // than labelling a row of buttons as if it were a field.
             title: "",
             key: "actions",
-            width: COLUMN.actionsPair,
+            width: actionsWidth,
             align: "right" as const,
             render: (_: unknown, r: R) => actions(r),
           },
@@ -152,12 +159,15 @@ export function UnitDetailsModal<R extends UnitDetailRow>({
       : []),
   ];
 
+  // As wide as the columns need, and no wider than the screen: every column
+  // is declared, so their sum is the grid, and 48 is the dialog's padding.
+  const grid = columns.reduce((sum, c) => sum + c.width, 0);
+
   return (
     <Modal
       open={open}
       onCancel={onClose}
-      // As wide as the columns need, and no wider than the screen.
-      width="min(1180px, calc(100vw - 32px))"
+      width={`min(${Math.max(1180, grid + 48)}px, calc(100vw - 32px))`}
       title={
         <Flex vertical gap={2}>
           <Typography.Text strong style={{ fontSize: TYPE.lg }}>

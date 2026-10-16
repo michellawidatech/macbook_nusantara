@@ -60,6 +60,30 @@ export function scopeMatches(
   return model.name === scope || model.category === scope;
 }
 
+/** The three things a discount can apply to (owner ask 2026-10-08). */
+export type DiscountScopeKind = "ALL" | "CATEGORY" | "PRODUCT";
+
+/**
+ * Which of the three a stored `scope` names.
+ *
+ * Read the way the database reads it (`scopeOf` in packages/db's reference
+ * adapter): empty or "All products" is everything, then a category name,
+ * and anything else a product — a model. A category is tried first because
+ * that is the order Postgres resolves the same string in, so the form and
+ * the database cannot disagree about what a saved discount covers.
+ */
+export function scopeKindOf(
+  db: Pick<MockDb, "categories" | "models">,
+  scope: string | undefined,
+): DiscountScopeKind {
+  const clean = (scope ?? "").trim();
+  if (clean === "" || clean === "All products") return "ALL";
+  const isCategory =
+    db.categories.some((c) => c.name === clean) ||
+    db.models.some((m) => m.category === clean);
+  return isCategory ? "CATEGORY" : "PRODUCT";
+}
+
 /** How a bundle lands against the current basket — the numbers the UI narrates. */
 export interface BundleProgress {
   /** Lines inside the discount's scope. */

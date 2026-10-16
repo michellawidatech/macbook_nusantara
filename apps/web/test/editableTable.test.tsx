@@ -31,6 +31,10 @@ import { getDb } from "../src/mock/store.js";
 import type { MockDb } from "../src/mock/seed.js";
 import { pressPageAction } from "./pageActions.js";
 
+// Several tests here render a whole inbound page into jsdom; CI's 2-vCPU
+// runner timed one out at the 5s default on 2026-10-08 (run 37731013839).
+vi.setConfig({ testTimeout: 60_000 });
+
 /**
  * What `Grid.useBreakpoint` is told the window is.
  *

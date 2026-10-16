@@ -6,7 +6,7 @@
  * "Stock Movement" listed it by serial and owned the adjustment machinery. The
  * owner asked for one screen with one table, and `InventoryTable` is that
  * table: flat since 2026-09-19 — a line per variant, grade and warehouse, its
- * units in a popup. This file is what remains — the page frame, the stock
+ * units nested under it. This file is what remains — the page frame, the stock
  * movement history (every row of it editable since 2026-09-24, through
  * `StockMovementEditModal`), the stock export (`StockExportModal`), and the
  * two modals that actually write.
@@ -129,6 +129,7 @@ import type {
   MockDb,
   UnitStatus,
 } from "../../mock/seed.js";
+import { warehouseLabel } from "../../lib/warehouses.js";
 
 /** Rows the modal opens with — the owner's "typically three or four". */
 const BLANK_ROWS = 1;
@@ -731,9 +732,9 @@ export function InventoryPage() {
 
   /**
    * The one table the merge produced: a flat line per variant, grade and
-   * warehouse since 2026-09-19, its units in a popup.
+   * warehouse since 2026-09-19, its units nested under it.
    *
-   * The popup owns its own per-unit buttons since 2026-09-23 — price change
+   * The nested units carry their own per-unit buttons since 2026-09-23 — price change
    * and edit unit — so nothing about one unit comes back up to this page.
    */
   const stockTab = (
@@ -1058,7 +1059,7 @@ export function InventoryPage() {
                   onChange={setLocationId}
                   options={db.warehouses
                     .filter((w) => w.active)
-                    .map((w) => ({ value: w.id, label: w.name }))}
+                    .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
                   style={{ width: "100%" }}
                 />
               </Form.Item>

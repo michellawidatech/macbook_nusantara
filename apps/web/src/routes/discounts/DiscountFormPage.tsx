@@ -7,7 +7,7 @@
  * what it is (a count and a price) and worked out against the real basket at
  * the till. See `lib/pricing.ts`.
  */
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import dayjs from "dayjs";
 import {
   App,
@@ -17,6 +17,7 @@ import {
   Flex,
   Form,
   Input,
+  InputNumber,
   Segmented,
   Select,
   Typography,
@@ -25,10 +26,12 @@ import { PageContainer } from "../../components/PageContainer";
 import { FooterToolbar } from "../../components/FooterToolbar";
 import { MoneyInput } from "../../components/MoneyInput";
 import { useDb, mutate, nextId } from "../../mock/store.js";
+import type { Discount } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { useFormDraft } from "../../hooks/useFormDraft";
 import { asOneOf, isRecord } from "../../lib/draftGuards.js";
+import { scopeKindOf, type DiscountScopeKind } from "../../lib/pricing.js";
 
 type DiscountType = "PCT" | "NOMINAL" | "BUNDLE";
 
@@ -38,6 +41,21 @@ type DiscountType = "PCT" | "NOMINAL" | "BUNDLE";
  * of dayjs values in the form and a pair of ISO days in storage.
  */
 const DISCOUNT_DRAFT = draftKey("discount.new");
+
+/**
+ * A count typed into the form, as the number the store's contract demands.
+ *
+ * The boxes were `<Input type="number">`, which hands the form a STRING —
+ * and the store refuses a discount whose `pct` or `usageLimit` is one
+ * ("Not saved — pct: Invalid input: expected number, received string", owner
+ * report 2026-10-02). They are `InputNumber` now; this also mends a value
+ * restored from a draft an older build kept as text. Empty is "not set".
+ */
+function countOf(v: unknown): number | undefined {
+  if (v === undefined || v === null || v === "") return undefined;
+  const n = typeof v === "number" ? v : Number(String(v).trim());
+  return Number.isFinite(n) ? Math.round(n) : undefined;
+}
 const toStored = (v: Record<string, unknown>) => ({
   ...v,
   range: Array.isArray(v.range)
@@ -54,18 +72,54 @@ const fromStored = (v: unknown): Record<string, unknown> | undefined => {
   return { ...v, range };
 };
 
+/**
+ * Adding a discount at `/discounts/new`, and correcting one at
+ * `/discounts/:discountId/edit` (owner ask 2026-10-02) — the same form.
+ *
+ * The form is mounted only once the discount is in the store, and keyed by
+ * it: its starting values and its kind are read once, at mount, so a form
+ * that mounted before the store answered would open blank and stay blank.
+ */
 export function DiscountFormPage() {
+  const { t } = useTranslation();
+  const db = useDb();
+  const { discountId } = useParams<{ discountId: string }>();
+  if (discountId === undefined) return <DiscountForm />;
+  const editing = db.discounts.find((d) => d.id === discountId);
+  if (editing === undefined) {
+    return (
+      <PageContainer
+        title={t("discount.editDiscount", "Edit Discount")}
+        backTo="/discounts"
+      >
+        <Typography.Text type="secondary">
+          {t("discount.notFound", "This discount does not exist.")}
+        </Typography.Text>
+      </PageContainer>
+    );
+  }
+  return <DiscountForm key={editing.id} editing={editing} />;
+}
+
+function DiscountForm({ editing }: { editing?: Discount }) {
   const { t } = useTranslation();
   const db = useDb();
   const navigate = useNavigate();
   const { message } = App.useApp();
   const [form] = Form.useForm();
+  const discountId = editing?.id;
+  // A half-typed correction is kept under its own key, so it never mixes
+  // with a new discount's.
+  const draftName =
+    discountId === undefined
+      ? DISCOUNT_DRAFT
+      : draftKey(`discount.edit.${discountId}`);
   const [type, setType, clearType] = usePersistentState<DiscountType>(
-    `${DISCOUNT_DRAFT}.type`,
-    "PCT",
+    `${draftName}.type`,
+    editing?.type ?? "PCT",
     asOneOf<DiscountType>(["PCT", "NOMINAL", "BUNDLE"]),
   );
-  const draft = useFormDraft<Record<string, unknown>>(form, DISCOUNT_DRAFT, {
+  const draft = useFormDraft<Record<string, unknown>>(form, draftName, {
     save: toStored,
     load: fromStored,
   });
@@ -75,6 +129,26 @@ export function DiscountFormPage() {
     clearType();
     navigate("/discounts");
   };
+
+  /** A stored scope, as the form's two questions. */
+  const scopeFields = (scope: string) => {
+    const kind = scopeKindOf(db, scope);
+    return kind === "ALL"
+      ? { scopeKind: kind }
+      : { scopeKind: kind, scopeTarget: scope };
+  };
+  const scopeKind = Form.useWatch("scopeKind", form) as
+    DiscountScopeKind | undefined;
+  /** Every category, by name — what `scopeOf` looks a category up by. */
+  const categoryNames = [
+    ...new Set([
+      ...db.categories.map((c) => c.name),
+      ...db.models.map((m) => m.category),
+    ]),
+  ].sort((a, b) => a.localeCompare(b));
+  const productNames = [...new Set(db.models.map((m) => m.name))].sort((a, b) =>
+    a.localeCompare(b),
+  );
 
   const submit = (v: {
     name: string;
@@ -86,43 +160,92 @@ export function DiscountFormPage() {
     bundlePriceRp?: number;
     usageLimit?: number;
     range?: [dayjs.Dayjs, dayjs.Dayjs];
-    scope: string;
+    scopeKind?: DiscountScopeKind;
+    scopeTarget?: string;
   }) => {
     if (
-      db.discounts.some((d) => d.code.toLowerCase() === v.code.toLowerCase())
+      db.discounts.some(
+        (d) =>
+          d.id !== editing?.id && d.code.toLowerCase() === v.code.toLowerCase(),
+      )
     ) {
       return void message.warning(
         "That code already exists — codes are unique, case-insensitive.",
       );
     }
+    const fields = {
+      code: v.code.toUpperCase(),
+      name: v.name,
+      type,
+      pct: type === "PCT" ? countOf(v.pct) : undefined,
+      amountRp: type === "NOMINAL" ? v.amountRp : undefined,
+      maxRp: type === "PCT" ? v.maxRp : undefined,
+      bundleQty: type === "BUNDLE" ? countOf(v.bundleQty) : undefined,
+      bundlePriceRp: type === "BUNDLE" ? v.bundlePriceRp : undefined,
+      usageLimit: countOf(v.usageLimit),
+      fromDate: v.range?.[0]?.format("YYYY-MM-DD"),
+      toDate: v.range?.[1]?.format("YYYY-MM-DD"),
+      // Stored as it always was — "All products", a category name or a
+      // product (model) name — which is what the store contract and
+      // Postgres's `scopeOf` read. The kind is the form's question only.
+      scope:
+        v.scopeKind === "CATEGORY" || v.scopeKind === "PRODUCT"
+          ? (v.scopeTarget ?? "")
+          : "All products",
+    };
     mutate((d) => {
-      d.discounts.unshift({
-        id: nextId("d"),
-        code: v.code.toUpperCase(),
-        name: v.name,
-        type,
-        pct: type === "PCT" ? v.pct : undefined,
-        amountRp: type === "NOMINAL" ? v.amountRp : undefined,
-        maxRp: type === "PCT" ? v.maxRp : undefined,
-        bundleQty: type === "BUNDLE" ? Number(v.bundleQty) : undefined,
-        bundlePriceRp: type === "BUNDLE" ? v.bundlePriceRp : undefined,
-        usageLimit: v.usageLimit,
-        used: 0,
-        fromDate: v.range?.[0]?.format("YYYY-MM-DD"),
-        toDate: v.range?.[1]?.format("YYYY-MM-DD"),
-        active: true,
-        scope: v.scope,
-      });
+      if (editing) {
+        // What it has been used for and whether it is switched on are not
+        // the form's to change: `used` is counted by sales, `active` is the
+        // list's switch.
+        const row = d.discounts.find((x) => x.id === editing.id)!;
+        Object.assign(row, fields);
+      } else {
+        d.discounts.unshift({
+          id: nextId("d"),
+          ...fields,
+          used: 0,
+          active: true,
+        });
+      }
     });
     message.success("Discount saved.");
     leave();
   };
 
   return (
-    <PageContainer title={t("discount.addDiscount", "Add Discount")}>
+    <PageContainer
+      title={
+        editing
+          ? t("discount.editDiscount", "Edit Discount")
+          : t("discount.addDiscount", "Add Discount")
+      }
+      {...(editing ? { backTo: "/discounts" } : {})}
+    >
       <Form
         form={form}
         layout="vertical"
+        initialValues={
+          editing
+            ? {
+                name: editing.name,
+                code: editing.code,
+                pct: editing.pct,
+                amountRp: editing.amountRp,
+                maxRp: editing.maxRp,
+                bundleQty: editing.bundleQty,
+                bundlePriceRp: editing.bundlePriceRp,
+                usageLimit: editing.usageLimit,
+                range: editing.fromDate
+                  ? [
+                      dayjs(editing.fromDate),
+                      editing.toDate ? dayjs(editing.toDate) : null,
+                    ]
+                  : undefined,
+                ...scopeFields(editing.scope),
+              }
+            : undefined
+        }
         onFinish={submit}
         onValuesChange={draft.onValuesChange}
         style={{ flex: 1 }}
@@ -180,7 +303,13 @@ export function DiscountFormPage() {
                     rules={[{ required: true }]}
                     style={{ width: 200 }}
                   >
-                    <Input type="number" suffix="%" min={1} max={100} />
+                    <InputNumber
+                      suffix="%"
+                      min={1}
+                      max={100}
+                      precision={0}
+                      style={{ width: "100%" }}
+                    />
                   </Form.Item>
                   <Form.Item
                     name="maxRp"
@@ -216,7 +345,13 @@ export function DiscountFormPage() {
                       "How many units from the scope below make up one bundle",
                     )}
                   >
-                    <Input type="number" min={2} max={20} suffix="units" />
+                    <InputNumber
+                      min={2}
+                      max={20}
+                      precision={0}
+                      suffix="units"
+                      style={{ width: "100%" }}
+                    />
                   </Form.Item>
                   <Form.Item
                     name="bundlePriceRp"
@@ -237,10 +372,11 @@ export function DiscountFormPage() {
                 label={t("discount.maxUses", "Max uses")}
                 style={{ width: 160 }}
               >
-                <Input
-                  type="number"
+                <InputNumber
                   min={1}
+                  precision={0}
                   placeholder={t("discount.unlimited", "Unlimited")}
+                  style={{ width: "100%" }}
                 />
               </Form.Item>
             </Flex>
@@ -267,28 +403,69 @@ export function DiscountFormPage() {
               >
                 <DatePicker.RangePicker format="DD MMM YYYY" />
               </Form.Item>
+              {/*
+               * All, a category or a product (owner ask 2026-10-08). It was
+               * one list of every model with the categories appended as
+               * "Category: …", which made the two hard to tell apart and put
+               * the categories under a hundred and sixty models. The kind
+               * first, then which one.
+               */}
               <Form.Item
-                name="scope"
+                name="scopeKind"
                 label={t("discount.appliesTo", "Applies to")}
-                initialValue="All products"
-                style={{ width: 280 }}
+                initialValue="ALL"
               >
-                <Select
+                <Segmented<DiscountScopeKind>
                   options={[
                     {
-                      value: "All products",
+                      value: "ALL",
                       label: t("discount.allProducts", "All products"),
                     },
-                    ...db.models.map((m) => ({ value: m.name, label: m.name })),
-                    ...[...new Set(db.models.map((m) => m.category))].map(
-                      (c) => ({
-                        value: c,
-                        label: `Category: ${c}`,
-                      }),
-                    ),
+                    {
+                      value: "CATEGORY",
+                      label: t("discount.scopeCategory", "Category"),
+                    },
+                    {
+                      value: "PRODUCT",
+                      label: t("discount.scopeProduct", "Product"),
+                    },
                   ]}
+                  // A category name is not a product name: what was picked
+                  // under the other kind goes.
+                  onChange={() => form.setFieldValue("scopeTarget", undefined)}
                 />
               </Form.Item>
+              {scopeKind === "CATEGORY" && (
+                <Form.Item
+                  name="scopeTarget"
+                  label={t("discount.whichCategory", "Which category")}
+                  rules={[{ required: true }]}
+                  style={{ width: 280 }}
+                >
+                  <Select
+                    showSearch
+                    placeholder={t(
+                      "discount.pickCategory",
+                      "Choose a category",
+                    )}
+                    options={categoryNames.map((c) => ({ value: c, label: c }))}
+                  />
+                </Form.Item>
+              )}
+              {scopeKind === "PRODUCT" && (
+                <Form.Item
+                  name="scopeTarget"
+                  label={t("discount.whichProduct", "Which product")}
+                  rules={[{ required: true }]}
+                  style={{ width: 320 }}
+                >
+                  <Select
+                    showSearch
+                    placeholder={t("discount.pickProduct", "Choose a product")}
+                    options={productNames.map((m) => ({ value: m, label: m }))}
+                  />
+                </Form.Item>
+              )}
             </Flex>
             <Typography.Text type="secondary">
               Usage counts when a sale redeems the code in Stock Out.

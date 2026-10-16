@@ -1134,6 +1134,60 @@ describe("a till's commit", () => {
     );
   }, 180_000);
 
+  it("deletes a discount no sale has used, and refuses one that has been", async () => {
+    await loadDemo();
+    const fresh = (id: string, code: string, used: number): Row => ({
+      id,
+      code,
+      name: code,
+      type: "NOMINAL",
+      amountRp: 100_000,
+      used,
+      active: true,
+      scope: "All products",
+    });
+    const created = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { discounts: [] },
+          {
+            discounts: [
+              fresh("disc_store_unused", "ZZUNUSED", 0),
+              fresh("disc_store_used", "ZZUSED", 1),
+            ],
+          },
+        ),
+      ),
+    });
+    const [unused, used] = (created.rows.discounts as Row[]).map((r) =>
+      decodeRow("discounts", r),
+    );
+
+    const removal = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore({ discounts: [unused!] }, { discounts: [] }),
+      ),
+    });
+    expect(removal.removed.discounts).toEqual(["disc_store_unused"]);
+    expect(
+      await db.discount.findUnique({ where: { id: "disc_store_unused" } }),
+    ).toBeNull();
+
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ discounts: [used!] }, { discounts: [] }),
+        ),
+      }),
+    ).rejects.toThrow(/sudah dipakai/);
+    expect(
+      await db.discount.findUnique({ where: { id: "disc_store_used" } }),
+    ).not.toBeNull();
+  }, 180_000);
+
   it("cancels a draft stock take instead of deleting it", async () => {
     const shop = await loadDemo();
     const draft = (shop["opnames"] as Row[]).find(

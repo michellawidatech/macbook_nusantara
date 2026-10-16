@@ -16,10 +16,22 @@
 #                               it, switch to it, restart, health-check — and
 #                               switch BACK if the new release is not healthy
 #   rollback                    switch to the release that was live before
+#   refresh                     STAGING ONLY: replace staging's database with a
+#                               fresh copy of the shop's (docs/staging.md)
 #
 # An admin runs the same verbs by hand:
 #
 #   sudo /usr/local/libexec/nusantara-deploy status
+#
+# `--stage` first makes every verb act on staging instead — /opt/nusantara-stage,
+# its own launchd jobs, its own database — and nothing else:
+#
+#   sudo /usr/local/libexec/nusantara-deploy --stage status
+#
+# The staging deploy key's forced command passes `--stage` itself
+# (setup-deploy-access --stage), so that key can never name the shop; the
+# shop's key passes the client's words as one argument, which is never
+# `--stage` alone, so it can never name staging.
 #
 # ⚠️ This file is the lock, not the key. Every release carries a copy in ops/,
 # but a release can never replace the installed one: a change here reaches the
@@ -31,12 +43,40 @@ umask 022
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export LC_ALL=C
 
-INSTALLER_VERSION=1
+INSTALLER_VERSION=2
+
+target=prod
+if [[ ${1:-} == --stage ]]; then
+  target=stage
+  shift
+fi
 
 # Every path is fixed on the Mac mini. The overrides exist for rehearsing this
 # script in a scratch directory; sudo resets the environment, so nothing the
 # CI sends can set them.
-home=${NUSANTARA_HOME:-/opt/nusantara}
+case $target in
+  prod)
+    home=${NUSANTARA_HOME:-/opt/nusantara}
+    label=local.nusantara
+    services=(api caddy worker webhook backup)
+    api_port=4000
+    caddy_port=8080
+    caddy_env=()
+    ;;
+  stage)
+    # Two processes and no more. Staging's database is a copy of the shop's,
+    # Outbox included, so a worker there would message real customers; and
+    # it keeps no nightly backup, because `refresh` rebuilds it.
+    home=${NUSANTARA_HOME:-/opt/nusantara-stage}
+    label=local.nusantara-stage
+    services=(api caddy)
+    api_port=4001
+    caddy_port=8081
+    # What local.nusantara-stage.caddy.plist hands Caddy; change both together.
+    caddy_env=(NUSANTARA_HOME=$home NUSANTARA_CADDY_PORT=$caddy_port
+      NUSANTARA_API_PORT=$api_port NUSANTARA_CADDY_ADMIN=off)
+    ;;
+esac
 svc_user=${NUSANTARA_USER:-_nusantara}
 svc_group=${NUSANTARA_GROUP:-staff}
 daemons=${NUSANTARA_DAEMONS:-/Library/LaunchDaemons}
@@ -48,12 +88,18 @@ api_wait=${NUSANTARA_API_WAIT:-60}
 releases=$home/releases
 incoming=$home/incoming
 max_bytes=$(( 300 * 1024 * 1024 ))
-services=(api caddy worker webhook backup)
+# refresh: the cluster both databases live on, and who runs it. Its superuser
+# is that account, reached over the socket by peer authentication — the one
+# login that may drop and create a database (the owner role may not).
+pgdata=${NUSANTARA_PGDATA:-/opt/homebrew/var/postgresql@16}
+pgbin=${NUSANTARA_PG_BIN:-/opt/homebrew/opt/postgresql@16/bin}
+pghost=${NUSANTARA_PGHOST:-/tmp}
+pg_owner=   # set by cmd_refresh: the data directory's owner
 
 say() { print -r -- "$*" }
 die() { print -ru2 -- "✗ nusantara-deploy: $*"; exit 1 }
 usage() {
-  print -u2 "usage: nusantara-deploy status | backup <label> | install <version> <sha256> | rollback"
+  print -u2 "usage: nusantara-deploy [--stage] status | backup <label> | install <version> <sha256> | rollback | refresh"
   exit 64
 }
 
@@ -64,7 +110,7 @@ target() {
   if [[ -L $1 ]]; then readlink $1; fi
 }
 
-loaded() { $launchctl print system/local.nusantara.$1 >/dev/null 2>&1 }
+loaded() { $launchctl print system/$label.$1 >/dev/null 2>&1 }
 
 # point <link> <dir>: one rename(2), so no request ever meets a missing link.
 point() {
@@ -110,7 +156,7 @@ answers() {
 }
 
 pid_of() {
-  $launchctl print system/local.nusantara.$1 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3; exit }'
+  $launchctl print system/$label.$1 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3; exit }'
 }
 
 # A process with no port answers nothing, so the worker counts as up when it is
@@ -132,17 +178,17 @@ stays_up() {
 healthy() {
   local want='"ok":true'
   if [[ -n $1 ]]; then want="\"release\":\"$1\""; fi
-  if ! answers http://127.0.0.1:4000/api/health $want $api_wait; then
-    say "  ✗ the API did not answer${1:+ as $1} on :4000"
+  if ! answers http://127.0.0.1:$api_port/api/health $want $api_wait; then
+    say "  ✗ the API did not answer${1:+ as $1} on :$api_port"
     return 1
   fi
   if loaded caddy; then
-    if ! answers http://127.0.0.1:8080/api/health $want 15; then
-      say "  ✗ Caddy (:8080) does not reach the API"
+    if ! answers http://127.0.0.1:$caddy_port/api/health $want 15; then
+      say "  ✗ Caddy (:$caddy_port) does not reach the API"
       return 1
     fi
-    if ! answers http://127.0.0.1:8080/ '<script' 15; then
-      say "  ✗ Caddy (:8080) does not serve the SPA"
+    if ! answers http://127.0.0.1:$caddy_port/ '<script' 15; then
+      say "  ✗ Caddy (:$caddy_port) does not serve the SPA"
       return 1
     fi
   fi
@@ -163,8 +209,8 @@ show_failure() {
   local svc log
   for svc in api webhook worker; do
     loaded $svc || continue
-    say "  --- local.nusantara.$svc"
-    $launchctl print system/local.nusantara.$svc 2>/dev/null |
+    say "  --- $label.$svc"
+    $launchctl print system/$label.$svc 2>/dev/null |
       grep -E '^[[:space:]]+(state|pid|runs|last exit code) = ' |
       sed 's/^[[:space:]]*/    /' || true
     log=$home/logs/$svc.log
@@ -172,31 +218,46 @@ show_failure() {
   done
 }
 
+# bootstrap <svc>: load its installed plist. bootout returns before the job
+# is gone, and bootstrap refuses until it is.
+bootstrap() {
+  local -i tries=0
+  until $launchctl bootstrap system $daemons/$label.$1.plist 2>/dev/null; do
+    (( ++tries < 10 )) || die "could not bootstrap $label.$1"
+    sleep 1
+  done
+}
+
 # activate <dir> [<dir it replaces>]: point current at <dir>, restart every
 # loaded service onto it, and reload any whose plist changed. Caddy restarts
 # only when its Caddyfile changed: it reads current/web on every request.
+#
+# On prod a service nobody loaded stays off — the worker and the webhook are
+# switched on by hand. Staging's two are always on, so the first staging
+# deploy is what loads them.
 activate() {
   local dir=$1 was=${2:-} svc plist
   point $home/current $dir
   for svc in $services; do
-    loaded $svc || continue
-    plist=$dir/ops/launchd/local.nusantara.$svc.plist
-    if [[ -f $plist ]] && ! cmp -s $plist $daemons/local.nusantara.$svc.plist; then
+    plist=$dir/ops/launchd/$label.$svc.plist
+    if ! loaded $svc; then
+      [[ $target == stage && -f $plist ]] || continue
       put_plist $plist
-      $launchctl bootout system/local.nusantara.$svc 2>/dev/null || true
-      # bootout returns before the job is gone; bootstrap refuses until it is.
-      local -i tries=0
-      until $launchctl bootstrap system $daemons/local.nusantara.$svc.plist 2>/dev/null; do
-        (( ++tries < 10 )) || die "could not bootstrap local.nusantara.$svc"
-        sleep 1
-      done
-      say "  reloaded local.nusantara.$svc (its plist changed)"
+      bootstrap $svc
+      say "  loaded $label.$svc"
+      continue
+    fi
+    if [[ -f $plist ]] && ! cmp -s $plist $daemons/$label.$svc.plist; then
+      put_plist $plist
+      $launchctl bootout system/$label.$svc 2>/dev/null || true
+      bootstrap $svc
+      say "  reloaded $label.$svc (its plist changed)"
       continue
     fi
     if [[ $svc == (api|worker|webhook) ]]; then
-      $launchctl kickstart -k system/local.nusantara.$svc
+      $launchctl kickstart -k system/$label.$svc
     elif [[ $svc == caddy && -n $was ]] && ! cmp -s $dir/ops/Caddyfile $was/ops/Caddyfile; then
-      $launchctl kickstart -k system/local.nusantara.caddy
+      $launchctl kickstart -k system/$label.caddy
       say "  restarted Caddy (its Caddyfile changed)"
     fi
   done
@@ -216,6 +277,7 @@ prune() {
 cmd_status() {
   local cur=$(target $home/current) prev=$(target $home/previous) d svc
   say "installer=$INSTALLER_VERSION"
+  say "target=$target"
   say "arch=$(uname -m)"
   say "current=${cur:t}"
   say "previous=${prev:t}"
@@ -226,18 +288,28 @@ cmd_status() {
 }
 
 cmd_backup() {
-  local label=$1 cur=$(target $home/current)
-  [[ $label =~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$' ]] || die "not a label: $label"
+  local name=$1 cur=$(target $home/current)
+  # ops/backup dumps the shop's database whichever release runs it.
+  [[ $target == prod ]] || die "staging keeps no backups — \`refresh\` rebuilds it from the shop's database"
+  [[ $name =~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$' ]] || die "not a label: $name"
   [[ -n $cur && -x $cur/ops/backup ]] || die "no live release to run ops/backup from"
   lock
-  as_svc $cur/ops/backup $label
+  as_svc $cur/ops/backup $name
 }
 
 cmd_install() {
   local version=$1 sha=$2
   [[ $version =~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$' ]] || die "not a version: $version"
   [[ $sha =~ '^[0-9a-f]{64}$' ]] || die "not a sha256: $sha"
-  loaded api || die "local.nusantara.api is not loaded — install the services by hand first (docs/deploy-macmini.md §4)"
+  loaded api || [[ $target == stage ]] ||
+    die "$label.api is not loaded — install the services by hand first (docs/deploy-macmini.md §4)"
+  # Staging is a copy of the shop's customers on a public address. It does not
+  # go up without the shop-password gate in front of it — the shop's Caddyfile
+  # treats a missing gate file as no gate, and here that is not a choice.
+  if [[ $target == stage ]]; then
+    local -a gates=($home/etc/caddy/*.caddy(N))
+    (( $#gates )) || die "$home/etc/caddy holds no gate file — staging stays down until it does (docs/staging.md §2)"
+  fi
   lock
 
   local name=nusantara-$version
@@ -303,9 +375,16 @@ cmd_install() {
   fi
 
   # 3. A Caddyfile that does not parse would take the whole site down on the
-  #    restart below, so it is checked before anything is switched.
-  if loaded caddy && [[ -n $was ]] && ! cmp -s $dest/ops/Caddyfile $was/ops/Caddyfile; then
-    as_svc $caddy validate --config $dest/ops/Caddyfile --adapter caddyfile >/dev/null 2>&1 ||
+  #    restart below, so it is checked before anything is switched — read
+  #    with the values this install's Caddy will read it with.
+  local fresh=
+  if loaded caddy; then
+    if [[ -n $was ]] && ! cmp -s $dest/ops/Caddyfile $was/ops/Caddyfile; then fresh=1; fi
+  elif [[ $target == stage ]]; then
+    fresh=1   # the first staging deploy starts it
+  fi
+  if [[ -n $fresh ]]; then
+    as_svc env $caddy_env $caddy validate --config $dest/ops/Caddyfile --adapter caddyfile >/dev/null 2>&1 ||
       die "the new Caddyfile does not validate — nothing was switched"
   fi
 
@@ -351,6 +430,59 @@ cmd_rollback() {
   die "the rollback failed; ${cur:t} is serving again"
 }
 
+# as_pg <tool> <args…>: a PostgreSQL client as the cluster's superuser, over
+# the socket. `cd /` first, or the tools complain they cannot read the
+# directory sudo left them in.
+as_pg() {
+  local tool=$1
+  shift
+  if (( EUID == 0 )); then
+    (cd / && sudo -u $pg_owner $pgbin/$tool --host=$pghost "$@")
+  else
+    $pgbin/$tool --host=$pghost "$@"
+  fi
+}
+
+# refresh: drop staging's database and make it again from the shop's — a
+# consistent snapshot through pg_dump, so the till can keep selling while it
+# runs. Its schema is then the SHOP's, which staging's code may be ahead of:
+# the staging deploy runs this BEFORE it migrates (docs/staging.md), and by
+# hand it wants a deploy after it.
+#
+# Staging only, and only in that direction: the shop's database is read and
+# never named in anything that writes.
+cmd_refresh() {
+  [[ $target == stage ]] || die "refresh rebuilds STAGING from the shop's database — say --stage"
+  local src=nusantara_pos_prod dst=nusantara_pos_stage
+  [[ $dst != $src ]] || die "refusing to refresh a database from itself"
+  pg_owner=$(stat -f %Su $pgdata 2>/dev/null) || die "cannot read $pgdata — is PostgreSQL there?"
+  [[ -n $pg_owner && $pg_owner != root ]] || die "cannot tell who runs PostgreSQL ($pgdata)"
+  lock
+
+  local roles="nusantara, nusantara_app, nusantara_agent, nusantara_readonly"
+  say "  copying $src → $dst (as $pg_owner)"
+  # WITH (FORCE) ends staging's own connections; its API reconnects.
+  as_pg psql -X -q -v ON_ERROR_STOP=1 --dbname=postgres \
+    -c "DROP DATABASE IF EXISTS \"$dst\" WITH (FORCE)" \
+    -c "CREATE DATABASE \"$dst\" OWNER nusantara" \
+    -c "REVOKE ALL ON DATABASE \"$dst\" FROM PUBLIC" \
+    -c "GRANT CONNECT ON DATABASE \"$dst\" TO $roles"
+  # Plain SQL through a pipe: nothing lands on disk, and psql replays it as
+  # ONE transaction or not at all. Owners and grants travel with it.
+  as_pg pg_dump --dbname=$src --format=plain |
+    as_pg psql -X -q -1 -v ON_ERROR_STOP=1 --dbname=$dst >/dev/null
+
+  local applied size
+  applied=$(as_pg psql -X -tA --dbname=$dst \
+    -c "select count(*) from _prisma_migrations where finished_at is not null and rolled_back_at is null")
+  size=$(as_pg psql -X -tA --dbname=$dst -c "select pg_size_pretty(pg_database_size(current_database()))")
+  if loaded api; then
+    $launchctl kickstart -k system/$label.api
+  fi
+  say "✓ $dst is a copy of $src as of $(date '+%Y-%m-%d %H:%M %Z') — $size, $applied migrations"
+  say "  its schema is the shop's now: deploy staging to bring it up to its own migrations"
+}
+
 # The forced command hands over ONE string; an admin at the keyboard hands
 # over words. Split the first into the second. No globbing happens here:
 # zsh does not glob the result of a parameter expansion.
@@ -363,5 +495,6 @@ case $verb in
   backup)   (( $# == 1 )) || usage; cmd_backup $1 ;;
   install)  (( $# == 2 )) || usage; cmd_install $1 $2 ;;
   rollback) (( $# == 0 )) || usage; cmd_rollback ;;
+  refresh)  (( $# == 0 )) || usage; cmd_refresh ;;
   *)        usage ;;
 esac
