@@ -627,6 +627,25 @@ describe("an unused discount can be deleted (2026-10-02)", () => {
   });
 });
 
+describe("an unused supplier or customer can be deleted (2026-10-21)", () => {
+  it("grants DELETE on the three tables to the app alone", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_app','"Supplier"','DELETE')        AS app_supplier,
+              has_table_privilege('nusantara_app','"Customer"','DELETE')        AS app_customer,
+              has_table_privilege('nusantara_app','"CustomerAddress"','DELETE') AS app_address,
+              has_table_privilege('nusantara_agent','"Customer"','DELETE')      AS agent_customer,
+              has_table_privilege('nusantara_app','"Customer"','TRUNCATE')      AS app_truncate`,
+    );
+    expect(rows[0]).toEqual({
+      app_supplier: true,
+      app_customer: true,
+      app_address: true,
+      agent_customer: false,
+      app_truncate: false,
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 
 describe("the ledger's two admitted edits (2026-09-23, in the database 2026-09-24)", () => {

@@ -1189,6 +1189,82 @@ describe("a till's commit", () => {
     ).not.toBeNull();
   }, 180_000);
 
+  it("deletes a supplier or customer nothing names, and refuses a used one (2026-10-21)", async () => {
+    const shop = await loadDemo();
+    const created = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { suppliers: [], customers: [] },
+          {
+            suppliers: [{ id: "sup_store_unused", name: "ZZ Unused supplier" }],
+            customers: [
+              {
+                id: "cus_store_unused",
+                name: "ZZ Unused customer",
+                phone: "",
+                addresses: [{ id: "adr_store_unused", line: "Jl. Uji 1" }],
+                createdAt: new Date().toISOString(),
+              },
+            ],
+          },
+        ),
+      ),
+    });
+    const sup = decodeRow("suppliers", (created.rows.suppliers as Row[])[0]!);
+    const cus = decodeRow("customers", (created.rows.customers as Row[])[0]!);
+
+    const removal = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { suppliers: [sup], customers: [cus] },
+          { suppliers: [], customers: [] },
+        ),
+      ),
+    });
+    expect(removal.removed.suppliers).toEqual(["sup_store_unused"]);
+    expect(removal.removed.customers).toEqual(["cus_store_unused"]);
+    expect(
+      await db.supplier.findUnique({ where: { id: "sup_store_unused" } }),
+    ).toBeNull();
+    expect(
+      await db.customer.findUnique({ where: { id: "cus_store_unused" } }),
+    ).toBeNull();
+    expect(
+      await db.customerAddress.count({
+        where: { customerId: "cus_store_unused" },
+      }),
+    ).toBe(0);
+
+    const usedSupplier = (shop["suppliers"] as Row[]).find((s) =>
+      (shop["pos"] as Row[]).some((p) => p["supplierId"] === s["id"]),
+    )!;
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ suppliers: [usedSupplier] }, { suppliers: [] }),
+        ),
+      }),
+    ).rejects.toThrow(/punya transaksi/);
+
+    const buyer = (shop["customers"] as Row[]).find((c) =>
+      (shop["orders"] as Row[]).some((o) => o["customerId"] === c["id"]),
+    )!;
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ customers: [buyer] }, { customers: [] }),
+        ),
+      }),
+    ).rejects.toThrow(/punya transaksi/);
+    expect(
+      await db.customer.findUnique({ where: { id: buyer["id"] as string } }),
+    ).not.toBeNull();
+  }, 180_000);
+
   it("cancels a draft stock take instead of deleting it", async () => {
     const shop = await loadDemo();
     const draft = (shop["opnames"] as Row[]).find(
@@ -1732,6 +1808,60 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
           });
       }
       expect(refused).toEqual([]);
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
+  it("deletes an unused supplier and customer, and refuses a used customer", async () => {
+    const shop = await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    try {
+      const created = await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { suppliers: [], customers: [] },
+            {
+              suppliers: [{ id: "sup_app_unused", name: "ZZ App supplier" }],
+              customers: [
+                {
+                  id: "cus_app_unused",
+                  name: "ZZ App customer",
+                  phone: "",
+                  addresses: [{ id: "adr_app_unused", line: "Jl. Uji 2" }],
+                  createdAt: new Date().toISOString(),
+                },
+              ],
+            },
+          ),
+        ),
+      });
+      const sup = decodeRow("suppliers", (created.rows.suppliers as Row[])[0]!);
+      const cus = decodeRow("customers", (created.rows.customers as Row[])[0]!);
+      const removal = await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { suppliers: [sup], customers: [cus] },
+            { suppliers: [], customers: [] },
+          ),
+        ),
+      });
+      expect(removal.removed.suppliers).toEqual(["sup_app_unused"]);
+      expect(removal.removed.customers).toEqual(["cus_app_unused"]);
+
+      const buyer = (shop["customers"] as Row[]).find((c) =>
+        (shop["orders"] as Row[]).some((o) => o["customerId"] === c["id"]),
+      )!;
+      await expect(
+        commitStore(app, {
+          staffId: ACTOR,
+          changes: encodeChangeset(
+            diffStore({ customers: [buyer] }, { customers: [] }),
+          ),
+        }),
+      ).rejects.toThrow(/punya transaksi/);
     } finally {
       await app.$disconnect();
     }
