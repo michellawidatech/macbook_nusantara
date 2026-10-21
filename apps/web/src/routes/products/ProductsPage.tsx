@@ -43,6 +43,7 @@ import { useTranslation } from "react-i18next";
 import {
   freeSkuCode,
   isMachineSkuCode,
+  sameVariant,
   skuCodeFor,
 } from "../../lib/skuCode.js";
 import { COLUMN } from "../../theme/tokens";
@@ -188,7 +189,7 @@ export function ProductsPage() {
         mode === "APPEND" ? `Add missing variants?` : `Replace all variants?`,
       content:
         mode === "APPEND"
-          ? `${wanted.filter((w) => !existing.some((s) => s.variantLabel === w)).length} new SKU(s) will be created. Nothing is created silently.`
+          ? `${wanted.filter((w) => !existing.some((s) => sameVariant(s.variantLabel, w))).length} new SKU(s) will be created. Nothing is created silently.`
           : `Variants with stock are kept; the rest are replaced by ${wanted.length} combination(s).`,
       onOk: () => {
         mutate((d) => {
@@ -200,7 +201,11 @@ export function ProductsPage() {
           }
           const taken = new Set(d.skus.map((x) => x.code));
           for (const w of wanted) {
-            if (d.skus.some((s) => s.modelId === m.id && s.variantLabel === w))
+            if (
+              d.skus.some(
+                (s) => s.modelId === m.id && sameVariant(s.variantLabel, w),
+              )
+            )
               continue;
             const code = freeSkuCode(
               taken,
@@ -262,6 +267,26 @@ export function ProductsPage() {
           skipped += 1;
           continue;
         }
+        /*
+         * A variant whose code the catalogue already holds IS already in the
+         * catalogue — typed in by hand, or imported under another AppleDB
+         * entry — so it is skipped rather than minted as `… (2)`. A model
+         * none of whose variants is new is not imported at all (2026-10-21).
+         */
+        const taken = new Set(d.skus.map((x) => x.code));
+        const fresh = combos([
+          { name: "RAM", values: c.ram },
+          { name: "SSD", values: c.ssd },
+        ])
+          .map((label) => ({
+            label,
+            code: skuCodeFor(c.name, c.releaseYear, label, ["RAM", "SSD"]),
+          }))
+          .filter((v) => !taken.has(v.code));
+        if (fresh.length === 0) {
+          skipped += 1;
+          continue;
+        }
         const id = nextId("m");
         d.models.push({
           id,
@@ -276,22 +301,15 @@ export function ProductsPage() {
           ],
         });
         added += 1;
-        const taken = new Set(d.skus.map((x) => x.code));
-        for (const label of combos([
-          { name: "RAM", values: c.ram },
-          { name: "SSD", values: c.ssd },
-        ])) {
-          const code = freeSkuCode(
-            taken,
-            skuCodeFor(c.name, c.releaseYear, label, ["RAM", "SSD"]),
-          );
-          taken.add(code);
+        for (const v of fresh) {
+          if (taken.has(v.code)) continue;
+          taken.add(v.code);
           d.skus.push({
             id: nextId("sku"),
             modelId: id,
-            code,
+            code: v.code,
             name: c.name,
-            variantLabel: label,
+            variantLabel: v.label,
             price: 0,
           });
           skus += 1;
@@ -359,7 +377,9 @@ export function ProductsPage() {
       const m = model!;
       if (
         db.skus.some(
-          (s) => s.modelId === m.id && s.variantLabel === v.variantLabel.trim(),
+          (s) =>
+            s.modelId === m.id &&
+            sameVariant(s.variantLabel, v.variantLabel.trim()),
         )
       ) {
         return void message.warning(

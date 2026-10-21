@@ -112,3 +112,18 @@ export function freeSkuCode(
   }
   return `${wanted} ${Date.now()}`;
 }
+
+/**
+ * Whether two variant labels name the same variant. `combos` joins with
+ * " / " and older rows were written with " · ", so `i3 · 8GB · 256GB` and
+ * `i3 / 8GB / 256GB` are one variant — comparing the strings created a
+ * duplicate of every row a model already had (2026-10-21).
+ */
+export function sameVariant(a: string, b: string): boolean {
+  const norm = (s: string) =>
+    s
+      .split(/\s*[/·]\s*/)
+      .map((v) => v.replace(/\s+/g, "").toUpperCase())
+      .join("|");
+  return norm(a) === norm(b);
+}

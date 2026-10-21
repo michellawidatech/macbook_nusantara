@@ -296,6 +296,44 @@ export const skus: Adapter<"skus"> = {
   lock: (tx, keys) => lockRows(tx, "Sku", "id", keys),
   async write(ctx, rows) {
     const { tx } = ctx;
+    /*
+     * `Sku.code` is unique across EVERY row, archived ones included, and the
+     * browser never sees an archived variant — so a code it picked as free
+     * could still be held (2026-10-21: renaming 24 SKU_ codes to the shop's
+     * naming was refused, because "Replace all variants" had archived the
+     * earlier rows of those exact names). Two passes make the batch safe:
+     * every changed code is first parked on a value nothing else can hold, so
+     * a rename may take a code another row of the same batch is giving up;
+     * then an ARCHIVED holder of a wanted code is renamed out of the way.
+     * A LIVE holder is still a real conflict and the database refuses it.
+     */
+    const changed = rows.filter(
+      (r) =>
+        r.base !== undefined &&
+        r.next !== undefined &&
+        r.base.code !== r.next.code,
+    );
+    for (const r of changed) {
+      await tx.sku.update({
+        where: { id: r.key },
+        data: { code: `~renaming~${r.key}` },
+      });
+    }
+    for (const r of rows) {
+      const n = r.next;
+      if (n === undefined) continue;
+      if (r.base !== undefined && r.base.code === n.code) continue;
+      const holder = await tx.sku.findUnique({
+        where: { code: n.code },
+        select: { id: true, archived: true },
+      });
+      if (holder !== null && holder.id !== n.id && holder.archived) {
+        await tx.sku.update({
+          where: { id: holder.id },
+          data: { code: `${n.code} [archived ${holder.id}]` },
+        });
+      }
+    }
     for (const r of rows) {
       const n = r.next;
       if (n === undefined) {

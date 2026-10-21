@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { freeSkuCode, isMachineSkuCode, skuCodeFor } from "../src/lib/skuCode";
+import {
+  freeSkuCode,
+  isMachineSkuCode,
+  sameVariant,
+  skuCodeFor,
+} from "../src/lib/skuCode";
 
 describe("skuCodeFor — the shop's naming (2026-10-21)", () => {
   it("reads a Chip × RAM × SSD variant onto an Intel model", () => {
@@ -50,5 +55,13 @@ describe("skuCodeFor — the shop's naming (2026-10-21)", () => {
     expect(isMachineSkuCode("SKU_18FQN1UTLADWLAI8")).toBe(true);
     expect(isMachineSkuCode('AIR 13" 2020 I7 8/128')).toBe(false);
     expect(freeSkuCode(new Set(["X"]), "X")).toBe("X (2)");
+  });
+});
+
+describe("sameVariant", () => {
+  it("treats · and / spellings as one variant", () => {
+    expect(sameVariant("i3 · 8GB · 256GB", "i3 / 8GB / 256GB")).toBe(true);
+    expect(sameVariant("8GB / 256GB", "8 GB/256 GB")).toBe(true);
+    expect(sameVariant("i3 / 8GB / 256GB", "i5 / 8GB / 256GB")).toBe(false);
   });
 });

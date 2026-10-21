@@ -1189,6 +1189,93 @@ describe("a till's commit", () => {
     ).not.toBeNull();
   }, 180_000);
 
+  it("renames SKU codes onto a code an archived variant held, and swaps within a batch (2026-10-21)", async () => {
+    const shop = await loadDemo();
+    const modelId = (shop["models"] as Row[])[0]!["id"] as string;
+    const sku = (id: string, code: string, label: string): Row => ({
+      id,
+      modelId,
+      code,
+      name: "ZZ",
+      variantLabel: label,
+      price: 0,
+    });
+    const created = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { skus: [] },
+          {
+            skus: [
+              sku("sku_zz_old", 'ZZ AIR 13" 2020 I7 8/128', "old"),
+              sku("sku_zz_a", "SKU_ZZRANDOMA", "i7 / 8GB / 128GB"),
+              sku("sku_zz_b", "ZZ CODE B", "b"),
+              sku("sku_zz_c", "ZZ CODE C", "c"),
+            ],
+          },
+        ),
+      ),
+    });
+    const byId = new Map(
+      (created.rows.skus as Row[])
+        .map((r) => decodeRow("skus", r))
+        .map((r) => [r["id"] as string, r]),
+    );
+    const [old, a, b, c] = [
+      "sku_zz_old",
+      "sku_zz_a",
+      "sku_zz_b",
+      "sku_zz_c",
+    ].map((id) => byId.get(id));
+    // "Replace all variants" archives the old row; it keeps its code.
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(diffStore({ skus: [old!] }, { skus: [] })),
+    });
+    // The rename takes the archived row's code, and B and C swap theirs.
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { skus: [a!, b!, c!] },
+          {
+            skus: [
+              { ...a!, code: 'ZZ AIR 13" 2020 I7 8/128' },
+              { ...b!, code: "ZZ CODE C" },
+              { ...c!, code: "ZZ CODE B" },
+            ],
+          },
+        ),
+      ),
+    });
+    const code = async (id: string) =>
+      (await db.sku.findUnique({ where: { id } }))!.code;
+    expect(await code("sku_zz_a")).toBe('ZZ AIR 13" 2020 I7 8/128');
+    expect(await code("sku_zz_b")).toBe("ZZ CODE C");
+    expect(await code("sku_zz_c")).toBe("ZZ CODE B");
+    expect(await code("sku_zz_old")).toBe(
+      'ZZ AIR 13" 2020 I7 8/128 [archived sku_zz_old]',
+    );
+
+    // A LIVE holder is still a conflict.
+    const [a2, b2] = await Promise.all(
+      ["sku_zz_a", "sku_zz_b"].map(async (id) => {
+        const row = await db.sku.findUnique({ where: { id } });
+        return id === "sku_zz_a"
+          ? { ...a!, code: row!.code }
+          : { ...b!, code: row!.code };
+      }),
+    );
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ skus: [b2!] }, { skus: [{ ...b2!, code: a2!.code }] }),
+        ),
+      }),
+    ).rejects.toThrow();
+  }, 180_000);
+
   it("deletes a supplier or customer nothing names, and refuses a used one (2026-10-21)", async () => {
     const shop = await loadDemo();
     const created = await commitStore(db, {
