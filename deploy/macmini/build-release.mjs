@@ -299,6 +299,7 @@ for (const f of [
   "setup-deploy-access",
   "setup-staging",
   "reset-transactions",
+  "fix-skus",
 ]) {
   chmodSync(join(stage, "ops", f), 0o755);
 }
