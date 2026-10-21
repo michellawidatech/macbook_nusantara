@@ -6,8 +6,9 @@
  * Nothing here is ever removed. Every one of these rows is pointed at by
  * history — a sale names its payment method, an expense its category — so a
  * removal is refused and the page offers "inactive" instead, which is what
- * every one of these screens already does. The one exception is a discount
- * no sale has redeemed (`removeUnusedDiscount`).
+ * every one of these screens already does. The exceptions are a discount
+ * no sale has redeemed (`removeUnusedDiscount`) and a supplier or customer no
+ * document names (`removeUnusedSupplier`, `removeUnusedCustomer`).
  */
 import { deepEqual } from "@nusantara/store";
 import type { Tx } from "../../client.js";
@@ -351,7 +352,10 @@ export const suppliers: Adapter<"suppliers"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("suppliers", r.key);
+      if (n === undefined) {
+        await removeUnusedSupplier(ctx, r.key);
+        continue;
+      }
       const data = {
         name: n.name.trim(),
         wa: blankToNull(n.phone),
@@ -702,7 +706,10 @@ export const customers: Adapter<"customers"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("customers", r.key);
+      if (n === undefined) {
+        await removeUnusedCustomer(ctx, r.key);
+        continue;
+      }
       const data = {
         name: n.name.trim(),
         phone: blankToNull(n.phone),
@@ -869,6 +876,87 @@ async function removeUnusedDiscount(
   await tx.discountSku.deleteMany({ where: { discountId: id } });
   await tx.discount.delete({ where: { id } });
   ctx.touch("discounts", id);
+}
+
+/**
+ * A supplier or customer no document names can be deleted outright (owner
+ * decision 2026-10-21: "hard delete it as long as there are no transaction
+ * linked"). Same footing as `removeUnusedDiscount`: the counts are read from
+ * the DATABASE, and every link is ON DELETE RESTRICT, so a document written
+ * by another till in the meantime fails the DELETE instead of orphaning.
+ */
+async function removeUnusedSupplier(
+  ctx: WriteContext,
+  id: string,
+): Promise<void> {
+  const { tx } = ctx;
+  const row = await tx.supplier.findUnique({
+    where: { id },
+    select: {
+      _count: {
+        select: {
+          purchaseOrders: true,
+          supplierReturns: true,
+          warrantyClaims: true,
+          unitReturns: true,
+          deposits: true,
+        },
+      },
+    },
+  });
+  if (row === null) return;
+  if (Object.values(row._count).some((n) => n > 0)) {
+    throw new StoreValidationError(
+      `Supplier ini punya transaksi dan tidak bisa dihapus (suppliers ${id}).`,
+      "suppliers",
+      id,
+    );
+  }
+  await tx.supplier.delete({ where: { id } });
+  ctx.touch("suppliers", id);
+}
+
+/**
+ * A chat thread counts as a link too: the inbox's history names the person,
+ * and the chatbot's rows are the agent role's to write, not this one's.
+ * Saved addresses are the customer's own and go with it.
+ */
+async function removeUnusedCustomer(
+  ctx: WriteContext,
+  id: string,
+): Promise<void> {
+  const { tx } = ctx;
+  const row = await tx.customer.findUnique({
+    where: { id },
+    select: {
+      openingBalance: true,
+      _count: {
+        select: {
+          orders: true,
+          reservations: true,
+          openingPayments: true,
+          waMessages: true,
+          waThreadMemories: true,
+          chatActions: true,
+          chatProfiles: true,
+        },
+      },
+    },
+  });
+  if (row === null) return;
+  if (
+    (row.openingBalance ?? 0n) !== 0n ||
+    Object.values(row._count).some((n) => n > 0)
+  ) {
+    throw new StoreValidationError(
+      `Pelanggan ini punya transaksi atau percakapan dan tidak bisa dihapus (customers ${id}).`,
+      "customers",
+      id,
+    );
+  }
+  await tx.customerAddress.deleteMany({ where: { customerId: id } });
+  await tx.customer.delete({ where: { id } });
+  ctx.touch("customers", id);
 }
 
 // ---------------------------------------------------------------------------

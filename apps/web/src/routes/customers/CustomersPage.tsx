@@ -45,6 +45,8 @@ import {
   WalletOutlined,
 } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
+import { DeleteAction } from "../../components/DeleteAction";
+import { customerInUse } from "../../lib/partyLinks.js";
 import { DataTable } from "../../components/DataTable";
 import { FilterBar } from "../../components/FilterBar";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
@@ -298,7 +300,7 @@ export function CustomersPage() {
               // words over and over; the tooltip and the `aria-label` say more
               // than the text did, because they name the customer.
               title: "",
-              width: 96,
+              width: 136,
               render: (_, c) => (
                 <Flex gap={4} justify="end">
                   <Tooltip title={t("customers.history", "History")}>
@@ -328,6 +330,23 @@ export function CustomersPage() {
                       }}
                     />
                   </Tooltip>
+                  <DeleteAction
+                    size="small"
+                    entityLabel={customerLabel(c)}
+                    blockedReason={
+                      customerInUse(db, c.id)
+                        ? t(
+                            "customers.deleteBlocked",
+                            "This customer has transactions and cannot be deleted.",
+                          )
+                        : undefined
+                    }
+                    onConfirm={async () => {
+                      mutate((d) => {
+                        d.customers = d.customers.filter((x) => x.id !== c.id);
+                      });
+                    }}
+                  />
                 </Flex>
               ),
             },

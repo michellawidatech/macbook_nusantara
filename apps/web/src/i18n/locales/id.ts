@@ -399,6 +399,7 @@ export const id: Record<string, string> = {
   "supplier.noDeposits": "Belum ada pembayaran di muka.",
   "supplier.addDeposit": "Catat deposit",
   "supplier.addDepositAria": "Catat deposit untuk {{name}}",
+  "supplier.deleteBlocked": "Supplier ini punya transaksi dan tidak bisa dihapus.",
   "supplier.when": "Tanggal",
   "supplier.note": "Catatan",
   "supplier.notePlaceholder": "Opsional",
@@ -2374,6 +2375,7 @@ export const id: Record<string, string> = {
   // Row actions that became icons on 2026-08-26. The aria-label carries the
   // sentence the button text used to, and names the record it acts on.
   "customers.editAria": "Ubah {{name}}",
+  "customers.deleteBlocked": "Pelanggan ini punya transaksi dan tidak bisa dihapus.",
   "customers.historyAria": "Riwayat pembelian {{name}}",
   "inbound.rejectAria": "Retur {{serial}} ke supplier",
   "inbound.rejectHint": "Tolak unitnya dan buka retur ke supplier",

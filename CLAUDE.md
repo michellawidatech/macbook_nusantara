@@ -2721,6 +2721,15 @@ Decisions that outlived those documents:
     turn is scored by code — `leadScoreOf(understand(text))`, no model call —
     and written with the reply, as the rules and v2 always were. A sale still
     clears it. The 👎 dialog lost its "which agent" picker.
+- **A supplier or customer nobody's paperwork names can be deleted,
+  2026-10-21** (*"hard delete it as long as there are no transaction
+  linked"*). A bin on the /suppliers and /customers rows; disabled with a
+  reason once something names the party (`lib/partyLinks.ts`).
+  `removeUnusedSupplier` / `removeUnusedCustomer` in `adapters/reference.ts`
+  re-check against the DATABASE — a customer with a chat thread counts as
+  linked too — and migration `20261021120000` grants `nusantara_app` DELETE
+  on `Supplier`, `Customer`, `CustomerAddress` only. The fourth hard delete;
+  do not generalise it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

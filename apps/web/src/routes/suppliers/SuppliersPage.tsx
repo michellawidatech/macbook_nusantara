@@ -79,6 +79,8 @@ import dayjs from "dayjs";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { PageContainer } from "../../components/PageContainer";
+import { DeleteAction } from "../../components/DeleteAction";
+import { supplierInUse } from "../../lib/partyLinks.js";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import { poTotals } from "../../lib/inbound.js";
@@ -1074,6 +1076,7 @@ export function SuppliersPage() {
                 key: "actions",
                 width: COLUMN.actions,
                 render: (_, r) => (
+                  <Flex gap={4} justify="end">
                   <Tooltip title={t("supplier.addDeposit", "Record a deposit")}>
                     <Button
                       size="small"
@@ -1090,6 +1093,26 @@ export function SuppliersPage() {
                       }}
                     />
                   </Tooltip>
+                  <DeleteAction
+                    size="small"
+                    entityLabel={r.supplier.name}
+                    blockedReason={
+                      supplierInUse(db, r.supplier.id)
+                        ? t(
+                            "supplier.deleteBlocked",
+                            "This supplier has transactions and cannot be deleted.",
+                          )
+                        : undefined
+                    }
+                    onConfirm={async () => {
+                      mutate((d) => {
+                        d.suppliers = d.suppliers.filter(
+                          (x) => x.id !== r.supplier.id,
+                        );
+                      });
+                    }}
+                  />
+                  </Flex>
                 ),
               },
             ]}
