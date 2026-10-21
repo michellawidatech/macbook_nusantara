@@ -1077,41 +1077,43 @@ export function SuppliersPage() {
                 width: COLUMN.actions,
                 render: (_, r) => (
                   <Flex gap={4} justify="end">
-                  <Tooltip title={t("supplier.addDeposit", "Record a deposit")}>
-                    <Button
+                    <Tooltip
+                      title={t("supplier.addDeposit", "Record a deposit")}
+                    >
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<PlusOutlined />}
+                        aria-label={t(
+                          "supplier.addDepositAria",
+                          "Record a deposit for {{name}}",
+                          { name: r.supplier.name },
+                        )}
+                        onClick={() => {
+                          setDepositTo(r.supplier);
+                          openDeposit();
+                        }}
+                      />
+                    </Tooltip>
+                    <DeleteAction
                       size="small"
-                      type="text"
-                      icon={<PlusOutlined />}
-                      aria-label={t(
-                        "supplier.addDepositAria",
-                        "Record a deposit for {{name}}",
-                        { name: r.supplier.name },
-                      )}
-                      onClick={() => {
-                        setDepositTo(r.supplier);
-                        openDeposit();
+                      entityLabel={r.supplier.name}
+                      blockedReason={
+                        supplierInUse(db, r.supplier.id)
+                          ? t(
+                              "supplier.deleteBlocked",
+                              "This supplier has transactions and cannot be deleted.",
+                            )
+                          : undefined
+                      }
+                      onConfirm={async () => {
+                        mutate((d) => {
+                          d.suppliers = d.suppliers.filter(
+                            (x) => x.id !== r.supplier.id,
+                          );
+                        });
                       }}
                     />
-                  </Tooltip>
-                  <DeleteAction
-                    size="small"
-                    entityLabel={r.supplier.name}
-                    blockedReason={
-                      supplierInUse(db, r.supplier.id)
-                        ? t(
-                            "supplier.deleteBlocked",
-                            "This supplier has transactions and cannot be deleted.",
-                          )
-                        : undefined
-                    }
-                    onConfirm={async () => {
-                      mutate((d) => {
-                        d.suppliers = d.suppliers.filter(
-                          (x) => x.id !== r.supplier.id,
-                        );
-                      });
-                    }}
-                  />
                   </Flex>
                 ),
               },
