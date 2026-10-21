@@ -57,6 +57,7 @@ import {
   instantOf,
   isoOf,
   lockRows,
+  noRowLock,
   refuseEdit,
   refuseRemoval,
   sameApartFrom,
@@ -1111,7 +1112,8 @@ export const stockIns: Adapter<"stockIns"> = {
       staff: s.staff.name,
     }));
   },
-  lock: (tx, keys) => lockRows(tx, "StockIn", "id", keys),
+  // Inserted only — see `noRowLock`.
+  lock: noRowLock,
   async write(ctx, rows) {
     for (const r of rows) {
       const n = r.next;

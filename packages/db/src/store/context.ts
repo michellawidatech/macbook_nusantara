@@ -302,14 +302,26 @@ const LOCKABLE = new Set([
   "Settlement",
   "UnitEvent",
   "UnitNote",
-  "StockIn",
   "StockAdjustment",
   "StockMove",
   "Expense",
   "ManualIncome",
-  "PaymentLog",
-  "SettlementLog",
 ]);
+
+/**
+ * The lock of a collection whose rows are only ever INSERTED — a log line, a
+ * stock-in record (2026-10-21).
+ *
+ * There is nothing to lock: a new row has no row yet, and the adapter refuses
+ * an edit or a removal outright. Taking one anyway is what broke them in
+ * production. `SELECT … FOR UPDATE` needs UPDATE on at least one column, and
+ * `nusantara_app` holds INSERT and SELECT only on these tables, as an
+ * append-only log should — so every Receive on Pending Payment, every payment
+ * correction's log line and every stock-in failed with "permission denied",
+ * while the tests, which commit as the owner, passed. Concurrent commits are
+ * still ordered by the store lock every commit takes first.
+ */
+export async function noRowLock(): Promise<void> {}
 
 /** `SELECT … FOR UPDATE` on the rows behind these keys, in key order. */
 export async function lockRows(

@@ -37,6 +37,7 @@ import {
   snapshotStore,
   truncateAll,
 } from "../src/index.js";
+import { ADAPTERS } from "../src/store/adapters/index.js";
 
 const URL =
   process.env["TEST_DATABASE_URL"] ??
@@ -1698,5 +1699,113 @@ describe("money that settles a debt without moving the balance (2026-09-22)", ()
       direction: "MASUK",
       inBalance: false,
     });
+  }, 180_000);
+});
+
+describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
+  /**
+   * Every other test here commits as the owner, who may do anything — which
+   * is how Receive on Pending Payment shipped broken: the commit locks the
+   * rows it touches with `SELECT … FOR UPDATE`, PostgreSQL wants UPDATE on at
+   * least one column for that, and the app role holds none on an append-only
+   * log. "permission denied for table SettlementLog", and only in production.
+   */
+  const asRole = (role: string): string => {
+    const u = new globalThis.URL(URL);
+    u.username = role;
+    u.password = "";
+    return u.toString();
+  };
+
+  it("can take every collection's lock", async () => {
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    try {
+      const refused: string[] = [];
+      for (const name of COLLECTION_NAMES) {
+        const adapter = ADAPTERS[name] as unknown as {
+          lock: (tx: unknown, keys: readonly string[]) => Promise<void>;
+        };
+        await app
+          .$transaction((tx) => adapter.lock(tx, ["no-such-row"]))
+          .catch((err: unknown) => {
+            refused.push(`${name}: ${String(err).split("\n").at(-1)}`);
+          });
+      }
+      expect(refused).toEqual([]);
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
+  it("records a marketplace payout: the payment, the settlement and its log", async () => {
+    await loadDemo();
+    const snap = decodeStore(
+      (await snapshotStore(db, { staffId: ACTOR })).db,
+    ) as unknown as Record<string, Row[]>;
+    const order = snap["orders"]!.find((o) =>
+      ((o["payments"] as Row[] | undefined) ?? []).some(
+        (p) => p["state"] === "PENDING",
+      ),
+    )!;
+    const pay = (order["payments"] as Row[]).find(
+      (p) => p["state"] === "PENDING",
+    )!;
+    const at = "2026-09-13T04:00:00.000Z";
+    const fee = 500_000;
+    const received = (pay["amount"] as number) - fee;
+    const next = {
+      ...order,
+      payments: (order["payments"] as Row[]).map((p) =>
+        p === pay ? { ...p, state: "SETTLED", at } : p,
+      ),
+      settled: true,
+    };
+    const settlement = {
+      id: "stl-app-1",
+      paymentId: pay["id"],
+      orderId: order["id"],
+      channel: pay["channel"],
+      gross: pay["amount"],
+      fees: [{ id: "fee-app-1", kind: "OTHER", label: "Admin", amount: fee }],
+      received,
+      at,
+      staff: "Store Test",
+    };
+    const log = {
+      id: "slog-app-1",
+      settlementId: "stl-app-1",
+      at,
+      staff: "Store Test",
+      action: "RECORDED",
+      after: { received, deducted: fee },
+    };
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    try {
+      await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            {
+              orders: [order],
+              settlements: [],
+              settlementLog: [],
+            } as unknown as StoreShape,
+            {
+              orders: [next],
+              settlements: [settlement],
+              settlementLog: [log],
+            } as unknown as StoreShape,
+          ),
+        ),
+      });
+    } finally {
+      await app.$disconnect();
+    }
+    expect(
+      await db.payment.findUniqueOrThrow({
+        where: { id: pay["id"] as string },
+      }),
+    ).toMatchObject({ status: "LUNAS" });
+    expect(await db.settlementLog.count()).toBe(1);
   }, 180_000);
 });

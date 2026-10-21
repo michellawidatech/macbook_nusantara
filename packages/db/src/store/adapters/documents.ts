@@ -39,6 +39,7 @@ import {
   instantOf,
   isoOf,
   lockRows,
+  noRowLock,
   optionalIso,
   refuseEdit,
   refuseRemoval,
@@ -2085,7 +2086,8 @@ export const paymentLog: Adapter<"paymentLog"> = {
       reason: l.reason ?? undefined,
     }));
   },
-  lock: (tx, keys) => lockRows(tx, "PaymentLog", "id", keys),
+  // Inserted only — see `noRowLock`.
+  lock: noRowLock,
   async write(ctx, rows) {
     const { tx } = ctx;
     for (const r of rows) {
@@ -2179,7 +2181,8 @@ export const settlementLog: Adapter<"settlementLog"> = {
       reason: l.reason ?? undefined,
     }));
   },
-  lock: (tx, keys) => lockRows(tx, "SettlementLog", "id", keys),
+  // Inserted only — see `noRowLock`.
+  lock: noRowLock,
   async write(ctx, rows) {
     for (const r of rows) {
       const n = r.next;
