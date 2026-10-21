@@ -3951,6 +3951,35 @@ export const id: Record<string, string> = {
   "products.skuCode": "Kode SKU",
   "products.skuCodeRequired": "Isi kode SKU",
   "products.skuCodeTaken": "Kode ini sudah dipakai varian lain",
+  "products.addNVariants": "Tambah {{n}} varian",
+  "products.appleSilicon": "Apple silicon (M1, M2…)",
+  "products.deleteBlocked":
+    "Produk ini punya riwayat stok atau penjualan dan tidak bisa dihapus.",
+  "products.deleted": "{{name}} dihapus.",
+  "products.eGM2": "mis. M2",
+  "products.eGMagicMouse": "mis. Magic Mouse 2",
+  "products.fullNamesDone": "{{n}} produk diganti namanya.",
+  "products.i5i7": "i5, i7…",
+  "products.intel": "Intel (i3, i5, i7…)",
+  "products.line": "Lini",
+  "products.planAddTo":
+    "{{name}} sudah ada — {{n}} varian yang belum ada akan ditambahkan ke sana.",
+  "products.planAxes":
+    "{{name}} sudah ada dengan pilihan yang berbeda (dengan atau tanpa prosesor). Tambahkan dari tombol Varian produk itu.",
+  "products.planExists": "{{name}} sudah punya semua varian ini.",
+  "products.planNew": "Produk baru {{name}} dengan {{n}} varian.",
+  "products.processor": "Prosesor",
+  "products.processorOptions": "Pilihan prosesor",
+  "products.processorOptionsHint":
+    "Setiap prosesor menjadi varian dari produk yang sama.",
+  "products.productAdded": "{{name}} ditambahkan dengan {{n}} varian.",
+  "products.productName": "Nama produk",
+  "products.screenSize": "Ukuran layar",
+  "products.useFullNames": "Pakai nama produk lengkap ({{n}})",
+  "products.useFullNamesTitle": "Ganti {{n}} nama produk ke nama lengkapnya?",
+  "products.variantInUse":
+    "Varian ini punya riwayat stok atau penjualan — tidak bisa dihapus",
+  "products.variantsAddedTo": "{{n}} varian ditambahkan ke {{name}}.",
   "products.renameMachineCodes": "Ganti kode SKU ({{n}})",
   "products.renameMachineCodesTitle": "Ganti {{n}} kode SKU?",
   "products.renameMachineCodesBody":

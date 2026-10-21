@@ -1276,6 +1276,75 @@ describe("a till's commit", () => {
     ).rejects.toThrow();
   }, 180_000);
 
+  it("deletes a product by archiving it with its variants, and refuses a variant with history (2026-10-21)", async () => {
+    const shop = await loadDemo();
+    const model: Row = {
+      id: "m_zz_delete",
+      name: 'MacBook Air 13" 2031',
+      category: (shop["models"] as Row[])[0]!["category"],
+      releaseYear: 2031,
+      axes: [
+        { name: "RAM", values: ["8GB"] },
+        { name: "SSD", values: ["256GB"] },
+      ],
+      source: "MANUAL",
+    };
+    const variant: Row = {
+      id: "sku_zz_delete",
+      modelId: "m_zz_delete",
+      code: 'AIR 13" 2031 8/256',
+      name: 'MacBook Air 13" 2031',
+      variantLabel: "8GB / 256GB",
+      price: 0,
+    };
+    const created = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { models: [], skus: [] },
+          { models: [model], skus: [variant] },
+        ),
+      ),
+    });
+    const m = decodeRow("models", (created.rows.models as Row[])[0]!);
+    const v = decodeRow("skus", (created.rows.skus as Row[])[0]!);
+
+    // A product cannot go while a variant of it is still live.
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(diffStore({ models: [m] }, { models: [] })),
+      }),
+    ).rejects.toThrow(/masih punya varian/);
+
+    const removal = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore({ models: [m], skus: [v] }, { models: [], skus: [] }),
+      ),
+    });
+    expect(removal.removed.models).toEqual(["m_zz_delete"]);
+    expect(
+      (await db.catalogModel.findUnique({ where: { id: "m_zz_delete" } }))!
+        .archived,
+    ).toBe(true);
+    expect(
+      (await db.sku.findUnique({ where: { id: "sku_zz_delete" } }))!.archived,
+    ).toBe(true);
+
+    // A counted variant with a stock movement is history, not litter.
+    const moved = (shop["stockMoves"] as Row[])[0]!;
+    const counted = (shop["skus"] as Row[]).find(
+      (k) => k["id"] === moved["skuId"],
+    )!;
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(diffStore({ skus: [counted] }, { skus: [] })),
+      }),
+    ).rejects.toThrow(/riwayat stok atau penjualan/);
+  }, 180_000);
+
   it("deletes a supplier or customer nothing names, and refuses a used one (2026-10-21)", async () => {
     const shop = await loadDemo();
     const created = await commitStore(db, {

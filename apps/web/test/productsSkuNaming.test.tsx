@@ -80,49 +80,90 @@ describe("SKU codes follow the shop's naming", () => {
     });
   });
 
-  it("previews and creates the codes for what is picked", async () => {
+  it("adds variants to the product that already exists, renaming it in full", async () => {
+    mutate((d) => {
+      d.models = d.models.filter((m) => m.id !== "m-short-name");
+      d.models.unshift({
+        id: "m-short-name",
+        name: 'AIR 13" 2019',
+        category: "MacBook Air",
+        releaseYear: 2019,
+        source: "MANUAL",
+        axes: [
+          { name: "RAM", values: [] },
+          { name: "SSD", values: [] },
+        ],
+      });
+    });
     renderPage();
     pressPageAction(/Add product/);
     const user = userEvent.setup();
     const dialog = (
       await screen.findByText("Create product and variants")
     ).closest(".ant-modal") as HTMLElement;
-    await user.type(
-      within(dialog).getByLabelText("Model name"),
-      'AIR 13" 2020 i7 16/256',
-    );
-    const pick = async (label: string, value: string) => {
-      const box = within(dialog).getByLabelText(label);
-      await user.click(box);
-      await user.type(box, `${value}{enter}`);
-    };
-    await user.type(within(dialog).getByLabelText("Release year"), "2020");
     await user.click(within(dialog).getByLabelText("Category"));
     await user.click((await screen.findAllByTitle("MacBook Air")).at(-1)!);
-    await pick("RAM options", "16GB");
-    await pick("SSD options", "256GB");
-    // The form starts with 8GB and 256GB/512GB picked; 16GB joins them.
-    const hint = await within(dialog).findByText(/^SKU codes will read:/);
+    await user.type(within(dialog).getByLabelText("Screen size"), "13");
+    const year = within(dialog).getByLabelText("Release year");
+    await user.clear(year);
+    await user.type(year, "2019");
+    await user.click(within(dialog).getByText("Intel (i3, i5, i7…)"));
+    const procs = within(dialog).getByLabelText("Processor options");
+    await user.click(procs);
+    await user.click((await screen.findAllByTitle("i5")).at(-1)!);
     await vi.waitFor(() =>
-      expect(hint.textContent).toBe(
-        'SKU codes will read: AIR 13" 2020 I7 8/256, AIR 13" 2020 I7 8/512, ' +
-          'AIR 13" 2020 I7 16/256, AIR 13" 2020 I7 16/512',
+      expect(within(dialog).getByTestId("add-product-codes").textContent).toBe(
+        'AIR 13" 2019 I5 8/256, AIR 13" 2019 I5 8/512, AIR 13" 2019 I5 16/256, AIR 13" 2019 I5 16/512',
       ),
     );
+    expect(
+      within(dialog).getByText(
+        'MacBook Air 13" 2019 already exists — the 4 missing variant(s) will be added to it.',
+      ),
+    ).toBeTruthy();
     await user.click(
-      within(dialog)
-        .getByText("Create product and variants")
-        .closest("button")!,
+      within(dialog).getByText("Add 4 variant(s)").closest("button")!,
     );
     await vi.waitFor(() => {
-      const model = getDb().models.find(
-        (m) => m.name === 'AIR 13" 2020 i7 16/256',
-      )!;
+      const m = getDb().models.find((x) => x.id === "m-short-name")!;
+      expect(m.name).toBe('MacBook Air 13" 2019');
       expect(
         getDb()
-          .skus.filter((s) => s.modelId === model.id)
+          .skus.filter((s) => s.modelId === "m-short-name")
           .map((s) => s.code),
-      ).toContain('AIR 13" 2020 I7 16/256');
+      ).toContain('AIR 13" 2019 I5 8/256');
     });
+    expect(
+      getDb().models.filter((m) => m.name.includes('13" 2019')),
+    ).toHaveLength(1);
+  });
+
+  it("deletes a product nothing has traded under, and refuses one with stock", async () => {
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", {
+        name: 'Delete MacBook Air 13" 2020',
+      }),
+    );
+    await user.click(
+      (await screen.findAllByText("Delete")).at(-1)!.closest("button")!,
+    );
+    await vi.waitFor(() =>
+      expect(getDb().models.some((m) => m.id === MODEL)).toBe(false),
+    );
+    expect(getDb().skus.some((s) => s.modelId === MODEL)).toBe(false);
+
+    const stocked = getDb().units[0]!;
+    const stockedModel = getDb().models.find(
+      (m) => m.id === getDb().skus.find((s) => s.id === stocked.skuId)!.modelId,
+    )!;
+    expect(
+      (
+        screen.queryAllByRole("button", {
+          name: `Delete ${stockedModel.name}`,
+        })[0] as HTMLButtonElement | undefined
+      )?.disabled ?? true,
+    ).toBe(true);
   });
 });

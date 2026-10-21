@@ -27,3 +27,33 @@ export function customerInUse(db: MockDb, id: string): boolean {
     (c?.openingPayments?.length ?? 0) > 0
   );
 }
+
+/**
+ * Whether a PRODUCT can be deleted (owner ask 2026-10-21: "allow delete
+ * product if the stock is 0"). Stricter than "nothing on the shelf": every
+ * past receipt, invoice and stock movement names its variant, and a deleted
+ * variant would leave those rows naming nothing. So it is deletable while no
+ * unit, counted movement, invoice line, sale line or trade-in has ever been
+ * recorded against any of its variants — which is every product made by
+ * mistake, and none that has traded.
+ */
+export function productInUse(db: MockDb, modelId: string): boolean {
+  return db.skus
+    .filter((s) => s.modelId === modelId)
+    .some((s) => variantInUse(db, s.id));
+}
+
+/** The same rule for one variant — what the Variants dialog's bin asks. */
+export function variantInUse(db: MockDb, skuId: string): boolean {
+  return (
+    db.units.some((u) => u.skuId === skuId) ||
+    db.stockMoves.some((m) => m.skuId === skuId) ||
+    db.stockIns.some((r) => r.skuId === skuId) ||
+    db.pos.some((p) => p.items.some((i) => i.skuId === skuId)) ||
+    db.orders.some(
+      (o) =>
+        (o.lines ?? []).some((l) => l.skuId === skuId) ||
+        (o.tradeIns ?? []).some((r) => r.skuId === skuId),
+    )
+  );
+}

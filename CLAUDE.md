@@ -2730,6 +2730,31 @@ Decisions that outlived those documents:
   linked too — and migration `20261021120000` grants `nusantara_app` DELETE
   on `Supplier`, `Customer`, `CustomerAddress` only. The fourth hard delete;
   do not generalise it.
+- **A product is described, not named — 2026-10-21.** *"The current product
+  making flow is very confusing."* The catalogue held one MacBook Air as
+  `MacBook Air 13" 2020`, `AIR 13" 2020` and `AIR 13" 2020 I5`: Add product
+  took a free-typed short name and had no processor field, so `i5` went into
+  the name and became a product.
+  - **Product names are in full** (owner decision): `MacBook Air 13" 2020`,
+    `MacBook Air 13" M2`. **SKU codes stay short** (`AIR 13" 2020 I5 8/256`,
+    `lib/skuCode.ts`). `lib/modelName.ts` reads any name to its identity —
+    line, size, year or (Apple silicon) chip, plus extras like `TB` — and
+    an **Intel processor is a variant, never part of the product**.
+  - **Add product** (`lib/newProduct.ts`) asks category (line for iPads),
+    size, year, Apple chip OR Intel processor options, RAM, SSD, and builds
+    the name. A category with no line (accessories) keeps a name box and one
+    variant. **The same product already there gets the missing variants**,
+    and is renamed to the full name; the dialog says which before Save.
+  - **Delete product** (row bin) archives the product and its variants, and
+    only while nothing has ever been recorded against them — units, counted
+    moves, invoice or sale lines, trade-ins (`productInUse`,
+    `variantInUse`). "Stock is 0" is not enough: an archived variant is not
+    projected, so a past receipt naming it would name nothing. The server
+    checks the same in the skus adapter; the model archive waits in
+    `ctx.later` because models are written before skus.
+  - *Use full product names (n)* renames what is safe to rename; a name with
+    a processor in it, or a product that has a duplicate, is left for a person.
+  - `ops/fix-skus` (2026-10-21) archives same-product duplicate VARIANTS.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

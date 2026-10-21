@@ -209,7 +209,31 @@ export const models: Adapter<"models"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("models", r.key);
+      if (n === undefined) {
+        // A product is deleted by archiving it (owner ask 2026-10-21), and
+        // only once it has no live variant left. Checked AFTER the rest of
+        // the commit: models are written before skus, and the same commit
+        // removes the product's variants.
+        const id = r.key;
+        ctx.later.push(async () => {
+          const live = await tx.sku.count({
+            where: { modelId: id, archived: false },
+          });
+          if (live > 0) {
+            throw new StoreValidationError(
+              "Produk ini masih punya varian — hapus variannya dulu.",
+              "models",
+              id,
+            );
+          }
+          await tx.catalogModel.update({
+            where: { id },
+            data: { archived: true },
+          });
+        });
+        ctx.touch("models", id);
+        continue;
+      }
       const data = {
         categoryId: await ctx.categoryId(n.category),
         name: n.name.trim(),
@@ -345,6 +369,30 @@ export const skus: Adapter<"skus"> = {
         if (inStock > 0) {
           throw new StoreValidationError(
             "Varian ini masih punya unit — tidak bisa dihapus.",
+            "skus",
+            r.key,
+          );
+        }
+        // Nor one any past document names (2026-10-21): an archived variant
+        // is not projected, so a receipt or invoice line naming it would name
+        // nothing on every screen. Same rule as the browser's `variantInUse`.
+        const named = await tx.sku.findUnique({
+          where: { id: r.key },
+          select: {
+            _count: {
+              select: {
+                orderItems: true,
+                poItems: true,
+                stockMoves: true,
+                stockIns: true,
+                tradeIns: true,
+              },
+            },
+          },
+        });
+        if (named && Object.values(named._count).some((c) => c > 0)) {
+          throw new StoreValidationError(
+            "Varian ini punya riwayat stok atau penjualan — tidak bisa dihapus.",
             "skus",
             r.key,
           );
