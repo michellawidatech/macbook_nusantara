@@ -2694,6 +2694,13 @@ Decisions that outlived those documents:
     PPN is always 0. The serial stays beside the product — the template has
     none, but a warranty claim is checked against it. *Cetak* and *Hal* are
     not printed: nothing counts prints, and the browser cannot number pages.
+- **Set price regrades too, 2026-10-21.** *"Make them able to change the
+  grade in bulk together when they change the price."* Inventory's Set price
+  dialog (`PriceEditorModal`) has a Grade select per unit with its own Fill
+  down; Save writes price and grade in one mutation and one `DICATAT` per
+  unit naming what moved ("Grade A → C"). A regraded unit moves to that
+  grade's line, since a line is one grade. A grade-only edit leaves the price
+  — and a hand-typed marketplace price — untouched.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

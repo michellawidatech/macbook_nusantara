@@ -678,7 +678,9 @@ export const id: Record<string, string> = {
   // shop says out loud; "marketplace" is not translated because the platforms
   // are called that here too.
   "price.editTitle": "Harga — {{what}}",
-  "price.save": "Simpan harga",
+  "price.saveAll": "Simpan",
+  "price.fillGrade": "Isi grade ke bawah",
+  "price.gradeFor": "Grade {{serial}}",
   "price.serial": "Serial",
   "price.grade": "Grade",
   "price.store": "Harga toko",
@@ -1037,7 +1039,7 @@ export const id: Record<string, string> = {
   "inventory.marketOne": "marketplace {{price}}",
   "inventory.notPricedYet": "belum dihargai",
   "inventory.ungraded": "Belum digrade",
-  "inventory.repriced": "{{n}} harga diperbarui.",
+  "inventory.unitsUpdated": "{{n}} unit diperbarui.",
 
   // ── Inventory & Stock Movement — the product table ───────────────────
   "inventory.adjustAria": "Sesuaikan {{serial}}",

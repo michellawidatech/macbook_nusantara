@@ -32,6 +32,14 @@
  * measured against it. It showed `Unit.buy` until 2026-09-19, which let a
  * unit be priced under what it had actually cost without a word.
  *
+ * ## The grade, in the same pass (2026-10-21)
+ *
+ * *"Make them able to change the grade in bulk together when they change the
+ * price."* Repricing a shelf is the moment somebody has looked at every unit
+ * on it, and a grade is what a price is argued from — so the grade is a box
+ * here too, with its own Fill down. Saving a changed grade moves the unit to
+ * that grade's line in Inventory, which is the point.
+ *
  * ## Nothing is written until Save
  *
  * A price grid that committed per keystroke would file Rp9, Rp95, Rp950 … on
@@ -45,15 +53,16 @@ import {
   Flex,
   InputNumber,
   Modal,
+  Select,
   Table,
   Tooltip,
   Typography,
 } from "antd";
 import { useTranslation } from "react-i18next";
-import { GradeTag } from "./GradeTag";
 import { CostInfoButton } from "./CostBreakdown";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "./money";
 import { fmtRp } from "../lib/format.js";
+import { NEW_GRADE } from "../lib/condition.js";
 import {
   isPriceInRange,
   priceOf,
@@ -72,11 +81,16 @@ export interface PriceEditorUnit extends ListedUnit {
   readonly poId: string | null;
 }
 
-/** What Save hands back: only the units whose price actually moved. */
+/** What Save hands back: only the units whose price or grade actually moved. */
 export interface PriceEdit {
   readonly serial: string;
-  /** The new counter price. */
+  /** The counter price after Save — unchanged when only the grade moved. */
   readonly price: number;
+  /**
+   * The new grade, present only when it changed. `null` is a grade somebody
+   * cleared: the unit goes back to ungraded.
+   */
+  readonly grade?: string | null;
 }
 
 export interface PriceEditorModalProps {
@@ -116,6 +130,8 @@ export function PriceEditorModal({
   const { t } = useTranslation();
   /** Serial → the typed price; `null` is a box somebody emptied. */
   const [draft, setDraft] = useState<Record<string, number | null>>({});
+  /** Serial → the picked grade; `null` is a cleared one, absent untouched. */
+  const [grades, setGrades] = useState<Record<string, string | null>>({});
 
   // Re-seeded whenever the dialog opens on a different set. Keyed on the
   // serials rather than on `open` alone, so reopening on another product does
@@ -128,6 +144,7 @@ export function PriceEditorModal({
         units.map((u) => [u.serial, priceOf(u, skuPrice(u.skuId))]),
       ),
     );
+    setGrades({});
     // `skuPrice` is a closure over the store and changes on every render; the
     // set of serials is what actually decides whether this needs re-seeding.
     // This project's eslint config has no exhaustive-deps rule to disable, so
@@ -139,6 +156,19 @@ export function PriceEditorModal({
   const typed = (u: PriceEditorUnit): number | null => {
     const v = draft[u.serial];
     return v === undefined ? current(u) : v;
+  };
+
+  const storedGrade = (u: PriceEditorUnit): string | null => u.grade ?? null;
+  /** What the grade box holds: the pick, or the unit's own grade. */
+  const pickedGrade = (u: PriceEditorUnit): string | null => {
+    const v = grades[u.serial];
+    return v === undefined ? storedGrade(u) : v;
+  };
+  const fillGradeDown = () => {
+    const first = units[0];
+    if (!first) return;
+    const value = pickedGrade(first);
+    setGrades(Object.fromEntries(units.map((u) => [u.serial, value])));
   };
 
   /** Everything that is out of range, so Save can refuse and say how many. */
@@ -190,10 +220,12 @@ export function PriceEditorModal({
     const edits: PriceEdit[] = [];
     for (const u of units) {
       const price = typed(u) ?? current(u);
+      const grade = pickedGrade(u);
+      const regraded = grade !== storedGrade(u);
       // Only what moved. A dialog opened and closed on eleven units must not
       // write eleven identical repricings into the ledger.
-      if (price === current(u)) continue;
-      edits.push({ serial: u.serial, price });
+      if (price === current(u) && !regraded) continue;
+      edits.push({ serial: u.serial, price, ...(regraded ? { grade } : {}) });
     }
     onSave(edits);
   };
@@ -202,12 +234,12 @@ export function PriceEditorModal({
     <Modal
       open={open}
       onCancel={onClose}
-      width={760}
+      width={860}
       // Reachable from inside Inventory's unit popup since 2026-09-23, which
       // is a modal in another part of the tree — see `UnitEditModal`.
       zIndex={1100}
       title={t("price.editTitle", "Prices — {{what}}", { what: title })}
-      okText={t("price.save", "Save prices")}
+      okText={t("price.saveAll", "Save")}
       okButtonProps={{ disabled: bad > 0 }}
       onOk={save}
     >
@@ -233,11 +265,46 @@ export function PriceEditorModal({
             ),
           },
           {
-            title: t("price.grade", "Grade"),
+            title: (
+              <Flex align="center" gap={SPACE.xs}>
+                {t("price.grade", "Grade")}
+                <Tooltip
+                  title={t(
+                    "price.fillDown",
+                    "Copy the top row down the column",
+                  )}
+                >
+                  <Button
+                    size="small"
+                    type="link"
+                    aria-label={t("price.fillGrade", "Fill the grade down")}
+                    onClick={fillGradeDown}
+                  >
+                    {t("price.fill", "Fill down")}
+                  </Button>
+                </Tooltip>
+              </Flex>
+            ),
             key: "grade",
-            width: COLUMN.grade,
+            width: COLUMN.choice,
             render: (_: unknown, u: PriceEditorUnit) => (
-              <GradeTag grade={u.grade} />
+              <Select<string>
+                allowClear
+                style={{ width: "100%" }}
+                aria-label={t("price.gradeFor", "Grade of {{serial}}", {
+                  serial: u.serial,
+                })}
+                value={pickedGrade(u) ?? undefined}
+                onChange={(v) =>
+                  setGrades((g) => ({ ...g, [u.serial]: v ?? null }))
+                }
+                options={[
+                  { value: NEW_GRADE, label: t("grade.new", "New") },
+                  { value: "A", label: "A" },
+                  { value: "B", label: "B" },
+                  { value: "C", label: "C" },
+                ]}
+              />
             ),
           },
           {

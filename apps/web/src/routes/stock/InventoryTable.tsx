@@ -447,15 +447,22 @@ export function InventoryTable({ extra }: InventoryTableProps) {
         if (!u) continue;
         const sku = d.skus.find((s) => s.id === u.skuId);
         const before = priceOf(u, sku?.price ?? 0);
-        const handTyped = u.marketPrice;
-        u.price = e.price;
+        const repriced = before !== e.price;
+        // A grade-only edit leaves the price, and the hand-typed marketplace
+        // price with it, exactly as they were.
+        const handTyped = repriced ? u.marketPrice : undefined;
+        const gradeBefore = u.grade ?? null;
+        if (repriced) u.price = e.price;
         if (handTyped !== undefined) u.marketPrice = undefined;
+        if (e.grade !== undefined)
+          u.grade = (e.grade ?? undefined) as Unit["grade"];
         appendEvent(d, e.serial, {
           type: "DICATAT",
           note: [
-            before === e.price
+            repriced ? `Price ${fmtRp(before)} → ${fmtRp(e.price)}` : undefined,
+            e.grade === undefined
               ? undefined
-              : `Price ${fmtRp(before)} → ${fmtRp(e.price)}`,
+              : `Grade ${gradeBefore ?? "none"} → ${e.grade ?? "none"}`,
             handTyped === undefined
               ? undefined
               : `Marketplace price ${fmtRp(handTyped)} set by hand dropped — the variant's listing follows the rule`,
@@ -466,7 +473,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       }
     });
     message.success(
-      t("inventory.repriced", "{{n}} prices updated.", { n: edits.length }),
+      t("inventory.unitsUpdated", "{{n}} units updated.", { n: edits.length }),
     );
   };
 

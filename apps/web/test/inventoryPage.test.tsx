@@ -367,7 +367,7 @@ describe("Set price", () => {
     expect(
       within(grid).getByText(/^Marketplace price after saving:/),
     ).toBeInTheDocument();
-    await userEvent.click(worded(grid, "Save prices"));
+    await userEvent.click(worded(grid, "Save"));
     await settle();
 
     const after = getDb().units.find((u) => u.serial === unit.serial)!;
@@ -379,6 +379,58 @@ describe("Set price", () => {
     expect(last.type).toBe("DICATAT");
     expect(last.note).toContain(`→ ${fmtRp(7_000_000)}`);
     expect(last.note).toContain("set by hand dropped");
+  });
+});
+
+describe("Set price, the grade with it", () => {
+  it("regrades the whole line from the top row, and leaves the prices alone", async () => {
+    // Owner ask 2026-10-21: change the grade in bulk while repricing.
+    const line = expectedLines().find(
+      (l) => l.units.length >= 2 && l.units.every((u) => u.grade !== "C"),
+    )!;
+    const prices = new Map(
+      line.units.map((u) => [
+        u.serial,
+        getDb().units.find((x) => x.serial === u.serial)!.price,
+      ]),
+    );
+    renderPage();
+    await settle();
+    await userEvent.click(worded(await rowFor(line), "Set price"));
+    const grid = await topModal();
+
+    const first = within(grid).getByRole("combobox", {
+      name: `Grade of ${line.units[0]!.serial}`,
+    });
+    fireEvent.mouseDown(first);
+    const option = await vi.waitFor(() => {
+      const open = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          ".ant-select-dropdown:not(.ant-select-dropdown-hidden)",
+        ),
+      );
+      const found = open
+        .at(-1)
+        ?.querySelector<HTMLElement>('.ant-select-item-option[title="C"]');
+      if (!found) throw new Error("no grade list open");
+      return found;
+    });
+    fireEvent.click(option);
+    await userEvent.click(
+      within(grid).getByRole("button", { name: "Fill the grade down" }),
+    );
+    await userEvent.click(worded(grid, "Save"));
+    await settle();
+
+    for (const u of line.units) {
+      const after = getDb().units.find((x) => x.serial === u.serial)!;
+      expect(after.grade).toBe("C");
+      expect(after.price).toBe(prices.get(u.serial));
+      const last = getDb()
+        .events.filter((e) => e.serial === u.serial)
+        .at(-1)!;
+      expect(last.note).toBe(`Grade ${u.grade ?? "none"} → C`);
+    }
   });
 });
 
