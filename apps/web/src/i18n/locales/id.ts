@@ -1353,7 +1353,7 @@ export const id: Record<string, string> = {
 
   // ── Return — from a customer ─────────────────────────────────────────
   "returnCustomer.date": "Tanggal",
-  "returnCustomer.pickOrSearchAReason": "Pilih atau cari alasan",
+  "returnCustomer.searchAReasonOrType": "Cari alasan, atau ketik yang baru",
   "returnCustomer.product": "Produk",
   "returnCustomer.reason": "Alasan",
   "returnCustomer.recordAReturn": "Catat retur",
@@ -1377,10 +1377,10 @@ export const id: Record<string, string> = {
   "returnSupplier.date": "Tanggal",
   "returnSupplier.eGDeadPixelCluster": "mis. dead pixel, engsel longgar",
   "returnSupplier.expectedCredit": "Kredit yang diharapkan",
-  "returnSupplier.managedInSettingsReasonsPer":
-    "Diatur di Pengaturan → Alasan per aktivitas",
+  "returnSupplier.pickOneOrTypeA":
+    "Pilih satu, atau ketik alasan baru — yang baru otomatis ditambahkan ke Pengaturan",
   "returnSupplier.origin": "Asal",
-  "returnSupplier.pickOrSearchAReason": "Pilih atau cari alasan",
+  "returnSupplier.searchAReasonOrType": "Cari alasan, atau ketik yang baru",
   "returnSupplier.product": "Produk",
   "returnSupplier.reason": "Alasan",
   "returnSupplier.recordAReturn": "Catat retur",
@@ -3359,6 +3359,9 @@ export const id: Record<string, string> = {
   "settle.saveCorrection": "Simpan koreksi",
   // Returns & exchange — buy-back or return, from one rule.
   "returnCustomer.pickAUnit": "Centang minimal satu unit yang dikembalikan.",
+  "returnCustomer.warehouse": "Kembali ke gudang",
+  "returnCustomer.pickAWarehouse": "Pilih gudang",
+  "returnCustomer.needWarehouse": "Pilih gudang tujuan unit ini kembali.",
   "returnCustomer.needReason": "Sebutkan kenapa unitnya dikembalikan.",
   "returnCustomer.recordedRefund":
     "Retur dicatat — kembalikan {{amount}}. Terima unitnya saat sudah kembali.",

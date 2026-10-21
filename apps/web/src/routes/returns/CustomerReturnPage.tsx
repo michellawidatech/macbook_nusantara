@@ -89,6 +89,7 @@
  * "Other" asks for a sentence.
  */
 import { useMemo, useState } from "react";
+import { warehouseLabel } from "../../lib/warehouses";
 import {
   Alert,
   App,
@@ -149,6 +150,7 @@ import {
   docCode,
   appendEvent,
   currentStaffName,
+  ensureReason,
   purgeQcPhotos,
 } from "../../mock/store.js";
 import type {
@@ -423,6 +425,16 @@ export function CustomerReturnPanel({
     asString,
   );
   /*
+   * Where what comes back goes (owner ask 2026-10-21: *"we should be able to
+   * choose the warehouse instead of automatically sending it to warehouse
+   * 4"*). It used to be this desk's warehouse, unasked — and an account whose
+   * warehouse was the service bench sent every return there. Only a PICKED
+   * warehouse is kept; see `returnTo` for the default.
+   */
+  const [warehousePicked, setWarehousePicked] = usePersistentState<
+    string | undefined
+  >(RETURN_DRAFT("warehouse"), undefined, asString);
+  /*
    * Only a date somebody PICKED is kept. "Today" is not a value to store: a
    * form reopened tomorrow would otherwise open on yesterday.
    */
@@ -498,6 +510,15 @@ export function CustomerReturnPanel({
     (r) => r.activity === "RETURN_CUSTOMER" && r.active,
   );
   const needsDetail = (reason ?? "").trim().toLowerCase() === OTHER;
+  /** Where a returned unit can be put: an active warehouse, not the bench. */
+  const shelves = db.warehouses.filter((w) => w.active && w.kind !== "SERVIS");
+  /**
+   * This desk's warehouse when it is a shelf; otherwise nothing, and the form
+   * asks. A unit with a fault goes to service from Inventory, by a decision.
+   */
+  const returnTo =
+    shelves.find((w) => w.id === warehousePicked)?.id ??
+    shelves.find((w) => w.id === db.myWarehouseId)?.id;
 
   const unitBySerial = useMemo(
     () => new Map(db.units.map((u) => [u.serial, u])),
@@ -730,6 +751,7 @@ export function CustomerReturnPanel({
     setQtyPicks({});
     setReason(undefined);
     setReasonDetail("");
+    setWarehousePicked(undefined);
     setDatePicked(undefined);
     setReplacements([]);
     setReturnFee(null);
@@ -955,6 +977,16 @@ export function CustomerReturnPanel({
       );
       return;
     }
+    if (returnTo === undefined) {
+      message.error(
+        t(
+          "returnCustomer.needWarehouse",
+          "Pick the warehouse it goes back to.",
+        ),
+      );
+      return;
+    }
+    const intoWarehouse = returnTo;
 
     const now = new Date().toISOString();
     const day = date.format("YYYY-MM-DD");
@@ -1089,6 +1121,10 @@ export function CustomerReturnPanel({
       outcome.refund = plan.refund;
       outcome.topUp = plan.topUp;
 
+      // A typed reason joins Settings' list in the same write (2026-10-21): a
+      // fresh database has none, and a pick-only box refused every return.
+      ensureReason(d, "RETURN_CUSTOMER", reason);
+
       // One return per unit, each waiting for the unit — unchanged.
       d.returns.unshift(
         ...unitBacks.map((b, i): ReturnRec => {
@@ -1151,7 +1187,7 @@ export function CustomerReturnPanel({
         appendEvent(d, b.serial, {
           type: "RETUR_PELANGGAN",
           toStatus: "TERSEDIA",
-          toLocationId: d.myWarehouseId,
+          toLocationId: intoWarehouse,
           note: [why, `restocked on arrival (${codeOf.get(b)!})`]
             .filter(Boolean)
             .join(" — "),
@@ -1205,7 +1241,7 @@ export function CustomerReturnPanel({
           d.stockMoves.push({
             id: nextId("sm"),
             skuId: line.skuId,
-            locationId: d.myWarehouseId,
+            locationId: intoWarehouse,
             qty: b.qty,
             cost: each,
             type: "RETUR_PELANGGAN",
@@ -1876,20 +1912,23 @@ export function CustomerReturnPanel({
                 style={{ flex: "1 1 260px", marginBottom: 12 }}
                 validateStatus={tried && !reason ? "error" : undefined}
               >
-                <Select
-                  showSearch
+                {/* Pick one, or type a new one — it joins Settings' list. */}
+                <AutoComplete
                   value={reason}
-                  optionFilterProp="label"
                   placeholder={t(
-                    "returnCustomer.pickOrSearchAReason",
-                    "Pick or search a reason",
+                    "returnCustomer.searchAReasonOrType",
+                    "Search a reason, or type a new one",
                   )}
                   aria-label={t("returnCustomer.reason", "Reason")}
-                  options={reasons.map((r) => ({
-                    value: r.label,
-                    label: r.label,
-                  }))}
-                  onChange={setReason}
+                  options={reasons.map((r) => ({ value: r.label }))}
+                  filterOption={(input, opt) =>
+                    String(opt?.value ?? "")
+                      .toLowerCase()
+                      .includes(input.toLowerCase())
+                  }
+                  onChange={(v: string) =>
+                    setReason(v.trim() === "" ? undefined : v)
+                  }
                 />
               </Form.Item>
               {needsDetail && (
@@ -1918,6 +1957,29 @@ export function CustomerReturnPanel({
                   />
                 </Form.Item>
               )}
+              <Form.Item
+                label={t("returnCustomer.warehouse", "Back to warehouse")}
+                required
+                style={{ flex: "1 1 220px", marginBottom: 12 }}
+                validateStatus={tried && !returnTo ? "error" : undefined}
+              >
+                <Select
+                  value={returnTo}
+                  placeholder={t(
+                    "returnCustomer.pickAWarehouse",
+                    "Pick a warehouse",
+                  )}
+                  aria-label={t(
+                    "returnCustomer.warehouse",
+                    "Back to warehouse",
+                  )}
+                  options={shelves.map((w) => ({
+                    value: w.id,
+                    label: warehouseLabel(w),
+                  }))}
+                  onChange={setWarehousePicked}
+                />
+              </Form.Item>
               <Form.Item
                 label={t("returnCustomer.date", "Date")}
                 style={{ flex: "0 0 auto", marginBottom: 12 }}
