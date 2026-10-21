@@ -2701,6 +2701,26 @@ Decisions that outlived those documents:
   unit naming what moved ("Grade A → C"). A regraded unit moves to that
   grade's line, since a line is one grade. A grade-only edit leaves the price
   — and a hand-typed marketplace price — untouched.
+- **One agent, and the bot decides the lead — 2026-10-21.** *"Keep it a
+  single agent on the chatbot and the user cannot choose / determine the
+  lead."*
+  - **No pipeline setting.** `chatbotSettings(hasCredential)` (packages/agent
+    v2context.ts) replaces `loadChatbotSettings`: the single AI agent (`v1`)
+    answers whenever there is an Anthropic credential, the rules without one —
+    a missing key degrades the bot instead of silencing it, so the worker is
+    never `dormant`. A stored `chatbot.pipeline` is ignored; `PUT
+    /api/chat/settings` is gone and GET is read-only. The three-agent pipeline
+    (`pipeline.ts`) is dormant, tested in packages/agent; its worker tests went.
+  - **The agent's voice is the Advisor seat's persona** — the one card left in
+    Settings → Agent. The worker used the active `Persona` for v1 and ignored
+    an edited Advisor; it reads `personaFor("ADVISOR", …)` now.
+  - **The lead is the bot's.** The staff switch on the profile, `PUT
+    /api/inbox/:phone/lead`, `setLead` and the lead threshold box are gone; the
+    threshold is `DEFAULT_LEAD_THRESHOLD` (60). `isLead` reads `leadAt` alone,
+    so a `leadStaffAt` left by an earlier build no longer counts. A single-agent
+    turn is scored by code — `leadScoreOf(understand(text))`, no model call —
+    and written with the reply, as the rules and v2 always were. A sale still
+    clears it. The 👎 dialog lost its "which agent" picker.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

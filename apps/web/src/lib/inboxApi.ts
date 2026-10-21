@@ -320,13 +320,6 @@ export const markRead = (phone: string) =>
     method: "POST",
   });
 
-/** Staff marks this thread a lead, or clears it (both halves). */
-export const setLead = (phone: string, lead: boolean) =>
-  api<{ lead: boolean }>(`/api/inbox/${encodeURIComponent(phone)}/lead`, {
-    method: "PUT",
-    body: { lead },
-  });
-
 /** Correct what the bot recorded about this customer. */
 export const patchProfile = (phone: string, body: ProfilePatch) =>
   api<CustomerProfile>(`/api/inbox/${encodeURIComponent(phone)}/profile`, {

@@ -16,7 +16,6 @@ import {
   Flex,
   Input,
   Space,
-  Switch,
   Tag,
   Tooltip,
   Typography,
@@ -36,7 +35,6 @@ import {
   addProfileFact,
   patchProfile,
   removeProfileFact,
-  setLead,
   type InboxConversation,
   type ProfileFact,
   type ProfileFactKind,
@@ -301,7 +299,6 @@ export function CustomerProfilePanel({
   const {
     token: { colorError },
   } = theme.useToken();
-  const [leadBusy, setLeadBusy] = useState(false);
   const profile = conversation.profile;
   const lead = conversation.lead ?? { on: false, score: null, by: null };
   const facts = profile?.facts ?? [];
@@ -335,18 +332,6 @@ export function CustomerProfilePanel({
       onChanged();
     } catch (err) {
       fail(err, t("chatProfile.saveFailed", "Could not save that."));
-    }
-  };
-
-  const toggleLead = async (on: boolean) => {
-    setLeadBusy(true);
-    try {
-      await setLead(phone, on);
-      onChanged();
-    } catch (err) {
-      fail(err, t("chatProfile.saveFailed", "Could not save that."));
-    } finally {
-      setLeadBusy(false);
     }
   };
 
@@ -408,13 +393,15 @@ export function CustomerProfilePanel({
             </Tooltip>
           )}
         </Flex>
-        <Switch
-          size="small"
-          checked={lead.on}
-          loading={leadBusy}
-          onChange={(v) => void toggleLead(v)}
-          aria-label={t("chatProfile.markLead", "Mark as a lead")}
-        />
+        {/*
+         * Read-only (owner, 2026-10-21: "the user cannot choose / determine
+         * the lead"). The bot's score sets the 🔥 and a sale clears it.
+         */}
+        {lead.on && (
+          <Tag color="red" style={{ marginInline: 0 }}>
+            {t("chat.tagLead", "Lead")}
+          </Tag>
+        )}
       </Flex>
 
       <Section title={t("chatProfile.summary", "Summary")}>

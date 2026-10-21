@@ -74,7 +74,9 @@ import {
   dispatchTool,
   isLead,
   loadAgentPersonas,
-  loadChatbotSettings,
+  chatbotSettings,
+  leadScoreOf,
+  understand,
   openProposalLine,
   personaFor,
   profileLine,
@@ -364,20 +366,15 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   // figure on the task that colleague has open.
   await refreshOffers(db, logger, now());
 
-  // Dormant, not broken. 06 §12: with no credential "the pipeline degrades to
-  // persist-only" — messages keep landing and keep showing in the inbox, and a
-  // human answers them. Rows are deliberately left at BARU rather than being
-  // escalated, so that configuring a key later answers the backlog instead of
-  // finding it already marked as somebody else's problem.
+  // No credential is no longer a dormant bot (2026-10-21): the rules answer
+  // what they can and hand the rest to a person — see `chatbotSettings`.
   const client =
     deps.client ??
     (hasCredential(anthropic) ? anthropicClient(anthropic) : null);
-  // The rules-first bot (owner, 2026-10-15) needs no model: without a
-  // credential it still answers everything a rule can and hands the rest to a
-  // person. The two AI pipelines stay dormant without one, as before.
-  const earlySettings = await loadChatbotSettings(db);
-  if (!client && earlySettings.pipeline !== "rules")
-    return { drafted: 0, escalated: 0, dormant: true };
+  // One agent (owner, 2026-10-21): the single AI agent with a credential.
+  // Without one the rules answer everything a rule can and hand the rest to a
+  // person, so a missing key degrades the bot rather than silencing it.
+  const earlySettings = chatbotSettings(client !== null);
 
   const at = now();
   const candidates = await quietCandidates(
@@ -574,9 +571,10 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       });
 
       const prompt = buildAgentPrompt({
-        // A fresh database has no persona row, and production never runs the
-        // seed, so the compiled-in voice is the fallback rather than an error.
-        persona: v2 ? advisorPersona : v1Persona,
+        // The one agent's persona is the one Settings edits (the Advisor's
+        // seat); unedited it is the active persona, and a fresh database with
+        // neither gets the compiled-in voice rather than an error.
+        persona: advisorPersona,
         storeFacts,
         knowledge: knowledgeText,
         capabilities,
@@ -778,6 +776,17 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         return;
       }
 
+      // The bot's lead score. The rules and the three agents score as they
+      // answer; the single agent does not, so its turn is scored the way the
+      // rules score one — from what the customer said, by code, no model
+      // (owner, 2026-10-21: the bot decides the lead, nobody else).
+      const leadScore =
+        "verdict" in result
+          ? result.verdict.leadScore
+          : leadScoreOf(
+              understand(current, at, { proposalOpen: false, lastShown: [] }),
+            );
+
       // One transaction: the answer and the intent to send it commit together,
       // or neither does (08 §5). No HTTP call happens inside it.
       const answeredAt = now();
@@ -870,25 +879,23 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           pipeline: settings.pipeline,
           result,
           v1Calls,
+          leadScore,
           latencyMs: Date.now() - turnStarted,
           at: answeredAt,
         });
-        if ("verdict" in result) {
-          const mem = await tx.waThreadMemory.findUnique({
-            where: { from },
-            select: { leadAt: true, leadStaffAt: true, leadClearedAt: true },
-          });
-          const score = result.verdict.leadScore;
-          await tx.waThreadMemory.updateMany({
-            where: { from },
-            data: {
-              leadScore: score,
-              ...(score >= settings.leadThreshold && !isLead(mem)
-                ? { leadAt: answeredAt }
-                : {}),
-            },
-          });
-        }
+        const mem = await tx.waThreadMemory.findUnique({
+          where: { from },
+          select: { leadAt: true, leadStaffAt: true, leadClearedAt: true },
+        });
+        await tx.waThreadMemory.updateMany({
+          where: { from },
+          data: {
+            leadScore,
+            ...(leadScore >= settings.leadThreshold && !isLead(mem)
+              ? { leadAt: answeredAt }
+              : {}),
+          },
+        });
       }, TXN_TIMEOUTS);
 
       drafted += 1;
@@ -1012,6 +1019,8 @@ async function recordRun(
     pipeline: "rules" | "v1" | "v2";
     result: ConverseResult | PipelineResult;
     v1Calls: readonly CallUsage[];
+    /** The turn's lead score, however it was reached. */
+    leadScore: number;
     latencyMs: number;
     at: Date;
   },
@@ -1044,10 +1053,10 @@ async function recordRun(
             language: v2.verdict.language,
             tone: v2.verdict.tone,
             intent: v2.verdict.intent,
-            leadScore: v2.verdict.leadScore,
             escalateTopic: v2.verdict.escalate,
           }
         : {}),
+      leadScore: r.leadScore,
       outcome: r.result.handoff ? "HANDOFF" : "REPLIED",
       inputTokens: sum("inputTokens"),
       cachedTokens: sum("cachedTokens"),

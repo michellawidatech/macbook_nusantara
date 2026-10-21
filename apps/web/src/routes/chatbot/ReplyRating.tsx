@@ -28,19 +28,12 @@ import {
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import {
-  AGENT_KEYS,
   EVALUATION_REASONS,
   createEvaluation,
-  type AgentKey,
   type EvaluationReason,
 } from "../../lib/chatApi.js";
 import type { ReplyEvaluation } from "../../lib/inboxApi.js";
-import {
-  EVAL_STATUS_COLOR,
-  agentLabel,
-  evalStatusLabel,
-  reasonLabel,
-} from "./labels.js";
+import { EVAL_STATUS_COLOR, evalStatusLabel, reasonLabel } from "./labels.js";
 
 export interface ReplyRatingProps {
   /** The `WaMessage` the reply hangs off. */
@@ -54,7 +47,6 @@ export interface ReplyRatingProps {
 
 interface BadForm {
   reason: EvaluationReason;
-  agent?: AgentKey;
   note?: string;
   corrected?: string;
 }
@@ -90,7 +82,6 @@ export function ReplyRating({
   const openBad = () => {
     form.setFieldsValue({
       reason: undefined,
-      agent: undefined,
       note: "",
       corrected: text,
     });
@@ -109,7 +100,6 @@ export function ReplyRating({
             messageId,
             rating: "BAD",
             reason: v.reason,
-            ...(v.agent ? { agent: v.agent } : {}),
             ...(note ? { note } : {}),
             ...(corrected && corrected !== text.trim() ? { corrected } : {}),
           });
@@ -207,19 +197,7 @@ export function ReplyRating({
               }))}
             />
           </Form.Item>
-          <Form.Item
-            name="agent"
-            label={t("chatEval.agentOptional", "Which agent (optional)")}
-          >
-            <Select
-              allowClear
-              aria-label={t("chatEval.agentOptional", "Which agent (optional)")}
-              options={AGENT_KEYS.map((a) => ({
-                value: a,
-                label: agentLabel(t, a),
-              }))}
-            />
-          </Form.Item>
+          {/* No "which agent": one agent answers since 2026-10-21. */}
           <Form.Item name="note" label={t("chatEval.note", "Note")}>
             <Input aria-label={t("chatEval.note", "Note")} />
           </Form.Item>

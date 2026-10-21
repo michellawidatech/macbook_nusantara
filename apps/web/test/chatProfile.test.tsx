@@ -12,14 +12,12 @@ import type { InboxConversation } from "../src/lib/inboxApi.js";
 const patchProfile = vi.fn(async () => ({}));
 const addProfileFact = vi.fn(async () => ({}));
 const removeProfileFact = vi.fn(async () => ({ ok: true as const }));
-const setLead = vi.fn(async (_p: string, lead: boolean) => ({ lead }));
 
 vi.mock("../src/lib/inboxApi.js", async (original) => ({
   ...(await original<typeof import("../src/lib/inboxApi.js")>()),
   patchProfile: (...a: unknown[]) => patchProfile(...(a as [])),
   addProfileFact: (...a: unknown[]) => addProfileFact(...(a as [])),
   removeProfileFact: (...a: unknown[]) => removeProfileFact(...(a as [])),
-  setLead: (p: string, lead: boolean) => setLead(p, lead),
 }));
 
 const { CustomerProfilePanel } =
@@ -90,7 +88,6 @@ beforeEach(() => {
   patchProfile.mockClear();
   addProfileFact.mockClear();
   removeProfileFact.mockClear();
-  setLead.mockClear();
 });
 
 describe("the customer profile", () => {
@@ -191,10 +188,10 @@ describe("the customer profile", () => {
     );
   });
 
-  it("clears the lead from its switch", async () => {
-    const user = userEvent.setup();
+  it("shows the bot's lead and offers nothing to change it", async () => {
+    // Owner, 2026-10-21: "the user cannot choose / determine the lead".
     draw();
-    await user.click(screen.getByRole("switch", { name: "Mark as a lead" }));
-    await waitFor(() => expect(setLead).toHaveBeenCalledWith(PHONE, false));
+    expect(screen.getByText("Bot score 72")).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 });

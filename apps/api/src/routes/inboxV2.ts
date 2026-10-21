@@ -126,11 +126,8 @@ export async function leadJson(db: PrismaClient, phone: string) {
   return {
     on,
     score: m?.leadScore ?? null,
-    by: !on
-      ? null
-      : (m?.leadStaffAt?.getTime() ?? 0) >= (m?.leadAt?.getTime() ?? 0)
-        ? ("STAFF" as const)
-        : ("BOT" as const),
+    // Only the bot marks a lead now (2026-10-21); kept in the answer's shape.
+    by: on ? ("BOT" as const) : null,
   };
 }
 
@@ -285,32 +282,9 @@ export function registerInboxV2(router: Router, db: PrismaClient): void {
     }
   });
 
-  /**
-   * PUT /api/inbox/:phone/lead — staff's half of the 🔥. On writes the staff
-   * half; off clears BOTH halves, the same clear a sale writes.
-   */
-  router.put("/:phone/lead", async (req, res, next) => {
-    try {
-      const phone = phoneOf(req.params["phone"]);
-      const body = z.object({ lead: z.boolean() }).strict().safeParse(req.body);
-      if (!body.success)
-        throw new ApiError(400, "VALIDASI", "Nilai lead tidak valid.");
-      const staff = req.staff;
-      if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
-      const now = new Date();
-      const data = body.data.lead
-        ? { leadStaffAt: now, leadStaffById: staff.id }
-        : { leadClearedAt: now };
-      await db.waThreadMemory.upsert({
-        where: { from: phone },
-        update: data,
-        create: { ...MEMORY_CREATE(phone, now), ...data },
-      });
-      res.json({ lead: (await leadJson(db, phone)).on });
-    } catch (err) {
-      next(err);
-    }
-  });
+  // No PUT /:phone/lead since 2026-10-21 (owner: "the user cannot choose /
+  // determine the lead"). The bot's score sets the 🔥 and a sale clears it;
+  // nobody at the inbox does either.
 
   /** PATCH /api/inbox/:phone/profile — a colleague corrects the profile. */
   router.patch("/:phone/profile", async (req, res, next) => {

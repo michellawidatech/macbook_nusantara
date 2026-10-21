@@ -221,7 +221,7 @@ export {
   lastShownUnits,
   profileKnown,
   loadAgentPersonas,
-  loadChatbotSettings,
+  chatbotSettings,
   openProposalLine,
   profileLine,
   type ChatbotSettings,

@@ -11,12 +11,22 @@ import { jakartaDate, jakartaTime } from "./tools.js";
 
 /**
  * Which bot answers. `rules` — rules and templates first, AI only for what
- * they cannot answer (owner, 2026-10-15: "if the process can be rule based or
- * automated, do not use AI") — is the default. `v1` is the single AI agent,
- * `v2` the three AI agents.
+ * they cannot answer (owner, 2026-10-15) — `v1`, the single AI agent, and
+ * `v2`, the three AI agents.
+ *
+ * ## One agent, and nobody chooses (owner, 2026-10-21)
+ *
+ * *"Keep it a single agent on the chatbot and the user cannot choose /
+ * determine the lead."* The pipeline is no longer a setting: the single agent
+ * answers whenever there is a credential, and the rules answer without one —
+ * so a missing key degrades the bot instead of switching it off. The lead
+ * threshold is fixed for the same reason: a lead is what the bot's score
+ * says, not a number somebody tunes. `chatbot.pipeline` and
+ * `chatbot.leadThreshold` rows left by an earlier build are ignored. `v2`
+ * (pipeline.ts) is dormant and still tested.
  */
 export const PIPELINE_SETTING_KEY = "chatbot.pipeline";
-/** From this router score the Advisor offers a visit and the thread is a 🔥 lead. */
+/** From this score the bot offers a visit and the thread is a 🔥 lead. */
 export const LEAD_THRESHOLD_SETTING_KEY = "chatbot.leadThreshold";
 export const DEFAULT_LEAD_THRESHOLD = 60;
 
@@ -28,32 +38,21 @@ export interface ChatbotSettings {
   readonly leadThreshold: number;
 }
 
-export async function loadChatbotSettings(
-  db: PrismaClient,
-): Promise<ChatbotSettings> {
-  const rows = await db.appSetting.findMany({
-    where: { key: { in: [PIPELINE_SETTING_KEY, LEAD_THRESHOLD_SETTING_KEY] } },
-    select: { key: true, value: true },
-  });
-  const get = (k: string) => rows.find((r) => r.key === k)?.value?.trim();
-  const threshold = Number(get(LEAD_THRESHOLD_SETTING_KEY));
+/** What answers: the single agent with a credential, the rules without. */
+export function chatbotSettings(hasCredential: boolean): ChatbotSettings {
   return {
-    pipeline: (PIPELINES as readonly string[]).includes(
-      get(PIPELINE_SETTING_KEY) ?? "",
-    )
-      ? (get(PIPELINE_SETTING_KEY) as PipelineName)
-      : "rules",
-    leadThreshold:
-      Number.isFinite(threshold) && threshold >= 0 && threshold <= 100
-        ? Math.round(threshold)
-        : DEFAULT_LEAD_THRESHOLD,
+    pipeline: hasCredential ? "v1" : "rules",
+    leadThreshold: DEFAULT_LEAD_THRESHOLD,
   };
 }
 
 /**
- * Is the thread a 🔥 lead? The bot's half (`leadAt`) or the staff's
- * (`leadStaffAt`), whichever is newer, set after the last clear — a sale or a
- * person taking it off (migration 20261014120000).
+ * Is the thread a 🔥 lead? The bot marked it (`leadAt`) after the last clear —
+ * a sale (migration 20261014120000).
+ *
+ * The bot's mark alone since 2026-10-21 (owner: "the user cannot choose /
+ * determine the lead"). `leadStaffAt` is what a staff switch used to write; a
+ * mark left by it no longer makes a lead, and nothing writes it now.
  */
 export function isLead(
   m: {
@@ -63,7 +62,7 @@ export function isLead(
   } | null,
 ): boolean {
   if (!m) return false;
-  const set = Math.max(m.leadAt?.getTime() ?? 0, m.leadStaffAt?.getTime() ?? 0);
+  const set = m.leadAt?.getTime() ?? 0;
   return set > 0 && set > (m.leadClearedAt?.getTime() ?? 0);
 }
 

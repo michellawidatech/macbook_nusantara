@@ -163,22 +163,41 @@ describe("the thread list", () => {
     ).toBe(0);
   });
 
-  it("lets staff set and clear the lead", async () => {
+  it("leaves the lead to the bot: staff can neither set nor clear it", async () => {
+    // Owner, 2026-10-21: "the user cannot choose / determine the lead".
     await botAnswered("halo", "halo kak");
     await request(app)
       .put(`/api/inbox/${PHONE}/lead`)
       .set("Cookie", staffCookie)
       .send({ lead: true })
-      .expect(200, { lead: true });
+      .expect(404);
+    // A staff mark left by an earlier build does not make a lead either.
+    const now = new Date();
+    const by = (await db.staff.findFirstOrThrow({ select: { id: true } })).id;
+    const mark = { leadStaffAt: now, leadStaffById: by };
+    await db.waThreadMemory.upsert({
+      where: { from: PHONE },
+      update: mark,
+      create: {
+        from: PHONE,
+        summaryTurns: 0,
+        clarifyCount: 0,
+        updatedAt: now,
+        ...mark,
+      },
+    });
+    const off = await request(app)
+      .get(`/api/inbox/${PHONE}`)
+      .set("Cookie", staffCookie);
+    expect(off.body.lead).toMatchObject({ on: false, by: null });
+    await db.waThreadMemory.update({
+      where: { from: PHONE },
+      data: { leadAt: new Date(), leadScore: 80 },
+    });
     const on = await request(app)
       .get(`/api/inbox/${PHONE}`)
       .set("Cookie", staffCookie);
-    expect(on.body.lead).toMatchObject({ on: true, by: "STAFF" });
-    await request(app)
-      .put(`/api/inbox/${PHONE}/lead`)
-      .set("Cookie", staffCookie)
-      .send({ lead: false })
-      .expect(200, { lead: false });
+    expect(on.body.lead).toMatchObject({ on: true, score: 80, by: "BOT" });
   });
 });
 
@@ -354,22 +373,28 @@ describe("agents and settings", () => {
       .expect(200);
   });
 
-  it("switches the pipeline and the lead threshold, owner only", async () => {
+  it("reports one bot and a fixed threshold, and nobody can change either", async () => {
+    // Owner, 2026-10-21: a single agent, and nobody chooses. Without a
+    // credential the rules answer.
     await request(app)
       .get("/api/chat/settings")
       .set("Cookie", staffCookie)
-      // Rules first is the default (owner, 2026-10-15).
       .expect(200, { pipeline: "rules", leadThreshold: 60 });
-    await request(app)
-      .put("/api/chat/settings")
-      .set("Cookie", staffCookie)
-      .send({ pipeline: "v2" })
-      .expect(403);
     await request(app)
       .put("/api/chat/settings")
       .set("Cookie", ownerCookie)
       .send({ pipeline: "v2", leadThreshold: 70 })
-      .expect(200, { pipeline: "v2", leadThreshold: 70 });
+      .expect(404);
+    // A stored choice left by an earlier build is ignored.
+    await db.appSetting.upsert({
+      where: { key: "chatbot.pipeline" },
+      update: { value: "v2", updatedAt: new Date() },
+      create: { key: "chatbot.pipeline", value: "v2", updatedAt: new Date() },
+    });
+    await request(app)
+      .get("/api/chat/settings")
+      .set("Cookie", staffCookie)
+      .expect(200, { pipeline: "rules", leadThreshold: 60 });
   });
 
   it("simulates the rules bot with no credential at all", async () => {
@@ -391,17 +416,18 @@ describe("agents and settings", () => {
     });
   });
 
-  it("says an AI pipeline is off without a credential", async () => {
-    await request(app)
-      .put("/api/chat/settings")
-      .set("Cookie", ownerCookie)
-      .send({ pipeline: "v1" })
-      .expect(200);
-    await request(app)
+  it("answers by the rules without a credential, whatever was stored", async () => {
+    await db.appSetting.upsert({
+      where: { key: "chatbot.pipeline" },
+      update: { value: "v1", updatedAt: new Date() },
+      create: { key: "chatbot.pipeline", value: "v1", updatedAt: new Date() },
+    });
+    const res = await request(app)
       .post("/api/chat/simulate")
       .set("Cookie", staffCookie)
       .send({ turns: [{ role: "user", text: "halo" }] })
-      .expect(503);
+      .expect(200);
+    expect(res.body).toMatchObject({ pipeline: "rules", usedAi: false });
   });
 
   it("tells each agent's job under the rules", async () => {

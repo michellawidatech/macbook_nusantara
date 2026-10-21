@@ -280,9 +280,10 @@ describe("on a desktop", () => {
       screen.getByRole("button", { name: "Michella Arlene Wijaya R." }),
     ).toBeInTheDocument();
     expect(screen.getByText("Customer profile")).toBeInTheDocument();
+    // The bot's 🔥, read-only (2026-10-21).
     expect(
-      screen.getByRole("switch", { name: "Mark as a lead" }),
-    ).toBeChecked();
+      screen.queryByRole("switch", { name: "Mark as a lead" }),
+    ).not.toBeInTheDocument();
     // No back arrow and no profile button: everything is already on screen.
     expect(
       screen.queryByRole("button", { name: "Back to chats" }),

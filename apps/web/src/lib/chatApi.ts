@@ -286,18 +286,18 @@ export const resetAgentPrompt = (agent: AgentKey) =>
     { method: "POST" },
   );
 
+/**
+ * What answers, read-only since 2026-10-21 (owner: "keep it a single agent …
+ * the user cannot choose / determine the lead"): `v1`, the one agent, when the
+ * server has a credential; `rules` without one.
+ */
 export interface ChatSettings {
-  /** `rules`: rules and templates first, AI only for what they cannot answer. */
   pipeline: "rules" | "v1" | "v2";
-  /** 0–100: the router score above which a thread is a lead. */
+  /** 0–100, fixed: the bot's score from which a thread is a lead. */
   leadThreshold: number;
 }
 
 export const getChatSettings = () => api<ChatSettings>("/api/chat/settings");
-
-/** Owner only. */
-export const setChatSettings = (body: Partial<ChatSettings>) =>
-  api<ChatSettings>("/api/chat/settings", { method: "PUT", body });
 
 export interface SimulationStep {
   agent: AgentKey;

@@ -2,10 +2,14 @@
  * Settings — how the bot is put together (owner ask 2026-10-15).
  *
  * On top: the four "may answer" switches and the testers (moved here off the
- * Chat tab, where they were a bar above every conversation), which pipeline
- * answers — three agents (v2) or the single agent (v1) — and the lead
- * threshold. Below, the three agents with their persona prompts on the left,
- * and the simulator on the right to try a change out on.
+ * Chat tab, where they were a bar above every conversation). Below, the
+ * agent with its persona prompt on the left, and the simulator on the right
+ * to try a change out on.
+ *
+ * ONE agent, and nothing to choose (owner, 2026-10-21: "keep it a single
+ * agent on the chatbot and the user cannot choose / determine the lead"). The
+ * pipeline picker and the lead threshold are gone; the server decides both
+ * (`chatbotSettings`) and this screen only reads what it decided.
  *
  * Every write here is the owner's: the server answers 403 to anybody else,
  * and the controls are drawn disabled for them rather than hidden, because
@@ -19,11 +23,9 @@ import {
   Card,
   Col,
   Flex,
-  InputNumber,
   Input,
   Modal,
   Row,
-  Segmented,
   Skeleton,
   Tag,
   Tooltip,
@@ -36,7 +38,6 @@ import {
   listAgents,
   resetAgentPrompt,
   saveAgentPrompt,
-  setChatSettings,
   type AgentPersona,
   type ChatSettings,
 } from "../../lib/chatApi.js";
@@ -158,132 +159,34 @@ function PersonaModal({
 
 export function BotSettings() {
   const { t } = useTranslation();
-  const { message } = App.useApp();
   const {
     token: { colorBorderSecondary },
   } = theme.useToken();
   const session = useSession();
   const isOwner = session.data?.role === "OWNER";
   const [settings, setSettings] = useState<ChatSettings | null>(null);
-  const [threshold, setThreshold] = useState<number | null>(null);
   const [agents, setAgents] = useState<AgentPersona[] | null>(null);
   const [agentsFailed, setAgentsFailed] = useState(false);
   const [editing, setEditing] = useState<AgentPersona | null>(null);
-  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     getChatSettings()
-      .then((s) => {
-        setSettings(s);
-        setThreshold(s.leadThreshold);
-      })
+      .then(setSettings)
       .catch(() => setSettings(null));
     listAgents()
-      .then((r) => setAgents(r.agents))
+      // The one agent is the Advisor's seat — the one the worker answers
+      // with. Router and Operations belong to the dormant three-agent bot.
+      .then((r) => setAgents(r.agents.filter((a) => a.agent === "ADVISOR")))
       .catch(() => setAgentsFailed(true));
   }, []);
-
-  const save = async (patch: Partial<ChatSettings>) => {
-    setSaving(true);
-    try {
-      const next = await setChatSettings(patch);
-      setSettings(next);
-      setThreshold(next.leadThreshold);
-    } catch (err) {
-      setThreshold(settings?.leadThreshold ?? null);
-      message.error(
-        err instanceof Error
-          ? err.message
-          : t("chatSettings.saveFailed", "Could not save the setting."),
-      );
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const commitThreshold = () => {
-    if (threshold === null || !settings) return;
-    const v = Math.max(0, Math.min(100, Math.round(threshold)));
-    if (v !== settings.leadThreshold) void save({ leadThreshold: v });
-  };
-
-  const ownerHint = isOwner
-    ? undefined
-    : t("chatSwitch.ownerOnly", "Only the owner can change this.");
 
   return (
     <Flex vertical gap={16}>
       <BotSwitches />
 
-      {settings && (
-        <Card size="small">
-          <Flex wrap gap={24} align="center">
-            <Flex align="center" gap={8} wrap>
-              <Typography.Text strong>
-                {t("chatSettings.pipeline", "Pipeline")}
-              </Typography.Text>
-              <Tooltip title={ownerHint}>
-                <Segmented
-                  aria-label={t("chatSettings.pipeline", "Pipeline")}
-                  disabled={!isOwner || saving}
-                  value={settings.pipeline}
-                  onChange={(v) =>
-                    void save({ pipeline: v as ChatSettings["pipeline"] })
-                  }
-                  options={[
-                    {
-                      value: "rules",
-                      label: t(
-                        "chatSettings.rules",
-                        "Rules first (AI only as fallback)",
-                      ),
-                    },
-                    {
-                      value: "v2",
-                      label: t("chatSettings.v2", "Three agents (v2)"),
-                    },
-                    {
-                      value: "v1",
-                      label: t("chatSettings.v1", "Single agent (v1)"),
-                    },
-                  ]}
-                />
-              </Tooltip>
-            </Flex>
-            <Flex align="center" gap={8}>
-              <Typography.Text strong>
-                {t("chatSettings.leadThreshold", "Lead threshold")}
-              </Typography.Text>
-              <Tooltip
-                title={
-                  ownerHint ??
-                  t(
-                    "chatSettings.leadThresholdHint",
-                    "A chat the bot scores at or above this (0–100) is marked a lead.",
-                  )
-                }
-              >
-                <InputNumber
-                  aria-label={t("chatSettings.leadThreshold", "Lead threshold")}
-                  min={0}
-                  max={100}
-                  precision={0}
-                  disabled={!isOwner || saving}
-                  value={threshold}
-                  onChange={(v) => setThreshold(v)}
-                  onBlur={commitThreshold}
-                  onPressEnter={commitThreshold}
-                  style={{ width: 96 }}
-                />
-              </Tooltip>
-            </Flex>
-          </Flex>
-        </Card>
-      )}
-
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={10}>
-          <Card title={t("chatAgents.title", "Agents")}>
+          <Card title={t("chatAgents.titleOne", "Agent")}>
             {agentsFailed ? (
               <Typography.Text type="secondary">
                 {t("chatAgents.loadFailed", "Could not load the agents.")}

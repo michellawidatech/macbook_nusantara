@@ -1014,3 +1014,32 @@ describe("the prompt", () => {
     await db.agentKnowledge.deleteMany({});
   });
 });
+
+describe("the lead, decided by the bot (owner, 2026-10-21)", () => {
+  it("scores a single-agent turn and marks a likely buyer", async () => {
+    await inbound({
+      id: "l.1",
+      from: SENDER,
+      text: "mau booking macbook air m2 besok jam 2 ya kak",
+      ts: ago(30_000),
+    });
+    await pass(scripted(["siap kak"]).client);
+
+    const mem = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: SENDER },
+    });
+    // Scored by code, the way the rules score a turn: product, a booking and
+    // a time — no model call spent on it.
+    expect(mem.leadScore).toBe(85);
+    expect(mem.leadAt).not.toBeNull();
+    const run = await db.agentRun.findFirstOrThrow({ where: { from: SENDER } });
+    expect(run).toMatchObject({ pipeline: "v1", leadScore: 85 });
+  });
+
+  it("does not mark a greeting", async () => {
+    await inbound({ id: "l.2", from: OTHER, text: "halo", ts: ago(30_000) });
+    await pass(scripted(["siap kak"]).client);
+    const mem = await db.waThreadMemory.findUnique({ where: { from: OTHER } });
+    expect(mem?.leadAt ?? null).toBeNull();
+  });
+});

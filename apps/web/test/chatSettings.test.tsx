@@ -1,7 +1,8 @@
 /**
- * The chatbot's Settings tab (2026-10-15): the three agents with their
- * personas, the pipeline and lead threshold, and the simulator — which sends
- * the whole conversation so far and prints what each answer cost.
+ * The chatbot's Settings tab (2026-10-15): the agent with its persona and the
+ * simulator — which sends the whole conversation so far and prints what each
+ * answer cost. ONE agent and nothing to choose since 2026-10-21: no pipeline
+ * picker, no lead threshold.
  */
 import { App as AntdApp } from "antd";
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -85,23 +86,17 @@ const RESULT: SimulationResult = {
 const saveAgentPrompt = vi.fn(async (agent: string, prompt: string) => ({
   agent: { ...AGENTS[0]!, agent, prompt, isDefault: false },
 }));
-const setChatSettings = vi.fn(async (body: object) => ({
-  pipeline: "v2",
-  leadThreshold: 60,
-  ...body,
-}));
 const simulate = vi.fn(
   async (_turns: unknown, _lastShown?: unknown): Promise<SimulationResult> =>
     RESULT,
 );
-let pipeline: "rules" | "v1" | "v2" = "v2";
+let pipeline: "rules" | "v1" | "v2" = "v1";
 
 vi.mock("../src/lib/chatApi.js", async (original) => ({
   ...(await original<typeof import("../src/lib/chatApi.js")>()),
   getCapabilities: async () => ({ set: OFF, effective: OFF }),
   getTesters: async () => ({ numbers: [] }),
   getChatSettings: async () => ({ pipeline, leadThreshold: 60 }),
-  setChatSettings: (body: object) => setChatSettings(body),
   listAgents: async () => ({ agents: AGENTS }),
   saveAgentPrompt: (a: string, p: string) => saveAgentPrompt(a, p),
   resetAgentPrompt: async () => ({ agent: AGENTS[1] }),
@@ -125,55 +120,48 @@ function draw() {
 }
 
 beforeEach(() => {
-  pipeline = "v2";
+  pipeline = "v1";
   saveAgentPrompt.mockClear();
-  setChatSettings.mockClear();
   simulate.mockClear();
 });
 
-describe("the agents", () => {
-  it("lists the three agents with their task and model", async () => {
+describe("the agent", () => {
+  it("lists the one agent, and offers nothing to choose", async () => {
     draw();
-    for (const a of AGENTS) {
-      expect(await screen.findByText(a.task)).toBeInTheDocument();
-    }
-    expect(screen.getByText("claude-haiku-4-5")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Writes every reply to the customer."),
+    ).toBeInTheDocument();
+    // Router and Operations belong to the dormant three-agent bot.
+    expect(
+      screen.queryByText("Reads each message and decides who answers."),
+    ).not.toBeInTheDocument();
     expect(
       screen.getAllByRole("button", { name: /^Persona of / }),
-    ).toHaveLength(3);
+    ).toHaveLength(1);
+    // No pipeline picker and no lead threshold (owner, 2026-10-21).
+    expect(screen.queryByText("Single agent (v1)")).not.toBeInTheDocument();
+    expect(screen.queryByText("Three agents (v2)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Lead threshold")).not.toBeInTheDocument();
   });
 
-  it("opens a persona in a dialog and saves an edit", async () => {
+  it("opens the persona in a dialog and saves an edit", async () => {
     const user = userEvent.setup();
     draw();
     await user.click(
-      await screen.findByRole("button", { name: "Persona of Router / Guard" }),
+      await screen.findByRole("button", { name: "Persona of Sales Advisor" }),
     );
     const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveTextContent("Default");
-    // Nothing to reset while it is still the default.
-    expect(
-      within(dialog).getByRole("button", { name: "Reset to default" }),
-    ).toBeDisabled();
+    expect(dialog).toHaveTextContent("Edited");
     const box = within(dialog).getByRole("textbox", { name: "Persona prompt" });
-    expect(box).toHaveValue("You are the router.");
+    expect(box).toHaveValue("You are the shop's advisor.");
 
     await user.type(box, " Be brief.");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(saveAgentPrompt).toHaveBeenCalledWith(
-        "ROUTER",
-        "You are the router. Be brief.",
+        "ADVISOR",
+        "You are the shop's advisor. Be brief.",
       ),
-    );
-  });
-
-  it("switches the pipeline", async () => {
-    const user = userEvent.setup();
-    draw();
-    await user.click(await screen.findByText("Single agent (v1)"));
-    await waitFor(() =>
-      expect(setChatSettings).toHaveBeenCalledWith({ pipeline: "v1" }),
     );
   });
 });
@@ -241,8 +229,8 @@ describe("the simulator", () => {
   });
 });
 
-describe("rules first (owner, 2026-10-15: AI only where rules cannot answer)", () => {
-  it("shows the rules choice, each agent's rules job, and when no AI was used", async () => {
+describe("without a credential the rules answer (2026-10-21)", () => {
+  it("shows the agent's rules job, and when no AI was used", async () => {
     pipeline = "rules";
     simulate.mockImplementation(async () => ({
       ...RESULT,
@@ -258,10 +246,7 @@ describe("rules first (owner, 2026-10-15: AI only where rules cannot answer)", (
     draw();
 
     expect(
-      await screen.findByText("Rules first (AI only as fallback)"),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByText("Rules, no AI: reads the intent from keywords."),
+      await screen.findByText("Templates; AI only for what no rule covers."),
     ).toBeInTheDocument();
 
     const box = await screen.findByRole("textbox", { name: "Your message" });

@@ -129,8 +129,10 @@ describe("loadWorkerConfig", () => {
 });
 
 describe("draftPass", () => {
-  it("is dormant with no Anthropic credential, and leaves rows at BARU", async () => {
-    const msg = await inbound({
+  it("answers by the rules with no Anthropic credential, whatever was stored", async () => {
+    // One agent, and nobody chooses (owner, 2026-10-21): the stored "v1" is
+    // ignored, and with no key the rules answer rather than nobody.
+    await inbound({
       id: "wamid.D1",
       from: "628111000111",
       text: "halo",
@@ -145,13 +147,11 @@ describe("draftPass", () => {
       maxDraftsPerTick: 5,
     });
 
-    expect(result).toEqual({ drafted: 0, escalated: 0, dormant: true });
-    // The backlog must survive: configuring a key later should answer it, not
-    // find it already marked as somebody else's problem.
-    const after = await db.waMessage.findUniqueOrThrow({
-      where: { id: msg.id },
+    expect(result).toMatchObject({ drafted: 1, dormant: false });
+    const run = await db.agentRun.findFirstOrThrow({
+      where: { from: "628111000111" },
     });
-    expect(after.status).toBe("BARU");
+    expect(run.pipeline).toBe("rules");
   });
 
   it("hands a thread to a person once the 24-hour window has closed", async () => {

@@ -1,6 +1,6 @@
 /**
  * The chat endpoints chatbot v2 adds (2026-10-15): evaluations of the bot's
- * replies, the three agents' personas, the pipeline settings, and the
+ * replies, the agents' personas, the (read-only) bot settings, and the
  * simulator. Registered on the chat router, behind the staff session.
  *
  * The contract is `.context/chatbot-v2-api-contract.md`.
@@ -14,16 +14,15 @@ import {
   AGENT_DEFINITIONS,
   AGENT_ROLES,
   DEFAULT_PERSONA,
-  LEAD_THRESHOLD_SETTING_KEY,
   MAX_CORRECTIONS,
-  PIPELINE_SETTING_KEY,
   agentCapabilities,
   anthropicClient,
   buildAgentPrompt,
   knowledgeBlock,
   loadAgentPersonas,
   loadCapabilities,
-  loadChatbotSettings,
+  chatbotSettings,
+  leadScoreOf,
   loadKnowledgeBase,
   loadStoreFacts,
   matchesFor,
@@ -64,14 +63,6 @@ const evaluationBody = z
     note: z.string().trim().max(500).optional(),
     corrected: z.string().trim().max(4_000).optional(),
   })
-  .strict();
-
-const settingsBody = z
-  .object({
-    pipeline: z.enum(["rules", "v1", "v2"]),
-    leadThreshold: z.number().int().min(0).max(100),
-  })
-  .partial()
   .strict();
 
 const simulateBody = z
@@ -440,49 +431,14 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
 
   // --- settings ---------------------------------------------------------------
 
-  router.get("/settings", async (_req, res, next) => {
-    try {
-      res.json(await loadChatbotSettings(db));
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.put("/settings", ownerOnly, async (req, res, next) => {
-    try {
-      const body = settingsBody.safeParse(req.body);
-      if (!body.success)
-        throw new ApiError(400, "VALIDASI", "Pengaturan tidak valid.");
-      const now = new Date();
-      const writes: Array<[string, string]> = [];
-      if (body.data.pipeline !== undefined)
-        writes.push([PIPELINE_SETTING_KEY, body.data.pipeline]);
-      if (body.data.leadThreshold !== undefined)
-        writes.push([
-          LEAD_THRESHOLD_SETTING_KEY,
-          String(body.data.leadThreshold),
-        ]);
-      await db.$transaction(
-        writes.map(([key, value]) =>
-          db.appSetting.upsert({
-            where: { key },
-            update: { value, updatedAt: now },
-            create: { key, value, updatedAt: now },
-          }),
-        ),
-      );
-      const saved = await loadChatbotSettings(db);
-      logger.info(
-        {
-          evt: "chat.settings.changed",
-          ctx: { staffId: req.staff?.id, ...saved },
-        },
-        "the chatbot's settings changed",
-      );
-      res.json(saved);
-    } catch (err) {
-      next(err);
-    }
+  /*
+   * Read-only since 2026-10-21 (owner: "keep it a single agent … the user
+   * cannot choose / determine the lead"). What answers follows the credential
+   * and the lead threshold is fixed — see `chatbotSettings`. The PUT that set
+   * both is gone.
+   */
+  router.get("/settings", (_req, res) => {
+    res.json(chatbotSettings(anthropicClient(anthropic) !== null));
   });
 
   // --- the simulator ------------------------------------------------------------
@@ -527,7 +483,9 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
           take: MAX_CORRECTIONS,
         }),
         loadCapabilities(db, agentCapabilities(process.env)),
-        loadChatbotSettings(db),
+        // What the live bot would be: the one agent, or the rules without a
+        // credential.
+        chatbotSettings(client !== null),
         loadAgentPersonas(db),
       ]);
       const v1 = active?.prompt ?? DEFAULT_PERSONA;
@@ -547,13 +505,6 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
         customerText,
         capabilities,
       });
-      // The rules bot needs no model; the two AI pipelines do.
-      if (!client && settings.pipeline !== "rules")
-        throw new ApiError(
-          503,
-          "KESALAHAN_SERVER",
-          "No Anthropic credential is configured, so the bot is switched off.",
-        );
       let failure: unknown;
       const ctx = { from: "simulator", now, capabilities };
       const route = routeMessage(customerText, { capabilities });
@@ -626,7 +577,13 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
                 language: "id",
                 tone: "casual",
                 intent: "other",
-                leadScore: 0,
+                // Scored the way the worker scores a single-agent turn.
+                leadScore: leadScoreOf(
+                  understand(customerText, now, {
+                    proposalOpen: false,
+                    lastShown: [],
+                  }),
+                ),
                 needsOperations: result.toolsUsed.length > 1,
                 operationsBrief: "",
                 escalate: result.handoff?.topic ?? null,
