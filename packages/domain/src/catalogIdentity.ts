@@ -66,7 +66,8 @@ export function modelIdentity(
 ): ModelIdentity | null {
   let text = name
     .toUpperCase()
-    .replace(/[(),]/g, " ")
+    // Brackets and list commas go; a decimal comma (`13,3"`) stays.
+    .replace(/[()]|,(?!\d)/g, " ")
     .replace(CONFIG_ANY, " ")
     .replace(CAPACITY, " ")
     .replace(/\s+/g, " ")
