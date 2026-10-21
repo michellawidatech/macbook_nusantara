@@ -3492,6 +3492,13 @@ export function InboundDetailPage() {
           onSetDiscount={setLineDiscount}
           onOpenDetails={(l) => setDetailsKey(l.key)}
           sellPriceOf={sellPriceOfLine}
+          // A price held for a row with no serial yet counts too; one being
+          // typed over a unit's stored price is the one the bench sees.
+          unitPricesOf={(l) =>
+            l.units.map(({ row }) =>
+              prices[row.key] !== undefined ? prices[row.key] : row.unit?.price,
+            )
+          }
           onSetSellPrice={setSellPrice}
           emptyText={
             <>

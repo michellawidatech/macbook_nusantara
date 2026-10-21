@@ -120,6 +120,17 @@ export interface PurchaseLinesTableProps {
    * reads what its units ask. Left out, a counted line's cell stays empty.
    */
   readonly sellPriceOf?: (line: PurchaseLine) => number;
+  /**
+   * The sell price of each unit of a TRACKED line, as entered — a price typed
+   * in the popup and not yet written onto a unit included (owner report
+   * 2026-10-21: the cell said None over units that had been priced). The order
+   * form holds every price in its drafts until Save, and the order's own page
+   * holds one for a row still waiting for its serial. Left out, the cell reads
+   * the units' stored prices.
+   */
+  readonly unitPricesOf?: (
+    line: PurchaseLine,
+  ) => readonly (number | null | undefined)[];
   readonly onSetSellPrice?: (line: PurchaseLine, value: number | null) => void;
   /** The line's own buttons — not arrived, remove, whatever the page offers. */
   readonly actions?: (line: PurchaseLine) => ReactNode;
@@ -155,6 +166,7 @@ export function PurchaseLinesTable({
   onSetDiscount,
   onOpenDetails,
   sellPriceOf,
+  unitPricesOf,
   onSetSellPrice,
   actions,
   actionsWidth,
@@ -187,13 +199,14 @@ export function PurchaseLinesTable({
    * box, amber while it is nothing: the order page will not confirm the
    * pieces into stock until it is set, because the till would quote Rp 0 for
    * them. A tracked line's units are priced one by one in the popup, so its
-   * cell only reads what they ask: one figure, a range, or None.
+   * cell only reads what they ask: one figure, the range from the lowest to
+   * the highest entered, or None while none is.
    */
   const sellPriceCell = (l: PurchaseLine) => {
     if (!l.counted) {
-      const asked = l.units
-        .map((u) => u.row.unit?.price)
-        .filter((p): p is number => typeof p === "number" && p > 0);
+      const asked = (
+        unitPricesOf?.(l) ?? l.units.map((u) => u.row.unit?.price)
+      ).filter((p): p is number => typeof p === "number" && p > 0);
       const range = priceRange(asked);
       if (range.count === 0 || range.single) {
         return (

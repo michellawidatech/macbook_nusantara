@@ -1162,6 +1162,12 @@ export function InboundFormPage() {
           sellPriceOf={(view) =>
             db.skus.find((s) => s.id === view.skuId)?.price ?? 0
           }
+          // Nothing is a unit until Save: the popup's prices are the drafts.
+          unitPricesOf={(view) =>
+            (lines.find((x) => x.key === view.key)?.units ?? []).map(
+              (u) => u.price,
+            )
+          }
           onSetSellPrice={(view, v) => {
             if (view.skuId === "") return;
             mutate((d) => {
