@@ -3245,6 +3245,8 @@ export const id: Record<string, string> = {
   "inbound.photosTip": "Foto",
   "inbound.photosAria": "Foto {{name}}",
   "inbound.photosTitle": "Foto · {{what}}",
+  "inbound.photosNotKept":
+    "Perangkat ini tidak punya ruang untuk menyimpan foto ini. Isi nomor serinya agar tersimpan — kalau halaman dimuat ulang sebelum itu, fotonya hilang.",
   "inbound.unitCol": "Unit",
   "inbound.batteryCol": "Baterai",
   "inbound.cogsCol": "HPP",

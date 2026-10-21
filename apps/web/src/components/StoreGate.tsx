@@ -12,6 +12,11 @@
  * store lives outside React and a toast must not be raised from outside a
  * component (CLAUDE.md): a commit the server refused, and a connection that
  * dropped with changes still waiting.
+ *
+ * And it asks before the page is left while a change is still on its way
+ * (client report 2026-10-21: a photo uploaded and then refreshed was gone).
+ * Every change is on screen before the server has it, and the queue lives in
+ * this page's memory — a refresh or a closed tab in that window drops it.
  */
 import { useEffect, type ReactNode } from "react";
 import { Alert, App, Button, Flex, Result, Spin, Typography } from "antd";
@@ -41,6 +46,18 @@ export function StoreGate({
   useEffect(() => {
     void loadStore();
   }, []);
+
+  const unsent = status.pending > 0;
+  useEffect(() => {
+    if (!unsent) return;
+    const ask = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // Chrome before 119 asks only when this is set as well.
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", ask);
+    return () => window.removeEventListener("beforeunload", ask);
+  }, [unsent]);
 
   useEffect(
     () =>

@@ -427,11 +427,9 @@ export function InboundDetailPage() {
     ),
   );
   /** QC answered before the serial, by row — see `QcDraft`. */
-  const [qcDrafts, setQcDrafts] = usePersistentState<Record<string, QcDraft>>(
-    INBOUND_DRAFT(poId, "qc"),
-    {},
-    mapOf<QcDraft>(isRecord),
-  );
+  const [qcDrafts, setQcDrafts, , qcDraftsKept] = usePersistentState<
+    Record<string, QcDraft>
+  >(INBOUND_DRAFT(poId, "qc"), {}, mapOf<QcDraft>(isRecord));
   /** Battery boxes being typed on a unit's row — written when left. */
   const [batteryTyping, setBatteryTyping] = usePersistentState<
     Record<string, BatteryDraft>
@@ -4197,42 +4195,58 @@ export function InboundDetailPage() {
               max={12}
             />
           ) : (
-            <UnitPhotos
-              draft={{
-                photos: qcDrafts[photosRowData.key]?.photos ?? [],
-                onAdd: (urls) =>
-                  setQcDrafts((m) => {
-                    const key = photosRowData.key;
-                    const held = m[key]?.photos ?? [];
-                    return {
-                      ...m,
-                      [key]: {
-                        ...m[key],
-                        photos: [
-                          ...held,
-                          ...urls.map((url) => ({ id: nextId("dph"), url })),
-                        ],
-                      },
-                    };
-                  }),
-                onRemove: (id) =>
-                  setQcDrafts((m) => {
-                    const key = photosRowData.key;
-                    return {
-                      ...m,
-                      [key]: {
-                        ...m[key],
-                        photos: (m[key]?.photos ?? []).filter(
-                          (p) => p.id !== id,
-                        ),
-                      },
-                    };
-                  }),
-              }}
-              editable={rowOpen(photosRowData)}
-              size={72}
-              max={12}
-            />
+            <Flex vertical gap={12}>
+              {/* Held on this device until the serial is filed, and the
+                  device refused: say so before a refresh does (client report
+                  2026-10-21). */}
+              {!qcDraftsKept &&
+                (qcDrafts[photosRowData.key]?.photos ?? []).length > 0 && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    title={t(
+                      "inbound.photosNotKept",
+                      "This device has no room to keep these photos. Fill in the serial to save them — a refresh before that loses them.",
+                    )}
+                  />
+                )}
+              <UnitPhotos
+                draft={{
+                  photos: qcDrafts[photosRowData.key]?.photos ?? [],
+                  onAdd: (urls) =>
+                    setQcDrafts((m) => {
+                      const key = photosRowData.key;
+                      const held = m[key]?.photos ?? [];
+                      return {
+                        ...m,
+                        [key]: {
+                          ...m[key],
+                          photos: [
+                            ...held,
+                            ...urls.map((url) => ({ id: nextId("dph"), url })),
+                          ],
+                        },
+                      };
+                    }),
+                  onRemove: (id) =>
+                    setQcDrafts((m) => {
+                      const key = photosRowData.key;
+                      return {
+                        ...m,
+                        [key]: {
+                          ...m[key],
+                          photos: (m[key]?.photos ?? []).filter(
+                            (p) => p.id !== id,
+                          ),
+                        },
+                      };
+                    }),
+                }}
+                editable={rowOpen(photosRowData)}
+                size={72}
+                max={12}
+              />
+            </Flex>
           ))}
       </Modal>
 
