@@ -256,6 +256,8 @@ export function PriceEditorModal({
         scroll={{ y: 420 }}
         columns={[
           {
+            // Takes what the four fixed columns leave; every header and figure
+            // stays on one line (owner report 2026-10-21).
             title: t("price.serial", "Serial"),
             dataIndex: "serial",
             render: (v: string) => (
@@ -266,7 +268,11 @@ export function PriceEditorModal({
           },
           {
             title: (
-              <Flex align="center" gap={SPACE.xs}>
+              <Flex
+                align="center"
+                gap={SPACE.xs}
+                style={{ whiteSpace: "nowrap" }}
+              >
                 {t("price.grade", "Grade")}
                 <Tooltip
                   title={t(
@@ -313,11 +319,14 @@ export function PriceEditorModal({
             // repairs, not a number a repricing may touch.
             title: t("price.cogs", "COGS"),
             key: "cost",
-            width: COLUMN.money,
+            width: COLUMN.money + COLUMN.antdControl,
             align: "right",
             render: (_: unknown, u: PriceEditorUnit) => (
               <Flex align="center" justify="flex-end" gap={SPACE.xs}>
-                <Typography.Text type="secondary">
+                <Typography.Text
+                  type="secondary"
+                  style={{ whiteSpace: "nowrap" }}
+                >
                   {fmtRp(costOf(u).total)}
                 </Typography.Text>
                 <CostInfoButton serial={u.serial} cost={costOf(u)} />
@@ -326,7 +335,12 @@ export function PriceEditorModal({
           },
           {
             title: (
-              <Flex align="center" gap={SPACE.xs} justify="flex-end">
+              <Flex
+                align="center"
+                gap={SPACE.xs}
+                justify="flex-end"
+                style={{ whiteSpace: "nowrap" }}
+              >
                 {t("price.store", "Store price")}
                 <Tooltip
                   title={t(
@@ -341,7 +355,7 @@ export function PriceEditorModal({
               </Flex>
             ),
             key: "price",
-            width: COLUMN.money,
+            width: COLUMN.choice + COLUMN.antdControl,
             align: "right",
             render: (_: unknown, u: PriceEditorUnit) => {
               const value = typed(u);

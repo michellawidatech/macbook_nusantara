@@ -542,7 +542,9 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       title: t("inventory.description", "Description"),
       dataIndex: "description",
       key: "description",
-      minWidth: 160,
+      // Takes the slack; its floor is low so the unit rows fit 1440 beside
+      // the sider now that Unit price carries its "i" on one line.
+      minWidth: COLUMN.flex,
       render: (v: string) => <LongText>{v}</LongText>,
     },
     // The QC photographs of this serial (owner ask 2026-09-29), read-only:
@@ -574,14 +576,18 @@ export function InventoryTable({ extra }: InventoryTableProps) {
        */
       title: t("inventory.unitPrice", "Unit price"),
       key: "buy",
-      width: COLUMN.money,
+      // The figure and its "i" on one line: at the bare money width the
+      // button pushed "Rp" onto a line of its own (owner report 2026-10-21).
+      width: COLUMN.money + COLUMN.antdControl,
       align: "right" as const,
       render: (_: unknown, u: Unit) => {
         const cost = costOf(u);
         return (
           <Flex align="center" justify="flex-end" gap={SPACE.xs}>
             <Flex vertical align="flex-end" gap={0}>
-              <Typography.Text>{fmtRp(cost.buy)}</Typography.Text>
+              <Typography.Text style={{ whiteSpace: "nowrap" }}>
+                {fmtRp(cost.buy)}
+              </Typography.Text>
               {cost.total !== cost.buy && (
                 <Typography.Text
                   type="secondary"
@@ -610,7 +616,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       align: "right" as const,
       render: (_: unknown, u: Unit) => (
         <Flex vertical align="flex-end" gap={0}>
-          <Typography.Text>
+          <Typography.Text style={{ whiteSpace: "nowrap" }}>
             {fmtRp(priceOf(u, skuPriceOf(u.skuId)))}
           </Typography.Text>
           {u.price === undefined && (
@@ -775,7 +781,9 @@ export function InventoryTable({ extra }: InventoryTableProps) {
             {
               title: t("inventory.grade", "Grade"),
               key: "grade",
-              width: COLUMN.grade,
+              // A one-letter tag under a short heading: the 16px Warehouse took
+              // comes from here, so the list still fits 1440 with the sider open.
+              width: COLUMN.grade - 16,
               facet: true,
               facetLabel: t("inventory.anyGrade", "Any grade"),
               // An empty line has no units and so no grade — not "ungraded".
@@ -795,7 +803,9 @@ export function InventoryTable({ extra }: InventoryTableProps) {
             {
               title: t("inventory.warehouse", "Warehouse"),
               key: "warehouse",
-              width: 124,
+              // Wide enough for the heading beside its sorter and filter on one
+              // line (owner report 2026-10-21: it broke as "Warehous / e").
+              width: COLUMN.status,
               // In the header since 2026-09-19: a line is ONE warehouse, so
               // filtering lines by it is filtering units by it, and the
               // quantities beside the filter stay true. See the docblock.
