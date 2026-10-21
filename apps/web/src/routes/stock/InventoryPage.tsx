@@ -64,6 +64,7 @@ import {
 import {
   DeleteOutlined,
   DownloadOutlined,
+  UploadOutlined,
   EditOutlined,
   LoginOutlined,
   LogoutOutlined,
@@ -73,6 +74,7 @@ import { ProTable } from "../../components/ProTable";
 import { EditableTable } from "../../components/EditableTable";
 import { InventoryTable } from "./InventoryTable";
 import { StockExportModal } from "./StockExportModal";
+import { PriceImportModal } from "./PriceImportModal";
 import { StockMovementEditModal } from "./StockMovementEditModal";
 import {
   stockHistoryRows,
@@ -229,6 +231,7 @@ export function InventoryPage() {
   const { compact } = useLayoutMode();
   /** The stock export dialog (owner ask 2026-09-19). */
   const [exporting, setExporting] = useState(false);
+  const [importingPrices, setImportingPrices] = useState(false);
   /** The history row being corrected (owner ask 2026-09-24). */
   const [editing, setEditing] = useState<StockHistoryRow | null>(null);
   // ── The batch, held as plain state rather than in a Form ──────────────────
@@ -726,6 +729,12 @@ export function InventoryPage() {
       <Button icon={<DownloadOutlined />} onClick={() => setExporting(true)}>
         {t("stockExport.button", "Export stock")}
       </Button>
+      <Button
+        icon={<UploadOutlined />}
+        onClick={() => setImportingPrices(true)}
+      >
+        {t("priceImport.button", "Import sell prices")}
+      </Button>
       {addAction}
     </Flex>
   );
@@ -938,6 +947,12 @@ export function InventoryPage() {
                 label: t("stockExport.button", "Export stock"),
                 icon: <DownloadOutlined />,
                 onClick: () => setExporting(true),
+              },
+              {
+                key: "import-prices",
+                label: t("priceImport.button", "Import sell prices"),
+                icon: <UploadOutlined />,
+                onClick: () => setImportingPrices(true),
               },
               {
                 key: "in",
@@ -1487,6 +1502,10 @@ export function InventoryPage() {
       </Modal>
 
       <StockExportModal open={exporting} onClose={() => setExporting(false)} />
+      <PriceImportModal
+        open={importingPrices}
+        onClose={() => setImportingPrices(false)}
+      />
       <StockMovementEditModal
         open={editing !== null}
         row={editing}

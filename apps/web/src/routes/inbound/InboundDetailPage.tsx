@@ -78,7 +78,6 @@ import {
 } from "antd";
 import type { MenuProps } from "antd";
 import {
-  CameraOutlined,
   CheckCircleFilled,
   CheckOutlined,
   CloseCircleOutlined,
@@ -96,6 +95,7 @@ import {
   UnlockOutlined,
 } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
+import { PhotoStackButton } from "../../components/PhotoStackButton";
 import { useTranslation } from "react-i18next";
 import { MoneyInput } from "../../components/MoneyInput";
 import { CommitMoneyInput } from "../../components/CommitMoneyInput";
@@ -3000,10 +3000,11 @@ export function InboundDetailPage() {
       : t("inbound.unitN", "unit {{n}}", { n: numberOf(r) });
 
   /** How many photos a row holds — the unit's, or the ones held for it. */
-  const photoCount = (r: ReceivingRow) =>
+  const photoUrls = (r: ReceivingRow): string[] =>
     r.unit
-      ? qcPhotosOf(db, r.unit.serial).length
-      : (qcDrafts[r.key]?.photos?.length ?? 0);
+      ? qcPhotosOf(db, r.unit.serial).map((p) => p.url)
+      : (qcDrafts[r.key]?.photos ?? []).map((p) => p.url);
+  const photoCount = (r: ReceivingRow) => photoUrls(r).length;
 
   /**
    * One of the row's decisions, as an icon with its name in a tooltip. A
@@ -3214,17 +3215,13 @@ export function InboundDetailPage() {
         {shown}
         {!r.notArrived && (rowOpen(r) || photos > 0) && (
           <Tooltip title={t("inbound.photosTip", "Photos")}>
-            <Button
-              size="small"
-              type="text"
-              icon={<CameraOutlined aria-hidden />}
-              aria-label={t("inbound.photosAria", "Photos of {{name}}", {
+            <PhotoStackButton
+              urls={photoUrls(r)}
+              ariaLabel={t("inbound.photosAria", "Photos of {{name}}", {
                 name,
               })}
               onClick={() => setPhotosRow(r.key)}
-            >
-              {photos > 0 ? photos : null}
-            </Button>
+            />
           </Tooltip>
         )}
         {more.length > 0 && (

@@ -3951,6 +3951,38 @@ export const id: Record<string, string> = {
   "products.skuCode": "Kode SKU",
   "products.skuCodeRequired": "Isi kode SKU",
   "products.skuCodeTaken": "Kode ini sudah dipakai varian lain",
+  "priceImport.apply": "Perbarui {{n}} unit",
+  "priceImport.button": "Impor harga jual",
+  "priceImport.conflict": "Dua harga untuk unit yang sama",
+  "priceImport.done": "Harga {{n}} unit diperbarui.",
+  "priceImport.heldNow": "Stok sekarang",
+  "priceImport.moved":
+    "{{n}} baris punya jumlah unit yang berbeda dari saat daftar diekspor (ditandai). Harga diterapkan ke stok yang ada sekarang.",
+  "priceImport.onList": "Di daftar",
+  "priceImport.newPrice": "Harga baru",
+  "priceImport.noPrices":
+    'Kolom harga tidak ditemukan. Gunakan Ekspor stok dan tambahkan kolom harga (mis. "Harga IG") di samping Unit dan Gudang.',
+  "priceImport.noProduct": "Produk tidak ditemukan",
+  "priceImport.noStock": "Tidak ada stok di sini",
+  "priceImport.noWarehouse": "Gudang tidak ditemukan",
+  "priceImport.now": "Sekarang",
+  "priceImport.ok": "Akan diperbarui",
+  "priceImport.onlyQc": "Masih QC — tidak diubah",
+  "priceImport.pick": "Pilih daftar harga (.xlsx)",
+  "priceImport.problems":
+    "{{n}} baris tidak mengubah apa pun; alasannya ada di sampingnya.",
+  "priceImport.problemsOnly": "Hanya baris yang tidak mengubah apa pun",
+  "priceImport.qcLeft":
+    "{{n}} unit yang masih QC tidak diubah — harganya ditentukan di invoice inbound-nya.",
+  "priceImport.result": "Hasil",
+  "priceImport.summary":
+    "{{n}} unit akan mendapat harga jual baru, dari {{rows}} baris daftar.",
+  "priceImport.title": "Impor harga jual",
+  "priceImport.unchanged": "Harga sudah sama",
+  "priceImport.unit": "Unit",
+  "priceImport.units": "Diubah",
+  "priceImport.unreadable": "File ini tidak bisa dibaca sebagai .xlsx.",
+  "priceImport.warehouse": "Gudang",
   "products.addNVariants": "Tambah {{n}} varian",
   "products.appleSilicon": "Apple silicon (M1, M2…)",
   "products.deleteBlocked":
