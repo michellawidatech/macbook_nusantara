@@ -2,15 +2,33 @@
  * The printed faktur — offered the moment a sale is recorded, and re-printable
  * for ever after from Finance → Transaction History.
  *
- * ## The one adjustment to the owner's template
+ * ## The owner's template, 2026-10-21
  *
- * The template this is built from carried a fixed line reading
- * "INSTAGRAM NUSANTARA" in the bill-to block — the shop's own handle, printed
- * on every receipt regardless of who was buying. That line is now
- * {@link billedTo}: the customer's name off the sale, upper-cased, in the same
- * position and weight. A walk-in with no customer record prints "WALK-IN
- * CUSTOMER" rather than a blank, because a receipt with an empty bill-to line
- * looks like a printer fault.
+ * The sheet is laid out after B2Soft's FAKTUR PENJUALAN, the one the shop
+ * printed for years (owner ask: *"make the bill exactly like this structure,
+ * with no extra text"*). Title and shop on the left, the date and *Kepada
+ * Yth.* on the right; No Faktur / Salesman / Tgl / JTp; a table of No ·
+ * Perincian · Qty · Harga · Diskon · Jumlah; then the print stamp, Ref and
+ * Keterangan beside Total · Diskon · Ongkos · PPN · Lain · Netto; and four
+ * signature boxes.
+ *
+ * What went, deliberately: the warranty and "sold as described" paragraphs,
+ * the channel and payment-method lines, the pending / balance-due warnings,
+ * and each unit's QC description. The owner's word for them was
+ * *misleading* — a receipt is something a customer argues from, and every
+ * sentence on it is one the shop has to stand behind. Under the shop's name
+ * go its hours (Settings → tagline), its address and its telephone number.
+ *
+ * Two of B2Soft's cells are NOT printed: *Cetak : 2x* (this app does not count
+ * prints, and a made-up count is worse than none) and *Hal : 1 dari 1* (the
+ * browser paginates, and cannot tell a page what number it is). The serial
+ * stays beside the product in Perincian, because the serial is what a warranty
+ * claim is checked against.
+ *
+ * The bill-to line is the customer's name off the sale, upper-cased. B2Soft's
+ * read "INSTAGRAM NUSANTARA" — a channel filed as a customer. A walk-in prints
+ * "WALK-IN CUSTOMER" rather than a blank, because an empty Kepada line looks
+ * like a printer fault.
  *
  * ## Why it prints the way it does
  *
@@ -29,42 +47,45 @@
 import type { CSSProperties } from "react";
 import { Button, Modal, Typography } from "antd";
 import { PrinterOutlined } from "@ant-design/icons";
-import { fmtRp, fmtDate } from "../lib/format.js";
 import { customerLabel } from "../lib/customers.js";
-import { orderBalance, paymentsOf } from "../lib/salePayments.js";
-import { marketplacePayMethod } from "../lib/channels.js";
+import { paymentsOf } from "../lib/salePayments.js";
+import { paymentRefOf } from "../lib/saleStatus.js";
+import { currentStaffName } from "../mock/store.js";
 // No `t` on purpose: the faktur is a print template and is deliberately
-// outside the language switch, so it takes the English label.
-import { labelOf, ORDER_SOURCE } from "../i18n/enumLabels.js";
-import type { MockDb, Order } from "../mock/seed.js";
+// outside the language switch — it is in Indonesian, like B2Soft's.
+import type { MockDb, Order, OrderFee } from "../mock/seed.js";
 
 /**
  * What the header prints when the shop has not said otherwise.
  *
  * Settings owns shop identity as of 2026-09-02 (`AppSettings.shopName` and its
- * three siblings, mirroring the `shop.*` keys in `AppSetting`). These are the
- * exact strings that used to be hard-coded here, kept as the fallback rather
- * than dropped: a faktur is the wrong surface on which to discover that a
- * setting is missing, and a receipt with no shop name on it looks like a
- * printer fault rather than a configuration one.
+ * three siblings, mirroring the `shop.*` keys in `AppSetting`). The name falls
+ * back because a faktur with no shop on it looks like a printer fault; the
+ * tagline (the opening hours) prints only when the shop has written one — a
+ * fallback sentence here would be exactly the invented text the 2026-10-21
+ * template removed.
  */
-const SHOP_FALLBACK = {
-  name: "NUSANTARA",
-  tagline: "Second-hand Apple — sales, trade-in and service",
-  address: "Jakarta, Indonesia",
-  contact: "WhatsApp +62 811 2233 44 · @nusantara",
-} as const;
+const SHOP_FALLBACK_NAME = "MACBOOK NUSANTARA";
 
-/** The header block, as the shop has set it. Blank fields fall back. */
+/**
+ * Where the shop is and how to reach it, as the owner gave them on 2026-10-21.
+ *
+ * Fixed here rather than read from Settings → Shop address / contact: those
+ * fields were seeded with demo text ("Jakarta, Indonesia", a made-up WhatsApp
+ * number), and a customer who rings the number on their receipt must reach
+ * the shop.
+ */
+export const SHOP_ADDRESS =
+  "Ruko Sorrento Place, Grande West Blok B No.32, Curug Sangereng, Kelapa Dua, Tangerang Regency, Banten 15811";
+export const SHOP_PHONE = "0858-8842-9991";
+
+/** The header block. */
 function shopOf(db: MockDb) {
   const s = db.settings;
-  const or = (value: string | undefined, fallback: string) =>
-    value !== undefined && value.trim() !== "" ? value : fallback;
+  const tagline = s.shopTagline?.trim() ?? "";
   return {
-    name: or(s.shopName, SHOP_FALLBACK.name),
-    tagline: or(s.shopTagline, SHOP_FALLBACK.tagline),
-    address: or(s.shopAddress, SHOP_FALLBACK.address),
-    contact: or(s.shopContact, SHOP_FALLBACK.contact),
+    name: (s.shopName?.trim() || SHOP_FALLBACK_NAME).toUpperCase(),
+    lines: [...(tagline ? [tagline] : []), SHOP_ADDRESS, `Telp. ${SHOP_PHONE}`],
   };
 }
 
@@ -73,23 +94,69 @@ export interface InvoiceProps {
   readonly order: Order;
 }
 
-/** The line that used to read "INSTAGRAM NUSANTARA" on the owner's template. */
+/** Kepada Yth. — the customer, and where the parcel goes when it is sent. */
 function billedTo(
   db: MockDb,
   order: Order,
-): { name: string; phone?: string; address?: string } {
+): { name: string; address?: string } {
   const customer = order.customerId
     ? db.customers.find((c) => c.id === order.customerId)
     : undefined;
-  if (!customer) return { name: "WALK-IN CUSTOMER" };
   return {
     // The name, or the number when that is all the shop has of them.
-    name: customerLabel(customer).toUpperCase(),
-    ...(customer.phone ? { phone: customer.phone } : {}),
-    ...((order.shippingAddress ?? customer.address)
-      ? { address: order.shippingAddress ?? customer.address }
-      : {}),
+    name: customer ? customerLabel(customer).toUpperCase() : "WALK-IN CUSTOMER",
+    ...(order.shippingAddress ? { address: order.shippingAddress } : {}),
   };
+}
+
+/** `5,700,000.00` — B2Soft's figures, which the shop reads at a glance. */
+export function fakturAmount(n: number): string {
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** `27/07/2026`. */
+function dmy(iso: string): string {
+  const d = new Date(iso);
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+
+/** `28/07/2026 - 03:23:45 PM` — when this copy came off the printer. */
+function printStamp(d: Date): string {
+  const h = d.getHours();
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${dmy(d.toISOString())} - ${pad2(h12)}:${pad2(d.getMinutes())}:${pad2(
+    d.getSeconds(),
+  )} ${h < 12 ? "AM" : "PM"}`;
+}
+
+/** A charge that is the courier's — B2Soft's *Ongkos*. The rest is *Lain*. */
+const SHIPPING_FEE = /deliver|ship|ongkir|ongkos|kirim|courier|kurir/i;
+
+/**
+ * The sale's charges split the way the faktur's foot names them.
+ *
+ * `fees` is the list since 2026-09-01; an order from before it carries one
+ * `extra` with its `extraNote`, read as a list of one.
+ */
+function chargesOf(order: Order): { ongkos: number; lain: number } {
+  const fees: readonly OrderFee[] =
+    order.fees && order.fees.length > 0
+      ? order.fees
+      : order.extra
+        ? [{ id: "extra", label: order.extraNote ?? "", amount: order.extra }]
+        : [];
+  let ongkos = 0;
+  let lain = 0;
+  for (const f of fees) {
+    if (SHIPPING_FEE.test(f.label)) ongkos += f.amount;
+    else lain += f.amount;
+  }
+  return { ongkos, lain };
 }
 
 /**
@@ -103,66 +170,73 @@ function billedTo(
 export function InvoiceSheet({ db, order }: InvoiceProps) {
   const to = billedTo(db, order);
   const shop = shopOf(db);
-  /*
-   * The method, spelled the way the shop spells it.
-   *
-   * `Order.payMethod` and `SalePayment.method` hold `PaymentMethod` CODES
-   * since 2026-09-09 — see seed.ts — so a receipt that printed the field raw
-   * would say "KARTU_KREDIT". A marketplace sale gets its channel's own
-   * escrow wording, which is what the customer's own order confirmation says.
-   */
-  const methodLabel = (code: string) =>
-    code === "MARKETPLACE"
-      ? marketplacePayMethod(order.source)
-      : (db.paymentMethods.find((m) => m.code === code)?.label ?? code);
   const salesman = db.salesmen.find((s) => s.id === order.salesmanId);
-  /** The bill in parts, and what it comes to. See `lib/salePayments.ts`. */
   const parts = paymentsOf(order);
-  // Returns included: the bill after them, net of what was handed back.
-  const balance = orderBalance(order);
-  const counted = order.lines ?? [];
-  const subtotal =
-    order.serials.reduce((t, s) => t + (order.prices[s] ?? 0), 0) +
-    counted.reduce((t, l) => t + l.price * l.qty, 0);
+  const ref = paymentRefOf(parts);
+  // Jatuh tempo: the earliest promise date, or the sale's own day when
+  // nothing was left owing — which is what B2Soft printed for a cash sale.
+  const dueAt =
+    parts
+      .filter((p) => p.state === "DUE" && p.dueAt)
+      .map((p) => p.dueAt!)
+      .sort()[0] ?? order.ts;
+
+  const nameOf = (skuId: string) => {
+    const sku = db.skus.find((k) => k.id === skuId);
+    return sku ? `${sku.name} ${sku.variantLabel}`.trim() : skuId;
+  };
+  /*
+   * Harga is what the line was LISTED at and Diskon what was knocked off it,
+   * so Jumlah is what it was charged — the 2026-09-01 bargain, printed where
+   * B2Soft printed a line discount. A line sold ABOVE list prints its charged
+   * price and no discount; an upsell is not something to show the customer.
+   */
+  const row = (charged: number, listed: number | undefined) => {
+    const harga = Math.max(charged, listed ?? charged);
+    return { harga, diskon: harga - charged, jumlah: charged };
+  };
   const lines = [
     ...order.serials.map((serial) => {
       const unit = db.units.find((u) => u.serial === serial);
-      const sku = unit && db.skus.find((k) => k.id === unit.skuId);
       return {
         key: serial,
+        name: unit ? nameOf(unit.skuId) : serial,
         serial,
-        name: sku ? `${sku.name} ${sku.variantLabel}` : serial,
-        description: unit?.description ?? "",
-        price: order.prices[serial] ?? 0,
+        qty: 1,
+        ...row(order.prices[serial] ?? 0, order.listPrices?.[serial]),
       };
     }),
-    // A counted product has no serial to print (2026-09-19): the line says
-    // how many and what each cost instead, and the serial cell says "None" —
-    // in English whatever the app's language, like the rest of the faktur.
-    ...counted.map((l) => {
-      const sku = db.skus.find((k) => k.id === l.skuId);
+    // A counted product has no serial (2026-09-19): one line of a quantity.
+    ...(order.lines ?? []).map((l) => {
+      const per = row(l.price, l.listPrice);
       return {
         key: l.id,
-        serial: "None",
-        name: sku ? `${sku.name} ${sku.variantLabel}` : l.skuId,
-        description: `${l.qty} × ${fmtRp(l.price)}`,
-        price: l.price * l.qty,
+        name: nameOf(l.skuId),
+        serial: undefined,
+        qty: l.qty,
+        harga: per.harga,
+        diskon: per.diskon * l.qty,
+        jumlah: l.price * l.qty,
       };
     }),
   ];
+  const qty = lines.reduce((t, l) => t + l.qty, 0);
+  const goods = lines.reduce((t, l) => t + l.jumlah, 0);
+  const { ongkos, lain } = chargesOf(order);
 
+  const num: CSSProperties = { textAlign: "right", whiteSpace: "nowrap" };
   const cell: CSSProperties = {
-    padding: "6px 8px",
-    borderBottom: "1px solid #e5e5e5",
+    padding: "3px 6px",
+    verticalAlign: "top",
+    fontWeight: 400,
   };
-  const th: CSSProperties = {
-    ...cell,
-    borderBottom: "1.5px solid #111",
-    fontSize: 11,
-    letterSpacing: 0.6,
-    textTransform: "uppercase",
-    textAlign: "left",
-  };
+  const rule = "1px solid #111";
+  const label: CSSProperties = { display: "inline-block", width: 76 };
+  const field = (name: string, value: string) => (
+    <div>
+      <span style={label}>{name}</span>: {value}
+    </div>
+  );
 
   return (
     <div
@@ -170,13 +244,13 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
       style={{
         background: "#fff",
         color: "#111",
-        fontFamily: "'Helvetica Neue', Arial, sans-serif",
+        fontFamily: "Arial, 'Helvetica Neue', sans-serif",
         fontSize: 12,
-        lineHeight: 1.45,
+        lineHeight: 1.4,
         padding: 24,
       }}
     >
-      {/* Header — shop on the left, document identity on the right. */}
+      {/* Title and shop on the left; the date and Kepada Yth. on the right. */}
       <div
         style={{
           display: "flex",
@@ -186,283 +260,142 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
         }}
       >
         <div>
-          <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 1.5 }}>
-            {shop.name}
-          </div>
-          <div style={{ fontSize: 11, color: "#555" }}>{shop.tagline}</div>
-          <div style={{ fontSize: 11, color: "#555" }}>{shop.address}</div>
-          <div style={{ fontSize: 11, color: "#555" }}>{shop.contact}</div>
+          <div style={{ fontSize: 16 }}>FAKTUR PENJUALAN</div>
+          <div style={{ fontSize: 16 }}>{shop.name}</div>
+          {shop.lines.map((l) => (
+            <div key={l} style={{ fontSize: 11, color: "#444" }}>
+              {l}
+            </div>
+          ))}
         </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: 3 }}>
-            INVOICE
-          </div>
-          <div style={{ fontSize: 11, color: "#555" }}>FAKTUR PENJUALAN</div>
-          <div style={{ marginTop: 8, fontSize: 12 }}>
-            <strong>{order.code}</strong>
-          </div>
-          <div style={{ fontSize: 11, color: "#555" }}>
-            {new Date(order.ts).toLocaleString("en-GB", {
-              day: "2-digit",
+        <div style={{ minWidth: 260 }}>
+          <div>
+            {new Date(order.ts).toLocaleDateString("id-ID", {
+              day: "numeric",
               month: "long",
               year: "numeric",
-              hour: "2-digit",
-              minute: "2-digit",
             })}
           </div>
+          <div>Kepada Yth,</div>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>{to.name}</div>
+          {to.address && <div style={{ maxWidth: 300 }}>{to.address}</div>}
         </div>
       </div>
 
-      <hr
-        style={{ border: 0, borderTop: "2px solid #111", margin: "14px 0" }}
-      />
-
-      {/* Bill-to. The name here is the template's old "INSTAGRAM NUSANTARA". */}
-      <div
-        style={{ display: "flex", justifyContent: "space-between", gap: 24 }}
-      >
+      <div style={{ display: "flex", gap: 48, marginTop: 20 }}>
         <div>
-          <div
-            style={{
-              fontSize: 10,
-              letterSpacing: 0.8,
-              color: "#666",
-              textTransform: "uppercase",
-            }}
-          >
-            Kepada / Bill to
-          </div>
-          <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: 0.5 }}>
-            {to.name}
-          </div>
-          {to.phone && <div style={{ color: "#444" }}>{to.phone}</div>}
-          {to.address && (
-            <div style={{ color: "#444", maxWidth: 260 }}>{to.address}</div>
-          )}
+          {field("No Faktur", order.code)}
+          {field("Salesman", salesman?.name.toUpperCase() ?? "")}
         </div>
-        <div style={{ textAlign: "right", color: "#444" }}>
+        <div>
           <div>
-            <span style={{ color: "#666" }}>Channel</span>{" "}
-            {labelOf(ORDER_SOURCE, order.source)}
+            <span style={{ ...label, width: 36 }}>Tgl</span>: {dmy(order.ts)}
           </div>
-          {/*
-           * The bill's parts, since 2026-09-08 (owner ask: *"we need to track
-           * different payment handling and reflect it on invoice"*).
-           *
-           * A sale paid one way prints exactly the line it always printed —
-           * `paymentsOf` gives a single-payment order one part — so nothing
-           * changes for the common receipt. A split one prints a line each,
-           * because a customer who paid Rp5jt in cash and Rp5jt on PayLater
-           * needs a receipt that says so, and one that reads "Payment
-           * Transfer" is a receipt they cannot use to argue with either
-           * party.
-           */}
-          {parts.length === 1 ? (
-            <div>
-              <span style={{ color: "#666" }}>Payment</span>{" "}
-              {methodLabel(order.payMethod)}
-            </div>
-          ) : (
-            parts.map((p) => (
-              <div key={p.id}>
-                <span style={{ color: "#666" }}>
-                  {p.state === "PENDING"
-                    ? `${p.channel ?? "Marketplace"} (pending)`
-                    : p.state === "DUE"
-                      ? "Due"
-                      : methodLabel(p.method)}
-                </span>{" "}
-                {fmtRp(p.amount)}
-              </div>
-            ))
-          )}
-          {salesman && (
-            <div>
-              <span style={{ color: "#666" }}>Salesperson</span> {salesman.name}
-            </div>
-          )}
+          <div>
+            <span style={{ ...label, width: 36 }}>JTp</span>: {dmy(dueAt)}
+          </div>
         </div>
       </div>
 
       <table
-        style={{ width: "100%", borderCollapse: "collapse", marginTop: 16 }}
+        style={{ width: "100%", borderCollapse: "collapse", marginTop: 6 }}
       >
         <thead>
-          <tr>
-            <th style={{ ...th, width: 28 }}>#</th>
-            <th style={th}>Description</th>
-            <th style={{ ...th, width: 150 }}>Serial number</th>
-            <th style={{ ...th, width: 120, textAlign: "right" }}>Price</th>
+          <tr style={{ borderTop: rule, borderBottom: rule }}>
+            <th style={{ ...cell, width: 28, textAlign: "left" }}>No</th>
+            <th style={{ ...cell, textAlign: "left" }}>Perincian</th>
+            <th style={{ ...cell, ...num, width: 48 }}>Qty</th>
+            <th style={{ ...cell, ...num, width: 110 }}>Harga</th>
+            <th style={{ ...cell, ...num, width: 90 }}>Diskon</th>
+            <th style={{ ...cell, ...num, width: 110 }}>Jumlah</th>
           </tr>
         </thead>
         <tbody>
           {lines.map((l, i) => (
             <tr key={l.key}>
-              <td style={{ ...cell, verticalAlign: "top", color: "#666" }}>
-                {i + 1}
-              </td>
-              <td style={{ ...cell, verticalAlign: "top" }}>
-                <div style={{ fontWeight: 600 }}>{l.name}</div>
-                {l.description && (
-                  <div style={{ fontSize: 11, color: "#666" }}>
-                    {l.description}
-                  </div>
+              <td style={cell}>{i + 1}.</td>
+              <td style={cell}>
+                {l.name}
+                {l.serial && (
+                  <span style={{ marginLeft: 8, fontSize: 11 }}>
+                    SN: {l.serial}
+                  </span>
                 )}
               </td>
-              <td
-                style={{
-                  ...cell,
-                  verticalAlign: "top",
-                  fontFamily: "ui-monospace, Menlo, monospace",
-                  fontSize: 11,
-                }}
-              >
-                {l.serial}
-              </td>
-              <td
-                style={{
-                  ...cell,
-                  verticalAlign: "top",
-                  textAlign: "right",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {fmtRp(l.price)}
-              </td>
+              <td style={{ ...cell, ...num }}>{l.qty}</td>
+              <td style={{ ...cell, ...num }}>{fakturAmount(l.harga)}</td>
+              <td style={{ ...cell, ...num }}>{fakturAmount(l.diskon)}</td>
+              <td style={{ ...cell, ...num }}>{fakturAmount(l.jumlah)}</td>
             </tr>
           ))}
         </tbody>
-      </table>
-
-      {/* Totals, right-aligned under the price column. */}
-      <div
-        style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}
-      >
-        <table style={{ borderCollapse: "collapse", minWidth: 260 }}>
-          <tbody>
-            <tr>
-              <td style={{ padding: "3px 8px", color: "#555" }}>Subtotal</td>
-              <td
-                style={{
-                  padding: "3px 8px",
-                  textAlign: "right",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {fmtRp(subtotal)}
-              </td>
-            </tr>
-            {order.discount > 0 && (
-              <tr>
-                <td style={{ padding: "3px 8px", color: "#555" }}>
-                  Discount
-                  {order.discountId &&
-                    ` (${db.discounts.find((d) => d.id === order.discountId)?.code ?? ""})`}
-                </td>
+        {/*
+         * The foot sits in the items table so its figures line up under the
+         * columns they add up, as B2Soft's did: the quantity under Qty, the
+         * names under Diskon, the rupiah under Jumlah.
+         */}
+        <tfoot>
+          {(
+            [
+              ["Total", goods],
+              ["Diskon", order.discount],
+              ["Ongkos", ongkos],
+              ["PPN", 0],
+              ["Lain", lain],
+              ["Netto", order.total],
+            ] as const
+          ).map(([name, value], i) => (
+            <tr key={name} style={i === 0 ? { borderTop: rule } : undefined}>
+              {i === 0 ? (
+                <>
+                  <td style={cell} colSpan={2} />
+                  <td style={{ ...cell, ...num }}>{qty}</td>
+                  <td style={cell} />
+                </>
+              ) : (
                 <td
+                  colSpan={4}
                   style={{
-                    padding: "3px 8px",
-                    textAlign: "right",
-                    whiteSpace: "nowrap",
+                    ...cell,
+                    padding: "1px 6px",
+                    ...(i === 1 ? { borderBottom: rule } : {}),
                   }}
                 >
-                  −{fmtRp(order.discount)}
+                  {i === 1 &&
+                    `${printStamp(new Date())}\u00a0\u00a0\u00a0${currentStaffName()}`}
+                  {i === 2 && field("Ref", ref ?? "")}
+                  {i === 3 && field("Keterangan", "")}
                 </td>
-              </tr>
-            )}
-            <tr>
-              <td
-                style={{
-                  padding: "8px",
-                  borderTop: "2px solid #111",
-                  fontWeight: 700,
-                  fontSize: 14,
-                }}
-              >
-                TOTAL
-              </td>
-              <td
-                style={{
-                  padding: "8px",
-                  borderTop: "2px solid #111",
-                  textAlign: "right",
-                  fontWeight: 700,
-                  fontSize: 14,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {fmtRp(order.total)}
+              )}
+              <td style={{ ...cell, padding: "1px 6px", ...num }}>{name} :</td>
+              <td style={{ ...cell, padding: "1px 6px", ...num }}>
+                {fakturAmount(value)}
               </td>
             </tr>
-          </tbody>
-        </table>
-      </div>
-
-      {order.shippingAddress && (
-        <div style={{ marginTop: 12, fontSize: 11 }}>
-          <span style={{ color: "#666" }}>Ship to </span>
-          {order.shippingAddress}
-        </div>
-      )}
-
-      <div
-        style={{ marginTop: 18, fontSize: 10, color: "#555", lineHeight: 1.6 }}
-      >
-        <div>
-          <strong>Garansi 90 hari</strong> — hardware faults not caused by
-          damage, liquid or software. Bring this invoice as proof of purchase.
-        </div>
-        <div>
-          Second-hand units are sold in the condition described above. Serial
-          numbers are recorded against this sale and cannot be exchanged for
-          another unit.
-        </div>
-        {/*
-         * Two different warnings, because they are about two different
-         * people. A marketplace holding the money is the shop's problem; an
-         * unpaid balance is the customer's, and the receipt they walk out
-         * with has to say what they still owe and when.
-         */}
-        {balance.pending > 0 && (
-          <div style={{ marginTop: 4, fontWeight: 700, color: "#8a6100" }}>
-            {fmtRp(balance.pending)} pending —{" "}
-            {labelOf(ORDER_SOURCE, order.source)} has not released the funds
-            yet.
-          </div>
-        )}
-        {balance.customerOwes > 0 && (
-          <div style={{ marginTop: 4, fontWeight: 700, color: "#a8071a" }}>
-            Balance due {fmtRp(balance.customerOwes)}
-            {balance.nextDueAt ? ` by ${fmtDate(balance.nextDueAt)}` : ""}.
-          </div>
-        )}
-      </div>
+          ))}
+        </tfoot>
+      </table>
 
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
-          marginTop: 32,
-          gap: 24,
+          gap: 12,
+          marginTop: 12,
         }}
       >
-        {["Hormat kami / For the shop", "Diterima oleh / Received by"].map(
-          (label) => (
-            <div key={label} style={{ flex: 1, textAlign: "center" }}>
-              <div style={{ height: 48 }} />
-              <div
-                style={{
-                  borderTop: "1px solid #111",
-                  paddingTop: 4,
-                  fontSize: 10,
-                  color: "#555",
-                }}
-              >
-                {label}
-              </div>
-            </div>
-          ),
-        )}
+        {[
+          "Diterima Oleh,",
+          "Diserahkan Oleh,",
+          "Diperiksa Oleh,",
+          "Hormat kami,",
+        ].map((who) => (
+          <div key={who} style={{ flex: 1, textAlign: "center" }}>
+            <div>{who}</div>
+            <div style={{ height: 44 }} />
+            <div>(........................)</div>
+          </div>
+        ))}
       </div>
     </div>
   );

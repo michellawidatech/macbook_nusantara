@@ -2675,6 +2675,25 @@ Decisions that outlived those documents:
   referenced table whatever the values. Rehearsed on a seeded throwaway
   database: FK restored byte-identical, no schema drift, the store loads and
   commits after it, and every open till reloads (StoreChange restarts at 1).
+- **The faktur is B2Soft's, 2026-10-21.** *"Make the bill exactly like this
+  structure, with no extra text … other info could be misleading."*
+  `components/Invoice.tsx` is laid out after B2Soft's FAKTUR PENJUALAN: title
+  and shop / date and *Kepada Yth.*; No Faktur · Salesman · Tgl · JTp; No ·
+  Perincian · Qty · Harga · Diskon · Jumlah; print stamp, Ref, Keterangan
+  beside Total · Diskon · Ongkos · PPN · Lain · Netto; four signatures.
+  Figures print as `5,700,000.00`, the template's own format.
+  - **Gone**: the warranty and "sold as described" paragraphs, channel,
+    payment-method and salesperson lines, the pending / balance-due warnings,
+    and every unit's QC description. Do not add prose back to the paper.
+  - **The address and phone are constants** (`SHOP_ADDRESS`, `SHOP_PHONE`),
+    given by the owner; Settings' address and contact still hold seeded demo
+    text and no longer reach the faktur. The tagline (the opening hours) and
+    the name still come from Settings.
+  - Harga is the LIST price and Diskon the bargain off it, so Jumlah is what
+    was charged; Ongkos is a fee whose label reads as delivery, Lain the rest;
+    PPN is always 0. The serial stays beside the product — the template has
+    none, but a warranty claim is checked against it. *Cetak* and *Hal* are
+    not printed: nothing counts prints, and the browser cannot number pages.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
