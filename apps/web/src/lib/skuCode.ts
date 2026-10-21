@@ -38,8 +38,20 @@ export function skuCodeFor(
    */
   const config =
     ram && ssd ? `${ram.replace(/\s*GB$/i, "")}/${ssd}` : (ssd ?? ram ?? "");
+  // A name typed with its own configuration (`AIR 13" 2020 i7 16/256`) gives
+  // way to the variant's: the variant is what this SKU IS, and keeping both
+  // printed `… 16/256 16/256GB` (2026-10-21).
+  const base =
+    config === ""
+      ? modelName
+      : modelName
+          .replace(
+            /\b\d+(?:[.,]\d+)?\s*(?:GB|TB)?\s*\/\s*\d+(?:[.,]\d+)?\s*(?:GB|TB)?\b/gi,
+            " ",
+          )
+          .replace(/\b\d+(?:[.,]\d+)?\s*(?:GB|TB)\b/gi, " ");
   const parsed = parseProductName(
-    [modelName, variantChip ?? "", config].filter((x) => x !== "").join(" "),
+    [base, variantChip ?? "", config].filter((x) => x.trim() !== "").join(" "),
   );
   const name = shopProductName({
     // The convention's line is already short — `AIR`, `PRO`.

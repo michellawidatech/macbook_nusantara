@@ -27,6 +27,21 @@ describe("skuCodeFor — the shop's naming (2026-10-21)", () => {
     );
   });
 
+  it("lets the variant replace a configuration typed into the name", () => {
+    expect(
+      skuCodeFor('AIR 13" 2020 i7 16/256', 2020, "16GB / 256GB", [
+        "RAM",
+        "SSD",
+      ]),
+    ).toBe('AIR 13" 2020 I7 16/256');
+    expect(
+      skuCodeFor('AIR 13" 2020 i7 16/256', 2020, "8GB / 1TB", ["RAM", "SSD"]),
+    ).toBe('AIR 13" 2020 I7 8/1TB');
+    expect(
+      skuCodeFor('MacBook Air 13" 2020 i7 16GB 256GB', 2020, "8GB / 512GB"),
+    ).toBe('AIR 13" 2020 I7 8/512');
+  });
+
   it("keeps an accessory's own words", () => {
     expect(skuCodeFor("Magic Mouse", undefined, "")).toBe("MAGIC MOUSE");
   });

@@ -132,6 +132,17 @@ export function ProductsPage() {
   // Watched so the code preview under the name field follows what is typed.
   const addName = Form.useWatch("name", addForm);
   const addYear = Form.useWatch("releaseYear", addForm);
+  const addRam = Form.useWatch("ram", addForm);
+  const addSsd = Form.useWatch("ssd", addForm);
+  // The codes the form will actually create, from what is picked — the hint
+  // used to assume 8GB / 256GB whatever was chosen.
+  const addCodes =
+    addName?.trim() && addRam?.length && addSsd?.length
+      ? combos([
+          { name: "RAM", values: addRam },
+          { name: "SSD", values: addSsd },
+        ]).map((label) => skuCodeFor(addName, addYear, label, ["RAM", "SSD"]))
+      : [];
 
   const model = editing && db.models.find((m) => m.id === editing.id);
 
@@ -863,9 +874,9 @@ export function ProductsPage() {
              * convention sees it before they create eight variants under it.
              */
             extra={
-              addName?.trim()
+              addCodes.length > 0
                 ? t("products.codePreview", "SKU codes will read: {{code}}", {
-                    code: skuCodeFor(addName, addYear, "8GB / 256GB"),
+                    code: addCodes.join(", "),
                   })
                 : t(
                     "products.namingHint",
