@@ -127,3 +127,12 @@ export function sameVariant(a: string, b: string): boolean {
       .join("|");
   return norm(a) === norm(b);
 }
+
+/**
+ * A variant anything may still be put on — not merged into another
+ * (2026-10-21). A merged one stays in the store for the receipts and invoices
+ * that name it; every picker and list of variants leaves it out.
+ */
+export function isLiveSku(s: { readonly mergedIntoId?: string }): boolean {
+  return s.mergedIntoId === undefined;
+}

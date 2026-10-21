@@ -78,6 +78,7 @@
  * ("did that one go in?") by showing them the row.
  */
 import { useEffect, useMemo, useRef, useState, type Ref } from "react";
+import { isLiveSku } from "../../lib/skuCode.js";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   App,
@@ -2405,7 +2406,7 @@ export function OpnameSessionPage() {
           serial={surplusFor}
           initial={surplus[surplusFor]}
           defaultLocationId={surplusHome}
-          skus={db.skus.map((k) => ({
+          skus={db.skus.filter(isLiveSku).map((k) => ({
             id: k.id,
             label: `${k.name} ${k.variantLabel}`,
             code: k.code,

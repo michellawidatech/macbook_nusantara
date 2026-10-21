@@ -332,15 +332,59 @@ model CatalogModel {
   source     CatalogSource?
   archived   Boolean
   createdAt  DateTime
+  /// The product's facts (owner ask 2026-10-21: "a smart system and
+  /// structured product"). `family` is the line in full ("MacBook Air"),
+  /// `chip` an Apple-silicon chip — part of the product; an Intel processor
+  /// is a variant — and `extra` what else makes it a different product
+  /// ("TB"). Null on a product still known only by its name.
+  family     String?
+  chip       String?
+  extra      String?
+  /// `productKeyOf` the facts, or of the name. Unique among live products
+  /// (partial index `CatalogModel_productKey_live`, hand-written), so a
+  /// second copy of a product cannot be created. Null when it cannot be
+  /// placed, and on an existing duplicate until it is merged.
+  productKey String?
 
   category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
 
-  axes      ModelAxis[]
-  photos    ModelPhoto[]
-  skus      Sku[]
-  discounts Discount[]
+  axes          ModelAxis[]
+  photos        ModelPhoto[]
+  skus          Sku[]
+  discounts     Discount[]
+  identifiers   ModelIdentifier[]
+  notDuplicateA ModelNotDuplicate[] @relation("NotDuplicateA")
+  notDuplicateB ModelNotDuplicate[] @relation("NotDuplicateB")
 
   @@unique([categoryId, name, year])
+}
+
+/// An AppleDB identifier (`Mac14,2`) LINKED to a product (2026-10-21). Apple
+/// gives one marketing model several identifiers, and an import that finds
+/// the product already in the catalogue links instead of copying it.
+model ModelIdentifier {
+  id         String   @id @default(cuid())
+  modelId    String
+  identifier String   @unique
+  createdAt  DateTime
+
+  model CatalogModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+
+  @@index([modelId])
+}
+
+/// Two products a person said are NOT the same (2026-10-21), so the
+/// duplicate review stops suggesting them. Stored with aModelId < bModelId.
+model ModelNotDuplicate {
+  id        String   @id @default(cuid())
+  aModelId  String
+  bModelId  String
+  createdAt DateTime
+
+  a CatalogModel @relation("NotDuplicateA", fields: [aModelId], references: [id], onDelete: Restrict)
+  b CatalogModel @relation("NotDuplicateB", fields: [bModelId], references: [id], onDelete: Restrict)
+
+  @@unique([aModelId, bModelId])
 }
 
 model ModelAxis {
@@ -387,8 +431,17 @@ model Sku {
   landed       BigInt
   archived     Boolean
   createdAt    DateTime
+  /// Set when this variant was merged into another (2026-10-21). It stays —
+  /// past receipts and invoices name it — but is archived and offered by no
+  /// picker; its units and stock moved to `mergedInto`.
+  mergedIntoId String?
+  /// `variantKeyOf` the label. Unique per live product (partial index
+  /// `Sku_variantKey_live`, hand-written); null on an existing duplicate.
+  variantKey   String?
 
-  model CatalogModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  model      CatalogModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  mergedInto Sku?         @relation("SkuMerge", fields: [mergedIntoId], references: [id], onDelete: Restrict)
+  mergedFrom Sku[]        @relation("SkuMerge")
 
   units            Unit[]
   poItems          PurchaseOrderItem[]

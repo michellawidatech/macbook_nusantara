@@ -26,7 +26,8 @@
  */
 import { useMemo, useState } from "react";
 import { Card, Segmented, Tag, Typography } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { BankOutlined, PlusOutlined } from "@ant-design/icons";
+import { OpeningBalanceModal } from "./OpeningBalanceModal";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { AdjustmentPanel } from "./AdjustmentPanel";
@@ -83,6 +84,7 @@ export function IncomeExpensePage() {
   const { t } = useTranslation();
   const db = useDb();
   const [addAdjustment, setAddAdjustment] = useState(false);
+  const [openingOpen, setOpeningOpen] = useState(false);
   const [basis, setBasis] = useState<"CASH" | "ACCRUAL">("CASH");
 
   /** Method-code → the human label from `PaymentMethod.label`. */
@@ -279,18 +281,26 @@ export function IncomeExpensePage() {
     const opening =
       (db.settings.openingCash ?? 0) + (db.settings.openingBank ?? 0);
     let running = opening;
+    // The opening figure already holds everything settled before its date.
+    const from = db.settings.openingBalanceAt ?? "";
     const at = new Map<string, number>();
     for (const r of chronological) {
       if (
         r.status === "SETTLED" &&
         r.inBalance &&
-        accountOfMethod(r.methodCode)
+        accountOfMethod(r.methodCode) &&
+        r.at >= from
       )
         running += r.direction === "INCOME" ? r.amount : -r.amount;
       at.set(r.key, running);
     }
     return at;
-  }, [rows, db.settings.openingCash, db.settings.openingBank]);
+  }, [
+    rows,
+    db.settings.openingCash,
+    db.settings.openingBank,
+    db.settings.openingBalanceAt,
+  ]);
 
   const typeLabel = (d: Direction) =>
     d === "INCOME"
@@ -306,6 +316,12 @@ export function IncomeExpensePage() {
       title={t("finance.incomeExpense", "Income & Expense")}
       stickyHeader
       actions={[
+        {
+          key: "opening",
+          label: t("opening.title", "Opening balance"),
+          icon: <BankOutlined />,
+          onClick: () => setOpeningOpen(true),
+        },
         {
           key: "add",
           label: t("finance.addAdjustment", "Add adjustment"),
@@ -446,6 +462,10 @@ export function IncomeExpensePage() {
         addOpen={addAdjustment}
         onCloseAdd={() => setAddAdjustment(false)}
         showHistory={false}
+      />
+      <OpeningBalanceModal
+        open={openingOpen}
+        onClose={() => setOpeningOpen(false)}
       />
     </PageContainer>
   );

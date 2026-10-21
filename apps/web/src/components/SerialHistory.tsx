@@ -370,15 +370,21 @@ export function SerialHistory({
               // Every QC photograph, larger than a list's thumbnails: this is
               // the one screen that shows a single unit in full (owner ask
               // 2026-09-29). Purged at the sale, so a sold unit says None.
+              // A unit the shop still holds can be photographed here too
+              // (owner ask 2026-10-21) — not a sold one, whose photos the
+              // sale purged on purpose.
               key: "ph",
               label: t("snTracking.photos", "Photos"),
               span: "filled",
-              children:
-                qcPhotosOf(db, unit.serial).length === 0 ? (
-                  fmtNone()
-                ) : (
-                  <UnitPhotos serial={unit.serial} size={72} max={8} />
-                ),
+              children: ["QC", "TERSEDIA", "DIRESERVASI", "SERVIS"].includes(
+                unit.status,
+              ) ? (
+                <UnitPhotos serial={unit.serial} size={72} max={8} editable />
+              ) : qcPhotosOf(db, unit.serial).length === 0 ? (
+                fmtNone()
+              ) : (
+                <UnitPhotos serial={unit.serial} size={72} max={8} />
+              ),
             },
           ]}
         />

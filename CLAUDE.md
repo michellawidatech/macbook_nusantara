@@ -2755,6 +2755,51 @@ Decisions that outlived those documents:
   - *Use full product names (n)* renames what is safe to rename; a name with
     a processor in it, or a product that has a duplicate, is left for a person.
   - `ops/fix-skus` (2026-10-21) archives same-product duplicate VARIANTS.
+- **Sell prices from a price list, 2026-10-21.** Inventory → *Import sell
+  prices* reads the shop's own *Export stock* sheet with a price column
+  ("Harga IG"), matches each row by the text the export wrote (`Sku.name` +
+  variant label) in the same warehouse, against the LIVE store, and previews
+  (`lib/priceImport.ts`). Only units past QC (`TERSEDIA`, `DIRESERVASI`,
+  `SERVIS`) get `Unit.price`, with a `DICATAT` naming the file; **a unit in QC
+  is never repriced** — its price is its inbound invoice's. `Sku.price`,
+  costs, invoices and the ledger are untouched (`priceImportPage.test.tsx`).
+- **Photos**: a row's photos are a thumbnail stack (`PhotoStackButton` —
+  first photo, second behind it, never more than two). S/N history takes new
+  photos for a unit the shop still holds; a sold unit's were purged by design.
+- **Opening balance on Income & Expense, 2026-10-21** (`OpeningBalanceModal`):
+  bank, cash and an "as of" day, into `AppSettings.openingCash/openingBank/
+  openingBalanceAt`. The running balance starts there and counts only money
+  settled ON or AFTER that day — the figure already holds what came before.
+- **The catalogue is facts, not names — 2026-10-21** (owner approved the plan
+  and its schema). Migration `20261021150000_catalogue_product_identity`,
+  ADDITIVE ONLY, nothing backfilled:
+  - `CatalogModel.family/chip/extra/productKey`, `Sku.mergedIntoId/variantKey`,
+    `ModelIdentifier` (AppleDB links), `ModelNotDuplicate` (pairs a person
+    said differ). Partial unique indexes on LIVE non-null keys.
+  - **Keys refuse a NEW duplicate and never an edit of an old one.**
+    `freeProductKey` / `freeVariantKey` (adapters/catalogue.ts): creating a
+    product or variant another live row already IS is refused; an existing
+    duplicate saves keyless. Import mode lets one through keyless. The
+    identity rules are `packages/domain/catalogIdentity.ts` — one copy for
+    browser and server.
+  - **Merge** (`lib/catalogMerge.ts`, Master Product → *Review duplicates*):
+    a variant the kept product lacks MOVES (same id — its units, invoice
+    lines and receipts follow); one it has JOINS: held units move with a
+    `DICATAT`, counted stock by a KOREKSI pair, and the variant is KEPT,
+    archived and `mergedIntoId`, because receipts name it. Never used →
+    removed. One variant that cannot be placed stops the whole merge.
+    "These are different" is remembered.
+  - ⚠️ **A merged variant is still in `db.skus`** (projected for history).
+    Every picker or list of variants filters with `isLiveSku`; a lookup by id
+    must not. New code listing variants must do the same.
+  - **AppleDB links instead of copying** (`matchAppleDb`): already linked →
+    skipped; the same product here (by facts or name, AppleDB's own wording
+    ignored) → identifier linked, missing RAM × SSD added; two candidates →
+    "Possible match", left for a person; else a new product named in full.
+  - Inbound creates no products (Master Product is the only door), so the
+    matcher and the server refusal cover it. ⚠️ The B2Soft importer runs in
+    import mode and is NOT matched — a re-import can still add a keyless
+    duplicate, which *Review duplicates* will then list.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

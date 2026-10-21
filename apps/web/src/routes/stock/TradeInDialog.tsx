@@ -52,6 +52,7 @@
  * `packages/store`) — which would have refused the whole sale with it.
  */
 import { useEffect } from "react";
+import { isLiveSku } from "../../lib/skuCode.js";
 import { Flex, Form, Input, Modal, Segmented, Select } from "antd";
 import { useTranslation } from "react-i18next";
 import { MoneyInput } from "../../components/MoneyInput";
@@ -245,7 +246,7 @@ export function TradeInDialog({
       });
 
   const pickable = db.skus.filter(
-    (k) => !category || categoryOfSku(k.id) === category,
+    (k) => isLiveSku(k) && (!category || categoryOfSku(k.id) === category),
   );
 
   return (

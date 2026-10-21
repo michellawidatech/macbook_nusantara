@@ -276,6 +276,7 @@ export const id: Record<string, string> = {
     "Kata sandi diganti. Semua perangkat lain yang masuk dengan akun Anda sudah dikeluarkan.",
 
   // ── Common ────────────────────────────────────────────────────────────────
+  "common.save": "Simpan",
   "common.delete": "Hapus",
   "common.cancel": "Batal",
   "common.back": "Kembali",
@@ -3951,6 +3952,13 @@ export const id: Record<string, string> = {
   "products.skuCode": "Kode SKU",
   "products.skuCodeRequired": "Isi kode SKU",
   "products.skuCodeTaken": "Kode ini sudah dipakai varian lain",
+  "opening.at": "Per tanggal",
+  "opening.atHint":
+    "Uang yang lunas sebelum tanggal ini sudah termasuk dalam angka ini dan tidak menggerakkan saldo lagi.",
+  "opening.bank": "Saldo bank",
+  "opening.cash": "Uang tunai di laci",
+  "opening.saved": "Saldo awal disimpan.",
+  "opening.title": "Saldo awal",
   "priceImport.apply": "Perbarui {{n}} unit",
   "priceImport.button": "Impor harga jual",
   "priceImport.conflict": "Dua harga untuk unit yang sama",
@@ -3983,6 +3991,45 @@ export const id: Record<string, string> = {
   "priceImport.units": "Diubah",
   "priceImport.unreadable": "File ini tidak bisa dibaca sebagai .xlsx.",
   "priceImport.warehouse": "Gudang",
+  "dupReview.becomes": "Menjadi",
+  "dupReview.different": "Ini produk berbeda",
+  "dupReview.differentConfirm": "Ini produk yang berbeda?",
+  "dupReview.differentOk": "Ya, berbeda",
+  "dupReview.drops": "Sama dengan {{code}} — dihapus (tidak pernah dipakai)",
+  "dupReview.joins": "Digabung ke {{code}} · {{n}} unit pindah",
+  "dupReview.keepWhich": "Simpan produk yang mana?",
+  "dupReview.label": "Pilihan",
+  "dupReview.markedDifferent": "Dicatat — tidak akan disarankan lagi.",
+  "dupReview.merge": "Gabung ke {{name}}",
+  "dupReview.mergeConfirm": "Gabung ke {{name}}?",
+  "dupReview.mergeDetail":
+    "Unit pindah dengan catatan di riwayatnya. Varian yang punya penjualan tetap ada untuk nota lama. Tidak bisa dibatalkan dari sini.",
+  "dupReview.mergeOk": "Gabung",
+  "dupReview.merged": "Digabung ke {{name}}.",
+  "dupReview.modelLine": "{{v}} varian · {{u}} unit disimpan",
+  "dupReview.moves": "Pindah sebagai {{code}}",
+  "dupReview.none": "Tidak ada produk yang tercatat dua kali.",
+  "dupReview.stuck": "Tidak bisa ditempatkan",
+  "dupReview.stuckWhy":
+    "Beberapa varian tidak bisa ditempatkan di {{name}} — biasanya karena produk yang disimpan punya pilihan prosesor dan varian ini tidak menyebutnya. Pilih produk lain untuk disimpan.",
+  "dupReview.title": "Tinjau produk ganda",
+  "dupReview.variant": "Varian",
+  "products.importDone":
+    "{{added}} produk baru, {{linked}} dihubungkan ke produk yang sudah ada, {{skus}} varian ditambahkan. Harga mulai dari Rp 0 — atur sebelum dijual.",
+  "products.importNothingNew":
+    "Tidak ada yang baru — semua model yang dipilih sudah ada di katalog.",
+  "products.inCatalogue": "Di katalog",
+  "products.matchLinked": "Sudah terhubung",
+  "products.matchLinkedTip": "Sudah terhubung ke {{name}}",
+  "products.matchNew": "Baru",
+  "products.matchPossible": "Mungkin sama",
+  "products.matchPossibleTip":
+    "Bisa jadi {{names}} — tidak diimpor. Pilih manual jika memang baru.",
+  "products.matchSame": "Produk sama",
+  "products.matchSameAs": "Sama dengan {{name}}",
+  "products.matchSameTip":
+    "Produk yang sama dengan {{name}} — impor akan menghubungkannya ke sana dan hanya menambah varian yang belum ada",
+  "products.reviewDuplicates": "Tinjau duplikat ({{n}})",
   "products.addNVariants": "Tambah {{n}} varian",
   "products.appleSilicon": "Apple silicon (M1, M2…)",
   "products.deleteBlocked":

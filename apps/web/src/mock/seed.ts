@@ -212,6 +212,11 @@ export interface Sku {
    */
   axisValues?: Record<string, string>;
   price: number;
+  /**
+   * Merged into another variant (2026-10-21). Kept because receipts and
+   * invoices name it; offered by no picker or list — see `isLiveSku`.
+   */
+  mergedIntoId?: string;
 }
 /** A product category — see `MockDb.categories`. */
 export interface ProductCategory {
@@ -235,6 +240,19 @@ export interface CatalogModel {
   /** Apple's model identifier when the row came from AppleDB (e.g. Mac14,2). */
   identifier?: string;
   source?: "MANUAL" | "APPLEDB";
+  /**
+   * The product's facts (2026-10-21) — `lib/modelName.ts`. `family` is the
+   * line in full ("MacBook Air"), `chip` an Apple-silicon chip, `extra` what
+   * else makes it a different product ("TB"). Absent on a product still known
+   * only by its name.
+   */
+  family?: string;
+  chip?: string;
+  extra?: string;
+  /** AppleDB identifiers linked to it — added, never removed. */
+  identifiers?: string[];
+  /** Products a person said are NOT this one — added, never removed. */
+  notDuplicateOf?: string[];
 }
 export interface Unit {
   serial: string;

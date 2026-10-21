@@ -42,6 +42,7 @@
  * never heard of. That is why an adjustment stores a `reasonId` and not text.
  */
 import { useEffect, useRef, useState } from "react";
+import { isLiveSku } from "../../lib/skuCode.js";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { SerialLink } from "../../components/SerialLink";
@@ -284,7 +285,9 @@ export function InventoryPage() {
     [],
     asListOf(isCountedRow),
   );
-  const countedSkus = db.skus.filter((s) => !skuTracksSerial(db, s.id));
+  const countedSkus = db.skus.filter(
+    (s) => isLiveSku(s) && !skuTracksSerial(db, s.id),
+  );
   /**
    * One batch, once — a ref rather than state, because that is the only kind
    * of latch that closes in time.

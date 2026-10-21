@@ -29,6 +29,7 @@ import {
   EditOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
+  MergeCellsOutlined,
   PlusOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
@@ -46,12 +47,19 @@ import type { CatalogModel, Sku } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
 import {
   freeSkuCode,
+  isLiveSku,
   isMachineSkuCode,
   sameVariant,
   skuCodeFor,
 } from "../../lib/skuCode.js";
 import { COLUMN } from "../../theme/tokens";
-import { fullNameRenames } from "../../lib/modelName.js";
+import {
+  fullModelName,
+  fullNameRenames,
+  modelIdentity,
+} from "../../lib/modelName.js";
+import { duplicateGroups, matchAppleDb } from "../../lib/catalogMerge.js";
+import { DuplicateReviewModal } from "./DuplicateReviewModal";
 import {
   applyNewProduct,
   familiesFor,
@@ -208,7 +216,7 @@ export function ProductsPage() {
   const generate = (mode: "APPEND" | "REPLACE") => {
     const m = model!;
     const wanted = combos(m.axes);
-    const existing = db.skus.filter((s) => s.modelId === m.id);
+    const existing = db.skus.filter((s) => isLiveSku(s) && s.modelId === m.id);
     const inStock = new Set(db.units.map((u) => u.skuId));
     modal.confirm({
       title:
@@ -229,7 +237,10 @@ export function ProductsPage() {
           for (const w of wanted) {
             if (
               d.skus.some(
-                (s) => s.modelId === m.id && sameVariant(s.variantLabel, w),
+                (s) =>
+                  isLiveSku(s) &&
+                  s.modelId === m.id &&
+                  sameVariant(s.variantLabel, w),
               )
             )
               continue;
@@ -285,38 +296,80 @@ export function ProductsPage() {
    */
   const runImport = (picked: ImportCandidate[]) => {
     let added = 0;
+    let linked = 0;
     let skus = 0;
     let skipped = 0;
     mutate((d) => {
+      const taken = new Set(d.skus.map((x) => x.code));
       for (const c of picked) {
-        if (d.models.some((m) => m.identifier === c.identifier)) {
+        /*
+         * One product, one row (2026-10-21): an entry whose machine is
+         * already in the catalogue — typed in by hand, from B2Soft, or under
+         * another AppleDB identifier — is LINKED to that product, and only
+         * the RAM × SSD it lacks is added. It is never copied in beside it.
+         */
+        const match = matchAppleDb(d, c);
+        // A possible match is a person's call: it is listed, not imported.
+        if (match.status === "LINKED" || match.status === "POSSIBLE") {
           skipped += 1;
           continue;
         }
-        /*
-         * A variant whose code the catalogue already holds IS already in the
-         * catalogue — typed in by hand, or imported under another AppleDB
-         * entry — so it is skipped rather than minted as `… (2)`. A model
-         * none of whose variants is new is not imported at all (2026-10-21).
-         */
-        const taken = new Set(d.skus.map((x) => x.code));
-        const fresh = combos([
+        const labels = combos([
           { name: "RAM", values: c.ram },
           { name: "SSD", values: c.ssd },
-        ])
-          .map((label) => ({
-            label,
-            code: skuCodeFor(c.name, c.releaseYear, label, ["RAM", "SSD"]),
-          }))
-          .filter((v) => !taken.has(v.code));
-        if (fresh.length === 0) {
-          skipped += 1;
+        ]);
+        if (match.status === "MATCH") {
+          const m = d.models.find((x) => x.id === match.model.id)!;
+          m.identifiers = [
+            ...new Set([...(m.identifiers ?? []), c.identifier]),
+          ];
+          linked += 1;
+          // Only onto a RAM × SSD product: one with a processor option
+          // cannot take a variant that names none.
+          const keys = m.axes
+            .map((a) => a.name.toUpperCase())
+            .sort()
+            .join("|");
+          if (keys !== "RAM|SSD") continue;
+          for (const label of labels) {
+            if (
+              d.skus.some(
+                (s) =>
+                  isLiveSku(s) &&
+                  s.modelId === m.id &&
+                  sameVariant(s.variantLabel, label),
+              )
+            ) {
+              continue;
+            }
+            const [ram, ssd] = label.split(" / ");
+            for (const a of m.axes) {
+              const v = a.name.toUpperCase() === "RAM" ? ram! : ssd!;
+              if (!a.values.includes(v)) a.values.push(v);
+            }
+            const code = freeSkuCode(
+              taken,
+              skuCodeFor(m.name, m.releaseYear, label, ["RAM", "SSD"]),
+            );
+            taken.add(code);
+            d.skus.push({
+              id: nextId("sku"),
+              modelId: m.id,
+              code,
+              name: m.name,
+              variantLabel: label,
+              price: 0,
+            });
+            skus += 1;
+          }
           continue;
         }
         const id = nextId("m");
+        const identity = modelIdentity(c.name, c.releaseYear);
+        const name = identity ? fullModelName(identity) : c.name;
         d.models.push({
           id,
-          name: c.name,
+          name,
           category: c.category,
           releaseYear: c.releaseYear,
           identifier: c.identifier,
@@ -325,17 +378,28 @@ export function ProductsPage() {
             { name: "RAM", values: c.ram },
             { name: "SSD", values: c.ssd },
           ],
+          ...(identity
+            ? {
+                family: identity.family,
+                ...(identity.sizeInch ? { sizeInch: identity.sizeInch } : {}),
+                ...(/^M\d/.test(identity.era) ? { chip: identity.era } : {}),
+                ...(identity.extra ? { extra: identity.extra } : {}),
+              }
+            : {}),
         });
         added += 1;
-        for (const v of fresh) {
-          if (taken.has(v.code)) continue;
-          taken.add(v.code);
+        for (const label of labels) {
+          const code = freeSkuCode(
+            taken,
+            skuCodeFor(name, c.releaseYear, label, ["RAM", "SSD"]),
+          );
+          taken.add(code);
           d.skus.push({
             id: nextId("sku"),
             modelId: id,
-            code: v.code,
-            name: c.name,
-            variantLabel: v.label,
+            code,
+            name,
+            variantLabel: label,
             price: 0,
           });
           skus += 1;
@@ -343,16 +407,21 @@ export function ProductsPage() {
       }
     });
     setImportOpen(false);
-    if (added === 0) {
+    if (added === 0 && linked === 0) {
       message.info(
-        "Nothing new — every model picked is already in the catalogue.",
+        t(
+          "products.importNothingNew",
+          "Nothing new — every model picked is already in the catalogue.",
+        ),
       );
       return;
     }
     message.success(
-      `Imported ${added} model(s) and ${skus} variant(s) from AppleDB${
-        skipped ? `, skipping ${skipped} already in the catalogue` : ""
-      }. Prices start at Rp 0 — set them before selling.`,
+      t(
+        "products.importDone",
+        "{{added}} new product(s), {{linked}} linked to a product already here, {{skus}} variant(s) added, {{skipped}} left out (already linked, or a possible match to check by hand). Prices start at Rp 0 — set them before selling.",
+        { added, linked, skus, skipped },
+      ),
     );
   };
 
@@ -388,6 +457,7 @@ export function ProductsPage() {
       if (
         db.skus.some(
           (s) =>
+            isLiveSku(s) &&
             s.modelId === m.id &&
             sameVariant(s.variantLabel, v.variantLabel.trim()),
         )
@@ -425,11 +495,16 @@ export function ProductsPage() {
    * display what's in the variant"). The generators no longer mint such codes;
    * this clears the ones they already did. A code somebody typed is left alone.
    */
-  const machineCodes = db.skus.filter((k) => isMachineSkuCode(k.code)).length;
+  const machineCodes = db.skus.filter(
+    (k) => isLiveSku(k) && isMachineSkuCode(k.code),
+  ).length;
   // Product names in the shop's short style, written in full (owner decision
   // 2026-10-21). Duplicates and names with a processor in them are left for
   // a person: see `fullNameRenames`.
   const nameRenames = fullNameRenames(db.models);
+  // The same product, in the catalogue more than once (2026-10-21).
+  const dupGroups = duplicateGroups(db).length;
+  const [reviewing, setReviewing] = useState(false);
   const renameMachineCodes = () =>
     modal.confirm({
       title: t(
@@ -449,7 +524,7 @@ export function ProductsPage() {
         mutate((d) => {
           const taken = new Set(d.skus.map((x) => x.code));
           for (const sku of d.skus) {
-            if (!isMachineSkuCode(sku.code)) continue;
+            if (!isLiveSku(sku) || !isMachineSkuCode(sku.code)) continue;
             const m = d.models.find((x) => x.id === sku.modelId);
             if (!m) continue;
             taken.delete(sku.code);
@@ -491,6 +566,20 @@ export function ProductsPage() {
           icon: <CloudDownloadOutlined />,
           onClick: openImport,
         },
+        ...(dupGroups > 0
+          ? [
+              {
+                key: "duplicates",
+                label: t(
+                  "products.reviewDuplicates",
+                  "Review duplicates ({{n}})",
+                  { n: dupGroups },
+                ),
+                icon: <MergeCellsOutlined />,
+                onClick: () => setReviewing(true),
+              },
+            ]
+          : []),
         ...(nameRenames.length > 0
           ? [
               {
@@ -575,7 +664,9 @@ export function ProductsPage() {
                 rowKey="id"
                 size="small"
                 pagination={false}
-                dataSource={db.skus.filter((s) => s.modelId === m.id)}
+                dataSource={db.skus.filter(
+                  (s) => isLiveSku(s) && s.modelId === m.id,
+                )}
                 columns={[
                   { title: "SKU", dataIndex: "code" },
                   {
@@ -677,9 +768,11 @@ export function ProductsPage() {
               title: t("products.variants", "Variants"),
               key: "variants",
               sortValue: (m) =>
-                db.skus.filter((s) => s.modelId === m.id).length,
+                db.skus.filter((s) => isLiveSku(s) && s.modelId === m.id)
+                  .length,
               render: (_, m) =>
-                db.skus.filter((s) => s.modelId === m.id).length,
+                db.skus.filter((s) => isLiveSku(s) && s.modelId === m.id)
+                  .length,
             },
             {
               title: "",
@@ -820,6 +913,74 @@ export function ProductsPage() {
                   searchable: true,
                 },
                 {
+                  // What the import would do with it (2026-10-21): an entry
+                  // already in the catalogue is linked, never copied.
+                  title: t("products.inCatalogue", "In catalogue"),
+                  key: "match",
+                  facet: true,
+                  sortValue: (c) => matchAppleDb(db, c).status,
+                  facetValue: (c) => {
+                    const m = matchAppleDb(db, c);
+                    return m.status === "NEW"
+                      ? t("products.matchNew", "New")
+                      : m.status === "LINKED"
+                        ? t("products.matchLinked", "Already linked")
+                        : m.status === "POSSIBLE"
+                          ? t("products.matchPossible", "Possible match")
+                          : t("products.matchSame", "Same product");
+                  },
+                  render: (_, c) => {
+                    const m = matchAppleDb(db, c);
+                    if (m.status === "NEW") {
+                      return (
+                        <Tag color="green">{t("products.matchNew", "New")}</Tag>
+                      );
+                    }
+                    if (m.status === "POSSIBLE") {
+                      return (
+                        <Tooltip
+                          title={t(
+                            "products.matchPossibleTip",
+                            "Could be {{names}} — not imported. Pick it by hand if it is new.",
+                            { names: m.models.map((x) => x.name).join(", ") },
+                          )}
+                        >
+                          <Tag color="orange">
+                            {t("products.matchPossible", "Possible match")}
+                          </Tag>
+                        </Tooltip>
+                      );
+                    }
+                    return (
+                      <Tooltip
+                        title={
+                          m.status === "LINKED"
+                            ? t(
+                                "products.matchLinkedTip",
+                                "Already linked to {{name}}",
+                                {
+                                  name: m.model.name,
+                                },
+                              )
+                            : t(
+                                "products.matchSameTip",
+                                "Same product as {{name}} — importing links it there and adds only missing variants",
+                                { name: m.model.name },
+                              )
+                        }
+                      >
+                        <Tag color={m.status === "LINKED" ? undefined : "blue"}>
+                          {m.status === "LINKED"
+                            ? t("products.matchLinked", "Already linked")
+                            : t("products.matchSameAs", "Same as {{name}}", {
+                                name: m.model.name,
+                              })}
+                        </Tag>
+                      </Tooltip>
+                    );
+                  },
+                },
+                {
                   title: t("products.category", "Category"),
                   dataIndex: "category",
                   facet: true,
@@ -951,6 +1112,11 @@ export function ProductsPage() {
           </>
         )}
       </Modal>
+
+      <DuplicateReviewModal
+        open={reviewing}
+        onClose={() => setReviewing(false)}
+      />
 
       <Modal
         title={t("products.addProduct", "Add product")}
@@ -1331,7 +1497,9 @@ export function ProductsPage() {
               <EditableTable<Sku>
                 rowKey="id"
                 size="small"
-                dataSource={db.skus.filter((s) => s.modelId === model.id)}
+                dataSource={db.skus.filter(
+                  (s) => isLiveSku(s) && s.modelId === model.id,
+                )}
                 // A price box is a cell you fill in, so this is an editor and
                 // not a list: the columns hold their widths rather than being
                 // divided up, and below `md` a variant becomes a card with its

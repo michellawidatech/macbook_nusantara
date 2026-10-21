@@ -20,7 +20,7 @@
  */
 import type { CatalogModel, MockDb } from "../mock/seed.js";
 import { fullModelName, identityKey, modelIdentity } from "./modelName.js";
-import { freeSkuCode, sameVariant, skuCodeFor } from "./skuCode.js";
+import { freeSkuCode, isLiveSku, sameVariant, skuCodeFor } from "./skuCode.js";
 
 /** The lines a category offers. Empty: the product is named by hand. */
 export function familiesFor(category: string | undefined): string[] {
@@ -149,7 +149,7 @@ export function planNewProduct(
   // variant of the product, not the product: never the target. Among the
   // rest, one already named in full wins, then the one with most variants.
   const variantsOf = (m: CatalogModel) =>
-    db.skus.filter((s) => s.modelId === m.id).length;
+    db.skus.filter((s) => isLiveSku(s) && s.modelId === m.id).length;
   const existing = ownKey
     ? live
         .filter((m) => {
@@ -249,9 +249,22 @@ export function applyNewProduct(
   const target =
     plan.existing && d.models.find((m) => m.id === plan.existing!.id);
   const id = target?.id ?? nextId("m");
+  // The product's facts, so the server keys it by them (2026-10-21).
+  const facts = input.family
+    ? {
+        family: input.family,
+        ...(input.appleChip?.trim()
+          ? { chip: input.appleChip.trim().toUpperCase().replace(/\s+/g, " ") }
+          : {}),
+      }
+    : {};
   if (target) {
     target.name = plan.name;
     target.axes = plan.axes;
+    if (input.family && !target.family) Object.assign(target, facts);
+    if (input.sizeInch && target.sizeInch === undefined) {
+      target.sizeInch = input.sizeInch;
+    }
   } else {
     d.models.push({
       id,
@@ -261,6 +274,7 @@ export function applyNewProduct(
       ...(input.sizeInch ? { sizeInch: input.sizeInch } : {}),
       source: "MANUAL",
       axes: plan.axes,
+      ...facts,
     });
   }
   for (const v of plan.variants) {

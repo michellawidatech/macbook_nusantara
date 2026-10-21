@@ -2023,6 +2023,165 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
     }
   }, 180_000);
 
+  it("merges a duplicate product: units move, the old variant is kept and marked, a third copy is refused (2026-10-21)", async () => {
+    const shop = await loadDemo();
+    const category = (shop["models"] as Row[])[0]!["category"];
+    const model = (id: string, name: string): Row => ({
+      id,
+      name,
+      category,
+      releaseYear: 2031,
+      axes: [
+        { name: "RAM", values: ["8GB"] },
+        { name: "SSD", values: ["512GB"] },
+      ],
+      source: "MANUAL",
+    });
+    const variant = (id: string, modelId: string, code: string): Row => ({
+      id,
+      modelId,
+      code,
+      name: "x",
+      variantLabel: "8GB / 512GB",
+      price: 0,
+    });
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    try {
+      // The shop's duplicates are from before this rule: made in import mode,
+      // which lets one through keyless rather than failing a replay.
+      const created = await commitStore(db, {
+        staffId: ACTOR,
+        mode: "import",
+        changes: encodeChangeset(
+          diffStore(
+            { models: [], skus: [] },
+            {
+              models: [
+                model("m_full", 'MacBook Air 13" 2031'),
+                { ...model("m_dup", 'AIR 13" 2031'), identifiers: ["ZZ99,1"] },
+              ],
+              skus: [
+                variant("s_full", "m_full", 'AIR 13" 2031 8/512'),
+                variant("s_dup", "m_dup", "SKU_ZZDUP"),
+              ],
+            },
+          ),
+        ),
+      });
+      const rows = (name: "models" | "skus") =>
+        new Map(
+          (created.rows[name] as Row[])
+            .map((r) => decodeRow(name, r))
+            .map((r) => [r["id"] as string, r]),
+        );
+      const models = rows("models");
+      const skus = rows("skus");
+      // The second copy is keyless: the first holds the product's key.
+      expect(
+        (await db.catalogModel.findUnique({ where: { id: "m_dup" } }))!
+          .productKey,
+      ).toBeNull();
+
+      // Put a unit on the shelf under the duplicate.
+      const snap = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      const unit = snap["units"]!.find((u) => u["status"] === "TERSEDIA")!;
+      await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { units: [unit] },
+            { units: [{ ...unit, skuId: "s_dup" }] },
+          ),
+        ),
+      });
+
+      // The merge, as the browser sends it.
+      const merged = await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            {
+              models: [models.get("m_full")!, models.get("m_dup")!],
+              skus: [skus.get("s_dup")!],
+              units: [{ ...unit, skuId: "s_dup" }],
+            },
+            {
+              models: [
+                {
+                  ...models.get("m_full")!,
+                  family: "MacBook Air",
+                  sizeInch: 13,
+                  identifiers: ["ZZ99,1"],
+                },
+              ],
+              skus: [
+                {
+                  ...skus.get("s_dup")!,
+                  modelId: "m_full",
+                  mergedIntoId: "s_full",
+                },
+              ],
+              units: [{ ...unit, skuId: "s_full" }],
+            },
+          ),
+        ),
+      });
+      expect(merged.removed.models).toEqual(["m_dup"]);
+      const dup = await db.sku.findUnique({ where: { id: "s_dup" } });
+      expect(dup).toMatchObject({ archived: true, mergedIntoId: "s_full" });
+      expect(
+        (await db.unit.findUnique({
+          where: { serial: unit["serial"] as string },
+        }))!.skuId,
+      ).toBe("s_full");
+      expect(
+        (await db.modelIdentifier.findUnique({
+          where: { identifier: "ZZ99,1" },
+        }))!.modelId,
+      ).toBe("m_full");
+      const full = await db.catalogModel.findUnique({
+        where: { id: "m_full" },
+      });
+      expect(full!.productKey).toBe("MACBOOK AIR|13|2031|");
+      // Still projected, for the receipts that name it.
+      const after = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      expect(after["skus"]!.find((s) => s["id"] === "s_dup")).toMatchObject({
+        mergedIntoId: "s_full",
+      });
+
+      // A third copy of the product is refused…
+      await expect(
+        commitStore(app, {
+          staffId: ACTOR,
+          changes: encodeChangeset(
+            diffStore(
+              { models: [] },
+              { models: [model("m_third", 'MacBook Air 13" 2031')] },
+            ),
+          ),
+        }),
+      ).rejects.toThrow(/sudah ada/);
+      // …and so is a second copy of a variant on its product.
+      await expect(
+        commitStore(app, {
+          staffId: ACTOR,
+          changes: encodeChangeset(
+            diffStore(
+              { skus: [] },
+              { skus: [variant("s_again", "m_full", 'AIR 13" 2031 8/512 X')] },
+            ),
+          ),
+        }),
+      ).rejects.toThrow(/sudah ada/);
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
   it("records a marketplace payout: the payment, the settlement and its log", async () => {
     await loadDemo();
     const snap = decodeStore(

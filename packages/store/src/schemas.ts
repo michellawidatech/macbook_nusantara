@@ -391,6 +391,14 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     axes: z.array(z.strictObject({ name: text, values: z.array(text) })),
     identifier: text.optional(),
     source: z.enum(CATALOG_SOURCES).optional(),
+    /** The product's facts (2026-10-21) — see `CatalogModel.family`. */
+    family: text.optional(),
+    chip: text.optional(),
+    extra: text.optional(),
+    /** AppleDB identifiers linked to this product. Written once, never removed. */
+    identifiers: z.array(text).optional(),
+    /** Products a person said are NOT this one. Written once, never removed. */
+    notDuplicateOf: z.array(id).optional(),
   });
 
   const sku = z.strictObject({
@@ -401,6 +409,8 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     variantLabel: text,
     axisValues: z.record(z.string(), z.string()).optional(),
     price: money,
+    /** Merged into another variant (2026-10-21): kept for history, offered nowhere. */
+    mergedIntoId: id.optional(),
   });
 
   const unit = z.strictObject({
