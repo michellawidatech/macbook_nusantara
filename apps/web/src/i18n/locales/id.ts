@@ -3951,6 +3951,12 @@ export const id: Record<string, string> = {
   "products.skuCode": "Kode SKU",
   "products.skuCodeRequired": "Isi kode SKU",
   "products.skuCodeTaken": "Kode ini sudah dipakai varian lain",
+  "products.renameMachineCodes": "Ganti kode SKU ({{n}})",
+  "products.renameMachineCodesTitle": "Ganti {{n}} kode SKU?",
+  "products.renameMachineCodesBody":
+    'Setiap kode SKU_… diganti dengan penamaan toko, mis. AIR 13" 2020 I7 8/128. Kode yang diketik manual tidak diubah.',
+  "products.renameMachineCodesOk": "Ganti",
+  "products.renameMachineCodesDone": "{{n}} kode SKU diganti.",
   "products.useShopNaming": "Pakai penamaan toko",
   "trade.editTitle": "Ubah tukar tambah",
   "trade.save": "Simpan",

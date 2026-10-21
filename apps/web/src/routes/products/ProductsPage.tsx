@@ -40,7 +40,11 @@ import { fetchMacModels, type ImportCandidate } from "../../lib/appledb.js";
 import { useDb, mutate, nextId } from "../../mock/store.js";
 import type { CatalogModel, Sku } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
-import { parseProductName, shopProductName } from "../../lib/productCode.js";
+import {
+  freeSkuCode,
+  isMachineSkuCode,
+  skuCodeFor,
+} from "../../lib/skuCode.js";
 import { COLUMN } from "../../theme/tokens";
 
 function combos(axes: { name: string; values: string[] }[]): string[] {
@@ -49,59 +53,6 @@ function combos(axes: { name: string; values: string[] }[]): string[] {
       acc.flatMap((p) => a.values.map((v) => (p ? `${p} / ${v}` : v))),
     [""],
   );
-}
-
-/**
- * One variant's SKU CODE, in the shop's own naming convention (owner ask
- * 2026-09-21: *"in the SKU and product input, actually they use the naming
- * convention in stock persediaan"*).
- *
- * `AIR 13" 2020 I5 8/256` — B2Soft's `PERSEDIAAN BARANG` spelling, which the
- * shop has read its stock off for years and which the bookkeeper's sheets
- * start from. It replaces `nextId("SKU")`, which produced `SKU_17`: a code
- * nobody could look up, match against a supplier's quotation or find in the
- * old system.
- *
- * The MODEL NAME is read for its parts rather than trusted to be in the
- * convention (`parseProductName`), because a product added by hand or brought
- * in from AppleDB is named however whoever added it named it. A name the
- * convention cannot read — an accessory, a spare part — keeps its own words
- * and simply gains the variant, which is the honest answer: `KOLI` has no
- * chip, no size and nothing to configure.
- *
- * Deliberately NOT unique on its own. Two products genuinely named the same
- * thing are the same thing, and `Sku.code` is unique in the schema, so the
- * caller appends a discriminator when the shop really does hold two.
- */
-function skuCodeFor(
-  modelName: string,
-  year: number | string | undefined,
-  variantLabel: string,
-): string {
-  const parsed = parseProductName(modelName);
-  // "8GB / 256GB" as the axes joined it. RAM first, storage second, which is
-  // the order `combos` builds and the order the convention prints.
-  const [ram, ssd] = variantLabel.split("/").map((v) => v.trim());
-  const name = shopProductName({
-    line: parsed.line,
-    ...(parsed.sizeInch === undefined ? {} : { sizeInch: parsed.sizeInch }),
-    year: parsed.year ?? (year === undefined ? null : String(year)),
-    ...(parsed.chip === undefined ? {} : { chip: parsed.chip }),
-    ...(ram ? { ram } : {}),
-    ...(ssd ? { ssd } : {}),
-    ...(parsed.extra === undefined ? {} : { extra: parsed.extra }),
-  });
-  return name === "" ? modelName.trim().toUpperCase() : name;
-}
-
-/** A code nothing else in the catalogue is using. See `skuCodeFor`. */
-function freeSkuCode(taken: ReadonlySet<string>, wanted: string): string {
-  if (!taken.has(wanted)) return wanted;
-  for (let n = 2; n < 100; n += 1) {
-    const tried = `${wanted} (${n})`;
-    if (!taken.has(tried)) return tried;
-  }
-  return `${wanted} ${Date.now()}`;
 }
 
 const SPEC_SOURCE_TAG: Record<
@@ -236,13 +187,24 @@ export function ProductsPage() {
               (s) => s.modelId !== m.id || inStock.has(s.id),
             );
           }
+          const taken = new Set(d.skus.map((x) => x.code));
           for (const w of wanted) {
             if (d.skus.some((s) => s.modelId === m.id && s.variantLabel === w))
               continue;
+            const code = freeSkuCode(
+              taken,
+              skuCodeFor(
+                m.name,
+                m.releaseYear,
+                w,
+                m.axes.map((a) => a.name),
+              ),
+            );
+            taken.add(code);
             d.skus.push({
               id: nextId("sku"),
               modelId: m.id,
-              code: nextId("SKU").toUpperCase(),
+              code,
               name: m.name,
               variantLabel: w,
               price: base,
@@ -303,14 +265,20 @@ export function ProductsPage() {
           ],
         });
         added += 1;
+        const taken = new Set(d.skus.map((x) => x.code));
         for (const label of combos([
           { name: "RAM", values: c.ram },
           { name: "SSD", values: c.ssd },
         ])) {
+          const code = freeSkuCode(
+            taken,
+            skuCodeFor(c.name, c.releaseYear, label, ["RAM", "SSD"]),
+          );
+          taken.add(code);
           d.skus.push({
             id: nextId("sku"),
             modelId: id,
-            code: nextId("SKU").toUpperCase(),
+            code,
             name: c.name,
             variantLabel: label,
             price: 0,
@@ -393,7 +361,12 @@ export function ProductsPage() {
           modelId: m.id,
           code: freeSkuCode(
             new Set(d.skus.map((x) => x.code)),
-            skuCodeFor(m.name, m.releaseYear, v.variantLabel.trim()),
+            skuCodeFor(
+              m.name,
+              m.releaseYear,
+              v.variantLabel.trim(),
+              m.axes.map((a) => a.name),
+            ),
           ),
           name: m.name,
           variantLabel: v.variantLabel.trim(),
@@ -403,6 +376,57 @@ export function ProductsPage() {
       setVariantOpen(false);
       variantForm.resetFields();
       message.success("Variant added.");
+    });
+
+  /**
+   * Every variant still carrying a machine-made `SKU_…` code, renamed to the
+   * shop's naming in one press (owner ask 2026-10-21: "make the SKU actually
+   * display what's in the variant"). The generators no longer mint such codes;
+   * this clears the ones they already did. A code somebody typed is left alone.
+   */
+  const machineCodes = db.skus.filter((k) => isMachineSkuCode(k.code)).length;
+  const renameMachineCodes = () =>
+    modal.confirm({
+      title: t(
+        "products.renameMachineCodesTitle",
+        "Rename {{n}} SKU code(s)?",
+        {
+          n: machineCodes,
+        },
+      ),
+      content: t(
+        "products.renameMachineCodesBody",
+        "Each SKU_… code becomes the shop's naming, e.g. AIR 13\" 2020 I7 8/128. Codes typed by hand are not touched.",
+      ),
+      okText: t("products.renameMachineCodesOk", "Rename"),
+      onOk: () => {
+        let n = 0;
+        mutate((d) => {
+          const taken = new Set(d.skus.map((x) => x.code));
+          for (const sku of d.skus) {
+            if (!isMachineSkuCode(sku.code)) continue;
+            const m = d.models.find((x) => x.id === sku.modelId);
+            if (!m) continue;
+            taken.delete(sku.code);
+            sku.code = freeSkuCode(
+              taken,
+              skuCodeFor(
+                m.name,
+                m.releaseYear,
+                sku.variantLabel,
+                m.axes.map((a) => a.name),
+              ),
+            );
+            taken.add(sku.code);
+            n += 1;
+          }
+        });
+        message.success(
+          t("products.renameMachineCodesDone", "{{n}} SKU code(s) renamed.", {
+            n,
+          }),
+        );
+      },
     });
 
   return (
@@ -422,6 +446,20 @@ export function ProductsPage() {
           icon: <CloudDownloadOutlined />,
           onClick: openImport,
         },
+        ...(machineCodes > 0
+          ? [
+              {
+                key: "rename-codes",
+                label: t(
+                  "products.renameMachineCodes",
+                  "Rename SKU codes ({{n}})",
+                  { n: machineCodes },
+                ),
+                icon: <EditOutlined />,
+                onClick: renameMachineCodes,
+              },
+            ]
+          : []),
       ]}
     >
       <Card>
@@ -1236,6 +1274,7 @@ export function ProductsPage() {
                           skuModel.name,
                           skuModel.releaseYear,
                           skuEditing.variantLabel,
+                          skuModel.axes.map((a) => a.name),
                         ),
                       ),
                     })
