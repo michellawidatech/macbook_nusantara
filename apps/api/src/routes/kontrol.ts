@@ -28,6 +28,7 @@ import { ApiError } from "../errors.js";
 const ACTIONS = [
   "CREATE",
   "UPDATE",
+  "DELETE",
   "ARCHIVE",
   "LOGIN",
   "LOGIN_GAGAL",

@@ -2261,6 +2261,9 @@ enum ReqStatus {
 enum AuditAction {
   CREATE
   UPDATE
+  /// A row the store REMOVED — a QC photo purged, an unused discount, a
+  /// draft count (2026-10-22, the activity log).
+  DELETE
   ARCHIVE
   LOGIN
   LOGIN_GAGAL

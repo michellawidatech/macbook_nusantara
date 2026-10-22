@@ -1,8 +1,8 @@
 /**
- * A supplier has no origin code any more (owner ask 2026-10-22: *"remove
- * settings that are not important. Like … supplier code"*). The serial stopped
- * carrying one on 2026-09-21 and nothing has read it since, so neither place
- * that adds or edits a supplier asks for it.
+ * Settings pared back (owner ask 2026-10-22: *"remove settings that are not
+ * important. Like … supplier code"*). A supplier has no origin code any more:
+ * the serial stopped carrying one on 2026-09-21 and nothing has read it
+ * since, so neither place that adds or edits a supplier asks for it.
  */
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -74,5 +74,30 @@ describe("a supplier without an origin code", () => {
         getDb().suppliers.find((s) => s.name === "Gudang Apel Baru"),
       ).toBeDefined(),
     );
+  });
+});
+
+/*
+ * Two more that reached nothing (owner ask 2026-10-22): the per-marketplace
+ * fee table, unread since deductions became typed per payout (2026-09-20),
+ * and the shop address, which the faktur no longer prints. The listing
+ * markup stays — it IS the marketplace price — and so does the contact,
+ * which the chatbot gives out.
+ */
+describe("Settings without the settings that reach nothing", () => {
+  it("keeps the listing markup and drops the marketplace fee boxes", async () => {
+    wrap(<SettingsPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Marketplace" }));
+    const panel = screen.getByRole("tabpanel");
+    expect(within(panel).getByLabelText("Listing markup")).toBeInTheDocument();
+    expect(within(panel).queryByLabelText(/ fee$/)).toBeNull();
+  });
+
+  it("keeps the shop's contact and drops its address", async () => {
+    wrap(<SettingsPage />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Shop identity" }));
+    const panel = screen.getByRole("tabpanel");
+    expect(within(panel).getByLabelText("Contact")).toBeInTheDocument();
+    expect(within(panel).queryByLabelText("Address")).toBeNull();
   });
 });

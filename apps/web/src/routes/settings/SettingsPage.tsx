@@ -34,6 +34,7 @@ import { PageContainer } from "../../components/PageContainer";
 import { CategorySettings } from "./CategorySettings.js";
 import { ScannerSettings } from "./ScannerSettings.js";
 import { StaffAccountsSettings } from "./StaffAccountsSettings.js";
+import { ActivitySettings } from "./ActivitySettings.js";
 import { ChangePasswordForm } from "../../components/ChangePasswordForm.js";
 import { useSession } from "../../lib/session.js";
 import { DataTable } from "../../components/DataTable";
@@ -52,8 +53,6 @@ import {
 } from "../../lib/battery.js";
 import { COLUMN, FORM_CENTRE, SPACE } from "../../theme/tokens";
 import { Link } from "react-router-dom";
-import { SALE_CHANNELS } from "../../lib/channels.js";
-import { commissionPctOf } from "../../lib/marketplace.js";
 import { DEFAULT_MARKETPLACE_MARKUP_PCT } from "../../lib/unitPrice.js";
 import type { ReasonActivity, Supplier } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
@@ -106,7 +105,6 @@ export function SettingsPage() {
   const [shopForm] = Form.useForm<{
     shopName: string;
     shopTagline: string;
-    shopAddress: string;
     shopContact: string;
   }>();
   const [activity, setActivity] = useState<ReasonActivity>("ADJUSTMENT");
@@ -1362,7 +1360,7 @@ export function SettingsPage() {
    * rule the app enforces against what the bank says.
    */
   const marketplace = (
-    <Card title={t("settings.marketplace", "Marketplace pricing & fees")}>
+    <Card title={t("settings.marketplacePricing", "Marketplace pricing")}>
       <Flex vertical gap={SPACE.lg}>
         <Flex vertical gap={SPACE.xs}>
           <Typography.Text strong>
@@ -1391,52 +1389,19 @@ export function SettingsPage() {
             }
           />
         </Flex>
-
-        <Divider style={{ margin: 0 }} />
-
-        <Flex vertical gap={SPACE.xs}>
-          <Typography.Text strong>
-            {t("settings.commissions", "What each marketplace charges")}
-          </Typography.Text>
-          <Typography.Text type="secondary">
-            {t(
-              "settings.commissionsHint",
-              "Deducted from a payout. A withdrawal opens with this figure and every other charge is typed.",
-            )}
-          </Typography.Text>
-          <Flex gap={SPACE.lg} wrap>
-            {SALE_CHANNELS.filter((c) => c.holdsFunds).map((c) => (
-              <Flex vertical gap={SPACE.xs} key={c.value}>
-                <Typography.Text type="secondary">{c.label}</Typography.Text>
-                <InputNumber
-                  min={0}
-                  max={100}
-                  addonAfter="%"
-                  style={{ width: 140 }}
-                  aria-label={t("settings.commissionFor", "{{channel}} fee", {
-                    channel: c.label,
-                  })}
-                  value={commissionPctOf(c.value, db.settings.marketplaceFees)}
-                  onChange={(v: number | null) =>
-                    v != null &&
-                    mutate((d) => {
-                      d.settings.marketplaceFees = {
-                        ...(d.settings.marketplaceFees ?? {}),
-                        [c.value]: v,
-                      };
-                    })
-                  }
-                />
-              </Flex>
-            ))}
-          </Flex>
-        </Flex>
       </Flex>
     </Card>
   );
 
   /**
-   * Who the shop is, as printed at the top of every faktur.
+   * Who the shop is: the name and tagline the faktur prints, and the contact
+   * the chatbot gives out (`shop.contact`, packages/agent systemFacts).
+   *
+   * ⚠️ No address box since 2026-10-22 (owner ask): the faktur prints the
+   * fixed address the owner gave (`SHOP_ADDRESS`), and nothing read this one.
+   * The setting itself (`shop.address`) is untouched.
+   *
+   * History: who the shop is, as printed at the top of every faktur.
    *
    * These four were a `const SHOP` inside `components/Invoice.tsx`, under a
    * comment reading "Hard-coded for now — Settings does not own shop identity
@@ -1464,14 +1429,12 @@ export function SettingsPage() {
         initialValues={{
           shopName: db.settings.shopName ?? "",
           shopTagline: db.settings.shopTagline ?? "",
-          shopAddress: db.settings.shopAddress ?? "",
           shopContact: db.settings.shopContact ?? "",
         }}
         onFinish={(values) => {
           mutate((d) => {
             d.settings.shopName = values.shopName.trim();
             d.settings.shopTagline = values.shopTagline.trim();
-            d.settings.shopAddress = values.shopAddress.trim();
             d.settings.shopContact = values.shopContact.trim();
           });
           message.success(
@@ -1491,14 +1454,6 @@ export function SettingsPage() {
               "settings.shopTaglineEg",
               "Second-hand Apple — sales, trade-in and service",
             )}
-          />
-        </Form.Item>
-        <Form.Item
-          name="shopAddress"
-          label={t("settings.shopAddress", "Address")}
-        >
-          <Input
-            placeholder={t("settings.shopAddressEg", "Jakarta, Indonesia")}
           />
         </Form.Item>
         <Form.Item
@@ -1590,6 +1545,13 @@ export function SettingsPage() {
                   key: "staff",
                   label: t("settings.tabStaffAccounts", "Staff accounts"),
                   children: <StaffAccountsSettings me={me} />,
+                },
+                // Who did what (owner ask 2026-10-22). `/api/kontrol/audit`
+                // is owner-only on the server too.
+                {
+                  key: "activity",
+                  label: t("settings.tabActivity", "Activity"),
+                  children: <ActivitySettings />,
                 },
               ]
             : []),

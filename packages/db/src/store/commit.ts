@@ -44,6 +44,7 @@ import {
   writeSettings,
 } from "./adapters/singletons.js";
 import { lastEvents } from "./adapters/units.js";
+import { activityRows } from "./activity.js";
 import {
   type RowWrite,
   type SingletonOf,
@@ -93,6 +94,9 @@ export interface CommitInput {
   readonly now?: Date;
   /** Transaction timeout. A till's default is 20 s; an import sets its own. */
   readonly timeoutMs?: number;
+  /** Where the save came from, for the activity log (`activity.ts`). */
+  readonly requestId?: string | null;
+  readonly ip?: string | null;
 }
 
 export interface CommitResult extends StoreDelta {
@@ -145,6 +149,8 @@ interface Plan {
   readonly rows: (RowWrite<unknown> & {
     next?: unknown;
     readonly wireBase?: unknown;
+    /** The row as it arrived — for the activity log, which shows wire form. */
+    wireNext?: unknown;
   })[];
   readonly order?: readonly string[];
 }
@@ -154,6 +160,7 @@ interface SingletonPlan {
   readonly base: unknown;
   readonly next: unknown;
   readonly wireBase: unknown;
+  readonly wireNext: unknown;
 }
 
 function plan(changes: unknown): {
@@ -207,7 +214,7 @@ function plan(changes: unknown): {
           r.key,
         );
       }
-      return { key: r.key, base, next, wireBase: r.base };
+      return { key: r.key, base, next, wireBase: r.base, wireNext: r.next };
     });
     plans.push(
       c.order === undefined ? { name, rows } : { name, rows, order: c.order },
@@ -224,6 +231,7 @@ function plan(changes: unknown): {
       base: decode(schema, s.base, name),
       next: decode(schema, s.next, name),
       wireBase: s.base,
+      wireNext: s.next,
     });
   }
   return { plans, singletons };
@@ -421,6 +429,8 @@ export async function commitStore(
           for (const p of plans) {
             for (const r of p.rows) {
               if (r.next !== undefined) r.next = replaceStrings(r.next, codes);
+              if (r.wireNext !== undefined)
+                r.wireNext = replaceStrings(r.wireNext, codes);
             }
           }
         }
@@ -536,6 +546,37 @@ export async function commitStore(
 
         // 6. The projection says what the ledger says.
         await verifyLedger(ctx);
+
+        // 6½. Who did it (2026-10-22) — in this transaction, so a refused
+        // save leaves no line and a landed one cannot lose it.
+        if (mode === "live") {
+          const activity = activityRows(
+            [
+              ...plans.flatMap((p) =>
+                p.rows.map((r) => ({
+                  collection: p.name,
+                  key: r.key,
+                  base: r.wireBase,
+                  next: r.next === undefined ? undefined : r.wireNext,
+                })),
+              ),
+              ...singletons.map((s) => ({
+                collection: s.name,
+                key: s.name === "myWarehouseId" ? ctx.staffId : "*",
+                base: s.wireBase,
+                next: s.wireNext,
+              })),
+            ],
+            {
+              staffId: ctx.staffId,
+              at: ctx.now,
+              requestId: input.requestId ?? null,
+              ip: input.ip ?? null,
+            },
+          );
+          if (activity.length > 0)
+            await tx.auditLog.createMany({ data: activity });
+        }
 
         // 7. Tell the other tills, and answer.
         const entries: [string, string][] = [];

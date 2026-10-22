@@ -1969,6 +1969,93 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
     }
   }, 180_000);
 
+  /*
+   * The activity log (owner ask 2026-10-22): every row a till saves is a line
+   * in AuditLog — who, when, what — written in the commit's own transaction,
+   * as the role the API commits as.
+   */
+  it("writes who changed what, field by field, as nusantara_app", async () => {
+    const shop = await loadDemo();
+    // The import above wrote none: a migration's rows are not activity.
+    expect(await db.auditLog.count()).toBe(0);
+    const unit = (shop["units"] as Row[]).find(
+      (u) => u["status"] === "TERSEDIA",
+    )!;
+    const regraded = unit["grade"] === "B" ? "C" : "B";
+    const note = {
+      id: "note-activity-1",
+      serial: unit["serial"],
+      body: "",
+      tag: "QC",
+      staff: "Store Test",
+      at: "2026-09-13T04:00:00.000Z",
+      photos: [
+        {
+          id: "ph-activity-1",
+          url: "data:image/jpeg;base64," + "A".repeat(4000),
+          sortOrder: 0,
+        },
+      ],
+    };
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    try {
+      await commitStore(app, {
+        staffId: ACTOR,
+        ip: "100.64.0.7",
+        changes: encodeChangeset(
+          diffStore(
+            { units: [unit], unitNotes: [] },
+            {
+              units: [{ ...unit, price: 7_250_000, grade: regraded }],
+              unitNotes: [note],
+            },
+          ),
+        ),
+      });
+      // Removed as the server now holds it: the photo's url is its own.
+      const held = (
+        decodeStore((await snapshotStore(db, { staffId: ACTOR })).db) as {
+          unitNotes: Row[];
+        }
+      ).unitNotes.find((n) => n["id"] === note.id)!;
+      await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ unitNotes: [held] }, { unitNotes: [] }),
+        ),
+      });
+    } finally {
+      await app.$disconnect();
+    }
+
+    const lines = await db.auditLog.findMany({ orderBy: { at: "asc" } });
+    const edit = lines.find((l) => l.entity === "units")!;
+    expect(edit).toMatchObject({
+      staffId: ACTOR,
+      action: "UPDATE",
+      entityId: unit["serial"],
+      ip: "100.64.0.7",
+    });
+    expect(edit.field?.split(", ").sort()).toEqual(["grade", "price"]);
+    expect(JSON.parse(edit.after!)).toEqual({
+      price: "7250000",
+      grade: regraded,
+    });
+    expect(JSON.parse(edit.before!)).toMatchObject({
+      price: String(unit["price"]),
+    });
+
+    const notes = lines.filter((l) => l.entity === "unitNotes");
+    expect(notes.map((l) => l.action)).toEqual(["CREATE", "DELETE"]);
+    // A photo is not copied into the log.
+    expect(
+      notes.every((l) => !(l.after ?? l.before ?? "").includes("AAAA")),
+    ).toBe(true);
+    expect(JSON.parse(notes[0]!.after!)).toMatchObject({
+      serial: unit["serial"],
+    });
+  });
+
   it("deletes an unused supplier and customer, and refuses a used customer", async () => {
     const shop = await loadDemo();
     const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });

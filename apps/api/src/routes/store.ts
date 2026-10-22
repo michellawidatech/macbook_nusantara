@@ -93,6 +93,9 @@ export function storeRouter(db: PrismaClient): Router {
       const result = await commitStore(db, {
         staffId: staff.id,
         changes: req.body,
+        // For the activity log (2026-10-22): where the save came from.
+        requestId: req.get("x-request-id") ?? null,
+        ip: req.ip ?? null,
       });
       res.json(scopeDelta(staff, result));
     } catch (e) {
