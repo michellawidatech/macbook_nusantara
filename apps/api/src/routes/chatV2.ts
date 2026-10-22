@@ -513,6 +513,8 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
         const calls: CallUsage[] = [];
         const result = await converse({
           client: client!,
+          // CHATBOT_MODEL: the simulator tries what the worker would run.
+          ...(anthropic.model ? { model: anthropic.model } : {}),
           db,
           ctx,
           prompt,

@@ -75,11 +75,22 @@ scores collapse. `test/retrieval.test.ts` runs 29 of the owner's questions,
 typed the way customers type them, against the real sheet; every one ranks its
 own answer first.
 
-Why not embeddings: tens of entries, one language, a small known vocabulary,
-and every decision is a line a person can read and a test can pin. An
-embedding store needs a provider, a column type and a migration to answer the
-same questions with less explanation. `indexKnowledge` is the seam if that
-changes.
+Why not embeddings *for the knowledge base*: tens of entries, one language, a
+small known vocabulary, and every decision is a line a person can read and a
+test can pin. That still holds for the owner's answers, which stay on BM25.
+
+**Embeddings are used since 2026-10-22 — for the conversation, not the
+answers** (owner decision). A returning customer's older turns are recalled
+from `ChatMemoryChunk`: one row per answered turn, embedded through Voyage AI
+(`voyage-4-lite`, 512 int8 dimensions, via MongoDB Atlas's
+`ai.mongodb.com/v1/embeddings`; Anthropic has no embeddings API) and scored by
+cosine in JS — no pgvector, because recall only ever searches ONE customer's
+own chunks. Without `VOYAGE_API_KEY`, or when Voyage fails or misses its
+1.5 s deadline, the same chunks are ranked by this file's BM25
+(`indexKnowledge`). Recalled turns ride in the per-turn half of the prompt,
+dated and fenced as "may be outdated", never in the cached half.
+`packages/agent/src/memoryRecall.ts`, `recall.ts`, `voyage.ts`;
+`apps/worker/src/memoryPass.ts`.
 
 **How the answers reach the model** (packages/agent/src/knowledge.ts). The
 owner's sheet is ~12,000 characters, so the WHOLE base rides in the prompt,

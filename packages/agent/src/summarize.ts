@@ -2,8 +2,9 @@
  * The rolling per-thread summary — the agent's long-term memory.
  *
  * Only the last few answered turns go to the model verbatim. Everything older
- * survives here instead: one cheap call, every few turns, rewriting a short note
- * of what this customer wants. `prompt.ts` injects it into the system prompt,
+ * survives here instead: one cheap call, every few turns, folding the new turns
+ * into the note — keeping the durable facts it already held (2026-10-22: it
+ * used to rewrite from scratch, and forgot a quoted price twelve turns on). `prompt.ts` injects it into the system prompt,
  * fenced as facts rather than instructions.
  *
  * It runs AFTER the reply is queued, so it costs the customer no latency, and it
@@ -26,9 +27,12 @@
  */
 
 import { stripFormatting } from "./sanitise.js";
-import { AGENT_MODEL, type AgentClient } from "./converse.js";
+import { AGENT_MODEL, EFFORT, type AgentClient } from "./converse.js";
 
-/** Same cheap model as the reply. One constant to change at migration time. */
+/**
+ * Same cheap model as the reply. The default only: `CHATBOT_SUMMARY_MODEL`
+ * overrides it without a release (the worker passes it as `model`).
+ */
 export const SUMMARY_MODEL = AGENT_MODEL;
 
 /**
@@ -44,10 +48,22 @@ export const SUMMARY_EVERY_TURNS = 3;
 /** Ceiling on turns fed to one refresh, so a catch-up after an outage stays bounded. */
 export const SUMMARY_INPUT_LIMIT = 12;
 
-/** Hard cap on the stored note: it rides in EVERY later system prompt. */
-export const SUMMARY_MAX_CHARS = 700;
+/**
+ * Hard cap on the stored note: it rides in EVERY later system prompt.
+ *
+ * 1,500 since 2026-10-22 (was 700). The note now KEEPS what it knew rather
+ * than being rewritten from the last dozen turns, and a returning customer's
+ * name, budget, the units quoted with their prices and a booking do not fit
+ * in 700 characters beside what they asked today. At Haiku 5.5's price the
+ * extra ~250 tokens per turn cost a fraction of a cent a day.
+ */
+export const SUMMARY_MAX_CHARS = 1_500;
 
-export const SUMMARY_MAX_TOKENS = 400;
+/**
+ * Room for the note (≈500 tokens, more on Haiku 5.5's tokenizer) AND for
+ * thinking, which counts toward the cap and is on by default there.
+ */
+export const SUMMARY_MAX_TOKENS = 2_048;
 
 /** The model's "nothing worth remembering yet" answer. */
 export const SUMMARY_NOTHING = "NOTHING YET";
@@ -56,12 +72,18 @@ export const SUMMARY_SYSTEM = [
   "You are keeping a working note on one WhatsApp sales conversation at a second-hand Apple shop",
   "in Indonesia, so whoever picks the thread up next does not have to read it all again.",
   "",
-  "Rewrite the WHOLE note from scratch. Do not append to the old one.",
-  "At most 5 short lines. No bullets, no asterisks, no headings, no dashes.",
+  "Write the updated note: the previous note merged with the new conversation, as one note.",
+  "KEEP every durable fact the previous note holds unless the new conversation changed it:",
+  "their name, budget, what they will use it for, the units discussed and any price the shop",
+  "quoted for them (as quoted, with the unit it was for), anything the shop promised, any",
+  "reservation or booking code and its time, any serial, any trade-in.",
+  "DROP greetings, thanks, small talk, and questions that were answered and no longer matter.",
+  "When a fact changed (a new budget, a cancelled booking), keep only the new one.",
+  "At most 10 short lines. No bullets, no asterisks, no headings, no dashes.",
   "",
   "Cover, in this order, and only what was actually said:",
   "1. What the customer wants, in plain language.",
-  "2. What has already been answered or agreed.",
+  "2. What has already been answered, quoted or agreed, and when if it was said.",
   "3. What is still open, and what happens next.",
   "4. Key data: their name, the model or variant, the budget, what they will use it for,",
   "   any reservation code, any serial, any trade-in.",
@@ -78,7 +100,11 @@ export const SUMMARY_SYSTEM = [
   `If there is nothing worth keeping yet, answer with exactly: ${SUMMARY_NOTHING}`,
 ].join("\n");
 
-/** One answered turn, as the summariser reads it. */
+/**
+ * One answered turn, as the summariser reads it. `text` is EVERY line the
+ * customer sent in the burst the reply answered, joined (turns.ts), not just
+ * the row the reply landed on.
+ */
 export interface SummaryTurn {
   readonly text: string | null;
   readonly replyText: string | null;
@@ -107,6 +133,8 @@ function clamp(text: string, max: number): string {
 
 export interface SummarizeInput {
   readonly client: AgentClient;
+  /** The model; `SUMMARY_MODEL` when absent (`CHATBOT_SUMMARY_MODEL`). */
+  readonly model?: string;
   readonly previous: string | null;
   readonly turns: readonly SummaryTurn[];
   readonly onError?: (err: unknown) => void;
@@ -126,8 +154,11 @@ export async function summarize(input: SummarizeInput): Promise<string | null> {
 
   try {
     const res = await input.client.messages.create({
-      model: SUMMARY_MODEL,
+      model: input.model ?? SUMMARY_MODEL,
       max_tokens: SUMMARY_MAX_TOKENS,
+      // No temperature (Haiku 5.5 refuses one); thinking stays adaptive and
+      // low, and the note is read off the TEXT blocks below, never content[0].
+      output_config: { effort: EFFORT },
       system: SUMMARY_SYSTEM,
       messages: [
         {
@@ -139,6 +170,7 @@ export async function summarize(input: SummarizeInput): Promise<string | null> {
       ],
     });
 
+    // By type: a Haiku 5.5 response can start with a thinking block.
     const text = res.content
       .flatMap((b) => (b.type === "text" ? [b.text] : []))
       .join("")

@@ -20,9 +20,12 @@ import {
   MIN_WAIT_MS,
   SUMMARY_EVERY_TURNS,
   agentCapabilities,
+  readAnthropicEnv,
+  readVoyageEnv,
   type AgentApiOptions,
   type AgentCapabilities,
   type AnthropicEnv,
+  type VoyageOptions,
   type WaitProfile,
 } from "@nusantara/agent";
 import type { WhatsAppCredentials } from "@nusantara/whatsapp";
@@ -48,6 +51,12 @@ export const WORKER_ENV_KEYS = [
   "GRAPH_API_VERSION",
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
+  "CHATBOT_MODEL",
+  "CHATBOT_SUMMARY_MODEL",
+  "VOYAGE_API_KEY",
+  "VOYAGE_MODEL",
+  "WORKER_MEMORY_TURNS",
+  "WORKER_MEMORY_EMBEDS",
   "WORKER_POLL_MS",
   "WORKER_DEBOUNCE_MS",
   "WORKER_DEBOUNCE_MIN_MS",
@@ -165,6 +174,16 @@ export interface WorkerConfig {
    * is how a worker deployed ahead of its API keeps answering.
    */
   readonly agentApi: AgentApiOptions | null;
+  /**
+   * Voyage AI, for chat recall (2026-10-22): `VOYAGE_API_KEY` (worker.env
+   * only — never printed) and `VOYAGE_MODEL`. Null without a key: turns are
+   * still chunked and recalled by keywords, just never embedded.
+   */
+  readonly voyage: VoyageOptions | null;
+  /** Answered turns written into `ChatMemoryChunk` per tick. */
+  readonly memoryTurnsPerTick: number;
+  /** Chunks embedded per tick — one Voyage call. */
+  readonly memoryEmbedsPerTick: number;
 }
 
 function int(raw: string | undefined, fallback: number): number {
@@ -182,10 +201,10 @@ export function loadWorkerConfig(
       // One constant for both channels — never two env fallbacks (CLAUDE.md).
       graphVersion: env["GRAPH_API_VERSION"]?.trim() || "v25.0",
     },
-    anthropic: {
-      apiKey: env["ANTHROPIC_API_KEY"]?.trim() || undefined,
-      authToken: env["ANTHROPIC_AUTH_TOKEN"]?.trim() || undefined,
-    },
+    // The credential, and CHATBOT_MODEL / CHATBOT_SUMMARY_MODEL — the
+    // model is an environment override, so moving the bot off Haiku 5.5 (or
+    // back) is an env edit and a restart, never a release.
+    anthropic: readAnthropicEnv(env),
     idlePollMs: int(env["WORKER_POLL_MS"], 2_000),
     debounceMs: int(env["WORKER_DEBOUNCE_MS"], BASE_WAIT_MS),
     // The base window is the middle of a range now. A direct question is
@@ -224,5 +243,8 @@ export function loadWorkerConfig(
             secret: env["AGENT_API_SECRET"].trim(),
           }
         : null,
+    voyage: readVoyageEnv(env),
+    memoryTurnsPerTick: int(env["WORKER_MEMORY_TURNS"], 40),
+    memoryEmbedsPerTick: int(env["WORKER_MEMORY_EMBEDS"], 32),
   };
 }

@@ -14,7 +14,8 @@
  *
  * Models (owner: "cheap for writing to the POS, medium to read intent and
  * phrase for the customer"): Sonnet 5.5 at low effort for the two that read
- * and write people, Haiku 4.5 for the one that calls tools.
+ * and write people, Haiku (`AGENT_MODEL`, Haiku 5.5 since 2026-10-22) for
+ * the one that calls tools.
  *
  * A persona in the `Persona` table (one per agent, `Persona.agent`) replaces
  * the default prompt here; the rules the code depends on are NOT in a persona
@@ -125,12 +126,39 @@ export interface RouterVerdict {
 
 // --- what it costs -----------------------------------------------------------
 
-/** US dollars per million tokens (2026-10). Cache writes are 1.25× input. */
-const PRICES: Record<string, { in: number; out: number; cacheRead: number }> = {
+/**
+ * US dollars per million tokens (2026-10). Cache reads are 0.1× input and
+ * 5-minute cache writes 1.25× input on every model here.
+ *
+ * Haiku 5.5's figures are its rate card for prompts of 100K tokens or fewer
+ * (above that it is $0.50 / $2.50). The bot's prompt — persona, rules, the
+ * owner's answers, eight turns — is a few thousand tokens, so the small card
+ * is the one that applies; `costMicros` switches card on the prompt's size
+ * anyway, so a turn that ever grows past it is priced right.
+ */
+const PRICES: Record<
+  string,
+  {
+    in: number;
+    out: number;
+    cacheRead: number;
+    /** Above `longOver` prompt tokens the whole call moves to this card. */
+    long?: { in: number; out: number; cacheRead: number };
+  }
+> = {
   "claude-sonnet-5-5": { in: 2, out: 10, cacheRead: 0.2 },
+  "claude-haiku-5-5": {
+    in: 0.1,
+    out: 0.5,
+    cacheRead: 0.01,
+    long: { in: 0.5, out: 2.5, cacheRead: 0.05 },
+  },
   "claude-haiku-4-5": { in: 1, out: 5, cacheRead: 0.1 },
   "claude-haiku-4-5-20251001": { in: 1, out: 5, cacheRead: 0.1 },
 };
+
+/** Haiku 5.5's small rate card covers prompts up to this many tokens. */
+const LONG_PROMPT_OVER = 100_000;
 
 /**
  * What a call cost, in micro-dollars (USD × 10⁶) — tokens × $/MTok is
@@ -143,8 +171,10 @@ export function costMicros(u: {
   readonly cacheWriteTokens: number;
   readonly outputTokens: number;
 }): number {
-  const p = PRICES[u.model];
-  if (!p) return 0;
+  const base = PRICES[u.model];
+  if (!base) return 0;
+  const prompt = u.inputTokens + u.cachedTokens + u.cacheWriteTokens;
+  const p = base.long && prompt > LONG_PROMPT_OVER ? base.long : base;
   return Math.round(
     u.inputTokens * p.in +
       u.cacheWriteTokens * p.in * 1.25 +

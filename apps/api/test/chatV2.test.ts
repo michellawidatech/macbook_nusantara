@@ -56,6 +56,8 @@ async function clean() {
   await db.customerProfileFact.deleteMany({});
   await db.customerProfile.deleteMany({});
   await db.waThreadMemory.deleteMany({});
+  // Chunks first: their message links are RESTRICT (20261022120000).
+  await db.chatMemoryChunk.deleteMany({});
   await db.waMessage.deleteMany({});
   await db.persona.updateMany({ data: { agent: null } });
   await db.persona.deleteMany({

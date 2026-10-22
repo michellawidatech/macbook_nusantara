@@ -18,6 +18,28 @@
  * free-text answer with nothing behind it cannot happen by accident. The
  * lookups (`search_knowledge`, `lookup_catalog`) run in between.
  *
+ * ## Haiku 5.5 (2026-10-22)
+ *
+ * The model is `claude-haiku-5-5` unless `CHATBOT_MODEL` says otherwise
+ * (`AnthropicEnv.model`). What moving off Haiku 4.5 changed here:
+ *
+ *  - Forced `tool_choice: any` is KEPT. Haiku 5.5 accepts it; the price is
+ *    that a forced call skips thinking. That is the trade wanted: "every turn
+ *    ends in reply or handoff_to_staff" is a guarantee the API keeps, where
+ *    `auto` would turn it into a prompt instruction plus a plain-text fallback
+ *    (the Sonnet path below). The facts come from the sources and the checks
+ *    in `checkReply`, not from reasoning, so thinking buys this loop little.
+ *  - Thinking is adaptive and on by default, so a response may still START
+ *    with `thinking` blocks (an `auto` caller, or a future model): content is
+ *    read by `type`, never `content[0]`, and the assistant turn is pushed
+ *    back with its blocks unmodified before the tool results.
+ *  - Thinking counts toward `max_tokens`, hence 4,096 rather than 1,024, and
+ *    `effort: low` on every call — the guide's level for chat.
+ *  - No `temperature` (Haiku 5.5 refuses anything but the default), no
+ *    prefill, no `budget_tokens`.
+ *  - The same text is ~30% more tokens on its tokenizer; `costMicros`
+ *    (agents.ts) prices it at $0.10 / $0.50 per MTok, ten times less.
+ *
  * Two checks sit outside the model, and neither trusts it:
  *
  *  - A message `routeMessage` already sent to a person (the stock or price of
@@ -91,7 +113,6 @@ export interface CreateArgs {
   messages: Anthropic.MessageParam[];
   tools?: Anthropic.Tool[];
   tool_choice?: Anthropic.ToolChoice;
-  temperature?: number;
   /**
    * Chatbot v2: effort for the Sonnet 5.5 agents, and the Router's JSON
    * schema. Absent on every v1 call.
@@ -133,24 +154,28 @@ export function usageOf(
  * answers and the shop's own records, not from the model's memory, so the job
  * here is choosing the right answer, phrasing it and knowing when to hand
  * over — which the small model does well and cheaply.
+ *
+ * The default only: `CHATBOT_MODEL` in the environment overrides it without a
+ * release (`readAnthropicEnv`), and the worker and the API pass it as `model`.
  */
-export const AGENT_MODEL = "claude-haiku-4-5-20251001";
+export const AGENT_MODEL = "claude-haiku-5-5";
 
 /** Lookup round-trips allowed before the turn is handed to a person. */
 export const MAX_STEPS = 4;
 
-/** Room for the owner's longest answer (the app list) plus the tool wrapper. */
-export const MAX_TOKENS = 1_024;
+/**
+ * Room for the owner's longest answer (the app list) plus the tool wrapper —
+ * and for thinking, which counts toward the cap on Haiku 5.5. A forced tool
+ * call skips thinking, but a cap sized for Haiku 4.5 would cut off the same
+ * answer: the newer tokenizer spends ~30% more tokens on the same words.
+ */
+export const MAX_TOKENS = 4_096;
 
 /**
- * Left at the SDK default, and named here so it stays there.
- *
- * It exists so that a later "let us make replies deterministic" edit has to
- * argue with a constant that says why not: a shop whose bot opens every
- * message identically reads as a recording, and variation is the cheapest
- * thing that stops it. The facts do not vary — they come from the sources.
+ * How hard the model thinks. `low` is the migration guide's level for chat,
+ * and this loop's quality lives in its sources and its checks.
  */
-export const TEMPERATURE = 1.0;
+export const EFFORT = "low" as const;
 
 export interface ConverseTurn {
   readonly role: "user" | "assistant";
@@ -574,20 +599,23 @@ export async function converse(
   try {
     for (let step = 1; step <= MAX_STEPS; step += 1) {
       const t0 = Date.now();
+      // No `temperature`: Haiku 5.5 and Sonnet 5.5 refuse a non-default one,
+      // and variation is what the default gives anyway.
       const response = await client.messages.create({
         model,
         max_tokens: MAX_TOKENS,
         system,
         tools,
         messages,
-        ...(forcedToolUse
-          ? { temperature: TEMPERATURE, tool_choice: { type: "any" as const } }
-          : {
-              tool_choice: { type: "auto" as const },
-              output_config: { effort: "low" as const },
-            }),
+        tool_choice: forcedToolUse
+          ? { type: "any" as const }
+          : { type: "auto" as const },
+        output_config: { effort: EFFORT },
       });
       input.onCall?.(usageOf(model, Date.now() - t0, response.usage));
+      // A safety classifier declined (HTTP 200, no tool, maybe no text). The
+      // customer gets a person, never an empty bubble.
+      if (response.stop_reason === "refusal") break;
 
       const uses = response.content.filter(
         (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
@@ -638,6 +666,8 @@ export async function converse(
         return answer(args, step);
       }
 
+      // The whole turn, thinking blocks included and unmodified: Haiku 5.5
+      // requires them back beside the tool results it reasoned about.
       messages.push({ role: "assistant", content: response.content });
       // Independent reads, run together.
       const results = await Promise.all(

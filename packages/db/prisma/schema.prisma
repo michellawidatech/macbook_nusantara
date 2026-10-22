@@ -1621,6 +1621,8 @@ model WaMessage {
   chatActions           ChatAction[]
   agentRuns             AgentRun[]
   evaluations           AgentEvaluation[]
+  memoryChunksFrom      ChatMemoryChunk[] @relation("ChatMemoryChunkFrom")
+  memoryChunksTo        ChatMemoryChunk[] @relation("ChatMemoryChunkTo")
 
   // Declared here because they exist in the database. Both were hand-written
   // into 20260820002832 without a matching @@index, so every `migrate dev`
@@ -1631,6 +1633,36 @@ model WaMessage {
   // syntax for that, which is also why the differ leaves it alone.
   @@index([from, ts])
   @@index([from, answeredAt])
+}
+
+/// One answered turn of a WhatsApp thread, kept for recall (owner,
+/// 2026-10-22). The turn's words — every inbound line of the burst and the
+/// reply — and, once the worker has embedded it, its vector. Recall searches
+/// ONE customer's own chunks, so the vector is int8 bytes scored in JS: no
+/// pgvector (not on the Mac mini, and CREATE EXTENSION needs a superuser).
+/// Written by the worker (nusantara_agent) only; the app role has no grant.
+model ChatMemoryChunk {
+  id            String    @id @default(cuid())
+  /// wa_id — the thread key WaMessage and WaThreadMemory use.
+  from          String
+  /// The first inbound row of the turn, and the row carrying the reply.
+  fromMessageId String
+  toMessageId   String
+  /// "customer: …" / "shop: …" lines, trimmed.
+  text          String
+  /// int8 vector, one byte per dimension. Null = not embedded yet.
+  embedding     Bytes?
+  model         String?
+  dims          Int?
+  createdAt     DateTime  @default(now())
+  embeddedAt    DateTime?
+
+  // Restrict: the chunk is a copy of those messages' words, so a purge of a
+  // message has to take its chunk with it rather than leave the words behind.
+  fromMessage WaMessage @relation("ChatMemoryChunkFrom", fields: [fromMessageId], references: [id], onDelete: Restrict)
+  toMessage   WaMessage @relation("ChatMemoryChunkTo", fields: [toMessageId], references: [id], onDelete: Restrict)
+
+  @@index([from, createdAt])
 }
 
 /// Two writers, disjoint column sets (08 §7). The webhook summarizer owns the

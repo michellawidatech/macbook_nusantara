@@ -354,6 +354,8 @@ export function chatRouter({
       let failure: unknown;
       const result = await converse({
         client,
+        // CHATBOT_MODEL: Draft writes with the model the worker runs.
+        ...(anthropic.model ? { model: anthropic.model } : {}),
         db,
         // No `reserve` capability, deliberately. Pressing Draft should propose
         // a sentence for a staff member to send, not book a reservation and

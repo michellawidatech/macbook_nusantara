@@ -67,6 +67,8 @@ beforeEach(async () => {
   // AgentRun points at the message it answered (chatbot v2).
   await db.agentRunStep.deleteMany({});
   await db.agentRun.deleteMany({});
+  // Chunks first: their message links are RESTRICT (20261022120000).
+  await db.chatMemoryChunk.deleteMany({});
   await db.waMessage.deleteMany({});
   await db.appSetting.upsert({
     where: { key: TESTERS_SETTING_KEY },

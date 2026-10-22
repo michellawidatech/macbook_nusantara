@@ -26,6 +26,14 @@ const OAUTH_BETA = "oauth-2025-04-20";
 export interface AnthropicEnv {
   readonly apiKey?: string | undefined;
   readonly authToken?: string | undefined;
+  /**
+   * `CHATBOT_MODEL` — the chat agent's model, when it is not `AGENT_MODEL`
+   * (converse.ts). An environment override so the owner can move the bot to
+   * another model, or back, without a release. Unset is the default.
+   */
+  readonly model?: string | undefined;
+  /** `CHATBOT_SUMMARY_MODEL` — the summariser's, likewise (`SUMMARY_MODEL`). */
+  readonly summaryModel?: string | undefined;
 }
 
 /**
@@ -41,6 +49,8 @@ export function readAnthropicEnv(
   return {
     apiKey: env["ANTHROPIC_API_KEY"]?.trim() || undefined,
     authToken: env["ANTHROPIC_AUTH_TOKEN"]?.trim() || undefined,
+    model: env["CHATBOT_MODEL"]?.trim() || undefined,
+    summaryModel: env["CHATBOT_SUMMARY_MODEL"]?.trim() || undefined,
   };
 }
 

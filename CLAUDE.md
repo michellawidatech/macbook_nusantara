@@ -2800,6 +2800,71 @@ Decisions that outlived those documents:
     matcher and the server refusal cover it. ⚠️ The B2Soft importer runs in
     import mode and is NOT matched — a re-import can still add a keyless
     duplicate, which *Review duplicates* will then list.
+- **The bot runs on Haiku 5.5 and remembers more, 2026-10-22** (owner
+  decisions). Two halves: the model, and what the single agent can see.
+  - **`claude-haiku-5-5`** for the replies (`AGENT_MODEL`) and the summary
+    (`SUMMARY_MODEL`), overridable WITHOUT a release by `CHATBOT_MODEL` /
+    `CHATBOT_SUMMARY_MODEL` (worker.env; api.env takes `CHATBOT_MODEL` for
+    Draft and the simulator) — env only, no Settings switch. `costMicros`
+    prices it at $0.10 / $0.50 per MTok (cache reads 0.1×, writes 1.25×), and
+    at $0.50 / $2.50 for a prompt over 100K tokens.
+  - **`tool_choice: any` is kept** (Haiku 5.5 accepts it; a forced call skips
+    thinking). "Every turn ends in reply or handoff_to_staff" stays a
+    guarantee of the API rather than of the prompt, and the facts come from
+    the sources and `checkReply`, not from reasoning. Every call sends
+    `output_config.effort: "low"` and no `temperature` (a non-default one is a
+    400); `MAX_TOKENS` is 4,096 because thinking counts toward it; content is
+    read by `type` and the assistant turn goes back with its thinking blocks
+    unmodified; a `refusal` is a hand-over. ⚠️ No prefill, no `budget_tokens`
+    — both are 400s on this model.
+  - ⚠️ **The same text is ~30% more tokens** on Haiku 5.5's tokenizer. An
+    `AgentRun` token count after the switch is not comparable with one
+    before it; compare `costMicros`.
+  - **A burst is one turn** (`packages/agent/turns.ts`). A reply lands on one
+    row, so the history and the summariser used to read only the last line
+    of "halo / mau tanya / Air M2 ada?". Lines are tied to their reply by
+    `answeredAt` — every claim writes one instant onto all the rows it
+    answers — and walked in `(ts, id)` order within it. `recentTurns` (the
+    8-turn window) and the summary pass both read whole turns now.
+  - **The single agent reads the profile** (`profileLine`) and any open
+    booking proposal; only v2 did. Both ride in the prompt's VOLATILE half,
+    never the cached one.
+  - **The summary keeps what it knew**: 1,500 characters (was 700), and the
+    summariser is told to keep the name, budget, units quoted with their
+    prices, promises and bookings from the previous note and to drop small
+    talk, instead of rewriting from the last dozen turns.
+  - **Recall: `ChatMemoryChunk`** (migration `20261022120000`, owner-approved,
+    additive): one row per answered turn — `from` (the thread key; the
+    brief's `waId`), `fromMessageId` / `toMessageId` (FKs to `WaMessage`,
+    RESTRICT: the chunk is a copy of their words, so a purge must take it
+    too), `text`, and `embedding` BYTEA / `model` / `dims` / `embeddedAt`,
+    all four or none (CHECK). Written by `memoryPass` (apps/worker), after
+    the summary pass, never inside a transaction. At draft time, ONCE the
+    8-turn window is full, the 3 older turns closest to the customer's
+    message — after the thread's `/new` (`resetPointFor`) — go into the
+    volatile prompt as "Earlier with this customer (may be outdated)", dated.
+  - **Embeddings are Voyage AI through MongoDB Atlas** (`voyage-4-lite`, 512
+    dimensions, `int8`, `POST ai.mongodb.com/v1/embeddings`, plain `fetch`).
+    **BYTEA and cosine in JS, not pgvector**: pgvector is not on the Mac mini,
+    `CREATE EXTENSION` needs a superuser, and recall only ever scores ONE
+    customer's own chunks — dozens of rows. The query embedding has a 1.5 s
+    deadline; no key, an error or a timeout falls back to BM25 (retrieval.ts)
+    over the same chunks, so Voyage can delay a reply by the deadline at most
+    and never stop one. The knowledge base itself stays on BM25.
+  - ⚠️ **`VOYAGE_API_KEY` lives in worker.env and nowhere else** — never
+    api.env, a doc, a log or a test. `VoyageError` carries the HTTP status,
+    never the request. Unset, chunks stay text and recall is by keywords.
+  - ⚠️ Grants: `nusantara_agent` has SELECT, INSERT and UPDATE on the four
+    embedding columns only — it cannot rewrite a chunk's words or delete one;
+    `nusantara_app` has nothing (the API never reads the table). The deploy's
+    `t|f|t|f|t` query is untouched. `apps/worker/test/memory.test.ts` runs the
+    pass and recall AS nusantara_agent.
+  - ⚠️ **A test that deletes `WaMessage` rows must delete `ChatMemoryChunk`
+    first** (RESTRICT). Every existing cleanup does; `truncateAll` CASCADEs.
+  - ⚠️ `RECALL_MIN_SIMILARITY` (0.5) is a starting point, not a measurement —
+    no Voyage call was made building this. Tune it on real threads.
+  - `/new` is unchanged: it forgets the conversation (recall included, via
+    the reset point) and leaves the profile and the POS customer alone.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

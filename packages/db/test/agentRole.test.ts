@@ -67,6 +67,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await owner.query(`DELETE FROM "WaThreadMemory"`);
+  await owner.query(`DELETE FROM "ChatMemoryChunk"`);
   await owner.query(`DELETE FROM "WaMessage"`);
 });
 

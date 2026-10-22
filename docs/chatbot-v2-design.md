@@ -12,7 +12,8 @@ the things to correct first.
 ## 1. What changes and why
 
 The shop handles about 50 customers a day, with 10–25 writing at the same time.
-Today's bot is one agent on Haiku 4.5. The worker answers **one chat at a
+Today's bot is one agent on Haiku 4.5 (Haiku 5.5, `claude-haiku-5-5`, since
+2026-10-22; `CHATBOT_MODEL` overrides it). The worker answers **one chat at a
 time**, up to 5 per pass, and each reply can take up to 4 model calls. Context
 does not leak between customers, because every query is filtered by the wa_id
 and a reply only commits if its messages are still unanswered. The problem is
@@ -245,8 +246,9 @@ Each turn reads at most:
 | Source | Size | Prompt caching |
 |---|---|---|
 | Profile | 1 row + child rows | uncached |
-| Summary | ≤700 chars | uncached |
-| Last 8 turns | — | uncached |
+| Summary | ≤1,500 chars (≤700 until 2026-10-22) | uncached |
+| Last 8 turns (each turn = every line of its burst + the reply) | — | uncached |
+| Recalled older turns (`ChatMemoryChunk`, top 3, dated) | ≤3 × 400 chars | uncached |
 | Open holds | — | uncached |
 | Persona, rules, knowledge base, shop facts | — | one cached prefix per agent |
 
@@ -254,8 +256,17 @@ Nothing grows with the length of a chat:
 
 - The summary pass (every 3 turns, Haiku) is what lets a 200-message chat cost
   the same as a 10-message one.
-- The profile is the long-term memory.
-- Index use stays on `(from, ts)`.
+- The profile is the long-term memory, and since 2026-10-22 the single agent
+  reads it too (it rides in the volatile prompt with any open proposal).
+- Older turns are recalled, not replayed (2026-10-22): the worker chunks each
+  answered turn into `ChatMemoryChunk` and embeds it with Voyage AI
+  (`voyage-4-lite`, int8, BYTEA — no pgvector); at draft time, once the
+  8-turn window is full, the customer's message is embedded with a 1.5 s
+  deadline and the 3 closest older turns since the last `/new` go in the
+  volatile prompt. Keyword (BM25) ranking answers when there is no key or
+  Voyage fails. This reverses "no embeddings" for the CONVERSATION; the
+  knowledge base stays BM25 (docs/chatbot-rag.md).
+- Index use stays on `(from, ts)`; recall on `ChatMemoryChunk (from, createdAt)`.
 
 ## 7. Schema changes *(owner: OK, must be deploy-safe)*
 

@@ -18,6 +18,7 @@ import { draftPass } from "./draft.js";
 import { sendPass } from "./send.js";
 import { expirePass } from "./expire.js";
 import { summaryPass } from "./summarise.js";
+import { memoryPass } from "./memoryPass.js";
 
 export interface TickDeps {
   readonly db: PrismaClient;
@@ -32,6 +33,9 @@ export interface TickResult {
   readonly sent: number;
   readonly failed: number;
   readonly summarised: number;
+  /** Answered turns written into chat memory, and chunks embedded. */
+  readonly chunked: number;
+  readonly embedded: number;
   /** Agent bookings nobody came for, released back into stock. */
   readonly expired: number;
 }
@@ -51,6 +55,7 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     // the Graph API (tools/wa-local injects a fake there), and the agent API
     // is this machine's own POS.
     ...(config.agentApi ? { agentApi: config.agentApi } : {}),
+    recall: { voyage: config.voyage },
     maxBatch: config.maxBatch,
     agentStaffId: config.agentStaffId,
     capabilities: config.capabilities,
@@ -74,6 +79,19 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     everyTurns: config.summaryEveryTurns,
     quietMs: config.summaryQuietMs,
     maxPerTick: config.maxSummariesPerTick,
+    ...(config.anthropic.summaryModel
+      ? { model: config.anthropic.summaryModel }
+      : {}),
+  });
+
+  // Recall's store, after the summary for the same reason: off the
+  // customer's clock, and failing on its own (memoryPass.ts).
+  const memory = await memoryPass({
+    db,
+    logger,
+    voyage: config.voyage,
+    maxTurns: config.memoryTurnsPerTick,
+    maxEmbeds: config.memoryEmbedsPerTick,
   });
 
   // Last. A held unit that nobody came for is costing the shop a sale right
@@ -93,6 +111,8 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     sent: send.sent,
     failed: send.failed,
     summarised: summary.refreshed,
+    chunked: memory.chunked,
+    embedded: memory.embedded,
     expired: expiry.expired,
   };
 }

@@ -255,7 +255,7 @@ describe("the AI fallback", () => {
         result,
         calls: [
           {
-            model: "claude-haiku-4-5-20251001",
+            model: "claude-haiku-5-5",
             ms: 900,
             inputTokens: 1000,
             cachedTokens: 0,

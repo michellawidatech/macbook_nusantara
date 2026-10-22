@@ -80,6 +80,8 @@ import {
   openProposalLine,
   personaFor,
   profileLine,
+  recallEarlier,
+  recentTurns,
   runPipeline,
   storeOpenAt,
   type AgentClient,
@@ -87,6 +89,7 @@ import {
   type ConverseResult,
   type ConverseTurn,
   type ToolContext,
+  type VoyageOptions,
   type WaitProfile,
 } from "@nusantara/agent";
 import {
@@ -158,6 +161,15 @@ export interface DraftDeps {
   readonly skewToleranceMs?: number;
   /** Injectable so a test can drive the debounce without waiting. */
   readonly now?: () => Date;
+  /**
+   * Recall of turns older than the history window (2026-10-22). `voyage`
+   * null is keyword recall; absent altogether is the same. `timeoutMs` bounds
+   * the one embedding call a turn may make.
+   */
+  readonly recall?: {
+    readonly voyage: VoyageOptions | null;
+    readonly timeoutMs?: number;
+  };
 }
 
 export interface DraftPassResult {
@@ -330,16 +342,20 @@ export function combineBatch(
   return lines.join("\n");
 }
 
-/** Answered history, oldest first, as alternating turns. */
-function toTurns(
-  history: ReadonlyArray<{ text: string | null; replyText: string | null }>,
+/**
+ * Answered history, oldest first, as alternating turns. Each history turn is
+ * the WHOLE burst it answered (packages/agent turns.ts) — every line, not
+ * only the row the reply landed on.
+ */
+export function toTurns(
+  history: ReadonlyArray<{ customer: string; reply: string }>,
   current: string,
 ): ConverseTurn[] {
   const turns: ConverseTurn[] = [];
   for (const m of history) {
-    const text = m.text?.trim();
+    const text = m.customer.trim();
     if (text) turns.push({ role: "user", text });
-    const reply = m.replyText?.trim();
+    const reply = m.reply.trim();
     if (reply) turns.push({ role: "assistant", text: reply });
   }
   turns.push({ role: "user", text: current });
@@ -553,22 +569,69 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       // Since a `/new`, when this thread has had one: the turns before it
       // are still in the inbox and are not this conversation's.
       const resetAt = await resetPointFor(db, from);
-      const history = await db.waMessage.findMany({
-        where: {
-          from,
-          direction: "IN",
-          replyText: { not: null },
-          ...(resetAt ? { answeredAt: { gt: resetAt } } : {}),
-        },
-        orderBy: [{ answeredAt: "desc" }, { ts: "desc" }],
-        take: HISTORY_TURNS,
-        select: { text: true, replyText: true },
-      });
+      // Oldest first; each turn is every line of its burst with the reply.
+      const history = await recentTurns(db, from, resetAt, HISTORY_TURNS);
+      // Newest first, for "what did the bot just say".
+      const newestFirst = [...history].reverse();
 
-      const memory = await db.waThreadMemory.findUnique({
-        where: { from },
-        select: { summary: true, directive: true },
-      });
+      const [memory, profile, openProposal] = await Promise.all([
+        db.waThreadMemory.findUnique({
+          where: { from },
+          select: { summary: true, directive: true },
+        }),
+        // What the customer has told the shop, and a booking proposal still
+        // open — so the single agent stops asking what the profile says
+        // (2026-10-22: only v2 read either before).
+        profileLine(db, from),
+        openProposalLine(db, from, at),
+      ]);
+
+      // Turns older than the window, when the window is full: the few that
+      // look related to what the customer just wrote (recall.ts). Bounded —
+      // one embedding call with a deadline, keyword ranking on any failure —
+      // and skipped outright while the window still holds the whole thread.
+      const recall =
+        history.length >= HISTORY_TURNS
+          ? await recallEarlier(db, {
+              from,
+              before: history[0]!.answeredAt,
+              after: resetAt,
+              query: current,
+              voyage: deps.recall?.voyage ?? null,
+              ...(deps.recall?.timeoutMs !== undefined
+                ? { timeoutMs: deps.recall.timeoutMs }
+                : {}),
+              onError: (err) =>
+                logger.warn(
+                  {
+                    evt: "worker.recall.vector_failed",
+                    ctx: { from },
+                    ...(err instanceof Error
+                      ? {
+                          err: {
+                            name: err.name,
+                            message: err.message,
+                            status: (err as { status?: number }).status,
+                          },
+                        }
+                      : {}),
+                  },
+                  "could not embed the message for recall — ranked by keywords instead",
+                ),
+            }).catch((err: unknown) => {
+              logger.warn(
+                {
+                  evt: "worker.recall.failed",
+                  ctx: { from },
+                  ...(err instanceof Error
+                    ? { err: { name: err.name, message: err.message } }
+                    : {}),
+                },
+                "recall failed — answering without it",
+              );
+              return [];
+            })
+          : [];
 
       const prompt = buildAgentPrompt({
         // The one agent's persona is the one Settings edits (the Advisor's
@@ -589,11 +652,11 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         openNow: storeOpenAt(at),
         summary: memory?.summary ?? null,
         directive: memory?.directive ?? null,
-        recentReplies: history
-          .map((h) => h.replyText)
-          .filter((r): r is string => Boolean(r))
-          .slice(0, 3),
+        recentReplies: newestFirst.map((h) => h.reply).slice(0, 3),
         customerText: current,
+        // v2 hands the profile and the proposal to its own agents.
+        ...(v2 ? {} : { profile, openProposal }),
+        recall: recall.map((r) => ({ text: r.text, at: r.at })),
       });
 
       // The two reads of the customer's message that do not ask the model:
@@ -648,17 +711,18 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
             { id: anchor.id, now: at },
           )
         : undefined;
-      const turns = toTurns([...history].reverse(), current);
+      const turns = toTurns(history, current);
+      // CHATBOT_MODEL, when the owner moved the bot without a release.
+      const agentModel = anthropic.model;
       const v1Calls: CallUsage[] = [];
       const turnStarted = Date.now();
       let result: ConverseResult | PipelineResult | RulesResult | null;
       if (settings.pipeline === "rules") {
         // Rules and templates first; the single agent only for what no rule
         // answers, and only when there is a credential (rules/run.ts).
-        const [known, lastShown, openProposal] = await Promise.all([
+        const [known, lastShown] = await Promise.all([
           profileKnown(db, from),
           lastShownUnits(db, from, resetAt),
-          openProposalLine(db, from, at),
         ]);
         result = await runRules({
           db,
@@ -670,7 +734,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           route,
           known,
           // Newest first out of the database: the bot's previous reply.
-          lastReply: history[0]?.replyText ?? null,
+          lastReply: newestFirst[0]?.reply ?? null,
           proposalOpen: openProposal !== null,
           lastShown,
           leadThreshold: settings.leadThreshold,
@@ -680,6 +744,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                   const calls: CallUsage[] = [];
                   const r = await converse({
                     client,
+                    ...(agentModel ? { model: agentModel } : {}),
                     db,
                     ctx,
                     prompt,
@@ -702,10 +767,6 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         });
       } else if (v2) {
         // Chatbot v2: Router → Operations → Sales Advisor (pipeline.ts).
-        const [profile, openProposal] = await Promise.all([
-          profileLine(db, from),
-          openProposalLine(db, from, at),
-        ]);
         result = await runPipeline({
           client: client!,
           db,
@@ -733,6 +794,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       } else {
         result = await converse({
           client: client!,
+          ...(agentModel ? { model: agentModel } : {}),
           db,
           ctx,
           prompt,

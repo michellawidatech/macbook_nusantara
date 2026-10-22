@@ -78,7 +78,7 @@ export {
   AGENT_MODEL,
   MAX_STEPS,
   MAX_TOKENS,
-  TEMPERATURE,
+  EFFORT,
   converse,
   stockFactsOf,
   type AgentClient,
@@ -242,3 +242,41 @@ export {
 } from "./rules/understand.js";
 export { reply as ruleReplies, unitLine } from "./rules/replies.js";
 export { moneyAmounts } from "./policy.js";
+export {
+  answeredTurns,
+  lineOf,
+  type AnsweredRow,
+  type AnsweredTurn,
+} from "./turns.js";
+export {
+  CHUNK_MAX_CHARS,
+  RECALL_LIMIT,
+  RECALL_MIN_KEYWORDS,
+  RECALL_MIN_SIMILARITY,
+  RECALL_SNIPPET_CHARS,
+  chunkText,
+  cosine,
+  decodeInt8,
+  encodeInt8,
+  rankRecall,
+  recallBlock,
+  type RecallCandidate,
+  type Recalled,
+} from "./memoryRecall.js";
+export {
+  VOYAGE_DEFAULT_MODEL,
+  VOYAGE_DIMENSIONS,
+  VOYAGE_URL,
+  VoyageError,
+  readVoyageEnv,
+  voyageEmbed,
+  type VoyageOptions,
+} from "./voyage.js";
+export {
+  RECALL_SCAN_LIMIT,
+  RECALL_TIMEOUT_MS,
+  recallEarlier,
+  recentTurns,
+  turnsFor,
+  type RecallInput,
+} from "./recall.js";

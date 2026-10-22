@@ -201,7 +201,7 @@ describe("a stock question through three agents", () => {
     // Sonnet 5.5 refuses a forced tool choice; the Advisor runs on auto.
     const advisor = model.calls.find((c) => c.agent === "advisor")!.args;
     expect(advisor.tool_choice).toEqual({ type: "auto" });
-    expect(advisor.temperature).toBeUndefined();
+    expect("temperature" in advisor).toBe(false);
   });
 
   it("gives the Advisor no POS tools and Operations no way to book or confirm", async () => {
