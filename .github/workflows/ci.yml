@@ -397,8 +397,15 @@ jobs:
       # as this exact version — and switches back by itself if it does not.
       - name: Install on the Mac mini
         run: |
+          # pipefail: the installer's refusal must fail this step. Without it
+          # the step reported `tee`'s exit code, so a release the installer
+          # rolled back (2026-10-22: the worker would not stay up) showed green.
+          set -o pipefail
           sha=$(cut -d' ' -f1 "release/nusantara-$VERSION.tar.gz.sha256")
           ssh mini install "$VERSION" "$sha" < "release/nusantara-$VERSION.tar.gz" | tee install.txt
+          # Belt and braces: the installer's own last word must be that THIS
+          # release is live.
+          grep -F "nusantara-$VERSION is live" install.txt
 
       # Optional: the same answer from outside, through `tailscale serve`. Needs
       # the tailnet policy to let tag:ci reach port 443 as well as 22.
