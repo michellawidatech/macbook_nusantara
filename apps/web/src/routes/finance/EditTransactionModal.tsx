@@ -40,7 +40,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   App,
-  Card,
   DatePicker,
   Divider,
   Flex,
@@ -49,7 +48,6 @@ import {
   InputNumber,
   Modal,
   Select,
-  Switch,
   Table,
   Typography,
 } from "antd";
@@ -66,7 +64,6 @@ import { fmtRp } from "../../lib/format.js";
 import { priceOf } from "../../lib/unitPrice.js";
 import {
   SALE_CHANNELS,
-  channelOf,
   holdsFunds,
   type SaleSource,
 } from "../../lib/channels.js";
@@ -235,18 +232,6 @@ export function EditTransactionModal({
 
   const setDeductionsOf = (paymentId: string, list: SettlementFee[]) =>
     setDeductions((all) => ({ ...all, [paymentId]: list }));
-  const markReceived = (paymentId: string, on: boolean, at?: string) =>
-    setPayments((rows) =>
-      rows.map((p) =>
-        p.id === paymentId
-          ? {
-              ...p,
-              state: on ? "SETTLED" : "PENDING",
-              ...(on ? { at: at ?? p.at } : {}),
-            }
-          : p,
-      ),
-    );
 
   /** Every serial the shop knows, for reading a typed or scanned one back. */
   const knownSerials = useMemo(() => db.units.map((u) => u.serial), [db.units]);
@@ -954,139 +939,9 @@ export function EditTransactionModal({
         total={bill}
         value={payments}
         onChange={setPayments}
+        deductions={deductions}
+        onDeductionsChange={setDeductionsOf}
       />
-
-      {/*
-       * The payout of each marketplace payment, under it (owner ask
-       * 2026-10-22). Deductions any time; "Payout received" is the payment's
-       * Pending/Settled — the one fact the balance reads.
-       */}
-      {payments
-        .filter((p) => p.channel !== undefined && p.amount > 0)
-        .map((p) => {
-          const fees = deductions[p.id] ?? [];
-          const deducted = fees.reduce((n, f) => n + f.amount, 0);
-          const name = channelOf(p.channel!)?.label ?? p.channel!;
-          return (
-            <Card
-              key={p.id}
-              size="small"
-              style={{ marginTop: SPACE.md }}
-              title={t(
-                "editSale.payoutTitle",
-                "{{channel}} payout — {{amount}}",
-                {
-                  channel: name,
-                  amount: fmtRp(p.amount),
-                },
-              )}
-              extra={
-                <Flex gap={SPACE.sm} align="center">
-                  <Switch
-                    size="small"
-                    checked={p.state === "SETTLED"}
-                    aria-label={t("editSale.payoutReceived", "Payout received")}
-                    onChange={(on) => markReceived(p.id, on)}
-                  />
-                  <Typography.Text>
-                    {t("editSale.payoutReceived", "Payout received")}
-                  </Typography.Text>
-                  {p.state === "SETTLED" && (
-                    <DatePicker
-                      size="small"
-                      allowClear={false}
-                      value={dayjs(p.at)}
-                      aria-label={t("editSale.payoutDate", "Received on")}
-                      onChange={(day) =>
-                        day && markReceived(p.id, true, day.toISOString())
-                      }
-                    />
-                  )}
-                </Flex>
-              }
-            >
-              {fees.map((f, i) => (
-                <Flex
-                  key={f.id}
-                  gap={SPACE.sm}
-                  style={{ marginBottom: SPACE.xs }}
-                >
-                  <Input
-                    size="small"
-                    value={f.label ?? ""}
-                    placeholder={t(
-                      "editSale.deductionName",
-                      "Deduction, e.g. Komisi",
-                    )}
-                    aria-label={t(
-                      "editSale.deductionNameFor",
-                      "Deduction name",
-                    )}
-                    onChange={(e) =>
-                      setDeductionsOf(
-                        p.id,
-                        fees.map((x, j) =>
-                          j === i ? { ...x, label: e.target.value } : x,
-                        ),
-                      )
-                    }
-                  />
-                  <MoneyInput
-                    value={f.amount}
-                    min={f.amount < 0 ? f.amount : 0}
-                    aria-label={t(
-                      "editSale.deductionAmountFor",
-                      "Deduction amount",
-                    )}
-                    style={{ width: 200 }}
-                    onChange={(v) =>
-                      setDeductionsOf(
-                        p.id,
-                        fees.map((x, j) =>
-                          j === i ? { ...x, amount: v ?? 0 } : x,
-                        ),
-                      )
-                    }
-                  />
-                  <Button
-                    size="small"
-                    type="text"
-                    icon={<DeleteOutlined />}
-                    aria-label={t(
-                      "editSale.removeDeduction",
-                      "Remove deduction",
-                    )}
-                    onClick={() =>
-                      setDeductionsOf(
-                        p.id,
-                        fees.filter((_, j) => j !== i),
-                      )
-                    }
-                  />
-                </Flex>
-              ))}
-              <Flex justify="space-between" align="center">
-                <Button
-                  size="small"
-                  icon={<PlusOutlined />}
-                  onClick={() =>
-                    setDeductionsOf(p.id, [
-                      ...fees,
-                      { id: nextId("fee"), kind: "OTHER", amount: 0 },
-                    ])
-                  }
-                >
-                  {t("editSale.addDeduction", "Add deduction")}
-                </Button>
-                <Typography.Text>
-                  {t("editSale.payoutLands", "Received {{amount}}", {
-                    amount: fmtRp(p.amount - deducted),
-                  })}
-                </Typography.Text>
-              </Flex>
-            </Card>
-          );
-        })}
     </Modal>
   );
 }

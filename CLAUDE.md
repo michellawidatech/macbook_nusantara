@@ -2998,11 +2998,13 @@ Decisions that outlived those documents:
     `SettleModal` are deleted; their writer is `lib/payouts.ts`
     (`recordPayouts` for the upload, `upsertSettlement` for one payment,
     `netOfOrder` re-deriving `grossTotal`/`netReceived`).
-  - **Edit transaction holds the payout.** Under every Shopee/Tokopedia
-    payment: its deductions (name + amount), *Received Rp X* = amount −
-    deductions, and a **Payout received** switch with its date. The switch IS
-    the payment's PENDING/SETTLED — the one fact the balance reads (owner
-    answer). Deductions may be typed while it is still pending, so a
+  - **Edit transaction holds the payout — in the payment grid itself**
+    (revised the same evening: *"add directly deduction on the rightmost … a
+    '−' button … a nested row below the Shopee row"*). `PaymentsPanel` takes
+    `deductions` / `onDeductionsChange` (Edit transaction only): a "−" on a
+    marketplace row nests a name + amount row under it, with "amount − kept =
+    received". The row's own Status IS the payout landing — Pending → Settled
+    dates it now. The reference sits BESIDE the method on one line. Deductions may be typed while it is still pending, so a
     `Settlement` can now exist beside a PENDING payment; nothing reads a
     settlement as "landed" any more. A payout no longer stops a sale from
     being deleted.

@@ -5,7 +5,7 @@
  * reference ID. Plus the month close that locks only what is settled.
  */
 import { App as AntdApp } from "antd";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { EditTransactionModal } from "../src/routes/finance/EditTransactionModal.js";
@@ -62,24 +62,29 @@ describe("a Shopee payment's payout, in the Edit transaction dialog", () => {
     });
     renderEdit(sale);
 
-    const card = screen
-      .getByText(/Shopee payout/)
-      .closest(".ant-card") as HTMLElement;
+    // The "−" at the end of the Shopee row opens a deduction nested under it.
     await userEvent.click(
-      within(card).getByRole("button", { name: /Add deduction/ }),
+      screen.getByRole("button", { name: "Add a deduction" }),
     );
     await userEvent.type(
-      within(card).getByRole("textbox", { name: "Deduction name" }),
+      screen.getByRole("textbox", { name: "Deduction name" }),
       "Komisi",
     );
-    const amount = within(card).getByRole("spinbutton", {
-      name: "Deduction amount",
-    });
+    const amount = screen.getByRole("spinbutton", { name: "Deduction amount" });
     await userEvent.type(amount, "250000");
     fireEvent.blur(amount);
-    await userEvent.click(
-      within(card).getByRole("switch", { name: "Payout received" }),
+    // The row's own status is the payout: Settled = it landed.
+    fireEvent.mouseDown(
+      screen.getAllByRole("combobox", { name: "State of this payment" })[0]!,
     );
+    const settled = await vi.waitFor(() => {
+      const el = Array.from(
+        document.querySelectorAll<HTMLElement>(".ant-select-item-option"),
+      ).find((o) => o.getAttribute("title") === "Settled");
+      if (!el) throw new Error("no Settled option");
+      return el;
+    });
+    fireEvent.click(settled);
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
     const after = getDb().orders.find((o) => o.id === "o-payout")!;

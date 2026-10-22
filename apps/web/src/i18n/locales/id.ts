@@ -4261,4 +4261,10 @@ export const id: Record<string, string> = {
   "editSale.removeItem": "Keluarkan barang ini",
   "editSale.addItem": "Tambah barang",
   "editSale.needsSerial": "Ketik nomor seri {{item}}.",
+  "pay.addDeduction": "Tambah potongan",
+  "pay.deductionName": "Potongan, mis. Komisi",
+  "pay.deductionNameFor": "Nama potongan",
+  "pay.deductionAmountFor": "Jumlah potongan",
+  "pay.removeDeduction": "Hapus potongan",
+  "pay.payoutLands": "{{amount}} − {{kept}} potongan = {{received}} diterima",
 };
