@@ -2872,7 +2872,12 @@ Decisions that outlived those documents:
     A key or token in the env still wins. `CHANGE_ME` (the env templates'
     placeholder) is no credential — it used to count as one, so a worker.env
     copied from the example sent every turn to a 401 and a hand-over.
-    ⚠️ Still not a Claude Pro/Max (`claude setup-token`) login.
+    ⚠️ **The owner runs it on an OAuth token** (`ANTHROPIC_AUTH_TOKEN` from
+    `claude setup-token`, 2026-10-22), and that token is a 429 on
+    `claude-haiku-5-5` while `claude-haiku-4-5` answers. So an OAuth token
+    defaults both models to `OAUTH_MODEL` (Haiku 4.5) unless `CHATBOT_MODEL`
+    says otherwise, and `effortConfig` sends `effort` only to a model that
+    takes it — Haiku 4.5 answers it with a 400.
 
 - **WhatsApp through a linked device, 2026-10-22** (owner decision): the
   chatbot runs on WhatsApp via **Baileys** in production, linked by scanning a

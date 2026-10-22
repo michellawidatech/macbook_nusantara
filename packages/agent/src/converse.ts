@@ -177,6 +177,23 @@ export const MAX_TOKENS = 4_096;
  */
 export const EFFORT = "low" as const;
 
+/**
+ * `output_config.effort` for a model that takes it, nothing for one that
+ * does not. Haiku 4.5 answers the parameter with a 400 ("This model does not
+ * support the effort parameter"), and Haiku 4.5 is what an OAuth token runs
+ * on (`OAUTH_MODEL`, anthropic.ts) — so sending it unconditionally turned
+ * every turn of an OAuth-run bot into a hand-over.
+ */
+export function effortConfig(model: string): {
+  output_config?: { effort: typeof EFFORT };
+} {
+  return /^claude-(?:(?:opus|sonnet|haiku|fable)-5|opus-4-[5-9]|sonnet-4-6)/.test(
+    model,
+  )
+    ? { output_config: { effort: EFFORT } }
+    : {};
+}
+
 export interface ConverseTurn {
   readonly role: "user" | "assistant";
   readonly text: string;
@@ -610,7 +627,7 @@ export async function converse(
         tool_choice: forcedToolUse
           ? { type: "any" as const }
           : { type: "auto" as const },
-        output_config: { effort: EFFORT },
+        ...effortConfig(model),
       });
       input.onCall?.(usageOf(model, Date.now() - t0, response.usage));
       // A safety classifier declined (HTTP 200, no tool, maybe no text). The

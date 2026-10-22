@@ -27,7 +27,7 @@
  */
 
 import { stripFormatting } from "./sanitise.js";
-import { AGENT_MODEL, EFFORT, type AgentClient } from "./converse.js";
+import { AGENT_MODEL, effortConfig, type AgentClient } from "./converse.js";
 
 /**
  * Same cheap model as the reply. The default only: `CHATBOT_SUMMARY_MODEL`
@@ -153,12 +153,13 @@ export async function summarize(input: SummarizeInput): Promise<string | null> {
   if (!transcript) return null;
 
   try {
+    const model = input.model ?? SUMMARY_MODEL;
     const res = await input.client.messages.create({
-      model: input.model ?? SUMMARY_MODEL,
+      model,
       max_tokens: SUMMARY_MAX_TOKENS,
       // No temperature (Haiku 5.5 refuses one); thinking stays adaptive and
       // low, and the note is read off the TEXT blocks below, never content[0].
-      output_config: { effort: EFFORT },
+      ...effortConfig(model),
       system: SUMMARY_SYSTEM,
       messages: [
         {

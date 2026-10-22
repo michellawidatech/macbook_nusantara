@@ -24,9 +24,9 @@
  * A key or token in the environment still wins when one is set — the order
  * the SDK itself uses.
  *
- * ⚠️ NOT a Claude Pro/Max login. `claude setup-token` produces a subscription
- * token Anthropic refuses outside Claude Code; `ant auth login` against the
- * Console is a different login, and the one that works here.
+ * A `claude setup-token` token (`ANTHROPIC_AUTH_TOKEN`) is still read, and is
+ * what the owner runs on (2026-10-22). It answers on Haiku 4.5 and not on
+ * Haiku 5.5, so it defaults to `OAUTH_MODEL`.
  *
  * Ported deliberately from `reference/whatsapp-webhook/agent/anthropic.ts`
  * rather than imported: `reference/` is the previous build and is never a
@@ -57,6 +57,15 @@ export interface AnthropicEnv {
    */
   readonly profile?: string | undefined;
 }
+
+/**
+ * The model an OAuth token (`ANTHROPIC_AUTH_TOKEN`, `claude setup-token`) runs
+ * on unless `CHATBOT_MODEL` / `CHATBOT_SUMMARY_MODEL` say otherwise. Probed
+ * 2026-10-22 with the shop's token: `claude-haiku-4-5` answers, and
+ * `claude-haiku-5-5` — `AGENT_MODEL` since that morning — is a 429 on every
+ * call, a one-word "halo" included. The owner runs the bot on that token only.
+ */
+export const OAUTH_MODEL = "claude-haiku-4-5";
 
 /** What the env templates ship with; never a credential. */
 const PLACEHOLDER = "CHANGE_ME";
@@ -108,11 +117,12 @@ export function readAnthropicEnv(
 ): AnthropicEnv {
   const apiKey = credential(env["ANTHROPIC_API_KEY"]);
   const authToken = credential(env["ANTHROPIC_AUTH_TOKEN"]);
+  const oauthDefault = !apiKey && authToken ? OAUTH_MODEL : undefined;
   return {
     apiKey,
     authToken,
-    model: env["CHATBOT_MODEL"]?.trim() || undefined,
-    summaryModel: env["CHATBOT_SUMMARY_MODEL"]?.trim() || undefined,
+    model: env["CHATBOT_MODEL"]?.trim() || oauthDefault,
+    summaryModel: env["CHATBOT_SUMMARY_MODEL"]?.trim() || oauthDefault,
     profile: apiKey || authToken ? undefined : antProfileOf(env),
   };
 }

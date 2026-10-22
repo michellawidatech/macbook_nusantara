@@ -13,6 +13,7 @@ export {
   hasCredential,
   readAnthropicEnv,
   usingOAuth,
+  OAUTH_MODEL,
   type AnthropicEnv,
 } from "./anthropic.js";
 export {
