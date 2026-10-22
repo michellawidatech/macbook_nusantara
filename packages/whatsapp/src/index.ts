@@ -20,3 +20,9 @@ export {
   windowClosesAt,
   windowRemainingMs,
 } from "./window.js";
+export {
+  GATEWAY_SECRET_HEADER,
+  gatewayFetch,
+  gatewayUrlFor,
+  type GatewayTarget,
+} from "./gateway.js";

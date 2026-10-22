@@ -317,6 +317,7 @@ export const id: Record<string, string> = {
   "activity.e.appleDb": "Impor AppleDB",
   "activity.e.myWarehouse": "Gudang sendiri",
   "activity.e.staff": "Akun staf",
+  "activity.e.whatsapp": "Koneksi WhatsApp",
   "activity.since":
     "Setiap perubahan tercatat mulai rilis 22 Oktober 2026. Riwayat masuk dan perubahan akun staf tercatat lebih lama.",
   "activity.search": "Cari serial, kode atau id",
@@ -4125,4 +4126,45 @@ export const id: Record<string, string> = {
   "discounts.deleteConfirm": "Hapus {{name}}?",
   "discounts.deleteBlocked":
     "Sudah dipakai di penjualan, jadi tetap tercatat. Nonaktifkan saja.",
+  "waConn.title": "Koneksi WhatsApp",
+  "waConn.linkFailed": "Gagal memulai penautan.",
+  "waConn.logoutTitle": "Putuskan WhatsApp?",
+  "waConn.logoutBody":
+    "Bot berhenti menjawab di nomor ini sampai ada yang memindai QR baru. Menautkan lagi dihitung dalam batas, dan sering menautkan lalu memutuskan bisa membuat nomor diblokir.",
+  "waConn.logoutOk": "Putuskan",
+  "waConn.loggedOut": "WhatsApp diputuskan.",
+  "waConn.logoutFailed": "Gagal memutuskan.",
+  "waConn.connected": "Tersambung",
+  "waConn.waiting": "Menunggu dipindai",
+  "waConn.connecting": "Menyambung",
+  "waConn.disconnected": "Tidak tersambung",
+  "waConn.endLoggedOut":
+    "Perangkat dihapus dari HP (Perangkat tertaut). Tautkan lagi untuk melanjutkan.",
+  "waConn.endQrExpired": "Kode QR tidak dipindai tepat waktu.",
+  "waConn.endReplaced":
+    "Sesi ini dibuka di tempat lain. Pastikan tidak ada komputer lain yang menjalankannya, lalu tautkan lagi.",
+  "waConn.endForbidden":
+    "WhatsApp menolak nomor ini. Periksa HP sebelum mencoba lagi.",
+  "waConn.warnTitle": "Koneksi tidak resmi — WhatsApp bisa memblokir nomor ini",
+  "waConn.warnRepeat":
+    "Tautkan sekali lalu biarkan. Jangan menautkan dan memutuskan berulang kali.",
+  "waConn.warnDedicated":
+    "Sebaiknya pakai nomor khusus toko, bukan nomor pribadi seseorang.",
+  "waConn.warnOnline":
+    "Biarkan HP tetap menyala dan online: WhatsApp melepas perangkat tertaut bila HP-nya tidak aktif sekitar 14 hari.",
+  "waConn.loadFailed": "Gagal membaca koneksi.",
+  "waConn.notConfigured":
+    "Server ini mengirim WhatsApp lewat Cloud API; tidak ada perangkat yang perlu ditautkan.",
+  "waConn.gatewayDown": "Gateway WhatsApp tidak berjalan di server.",
+  "waConn.checkAgain": "Periksa lagi",
+  "waConn.status": "Status",
+  "waConn.number": "Nomor tertaut",
+  "waConn.since": "Tersambung sejak",
+  "waConn.qrAlt": "Kode QR untuk menautkan WhatsApp",
+  "waConn.scanHow":
+    "Di HP toko: WhatsApp → Setelan → Perangkat tertaut → Tautkan perangkat, lalu pindai kode ini.",
+  "waConn.link": "Tautkan WhatsApp",
+  "waConn.logout": "Putuskan",
+  "waConn.attemptsLeft":
+    "Sisa {{remaining}} dari {{max}} percobaan menautkan dalam satu jam",
 };

@@ -43,7 +43,9 @@ umask 022
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export LC_ALL=C
 
-INSTALLER_VERSION=2
+# 3 (2026-10-22): knows local.nusantara.wa-gateway — restarts it on a deploy,
+# reloads its plist, and health-checks :3002 when it is loaded.
+INSTALLER_VERSION=3
 
 target=prod
 if [[ ${1:-} == --stage ]]; then
@@ -58,7 +60,7 @@ case $target in
   prod)
     home=${NUSANTARA_HOME:-/opt/nusantara}
     label=local.nusantara
-    services=(api caddy worker webhook backup)
+    services=(api caddy worker webhook wa-gateway backup)
     api_port=4000
     caddy_port=8080
     caddy_env=()
@@ -196,6 +198,10 @@ healthy() {
     say "  ✗ the webhook did not answer on :3001"
     return 1
   fi
+  if loaded wa-gateway && ! answers http://127.0.0.1:3002/health '"status":"ok"' 30; then
+    say "  ✗ the WhatsApp gateway did not answer on :3002"
+    return 1
+  fi
   if loaded worker && ! stays_up worker; then
     say "  ✗ the worker does not stay up"
     return 1
@@ -207,7 +213,7 @@ healthy() {
 # process and the tail of its own log.
 show_failure() {
   local svc log
-  for svc in api webhook worker; do
+  for svc in api webhook wa-gateway worker; do
     loaded $svc || continue
     say "  --- $label.$svc"
     $launchctl print system/$label.$svc 2>/dev/null |
@@ -232,8 +238,8 @@ bootstrap() {
 # loaded service onto it, and reload any whose plist changed. Caddy restarts
 # only when its Caddyfile changed: it reads current/web on every request.
 #
-# On prod a service nobody loaded stays off — the worker and the webhook are
-# switched on by hand. Staging's two are always on, so the first staging
+# On prod a service nobody loaded stays off — the worker, the webhook and the
+# WhatsApp gateway are switched on by hand (docs/whatsapp-baileys.md). Staging's two are always on, so the first staging
 # deploy is what loads them.
 activate() {
   local dir=$1 was=${2:-} svc plist
@@ -254,7 +260,7 @@ activate() {
       say "  reloaded $label.$svc (its plist changed)"
       continue
     fi
-    if [[ $svc == (api|worker|webhook) ]]; then
+    if [[ $svc == (api|worker|webhook|wa-gateway) ]]; then
       $launchctl kickstart -k system/$label.$svc
     elif [[ $svc == caddy && -n $was ]] && ! cmp -s $dir/ops/Caddyfile $was/ops/Caddyfile; then
       $launchctl kickstart -k system/$label.caddy

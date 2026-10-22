@@ -38,6 +38,8 @@ export type ErrorCode =
   | "TIDAK_DITEMUKAN"
   | "KONFLIK"
   | "TERLALU_BANYAK"
+  /** The WhatsApp gateway (apps/wa-gateway) is not configured or not up. */
+  | "GATEWAY_MATI"
   | "KESALAHAN_SERVER";
 
 export class ApiError extends Error {

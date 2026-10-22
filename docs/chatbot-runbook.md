@@ -6,6 +6,11 @@ my message."*
 This is the diagnosis, the fix, and what the bot does once it is answering.
 The design is [chatbot-rag.md](./chatbot-rag.md); this is the wiring.
 
+> **2026-10-22:** the shop's number can also be a device linked to the POS
+> (Baileys, `WHATSAPP_TRANSPORT=baileys`) instead of the Cloud API. In that
+> mode Meta, the Funnel and steps 2–3 below do not apply; the webhook still
+> does. [whatsapp-baileys.md](./whatsapp-baileys.md) is that runbook.
+
 ## What was actually wrong
 
 Nothing in the code. Measured on the development database on 2026-09-21:

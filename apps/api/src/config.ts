@@ -56,6 +56,12 @@ export interface ApiConfig {
   readonly agentApiSecret: string | null;
   /** The Staff row a bot booking is attributed to — the worker's default. */
   readonly agentStaffId: string;
+  /**
+   * The WhatsApp gateway (apps/wa-gateway, 2026-10-22): `WA_GATEWAY_URL` +
+   * `WA_GATEWAY_SECRET`, both or neither. Null, `/api/whatsapp/connection`
+   * answers "not configured" — the Cloud API shop has no gateway at all.
+   */
+  readonly waGateway: { readonly url: string; readonly secret: string } | null;
 }
 
 const TWELVE_HOURS = 12 * 60 * 60 * 1000;
@@ -99,5 +105,12 @@ export function loadConfig(env: Record<string, string | undefined>): ApiConfig {
     release: env["NUSANTARA_RELEASE"] || null,
     agentApiSecret: env["AGENT_API_SECRET"]?.trim() || null,
     agentStaffId: env["WORKER_AGENT_STAFF_ID"]?.trim() || "staff_agent",
+    waGateway:
+      env["WA_GATEWAY_URL"]?.trim() && env["WA_GATEWAY_SECRET"]?.trim()
+        ? {
+            url: env["WA_GATEWAY_URL"].trim().replace(/\/+$/, ""),
+            secret: env["WA_GATEWAY_SECRET"].trim(),
+          }
+        : null,
   };
 }

@@ -19,7 +19,7 @@ import { db as prisma, disconnect } from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
 import { hasCredential } from "@nusantara/agent";
 import { canSend } from "@nusantara/whatsapp";
-import { loadEnvFile, loadWorkerConfig } from "./config.js";
+import { loadEnvFile, loadWorkerConfig, sendFetchFor } from "./config.js";
 import { run } from "./loop.js";
 import { checkDatabaseRole } from "./role.js";
 
@@ -55,7 +55,9 @@ export function main(): void {
   if (!canDeliver) {
     logger.warn(
       { evt: "worker.config.no_whatsapp" },
-      "no WhatsApp token — replies will be queued in the outbox but not sent",
+      config.transport.kind === "baileys"
+        ? "WHATSAPP_TRANSPORT=baileys without WA_GATEWAY_URL and WA_GATEWAY_SECRET — replies will be queued in the outbox but not sent"
+        : "no WhatsApp token — replies will be queued in the outbox but not sent",
     );
   }
   logger.info(
@@ -63,6 +65,7 @@ export function main(): void {
       evt: "worker.config.loaded",
       ctx: {
         envFile,
+        transport: config.transport.kind,
         graphVersion: config.whatsapp.graphVersion,
         canDraft,
         canDeliver,
@@ -89,7 +92,15 @@ export function main(): void {
         return;
       }
       logger.info({ evt: "worker.started" }, "worker started");
-      await run({ db, logger, config, stop });
+      // Baileys mode: the same Graph requests, to the gateway on loopback.
+      const fetchImpl = sendFetchFor(config.transport);
+      await run({
+        db,
+        logger,
+        config,
+        stop,
+        ...(fetchImpl ? { fetchImpl } : {}),
+      });
     })
     .catch((err: unknown) => {
       logger.error(

@@ -102,6 +102,12 @@ vi.mock("../src/lib/chatApi.js", async (original) => ({
   resetAgentPrompt: async () => ({ agent: AGENTS[1] }),
   simulate: (turns: unknown, lastShown?: unknown) => simulate(turns, lastShown),
 }));
+// The owner's WhatsApp connection card sits on this tab (2026-10-22); its
+// own behaviour is whatsappConnection.test.tsx.
+vi.mock("../src/lib/whatsappApi.js", async (original) => ({
+  ...(await original<typeof import("../src/lib/whatsappApi.js")>()),
+  getWhatsAppConnection: async () => ({ gateway: "NOT_CONFIGURED" }),
+}));
 vi.mock("../src/lib/session.js", async (original) => ({
   ...(await original<typeof import("../src/lib/session.js")>()),
   useSession: () => ({ data: { role: "OWNER" } }),
@@ -123,6 +129,16 @@ beforeEach(() => {
   pipeline = "v1";
   saveAgentPrompt.mockClear();
   simulate.mockClear();
+});
+
+describe("the WhatsApp connection (2026-10-22)", () => {
+  it("is on the owner's Settings tab", async () => {
+    draw();
+    expect(await screen.findByText("WhatsApp connection")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/there is no device to link/),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("the agent", () => {
@@ -223,8 +239,13 @@ describe("the simulator", () => {
       await screen.findByRole("textbox", { name: "Your message" }),
       "Halo{Enter}",
     );
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "no Claude credential",
+    // Not the only alert on the tab: the WhatsApp card's warning is one too.
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole("alert")
+          .some((a) => /no Claude credential/.test(a.textContent ?? "")),
+      ).toBe(true),
     );
   });
 });

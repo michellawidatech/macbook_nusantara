@@ -2,7 +2,9 @@
  * Settings — how the bot is put together (owner ask 2026-10-15).
  *
  * On top: the four "may answer" switches and the testers (moved here off the
- * Chat tab, where they were a bar above every conversation). Below, the
+ * Chat tab, where they were a bar above every conversation). For the owner
+ * only, the WhatsApp connection under them — the linked device that is the
+ * shop's number (2026-10-22, `WhatsAppConnection`). Below, the
  * agent with its persona prompt on the left, and the simulator on the right
  * to try a change out on.
  *
@@ -44,6 +46,7 @@ import {
 import { useSession } from "../../lib/session.js";
 import { BotSwitches } from "./BotSwitches.js";
 import { Simulator } from "./Simulator.js";
+import { WhatsAppConnection } from "./WhatsAppConnection.js";
 
 function PersonaModal({
   agent,
@@ -183,6 +186,8 @@ export function BotSettings() {
   return (
     <Flex vertical gap={16}>
       <BotSwitches />
+      {/* Owner-only: a QR on screen is the shop's number (2026-10-22). */}
+      {isOwner && <WhatsAppConnection />}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={10}>

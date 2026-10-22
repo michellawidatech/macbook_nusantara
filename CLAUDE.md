@@ -2865,6 +2865,56 @@ Decisions that outlived those documents:
     no Voyage call was made building this. Tune it on real threads.
   - `/new` is unchanged: it forgets the conversation (recall included, via
     the reset point) and leaves the profile and the POS customer alone.
+
+- **WhatsApp through a linked device, 2026-10-22** (owner decision): the
+  chatbot runs on WhatsApp via **Baileys** in production, linked by scanning a
+  QR inside the POS. This REVERSES the 2026-10-14 "Baileys is local testing
+  only; production is the Cloud API" — for the transport, not for
+  `tools/wa-local`, which stays a laptop tool outside the workspace.
+  `docs/whatsapp-baileys.md` is the runbook.
+  - **`apps/wa-gateway`** is one Baileys socket on `127.0.0.1:3002` behind a
+    shared secret (`x-wa-gateway-secret`): `GET /status`, `POST /link`,
+    `POST /logout`, and `POST /graph/{v}/{id}/messages|media` answering in
+    Graph's shapes. Inbound 1:1 messages (never groups, status, channels or
+    the number's own) are re-shaped into Meta's delivery and POSTed to the
+    REAL webhook, signed with its `APP_SECRET`. Only `baileysSocket.ts`
+    imports Baileys; the rules are in `session.ts` / `delivery.ts`, tested
+    with a fake socket and the real Graph client.
+  - **The worker is not forked.** `WHATSAPP_TRANSPORT=baileys` (+
+    `WA_GATEWAY_URL`, `WA_GATEWAY_SECRET`) hands the send pass
+    `gatewayFetch` (`@nusantara/whatsapp`) through the existing `fetchImpl`
+    seam: same request, origin moved, bearer token dropped, secret added. No
+    `WHATSAPP_TOKEN` is read in that mode. Unset or anything else is the
+    Cloud API, unchanged. Baileys mode half-configured is DORMANT, never a
+    fall-back to Meta.
+  - **ONE session.** Link is refused (409) while a session is connected or
+    connecting, rationed to **3 attempts an hour** (429, reported on the
+    card), and a session opened elsewhere (440) is left DISCONNECTED rather
+    than fought over. The POS card (Chatbot → Settings, **owner-only**) shows
+    a permanent warning: unofficial, can be banned, do not link/unlink
+    repeatedly, prefer a dedicated number, keep the phone online (~14 days).
+    `/api/whatsapp/connection` audits a link request as CREATE and an unlink
+    as DELETE (entity `WhatsApp`), after the gateway answered — no network
+    inside a transaction.
+  - ⚠️ **The QR is never logged**, anywhere. For its minute it IS the number.
+  - ⚠️ **SIGTERM does not unlink.** A deploy restarts the gateway; the session
+    is in `WA_GATEWAY_STATE_DIR` (`/opt/nusantara/var/wa-gateway`), outside
+    the release. Unlinking is the owner's Disconnect button or the phone.
+  - ⚠️ **Prod only**, twice: the gateway refuses `APP_ENV` other than `prod`
+    unless `WA_GATEWAY_ALLOW_NONPROD=1`, and `ops/run wa-gateway` refuses
+    before starting it. Staging must never run it — it would be a second
+    device on the shop's number.
+  - ⚠️ **An inbound photo's bytes are not downloaded.** It arrives as
+    `type: "image"` with its caption, exactly as from Meta, and the webhook
+    stores type and text only — no table holds customer media, and a
+    customer's photo is a hand-over anyway. Baileys' optional sharp/jimp are
+    left out of the release (`BAILEYS_OPTIONAL`), so a sent photo carries no
+    thumbnail.
+  - ⚠️ **Installer 3.** `nusantara-deploy` restarts, reloads and
+    health-checks `local.nusantara.wa-gateway`; a release cannot replace the
+    installed copy, so the owner must re-run `setup-deploy-access` on the Mac
+    mini once. The gateway, like the worker and webhook, is LOADED by hand
+    the first time (`docs/whatsapp-baileys.md` step 7).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
@@ -2942,7 +2992,8 @@ there is the comment/DM ingest this build has not written yet.
 - `gh workflow run CI --ref <branch>` — deploy a branch to staging
   (`-f refresh_staging_data=true` for a fresh copy of the shop's data first);
   a push to `main` does it by itself (`docs/staging.md`)
-- Ports: web 3000, api 4000, webhook 3001, monitor 4100; on the Mac mini,
+- Ports: web 3000, api 4000, webhook 3001, wa-gateway 3002 (loopback), monitor
+  4100; on the Mac mini,
   staging's api 4001 and Caddy 8081 beside the shop's 4000 and 8080
 - Database: `nusantara_pos_rebuild` on `localhost:5432`, role `nusantara`
 - Meta: App ID `2157052578394015`, WABA `1701973881546032`,
