@@ -141,6 +141,30 @@ const serials = () =>
     .map((el) => (el as HTMLInputElement).value);
 
 /** The dialog mounted most recently — antd leaves closed ones in the DOM. */
+/** Pick a warehouse in a Select by its id (the label carries its number). */
+async function pickWarehouse(control: HTMLElement, id: string, here = false) {
+  const w = snapshot().warehouses.find((x) => x.id === id)!;
+  const label = w.code ? `${w.code} · ${w.name}` : w.name;
+  fireEvent.mouseDown(control);
+  const item = await vi.waitFor(() => {
+    const open = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".ant-select-dropdown:not(.ant-select-dropdown-hidden)",
+      ),
+    );
+    const found = Array.from(
+      open[open.length - 1]?.querySelectorAll<HTMLElement>(
+        ".ant-select-item-option",
+      ) ?? [],
+    ).find((el) =>
+      (el.getAttribute("title") ?? "").startsWith(here ? `${label} (` : label),
+    );
+    if (!found) throw new Error(`no option “${label}” open`);
+    return found;
+  });
+  fireEvent.click(item);
+}
+
 async function lastDialog(): Promise<HTMLElement> {
   const dialogs = await screen.findAllByRole("dialog");
   return dialogs[dialogs.length - 1]!;
@@ -1259,7 +1283,7 @@ describe("sending a machine to service", () => {
     )!.locationId;
     await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
     const dialog = await lastDialog();
-    await userEvent.click(within(dialog).getByRole("switch"));
+    await pickWarehouse(within(dialog).getByLabelText("Send to"), before, true);
     await userEvent.click(await okButton("Send to service"));
 
     const db = snapshot();
@@ -1269,6 +1293,30 @@ describe("sending a machine to service", () => {
     expect(
       db.services.find((r) => r.serial === serial)!.arrivedAt,
     ).toBeTruthy();
+  });
+
+  // Owner ask 2026-10-22: *"make sure we can choose where we send the
+  // product"* — the bench is the default, not the only answer.
+  it("sends it to whichever warehouse the dialog names", async () => {
+    const serial = await described();
+    await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
+    const dialog = await lastDialog();
+    const other = snapshot().warehouses.find(
+      (w) =>
+        w.active &&
+        w.kind !== "SERVIS" &&
+        w.id !== snapshot().units.find((u) => u.serial === serial)!.locationId,
+    )!;
+    await pickWarehouse(within(dialog).getByLabelText("Send to"), other.id);
+    await userEvent.click(await okButton("Send to service"));
+
+    const db = snapshot();
+    const unit = db.units.find((u) => u.serial === serial)!;
+    expect(unit.status).toBe("SERVIS");
+    expect(unit.locationId).toBe(other.id);
+    const visit = db.services.find((r) => r.serial === serial)!;
+    expect(visit.closedAt).toBeUndefined();
+    expect(visit.fromLocationId).not.toBe(other.id);
   });
 
   it("puts the courier and the quote on the visit it opens", async () => {

@@ -757,7 +757,11 @@ export const id: Record<string, string> = {
   "inbound.serviceShip": "Kirim ke {{bench}}",
   "inbound.serviceShipHint":
     "Matikan kalau tukang servisnya yang menjemput, atau kalau unitnya tidak dipindahkan. Kalau dinyalakan, unitnya langsung tercatat di meja servis.",
-  "inbound.serviceShipLabel": "Kirim ke meja servis",
+  "inbound.serviceShipLabel": "Ongkir ke servis",
+  "inbound.serviceSendTo": "Kirim ke",
+  "inbound.serviceSendToHint":
+    "Ke mana unit ini dikirim untuk diperbaiki. Pilih gudangnya sendiri kalau teknisi yang mengambil atau unitnya tidak dipindah.",
+  "inbound.serviceStaysHere": "{{name}} (tetap di sini)",
   "inbound.serviceShippingFee": "Ongkir ke sana",
   "inbound.serviceShippingFeeHint":
     "Ongkir antar gudang. Ikut dihitung sebagai modal unit ini.",
@@ -1963,6 +1967,9 @@ export const id: Record<string, string> = {
   "inventory.editUnitAria": "Ubah {{serial}}",
 
   // The adjustment dialog's two halves, headed the same way.
+  "stock.serviceSendTo": "Kirim ke",
+  "stock.serviceSendToHint":
+    "Ke mana unit dikirim untuk diperbaiki — meja servis, kecuali memilih gudang lain.",
   "stock.serialisedProducts": "Produk berserial",
   "stock.noCounted": "Belum ada produk hitungan di batch ini.",
   "stock.qty": "Jumlah",

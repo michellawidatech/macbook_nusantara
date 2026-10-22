@@ -452,7 +452,8 @@ export function InboundDetailPage() {
    */
   const [sendingToService, setSendingToService] = useState<string | null>(null);
   const [serviceForm] = Form.useForm<{
-    ship: boolean;
+    /** The warehouse the unit goes to — its own when it is not moving. */
+    sendTo?: string;
     shippingFee?: number;
     serviceFee?: number;
     note?: string;
@@ -1504,7 +1505,6 @@ export function InboundDetailPage() {
   const locked = closed || !editing;
 
   const bench = serviceLocationOf(db.warehouses);
-  const benchName = warehouseLabelOf(db.warehouses, bench) ?? bench ?? "";
 
   /** An expense's name as the page shows it: its label, else its kind. */
   const feeName = (fee: PoFee) =>
@@ -1580,8 +1580,11 @@ export function InboundDetailPage() {
         const u = d.units.find((x) => x.serial === serial)!;
         const reasonLabel = "On Service";
         ensureReason(d, "ADJUSTMENT", reasonLabel);
-        const travelling =
-          v.ship && bench !== undefined && bench !== u.locationId;
+        // Where it goes is the dialog's answer (owner ask 2026-10-22: *"make
+        // sure we can choose where we send the product"*) — the bench by
+        // default, the unit's own warehouse when it is not moving.
+        const dest: string = v.sendTo ?? u.locationId;
+        const travelling = dest !== u.locationId;
         /*
          * ⚠️ Read BEFORE the event, which writes the projection. The visit is
          * what sends the unit back afterwards, so `fromLocationId` has to be
@@ -1593,10 +1596,10 @@ export function InboundDetailPage() {
         appendEvent(d, serial, {
           type: "DICATAT",
           toStatus: "SERVIS",
-          ...(travelling ? { toLocationId: bench } : {}),
+          ...(travelling ? { toLocationId: dest } : {}),
           refCode: po.code,
           note: travelling
-            ? `Sent to service — ${benchName}`
+            ? `Sent to service — ${warehouseLabelOf(d.warehouses, dest) ?? dest}`
             : "Sent to service",
         });
         // The rack belongs to the warehouse it is leaving.
@@ -1608,7 +1611,7 @@ export function InboundDetailPage() {
             kind: "SHIPPING" as const,
             // Translated where it is WRITTEN — the string is stored and frozen
             // in whatever language the bench happened to be in.
-            label: t("inbound.serviceShipLabel", "Transfer to the bench"),
+            label: t("inbound.serviceShipLabel", "Courier to service"),
             amount: v.shippingFee!,
             at: now,
             staff: currentStaffName(),
@@ -1638,14 +1641,18 @@ export function InboundDetailPage() {
           staff: currentStaffName(),
         });
       });
+      const from = db.units.find((x) => x.serial === serial)?.locationId;
       setSendingToService(null);
       serviceForm.resetFields();
       message.success(
-        v.ship && bench
+        v.sendTo !== undefined && v.sendTo !== from
           ? t(
               "inbound.serviceSentShipping",
               "{{serial}} is now at {{bench}}.",
-              { serial, bench: benchName },
+              {
+                serial,
+                bench: warehouseLabelOf(db.warehouses, v.sendTo) ?? v.sendTo,
+              },
             )
           : t(
               "inbound.serviceSentHere",
@@ -4270,9 +4277,14 @@ export function InboundDetailPage() {
         <Form
           form={serviceForm}
           layout="vertical"
-          // Shipped by default: the bench is a different building, and a
-          // machine graded in warehouse 1 has to get there.
-          initialValues={{ ship: bench !== undefined }}
+          // The bench by default: it is a different building, and a unit
+          // graded in warehouse 1 has to get there. Any warehouse may be
+          // named instead (owner ask 2026-10-22), its own included.
+          initialValues={{
+            sendTo:
+              bench ??
+              db.units.find((x) => x.serial === sendingToService)?.locationId,
+          }}
         >
           <Typography.Paragraph type="secondary">
             {t(
@@ -4281,24 +4293,40 @@ export function InboundDetailPage() {
               { serial: sendingToService ?? "" },
             )}
           </Typography.Paragraph>
-          {bench && (
-            <Form.Item
-              name="ship"
-              valuePropName="checked"
-              label={t("inbound.serviceShip", "Send it to {{bench}}", {
-                bench: benchName,
-              })}
-              tooltip={t(
-                "inbound.serviceShipHint",
-                "Leave this off if the repairer collects it, or if the unit is not moving. Turning it on files the unit at the bench straight away.",
-              )}
-            >
-              <Switch />
-            </Form.Item>
-          )}
-          <Form.Item noStyle shouldUpdate={(a, b) => a.ship !== b.ship}>
+          <Form.Item
+            name="sendTo"
+            label={t("inbound.serviceSendTo", "Send to")}
+            tooltip={t(
+              "inbound.serviceSendToHint",
+              "Where the unit goes for its repair. Pick its own warehouse if the repairer collects it or it is not moving.",
+            )}
+          >
+            <Select
+              aria-label={t("inbound.serviceSendTo", "Send to")}
+              options={db.warehouses
+                .filter((w) => w.active)
+                .map((w) => {
+                  const here =
+                    w.id ===
+                    db.units.find((x) => x.serial === sendingToService)
+                      ?.locationId;
+                  return {
+                    value: w.id,
+                    label: here
+                      ? t("inbound.serviceStaysHere", "{{name}} (stays here)", {
+                          name: warehouseLabel(w),
+                        })
+                      : warehouseLabel(w),
+                  };
+                })}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(a, b) => a.sendTo !== b.sendTo}>
             {({ getFieldValue }) =>
-              bench && getFieldValue("ship") ? (
+              getFieldValue("sendTo") !== undefined &&
+              getFieldValue("sendTo") !==
+                db.units.find((x) => x.serial === sendingToService)
+                  ?.locationId ? (
                 <Form.Item
                   name="shippingFee"
                   label={t(

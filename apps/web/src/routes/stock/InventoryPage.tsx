@@ -271,6 +271,17 @@ export function InventoryPage() {
     db.myWarehouseId,
     asString,
   );
+  /*
+   * Where a unit sent to service goes (owner ask 2026-10-22: *"make sure we
+   * can choose where we send the product"*). Only a PICKED warehouse is kept;
+   * unpicked it is the service bench, as it always was.
+   */
+  const [serviceToPicked, setServiceToPicked] = usePersistentState<
+    string | undefined
+  >(BATCH_DRAFT("serviceTo"), undefined, asString);
+  const serviceTo =
+    db.warehouses.find((w) => w.active && w.id === serviceToPicked)?.id ??
+    serviceLocationOf(db.warehouses);
   const [rows, setRows] = usePersistentState<BatchRow[]>(
     BATCH_DRAFT("rows"),
     blankRows,
@@ -376,6 +387,7 @@ export function InventoryPage() {
     setOutStatus(direction === "OUT" ? "HILANG" : "HILANG");
     setOutTouched(false);
     setLocationId(db.myWarehouseId);
+    setServiceToPicked(undefined);
     setRows(blankRows());
     setCountedRows([]);
     setAdding(true);
@@ -615,8 +627,8 @@ export function InventoryPage() {
           // Read BEFORE the event, which writes the projection — the visit has
           // to record where the machine set out from.
           const cameFrom = existing.locationId;
-          if (goingToService) existing.rackId = undefined;
-          const serviceBench = serviceLocationOf(d.warehouses);
+          if (goingToService && serviceTo !== cameFrom)
+            existing.rackId = undefined;
           appendEvent(d, serial, {
             type: "KOREKSI",
             toStatus: kind === "IN" ? "TERSEDIA" : outStatus,
@@ -624,7 +636,7 @@ export function InventoryPage() {
               kind === "IN"
                 ? locationId
                 : goingToService
-                  ? serviceBench
+                  ? serviceTo
                   : undefined,
             note: [
               `${kind === "IN" ? "Adjusted in" : "Adjusted out"} — ${label}`,
@@ -1103,6 +1115,27 @@ export function InventoryPage() {
                     value: o.value,
                     label: t(o.label),
                   }))}
+                  style={{ width: "100%" }}
+                />
+              </Form.Item>
+            )}
+            {kind === "OUT" && outStatus === "SERVIS" && (
+              <Form.Item
+                label={t("stock.serviceSendTo", "Send to")}
+                required
+                tooltip={t(
+                  "stock.serviceSendToHint",
+                  "Where the units go for their repair — the service bench unless you pick another warehouse.",
+                )}
+                style={{ marginBottom: SPACE.md, minWidth: 220 }}
+              >
+                <Select
+                  value={serviceTo}
+                  onChange={setServiceToPicked}
+                  aria-label={t("stock.serviceSendTo", "Send to")}
+                  options={db.warehouses
+                    .filter((w) => w.active)
+                    .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
                   style={{ width: "100%" }}
                 />
               </Form.Item>
