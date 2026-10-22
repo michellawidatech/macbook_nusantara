@@ -20,7 +20,8 @@ import { maskPhones, redactValue } from "./redact.js";
 export type { Logger };
 
 /** §2: one of these, never a free-text app name. */
-export type AppName = "api" | "web" | "whatsapp-webhook" | "monitor" | "worker";
+export type AppName =
+  "api" | "web" | "whatsapp-webhook" | "wa-gateway" | "monitor" | "worker";
 
 export type Level = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 

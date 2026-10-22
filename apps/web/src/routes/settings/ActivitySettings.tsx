@@ -287,6 +287,8 @@ export function ActivitySettings() {
         return t("activity.e.myWarehouse", "Own warehouse");
       case "Staff":
         return t("activity.e.staff", "Staff account");
+      case "WhatsApp":
+        return t("activity.e.whatsapp", "WhatsApp connection");
       default:
         return e;
     }
@@ -337,6 +339,7 @@ export function ActivitySettings() {
     "discounts",
     "settings",
     "Staff",
+    "WhatsApp",
   ];
 
   return (

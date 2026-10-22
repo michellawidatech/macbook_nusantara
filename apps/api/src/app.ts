@@ -33,6 +33,7 @@ import { kontrolRouter } from "./routes/kontrol.js";
 import { storeRouter } from "./routes/store.js";
 import { staffRouter } from "./routes/staff.js";
 import { agentRouter } from "./routes/agent.js";
+import { whatsappRouter } from "./routes/whatsapp.js";
 import type { AnthropicEnv } from "@nusantara/agent";
 
 /** Four phone photographs as base64, with room to spare. */
@@ -153,6 +154,16 @@ export function createApp(deps: CreateAppDeps): Express {
   api.use(
     "/staff",
     staffRouter({ db, logger, limiter, requireOwner: requireOwner(logger) }),
+  );
+  // The linked WhatsApp device (2026-10-22), owner-only inside the router.
+  api.use(
+    "/whatsapp",
+    whatsappRouter({
+      db,
+      logger,
+      gateway: config.waGateway,
+      requireOwner: requireOwner(logger),
+    }),
   );
 
   app.use("/api", api);

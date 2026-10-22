@@ -189,14 +189,31 @@ export async function runDoctor(
   });
 
   // --- 7. can the bot speak ------------------------------------------------
+  // Baileys mode (2026-10-22) sends through apps/wa-gateway and has no token;
+  // whether the device is LINKED is on /chat → Settings, not in this file.
+  const baileys = env["WHATSAPP_TRANSPORT"]?.trim().toLowerCase() === "baileys";
   out.push(
-    isSet(env["WHATSAPP_TOKEN"]) && isSet(env["PHONE_NUMBER_ID"])
-      ? { level: "ok", title: "A WhatsApp send credential is set" }
-      : {
-          level: "fail",
-          title: "No WhatsApp credential — replies queue and never send",
-          fix: "Set WHATSAPP_TOKEN and PHONE_NUMBER_ID in /opt/nusantara/etc/worker.env.",
-        },
+    baileys
+      ? isSet(env["WA_GATEWAY_URL"]) && isSet(env["WA_GATEWAY_SECRET"])
+        ? {
+            level: "ok",
+            title:
+              "WHATSAPP_TRANSPORT=baileys — replies go through the WhatsApp gateway",
+            fix: "Check the device is linked: Chatbot → Settings → WhatsApp connection.",
+          }
+        : {
+            level: "fail",
+            title:
+              "WHATSAPP_TRANSPORT=baileys without the gateway's URL and secret — replies queue and never send",
+            fix: "Set WA_GATEWAY_URL and WA_GATEWAY_SECRET in /opt/nusantara/etc/worker.env (docs/whatsapp-baileys.md).",
+          }
+      : isSet(env["WHATSAPP_TOKEN"]) && isSet(env["PHONE_NUMBER_ID"])
+        ? { level: "ok", title: "A WhatsApp send credential is set" }
+        : {
+            level: "fail",
+            title: "No WhatsApp credential — replies queue and never send",
+            fix: "Set WHATSAPP_TOKEN and PHONE_NUMBER_ID in /opt/nusantara/etc/worker.env.",
+          },
   );
 
   const pending = await prisma.outbox.count({ where: { status: "PENDING" } });

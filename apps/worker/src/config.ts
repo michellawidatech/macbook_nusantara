@@ -25,7 +25,61 @@ import {
   type AnthropicEnv,
   type WaitProfile,
 } from "@nusantara/agent";
-import type { WhatsAppCredentials } from "@nusantara/whatsapp";
+import {
+  gatewayFetch,
+  type GatewayTarget,
+  type WhatsAppCredentials,
+} from "@nusantara/whatsapp";
+
+/**
+ * How a reply reaches WhatsApp (owner decision 2026-10-22).
+ *
+ * `cloud` is Meta's Cloud API with the shop's token — unchanged, and the
+ * default. `baileys` sends the SAME Graph requests to `apps/wa-gateway` on
+ * loopback, which speaks WhatsApp Web as a device linked to the shop's number
+ * (docs/whatsapp-baileys.md). There is no token in that mode: the send code
+ * still wants one before it calls itself configured, so a placeholder stands
+ * in, and `gatewayFetch` drops the Authorization header built from it before
+ * anything leaves the process.
+ *
+ * Baileys mode with the URL or the secret missing stays Baileys mode with
+ * EMPTY credentials — the send pass's existing "dormant": replies queue,
+ * nothing is claimed, and the first log line says why. Falling back to the
+ * Cloud API instead would send from Meta with whatever token happened to be
+ * left in the file, which is not what anybody chose.
+ */
+export type WhatsAppTransport =
+  { readonly kind: "cloud" } | ({ readonly kind: "baileys" } & GatewayTarget);
+
+/** What stands in for a token in Baileys mode. Never sent anywhere. */
+export const BAILEYS_TOKEN_PLACEHOLDER = "wa-gateway";
+
+/**
+ * The fetch the send pass is handed (`TickDeps.fetchImpl`): none for the
+ * Cloud API — the client's own `fetch` to graph.facebook.com — and the
+ * gateway's rewrite for Baileys. The seam tools/wa-local and the tests use.
+ */
+export function sendFetchFor(
+  transport: WhatsAppTransport,
+  baseFetch: typeof fetch = fetch,
+): typeof fetch | undefined {
+  return transport.kind === "baileys" && transport.url && transport.secret
+    ? gatewayFetch(transport, baseFetch)
+    : undefined;
+}
+
+export function transportOf(
+  env: Record<string, string | undefined>,
+): WhatsAppTransport {
+  if (env["WHATSAPP_TRANSPORT"]?.trim().toLowerCase() !== "baileys") {
+    return { kind: "cloud" };
+  }
+  return {
+    kind: "baileys",
+    url: env["WA_GATEWAY_URL"]?.trim() ?? "",
+    secret: env["WA_GATEWAY_SECRET"]?.trim() ?? "",
+  };
+}
 
 /**
  * The only keys the worker will accept from a shared secrets file.
@@ -66,6 +120,9 @@ export const WORKER_ENV_KEYS = [
   "AGENT_API_URL",
   "AGENT_API_SECRET",
   "WORKER_MAX_SENDS",
+  "WHATSAPP_TRANSPORT",
+  "WA_GATEWAY_URL",
+  "WA_GATEWAY_SECRET",
 ] as const;
 
 /**
@@ -101,6 +158,8 @@ export function loadEnvFile(path: string): Record<string, string> {
 
 export interface WorkerConfig {
   readonly whatsapp: WhatsAppCredentials;
+  /** The Cloud API or the Baileys gateway — `WHATSAPP_TRANSPORT`. */
+  readonly transport: WhatsAppTransport;
   readonly anthropic: AnthropicEnv;
   /** How long between ticks when the last tick had nothing to do. */
   readonly idlePollMs: number;
@@ -175,13 +234,28 @@ function int(raw: string | undefined, fallback: number): number {
 export function loadWorkerConfig(
   env: Record<string, string | undefined>,
 ): WorkerConfig {
+  // One constant for both channels — never two env fallbacks (CLAUDE.md).
+  const graphVersion = env["GRAPH_API_VERSION"]?.trim() || "v25.0";
+  const transport = transportOf(env);
   return {
-    whatsapp: {
-      whatsappToken: env["WHATSAPP_TOKEN"]?.trim() ?? "",
-      phoneNumberId: env["PHONE_NUMBER_ID"]?.trim() ?? "",
-      // One constant for both channels — never two env fallbacks (CLAUDE.md).
-      graphVersion: env["GRAPH_API_VERSION"]?.trim() || "v25.0",
-    },
+    whatsapp:
+      transport.kind === "cloud"
+        ? {
+            whatsappToken: env["WHATSAPP_TOKEN"]?.trim() ?? "",
+            phoneNumberId: env["PHONE_NUMBER_ID"]?.trim() ?? "",
+            graphVersion,
+          }
+        : {
+            // Never WHATSAPP_TOKEN, even if the file still holds one.
+            whatsappToken:
+              transport.url && transport.secret
+                ? BAILEYS_TOKEN_PLACEHOLDER
+                : "",
+            // A path segment the gateway ignores; the number is the device's.
+            phoneNumberId: env["PHONE_NUMBER_ID"]?.trim() || "baileys",
+            graphVersion,
+          },
+    transport,
     anthropic: {
       apiKey: env["ANTHROPIC_API_KEY"]?.trim() || undefined,
       authToken: env["ANTHROPIC_AUTH_TOKEN"]?.trim() || undefined,
