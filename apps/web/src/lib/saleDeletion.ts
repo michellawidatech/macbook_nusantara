@@ -36,11 +36,7 @@ import type { MockDb, Order } from "../mock/seed.js";
 import { isSaleLocked } from "./bookClose.js";
 
 export type SaleDeletionBlock =
-  | "BOOKS_CLOSED"
-  | "RETURNED"
-  | "TRADE_IN"
-  | "UNIT_MOVED"
-  | "LINKED_MONEY";
+  "BOOKS_CLOSED" | "RETURNED" | "TRADE_IN" | "UNIT_MOVED" | "LINKED_MONEY";
 
 /** Why `order` cannot be deleted, or undefined when it can. */
 export function saleDeletionBlock(
