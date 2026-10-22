@@ -82,3 +82,13 @@ export function endOfDay(day: Date): string {
   end.setHours(23, 59, 59, 999);
   return end.toISOString();
 }
+
+/**
+ * The last instant of a local MONTH (owner ask 2026-10-22: *"add a close
+ * transaction monthly"*). The book closes a whole month at a time now; any
+ * day of the month picks it. Local, for the reason `endOfDay` gives.
+ */
+export function endOfMonth(day: Date): string {
+  const end = new Date(day.getFullYear(), day.getMonth() + 1, 0);
+  return endOfDay(end);
+}

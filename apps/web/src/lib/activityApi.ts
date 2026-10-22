@@ -7,7 +7,12 @@
  * always wrote. Server data in TanStack Query, like `staffApi`: who did what
  * is not the shop's data, and the store sends nobody a copy of it.
  */
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { api } from "./api.js";
 
 export type ActivityAction =
@@ -84,6 +89,20 @@ export function useActivity(filter: ActivityFilter, enabled = true) {
     // A new page or filter keeps the old rows on screen until it lands.
     placeholderData: keepPreviousData,
     enabled,
+  });
+}
+
+/**
+ * Clear the whole log — `DELETE /api/kontrol/audit`, owner-only (2026-10-22).
+ * The server leaves one line recording the clear; `cleared` is how many rows
+ * went before it.
+ */
+export function useClearActivity() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api<{ cleared: number }>("/api/kontrol/audit", { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["kontrol", "audit"] }),
   });
 }
 

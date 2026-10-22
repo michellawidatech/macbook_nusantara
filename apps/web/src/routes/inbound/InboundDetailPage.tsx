@@ -3720,6 +3720,14 @@ export function InboundDetailPage() {
     >
       <Flex gap={32} wrap align="flex-start">
         <Flex vertical gap={10} style={{ minWidth: 300, flex: "1 1 300px" }}>
+          {/* How many units the invoice bought (owner ask 2026-10-22) — every
+              line's quantity, a counted product's pieces included. */}
+          <Flex justify="space-between" gap={16}>
+            <span>{t("inbound.unitsPurchased", "Total units purchased")}</span>
+            <span data-testid="units-purchased">
+              {po.items.reduce((n, i) => n + i.qty, 0)}
+            </span>
+          </Flex>
           <Flex vertical>
             <Flex justify="space-between" gap={16}>
               <span>{t("inbound.productsTotal", "Products")}</span>

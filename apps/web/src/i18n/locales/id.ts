@@ -908,6 +908,7 @@ export const id: Record<string, string> = {
   "inbound.printLabels": "Cetak label",
   "inbound.product": "Produk",
   "inbound.products": "Produk",
+  "inbound.unitsPurchased": "Total unit dibeli",
   "inbound.productsTotal": "Produk",
   "inbound.putBackHint": "Kembalikan baris ini — barangnya ternyata datang",
   "inbound.qcHint":
@@ -1372,7 +1373,7 @@ export const id: Record<string, string> = {
     "Tidak ada unit dengan serial ini di sistem. Kalau baru saja datang, mungkin masih menunggu di penerimaan.",
   "snTracking.note": "Catatan",
   "snTracking.printLabel": "Cetak label",
-  "snTracking.rawLedgerAppendOnly": "Buku besar mentah (hanya bisa ditambah)",
+  "snTracking.rawLedger": "Buku besar mentah",
   "snTracking.ref": "Ref",
   "snTracking.sNTracking": "Riwayat Serial",
   "snTracking.searchEventNoteOrReference":
@@ -2498,21 +2499,6 @@ export const id: Record<string, string> = {
 
   // Printing labels — page setup and the barcode.
   "labels.title": "Cetak label — {{count}} serial",
-  "labels.printOn": "Cetak di",
-  "labels.sheet": "Lembar kertas",
-  "labels.roll": "Roll thermal",
-  "labels.paper": "Kertas",
-  "labels.labelWidth": "Lebar label (mm)",
-  "labels.labelHeight": "Tinggi label (mm)",
-  "labels.gap": "Jarak (mm)",
-  "labels.margin": "Margin (mm)",
-  "labels.symbology": "Kode",
-  "labels.code128": "Code 128",
-  "labels.qr": "QR",
-  "labels.sheetSummary":
-    "{{count}} label dalam {{sheets}} lembar, {{cols}} ke samping dan {{rows}} ke bawah, ukuran {{w}} × {{h}}mm. Cetak pada skala 100% — “fit to page” akan menggeser semua label keluar dari backing-nya.",
-  "labels.rollSummary":
-    "{{count}} label, satu per stiker {{w}} × {{h}}mm. Setel ukuran kertas printer sesuai stikernya, dan cetak pada skala 100%.",
   "labels.nothingSelected": "Tidak ada yang dipilih untuk dicetak.",
 
   // What the print dialog says about a serial it will not encode. Two levels:
@@ -4167,4 +4153,73 @@ export const id: Record<string, string> = {
   "waConn.logout": "Putuskan",
   "waConn.attemptsLeft":
     "Sisa {{remaining}} dari {{max}} percobaan menautkan dalam satu jam",
+  "activity.clearWord": "HAPUS",
+  "activity.e.auditLog": "Riwayat aktivitas",
+  "activity.clear": "Hapus semua aktivitas",
+  "activity.clearTitle": "Hapus semua aktivitas?",
+  "activity.clearOk": "Hapus",
+  "activity.cleared": "{{count}} baris aktivitas dihapus.",
+  "activity.clearFailed": "Aktivitas tidak bisa dihapus.",
+  "activity.clearBody":
+    "Ini menghapus setiap baris riwayat aktivitas, untuk semua orang. Satu baris yang mencatat bahwa Anda menghapusnya tetap disimpan. Tidak ada yang bisa dikembalikan.",
+  "activity.clearTypeIt": "Ketik",
+  "activity.clearToConfirm": "untuk konfirmasi.",
+  "activity.clearTypeAria": "Ketik kata untuk konfirmasi",
+  "labels.summary":
+    "{{count}} label, satu stiker 50 × 30 mm per label. Cetak dengan skala 100% tanpa margin.",
+  "snTracking.deleteOnlyRow":
+    "Unit selalu menyimpan setidaknya satu baris riwayat.",
+  "snTracking.deleteLiveSale":
+    "Unit ini masih ada di {{code}}. Hapus transaksinya di Riwayat Transaksi.",
+  "snTracking.deleteRowTitle": "Hapus baris riwayat ini?",
+  "snTracking.deleteRowBody":
+    "“{{event}}” pada {{date}} dihapus dari riwayat unit ini untuk selamanya.",
+  "snTracking.deleteRowOk": "Hapus baris",
+  "snTracking.rowDeleted": "Baris riwayat dihapus.",
+  "snTracking.deleteRow": "Hapus baris",
+  "snTracking.rowMenu": "Lainnya untuk baris {{seq}}",
+  "transactions.closeMonthTitle": "Tutup buku sampai akhir {{month}}?",
+  "transactions.closeMonthBody":
+    "{{count}} transaksi sampai akhir bulan itu menjadi hanya-baca: tidak bisa diubah, tidak bisa dihapus, dan tidak menerima pembayaran lagi. Buku bisa dibuka kembali kapan saja.",
+  "transactions.bookClosedMonthBody":
+    "Setiap transaksi sampai akhir {{month}} hanya-baca, tidak bisa dihapus, dan tidak menerima pembayaran lagi. Buka kembali buku untuk mengoreksinya.",
+  "transactions.closeMonthAsk":
+    "Kunci setiap transaksi sampai akhir bulan ini.",
+  "transactions.closeMonthDate": "Tutup buku sampai akhir",
+  "transactions.deleteClosed":
+    "Buku sudah ditutup untuk bulan ini. Buka kembali untuk menghapus penjualan ini.",
+  "transactions.deleteReturned":
+    "Ada yang diretur dari penjualan ini. Hapus returnya dulu.",
+  "transactions.deleteTradeIn":
+    "Penjualan ini menerima tukar tambah, yang sekarang ada di stok.",
+  "transactions.deleteMoved":
+    "Ada unit dari penjualan ini yang sudah berpindah (direservasi, dipindah, atau terjual lagi).",
+  "transactions.deletePayout":
+    "Pencairan marketplace sudah dicatat untuk penjualan ini.",
+  "transactions.deleteLinked":
+    "Ada catatan Pemasukan & Pengeluaran yang menaut penjualan ini.",
+  "transactions.deleteTitle": "Hapus {{code}}?",
+  "transactions.deleteBody":
+    "Penjualan dan pembayarannya dihapus untuk selamanya, dan {{count}} unitnya kembali ke rak seperti sebelum dijual. Tidak bisa dibatalkan.",
+  "transactions.deleteOk": "Hapus transaksi",
+  "transactions.deleted": "{{code}} dihapus.",
+  "transactions.deleteSale": "Hapus transaksi",
+  "transactions.deleteSaleAria": "Hapus {{code}}",
+  "editSale.pickProduct": "Pilih produk di setiap baris aksesori.",
+  "editSale.belowReturned":
+    "Jumlah di satu baris tidak bisa kurang dari yang sudah diretur.",
+  "editSale.notEnoughStock": "Stok {{product}} tidak cukup untuk {{qty}} lagi.",
+  "editSale.price": "Harga",
+  "editSale.priceFor": "Harga",
+  "editSale.accessories": "Aksesori (tanpa serial)",
+  "editSale.product": "Produk",
+  "editSale.productFor": "Produk",
+  "editSale.pickProductOne": "Pilih produk",
+  "editSale.qty": "Jml",
+  "editSale.qtyFor": "Jumlah",
+  "editSale.pricePerPiece": "Harga per buah",
+  "editSale.piecePriceFor": "Harga per buah",
+  "editSale.removeCounted": "Keluarkan produk ini",
+  "editSale.addCounted": "Tambah aksesori",
+  "editSale.newTotal": "Total {{total}}",
 };

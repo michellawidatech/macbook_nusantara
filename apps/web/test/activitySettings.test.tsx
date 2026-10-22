@@ -114,4 +114,77 @@ describe("the activity tab", () => {
       expect(asked.some((u) => u.includes("staffId=st-dina"))).toBe(true),
     );
   });
+
+  it("clears the whole log only after the confirm word is typed", async () => {
+    const asked: { url: string; method: string }[] = [];
+    let cleared = false;
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        asked.push({ url, method });
+        if (method === "DELETE") cleared = true;
+        const body = url.startsWith("/api/staff")
+          ? { accounts: [] }
+          : method === "DELETE"
+            ? { cleared: 42 }
+            : {
+                entries: cleared
+                  ? [
+                      {
+                        id: "c1",
+                        at: "2026-10-22T04:00:00.000Z",
+                        action: "DELETE",
+                        entity: "AuditLog",
+                        entityId: "all",
+                        field: null,
+                        before: JSON.stringify({ rows: 42 }),
+                        after: null,
+                        requestId: null,
+                        ip: null,
+                        staff: {
+                          id: "st-ersen",
+                          name: "Ersen",
+                          username: "ersen",
+                        },
+                      },
+                    ]
+                  : [],
+                page: 1,
+                perPage: 50,
+                total: cleared ? 1 : 0,
+              };
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    ) as typeof globalThis.fetch;
+    renderTab();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Clear all activity/ }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    const ok = within(dialog).getByRole("button", { name: "Clear it" });
+    expect(ok).toBeDisabled();
+
+    const box = within(dialog).getByLabelText("Type the word to confirm");
+    fireEvent.change(box, { target: { value: "clear" } });
+    expect(ok).toBeDisabled();
+    expect(asked.some((a) => a.method === "DELETE")).toBe(false);
+
+    fireEvent.change(box, { target: { value: "CLEAR" } });
+    expect(ok).toBeEnabled();
+    fireEvent.click(ok);
+
+    expect(
+      await screen.findByText("42 activity line(s) cleared."),
+    ).toBeInTheDocument();
+    expect(
+      asked.filter((a) => a.method === "DELETE").map((a) => a.url),
+    ).toEqual(["/api/kontrol/audit"]);
+    // The list is read again, and the clear is the line left in it.
+    expect(await screen.findByText("Activity log")).toBeInTheDocument();
+  });
 });

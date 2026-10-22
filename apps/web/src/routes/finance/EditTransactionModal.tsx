@@ -17,8 +17,23 @@
  *
  * ⚠️ This is the one place the append-only rule in CLAUDE.md does not hold.
  * `packages/db`'s events adapter permits it for exactly this shape: the LAST
- * event of a unit, never one in the middle, and never leaving a unit with no
- * history at all. Everything else about the ledger is unchanged.
+ * event of a unit, never leaving a unit with no history at all.
+ *
+ * ## Everything on it is correctable (owner, 2026-10-22)
+ *
+ * > *"The transaction history should be editable … Do not implement append
+ * > only. This is an environment where they input amount / product / channel
+ * > wrongly. So all things should be recoverable and a mistake should not cost
+ * > lots of additional steps."*
+ *
+ * So a unit's PRICE is a box on its line, and a counted product — a MagSafe,
+ * a charger, anything with no serial — is a line of its own with a quantity
+ * and a price per piece. It could not be added here before, which is the bug
+ * the owner reported. Its pieces leave and return on the stock ledger the way
+ * the till's do: more pieces is a `TERJUAL` from the shelf, fewer (or the line
+ * gone) is a `KOREKSI` putting them back at the cost they went out at. The
+ * sale's subtotal and total are re-derived from the lines on save, so the
+ * money on every other screen follows.
  *
  * Money is `PaymentsPanel`, the same grid the till and the payment dialog use.
  */
@@ -30,6 +45,7 @@ import {
   Flex,
   Form,
   Input,
+  InputNumber,
   Modal,
   Select,
   Table,
@@ -40,6 +56,12 @@ import { Button } from "antd";
 import dayjs from "dayjs";
 import { useTranslation } from "react-i18next";
 import { PaymentsPanel } from "../../components/PaymentsPanel";
+import { MoneyInput } from "../../components/MoneyInput";
+import { averageCost, takeFrom } from "../../lib/stock.js";
+import { skuTracksSerial } from "../../lib/serialTracking.js";
+import { isLiveSku } from "../../lib/skuCode.js";
+import { fmtRp } from "../../lib/format.js";
+import { priceOf } from "../../lib/unitPrice.js";
 import { SALE_CHANNELS, type SaleSource } from "../../lib/channels.js";
 import { customerLine } from "../../lib/customers.js";
 import { isBookClosed } from "../../lib/bookClose.js";
@@ -72,6 +94,23 @@ interface UnitLine {
   readonly serial: string;
   /** The variant, which the serial decides — or which empties the serial. */
   readonly skuId: string | undefined;
+  /** What this unit is charged on the sale. */
+  readonly price: number;
+}
+
+/** A counted product's line — an accessory, by quantity (no serial). */
+interface CountLine {
+  readonly key: string;
+  /** `OrderLine.id`; a new line gets one at save. */
+  readonly id: string | undefined;
+  readonly skuId: string | undefined;
+  readonly qty: number;
+  /** Per piece. */
+  readonly price: number;
+  /** Pieces on the sale when the dialog opened; 0 for a new line. */
+  readonly wasQty: number;
+  readonly listPrice?: number;
+  readonly returnedQty?: number;
 }
 
 export interface EditTransactionModalProps {
@@ -94,6 +133,7 @@ export function EditTransactionModal({
   const [source, setSource] = useState<SaleSource>("OFFLINE");
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [lines, setLines] = useState<UnitLine[]>([]);
+  const [counted, setCounted] = useState<CountLine[]>([]);
   const [payments, setPayments] = useState<SalePayment[]>([]);
 
   useEffect(() => {
@@ -109,6 +149,19 @@ export function EditTransactionModal({
         was: serial,
         serial,
         skuId: db.units.find((u) => u.serial === serial)?.skuId,
+        price: order.prices[serial] ?? 0,
+      })),
+    );
+    setCounted(
+      (order.lines ?? []).map((l) => ({
+        key: `c-${l.id}`,
+        id: l.id,
+        skuId: l.skuId,
+        qty: l.qty,
+        price: l.price,
+        wasQty: l.qty,
+        ...(l.listPrice !== undefined ? { listPrice: l.listPrice } : {}),
+        ...(l.returnedQty !== undefined ? { returnedQty: l.returnedQty } : {}),
       })),
     );
     setPayments(paid.map((p) => ({ ...p })));
@@ -117,14 +170,23 @@ export function EditTransactionModal({
   /** Every serial the shop knows, for reading a typed or scanned one back. */
   const knownSerials = useMemo(() => db.units.map((u) => u.serial), [db.units]);
 
-  /** Variants that can go out: this sale's own, plus anything on the shelf. */
-  const skuOptions = useMemo(
-    () =>
-      db.skus
-        .map((k) => ({ value: k.id, label: `${k.name} ${k.variantLabel}` }))
-        .sort((a, b) => a.label.localeCompare(b.label)),
-    [db.skus],
-  );
+  /** Variants identified by serial, and the ones counted by quantity. */
+  const [skuOptions, countedOptions] = useMemo(() => {
+    const opts = db.skus
+      .filter(isLiveSku)
+      .map((k) => ({
+        value: k.id,
+        label: `${k.name} ${k.variantLabel}`.trim(),
+        tracked: skuTracksSerial(db, k.id),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    return [opts.filter((o) => o.tracked), opts.filter((o) => !o.tracked)];
+  }, [db.skus, db.models, db.categories]);
+
+  const setCount = (key: string, patch: Partial<CountLine>) =>
+    setCounted((rows) =>
+      rows.map((r) => (r.key === key ? { ...r, ...patch } : r)),
+    );
 
   const setLine = (key: string, patch: Partial<UnitLine>) =>
     setLines((rows) =>
@@ -135,9 +197,15 @@ export function EditTransactionModal({
   const commitSerial = (line: UnitLine, raw: string) => {
     const serial = resolveSerialQuery(raw, knownSerials);
     const unit = db.units.find((u) => u.serial === serial);
+    const sku = unit && db.skus.find((k) => k.id === unit.skuId);
     setLine(line.key, {
       serial,
       ...(unit ? { skuId: unit.skuId } : {}),
+      // A unit new to the sale starts at its own asking price; one already on
+      // it keeps what it was charged.
+      ...(unit && serial !== line.was
+        ? { price: priceOf(unit, sku?.price ?? 0) }
+        : {}),
     });
   };
 
@@ -145,7 +213,22 @@ export function EditTransactionModal({
   const pickSku = (line: UnitLine, skuId: string) =>
     setLine(line.key, { skuId, serial: "" });
 
-  const bill = order ? billAfterReturns(order) : 0;
+  /** The subtotal and total the lines on screen add up to. */
+  const draftTotals = (o: Order) => {
+    const unitsSum = lines
+      .filter((l) => l.serial.trim() !== "")
+      .reduce((n, l) => n + l.price, 0);
+    const countedSum = counted
+      .filter((c) => c.skuId !== undefined && c.qty > 0)
+      .reduce((n, c) => n + c.price * c.qty, 0);
+    const extra = o.extra ?? 0;
+    const trade = (o.tradeIns ?? []).reduce((n, x) => n + x.value, 0);
+    const bill = unitsSum + countedSum - o.discount + extra;
+    return { bill, total: Math.max(0, bill - trade) };
+  };
+  const bill = order
+    ? billAfterReturns({ ...order, total: draftTotals(order).total })
+    : 0;
 
   const save = () => {
     if (order === null) return;
@@ -197,6 +280,46 @@ export function EditTransactionModal({
       return;
     }
 
+    const countedKept = counted.filter(
+      (c) => c.skuId !== undefined && c.qty > 0,
+    );
+    if (counted.some((c) => c.skuId === undefined && c.qty > 0)) {
+      message.error(
+        t("editSale.pickProduct", "Pick the product on every accessory line."),
+      );
+      return;
+    }
+    if (countedKept.some((c) => c.qty < (c.returnedQty ?? 0))) {
+      message.error(
+        t(
+          "editSale.belowReturned",
+          "A line cannot hold fewer pieces than have already come back.",
+        ),
+      );
+      return;
+    }
+    // More pieces than before have to come off a shelf that holds them.
+    const want = new Map<string, number>();
+    for (const c of counted) {
+      if (c.skuId === undefined) continue;
+      const delta = (c.skuId ? Math.max(0, c.qty) : 0) - c.wasQty;
+      if (delta > 0) want.set(c.skuId, (want.get(c.skuId) ?? 0) + delta);
+    }
+    for (const [skuId, qty] of want) {
+      if (takeFrom(db.stockMoves, skuId, qty, db.myWarehouseId) === null) {
+        const sku = db.skus.find((k) => k.id === skuId);
+        message.error(
+          t(
+            "editSale.notEnoughStock",
+            "Not enough {{product}} in stock for {{qty}} more.",
+            { product: sku ? `${sku.name} ${sku.variantLabel}` : skuId, qty },
+          ),
+        );
+        return;
+      }
+    }
+    const { total: newTotal } = draftTotals(order);
+
     const before = paymentsOf(order);
     const refText = ref.trim();
     const stamp = new Date().toISOString();
@@ -218,20 +341,99 @@ export function EditTransactionModal({
         if (o.listPrices) delete o.listPrices[serial];
       }
       o.serials = serials;
-      // A unit joining the sale is sold at what the one it replaced fetched,
-      // or at the variant's asking price when it is simply an extra line.
-      const freed = gone.map((s) => order.prices[s] ?? 0);
-      for (const [i, serial] of added.entries()) {
-        const unit = d.units.find((u) => u.serial === serial);
-        const sku = unit && d.skus.find((k) => k.id === unit.skuId);
-        o.prices[serial] =
-          freed[i] ?? unit?.price ?? sku?.price ?? o.prices[serial] ?? 0;
+      // Every unit's price is what its line says now — a typo in the amount
+      // is corrected here, not with another document.
+      for (const l of kept) o.prices[l.serial.trim()] = l.price;
+      for (const serial of added) {
         appendEvent(d, serial, {
           type: "TERJUAL",
           toStatus: "TERJUAL",
           refCode: o.code,
         });
       }
+
+      // The counted lines, and their pieces on the stock ledger.
+      const staff = currentStaffName();
+      const soldCost = (lineId: string) => {
+        const m = d.stockMoves.find(
+          (x) => x.orderLineId === lineId && x.type === "TERJUAL",
+        );
+        return m?.cost;
+      };
+      const nextLines: NonNullable<Order["lines"]> = [];
+      for (const c of counted) {
+        const id = c.id ?? nextId("ol");
+        const skuId = c.skuId;
+        const qty = skuId === undefined ? 0 : Math.max(0, c.qty);
+        const was = c.wasQty;
+        const original = (order.lines ?? []).find((l) => l.id === c.id);
+        // A product changed on an existing line is the old pieces back and
+        // the new ones out.
+        const swapped =
+          original !== undefined &&
+          skuId !== undefined &&
+          original.skuId !== skuId;
+        const backQty = swapped ? was : Math.max(0, was - qty);
+        const outQty = swapped ? qty : Math.max(0, qty - was);
+        if (backQty > 0 && original !== undefined) {
+          const home =
+            d.stockMoves.find(
+              (x) => x.orderLineId === original.id && x.type === "TERJUAL",
+            )?.locationId ?? d.myWarehouseId;
+          d.stockMoves.push({
+            id: nextId("sm"),
+            skuId: original.skuId,
+            locationId: home,
+            qty: backQty,
+            cost: soldCost(original.id) ?? averageCost(d, original.skuId),
+            type: "KOREKSI",
+            at: stamp,
+            refCode: o.code,
+            orderId: o.id,
+            orderLineId: original.id,
+            note: `Transaction ${o.code} corrected — ${staff}`,
+            staff,
+          });
+        }
+        if (outQty > 0 && skuId !== undefined) {
+          const cost = averageCost(d, skuId);
+          for (const part of takeFrom(
+            d.stockMoves,
+            skuId,
+            outQty,
+            d.myWarehouseId,
+          ) ?? []) {
+            d.stockMoves.push({
+              id: nextId("sm"),
+              skuId,
+              locationId: part.locationId,
+              qty: -part.qty,
+              cost,
+              type: "TERJUAL",
+              at: stamp,
+              refCode: o.code,
+              orderId: o.id,
+              orderLineId: id,
+              staff,
+            });
+          }
+        }
+        if (qty > 0 && skuId !== undefined) {
+          nextLines.push({
+            id,
+            skuId,
+            qty,
+            price: c.price,
+            ...(c.listPrice !== undefined && !swapped
+              ? { listPrice: c.listPrice }
+              : {}),
+            ...(c.returnedQty ? { returnedQty: c.returnedQty } : {}),
+          });
+        }
+      }
+      if (nextLines.length > 0) o.lines = nextLines;
+      else delete o.lines;
+      o.total = newTotal;
 
       // The reference belongs to the marketplace part, and to every part when
       // no part is a marketplace one — a TikTok sale taken in cash still has
@@ -372,6 +574,18 @@ export function EditTransactionModal({
             ),
           },
           {
+            title: t("editSale.price", "Price"),
+            key: "price",
+            width: COLUMN.moneyInput,
+            render: (_, l) => (
+              <MoneyInput
+                value={l.price}
+                aria-label={t("editSale.priceFor", "Price")}
+                onChange={(v) => setLine(l.key, { price: v ?? 0 })}
+              />
+            ),
+          },
+          {
             title: "",
             key: "remove",
             width: COLUMN.action,
@@ -399,12 +613,120 @@ export function EditTransactionModal({
               was: "",
               serial: "",
               skuId: undefined,
+              price: 0,
             },
           ])
         }
       >
         {t("editSale.addLine", "Add a unit")}
       </Button>
+
+      <Divider>{t("editSale.accessories", "Accessories (no serial)")}</Divider>
+
+      {counted.length > 0 && (
+        <Table<CountLine>
+          size="small"
+          rowKey="key"
+          dataSource={counted}
+          pagination={false}
+          columns={[
+            {
+              title: t("editSale.product", "Product"),
+              key: "sku",
+              render: (_, c) => (
+                <Select<string>
+                  size="small"
+                  showSearch
+                  optionFilterProp="label"
+                  style={{ width: "100%" }}
+                  value={c.skuId}
+                  aria-label={t("editSale.productFor", "Product")}
+                  placeholder={t("editSale.pickProductOne", "Pick a product")}
+                  options={countedOptions}
+                  onChange={(v) => {
+                    const sku = db.skus.find((k) => k.id === v);
+                    setCount(c.key, {
+                      skuId: v,
+                      ...(c.wasQty === 0 ? { price: sku?.price ?? 0 } : {}),
+                    });
+                  }}
+                />
+              ),
+            },
+            {
+              title: t("editSale.qty", "Qty"),
+              key: "qty",
+              width: COLUMN.qty,
+              render: (_, c) => (
+                <InputNumber<number>
+                  size="small"
+                  min={1}
+                  precision={0}
+                  value={c.qty}
+                  aria-label={t("editSale.qtyFor", "Quantity")}
+                  onChange={(v) => setCount(c.key, { qty: v ?? 1 })}
+                  style={{ width: "100%" }}
+                />
+              ),
+            },
+            {
+              title: t("editSale.pricePerPiece", "Price per piece"),
+              key: "price",
+              width: COLUMN.moneyInput,
+              render: (_, c) => (
+                <MoneyInput
+                  value={c.price}
+                  aria-label={t("editSale.piecePriceFor", "Price per piece")}
+                  onChange={(v) => setCount(c.key, { price: v ?? 0 })}
+                />
+              ),
+            },
+            {
+              title: "",
+              key: "remove",
+              width: COLUMN.action,
+              render: (_, c) => (
+                <Button
+                  type="text"
+                  icon={<DeleteOutlined />}
+                  aria-label={t(
+                    "editSale.removeCounted",
+                    "Take this product off",
+                  )}
+                  onClick={() =>
+                    setCounted((rows) => rows.filter((r) => r.key !== c.key))
+                  }
+                />
+              ),
+            },
+          ]}
+        />
+      )}
+      <Button
+        size="small"
+        style={{ marginTop: SPACE.sm }}
+        onClick={() =>
+          setCounted((rows) => [
+            ...rows,
+            {
+              key: `c-new-${rows.length}-${Date.now()}`,
+              id: undefined,
+              skuId: undefined,
+              qty: 1,
+              price: 0,
+              wasQty: 0,
+            },
+          ])
+        }
+      >
+        {t("editSale.addCounted", "Add an accessory")}
+      </Button>
+      <Typography.Text
+        strong
+        style={{ display: "block", marginTop: SPACE.sm, textAlign: "right" }}
+      >
+        {t("editSale.newTotal", "Total {{total}}", { total: fmtRp(bill) })}
+      </Typography.Text>
       {lines.some((l) => l.was !== "" && l.was !== l.serial) && (
         <Typography.Text
           type="warning"

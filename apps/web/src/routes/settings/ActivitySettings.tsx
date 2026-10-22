@@ -17,19 +17,24 @@
 import { useMemo, useState } from "react";
 import {
   Alert,
+  App,
+  Button,
   DatePicker,
   Flex,
   Input,
+  Modal,
   Select,
   Table,
   Tag,
   Typography,
 } from "antd";
+import { DeleteOutlined } from "@ant-design/icons";
 import type { Dayjs } from "dayjs";
 import { useTranslation } from "react-i18next";
 import {
   readValues,
   useActivity,
+  useClearActivity,
   type ActivityAction,
   type ActivityEntry,
 } from "../../lib/activityApi.js";
@@ -129,6 +134,7 @@ function nameOf(db: MockDb, e: ActivityEntry): string {
     case "settings":
     case "appleDbHidden":
     case "myWarehouseId":
+    case "AuditLog":
       return "";
     default:
       return fromRow ?? e.entityId;
@@ -145,6 +151,12 @@ export function ActivitySettings() {
   const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [q, setQ] = useState("");
   const staff = useStaffAccounts();
+  const { message } = App.useApp();
+  const clear = useClearActivity();
+  const [clearing, setClearing] = useState(false);
+  const [clearTyped, setClearTyped] = useState("");
+  /** The word typed to confirm — translated, so it is the screen's own word. */
+  const clearWord = t("activity.clearWord", "CLEAR");
 
   const filter = useMemo(
     () => ({
@@ -289,6 +301,8 @@ export function ActivitySettings() {
         return t("activity.e.staff", "Staff account");
       case "WhatsApp":
         return t("activity.e.whatsapp", "WhatsApp connection");
+      case "AuditLog":
+        return t("activity.e.auditLog", "Activity log");
       default:
         return e;
     }
@@ -404,7 +418,79 @@ export function ActivitySettings() {
             )
           }
         />
+        {/* Owner-only by mount: the Activity tab is drawn for owners alone,
+            and DELETE /api/kontrol/audit refuses anybody else. */}
+        <Button
+          danger
+          icon={<DeleteOutlined />}
+          style={{ marginInlineStart: "auto" }}
+          onClick={() => {
+            setClearTyped("");
+            setClearing(true);
+          }}
+        >
+          {t("activity.clear", "Clear all activity")}
+        </Button>
       </Flex>
+      {/*
+       * Two layers, as a draft stock count's delete: the dialog, then typing
+       * the word shown above the box. The server leaves one line recording
+       * the clear, so the log never reads as if nothing had happened.
+       */}
+      <Modal
+        open={clearing}
+        title={t("activity.clearTitle", "Clear all activity?")}
+        okText={t("activity.clearOk", "Clear it")}
+        okButtonProps={{
+          danger: true,
+          disabled: clearTyped.trim() !== clearWord,
+        }}
+        confirmLoading={clear.isPending}
+        onCancel={() => setClearing(false)}
+        onOk={() => {
+          if (clearTyped.trim() !== clearWord || clear.isPending) return;
+          clear.mutate(undefined, {
+            onSuccess: ({ cleared }) => {
+              setClearing(false);
+              setPage(1);
+              message.success(
+                t("activity.cleared", "{{count}} activity line(s) cleared.", {
+                  count: cleared,
+                }),
+              );
+            },
+            onError: () => {
+              message.error(
+                t("activity.clearFailed", "The activity could not be cleared."),
+              );
+            },
+          });
+        }}
+      >
+        <Flex vertical gap={12}>
+          <Typography.Paragraph style={{ marginBottom: 0 }}>
+            {t(
+              "activity.clearBody",
+              "This removes every line of the activity history, for everybody. One line saying you cleared it is kept. Nothing here can be recovered.",
+            )}
+          </Typography.Paragraph>
+          <Typography.Text>
+            {t("activity.clearTypeIt", "Type")}{" "}
+            <Typography.Text code>{clearWord}</Typography.Text>{" "}
+            {t("activity.clearToConfirm", "to confirm.")}
+          </Typography.Text>
+          <Input
+            value={clearTyped}
+            onChange={(e) => setClearTyped(e.target.value)}
+            aria-label={t("activity.clearTypeAria", "Type the word to confirm")}
+            placeholder={clearWord}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+          />
+        </Flex>
+      </Modal>
       {result.isError && (
         <Alert
           type="error"

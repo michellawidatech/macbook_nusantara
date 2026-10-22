@@ -583,6 +583,28 @@ describe("08 §2 — the fifteen invariants", () => {
       [UNIT],
     );
     expect(left.map((r) => r.id)).toEqual(["ue1"]);
+
+    // Since 2026-10-22 any row may go (20261022140000) — from the middle too —
+    // but never the last one standing.
+    await owner.query(
+      `INSERT INTO "UnitEvent" (id, "unitId", serial, seq, type, at, "toStatus", "costDelta", "staffId")
+       VALUES ('ue4',$1,'SER-001X',4,'QC_SELESAI',now(),'TERSEDIA',0,$2),
+              ('ue5',$1,'SER-001X',5,'DICATAT',now(),'TERSEDIA',0,$2)`,
+      [UNIT, STAFF],
+    );
+    const { rows: mid } = await app.query<{ n: number }>(
+      `SELECT unit_event_drop(ARRAY['ue4']) AS n`,
+    );
+    expect(mid[0]!.n).toBe(1);
+    await rejectsWith(
+      () => app.query(`SELECT unit_event_drop(ARRAY['ue1','ue5'])`),
+      CHECK_VIOLATION,
+    );
+    const { rows: kept } = await owner.query<{ id: string }>(
+      `SELECT id FROM "UnitEvent" WHERE "unitId" = $1 ORDER BY seq`,
+      [UNIT],
+    );
+    expect(kept.map((r) => r.id)).toEqual(["ue1", "ue5"]);
   });
 
   it("15. a unit always has a location", async () => {
@@ -671,6 +693,45 @@ describe("the ledger's two admitted edits (2026-09-23, in the database 2026-09-2
       drop_last: true,
       agent_drop_last: false,
     });
+  });
+});
+
+describe("clearing the activity log (2026-10-22)", () => {
+  it("is one definer function, and the table stays append-only", async () => {
+    // No table-level DELETE, UPDATE or TRUNCATE: the only way the app empties
+    // the log is audit_log_clear(), which takes EVERY row or none — there is
+    // no form of it that edits the history by removing single lines.
+    const { rows } = await owner.query(
+      `SELECT has_function_privilege('nusantara_app','audit_log_clear()','EXECUTE')   AS app_clear,
+              has_function_privilege('nusantara_agent','audit_log_clear()','EXECUTE') AS agent_clear,
+              has_table_privilege('nusantara_app','"AuditLog"','DELETE')               AS app_delete,
+              has_table_privilege('nusantara_app','"AuditLog"','UPDATE')               AS app_update,
+              has_table_privilege('nusantara_app','"AuditLog"','TRUNCATE')             AS app_truncate`,
+    );
+    expect(rows[0]).toEqual({
+      app_clear: true,
+      agent_clear: false,
+      app_delete: false,
+      app_update: false,
+      app_truncate: false,
+    });
+
+    await owner.query(
+      `INSERT INTO "AuditLog" (id, at, entity, "entityId", action)
+       VALUES ('clr1', now(),'Unit','x','CREATE'), ('clr2', now(),'Unit','y','UPDATE')`,
+    );
+    await rejectsWith(
+      () => app.query(`DELETE FROM "AuditLog" WHERE id = 'clr1'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    const { rows: cleared } = await app.query<{ n: number }>(
+      `SELECT audit_log_clear() AS n`,
+    );
+    expect(cleared[0]!.n).toBe(2);
+    const { rows: left } = await owner.query<{ n: string }>(
+      `SELECT count(*) AS n FROM "AuditLog"`,
+    );
+    expect(left[0]!.n).toBe("0");
   });
 });
 

@@ -238,3 +238,62 @@ describe("GET /api/kontrol/audit", () => {
     expect(res.body.error.field).toBe("from");
   });
 });
+
+// Last in the file on purpose: it empties the log the reader tests above use.
+describe("DELETE /api/kontrol/audit", () => {
+  it("refuses anybody but the owner, and leaves the log as it was", async () => {
+    await db.staff.upsert({
+      where: { username: "kasir-audit" },
+      update: { passwordHash: await hashPassword(PASSWORD), active: true },
+      create: {
+        username: "kasir-audit",
+        name: "Kasir Audit",
+        role: "STAFF",
+        canApprove: false,
+        active: true,
+        passwordHash: await hashPassword(PASSWORD),
+        createdAt: new Date(),
+      },
+    });
+    const login = await request(app)
+      .post("/api/auth/login")
+      .send({ username: "kasir-audit", password: PASSWORD });
+    expect(login.status, JSON.stringify(login.body)).toBe(200);
+    const staffCookie = (
+      login.headers["set-cookie"] as unknown as string[]
+    )[0]!;
+
+    const before = await db.auditLog.count();
+    const res = await request(app)
+      .delete("/api/kontrol/audit")
+      .set("Cookie", staffCookie);
+    expect(res.status).toBe(403);
+    expect(await db.auditLog.count()).toBe(before);
+  });
+
+  it("empties the log for the owner and leaves one row saying so", async () => {
+    const before = await db.auditLog.count();
+    expect(before).toBeGreaterThan(0);
+
+    const res = await request(app)
+      .delete("/api/kontrol/audit")
+      .set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cleared: before });
+
+    // Never silently empty: the clear itself is the one line left.
+    const rows = await db.auditLog.findMany();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      staffId: ownerId,
+      entity: "AuditLog",
+      entityId: "all",
+      action: "DELETE",
+      before: JSON.stringify({ rows: before }),
+    });
+
+    const read = await get();
+    expect(read.body.total).toBe(1);
+    expect(read.body.entries[0].staff).toMatchObject({ username: "pemilik" });
+  });
+});

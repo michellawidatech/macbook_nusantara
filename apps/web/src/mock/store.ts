@@ -918,6 +918,33 @@ export function removeLastEvent(
   return last;
 }
 
+/**
+ * Delete one row from a unit's history (owner ask 2026-10-22: *"some of the
+ * history is irrelevant"*). Any row, behind the ⋯ on S/N history, with two
+ * refusals `historyRowDeletion` explains. The NEWEST row going puts the unit
+ * back to what the row before it says, as `removeLastEvent` does; a row out
+ * of the middle leaves the unit where it is.
+ */
+export function removeEvent(draft: MockDb, eventId: string): boolean {
+  const ev = draft.events.find((e) => e.id === eventId);
+  if (ev === undefined) return false;
+  const mine = draft.events
+    .filter((e) => e.serial === ev.serial)
+    .sort((a, b) => a.seq - b.seq);
+  if (mine.length < 2) return false;
+  const wasLast = mine[mine.length - 1]!.id === ev.id;
+  draft.events = draft.events.filter((e) => e.id !== ev.id);
+  if (wasLast) {
+    const now = mine[mine.length - 2]!;
+    const unit = draft.units.find((u) => u.serial === ev.serial);
+    if (unit) {
+      unit.status = now.toStatus as typeof unit.status;
+      unit.locationId = now.locationId;
+    }
+  }
+  return true;
+}
+
 /** Append a lifecycle event and update the unit projection together. */
 export function appendEvent(
   draft: MockDb,
@@ -936,7 +963,14 @@ export function appendEvent(
   draft.events.push({
     id: nextId("ev"),
     serial,
-    seq: draft.events.filter((e) => e.serial === serial).length + 1,
+    // The highest number plus one, not the count: a row deleted from the
+    // middle of a history (2026-10-22) leaves a gap, and the store wants
+    // each new row to follow the newest.
+    seq:
+      draft.events.reduce(
+        (n, e) => (e.serial === serial && e.seq > n ? e.seq : n),
+        0,
+      ) + 1,
     type: ev.type,
     at: new Date().toISOString(),
     fromStatus: unit.status,

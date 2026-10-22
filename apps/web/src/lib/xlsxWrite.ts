@@ -4,7 +4,7 @@
  *
  * ## Why not a library
  *
- * The same reason `lib/code128.ts` is written out: the job is small and the
+ * The job is small and the
  * format is public. An .xlsx is a ZIP of a handful of XML parts, and a stock
  * report needs strings, numbers, a bold row and column widths — nothing a
  * spreadsheet library earns its weight for. SheetJS is several hundred

@@ -710,6 +710,26 @@ export const reservations: Adapter<"reservations"> = {
 
 type Sale = RowOf<"orders">;
 
+/**
+ * The `returnReason` of a line taken off a sale by Edit transaction (owner,
+ * 2026-10-22: *"the transaction history should be editable … do not implement
+ * append only"*). The line is CLOSED, not deleted — its `TERJUAL` stock moves
+ * and the unit's history name it, and every one of those FKs is RESTRICT —
+ * and a closed-by-correction line is projected nowhere, so on every screen the
+ * sale reads as though it never carried it. A line a customer RETURNED is
+ * closed with another reason and is still shown, marked Returned.
+ */
+const CORRECTED = "Dikoreksi";
+
+/**
+ * "Not closed by a correction" as a Prisma filter. ⚠️ Not `NOT: { returnReason:
+ * CORRECTED }`: SQL's `NOT (x = 'y')` is NULL when x is NULL, so that drops
+ * every ordinary line — whose reason is null — along with the corrected ones.
+ */
+const NOT_CORRECTED = {
+  OR: [{ returnReason: null }, { returnReason: { not: CORRECTED } }],
+};
+
 async function syncSaleLines(
   ctx: WriteContext,
   sale: Sale,
@@ -735,13 +755,18 @@ async function syncSaleLines(
   // Unit lines only: a counted product's line has no unit and is kept by
   // `syncCountedLines`.
   const existing = await tx.orderItem.findMany({
-    where: { orderId: sale.id, unitId: { not: null } },
+    where: {
+      orderId: sale.id,
+      unitId: { not: null },
+      ...NOT_CORRECTED,
+    },
     select: {
       id: true,
       unitId: true,
       price: true,
       listPrice: true,
       sortOrder: true,
+      cogs: true,
     },
   });
   const left = new Map(existing.map((i) => [i.unitId, i]));
@@ -802,12 +827,22 @@ async function syncSaleLines(
       });
     }
   }
-  if (left.size > 0) {
-    throw new StoreValidationError(
-      "Baris penjualan tidak bisa dihapus — catat retur.",
-      "orders",
-      sale.id,
-    );
+  // Units taken off the sale by a correction: the line closes, the unit is
+  // no longer this sale's, and what it cost leaves the sale's cost. Its sold
+  // row comes off its history in the same commit (`removeEvents`).
+  for (const item of left.values()) {
+    await tx.orderItem.update({
+      where: { id: item.id },
+      data: { returnedAt: ctx.now, returnedQty: 1, returnReason: CORRECTED },
+    });
+    await tx.unit.updateMany({
+      where: { soldOrderItemId: item.id },
+      data: { soldOrderItemId: null },
+    });
+    await tx.order.update({
+      where: { id: sale.id },
+      data: { cogs: { decrement: item.cogs } },
+    });
   }
 }
 
@@ -820,8 +855,8 @@ async function syncSaleLines(
 async function syncCountedLines(ctx: WriteContext, sale: Sale): Promise<void> {
   const { tx } = ctx;
   const existing = await tx.orderItem.findMany({
-    where: { orderId: sale.id, unitId: null },
-    select: { id: true },
+    where: { orderId: sale.id, unitId: null, ...NOT_CORRECTED },
+    select: { id: true, qty: true },
   });
   const left = new Set(existing.map((i) => i.id));
   const lines = sale.lines ?? [];
@@ -878,12 +913,19 @@ async function syncCountedLines(ctx: WriteContext, sale: Sale): Promise<void> {
       },
     });
   }
-  if (left.size > 0) {
-    throw new StoreValidationError(
-      "Baris penjualan tidak bisa dihapus — catat retur.",
-      "orders",
-      sale.id,
-    );
+  // A line taken off by a correction closes (see `CORRECTED`). Its pieces go
+  // back on the shelf by the KOREKSI moves the browser sends in the same
+  // commit, which also take their cost off the sale (adapters/stock.ts).
+  const qtyOf = new Map(existing.map((i) => [i.id, i.qty]));
+  for (const id of left) {
+    await tx.orderItem.update({
+      where: { id },
+      data: {
+        returnedAt: ctx.now,
+        returnedQty: qtyOf.get(id) ?? 0,
+        returnReason: CORRECTED,
+      },
+    });
   }
 }
 
@@ -1016,14 +1058,120 @@ async function syncOrderAdjustments(
   }
 }
 
+/**
+ * A sale deleted from Transaction History (owner ask 2026-10-22: *"add a
+ * button to delete a transaction … close transaction monthly so before that
+ * all the transaction can be deleted"*; asked, *"gone completely"*).
+ *
+ * The browser drops the order, takes each unit's sold row off its ledger
+ * (`removeEvents`, units.ts, which runs after this in the same commit) and
+ * puts counted pieces back with a KOREKSI move. Here the row is CANCELLED,
+ * not deleted — the same footing as a deleted inbound invoice (`cancelPo`):
+ * `BATAL` is projected nowhere, its payments are voided, and its lines are
+ * closed so the units on them can be sold again
+ * (`OrderItem_unitId_unreturned_key`). Every UnitEvent, PaymentLog and
+ * StockMove that names the order still finds it.
+ *
+ * Refused, each because undoing it here would have to guess: a closed book
+ * (`finance.booksClosedAt`), a return (an adjustment, a refund or a line
+ * already closed), a trade-in, a marketplace payout received against it, or
+ * an Income & Expense line naming it. `lib/saleDeletion.ts` in the web app
+ * asks the same questions so the button can say why before anybody presses.
+ */
+async function cancelSale(ctx: WriteContext, id: string): Promise<void> {
+  const { tx } = ctx;
+  const order = await tx.order.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      code: true,
+      ts: true,
+      status: true,
+      _count: {
+        select: {
+          adjustments: true,
+          settlements: true,
+          expenses: true,
+          incomes: true,
+          tradeIns: { where: { removedAt: null } },
+          payments: { where: { direction: "KELUAR", voidedAt: null } },
+          items: {
+            where: {
+              returnedAt: { not: null },
+              ...NOT_CORRECTED,
+            },
+          },
+        },
+      },
+    },
+  });
+  if (order === null || order.status === "BATAL") {
+    throw new StoreValidationError("Transaksi tidak ditemukan.", "orders", id);
+  }
+  const refuse = (why: string) =>
+    new StoreValidationError(
+      `Transaksi ${order.code} tidak bisa dihapus: ${why}`,
+      "orders",
+      id,
+    );
+  const closed = await tx.appSetting.findUnique({
+    where: { key: "finance.booksClosedAt" },
+    select: { value: true },
+  });
+  if (closed && closed.value.trim() !== "") {
+    const until = new Date(closed.value);
+    if (!Number.isNaN(until.getTime()) && order.ts <= until)
+      throw refuse("bukunya sudah ditutup.");
+  }
+  const c = order._count;
+  if (c.adjustments > 0 || c.payments > 0 || c.items > 0)
+    throw refuse("ada retur di dalamnya.");
+  if (c.tradeIns > 0) throw refuse("ada tukar tambah di dalamnya.");
+  if (c.settlements > 0) throw refuse("pencairan marketplace sudah dicatat.");
+  if (c.expenses > 0 || c.incomes > 0)
+    throw refuse("ada catatan pemasukan/pengeluaran yang menautnya.");
+
+  const items = await tx.orderItem.findMany({
+    where: { orderId: id },
+    select: { id: true, qty: true },
+  });
+  await tx.unit.updateMany({
+    where: { soldOrderItemId: { in: items.map((i) => i.id) } },
+    data: { soldOrderItemId: null },
+  });
+  for (const i of items) {
+    await tx.orderItem.update({
+      where: { id: i.id },
+      data: {
+        returnedAt: ctx.now,
+        returnedQty: i.qty,
+        returnReason: "Transaksi dihapus",
+      },
+    });
+  }
+  await tx.payment.updateMany({
+    where: { orderId: id, voidedAt: null },
+    data: { voidedAt: ctx.now },
+  });
+  await tx.orderFee.updateMany({
+    where: { orderId: id, removedAt: null },
+    data: { removedAt: ctx.now },
+  });
+  await tx.order.update({ where: { id }, data: { status: "BATAL" } });
+  ctx.touch("orders", id);
+}
+
 export const orders: Adapter<"orders"> = {
   collection: "orders",
   async project(tx, _ctx, keys) {
     const rows = await tx.order.findMany({
-      where: byId(keys),
+      // A deleted sale (`cancelSale`) is projected nowhere — the browser
+      // removed it, and every screen reads the projection.
+      where: { ...byId(keys), status: { not: "BATAL" } },
       orderBy: [{ ts: "desc" }, { code: "desc" }],
       include: {
         items: {
+          where: { ...NOT_CORRECTED },
           orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
           include: { unit: { select: { serial: true } } },
         },
@@ -1164,7 +1312,10 @@ export const orders: Adapter<"orders"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("orders", r.key);
+      if (n === undefined) {
+        await cancelSale(ctx, r.key);
+        continue;
+      }
 
       const unitRows = await tx.unit.findMany({
         where: { serial: { in: n.serials }, archivedAt: null },

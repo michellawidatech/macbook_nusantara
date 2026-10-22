@@ -58,6 +58,13 @@ export const fmtDate = (v: string): string =>
     year: "numeric",
   });
 
+/** A month and its year — "September 2026" — for the monthly book close. */
+export const fmtMonth = (v: string): string =>
+  new Date(v).toLocaleDateString(dateLocale, {
+    month: "long",
+    year: "numeric",
+  });
+
 /**
  * Just the clock — for something that happened moments ago and will happen
  * again in a minute, where the date is noise. The autosave status line is the

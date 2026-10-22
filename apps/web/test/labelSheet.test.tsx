@@ -1,220 +1,128 @@
 import { App as AntdApp } from "antd";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { LabelSheet, PrintLabelsModal } from "../src/components/LabelSheet";
 import {
-  DEFAULT_SETUP,
-  tiling,
-  type LabelSetup,
-} from "../src/lib/labelPaper.js";
-import type { LabelDatum } from "../src/lib/labels.js";
+  LABEL_HEIGHT_MM,
+  LABEL_WIDTH_MM,
+  LabelSheet,
+  PrintLabelsModal,
+  QR_MM,
+} from "../src/components/LabelSheet";
+import { labelFor, type LabelDatum } from "../src/lib/labels.js";
+import type { CatalogModel, Sku, Unit } from "../src/mock/seed.js";
 
-/**
- * A sticker for a serial.
- *
- * `barcode` defaults to the serial itself — what a real sticker carries since
- * the owner retired the supplier-code "store barcode" on 2026-09-21.
- */
+/** A sticker for a serial. */
 const label = (serial: string, barcode = serial): LabelDatum => ({
   serial,
   barcode,
-  line1: 'PRO 13" 2017',
-  line2: "i5 8/128 NTB",
+  name: 'MacBook Air 13" 2020',
+  code: 'AIR 13" 2020 I5 8/256',
 });
 
-/** The sheet renders `.label-cell` per sticker and `.label-page` per sheet. */
-const cells = (c: HTMLElement) => c.querySelectorAll(".label-cell");
-const pages = (c: HTMLElement) => c.querySelectorAll(".label-page");
-/** The one `<style>` the sheet injects is its `@page` rule. */
+const cells = (c: HTMLElement) =>
+  c.querySelectorAll<HTMLElement>(".label-cell");
+/** The one `<style>` the sheet injects holds its `@page` rule. */
 const pageCss = (c: HTMLElement) => c.querySelector("style")?.textContent ?? "";
 
-const withSetup = (patch: Partial<LabelSetup>): LabelSetup => ({
-  ...DEFAULT_SETUP,
-  ...patch,
-});
-
+/**
+ * The owner's sticker (2026-10-22): always 50 × 30 mm, a square QR on the
+ * left, the product name and the SKU code on the right, and no serial text.
+ */
 describe("LabelSheet", () => {
-  it("prints the serial as text as well as encoding it", () => {
-    // The sticker's text and its symbol have to be the same string, or nobody
-    // can check one against the other by eye. Both are the serial as stored —
-    // nothing in front of it since 2026-09-21.
-    render(<LabelSheet labels={[label("C02740137JKM")]} />);
-    expect(screen.getByText("C02740137JKM")).toBeInTheDocument();
-    expect(screen.getByText('PRO 13" 2017')).toBeInTheDocument();
-    expect(screen.getByText("i5 8/128 NTB")).toBeInTheDocument();
-  });
-
-  it("encodes a square QR for every serial by default", async () => {
-    // The owner's decision (2026-08-28): the sticker is read by the shop's own
-    // phones, and a QR survives a creased, half-covered label in a way a row
-    // of bars cannot. Generation is async, so the SVGs arrive after the first
-    // paint.
+  it("prints a 50 × 30 mm page with the product name and SKU code and no serial text", async () => {
     const { container } = render(
-      <LabelSheet labels={[label("SB1234567890"), label("SB1234567891")]} />,
+      <LabelSheet labels={[label("C02740137JKM")]} />,
     );
+    expect(pageCss(container)).toMatch(
+      /@page label-sheet \{ size: 50mm 30mm; margin: 0; \}/,
+    );
+    const [cell] = cells(container);
+    expect(cell!.style.width).toBe("50mm");
+    expect(cell!.style.height).toBe("30mm");
+    expect(cell!.textContent).toBe('MacBook Air 13" 2020AIR 13" 2020 I5 8/256');
+    expect(cell!.textContent).not.toContain("C02740137JKM");
+    // The serial is in the QR, which arrives asynchronously.
     await waitFor(() => {
-      expect(container.querySelectorAll("svg").length).toBe(2);
+      expect(cell!.querySelector(".label-qr svg")).not.toBeNull();
     });
-    // Square, and sized off the label height rather than stretched to the
-    // width the bars used to want.
-    for (const box of container.querySelectorAll<HTMLElement>(
-      "[aria-hidden='true']",
-    )) {
-      if (box.style.width === "") continue;
-      expect(box.style.width).toBe(box.style.height);
-    }
   });
 
-  it("keeps the QR big enough to read on the smallest thermal label", async () => {
-    // `labelHeightMm - 10` asks for a 5mm square at LABEL_MIN_MM, which is
-    // under one dot per module on a 203dpi head — a grey smudge, not a code.
+  it("puts a square QR on the left, filling the height less a margin", () => {
     const { container } = render(
-      <LabelSheet
-        labels={[label("ASBJ347203KLM")]}
-        setup={withSetup({ mode: "ROLL", labelWidthMm: 40, labelHeightMm: 15 })}
-      />,
+      <LabelSheet labels={[label("SB1234567890")]} />,
     );
-    await waitFor(() => {
-      expect(container.querySelectorAll("svg").length).toBe(1);
-    });
-    const box = container.querySelector<HTMLElement>("[aria-hidden='true']")!;
-    expect(box.style.width).toBe("8mm");
-    expect(box.style.height).toBe("8mm");
+    const qr = container.querySelector<HTMLElement>(".label-qr")!;
+    expect(qr.style.width).toBe(`${QR_MM}mm`);
+    expect(qr.style.height).toBe(`${QR_MM}mm`);
+    expect(qr.style.left).toBe("2mm");
+    expect(QR_MM).toBeLessThan(LABEL_HEIGHT_MM);
+    expect(QR_MM).toBeGreaterThanOrEqual(24);
+    expect(LABEL_WIDTH_MM).toBe(50);
   });
 
-  it("draws a Code 128 for the desk that still has a 1-D handheld", () => {
-    const { container } = render(
-      <LabelSheet
-        labels={[label("ASB1234567890")]}
-        setup={withSetup({ symbology: "CODE128" })}
-      />,
-    );
-    // Bars, not one empty box. A 13-character serial is 16 symbols — start,
-    // 13 data, checksum, stop — at 3 bars each, plus the stop's trailing bar:
-    // 49. `test/code128.test.ts` owns the encoding; this only checks that
-    // choosing Code 128 actually draws one. Unlike the QR it is synchronous.
-    // One rect per module of the Code 128, so the count moves with the
-    // encoded string's length.
-    expect(container.querySelectorAll("svg rect").length).toBe(49);
-  });
-
-  it("omits the second line rather than printing an empty one", () => {
+  it("clamps a long product name instead of spilling onto the next sticker", () => {
     const { container } = render(
       <LabelSheet
         labels={[
           {
-            serial: "SB1234567890",
-            barcode: "SB1234567890",
-            line1: "Magic Mouse",
-            line2: "",
+            ...label("SB1234567890"),
+            name: "MacBook Pro 16-inch with an unusually long product name 2023",
           },
         ]}
       />,
     );
     const cell = cells(container)[0]!;
-    // The QR block's serial and one code line, and no stray blank element.
-    expect(cell.textContent).toBe("SB1234567890Magic Mouse");
+    expect(cell.style.overflow).toBe("hidden");
+    const name = cell.querySelector<HTMLElement>(".label-name")!;
+    expect(name.style.overflow).toBe("hidden");
+    expect(name.style.webkitLineClamp).toBe("3");
   });
 
-  describe("pagination", () => {
-    const full = tiling(DEFAULT_SETUP).perPage;
-
-    it("fits a full sheet on one page", () => {
-      const { container } = render(
-        <LabelSheet
-          labels={Array.from({ length: full }, (_, i) => label(`S${i}`))}
-        />,
-      );
-      expect(pages(container).length).toBe(1);
-      expect(cells(container).length).toBe(full);
-    });
-
-    it("spills one past a full sheet onto a second page", () => {
-      const { container } = render(
-        <LabelSheet
-          labels={Array.from({ length: full + 1 }, (_, i) => label(`S${i}`))}
-        />,
-      );
-      expect(pages(container).length).toBe(2);
-      expect(cells(container).length).toBe(full + 1);
-    });
-
-    it("honours a different sticker stock", () => {
-      const stock = withSetup({ labelWidthMm: 70, labelHeightMm: 40 });
-      // A4 less a 5mm margin each side leaves 200 × 287, which takes 2 across
-      // and 7 down at 70 × 40. Derived rather than declared — that is the
-      // point of `tiling`: four numbers that can disagree became two that
-      // cannot.
-      expect(tiling(stock).columns).toBe(2);
-      expect(tiling(stock).rows).toBe(7);
-      const { container } = render(
-        <LabelSheet
-          labels={Array.from({ length: 15 }, (_, i) => label(`S${i}`))}
-          setup={stock}
-        />,
-      );
-      expect(pages(container).length).toBe(2);
-    });
-
-    it("keeps the sheet the shop already prints", () => {
-      // 50 × 30 on A4 is 4 across and 9 down — exactly what the old
-      // hard-coded DEFAULT_GEOMETRY declared, now computed from the paper and
-      // the sticker instead.
-      const t = tiling(DEFAULT_SETUP);
-      expect([t.columns, t.rows, t.perPage]).toEqual([4, 9, 36]);
-    });
-
-    it("puts one label on each page of a thermal roll", () => {
-      // The owner's second printer (2026-08-28). The label IS the page, so
-      // three stickers are three pages — a 210mm page with a 50mm sticker in
-      // the corner would feed 210mm of stock per machine.
-      const { container } = render(
-        <LabelSheet
-          labels={Array.from({ length: 3 }, (_, i) => label(`S${i}`))}
-          setup={withSetup({
-            mode: "ROLL",
-            labelWidthMm: 50,
-            labelHeightMm: 25,
-          })}
-        />,
-      );
-      expect(pages(container).length).toBe(3);
-      expect(cells(container).length).toBe(3);
-    });
+  it("is one sticker per page, with no blank page after the last", () => {
+    const { container } = render(
+      <LabelSheet
+        labels={Array.from({ length: 3 }, (_, i) => label(`SB12345678${i}0`))}
+      />,
+    );
+    const all = [...cells(container)];
+    expect(all).toHaveLength(3);
+    expect(all.map((c) => c.style.breakAfter)).toEqual([
+      "page",
+      "page",
+      "auto",
+    ]);
   });
 
-  describe("the page rule", () => {
-    it("sizes the named page to the chosen paper", () => {
-      const { container } = render(
-        <LabelSheet
-          labels={[label("S1")]}
-          setup={withSetup({ paperId: "F4" })}
-        />,
-      );
-      // F4 is 215 × 330 and no browser knows the name, which is exactly why
-      // the rule is emitted in millimetres.
-      expect(pageCss(container)).toContain("215mm 330mm");
-    });
-
-    it("sizes it to the sticker on a roll", () => {
-      const { container } = render(
-        <LabelSheet
-          labels={[label("S1")]}
-          setup={withSetup({
-            mode: "ROLL",
-            labelWidthMm: 50,
-            labelHeightMm: 25,
-          })}
-        />,
-      );
-      expect(pageCss(container)).toContain("50mm 25mm");
-    });
+  it("omits the code line rather than printing an empty one", () => {
+    const { container } = render(
+      <LabelSheet labels={[{ ...label("SB1234567890"), code: "" }]} />,
+    );
+    expect(container.querySelector(".label-code")).toBeNull();
   });
 
-  it("renders nothing but the root when there is nothing to print", () => {
+  it("renders no sticker when there is nothing to print", () => {
     const { container } = render(<LabelSheet labels={[]} />);
-    expect(pages(container).length).toBe(0);
     expect(cells(container).length).toBe(0);
+  });
+});
+
+describe("labelFor", () => {
+  it("carries the product name and the SKU code, and encodes the serial", () => {
+    const sku = {
+      id: "s1",
+      modelId: "m1",
+      code: 'AIR 13" 2020 I5 8/256',
+      name: 'MacBook Air 13" 2020',
+      variantLabel: "i5 · 8GB · 256GB",
+      price: 0,
+    } as Sku;
+    const unit = { serial: "C02740137JKM", skuId: "s1" } as Unit;
+    expect(labelFor(unit, sku, { name: "x" } as CatalogModel)).toEqual({
+      serial: "C02740137JKM",
+      barcode: "C02740137JKM",
+      name: 'MacBook Air 13" 2020',
+      code: 'AIR 13" 2020 I5 8/256',
+    });
   });
 });
 
@@ -256,7 +164,7 @@ describe("PrintLabelsModal validation", () => {
     // for is discovered by somebody hunting a shelf for the missing one.
     open([
       label("SBJ347203KLM"),
-      { serial: "", barcode: "", line1: "Mac", line2: "" },
+      { serial: "", barcode: "", name: "Mac", code: "" },
     ]);
     expect(await printButton()).toBeDisabled();
     expect(screen.getByText(/cannot be printed/)).toBeInTheDocument();
@@ -265,8 +173,6 @@ describe("PrintLabelsModal validation", () => {
   it("names the offending serial rather than only counting it", async () => {
     open([label("SBJ34I203KLM")]);
     await printButton();
-    // Scoped to the alert: the serial is also printed on the sticker in the
-    // preview below, which is not what this is asking about.
     const alert = within(screen.getByRole("alert"));
     // The SERIAL, not the sticker: what is in doubt is the machine's own
     // number, and that is what somebody has to go and check.
@@ -287,7 +193,7 @@ describe("PrintLabelsModal validation", () => {
     // used to take every QR on the page with it — thirty-six blank squares
     // because of one bad row.
     open([
-      { serial: "", barcode: "", line1: "Mac", line2: "" },
+      { serial: "", barcode: "", name: "Mac", code: "" },
       label("ASBJ347203KLM"),
       label("ASBJ347203KLN"),
     ]);

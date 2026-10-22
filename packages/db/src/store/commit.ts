@@ -389,7 +389,7 @@ export async function commitStore(
         continue;
       throw new StoreValidationError(
         p.name === "events"
-          ? "Riwayat unit tidak bisa diubah — hanya serialnya yang boleh dikoreksi, dan hanya kejadian terakhirnya yang boleh dihapus."
+          ? "Riwayat unit tidak bisa diubah — hanya serialnya yang boleh dikoreksi."
           : correctable
             ? `Catatan ${p.name} tidak bisa dihapus.`
             : `Catatan ${p.name} tidak bisa diubah setelah tersimpan.`,

@@ -13,11 +13,12 @@
  * - an event is NEW, with two exceptions the owner decided on 2026-09-23 and
  *   nothing else: its `serial` may follow its unit to a corrected serial
  *   (`renameEvents` — that column alone, and only onto the unit that holds
- *   the row), and a unit's LAST rows may be taken back (`removeLastEvents` —
- *   never one in the middle, never the last one standing). The database
- *   holds the same line: `nusantara_app` may UPDATE `UnitEvent.serial` and
- *   no other column, and its one door to a DELETE is `unit_event_drop_last`,
- *   which refuses the same rows (migration 20260924130000);
+ *   the row), and a unit's rows may be taken back (`removeEvents` — any
+ *   row since 2026-10-22, never the last one standing, never the sold row of
+ *   a sale that still has the unit on it). The database holds the same line:
+ *   `nusantara_app` may UPDATE `UnitEvent.serial` and no other column, and
+ *   its one door to a DELETE is `unit_event_drop`, which refuses to empty a
+ *   unit (migration 20261022140000);
  * - events are continuous: `seq` is the previous plus one, and `fromStatus`
  *   is the status the previous event left;
  * - the commit then checks each unit row against where its ledger now leaves
@@ -602,10 +603,12 @@ export const events: Adapter<"events"> = {
      * A sale's unit can be swapped from Transaction History, and the owner
      * asked for that to leave no trace of the unit it replaced — *"if we edit
      * the unit it should edit the ledger as well instead of append only"*. So
-     * the LAST event of a unit may be removed, and only the last: taking a row
-     * out of the middle would leave the events either side claiming statuses
-     * that no longer meet, which is exactly the continuity the create pass
-     * below refuses to write in the first place.
+     * the LAST event of a unit may be removed. Since 2026-10-22 a row in the
+     * MIDDLE may go too — *"delete the serial [history] per unit … some of
+     * the history is irrelevant"* (owner) — which leaves the rows either side
+     * claiming statuses that no longer meet. That is accepted: the projection
+     * is still checked against whatever is the last row, and the create pass
+     * only ever compares a new row with the last one.
      *
      * Everything else about the ledger is unchanged. An event may not be
      * EDITED in place, because its `seq`, its `fromStatus` and its unit are a
@@ -652,7 +655,7 @@ export const events: Adapter<"events"> = {
       fresh.push(r.next);
     }
     if (renamed.length > 0) await renameEvents(ctx, renamed);
-    if (dropped.length > 0) await removeLastEvents(ctx, dropped);
+    if (dropped.length > 0) await removeEvents(ctx, dropped);
     if (fresh.length === 0) return;
 
     const bySerial = new Map<string, EventRow[]>();
@@ -809,22 +812,32 @@ async function renameEvents(
 }
 
 /**
- * Take events off the end of their units' ledgers.
+ * Take events off their units' ledgers.
  *
- * Refuses anything that is not currently the unit's last row, and refuses to
- * empty a unit: a unit with no history is a unit whose status nothing
- * explains, which `verifyLedger` would reject a moment later anyway. What is
- * left becomes `ledgerAfter`, so the projection check compares the unit
- * against the event that is now its last.
+ * Any row (owner, 2026-10-22), with two refusals. A unit is never emptied: a
+ * unit with no history is a unit whose status nothing explains. And a SOLD
+ * row stays while its sale still has the unit on it — that one goes by
+ * deleting the transaction (`cancelSale`, documents.ts), or the unit would be
+ * on a receipt and on the shelf at once and could be sold twice.
+ *
+ * Only a unit whose LAST row went has its projection re-derived
+ * (`ledgerAfter`); a row out of the middle leaves the unit where it was.
  */
-async function removeLastEvents(
+async function removeEvents(
   ctx: WriteContext,
   dropped: readonly { id: string; serial: string }[],
 ): Promise<void> {
   const { tx } = ctx;
   const rows = await tx.unitEvent.findMany({
     where: { id: { in: dropped.map((d) => d.id) } },
-    select: { id: true, unitId: true, seq: true, serial: true },
+    select: {
+      id: true,
+      unitId: true,
+      seq: true,
+      serial: true,
+      type: true,
+      orderId: true,
+    },
   });
   const found = new Map(rows.map((r) => [r.id, r]));
   const perUnit = new Map<string, { serial: string; seqs: number[] }>();
@@ -842,38 +855,55 @@ async function removeLastEvents(
     perUnit.set(row.unitId, entry);
   }
 
-  const lasts = await lastEvents(tx, [...perUnit.keys()]);
-  for (const [unitId, entry] of perUnit) {
-    const last = lasts.get(unitId);
-    const top = last?.seq ?? 0;
-    entry.seqs.sort((a, b) => b - a);
-    // They have to be the top N, contiguous: 7 then 6 then 5, never 7 then 5.
-    for (let i = 0; i < entry.seqs.length; i += 1) {
-      if (entry.seqs[i] !== top - i) {
-        throw new StoreValidationError(
-          `Hanya kejadian terakhir unit ${entry.serial} yang bisa dihapus.`,
-          "events",
-          String(entry.seqs[i]),
-        );
-      }
+  // A live sale's sold row. The orders adapter runs first in a commit, so a
+  // sale deleted in the same save is already off the unit here.
+  for (const row of rows) {
+    if (row.type !== "TERJUAL" || row.orderId === null) continue;
+    const live = await tx.orderItem.findFirst({
+      where: {
+        orderId: row.orderId,
+        unitId: row.unitId,
+        returnedAt: null,
+        order: { status: { not: "BATAL" } },
+      },
+      select: { id: true },
+    });
+    if (live !== null) {
+      throw new StoreValidationError(
+        `Riwayat terjual ${row.serial} milik transaksi yang masih ada — hapus transaksinya.`,
+        "events",
+        row.id,
+      );
     }
-    if (entry.seqs.length >= top) {
+  }
+
+  const lasts = await lastEvents(tx, [...perUnit.keys()]);
+  const counts = await tx.unitEvent.groupBy({
+    by: ["unitId"],
+    where: { unitId: { in: [...perUnit.keys()] } },
+    _count: { _all: true },
+  });
+  const countOf = new Map(counts.map((c) => [c.unitId, c._count._all]));
+  const topDropped = new Set<string>();
+  for (const [unitId, entry] of perUnit) {
+    if (entry.seqs.length >= (countOf.get(unitId) ?? 0)) {
       throw new StoreValidationError(
         `Unit ${entry.serial} harus punya riwayat.`,
         "events",
         entry.serial,
       );
     }
+    if (entry.seqs.includes(lasts.get(unitId)?.seq ?? -1))
+      topDropped.add(unitId);
   }
 
-  // The database takes them off, and only these: `unit_event_drop_last` is
-  // the one door the app role has to a DELETE on the ledger, and it refuses
-  // any row that is not the top of its unit's chain or is the last one
-  // standing — the checks above, held a second time where no code path can
-  // skip them (migration 20260924130000).
+  // The database takes them off, and only these: `unit_event_drop` is the one
+  // door the app role has to a DELETE on the ledger, and it refuses to empty a
+  // unit — the check above, held a second time where no code path can skip it
+  // (migration 20261022140000).
   const ids = [...found.keys()];
   const [result] = await tx.$queryRaw<{ n: number }[]>`
-    SELECT unit_event_drop_last(${ids}::text[]) AS n`;
+    SELECT unit_event_drop(${ids}::text[]) AS n`;
   if ((result?.n ?? 0) !== ids.length) {
     throw new StoreValidationError("Riwayat unit tidak terhapus.", "events");
   }
@@ -883,8 +913,9 @@ async function removeLastEvents(
   // location is the newest surviving row that moved the unit — what the
   // browser reads off that row's projection — not the unit's own column,
   // which still says where the dropped row sent it.
-  const after = await lastEvents(tx, [...perUnit.keys()]);
+  const after = await lastEvents(tx, [...topDropped]);
   for (const [unitId, entry] of perUnit) {
+    if (!topDropped.has(unitId)) continue;
     const last = after.get(unitId);
     if (last === undefined) continue;
     const moved =

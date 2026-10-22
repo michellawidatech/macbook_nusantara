@@ -1604,18 +1604,20 @@ describe("a till's commit", () => {
     ).rejects.toThrow(/tidak bisa diubah/);
   }, 180_000);
 
-  it("takes a sold unit's last event back — never one in the middle, never the last one standing", async () => {
+  it("takes any history row back (2026-10-22) — never a live sale's sold row, never the last one standing", async () => {
     const shop = await loadDemo();
     const events = shop["events"] as Row[];
-    const unit = (shop["units"] as Row[]).find(
+    const historyOf = (serial: string) =>
+      events
+        .filter((e) => e["serial"] === serial)
+        .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const sold = (shop["units"] as Row[]).find(
       (u) =>
         u["status"] === "TERJUAL" &&
-        events.filter((e) => e["serial"] === u["serial"]).length >= 3,
+        historyOf(u["serial"] as string).length >= 3,
     )!;
-    const serial = unit["serial"] as string;
-    const mine = events
-      .filter((e) => e["serial"] === serial)
-      .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const serial = sold["serial"] as string;
+    const mine = historyOf(serial);
     const last = mine[mine.length - 1]!;
     const previous = mine[mine.length - 2]!;
     const commit = (
@@ -1627,46 +1629,420 @@ describe("a till's commit", () => {
         changes: encodeChangeset(diffStore(before, after)),
       });
 
-    // In the middle: the chain is not rebuilt around a hole.
+    // A live sale's sold row: deleting the transaction is the way to that.
     await expect(
-      commit({ events: mine }, { events: mine.filter((e) => e !== previous) }),
-    ).rejects.toThrow(/terakhir/);
-    // The last row, with the unit still saying what that row said: the
-    // projection must follow the ledger, in the same commit.
-    await expect(
-      commit({ events: mine }, { events: mine.slice(0, -1) }),
-    ).rejects.toThrow(/riwayatnya/);
-    // The last row, the unit put back where its history now leaves it —
-    // Transaction History's swap, `removeLastEvent` in the browser.
+      commit(
+        { units: [sold], events: mine },
+        {
+          units: [
+            {
+              ...sold,
+              status: previous["toStatus"],
+              locationId: previous["locationId"],
+            },
+          ],
+          events: mine.slice(0, -1),
+        },
+      ),
+    ).rejects.toThrow(/transaksi yang masih ada/);
+    // In the middle: the row goes and the unit stays where it is.
     await commit(
-      { units: [unit], events: mine },
+      { events: mine },
+      { events: mine.filter((e) => e !== previous) },
+    );
+    expect(
+      await db.unitEvent.count({ where: { id: previous["id"] as string } }),
+    ).toBe(0);
+    const still = await db.unit.findUniqueOrThrow({
+      where: { serial },
+      select: { status: true },
+    });
+    expect(still.status).toBe(sold["status"]);
+    expect(
+      await db.unitEvent.count({ where: { id: last["id"] as string } }),
+    ).toBe(1);
+
+    // The last row of a unit on no sale, with the unit still saying what that
+    // row said: the projection must follow the ledger, in the same commit.
+    const shelf = (shop["units"] as Row[]).find(
+      (u) =>
+        u["status"] !== "TERJUAL" &&
+        historyOf(u["serial"] as string).length >= 2 &&
+        historyOf(u["serial"] as string).at(-1)!["type"] !== "TERJUAL",
+    )!;
+    const its = historyOf(shelf["serial"] as string);
+    const before = its[its.length - 2]!;
+    await expect(
+      commit({ events: its }, { events: its.slice(0, -1) }),
+    ).rejects.toThrow(/riwayatnya/);
+    await commit(
+      { units: [shelf], events: its },
       {
         units: [
           {
-            ...unit,
-            status: previous["toStatus"],
-            locationId: previous["locationId"],
+            ...shelf,
+            status: before["toStatus"],
+            locationId: before["locationId"],
           },
         ],
-        events: mine.slice(0, -1),
+        events: its.slice(0, -1),
       },
     );
     const row = await db.unit.findUniqueOrThrow({
-      where: { serial },
+      where: { serial: shelf["serial"] as string },
       select: { status: true, locationId: true },
     });
-    expect(row.status).toBe(previous["toStatus"]);
-    expect(row.locationId).toBe(previous["locationId"]);
-    expect(
-      await db.unitEvent.count({ where: { id: last["id"] as string } }),
-    ).toBe(0);
-    expect(await db.unitEvent.count({ where: { serial } })).toBe(
-      mine.length - 1,
-    );
+    expect(row.status).toBe(before["toStatus"]);
+    expect(row.locationId).toBe(before["locationId"]);
     // Never the last one standing.
-    await expect(
-      commit({ events: mine.slice(0, -1) }, { events: [] }),
-    ).rejects.toThrow(/harus punya riwayat/);
+    const left = its.slice(0, -1);
+    await expect(commit({ events: left }, { events: [] })).rejects.toThrow(
+      /harus punya riwayat/,
+    );
+  }, 180_000);
+
+  it("deletes a sale (2026-10-22): cancelled, its units back, sellable again", async () => {
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const units = shop["units"] as Row[];
+    const lastOf = (serial: string) =>
+      events
+        .filter((e) => e["serial"] === serial)
+        .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const order = (shop["orders"] as Row[]).find((o) => {
+      const serials = o["serials"] as string[];
+      return (
+        serials.length > 0 &&
+        o["adjustments"] === undefined &&
+        o["refunds"] === undefined &&
+        o["tradeIns"] === undefined &&
+        o["lines"] === undefined &&
+        serials.every((s) => {
+          const h = lastOf(s);
+          return (
+            h.length >= 2 &&
+            h.at(-1)!["type"] === "TERJUAL" &&
+            h.at(-1)!["refCode"] === o["code"]
+          );
+        })
+      );
+    })!;
+    const serials = order["serials"] as string[];
+    const settlements = await db.settlement.count({
+      where: { orderId: order["id"] as string },
+    });
+    const linked =
+      (await db.expense.count({ where: { orderId: order["id"] as string } })) +
+      (await db.manualIncome.count({
+        where: { orderId: order["id"] as string },
+      }));
+    expect(settlements + linked).toBe(0);
+    const mineUnits = units.filter((u) =>
+      serials.includes(u["serial"] as string),
+    );
+    const mineEvents = serials.flatMap(lastOf);
+    const back = mineUnits.map((u) => {
+      const h = lastOf(u["serial"] as string);
+      const prev = h[h.length - 2]!;
+      return { ...u, status: prev["toStatus"], locationId: prev["locationId"] };
+    });
+    const sold = new Set(serials.map((s) => lastOf(s).at(-1)!["id"]));
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [order], units: mineUnits, events: mineEvents },
+          {
+            orders: [],
+            units: back,
+            events: mineEvents.filter((e) => !sold.has(e["id"])),
+          },
+        ),
+      ),
+    });
+    const row = await db.order.findUniqueOrThrow({
+      where: { id: order["id"] as string },
+      select: {
+        status: true,
+        payments: { select: { voidedAt: true } },
+        items: { select: { returnedAt: true, returnReason: true } },
+      },
+    });
+    expect(row.status).toBe("BATAL");
+    expect(row.payments.every((p) => p.voidedAt !== null)).toBe(true);
+    expect(
+      row.items.every(
+        (i) => i.returnedAt !== null && i.returnReason === "Transaksi dihapus",
+      ),
+    ).toBe(true);
+    for (const s of serials) {
+      const u = await db.unit.findUniqueOrThrow({
+        where: { serial: s },
+        select: { status: true, soldOrderItemId: true },
+      });
+      expect(u.status).not.toBe("TERJUAL");
+      expect(u.soldOrderItemId).toBeNull();
+    }
+    // Gone from the projection, so every screen drops it.
+    const reread = (await snapshotStore(db, { staffId: ACTOR })).db;
+    expect(
+      (reread["orders"] as Row[]).some((o) => o["id"] === order["id"]),
+    ).toBe(false);
+  }, 180_000);
+
+  it("corrects a sale (2026-10-22): a unit off, a price changed, an accessory added and taken off", async () => {
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const historyOf = (serial: string) =>
+      events
+        .filter((e) => e["serial"] === serial)
+        .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const lastIsSaleOf = (o: Row, s: string) => {
+      const h = historyOf(s);
+      return (
+        h.length >= 2 &&
+        h.at(-1)!["type"] === "TERJUAL" &&
+        h.at(-1)!["refCode"] === o["code"]
+      );
+    };
+    const order = (shop["orders"] as Row[]).find(
+      (o) =>
+        (o["serials"] as string[]).length >= 1 &&
+        o["adjustments"] === undefined &&
+        o["tradeIns"] === undefined &&
+        (o["serials"] as string[]).some((s) => lastIsSaleOf(o, s)),
+    )!;
+    expect(order).toBeDefined();
+    // The database's own reading of the sale is the base a till would hold.
+    const first = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const sale = decodeRow(
+      "orders",
+      (first["orders"] as Row[]).find((o) => o["id"] === order["id"])!,
+    ) as Row;
+    const serials = sale["serials"] as string[];
+    const prices = sale["prices"] as Record<string, number>;
+    const off = serials.find((s) => lastIsSaleOf(order, s))!;
+    const keep = serials.find((s) => s !== off);
+    const offBase = decodeRow(
+      "units",
+      (first["units"] as Row[]).find((u) => u["serial"] === off)!,
+    ) as Row;
+    const offEvents = (first["events"] as Row[])
+      .map((e) => decodeRow("events", e) as Row)
+      .filter((e) => e["serial"] === off)
+      .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const prev = offEvents.at(-2)!;
+    const cogsBefore = (
+      await db.order.findUniqueOrThrow({
+        where: { id: order["id"] as string },
+        select: { cogs: true },
+      })
+    ).cogs;
+
+    const { [off]: _gone, ...restPrices } = prices;
+    const listPrices = sale["listPrices"] as Record<string, number> | undefined;
+    const { [off]: _goneList, ...restList } = listPrices ?? {};
+    const corrected: Row = {
+      ...sale,
+      serials: serials.filter((s) => s !== off),
+      prices:
+        keep === undefined
+          ? restPrices
+          : { ...restPrices, [keep]: prices[keep]! + 100_000 },
+      ...(listPrices ? { listPrices: restList } : {}),
+      total:
+        (sale["total"] as number) -
+        prices[off]! +
+        (keep === undefined ? 0 : 100_000),
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          {
+            orders: [sale],
+            units: [offBase],
+            events: offEvents,
+          },
+          {
+            orders: [corrected],
+            units: [
+              {
+                ...offBase,
+                status: prev["toStatus"],
+                locationId: prev["locationId"],
+              },
+            ],
+            events: offEvents.slice(0, -1),
+          },
+        ),
+      ),
+    });
+    let snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    let row = decodeRow(
+      "orders",
+      (snap["orders"] as Row[]).find((o) => o["id"] === order["id"])!,
+    ) as Row;
+    expect(row["serials"]).toEqual(serials.filter((s) => s !== off));
+    if (keep !== undefined)
+      expect((row["prices"] as Record<string, number>)[keep]).toBe(
+        prices[keep]! + 100_000,
+      );
+    const offRow = await db.unit.findUniqueOrThrow({
+      where: { serial: off },
+      select: { status: true, soldOrderItemId: true, buy: true },
+    });
+    expect(offRow.status).toBe(prev["toStatus"]);
+    expect(offRow.soldOrderItemId).toBeNull();
+    const cogsAfter = (
+      await db.order.findUniqueOrThrow({
+        where: { id: order["id"] as string },
+        select: { cogs: true },
+      })
+    ).cogs;
+    expect(cogsAfter).toBe(cogsBefore - offRow.buy);
+
+    // An accessory: a counted variant the demo holds stock of.
+    const moves = shop["stockMoves"] as Row[];
+    const held = new Map<string, number>();
+    for (const m of moves) {
+      const k = `${m["skuId"]}|${m["locationId"]}`;
+      held.set(k, (held.get(k) ?? 0) + (m["qty"] as number));
+    }
+    const [key] = [...held.entries()].find(([, n]) => n > 0)!;
+    const [skuId, locationId] = key.split("|") as [string, string];
+    const withLine: Row = {
+      ...corrected,
+      lines: [
+        ...(((corrected["lines"] as Row[] | undefined) ?? []) as Row[]),
+        { id: "ol_store_edit", skuId, qty: 1, price: 50_000 },
+      ],
+      total: (corrected["total"] as number) + 50_000,
+    };
+    const sold = {
+      id: "sm_store_edit_out",
+      skuId,
+      locationId,
+      qty: -1,
+      cost: 20_000,
+      type: "TERJUAL",
+      at: NOW.toISOString(),
+      refCode: order["code"],
+      orderId: order["id"],
+      orderLineId: "ol_store_edit",
+      staff: "Test",
+    };
+    const base = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const baseOrder = decodeRow(
+      "orders",
+      (base["orders"] as Row[]).find((o) => o["id"] === order["id"])!,
+    ) as Row;
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [baseOrder], stockMoves: [] },
+          {
+            orders: [
+              {
+                ...baseOrder,
+                lines: withLine["lines"],
+                total: withLine["total"],
+              },
+            ],
+            stockMoves: [sold],
+          },
+        ),
+      ),
+    });
+    snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    row = decodeRow(
+      "orders",
+      (snap["orders"] as Row[]).find((o) => o["id"] === order["id"])!,
+    ) as Row;
+    expect(
+      ((row["lines"] as Row[]) ?? []).some((l) => l["id"] === "ol_store_edit"),
+    ).toBe(true);
+
+    // …and taken off again: the line closes and the piece goes back.
+    const { lines: _l, ...noLine } = row;
+    const back = {
+      ...sold,
+      id: "sm_store_edit_back",
+      qty: 1,
+      type: "KOREKSI",
+    };
+    const keptLines = ((row["lines"] as Row[]) ?? []).filter(
+      (l) => l["id"] !== "ol_store_edit",
+    );
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [row], stockMoves: [] },
+          {
+            orders: [
+              {
+                ...noLine,
+                ...(keptLines.length > 0 ? { lines: keptLines } : {}),
+                total: (row["total"] as number) - 50_000,
+              },
+            ],
+            stockMoves: [back],
+          },
+        ),
+      ),
+    });
+    snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    row = decodeRow(
+      "orders",
+      (snap["orders"] as Row[]).find((o) => o["id"] === order["id"])!,
+    ) as Row;
+    expect(
+      ((row["lines"] as Row[] | undefined) ?? []).some(
+        (l) => l["id"] === "ol_store_edit",
+      ),
+    ).toBe(false);
+    const item = await db.orderItem.findUniqueOrThrow({
+      where: { id: "ol_store_edit" },
+      select: { returnReason: true },
+    });
+    expect(item.returnReason).toBe("Dikoreksi");
+    const finalCogs = (
+      await db.order.findUniqueOrThrow({
+        where: { id: order["id"] as string },
+        select: { cogs: true },
+      })
+    ).cogs;
+    expect(finalCogs).toBe(cogsAfter);
+  }, 180_000);
+
+  it("refuses to delete a sale inside a closed book", async () => {
+    const shop = await loadDemo();
+    const order = (shop["orders"] as Row[]).find(
+      (o) => o["adjustments"] === undefined,
+    )!;
+    await db.appSetting.upsert({
+      where: { key: "finance.booksClosedAt" },
+      create: {
+        key: "finance.booksClosedAt",
+        value: new Date(Date.now() + 86_400_000).toISOString(),
+        updatedAt: new Date(),
+      },
+      update: { value: new Date(Date.now() + 86_400_000).toISOString() },
+    });
+    try {
+      await expect(
+        commitStore(db, {
+          staffId: ACTOR,
+          changes: encodeChangeset(
+            diffStore({ orders: [order] }, { orders: [] }),
+          ),
+        }),
+      ).rejects.toThrow(/bukunya sudah ditutup/);
+    } finally {
+      await db.appSetting.delete({ where: { key: "finance.booksClosedAt" } });
+    }
   }, 180_000);
 });
 

@@ -194,7 +194,12 @@ export function lineCost(
 ): number {
   let total = 0;
   for (const m of moves) {
-    if (m.orderLineId !== orderLineId || m.type !== "TERJUAL") continue;
+    // Sold pieces, less any an Edit transaction put back (2026-10-22).
+    if (
+      m.orderLineId !== orderLineId ||
+      (m.type !== "TERJUAL" && !(m.type === "KOREKSI" && m.qty > 0))
+    )
+      continue;
     total += -m.qty * m.cost;
   }
   return total;

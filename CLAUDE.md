@@ -194,6 +194,13 @@ Decisions that outlived those documents:
   and the sticker rather than taken on trust, or a **thermal roll**, where the
   label is the page. `lib/labelPaper.ts` holds it; the setup is per-desk, so it
   lives in `localStorage` beside the scanner's.
+  ⚠️ **2026-10-22: the page is no longer a setting** (owner: *"remove the
+  customization"*). Every print is one **50 × 30 mm** sticker per page
+  (`@page label-sheet { size: 50mm 30mm; margin: 0 }`, a break after each):
+  a 26 mm QR of the stored serial on the left, the product name and the SKU
+  code (`Sku.code`) on the right, each clamped to three lines, and **no serial
+  text**. `lib/labelPaper.ts`, `lib/code128.ts` and the `nusantara.labels`
+  setup are gone; the serial checks before printing are unchanged.
 - **AppleDB import hides, 2026-08-28.** "Not selling" was a mark that dimmed a
   row and left it in a table of thousands. Hidden models leave the list, and a
   switch above it shows them so one can be brought back. `MockDb.appleDbHidden`
@@ -2928,6 +2935,58 @@ Decisions that outlived those documents:
     installed copy, so the owner must re-run `setup-deploy-access` on the Mac
     mini once. The gateway, like the worker and webhook, is LOADED by hand
     the first time (`docs/whatsapp-baileys.md` step 7).
+- **The activity log can be cleared, 2026-10-22** (*"a button to clear all
+  the activity history"*). Settings → Activity has an owner-only *Clear all
+  activity* behind a two-layer confirm — the dialog, then typing the word
+  shown (`CLEAR` / `HAPUS`), the draft-opname pattern. `DELETE
+  /api/kontrol/audit` (`requireOwner`) empties the table and writes ONE fresh
+  `AuditLog` row — entity `AuditLog`, action `DELETE`, who, when and
+  `{"rows": n}` — in the same transaction, so a cleared log always says who
+  cleared it. ⚠️ `AuditLog` stays append-only: no table-level DELETE, UPDATE
+  or TRUNCATE is granted; the one door is `audit_log_clear()`, a SECURITY
+  DEFINER function (migration `20261022150000_audit_log_clear`, the
+  `unit_event_drop_last` pattern) that takes EVERY row or none — there is no
+  form of it that removes single lines. Only `nusantara_app` may execute it.
+  Do not generalise it.
+- **Mistakes are corrected, not appended around — 2026-10-22.** *"The
+  transaction history should be editable … Do not implement append only. This
+  is an environment where they input amount / product / channel wrongly. So
+  all things should be recoverable and a mistake should not cost lots of
+  additional steps."* Four changes, owner-asked.
+  - **Edit transaction takes accessories and prices** (the owner's bug: a
+    MagSafe could not be added). A counted product is a line — product, qty,
+    price per piece — and a unit's price is a box on its line; the sale's
+    total is re-derived from the lines on save. More pieces is a `TERJUAL`
+    from the shelf, fewer (or the line gone) a `KOREKSI` putting them back at
+    the cost they went out at; a positive KOREKSI naming an order line takes
+    its cost off `OrderItem.cogs`/`Order.cogs` (adapters/stock.ts, and
+    `lineCost`). On Postgres a line taken off is CLOSED with `returnReason =
+    "Dikoreksi"` (`CORRECTED` in documents.ts) and projected nowhere; a unit
+    taken off has its `soldOrderItemId` cleared and its cost leaves the sale.
+    ⚠️ Filter with `NOT_CORRECTED` (an OR with null), never `NOT: {
+    returnReason }` — SQL's NOT drops every null-reason line with it.
+  - **A sale can be deleted** (Transaction History, a bin per row) — *"gone
+    completely"* (owner answer). `lib/saleDeletion.ts` is the rule: refused
+    in a closed month, after a return, with a trade-in, when a unit moved on,
+    with a marketplace payout or an Income & Expense line naming it. Units go
+    back to what their previous row says, counted pieces back by a KOREKSI,
+    a redeemed discount is freed. On Postgres it is `cancelSale`: `BATAL`
+    (projected nowhere), payments voided, lines closed — a deleted invoice's
+    footing. Checked server-side too, book close included.
+  - **The book closes a MONTH at a time** (`endOfMonth`, a month picker) —
+    *"close transaction monthly so before that all the transaction can be
+    deleted"*. What is open can be edited and deleted; what is closed neither.
+  - **A unit's history row can be deleted** from S/N history's ⋯ menu — *"some
+    of the history is irrelevant"*. Any row (`removeEvent`), never the last
+    one standing, never the sold row of a sale that still carries the unit
+    (`historyRowBlock`) — that goes by deleting the transaction. The newest
+    row going restores the row before it; a middle row leaves the unit as it
+    is. The database's door is `unit_event_drop(text[])` (migration
+    `20261022140000`, SECURITY DEFINER, refuses only to empty a unit;
+    `unit_event_drop_last` kept for the release before). ⚠️ New rows number
+    from the highest `seq` + 1, not the count — a gap is normal now.
+  - Inbound's Purchase card shows **Total units purchased** (every line's
+    qty).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
