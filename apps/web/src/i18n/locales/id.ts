@@ -454,11 +454,6 @@ export const id: Record<string, string> = {
   "supplier.nameLabel": "Nama",
   "supplier.namePlaceholder": "CV Apel Segar",
   "supplier.nameTaken": "Supplier dengan nama itu sudah ada.",
-  "supplier.codeLabel": "Kode asal",
-  "supplier.codeHint":
-    "Dua huruf kapital. Kode ini menempel di depan setiap barcode toko untuk unit dari supplier ini, jadi serialnya menunjukkan asal palletnya.",
-  "supplier.codeShape": "Kode supplier tepat dua huruf kapital.",
-  "supplier.codeTaken": "{{code}} sudah dipakai supplier lain.",
   "supplier.phone": "Telepon",
   "supplier.address": "Alamat",
   "supplier.oldDebtLabel": "Utang kita yang sudah ada",
@@ -2516,15 +2511,6 @@ export const id: Record<string, string> = {
   "returnCustomer.backInStock": "Unit sudah kembali ke stok siap jual.",
 
   // Settings — the supplier's two-letter serial code.
-  "settings.supplierCode": "Kode",
-  "settings.supplierCodeLabel": "Kode serial (opsional)",
-  "settings.supplierCodePlaceholder": "Kode (AS)",
-  "settings.supplierCodeHelp":
-    "Dipasang di depan setiap serial yang di-scan dari supplier ini — unit yang terbaca BJ347203KLM disimpan sebagai ASBJ347203KLM.",
-  "settings.supplierCodeShape": "Kode supplier tepat dua huruf kapital.",
-  "settings.supplierCodeTaken": "{{code}} sudah dipakai supplier lain.",
-  "settings.supplierCodeMissing":
-    "Serial hasil scan dari supplier ini akan ditolak sampai ia punya kode dua huruf.",
 
   // ── 2026-09-01 revision: adjustments, the dark nav, the opname scope
   //    editor and delete, and the reshaped till. ──

@@ -41,10 +41,6 @@ import { ProTable } from "../../components/ProTable";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { fmtNone, fmtRp } from "../../lib/format.js";
 import { upsellOn } from "../../lib/pos.js";
-import {
-  SUPPLIER_CODE_LENGTH,
-  SUPPLIER_CODE_PATTERN,
-} from "../../lib/serialScan.js";
 import { useDb, mutate, nextId } from "../../mock/store.js";
 import {
   BATTERY_GRADE_COLOR,
@@ -102,8 +98,6 @@ export function SettingsPage() {
     name: string;
     phone?: string;
     address?: string;
-    /** The two-letter serial prefix. See `Supplier.code`. */
-    code?: string;
   }>();
   const [reasonForm] = Form.useForm<{ label: string }>();
   const [rsvForm] = Form.useForm<{ name: string }>();
@@ -133,7 +127,6 @@ export function SettingsPage() {
     name: string;
     phone?: string;
     address?: string;
-    code?: string;
   }>();
 
   const unitsIn = (warehouseId: string) =>
@@ -460,7 +453,6 @@ export function SettingsPage() {
         // stored as "", so "None" keeps meaning "nobody filled this in".
         row.phone = v.phone?.trim() || undefined;
         row.address = v.address?.trim() || undefined;
-        row.code = v.code?.trim().toUpperCase() || undefined;
       });
       setEditingSupplier(null);
       message.success(t("settings.supplierSaved", "Supplier updated."));
@@ -508,31 +500,12 @@ export function SettingsPage() {
               "A supplier with that name already exists.",
             );
           }
-          const code = (v.code ?? "").trim().toUpperCase();
-          if (code !== "" && !SUPPLIER_CODE_PATTERN.test(code)) {
-            return void message.warning(
-              t(
-                "settings.supplierCodeShape",
-                "A supplier code is exactly two capital letters.",
-              ),
-            );
-          }
-          if (code !== "" && db.suppliers.some((x) => x.code === code)) {
-            return void message.warning(
-              t(
-                "settings.supplierCodeTaken",
-                "{{code}} already belongs to another supplier.",
-                { code },
-              ),
-            );
-          }
           mutate((d) => {
             d.suppliers.push({
               id: nextId("sup"),
               name: v.name.trim(),
               phone: v.phone?.trim() || undefined,
               address: v.address?.trim() || undefined,
-              code: code || undefined,
             });
           });
           supForm.resetFields();
@@ -547,20 +520,6 @@ export function SettingsPage() {
           <Input
             placeholder={t("settings.supplierName", "Supplier name")}
             style={{ width: 240 }}
-          />
-        </Form.Item>
-        {/*
-         * The two-letter origin code that goes on the front of every serial
-         * scanned in from this supplier (owner ask 2026-08-28) — see
-         * `lib/serialScan.ts`. Suggested from the name as it is typed, and
-         * only suggested: the shop's codes are the shop's to choose, and two
-         * suppliers can easily suggest the same two letters.
-         */}
-        <Form.Item name="code" label={compact ? "Code" : undefined}>
-          <Input
-            placeholder={t("settings.supplierCodePlaceholder", "Code (AS)")}
-            maxLength={SUPPLIER_CODE_LENGTH}
-            style={{ width: 110, textTransform: "uppercase" }}
           />
         </Form.Item>
         <Form.Item
@@ -600,37 +559,6 @@ export function SettingsPage() {
             searchable: true,
             sortValue: (s) => s.name,
             render: (_, s) => <Typography.Text>{s.name}</Typography.Text>,
-          },
-          {
-            /*
-             * The prefix every serial scanned in from this supplier carries
-             * (owner ask 2026-08-28). A supplier without one is not broken —
-             * every supplier in the shop predates the scheme — but intake
-             * cannot take a SCANNED serial for it, so the gap is worth
-             * showing rather than leaving as an empty cell.
-             */
-            title: t("settings.supplierCode", "Code"),
-            key: "code",
-            width: COLUMN.code,
-            searchable: true,
-            sortValue: (s) => s.code ?? "",
-            render: (_, s) =>
-              s.code ? (
-                <Tag style={{ fontFamily: "monospace", marginInlineEnd: 0 }}>
-                  {s.code}
-                </Tag>
-              ) : (
-                <Tooltip
-                  title={t(
-                    "settings.supplierCodeMissing",
-                    "Serials scanned in from this supplier will be refused until it has a two-letter code.",
-                  )}
-                >
-                  <Typography.Text type="secondary">
-                    {fmtNone()}
-                  </Typography.Text>
-                </Tooltip>
-              ),
           },
           {
             title: t("settings.phone", "Phone"),
@@ -719,7 +647,6 @@ export function SettingsPage() {
             name: editingSupplier?.name ?? "",
             phone: editingSupplier?.phone ?? "",
             address: editingSupplier?.address ?? "",
-            code: editingSupplier?.code ?? "",
           }}
         >
           <Form.Item
@@ -758,60 +685,6 @@ export function SettingsPage() {
             ]}
           >
             <Input />
-          </Form.Item>
-          <Form.Item
-            name="code"
-            label={t("settings.supplierCodeLabel", "Serial code (optional)")}
-            // Both rules are field validators rather than checks in `onOk`,
-            // for the reason `saveSupplierEdit` explains: antd closes a Modal
-            // whose `onOk` resolves, so a refusal there would take the
-            // half-typed value down with it.
-            rules={[
-              {
-                validator: (_, value: string | undefined) => {
-                  const clean = (value ?? "").trim().toUpperCase();
-                  if (clean === "") return Promise.resolve();
-                  if (!SUPPLIER_CODE_PATTERN.test(clean)) {
-                    return Promise.reject(
-                      new Error(
-                        t(
-                          "settings.supplierCodeShape",
-                          "A supplier code is exactly two capital letters.",
-                        ),
-                      ),
-                    );
-                  }
-                  // Unique, because the code IS part of a serial: two
-                  // suppliers sharing `AS` would put two different machines
-                  // under one string, which is the one thing this database
-                  // cannot have.
-                  const clash = db.suppliers.some(
-                    (x) => x.id !== editingSupplier?.id && x.code === clean,
-                  );
-                  return clash
-                    ? Promise.reject(
-                        new Error(
-                          t(
-                            "settings.supplierCodeTaken",
-                            "{{code}} already belongs to another supplier.",
-                            { code: clean },
-                          ),
-                        ),
-                      )
-                    : Promise.resolve();
-                },
-              },
-            ]}
-            extra={t(
-              "settings.supplierCodeHelp",
-              "Goes on the front of every serial scanned in from this supplier. A unit whose own barcode reads SBJ347203KLM is stored — and its sticker printed — as ASBJ347203KLM, and the scanner takes either.",
-            )}
-          >
-            <Input
-              maxLength={SUPPLIER_CODE_LENGTH}
-              placeholder={t("settings.supplierCodePlaceholder", "Code (AS)")}
-              style={{ width: 120, textTransform: "uppercase" }}
-            />
           </Form.Item>
           <Form.Item
             name="phone"
