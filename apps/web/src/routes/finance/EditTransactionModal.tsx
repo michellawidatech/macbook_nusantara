@@ -40,6 +40,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   App,
+  Card,
   DatePicker,
   Divider,
   Flex,
@@ -48,10 +49,11 @@ import {
   InputNumber,
   Modal,
   Select,
+  Switch,
   Table,
   Typography,
 } from "antd";
-import { DeleteOutlined } from "@ant-design/icons";
+import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button } from "antd";
 import dayjs from "dayjs";
 import { useTranslation } from "react-i18next";
@@ -62,9 +64,16 @@ import { skuTracksSerial } from "../../lib/serialTracking.js";
 import { isLiveSku } from "../../lib/skuCode.js";
 import { fmtRp } from "../../lib/format.js";
 import { priceOf } from "../../lib/unitPrice.js";
-import { SALE_CHANNELS, type SaleSource } from "../../lib/channels.js";
+import {
+  SALE_CHANNELS,
+  channelOf,
+  holdsFunds,
+  type SaleSource,
+} from "../../lib/channels.js";
+import { upsertSettlement } from "../../lib/payouts.js";
+import type { SettlementFee } from "../../lib/marketplace.js";
 import { customerLine } from "../../lib/customers.js";
-import { isBookClosed } from "../../lib/bookClose.js";
+import { isSaleLocked } from "../../lib/bookClose.js";
 import { resolveSerialQuery } from "../../lib/serialInput.js";
 import {
   billAfterReturns,
@@ -82,7 +91,7 @@ import {
   removeLastEvent,
   useDb,
 } from "../../mock/store.js";
-import type { Order } from "../../mock/seed.js";
+import type { Order, OrderFee } from "../../mock/seed.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 
 /** One unit line on the sale, while it is being edited. */
@@ -134,7 +143,17 @@ export function EditTransactionModal({
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [lines, setLines] = useState<UnitLine[]>([]);
   const [counted, setCounted] = useState<CountLine[]>([]);
+  /** The sale's additional charges (delivery, a bag…), as rows. */
+  const [fees, setFees] = useState<OrderFee[]>([]);
   const [payments, setPayments] = useState<SalePayment[]>([]);
+  /**
+   * Each marketplace payment's deductions, by payment id (owner ask
+   * 2026-10-22: deductions are entered under the payment, here, not on a
+   * page of their own). Seeded from the payment's settlement.
+   */
+  const [deductions, setDeductions] = useState<Record<string, SettlementFee[]>>(
+    {},
+  );
 
   useEffect(() => {
     if (!open || order === null) return;
@@ -165,7 +184,50 @@ export function EditTransactionModal({
       })),
     );
     setPayments(paid.map((p) => ({ ...p })));
+    setFees(
+      order.fees?.map((f) => ({ ...f })) ??
+        ((order.extra ?? 0) > 0
+          ? [
+              {
+                id: `fee-${order.id}`,
+                label: order.extraNote ?? "Extra",
+                amount: order.extra!,
+              },
+            ]
+          : []),
+    );
+    setDeductions(
+      Object.fromEntries(
+        db.settlements
+          .filter((s) => s.orderId === order.id)
+          .map((s) => [s.paymentId, s.fees.map((f) => ({ ...f }))]),
+      ),
+    );
   }, [open, order?.id]);
+
+  /**
+   * A sale-level reference box only where nothing else carries one: a
+   * marketplace CHANNEL (Shopee, Tokopedia, TikTok) with no marketplace
+   * payment row — TikTok, or Shopee taken in cash. A marketplace payment
+   * carries its own under its method; any other sale has none at all.
+   */
+  const saleRefShown =
+    holdsFunds(source) && !payments.some((p) => p.channel !== undefined);
+
+  const setDeductionsOf = (paymentId: string, list: SettlementFee[]) =>
+    setDeductions((all) => ({ ...all, [paymentId]: list }));
+  const markReceived = (paymentId: string, on: boolean, at?: string) =>
+    setPayments((rows) =>
+      rows.map((p) =>
+        p.id === paymentId
+          ? {
+              ...p,
+              state: on ? "SETTLED" : "PENDING",
+              ...(on ? { at: at ?? p.at } : {}),
+            }
+          : p,
+      ),
+    );
 
   /** Every serial the shop knows, for reading a typed or scanned one back. */
   const knownSerials = useMemo(() => db.units.map((u) => u.serial), [db.units]);
@@ -221,7 +283,7 @@ export function EditTransactionModal({
     const countedSum = counted
       .filter((c) => c.skuId !== undefined && c.qty > 0)
       .reduce((n, c) => n + c.price * c.qty, 0);
-    const extra = o.extra ?? 0;
+    const extra = fees.reduce((n, f) => n + f.amount, 0);
     const trade = (o.tradeIns ?? []).reduce((n, x) => n + x.value, 0);
     const bill = unitsSum + countedSum - o.discount + extra;
     return { bill, total: Math.max(0, bill - trade) };
@@ -235,7 +297,7 @@ export function EditTransactionModal({
     // The book, closed over this date (owner ask 2026-09-24). Transaction
     // History already disables the button; this is the writer refusing, so no
     // other door into this dialog can get around it.
-    if (isBookClosed(order.ts, db.settings)) {
+    if (isSaleLocked(order, db.settings)) {
       message.error(
         t(
           "editSale.bookClosed",
@@ -433,19 +495,56 @@ export function EditTransactionModal({
       }
       if (nextLines.length > 0) o.lines = nextLines;
       else delete o.lines;
+      // The charges: the rows, their total as `extra` and its label — what
+      // the invoice prints (2026-09-01: `extra` is the denormalised total).
+      const charges = fees.filter((f) => f.amount > 0);
+      if (charges.length > 0) {
+        o.fees = charges.map((f) => ({
+          ...f,
+          label: f.label.trim() || "Extra",
+        }));
+        o.extra = charges.reduce((n, f) => n + f.amount, 0);
+        o.extraNote =
+          charges.length === 1 ? o.fees[0]!.label : `${charges.length} charges`;
+      } else {
+        delete o.fees;
+        delete o.extra;
+        delete o.extraNote;
+      }
       o.total = newTotal;
 
-      // The reference belongs to the marketplace part, and to every part when
-      // no part is a marketplace one — a TikTok sale taken in cash still has
-      // the platform's order number.
-      const marketplaceParts = payments.filter((p) => p.channel !== undefined);
-      const next = payments.map((p) =>
-        marketplaceParts.length === 0 || p.channel !== undefined
-          ? { ...p, ...(refText === "" ? {} : { ref: refText }) }
-          : p,
-      );
+      // A marketplace part keeps its own number (typed under its method). The
+      // sale-level box writes onto the parts only when it is shown; a sale
+      // moved off a marketplace (Shopee → Instagram, paid by transfer) keeps
+      // no reference anywhere (owner, 2026-10-22).
+      const next = payments.map((p) => {
+        if (p.channel !== undefined) return p;
+        const { ref: _drop, ...rest } = p;
+        return saleRefShown && refText !== ""
+          ? { ...rest, ref: refText }
+          : rest;
+      });
       o.payments = next;
       o.settled = isSettled(billAfterReturns(o), next, refundedOf(o));
+      // The deductions under each marketplace payment, into its settlement.
+      for (const p of next) {
+        if (p.channel === undefined) continue;
+        const fees = (deductions[p.id] ?? []).filter((f) => f.amount !== 0);
+        const had = d.settlements.some((s) => s.paymentId === p.id);
+        if (fees.length === 0 && !had && p.state !== "SETTLED") continue;
+        upsertSettlement(
+          d,
+          {
+            paymentId: p.id,
+            orderId: o.id,
+            channel: p.channel,
+            gross: p.amount,
+            fees,
+            at: p.at,
+          },
+          { staff: currentStaffName(), nextId },
+        );
+      }
       for (const row of diffPayments(before, next, {
         at: stamp,
         staff: currentStaffName(),
@@ -471,19 +570,21 @@ export function EditTransactionModal({
     >
       <Form layout="vertical">
         <Flex gap={SPACE.md} wrap>
-          <Form.Item
-            label={t("editSale.ref", "Reference ID")}
-            style={{ flex: "1 1 220px" }}
-          >
-            <Input
-              value={ref}
-              onChange={(e) => setRef(e.target.value)}
-              placeholder={t(
-                "editSale.refPlaceholder",
-                "The marketplace's order number",
-              )}
-            />
-          </Form.Item>
+          {saleRefShown && (
+            <Form.Item
+              label={t("editSale.ref", "Reference ID")}
+              style={{ flex: "1 1 220px" }}
+            >
+              <Input
+                value={ref}
+                onChange={(e) => setRef(e.target.value)}
+                placeholder={t(
+                  "editSale.refPlaceholder",
+                  "The marketplace's order number",
+                )}
+              />
+            </Form.Item>
+          )}
           <Form.Item
             label={t("editSale.date", "Date")}
             style={{ flex: "1 1 200px" }}
@@ -721,6 +822,53 @@ export function EditTransactionModal({
       >
         {t("editSale.addCounted", "Add an accessory")}
       </Button>
+      <Divider>{t("editSale.charges", "Additional charges")}</Divider>
+      {fees.map((f, i) => (
+        <Flex key={f.id} gap={SPACE.sm} style={{ marginBottom: SPACE.xs }}>
+          <Input
+            size="small"
+            value={f.label}
+            placeholder={t("editSale.chargeName", "Charge, e.g. Delivery")}
+            aria-label={t("editSale.chargeNameFor", "Charge name")}
+            onChange={(e) =>
+              setFees((rows) =>
+                rows.map((x, j) =>
+                  j === i ? { ...x, label: e.target.value } : x,
+                ),
+              )
+            }
+          />
+          <MoneyInput
+            value={f.amount}
+            aria-label={t("editSale.chargeAmountFor", "Charge amount")}
+            style={{ width: 200 }}
+            onChange={(v) =>
+              setFees((rows) =>
+                rows.map((x, j) => (j === i ? { ...x, amount: v ?? 0 } : x)),
+              )
+            }
+          />
+          <Button
+            size="small"
+            type="text"
+            icon={<DeleteOutlined />}
+            aria-label={t("editSale.removeCharge", "Remove charge")}
+            onClick={() => setFees((rows) => rows.filter((_, j) => j !== i))}
+          />
+        </Flex>
+      ))}
+      <Button
+        size="small"
+        icon={<PlusOutlined />}
+        onClick={() =>
+          setFees((rows) => [
+            ...rows,
+            { id: nextId("fee"), label: "", amount: 0 },
+          ])
+        }
+      >
+        {t("editSale.addCharge", "Add a charge")}
+      </Button>
       <Typography.Text
         strong
         style={{ display: "block", marginTop: SPACE.sm, textAlign: "right" }}
@@ -747,6 +895,138 @@ export function EditTransactionModal({
         value={payments}
         onChange={setPayments}
       />
+
+      {/*
+       * The payout of each marketplace payment, under it (owner ask
+       * 2026-10-22). Deductions any time; "Payout received" is the payment's
+       * Pending/Settled — the one fact the balance reads.
+       */}
+      {payments
+        .filter((p) => p.channel !== undefined && p.amount > 0)
+        .map((p) => {
+          const fees = deductions[p.id] ?? [];
+          const deducted = fees.reduce((n, f) => n + f.amount, 0);
+          const name = channelOf(p.channel!)?.label ?? p.channel!;
+          return (
+            <Card
+              key={p.id}
+              size="small"
+              style={{ marginTop: SPACE.md }}
+              title={t(
+                "editSale.payoutTitle",
+                "{{channel}} payout — {{amount}}",
+                {
+                  channel: name,
+                  amount: fmtRp(p.amount),
+                },
+              )}
+              extra={
+                <Flex gap={SPACE.sm} align="center">
+                  <Switch
+                    size="small"
+                    checked={p.state === "SETTLED"}
+                    aria-label={t("editSale.payoutReceived", "Payout received")}
+                    onChange={(on) => markReceived(p.id, on)}
+                  />
+                  <Typography.Text>
+                    {t("editSale.payoutReceived", "Payout received")}
+                  </Typography.Text>
+                  {p.state === "SETTLED" && (
+                    <DatePicker
+                      size="small"
+                      allowClear={false}
+                      value={dayjs(p.at)}
+                      aria-label={t("editSale.payoutDate", "Received on")}
+                      onChange={(day) =>
+                        day && markReceived(p.id, true, day.toISOString())
+                      }
+                    />
+                  )}
+                </Flex>
+              }
+            >
+              {fees.map((f, i) => (
+                <Flex
+                  key={f.id}
+                  gap={SPACE.sm}
+                  style={{ marginBottom: SPACE.xs }}
+                >
+                  <Input
+                    size="small"
+                    value={f.label ?? ""}
+                    placeholder={t(
+                      "editSale.deductionName",
+                      "Deduction, e.g. Komisi",
+                    )}
+                    aria-label={t(
+                      "editSale.deductionNameFor",
+                      "Deduction name",
+                    )}
+                    onChange={(e) =>
+                      setDeductionsOf(
+                        p.id,
+                        fees.map((x, j) =>
+                          j === i ? { ...x, label: e.target.value } : x,
+                        ),
+                      )
+                    }
+                  />
+                  <MoneyInput
+                    value={f.amount}
+                    min={f.amount < 0 ? f.amount : 0}
+                    aria-label={t(
+                      "editSale.deductionAmountFor",
+                      "Deduction amount",
+                    )}
+                    style={{ width: 200 }}
+                    onChange={(v) =>
+                      setDeductionsOf(
+                        p.id,
+                        fees.map((x, j) =>
+                          j === i ? { ...x, amount: v ?? 0 } : x,
+                        ),
+                      )
+                    }
+                  />
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<DeleteOutlined />}
+                    aria-label={t(
+                      "editSale.removeDeduction",
+                      "Remove deduction",
+                    )}
+                    onClick={() =>
+                      setDeductionsOf(
+                        p.id,
+                        fees.filter((_, j) => j !== i),
+                      )
+                    }
+                  />
+                </Flex>
+              ))}
+              <Flex justify="space-between" align="center">
+                <Button
+                  size="small"
+                  icon={<PlusOutlined />}
+                  onClick={() =>
+                    setDeductionsOf(p.id, [
+                      ...fees,
+                      { id: nextId("fee"), kind: "OTHER", amount: 0 },
+                    ])
+                  }
+                >
+                  {t("editSale.addDeduction", "Add deduction")}
+                </Button>
+                <Typography.Text>
+                  {t("editSale.payoutLands", "Received {{amount}}", {
+                    amount: fmtRp(p.amount - deducted),
+                  })}
+                </Typography.Text>
+              </Flex>
+            </Card>
+          );
+        })}
     </Modal>
   );
 }

@@ -4222,4 +4222,23 @@ export const id: Record<string, string> = {
   "editSale.removeCounted": "Keluarkan produk ini",
   "editSale.addCounted": "Tambah aksesori",
   "editSale.newTotal": "Total {{total}}",
+  "editSale.payoutTitle": "Pencairan {{channel}} — {{amount}}",
+  "editSale.payoutReceived": "Dana sudah diterima",
+  "editSale.payoutDate": "Diterima pada",
+  "editSale.deductionName": "Potongan, mis. Komisi",
+  "editSale.deductionNameFor": "Nama potongan",
+  "editSale.deductionAmountFor": "Jumlah potongan",
+  "editSale.removeDeduction": "Hapus potongan",
+  "editSale.addDeduction": "Tambah potongan",
+  "editSale.payoutLands": "Diterima {{amount}}",
+  "editSale.charges": "Biaya tambahan",
+  "editSale.chargeName": "Biaya, mis. Ongkir",
+  "editSale.chargeNameFor": "Nama biaya",
+  "editSale.chargeAmountFor": "Jumlah biaya",
+  "editSale.removeCharge": "Hapus biaya",
+  "editSale.addCharge": "Tambah biaya",
+  "transactions.closeMonthSettledBody":
+    "{{count}} transaksi lunas sampai akhir bulan itu menjadi hanya-baca: tidak bisa diubah dan tidak bisa dihapus. {{open}} yang masih menunggu uang tetap terbuka, jadi pembayarannya masih bisa diterima. Buku bisa dibuka kembali kapan saja.",
+  "transactions.bookClosedSettledBody":
+    "Setiap transaksi lunas sampai akhir {{month}} hanya-baca dan tidak bisa dihapus; yang masih menunggu uang tetap terbuka. Buka kembali buku untuk mengoreksi transaksi yang lunas.",
 };

@@ -2019,8 +2019,9 @@ describe("a till's commit", () => {
 
   it("refuses to delete a sale inside a closed book", async () => {
     const shop = await loadDemo();
+    // A settled one: a sale still waiting on money stays open (2026-10-22).
     const order = (shop["orders"] as Row[]).find(
-      (o) => o["adjustments"] === undefined,
+      (o) => o["adjustments"] === undefined && o["settled"] === true,
     )!;
     await db.appSetting.upsert({
       where: { key: "finance.booksClosedAt" },

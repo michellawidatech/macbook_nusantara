@@ -26,21 +26,20 @@
  * - `TRADE_IN` — a unit came IN on it and is in stock now.
  * - `UNIT_MOVED` — one of its units has a newer event than the sale: it was
  *   moved, reserved, or sold again since.
- * - `PAYOUT` / `LINKED_MONEY` — a marketplace payout was received against it,
- *   or an Income & Expense line names it.
+ * - `LINKED_MONEY` — an Income & Expense line names it. (A marketplace payout
+ *   no longer refuses it, 2026-10-22 — everything is recoverable.)
  *
  * Pure apart from `deleteSale`, which is a mutation body for `mutate`.
  * `test/saleDeletion.test.ts` is the spec.
  */
 import type { MockDb, Order } from "../mock/seed.js";
-import { isBookClosed } from "./bookClose.js";
+import { isSaleLocked } from "./bookClose.js";
 
 export type SaleDeletionBlock =
   | "BOOKS_CLOSED"
   | "RETURNED"
   | "TRADE_IN"
   | "UNIT_MOVED"
-  | "PAYOUT"
   | "LINKED_MONEY";
 
 /** Why `order` cannot be deleted, or undefined when it can. */
@@ -57,7 +56,7 @@ export function saleDeletionBlock(
   >,
   order: Order,
 ): SaleDeletionBlock | undefined {
-  if (isBookClosed(order.ts, db.settings)) return "BOOKS_CLOSED";
+  if (isSaleLocked(order, db.settings)) return "BOOKS_CLOSED";
   const serials = new Set(order.serials);
   if (
     (order.adjustments?.length ?? 0) > 0 ||
@@ -82,7 +81,6 @@ export function saleDeletionBlock(
     )
       return "UNIT_MOVED";
   }
-  if (db.settlements.some((s) => s.orderId === order.id)) return "PAYOUT";
   if (
     db.expenses.some((e) => e.orderId === order.id) ||
     db.incomes.some((i) => i.orderId === order.id)

@@ -96,12 +96,10 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       // History first: chasing a receipt is the daily job, and reading the
       // ledger is the monthly one.
       { path: "/finance/transactions", label: "Transaction History" },
-      // Money the shop is owed, by whoever is holding it (owner ask
-      // 2026-09-08). Its own leaf and not a tab of Income & Expense: chasing a
-      // marketplace payout and chasing a customer are daily jobs with their
-      // own rhythm, and burying them a click inside the monthly screen is how
-      // a Rp23jt payout sits unwithdrawn for a fortnight.
-      { path: "/finance/receivables", label: "Pending Payment" },
+      // Pending Payment was its own leaf from 2026-09-08 and folded into
+      // Transaction History on 2026-10-22 (owner ask): a payout's deductions
+      // are entered under the payment in Edit transaction, and the Shopee
+      // upload is a button on that page. `/finance/receivables` redirects.
       // Piutang and utang, each its own leaf (owner ask 2026-09-22 — they
       // were two tabs of one page for a day). Not tabs of the one above:
       // that screen's first table is money a MARKETPLACE is holding, which is

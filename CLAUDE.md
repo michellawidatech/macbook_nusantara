@@ -2987,6 +2987,40 @@ Decisions that outlived those documents:
     from the highest `seq` + 1, not the count — a gap is normal now.
   - Inbound's Purchase card shows **Total units purchased** (every line's
     qty).
+- **One page for a sale's money — 2026-10-22, later.** *"Combine the
+  transaction history and the pending payment … it should just be transaction
+  history + upload the shopee balance"*, *"below the payment method Shopee, we
+  should be able to add deduction immediately"*, and four owner answers.
+  - **Pending Payment is gone.** Its nav leaf is removed and
+    `/finance/receivables` redirects to Transaction History; a sale waiting
+    on a payout is that list's *With a marketplace* payment status. The Shopee
+    upload is a button on Transaction History. `ReceivablesPage` and
+    `SettleModal` are deleted; their writer is `lib/payouts.ts`
+    (`recordPayouts` for the upload, `upsertSettlement` for one payment,
+    `netOfOrder` re-deriving `grossTotal`/`netReceived`).
+  - **Edit transaction holds the payout.** Under every Shopee/Tokopedia
+    payment: its deductions (name + amount), *Received Rp X* = amount −
+    deductions, and a **Payout received** switch with its date. The switch IS
+    the payment's PENDING/SETTLED — the one fact the balance reads (owner
+    answer). Deductions may be typed while it is still pending, so a
+    `Settlement` can now exist beside a PENDING payment; nothing reads a
+    settlement as "landed" any more. A payout no longer stops a sale from
+    being deleted.
+  - **The reference ID follows the channel** (owner answer: Shopee, Tokopedia
+    or TikTok). A marketplace payment keeps its own under its method; the
+    sale-level box is drawn only for a marketplace channel with no
+    marketplace payment (TikTok, or Shopee taken in cash); any other sale
+    keeps no reference — Shopee → Instagram + transfer strips it.
+  - **Additional charges are rows** in the dialog (`Order.fees`; `extra` and
+    `extraNote` re-derived), and the total follows.
+  - **A closed month locks only what is finished** — *"close book to all the
+    payment that already settled (need to get X, received X, no pending),
+    and we can still add received amount even if it is closed"*.
+    `isSaleLocked` (bookClose.ts): inside the closed month AND fully settled,
+    nothing pending, nothing owed. Every door asks it — Transaction History,
+    Edit transaction, `PaymentsModal`, `DebtPaymentModal`, sale deletion,
+    return undo — and `cancelSale` on Postgres reads `Order.status = LUNAS`
+    the same way.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

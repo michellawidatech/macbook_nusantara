@@ -63,7 +63,7 @@ import {
   type SalePayment,
 } from "../../lib/salePayments.js";
 import { diffPayments } from "../../lib/paymentEdits.js";
-import { isBookClosed } from "../../lib/bookClose.js";
+import { isSaleLocked } from "../../lib/bookClose.js";
 import { TYPE } from "../../theme/tokens";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import { useDb, mutate, nextId, currentStaffName } from "../../mock/store.js";
@@ -525,7 +525,7 @@ export function CustomersPage() {
 
       <PaymentsModal
         open={paying !== null}
-        locked={isBookClosed(paying?.ts, db.settings)}
+        locked={isSaleLocked(paying ?? undefined, db.settings)}
         orderId={paying?.id ?? ""}
         code={paying?.code ?? ""}
         total={paying ? billAfterReturns(paying) : 0}

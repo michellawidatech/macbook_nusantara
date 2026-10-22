@@ -1090,7 +1090,6 @@ async function cancelSale(ctx: WriteContext, id: string): Promise<void> {
       _count: {
         select: {
           adjustments: true,
-          settlements: true,
           expenses: true,
           incomes: true,
           tradeIns: { where: { removedAt: null } },
@@ -1120,14 +1119,19 @@ async function cancelSale(ctx: WriteContext, id: string): Promise<void> {
   });
   if (closed && closed.value.trim() !== "") {
     const until = new Date(closed.value);
-    if (!Number.isNaN(until.getTime()) && order.ts <= until)
+    // Locked only once finished (2026-10-22): a sale still waiting on money
+    // stays open after the close.
+    if (
+      !Number.isNaN(until.getTime()) &&
+      order.ts <= until &&
+      order.status === "LUNAS"
+    )
       throw refuse("bukunya sudah ditutup.");
   }
   const c = order._count;
   if (c.adjustments > 0 || c.payments > 0 || c.items > 0)
     throw refuse("ada retur di dalamnya.");
   if (c.tradeIns > 0) throw refuse("ada tukar tambah di dalamnya.");
-  if (c.settlements > 0) throw refuse("pencairan marketplace sudah dicatat.");
   if (c.expenses > 0 || c.incomes > 0)
     throw refuse("ada catatan pemasukan/pengeluaran yang menautnya.");
 

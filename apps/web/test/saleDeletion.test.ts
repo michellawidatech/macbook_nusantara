@@ -103,9 +103,19 @@ describe("deleting a sale", () => {
     expect(db.discounts[0]!.used).toBe(2);
   });
 
-  it("refuses a sale inside a closed month, and changes nothing", () => {
+  it("refuses a settled sale inside a closed month, and changes nothing", () => {
     const db = copy();
     const sale = plainSale(db);
+    sale.settled = true;
+    sale.payments = [
+      {
+        id: "pay-settled",
+        method: "TUNAI",
+        amount: sale.total,
+        state: "SETTLED",
+        at: sale.ts,
+      },
+    ];
     db.settings = {
       ...db.settings,
       booksClosedAt: endOfMonth(new Date(sale.ts)),

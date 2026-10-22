@@ -107,6 +107,12 @@ export function App() {
           path="/finance/payable-receivable"
           element={<Navigate to="/finance/receivable" replace />}
         />
+        {/* Pending Payment folded into Transaction History (owner ask
+            2026-10-22). */}
+        <Route
+          path="/finance/receivables"
+          element={<Navigate to="/finance/transactions" replace />}
+        />
         {/* The inbox and the knowledge base are two tabs of one page since
             2026-08-26. The old leaf path still resolves. */}
         <Route
