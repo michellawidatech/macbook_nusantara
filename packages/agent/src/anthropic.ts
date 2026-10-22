@@ -13,11 +13,28 @@
  * customer-facing backend at it. For anything beyond testing, an API key is the
  * supported configuration.
  *
+ * ## A Console login (`ant auth login`), 2026-10-22
+ *
+ * The owner's choice for production: no key to copy, billed to the Console
+ * organisation like a key, and the SDK refreshes the token by itself. `ant
+ * auth login`, run once as the service's user, writes a PROFILE under
+ * `$ANTHROPIC_CONFIG_DIR` (else `$XDG_CONFIG_HOME/anthropic`, else
+ * `$HOME/.config/anthropic`); the client is then built with `{ profile }`,
+ * which the SDK keeps from being shadowed by a stray `ANTHROPIC_API_KEY`.
+ * A key or token in the environment still wins when one is set — the order
+ * the SDK itself uses.
+ *
+ * ⚠️ NOT a Claude Pro/Max login. `claude setup-token` produces a subscription
+ * token Anthropic refuses outside Claude Code; `ant auth login` against the
+ * Console is a different login, and the one that works here.
+ *
  * Ported deliberately from `reference/whatsapp-webhook/agent/anthropic.ts`
  * rather than imported: `reference/` is the previous build and is never a
  * dependency of this one (see CLAUDE.md).
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 
 /** OAuth calls to /v1/messages require this beta header; API-key calls don't. */
@@ -34,6 +51,49 @@ export interface AnthropicEnv {
   readonly model?: string | undefined;
   /** `CHATBOT_SUMMARY_MODEL` — the summariser's, likewise (`SUMMARY_MODEL`). */
   readonly summaryModel?: string | undefined;
+  /**
+   * An `ant auth login` profile found on disk, used only when no key or
+   * token is set. See "A Console login" above.
+   */
+  readonly profile?: string | undefined;
+}
+
+/** What the env templates ship with; never a credential. */
+const PLACEHOLDER = "CHANGE_ME";
+
+const credential = (v: string | undefined): string | undefined => {
+  const t = v?.trim();
+  return t && t !== PLACEHOLDER ? t : undefined;
+};
+
+/**
+ * The `ant auth login` profile this environment would use, if one exists —
+ * the SDK's own resolution, read from the PASSED environment (never
+ * `process.env`), so a test without `HOME` never finds a developer's login.
+ */
+export function antProfileOf(
+  env: Record<string, string | undefined>,
+): string | undefined {
+  const dir =
+    env["ANTHROPIC_CONFIG_DIR"]?.trim() ||
+    (env["XDG_CONFIG_HOME"]?.trim()
+      ? join(env["XDG_CONFIG_HOME"].trim(), "anthropic")
+      : env["HOME"]?.trim()
+        ? join(env["HOME"].trim(), ".config", "anthropic")
+        : undefined);
+  if (dir === undefined) return undefined;
+  let name = env["ANTHROPIC_PROFILE"]?.trim();
+  if (!name) {
+    try {
+      name = readFileSync(join(dir, "active_config"), "utf8").trim();
+    } catch {
+      name = "";
+    }
+  }
+  if (!name) name = "default";
+  // The SDK refuses anything else as a profile name; so do we.
+  if (!/^[A-Za-z0-9_.-]+$/.test(name)) return undefined;
+  return existsSync(join(dir, "configs", `${name}.json`)) ? name : undefined;
 }
 
 /**
@@ -46,17 +106,20 @@ export interface AnthropicEnv {
 export function readAnthropicEnv(
   env: Record<string, string | undefined>,
 ): AnthropicEnv {
+  const apiKey = credential(env["ANTHROPIC_API_KEY"]);
+  const authToken = credential(env["ANTHROPIC_AUTH_TOKEN"]);
   return {
-    apiKey: env["ANTHROPIC_API_KEY"]?.trim() || undefined,
-    authToken: env["ANTHROPIC_AUTH_TOKEN"]?.trim() || undefined,
+    apiKey,
+    authToken,
     model: env["CHATBOT_MODEL"]?.trim() || undefined,
     summaryModel: env["CHATBOT_SUMMARY_MODEL"]?.trim() || undefined,
+    profile: apiKey || authToken ? undefined : antProfileOf(env),
   };
 }
 
 /** True when there is something to authenticate with. */
 export function hasCredential(env: AnthropicEnv): boolean {
-  return Boolean(env.apiKey || env.authToken);
+  return Boolean(env.apiKey || env.authToken || env.profile);
 }
 
 /** Are we on an OAuth token rather than a static API key? */
@@ -73,6 +136,10 @@ export function usingOAuth(env: AnthropicEnv): boolean {
  */
 export function anthropicClient(env: AnthropicEnv): Anthropic | null {
   if (!hasCredential(env)) return null;
+  // A Console login: the SDK reads the profile and refreshes its token.
+  if (!env.apiKey && !env.authToken && env.profile) {
+    return new Anthropic({ profile: env.profile });
+  }
   return new Anthropic({
     ...(env.apiKey ? { apiKey: env.apiKey } : { authToken: env.authToken }),
     ...(usingOAuth(env)

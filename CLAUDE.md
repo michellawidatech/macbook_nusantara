@@ -2865,6 +2865,14 @@ Decisions that outlived those documents:
     no Voyage call was made building this. Tune it on real threads.
   - `/new` is unchanged: it forgets the conversation (recall included, via
     the reset point) and leaves the profile and the POS customer alone.
+  - **A Console login runs the bot** (owner, 2026-10-22): `ant auth login`,
+    run once as `_nusantara` with `HOME=/opt/nusantara/var`, leaves a profile
+    the SDK refreshes by itself; `antProfileOf` (packages/agent anthropic.ts)
+    finds it from the PASSED env and the client is built with `{ profile }`.
+    A key or token in the env still wins. `CHANGE_ME` (the env templates'
+    placeholder) is no credential — it used to count as one, so a worker.env
+    copied from the example sent every turn to a 401 and a hand-over.
+    ⚠️ Still not a Claude Pro/Max (`claude setup-token`) login.
 
 - **WhatsApp through a linked device, 2026-10-22** (owner decision): the
   chatbot runs on WhatsApp via **Baileys** in production, linked by scanning a
