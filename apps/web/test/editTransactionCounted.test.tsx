@@ -62,13 +62,12 @@ describe("Edit transaction with an accessory", () => {
       </AntdApp>,
     );
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Add an accessory" }),
-    );
-    await chooseOption(
-      screen.getAllByRole("combobox", { name: "Product" }).at(-1)!,
-      label,
-    );
+    await userEvent.click(screen.getByRole("button", { name: /Add an item/ }));
+    const picker = screen.getAllByRole("combobox", { name: "Item" }).at(-1)!;
+    // The list holds every product; it renders only what is in view, so
+    // narrow it the way a person would.
+    await userEvent.type(picker, sku.name);
+    await chooseOption(picker, label);
     const qty = screen.getAllByRole("spinbutton", { name: "Quantity" }).at(-1)!;
     await userEvent.clear(qty);
     await userEvent.type(qty, "2");

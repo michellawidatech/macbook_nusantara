@@ -3021,6 +3021,23 @@ Decisions that outlived those documents:
     Edit transaction, `PaymentsModal`, `DebtPaymentModal`, sale deletion,
     return undo — and `cancelSale` on Postgres reads `Order.status = LUNAS`
     the same way.
+- **Cash ↔ bank, and the two balances, 2026-10-22.** *"Take 2mil in bank to
+  cash, use the cash, and return the money again."* The adjustment dialog's
+  third type is **Cash ↔ bank**: *Pencairan Dana Bank* (bank → cash) or
+  *Setor Tunai ke Bank* (cash → bank), written as an `Expense` (kind
+  `TRANSFER`, from one pot) plus a `ManualIncome` (reason `TRANSFER`, into the
+  other) in one save — no schema change, each pot moves and the total does
+  not. Income & Expense shows a **Cash** and a **Bank** card (`balancesOf`,
+  from the opening balance on), following the Cash basis / Accrual switch —
+  accrual adds a pending payout to the bank — and both read **Rp ••••••**
+  until the eye is pressed (per visit, never remembered).
+- **Edit transaction is ONE Items table, 2026-10-22** — *"item name first,
+  then serial or qty"*. Item (every live variant) · Serial / Qty · Price ·
+  remove, and one *Add an item*. The product picked decides the row: a
+  tracked one asks its serial, a counted one (`skuTracksSerial` false) a
+  quantity with a price per piece. ⚠️ A unit row with a product and no serial
+  is REFUSED on save ("Type the serial of …"); it used to be dropped without a
+  word, which is how an added MagSafe vanished in the owner's report.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

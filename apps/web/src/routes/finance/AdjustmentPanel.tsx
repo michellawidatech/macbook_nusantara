@@ -74,8 +74,23 @@ const INCOME_REASON: Record<string, string> = Object.fromEntries(
   INCOME_REASONS.map((r) => [r.value, r.label]),
 );
 
-/** Which way the money went. The first question the dialog asks. */
-type Direction = "INCOME" | "EXPENSE";
+/**
+ * Which way the money went. The first question the dialog asks.
+ *
+ * `MOVE` (owner ask 2026-10-22): money moved between the shop's own two pots —
+ * *"take 2mil in bank to cash, use the cash, and return the money again"*.
+ * Neither income nor expense of the business, so it is a third answer; it is
+ * written as the pair the ledger already has words for — an "Bank transfer"
+ * expense out of one pot and an "Account transfer" income into the other, in
+ * one save — so each balance moves and the total does not.
+ */
+type Direction = "INCOME" | "EXPENSE" | "MOVE";
+
+/** The two moves, by the names the shop uses for them. */
+const MOVES = [
+  { value: "BANK_TO_CASH", from: "TRANSFER", to: "TUNAI" },
+  { value: "CASH_TO_BANK", from: "TUNAI", to: "TRANSFER" },
+] as const;
 
 interface Values {
   direction: Direction;
@@ -161,8 +176,19 @@ export function AdjustmentPanel({
    * is not on offer. Defaulting to the first of the new list is the same
    * choice the form makes on open.
    */
+  /** A move's name — literal `t()` calls, so `test/i18n.test.ts` sees them. */
+  const moveLabel = (value: string) =>
+    value === "CASH_TO_BANK"
+      ? t("adjust.cashToBank", "Setor Tunai ke Bank (cash → bank)")
+      : t("adjust.bankToCash", "Pencairan Dana Bank (bank → cash)");
+
   const pickDirection = (next: Direction) => {
-    const first = next === "INCOME" ? INCOME_REASONS[0].value : "OPERATIONAL";
+    const first =
+      next === "INCOME"
+        ? INCOME_REASONS[0].value
+        : next === "MOVE"
+          ? MOVES[0].value
+          : "OPERATIONAL";
     setDirection(next);
     setReason(first);
     form.setFieldsValue({ direction: next, reason: first });
@@ -179,6 +205,27 @@ export function AdjustmentPanel({
     form.validateFields().then((v) => {
       const date = v.date.format("YYYY-MM-DD");
       mutate((d) => {
+        if (v.direction === "MOVE") {
+          const move = MOVES.find((m) => m.value === v.reason) ?? MOVES[0];
+          const note = v.note?.trim() || moveLabel(move.value);
+          d.expenses.unshift({
+            id: nextId("e"),
+            kind: "TRANSFER",
+            label: note,
+            amount: v.amount,
+            date,
+            method: move.from,
+          });
+          d.incomes.unshift({
+            id: nextId("mi"),
+            reason: "TRANSFER",
+            amount: v.amount,
+            date,
+            method: move.to,
+            note,
+          });
+          return;
+        }
         if (v.direction === "INCOME") {
           d.incomes.unshift({
             id: nextId("mi"),
@@ -208,9 +255,11 @@ export function AdjustmentPanel({
         });
       });
       message.success(
-        v.direction === "INCOME"
-          ? t("adjust.incomeRecorded", "Income recorded.")
-          : t("adjust.expenseRecorded", "Expense recorded."),
+        v.direction === "MOVE"
+          ? t("adjust.moveRecorded", "Money moved between cash and bank.")
+          : v.direction === "INCOME"
+            ? t("adjust.incomeRecorded", "Income recorded.")
+            : t("adjust.expenseRecorded", "Expense recorded."),
       );
       close();
     });
@@ -268,7 +317,16 @@ export function AdjustmentPanel({
     readonly guide: string;
     readonly retired?: boolean;
     readonly needsTransaction?: boolean;
-  }[] = direction === "INCOME" ? INCOME_REASONS : EXPENSE_CATEGORIES;
+  }[] =
+    direction === "INCOME"
+      ? INCOME_REASONS
+      : direction === "MOVE"
+        ? MOVES.map((m) => ({
+            value: m.value,
+            label: moveLabel(m.value),
+            guide: "",
+          }))
+        : EXPENSE_CATEGORIES;
   const reasonOptions = categories
     // A retired category still reads back on rows already written; it is just
     // not something new money can be filed under (2026-09-23).
@@ -455,6 +513,10 @@ export function AdjustmentPanel({
               options={[
                 { value: "INCOME", label: t("adjust.income", "Income") },
                 { value: "EXPENSE", label: t("adjust.expense", "Expense") },
+                {
+                  value: "MOVE",
+                  label: t("adjust.move", "Cash ↔ bank"),
+                },
               ]}
             />
           </Form.Item>
@@ -575,18 +637,21 @@ export function AdjustmentPanel({
            * among them — money still with Shopee is not an adjustment, it is
            * the pending table.
            */}
-          <Form.Item
-            name="method"
-            label={t("adjust.method", "How the money moved")}
-            rules={[
-              {
-                required: true,
-                message: t("adjust.pickAMethod", "Pick how the money moved."),
-              },
-            ]}
-          >
-            <Select options={methodOptions} />
-          </Form.Item>
+          {/* A move names both pots by its reason, so it asks no method. */}
+          {direction !== "MOVE" && (
+            <Form.Item
+              name="method"
+              label={t("adjust.method", "How the money moved")}
+              rules={[
+                {
+                  required: true,
+                  message: t("adjust.pickAMethod", "Pick how the money moved."),
+                },
+              ]}
+            >
+              <Select options={methodOptions} />
+            </Form.Item>
+          )}
 
           <Form.Item name="note" label={t("adjust.note", "Note")}>
             <Input.TextArea

@@ -107,6 +107,22 @@ interface UnitLine {
   readonly price: number;
 }
 
+/** One row of the Items table: a unit, an accessory, or one not picked yet. */
+type ItemRow =
+  | {
+      readonly kind: "unit";
+      readonly key: string;
+      readonly skuId?: string;
+      readonly line: UnitLine;
+    }
+  | {
+      readonly kind: "counted";
+      readonly key: string;
+      readonly skuId?: string;
+      readonly line: CountLine;
+    }
+  | { readonly kind: "new"; readonly key: string };
+
 /** A counted product's line — an accessory, by quantity (no serial). */
 interface CountLine {
   readonly key: string;
@@ -143,6 +159,8 @@ export function EditTransactionModal({
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [lines, setLines] = useState<UnitLine[]>([]);
   const [counted, setCounted] = useState<CountLine[]>([]);
+  /** Rows added and not given a product yet — they become one or the other. */
+  const [fresh, setFresh] = useState<string[]>([]);
   /** The sale's additional charges (delivery, a bag…), as rows. */
   const [fees, setFees] = useState<OrderFee[]>([]);
   const [payments, setPayments] = useState<SalePayment[]>([]);
@@ -184,6 +202,7 @@ export function EditTransactionModal({
       })),
     );
     setPayments(paid.map((p) => ({ ...p })));
+    setFresh([]);
     setFees(
       order.fees?.map((f) => ({ ...f })) ??
         ((order.extra ?? 0) > 0
@@ -245,6 +264,85 @@ export function EditTransactionModal({
     return [opts.filter((o) => o.tracked), opts.filter((o) => !o.tracked)];
   }, [db.skus, db.models, db.categories]);
 
+  /** Every live variant, tracked and counted, for the one Item picker. */
+  const itemOptions = useMemo(
+    () =>
+      [...skuOptions, ...countedOptions].sort((a, b) =>
+        a.label.localeCompare(b.label),
+      ),
+    [skuOptions, countedOptions],
+  );
+  const isCounted = (skuId: string) =>
+    countedOptions.some((o) => o.value === skuId);
+
+  const itemRows: ItemRow[] = [
+    ...lines.map((l) => ({
+      kind: "unit" as const,
+      key: l.key,
+      ...(l.skuId !== undefined ? { skuId: l.skuId } : {}),
+      line: l,
+    })),
+    ...counted.map((c) => ({
+      kind: "counted" as const,
+      key: c.key,
+      ...(c.skuId !== undefined ? { skuId: c.skuId } : {}),
+      line: c,
+    })),
+    ...fresh.map((key) => ({ kind: "new" as const, key })),
+  ];
+
+  /** A new counted line for `skuId`, at its asking price. */
+  const countedFor = (key: string, skuId: string): CountLine => ({
+    key,
+    id: undefined,
+    skuId,
+    qty: 1,
+    price: db.skus.find((k) => k.id === skuId)?.price ?? 0,
+    wasQty: 0,
+  });
+
+  /** Picking the product decides what the row is: a unit or an accessory. */
+  const pickItem = (r: ItemRow, skuId: string) => {
+    const counts = isCounted(skuId);
+    if (r.kind === "new") {
+      setFresh((rows) => rows.filter((k) => k !== r.key));
+      if (counts) setCounted((rows) => [...rows, countedFor(r.key, skuId)]);
+      else
+        setLines((rows) => [
+          ...rows,
+          { key: r.key, was: "", serial: "", skuId, price: 0 },
+        ]);
+      return;
+    }
+    if (r.kind === "unit") {
+      if (!counts) return pickSku(r.line, skuId);
+      setLines((rows) => rows.filter((x) => x.key !== r.key));
+      setCounted((rows) => [...rows, countedFor(`${r.key}-c`, skuId)]);
+      return;
+    }
+    if (counts) {
+      const sku = db.skus.find((k) => k.id === skuId);
+      setCount(r.key, {
+        skuId,
+        ...(r.line.wasQty === 0 ? { price: sku?.price ?? 0 } : {}),
+      });
+      return;
+    }
+    setCounted((rows) => rows.filter((x) => x.key !== r.key));
+    setLines((rows) => [
+      ...rows,
+      { key: `${r.key}-u`, was: "", serial: "", skuId, price: 0 },
+    ]);
+  };
+
+  const removeItem = (r: ItemRow) => {
+    if (r.kind === "unit")
+      setLines((rows) => rows.filter((x) => x.key !== r.key));
+    else if (r.kind === "counted")
+      setCounted((rows) => rows.filter((x) => x.key !== r.key));
+    else setFresh((rows) => rows.filter((k) => k !== r.key));
+  };
+
   const setCount = (key: string, patch: Partial<CountLine>) =>
     setCounted((rows) =>
       rows.map((r) => (r.key === key ? { ...r, ...patch } : r)),
@@ -303,6 +401,21 @@ export function EditTransactionModal({
           "editSale.bookClosed",
           "The book is closed over this date. Reopen it on Transaction History first.",
         ),
+      );
+      return;
+    }
+    // A unit row with its product picked and no serial used to be dropped on
+    // save without a word — which is how an item "disappeared" (owner report
+    // 2026-10-22). It is refused instead, and says which.
+    const serialless = lines.find(
+      (l) => l.serial.trim() === "" && l.skuId !== undefined,
+    );
+    if (serialless !== undefined) {
+      const sku = db.skus.find((k) => k.id === serialless.skuId);
+      message.error(
+        t("editSale.needsSerial", "Type the serial of {{item}}.", {
+          item: sku ? `${sku.name} ${sku.variantLabel}`.trim() : "",
+        }),
       );
       return;
     }
@@ -631,73 +744,117 @@ export function EditTransactionModal({
         </Flex>
       </Form>
 
-      <Divider style={{ marginTop: 0 }}>{t("editSale.units", "Units")}</Divider>
+      <Divider style={{ marginTop: 0 }}>{t("editSale.items", "Items")}</Divider>
 
-      <Table<UnitLine>
+      {/*
+       * One table for everything on the sale (owner ask 2026-10-22: *"item
+       * name first, then serial or qty"*). A unit tracked by serial asks for
+       * its serial; an accessory (a counted product — a MagSafe, a charger)
+       * asks for a quantity, and its price is per piece. Picking a product
+       * decides which the row is.
+       */}
+      <Table<ItemRow>
         size="small"
         rowKey="key"
-        dataSource={lines}
+        dataSource={itemRows}
         pagination={false}
         columns={[
           {
-            title: t("editSale.serial", "Serial number"),
-            key: "serial",
-            width: COLUMN.serial,
-            render: (_, l) => (
-              <Input
-                size="small"
-                style={{ textTransform: "uppercase" }}
-                defaultValue={l.serial}
-                key={l.serial}
-                aria-label={t("editSale.serialFor", "Serial number")}
-                onBlur={(e) => commitSerial(l, e.target.value)}
-                onPressEnter={(e) =>
-                  commitSerial(l, (e.target as HTMLInputElement).value)
-                }
-              />
-            ),
-          },
-          {
-            title: t("editSale.unit", "Unit"),
-            key: "sku",
-            render: (_, l) => (
+            title: t("editSale.item", "Item"),
+            key: "item",
+            render: (_, r) => (
               <Select<string>
                 size="small"
                 showSearch
                 optionFilterProp="label"
                 style={{ width: "100%" }}
-                value={l.skuId}
-                aria-label={t("editSale.unitFor", "Unit")}
-                placeholder={t("editSale.pickUnit", "Pick a unit")}
-                options={skuOptions}
-                onChange={(v) => pickSku(l, v)}
+                value={r.kind === "new" ? undefined : r.skuId}
+                aria-label={t("editSale.itemFor", "Item")}
+                placeholder={t("editSale.pickItem", "Pick an item")}
+                options={itemOptions}
+                onChange={(v) => pickItem(r, v)}
               />
             ),
           },
           {
+            title: t("editSale.serialOrQty", "Serial / Qty"),
+            key: "serial",
+            width: COLUMN.serial + 40,
+            render: (_, r) =>
+              r.kind === "unit" ? (
+                <Input
+                  size="small"
+                  style={{ textTransform: "uppercase" }}
+                  defaultValue={r.line.serial}
+                  key={r.line.serial}
+                  placeholder={t("editSale.serialPlaceholder", "Serial number")}
+                  aria-label={t("editSale.serialFor", "Serial number")}
+                  onBlur={(e) => commitSerial(r.line, e.target.value)}
+                  onPressEnter={(e) =>
+                    commitSerial(r.line, (e.target as HTMLInputElement).value)
+                  }
+                />
+              ) : r.kind === "counted" ? (
+                <InputNumber<number>
+                  size="small"
+                  min={1}
+                  precision={0}
+                  value={r.line.qty}
+                  addonAfter={t("editSale.pcs", "pcs")}
+                  aria-label={t("editSale.qtyFor", "Quantity")}
+                  onChange={(v) => setCount(r.line.key, { qty: v ?? 1 })}
+                  style={{ width: "100%" }}
+                />
+              ) : (
+                <Typography.Text type="secondary">
+                  {t("editSale.pickItemFirst", "Pick the item first")}
+                </Typography.Text>
+              ),
+          },
+          {
             title: t("editSale.price", "Price"),
             key: "price",
-            width: COLUMN.moneyInput,
-            render: (_, l) => (
-              <MoneyInput
-                value={l.price}
-                aria-label={t("editSale.priceFor", "Price")}
-                onChange={(v) => setLine(l.key, { price: v ?? 0 })}
-              />
-            ),
+            width: COLUMN.moneyInput + 40,
+            render: (_, r) =>
+              r.kind === "new" ? null : (
+                <Flex vertical gap={0}>
+                  <MoneyInput
+                    value={r.line.price}
+                    aria-label={
+                      r.kind === "counted"
+                        ? t("editSale.piecePriceFor", "Price per piece")
+                        : t("editSale.priceFor", "Price")
+                    }
+                    onChange={(v) =>
+                      r.kind === "counted"
+                        ? setCount(r.line.key, { price: v ?? 0 })
+                        : setLine(r.line.key, { price: v ?? 0 })
+                    }
+                  />
+                  {r.kind === "counted" && r.line.qty > 1 && (
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: TYPE.sm }}
+                    >
+                      {t("editSale.lineTotal", "{{qty}} × = {{total}}", {
+                        qty: r.line.qty,
+                        total: fmtRp(r.line.qty * r.line.price),
+                      })}
+                    </Typography.Text>
+                  )}
+                </Flex>
+              ),
           },
           {
             title: "",
             key: "remove",
             width: COLUMN.action,
-            render: (_, l) => (
+            render: (_, r) => (
               <Button
                 type="text"
                 icon={<DeleteOutlined />}
-                aria-label={t("editSale.removeLine", "Take this unit off")}
-                onClick={() =>
-                  setLines((rows) => rows.filter((r) => r.key !== l.key))
-                }
+                aria-label={t("editSale.removeItem", "Take this item off")}
+                onClick={() => removeItem(r)}
               />
             ),
           },
@@ -705,123 +862,26 @@ export function EditTransactionModal({
       />
       <Button
         size="small"
+        icon={<PlusOutlined />}
         style={{ marginTop: SPACE.sm }}
         onClick={() =>
-          setLines((rows) => [
-            ...rows,
-            {
-              key: `l-new-${rows.length}-${Date.now()}`,
-              was: "",
-              serial: "",
-              skuId: undefined,
-              price: 0,
-            },
-          ])
+          setFresh((rows) => [...rows, `n-${rows.length}-${Date.now()}`])
         }
       >
-        {t("editSale.addLine", "Add a unit")}
+        {t("editSale.addItem", "Add an item")}
       </Button>
-
-      <Divider>{t("editSale.accessories", "Accessories (no serial)")}</Divider>
-
-      {counted.length > 0 && (
-        <Table<CountLine>
-          size="small"
-          rowKey="key"
-          dataSource={counted}
-          pagination={false}
-          columns={[
-            {
-              title: t("editSale.product", "Product"),
-              key: "sku",
-              render: (_, c) => (
-                <Select<string>
-                  size="small"
-                  showSearch
-                  optionFilterProp="label"
-                  style={{ width: "100%" }}
-                  value={c.skuId}
-                  aria-label={t("editSale.productFor", "Product")}
-                  placeholder={t("editSale.pickProductOne", "Pick a product")}
-                  options={countedOptions}
-                  onChange={(v) => {
-                    const sku = db.skus.find((k) => k.id === v);
-                    setCount(c.key, {
-                      skuId: v,
-                      ...(c.wasQty === 0 ? { price: sku?.price ?? 0 } : {}),
-                    });
-                  }}
-                />
-              ),
-            },
-            {
-              title: t("editSale.qty", "Qty"),
-              key: "qty",
-              width: COLUMN.qty,
-              render: (_, c) => (
-                <InputNumber<number>
-                  size="small"
-                  min={1}
-                  precision={0}
-                  value={c.qty}
-                  aria-label={t("editSale.qtyFor", "Quantity")}
-                  onChange={(v) => setCount(c.key, { qty: v ?? 1 })}
-                  style={{ width: "100%" }}
-                />
-              ),
-            },
-            {
-              title: t("editSale.pricePerPiece", "Price per piece"),
-              key: "price",
-              width: COLUMN.moneyInput,
-              render: (_, c) => (
-                <MoneyInput
-                  value={c.price}
-                  aria-label={t("editSale.piecePriceFor", "Price per piece")}
-                  onChange={(v) => setCount(c.key, { price: v ?? 0 })}
-                />
-              ),
-            },
-            {
-              title: "",
-              key: "remove",
-              width: COLUMN.action,
-              render: (_, c) => (
-                <Button
-                  type="text"
-                  icon={<DeleteOutlined />}
-                  aria-label={t(
-                    "editSale.removeCounted",
-                    "Take this product off",
-                  )}
-                  onClick={() =>
-                    setCounted((rows) => rows.filter((r) => r.key !== c.key))
-                  }
-                />
-              ),
-            },
-          ]}
-        />
+      {lines.some((l) => l.was !== "" && l.was !== l.serial) && (
+        <Typography.Text
+          type="warning"
+          style={{ display: "block", marginTop: SPACE.sm, fontSize: TYPE.sm }}
+        >
+          {t(
+            "editSale.swapWarning",
+            "A unit taken off goes back on the shelf, and this sale leaves its timeline.",
+          )}
+        </Typography.Text>
       )}
-      <Button
-        size="small"
-        style={{ marginTop: SPACE.sm }}
-        onClick={() =>
-          setCounted((rows) => [
-            ...rows,
-            {
-              key: `c-new-${rows.length}-${Date.now()}`,
-              id: undefined,
-              skuId: undefined,
-              qty: 1,
-              price: 0,
-              wasQty: 0,
-            },
-          ])
-        }
-      >
-        {t("editSale.addCounted", "Add an accessory")}
-      </Button>
+
       <Divider>{t("editSale.charges", "Additional charges")}</Divider>
       {fees.map((f, i) => (
         <Flex key={f.id} gap={SPACE.sm} style={{ marginBottom: SPACE.xs }}>

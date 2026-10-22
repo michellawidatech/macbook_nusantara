@@ -25,15 +25,21 @@
  * `db.expenses`, an income into `db.incomes`.
  */
 import { useMemo, useState } from "react";
-import { Card, Segmented, Tag, Typography } from "antd";
-import { BankOutlined, PlusOutlined } from "@ant-design/icons";
+import { Button, Card, Flex, Segmented, Tag, Typography } from "antd";
+import {
+  BankOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
+  PlusOutlined,
+  WalletOutlined,
+} from "@ant-design/icons";
 import { OpeningBalanceModal } from "./OpeningBalanceModal";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { AdjustmentPanel } from "./AdjustmentPanel";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import { customerLabel } from "../../lib/customers.js";
-import { accountOfMethod } from "../../lib/accounts.js";
+import { accountOfMethod, balancesOf } from "../../lib/accounts.js";
 import { paymentsOf } from "../../lib/salePayments.js";
 import { useDb } from "../../mock/store.js";
 import {
@@ -43,7 +49,7 @@ import {
 } from "../../mock/seed.js";
 import { labelOf } from "../../i18n/enumLabels.js";
 import { useTranslation } from "react-i18next";
-import { COLUMN } from "../../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 
 /** Category label maps, derived from `seed.ts` so there is one vocabulary. */
 const INCOME_REASON: Record<string, string> = Object.fromEntries(
@@ -86,6 +92,16 @@ export function IncomeExpensePage() {
   const [addAdjustment, setAddAdjustment] = useState(false);
   const [openingOpen, setOpeningOpen] = useState(false);
   const [basis, setBasis] = useState<"CASH" | "ACCRUAL">("CASH");
+  /**
+   * The two balances are hidden until somebody asks (owner ask 2026-10-22:
+   * *"the balance should be dotted at first and if they want to see it they
+   * can open the eye button"*) — the screen is often in view of a customer.
+   * Per visit, never remembered.
+   */
+  const [reveal, setReveal] = useState<{ cash: boolean; bank: boolean }>({
+    cash: false,
+    bank: false,
+  });
 
   /** Method-code → the human label from `PaymentMethod.label`. */
   const methodLabel = (code: string) =>
@@ -302,6 +318,73 @@ export function IncomeExpensePage() {
     db.settings.openingBalanceAt,
   ]);
 
+  /**
+   * What is in the drawer and in the bank (owner ask 2026-10-22: *"why can't I
+   * see the total cash in bank and the petty cash"*), on the basis the switch
+   * says: cash basis is money that moved; accrual adds what is promised — a
+   * marketplace payout still pending counts toward the bank, a customer's
+   * debt toward the pot its method names. From the opening balance on.
+   */
+  const pots = useMemo(() => {
+    const from = db.settings.openingBalanceAt ?? "";
+    return balancesOf(
+      rows
+        .filter(
+          (r) =>
+            r.inBalance &&
+            r.at >= from &&
+            (basis === "ACCRUAL" || r.status === "SETTLED"),
+        )
+        .map((r) => ({
+          method: r.methodCode,
+          amount: r.direction === "INCOME" ? r.amount : -r.amount,
+        })),
+      {
+        cash: db.settings.openingCash ?? 0,
+        bank: db.settings.openingBank ?? 0,
+      },
+    );
+  }, [
+    rows,
+    basis,
+    db.settings.openingCash,
+    db.settings.openingBank,
+    db.settings.openingBalanceAt,
+  ]);
+
+  const potCard = (
+    which: "cash" | "bank",
+    title: string,
+    icon: React.ReactNode,
+  ) => (
+    <Card size="small" style={{ flex: "1 1 240px" }}>
+      <Flex justify="space-between" align="center" gap={SPACE.sm}>
+        <Flex vertical gap={0}>
+          <Typography.Text type="secondary">
+            {icon} {title}
+          </Typography.Text>
+          <Typography.Text
+            strong
+            style={{ fontSize: TYPE.lg }}
+            data-testid={`pot-${which}`}
+          >
+            {reveal[which] ? fmtRp(pots[which]) : "Rp ••••••"}
+          </Typography.Text>
+        </Flex>
+        <Button
+          type="text"
+          icon={reveal[which] ? <EyeInvisibleOutlined /> : <EyeOutlined />}
+          aria-label={
+            reveal[which]
+              ? t("cashflow.hideBalance", "Hide {{what}}", { what: title })
+              : t("cashflow.showBalance", "Show {{what}}", { what: title })
+          }
+          onClick={() => setReveal((r) => ({ ...r, [which]: !r[which] }))}
+        />
+      </Flex>
+    </Card>
+  );
+
   const typeLabel = (d: Direction) =>
     d === "INCOME"
       ? t("finance.income", "Income")
@@ -331,6 +414,10 @@ export function IncomeExpensePage() {
         },
       ]}
     >
+      <Flex gap={SPACE.md} wrap style={{ marginBottom: SPACE.md }}>
+        {potCard("cash", t("cashflow.cashPot", "Cash"), <WalletOutlined />)}
+        {potCard("bank", t("cashflow.bankPot", "Bank"), <BankOutlined />)}
+      </Flex>
       <Card>
         <ProTable<Row>
           persistKey="cashflow.unified"
