@@ -139,7 +139,7 @@ export function createApp(deps: CreateAppDeps): Express {
       requireOwner: requireOwner(logger),
     }),
   );
-  api.use("/inbox", inboxRouter(db));
+  api.use("/inbox", inboxRouter(db, { gateway: config.waGateway, logger }));
   api.use("/reservations", reservationsRouter(db));
   api.use("/inbound", inboundRouter(db));
   api.use("/store", storeRouter(db));

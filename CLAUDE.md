@@ -3040,6 +3040,47 @@ Decisions that outlived those documents:
   quantity with a price per piece. ⚠️ A unit row with a product and no serial
   is REFUSED on save ("Type the serial of …"); it used to be dropped without a
   word, which is how an added MagSafe vanished in the owner's report.
+- **What was sent can be seen, edited and unsent — 2026-10-23.** *"Display
+  the photo that we sent as well. Can we edit or unsend from the web? I would
+  want to do that in case the AI is wrong."* Owner answers: add the columns;
+  ANY signed-in staff may do it, each action audit-logged with who.
+  - **`Outbox.providerMessageId`, `.retractedAt`, `.editedAt`** (migration
+    `20261023090000_outbox_sent_message_edit_unsend`, additive). The worker
+    keeps the id WhatsApp returned when it marks a row SENT (`markOutboxSent`
+    used to log it and throw it away), text and photo alike. No GRANT: both
+    writer roles already held table-level UPDATE on `Outbox`, and the
+    migration's DO block refuses if that is not so, or if either can DELETE.
+    The deploy's `t|f|t|f|t` reads no `Outbox` privilege and is unchanged.
+  - **`GET /api/inbox/:phone` carries `sent`** — the thread's newest 100
+    WA_REPLY / WA_IMAGE rows by `payload.to`, with `canEdit` / `canUnsend`
+    decided server-side (`routes/inboxSent.ts`). A reply bubble names its row
+    by `reply.outboxId`: the newest WA_REPLY whose `inReplyTo` is that message
+    and whose body is exactly its `replyText` (an edit rewrites both, so the
+    pair still matches). Every sent item no reply claims — a photo, the
+    "Berikut foto…" line, a bot reply a later staff reply overwrote on the
+    same row — is drawn as its own bubble at its time. A reply with no row
+    has no menu.
+  - **The limits are WhatsApp's**: unsend within 48 h of `sentAt`, edit a
+    TEXT within 15 min. Also refused: another phone's row (404), not SENT, no
+    id (sent before this release — and a `wamid.` Cloud API id or the
+    gateway's `wa-gateway-…` stand-in counts as none), already unsent, and
+    **any transport but Baileys** (409; the API reads that as
+    `config.waGateway` being set). Order: validate → `POST /messages/revoke`
+    or `/messages/edit` on the gateway (`gatewayClient.ts`, shared with
+    `/api/whatsapp/connection`) → ONE transaction stamping the row (an edit
+    also rewrites `payload.body`, and `WaMessage.replyText` only while it
+    still holds the old text) and an `AuditLog` row, entity `Outbox`, DELETE
+    or UPDATE with before/after.
+  - **The gateway addresses the chat the send went to** (`jidFor`: the LID a
+    customer wrote from, else `<n>@s.whatsapp.net`) — a delete aimed at the
+    other chat finds nothing.
+  - `/chat` draws a sent photo from `GET /api/inbox/:phone/sent/:id/photo`
+    (click for larger; "Photo no longer stored" on a 404 — a sold unit's
+    photos are purged by design), "Unsent" in place of an unsent item,
+    "Edited" beside an edited one, and a ⋯ (`SentItems.tsx`) with Edit and
+    Unsend (behind a confirm) only while the server says each is possible.
+  - ⚠️ An unsent row keeps `replyText` and its outbox row — nothing is
+    deleted, and *Write it for me* leaves unsent lines out of the turns.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

@@ -110,6 +110,13 @@ export interface GatewaySocket {
     mimeType: string,
     caption?: string,
   ): Promise<string | null>;
+  /**
+   * Delete a message this account sent, for everyone (2026-10-23). WhatsApp
+   * honours it for about two days after the send.
+   */
+  revoke(jid: string, id: string): Promise<void>;
+  /** Replace the text of a message this account sent; ~15 minutes after it. */
+  editText(jid: string, id: string, text: string): Promise<void>;
   /** Unlink this device from the account. */
   logout(): Promise<void>;
   /** Close the connection and nothing else. */
@@ -167,6 +174,10 @@ export interface SessionApi {
   link(): Promise<LinkResult>;
   logout(): Promise<GatewayStatus>;
   send(message: OutboundMessage): Promise<string>;
+  /** Unsend a message this number sent to `to` (digits), by its id. */
+  revoke(to: string, id: string): Promise<void>;
+  /** Correct the text of a message this number sent to `to`. */
+  editText(to: string, id: string, text: string): Promise<void>;
 }
 
 export interface SessionDeps {
@@ -320,7 +331,7 @@ export class WhatsAppSession implements SessionApi {
     if (this.state !== "CONNECTED" || !this.sock) {
       throw new GatewayError(503, "the WhatsApp number is not linked");
     }
-    const jid = this.jids[message.to] ?? `${message.to}@s.whatsapp.net`;
+    const jid = this.jidFor(message.to);
     await this.sleep(this.pacer.reserve(jid, this.now()));
     const words =
       message.kind === "text" ? message.body : (message.caption ?? "");
@@ -344,6 +355,34 @@ export class WhatsAppSession implements SessionApi {
             message.caption,
           );
     return id ?? `wa-gateway-${this.now()}`;
+  }
+
+  /**
+   * Unsend and edit (2026-10-23). Addressed to the SAME jid a send to `to`
+   * goes to (`jidFor`): a message sent to a customer's LID lives in the LID's
+   * chat, and a delete aimed at the phone-number chat would find nothing.
+   * No pacing and no typing — neither is a new message.
+   */
+  async revoke(to: string, id: string): Promise<void> {
+    const sock = this.connectedSocket();
+    await sock.revoke(this.jidFor(to), id);
+  }
+
+  async editText(to: string, id: string, text: string): Promise<void> {
+    const sock = this.connectedSocket();
+    await sock.editText(this.jidFor(to), id, text);
+  }
+
+  /** Where a message to this wa_id goes: the chat it last wrote from. */
+  private jidFor(to: string): string {
+    return this.jids[to] ?? `${to}@s.whatsapp.net`;
+  }
+
+  private connectedSocket(): GatewaySocket {
+    if (this.state !== "CONNECTED" || !this.sock) {
+      throw new GatewayError(503, "the WhatsApp number is not linked");
+    }
+    return this.sock;
   }
 
   // --- the connection ------------------------------------------------------

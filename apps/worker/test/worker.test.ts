@@ -253,6 +253,8 @@ describe("sendPass", () => {
     const row = await db.outbox.findFirstOrThrow({});
     expect(row.status).toBe("SENT");
     expect(row.sentAt).not.toBeNull();
+    // Kept, so the inbox can edit or unsend it later (2026-10-23).
+    expect(row.providerMessageId).toBe("wamid.OUT");
   });
 
   it("retries a Graph error carried by a 200 instead of marking it sent", async () => {

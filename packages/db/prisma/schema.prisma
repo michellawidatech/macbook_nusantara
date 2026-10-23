@@ -1458,17 +1458,26 @@ model AuditLog {
 /// worker claims it with FOR UPDATE SKIP LOCKED and sends. No network I/O
 /// ever happens inside a database transaction.
 model Outbox {
-  id            String       @id @default(cuid())
-  kind          OutboxKind
+  id                String       @id @default(cuid())
+  kind              OutboxKind
   /// send intent — see the note on JSON columns at the top of this file
-  payload       Json
-  status        OutboxStatus
-  attempts      Int
-  nextAttemptAt DateTime
-  lastError     String?
-  requestId     String?
-  createdAt     DateTime
-  sentAt        DateTime?
+  payload           Json
+  status            OutboxStatus
+  attempts          Int
+  nextAttemptAt     DateTime
+  lastError         String?
+  requestId         String?
+  createdAt         DateTime
+  sentAt            DateTime?
+  /// The id WhatsApp gave the message when it went out (2026-10-23) — what an
+  /// edit or an unsend must name. Written by the worker with SENT; null on a
+  /// row sent before then, which can therefore be neither edited nor unsent.
+  providerMessageId String?
+  /// Staff unsent it (delete for everyone). The row stays; AuditLog says who.
+  retractedAt       DateTime?
+  /// Staff corrected its text; the new text is `payload.body`, the old one is
+  /// in the AuditLog row.
+  editedAt          DateTime?
 }
 
 /// NOT in docs/erd-pos-chatbot.drawio's original 62 tables. Added in S6 with the

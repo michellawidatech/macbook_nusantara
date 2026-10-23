@@ -88,6 +88,37 @@ export interface InboxReply {
   at: string | null;
   /** Staff's verdict on this reply, or null while nobody has rated it. */
   evaluation?: ReplyEvaluation | null;
+  /**
+   * The sent item (`InboxConversation.sent`) this reply IS — what its ⋯ menu
+   * edits or unsends. Null when no outbox row matches it, and then it has no
+   * menu.
+   */
+  outboxId?: string | null;
+}
+
+/**
+ * One text or photo the shop sent this customer (2026-10-23) — see
+ * apps/api/src/routes/inboxSent.ts. `canEdit` / `canUnsend` are decided by
+ * the server: WhatsApp's 15-minute and ~48-hour limits, and whether the shop
+ * sends through the linked device at all (the Cloud API can do neither).
+ */
+export interface SentItem {
+  id: string;
+  kind: "WA_REPLY" | "WA_IMAGE";
+  status: "PENDING" | "SENDING" | "SENT" | "FAILED";
+  createdAt: string;
+  sentAt: string | null;
+  /** A text: what the customer has now. */
+  body?: string;
+  /** A photo: drawn through `sentPhotoUrl`. */
+  photoId?: string;
+  /** The message it answered. */
+  inReplyTo: string | null;
+  /** Unsent for everyone. */
+  retractedAt: string | null;
+  editedAt: string | null;
+  canEdit: boolean;
+  canUnsend: boolean;
 }
 
 export interface InboxMessage {
@@ -137,6 +168,8 @@ export interface InboxConversation {
   lead: LeadState;
   /** The customer's open holds. */
   reservations: InboxReservation[];
+  /** Every text and photo sent to this number, oldest first. */
+  sent?: SentItem[];
 }
 
 export interface LeadState {
@@ -351,4 +384,22 @@ export const attachMedia = (phone: string, serials: readonly string[]) =>
   api<{ queued: number; units: number; skipped: string[] }>(
     `/api/inbox/${encodeURIComponent(phone)}/media`,
     { method: "POST", body: { serials } },
+  );
+
+/** Where a sent photo's bytes are; 404 once the unit sold (photos purged). */
+export const sentPhotoUrl = (phone: string, outboxId: string) =>
+  `/api/inbox/${encodeURIComponent(phone)}/sent/${encodeURIComponent(outboxId)}/photo`;
+
+/** Delete a sent message for everyone. 409 past the limit or on the Cloud API. */
+export const unsendSent = (phone: string, outboxId: string) =>
+  api<SentItem>(
+    `/api/inbox/${encodeURIComponent(phone)}/sent/${encodeURIComponent(outboxId)}/unsend`,
+    { method: "POST" },
+  );
+
+/** Correct a sent text, within WhatsApp's 15 minutes. */
+export const editSent = (phone: string, outboxId: string, text: string) =>
+  api<SentItem>(
+    `/api/inbox/${encodeURIComponent(phone)}/sent/${encodeURIComponent(outboxId)}/edit`,
+    { method: "POST", body: { text } },
   );

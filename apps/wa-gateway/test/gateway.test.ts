@@ -74,6 +74,14 @@ class FakeSocket implements GatewaySocket {
     this.sent.push({ jid, image, ...(caption ? { caption } : {}) });
     return `OUT${this.sent.length}`;
   }
+  readonly revoked: Array<{ jid: string; id: string }> = [];
+  readonly edited: Array<{ jid: string; id: string; text: string }> = [];
+  async revoke(jid: string, id: string) {
+    this.revoked.push({ jid, id });
+  }
+  async editText(jid: string, id: string, text: string) {
+    this.edited.push({ jid, id, text });
+  }
   async logout() {
     this.loggedOut = true;
     this.conn({ connection: "close", statusCode: CLOSE.loggedOut });
@@ -477,5 +485,103 @@ describe("inbound, to the webhook", () => {
     const sock = await linked();
     sock.msgs([msg({})]);
     await vi.waitFor(() => expect(webhook).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("unsend and edit, for the inbox (2026-10-23)", () => {
+  async function linked() {
+    await gw("/link", { method: "POST" });
+    latest().conn({ qr: "Q" });
+    await flush();
+    await scan();
+    return latest();
+  }
+  const post = (path: string, body: unknown, secret = SECRET) =>
+    gw(
+      path,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      secret,
+    );
+
+  it("needs the secret", async () => {
+    await linked();
+    expect(
+      (await post("/messages/revoke", { to: "6281234567890", id: "OUT1" }, "x"))
+        .status,
+    ).toBe(401);
+  });
+
+  it("refuses while nothing is linked", async () => {
+    const res = await post("/messages/revoke", {
+      to: "6281234567890",
+      id: "OUT1",
+    });
+    expect(res.status).toBe(503);
+  });
+
+  it("unsends by id, in the chat a send to that number goes to", async () => {
+    const sock = await linked();
+    const res = await post("/messages/revoke", {
+      to: "+62 812-3456-7890",
+      id: "OUT1",
+    });
+    expect(res.status).toBe(200);
+    expect(sock.revoked).toEqual([
+      { jid: "6281234567890@s.whatsapp.net", id: "OUT1" },
+    ]);
+  });
+
+  it("edits a text, and aims at the LID a customer wrote from", async () => {
+    const sock = await linked();
+    sock.lids.set("99887766@lid", "6289876543210@s.whatsapp.net");
+    sock.msgs([
+      {
+        id: "M1",
+        jid: "99887766@lid",
+        fromMe: false,
+        pushName: "Ayu",
+        seconds: 1_760_000_000,
+        content: { conversation: "halo" },
+      },
+    ]);
+    await vi.waitFor(() => expect(webhook).toHaveBeenCalledTimes(1));
+    const res = await post("/messages/edit", {
+      to: "6289876543210",
+      id: "OUT7",
+      text: "Harga yang benar Rp 14.500.000 kak",
+    });
+    expect(res.status).toBe(200);
+    expect(sock.edited).toEqual([
+      {
+        jid: "99887766@lid",
+        id: "OUT7",
+        text: "Harga yang benar Rp 14.500.000 kak",
+      },
+    ]);
+  });
+
+  it("refuses a body without a number, an id or (for an edit) text", async () => {
+    const sock = await linked();
+    expect(
+      (await post("/messages/revoke", { to: "abc", id: "OUT1" })).status,
+    ).toBe(400);
+    expect(
+      (await post("/messages/revoke", { to: "6281234567890", id: "" })).status,
+    ).toBe(400);
+    expect(
+      (
+        await post("/messages/edit", {
+          to: "6281234567890",
+          id: "OUT1",
+          text: "  ",
+        })
+      ).status,
+    ).toBe(400);
+    expect(sock.revoked).toEqual([]);
+    expect(sock.edited).toEqual([]);
   });
 });

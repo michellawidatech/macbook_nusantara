@@ -131,6 +131,18 @@ export function baileysSocketFactory(logger: Logger): SocketFactory {
         remember(msg);
         return msg?.key.id ?? null;
       },
+      async revoke(jid, id) {
+        await sock.sendMessage(jid, {
+          delete: { remoteJid: jid, fromMe: true, id },
+        });
+      },
+      async editText(jid, id, text) {
+        const msg = await sock.sendMessage(jid, {
+          text,
+          edit: { remoteJid: jid, fromMe: true, id },
+        });
+        remember(msg);
+      },
       async logout() {
         await sock.logout();
       },

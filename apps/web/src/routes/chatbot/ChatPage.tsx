@@ -16,6 +16,12 @@
  *    a shadow / outline, not a popup modal)"). Every bot reply is rated 👍 / 👎
  *    (`ReplyRating`) — that replaced "Fix this". The reply box writes, asks
  *    the bot for a draft, or attaches a unit's QC photos.
+ *  - **What was sent** (2026-10-23, `SentItems`): a photo the shop sent is
+ *    drawn at its time, and every sent bubble carries a ⋯ to edit (a text,
+ *    15 minutes) or unsend it. A reply bubble finds its outbox row by
+ *    `reply.outboxId`, which the server matched; every sent item no reply
+ *    claimed — a photo, the line before it, a reply a later one overwrote —
+ *    is its own bubble, slotted in by time.
  *  - **The profile** (`CustomerProfilePanel`), every field correctable in
  *    place.
  *
@@ -76,7 +82,9 @@ import {
   sendReply,
   setAutoReply,
   type ReplyEvaluation,
+  type SentItem,
 } from "../../lib/inboxApi.js";
+import { SentMenu, SentPhoto } from "./SentItems.js";
 import { handoffTopicLabel } from "../../lib/handoffTopics.js";
 import { CustomerProfilePanel } from "./CustomerProfilePanel.js";
 import { ReplyRating } from "./ReplyRating.js";
@@ -110,6 +118,8 @@ interface Bubble {
   waiting: boolean;
   /** Why the bot handed it over, for the caption under the outline. */
   waitingTopic: string | null;
+  /** The outbox row this bubble is, when it was sent through one. */
+  sent: SentItem | null;
 }
 
 /** A column: a card whose body scrolls and nothing else does. */
@@ -223,6 +233,9 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
     if (!conversation) return [];
     const out: Bubble[] = [];
     const botOff = !conversation.autoReply.enabled;
+    const sent = conversation.sent ?? [];
+    const sentById = new Map(sent.map((x) => [x.id, x]));
+    const claimed = new Set<string>();
     for (const m of conversation.messages) {
       // Status, not `m.handoff`: the server keeps the hand-over note on a row
       // staff have since answered (DIJAWAB_STAF), which is no longer waiting.
@@ -245,8 +258,11 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
           waiting && m.status === "PERLU_STAF"
             ? (m.handoff?.topic ?? null)
             : null,
+        sent: null,
       });
       if (m.reply) {
+        const own = m.reply.outboxId ? sentById.get(m.reply.outboxId) : null;
+        if (own) claimed.add(own.id);
         out.push({
           key: `${m.id}:out`,
           messageId: m.id,
@@ -258,10 +274,42 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
           evaluation: m.reply.evaluation ?? null,
           waiting: false,
           waitingTopic: null,
+          sent: own ?? null,
         });
       }
     }
-    return out;
+    /*
+     * Every sent item no reply claimed, slotted in by time without
+     * disturbing the order above (an answer stays under its question). One
+     * older than the first message shown belongs to history the 200-row cap
+     * already dropped.
+     */
+    const first = conversation.messages[0]?.at ?? "";
+    const extras = sent
+      .filter((x) => !claimed.has(x.id))
+      .map<Bubble>((x) => ({
+        key: `${x.id}:sent`,
+        messageId: x.inReplyTo ?? x.id,
+        side: "out",
+        text: x.body ?? "",
+        at: x.sentAt ?? x.createdAt,
+        byAgent: false,
+        by: null,
+        evaluation: null,
+        waiting: false,
+        waitingTopic: null,
+        sent: x,
+      }))
+      .filter((b) => b.at >= first);
+    if (extras.length === 0) return out;
+    const merged: Bubble[] = [];
+    let i = 0;
+    for (const b of out) {
+      while (i < extras.length && extras[i]!.at < b.at)
+        merged.push(extras[i++]!);
+      merged.push(b);
+    }
+    return [...merged, ...extras.slice(i)];
   }, [conversation]);
 
   const errorText = (err: unknown, fallback: string) =>
@@ -352,10 +400,14 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
     );
     const since =
       bubbles.reduce((at, b, i) => (resets.has(b.messageId) ? i : at), -1) + 1;
-    const turns = bubbles.slice(since).map((b) => ({
-      role: b.side === "in" ? ("user" as const) : ("assistant" as const),
-      text: b.text,
-    }));
+    const turns = bubbles
+      .slice(since)
+      // A photo has no words, and an unsent line is not what the customer has.
+      .filter((b) => b.text && !b.sent?.retractedAt)
+      .map((b) => ({
+        role: b.side === "in" ? ("user" as const) : ("assistant" as const),
+        text: b.text,
+      }));
     if (turns.length === 0) return;
     setDrafting(true);
     try {
@@ -633,19 +685,42 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
                   }}
                 >
                   {mine && (
-                    <Typography.Text
-                      style={{ fontSize: 12, color: colorTextSecondary }}
-                    >
-                      {b.byAgent ? (
-                        <>
-                          <RobotOutlined /> {t("chat.bot", "Bot")}
-                        </>
-                      ) : (
-                        (b.by ?? t("chat.staff", "Staff"))
+                    <Flex justify="space-between" align="center" gap={8}>
+                      <Typography.Text
+                        style={{ fontSize: 12, color: colorTextSecondary }}
+                      >
+                        {b.byAgent ? (
+                          <>
+                            <RobotOutlined /> {t("chat.bot", "Bot")}
+                          </>
+                        ) : b.key.endsWith(":sent") ? (
+                          t("chat.sentByShop", "Sent")
+                        ) : (
+                          (b.by ?? t("chat.staff", "Staff"))
+                        )}
+                      </Typography.Text>
+                      {b.sent && active && (
+                        <SentMenu
+                          phone={active}
+                          item={b.sent}
+                          onChanged={refresh}
+                        />
                       )}
-                    </Typography.Text>
+                    </Flex>
                   )}
-                  <div style={{ whiteSpace: "pre-wrap" }}>{b.text}</div>
+                  {b.sent?.retractedAt ? (
+                    <Typography.Text
+                      type="secondary"
+                      italic
+                      data-testid="sent-unsent"
+                    >
+                      {t("chat.unsentLabel", "Unsent")}
+                    </Typography.Text>
+                  ) : b.sent?.kind === "WA_IMAGE" && active ? (
+                    <SentPhoto phone={active} item={b.sent} />
+                  ) : (
+                    <div style={{ whiteSpace: "pre-wrap" }}>{b.text}</div>
+                  )}
                   {b.waiting && (
                     <Typography.Text
                       style={{
@@ -668,6 +743,14 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
                   <Flex justify="space-between" align="center" gap={12}>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       {fmtDateTime(b.at)}
+                      {b.sent?.editedAt && !b.sent.retractedAt
+                        ? ` · ${t("chat.editedLabel", "Edited")}`
+                        : ""}
+                      {b.sent && b.sent.status === "FAILED"
+                        ? ` · ${t("chat.notDelivered", "Not delivered")}`
+                        : b.sent && b.sent.status !== "SENT"
+                          ? ` · ${t("chat.queuedLabel", "Queued")}`
+                          : ""}
                     </Typography.Text>
                     {mine && b.byAgent && (
                       <ReplyRating

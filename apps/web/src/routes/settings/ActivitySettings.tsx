@@ -301,6 +301,8 @@ export function ActivitySettings() {
         return t("activity.e.staff", "Staff account");
       case "WhatsApp":
         return t("activity.e.whatsapp", "WhatsApp connection");
+      case "Outbox":
+        return t("activity.e.outbox", "WhatsApp message");
       case "AuditLog":
         return t("activity.e.auditLog", "Activity log");
       default:
@@ -354,6 +356,7 @@ export function ActivitySettings() {
     "settings",
     "Staff",
     "WhatsApp",
+    "Outbox",
   ];
 
   return (

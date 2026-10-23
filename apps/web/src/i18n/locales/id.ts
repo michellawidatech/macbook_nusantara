@@ -318,6 +318,7 @@ export const id: Record<string, string> = {
   "activity.e.myWarehouse": "Gudang sendiri",
   "activity.e.staff": "Akun staf",
   "activity.e.whatsapp": "Koneksi WhatsApp",
+  "activity.e.outbox": "Pesan WhatsApp",
   "activity.since":
     "Setiap perubahan tercatat mulai rilis 22 Oktober 2026. Riwayat masuk dan perubahan akun staf tercatat lebih lama.",
   "activity.search": "Cari serial, kode atau id",
@@ -3850,6 +3851,28 @@ export const id: Record<string, string> = {
   "chat.mediaNotFound":
     "Tidak ada unit dengan serial itu, atau unitnya belum punya foto QC.",
   "chat.mediaFailed": "Foto tidak bisa dilampirkan.",
+  // What was sent: photos in the thread, edit and unsend (2026-10-23).
+  "chat.photoGone": "Foto sudah tidak tersimpan",
+  "chat.sentPhoto": "Foto terkirim",
+  "chat.sentByShop": "Terkirim",
+  "chat.messageActions": "Aksi pesan",
+  "chat.editMessage": "Ubah",
+  "chat.unsend": "Tarik pesan",
+  "chat.unsendTitle": "Tarik pesan ini?",
+  "chat.unsendBody":
+    "Pesan juga terhapus di pelanggan. Mereka akan melihat bahwa ada pesan yang dihapus.",
+  "chat.unsent": "Pesan ditarik.",
+  "chat.unsendFailed": "Pesan tidak bisa ditarik.",
+  "chat.unsentLabel": "Pesan ditarik",
+  "chat.editTitle": "Ubah pesan",
+  "chat.saveEdit": "Simpan",
+  "chat.editHint":
+    "WhatsApp mengizinkan pesan diubah 15 menit setelah terkirim. Pelanggan melihatnya bertanda diedit.",
+  "chat.edited": "Pesan diubah.",
+  "chat.editFailed": "Pesan tidak bisa diubah.",
+  "chat.editedLabel": "Diedit",
+  "chat.notDelivered": "Tidak terkirim",
+  "chat.queuedLabel": "Dalam antrean",
   "chat.aiOn": "AI nyala",
   "chat.aiOff": "AI mati",
   "chat.showProfile": "Profil pelanggan",

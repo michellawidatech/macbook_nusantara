@@ -84,3 +84,38 @@ export const sentBody = (id: string) => ({
 export const graphErrorBody = (code: number, message: string) => ({
   error: { message, type: "WaGatewayException", code },
 });
+
+/**
+ * A `/messages/revoke` or `/messages/edit` body (2026-10-23): which chat, which
+ * message, and for an edit the new text. A string is the reason it was refused.
+ * Not Graph's shape — the Cloud API has no edit and no delete — so only the
+ * API's inbox calls these, never the worker's Graph client.
+ */
+export interface RetractRequest {
+  readonly to: string;
+  readonly id: string;
+}
+export interface EditRequest extends RetractRequest {
+  readonly text: string;
+}
+
+const MESSAGE_ID = /^[A-Za-z0-9._:=+/-]{1,128}$/;
+
+export function parseRetractRequest(raw: unknown): RetractRequest | string {
+  if (typeof raw !== "object" || raw === null) return "the body is not JSON";
+  const r = raw as Record<string, unknown>;
+  const to = typeof r["to"] === "string" ? digits(r["to"]) : "";
+  if (!/^\d{6,20}$/.test(to)) return "`to` is not a phone number";
+  const id = typeof r["id"] === "string" ? r["id"].trim() : "";
+  if (!MESSAGE_ID.test(id)) return "`id` is not a message id";
+  return { to, id };
+}
+
+export function parseEditRequest(raw: unknown): EditRequest | string {
+  const base = parseRetractRequest(raw);
+  if (typeof base === "string") return base;
+  const text = (raw as Record<string, unknown>)["text"];
+  if (typeof text !== "string" || !text.trim()) return "an edit needs `text`";
+  if (text.length > 4_096) return "`text` is too long";
+  return { ...base, text };
+}

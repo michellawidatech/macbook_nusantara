@@ -7,6 +7,8 @@
  *     POST /logout                       unlink, and delete the session's files
  *     POST /graph/{v}/{phone-id}/media     the worker's upload, Graph-shaped
  *     POST /graph/{v}/{phone-id}/messages  the worker's send, Graph-shaped
+ *     POST /messages/revoke              {to, id}: unsend for everyone (the inbox)
+ *     POST /messages/edit                {to, id, text}: correct a sent text
  *
  * Callers: the API (owner-only `/api/whatsapp/connection`, which adds the
  * secret) and the worker (its fetch, rewritten in Baileys mode). Nothing here
@@ -26,6 +28,8 @@ import { GATEWAY_SECRET_HEADER } from "./config.js";
 import {
   graphCallOf,
   graphErrorBody,
+  parseEditRequest,
+  parseRetractRequest,
   parseSendRequest,
   sentBody,
 } from "./graph.js";
@@ -128,6 +132,52 @@ export function createGatewayServer(deps: ServerDeps): Server {
 
     if (req.method === "POST" && path === "/logout") {
       return send(res, 200, await session.logout());
+    }
+
+    if (
+      req.method === "POST" &&
+      (path === "/messages/revoke" || path === "/messages/edit")
+    ) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse((await readBody(req, JSON_LIMIT)).toString("utf8"));
+      } catch {
+        return send(res, 400, graphErrorBody(400, "the body is not JSON"));
+      }
+      const edit = path === "/messages/edit";
+      const request = edit
+        ? parseEditRequest(parsed)
+        : parseRetractRequest(parsed);
+      if (typeof request === "string") {
+        return send(res, 400, graphErrorBody(400, request));
+      }
+      try {
+        if ("text" in request && typeof request.text === "string") {
+          await session.editText(request.to, request.id, request.text);
+        } else {
+          await session.revoke(request.to, request.id);
+        }
+        return send(res, 200, { ok: true });
+      } catch (err) {
+        const status = err instanceof GatewayError ? err.status : 502;
+        logger.warn(
+          {
+            evt: edit ? "wa-gateway.edit.failed" : "wa-gateway.revoke.failed",
+            err: errInfo(err),
+          },
+          edit
+            ? "an edit through WhatsApp failed"
+            : "an unsend through WhatsApp failed",
+        );
+        return send(
+          res,
+          status,
+          graphErrorBody(
+            status,
+            err instanceof Error ? err.message : "the request failed",
+          ),
+        );
+      }
     }
 
     const call = req.method === "POST" ? graphCallOf(path) : null;

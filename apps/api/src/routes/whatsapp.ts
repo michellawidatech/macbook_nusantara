@@ -26,10 +26,7 @@ import { Router, type RequestHandler } from "express";
 import type { PrismaClient } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import { ApiError } from "../errors.js";
-
-/** The gateway's header; the same constant `@nusantara/whatsapp` exports. */
-const SECRET_HEADER = "x-wa-gateway-secret";
-const TIMEOUT_MS = 8_000;
+import { callGateway } from "../gatewayClient.js";
 
 export type GatewayHealth = "OK" | "UNREACHABLE" | "NOT_CONFIGURED";
 
@@ -47,10 +44,6 @@ interface GatewayStatusBody {
   readonly number?: string;
 }
 
-type GatewayAnswer =
-  | { readonly ok: true; readonly status: number; readonly body: unknown }
-  | { readonly ok: false };
-
 const notRunning = (configured: boolean) =>
   new ApiError(
     503,
@@ -62,41 +55,17 @@ const notRunning = (configured: boolean) =>
 
 export function whatsappRouter(deps: WhatsAppRouterDeps): Router {
   const { db, logger, gateway } = deps;
-  const doFetch = deps.fetchImpl ?? fetch;
   const router = Router();
   router.use(deps.requireOwner);
 
-  const call = async (
-    method: "GET" | "POST",
-    path: string,
-  ): Promise<GatewayAnswer> => {
-    if (!gateway) return { ok: false };
-    try {
-      const res = await doFetch(`${gateway.url}${path}`, {
-        method,
-        headers: { [SECRET_HEADER]: gateway.secret },
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-      const text = await res.text();
-      return {
-        ok: true,
-        status: res.status,
-        body: text ? (JSON.parse(text) as unknown) : {},
-      };
-    } catch (err) {
-      logger.warn(
-        {
-          evt: "whatsapp.gateway.unreachable",
-          ctx: { path },
-          err: {
-            message: err instanceof Error ? err.message : String(err),
-          },
-        },
-        "the WhatsApp gateway did not answer",
-      );
-      return { ok: false };
-    }
-  };
+  const call = (method: "GET" | "POST", path: string) =>
+    callGateway({
+      gateway,
+      logger,
+      method,
+      path,
+      ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+    });
 
   /** A gateway answer that is not the one asked for is a misconfiguration. */
   const unexpected = (status: number) => {

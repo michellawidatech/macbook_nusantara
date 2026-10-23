@@ -64,6 +64,12 @@ import {
   registerInboxV2,
   reservationsFor,
 } from "./inboxV2.js";
+import {
+  registerInboxSent,
+  replyOutboxIds,
+  sentItemsFor,
+  type InboxSentDeps,
+} from "./inboxSent.js";
 
 /**
  * A `wa_id` as Meta writes it: digits only, country code first, no `+`.
@@ -241,8 +247,18 @@ export function readHandoff(
   };
 }
 
-export function inboxRouter(db: PrismaClient): Router {
+/**
+ * `sent` is the WhatsApp gateway and a logger (2026-10-23): unsend and edit
+ * go through the linked device, and with no gateway configured they are
+ * refused and never offered. Optional so a test building the router alone
+ * still gets an inbox.
+ */
+export function inboxRouter(
+  db: PrismaClient,
+  sent: InboxSentDeps | null = null,
+): Router {
   const router = Router();
+  const baileys = sent?.gateway != null;
 
   /**
    * GET /api/inbox — every thread, most recently active first.
@@ -459,14 +475,18 @@ export function inboxRouter(db: PrismaClient): Router {
         // and what a colleague added — the v2 profile (inboxV2.ts).
         profileJson(db, phone.data),
       ]);
-      const [lead, reservations, evaluations] = await Promise.all([
+      const [lead, reservations, evaluations, sentItems] = await Promise.all([
         leadJson(db, phone.data),
         reservationsFor(db, phone.data),
         evaluationsFor(
           db,
           messages.filter((m) => m.replyText).map((m) => m.id),
         ),
+        // What the shop sent, photos included, each with whether it can
+        // still be edited or unsent (inboxSent.ts, 2026-10-23).
+        sentItemsFor(db, phone.data, { baileys }),
       ]);
+      const outboxOfReply = replyOutboxIds(messages, sentItems);
 
       // Counts rather than rows: the panel says "3 pesanan", and shipping the
       // orders themselves would be a second, larger payload nobody reads.
@@ -577,6 +597,13 @@ export function inboxRouter(db: PrismaClient): Router {
         lead,
         /** Open holds under this number, by the bot or at the counter. */
         reservations,
+        /**
+         * Every text and photo sent to this number (the newest 100, oldest
+         * first). A reply bubble names its own by `reply.outboxId`; the rest
+         * — photos, the line before them, a reply a later one overwrote —
+         * are drawn at their own time.
+         */
+        sent: sentItems,
         messages: messages.map((m) => ({
           id: m.id,
           waMessageId: m.waMessageId,
@@ -601,6 +628,8 @@ export function inboxRouter(db: PrismaClient): Router {
                 at: m.answeredAt?.toISOString() ?? null,
                 /** The newest staff verdict on this reply (Evaluation). */
                 evaluation: evaluations.get(m.id) ?? null,
+                /** The sent item this reply IS, or null (no ⋯ menu). */
+                outboxId: outboxOfReply.get(m.id) ?? null,
               }
             : null,
         })),
@@ -1006,6 +1035,7 @@ export function inboxRouter(db: PrismaClient): Router {
   });
 
   registerInboxV2(router, db);
+  if (sent) registerInboxSent(router, db, sent);
 
   return router;
 }
