@@ -50,6 +50,9 @@ import {
 import { labelOf } from "../../i18n/enumLabels.js";
 import { useTranslation } from "react-i18next";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
+import { TimeSeriesChart } from "../../components/TimeSeriesChart";
+import { DonutChart } from "../../components/DonutChart";
+import { expenseBreakdown, monthlyFlow } from "../../lib/cashflowCharts.js";
 
 /** Category label maps, derived from `seed.ts` so there is one vocabulary. */
 const INCOME_REASON: Record<string, string> = Object.fromEntries(
@@ -92,6 +95,8 @@ export function IncomeExpensePage() {
   const [addAdjustment, setAddAdjustment] = useState(false);
   const [openingOpen, setOpeningOpen] = useState(false);
   const [basis, setBasis] = useState<"CASH" | "ACCRUAL">("CASH");
+  /** How far back the two charts look (owner ask 2026-10-23). */
+  const [chartMonths, setChartMonths] = useState<3 | 6 | 12>(6);
   /**
    * The two balances are hidden until somebody asks (owner ask 2026-10-22:
    * *"the balance should be dotted at first and if they want to see it they
@@ -385,6 +390,23 @@ export function IncomeExpensePage() {
     </Card>
   );
 
+  /*
+   * The two charts (owner ask 2026-10-23), off the rows the table shows — so
+   * the basis switch moves them too — over the last 3, 6 or 12 months.
+   */
+  const trend = useMemo(
+    () => monthlyFlow(shown, new Date(), chartMonths),
+    [shown, chartMonths],
+  );
+  const slices = useMemo(
+    () => expenseBreakdown(shown, trend[0]!.month),
+    [shown, trend],
+  );
+  const fmtShort = (n: number) =>
+    Math.abs(n) >= 1_000_000
+      ? `Rp ${(n / 1_000_000).toLocaleString("id-ID", { maximumFractionDigits: 1 })} jt`
+      : fmtRp(n);
+
   const typeLabel = (d: Direction) =>
     d === "INCOME"
       ? t("finance.income", "Income")
@@ -417,6 +439,70 @@ export function IncomeExpensePage() {
       <Flex gap={SPACE.md} wrap style={{ marginBottom: SPACE.md }}>
         {potCard("cash", t("cashflow.cashPot", "Cash"), <WalletOutlined />)}
         {potCard("bank", t("cashflow.bankPot", "Bank"), <BankOutlined />)}
+      </Flex>
+      <Flex gap={SPACE.md} wrap style={{ marginBottom: SPACE.md }}>
+        <Card
+          size="small"
+          style={{ flex: "2 1 520px", minWidth: 0 }}
+          title={t("cashflow.trendTitle", "Revenue vs. expense")}
+          extra={
+            <Segmented<3 | 6 | 12>
+              size="small"
+              value={chartMonths}
+              onChange={setChartMonths}
+              options={[
+                { value: 3, label: t("cashflow.months3", "3 months") },
+                { value: 6, label: t("cashflow.months6", "6 months") },
+                { value: 12, label: t("cashflow.months12", "12 months") },
+              ]}
+            />
+          }
+        >
+          <TimeSeriesChart
+            categories={trend.map((m) =>
+              m.month.toLocaleDateString(undefined, {
+                month: "short",
+                year: "2-digit",
+              }),
+            )}
+            series={[
+              {
+                key: "income",
+                label: t("cashflow.revenue", "Revenue"),
+                values: trend.map((m) => m.income),
+              },
+              {
+                key: "expense",
+                label: t("cashflow.expenses", "Expenses"),
+                values: trend.map((m) => m.expense),
+              },
+            ]}
+            format={fmtRp}
+            formatTick={fmtShort}
+            height={240}
+          />
+        </Card>
+        <Card
+          size="small"
+          style={{ flex: "1 1 380px", minWidth: 0 }}
+          title={t("cashflow.breakdownTitle", "Expense breakdown")}
+        >
+          <DonutChart
+            slices={slices.map((s) => ({
+              key: s.category,
+              label:
+                s.category === "OTHER"
+                  ? t("cashflow.otherExpenses", "Other")
+                  : labelOf(EXPENSE_KIND, s.category, t),
+              value: s.amount,
+              other: s.category === "OTHER",
+            }))}
+            format={fmtRp}
+            centre={fmtShort(slices.reduce((n, s) => n + s.amount, 0))}
+            size={180}
+            emptyText={t("cashflow.noExpenses", "No expense in this period.")}
+          />
+        </Card>
       </Flex>
       <Card>
         <ProTable<Row>

@@ -4380,4 +4380,13 @@ export const id: Record<string, string> = {
   "pnl.tabMonths": "Per bulan",
   "pnl.formatXlsx": "Excel (.xlsx)",
   "pnl.formatPdf": "PDF (.pdf)",
+  "cashflow.trendTitle": "Pendapatan vs. pengeluaran",
+  "cashflow.months3": "3 bulan",
+  "cashflow.months6": "6 bulan",
+  "cashflow.months12": "12 bulan",
+  "cashflow.revenue": "Pendapatan",
+  "cashflow.expenses": "Pengeluaran",
+  "cashflow.breakdownTitle": "Rincian pengeluaran",
+  "cashflow.otherExpenses": "Lainnya",
+  "cashflow.noExpenses": "Tidak ada pengeluaran di periode ini.",
 };

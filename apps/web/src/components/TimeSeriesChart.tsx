@@ -1,7 +1,10 @@
 /**
  * A multi-series line chart, drawn as inline SVG.
  *
- * ## Nothing imports this today (2026-09-01)
+ * ## Used again since 2026-10-23 — Profit & Loss's By month tab and Income &
+ * Expense's revenue-vs-expense trend. The note below is its history.
+ *
+ * ## Nothing imported this from 2026-09-01
  *
  * Its only caller was the "Money over time" card on the Income & Expense page,
  * removed at the owner's request — the header of `routes/finance/CashflowPage.tsx`
@@ -39,10 +42,10 @@
  * - **One axis.** Every series here is rupiah, so they share a scale. If a
  *   measure in different units is ever wanted, it gets its own chart.
  */
-import { useMemo, useRef, useState } from "react";
+import { useContext, useMemo, useRef, useState } from "react";
 import { Checkbox, Flex, Typography, theme } from "antd";
 import { SPACE, TYPE } from "../theme/tokens";
-import { useColorScheme } from "../theme/useColorScheme";
+import { ColorSchemeContext } from "../theme/context";
 
 /** Categorical slots 1–4, light and dark, from the validated house palette. */
 const SERIES_COLORS = {
@@ -90,7 +93,9 @@ export function TimeSeriesChart({
   formatTick,
   height = 280,
 }: TimeSeriesChartProps) {
-  const { resolved } = useColorScheme();
+  // Light outside a ThemeProvider (a page rendered bare in a test) rather
+  // than a throw: a chart is never the reason a screen should fail.
+  const resolved = useContext(ColorSchemeContext)?.resolved ?? "light";
   const {
     token: {
       colorBgContainer,
