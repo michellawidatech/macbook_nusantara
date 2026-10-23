@@ -15,6 +15,17 @@ import { isWithinWindow } from "@nusantara/whatsapp";
 import { dispatchTool, isLead, phoneForms } from "@nusantara/agent";
 import { ApiError, notFound } from "../errors.js";
 
+/** How many units one "attach media" may carry. */
+export const MAX_MEDIA_UNITS = 5;
+
+/**
+ * The line sent before a unit's photos (owner's wording, 2026-10-23: *"berikut
+ * untuk photo {unit name} nya ya kakk, boleh dilihat lihat dulu"*).
+ */
+export function photoCaption(unit: string): string {
+  return `Berikut foto ${unit} nya ya kak, boleh dilihat-lihat dulu 😊`;
+}
+
 const phoneParam = z
   .string()
   .trim()
@@ -391,18 +402,41 @@ export function registerInboxV2(router: Router, db: PrismaClient): void {
   });
 
   /**
-   * POST /api/inbox/:phone/media — "attach media": the unit's QC photos, as
-   * the bot would send them (the same `unit_photos` rule — a sellable unit,
-   * at most three), queued after anything already waiting to go.
+   * POST /api/inbox/:phone/media — "attach media": units' QC photos, as the
+   * bot would send them (the same `unit_photos` rule — a sellable unit, at
+   * most three each), queued after anything already waiting to go.
+   *
+   * Several units at once since 2026-10-23 (owner: *"they can choose, even
+   * multiple … and if they send image, the chatbot will also automatically
+   * send a text"*): `serials`, up to five, each one preceded by a line naming
+   * it — "Berikut foto {unit} nya ya kak…" — so the customer can tell which
+   * photos are which. `serial` alone is still read, for the build before.
+   * A serial that has no photos to send is reported back, not refused, as
+   * long as at least one other does.
    */
   router.post("/:phone/media", async (req, res, next) => {
     try {
       const phone = phoneOf(req.params["phone"]);
       const body = z
-        .object({ serial: z.string().trim().min(1).max(40) })
+        .object({
+          serial: z.string().trim().min(1).max(40).optional(),
+          serials: z
+            .array(z.string().trim().min(1).max(40))
+            .min(1)
+            .max(MAX_MEDIA_UNITS)
+            .optional(),
+        })
         .strict()
         .safeParse(req.body);
-      if (!body.success)
+      const serials = body.success
+        ? [
+            ...new Set([
+              ...(body.data.serials ?? []),
+              ...(body.data.serial ? [body.data.serial] : []),
+            ]),
+          ]
+        : [];
+      if (serials.length === 0 || serials.length > MAX_MEDIA_UNITS)
         throw new ApiError(400, "VALIDASI", "Nomor seri tidak valid.");
       const last = await db.waMessage.findFirst({
         where: { from: phone, direction: "IN" },
@@ -416,29 +450,57 @@ export function registerInboxV2(router: Router, db: PrismaClient): void {
           "KONFLIK",
           "Jendela 24 jam WhatsApp sudah tutup — foto tidak bisa dikirim.",
         );
-      const out = (await dispatchTool(
-        db,
-        "unit_photos",
-        { serial: body.data.serial },
-        { from: phone, now: new Date() },
-      )) as { found?: boolean; photoIds?: unknown };
-      const ids = Array.isArray(out.photoIds)
-        ? out.photoIds.filter((x): x is string => typeof x === "string")
-        : [];
-      if (out.found === false || ids.length === 0)
+      // Network-free lookups first, outside the transaction.
+      const found: { serial: string; caption: string; ids: string[] }[] = [];
+      const skipped: string[] = [];
+      for (const serial of serials) {
+        const out = (await dispatchTool(
+          db,
+          "unit_photos",
+          { serial },
+          { from: phone, now: new Date() },
+        )) as { found?: boolean; photoIds?: unknown; caption?: unknown };
+        const ids = Array.isArray(out.photoIds)
+          ? out.photoIds.filter((x): x is string => typeof x === "string")
+          : [];
+        if (out.found === false || ids.length === 0) {
+          skipped.push(serial);
+          continue;
+        }
+        found.push({
+          serial,
+          caption: typeof out.caption === "string" ? out.caption : serial,
+          ids,
+        });
+      }
+      if (found.length === 0)
         throw new ApiError(
           404,
           "TIDAK_DITEMUKAN",
           "Unit itu tidak ada, tidak tersedia, atau belum punya foto.",
         );
       await db.$transaction(async (tx) => {
-        for (const photoId of ids)
+        for (const unit of found) {
           await enqueueOutbox(tx, {
-            kind: "WA_IMAGE",
-            payload: { to: phone, photoId, inReplyTo: last.id },
+            kind: "WA_REPLY",
+            payload: {
+              to: phone,
+              body: photoCaption(unit.caption),
+              inReplyTo: last.id,
+            },
           });
+          for (const photoId of unit.ids)
+            await enqueueOutbox(tx, {
+              kind: "WA_IMAGE",
+              payload: { to: phone, photoId, inReplyTo: last.id },
+            });
+        }
       });
-      res.json({ queued: ids.length });
+      res.json({
+        queued: found.reduce((n, u) => n + u.ids.length, 0),
+        units: found.length,
+        skipped,
+      });
     } catch (err) {
       next(err);
     }

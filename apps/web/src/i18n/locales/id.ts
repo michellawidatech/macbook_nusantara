@@ -4267,4 +4267,20 @@ export const id: Record<string, string> = {
   "pay.deductionAmountFor": "Jumlah potongan",
   "pay.removeDeduction": "Hapus potongan",
   "pay.payoutLands": "{{amount}} − {{kept}} potongan = {{received}} diterima",
+  "chat.mediaQueuedUnits":
+    "Foto {{units}} unit masuk antrean ({{n}} foto). Terkirim dalam beberapa detik.",
+  "chat.mediaSkipped":
+    "Tidak terkirim, tidak ada foto atau sudah tidak dijual: {{serials}}",
+  "chat.pickPhotosTitle": "Kirim foto unit",
+  "chat.sendPickedPhotos": "Kirim foto {{n}} unit",
+  "chat.pickProduct": "Produk",
+  "chat.searchProduct": "Cari produk",
+  "chat.noPhotographedUnits": "Belum ada unit dijual yang punya foto.",
+  "chat.unitsWithPhotos": "{{n}} unit",
+  "chat.serial": "Serial",
+  "chat.grade": "Grade",
+  "chat.price": "Harga",
+  "chat.photos": "Foto",
+  "chat.pickPhotosHint":
+    "Setiap unit dikirim dengan satu baris namanya, lalu sampai tiga fotonya. Maksimal {{max}} unit sekaligus.",
 };

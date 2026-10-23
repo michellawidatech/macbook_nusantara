@@ -12,6 +12,7 @@ import { createLogger } from "@nusantara/logging";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { hashPassword } from "../src/auth/credentials.js";
+import { MAX_MEDIA_UNITS, photoCaption } from "../src/routes/inboxV2.js";
 
 const URL =
   process.env["TEST_DATABASE_URL"] ??
@@ -439,5 +440,42 @@ describe("agents and settings", () => {
     expect(
       res.body.agents.every((a: { inRules: string }) => a.inRules.length > 0),
     ).toBe(true);
+  });
+});
+
+describe("attaching units' photos (2026-10-23)", () => {
+  it("words the line sent before each unit's photos", () => {
+    expect(photoCaption('MacBook Air 13" M2 8GB / 256GB')).toBe(
+      'Berikut foto MacBook Air 13" M2 8GB / 256GB nya ya kak, boleh dilihat-lihat dulu 😊',
+    );
+  });
+
+  it("refuses an empty request and more units than one send may carry", async () => {
+    await botAnswered("ada foto?", "sebentar ya kak");
+    const none = await request(app)
+      .post(`/api/inbox/${PHONE}/media`)
+      .set("Cookie", staffCookie)
+      .send({ serials: [] });
+    expect(none.status).toBe(400);
+    const many = await request(app)
+      .post(`/api/inbox/${PHONE}/media`)
+      .set("Cookie", staffCookie)
+      .send({
+        serials: Array.from(
+          { length: MAX_MEDIA_UNITS + 1 },
+          (_, i) => `SERIAL${i}`,
+        ),
+      });
+    expect(many.status).toBe(400);
+  });
+
+  it("queues nothing when no named unit has photos to send", async () => {
+    await botAnswered("ada foto?", "sebentar ya kak");
+    const res = await request(app)
+      .post(`/api/inbox/${PHONE}/media`)
+      .set("Cookie", staffCookie)
+      .send({ serials: ["NOSUCHUNIT1", "NOSUCHUNIT2"] });
+    expect(res.status).toBe(404);
+    expect(await db.outbox.count()).toBe(0);
   });
 });

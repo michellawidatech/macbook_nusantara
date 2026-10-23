@@ -46,7 +46,6 @@ import {
   Empty,
   Flex,
   Input,
-  Modal,
   Skeleton,
   Switch,
   Tooltip,
@@ -82,6 +81,7 @@ import { handoffTopicLabel } from "../../lib/handoffTopics.js";
 import { CustomerProfilePanel } from "./CustomerProfilePanel.js";
 import { ReplyRating } from "./ReplyRating.js";
 import { ThreadList, threadName } from "./ThreadList.js";
+import { UnitPhotoPicker } from "./UnitPhotoPicker.js";
 import { useInbox } from "../../hooks/useInbox.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { asString } from "../../lib/draftGuards.js";
@@ -145,7 +145,6 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [mediaOpen, setMediaOpen] = useState(false);
-  const [mediaSerial, setMediaSerial] = useState("");
   const [attaching, setAttaching] = useState(false);
   const messagesRef = useRef<HTMLDivElement>(null);
 
@@ -392,23 +391,27 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
     }
   };
 
-  const attach = async () => {
-    const serial = mediaSerial.trim().toUpperCase();
-    if (!serial || !active) return;
+  const attach = async (serials: string[]) => {
+    if (serials.length === 0 || !active) return;
     setAttaching(true);
     try {
-      const { queued } = await attachMedia(active, serial);
+      const { queued, units, skipped } = await attachMedia(active, serials);
       message.success(
         t(
-          "chat.mediaQueued",
-          "{{n}} photos queued. They go out in a few seconds.",
-          {
-            n: queued,
-          },
+          "chat.mediaQueuedUnits",
+          "Photos of {{units}} unit(s) queued ({{n}} photos). They go out in a few seconds.",
+          { units, n: queued },
         ),
       );
+      if (skipped.length > 0)
+        message.warning(
+          t(
+            "chat.mediaSkipped",
+            "Not sent, no photos or no longer on sale: {{serials}}",
+            { serials: skipped.join(", ") },
+          ),
+        );
       setMediaOpen(false);
-      setMediaSerial("");
       refresh();
     } catch (err) {
       if (err instanceof ApiRequestError && err.status === 409) {
@@ -785,32 +788,12 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
         </Drawer>
       )}
 
-      <Modal
-        title={t("chat.attachMediaTitle", "Send a unit's QC photos")}
+      <UnitPhotoPicker
         open={mediaOpen}
-        okText={t("chat.attachSend", "Send photos")}
-        okButtonProps={{ loading: attaching, disabled: !mediaSerial.trim() }}
-        onOk={() => void attach()}
+        sending={attaching}
         onCancel={() => setMediaOpen(false)}
-        destroyOnHidden
-      >
-        <Flex vertical gap={8}>
-          <Typography.Text type="secondary">
-            {t(
-              "chat.attachMediaHint",
-              "Up to three of the unit's QC photos go to this customer.",
-            )}
-          </Typography.Text>
-          <Input
-            autoFocus
-            aria-label={t("chat.unitSerial", "Unit serial")}
-            placeholder={t("chat.unitSerial", "Unit serial")}
-            value={mediaSerial}
-            onChange={(e) => setMediaSerial(e.target.value.toUpperCase())}
-            onPressEnter={() => void attach()}
-          />
-        </Flex>
-      </Modal>
+        onSend={(serials) => void attach(serials)}
+      />
     </>
   );
 }

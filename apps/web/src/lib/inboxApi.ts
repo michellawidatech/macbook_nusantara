@@ -347,8 +347,8 @@ export const removeProfileFact = (phone: string, id: string) =>
  * Queue a unit's QC photos (at most three) to this customer. 409 when the
  * 24-hour window has closed, 404 for an unknown serial or one with no photos.
  */
-export const attachMedia = (phone: string, serial: string) =>
-  api<{ queued: number }>(`/api/inbox/${encodeURIComponent(phone)}/media`, {
-    method: "POST",
-    body: { serial },
-  });
+export const attachMedia = (phone: string, serials: readonly string[]) =>
+  api<{ queued: number; units: number; skipped: string[] }>(
+    `/api/inbox/${encodeURIComponent(phone)}/media`,
+    { method: "POST", body: { serials } },
+  );
