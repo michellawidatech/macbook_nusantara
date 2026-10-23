@@ -4,7 +4,12 @@
  * every figure below is put there by the test.
  */
 import { describe, expect, it } from "vitest";
-import { monthPeriod, profitLoss } from "../src/lib/profitLoss.js";
+import {
+  monthPeriod,
+  monthlyProfitLoss,
+  profitLoss,
+  unitProfits,
+} from "../src/lib/profitLoss.js";
 import { costIndex } from "../src/lib/service.js";
 import { getDb } from "../src/mock/store.js";
 import type { MockDb } from "../src/mock/seed.js";
@@ -170,5 +175,59 @@ describe("profit & loss", () => {
       status: "CANCELLED",
     });
     expect(line(profitLoss(db, MONTH), "cogsReturned")).toBe(0);
+  });
+
+  it("lists the transactions behind every line, adding up to it", () => {
+    const db = structuredClone(getDb());
+    const p = monthPeriod(new Date());
+    const r = profitLoss(db, p);
+    for (const l of [
+      ...r.revenue,
+      ...r.cogs,
+      ...r.operating,
+      ...r.otherIncome,
+      ...r.otherExpense,
+    ])
+      expect(l.items.reduce((n, i) => n + i.amount, 0)).toBe(l.amount);
+    expect(r.revenue[0]!.items.length).toBeGreaterThan(0);
+  });
+
+  it("averages profit per unit per product, the discount code shared by price", () => {
+    const db = empty();
+    const sku = db.units.find(
+      (u) => db.units.filter((x) => x.skuId === u.skuId).length >= 2,
+    )!.skuId;
+    const [a, b] = db.units.filter((u) => u.skuId === sku);
+    const cost = costIndex(db);
+    db.orders.push({
+      id: "o-avg",
+      code: "SI-2030/01-000002",
+      ts: IN,
+      customerId: null,
+      serials: [a!.serial, b!.serial],
+      prices: { [a!.serial]: 6_000_000, [b!.serial]: 4_000_000 },
+      discount: 1_000_000,
+      source: "OFFLINE" as never,
+      payMethod: "TUNAI",
+      settled: true,
+      total: 9_000_000,
+    } as MockDb["orders"][number]);
+    const [row] = unitProfits(db, MONTH);
+    const spent = cost(a!).total + cost(b!).total;
+    expect(row!.sold).toBe(2);
+    expect(row!.revenue).toBe(9_000_000);
+    expect(row!.profit).toBe(9_000_000 - spent);
+    expect(row!.perUnit).toBe(Math.round((9_000_000 - spent) / 2));
+  });
+
+  it("gives twelve months, oldest first, each its own statement", () => {
+    const db = structuredClone(getDb());
+    const now = new Date();
+    const months = monthlyProfitLoss(db, now, 12);
+    expect(months).toHaveLength(12);
+    expect(months.at(-1)!.month.getMonth()).toBe(now.getMonth());
+    expect(months.at(-1)!.netProfit).toBe(
+      profitLoss(db, monthPeriod(now)).netProfit,
+    );
   });
 });
