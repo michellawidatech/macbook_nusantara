@@ -1,9 +1,14 @@
 /**
- * The tick — one draft pass, then one send pass, forever.
+ * The tick — a send pass, a draft pass, then a send pass again, forever.
  *
- * Draft before send, deliberately: a reply drafted this tick is sent in the
- * same tick rather than waiting for the next one, which is the difference
- * between a customer waiting two seconds and four.
+ * Draft before the second send, deliberately: a reply drafted this tick is
+ * sent in the same tick rather than waiting for the next one, which is the
+ * difference between a customer waiting two seconds and four.
+ *
+ * And a send FIRST (2026-10-23): what is already queued — a staff reply, the
+ * photos somebody attached — owes nothing to the bot and must never wait
+ * behind its draft. On the Mac mini a model call that hung held the whole
+ * tick, and fourteen outbox rows sat at zero attempts behind it.
  *
  * The loop is a `setTimeout` chain rather than a `setInterval`. An interval
  * fires on a wall clock and will happily start a second tick while the first is
@@ -44,6 +49,15 @@ export interface TickResult {
 export async function tick(deps: TickDeps): Promise<TickResult> {
   const { db, logger, config } = deps;
 
+  const sendDeps = {
+    db,
+    logger,
+    credentials: config.whatsapp,
+    maxSendsPerTick: config.maxSendsPerTick,
+    ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+  };
+  const queued = await sendPass(sendDeps);
+
   const draft = await draftPass({
     db,
     logger,
@@ -62,13 +76,7 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     reservationGraceMs: config.reservationGraceMs,
   });
 
-  const send = await sendPass({
-    db,
-    logger,
-    credentials: config.whatsapp,
-    maxSendsPerTick: config.maxSendsPerTick,
-    ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
-  });
+  const send = await sendPass(sendDeps);
 
   // Third, and last on purpose: the reply is already on the wire, so keeping
   // the thread's note current costs the customer nothing.
@@ -108,8 +116,8 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
   return {
     drafted: draft.drafted,
     escalated: draft.escalated,
-    sent: send.sent,
-    failed: send.failed,
+    sent: queued.sent + send.sent,
+    failed: queued.failed + send.failed,
     summarised: summary.refreshed,
     chunked: memory.chunked,
     embedded: memory.embedded,

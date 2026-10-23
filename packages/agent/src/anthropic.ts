@@ -144,13 +144,28 @@ export function usingOAuth(env: AnthropicEnv): boolean {
  * with no key still gets a working inbox where staff answer by hand, and the
  * chat page says why the bot is quiet instead of showing an error.
  */
+/**
+ * How long one model call may take, and how often it is retried (2026-10-23).
+ * The SDK's own default is ten minutes a try with two retries; on the shop's
+ * Mac mini a call that hung that long held the whole worker tick — staff
+ * replies and photos queued behind it went nowhere for the better part of an
+ * hour. A chat reply that has not come back in a minute is a hand-over anyway.
+ */
+export const ANTHROPIC_TIMEOUT_MS = 60_000;
+export const ANTHROPIC_MAX_RETRIES = 1;
+
 export function anthropicClient(env: AnthropicEnv): Anthropic | null {
   if (!hasCredential(env)) return null;
+  const limits = {
+    timeout: ANTHROPIC_TIMEOUT_MS,
+    maxRetries: ANTHROPIC_MAX_RETRIES,
+  };
   // A Console login: the SDK reads the profile and refreshes its token.
   if (!env.apiKey && !env.authToken && env.profile) {
-    return new Anthropic({ profile: env.profile });
+    return new Anthropic({ profile: env.profile, ...limits });
   }
   return new Anthropic({
+    ...limits,
     ...(env.apiKey ? { apiKey: env.apiKey } : { authToken: env.authToken }),
     ...(usingOAuth(env)
       ? { defaultHeaders: { "anthropic-beta": OAUTH_BETA } }
