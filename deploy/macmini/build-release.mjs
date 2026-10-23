@@ -313,6 +313,7 @@ for (const f of [
   "fix-skus",
   "void-sale",
   "release-unit",
+  "check-consistency",
 ]) {
   chmodSync(join(stage, "ops", f), 0o755);
 }

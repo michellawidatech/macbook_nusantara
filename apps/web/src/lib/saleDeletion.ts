@@ -112,6 +112,36 @@ export function saleRowsOf(
 }
 
 /**
+ * Take one unit off a sale inside a `mutate`: the sale's rows come off its
+ * history (`saleRowsOf`) and the unit takes the status and place of the newest
+ * row left. Used by deleting a sale and by Edit transaction taking a unit off
+ * one — both used to remove only the NEWEST row, so a note written after the
+ * sold row left the unit Sold (owner report 2026-10-23). A unit always keeps
+ * one row; the server holds the same line. Returns false when nothing moved.
+ */
+export function takeUnitOffSale(
+  draft: MockDb,
+  serial: string,
+  code: string,
+): boolean {
+  const gone = new Set(
+    (saleRowsOf(draft.events, serial, code) ?? []).map((e) => e.id),
+  );
+  const left = draft.events
+    .filter((e) => e.serial === serial && !gone.has(e.id))
+    .sort((a, b) => a.seq - b.seq);
+  if (gone.size === 0 || left.length === 0) return false;
+  draft.events = draft.events.filter((e) => !gone.has(e.id));
+  const now = left[left.length - 1]!;
+  const unit = draft.units.find((u) => u.serial === serial);
+  if (unit) {
+    unit.status = now.toStatus as typeof unit.status;
+    unit.locationId = now.locationId;
+  }
+  return true;
+}
+
+/**
  * Delete the sale inside a `mutate`. Returns false (and changes nothing) when
  * `saleDeletionBlock` refuses — the draft may have moved on since the button
  * was drawn.
@@ -131,23 +161,8 @@ export function deleteSale(
   if (order === undefined || saleDeletionBlock(draft, order) !== undefined)
     return false;
 
-  for (const serial of order.serials) {
-    const gone = new Set(
-      (saleRowsOf(draft.events, serial, order.code) ?? []).map((e) => e.id),
-    );
-    const left = draft.events
-      .filter((e) => e.serial === serial && !gone.has(e.id))
-      .sort((a, b) => a.seq - b.seq);
-    // A unit always keeps one row; the server holds the same line.
-    if (gone.size === 0 || left.length === 0) continue;
-    draft.events = draft.events.filter((e) => !gone.has(e.id));
-    const now = left[left.length - 1]!;
-    const unit = draft.units.find((u) => u.serial === serial);
-    if (unit) {
-      unit.status = now.toStatus as typeof unit.status;
-      unit.locationId = now.locationId;
-    }
-  }
+  for (const serial of order.serials)
+    takeUnitOffSale(draft, serial, order.code);
 
   for (const m of draft.stockMoves.filter(
     (x) => x.orderId === orderId && x.type === "TERJUAL",

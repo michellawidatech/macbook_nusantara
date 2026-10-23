@@ -1,0 +1,64 @@
+#!/bin/zsh
+# Read-only: list every unit, sale and discount whose stored state disagrees
+# with the documents behind it (owner question 2026-10-23: "what else is weird
+# or not consistent"). Changes nothing — it runs in a READ ONLY transaction.
+#
+#   sudo -u _nusantara /opt/nusantara/current/ops/check-consistency
+#
+# An empty table under a heading means that check found nothing.
+setopt err_exit no_unset pipe_fail
+
+home=${NUSANTARA_HOME:-/opt/nusantara}
+pgbin=${PG_BIN:-/opt/homebrew/opt/postgresql@16/bin}
+dbname=${NUSANTARA_DB:-nusantara_pos_prod}
+export PGPASSFILE=$home/etc/pgpass
+
+$pgbin/psql --host=127.0.0.1 --username=nusantara --dbname=$dbname \
+  -X -v ON_ERROR_STOP=1 --quiet <<'SQL'
+BEGIN READ ONLY;
+
+\echo '== 1. Unit status or place differs from its newest history row'
+WITH l AS (SELECT DISTINCT ON ("unitId") "unitId", "toStatus" FROM "UnitEvent" ORDER BY "unitId", seq DESC),
+     m AS (SELECT DISTINCT ON ("unitId") "unitId", "toLocationId" FROM "UnitEvent"
+            WHERE "toLocationId" IS NOT NULL ORDER BY "unitId", seq DESC)
+SELECT u.serial, u.status, l."toStatus" AS history_says
+  FROM "Unit" u LEFT JOIN l ON l."unitId" = u.id LEFT JOIN m ON m."unitId" = u.id
+ WHERE u."archivedAt" IS NULL
+   AND (l."toStatus" IS DISTINCT FROM u.status
+        OR (m."toLocationId" IS NOT NULL AND m."toLocationId" <> u."locationId"));
+
+\echo '== 2. Sold, but on no live sale'
+SELECT u.serial FROM "Unit" u
+ WHERE u.status = 'TERJUAL' AND u."archivedAt" IS NULL AND NOT EXISTS (
+   SELECT 1 FROM "OrderItem" i JOIN "Order" o ON o.id = i."orderId"
+    WHERE i."unitId" = u.id AND i."returnedAt" IS NULL AND o.status <> 'BATAL');
+
+\echo '== 3. Still on a live sale, but not Sold'
+SELECT u.serial, u.status, o.code FROM "Unit" u
+  JOIN "OrderItem" i ON i."unitId" = u.id AND i."returnedAt" IS NULL
+  JOIN "Order" o ON o.id = i."orderId" AND o.status <> 'BATAL'
+ WHERE u.status <> 'TERJUAL';
+
+\echo '== 4. Reserved, but no open reservation holds it'
+SELECT u.serial FROM "Unit" u
+ WHERE u.status = 'DIRESERVASI' AND NOT EXISTS (
+   SELECT 1 FROM "ReservationItem" ri JOIN "Reservation" r ON r.id = ri."reservationId"
+    WHERE ri."unitId" = u.id AND ri."removedAt" IS NULL AND r.status = 'TERJADWAL');
+
+\echo '== 5. In service with no open visit, or an open visit on a unit not in service'
+SELECT u.serial, u.status, v.id AS open_visit FROM "Unit" u
+  LEFT JOIN "ServiceVisit" v ON v."unitId" = u.id AND v."closedAt" IS NULL
+ WHERE (u.status = 'SERVIS' AND v.id IS NULL) OR (v.id IS NOT NULL AND u.status <> 'SERVIS');
+
+\echo '== 6. Counted stock below zero'
+SELECT k.name, k."variantLabel", s."locationId", SUM(s.qty) AS on_hand
+  FROM "StockMove" s JOIN "Sku" k ON k.id = s."skuId"
+ GROUP BY 1, 2, 3 HAVING SUM(s.qty) < 0;
+
+\echo '== 7. Discount "used" differs from the live sales that redeemed it'
+SELECT d.code, d.used, COUNT(o.id) FILTER (WHERE o.status <> 'BATAL') AS live_sales
+  FROM "Discount" d LEFT JOIN "Order" o ON o."discountId" = d.id
+ GROUP BY d.id HAVING d.used <> COUNT(o.id) FILTER (WHERE o.status <> 'BATAL');
+
+ROLLBACK;
+SQL

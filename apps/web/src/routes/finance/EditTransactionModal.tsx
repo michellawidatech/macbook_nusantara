@@ -80,12 +80,12 @@ import {
   type SalePayment,
 } from "../../lib/salePayments.js";
 import { diffPayments } from "../../lib/paymentEdits.js";
+import { saleRowsOf, takeUnitOffSale } from "../../lib/saleDeletion.js";
 import {
   appendEvent,
   currentStaffName,
   mutate,
   nextId,
-  removeLastEvent,
   useDb,
 } from "../../mock/store.js";
 import type { Order, OrderFee } from "../../mock/seed.js";
@@ -426,6 +426,21 @@ export function EditTransactionModal({
     const gone = lines
       .map((l) => l.was)
       .filter((s) => s !== "" && !serials.includes(s));
+    // A unit that has moved on since the sale (returned, held, sold again)
+    // cannot simply come off it: its later rows belong to other documents.
+    const movedOn = gone.filter(
+      (s) => saleRowsOf(db.events, s, order.code) === null,
+    );
+    if (movedOn.length > 0) {
+      message.error(
+        t(
+          "editSale.unitMovedOn",
+          "{{serial}} has moved on since this sale, so it cannot be taken off it here.",
+          { serial: movedOn[0]! },
+        ),
+      );
+      return;
+    }
     const added = serials.filter((s) => !lines.some((l) => l.was === s));
     const taken = added.filter((s) => {
       const u = db.units.find((x) => x.serial === s);
@@ -496,7 +511,7 @@ export function EditTransactionModal({
        * said, which for a sold unit is the shelf it was picked from.
        */
       for (const serial of gone) {
-        removeLastEvent(d, serial);
+        takeUnitOffSale(d, serial, o.code);
         delete o.prices[serial];
         if (o.listPrices) delete o.listPrices[serial];
       }

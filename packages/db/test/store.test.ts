@@ -1847,6 +1847,79 @@ describe("a till's commit", () => {
     }
   }, 180_000);
 
+  it("takes a unit off a sale with nothing but the order (2026-10-23): the server puts it back", async () => {
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const historyOf = (serial: string) =>
+      events
+        .filter((e) => e["serial"] === serial)
+        .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const order = (shop["orders"] as Row[]).find((o) => {
+      const serials = o["serials"] as string[];
+      return (
+        serials.length >= 1 &&
+        o["adjustments"] === undefined &&
+        o["refunds"] === undefined &&
+        o["tradeIns"] === undefined &&
+        o["lines"] === undefined &&
+        serials.every((s) => {
+          const h = historyOf(s);
+          return (
+            h.length >= 2 &&
+            h.at(-1)!["type"] === "TERJUAL" &&
+            h.at(-1)!["refCode"] === o["code"]
+          );
+        })
+      );
+    })!;
+    const first = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const sale = decodeRow(
+      "orders",
+      (first["orders"] as Row[]).find((o) => o["id"] === order["id"])!,
+    ) as Row;
+    const serials = sale["serials"] as string[];
+    const off = serials[0]!;
+    const { [off]: offPrice, ...prices } = sale["prices"] as Record<
+      string,
+      number
+    >;
+    const listPrices = sale["listPrices"] as Record<string, number> | undefined;
+    const { [off]: _offList, ...restList } = listPrices ?? {};
+    const after: Row = {
+      ...sale,
+      serials: serials.slice(1),
+      prices,
+      ...(listPrices ? { listPrices: restList } : {}),
+      total: (sale["total"] as number) - offPrice!,
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore({ orders: [sale] }, { orders: [after] }),
+      ),
+    });
+    const prev = historyOf(off).at(-2)!;
+    const u = await db.unit.findUniqueOrThrow({
+      where: { serial: off },
+      select: { id: true, status: true, soldOrderItemId: true },
+    });
+    expect(u.status).toBe(prev["toStatus"]);
+    expect(u.soldOrderItemId).toBeNull();
+    expect(
+      await db.unitEvent.count({
+        where: { unitId: u.id, orderId: order["id"] as string },
+      }),
+    ).toBe(0);
+    // A unit still on the sale keeps its sold row.
+    if (serials[1] !== undefined) {
+      const kept = await db.unit.findUniqueOrThrow({
+        where: { serial: serials[1] },
+        select: { status: true },
+      });
+      expect(kept.status).toBe("TERJUAL");
+    }
+  }, 180_000);
+
   it("corrects a sale (2026-10-22): a unit off, a price changed, an accessory added and taken off", async () => {
     const shop = await loadDemo();
     const events = shop["events"] as Row[];

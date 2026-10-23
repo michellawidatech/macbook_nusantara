@@ -485,11 +485,21 @@ export function ProTable<T extends object>({
                 // component's state and the filtering happens above.
                 filtered: rangeSet(ranges[key]),
                 filterDropdown: ({ close }: { close: () => void }) => (
-                  <Flex vertical gap={SPACE.sm} style={{ padding: SPACE.sm }}>
+                  <Flex
+                    vertical
+                    gap={SPACE.sm}
+                    className="pro-table-date-filter"
+                    style={{ padding: SPACE.sm }}
+                  >
                     <DatePicker.RangePicker
-                      // Inside the dropdown, not in a portal of its own: a
-                      // click on the calendar must not read as a click
-                      // outside the filter, which closes it.
+                      // The calendar is drawn INSIDE the filter, always open,
+                      // in the flow (`.pro-table-date-filter` in global.css)
+                      // — not a popup. As a popup anchored in this narrow
+                      // dropdown it spilled over the sider, covered OK and
+                      // could not be picked from (owner report 2026-10-23).
+                      // In a portal of its own, a click on it would read as
+                      // a click outside the filter, which closes it.
+                      open
                       getPopupContainer={(node) =>
                         node.parentElement ?? document.body
                       }
@@ -502,7 +512,10 @@ export function ProTable<T extends object>({
                         t("proTable.dateUntil", "Until"),
                       ]}
                     />
-                    <Flex justify="space-between">
+                    <Flex
+                      justify="space-between"
+                      className="pro-table-date-filter-actions"
+                    >
                       <Button
                         size="small"
                         type="link"

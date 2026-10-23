@@ -843,6 +843,7 @@ async function syncSaleLines(
       where: { id: sale.id },
       data: { cogs: { decrement: item.cogs } },
     });
+    if (item.unitId) await restoreUnitOffSale(ctx, item.unitId, sale.id);
   }
 }
 
@@ -1173,44 +1174,60 @@ async function cancelSale(ctx: WriteContext, id: string): Promise<void> {
   const unitIds = [
     ...new Set(items.map((i) => i.unitId).filter((u): u is string => !!u)),
   ];
-  for (const unitId of unitIds) {
-    const mine = await tx.unitEvent.findMany({
-      where: { unitId, orderId: id },
-      select: { id: true },
-    });
-    if (mine.length === 0) continue;
-    const total = await tx.unitEvent.count({ where: { unitId } });
-    if (mine.length >= total) continue;
-    const ids = mine.map((e) => e.id);
-    await tx.$queryRaw`SELECT unit_event_drop(${ids}::text[])`;
-    for (const e of ids) {
-      ctx.droppedEvents.add(e);
-      ctx.touch("events", e);
-    }
-    const last = await tx.unitEvent.findFirst({
-      where: { unitId },
-      orderBy: { seq: "desc" },
-      select: { toStatus: true },
-    });
-    const moved = await tx.unitEvent.findFirst({
-      where: { unitId, toLocationId: { not: null } },
-      orderBy: { seq: "desc" },
-      select: { toLocationId: true },
-    });
-    const unit = await tx.unit.update({
-      where: { id: unitId },
-      data: {
-        ...(last ? { status: last.toStatus } : {}),
-        ...(moved?.toLocationId ? { locationId: moved.toLocationId } : {}),
-      },
-      select: { serial: true, status: true, locationId: true },
-    });
-    ctx.touch("units", unit.serial);
-    ctx.ledgerAfter.set(unit.serial, {
-      status: unit.status,
-      locationId: unit.locationId,
-    });
+  for (const unitId of unitIds) await restoreUnitOffSale(ctx, unitId, id);
+}
+
+/**
+ * A unit that has stopped being part of a sale — the sale deleted, or the unit
+ * taken off it by a correction — goes back to what it was before (owner report
+ * 2026-10-23: a deleted sale left C02D503ZM6KJ Sold). Every ledger row naming
+ * the sale comes off — the sold row and any note written after it — and the
+ * unit takes the status and place of its newest remaining row. Done here
+ * whatever the browser sent; `removeEvents` skips a row already dropped. A
+ * unit is never emptied: if the sale's rows are all it has, it is left alone.
+ */
+async function restoreUnitOffSale(
+  ctx: WriteContext,
+  unitId: string,
+  orderId: string,
+): Promise<void> {
+  const { tx } = ctx;
+  const mine = await tx.unitEvent.findMany({
+    where: { unitId, orderId },
+    select: { id: true },
+  });
+  if (mine.length === 0) return;
+  const total = await tx.unitEvent.count({ where: { unitId } });
+  if (mine.length >= total) return;
+  const ids = mine.map((e) => e.id);
+  await tx.$queryRaw`SELECT unit_event_drop(${ids}::text[])`;
+  for (const e of ids) {
+    ctx.droppedEvents.add(e);
+    ctx.touch("events", e);
   }
+  const last = await tx.unitEvent.findFirst({
+    where: { unitId },
+    orderBy: { seq: "desc" },
+    select: { toStatus: true },
+  });
+  const moved = await tx.unitEvent.findFirst({
+    where: { unitId, toLocationId: { not: null } },
+    orderBy: { seq: "desc" },
+    select: { toLocationId: true },
+  });
+  const unit = await tx.unit.update({
+    where: { id: unitId },
+    data: {
+      ...(last ? { status: last.toStatus } : {}),
+      ...(moved?.toLocationId ? { locationId: moved.toLocationId } : {}),
+    },
+    select: { serial: true, status: true, locationId: true },
+  });
+  ctx.touch("units", unit.serial);
+  ctx.ledgerAfter.set(unit.serial, {
+    status: unit.status,
+    locationId: unit.locationId,
+  });
 }
 
 export const orders: Adapter<"orders"> = {

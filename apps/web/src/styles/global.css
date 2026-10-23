@@ -892,3 +892,32 @@ body {
 .ant-table-content {
   overflow-x: auto;
 }
+
+/*
+ * A table header's date-range filter (ProTable `dateRange`): the calendar is
+ * part of the filter, in the flow below the From/Until box, not a popup laid
+ * over the page (owner report 2026-10-23 — a popup anchored in the narrow
+ * filter dropdown spilled over the sider, hid OK and could not be clicked).
+ * `!important` because rc-trigger writes the popup's position inline.
+ */
+.pro-table-date-filter .ant-picker-dropdown {
+  position: static !important;
+  inset: auto !important;
+  transform: none !important;
+  padding: 0;
+  z-index: auto;
+  /* Keep the whole two-month panel inside the screen. */
+  max-width: calc(100vw - 32px);
+  overflow-x: auto;
+  /* Under the From/Until box, above Reset / OK (it is mounted last). */
+  order: 1;
+}
+.pro-table-date-filter > .pro-table-date-filter-actions {
+  order: 2;
+}
+.pro-table-date-filter .ant-picker-dropdown .ant-picker-range-arrow {
+  display: none;
+}
+.pro-table-date-filter .ant-picker-panel-container {
+  box-shadow: none;
+}
