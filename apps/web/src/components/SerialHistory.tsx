@@ -238,6 +238,12 @@ export function SerialHistory({
           "This unit is still on {{code}}. Delete the transaction in Transaction History instead.",
           { code: e.refCode ?? "" },
         );
+      case "DOCUMENT_ROW":
+        return t(
+          "snTracking.deleteDocumentRow",
+          "The unit's current status rests on this row ({{code}}). Undo it from its own screen — the return, the reservation or the service bench.",
+          { code: e.refCode ?? "" },
+        );
       default:
         return undefined;
     }

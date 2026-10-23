@@ -33,7 +33,9 @@
  * `test/saleDeletion.test.ts` is the spec.
  */
 import type { MockDb, Order } from "../mock/seed.js";
+import { newestRowOwnedByDocument } from "@nusantara/domain";
 import { isSaleLocked } from "./bookClose.js";
+import { reprojectHolds } from "./reservations.js";
 
 export type SaleDeletionBlock =
   "BOOKS_CLOSED" | "RETURNED" | "TRADE_IN" | "UNIT_MOVED" | "LINKED_MONEY";
@@ -138,6 +140,8 @@ export function takeUnitOffSale(
     unit.status = now.toStatus as typeof unit.status;
     unit.locationId = now.locationId;
   }
+  // Sold out of a hold: back at DIRESERVASI, the hold is holding again.
+  reprojectHolds(draft, [serial]);
   return true;
 }
 
@@ -190,7 +194,7 @@ export function deleteSale(
   return true;
 }
 
-export type HistoryRowBlock = "ONLY_ROW" | "LIVE_SALE";
+export type HistoryRowBlock = "ONLY_ROW" | "LIVE_SALE" | "DOCUMENT_ROW";
 
 /**
  * Why one row of a unit's history cannot be deleted (owner ask 2026-10-22:
@@ -210,14 +214,14 @@ export function historyRowBlock(
   db: Pick<MockDb, "events" | "orders">,
   event: MockDb["events"][number],
 ): HistoryRowBlock | undefined {
-  const rows = db.events.filter((e) => e.serial === event.serial).length;
-  if (rows < 2) return "ONLY_ROW";
+  const mine = db.events
+    .filter((e) => e.serial === event.serial)
+    .sort((a, b) => a.seq - b.seq);
+  if (mine.length < 2) return "ONLY_ROW";
   if (event.type === "TERJUAL") {
-    const sale = db.orders.find(
-      (o) =>
-        (event.refCode === undefined || o.code === event.refCode) &&
-        o.serials.includes(event.serial),
-    );
+    // Any sale still carrying the unit — an exchange's replacement names the
+    // return's SG code, not the sale's, and must count too (audit 2026-10-23).
+    const sale = db.orders.find((o) => o.serials.includes(event.serial));
     if (sale !== undefined) {
       // Still on THIS sale only if no later row brought it back.
       const later = db.events.some(
@@ -229,5 +233,16 @@ export function historyRowBlock(
       if (!later) return "LIVE_SALE";
     }
   }
+  // The newest row a return, hold, claim or service visit stands on.
+  const i = mine.findIndex((e) => e.id === event.id);
+  if (
+    i === mine.length - 1 &&
+    newestRowOwnedByDocument({
+      type: event.type,
+      fromStatus: i > 0 ? mine[i - 1]!.toStatus : null,
+      toStatus: event.toStatus,
+    })
+  )
+    return "DOCUMENT_ROW";
   return undefined;
 }

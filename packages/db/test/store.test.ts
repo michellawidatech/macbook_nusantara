@@ -1920,6 +1920,247 @@ describe("a till's commit", () => {
     }
   }, 180_000);
 
+  it("takes a customer return back (2026-10-23): the adjustment is withdrawn, the line reopens, the unit is the sale's again", async () => {
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const historyOf = (serial: string) =>
+      events
+        .filter((e) => e["serial"] === serial)
+        .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const order = (shop["orders"] as Row[]).find((o) => {
+      const serials = o["serials"] as string[];
+      return (
+        serials.length >= 1 &&
+        o["adjustments"] === undefined &&
+        o["refunds"] === undefined &&
+        o["tradeIns"] === undefined &&
+        o["lines"] === undefined &&
+        serials.every((s) => {
+          const h = historyOf(s);
+          return (
+            h.length >= 2 &&
+            h.at(-1)!["type"] === "TERJUAL" &&
+            h.at(-1)!["refCode"] === o["code"]
+          );
+        })
+      );
+    })!;
+    const decoded = (snap: Record<string, unknown>, c: string) =>
+      (snap[c] as Row[]).map((r) => decodeRow(c as never, r) as Row);
+    let snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const sale = decoded(snap, "orders").find((o) => o["id"] === order["id"])!;
+    const serial = (sale["serials"] as string[])[0]!;
+    const price = (sale["prices"] as Record<string, number>)[serial]!;
+    const unit = decoded(snap, "units").find((u) => u["serial"] === serial)!;
+    const sold = decoded(snap, "events")
+      .filter((e) => e["serial"] === serial)
+      .sort((a, b) => (a["seq"] as number) - (b["seq"] as number))
+      .at(-1)!;
+    const code = "SG-2026/10-Tundo123";
+    const at = new Date(Date.now() + 60_000).toISOString();
+
+    // The return.
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [sale], returns: [], units: [unit], events: [] },
+          {
+            orders: [
+              {
+                ...sale,
+                adjustments: [
+                  {
+                    id: "adj_undo_test",
+                    type: "RETUR",
+                    code,
+                    amount: price,
+                    reason: `Returned ${serial}`,
+                    at,
+                  },
+                ],
+              },
+            ],
+            returns: [
+              {
+                id: "r_undo_test",
+                code,
+                kind: "CUSTOMER",
+                serial,
+                reason: "Rusak",
+                date: at.slice(0, 10),
+                status: "ARRIVED",
+              },
+            ],
+            units: [{ ...unit, status: "TERSEDIA" }],
+            events: [
+              {
+                id: "ev_undo_ret",
+                serial,
+                seq: (sold["seq"] as number) + 1,
+                type: "RETUR_PELANGGAN",
+                at,
+                fromStatus: "TERJUAL",
+                toStatus: "TERSEDIA",
+                locationId: sold["locationId"],
+                note: "Returned",
+                refCode: code,
+                staff: "Michella",
+              },
+            ],
+          },
+        ),
+      ),
+    });
+    const closed = await db.orderItem.findFirstOrThrow({
+      where: { orderId: order["id"] as string, unit: { serial } },
+    });
+    expect(closed.returnReason).toBe("Retur pelanggan");
+
+    // The undo, exactly as Returns → Delete writes it.
+    snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const sale2 = decoded(snap, "orders").find((o) => o["id"] === order["id"])!;
+    const ret2 = decoded(snap, "returns").find(
+      (r) => r["id"] === "r_undo_test",
+    )!;
+    const unit2 = decoded(snap, "units").find((u) => u["serial"] === serial)!;
+    const realCode = ret2["code"] as string;
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [sale2], returns: [ret2], units: [unit2], events: [] },
+          {
+            orders: [{ ...sale2, adjustments: undefined }],
+            returns: [{ ...ret2, status: "CANCELLED" }],
+            units: [{ ...unit2, status: "TERJUAL" }],
+            events: [
+              {
+                id: "ev_undo_back",
+                serial,
+                seq: (sold["seq"] as number) + 2,
+                type: "KOREKSI",
+                at: new Date(Date.now() + 120_000).toISOString(),
+                fromStatus: "TERSEDIA",
+                toStatus: "TERJUAL",
+                locationId: sold["locationId"],
+                note: `Return ${realCode} taken back`,
+                refCode: realCode,
+                staff: "Michella",
+              },
+            ],
+          },
+        ),
+      ),
+    });
+    const line = await db.orderItem.findUniqueOrThrow({
+      where: { id: closed.id },
+    });
+    expect(line.returnedAt).toBeNull();
+    expect(line.returnReason).toBeNull();
+    const u = await db.unit.findUniqueOrThrow({
+      where: { serial },
+      select: { status: true, soldOrderItemId: true },
+    });
+    expect(u.status).toBe("TERJUAL");
+    expect(u.soldOrderItemId).toBe(closed.id);
+    const adj = await db.orderAdjustment.findUniqueOrThrow({
+      where: { id: "adj_undo_test" },
+    });
+    expect(adj.amount).toBe(0n);
+    // Gone from what the tills read.
+    snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const reread = decoded(snap, "orders").find(
+      (o) => o["id"] === order["id"],
+    )!;
+    expect(reread["adjustments"]).toBeUndefined();
+  }, 180_000);
+
+  it("refuses a unit off the shelf on a sale, and a hold's row in history (2026-10-23)", async () => {
+    await loadDemo();
+    let snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const decoded = (c: string) =>
+      (snap[c] as Row[]).map((r) => decodeRow(c as never, r) as Row);
+    const sale = decoded("orders").find(
+      (o) =>
+        (o["serials"] as string[]).length >= 1 &&
+        o["lines"] === undefined &&
+        o["adjustments"] === undefined,
+    )!;
+    const inQc = decoded("units").find(
+      (u) =>
+        u["status"] !== "TERSEDIA" &&
+        u["status"] !== "TERJUAL" &&
+        u["status"] !== "DIRESERVASI",
+    )!;
+    expect(inQc).toBeDefined();
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { orders: [sale] },
+            {
+              orders: [
+                {
+                  ...sale,
+                  serials: [...(sale["serials"] as string[]), inQc["serial"]],
+                  prices: {
+                    ...(sale["prices"] as Record<string, number>),
+                    [inQc["serial"] as string]: 1_000_000,
+                  },
+                  total: (sale["total"] as number) + 1_000_000,
+                },
+              ],
+            },
+          ),
+        ),
+      }),
+    ).rejects.toThrow(/tidak tersedia untuk dijual/);
+
+    // A hold row on top of a unit's history goes with its hold, not here.
+    const unit = decoded("units").find((u) => u["status"] === "TERSEDIA")!;
+    const last = decoded("events")
+      .filter((e) => e["serial"] === unit["serial"])
+      .sort((a, b) => (a["seq"] as number) - (b["seq"] as number))
+      .at(-1)!;
+    const hold = {
+      id: "ev_hold_doc",
+      serial: unit["serial"],
+      seq: (last["seq"] as number) + 1,
+      type: "DIRESERVASI",
+      at: new Date().toISOString(),
+      fromStatus: "TERSEDIA",
+      toStatus: "DIRESERVASI",
+      locationId: last["locationId"],
+      note: "Held",
+      staff: "Michella",
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { units: [unit], events: [] },
+          { units: [{ ...unit, status: "DIRESERVASI" }], events: [hold] },
+        ),
+      ),
+    });
+    snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const held = decoded("units").find((u) => u["serial"] === unit["serial"])!;
+    const row = decoded("events").find((e) => e["id"] === "ev_hold_doc")!;
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { units: [held], events: [row] },
+            { units: [{ ...held, status: "TERSEDIA" }], events: [] },
+          ),
+        ),
+      }),
+    ).rejects.toThrow(/milik dokumennya/);
+  }, 180_000);
+
   it("corrects a sale (2026-10-22): a unit off, a price changed, an accessory added and taken off", async () => {
     const shop = await loadDemo();
     const events = shop["events"] as Row[];

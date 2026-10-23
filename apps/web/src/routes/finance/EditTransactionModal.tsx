@@ -454,6 +454,23 @@ export function EditTransactionModal({
       );
       return;
     }
+    // Only a unit on the shelf can be added here: one in QC, held for a
+    // customer, in service or gone back to its supplier belongs to that
+    // document first (audit 2026-10-23). The server refuses the same.
+    const offShelf = added.filter((s) => {
+      const u = db.units.find((x) => x.serial === s);
+      return u !== undefined && u.status !== "TERSEDIA";
+    });
+    if (offShelf.length > 0) {
+      message.error(
+        t(
+          "editSale.notOnShelf",
+          "{{serial}} is not on the shelf, so it cannot be added to a sale.",
+          { serial: offShelf[0]! },
+        ),
+      );
+      return;
+    }
 
     const countedKept = counted.filter(
       (c) => c.skuId !== undefined && c.qty > 0,

@@ -108,6 +108,8 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       { path: "/finance/receivable", label: "Receivable" },
       { path: "/finance/payable", label: "Payable" },
       { path: "/finance/income-expense", label: "Income & Expense" },
+      // Laba Rugi, after Olsera's template (owner ask 2026-10-23).
+      { path: "/finance/profit-loss", label: "Profit & Loss" },
     ],
   },
   {

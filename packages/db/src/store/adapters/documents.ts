@@ -722,6 +722,13 @@ type Sale = RowOf<"orders">;
 const CORRECTED = "Dikoreksi";
 
 /**
+ * A RETUR adjustment whose return was taken back (2026-10-23). Kept, at zero,
+ * because the app cannot delete it; filtered out of every reading.
+ */
+const WITHDRAWN = "Retur dibatalkan";
+const NOT_WITHDRAWN = { NOT: { reason: { startsWith: WITHDRAWN } } };
+
+/**
  * "Not closed by a correction" as a Prisma filter. ⚠️ Not `NOT: { returnReason:
  * CORRECTED }`: SQL's `NOT (x = 'y')` is NULL when x is NULL, so that drops
  * every ordinary line — whose reason is null — along with the corrected ones.
@@ -788,6 +795,29 @@ async function syncSaleLines(
         });
       }
       continue;
+    }
+    // Only a unit on the shelf (or held for this customer) can go on a sale
+    // (audit 2026-10-23: Edit transaction took a unit still in QC, in
+    // service or gone back to its supplier). Judged by its newest ledger row
+    // BEFORE this commit — events are written after orders, and the unit's
+    // own column may already carry the browser's TERJUAL.
+    if (ctx.mode !== "import") {
+      const last = await tx.unitEvent.findFirst({
+        where: { unitId: unit.id },
+        orderBy: { seq: "desc" },
+        select: { toStatus: true },
+      });
+      if (
+        last !== null &&
+        last.toStatus !== "TERSEDIA" &&
+        last.toStatus !== "DIRESERVASI"
+      ) {
+        throw new StoreValidationError(
+          `Unit ${serial} tidak tersedia untuk dijual (${last.toStatus}).`,
+          "orders",
+          sale.id,
+        );
+      }
     }
     // A machine can be on one open receipt at a time. Its earlier line is
     // closed: the machine came back and is being sold again.
@@ -900,6 +930,13 @@ async function syncCountedLines(ctx: WriteContext, sale: Sale): Promise<void> {
         await tx.orderItem.updateMany({
           where: { id: l.id, returnedAt: null },
           data: { returnedAt: ctx.now },
+        });
+      } else {
+        // A return taken back (2026-10-23): nothing is out any more, so the
+        // line is open again — left closed, the sale could never be deleted.
+        await tx.orderItem.updateMany({
+          where: { id: l.id, returnReason: "Retur pelanggan" },
+          data: { returnedAt: null, returnReason: null },
         });
       }
       continue;
@@ -1030,7 +1067,7 @@ async function syncOrderAdjustments(
 ): Promise<void> {
   const { tx } = ctx;
   const existing = await tx.orderAdjustment.findMany({
-    where: { orderId: sale.id },
+    where: { orderId: sale.id, ...NOT_WITHDRAWN },
   });
   const left = new Map(existing.map((a) => [a.id, a]));
   for (const a of sale.adjustments ?? []) {
@@ -1050,12 +1087,25 @@ async function syncOrderAdjustments(
       });
     }
   }
-  if (left.size > 0) {
-    throw new StoreValidationError(
-      "Penyesuaian penjualan tidak bisa dihapus.",
-      "orders",
-      sale.id,
-    );
+  // A return taken back (audit 2026-10-23: the undo was refused here every
+  // time). The app holds no DELETE on this table, so the row is WITHDRAWN —
+  // amount 0, what it was kept in its reason — and projected nowhere. Any
+  // other adjustment that disappears is still refused.
+  for (const a of left.values()) {
+    if (a.type !== "RETUR" || a.code === null) {
+      throw new StoreValidationError(
+        "Penyesuaian penjualan tidak bisa dihapus.",
+        "orders",
+        sale.id,
+      );
+    }
+    await tx.orderAdjustment.update({
+      where: { id: a.id },
+      data: {
+        amount: 0n,
+        reason: `${WITHDRAWN} (${a.amount.toString()}): ${a.reason}`,
+      },
+    });
   }
 }
 
@@ -1090,7 +1140,7 @@ async function cancelSale(ctx: WriteContext, id: string): Promise<void> {
       status: true,
       _count: {
         select: {
-          adjustments: true,
+          adjustments: { where: NOT_WITHDRAWN },
           expenses: true,
           incomes: true,
           tradeIns: { where: { removedAt: null } },
@@ -1228,6 +1278,25 @@ async function restoreUnitOffSale(
     status: unit.status,
     locationId: unit.locationId,
   });
+  // Sold out of a hold: the hold had closed as collected, and with the unit
+  // back at DIRESERVASI it is holding again (audit 2026-10-23 — otherwise the
+  // unit is held by a finished reservation nobody can release).
+  if (unit.status === "DIRESERVASI") {
+    const holds = await tx.reservation.findMany({
+      where: {
+        status: "SELESAI",
+        items: { some: { unitId, removedAt: null } },
+      },
+      select: { id: true },
+    });
+    for (const h of holds) {
+      await tx.reservation.update({
+        where: { id: h.id },
+        data: { status: "TERJADWAL" },
+      });
+      ctx.touch("reservations", h.id);
+    }
+  }
 }
 
 export const orders: Adapter<"orders"> = {
@@ -1257,7 +1326,10 @@ export const orders: Adapter<"orders"> = {
           orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
           include: { method: { select: { code: true } } },
         },
-        adjustments: { orderBy: [{ at: "asc" }, { id: "asc" }] },
+        adjustments: {
+          where: NOT_WITHDRAWN,
+          orderBy: [{ at: "asc" }, { id: "asc" }],
+        },
         payMethod: { select: { code: true } },
       },
     });

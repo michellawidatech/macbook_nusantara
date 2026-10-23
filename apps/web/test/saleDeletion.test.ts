@@ -8,6 +8,7 @@ import {
   deleteSale,
   historyRowBlock,
   saleDeletionBlock,
+  takeUnitOffSale,
 } from "../src/lib/saleDeletion.js";
 import { endOfMonth, isBookClosed } from "../src/lib/bookClose.js";
 import { appendEvent, getDb, removeEvent } from "../src/mock/store.js";
@@ -261,5 +262,76 @@ describe("deleting one row of a unit's history", () => {
     const now = db.units.find((u) => u.serial === unit.serial)!;
     expect(now.status).toBe(prev.toStatus);
     expect(now.locationId).toBe(prev.locationId);
+  });
+});
+
+describe("the rows a document stands on (audit 2026-10-23)", () => {
+  const shelfUnit = (db: MockDb) =>
+    db.units.find(
+      (u) => u.status === "TERSEDIA" && historyOf(db, u.serial).length >= 2,
+    )!;
+
+  it("keeps the newest hold row; a middle one may go", () => {
+    const db = copy();
+    const unit = shelfUnit(db);
+    appendEvent(
+      db,
+      unit.serial,
+      { type: "DIRESERVASI", toStatus: "DIRESERVASI", refCode: "RV-X" },
+      "Test",
+    );
+    const hold = historyOf(db, unit.serial).at(-1)!;
+    expect(historyRowBlock(db, hold)).toBe("DOCUMENT_ROW");
+    appendEvent(db, unit.serial, { type: "DICATAT", note: "a note" }, "Test");
+    expect(historyRowBlock(db, hold)).toBeUndefined();
+  });
+
+  it("keeps an exchange replacement's sold row, which names the return", () => {
+    const db = copy();
+    const sale = plainSale(db);
+    const unit = shelfUnit(db);
+    sale.serials.push(unit.serial);
+    appendEvent(
+      db,
+      unit.serial,
+      { type: "TERJUAL", toStatus: "TERJUAL", refCode: "SG-X" },
+      "Test",
+    );
+    expect(historyRowBlock(db, historyOf(db, unit.serial).at(-1)!)).toBe(
+      "LIVE_SALE",
+    );
+  });
+
+  it("a unit sold out of a hold and taken off the sale is held again", () => {
+    const db = copy();
+    const unit = shelfUnit(db);
+    appendEvent(
+      db,
+      unit.serial,
+      { type: "DIRESERVASI", toStatus: "DIRESERVASI", refCode: "RV-X" },
+      "Test",
+    );
+    appendEvent(
+      db,
+      unit.serial,
+      { type: "TERJUAL", toStatus: "TERJUAL", refCode: "SI-X" },
+      "Test",
+    );
+    db.reservations.push({
+      id: "res-x",
+      code: "RV-X",
+      customerId: db.customers[0]!.id,
+      when: "2026-10-23T05:00:00.000Z",
+      note: "",
+      items: [{ id: "ri-x", serial: unit.serial }],
+      status: "DONE",
+    });
+    expect(takeUnitOffSale(db, unit.serial, "SI-X")).toBe(true);
+    expect(db.units.find((u) => u.serial === unit.serial)!.status).toBe(
+      "DIRESERVASI",
+    );
+    expect(db.reservations.find((r) => r.id === "res-x")!.status).toBe(
+      "ACTIVE",
+    );
   });
 });

@@ -46,6 +46,7 @@
  * happened from 2026-09-23 to 2026-09-24, behind a gate in `commit.ts` that
  * refused the renamed rows first: every serial correction was "Not saved".
  */
+import { newestRowOwnedByDocument } from "@nusantara/domain";
 import { deepEqual } from "@nusantara/store";
 import type { Prisma, Tx } from "../../client.js";
 import { StoreValidationError } from "../errors.js";
@@ -679,6 +680,9 @@ export const events: Adapter<"events"> = {
 
     const data: Prisma.UnitEventCreateManyInput[] = [];
     const returned: { unitId: string; at: Date }[] = [];
+    // A customer return taken back (2026-10-23): the unit goes back out to
+    // the customer, so the receipt line the return closed opens again.
+    const unreturned: string[] = [];
     for (const [serial, list] of bySerial) {
       const unitId = unitIdOf.get(serial);
       if (unitId === undefined) {
@@ -728,6 +732,14 @@ export const events: Adapter<"events"> = {
         });
         if (e.type === "RETUR_PELANGGAN")
           returned.push({ unitId, at: instantOf(e.at) });
+        if (
+          e.type === "KOREKSI" &&
+          e.toStatus === "TERJUAL" &&
+          status !== "TERJUAL" &&
+          e.refCode !== undefined &&
+          e.refCode.startsWith("SG-")
+        )
+          unreturned.push(unitId);
         seq = e.seq;
         status = e.toStatus;
         location = e.locationId;
@@ -767,6 +779,37 @@ export const events: Adapter<"events"> = {
         where: { id: unitId, soldOrderItemId: { in: ids } },
         data: { soldOrderItemId: null },
       });
+    }
+    // The undo of a return: the newest line a return closed opens again and
+    // the unit is that sale's once more — only while nothing else has it.
+    for (const unitId of unreturned) {
+      const open = await tx.orderItem.count({
+        where: {
+          unitId,
+          returnedAt: null,
+          order: { status: { not: "BATAL" } },
+        },
+      });
+      if (open > 0) continue;
+      const line = await tx.orderItem.findFirst({
+        where: {
+          unitId,
+          returnReason: "Retur pelanggan",
+          order: { status: { not: "BATAL" } },
+        },
+        orderBy: { returnedAt: "desc" },
+        select: { id: true, orderId: true },
+      });
+      if (line === null) continue;
+      await tx.orderItem.update({
+        where: { id: line.id },
+        data: { returnedAt: null, returnedQty: 0, returnReason: null },
+      });
+      await tx.unit.update({
+        where: { id: unitId },
+        data: { soldOrderItemId: line.id },
+      });
+      ctx.touch("orders", line.orderId);
     }
   },
 };
@@ -839,6 +882,8 @@ async function removeEvents(
       serial: true,
       type: true,
       orderId: true,
+      fromStatus: true,
+      toStatus: true,
     },
   });
   const found = new Map(rows.map((r) => [r.id, r]));
@@ -860,10 +905,21 @@ async function removeEvents(
   // A live sale's sold row. The orders adapter runs first in a commit, so a
   // sale deleted in the same save is already off the unit here.
   for (const row of rows) {
-    if (row.type !== "TERJUAL" || row.orderId === null) continue;
+    if (row.type !== "TERJUAL") continue;
+    // An exchange's replacement names the return, not the sale (orderId
+    // null), so the test is any live sale still carrying the unit with no
+    // customer return after this row (audit 2026-10-23).
+    const backAfter = await tx.unitEvent.count({
+      where: {
+        unitId: row.unitId,
+        seq: { gt: row.seq },
+        type: "RETUR_PELANGGAN",
+      },
+    });
+    if (backAfter > 0) continue;
     const live = await tx.orderItem.findFirst({
       where: {
-        orderId: row.orderId,
+        ...(row.orderId !== null ? { orderId: row.orderId } : {}),
         unitId: row.unitId,
         returnedAt: null,
         order: { status: { not: "BATAL" } },
@@ -893,6 +949,22 @@ async function removeEvents(
         `Unit ${entry.serial} harus punya riwayat.`,
         "events",
         entry.serial,
+      );
+    }
+    // The newest row a return, hold, claim or service visit stands on is
+    // undone from its own screen, never deleted here (newestRowOwnedByDocument).
+    const top = rows.find(
+      (r) => r.unitId === unitId && r.seq === lasts.get(unitId)?.seq,
+    );
+    if (
+      top !== undefined &&
+      top.type !== "TERJUAL" &&
+      newestRowOwnedByDocument(top)
+    ) {
+      throw new StoreValidationError(
+        `Riwayat terakhir ${entry.serial} milik dokumennya (${top.type}) — batalkan dari layarnya.`,
+        "events",
+        top.id,
       );
     }
     if (entry.seqs.includes(lasts.get(unitId)?.seq ?? -1))
