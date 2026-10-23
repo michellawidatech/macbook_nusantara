@@ -311,6 +311,7 @@ for (const f of [
   "setup-staging",
   "reset-transactions",
   "fix-skus",
+  "void-sale",
 ]) {
   chmodSync(join(stage, "ops", f), 0o755);
 }
