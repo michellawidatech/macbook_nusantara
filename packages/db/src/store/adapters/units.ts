@@ -649,6 +649,8 @@ export const events: Adapter<"events"> = {
             r.key,
           );
         }
+        // Already taken off by a sale's deletion earlier in this commit.
+        if (ctx.droppedEvents.has(r.key)) continue;
         dropped.push({ id: r.key, serial: r.base.serial });
         continue;
       }

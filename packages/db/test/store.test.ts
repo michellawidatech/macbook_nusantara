@@ -1790,6 +1790,63 @@ describe("a till's commit", () => {
     ).toBe(false);
   }, 180_000);
 
+  it("deletes a sale with nothing but the order (2026-10-23): the server puts its units back", async () => {
+    // Owner report: a deleted sale left C02D503ZM6KJ Sold. A browser that
+    // sends only the order's removal must still get the unit back on the shelf
+    // and its sold row gone.
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const historyOf = (serial: string) =>
+      events
+        .filter((e) => e["serial"] === serial)
+        .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const order = (shop["orders"] as Row[]).find((o) => {
+      const serials = o["serials"] as string[];
+      return (
+        serials.length > 0 &&
+        o["adjustments"] === undefined &&
+        o["refunds"] === undefined &&
+        o["tradeIns"] === undefined &&
+        o["lines"] === undefined &&
+        serials.every((s) => {
+          const h = historyOf(s);
+          return (
+            h.length >= 2 &&
+            h.at(-1)!["type"] === "TERJUAL" &&
+            h.at(-1)!["refCode"] === o["code"]
+          );
+        })
+      );
+    })!;
+    const serials = order["serials"] as string[];
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(diffStore({ orders: [order] }, { orders: [] })),
+    });
+    for (const s of serials) {
+      const prev = historyOf(s).at(-2)!;
+      const u = await db.unit.findUniqueOrThrow({
+        where: { serial: s },
+        select: { status: true, soldOrderItemId: true, id: true },
+      });
+      expect(u.status).toBe(prev["toStatus"]);
+      expect(u.soldOrderItemId).toBeNull();
+      expect(
+        await db.unitEvent.count({
+          where: { unitId: u.id, orderId: order["id"] as string },
+        }),
+      ).toBe(0);
+    }
+    // The projection agrees: no sold row left, status off the last row.
+    const reread = (await snapshotStore(db, { staffId: ACTOR })).db;
+    for (const s of serials) {
+      const rows = (reread["events"] as Row[]).filter((e) => e["serial"] === s);
+      expect(rows.some((e) => e["refCode"] === order["code"])).toBe(false);
+      const unit = (reread["units"] as Row[]).find((u) => u["serial"] === s)!;
+      expect(unit["status"]).not.toBe("TERJUAL");
+    }
+  }, 180_000);
+
   it("corrects a sale (2026-10-22): a unit off, a price changed, an accessory added and taken off", async () => {
     const shop = await loadDemo();
     const events = shop["events"] as Row[];

@@ -69,13 +69,7 @@ export function saleDeletionBlock(
     return "RETURNED";
   if ((order.tradeIns?.length ?? 0) > 0) return "TRADE_IN";
   for (const serial of order.serials) {
-    const last = lastEventOf(db.events, serial);
-    if (
-      last === undefined ||
-      last.type !== "TERJUAL" ||
-      (last.refCode !== undefined && last.refCode !== order.code)
-    )
-      return "UNIT_MOVED";
+    if (saleRowsOf(db.events, serial, order.code) === null) return "UNIT_MOVED";
   }
   if (
     db.expenses.some((e) => e.orderId === order.id) ||
@@ -85,13 +79,36 @@ export function saleDeletionBlock(
   return undefined;
 }
 
-function lastEventOf(events: MockDb["events"], serial: string) {
-  let last: MockDb["events"][number] | undefined;
-  for (const e of events) {
-    if (e.serial === serial && (last === undefined || e.seq > last.seq))
-      last = e;
+/**
+ * The rows of a unit's history that belong to this sale — its sold row and
+ * anything written under the sale's code after it (a payout's note) — or
+ * null when the unit has moved on since: a row from any OTHER document after
+ * the sold row (a return, a reservation, another sale). Owner report
+ * 2026-10-23: deleting a sale must always put its unit back, and a payout
+ * note after the sale used to make it look "moved".
+ */
+export function saleRowsOf(
+  events: MockDb["events"],
+  serial: string,
+  code: string,
+): MockDb["events"] | null {
+  const mine = events
+    .filter((e) => e.serial === serial)
+    .sort((a, b) => a.seq - b.seq);
+  let sold = -1;
+  for (let i = mine.length - 1; i >= 0; i -= 1) {
+    const e = mine[i]!;
+    if (
+      e.type === "TERJUAL" &&
+      (e.refCode === undefined || e.refCode === code)
+    ) {
+      sold = i;
+      break;
+    }
   }
-  return last;
+  if (sold < 0) return null;
+  if (mine.slice(sold + 1).some((e) => e.refCode !== code)) return null;
+  return mine.filter((e, i) => i === sold || (i > sold && e.refCode === code));
 }
 
 /**
@@ -115,13 +132,16 @@ export function deleteSale(
     return false;
 
   for (const serial of order.serials) {
-    const mine = draft.events
-      .filter((e) => e.serial === serial)
+    const gone = new Set(
+      (saleRowsOf(draft.events, serial, order.code) ?? []).map((e) => e.id),
+    );
+    const left = draft.events
+      .filter((e) => e.serial === serial && !gone.has(e.id))
       .sort((a, b) => a.seq - b.seq);
-    const sold = mine[mine.length - 1];
-    if (sold === undefined || mine.length < 2) continue;
-    draft.events = draft.events.filter((e) => e.id !== sold.id);
-    const now = mine[mine.length - 2]!;
+    // A unit always keeps one row; the server holds the same line.
+    if (gone.size === 0 || left.length === 0) continue;
+    draft.events = draft.events.filter((e) => !gone.has(e.id));
+    const now = left[left.length - 1]!;
     const unit = draft.units.find((u) => u.serial === serial);
     if (unit) {
       unit.status = now.toStatus as typeof unit.status;

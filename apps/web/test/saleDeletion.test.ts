@@ -66,6 +66,42 @@ describe("deleting a sale", () => {
     }
   });
 
+  it("takes every row the sale wrote, even one after the sold row (2026-10-23)", () => {
+    // Owner report: a deleted sale left C02D503ZM6KJ Sold — a note the sale
+    // wrote after the sold row hid the sold row from the delete.
+    const db = copy();
+    db.settings = { ...db.settings, booksClosedAt: "" };
+    const sale = plainSale(db);
+    const serial = sale.serials[0]!;
+    const before = historyOf(db, serial).at(-2)!;
+    appendEvent(
+      db,
+      serial,
+      { type: "DICATAT", note: "payout", refCode: sale.code },
+      "Test",
+    );
+    expect(saleDeletionBlock(db, sale)).toBeUndefined();
+    expect(deleteSale(db, sale.id, opts())).toBe(true);
+    const unit = db.units.find((u) => u.serial === serial)!;
+    expect(unit.status).toBe(before.toStatus);
+    expect(historyOf(db, serial).some((e) => e.refCode === sale.code)).toBe(
+      false,
+    );
+  });
+
+  it("refuses when another document wrote on the unit after the sale", () => {
+    const db = copy();
+    db.settings = { ...db.settings, booksClosedAt: "" };
+    const sale = plainSale(db);
+    appendEvent(
+      db,
+      sale.serials[0]!,
+      { type: "DICATAT", note: "elsewhere", refCode: "SG-X" },
+      "Test",
+    );
+    expect(saleDeletionBlock(db, sale)).toBe("UNIT_MOVED");
+  });
+
   it("puts a counted piece back with an opposite move, never by removing the sale's", () => {
     const db = copy();
     db.settings = { ...db.settings, booksClosedAt: "" };

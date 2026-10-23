@@ -112,6 +112,12 @@ export class WriteContext {
     string,
     { status: string; locationId: string }
   >();
+  /**
+   * Ledger rows a sale's deletion already took off (`cancelSale`, 2026-10-23),
+   * so the events adapter does not refuse the browser's removal of the same
+   * rows as "not found" later in the commit.
+   */
+  readonly droppedEvents = new Set<string>();
   /** Units whose row this commit wrote, to be checked against their ledger. */
   readonly unitsWritten = new Set<string>();
   /** Serials archived by this commit; their events' removal is not a ledger edit. */

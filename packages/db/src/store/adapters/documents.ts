@@ -1137,7 +1137,7 @@ async function cancelSale(ctx: WriteContext, id: string): Promise<void> {
 
   const items = await tx.orderItem.findMany({
     where: { orderId: id },
-    select: { id: true, qty: true },
+    select: { id: true, qty: true, unitId: true },
   });
   await tx.unit.updateMany({
     where: { soldOrderItemId: { in: items.map((i) => i.id) } },
@@ -1163,6 +1163,54 @@ async function cancelSale(ctx: WriteContext, id: string): Promise<void> {
   });
   await tx.order.update({ where: { id }, data: { status: "BATAL" } });
   ctx.touch("orders", id);
+
+  // The units go back to the shelf HERE, whatever the browser sent (owner
+  // report 2026-10-23: a sale was deleted and its unit still read Sold). Every
+  // ledger row that names this sale comes off — the sold row and any note a
+  // payout wrote after it — and the unit takes the status and place of its
+  // newest remaining row. A unit is never emptied: if the sale's rows are all
+  // it has, it is left for a person.
+  const unitIds = [
+    ...new Set(items.map((i) => i.unitId).filter((u): u is string => !!u)),
+  ];
+  for (const unitId of unitIds) {
+    const mine = await tx.unitEvent.findMany({
+      where: { unitId, orderId: id },
+      select: { id: true },
+    });
+    if (mine.length === 0) continue;
+    const total = await tx.unitEvent.count({ where: { unitId } });
+    if (mine.length >= total) continue;
+    const ids = mine.map((e) => e.id);
+    await tx.$queryRaw`SELECT unit_event_drop(${ids}::text[])`;
+    for (const e of ids) {
+      ctx.droppedEvents.add(e);
+      ctx.touch("events", e);
+    }
+    const last = await tx.unitEvent.findFirst({
+      where: { unitId },
+      orderBy: { seq: "desc" },
+      select: { toStatus: true },
+    });
+    const moved = await tx.unitEvent.findFirst({
+      where: { unitId, toLocationId: { not: null } },
+      orderBy: { seq: "desc" },
+      select: { toLocationId: true },
+    });
+    const unit = await tx.unit.update({
+      where: { id: unitId },
+      data: {
+        ...(last ? { status: last.toStatus } : {}),
+        ...(moved?.toLocationId ? { locationId: moved.toLocationId } : {}),
+      },
+      select: { serial: true, status: true, locationId: true },
+    });
+    ctx.touch("units", unit.serial);
+    ctx.ledgerAfter.set(unit.serial, {
+      status: unit.status,
+      locationId: unit.locationId,
+    });
+  }
 }
 
 export const orders: Adapter<"orders"> = {
