@@ -33,6 +33,7 @@
  *
  * Pure: no React, no store. `test/bookClose.test.ts` is the spec.
  */
+import { orderBalance } from "./salePayments.js";
 
 /** The parts of `AppSettings` this file reads. */
 export interface BookCloseSettings {
@@ -81,4 +82,34 @@ export function endOfDay(day: Date): string {
   const end = new Date(day);
   end.setHours(23, 59, 59, 999);
   return end.toISOString();
+}
+
+/**
+ * The last instant of a local MONTH (owner ask 2026-10-22: *"add a close
+ * transaction monthly"*). The book closes a whole month at a time now; any
+ * day of the month picks it. Local, for the reason `endOfDay` gives.
+ */
+export function endOfMonth(day: Date): string {
+  const end = new Date(day.getFullYear(), day.getMonth() + 1, 0);
+  return endOfDay(end);
+}
+
+/**
+ * Is this SALE locked by the closed book? (owner ask 2026-10-22: *"by default
+ * should close book to all the payment that already settled (need to get X,
+ * received X, no pending), and we can still add received amount even if it is
+ * closed"*.)
+ *
+ * A closed month locks only what is finished: a sale dated inside it whose
+ * bill is wholly in the shop's hands — nothing pending with a marketplace,
+ * nothing owed. A sale still waiting on money stays open after the close, so
+ * the payout or the customer's payment can still be recorded, and corrected.
+ */
+export function isSaleLocked(
+  order: Parameters<typeof orderBalance>[0] | undefined,
+  settings: BookCloseSettings | undefined,
+): boolean {
+  if (order === undefined || !isBookClosed(order.ts, settings)) return false;
+  const b = orderBalance(order);
+  return b.fullySettled && b.pending === 0 && b.customerOwes === 0;
 }

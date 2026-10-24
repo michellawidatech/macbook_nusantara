@@ -15,15 +15,74 @@
 
 import { readFileSync } from "node:fs";
 import {
+  BASE_WAIT_MS,
   MAX_WAIT_MS,
   MIN_WAIT_MS,
   SUMMARY_EVERY_TURNS,
   agentCapabilities,
+  readAnthropicEnv,
+  readVoyageEnv,
+  type AgentApiOptions,
   type AgentCapabilities,
   type AnthropicEnv,
+  type VoyageOptions,
   type WaitProfile,
 } from "@nusantara/agent";
-import type { WhatsAppCredentials } from "@nusantara/whatsapp";
+import {
+  gatewayFetch,
+  type GatewayTarget,
+  type WhatsAppCredentials,
+} from "@nusantara/whatsapp";
+
+/**
+ * How a reply reaches WhatsApp (owner decision 2026-10-22).
+ *
+ * `cloud` is Meta's Cloud API with the shop's token — unchanged, and the
+ * default. `baileys` sends the SAME Graph requests to `apps/wa-gateway` on
+ * loopback, which speaks WhatsApp Web as a device linked to the shop's number
+ * (docs/whatsapp-baileys.md). There is no token in that mode: the send code
+ * still wants one before it calls itself configured, so a placeholder stands
+ * in, and `gatewayFetch` drops the Authorization header built from it before
+ * anything leaves the process.
+ *
+ * Baileys mode with the URL or the secret missing stays Baileys mode with
+ * EMPTY credentials — the send pass's existing "dormant": replies queue,
+ * nothing is claimed, and the first log line says why. Falling back to the
+ * Cloud API instead would send from Meta with whatever token happened to be
+ * left in the file, which is not what anybody chose.
+ */
+export type WhatsAppTransport =
+  { readonly kind: "cloud" } | ({ readonly kind: "baileys" } & GatewayTarget);
+
+/** What stands in for a token in Baileys mode. Never sent anywhere. */
+export const BAILEYS_TOKEN_PLACEHOLDER = "wa-gateway";
+
+/**
+ * The fetch the send pass is handed (`TickDeps.fetchImpl`): none for the
+ * Cloud API — the client's own `fetch` to graph.facebook.com — and the
+ * gateway's rewrite for Baileys. The seam tools/wa-local and the tests use.
+ */
+export function sendFetchFor(
+  transport: WhatsAppTransport,
+  baseFetch: typeof fetch = fetch,
+): typeof fetch | undefined {
+  return transport.kind === "baileys" && transport.url && transport.secret
+    ? gatewayFetch(transport, baseFetch)
+    : undefined;
+}
+
+export function transportOf(
+  env: Record<string, string | undefined>,
+): WhatsAppTransport {
+  if (env["WHATSAPP_TRANSPORT"]?.trim().toLowerCase() !== "baileys") {
+    return { kind: "cloud" };
+  }
+  return {
+    kind: "baileys",
+    url: env["WA_GATEWAY_URL"]?.trim() ?? "",
+    secret: env["WA_GATEWAY_SECRET"]?.trim() ?? "",
+  };
+}
 
 /**
  * The only keys the worker will accept from a shared secrets file.
@@ -46,6 +105,12 @@ export const WORKER_ENV_KEYS = [
   "GRAPH_API_VERSION",
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
+  "CHATBOT_MODEL",
+  "CHATBOT_SUMMARY_MODEL",
+  "VOYAGE_API_KEY",
+  "VOYAGE_MODEL",
+  "WORKER_MEMORY_TURNS",
+  "WORKER_MEMORY_EMBEDS",
   "WORKER_POLL_MS",
   "WORKER_DEBOUNCE_MS",
   "WORKER_DEBOUNCE_MIN_MS",
@@ -60,7 +125,13 @@ export const WORKER_ENV_KEYS = [
   "WORKER_AGENT_STAFF_ID",
   "AGENT_CAPABILITIES",
   "WORKER_MAX_DRAFTS",
+  "WORKER_DRAFT_CONCURRENCY",
+  "AGENT_API_URL",
+  "AGENT_API_SECRET",
   "WORKER_MAX_SENDS",
+  "WHATSAPP_TRANSPORT",
+  "WA_GATEWAY_URL",
+  "WA_GATEWAY_SECRET",
 ] as const;
 
 /**
@@ -96,6 +167,8 @@ export function loadEnvFile(path: string): Record<string, string> {
 
 export interface WorkerConfig {
   readonly whatsapp: WhatsAppCredentials;
+  /** The Cloud API or the Baileys gateway — `WHATSAPP_TRANSPORT`. */
+  readonly transport: WhatsAppTransport;
   readonly anthropic: AnthropicEnv;
   /** How long between ticks when the last tick had nothing to do. */
   readonly idlePollMs: number;
@@ -110,6 +183,12 @@ export interface WorkerConfig {
   readonly debounceMs: number;
   /** Threads drafted per tick. A cap, so one busy minute cannot fan out. */
   readonly maxDraftsPerTick: number;
+  /**
+   * Threads answered at the same time (chatbot v2, 2026-10-14). Each holds at
+   * most one database connection, so the worker's `connection_limit` must
+   * leave room for it (worker.env.example).
+   */
+  readonly draftConcurrency: number;
   /** Outbox rows sent per tick. */
   readonly maxSendsPerTick: number;
   /** The adaptive wait windows the debounce picks between. */
@@ -146,6 +225,24 @@ export interface WorkerConfig {
    * prices off a half-migrated shelf.
    */
   readonly capabilities: AgentCapabilities;
+  /**
+   * The POS's agent API (chatbot v2 step 3): `AGENT_API_URL` +
+   * `AGENT_API_SECRET`. Both set, the stock, photo, customer and booking
+   * tools run behind `/api/agent/v1` under a per-turn token; either missing,
+   * they run here against the database, as before. Null is not an error — it
+   * is how a worker deployed ahead of its API keeps answering.
+   */
+  readonly agentApi: AgentApiOptions | null;
+  /**
+   * Voyage AI, for chat recall (2026-10-22): `VOYAGE_API_KEY` (worker.env
+   * only — never printed) and `VOYAGE_MODEL`. Null without a key: turns are
+   * still chunked and recalled by keywords, just never embedded.
+   */
+  readonly voyage: VoyageOptions | null;
+  /** Answered turns written into `ChatMemoryChunk` per tick. */
+  readonly memoryTurnsPerTick: number;
+  /** Chunks embedded per tick — one Voyage call. */
+  readonly memoryEmbedsPerTick: number;
 }
 
 function int(raw: string | undefined, fallback: number): number {
@@ -156,28 +253,46 @@ function int(raw: string | undefined, fallback: number): number {
 export function loadWorkerConfig(
   env: Record<string, string | undefined>,
 ): WorkerConfig {
+  // One constant for both channels — never two env fallbacks (CLAUDE.md).
+  const graphVersion = env["GRAPH_API_VERSION"]?.trim() || "v25.0";
+  const transport = transportOf(env);
   return {
-    whatsapp: {
-      whatsappToken: env["WHATSAPP_TOKEN"]?.trim() ?? "",
-      phoneNumberId: env["PHONE_NUMBER_ID"]?.trim() ?? "",
-      // One constant for both channels — never two env fallbacks (CLAUDE.md).
-      graphVersion: env["GRAPH_API_VERSION"]?.trim() || "v25.0",
-    },
-    anthropic: {
-      apiKey: env["ANTHROPIC_API_KEY"]?.trim() || undefined,
-      authToken: env["ANTHROPIC_AUTH_TOKEN"]?.trim() || undefined,
-    },
+    whatsapp:
+      transport.kind === "cloud"
+        ? {
+            whatsappToken: env["WHATSAPP_TOKEN"]?.trim() ?? "",
+            phoneNumberId: env["PHONE_NUMBER_ID"]?.trim() ?? "",
+            graphVersion,
+          }
+        : {
+            // Never WHATSAPP_TOKEN, even if the file still holds one.
+            whatsappToken:
+              transport.url && transport.secret
+                ? BAILEYS_TOKEN_PLACEHOLDER
+                : "",
+            // A path segment the gateway ignores; the number is the device's.
+            phoneNumberId: env["PHONE_NUMBER_ID"]?.trim() || "baileys",
+            graphVersion,
+          },
+    transport,
+    // The credential, and CHATBOT_MODEL / CHATBOT_SUMMARY_MODEL — the
+    // model is an environment override, so moving the bot off Haiku 5.5 (or
+    // back) is an env edit and a restart, never a release.
+    anthropic: readAnthropicEnv(env),
     idlePollMs: int(env["WORKER_POLL_MS"], 2_000),
-    debounceMs: int(env["WORKER_DEBOUNCE_MS"], 8_000),
+    debounceMs: int(env["WORKER_DEBOUNCE_MS"], BASE_WAIT_MS),
     // The base window is the middle of a range now. A direct question is
     // answered sooner and "nanti saya kabarin" waits far longer; see
     // `computeWaitMs`.
     waits: {
       minMs: int(env["WORKER_DEBOUNCE_MIN_MS"], MIN_WAIT_MS),
-      baseMs: int(env["WORKER_DEBOUNCE_MS"], 8_000),
+      baseMs: int(env["WORKER_DEBOUNCE_MS"], BASE_WAIT_MS),
       maxMs: int(env["WORKER_DEBOUNCE_MAX_MS"], MAX_WAIT_MS),
     },
-    maxDraftsPerTick: int(env["WORKER_MAX_DRAFTS"], 5),
+    // 16 a tick, 8 at once: at "10–25 concurrent" (owner, 2026-10-14) a busy
+    // minute drains in two ticks instead of five.
+    maxDraftsPerTick: int(env["WORKER_MAX_DRAFTS"], 16),
+    draftConcurrency: int(env["WORKER_DRAFT_CONCURRENCY"], 8),
     maxBatch: int(env["WORKER_MAX_BATCH"], 30),
     maxSendsPerTick: int(env["WORKER_MAX_SENDS"], 20),
     summaryEveryTurns: int(
@@ -195,5 +310,15 @@ export function loadWorkerConfig(
     // One reader for the whole repo (packages/agent policy.ts), so the worker
     // and the API's Draft endpoint cannot disagree about what the bot may do.
     capabilities: agentCapabilities(env),
+    agentApi:
+      env["AGENT_API_URL"]?.trim() && env["AGENT_API_SECRET"]?.trim()
+        ? {
+            baseUrl: env["AGENT_API_URL"].trim(),
+            secret: env["AGENT_API_SECRET"].trim(),
+          }
+        : null,
+    voyage: readVoyageEnv(env),
+    memoryTurnsPerTick: int(env["WORKER_MEMORY_TURNS"], 40),
+    memoryEmbedsPerTick: int(env["WORKER_MEMORY_EMBEDS"], 32),
   };
 }

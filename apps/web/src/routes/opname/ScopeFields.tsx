@@ -21,6 +21,7 @@ import type { OpnameScope } from "../../lib/opnameScope.js";
 import { CONDITIONS, type UnitCondition } from "../../lib/condition.js";
 import { fmtNone } from "../../lib/format.js";
 import type { CatalogModel, RackLocation, Warehouse } from "../../mock/seed.js";
+import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
 export interface ScopeFieldsProps {
   value: OpnameScope;
@@ -80,7 +81,7 @@ export function ScopeFields({
               : // Qualified only when the qualifier tells two racks apart —
                 // every warehouse numbers its own from one, so a bare "Rak 1"
                 // is ambiguous the moment two warehouses are in play.
-                `${warehouses.find((w) => w.id === r.warehouseId)?.name ?? fmtNone()} · ${r.name}`,
+                `${warehouseLabelOf(warehouses, r.warehouseId) ?? fmtNone()} · ${r.name}`,
         })),
     [racks, warehouses, value.locationIds],
   );
@@ -140,7 +141,7 @@ export function ScopeFields({
           placeholder={t("opnameScope.allWarehouses", "All warehouses")}
           options={warehouses
             .filter((w) => w.active)
-            .map((w) => ({ value: w.id, label: w.name }))}
+            .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
         />
       </Form.Item>
       <Form.Item

@@ -1,0 +1,188 @@
+#!/bin/zsh
+# Void sales that should never have been recorded — and the customer returns
+# made against them — as though none of it happened (owner ask 2026-10-23:
+# "undo that transaction but they already returned the product … I want to
+# proceed with deleting the transaction and the return, so now the unit is
+# back to normal (in inventory) and remove the unit serial history").
+#
+#   sudo -u _nusantara /opt/nusantara/current/ops/void-sale SI-2026/10-000004 SI-2026/10-000005
+#   sudo -u _nusantara /opt/nusantara/current/ops/void-sale --apply SI-2026/10-000004 SI-2026/10-000005
+#
+# Without --apply it is a DRY RUN: it does all of it inside a transaction,
+# prints what it found and what the units become, and rolls back.
+#
+# GONE, for each sale named: the sale, its lines, fees, adjustments, trade-in
+# records, shipments, payments and their edit log, its marketplace payouts,
+# the Income & Expense lines that name it; each customer return the sale's
+# RETUR adjustments name (the SG codes) and the refund lines whose note names
+# those codes; every serial-history row that belongs to the sale or to those
+# returns (the sold row, the returned row, and an exchange's sold row); and
+# the counted-stock moves of the sale.
+#
+# BACK: every unit those history rows moved takes the status and place its
+# newest REMAINING row says — for a unit that was sold and returned that is
+# the shelf it came from, as it was before the sale.
+#
+# Refused (nothing changes) when: a code is not a sale; a unit would be left
+# with no history at all; a warranty claim hangs off the sale. A trade-in
+# recorded on the sale is listed — the trade-in UNIT stays where it is.
+#
+# Safety: a pg_dump first (ops/backup, label before-void-sale), the codes typed
+# back, one transaction. Every open POS tab reloads itself afterwards
+# (StoreChange restarts). An AuditLog line records what was voided.
+# A one-off repair tool, like reset-transactions — not a precedent: the app's
+# own Delete transaction is the everyday door.
+setopt err_exit no_unset pipe_fail
+
+home=${NUSANTARA_HOME:-/opt/nusantara}
+pgbin=${PG_BIN:-/opt/homebrew/opt/postgresql@16/bin}
+dbname=${NUSANTARA_DB:-nusantara_pos_prod}
+apply=0
+if [[ ${1:-} == --apply ]]; then apply=1; shift; fi
+(( $# > 0 )) || { print -u2 "usage: void-sale [--apply] SI-…  [SI-…]"; exit 64 }
+for c in "$@"; do
+  [[ $c =~ '^SI-[0-9]{4}/[0-9]{2}-[0-9A-Za-z]+$' ]] || { print -u2 "void-sale: not a sale code: $c"; exit 64 }
+done
+codes="{${(j:,:)@}}"
+
+export PGPASSFILE=$home/etc/pgpass
+psql=($pgbin/psql --host=127.0.0.1 --username=nusantara --dbname=$dbname
+  -X -v ON_ERROR_STOP=1 --quiet -v codes="$codes")
+
+body=$(cat <<'SQL'
+CREATE TEMP TABLE v_order ON COMMIT DROP AS
+  SELECT id, code, ts, total, "discountId" FROM "Order" WHERE code = ANY(:'codes'::text[]);
+DO $$ BEGIN
+  IF (SELECT count(*) FROM v_order) <> (SELECT cardinality(current_setting('void.codes')::text[])) THEN
+    RAISE EXCEPTION 'not every code is a sale: found %', (SELECT string_agg(code, ', ') FROM v_order);
+  END IF;
+END $$;
+
+CREATE TEMP TABLE v_item ON COMMIT DROP AS
+  SELECT id, "unitId" FROM "OrderItem" WHERE "orderId" IN (SELECT id FROM v_order);
+CREATE TEMP TABLE v_adjcode ON COMMIT DROP AS
+  SELECT DISTINCT code FROM "OrderAdjustment"
+   WHERE "orderId" IN (SELECT id FROM v_order) AND code IS NOT NULL;
+CREATE TEMP TABLE v_ret ON COMMIT DROP AS
+  SELECT id, code FROM "UnitReturn"
+   WHERE kind = 'CUSTOMER' AND code IN (SELECT code FROM v_adjcode);
+CREATE TEMP TABLE v_event ON COMMIT DROP AS
+  SELECT id, "unitId" FROM "UnitEvent"
+   WHERE "orderId" IN (SELECT id FROM v_order)
+      OR "unitReturnId" IN (SELECT id FROM v_ret);
+CREATE TEMP TABLE v_pay ON COMMIT DROP AS
+  SELECT id FROM "Payment" WHERE "orderId" IN (SELECT id FROM v_order);
+CREATE TEMP TABLE v_stl ON COMMIT DROP AS
+  SELECT id FROM "Settlement"
+   WHERE "orderId" IN (SELECT id FROM v_order) OR "paymentId" IN (SELECT id FROM v_pay);
+CREATE TEMP TABLE v_exp ON COMMIT DROP AS
+  SELECT id FROM "Expense"
+   WHERE "orderId" IN (SELECT id FROM v_order)
+      OR (kind = 'REFUND' AND EXISTS (SELECT 1 FROM v_ret r WHERE "Expense".note LIKE '%' || r.code || '%'));
+CREATE TEMP TABLE v_inc ON COMMIT DROP AS
+  SELECT id FROM "ManualIncome"
+   WHERE "orderId" IN (SELECT id FROM v_order)
+      OR (reason = 'REFUND' AND EXISTS (SELECT 1 FROM v_ret r WHERE "ManualIncome".note LIKE '%' || r.code || '%'));
+
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM "WarrantyClaim" WHERE "orderItemId" IN (SELECT id FROM v_item)) THEN
+    RAISE EXCEPTION 'a warranty claim hangs off one of these sales — resolve it by hand first';
+  END IF;
+  IF EXISTS (
+    SELECT e."unitId" FROM "UnitEvent" e
+     WHERE e."unitId" IN (SELECT "unitId" FROM v_event)
+     GROUP BY e."unitId"
+    HAVING count(*) FILTER (WHERE e.id NOT IN (SELECT id FROM v_event)) = 0
+  ) THEN
+    RAISE EXCEPTION 'a unit would be left with no serial history at all';
+  END IF;
+END $$;
+
+\echo '== Sales'
+SELECT code, ts, total FROM v_order ORDER BY ts;
+\echo '== Customer returns'
+SELECT code FROM v_ret ORDER BY code;
+\echo '== Serial-history rows removed, per unit'
+SELECT u.serial, e.type, e.at, e.seq FROM "UnitEvent" e JOIN "Unit" u ON u.id = e."unitId"
+ WHERE e.id IN (SELECT id FROM v_event) ORDER BY u.serial, e.seq;
+\echo '== Money removed'
+SELECT 'payments' what, count(*), coalesce(sum(amount),0) FROM "Payment" WHERE id IN (SELECT id FROM v_pay)
+UNION ALL SELECT 'payouts', count(*), coalesce(sum(received),0) FROM "Settlement" WHERE id IN (SELECT id FROM v_stl)
+UNION ALL SELECT 'expenses', count(*), coalesce(sum(amount),0) FROM "Expense" WHERE id IN (SELECT id FROM v_exp)
+UNION ALL SELECT 'incomes', count(*), coalesce(sum(amount),0) FROM "ManualIncome" WHERE id IN (SELECT id FROM v_inc);
+\echo '== Trade-ins recorded on these sales (the trade-in units themselves stay)'
+SELECT label, serial, value FROM "TradeIn" WHERE "orderId" IN (SELECT id FROM v_order);
+
+-- The deletes, children first.
+DELETE FROM "PaymentLog" WHERE "paymentId" IN (SELECT id FROM v_pay);
+DELETE FROM "SettlementFee" WHERE "settlementId" IN (SELECT id FROM v_stl);
+DELETE FROM "SettlementLog" WHERE "settlementId" IN (SELECT id FROM v_stl);
+DELETE FROM "Settlement" WHERE id IN (SELECT id FROM v_stl);
+DELETE FROM "Expense" WHERE id IN (SELECT id FROM v_exp);
+DELETE FROM "ManualIncome" WHERE id IN (SELECT id FROM v_inc);
+UPDATE "Unit" SET "soldOrderItemId" = NULL WHERE "soldOrderItemId" IN (SELECT id FROM v_item);
+DELETE FROM "UnitEvent" WHERE id IN (SELECT id FROM v_event);
+DELETE FROM "StockMove"
+ WHERE "orderId" IN (SELECT id FROM v_order) OR "orderItemId" IN (SELECT id FROM v_item);
+DELETE FROM "ShipmentEvent" WHERE "shipmentId" IN (SELECT id FROM "Shipment" WHERE "orderId" IN (SELECT id FROM v_order));
+DELETE FROM "ShipmentItem" WHERE "orderItemId" IN (SELECT id FROM v_item);
+DELETE FROM "Shipment" WHERE "orderId" IN (SELECT id FROM v_order);
+DELETE FROM "TradeIn" WHERE "orderId" IN (SELECT id FROM v_order);
+DELETE FROM "OrderAdjustment" WHERE "orderId" IN (SELECT id FROM v_order);
+DELETE FROM "OrderFee" WHERE "orderId" IN (SELECT id FROM v_order);
+DELETE FROM "Payment" WHERE id IN (SELECT id FROM v_pay);
+DELETE FROM "OrderItem" WHERE id IN (SELECT id FROM v_item);
+UPDATE "Discount" d SET used = greatest(0, used - x.n)
+  FROM (SELECT "discountId" id, count(*) n FROM v_order WHERE "discountId" IS NOT NULL GROUP BY 1) x
+ WHERE d.id = x.id;
+DELETE FROM "Order" WHERE id IN (SELECT id FROM v_order);
+DELETE FROM "UnitReturn" WHERE id IN (SELECT id FROM v_ret);
+
+-- Each unit those rows moved takes what its newest remaining row says.
+UPDATE "Unit" u
+   SET status = last."toStatus",
+       "locationId" = coalesce(
+         (SELECT m."toLocationId" FROM "UnitEvent" m
+           WHERE m."unitId" = u.id AND m."toLocationId" IS NOT NULL
+           ORDER BY m.seq DESC LIMIT 1),
+         u."locationId")
+  FROM (SELECT DISTINCT ON ("unitId") "unitId", "toStatus" FROM "UnitEvent"
+         WHERE "unitId" IN (SELECT DISTINCT "unitId" FROM v_event)
+         ORDER BY "unitId", seq DESC) last
+ WHERE u.id = last."unitId";
+
+\echo '== The units now'
+SELECT u.serial, u.status, l.name AS location FROM "Unit" u JOIN "Location" l ON l.id = u."locationId"
+ WHERE u.id IN (SELECT DISTINCT "unitId" FROM v_event) ORDER BY u.serial;
+
+INSERT INTO "AuditLog" (id, at, entity, "entityId", action, before)
+VALUES (md5(random()::text || clock_timestamp()::text), now() AT TIME ZONE 'UTC', 'Order',
+        array_to_string(:'codes'::text[], ','), 'DELETE',
+        'void-sale: sales ' || array_to_string(:'codes'::text[], ', ') ||
+        coalesce('; returns ' || (SELECT string_agg(code, ', ') FROM v_ret), ''));
+
+-- Every open till reloads instead of showing what is gone.
+TRUNCATE TABLE "StoreChange" RESTART IDENTITY;
+SQL
+)
+
+run() {
+  { print "BEGIN;"; print "SET LOCAL void.codes = '$codes';"; print -r -- "$body"; print "$1;" } | $psql
+}
+
+print "Database: $dbname — sales: $*"
+if (( ! apply )); then
+  run ROLLBACK
+  print "\nDRY RUN: nothing changed. Run again with --apply to do it."
+  exit 0
+fi
+
+run ROLLBACK
+print "\nBacking up first…"
+$home/current/ops/backup before-void-sale
+print
+print -n "This deletes everything listed above for good. Type the sale codes again, space-separated: "
+read -r answer </dev/tty
+[[ $answer == "$*" ]] || { print "Not confirmed. Nothing changed."; exit 1 }
+run COMMIT
+print "\nDone. Every open POS tab reloads itself on its next poll (a few seconds)."

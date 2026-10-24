@@ -36,6 +36,7 @@ import {
   markSummaryAttempt,
   saveSummary,
   summarize,
+  turnsFor,
   type AgentClient,
   type AnthropicEnv,
 } from "@nusantara/agent";
@@ -54,6 +55,8 @@ export interface SummaryDeps {
   readonly quietMs: number;
   readonly maxPerTick: number;
   readonly inputLimit?: number;
+  /** `CHATBOT_SUMMARY_MODEL`; the package default when absent. */
+  readonly model?: string;
   readonly now?: () => Date;
 }
 
@@ -165,11 +168,20 @@ export async function summaryPass(
       const newest = rows[rows.length - 1]!;
       if (!newest.answeredAt) continue;
 
+      // Whole turns: every line of each burst, not only the row its reply
+      // landed on (packages/agent turns.ts). The cursor is still the reply
+      // rows', so what is covered does not change.
+      const turns = await turnsFor(db, from, rows);
+
       let failure: unknown;
       const summary = await summarize({
         client,
+        ...(deps.model ? { model: deps.model } : {}),
         previous: memo?.summary ?? null,
-        turns: rows,
+        turns: turns.map((t) => ({
+          text: t.customer || null,
+          replyText: t.reply,
+        })),
         onError: (err) => {
           failure = err;
         },

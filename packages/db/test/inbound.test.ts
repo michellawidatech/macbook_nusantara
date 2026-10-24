@@ -37,7 +37,7 @@ beforeAll(async () => {
   skuId = (await db.sku.findFirstOrThrow({ select: { id: true } })).id;
   locationId = (
     await db.location.findFirstOrThrow({
-      where: { code: "GDG-SRP" },
+      where: { code: "02" },
       select: { id: true },
     })
   ).id;

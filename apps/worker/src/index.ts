@@ -12,6 +12,7 @@ export {
 } from "./config.js";
 export { draftPass, type DraftDeps, type DraftPassResult } from "./draft.js";
 export { sendPass, type SendDeps, type SendPassResult } from "./send.js";
+export { resetPass, type ResetDeps, type ResetPassResult } from "./reset.js";
 export {
   run,
   tick,

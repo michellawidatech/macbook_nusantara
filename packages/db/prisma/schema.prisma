@@ -332,15 +332,59 @@ model CatalogModel {
   source     CatalogSource?
   archived   Boolean
   createdAt  DateTime
+  /// The product's facts (owner ask 2026-10-21: "a smart system and
+  /// structured product"). `family` is the line in full ("MacBook Air"),
+  /// `chip` an Apple-silicon chip — part of the product; an Intel processor
+  /// is a variant — and `extra` what else makes it a different product
+  /// ("TB"). Null on a product still known only by its name.
+  family     String?
+  chip       String?
+  extra      String?
+  /// `productKeyOf` the facts, or of the name. Unique among live products
+  /// (partial index `CatalogModel_productKey_live`, hand-written), so a
+  /// second copy of a product cannot be created. Null when it cannot be
+  /// placed, and on an existing duplicate until it is merged.
+  productKey String?
 
   category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
 
-  axes      ModelAxis[]
-  photos    ModelPhoto[]
-  skus      Sku[]
-  discounts Discount[]
+  axes          ModelAxis[]
+  photos        ModelPhoto[]
+  skus          Sku[]
+  discounts     Discount[]
+  identifiers   ModelIdentifier[]
+  notDuplicateA ModelNotDuplicate[] @relation("NotDuplicateA")
+  notDuplicateB ModelNotDuplicate[] @relation("NotDuplicateB")
 
   @@unique([categoryId, name, year])
+}
+
+/// An AppleDB identifier (`Mac14,2`) LINKED to a product (2026-10-21). Apple
+/// gives one marketing model several identifiers, and an import that finds
+/// the product already in the catalogue links instead of copying it.
+model ModelIdentifier {
+  id         String   @id @default(cuid())
+  modelId    String
+  identifier String   @unique
+  createdAt  DateTime
+
+  model CatalogModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+
+  @@index([modelId])
+}
+
+/// Two products a person said are NOT the same (2026-10-21), so the
+/// duplicate review stops suggesting them. Stored with aModelId < bModelId.
+model ModelNotDuplicate {
+  id        String   @id @default(cuid())
+  aModelId  String
+  bModelId  String
+  createdAt DateTime
+
+  a CatalogModel @relation("NotDuplicateA", fields: [aModelId], references: [id], onDelete: Restrict)
+  b CatalogModel @relation("NotDuplicateB", fields: [bModelId], references: [id], onDelete: Restrict)
+
+  @@unique([aModelId, bModelId])
 }
 
 model ModelAxis {
@@ -387,8 +431,17 @@ model Sku {
   landed       BigInt
   archived     Boolean
   createdAt    DateTime
+  /// Set when this variant was merged into another (2026-10-21). It stays —
+  /// past receipts and invoices name it — but is archived and offered by no
+  /// picker; its units and stock moved to `mergedInto`.
+  mergedIntoId String?
+  /// `variantKeyOf` the label. Unique per live product (partial index
+  /// `Sku_variantKey_live`, hand-written); null on an existing duplicate.
+  variantKey   String?
 
-  model CatalogModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  model      CatalogModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  mergedInto Sku?         @relation("SkuMerge", fields: [mergedIntoId], references: [id], onDelete: Restrict)
+  mergedFrom Sku[]        @relation("SkuMerge")
 
   units            Unit[]
   poItems          PurchaseOrderItem[]
@@ -473,6 +526,7 @@ model Unit {
   orderItems          OrderItem[]               @relation("OrderItemUnit")
   tradeIns            TradeIn[]
   reservationItems    ReservationItem[]
+  proposalItems       ReservationProposalItem[]
   warrantyClaims      WarrantyClaim[]
   stockIns            StockIn[]
   adjustments         StockAdjustment[]
@@ -1074,6 +1128,11 @@ model Staff {
   /// initial password, or an owner's reset (owner ask 2026-09-18). A session
   /// of such an account can do nothing but choose a new one.
   mustChangePassword Boolean   @default(false)
+  /// May open Financial & Report and read the money behind it — expenses,
+  /// incomes, payouts and the payment edit logs (owner ask 2026-10-16: "only
+  /// Ersen and Dina"). Per person rather than per role: Dina is staff, and
+  /// making her an owner would also hand her everybody's passwords.
+  canViewFinance     Boolean   @default(false)
   /// ⚠️ Dead since 2026-09-18, when Auth0 was retired for the app's own login.
   /// Kept for one release so the release before it still reads the table it
   /// expects through a deploy (docs/deploy-pipeline.md); drop it after that.
@@ -1093,25 +1152,25 @@ model Staff {
   stockMoves               StockMove[]
   unitNotes                UnitNote[]
   opnameSessions           OpnameSession[]
-  ordersApproved           Order[]             @relation("OrderApprovedBy")
-  ordersSold               Order[]             @relation("OrderSoldBy")
+  ordersApproved           Order[]               @relation("OrderApprovedBy")
+  ordersSold               Order[]               @relation("OrderSoldBy")
   payments                 Payment[]
   orderAdjustments         OrderAdjustment[]
   shifts                   Shift[]
   shipmentEvents           ShipmentEvent[]
   warrantyClaims           WarrantyClaim[]
-  priceLogs                PriceLog[]          @relation("PriceLogStaff")
-  priceLogsApproved        PriceLog[]          @relation("PriceLogApprovedBy")
-  priceReqsRequested       PriceReq[]          @relation("PriceReqRequestedBy")
-  priceReqsDecided         PriceReq[]          @relation("PriceReqDecidedBy")
+  priceLogs                PriceLog[]            @relation("PriceLogStaff")
+  priceLogsApproved        PriceLog[]            @relation("PriceLogApprovedBy")
+  priceReqsRequested       PriceReq[]            @relation("PriceReqRequestedBy")
+  priceReqsDecided         PriceReq[]            @relation("PriceReqDecidedBy")
   auditLogs                AuditLog[]
   pettyCashEntries         PettyCashEntry[]
   waMessagesAnswered       WaMessage[]
-  waThreadMemoriesDirected WaThreadMemory[]    @relation("WaThreadMemoryDirectedBy")
-  waThreadMemoriesToggled  WaThreadMemory[]    @relation("WaThreadMemoryAutoReplyBy")
+  waThreadMemoriesDirected WaThreadMemory[]      @relation("WaThreadMemoryDirectedBy")
+  waThreadMemoriesToggled  WaThreadMemory[]      @relation("WaThreadMemoryAutoReplyBy")
   idempotencyKeys          IdempotencyKey[]
-  igCommentsReplied        IgComment[]         @relation("IgCommentRepliedBy")
-  igCommentsDmSent         IgComment[]         @relation("IgCommentDmSentBy")
+  igCommentsReplied        IgComment[]           @relation("IgCommentRepliedBy")
+  igCommentsDmSent         IgComment[]           @relation("IgCommentDmSentBy")
   agentKnowledge           AgentKnowledge[]
   personas                 Persona[]
   agentCorrections         AgentCorrection[]
@@ -1127,7 +1186,11 @@ model Staff {
   serviceFees              ServiceFee[]
   deposits                 SupplierDeposit[]
   allocations              DepositAllocation[]
-  chatActionsResolved      ChatAction[]        @relation("ChatActionResolvedBy")
+  chatActionsResolved      ChatAction[]          @relation("ChatActionResolvedBy")
+  waThreadsLeadSet         WaThreadMemory[]      @relation("WaThreadMemoryLeadStaffBy")
+  profileFacts             CustomerProfileFact[]
+  evaluationsWritten       AgentEvaluation[]     @relation("AgentEvaluationCreatedBy")
+  evaluationsReviewed      AgentEvaluation[]     @relation("AgentEvaluationReviewedBy")
 }
 
 model StaffSession {
@@ -1207,6 +1270,8 @@ model Reservation {
   items      ReservationItem[]
   unitEvents UnitEvent[]
   orders     Order[]
+  /// The chatbot's confirmed proposal, when the bot made this booking.
+  proposal   ReservationProposal?
 
   /// The agent's duplicate guard and the phone-scoped cancel both read
   /// (phone, status) on every booking attempt.
@@ -1393,17 +1458,26 @@ model AuditLog {
 /// worker claims it with FOR UPDATE SKIP LOCKED and sends. No network I/O
 /// ever happens inside a database transaction.
 model Outbox {
-  id            String       @id @default(cuid())
-  kind          OutboxKind
+  id                String       @id @default(cuid())
+  kind              OutboxKind
   /// send intent — see the note on JSON columns at the top of this file
-  payload       Json
-  status        OutboxStatus
-  attempts      Int
-  nextAttemptAt DateTime
-  lastError     String?
-  requestId     String?
-  createdAt     DateTime
-  sentAt        DateTime?
+  payload           Json
+  status            OutboxStatus
+  attempts          Int
+  nextAttemptAt     DateTime
+  lastError         String?
+  requestId         String?
+  createdAt         DateTime
+  sentAt            DateTime?
+  /// The id WhatsApp gave the message when it went out (2026-10-23) — what an
+  /// edit or an unsend must name. Written by the worker with SENT; null on a
+  /// row sent before then, which can therefore be neither edited nor unsent.
+  providerMessageId String?
+  /// Staff unsent it (delete for everyone). The row stays; AuditLog says who.
+  retractedAt       DateTime?
+  /// Staff corrected its text; the new text is `payload.body`, the old one is
+  /// in the AuditLog row.
+  editedAt          DateTime?
 }
 
 /// NOT in docs/erd-pos-chatbot.drawio's original 62 tables. Added in S6 with the
@@ -1554,6 +1628,10 @@ model WaMessage {
   coveredThreadMemories WaThreadMemory[]
   corrections           AgentCorrection[]
   chatActions           ChatAction[]
+  agentRuns             AgentRun[]
+  evaluations           AgentEvaluation[]
+  memoryChunksFrom      ChatMemoryChunk[] @relation("ChatMemoryChunkFrom")
+  memoryChunksTo        ChatMemoryChunk[] @relation("ChatMemoryChunkTo")
 
   // Declared here because they exist in the database. Both were hand-written
   // into 20260820002832 without a matching @@index, so every `migrate dev`
@@ -1564,6 +1642,36 @@ model WaMessage {
   // syntax for that, which is also why the differ leaves it alone.
   @@index([from, ts])
   @@index([from, answeredAt])
+}
+
+/// One answered turn of a WhatsApp thread, kept for recall (owner,
+/// 2026-10-22). The turn's words — every inbound line of the burst and the
+/// reply — and, once the worker has embedded it, its vector. Recall searches
+/// ONE customer's own chunks, so the vector is int8 bytes scored in JS: no
+/// pgvector (not on the Mac mini, and CREATE EXTENSION needs a superuser).
+/// Written by the worker (nusantara_agent) only; the app role has no grant.
+model ChatMemoryChunk {
+  id            String    @id @default(cuid())
+  /// wa_id — the thread key WaMessage and WaThreadMemory use.
+  from          String
+  /// The first inbound row of the turn, and the row carrying the reply.
+  fromMessageId String
+  toMessageId   String
+  /// "customer: …" / "shop: …" lines, trimmed.
+  text          String
+  /// int8 vector, one byte per dimension. Null = not embedded yet.
+  embedding     Bytes?
+  model         String?
+  dims          Int?
+  createdAt     DateTime  @default(now())
+  embeddedAt    DateTime?
+
+  // Restrict: the chunk is a copy of those messages' words, so a purge of a
+  // message has to take its chunk with it rather than leave the words behind.
+  fromMessage WaMessage @relation("ChatMemoryChunkFrom", fields: [fromMessageId], references: [id], onDelete: Restrict)
+  toMessage   WaMessage @relation("ChatMemoryChunkTo", fields: [toMessageId], references: [id], onDelete: Restrict)
+
+  @@index([from, createdAt])
 }
 
 /// Two writers, disjoint column sets (08 §7). The webhook summarizer owns the
@@ -1592,9 +1700,31 @@ model WaThreadMemory {
   /// pass skips it entirely and answers every other thread as before. Defaults
   /// true, so a number nobody has ruled on is answered by the bot — the
   /// behaviour every thread had before this column existed.
-  autoReply        Boolean   @default(true)
+  /// ⚠️ `dbgenerated`, not `@default(true)`: with a plain default Prisma
+  /// sends `true` in every INSERT, and the agent role holds no INSERT on this
+  /// staff-owned column — so every memory row the worker tried to create was
+  /// refused (found 2026-10-15, apps/worker/test/agentRole.test.ts). The
+  /// database's own DEFAULT true is unchanged; Prisma now leaves it to it.
+  autoReply        Boolean   @default(dbgenerated("true"))
   autoReplyAt      DateTime?
   autoReplyById    String?
+  /// agent-owned. The worker's claim on this thread: only the holder may
+  /// answer it until the lease runs out, so N threads run in parallel and one
+  /// thread never runs twice (chatbot v2, 2026-10-14).
+  leaseUntil       DateTime?
+  leasedBy         String?
+  /// agent-owned. The router's last lead score (0–100), and when it last
+  /// crossed the threshold — the bot's half of the 🔥 tag.
+  leadScore        Int?
+  leadAt           DateTime?
+  /// staff-owned. The staff half of the 🔥 tag, and the clear that ends both
+  /// halves — written by a person, or by the sale (owner: a lead clears at
+  /// sale). A lead is shown while max(leadAt, leadStaffAt) > leadClearedAt.
+  leadStaffAt      DateTime?
+  leadStaffById    String?
+  leadClearedAt    DateTime?
+  /// staff-owned. The inbox read marker: inbound messages after it are unread.
+  readAt           DateTime?
   clarifyCount     Int
   clarifyAt        DateTime?
   updatedAt        DateTime
@@ -1603,6 +1733,7 @@ model WaThreadMemory {
   coveredThrough WaMessage? @relation(fields: [coveredThroughId], references: [id], onDelete: Restrict)
   directiveBy    Staff?     @relation("WaThreadMemoryDirectedBy", fields: [directiveById], references: [id], onDelete: Restrict)
   autoReplyBy    Staff?     @relation("WaThreadMemoryAutoReplyBy", fields: [autoReplyById], references: [id], onDelete: Restrict)
+  leadStaffBy    Staff?     @relation("WaThreadMemoryLeadStaffBy", fields: [leadStaffById], references: [id], onDelete: Restrict)
 }
 
 /// Something a person has to do for a chat customer (owner ask 2026-09-29):
@@ -1662,15 +1793,163 @@ model CustomerProfile {
   name          String?
   /// What they want it for: kuliah, editing video, kantor…
   useCase       String?
-  /// Whole rupiah, as the customer stated it.
+  /// Whole rupiah, as the customer stated it. ⚠️ Superseded by budgetMin /
+  /// budgetMax (2026-10-14) and kept one release so the release before reads
+  /// it during a deploy. Drop it after.
   budget        BigInt?
+  /// The budget as a range, whole rupiah (owner: budget is a min–max range).
+  /// "sekitar 15 jt" is min = max = 15.000.000; "di bawah 20" is max only.
+  budgetMin     BigInt?
+  budgetMax     BigInt?
+  /// The bot's GUESS at an age band ("20–25"). Always shown as an estimate.
+  ageEstimate   String?
+  /// Job or school, as told or guessed ("mahasiswa DKV", "programmer").
+  occupation    String?
   /// What they use now.
   currentDevice String?
   /// Anything else they asked for: colour, size, "yang ringan".
   preference    String?
   updatedAt     DateTime
 
-  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  customer Customer?             @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  facts    CustomerProfileFact[]
+}
+
+/// One bullet of a customer profile: a usage area, an app, a preference or
+/// anything else worth knowing (chatbot v2, 2026-10-14). A table rather than a
+/// comma list so "who uses Photoshop" is a query, and rather than JSON because
+/// JSON columns are forbidden here. Never deleted: a fact taken back carries
+/// `removedAt`.
+model CustomerProfileFact {
+  id          String          @id @default(cuid())
+  profileId   String
+  kind        ProfileFactKind
+  value       String
+  source      FactSource
+  createdById String?
+  createdAt   DateTime
+  removedAt   DateTime?
+
+  profile   CustomerProfile @relation(fields: [profileId], references: [id], onDelete: Restrict)
+  createdBy Staff?          @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([profileId])
+  @@index([kind, value])
+}
+
+/// A booking the bot has PROPOSED and the customer has not yet confirmed
+/// (chatbot v2). Holds no unit and writes no UnitEvent; confirming it creates
+/// the real Reservation in one transaction and sets `reservationId`. The
+/// confirm is refused past `expiresAt` or once confirmed.
+model ReservationProposal {
+  id            String    @id @default(cuid())
+  /// wa_id — the only phone the booking can be made for.
+  from          String
+  custName      String
+  /// The visit: when the customer will come to see the units.
+  scheduledFor  DateTime
+  createdAt     DateTime
+  expiresAt     DateTime
+  confirmedAt   DateTime?
+  cancelledAt   DateTime?
+  reservationId String?   @unique
+
+  reservation Reservation?              @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  items       ReservationProposalItem[]
+
+  @@index([from, createdAt])
+}
+
+model ReservationProposalItem {
+  id         String @id @default(cuid())
+  proposalId String
+  unitId     String
+  sortOrder  Int    @default(0)
+
+  proposal ReservationProposal @relation(fields: [proposalId], references: [id], onDelete: Restrict)
+  unit     Unit                @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@unique([proposalId, unitId])
+}
+
+/// One bot turn: what the router read, which agents ran, what it cost and how
+/// long it took (chatbot v2). Evaluation and the simulator read it.
+model AgentRun {
+  id            String   @id @default(cuid())
+  /// wa_id. A simulator turn has its own tester id.
+  from          String
+  /// The inbound row whose replyText holds this turn's answer.
+  messageId     String?
+  dryRun        Boolean  @default(false)
+  pipeline      String
+  language      String?
+  tone          String?
+  intent        String?
+  leadScore     Int?
+  escalateTopic String?
+  /// REPLIED, HANDOFF, SKIPPED or ERROR.
+  outcome       String
+  inputTokens   Int      @default(0)
+  cachedTokens  Int      @default(0)
+  outputTokens  Int      @default(0)
+  /// US dollars × 1 000 000. Not rupiah: what Anthropic bills.
+  costMicros    BigInt   @default(0)
+  latencyMs     Int      @default(0)
+  createdAt     DateTime
+
+  message     WaMessage?        @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  steps       AgentRunStep[]
+  evaluations AgentEvaluation[]
+
+  @@index([from, createdAt])
+  @@index([messageId])
+}
+
+model AgentRunStep {
+  id           String    @id @default(cuid())
+  runId        String
+  sortOrder    Int
+  agent        AgentRole
+  model        String
+  /// The tool called, or null for the model call itself.
+  tool         String?
+  ok           Boolean
+  ms           Int
+  inputTokens  Int       @default(0)
+  outputTokens Int       @default(0)
+
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+
+  @@index([runId])
+}
+
+/// A staff verdict on one bot reply (owner, 2026-10-14). A BAD one reaches the
+/// bot only when somebody presses Apply, which writes `correctionId`.
+model AgentEvaluation {
+  id           String      @id @default(cuid())
+  messageId    String
+  runId        String?
+  rating       EvalRating
+  reason       EvalReason?
+  /// Which agent the reviewer blames, when they can tell.
+  agent        AgentRole?
+  note         String?
+  corrected    String?
+  status       EvalStatus  @default(OPEN)
+  correctionId String?     @unique
+  createdById  String
+  createdAt    DateTime
+  reviewedById String?
+  reviewedAt   DateTime?
+
+  message    WaMessage        @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  run        AgentRun?        @relation(fields: [runId], references: [id], onDelete: Restrict)
+  correction AgentCorrection? @relation(fields: [correctionId], references: [id], onDelete: Restrict)
+  createdBy  Staff            @relation("AgentEvaluationCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  reviewedBy Staff?           @relation("AgentEvaluationReviewedBy", fields: [reviewedById], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+  @@index([messageId])
 }
 
 model AgentCache {
@@ -1704,14 +1983,17 @@ model AgentKnowledge {
 /// The agent's voice. Exactly one row is active, enforced by a partial unique
 /// index rather than by convention — see the migration.
 model Persona {
-  id          String   @id @default(cuid())
-  name        String   @unique
+  id          String     @id @default(cuid())
+  name        String     @unique
   blurb       String?
   /// The prompt text itself. Free text a staff member wrote.
   prompt      String
   active      Boolean
   /// A built-in cannot be deleted by staff, only deactivated.
   builtIn     Boolean
+  /// Which of the three chatbot agents this persona is (chatbot v2). One
+  /// persona per agent (owner, 2026-10-14); null for a persona no agent uses.
+  agent       AgentRole? @unique
   createdById String?
   createdAt   DateTime
   updatedAt   DateTime
@@ -1732,8 +2014,10 @@ model AgentCorrection {
   createdById String
   createdAt   DateTime
 
-  message   WaMessage? @relation(fields: [messageId], references: [id], onDelete: Restrict)
-  createdBy Staff      @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  message    WaMessage?       @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  createdBy  Staff            @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  /// The evaluation whose Apply wrote this correction, if any.
+  evaluation AgentEvaluation?
 }
 
 // ============================================================================
@@ -2018,6 +2302,9 @@ enum ReqStatus {
 enum AuditAction {
   CREATE
   UPDATE
+  /// A row the store REMOVED — a QC photo purged, an unused discount, a
+  /// draft count (2026-10-22, the activity log).
+  DELETE
   ARCHIVE
   LOGIN
   LOGIN_GAGAL
@@ -2085,6 +2372,46 @@ enum ChatActionKind {
 enum ChatActionStatus {
   OPEN
   DONE
+}
+
+/// The three chatbot v2 agents.
+enum AgentRole {
+  ROUTER
+  ADVISOR
+  OPERATIONS
+}
+
+enum ProfileFactKind {
+  USAGE
+  APP
+  PREFERENCE
+  ABOUT
+}
+
+enum FactSource {
+  BOT
+  STAFF
+}
+
+enum EvalRating {
+  GOOD
+  BAD
+}
+
+enum EvalReason {
+  WRONG_FACT
+  WRONG_TONE
+  TOO_LONG
+  MISSED_QUESTION
+  SHOULD_ESCALATE
+  SHOULD_NOT_ESCALATE
+  OTHER
+}
+
+enum EvalStatus {
+  OPEN
+  APPLIED
+  DISMISSED
 }
 
 enum WaMsgStatus {

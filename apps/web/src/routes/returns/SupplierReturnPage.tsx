@@ -12,7 +12,17 @@
  * Both kinds share the one history table below.
  */
 import { useState } from "react";
-import { App, Button, Flex, Form, Input, Modal, Segmented, Select } from "antd";
+import {
+  App,
+  AutoComplete,
+  Button,
+  Flex,
+  Form,
+  Input,
+  Modal,
+  Segmented,
+  Select,
+} from "antd";
 import { MoneyInput } from "../../components/MoneyInput";
 import { CountInput } from "../../components/CountInput";
 import { fmtDate, fmtNone } from "../../lib/format.js";
@@ -24,9 +34,11 @@ import {
   docCode,
   appendEvent,
   currentStaffName,
+  ensureReason,
 } from "../../mock/store.js";
 import { FORM_CENTRE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
+import { warehouseLabelOf } from "../../lib/warehouses.js";
 
 /** The label that turns on the "specify" field. Matched case-insensitively. */
 const OTHER = "other";
@@ -66,7 +78,7 @@ export function SupplierReturnPanel({
     return k ? `${k.name} ${k.variantLabel}` : fmtNone();
   };
   const warehouseName = (id: string) =>
-    db.warehouses.find((w) => w.id === id)?.name ?? id;
+    warehouseLabelOf(db.warehouses, id) ?? id;
 
   /** Counted products the shop holds, and where. */
   const levels = stockLevels(db.stockMoves);
@@ -104,12 +116,14 @@ export function SupplierReturnPanel({
     credit?: number;
   }) => {
     mutate((d) => {
+      // A typed reason joins Settings' list in the same write (2026-10-21).
+      ensureReason(d, "RETURN_SUPPLIER", v.reason);
       d.returns.unshift({
         id: nextId("r"),
         code: docCode("SP"),
         kind: "SUPPLIER",
         serial: v.serial,
-        reason: v.reason,
+        reason: v.reason.trim(),
         reasonDetail: needsDetail ? v.reasonDetail?.trim() : undefined,
         date: new Date().toISOString().slice(0, 10),
         status: "DONE",
@@ -137,7 +151,6 @@ export function SupplierReturnPanel({
     reason: string;
     reasonDetail?: string;
   }) => {
-    const reasonId = reasons.find((r) => r.label === v.reason)?.id;
     let short = false;
     mutate((d) => {
       // Checked again inside the write: another till may have sold some.
@@ -145,6 +158,9 @@ export function SupplierReturnPanel({
         short = true;
         return;
       }
+      // A typed reason joins Settings' list in the same write (2026-10-21).
+      const reasonId =
+        ensureReason(d, "RETURN_SUPPLIER", v.reason) || undefined;
       d.stockMoves.push({
         id: nextId("sm"),
         skuId: v.skuId,
@@ -186,23 +202,23 @@ export function SupplierReturnPanel({
         name="reason"
         label={t("returnSupplier.reason", "Reason")}
         tooltip={t(
-          "returnSupplier.managedInSettingsReasonsPer",
-          "Managed in Settings → Reasons per activity",
+          "returnSupplier.pickOneOrTypeA",
+          "Pick one, or type a new reason — a new one is added to Settings automatically",
         )}
         rules={[{ required: true }]}
       >
-        <Select
-          showSearch
-          optionFilterProp="label"
+        <AutoComplete
           placeholder={t(
-            "returnSupplier.pickOrSearchAReason",
-            "Pick or search a reason",
+            "returnSupplier.searchAReasonOrType",
+            "Search a reason, or type a new one",
           )}
-          options={reasons.map((r) => ({
-            value: r.label,
-            label: r.label,
-          }))}
-          onChange={setReason}
+          options={reasons.map((r) => ({ value: r.label }))}
+          filterOption={(input, opt) =>
+            String(opt?.value ?? "")
+              .toLowerCase()
+              .includes(input.toLowerCase())
+          }
+          onChange={(v: string) => setReason(v)}
         />
       </Form.Item>
       {needsDetail && (

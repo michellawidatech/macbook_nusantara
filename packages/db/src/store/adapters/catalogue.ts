@@ -12,6 +12,7 @@
  * leaves them out, so the page sees what it wrote.
  */
 import { deepEqual } from "@nusantara/store";
+import { modelKeyOf, variantKeyOf } from "@nusantara/domain";
 import { StoreValidationError } from "../errors.js";
 import {
   type Adapter,
@@ -169,6 +170,124 @@ async function syncAxes(
   }
 }
 
+/**
+ * The product key this row may hold (2026-10-21). Another LIVE product
+ * already being this product — by its stored key, or, for a row saved before
+ * keys existed, by its name — means:
+ * - a NEW product is refused: that is the second copy the key exists to stop
+ *   (in import mode it is let through keyless, so a replay never fails);
+ * - an EXISTING one keeps no key, and every edit to it still saves. The
+ *   catalogue holds duplicates from before, and a rule that blocked editing
+ *   them would stop the shop until they were merged.
+ */
+/** Products this commit archives — they give up their key and AppleDB links. */
+function removedModels(ctx: WriteContext): Set<string> {
+  let set = ctx.memo.get("models.removed") as Set<string> | undefined;
+  if (!set) ctx.memo.set("models.removed", (set = new Set()));
+  return set;
+}
+
+async function freeProductKey(
+  ctx: WriteContext,
+  id: string,
+  key: string | null,
+  creatingName: string | null,
+): Promise<string | null> {
+  if (key === null) return null;
+  const live = await ctx.tx.catalogModel.findMany({
+    where: {
+      archived: false,
+      id: { notIn: [id, ...removedModels(ctx)] },
+    },
+    select: {
+      name: true,
+      year: true,
+      family: true,
+      sizeInch: true,
+      chip: true,
+      extra: true,
+      productKey: true,
+    },
+  });
+  const holder = live.find(
+    (m) =>
+      (m.productKey ??
+        modelKeyOf({
+          ...m,
+          sizeInch: m.sizeInch === null ? null : m.sizeInch.toNumber(),
+        })) === key,
+  );
+  if (holder === undefined) return key;
+  if (creatingName !== null && ctx.mode !== "import") {
+    throw new StoreValidationError(
+      `Produk ini sudah ada: ${holder.name}. Tambahkan variannya ke sana.`,
+      "models",
+      id,
+    );
+  }
+  return null;
+}
+
+/** AppleDB identifiers linked to the product. Added, never removed. */
+async function linkIdentifiers(
+  ctx: WriteContext,
+  modelId: string,
+  identifiers: readonly string[],
+): Promise<void> {
+  for (const identifier of new Set(identifiers.map((i) => i.trim()))) {
+    if (identifier === "") continue;
+    const held = await ctx.tx.modelIdentifier.findUnique({
+      where: { identifier },
+    });
+    if (held?.modelId === modelId) continue;
+    if (held) {
+      // A product merged away hands its links to the one it became.
+      const from = await ctx.tx.catalogModel.findUnique({
+        where: { id: held.modelId },
+        select: { archived: true },
+      });
+      if (from?.archived || removedModels(ctx).has(held.modelId)) {
+        await ctx.tx.modelIdentifier.update({
+          where: { id: held.id },
+          data: { modelId },
+        });
+        continue;
+      }
+      throw new StoreValidationError(
+        `AppleDB ${identifier} sudah terhubung ke produk lain.`,
+        "models",
+        modelId,
+      );
+    }
+    await ctx.tx.modelIdentifier.create({
+      data: { modelId, identifier, createdAt: ctx.now },
+    });
+  }
+}
+
+/** "These are different products" — stored once per pair, ordered. */
+async function markNotDuplicates(
+  ctx: WriteContext,
+  modelId: string,
+  others: readonly string[],
+): Promise<void> {
+  for (const other of new Set(others)) {
+    if (other === modelId) continue;
+    const [aModelId, bModelId] =
+      modelId < other ? [modelId, other] : [other, modelId];
+    // Read, then insert: the app role may not UPDATE this table, and an
+    // upsert is an UPDATE to PostgreSQL even when it changes nothing.
+    const had = await ctx.tx.modelNotDuplicate.findUnique({
+      where: { aModelId_bModelId: { aModelId, bModelId } },
+    });
+    if (had === null) {
+      await ctx.tx.modelNotDuplicate.create({
+        data: { aModelId, bModelId, createdAt: ctx.now },
+      });
+    }
+  }
+}
+
 export const models: Adapter<"models"> = {
   collection: "models",
   async project(tx, _ctx, keys) {
@@ -187,6 +306,9 @@ export const models: Adapter<"models"> = {
             },
           },
         },
+        identifiers: { orderBy: { createdAt: "asc" } },
+        notDuplicateA: { select: { bModelId: true } },
+        notDuplicateB: { select: { aModelId: true } },
       },
     });
     return rows.map((m) => ({
@@ -202,14 +324,70 @@ export const models: Adapter<"models"> = {
       })),
       identifier: m.identifier ?? undefined,
       source: m.source ?? undefined,
+      ...(m.family === null ? {} : { family: m.family }),
+      ...(m.chip === null ? {} : { chip: m.chip }),
+      ...(m.extra === null ? {} : { extra: m.extra }),
+      ...(m.identifiers.length === 0
+        ? {}
+        : { identifiers: m.identifiers.map((i) => i.identifier) }),
+      ...(m.notDuplicateA.length + m.notDuplicateB.length === 0
+        ? {}
+        : {
+            notDuplicateOf: [
+              ...m.notDuplicateA.map((d) => d.bModelId),
+              ...m.notDuplicateB.map((d) => d.aModelId),
+            ].sort(),
+          }),
     }));
   },
   lock: (tx, keys) => lockRows(tx, "CatalogModel", "id", keys),
   async write(ctx, rows) {
     const { tx } = ctx;
+    for (const r of rows)
+      if (r.next === undefined) removedModels(ctx).add(r.key);
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("models", r.key);
+      if (n === undefined) {
+        // A product is deleted by archiving it (owner ask 2026-10-21), and
+        // only once it has no live variant left. Checked AFTER the rest of
+        // the commit: models are written before skus, and the same commit
+        // removes the product's variants.
+        const id = r.key;
+        ctx.later.push(async () => {
+          const live = await tx.sku.count({
+            where: { modelId: id, archived: false },
+          });
+          if (live > 0) {
+            throw new StoreValidationError(
+              "Produk ini masih punya varian — hapus variannya dulu.",
+              "models",
+              id,
+            );
+          }
+          await tx.catalogModel.update({
+            where: { id },
+            data: { archived: true },
+          });
+        });
+        ctx.touch("models", id);
+        continue;
+      }
+      const facts = {
+        family: n.family?.trim() || null,
+        chip: n.chip?.trim() || null,
+        extra: n.extra?.trim() || null,
+      };
+      const productKey = await freeProductKey(
+        ctx,
+        n.id,
+        modelKeyOf({
+          name: n.name,
+          year: n.releaseYear,
+          sizeInch: n.sizeInch ?? null,
+          ...facts,
+        }),
+        r.base === undefined ? n.name : null,
+      );
       const data = {
         categoryId: await ctx.categoryId(n.category),
         name: n.name.trim(),
@@ -218,6 +396,8 @@ export const models: Adapter<"models"> = {
         sizeInch: n.sizeInch ?? null,
         identifier: n.identifier ?? null,
         source: n.source ?? null,
+        ...facts,
+        productKey,
       };
       if (r.base === undefined) {
         await tx.catalogModel.create({
@@ -229,6 +409,8 @@ export const models: Adapter<"models"> = {
       if (r.base === undefined || !deepEqual(r.base.axes, n.axes)) {
         await syncAxes(ctx, n.id, n.axes);
       }
+      await linkIdentifiers(ctx, n.id, n.identifiers ?? []);
+      await markNotDuplicates(ctx, n.id, n.notDuplicateOf ?? []);
       ctx.touch("models", n.id);
     }
   },
@@ -267,11 +449,88 @@ async function syncAxisValues(
   }
 }
 
+/**
+ * The variant key this row may hold — the rule `freeProductKey` follows: a
+ * NEW variant that is already on its product is refused; an existing
+ * duplicate keeps no key and still saves.
+ */
+async function freeVariantKey(
+  ctx: WriteContext,
+  id: string,
+  modelId: string,
+  key: string | null,
+  creating: boolean,
+): Promise<string | null> {
+  if (key === null) return null;
+  const siblings = await ctx.tx.sku.findMany({
+    where: { modelId, archived: false, id: { not: id } },
+    select: { code: true, variantKey: true, variantLabel: true },
+  });
+  const holder = siblings.find(
+    (s) => (s.variantKey ?? variantKeyOf(s.variantLabel)) === key,
+  );
+  if (holder === undefined) return key;
+  if (creating && ctx.mode !== "import") {
+    throw new StoreValidationError(
+      `Varian ini sudah ada di produk ini: ${holder.code}.`,
+      "skus",
+      id,
+    );
+  }
+  return null;
+}
+
+/**
+ * A merged variant gives everything it HOLDS to the one it was merged into:
+ * no unit still held under it, no counted stock left on its shelf. What it
+ * sold stays — receipts name it, which is why it is kept at all.
+ */
+async function checkMerged(
+  ctx: WriteContext,
+  id: string,
+  into: string,
+): Promise<void> {
+  const target = await ctx.tx.sku.findUnique({
+    where: { id: into },
+    select: { mergedIntoId: true, archived: true },
+  });
+  if (target === null || target.archived || target.mergedIntoId !== null) {
+    throw new StoreValidationError(
+      "Varian tujuan penggabungan tidak aktif.",
+      "skus",
+      id,
+    );
+  }
+  const held = await ctx.tx.unit.count({
+    where: {
+      skuId: id,
+      archivedAt: null,
+      status: { in: ["QC", "TERSEDIA", "DIRESERVASI", "SERVIS"] },
+    },
+  });
+  const counted = await ctx.tx.stockMove.aggregate({
+    where: { skuId: id },
+    _sum: { qty: true },
+  });
+  if (held > 0 || (counted._sum.qty ?? 0) !== 0) {
+    throw new StoreValidationError(
+      "Varian yang digabung masih punya stok — pindahkan dulu.",
+      "skus",
+      id,
+    );
+  }
+}
+
 export const skus: Adapter<"skus"> = {
   collection: "skus",
   async project(tx, _ctx, keys) {
     const rows = await tx.sku.findMany({
-      where: { ...byId(keys), archived: false },
+      // A merged variant is archived but still projected: receipts and
+      // invoices name it. Pickers leave it out (`isLiveSku`).
+      where: {
+        ...byId(keys),
+        OR: [{ archived: false }, { mergedIntoId: { not: null } }],
+      },
       orderBy: [{ createdAt: "asc" }, { code: "asc" }],
       include: {
         axisValues: {
@@ -291,11 +550,57 @@ export const skus: Adapter<"skus"> = {
           ? undefined
           : Object.fromEntries(s.axisValues.map((v) => [v.axis, v.value])),
       price: s.price,
+      ...(s.mergedIntoId === null ? {} : { mergedIntoId: s.mergedIntoId }),
     }));
   },
   lock: (tx, keys) => lockRows(tx, "Sku", "id", keys),
   async write(ctx, rows) {
     const { tx } = ctx;
+    /*
+     * `Sku.code` is unique across EVERY row, archived ones included, and the
+     * browser never sees an archived variant — so a code it picked as free
+     * could still be held (2026-10-21: renaming 24 SKU_ codes to the shop's
+     * naming was refused, because "Replace all variants" had archived the
+     * earlier rows of those exact names). Two passes make the batch safe:
+     * every changed code is first parked on a value nothing else can hold, so
+     * a rename may take a code another row of the same batch is giving up;
+     * then an ARCHIVED holder of a wanted code is renamed out of the way.
+     * A LIVE holder is still a real conflict and the database refuses it.
+     */
+    const changed = rows.filter(
+      (r) =>
+        r.base !== undefined &&
+        r.next !== undefined &&
+        r.base.code !== r.next.code,
+    );
+    for (const r of changed) {
+      await tx.sku.update({
+        where: { id: r.key },
+        data: { code: `~renaming~${r.key}` },
+      });
+    }
+    for (const r of rows) {
+      const n = r.next;
+      if (n === undefined) continue;
+      if (r.base !== undefined && r.base.code === n.code) continue;
+      const holder = await tx.sku.findUnique({
+        where: { code: n.code },
+        select: { id: true, archived: true, mergedIntoId: true },
+      });
+      // A MERGED variant is archived too, but the browser sees it and its
+      // code is still on receipts: it is a live holder, not litter.
+      if (
+        holder !== null &&
+        holder.id !== n.id &&
+        holder.archived &&
+        holder.mergedIntoId === null
+      ) {
+        await tx.sku.update({
+          where: { id: holder.id },
+          data: { code: `${n.code} [archived ${holder.id}]` },
+        });
+      }
+    }
     for (const r of rows) {
       const n = r.next;
       if (n === undefined) {
@@ -311,9 +616,39 @@ export const skus: Adapter<"skus"> = {
             r.key,
           );
         }
+        // Nor one any past document names (2026-10-21): an archived variant
+        // is not projected, so a receipt or invoice line naming it would name
+        // nothing on every screen. Same rule as the browser's `variantInUse`.
+        const named = await tx.sku.findUnique({
+          where: { id: r.key },
+          select: {
+            _count: {
+              select: {
+                orderItems: true,
+                poItems: true,
+                stockMoves: true,
+                stockIns: true,
+                tradeIns: true,
+              },
+            },
+          },
+        });
+        if (named && Object.values(named._count).some((c) => c > 0)) {
+          throw new StoreValidationError(
+            "Varian ini punya riwayat stok atau penjualan — tidak bisa dihapus.",
+            "skus",
+            r.key,
+          );
+        }
         await tx.sku.update({ where: { id: r.key }, data: { archived: true } });
         ctx.touch("skus", r.key);
         continue;
+      }
+      const merged = n.mergedIntoId ?? null;
+      if (merged !== null && (r.base?.mergedIntoId ?? null) !== merged) {
+        // Checked once the whole commit has landed: the same commit moves
+        // this variant's units onto the one it is merged into.
+        ctx.later.push(() => checkMerged(ctx, n.id, merged));
       }
       const data = {
         modelId: n.modelId,
@@ -321,6 +656,18 @@ export const skus: Adapter<"skus"> = {
         name: n.name,
         variantLabel: n.variantLabel,
         price: n.price,
+        mergedIntoId: merged,
+        variantKey:
+          merged === null
+            ? await freeVariantKey(
+                ctx,
+                n.id,
+                n.modelId,
+                variantKeyOf(n.variantLabel),
+                r.base === undefined,
+              )
+            : null,
+        ...(merged === null ? {} : { archived: true }),
       };
       if (r.base === undefined) {
         await tx.sku.create({
@@ -329,7 +676,7 @@ export const skus: Adapter<"skus"> = {
             ...data,
             grade: null,
             landed: 0n,
-            archived: false,
+            archived: merged !== null,
             createdAt: ctx.now,
           },
         });

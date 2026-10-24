@@ -78,6 +78,7 @@
  * ("did that one go in?") by showing them the row.
  */
 import { useEffect, useMemo, useRef, useState, type Ref } from "react";
+import { isLiveSku } from "../../lib/skuCode.js";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   App,
@@ -161,6 +162,7 @@ import {
 } from "../../lib/condition.js";
 import type { OpnameSurplus, Unit } from "../../mock/seed.js";
 import { COLUMN } from "../../theme/tokens";
+import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
 /** Statuses that mean the warehouse should physically be holding the unit. */
 const IN_STOCK = ["TERSEDIA", "DIRESERVASI", "QC"];
@@ -393,7 +395,10 @@ function SurplusDialog({
             <Select
               value={locationId}
               onChange={setLocationId}
-              options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
+              options={warehouses.map((w) => ({
+                value: w.id,
+                label: warehouseLabel(w),
+              }))}
             />
           </Form.Item>
         )}
@@ -850,8 +855,7 @@ export function OpnameSessionPage() {
   const whereOf = (serial: string) => {
     const u = unitBySerial.get(serial);
     if (!u) return fmtNone();
-    const where =
-      db.warehouses.find((w) => w.id === u.locationId)?.name ?? fmtNone();
+    const where = warehouseLabelOf(db.warehouses, u.locationId) ?? fmtNone();
     const rack = db.racks.find((r) => r.id === u.rackId)?.name;
     return rack ? `${where} · ${rack}` : where;
   };
@@ -1484,8 +1488,7 @@ export function OpnameSessionPage() {
             label: t("opname.warehouse", "Warehouse"),
             children: axisChips(
               scope.locationIds.map(
-                (id) =>
-                  db.warehouses.find((w) => w.id === id)?.name ?? fmtNone(),
+                (id) => warehouseLabelOf(db.warehouses, id) ?? fmtNone(),
               ),
               t("opname.allWarehouses", "All warehouses"),
             ),
@@ -2403,7 +2406,7 @@ export function OpnameSessionPage() {
           serial={surplusFor}
           initial={surplus[surplusFor]}
           defaultLocationId={surplusHome}
-          skus={db.skus.map((k) => ({
+          skus={db.skus.filter(isLiveSku).map((k) => ({
             id: k.id,
             label: `${k.name} ${k.variantLabel}`,
             code: k.code,

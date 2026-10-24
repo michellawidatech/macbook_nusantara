@@ -13,6 +13,7 @@ export {
   hasCredential,
   readAnthropicEnv,
   usingOAuth,
+  OAUTH_MODEL,
   type AnthropicEnv,
 } from "./anthropic.js";
 export {
@@ -28,6 +29,9 @@ export {
 export {
   ANTHROPIC_TOOLS,
   CUSTOMER_TOOLS,
+  CODE_ONLY_TOOLS,
+  PROPOSAL_TOOLS,
+  PROPOSAL_TTL_MS,
   MAX_BOOKING_DAYS,
   PHOTO_TOOLS,
   PROFILE_TOOLS,
@@ -75,7 +79,7 @@ export {
   AGENT_MODEL,
   MAX_STEPS,
   MAX_TOKENS,
-  TEMPERATURE,
+  EFFORT,
   converse,
   stockFactsOf,
   type AgentClient,
@@ -108,6 +112,18 @@ export {
   type RankedDoc,
 } from "./retrieval.js";
 export { loadCapabilities } from "./switches.js";
+export {
+  MAX_TESTERS,
+  RESET_INTENT,
+  RESET_REPLY,
+  TESTERS_SETTING_KEY,
+  formatTesters,
+  isResetCommand,
+  loadTesters,
+  parseTesters,
+  resetPointFor,
+  toWaId,
+} from "./reset.js";
 export {
   CAPABILITY_SETTING_KEYS,
   HANDOFF_TOPICS,
@@ -161,3 +177,107 @@ export {
   type SummarizeInput,
   type SummaryTurn,
 } from "./summarize.js";
+export {
+  AGENT_API_ROUTES,
+  AGENT_TOKEN_TTL_MS,
+  REMOTE_TOOLS,
+  agentApiDispatch,
+  argsFromRequest,
+  mintAgentToken,
+  verifyAgentToken,
+  type AgentApiOptions,
+  type AgentClaims,
+  type AgentMethod,
+  type AgentRoute,
+  type ToolDispatch,
+} from "./agentApi.js";
+export {
+  ADVISOR_MODEL,
+  AGENT_DEFINITIONS,
+  AGENT_ROLES,
+  INTENTS,
+  OPERATIONS_MODEL,
+  ROUTER_MODEL,
+  costMicros,
+  type AgentDefinition,
+  type AgentRole,
+  type Intent,
+  type RouterVerdict,
+} from "./agents.js";
+export {
+  personaFor,
+  readVerdict,
+  runPipeline,
+  type AgentStep,
+  type PipelineInput,
+  type PipelineResult,
+} from "./pipeline.js";
+export { usageOf, photoIdsIn, type CallUsage } from "./converse.js";
+export {
+  DEFAULT_LEAD_THRESHOLD,
+  LEAD_THRESHOLD_SETTING_KEY,
+  PIPELINE_SETTING_KEY,
+  PIPELINES,
+  isLead,
+  lastShownUnits,
+  profileKnown,
+  loadAgentPersonas,
+  chatbotSettings,
+  openProposalLine,
+  profileLine,
+  type ChatbotSettings,
+  type PipelineName,
+} from "./v2context.js";
+export {
+  leadScoreOf,
+  runRules,
+  type RulesInput,
+  type RulesResult,
+} from "./rules/run.js";
+export {
+  understand,
+  nameOf,
+  visitTimeOf,
+  type RuleIntent,
+  type Understanding,
+} from "./rules/understand.js";
+export { reply as ruleReplies, unitLine } from "./rules/replies.js";
+export { moneyAmounts } from "./policy.js";
+export {
+  answeredTurns,
+  lineOf,
+  type AnsweredRow,
+  type AnsweredTurn,
+} from "./turns.js";
+export {
+  CHUNK_MAX_CHARS,
+  RECALL_LIMIT,
+  RECALL_MIN_KEYWORDS,
+  RECALL_MIN_SIMILARITY,
+  RECALL_SNIPPET_CHARS,
+  chunkText,
+  cosine,
+  decodeInt8,
+  encodeInt8,
+  rankRecall,
+  recallBlock,
+  type RecallCandidate,
+  type Recalled,
+} from "./memoryRecall.js";
+export {
+  VOYAGE_DEFAULT_MODEL,
+  VOYAGE_DIMENSIONS,
+  VOYAGE_URL,
+  VoyageError,
+  readVoyageEnv,
+  voyageEmbed,
+  type VoyageOptions,
+} from "./voyage.js";
+export {
+  RECALL_SCAN_LIMIT,
+  RECALL_TIMEOUT_MS,
+  recallEarlier,
+  recentTurns,
+  turnsFor,
+  type RecallInput,
+} from "./recall.js";

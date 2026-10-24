@@ -1,0 +1,13 @@
+-- The activity log (owner ask 2026-10-22: "add an activity tab that reveals
+-- all the activity", answered "everything, from now on").
+--
+-- Every store commit now writes one "AuditLog" row per row it saved, in the
+-- same transaction (packages/db/src/store/activity.ts). CREATE and UPDATE
+-- already exist; a row the store REMOVES — a QC photo purged at a sale, an
+-- unused discount or supplier deleted, a draft count thrown away — needs its
+-- own word. ARCHIVE is not it: those rows are gone, not hidden.
+--
+-- Additive. nusantara_app has held INSERT on "AuditLog" since
+-- 20260815060658 (invariant 14), which is all the commit needs; no grant
+-- changes, so the deploy's grant query reads as before.
+ALTER TYPE "AuditAction" ADD VALUE IF NOT EXISTS 'DELETE' BEFORE 'ARCHIVE';

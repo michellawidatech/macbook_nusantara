@@ -12,17 +12,32 @@ on:
   # "Run workflow" on a v* tag redeploys that tag — the pipeline's rollback. It
   # reuses the tarball already attached to the tag's GitHub Release.
   #
+  # "Run workflow" on a BRANCH deploys that branch to staging
+  # (https://staging-pos.macbooknusantara.com, docs/staging.md) — the way to
+  # try a feature on the shop's own data before it is merged. A push to main
+  # deploys main there by itself.
+  #
   # No pull_request trigger: every push is already checked, and a pull request
   # shows the checks of its head commit. Both at once ran every job twice
   # against the plan's 2,000 free minutes.
   workflow_dispatch:
+    inputs:
+      refresh_staging_data:
+        description: >-
+          Staging only: replace staging's database with a fresh copy of the
+          shop's before migrating it. Everything done on staging since the
+          last copy is lost.
+        type: boolean
+        default: false
 
 # A second push to the same branch makes the first one's answer worthless.
 # main and the release tags are excluded: those runs are the record of what
-# cleared stage and prod, and a cancelled one is a gap in it.
+# cleared stage and prod, and a cancelled one is a gap in it. So is a "Run
+# workflow": it is a deploy somebody asked for, and its group is its own, so a
+# push to the same branch can never cancel it halfway through a migration.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: read
@@ -55,6 +70,15 @@ jobs:
 
   test:
     name: Tests (PostgreSQL 16)
+    # Only where it guards something (owner, 2026-10-23: the free plan's
+    # 2,000 minutes a month ran out). A release tag, main and a "Run
+    # workflow" still run the whole suite, and a release cannot be built
+    # without it (`release` needs `test`). A push to a feature branch gets the
+    # three-minute `static` check instead of eighteen minutes of tests.
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.ref == 'refs/heads/main' ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -382,8 +406,15 @@ jobs:
       # as this exact version — and switches back by itself if it does not.
       - name: Install on the Mac mini
         run: |
+          # pipefail: the installer's refusal must fail this step. Without it
+          # the step reported `tee`'s exit code, so a release the installer
+          # rolled back (2026-10-22: the worker would not stay up) showed green.
+          set -o pipefail
           sha=$(cut -d' ' -f1 "release/nusantara-$VERSION.tar.gz.sha256")
           ssh mini install "$VERSION" "$sha" < "release/nusantara-$VERSION.tar.gz" | tee install.txt
+          # Belt and braces: the installer's own last word must be that THIS
+          # release is live.
+          grep -F "nusantara-$VERSION is live" install.txt
 
       # Optional: the same answer from outside, through `tailscale serve`. Needs
       # the tailnet policy to let tag:ci reach port 443 as well as 22.
@@ -405,6 +436,244 @@ jobs:
             echo "| Commit | \`${GITHUB_SHA:0:7}\` |"
             echo "| Was live | \`$(sed -n 's/^current=//p' status.txt 2> /dev/null)\` |"
             echo "| Backup | $(sed -n 's/^backup ok: //p' backup.txt 2> /dev/null) |"
+            echo
+            echo '```'
+            cat install.txt 2> /dev/null || echo "(not installed)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Staging — docs/staging.md. The same sealed release and the same installer
+  # as the two jobs above, aimed at /opt/nusantara-stage on the same Mac mini.
+  # ⚠️ These two mirror `release` and `deploy` step for step; a change to one
+  # pair is almost always owed to the other.
+  # ---------------------------------------------------------------------------
+
+  # Needs `static` and NOT `test`: the build is what staging cannot do without,
+  # and the suites take a quarter of an hour that a person waiting to try a
+  # branch should not have to spend. They still run beside it and still report.
+  stage-release:
+    name: Build the staging release (Apple silicon)
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/'))
+    needs: [static]
+    runs-on: macos-15
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.name.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The branch, the commit and the run. The run is in it because a rebuild
+      # of the same commit is different bytes, and the installer refuses a
+      # second set of bytes under a name it already holds.
+      - name: Name the release
+        id: name
+        run: |
+          branch=$(printf '%s' "$GITHUB_REF_NAME" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-40)
+          echo "version=stage-$branch-${GITHUB_SHA::7}-$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/setup
+
+      - name: Build
+        env:
+          NUSANTARA_VERSION: ${{ steps.name.outputs.version }}
+        run: node deploy/macmini/build-release.mjs
+
+      - name: Checksum
+        env:
+          VERSION: ${{ steps.name.outputs.version }}
+        run: |
+          cd build/macmini
+          shasum -a 256 "nusantara-$VERSION.tar.gz" > "nusantara-$VERSION.tar.gz.sha256"
+
+      # A run artifact, not a GitHub Release: a staging build is not a
+      # release anybody will redeploy. Kept a few days for a re-run.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stage-release
+          path: |
+            build/macmini/nusantara-${{ steps.name.outputs.version }}.tar.gz
+            build/macmini/nusantara-${{ steps.name.outputs.version }}.tar.gz.sha256
+          retention-days: 3
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stage-sourcemaps
+          path: build/macmini/maps/${{ steps.name.outputs.version }}
+          retention-days: 3
+
+  # The `stage` environment holds its own SSH key — pinned on the Mac mini to
+  # `nusantara-deploy --stage`, so it cannot touch the shop — its own Tailscale
+  # identity, and the owner's URL for nusantara_pos_stage. It admits any
+  # branch, because "Run workflow" on any branch is how a feature is tried.
+  stage-deploy:
+    name: Deploy to staging
+    needs: [stage-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: stage
+      url: https://staging-pos.macbooknusantara.com
+    concurrency:
+      group: deploy-stage
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # Tailscale workload identity federation
+    env:
+      VERSION: ${{ needs.stage-release.outputs.version }}
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER || 'nusantara-deploy' }}
+      REFRESH: ${{ inputs.refresh_staging_data == true }}
+    steps:
+      - name: Check the stage environment is configured
+        env:
+          HAS_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY != '' }}
+          HAS_OWNER_URL: ${{ secrets.STAGE_OWNER_DATABASE_URL != '' }}
+          HAS_TS_CLIENT: ${{ secrets.TS_OAUTH_CLIENT_ID != '' }}
+          HAS_TS_SECRET: ${{ secrets.TS_OAUTH_SECRET != '' }}
+          TS_AUDIENCE: ${{ vars.TS_AUDIENCE }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          missing=()
+          [ -n "$DEPLOY_HOST" ] || missing+=("variable DEPLOY_HOST")
+          [ -n "$DEPLOY_KNOWN_HOSTS" ] || missing+=("variable DEPLOY_KNOWN_HOSTS")
+          [ "$HAS_SSH_KEY" = true ] || missing+=("secret DEPLOY_SSH_KEY")
+          [ "$HAS_OWNER_URL" = true ] || missing+=("secret STAGE_OWNER_DATABASE_URL")
+          [ "$HAS_TS_CLIENT" = true ] || missing+=("secret TS_OAUTH_CLIENT_ID")
+          [ -n "$TS_AUDIENCE" ] || [ "$HAS_TS_SECRET" = true ] ||
+            missing+=("variable TS_AUDIENCE (or secret TS_OAUTH_SECRET)")
+          if [ ${#missing[@]} -gt 0 ]; then
+            for m in "${missing[@]}"; do echo "::error::the stage environment has no $m (docs/staging.md)"; done
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: stage-release
+          path: release
+
+      - name: Check the release
+        run: (cd release && sha256sum -c "nusantara-$VERSION.tar.gz.sha256")
+
+      - name: Join the tailnet (workload identity)
+        if: vars.TS_AUDIENCE != ''
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:ci
+          ping: ${{ vars.DEPLOY_HOST }}
+
+      - name: Join the tailnet (OAuth client)
+        if: vars.TS_AUDIENCE == ''
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          ping: ${{ vars.DEPLOY_HOST }}
+
+      - name: Set up SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host mini
+            HostName $DEPLOY_HOST
+            User $DEPLOY_USER
+            IdentityFile ~/.ssh/deploy
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+            ConnectTimeout 30
+            ConnectionAttempts 3
+            ServerAliveInterval 15
+            ServerAliveCountMax 8
+          EOF
+
+      # Staging's key arrives at the installer as `--stage status`. An
+      # installer from before staging (INSTALLER_VERSION 1) answers that with
+      # its usage line — and this is where that shows.
+      - name: What is live on staging now
+        run: |
+          if ! ssh mini status | tee status.txt; then
+            echo "::error::the Mac mini refused the staging key's status — re-run setup-deploy-access --stage there (docs/staging.md §3)"
+            exit 1
+          fi
+          if [ "$(sed -n 's/^target=//p' status.txt)" != stage ]; then
+            echo "::error::this key reached the installer for '$(sed -n 's/^target=//p' status.txt)', not stage — it must be pinned with setup-deploy-access --stage"
+            exit 1
+          fi
+
+      # Before the migrations, so a copy of the shop's older schema is brought
+      # up to this branch's in the same run.
+      - name: Copy the shop's database into staging
+        if: env.REFRESH == 'true'
+        run: ssh mini refresh | tee refresh.txt
+
+      - name: Migrate
+        env:
+          OWNER_URL: ${{ secrets.STAGE_OWNER_DATABASE_URL }}
+        run: |
+          case "$OWNER_URL" in
+            *@127.0.0.1:55432/nusantara_pos_stage*) ;;
+            *) echo "::error::STAGE_OWNER_DATABASE_URL must point at the tunnel: postgresql://nusantara:…@127.0.0.1:55432/nusantara_pos_stage"; exit 1 ;;
+          esac
+          ssh -f -N -M -S "$RUNNER_TEMP/tunnel" -o ExitOnForwardFailure=yes \
+            -L 55432:127.0.0.1:5432 mini
+          DATABASE_URL="$OWNER_URL" pnpm --filter @nusantara/db exec prisma migrate deploy | tee migrate.txt
+
+      - name: Verify the schema (ask the database, not Prisma)
+        env:
+          OWNER_URL: ${{ secrets.STAGE_OWNER_DATABASE_URL }}
+        run: |
+          q() { psql "$OWNER_URL" -v ON_ERROR_STOP=1 -tAc "$1"; }
+          ls packages/db/prisma/migrations | grep '^[0-9]' | sort > expected.txt
+          q "select migration_name from _prisma_migrations where finished_at is not null and rolled_back_at is null order by 1" | sort > applied.txt
+          missing=$(comm -23 expected.txt applied.txt)
+          if [ -n "$missing" ]; then echo "::error::not applied: $missing"; exit 1; fi
+          extra=$(comm -13 expected.txt applied.txt)
+          if [ -n "$extra" ]; then echo "::warning::staging's database has migrations this branch does not: $extra — run again with 'refresh staging data' ticked for a clean copy"; fi
+          failed=$(q "select count(*) from _prisma_migrations where finished_at is null and rolled_back_at is null")
+          if [ "$failed" != 0 ]; then echo "::error::$failed migration(s) started and never finished"; exit 1; fi
+          grants=$(q "select has_table_privilege('nusantara_app','\"Unit\"','SELECT'), has_table_privilege('nusantara_app','\"Unit\"','DELETE'), has_table_privilege('nusantara_app','\"UnitEvent\"','INSERT'), has_table_privilege('nusantara_app','\"UnitEvent\"','UPDATE'), has_table_privilege('nusantara_app','\"UnitNotePhoto\"','DELETE')")
+          if [ "$grants" != "t|f|t|f|t" ]; then echo "::error::nusantara_app's grants are $grants, not t|f|t|f|t — the ledger is not append-only"; exit 1; fi
+          echo "$(wc -l < applied.txt | tr -d ' ') migrations applied, grants t|f|t|f|t"
+
+      - name: Close the tunnel
+        if: always()
+        run: ssh -S "$RUNNER_TEMP/tunnel" -O exit mini 2> /dev/null || true
+
+      - name: Install on staging
+        run: |
+          sha=$(cut -d' ' -f1 "release/nusantara-$VERSION.tar.gz.sha256")
+          ssh mini install "$VERSION" "$sha" < "release/nusantara-$VERSION.tar.gz" | tee install.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### \`nusantara-$VERSION\` → staging"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Branch | \`$GITHUB_REF_NAME\` |"
+            echo "| Commit | \`${GITHUB_SHA:0:7}\` |"
+            echo "| Was live | \`$(sed -n 's/^current=//p' status.txt 2> /dev/null)\` |"
+            echo "| Data | $(sed -n 's/^✓ //p' refresh.txt 2> /dev/null || true) |"
+            echo "| Address | https://staging-pos.macbooknusantara.com |"
             echo
             echo '```'
             cat install.txt 2> /dev/null || echo "(not installed)"

@@ -10,8 +10,8 @@
  * the commit — so the release is named for what it is, not for when it was
  * built — and there a tree with uncommitted changes is refused outright.
  *
- * What goes in: the four server processes (api, worker, webhook and the staff
- * CLI), each compiled by esbuild into ONE minified file; the SPA exactly as
+ * What goes in: the server processes (api, worker, webhook, the WhatsApp
+ * gateway) and the CLIs, each compiled by esbuild into ONE minified file; the SPA exactly as
  * `vite build` emits it; a Prisma client generated from a copy of the schema
  * with every comment removed; the two native pieces (Prisma's query engine and
  * argon2) as binaries; and the ops scripts in ./ops.
@@ -155,7 +155,18 @@ const ENTRIES = {
   accounts: "apps/api/src/cli/seed-accounts.ts",
   knowledge: "apps/api/src/cli/import-knowledge.ts",
   chatbot: "apps/api/src/cli/chatbot-doctor.ts",
+  // WhatsApp as a linked device (2026-10-22, docs/whatsapp-baileys.md).
+  "wa-gateway": "apps/wa-gateway/src/main.ts",
 };
+
+/**
+ * Baileys' optional image, audio and link-preview helpers. It imports each
+ * with `import(…).catch()` and carries on without it — an image is sent with
+ * no thumbnail, which is all sharp/jimp would add — so they are left out
+ * rather than bundled: sharp is native code for one CPU and would have to
+ * ship as files the way argon2 does, for a thumbnail.
+ */
+const BAILEYS_OPTIONAL = ["sharp", "jimp", "link-preview-js", "audio-decode"];
 
 /** The generated client stays a directory of files next to the bundles. */
 const prismaClientExternal = {
@@ -197,7 +208,7 @@ const result = await esbuild.build({
   metafile: true,
   logLevel: "warning",
   // A native addon cannot be inlined; it ships as files (step 3).
-  external: ["@node-rs/argon2"],
+  external: ["@node-rs/argon2", ...BAILEYS_OPTIONAL],
   plugins: [prismaClientExternal],
   // The CommonJS dependencies (express, pino, …) call require() and read
   // __dirname, and neither exists inside an ES module.
@@ -292,7 +303,18 @@ cpSync(join(ROOT, "apps", "web", "dist"), join(stage, "web"), {
 cpSync(join(HERE, "ops"), join(stage, "ops"), { recursive: true });
 // nusantara-deploy and setup-deploy-access ride along so an admin at the Mac
 // mini can reinstall them from the live release; neither runs from here.
-for (const f of ["run", "backup", "nusantara-deploy", "setup-deploy-access"]) {
+for (const f of [
+  "run",
+  "backup",
+  "nusantara-deploy",
+  "setup-deploy-access",
+  "setup-staging",
+  "reset-transactions",
+  "fix-skus",
+  "void-sale",
+  "release-unit",
+  "check-consistency",
+]) {
   chmodSync(join(stage, "ops", f), 0o755);
 }
 writeFileSync(

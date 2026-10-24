@@ -92,7 +92,7 @@ def build(si: dict[str, Invoice], pi: dict[str, Invoice], summary: dict[str, tup
     rows["paymentMethods"].append(dict(id="pm_b2soft", code=METHOD, label="B2Soft (metode tidak tercatat)",
                                        builtIn=False, forPo=True, forSale=True, active=False))
     for code, name in warehouses:
-        rows["warehouses"].append(dict(id=wh(code), name=name.title().replace("Qc", "QC"), active=True,
+        rows["warehouses"].append(dict(id=wh(code), code=code, name=name.title().replace("Qc", "QC"), active=True,
                                        kind="TOKO" if code == "02" else "GUDANG"))
     sales_id = {}
     for name in salesmen:

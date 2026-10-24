@@ -25,16 +25,39 @@
  * `db.expenses`, an income into `db.incomes`.
  */
 import { useMemo, useState } from "react";
-import { Card, Segmented, Tag, Typography } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import {
+  App,
+  Button,
+  Card,
+  Flex,
+  Segmented,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import {
+  BankOutlined,
+  DeleteOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
+  PlusOutlined,
+  WalletOutlined,
+} from "@ant-design/icons";
+import { OpeningBalanceModal } from "./OpeningBalanceModal";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { AdjustmentPanel } from "./AdjustmentPanel";
-import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
+import { fmtRp, fmtDate, fmtNone, fmtTime } from "../../lib/format.js";
 import { customerLabel } from "../../lib/customers.js";
-import { accountOfMethod } from "../../lib/accounts.js";
+import { accountOfMethod, balancesOf } from "../../lib/accounts.js";
 import { paymentsOf } from "../../lib/salePayments.js";
-import { useDb } from "../../mock/store.js";
+import { mutate, useDb } from "../../mock/store.js";
+import {
+  adjustmentDeletionBlock,
+  deleteAdjustment,
+  transferPartner,
+  type AdjustmentRef,
+} from "../../lib/adjustmentDeletion.js";
 import {
   EXPENSE_CATEGORIES,
   INCOME_REASONS,
@@ -42,7 +65,10 @@ import {
 } from "../../mock/seed.js";
 import { labelOf } from "../../i18n/enumLabels.js";
 import { useTranslation } from "react-i18next";
-import { COLUMN } from "../../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
+import { TimeSeriesChart } from "../../components/TimeSeriesChart";
+import { DonutChart } from "../../components/DonutChart";
+import { expenseBreakdown, monthlyFlow } from "../../lib/cashflowCharts.js";
 
 /** Category label maps, derived from `seed.ts` so there is one vocabulary. */
 const INCOME_REASON: Record<string, string> = Object.fromEntries(
@@ -77,13 +103,78 @@ interface Row {
   /** Always positive. `direction` is the sign. */
   readonly amount: number;
   readonly status: "SETTLED" | "PENDING" | "DUE";
+  /**
+   * Orders rows that share an instant — and every hand-typed row of one day
+   * does, since an adjustment carries a date and no time: when it was typed
+   * (`createdAt`), empty for everything else.
+   */
+  readonly tie: string;
+  /** The `Expense` / `ManualIncome` behind a typed row — what Delete removes. */
+  readonly adjustment?: AdjustmentRef & { readonly date: string };
+}
+
+/**
+ * When a typed row happened: the day somebody picked, at the clock time they
+ * typed it (owner ask 2026-10-24: an hour and minute on every row). The day is
+ * theirs to back-date; the time is the only one there is. A row with no
+ * `createdAt` sits at noon, so it sorts among the day's sales rather than
+ * always above them — midnight would be a claim it does not make.
+ */
+function typedAt(date: string, createdAt: string | undefined): string {
+  const typed = createdAt === undefined ? undefined : new Date(createdAt);
+  if (typed === undefined || Number.isNaN(typed.getTime()))
+    return `${date}T12:00:00.000Z`;
+  const [y, m, d] = date.split("-").map(Number) as [number, number, number];
+  return new Date(
+    y,
+    m - 1,
+    d,
+    typed.getHours(),
+    typed.getMinutes(),
+    typed.getSeconds(),
+    typed.getMilliseconds(),
+  ).toISOString();
+}
+
+/**
+ * Oldest first, and TOTAL: by instant, then by `tie`, then by key.
+ *
+ * ⚠️ Without the last two the order of a day's typed rows was whatever order
+ * the collections happened to hold them in, and the table — sorted newest
+ * first by a stable sort — kept them in that same order, oldest on top. So
+ * the "Latest balance" on the first row of a busy day was not the latest: on
+ * 2026-10-24 it read Rp 21.722.500 above two expenses that had already taken
+ * it to Rp 21.622.200, and the shop counted the Rp 100.300 as missing (owner
+ * report, 2026-10-24). The table now sorts on this order's position, so the
+ * walk and the view cannot disagree.
+ */
+function chronological(a: Row, b: Row): number {
+  return (
+    a.at.localeCompare(b.at) ||
+    a.tie.localeCompare(b.tie) ||
+    a.key.localeCompare(b.key)
+  );
 }
 
 export function IncomeExpensePage() {
   const { t } = useTranslation();
+  const { message, modal } = App.useApp();
   const db = useDb();
   const [addAdjustment, setAddAdjustment] = useState(false);
+  const [openingOpen, setOpeningOpen] = useState(false);
   const [basis, setBasis] = useState<"CASH" | "ACCRUAL">("CASH");
+  /** How far back the two charts look (owner ask 2026-10-23). */
+  const [chartMonths, setChartMonths] = useState<3 | 6 | 12>(6);
+  /**
+   * The two balances are hidden until somebody asks (owner ask 2026-10-22:
+   * *"the balance should be dotted at first and if they want to see it they
+   * can open the eye button"*) — the screen is often in view of a customer.
+   * Per visit, never remembered.
+   */
+  const [reveal, setReveal] = useState<{ cash: boolean; bank: boolean }>({
+    cash: false,
+    bank: false,
+  });
 
   /** Method-code → the human label from `PaymentMethod.label`. */
   const methodLabel = (code: string) =>
@@ -116,6 +207,7 @@ export function IncomeExpensePage() {
           orderCode: o.code,
           amount: p.amount,
           status: p.state,
+          tie: "",
         });
       }
       for (const r of o.refunds ?? []) {
@@ -135,16 +227,14 @@ export function IncomeExpensePage() {
           orderCode: o.code,
           amount: r.amount,
           status: "SETTLED",
+          tie: "",
         });
       }
     }
     for (const i of db.incomes) {
       out.push({
         key: `i-${i.id}`,
-        // Noon so the row sorts among the day's sales rather than always above
-        // them; a hand-entered row carries a date and no time, and pretending
-        // it happened at midnight is a claim it does not make.
-        at: `${i.date}T12:00:00.000Z`,
+        at: typedAt(i.date, i.createdAt),
         direction: "INCOME",
         category: i.reason,
         method: methodLabel(i.method),
@@ -156,12 +246,14 @@ export function IncomeExpensePage() {
           : {}),
         amount: i.amount,
         status: "SETTLED",
+        tie: i.createdAt ?? "",
+        adjustment: { kind: "income", id: i.id, date: i.date },
       });
     }
     for (const e of db.expenses) {
       out.push({
         key: `e-${e.id}`,
-        at: `${e.date}T12:00:00.000Z`,
+        at: typedAt(e.date, e.createdAt),
         direction: "EXPENSE",
         category: e.kind,
         method: methodLabel(e.method),
@@ -174,6 +266,8 @@ export function IncomeExpensePage() {
           : {}),
         amount: e.amount,
         status: "SETTLED",
+        tie: e.createdAt ?? "",
+        adjustment: { kind: "expense", id: e.id, date: e.date },
       });
     }
     /*
@@ -201,6 +295,7 @@ export function IncomeExpensePage() {
           orderCode: po.code,
           amount: p.amount,
           status: "SETTLED",
+          tie: "",
         });
       }
     }
@@ -220,6 +315,7 @@ export function IncomeExpensePage() {
           }),
         amount: d.amount,
         status: "SETTLED",
+        tie: "",
       });
     }
     // Payments off a debt from before this app. Customers only since
@@ -241,11 +337,12 @@ export function IncomeExpensePage() {
             }),
           amount: p.amount,
           status: "SETTLED",
+          tie: "",
         });
       }
     }
     // Newest first, so the top of the page is what happened last.
-    return out.sort((a, b) => b.at.localeCompare(a.at));
+    return out.sort((a, b) => chronological(b, a));
   }, [
     db.orders,
     db.incomes,
@@ -257,6 +354,60 @@ export function IncomeExpensePage() {
     db.paymentMethods,
     t,
   ]);
+
+  /**
+   * Each row's place in the one total order, newest highest — what the Date
+   * column sorts on, so either direction is exactly the order the running
+   * balance was walked in (see `chronological`).
+   */
+  const position = useMemo(
+    () => new Map(rows.map((r, i) => [r.key, rows.length - i])),
+    [rows],
+  );
+
+  /** Why a typed row cannot be deleted, in words; undefined when it can. */
+  const deleteBlockText = (r: Row) =>
+    r.adjustment &&
+    adjustmentDeletionBlock(r.adjustment.date, db.settings) === "BOOKS_CLOSED"
+      ? t(
+          "cashflow.deleteClosed",
+          "The book is closed over this month. Reopen it to delete this adjustment.",
+        )
+      : undefined;
+
+  /*
+   * Delete a typed adjustment (owner ask 2026-10-24). A cash ↔ bank move goes
+   * with its other half; `lib/adjustmentDeletion.ts` is the rule.
+   */
+  const removeAdjustment = (r: Row) => {
+    const ref = r.adjustment;
+    if (!ref) return;
+    const pair = transferPartner(db, ref) !== undefined;
+    modal.confirm({
+      title: t("cashflow.deleteTitle", "Delete this adjustment?"),
+      content: pair
+        ? t(
+            "cashflow.deleteMoveBody",
+            "{{description}} — {{amount}}. Both halves of this cash ↔ bank move are removed for good, and the balances are worked out again without them.",
+            { description: r.description, amount: fmtRp(r.amount) },
+          )
+        : t(
+            "cashflow.deleteBody",
+            "{{description}} — {{amount}}. It is removed for good, and the balances are worked out again without it.",
+            { description: r.description, amount: fmtRp(r.amount) },
+          ),
+      okText: t("cashflow.deleteOk", "Delete adjustment"),
+      okButtonProps: { danger: true },
+      onOk: () => {
+        let removed = 0;
+        mutate((d) => {
+          removed = deleteAdjustment(d, ref);
+        });
+        if (removed > 0)
+          message.success(t("cashflow.deleted", "Adjustment deleted."));
+      },
+    });
+  };
 
   /** Cash basis is money that moved; accrual adds what is promised. */
   const shown = useMemo(
@@ -275,22 +426,114 @@ export function IncomeExpensePage() {
    * what is shown, so switching basis does not change the figure.
    */
   const balanceAtRow = useMemo(() => {
-    const chronological = [...rows].sort((a, b) => a.at.localeCompare(b.at));
     const opening =
       (db.settings.openingCash ?? 0) + (db.settings.openingBank ?? 0);
     let running = opening;
+    // The opening figure already holds everything settled before its date.
+    const from = db.settings.openingBalanceAt ?? "";
     const at = new Map<string, number>();
-    for (const r of chronological) {
+    // `rows` is newest first in the one total order; walk it backwards.
+    for (const r of [...rows].reverse()) {
       if (
         r.status === "SETTLED" &&
         r.inBalance &&
-        accountOfMethod(r.methodCode)
+        accountOfMethod(r.methodCode) &&
+        r.at >= from
       )
         running += r.direction === "INCOME" ? r.amount : -r.amount;
       at.set(r.key, running);
     }
     return at;
-  }, [rows, db.settings.openingCash, db.settings.openingBank]);
+  }, [
+    rows,
+    db.settings.openingCash,
+    db.settings.openingBank,
+    db.settings.openingBalanceAt,
+  ]);
+
+  /**
+   * What is in the drawer and in the bank (owner ask 2026-10-22: *"why can't I
+   * see the total cash in bank and the petty cash"*), on the basis the switch
+   * says: cash basis is money that moved; accrual adds what is promised — a
+   * marketplace payout still pending counts toward the bank, a customer's
+   * debt toward the pot its method names. From the opening balance on.
+   */
+  const pots = useMemo(() => {
+    const from = db.settings.openingBalanceAt ?? "";
+    return balancesOf(
+      rows
+        .filter(
+          (r) =>
+            r.inBalance &&
+            r.at >= from &&
+            (basis === "ACCRUAL" || r.status === "SETTLED"),
+        )
+        .map((r) => ({
+          method: r.methodCode,
+          amount: r.direction === "INCOME" ? r.amount : -r.amount,
+        })),
+      {
+        cash: db.settings.openingCash ?? 0,
+        bank: db.settings.openingBank ?? 0,
+      },
+    );
+  }, [
+    rows,
+    basis,
+    db.settings.openingCash,
+    db.settings.openingBank,
+    db.settings.openingBalanceAt,
+  ]);
+
+  const potCard = (
+    which: "cash" | "bank",
+    title: string,
+    icon: React.ReactNode,
+  ) => (
+    <Card size="small" style={{ flex: "1 1 240px" }}>
+      <Flex justify="space-between" align="center" gap={SPACE.sm}>
+        <Flex vertical gap={0}>
+          <Typography.Text type="secondary">
+            {icon} {title}
+          </Typography.Text>
+          <Typography.Text
+            strong
+            style={{ fontSize: TYPE.lg }}
+            data-testid={`pot-${which}`}
+          >
+            {reveal[which] ? fmtRp(pots[which]) : "Rp ••••••"}
+          </Typography.Text>
+        </Flex>
+        <Button
+          type="text"
+          icon={reveal[which] ? <EyeInvisibleOutlined /> : <EyeOutlined />}
+          aria-label={
+            reveal[which]
+              ? t("cashflow.hideBalance", "Hide {{what}}", { what: title })
+              : t("cashflow.showBalance", "Show {{what}}", { what: title })
+          }
+          onClick={() => setReveal((r) => ({ ...r, [which]: !r[which] }))}
+        />
+      </Flex>
+    </Card>
+  );
+
+  /*
+   * The two charts (owner ask 2026-10-23), off the rows the table shows — so
+   * the basis switch moves them too — over the last 3, 6 or 12 months.
+   */
+  const trend = useMemo(
+    () => monthlyFlow(shown, new Date(), chartMonths),
+    [shown, chartMonths],
+  );
+  const slices = useMemo(
+    () => expenseBreakdown(shown, trend[0]!.month),
+    [shown, trend],
+  );
+  const fmtShort = (n: number) =>
+    Math.abs(n) >= 1_000_000
+      ? `Rp ${(n / 1_000_000).toLocaleString("id-ID", { maximumFractionDigits: 1 })} jt`
+      : fmtRp(n);
 
   const typeLabel = (d: Direction) =>
     d === "INCOME"
@@ -307,6 +550,12 @@ export function IncomeExpensePage() {
       stickyHeader
       actions={[
         {
+          key: "opening",
+          label: t("opening.title", "Opening balance"),
+          icon: <BankOutlined />,
+          onClick: () => setOpeningOpen(true),
+        },
+        {
           key: "add",
           label: t("finance.addAdjustment", "Add adjustment"),
           icon: <PlusOutlined />,
@@ -315,6 +564,74 @@ export function IncomeExpensePage() {
         },
       ]}
     >
+      <Flex gap={SPACE.md} wrap style={{ marginBottom: SPACE.md }}>
+        {potCard("cash", t("cashflow.cashPot", "Cash"), <WalletOutlined />)}
+        {potCard("bank", t("cashflow.bankPot", "Bank"), <BankOutlined />)}
+      </Flex>
+      <Flex gap={SPACE.md} wrap style={{ marginBottom: SPACE.md }}>
+        <Card
+          size="small"
+          style={{ flex: "2 1 520px", minWidth: 0 }}
+          title={t("cashflow.trendTitle", "Revenue vs. expense")}
+          extra={
+            <Segmented<3 | 6 | 12>
+              size="small"
+              value={chartMonths}
+              onChange={setChartMonths}
+              options={[
+                { value: 3, label: t("cashflow.months3", "3 months") },
+                { value: 6, label: t("cashflow.months6", "6 months") },
+                { value: 12, label: t("cashflow.months12", "12 months") },
+              ]}
+            />
+          }
+        >
+          <TimeSeriesChart
+            categories={trend.map((m) =>
+              m.month.toLocaleDateString(undefined, {
+                month: "short",
+                year: "2-digit",
+              }),
+            )}
+            series={[
+              {
+                key: "income",
+                label: t("cashflow.revenue", "Revenue"),
+                values: trend.map((m) => m.income),
+              },
+              {
+                key: "expense",
+                label: t("cashflow.expenses", "Expenses"),
+                values: trend.map((m) => m.expense),
+              },
+            ]}
+            format={fmtRp}
+            formatTick={fmtShort}
+            height={240}
+          />
+        </Card>
+        <Card
+          size="small"
+          style={{ flex: "1 1 380px", minWidth: 0 }}
+          title={t("cashflow.breakdownTitle", "Expense breakdown")}
+        >
+          <DonutChart
+            slices={slices.map((s) => ({
+              key: s.category,
+              label:
+                s.category === "OTHER"
+                  ? t("cashflow.otherExpenses", "Other")
+                  : labelOf(EXPENSE_KIND, s.category, t),
+              value: s.amount,
+              other: s.category === "OTHER",
+            }))}
+            format={fmtRp}
+            centre={fmtShort(slices.reduce((n, s) => n + s.amount, 0))}
+            size={180}
+            emptyText={t("cashflow.noExpenses", "No expense in this period.")}
+          />
+        </Card>
+      </Flex>
       <Card>
         <ProTable<Row>
           persistKey="cashflow.unified"
@@ -340,9 +657,21 @@ export function IncomeExpensePage() {
               dataIndex: "at",
               width: COLUMN.date,
               defaultSortOrder: "descend",
+              sortValue: (r: Row) => position.get(r.key),
               dateRange: true,
+              dateValue: (r: Row) => r.at,
               facetLabel: t("finance.date", "Date"),
-              render: (v: string) => fmtDate(v),
+              render: (v: string) => (
+                <Flex vertical>
+                  <span>{fmtDate(v)}</span>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: TYPE.sm }}
+                  >
+                    {fmtTime(v)}
+                  </Typography.Text>
+                </Flex>
+              ),
             },
             {
               title: t("finance.type", "Type"),
@@ -438,6 +767,35 @@ export function IncomeExpensePage() {
                 return b === undefined ? fmtNone() : fmtRp(b);
               },
             },
+            {
+              key: "actions",
+              width: COLUMN.action,
+              align: "center",
+              render: (_: unknown, r: Row) =>
+                r.adjustment ? (
+                  <Tooltip
+                    title={
+                      deleteBlockText(r) ??
+                      t("cashflow.deleteAdjustment", "Delete adjustment")
+                    }
+                  >
+                    <span>
+                      <Button
+                        size="small"
+                        danger
+                        disabled={deleteBlockText(r) !== undefined}
+                        aria-label={t(
+                          "cashflow.deleteAdjustmentAria",
+                          "Delete {{description}}",
+                          { description: r.description },
+                        )}
+                        icon={<DeleteOutlined />}
+                        onClick={() => removeAdjustment(r)}
+                      />
+                    </span>
+                  </Tooltip>
+                ) : null,
+            },
           ]}
         />
       </Card>
@@ -446,6 +804,10 @@ export function IncomeExpensePage() {
         addOpen={addAdjustment}
         onCloseAdd={() => setAddAdjustment(false)}
         showHistory={false}
+      />
+      <OpeningBalanceModal
+        open={openingOpen}
+        onClose={() => setOpeningOpen(false)}
       />
     </PageContainer>
   );

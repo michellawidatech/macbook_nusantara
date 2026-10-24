@@ -6,7 +6,10 @@
  * Nothing here is ever removed. Every one of these rows is pointed at by
  * history — a sale names its payment method, an expense its category — so a
  * removal is refused and the page offers "inactive" instead, which is what
- * every one of these screens already does.
+ * every one of these screens already does. The exceptions are a discount
+ * no sale has redeemed (`removeUnusedDiscount`), a supplier or customer no
+ * document names (`removeUnusedSupplier`, `removeUnusedCustomer`), and money
+ * typed in by hand (`removeAdjustment`), which nothing points at.
  */
 import { deepEqual } from "@nusantara/store";
 import type { Tx } from "../../client.js";
@@ -104,6 +107,7 @@ export const warehouses: Adapter<"warehouses"> = {
     });
     return rows.map((r) => ({
       id: r.id,
+      code: r.code,
       name: r.name,
       active: r.active,
       kind: r.kind,
@@ -120,9 +124,10 @@ export const warehouses: Adapter<"warehouses"> = {
         await tx.location.create({
           data: {
             id: n.id,
-            // `code` is unique and printed on nothing the browser shows; the
-            // id is already unique, so it serves.
-            code: n.id,
+            // The shop's number for it (2026-10-08), printed beside the name
+            // on every screen. A warehouse made without one takes its id,
+            // which is unique and so satisfies the column's index.
+            code: n.code ?? n.id,
             name: n.name,
             kind: n.kind ?? "GUDANG",
             active: n.active,
@@ -135,6 +140,7 @@ export const warehouses: Adapter<"warehouses"> = {
           data: {
             name: n.name,
             active: n.active,
+            ...(n.code === undefined ? {} : { code: n.code }),
             ...(n.kind === undefined ? {} : { kind: n.kind }),
           },
         });
@@ -347,7 +353,10 @@ export const suppliers: Adapter<"suppliers"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("suppliers", r.key);
+      if (n === undefined) {
+        await removeUnusedSupplier(ctx, r.key);
+        continue;
+      }
       const data = {
         name: n.name.trim(),
         wa: blankToNull(n.phone),
@@ -698,7 +707,10 @@ export const customers: Adapter<"customers"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("customers", r.key);
+      if (n === undefined) {
+        await removeUnusedCustomer(ctx, r.key);
+        continue;
+      }
       const data = {
         name: n.name.trim(),
         phone: blankToNull(n.phone),
@@ -806,7 +818,10 @@ export const discounts: Adapter<"discounts"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("discounts", r.key);
+      if (n === undefined) {
+        await removeUnusedDiscount(ctx, r.key);
+        continue;
+      }
       const data = {
         code: n.code,
         description: n.name,
@@ -833,9 +848,165 @@ export const discounts: Adapter<"discounts"> = {
   },
 };
 
+/**
+ * The one removal in this file (owner decision 2026-10-02): a discount no sale
+ * has redeemed is deleted outright, because it is litter rather than history —
+ * nothing points at it but its own SKU list. One that has been used is refused
+ * and stays switchable off, since a receipt names it. Both tests read the
+ * DATABASE, not the browser's copy: a till may have redeemed the code since
+ * this page loaded. `Order.discountId` is ON DELETE RESTRICT besides, so a
+ * redemption racing this commit fails the DELETE rather than orphaning a sale.
+ */
+async function removeUnusedDiscount(
+  ctx: WriteContext,
+  id: string,
+): Promise<void> {
+  const { tx } = ctx;
+  const row = await tx.discount.findUnique({
+    where: { id },
+    select: { used: true, _count: { select: { orders: true } } },
+  });
+  if (row === null) return;
+  if (row.used > 0 || row._count.orders > 0) {
+    throw new StoreValidationError(
+      `Diskon ini sudah dipakai di penjualan dan tidak bisa dihapus — nonaktifkan saja (discounts ${id}).`,
+      "discounts",
+      id,
+    );
+  }
+  await tx.discountSku.deleteMany({ where: { discountId: id } });
+  await tx.discount.delete({ where: { id } });
+  ctx.touch("discounts", id);
+}
+
+/**
+ * A supplier or customer no document names can be deleted outright (owner
+ * decision 2026-10-21: "hard delete it as long as there are no transaction
+ * linked"). Same footing as `removeUnusedDiscount`: the counts are read from
+ * the DATABASE, and every link is ON DELETE RESTRICT, so a document written
+ * by another till in the meantime fails the DELETE instead of orphaning.
+ */
+async function removeUnusedSupplier(
+  ctx: WriteContext,
+  id: string,
+): Promise<void> {
+  const { tx } = ctx;
+  const row = await tx.supplier.findUnique({
+    where: { id },
+    select: {
+      _count: {
+        select: {
+          purchaseOrders: true,
+          supplierReturns: true,
+          warrantyClaims: true,
+          unitReturns: true,
+          deposits: true,
+        },
+      },
+    },
+  });
+  if (row === null) return;
+  if (Object.values(row._count).some((n) => n > 0)) {
+    throw new StoreValidationError(
+      `Supplier ini punya transaksi dan tidak bisa dihapus (suppliers ${id}).`,
+      "suppliers",
+      id,
+    );
+  }
+  await tx.supplier.delete({ where: { id } });
+  ctx.touch("suppliers", id);
+}
+
+/**
+ * A chat thread counts as a link too: the inbox's history names the person,
+ * and the chatbot's rows are the agent role's to write, not this one's.
+ * Saved addresses are the customer's own and go with it.
+ */
+async function removeUnusedCustomer(
+  ctx: WriteContext,
+  id: string,
+): Promise<void> {
+  const { tx } = ctx;
+  const row = await tx.customer.findUnique({
+    where: { id },
+    select: {
+      openingBalance: true,
+      _count: {
+        select: {
+          orders: true,
+          reservations: true,
+          openingPayments: true,
+          waMessages: true,
+          waThreadMemories: true,
+          chatActions: true,
+          chatProfiles: true,
+        },
+      },
+    },
+  });
+  if (row === null) return;
+  if (
+    (row.openingBalance ?? 0n) !== 0n ||
+    Object.values(row._count).some((n) => n > 0)
+  ) {
+    throw new StoreValidationError(
+      `Pelanggan ini punya transaksi atau percakapan dan tidak bisa dihapus (customers ${id}).`,
+      "customers",
+      id,
+    );
+  }
+  await tx.customerAddress.deleteMany({ where: { customerId: id } });
+  await tx.customer.delete({ where: { id } });
+  ctx.touch("customers", id);
+}
+
 // ---------------------------------------------------------------------------
 // Money typed in by hand
 // ---------------------------------------------------------------------------
+
+/**
+ * An adjustment typed into Income & Expense can be deleted (owner ask
+ * 2026-10-24: "we should be able to delete the income expense adjustment").
+ * No foreign key points at `Expense` or `ManualIncome`, so nothing is
+ * orphaned; what IS checked here is the book close — a day inside a closed
+ * month keeps its adjustments, as it keeps its finished sales, and the browser
+ * asks the same (`lib/adjustmentDeletion.ts`). A cash ↔ bank move arrives as
+ * both halves in one changeset, because the browser removes both.
+ */
+async function removeAdjustment(
+  ctx: WriteContext,
+  collection: "expenses" | "incomes",
+  id: string,
+): Promise<void> {
+  const { tx } = ctx;
+  const row =
+    collection === "expenses"
+      ? await tx.expense.findUnique({ where: { id }, select: { date: true } })
+      : await tx.manualIncome.findUnique({
+          where: { id },
+          select: { date: true },
+        });
+  if (row === null) return;
+  const closed = await tx.appSetting.findUnique({
+    where: { key: "finance.booksClosedAt" },
+    select: { value: true },
+  });
+  if (closed && closed.value.trim() !== "") {
+    const until = new Date(closed.value);
+    // `date` is a Jakarta day; it is inside the close when its first instant is.
+    const starts = new Date(`${row.date}T00:00:00+07:00`);
+    if (!Number.isNaN(until.getTime()) && starts <= until) {
+      throw new StoreValidationError(
+        `Bukunya sudah ditutup untuk tanggal ${row.date}; penyesuaian ini tidak bisa dihapus (${collection} ${id}).`,
+        collection,
+        id,
+      );
+    }
+  }
+  if (collection === "expenses") await tx.expense.delete({ where: { id } });
+  else await tx.manualIncome.delete({ where: { id } });
+  ctx.touch(collection, id);
+}
 
 export const expenses: Adapter<"expenses"> = {
   collection: "expenses",
@@ -855,6 +1026,7 @@ export const expenses: Adapter<"expenses"> = {
       referralSourceId: e.referralSourceId ?? undefined,
       method: e.method.code,
       orderId: e.orderId ?? undefined,
+      createdAt: isoOf(e.createdAt),
     }));
   },
   lock: (tx, keys) => lockRows(tx, "Expense", "id", keys),
@@ -862,7 +1034,10 @@ export const expenses: Adapter<"expenses"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("expenses", r.key);
+      if (n === undefined) {
+        await removeAdjustment(ctx, "expenses", r.key);
+        continue;
+      }
       const data = {
         label: blankToNull(n.label),
         kind: n.kind,
@@ -879,7 +1054,9 @@ export const expenses: Adapter<"expenses"> = {
             id: n.id,
             ...data,
             staffId: ctx.staffId,
-            createdAt: ctx.now,
+            // The till's clock when it sent one: it is what ordered the row
+            // on screen, and it orders nothing but a day's typed rows.
+            createdAt: n.createdAt ? new Date(n.createdAt) : ctx.now,
           },
         });
       } else {
@@ -906,6 +1083,7 @@ export const incomes: Adapter<"incomes"> = {
       note: i.note ?? undefined,
       method: i.method.code,
       orderId: i.orderId ?? undefined,
+      createdAt: isoOf(i.createdAt),
     }));
   },
   lock: (tx, keys) => lockRows(tx, "ManualIncome", "id", keys),
@@ -913,7 +1091,10 @@ export const incomes: Adapter<"incomes"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("incomes", r.key);
+      if (n === undefined) {
+        await removeAdjustment(ctx, "incomes", r.key);
+        continue;
+      }
       const data = {
         reason: n.reason,
         amount: n.amount,
@@ -928,7 +1109,7 @@ export const incomes: Adapter<"incomes"> = {
             id: n.id,
             ...data,
             staffId: ctx.staffId,
-            createdAt: ctx.now,
+            createdAt: n.createdAt ? new Date(n.createdAt) : ctx.now,
           },
         });
       } else {

@@ -65,6 +65,7 @@ import {
   Tooltip,
   Typography,
 } from "antd";
+import type { InputRef } from "antd";
 import {
   ArrowLeftOutlined,
   ArrowUpOutlined,
@@ -72,6 +73,7 @@ import {
   PlusOutlined,
   ClockCircleOutlined,
   DeleteOutlined,
+  EditOutlined,
   EyeOutlined,
   GiftOutlined,
   ShoppingCartOutlined,
@@ -143,8 +145,12 @@ import {
   channelOf,
   type SaleSource,
 } from "../../lib/channels.js";
-import { gradeForCondition } from "../../lib/condition.js";
-import { resolveSerialQuery, serialNamedBy } from "../../lib/serialInput.js";
+import { gradeForCondition, gradeText } from "../../lib/condition.js";
+import {
+  resolveSerialQuery,
+  serialMatchesQuery,
+  serialNamedBy,
+} from "../../lib/serialInput.js";
 import { EnumTag } from "../../components/EnumTag";
 import { UNIT_STATUS } from "../../i18n/enumLabels.js";
 import { skuTracksSerial } from "../../lib/serialTracking.js";
@@ -630,15 +636,32 @@ export function StockOutPage() {
     asString,
   );
   /**
-   * Which variant's serials are being chosen between.
+   * Which catalogue row's serials are being chosen between — a variant in one
+   * grade, by `ShelfRow.key`.
    *
    * The chooser opens whenever there is a CHOICE (owner answer 2026-08-27) —
-   * grade, battery and shelf are worth reading before a particular second-hand
-   * laptop goes out of the door. When one machine is all that is left of a
-   * variant there is nothing to choose, so tapping the row puts that machine
-   * straight in the basket (owner revision 2026-08-27) — see `pickFromRow`.
+   * battery, shelf and the QC note are worth reading before a particular
+   * second-hand laptop goes out of the door. When one machine is all that is
+   * left of a row there is nothing to choose, so tapping the row puts that
+   * machine straight in the basket (owner revision 2026-08-27) — see
+   * `pickFromRow`.
    */
-  const [pickingSku, setPickingSku] = useState<string>();
+  const [pickingRow, setPickingRow] = useState<string>();
+  /** The chooser's serial search (owner ask 2026-10-08). */
+  const [chooserQuery, setChooserQuery] = useState("");
+  /**
+   * Its box, focused when the dialog opens and again after each pick.
+   * `autoFocus` loses: the Modal's focus trap moves the caret to its first
+   * button as it opens, so the box takes it back a tick later. Not on
+   * `afterOpenChange`, which waits for the open animation — a frame that a
+   * background tab never draws.
+   */
+  const chooserSearch = useRef<InputRef>(null);
+  useEffect(() => {
+    if (pickingRow === undefined) return;
+    const id = window.setTimeout(() => chooserSearch.current?.focus(), 0);
+    return () => window.clearTimeout(id);
+  }, [pickingRow]);
   /**
    * The charges the shop is adding on top (owner ask 2026-09-01: *"additional
    * fee could be more than 1"*).
@@ -669,6 +692,8 @@ export function StockOutPage() {
     asListOf(isTradeIn),
   );
   const [tradeOpen, setTradeOpen] = useState(false);
+  /** The trade-in line being corrected, when the dialog is editing one. */
+  const [tradeEditing, setTradeEditing] = useState<TradeInLine | null>(null);
   const [discountOpen, setDiscountOpen] = useState(false);
   /** The basket line whose price breakdown is open — the eye button. */
   const [inspecting, setInspecting] = useState<number | null>(null);
@@ -1601,7 +1626,8 @@ export function StockOutPage() {
       addSuggestion(left[0]!.serial);
       return;
     }
-    setPickingSku(row.sku.id);
+    setChooserQuery("");
+    setPickingRow(row.key);
   };
 
   /**
@@ -1720,13 +1746,13 @@ export function StockOutPage() {
   })();
 
   /**
-   * The catalogue — one row per variant, with what is left of it.
+   * The catalogue — one row per variant and grade, with what is left of it.
    *
    * It listed every sellable SERIAL until 2026-08-27, one row each, and that
    * was honest and useless: a customer points at a machine and says "the Air,
    * the silver one", and the screen answered with forty rows of C02XY… that
    * all looked the same. A till lists models. WHICH machine goes out is a
-   * separate question, asked whenever there is a choice — `pickingSku` opens
+   * separate question, asked whenever there is a choice — `pickingRow` opens
    * the chooser where a serial's grade and battery are worth reading. A row
    * down to its last machine skips it (owner revision 2026-08-27); see
    * `pickFromRow`.
@@ -1853,9 +1879,11 @@ export function StockOutPage() {
         <Flex vertical>
           {catalogue.map((row) => {
             const out = row.remaining === 0;
+            const product = `${row.sku.name} ${row.sku.variantLabel}`;
+            const grade = gradeText(row.grade, t("grade.new", "New"));
             return (
               <Flex
-                key={row.sku.id}
+                key={row.key}
                 align="center"
                 gap={12}
                 className="pos-shelf-row"
@@ -1866,9 +1894,17 @@ export function StockOutPage() {
                 role="button"
                 tabIndex={out ? -1 : 0}
                 aria-disabled={out || undefined}
-                aria-label={t("pos.pickFrom", "Choose a {{product}}", {
-                  product: `${row.sku.name} ${row.sku.variantLabel}`,
-                })}
+                // The grade is in the name: two rows of one variant differ by
+                // nothing else.
+                aria-label={
+                  grade === null
+                    ? t("pos.pickFrom", "Choose a {{product}}", { product })
+                    : t(
+                        "pos.pickFromGrade",
+                        "Choose a {{product}}, grade {{grade}}",
+                        { product, grade },
+                      )
+                }
                 style={{
                   padding: "10px 8px",
                   cursor: out ? "not-allowed" : "pointer",
@@ -1883,6 +1919,18 @@ export function StockOutPage() {
                   }
                 }}
               >
+                {/*
+                 * The grade first, beside the name (owner ask 2026-10-08): a
+                 * row is one variant in one grade, so the grade is half of
+                 * what the row IS. A slot of one width on every row, filled
+                 * or not, so the names line up down the list — a counted
+                 * product has no grade and still starts where the others do.
+                 * `plain`: a tooltip on a chip inside a row that is itself
+                 * one big button would fire on the way past.
+                 */}
+                <span className="pos-shelf-grade">
+                  {row.grade && <GradeTag grade={row.grade} plain />}
+                </span>
                 <Flex vertical style={{ flex: 1, minWidth: 0 }}>
                   <Typography.Text strong ellipsis>
                     {row.sku.name}
@@ -1896,20 +1944,6 @@ export function StockOutPage() {
                   </Typography.Text>
                 </Flex>
 
-                {/*
-                 * The grades present, not a price per grade. Two machines of
-                 * one variant in different condition ask the same money (owner
-                 * revision 2026-08-27) — the grade is recorded, shown, and
-                 * does not move the number.
-                 */}
-                <Flex gap={4}>
-                  {row.grades.map((g) => (
-                    // `plain`: a tooltip on every chip of a catalogue row that
-                    // is itself one big button would fire on the way past.
-                    <GradeTag key={g} grade={g} plain />
-                  ))}
-                </Flex>
-
                 <Typography.Text
                   type={out ? "danger" : "warning"}
                   style={{ fontSize: 12, whiteSpace: "nowrap" }}
@@ -1921,9 +1955,9 @@ export function StockOutPage() {
                       })}
                 </Typography.Text>
 
-                {/* A RANGE since 2026-09-08: the price is per serial, so a
-                    row holding an A and a C quotes two numbers. `single`
-                    collapses it where the machines agree. */}
+                {/* A RANGE since 2026-09-08: the price is per serial, so two
+                    machines of one grade can still ask two numbers — a tired
+                    battery. `single` collapses it where they agree. */}
                 <Typography.Text strong style={{ whiteSpace: "nowrap" }}>
                   {row.price.count === 0
                     ? fmtRp(row.sku.price)
@@ -2717,6 +2751,22 @@ export function StockOutPage() {
                 </Typography.Text>
                 <Flex align="center" gap={4}>
                   <Typography.Text>−{fmtRp(x.value)}</Typography.Text>
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label={t(
+                      "pos.editTradeIn",
+                      "Edit trade-in {{label}}",
+                      {
+                        label: x.label,
+                      },
+                    )}
+                    icon={<EditOutlined />}
+                    onClick={() => {
+                      setTradeEditing(x);
+                      setTradeOpen(true);
+                    }}
+                  />
                   <Button
                     type="text"
                     danger
@@ -3715,29 +3765,68 @@ export function StockOutPage() {
        * under them. Picked rows leave the list as they are taken, the count in
        * the title comes down, and *Done* closes it — or it closes itself when
        * there is nothing left to pick.
+       *
+       * One row is one variant in ONE grade since 2026-10-08, so every unit
+       * here shares the grade in the heading, and a search box over the
+       * serials sits on top (owner ask, same day): a row of nine units is
+       * found by the serial on the sticker faster than by reading nine notes.
+       * Enter takes the unit when the search has narrowed to one.
        */}
       <Modal
-        open={pickingSku !== undefined}
+        open={pickingRow !== undefined}
         title={t("pos.whichMachine", "Which unit?")}
         footer={
-          <Button type="primary" onClick={() => setPickingSku(undefined)}>
+          <Button type="primary" onClick={() => setPickingRow(undefined)}>
             {t("pos.done", "Done")}
           </Button>
         }
         width={720}
-        onCancel={() => setPickingSku(undefined)}
+        onCancel={() => setPickingRow(undefined)}
       >
         {(() => {
-          const row = catalogue.find((r) => r.sku.id === pickingSku);
+          const row = catalogue.find((r) => r.key === pickingRow);
           if (!row) return null;
           const taken = new Set(lines.map((l) => l.serial));
           const left = row.units.filter((u) => !taken.has(u.serial));
           const chosen = row.units.filter((u) => taken.has(u.serial));
+          const shown = left.filter((u) =>
+            serialMatchesQuery(chooserQuery, u.serial),
+          );
+          /** Put a unit on the sale; close once nothing is left to pick. */
+          const pick = (serial: string) => {
+            addSuggestion(serial);
+            setChooserQuery("");
+            if (left.length === 1) setPickingRow(undefined);
+            else chooserSearch.current?.focus();
+          };
           return (
             <Flex vertical gap={12}>
-              <Typography.Text type="secondary">
-                {row.sku.name} {row.sku.variantLabel}
-              </Typography.Text>
+              <Flex align="center" gap={8}>
+                {row.grade && <GradeTag grade={row.grade} />}
+                <Typography.Text type="secondary">
+                  {row.sku.name} {row.sku.variantLabel}
+                </Typography.Text>
+              </Flex>
+              {left.length > 0 && (
+                <Input.Search
+                  // A fresh box on every row opened: `pickFromRow` empties it.
+                  ref={chooserSearch}
+                  allowClear
+                  value={chooserQuery}
+                  onChange={(e) => setChooserQuery(e.target.value)}
+                  // Enter, never the clear button: antd reports both here, and
+                  // clearing a box narrowed to one unit must not sell it.
+                  onSearch={(value, _e, info) => {
+                    if (info?.source === "clear") return;
+                    const hits = left.filter((u) =>
+                      serialMatchesQuery(value, u.serial),
+                    );
+                    if (hits.length === 1) pick(hits[0]!.serial);
+                  }}
+                  placeholder={t("pos.searchSerial", "Search the serial")}
+                  aria-label={t("pos.searchSerial", "Search the serial")}
+                />
+              )}
               {/* What this dialog has already put on the sale, so somebody
                   taking three of a kind can see how many they have without
                   closing it to look at the basket. */}
@@ -3763,7 +3852,15 @@ export function StockOutPage() {
                   )}
                 </Typography.Text>
               )}
-              {left.map((u) => {
+              {left.length > 0 && shown.length === 0 && (
+                <Typography.Text type="secondary">
+                  {t(
+                    "pos.noSerialMatches",
+                    "No unit here has a serial like that.",
+                  )}
+                </Typography.Text>
+              )}
+              {shown.map((u) => {
                 // In whichever units this machine's era reports — a 2017
                 // body says "312 cycles", an M2 says "94%".
                 const battery = readUnitBattery(u, db, batterySettings);
@@ -3787,7 +3884,6 @@ export function StockOutPage() {
                         {u.description || t("pos.noNote", "No QC note")}
                       </Typography.Text>
                     </Flex>
-                    <GradeTag grade={u.grade} />
                     {battery.grade !== null && (
                       <Tag color={BATTERY_GRADE_COLOR[battery.grade]}>
                         {battery.text}
@@ -3820,12 +3916,9 @@ export function StockOutPage() {
                       aria-label={t("pos.pickAria", "Pick {{serial}}", {
                         serial: u.serial,
                       })}
-                      onClick={() => {
-                        addSuggestion(u.serial);
-                        // Closes only when this was the last one. Otherwise it
-                        // stays open for the next machine — see the docblock.
-                        if (left.length === 1) setPickingSku(undefined);
-                      }}
+                      // Closes only when this was the last one. Otherwise it
+                      // stays open for the next machine — see the docblock.
+                      onClick={() => pick(u.serial)}
                     >
                       {t("pos.pickThisOne", "Pick")}
                     </Button>
@@ -3840,10 +3933,23 @@ export function StockOutPage() {
       <TradeInDialog
         open={tradeOpen}
         db={db}
-        onCancel={() => setTradeOpen(false)}
-        onAdd={(draft) => {
-          setTradeIns((prev) => [...prev, { id: nextId("ti"), ...draft }]);
+        {...(tradeEditing ? { initial: tradeEditing } : {})}
+        onCancel={() => {
           setTradeOpen(false);
+          setTradeEditing(null);
+        }}
+        onAdd={(draft) => {
+          // An edit replaces the line where it stands, under its own id.
+          const editing = tradeEditing;
+          setTradeIns((prev) =>
+            editing
+              ? prev.map((y) =>
+                  y.id === editing.id ? { id: editing.id, ...draft } : y,
+                )
+              : [...prev, { id: nextId("ti"), ...draft }],
+          );
+          setTradeOpen(false);
+          setTradeEditing(null);
         }}
       />
 

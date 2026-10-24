@@ -1,0 +1,150 @@
+#!/bin/zsh
+# Empty the shop's transactions and keep its master data (owner ask
+# 2026-10-16: "empty the inbound & its unit serial history, transaction, stock
+# opname, service, discount, pending payment, receivable, payable, income &
+# expense so only the master data is in").
+#
+#   sudo -u _nusantara /opt/nusantara/current/ops/reset-transactions --dry-run
+#   sudo -u _nusantara /opt/nusantara/current/ops/reset-transactions
+#
+# GONE: every purchase invoice, its lines, expenses, payments and supplier
+# returns and deposits; every unit, its whole serial history, notes and photos,
+# and every counted-stock movement; every sale, its lines, fees, adjustments,
+# trade-ins, payments, payment log and shipments; customer returns;
+# reservations (and the chatbot's 30-minute booking proposals, which name
+# units); stock takes; service visits; discounts; marketplace payouts; income
+# and expense adjustments; shifts and petty cash entries; customers' old
+# (B2Soft) debts; the opening cash and bank balance and the books-closed date.
+#
+# KEPT: products (categories, models, variants and their asking prices),
+# suppliers, customers and their addresses, salespeople, staff accounts and
+# their sessions, warehouses and racks, payment methods, reasons, QC phrases,
+# grading, settings, the audit log, and every chatbot table — a chatbot task
+# that named a unit keeps everything but that link.
+#
+# This is the app's one sanctioned mass delete, and it is a deliberate fresh
+# start, not a tool: the ledger is append-only everywhere else.
+#
+# Safety: a pg_dump first (ops/backup, label before-reset), the database's name
+# typed back, one transaction, and TRUNCATE without CASCADE — if any table
+# not named here still points at one that is, PostgreSQL refuses the whole
+# thing and nothing is deleted. Restore: pg_restore --clean from the dump.
+setopt err_exit no_unset pipe_fail
+
+home=${NUSANTARA_HOME:-/opt/nusantara}
+pgbin=${PG_BIN:-/opt/homebrew/opt/postgresql@16/bin}
+dbname=${NUSANTARA_DB:-nusantara_pos_prod}
+dry=0
+[[ ${1:-} == --dry-run ]] && dry=1
+
+export PGPASSFILE=$home/etc/pgpass
+psql=($pgbin/psql --host=127.0.0.1 --username=nusantara --dbname=$dbname
+  -X -v ON_ERROR_STOP=1 --quiet)
+
+counts() {
+  $psql -At -F ' ' <<'SQL'
+SELECT 'units', count(*) FROM "Unit"
+UNION ALL SELECT 'serial-history', count(*) FROM "UnitEvent"
+UNION ALL SELECT 'stock-moves', count(*) FROM "StockMove"
+UNION ALL SELECT 'inbound-invoices', count(*) FROM "PurchaseOrder"
+UNION ALL SELECT 'sales', count(*) FROM "Order"
+UNION ALL SELECT 'payments', count(*) FROM "Payment"
+UNION ALL SELECT 'reservations', count(*) FROM "Reservation"
+UNION ALL SELECT 'customer-returns', count(*) FROM "UnitReturn"
+UNION ALL SELECT 'stock-takes', count(*) FROM "OpnameSession"
+UNION ALL SELECT 'service-visits', count(*) FROM "ServiceVisit"
+UNION ALL SELECT 'discounts', count(*) FROM "Discount"
+UNION ALL SELECT 'payouts', count(*) FROM "Settlement"
+UNION ALL SELECT 'expenses', count(*) FROM "Expense"
+UNION ALL SELECT 'incomes', count(*) FROM "ManualIncome"
+UNION ALL SELECT 'customers-with-old-debt', count(*) FROM "Customer" WHERE "openingBalance" IS NOT NULL
+UNION ALL SELECT 'kept:variants', count(*) FROM "Sku"
+UNION ALL SELECT 'kept:suppliers', count(*) FROM "Supplier"
+UNION ALL SELECT 'kept:customers', count(*) FROM "Customer"
+UNION ALL SELECT 'kept:staff', count(*) FROM "Staff"
+UNION ALL SELECT 'kept:chat-messages', count(*) FROM "WaMessage";
+SQL
+}
+
+print "Database: $dbname"
+counts | column -t
+(( dry )) && { print "\n--dry-run: nothing changed."; exit 0 }
+
+print "\nBacking up first…"
+$home/current/ops/backup before-reset
+
+print
+print "This deletes everything listed above except the 'kept' rows, for good."
+print -n "Type the database name ($dbname) to go ahead: "
+read -r answer </dev/tty
+[[ $answer == $dbname ]] || { print "Not confirmed. Nothing changed."; exit 1 }
+
+$psql <<'SQL'
+BEGIN;
+
+-- The one kept table that points at a unit. PostgreSQL will not TRUNCATE a
+-- table another table holds a foreign key to — even with every value null —
+-- so the constraint is lifted for this transaction and put back exactly as
+-- it was (its own definition, read here) once "Unit" is empty.
+UPDATE "ChatAction" SET "unitId" = NULL WHERE "unitId" IS NOT NULL;
+CREATE TEMP TABLE kept_fk ON COMMIT DROP AS
+  SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
+   WHERE conname = 'ChatAction_unitId_fkey'
+     AND conrelid = '"ChatAction"'::regclass;
+DO $$ BEGIN
+  IF (SELECT count(*) FROM kept_fk) <> 1 THEN
+    RAISE EXCEPTION 'ChatAction_unitId_fkey not found: this script is older than the schema';
+  END IF;
+END $$;
+ALTER TABLE "ChatAction" DROP CONSTRAINT "ChatAction_unitId_fkey";
+
+-- No CASCADE, on purpose: a table left out of this list that still refers to
+-- one in it makes PostgreSQL refuse the statement, and the transaction with it.
+-- RESTART IDENTITY puts StoreChange back to 0, so every open till's cursor is
+-- "ahead" and it reloads instead of showing what was deleted.
+TRUNCATE TABLE
+  "PurchaseOrder", "PurchaseOrderItem", "PurchaseOrderItemSerial",
+  "PurchaseOrderFee", "PurchaseOrderPackage", "ArrivalPhoto", "StockIn",
+  "SupplierReturn", "SupplierReturnItem", "SupplierDeposit",
+  "DepositAllocation",
+  "Unit", "UnitAttribute", "UnitEvent", "UnitNote", "UnitNotePhoto",
+  "StockMove", "StockAdjustment",
+  "Order", "OrderItem", "OrderFee", "OrderAdjustment", "TradeIn", "Payment",
+  "PaymentLog", "Shipment", "ShipmentItem", "ShipmentEvent",
+  "WarrantyClaim", "UnitReturn",
+  "OpnameSession", "OpnameCount", "OpnameScan", "OpnameScopeLocation",
+  "OpnameScopeRack", "OpnameScopeCategory", "OpnameScopeCondition",
+  "OpnameSurplus",
+  "ServiceVisit", "ServiceFee",
+  "Discount", "DiscountSku",
+  "Settlement", "SettlementFee", "SettlementLog",
+  "Expense", "ManualIncome",
+  "Reservation", "ReservationItem", "ReservationProposal",
+  "ReservationProposalItem",
+  "Shift", "PettyCashEntry",
+  "StoreChange", "IdempotencyKey"
+  RESTART IDENTITY;
+
+DO $$ BEGIN
+  EXECUTE 'ALTER TABLE "ChatAction" ADD CONSTRAINT "ChatAction_unitId_fkey" '
+    || (SELECT def FROM kept_fk);
+END $$;
+
+-- Receivable: the debts carried over from B2Soft. Their payments were rows
+-- of "Payment", already gone above.
+UPDATE "Customer"
+   SET "openingBalance" = NULL, "openingBalanceAt" = NULL
+ WHERE "openingBalance" IS NOT NULL OR "openingBalanceAt" IS NOT NULL;
+
+-- Income & Expense: opening cash and bank, and the closed-books date. Absent
+-- reads as zero and "open".
+DELETE FROM "AppSetting"
+ WHERE key IN ('finance.openingCash', 'finance.openingBank',
+               'finance.openingBalanceAt', 'finance.booksClosedAt');
+
+COMMIT;
+SQL
+
+print "\nDone. What is left:"
+counts | column -t
+print "\nEvery open POS tab reloads itself on its next poll (a few seconds)."

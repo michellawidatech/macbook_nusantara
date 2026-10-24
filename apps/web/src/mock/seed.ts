@@ -48,6 +48,13 @@ export type UnitStatus =
 
 export interface Warehouse {
   id: string;
+  /**
+   * `Location.code` — the shop's own number, `01`…`04` (owner ask
+   * 2026-10-08: they have used them for six years). Printed beside the name
+   * through `warehouseLabel`; optional because a warehouse can be made
+   * without one.
+   */
+  code?: string;
   name: string;
   active: boolean;
   /**
@@ -205,6 +212,11 @@ export interface Sku {
    */
   axisValues?: Record<string, string>;
   price: number;
+  /**
+   * Merged into another variant (2026-10-21). Kept because receipts and
+   * invoices name it; offered by no picker or list — see `isLiveSku`.
+   */
+  mergedIntoId?: string;
 }
 /** A product category — see `MockDb.categories`. */
 export interface ProductCategory {
@@ -228,6 +240,19 @@ export interface CatalogModel {
   /** Apple's model identifier when the row came from AppleDB (e.g. Mac14,2). */
   identifier?: string;
   source?: "MANUAL" | "APPLEDB";
+  /**
+   * The product's facts (2026-10-21) — `lib/modelName.ts`. `family` is the
+   * line in full ("MacBook Air"), `chip` an Apple-silicon chip, `extra` what
+   * else makes it a different product ("TB"). Absent on a product still known
+   * only by its name.
+   */
+  family?: string;
+  chip?: string;
+  extra?: string;
+  /** AppleDB identifiers linked to it — added, never removed. */
+  identifiers?: string[];
+  /** Products a person said are NOT this one — added, never removed. */
+  notDuplicateOf?: string[];
 }
 export interface Unit {
   serial: string;
@@ -1135,6 +1160,12 @@ export interface ManualIncome {
    * balance mismatch, none of which is about a particular receipt.
    */
   orderId?: string;
+  /**
+   * When it was typed — `ManualIncome.createdAt`, stamped by the till that
+   * wrote it. It orders a day's typed rows on Income & Expense, which share a
+   * date and no time (2026-10-24); absent, such a row sorts first in its day.
+   */
+  createdAt?: string;
 }
 
 export interface Expense {
@@ -1169,6 +1200,8 @@ export interface Expense {
    * compensation, a refund to a customer (owner ask 2026-09-23).
    */
   orderId?: string;
+  /** When it was typed — see `ManualIncome.createdAt`. */
+  createdAt?: string;
 }
 export interface ChatMsg {
   id: string;
@@ -1612,6 +1645,7 @@ export function buildSeed(): MockDb {
   const shop = buildShop();
   const warehouses: Warehouse[] = shop.locations.map((l) => ({
     id: l.id,
+    code: l.code,
     name: l.name,
     active: true,
     kind: l.kind,
@@ -2396,6 +2430,7 @@ export function buildSeed(): MockDb {
       reason: "SALES",
       amount: 4_250_000,
       date: iso(6).slice(0, 10),
+      createdAt: iso(6),
       method: "TUNAI",
       note: "Walk-in paid cash while the till was down",
     },
@@ -2404,6 +2439,7 @@ export function buildSeed(): MockDb {
       reason: "TRANSFER",
       amount: 15_000_000,
       date: iso(11).slice(0, 10),
+      createdAt: iso(11),
       method: "TRANSFER",
       note: "Topped up the shop float from the owner's account",
     },
@@ -2417,6 +2453,7 @@ export function buildSeed(): MockDb {
       kind: "RENT",
       amount: 7_500_000,
       date: iso(14).slice(0, 10),
+      createdAt: iso(14),
     },
     {
       id: "e-2",
@@ -2425,6 +2462,7 @@ export function buildSeed(): MockDb {
       kind: "OPERATIONAL",
       amount: 240_000,
       date: iso(0).slice(0, 10),
+      createdAt: iso(0),
     },
     {
       id: "e-3",
@@ -2433,6 +2471,7 @@ export function buildSeed(): MockDb {
       kind: "MARKETING",
       amount: 2_400_000,
       date: iso(12).slice(0, 10),
+      createdAt: iso(12),
       referralSourceId: "ref_instagram_ads",
     },
     {
@@ -2442,6 +2481,7 @@ export function buildSeed(): MockDb {
       kind: "MARKETING",
       amount: 1_100_000,
       date: iso(10).slice(0, 10),
+      createdAt: iso(10),
       referralSourceId: "ref_shopee_ads",
     },
     {
@@ -2451,6 +2491,7 @@ export function buildSeed(): MockDb {
       kind: "MARKETING",
       amount: 900_000,
       date: iso(4).slice(0, 10),
+      createdAt: iso(4),
       referralSourceId: "ref_tiktok_ads",
     },
     {
@@ -2460,6 +2501,7 @@ export function buildSeed(): MockDb {
       kind: "PAYROLL",
       amount: 12_000_000,
       date: iso(8).slice(0, 10),
+      createdAt: iso(8),
     },
     {
       id: "e-7",
@@ -2468,6 +2510,7 @@ export function buildSeed(): MockDb {
       kind: "OPERATIONAL",
       amount: 1_500_000,
       date: iso(7).slice(0, 10),
+      createdAt: iso(7),
     },
     {
       id: "e-8",
@@ -2476,6 +2519,7 @@ export function buildSeed(): MockDb {
       kind: "OPERATIONAL",
       amount: 650_000,
       date: iso(2).slice(0, 10),
+      createdAt: iso(2),
     },
   ];
   const chats: ChatThread[] = [

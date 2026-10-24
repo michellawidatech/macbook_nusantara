@@ -44,6 +44,7 @@
 
 import {
   TXN_TIMEOUTS,
+  assertSchedule,
   createHold,
   releaseHold,
   rescheduleHold,
@@ -705,8 +706,93 @@ const REMEMBER_CUSTOMER: Anthropic.Tool = {
         maxLength: 200,
         description: "Anything else they want: size, colour, light, a grade.",
       },
+      budget_min: {
+        type: "integer",
+        minimum: 1,
+        description:
+          "The bottom of their budget range in whole rupiah, when they gave a range.",
+      },
+      budget_max: {
+        type: "integer",
+        minimum: 1,
+        description:
+          "The top of their budget range in whole rupiah. 'di bawah 20 jt' is 20000000.",
+      },
+      age_estimate: {
+        type: "string",
+        maxLength: 20,
+        description:
+          "Your ESTIMATE of their age band, e.g. '18-22', only when something they said points " +
+          "to it (school, kuliah, a job). Never ask their age.",
+      },
+      occupation: {
+        type: "string",
+        maxLength: 80,
+        description:
+          "Their job or school as they described it: 'mahasiswa DKV', 'programmer', 'guru'.",
+      },
+      usage: {
+        type: "string",
+        maxLength: 200,
+        description:
+          "What they mainly do on it, comma-separated: programming, design, video editing, office.",
+      },
+      apps: {
+        type: "string",
+        maxLength: 300,
+        description:
+          "Specific apps they named: VS Code, Photoshop, Premiere, Excel.",
+      },
+      preferences: {
+        type: "string",
+        maxLength: 300,
+        description:
+          "Product preferences, comma-separated: new, 14 inch, light, silver, M-series, 512GB.",
+      },
+      about: {
+        type: "string",
+        maxLength: 600,
+        description:
+          "Anything else worth a colleague knowing, short facts separated by semicolons.",
+      },
     },
     required: [],
+    additionalProperties: false,
+  },
+};
+
+/**
+ * Chatbot v2 step 5: a booking the customer has NOT yet agreed to. Holds
+ * nothing. The customer's next message decides — and that decision is read by
+ * the router and acted on by CODE (`confirm_reservation` is never offered to
+ * a model), so no sentence of the model's can turn a proposal into a hold.
+ */
+const PROPOSE_RESERVATION: Anthropic.Tool = {
+  name: "propose_reservation",
+  description:
+    "Prepare a visit to the shop to see one or more units in person. This does NOT book " +
+    "anything: it returns the units and the time for the advisor to read back to the customer " +
+    "for confirmation. Use the serials search_stock returned. A new proposal replaces the last.",
+  input_schema: {
+    type: "object",
+    properties: {
+      serials: {
+        type: "string",
+        maxLength: 120,
+        description:
+          "The serials of the units the customer wants to see, comma-separated, at most three.",
+      },
+      when: {
+        type: "string",
+        description: "The visit, YYYY-MM-DDTHH:MM in Jakarta time.",
+      },
+      custName: {
+        type: "string",
+        maxLength: 80,
+        description: "The name the customer gave for the booking.",
+      },
+    },
+    required: ["serials", "when", "custName"],
     additionalProperties: false,
   },
 };
@@ -784,6 +870,16 @@ export const RESERVATION_TOOLS = [
 export const PROFILE_TOOLS = ["remember_customer"] as const;
 
 /**
+ * Chatbot v2's booking door: propose, then the CODE confirms. Offered only to
+ * a caller that asks for it (`toolsFor(…, { proposals: true })`) — the v1
+ * agent books directly and would leave a proposal nobody confirms.
+ */
+export const PROPOSAL_TOOLS = ["propose_reservation"] as const;
+
+/** Run by code on the router's reading of the customer's reply; never offered. */
+export const CODE_ONLY_TOOLS = ["confirm_reservation"] as const;
+
+/**
  * Writes: offered only to a caller holding a reserve capability.
  *
  * ⚠️ `cancel_reservation` is NOT offered to a customer's conversation since
@@ -818,6 +914,7 @@ export const ANTHROPIC_TOOLS: Anthropic.Tool[] = [
   RESCHEDULE_RESERVATION,
   CANCEL_RESERVATION,
   REMEMBER_CUSTOMER,
+  PROPOSE_RESERVATION,
 ];
 
 /**
@@ -838,6 +935,8 @@ export function toolsFor(
     handoffOnly?: boolean;
     /** What the bot may do for itself. Defaults to the 2026-09-18 design. */
     capabilities?: AgentCapabilities;
+    /** Chatbot v2: offer `propose_reservation` with the booking tools. */
+    proposals?: boolean;
   } = {},
 ): Anthropic.Tool[] {
   const can = effectiveCapabilities(opts.capabilities ?? PARALLEL_CAPABILITIES);
@@ -856,6 +955,7 @@ export function toolsFor(
    */
   if (can.reserve && ctx.reserve !== undefined) {
     for (const n of RESERVATION_TOOLS) names.add(n);
+    if (opts.proposals) for (const n of PROPOSAL_TOOLS) names.add(n);
   }
   if (opts.handoffOnly) names.delete("reply");
   return ANTHROPIC_TOOLS.filter((t) => names.has(t.name));
@@ -2160,21 +2260,73 @@ async function rememberCustomer(
   const useCase = clip(args["use_case"], 160);
   const currentDevice = clip(args["current_device"], 120);
   const preference = clip(args["preference"], 200);
-  const rawBudget = args["budget"];
-  const budget =
-    typeof rawBudget === "number" &&
-    Number.isFinite(rawBudget) &&
-    rawBudget >= 1
-      ? BigInt(Math.floor(rawBudget))
+  const ageEstimate = clip(args["age_estimate"], 20);
+  const occupation = clip(args["occupation"], 80);
+  const rupiah = (v: unknown): bigint | undefined =>
+    typeof v === "number" && Number.isFinite(v) && v >= 1
+      ? BigInt(Math.floor(v))
       : undefined;
+  const budget = rupiah(args["budget"]);
+  // A single figure is a range of one (owner: "budget is a min–max range").
+  let budgetMin = rupiah(args["budget_min"]) ?? budget;
+  let budgetMax = rupiah(args["budget_max"]) ?? budget;
+  if (
+    budgetMin !== undefined &&
+    budgetMax !== undefined &&
+    budgetMin > budgetMax
+  )
+    [budgetMin, budgetMax] = [budgetMax, budgetMin];
   const fields = {
     ...(name ? { name } : {}),
     ...(useCase ? { useCase } : {}),
     ...(currentDevice ? { currentDevice } : {}),
     ...(preference ? { preference } : {}),
-    ...(budget !== undefined ? { budget } : {}),
+    ...(ageEstimate ? { ageEstimate } : {}),
+    ...(occupation ? { occupation } : {}),
+    ...(budgetMin !== undefined ? { budgetMin } : {}),
+    ...(budgetMax !== undefined ? { budgetMax } : {}),
+    // The old single column, kept one release for the reader before
+    // (migration 20261014120000): the top of the range is what it meant.
+    ...((budgetMax ?? budget) !== undefined
+      ? { budget: budgetMax ?? budget }
+      : {}),
   };
-  if (Object.keys(fields).length === 0) return { saved: false };
+  // Comma-separated text, never an array: no model output becomes a query
+  // shape (tools.schema.test.ts). ABOUT facts may contain commas, so they
+  // are split on semicolons.
+  const list = (
+    v: unknown,
+    max: number,
+    len: number,
+    sep: RegExp = /[,;]/,
+  ): string[] =>
+    (typeof v === "string" ? v.split(sep) : [])
+      .map((x) => clip(x, len))
+      .filter((x): x is string => Boolean(x))
+      .slice(0, max);
+  const facts: Array<{
+    kind: "USAGE" | "APP" | "PREFERENCE" | "ABOUT";
+    value: string;
+  }> = [
+    ...list(args["usage"], 5, 40).map((value) => ({
+      kind: "USAGE" as const,
+      value,
+    })),
+    ...list(args["apps"], 8, 40).map((value) => ({
+      kind: "APP" as const,
+      value,
+    })),
+    ...list(args["preferences"], 6, 60).map((value) => ({
+      kind: "PREFERENCE" as const,
+      value,
+    })),
+    ...list(args["about"], 5, 120, /;/).map((value) => ({
+      kind: "ABOUT" as const,
+      value,
+    })),
+  ];
+  if (Object.keys(fields).length === 0 && facts.length === 0)
+    return { saved: false };
 
   const db = ctx.profile.write;
   const phones = phoneForms(ctx.from);
@@ -2191,7 +2343,7 @@ async function rememberCustomer(
       // A customer the bot met for the first time is a row every till lists.
       await recordStoreChanges(tx, [["customers", customer.id]]);
     }
-    await tx.customerProfile.upsert({
+    const profile = await tx.customerProfile.upsert({
       where: { from: ctx.from },
       update: {
         ...fields,
@@ -2204,13 +2356,253 @@ async function rememberCustomer(
         ...(customer ? { customerId: customer.id } : {}),
         updatedAt: ctx.now,
       },
+      select: { id: true },
     });
+    if (facts.length > 0) {
+      // A fact already on the profile — the bot's or a colleague's, in any
+      // letter case — is not written twice.
+      const have = await tx.customerProfileFact.findMany({
+        where: { profileId: profile.id, removedAt: null },
+        select: { kind: true, value: true },
+      });
+      const seen = new Set(
+        have.map((f) => `${f.kind}:${f.value.toLowerCase()}`),
+      );
+      for (const f of facts) {
+        const key = `${f.kind}:${f.value.toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        await tx.customerProfileFact.create({
+          data: {
+            profileId: profile.id,
+            kind: f.kind,
+            value: f.value,
+            source: "BOT",
+            createdAt: ctx.now,
+          },
+        });
+      }
+    }
   }, TXN_TIMEOUTS);
   return {
     saved: true,
     guidance:
       "Saved. Do not tell the customer you saved anything; just carry on.",
   };
+}
+
+/** How long a proposal waits for the customer's yes. */
+export const PROPOSAL_TTL_MS = 30 * 60_000;
+
+/**
+ * Chatbot v2 step 5: record a visit the customer has not agreed to yet.
+ *
+ * Validated exactly as the hold it may become (`assertSchedule`, the same
+ * stock filter the search uses), so a proposal the customer says yes to does
+ * not then fail for a reason that was knowable now. Writes no hold and no
+ * UnitEvent; an earlier open proposal of this customer's is cancelled, so
+ * "the one they said yes to" is never ambiguous.
+ */
+async function proposeReservation(
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+) {
+  if (!ctx.reserve)
+    return { error: "Booking is not available on this channel." };
+  const { write } = ctx.reserve;
+  const serials = [
+    ...new Set(
+      String(args["serials"] ?? "")
+        .split(/[\s,;]+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  ].slice(0, 3);
+  if (serials.length === 0) return { needSerial: true };
+  const custName = clip(args["custName"], 80);
+  if (!custName)
+    return {
+      needName: true,
+      guidance: "Ask the customer for the name the booking should be under.",
+    };
+  const at = parseJakarta(String(args["when"] ?? ""));
+  if (!at)
+    return {
+      needWhen: true,
+      note: "The date was not understood. Send it as YYYY-MM-DDTHH:MM in Jakarta time.",
+    };
+  try {
+    assertSchedule(at, ctx.now, {
+      requireFuture: true,
+      maxBookingDays: MAX_BOOKING_DAYS,
+      storeHours: STORE_HOURS,
+    });
+  } catch (err) {
+    if (err instanceof BookingInPastError) return { pastDate: true };
+    if (err instanceof BookingTooFarAheadError)
+      return { tooFarAhead: true, maxDays: err.maxDays };
+    if (err instanceof OutsideStoreHoursError)
+      return {
+        closedThen: true,
+        hours: `${err.openHour}:00 to ${err.closeHour}:00`,
+      };
+    throw err;
+  }
+
+  const units = await write.unit.findMany({
+    where: { ...stockWhere({}), serial: { in: serials } },
+    select: { ...UNIT_SELECT, id: true },
+  });
+  const missing = serials.filter((s) => !units.some((u) => u.serial === s));
+  if (missing.length > 0)
+    return toolJson({
+      unavailable: true,
+      serials: missing,
+      guidance: NEVER_INVENT_REASON,
+    });
+
+  const proposal = await write.$transaction(async (tx) => {
+    await tx.reservationProposal.updateMany({
+      where: { from: ctx.from, confirmedAt: null, cancelledAt: null },
+      data: { cancelledAt: ctx.now },
+    });
+    return tx.reservationProposal.create({
+      data: {
+        from: ctx.from,
+        custName,
+        scheduledFor: at,
+        createdAt: ctx.now,
+        expiresAt: new Date(ctx.now.getTime() + PROPOSAL_TTL_MS),
+        items: {
+          create: serials.map((serial, i) => ({
+            unitId: units.find((u) => u.serial === serial)!.id,
+            sortOrder: i,
+          })),
+        },
+      },
+      select: { id: true },
+    });
+  }, TXN_TIMEOUTS);
+
+  return toolJson({
+    ok: true,
+    proposed: true,
+    proposalId: proposal.id,
+    when: `${jakartaDate(at)} ${jakartaTime(at)}`,
+    custName,
+    units: serials.map((serial) => {
+      const u = units.find((x) => x.serial === serial)!;
+      return {
+        serial,
+        ...label(u),
+        ...(u.grade ? { grade: u.grade } : {}),
+        ...quote(askingPrice(u), ctx),
+      };
+    }),
+    guidance:
+      "NOT booked yet. Read every unit (name, grade, price) and the date and time back to the " +
+      "customer and ask them to confirm. Do not say it is booked or held.",
+  });
+}
+
+/**
+ * Turn the customer's open proposal into a hold. Called by CODE when the
+ * router reads the customer's reply as a yes — never offered to a model.
+ */
+async function confirmReservation(ctx: ToolContext) {
+  if (!ctx.reserve)
+    return { error: "Booking is not available on this channel." };
+  const guard = ctx.writesUsed;
+  if (guard?.has("create_reservation")) return { alreadyBooked: true };
+  const { write, staffId } = ctx.reserve;
+  const proposal = await write.reservationProposal.findFirst({
+    where: {
+      from: ctx.from,
+      confirmedAt: null,
+      cancelledAt: null,
+      expiresAt: { gt: ctx.now },
+    },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      custName: true,
+      scheduledFor: true,
+      items: {
+        orderBy: { sortOrder: "asc" },
+        select: { unit: { select: { serial: true } } },
+      },
+    },
+  });
+  if (!proposal) return { noProposal: true };
+  guard?.add("create_reservation");
+  const e164 = toE164(ctx.from);
+  const serials = proposal.items.map((i) => i.unit.serial);
+  try {
+    const hold = await write.$transaction(async (tx) => {
+      const made = await createHold(tx, {
+        serials,
+        staffId,
+        customer: { phone: e164, name: proposal.custName },
+        scheduledFor: proposal.scheduledFor,
+        note: null,
+        eventNote: `Reservasi agen untuk ${e164}`,
+        source: "AGEN",
+        at: ctx.now,
+        duplicateScope: { phone: e164, source: "AGEN" },
+        policy: {
+          requireFuture: true,
+          maxBookingDays: MAX_BOOKING_DAYS,
+          storeHours: STORE_HOURS,
+        },
+      });
+      // Only while still open: two confirms racing are one hold, not two.
+      const { count } = await tx.reservationProposal.updateMany({
+        where: { id: proposal.id, confirmedAt: null, cancelledAt: null },
+        data: { confirmedAt: ctx.now, reservationId: made.id },
+      });
+      if (count !== 1) throw new Error("proposal already settled");
+      return made;
+    }, TXN_TIMEOUTS);
+    const at = proposal.scheduledFor;
+    const graceMs = ctx.reserve.graceMs;
+    const until =
+      graceMs !== undefined ? new Date(at.getTime() + graceMs) : null;
+    return toolJson({
+      ok: true,
+      code: hold.code,
+      when: `${jakartaDate(at)} ${jakartaTime(at)}`,
+      serials,
+      custName: proposal.custName,
+      ...(until
+        ? { heldUntil: `${jakartaDate(until)} ${jakartaTime(until)}` }
+        : {}),
+    });
+  } catch (err) {
+    guard?.delete("create_reservation");
+    if (
+      err instanceof UnitNotAvailableError ||
+      err instanceof UnknownSerialError
+    )
+      return toolJson({
+        unavailable: true,
+        serials,
+        guidance: NEVER_INVENT_REASON,
+      });
+    if (err instanceof DuplicateHoldError)
+      return toolJson({ alreadyBooked: true, code: err.code });
+    if (
+      err instanceof BookingInPastError ||
+      err instanceof BookingTooFarAheadError ||
+      err instanceof OutsideStoreHoursError
+    )
+      return { scheduleNoLongerValid: true };
+    ctx.onError?.("confirm_reservation", err);
+    return {
+      error:
+        "Could not save the booking. Tell the customer a colleague will follow up, and do not " +
+        "claim it was booked.",
+    };
+  }
 }
 
 // --- dispatch --------------------------------------------------------------
@@ -2263,6 +2655,10 @@ export async function dispatchTool(
       out = await rescheduleReservation(args, ctx);
     else if (name === "remember_customer")
       out = await rememberCustomer(args, ctx);
+    else if (name === "propose_reservation")
+      out = await proposeReservation(args, ctx);
+    else if (name === "confirm_reservation")
+      out = await confirmReservation(ctx);
     else return { error: `Unknown tool ${name}.` };
 
     // The gate. A BigInt reaching JSON.stringify in the loop throws, which is

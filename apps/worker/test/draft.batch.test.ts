@@ -24,6 +24,20 @@ import { createLogger } from "@nusantara/logging";
 import type { AgentClient, CreateArgs } from "@nusantara/agent";
 import { draftPass } from "../src/draft.js";
 
+/**
+ * These tests are about the single AI agent (pipeline v1). The default is the
+ * rules-first bot since 2026-10-15, so the setting is pinned here.
+ */
+async function pinPipelineV1(client: {
+  appSetting: PrismaClient["appSetting"];
+}) {
+  await client.appSetting.upsert({
+    where: { key: "chatbot.pipeline" },
+    update: { value: "v1" },
+    create: { key: "chatbot.pipeline", value: "v1", updatedAt: new Date() },
+  });
+}
+
 const URL =
   process.env["TEST_DATABASE_URL"] ??
   "postgresql://nusantara@localhost:5432/nusantara_pos_test";
@@ -46,17 +60,25 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await db.appSetting.deleteMany({ where: { key: "chatbot.pipeline" } });
   await db.$disconnect();
 });
 
 beforeEach(async () => {
+  await pinPipelineV1(db);
   await db.outbox.deleteMany({});
   // WaThreadMemory.coveredThroughId is an FK to WaMessage with onDelete:
   // Restrict, so the memory rows have to go first.
   await db.waThreadMemory.deleteMany({});
   // ChatAction points at WaMessage, Unit and Customer (2026-09-29).
   await db.chatAction.deleteMany({});
+  await db.customerProfileFact.deleteMany({});
   await db.customerProfile.deleteMany({});
+  // AgentRun points at the message it answered (chatbot v2).
+  await db.agentRunStep.deleteMany({});
+  await db.agentRun.deleteMany({});
+  // Chunks first: their message links are RESTRICT (20261022120000).
+  await db.chatMemoryChunk.deleteMany({});
   await db.waMessage.deleteMany({});
 });
 
@@ -371,8 +393,8 @@ describe("batching a burst", () => {
 
 describe("the adaptive wait", () => {
   it("answers a customer who asked a question before one who is still muttering", async () => {
-    // Both last spoke 6 seconds ago: past the 4s question wait, short of the
-    // 8s base window.
+    // Both last spoke 6 seconds ago: past the 3s question wait, short of the
+    // 8s base window this file passes.
     await inbound({
       id: "a.q",
       from: SENDER,
@@ -395,12 +417,13 @@ describe("the adaptive wait", () => {
   });
 
   it("keeps waiting on nanti saya kabarin long after an ordinary message would have been answered", async () => {
-    // 20 seconds: well past the base window, well short of the 45s hold.
+    // 15 seconds: past the base window (8s here) and the filler stretch,
+    // short of the 20s hold (MAX_WAIT_MS since 2026-10-14).
     await inbound({
       id: "w.later",
       from: SENDER,
       text: "nanti saya kabarin ya",
-      ts: ago(20_000),
+      ts: ago(15_000),
     });
 
     const result = await pass(scripted(["siap kak"]).client);
@@ -991,5 +1014,34 @@ describe("the prompt", () => {
     expect(row.status).toBe("DIJAWAB_AGEN");
     expect(row.intent).toBe("jawab:faq");
     await db.agentKnowledge.deleteMany({});
+  });
+});
+
+describe("the lead, decided by the bot (owner, 2026-10-21)", () => {
+  it("scores a single-agent turn and marks a likely buyer", async () => {
+    await inbound({
+      id: "l.1",
+      from: SENDER,
+      text: "mau booking macbook air m2 besok jam 2 ya kak",
+      ts: ago(30_000),
+    });
+    await pass(scripted(["siap kak"]).client);
+
+    const mem = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: SENDER },
+    });
+    // Scored by code, the way the rules score a turn: product, a booking and
+    // a time — no model call spent on it.
+    expect(mem.leadScore).toBe(85);
+    expect(mem.leadAt).not.toBeNull();
+    const run = await db.agentRun.findFirstOrThrow({ where: { from: SENDER } });
+    expect(run).toMatchObject({ pipeline: "v1", leadScore: 85 });
+  });
+
+  it("does not mark a greeting", async () => {
+    await inbound({ id: "l.2", from: OTHER, text: "halo", ts: ago(30_000) });
+    await pass(scripted(["siap kak"]).client);
+    const mem = await db.waThreadMemory.findUnique({ where: { from: OTHER } });
+    expect(mem?.leadAt ?? null).toBeNull();
   });
 });

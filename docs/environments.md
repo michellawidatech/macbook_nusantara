@@ -6,9 +6,10 @@ Environment, and a trigger that promotes code into it.
 | | dev | stage | prod |
 |---|---|---|---|
 | Database | `nusantara_pos_rebuild` | `nusantara_pos_stage` | `nusantara_pos_prod` |
-| Enters on | any push | merge to `main` | a `v*` tag |
+| Enters on | any push | a push to `main`, or Run workflow on a branch | a `v*` tag |
 | GitHub Environment | `dev` | `stage` | `prod` |
-| Refs allowed in | any | `main` only | `v*` tags only |
+| Refs allowed in | any | any branch | `v*` tags only |
+| Lives on | your laptop | the shop's Mac mini, `/opt/nusantara-stage` | the shop's Mac mini, `/opt/nusantara` |
 
 `dev` keeps the name it was built under rather than being renamed for symmetry:
 every note in `docs/rebuild` and every developer's shell already points at
@@ -85,14 +86,17 @@ it, switched on when WhatsApp moves there. Render and Netlify hosted them from
 2026-09-02 until they were retired on 2026-09-18.
 `monitor` is a package with a typecheck and no server to start.
 
-**CI deploys `prod`, and only `prod`** (2026-09-18). Until then it deployed
+**CI deploys `prod` and `stage`.** `prod` since 2026-09-18; `stage` since
+2026-10-06, to `https://staging-pos.macbooknusantara.com` on the same Mac mini,
+on a copy of the shop's database (`docs/staging.md`). Until 2026-09-18 it deployed
 nothing, for a reason that still stands: `prisma migrate status` lies in this
 project, so the step that would report a bad deploy was the one that could not
 be trusted. The pipeline never asks it. After `prisma migrate deploy` it asks
 the database — every migration the tag carries is applied and finished, none is
 half-done, and `nusantara_app`'s grants still read `t|f|t|f|t` — and it
-switches no code on until all three hold. `dev` and `stage` have no host, so a
-push to a branch or to `main` is checked and goes no further.
+switches no code on until all three hold. The staging deploy asks the same
+three questions of `nusantara_pos_stage`. `dev` has no host, so a push to any
+other branch is checked and goes no further.
 
 **`prod` has no required-reviewer gate.** That protection rule needs a paid plan
 on a private repository, and this one is GitHub Free. What stands in for it is
@@ -100,6 +104,6 @@ the deployment branch policy: only a `v*` tag can enter `prod`, and cutting a
 tag is already a deliberate act. If the repo moves to Pro or Team, add the
 reviewer gate in Settings → Environments → prod.
 
-`prod` lives on the shop's Mac mini. `stage` still lives on the developer
-cluster, because there is no second host; when one exists, only the host and
-the password in `secrets/<env>.env` change.
+`prod` and `stage` both live on the shop's Mac mini, as two installs side by
+side (`docs/staging.md`). A `nusantara_pos_stage` on your own cluster is still
+yours to make for local work, as above; nothing deploys to it.

@@ -119,3 +119,23 @@ export function isCollectionName(name: string): name is CollectionName {
 export function isSingletonName(name: string): name is SingletonName {
   return Object.prototype.hasOwnProperty.call(SINGLETONS, name);
 }
+
+/**
+ * The money only Financial & Report reads (owner ask 2026-10-16: "only Ersen
+ * and Dina"). For an account without `Staff.canViewFinance` the API projects
+ * these as empty lists, leaves them out of every change it sends, and accepts
+ * nothing for them but a NEW row — a refund written by the return desk, a
+ * payment-log line written by the customer drawer — because a person who
+ * cannot read a row cannot have based an edit on it.
+ *
+ * Sale payments are NOT here: they live on the order, and the till and the
+ * return desk cannot work without them.
+ */
+export const FINANCE_COLLECTIONS: ReadonlySet<CollectionName> =
+  new Set<CollectionName>([
+    "expenses",
+    "incomes",
+    "settlements",
+    "settlementLog",
+    "paymentLog",
+  ]);

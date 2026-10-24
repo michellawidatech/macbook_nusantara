@@ -15,6 +15,7 @@ import { useDb } from "../mock/store.js";
 import { fmtDateTime } from "../lib/format.js";
 import { labelOf, UNIT_EVENT, UNIT_STATUS } from "../i18n/enumLabels.js";
 import { EnumTag } from "./EnumTag";
+import { warehouseLabel } from "../lib/warehouses.js";
 
 export function UnitTimeline({ serial }: { serial: string | null }) {
   const db = useDb();
@@ -73,7 +74,7 @@ export function UnitTimeline({ serial }: { serial: string | null }) {
             <EnumTag map={UNIT_STATUS} value={unit.status} />
             {/* Where the system believes it is — which is exactly the fact a
                 counter needs when the unit is standing in a different room. */}
-            <Tag>{where?.name ?? "Unknown warehouse"}</Tag>
+            <Tag>{where ? warehouseLabel(where) : "Unknown warehouse"}</Tag>
           </Flex>
         )}
       </Flex>

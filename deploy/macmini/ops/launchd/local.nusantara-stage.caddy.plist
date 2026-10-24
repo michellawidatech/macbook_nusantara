@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  STAGING's Caddy on 127.0.0.1:8081 (docs/staging.md): the shop's Caddyfile,
+  read with staging's values. The cloudflared route for
+  staging-pos.macbooknusantara.com points here.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>local.nusantara-stage.caddy</string>
+	<key>UserName</key>
+	<string>_nusantara</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/homebrew/bin/caddy</string>
+		<string>run</string>
+		<string>--config</string>
+		<string>/opt/nusantara-stage/current/ops/Caddyfile</string>
+		<string>--adapter</string>
+		<string>caddyfile</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/opt/nusantara-stage/var</string>
+		<key>XDG_DATA_HOME</key>
+		<string>/opt/nusantara-stage/var</string>
+		<key>XDG_CONFIG_HOME</key>
+		<string>/opt/nusantara-stage/var</string>
+		<!-- What the Caddyfile's NUSANTARA_* placeholders read. ops/nusantara-deploy
+		     validates with the same four (stage_caddy_env); change both together. -->
+		<key>NUSANTARA_HOME</key>
+		<string>/opt/nusantara-stage</string>
+		<key>NUSANTARA_CADDY_PORT</key>
+		<string>8081</string>
+		<key>NUSANTARA_API_PORT</key>
+		<string>4001</string>
+		<key>NUSANTARA_CADDY_ADMIN</key>
+		<string>off</string>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/opt/nusantara-stage</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>StandardOutPath</key>
+	<string>/opt/nusantara-stage/logs/caddy.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/nusantara-stage/logs/caddy.log</string>
+</dict>
+</plist>

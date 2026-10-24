@@ -1,6 +1,6 @@
 /**
  * What the shop holds, as one flat table: a line per variant, grade and
- * warehouse, and the units behind a line in a popup (owner ask 2026-09-19).
+ * warehouse, and the units behind a line nested under it (2026-10-02).
  *
  * ## Why flat
  *
@@ -14,12 +14,14 @@
  * one warehouse, with its count, what it cost and what it asks on the line.
  * `lib/inventory.ts` builds the lines and says why those axes.
  *
- * The serials are one click away rather than one level down: clicking a line
- * opens a popup listing its units — battery, status, rack, description, what
- * each cost (the "i" breaks it down) and what it asks — with the per-unit
- * Adjust that used to live on the nested level. Because nothing expands any
- * more, the table is an ordinary `ProTable` again: cards on a phone, a click
- * or Enter on a line to open it.
+ * The serials are one click away: clicking a line opens its units UNDER it —
+ * battery, status, rack, description, what each cost (the "i" breaks it
+ * down) and what it asks — with the per-unit buttons. This was a popup from
+ * 2026-09-19 and became a nested row again on 2026-10-02 (owner ask: *"instead
+ * of showing popup in the UI when a row is clicked, use nested column"*).
+ * The lines stay flat — one level, never product → grade → serial — so the
+ * 2026-09-19 complaint does not come back. ⚠️ An expanding table keeps its
+ * grid on a phone (DataTable's docblock), so this list is no longer cards.
  *
  * ## Two kinds of filter, and the split matters before editing this file
  *
@@ -54,7 +56,6 @@ import {
   App,
   Button,
   Flex,
-  Modal,
   Segmented,
   Select,
   theme,
@@ -108,6 +109,7 @@ import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
 import type { StockMove, Unit } from "../../mock/seed.js";
+import { warehouseLabelOf } from "../../lib/warehouses.js";
 
 /** A quantity cell: the number, or a muted zero that does not shout. */
 function Qty({ n, strong }: { n: number; strong?: boolean }) {
@@ -134,7 +136,7 @@ function rangeText(range: PriceRange): string {
  * Was this click aimed at a control inside the line rather than the line?
  *
  * The checkbox's own cell, a button, a link: each does its own thing, and
- * opening the popup on top of it would be a second answer to one click.
+ * opening the line under it would be a second answer to one click.
  * `closest` walks up from the target, so a click on a button's icon counts.
  */
 function onAControl(e: MouseEvent<HTMLElement>): boolean {
@@ -172,8 +174,17 @@ export function InventoryTable({ extra }: InventoryTableProps) {
   } | null>(null);
   /** The unit being corrected, or null (owner ask 2026-09-23). */
   const [editingUnit, setEditingUnit] = useState<Unit | null>(null);
-  /** The key of the line whose units are in the popup, or null. */
-  const [opened, setOpened] = useState<string | null>(null);
+  /**
+   * The lines open to show their units (owner ask 2026-10-02: *"instead of
+   * showing popup in the UI when a row is clicked, use nested column"*).
+   * Several at once — comparing two warehouses' A-grades side by side is the
+   * thing a popup could never do.
+   */
+  const [expanded, setExpanded] = useState<readonly string[]>([]);
+  const toggle = (key: string) =>
+    setExpanded((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
 
   // The shop's thresholds, not the library defaults: Settings can move them.
   const batterySettings = batterySettingsFrom(db.settings);
@@ -182,9 +193,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
   const skuPriceOf = (skuId: string) =>
     db.skus.find((s) => s.id === skuId)?.price ?? 0;
   const warehouseName = (id: string | undefined) =>
-    id === undefined
-      ? undefined
-      : (db.warehouses.find((w) => w.id === id)?.name ?? id);
+    id === undefined ? undefined : (warehouseLabelOf(db.warehouses, id) ?? id);
   const rackName = (id?: string) => db.racks.find((r) => r.id === id)?.name;
   const gradeLabel = (grade: string | undefined) =>
     gradeText(grade, t("grade.new", "New")) ??
@@ -257,13 +266,15 @@ export function InventoryTable({ extra }: InventoryTableProps) {
     [db.units, db.skus, markupPct],
   );
 
-  const openLine = lines.find((l) => l.key === opened);
-  // A line that disappears under the popup — its last unit moved to another
-  // warehouse by an adjustment made from inside it — closes the popup rather
-  // than leaving a key that would reopen it if the line ever came back.
+  // A line that disappears while open — its last unit moved to another
+  // warehouse by an edit made from inside it — is forgotten, rather than
+  // leaving a key that would reopen it if the line ever came back.
   useEffect(() => {
-    if (opened !== null && openLine === undefined) setOpened(null);
-  }, [opened, openLine]);
+    const live = new Set(lines.map((l) => l.key));
+    if (expanded.some((k) => !live.has(k))) {
+      setExpanded((prev) => prev.filter((k) => live.has(k)));
+    }
+  }, [lines, expanded]);
 
   const totalHeld = lines.reduce((n, l) => n + l.onHand, 0);
   const totalValue = lines.reduce((n, l) => n + l.value, 0);
@@ -284,6 +295,71 @@ export function InventoryTable({ extra }: InventoryTableProps) {
     ]
       .filter(Boolean)
       .join(" · ");
+
+  /**
+   * The units behind a line, drawn under it when it is opened. A counted
+   * product has no units, so it shows what moved its shelf instead.
+   */
+  const unitsOf = (l: InventoryLine) => (
+    <>
+      {l.counted && (
+        <DataTable<StockMove>
+          rowKey="id"
+          size="small"
+          dataSource={db.stockMoves
+            .filter((m) => m.skuId === l.skuId && m.locationId === l.locationId)
+            .sort((a, b) => b.at.localeCompare(a.at))}
+          paginated={false}
+          columns={[
+            {
+              title: t("inventory.moveWhen", "When"),
+              key: "at",
+              render: (_, m) => fmtDateTime(m.at),
+            },
+            {
+              title: t("inventory.moveWhat", "What"),
+              key: "type",
+              render: (_, m) => labelOf(STOCK_MOVE, m.type, t),
+            },
+            {
+              title: t("inventory.moveDoc", "Document"),
+              key: "ref",
+              render: (_, m) => m.refCode ?? fmtNone(),
+            },
+            {
+              title: t("inventory.moveQty", "Qty"),
+              key: "qty",
+              align: "right",
+              render: (_, m) => (
+                <Typography.Text type={m.qty > 0 ? "success" : "danger"}>
+                  {m.qty > 0 ? `+${m.qty}` : m.qty}
+                </Typography.Text>
+              ),
+            },
+          ]}
+        />
+      )}
+      {!l.counted && (
+        /*
+         * Wrapped rather than given a className: `DataTable` takes none, and
+         * the dialog is wide enough (owner ask 2026-09-23) that the cells
+         * need a tighter rhythm or the eye has to travel between a serial
+         * and the price on the same row.
+         */
+        <div className="unit-popup-table">
+          <DataTable<Unit>
+            rowKey="serial"
+            size="small"
+            dataSource={l.units}
+            columns={unitColumns(l)}
+            // A pager only when a line is long enough to need one: a line is
+            // one grade in one warehouse, and most hold a handful.
+            paginated={l.units.length > 20}
+          />
+        </div>
+      )}
+    </>
+  );
 
   const filters = (
     <>
@@ -371,15 +447,22 @@ export function InventoryTable({ extra }: InventoryTableProps) {
         if (!u) continue;
         const sku = d.skus.find((s) => s.id === u.skuId);
         const before = priceOf(u, sku?.price ?? 0);
-        const handTyped = u.marketPrice;
-        u.price = e.price;
+        const repriced = before !== e.price;
+        // A grade-only edit leaves the price, and the hand-typed marketplace
+        // price with it, exactly as they were.
+        const handTyped = repriced ? u.marketPrice : undefined;
+        const gradeBefore = u.grade ?? null;
+        if (repriced) u.price = e.price;
         if (handTyped !== undefined) u.marketPrice = undefined;
+        if (e.grade !== undefined)
+          u.grade = (e.grade ?? undefined) as Unit["grade"];
         appendEvent(d, e.serial, {
           type: "DICATAT",
           note: [
-            before === e.price
+            repriced ? `Price ${fmtRp(before)} → ${fmtRp(e.price)}` : undefined,
+            e.grade === undefined
               ? undefined
-              : `Price ${fmtRp(before)} → ${fmtRp(e.price)}`,
+              : `Grade ${gradeBefore ?? "none"} → ${e.grade ?? "none"}`,
             handTyped === undefined
               ? undefined
               : `Marketplace price ${fmtRp(handTyped)} set by hand dropped — the variant's listing follows the rule`,
@@ -390,7 +473,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       }
     });
     message.success(
-      t("inventory.repriced", "{{n}} prices updated.", { n: edits.length }),
+      t("inventory.unitsUpdated", "{{n}} units updated.", { n: edits.length }),
     );
   };
 
@@ -402,12 +485,10 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       key: "serial",
       render: (v: string) => <SerialLink serial={v} />,
     },
-    {
-      title: t("inventory.grade", "Grade"),
-      key: "grade",
-      width: COLUMN.grade,
-      render: (_: unknown, u: Unit) => <GradeTag grade={u.grade} />,
-    },
+    // No Grade and no warehouse here (2026-10-02): the units sit under their
+    // line now, and a line IS one grade in one warehouse — both are on the row
+    // above. The popup needed them; a nested row repeating them only pushed
+    // the prices and the buttons off the side of the screen.
     // No battery for a category the shop counts rather than identifies: a
     // sleeve has none, and a column of "None" would answer a question nobody
     // asked (2026-09-19).
@@ -421,7 +502,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
              */
             title: t("inventory.battery", "Battery"),
             key: "battery",
-            width: 130,
+            width: COLUMN.tag,
             align: "right" as const,
             render: (_: unknown, u: Unit) => {
               const read = readUnitBattery(u, db, batterySettings);
@@ -446,17 +527,14 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       title: t("inventory.status", "Status"),
       dataIndex: "status",
       key: "status",
-      width: COLUMN.status,
+      width: COLUMN.tag,
       render: (v: string) => <EnumTag map={UNIT_STATUS} value={v} />,
     },
     {
-      title: t("inventory.where", "Where"),
-      key: "where",
-      width: 200,
-      render: (_: unknown, u: Unit) =>
-        [warehouseName(u.locationId), rackName(u.rackId)]
-          .filter(Boolean)
-          .join(" · "),
+      title: t("inventory.rack", "Rack"),
+      key: "rack",
+      width: COLUMN.qty,
+      render: (_: unknown, u: Unit) => rackName(u.rackId) ?? fmtNone(),
     },
     {
       // Two lines, not one (owner decision 2026-08-26). This is the column
@@ -464,11 +542,13 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       title: t("inventory.description", "Description"),
       dataIndex: "description",
       key: "description",
-      width: 200,
+      // Takes the slack; its floor is low so the unit rows fit 1440 beside
+      // the sider now that Unit price carries its "i" on one line.
+      minWidth: COLUMN.flex,
       render: (v: string) => <LongText>{v}</LongText>,
     },
     // The QC photographs of this serial (owner ask 2026-09-29), read-only:
-    // they are gathered at Inbound & QC and at a stock count, and this popup
+    // they are gathered at Inbound & QC and at a stock count, and this list
     // is where somebody checks a unit's condition before quoting it. Counted
     // lines have no serial to photograph.
     ...(line.tracksSerial
@@ -476,12 +556,13 @@ export function InventoryTable({ extra }: InventoryTableProps) {
           {
             title: t("inventory.photos", "Photos"),
             key: "photos",
-            width: COLUMN.actionsPair,
+            // Three 32px thumbnails and their gaps.
+            width: COLUMN.tag,
             render: (_: unknown, u: Unit) =>
               qcPhotosOf(db, u.serial).length === 0 ? (
                 fmtNone()
               ) : (
-                <UnitPhotos serial={u.serial} size={36} max={3} />
+                <UnitPhotos serial={u.serial} size={32} max={3} />
               ),
           },
         ]
@@ -495,14 +576,18 @@ export function InventoryTable({ extra }: InventoryTableProps) {
        */
       title: t("inventory.unitPrice", "Unit price"),
       key: "buy",
-      width: COLUMN.money,
+      // The figure and its "i" on one line: at the bare money width the
+      // button pushed "Rp" onto a line of its own (owner report 2026-10-21).
+      width: COLUMN.money + COLUMN.antdControl,
       align: "right" as const,
       render: (_: unknown, u: Unit) => {
         const cost = costOf(u);
         return (
           <Flex align="center" justify="flex-end" gap={SPACE.xs}>
             <Flex vertical align="flex-end" gap={0}>
-              <Typography.Text>{fmtRp(cost.buy)}</Typography.Text>
+              <Typography.Text style={{ whiteSpace: "nowrap" }}>
+                {fmtRp(cost.buy)}
+              </Typography.Text>
               {cost.total !== cost.buy && (
                 <Typography.Text
                   type="secondary"
@@ -531,7 +616,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       align: "right" as const,
       render: (_: unknown, u: Unit) => (
         <Flex vertical align="flex-end" gap={0}>
-          <Typography.Text>
+          <Typography.Text style={{ whiteSpace: "nowrap" }}>
             {fmtRp(priceOf(u, skuPriceOf(u.skuId)))}
           </Typography.Text>
           {u.price === undefined && (
@@ -545,10 +630,13 @@ export function InventoryTable({ extra }: InventoryTableProps) {
     {
       // Untitled: this codebase's actions column, which a phone card puts at
       // its foot. Price change and edit unit (owner ask 2026-09-23) — the two
-      // things anybody opens this popup to do.
+      // things anybody opens a line to do.
       title: "",
       key: "actions",
       width: COLUMN.actions,
+      // Pinned: when a narrow screen scrolls the units sideways, the two
+      // things anybody opens a line to do stay in reach.
+      fixed: compact ? undefined : ("right" as const),
       render: (_: unknown, u: Unit) => (
         <Flex gap={4}>
           <Tooltip title={t("inventory.priceChange", "Price change")}>
@@ -580,400 +668,321 @@ export function InventoryTable({ extra }: InventoryTableProps) {
 
   return (
     <>
-      <ProTable<InventoryLine>
-        persistKey="inventory"
-        rowKey="key"
-        dataSource={lines}
-        selectable
-        // Printing a shelf's worth of stickers at once is the reason batch
-        // selection exists here: a stock take that relabels three lines
-        // should be one trip to the printer, not three.
-        bulkActions={(selected, clear) => (
-          <Button
-            type="primary"
-            icon={<PrinterOutlined />}
-            onClick={() => {
-              const picked = selected.flatMap((l) => l.units);
-              setPrinting(labelsFor(picked, db.skus, db.models));
-              clear();
-            }}
-          >
-            {t("inventory.printN", "Print labels ({{count}})", {
-              count: selected.reduce((n, l) => n + l.units.length, 0),
-            })}
-          </Button>
-        )}
-        // A line is a control: a click, or Enter from the keyboard, opens its
-        // units. An empty line ("All products") has none to open.
-        onRow={(l) => ({
-          onClick: (e: MouseEvent<HTMLElement>) => {
-            if (l.onHand === 0 || onAControl(e)) return;
-            setOpened(l.key);
-          },
-          style: l.onHand > 0 ? { cursor: "pointer" } : undefined,
-        })}
-        keyboardRows={(l) =>
-          t("inventory.openLineAria", "Show the units of {{what}}", {
-            what: lineTitle(l),
-          })
-        }
-        // The pager goes back to page one when the question changes, not when
-        // the store moves under it — DataTable's docblock on `resetKey`.
-        resetKey={`${scope}|${categories.join()}|${bands.join()}`}
-        searchPlaceholder={t(
-          "inventory.searchPlaceholder",
-          "Search product, specs, code or a serial number",
-        )}
-        toolbar={filters}
-        extra={
-          <Flex align="center" gap={SPACE.md} wrap>
-            <Typography.Text type="secondary">
-              {t(
-                "inventory.summary",
-                "{{products}} products · {{units}} units held · value {{value}}",
-                {
-                  products,
-                  units: totalHeld,
-                  value: fmtRp(totalValue),
-                },
-              )}
-            </Typography.Text>
-            {extra}
-          </Flex>
-        }
-        columns={[
-          {
-            title: t("inventory.unitAndSku", "Unit & SKU"),
-            key: "unit",
-            // The seven widths add up to a 1440px laptop screen with the nav
-            // open (2026-09-19): past that, Unit price and Sell price slid under
-            // the pinned Action column and needed a sideways scroll.
-            width: 216,
-            facet: true,
-            facetLabel: t("inventory.anyProduct", "Any product"),
-            searchable: true,
-            sortValue: (l) => `${l.product} ${l.specs}`,
-            // The filter lists products, not variants: eight lines of
-            // "MacBook Air M2" differing only in RAM would make a filter
-            // nobody can read.
-            facetValue: (l) => l.product,
-            // A serial is a legitimate way to reach a line — staff paste one
-            // in constantly — so the serials ride along in what this column
-            // searches without being shown in it.
-            searchValue: (l) =>
-              `${l.product} ${l.specs} ${l.code} ${l.units
-                .map((u) => u.serial)
-                .join(" ")}`,
-            render: (_, l) => (
-              <Flex vertical gap={0}>
-                <Typography.Text>
-                  <Typography.Text strong>{l.product}</Typography.Text>{" "}
-                  {l.specs}
-                </Typography.Text>
-                <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
-                  {l.code}
-                </Typography.Text>
-              </Flex>
-            ),
-          },
-          {
-            title: t("inventory.grade", "Grade"),
-            key: "grade",
-            width: COLUMN.grade,
-            facet: true,
-            facetLabel: t("inventory.anyGrade", "Any grade"),
-            // An empty line has no units and so no grade — not "ungraded".
-            facetValue: (l) =>
-              l.onHand === 0 ? undefined : gradeLabel(l.grade),
-            sortValue: (l) => (l.onHand === 0 ? undefined : gradeRank(l.grade)),
-            render: (_, l) =>
-              l.onHand === 0 ? (
-                <Typography.Text type="secondary">{fmtNone()}</Typography.Text>
-              ) : (
-                <GradeTag grade={l.grade} />
-              ),
-          },
-          {
-            title: t("inventory.warehouse", "Warehouse"),
-            key: "warehouse",
-            width: 124,
-            // In the header since 2026-09-19: a line is ONE warehouse, so
-            // filtering lines by it is filtering units by it, and the
-            // quantities beside the filter stay true. See the docblock.
-            facet: true,
-            facetLabel: t("inventory.anyWarehouse", "Any warehouse"),
-            facetValue: (l) => warehouseName(l.locationId),
-            sortValue: (l) => warehouseName(l.locationId),
-            render: (_, l) =>
-              warehouseName(l.locationId) ?? (
-                <Typography.Text type="secondary">{fmtNone()}</Typography.Text>
-              ),
-          },
-          {
-            /*
-             * One quantity, and what it is made of (owner decision
-             * 2026-08-26). A bare number over nothing reads as "we hold 3";
-             * "3 available" reads as "3 you can sell today", which is the
-             * question being asked — so the breakdown is shown even when it
-             * is the whole quantity. A line of text rather than four columns:
-             * on a normal day three of them would be columns of zeros.
-             */
-            title: t("inventory.qty", "Qty"),
-            key: "qty",
-            width: COLUMN.qty,
-            align: "right",
-            sortValue: (l) => l.onHand,
-            render: (_, l) => {
-              const parts = [
-                l.available > 0 &&
-                  t("inventory.nAvailable", "{{n}} available", {
-                    n: l.available,
-                  }),
-                l.reserved > 0 &&
-                  t("inventory.nOnHold", "{{n}} on hold", { n: l.reserved }),
-                l.qc > 0 && t("inventory.nInQc", "{{n}} in QC", { n: l.qc }),
-                l.service > 0 &&
-                  t("inventory.nOnService", "{{n}} on service", {
-                    n: l.service,
-                  }),
-              ].filter(Boolean);
-              return (
-                <Flex vertical align="flex-end" gap={2}>
-                  <Qty n={l.onHand} strong />
-                  {parts.length > 0 && (
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: TYPE.sm }}
-                    >
-                      {parts.join(" · ")}
-                    </Typography.Text>
-                  )}
-                </Flex>
-              );
+      {/* `inventory-lines` gives the units nested under a line the width
+          antd's padding would otherwise take (global.css). */}
+      <div className="inventory-lines">
+        <ProTable<InventoryLine>
+          persistKey="inventory"
+          rowKey="key"
+          dataSource={lines}
+          selectable
+          // Printing a shelf's worth of stickers at once is the reason batch
+          // selection exists here: a stock take that relabels three lines
+          // should be one trip to the printer, not three.
+          bulkActions={(selected, clear) => (
+            <Button
+              type="primary"
+              icon={<PrinterOutlined />}
+              onClick={() => {
+                const picked = selected.flatMap((l) => l.units);
+                setPrinting(labelsFor(picked, db.skus, db.models));
+                clear();
+              }}
+            >
+              {t("inventory.printN", "Print labels ({{count}})", {
+                count: selected.reduce((n, l) => n + l.units.length, 0),
+              })}
+            </Button>
+          )}
+          // A line is a control: a click, or Enter from the keyboard, opens its
+          // units under it and closes them again. An empty line ("All
+          // products") has none to open.
+          onRow={(l) => ({
+            onClick: (e: MouseEvent<HTMLElement>) => {
+              if (l.onHand === 0 || onAControl(e)) return;
+              toggle(l.key);
             },
-          },
-          {
-            /*
-             * What the units on the line were bought for — `Unit.buy`, the
-             * invoice line, which Inbound calls a unit's "Unit price". The
-             * COGS under it adds the invoice's expenses and any repairs, and
-             * is drawn only when those make it a different number.
-             */
-            title: t("inventory.unitPrice", "Unit price"),
-            key: "buy",
-            width: COLUMN.money,
-            align: "right",
-            sortValue: (l) => (l.buy.count === 0 ? undefined : l.buy.min),
-            render: (_, l) =>
-              l.buy.count === 0 ? (
-                <Typography.Text type="secondary">{fmtRp(0)}</Typography.Text>
-              ) : (
-                <Flex vertical align="flex-end" gap={0}>
-                  <Typography.Text>{rangeText(l.buy)}</Typography.Text>
-                  {(l.cost.min !== l.buy.min || l.cost.max !== l.buy.max) && (
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: TYPE.sm }}
-                    >
-                      {t("inventory.cogsOne", "COGS {{amount}}", {
-                        amount: rangeText(l.cost),
-                      })}
-                    </Typography.Text>
-                  )}
-                </Flex>
-              ),
-          },
-          {
-            /*
-             * What the units on sale ask (per serial since 2026-09-08), and
-             * under it the variant's marketplace price — the highest of its
-             * units', the same on every line of the variant, because a
-             * listing is one price (owner ask 2026-09-19).
-             */
-            title: t("inventory.sellPrice", "Sell price"),
-            key: "sell",
-            width: COLUMN.money,
-            align: "right",
-            sortValue: (l) => (l.store.count === 0 ? undefined : l.store.min),
-            render: (_, l) => {
-              const market = marketBySku.get(l.skuId);
-              return (
-                <Flex vertical align="flex-end" gap={0}>
-                  {l.store.count === 0 ? (
-                    <Typography.Text type="secondary">
-                      {fmtRp(0)}
-                    </Typography.Text>
-                  ) : (
-                    <Typography.Text>{rangeText(l.store)}</Typography.Text>
-                  )}
-                  {market !== undefined && l.onHand > 0 && (
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: TYPE.sm }}
-                    >
-                      {t("inventory.marketOne", "marketplace {{price}}", {
-                        price: fmtRp(market),
-                      })}
-                    </Typography.Text>
-                  )}
-                </Flex>
-              );
-            },
-          },
-          {
-            // Titled, as the owner listed it. On a phone that makes it a
-            // labelled line of the card rather than the card's foot, which is
-            // where its two buttons read best anyway.
-            title: t("inventory.action", "Action"),
-            key: "actions",
-            width: COLUMN.actionsWide,
-            fixed: compact ? undefined : "right",
-            render: (_, l) => (
-              <Flex gap={SPACE.xs} wrap>
-                <Button
-                  size="small"
-                  icon={<TagsOutlined />}
-                  disabled={l.units.length === 0}
-                  // The visible words first, so the name a screen reader
-                  // announces contains what a sighted user reads (WCAG 2.5.3).
-                  aria-label={t(
-                    "inventory.setPriceFor",
-                    "Set price for {{what}}",
-                    {
-                      what: lineTitle(l),
-                    },
-                  )}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setRepricing({ title: lineTitle(l), units: l.units });
-                  }}
-                >
-                  {t("inventory.setPrice", "Set price")}
-                </Button>
-                <Button
-                  size="small"
-                  icon={<PrinterOutlined />}
-                  disabled={l.units.length === 0}
-                  aria-label={t(
-                    "inventory.printBarcodeFor",
-                    "Print barcode for {{what}}",
-                    { what: lineTitle(l) },
-                  )}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setPrinting(labelsFor(l.units, db.skus, db.models));
-                  }}
-                >
-                  {t("inventory.printBarcode", "Print barcode")}
-                </Button>
-              </Flex>
-            ),
-          },
-        ]}
-      />
-
-      {/*
-       * The units behind a line. A modal rather than a drawer or an
-       * expansion: it is read and closed, it is the same on a phone as on a
-       * desk, and it leaves the flat table flat.
-       */}
-      <Modal
-        open={openLine !== undefined}
-        onCancel={() => setOpened(null)}
-        width={compact ? "100%" : 1440}
-        footer={
-          <Button onClick={() => setOpened(null)}>
-            {t("common.close", "Close")}
-          </Button>
-        }
-        title={
-          openLine && (
-            <Flex vertical gap={2}>
-              <span>{`${openLine.product} ${openLine.specs}`.trim()}</span>
-              <Flex
-                align="center"
-                gap={SPACE.sm}
-                wrap
-                style={{ fontSize: TYPE.sm, fontWeight: 400 }}
-              >
-                <Typography.Text type="secondary">
-                  {openLine.code}
-                </Typography.Text>
-                {!openLine.counted && <GradeTag grade={openLine.grade} plain />}
-                <Typography.Text type="secondary">
-                  {warehouseName(openLine.locationId)}
-                </Typography.Text>
-                <Typography.Text type="secondary">
-                  {t("inventory.nUnits", "{{n}} units", {
-                    n: openLine.onHand,
-                  })}
-                </Typography.Text>
-              </Flex>
+            style: l.onHand > 0 ? { cursor: "pointer" } : undefined,
+          })}
+          expandable={{
+            expandedRowKeys: [...expanded],
+            rowExpandable: (l) => l.onHand > 0,
+            onExpand: (_, l) => toggle(l.key),
+            expandedRowRender: (l) => unitsOf(l),
+          }}
+          keyboardRows={(l) =>
+            t("inventory.openLineAria", "Show the units of {{what}}", {
+              what: lineTitle(l),
+            })
+          }
+          // The pager goes back to page one when the question changes, not when
+          // the store moves under it — DataTable's docblock on `resetKey`.
+          resetKey={`${scope}|${categories.join()}|${bands.join()}`}
+          searchPlaceholder={t(
+            "inventory.searchPlaceholder",
+            "Search product, specs, code or a serial number",
+          )}
+          toolbar={filters}
+          extra={
+            <Flex align="center" gap={SPACE.md} wrap>
+              <Typography.Text type="secondary">
+                {t(
+                  "inventory.summary",
+                  "{{products}} products · {{units}} units held · value {{value}}",
+                  {
+                    products,
+                    units: totalHeld,
+                    value: fmtRp(totalValue),
+                  },
+                )}
+              </Typography.Text>
+              {extra}
             </Flex>
-          )
-        }
-      >
-        {openLine?.counted && (
-          <DataTable<StockMove>
-            rowKey="id"
-            size="small"
-            dataSource={db.stockMoves
-              .filter(
-                (m) =>
-                  m.skuId === openLine.skuId &&
-                  m.locationId === openLine.locationId,
-              )
-              .sort((a, b) => b.at.localeCompare(a.at))}
-            paginated={false}
-            columns={[
-              {
-                title: t("inventory.moveWhen", "When"),
-                key: "at",
-                render: (_, m) => fmtDateTime(m.at),
-              },
-              {
-                title: t("inventory.moveWhat", "What"),
-                key: "type",
-                render: (_, m) => labelOf(STOCK_MOVE, m.type, t),
-              },
-              {
-                title: t("inventory.moveDoc", "Document"),
-                key: "ref",
-                render: (_, m) => m.refCode ?? fmtNone(),
-              },
-              {
-                title: t("inventory.moveQty", "Qty"),
-                key: "qty",
-                align: "right",
-                render: (_, m) => (
-                  <Typography.Text type={m.qty > 0 ? "success" : "danger"}>
-                    {m.qty > 0 ? `+${m.qty}` : m.qty}
+          }
+          columns={[
+            {
+              title: t("inventory.unitAndSku", "Unit & SKU"),
+              key: "unit",
+              // The seven widths and the expand chevron add up to a 1440px
+              // laptop screen with the nav open: past that, Unit price and Sell
+              // price slide under the pinned Action column. 216 until the
+              // chevron arrived (2026-10-02).
+              width: 180,
+              facet: true,
+              facetLabel: t("inventory.anyProduct", "Any product"),
+              searchable: true,
+              sortValue: (l) => `${l.product} ${l.specs}`,
+              // The filter lists products, not variants: eight lines of
+              // "MacBook Air M2" differing only in RAM would make a filter
+              // nobody can read.
+              facetValue: (l) => l.product,
+              // A serial is a legitimate way to reach a line — staff paste one
+              // in constantly — so the serials ride along in what this column
+              // searches without being shown in it.
+              searchValue: (l) =>
+                `${l.product} ${l.specs} ${l.code} ${l.units
+                  .map((u) => u.serial)
+                  .join(" ")}`,
+              render: (_, l) => (
+                <Flex vertical gap={0}>
+                  <Typography.Text>
+                    <Typography.Text strong>{l.product}</Typography.Text>{" "}
+                    {l.specs}
+                  </Typography.Text>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: TYPE.sm }}
+                  >
+                    {l.code}
+                  </Typography.Text>
+                </Flex>
+              ),
+            },
+            {
+              title: t("inventory.grade", "Grade"),
+              key: "grade",
+              // A one-letter tag under a short heading: the 16px Warehouse took
+              // comes from here, so the list still fits 1440 with the sider open.
+              width: COLUMN.grade - 16,
+              facet: true,
+              facetLabel: t("inventory.anyGrade", "Any grade"),
+              // An empty line has no units and so no grade — not "ungraded".
+              facetValue: (l) =>
+                l.onHand === 0 ? undefined : gradeLabel(l.grade),
+              sortValue: (l) =>
+                l.onHand === 0 ? undefined : gradeRank(l.grade),
+              render: (_, l) =>
+                l.onHand === 0 ? (
+                  <Typography.Text type="secondary">
+                    {fmtNone()}
+                  </Typography.Text>
+                ) : (
+                  <GradeTag grade={l.grade} />
+                ),
+            },
+            {
+              title: t("inventory.warehouse", "Warehouse"),
+              key: "warehouse",
+              // Wide enough for the heading beside its sorter and filter on one
+              // line (owner report 2026-10-21: it broke as "Warehous / e").
+              width: COLUMN.status,
+              // In the header since 2026-09-19: a line is ONE warehouse, so
+              // filtering lines by it is filtering units by it, and the
+              // quantities beside the filter stay true. See the docblock.
+              facet: true,
+              facetLabel: t("inventory.anyWarehouse", "Any warehouse"),
+              facetValue: (l) => warehouseName(l.locationId),
+              sortValue: (l) => warehouseName(l.locationId),
+              render: (_, l) =>
+                warehouseName(l.locationId) ?? (
+                  <Typography.Text type="secondary">
+                    {fmtNone()}
                   </Typography.Text>
                 ),
+            },
+            {
+              /*
+               * One quantity, and what it is made of (owner decision
+               * 2026-08-26). A bare number over nothing reads as "we hold 3";
+               * "3 available" reads as "3 you can sell today", which is the
+               * question being asked — so the breakdown is shown even when it
+               * is the whole quantity. A line of text rather than four columns:
+               * on a normal day three of them would be columns of zeros.
+               */
+              title: t("inventory.qty", "Qty"),
+              key: "qty",
+              width: COLUMN.qty,
+              align: "right",
+              sortValue: (l) => l.onHand,
+              render: (_, l) => {
+                const parts = [
+                  l.available > 0 &&
+                    t("inventory.nAvailable", "{{n}} available", {
+                      n: l.available,
+                    }),
+                  l.reserved > 0 &&
+                    t("inventory.nOnHold", "{{n}} on hold", { n: l.reserved }),
+                  l.qc > 0 && t("inventory.nInQc", "{{n}} in QC", { n: l.qc }),
+                  l.service > 0 &&
+                    t("inventory.nOnService", "{{n}} on service", {
+                      n: l.service,
+                    }),
+                ].filter(Boolean);
+                return (
+                  <Flex vertical align="flex-end" gap={2}>
+                    <Qty n={l.onHand} strong />
+                    {parts.length > 0 && (
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: TYPE.sm }}
+                      >
+                        {parts.join(" · ")}
+                      </Typography.Text>
+                    )}
+                  </Flex>
+                );
               },
-            ]}
-          />
-        )}
-        {openLine && !openLine.counted && (
-          /*
-           * Wrapped rather than given a className: `DataTable` takes none, and
-           * the dialog is wide enough (owner ask 2026-09-23) that the cells
-           * need a tighter rhythm or the eye has to travel between a serial
-           * and the price on the same row.
-           */
-          <div className="unit-popup-table">
-            <DataTable<Unit>
-              rowKey="serial"
-              size="small"
-              dataSource={openLine.units}
-              columns={unitColumns(openLine)}
-              // A pager only when a line is long enough to need one: a line is
-              // one grade in one warehouse, and most hold a handful.
-              paginated={openLine.units.length > 20}
-            />
-          </div>
-        )}
-      </Modal>
+            },
+            {
+              /*
+               * What the units on the line were bought for — `Unit.buy`, the
+               * invoice line, which Inbound calls a unit's "Unit price". The
+               * COGS under it adds the invoice's expenses and any repairs, and
+               * is drawn only when those make it a different number.
+               */
+              title: t("inventory.unitPrice", "Unit price"),
+              key: "buy",
+              width: COLUMN.money,
+              align: "right",
+              sortValue: (l) => (l.buy.count === 0 ? undefined : l.buy.min),
+              render: (_, l) =>
+                l.buy.count === 0 ? (
+                  <Typography.Text type="secondary">{fmtRp(0)}</Typography.Text>
+                ) : (
+                  <Flex vertical align="flex-end" gap={0}>
+                    <Typography.Text>{rangeText(l.buy)}</Typography.Text>
+                    {(l.cost.min !== l.buy.min || l.cost.max !== l.buy.max) && (
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: TYPE.sm }}
+                      >
+                        {t("inventory.cogsOne", "COGS {{amount}}", {
+                          amount: rangeText(l.cost),
+                        })}
+                      </Typography.Text>
+                    )}
+                  </Flex>
+                ),
+            },
+            {
+              /*
+               * What the units on sale ask (per serial since 2026-09-08), and
+               * under it the variant's marketplace price — the highest of its
+               * units', the same on every line of the variant, because a
+               * listing is one price (owner ask 2026-09-19).
+               */
+              title: t("inventory.sellPrice", "Sell price"),
+              key: "sell",
+              width: COLUMN.money,
+              align: "right",
+              sortValue: (l) => (l.store.count === 0 ? undefined : l.store.min),
+              render: (_, l) => {
+                const market = marketBySku.get(l.skuId);
+                return (
+                  <Flex vertical align="flex-end" gap={0}>
+                    {l.store.count === 0 ? (
+                      <Typography.Text type="secondary">
+                        {fmtRp(0)}
+                      </Typography.Text>
+                    ) : (
+                      <Typography.Text>{rangeText(l.store)}</Typography.Text>
+                    )}
+                    {market !== undefined && l.onHand > 0 && (
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: TYPE.sm }}
+                      >
+                        {t("inventory.marketOne", "marketplace {{price}}", {
+                          price: fmtRp(market),
+                        })}
+                      </Typography.Text>
+                    )}
+                  </Flex>
+                );
+              },
+            },
+            {
+              // Titled, as the owner listed it. On a phone that makes it a
+              // labelled line of the card rather than the card's foot, which is
+              // where its two buttons read best anyway.
+              title: t("inventory.action", "Action"),
+              key: "actions",
+              width: COLUMN.actionsWide,
+              fixed: compact ? undefined : "right",
+              render: (_, l) => (
+                <Flex gap={SPACE.xs} wrap>
+                  <Button
+                    size="small"
+                    icon={<TagsOutlined />}
+                    disabled={l.units.length === 0}
+                    // The visible words first, so the name a screen reader
+                    // announces contains what a sighted user reads (WCAG 2.5.3).
+                    aria-label={t(
+                      "inventory.setPriceFor",
+                      "Set price for {{what}}",
+                      {
+                        what: lineTitle(l),
+                      },
+                    )}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setRepricing({ title: lineTitle(l), units: l.units });
+                    }}
+                  >
+                    {t("inventory.setPrice", "Set price")}
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<PrinterOutlined />}
+                    disabled={l.units.length === 0}
+                    aria-label={t(
+                      "inventory.printBarcodeFor",
+                      "Print barcode for {{what}}",
+                      { what: lineTitle(l) },
+                    )}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPrinting(labelsFor(l.units, db.skus, db.models));
+                    }}
+                  >
+                    {t("inventory.printBarcode", "Print barcode")}
+                  </Button>
+                </Flex>
+              ),
+            },
+          ]}
+        />
+      </div>
 
       <UnitEditModal
         open={editingUnit !== null}

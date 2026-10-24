@@ -45,6 +45,7 @@ import { ScopeFields, useConditionWord } from "./ScopeFields.js";
 import type { OpnameRec } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
 import { COLUMN } from "../../theme/tokens";
+import { warehouseLabelOf } from "../../lib/warehouses.js";
 
 /** How many serials a count has read, expected or not. See `restoreScans`. */
 const scannedIn = (o: OpnameRec | null) =>
@@ -100,10 +101,7 @@ export function OpnamePage() {
             o.locationIds.length === 0
               ? t("opnameList.allWarehouses", "All warehouses")
               : o.locationIds
-                  .map(
-                    (id) =>
-                      db.warehouses.find((w) => w.id === id)?.name ?? fmtNone(),
-                  )
+                  .map((id) => warehouseLabelOf(db.warehouses, id) ?? fmtNone())
                   .join(", "),
           /** The other three axes, as words, for the line under the warehouse. */
           narrowing: [

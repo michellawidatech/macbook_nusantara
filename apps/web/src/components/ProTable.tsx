@@ -112,6 +112,13 @@ export type ProColumn<T> = AntColumn<T> & {
    * already follows for a row with no value.
    */
   dateRange?: boolean;
+  /**
+   * The instant or day the date-range filter reads, when the column SORTS on
+   * something else — Income & Expense sorts its Date column on the order the
+   * running balance was walked in, so two rows of one day cannot trade places
+   * (2026-10-24), and that order is a number, not a date.
+   */
+  dateValue?: (record: T) => string | undefined | null;
 };
 
 /** A date filter's bounds as local `YYYY-MM-DD` days; either may be open. */
@@ -162,6 +169,13 @@ export interface ProTableProps<T> extends Omit<
    * is a picker that looks empty.
    */
   persistKey?: string;
+  /**
+   * What the header filters start at, column key → picked values (the facet
+   * values, so the labels a `facetValue` gives). For a list whose useful
+   * view is a slice — the chatbot's evaluations open on "bad, still open".
+   * Shown as chips like any other filter, so it is one × away from the lot.
+   */
+  defaultFilters?: Record<string, string[]>;
 }
 
 /** The filter map as the header writes it: column key → picked values. */
@@ -290,6 +304,7 @@ export function ProTable<T extends object>({
   resetKey,
   rowKey,
   persistKey,
+  defaultFilters,
   ...rest
 }: ProTableProps<T>) {
   const { compact } = useLayoutMode();
@@ -306,7 +321,7 @@ export function ProTable<T extends object>({
   );
   const [filters, setFilters] = usePersistentState<Record<string, string[]>>(
     kept("filters"),
-    {},
+    () => defaultFilters ?? {},
     parseFilters,
   );
   const [ranges, setRanges] = usePersistentState<Record<string, DayRange>>(
@@ -402,7 +417,9 @@ export function ProTable<T extends object>({
       for (const { col, key } of dateCols) {
         const r = ranges[key];
         if (!rangeSet(r)) continue;
-        const day = dayOfValue(valueOf(col, row));
+        const day = dayOfValue(
+          col.dateValue ? (col.dateValue(row) ?? undefined) : valueOf(col, row),
+        );
         if (day === undefined) return false;
         if (r![0] !== null && day < r![0]) return false;
         if (r![1] !== null && day > r![1]) return false;
@@ -446,6 +463,7 @@ export function ProTable<T extends object>({
           searchValue,
           defaultSortOrder,
           dateRange,
+          dateValue: _dateValue,
           ...antCol
         } = col;
         const key = colKey(col, i);
@@ -477,11 +495,21 @@ export function ProTable<T extends object>({
                 // component's state and the filtering happens above.
                 filtered: rangeSet(ranges[key]),
                 filterDropdown: ({ close }: { close: () => void }) => (
-                  <Flex vertical gap={SPACE.sm} style={{ padding: SPACE.sm }}>
+                  <Flex
+                    vertical
+                    gap={SPACE.sm}
+                    className="pro-table-date-filter"
+                    style={{ padding: SPACE.sm }}
+                  >
                     <DatePicker.RangePicker
-                      // Inside the dropdown, not in a portal of its own: a
-                      // click on the calendar must not read as a click
-                      // outside the filter, which closes it.
+                      // The calendar is drawn INSIDE the filter, always open,
+                      // in the flow (`.pro-table-date-filter` in global.css)
+                      // — not a popup. As a popup anchored in this narrow
+                      // dropdown it spilled over the sider, covered OK and
+                      // could not be picked from (owner report 2026-10-23).
+                      // In a portal of its own, a click on it would read as
+                      // a click outside the filter, which closes it.
+                      open
                       getPopupContainer={(node) =>
                         node.parentElement ?? document.body
                       }
@@ -494,7 +522,10 @@ export function ProTable<T extends object>({
                         t("proTable.dateUntil", "Until"),
                       ]}
                     />
-                    <Flex justify="space-between">
+                    <Flex
+                      justify="space-between"
+                      className="pro-table-date-filter-actions"
+                    >
                       <Button
                         size="small"
                         type="link"

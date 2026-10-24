@@ -104,4 +104,49 @@ describe("supplier return of a counted product", () => {
       0,
     );
   });
+
+  // A fresh database has no supplier-return reasons (go-live imported none):
+  // a typed one has to be enough, and it joins the list.
+  it("takes a typed reason nobody has listed yet", async () => {
+    render(
+      <AntdApp>
+        <MemoryRouter>
+          <SupplierReturnPanel addOpen onCloseAdd={() => {}} />
+        </MemoryRouter>
+      </AntdApp>,
+    );
+    await userEvent.click(screen.getByText("Counted product (by quantity)"));
+    // Whatever still has pieces: the test above may have taken the last one.
+    const db = getDb();
+    const id = [...stockLevels(db.stockMoves).keys()].find(
+      (k) =>
+        onHand(db.stockMoves, k) > 0 &&
+        db.pos.some((p) => p.items.some((i) => i.skuId === k)),
+    )!;
+    const left = onHand(db.stockMoves, id);
+    const sku = db.skus.find((s) => s.id === id)!;
+    await chooseOption(
+      screen.getByRole("combobox", { name: "Product" }),
+      `${sku.name} ${sku.variantLabel} — ${left} in stock`,
+    );
+    await userEvent.type(
+      screen.getByRole("combobox", { name: /^Reason/ }),
+      "Segel rusak",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Record supplier return" }),
+    );
+
+    await vi.waitFor(() =>
+      expect(onHand(getDb().stockMoves, id)).toBe(left - 1),
+    );
+    const listed = getDb().reasons.find(
+      (r) => r.activity === "RETURN_SUPPLIER" && r.label === "Segel rusak",
+    );
+    expect(listed).toBeDefined();
+    const move = getDb().stockMoves.find(
+      (m) => m.type === "RETUR_SUPPLIER" && m.reasonId === listed!.id,
+    );
+    expect(move).toBeDefined();
+  });
 });

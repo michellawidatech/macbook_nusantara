@@ -40,7 +40,8 @@ Decisions that outlived those documents:
     it. `/stock/adjustment` redirects here. `?adjust=IN|OUT` opens the batch
     editor, which is how a posted stock opname records a late movement.
   - **Chatbot** (`/chat`) is the inbox and the knowledge base as two tabs.
-    `/chat/knowledge` redirects here.
+    `/chat/knowledge` redirects here. ⚠️ Four tabs since 2026-10-15 — see
+    "Chatbot v2" below.
 - **Price is per variant, not per serial** (owner revision 2026-08-27, which
   reverses the 2026-08-15 decision). `Sku.price` is the only sellable price;
   `Unit.price` and its CHECK are gone. QC no longer asks for a price and shows
@@ -193,6 +194,13 @@ Decisions that outlived those documents:
   and the sticker rather than taken on trust, or a **thermal roll**, where the
   label is the page. `lib/labelPaper.ts` holds it; the setup is per-desk, so it
   lives in `localStorage` beside the scanner's.
+  ⚠️ **2026-10-22: the page is no longer a setting** (owner: *"remove the
+  customization"*). Every print is one **50 × 30 mm** sticker per page
+  (`@page label-sheet { size: 50mm 30mm; margin: 0 }`, a break after each):
+  a 26 mm QR of the stored serial on the left, the product name and the SKU
+  code (`Sku.code`) on the right, each clamped to three lines, and **no serial
+  text**. `lib/labelPaper.ts`, `lib/code128.ts` and the `nusantara.labels`
+  setup are gone; the serial checks before printing are unchanged.
 - **AppleDB import hides, 2026-08-28.** "Not selling" was a mark that dimmed a
   row and left it in a table of thousands. Hidden models leave the list, and a
   switch above it shows them so one can be brought back. `MockDb.appleDbHidden`
@@ -1078,7 +1086,7 @@ Decisions that outlived those documents:
     per-unit box anywhere. `Unit.marketPrice` still exists and still counts.
   - **Inventory is flat** (p4): one line per variant × grade × warehouse,
     unit price and sell price as ranges, *Set price* / *Print barcode*; a line
-    opens a popup of its units with an "i" per unit breaking down the COGS
+    opens a popup of its units (⚠️ nested under the line since 2026-10-02) with an "i" per unit breaking down the COGS
     (`components/CostBreakdown`). **Export stock** (p5) writes .xlsx after
     B2Soft's PERSEDIAAN BARANG, with `lib/xlsxWrite.ts` — no dependency.
   - **S/N Tracking** (p6) lists every serial (filters: category / product /
@@ -1126,9 +1134,9 @@ Decisions that outlived those documents:
     (`SEED.primaryDark`, primary text 5.5:1); the till's total panel and the
     active app tab use `BRAND_DEEP`, and the panel's main button is white.
     `test/theme.test.ts` checks the contrast.
-  - ⚠️ Schema gaps still open: `Location.code` is not in the store (the
-    export names warehouses by name), and a settlement's note lives on the
-    payments because `Settlement` has only `reason`.
+  - ⚠️ Schema gaps still open: ~~`Location.code` is not in the store~~ (it
+    is since 2026-10-08 — see "Four asks"), and a settlement's note lives on
+    the payments because `Settlement` has only `reason`.
 - **Counted products are quantities, in the database too — 2026-09-19.**
   *"For accessories literally don't record any individual measurements like
   code, no need, that should purely be by qty"* — and, asked how far: the
@@ -2289,7 +2297,8 @@ Decisions that outlived those documents:
     OPEN row per (thread, kind) — a partial unique index — with the bot's
     summary, the unit, the POS price and, for a NEGOTIATION, the customer's
     offer read by CODE (`parseAskPrice`). `refreshOffers` upserts a newer
-    offer while the thread is held. /chat draws open tasks above the messages
+    offer while the thread is held. ⚠️ (UI below REMOVED 2026-10-15 — see
+    "A hand-over is an outline".) /chat draws open tasks above the messages
     and opens each one's dialog once by itself; the negotiation dialog shows
     our price, the cost (`Unit.landed`, "modal") and the offer, and *Send
     offer* records `staffPrice`, closes the task, answers the chat and lifts
@@ -2321,6 +2330,782 @@ Decisions that outlived those documents:
     and listed in `masters-audit.txt`. No prices (every variant
     Rp 0), no stock, no balances. Warehouse 04 (Gudang Masuk Belum QC) is the
     service bench (`SERVIS`), 02 the shop.
+- **The chatbot, tried out locally — three changes, 2026-10-14.**
+  - **`tools/wa-local/` answers a real WhatsApp chat on a laptop**, through
+    Baileys (WhatsApp Web's protocol — unofficial, so a spare number and LOCAL
+    TESTING ONLY; production is the Cloud API). `up` / `down` run the POS, the
+    real webhook with a secret made up for that laptop, and the real worker
+    loop with its Graph calls answered through `TickDeps.fetchImpl`. On the
+    sandbox database `nusantara_pos_chatbot`; the shop's Meta token is never
+    loaded. ⚠️ Deliberately OUTSIDE the pnpm workspace (its own
+    `pnpm install --ignore-workspace`), so Baileys is in no lockfile CI or a
+    release installs. ⚠️ An allow-list gates both directions: a linked account
+    receives every chat that account receives. ⚠️ Never `pnpm dev` beside it —
+    the ordinary worker loads the real token and drains the same Outbox.
+  - **The knowledge base is a spreadsheet** — *"1 column for questions and 1
+    column for answer"*. /chat → Knowledge has *Download .xlsx* and *Import
+    from a file* (.xlsx or .csv); the pasted `Q:`/`A:` dialog is gone, though
+    `parseQaText` still reads that format for the `knowledge` CLI.
+    `packages/domain/qaSheet.ts` reads rows (column A/B, or wherever a
+    "Question"/"Answer" header row says; a `;`-separated CSV is what Excel
+    writes on an Indonesian machine). **An upload UPDATES an answer the file
+    changed** (owner answer) — the sheet is the source of truth, where a paste
+    only ever added — and the dialog shows new / changed / unchanged, with
+    today's answer under the one replacing it. A question the file leaves out
+    is left alone, and an update never touches the Active switch.
+  - **`/new` starts a tester's chat over** — *"start a new chat and retrieve no
+    context of the user"*. `packages/agent/reset.ts` is the rule,
+    `apps/worker/reset.ts` the write. Three owner answers:
+    **tester numbers only** (`AppSetting` `chatbot.testers`, the *Testers*
+    button beside the switches, owner-only) — a reset has to lift a hand-over
+    hold or the bot stays silent after it, and a customer must not be able to
+    dismiss a colleague's task; from anybody else `/new` is an ordinary
+    message. **The conversation only** — earlier turns, the summary and open
+    tasks are left behind; a customer record the POS holds under that phone is
+    still found. **Nothing is deleted** — the `/new` row is stamped
+    `intent: sistem:reset` and every reader of a thread's past
+    (`resetPointFor`: the draft pass, the summary cursor, *Write it for me*)
+    reads only what was answered after it.
+    ⚠️ It is its own pass AHEAD of the draft pass and outside its candidate
+    query: that query skips a held thread and one with `autoReply` off, which
+    are exactly the threads a reset is for.
+
+- **Chatbot v2, started 2026-10-14** — `docs/chatbot-v2-design.md` is the
+  design and the build order; read it before touching the bot. *"Around 50
+  customers a day, 10–25 at once."* Three agents in code, not n8n — Router
+  (Sonnet 5.5, structured, no prose), Operations (Haiku 4.5, POS REST only)
+  and the Sales Advisor (Sonnet 5.5), who writes every reply. Owner answers:
+  the POS is reached through REST (`/api/agent/v1/*`) with a per-turn token
+  that carries the sender's wa_id — **no route takes a phone**, which is what
+  "a customer can only write to their own data" means; photos stay WhatsApp
+  uploads; 10 s is fine; an appointment is a reservation with a visit time
+  (`Reservation.scheduledFor`); a lead is set by the bot or staff and clears at
+  a sale; one persona per agent; tabs are Chat · Knowledge Base · Evaluation ·
+  Settings, and Settings holds the personas, the simulator, the switches and
+  Testers.
+  - ⚠️ **A Claude Pro/Max (Claude Code) login cannot run the bot.** Anthropic
+    refuses those tokens outside Claude Code and claude.ai. Production needs a
+    Console API key or Console OAuth (`ant auth login`).
+  - **Step 1 is in:** migration
+    `20261014120000_chatbot_v2_threads_profiles_and_evaluation` (additive; owner
+    approved the schema). `WaThreadMemory` gains the lease (agent-owned), the
+    lead in two halves — `leadAt`/`leadScore` the bot's, `leadStaffAt` and
+    `leadClearedAt` staff's — and `readAt`; the column grants keep invariant
+    13 disjoint. `CustomerProfile` gains `budgetMin`/`budgetMax` (backfilled),
+    `ageEstimate`, `occupation` and `CustomerProfileFact` rows.
+    `ReservationProposal(+Item)`, `AgentRun(+Step)`, `AgentEvaluation` and
+    `Persona.agent` (unique) are new. ⚠️ `CustomerProfile.budget` is
+    superseded and kept ONE release for the reader before; drop it after.
+    ⚠️ `prisma migrate diff` wants to drop `Expense_orderId_idx` and
+    `ManualIncome_orderId_idx` (hand-written, never declared) — strip that
+    from any generated migration.
+  - **The app is full width** (owner, 2026-10-14): `LAYOUT.contentMaxWidth`
+    (1600) is gone, so a zoomed-out screen no longer leaves its right third
+    empty. Forms are still capped by `formMaxWidth`.
+  - **Step 2 is in (2026-10-15): threads in parallel.** The draft pass answers
+    up to `WORKER_DRAFT_CONCURRENCY` (8) threads at once, 16 a tick, each under
+    a **lease** (`apps/worker/src/lease.ts`): one INSERT … ON CONFLICT that
+    takes `WaThreadMemory.leaseUntil/leasedBy` only when nobody holds an
+    unexpired one (120 s), released when the turn ends. Two lanes or two worker
+    processes never answer one customer; the commit's compare-and-swap stays as
+    the second guard. `draftPass` without `concurrency` is still sequential —
+    tests that script one model across threads depend on it.
+    `test/lease.test.ts` proves one call per thread under overlap, each reply
+    carrying only its own customer's words, and the claim as both roles.
+    Waits are now 3 s / 6 s / ~11 s / 20 s (`debounce.ts`, was 4/10/18/45).
+    ⚠️ **The worker logs in as `nusantara_agent`, and the roles stay
+    separate** (owner, 2026-10-15). The Mac mini's worker had inherited
+    common.env's `DATABASE_URL` (`nusantara_app`); `docs/worker-agent-role.md`
+    is the step-by-step switch, done on the Mac mini BEFORE the chatbot v2 tag.
+    From that release the worker **refuses to start in prod as any other
+    role** (`apps/worker/src/role.ts`, exit 78). The lease is the agent's
+    alone. `apps/worker/test/agentRole.test.ts` runs every pass as
+    nusantara_agent — no worker test did before, and it found that the agent
+    role could never CREATE a memory row: Prisma sent `autoReply`'s
+    `@default(true)` in every INSERT and the role holds no INSERT on that
+    staff-owned column. It is `@default(dbgenerated("true"))` now (same DB
+    default, no migration); ⚠️ `prisma migrate diff` therefore also emits a
+    no-op `ALTER COLUMN "autoReply" SET DEFAULT true` — strip it like the two
+    index drops.
+    The webhook does NOT refuse a non-numeric `from` (the design's first draft
+    did): WhatsApp usernames may send a sender id that is not a phone number.
+  - **Step 3 is in (2026-10-15): the POS behind `/api/agent/v1`.** The POS
+    tools (stock, serials, photos, catalogue, and the customer's own profile,
+    orders and bookings) run in the API behind a per-turn token the worker
+    signs (`AGENT_API_SECRET`, in api.env AND worker.env, nowhere else); the
+    worker's `converse` sends them there through `agentApiDispatch` when
+    `AGENT_API_URL` + the secret are set, and runs them locally otherwise.
+    `packages/agent/src/agentApi.ts` is the contract (route table, token,
+    client, `argsFromRequest`); `apps/api/src/routes/agent.ts` the route,
+    mounted BEFORE `requireAuth` because its caller holds no staff session.
+    ⚠️ **No route takes a phone** — `/me` is the token's `waId`, and that is
+    what "a customer can only write to their own data" means here. Keep it
+    so: a new route that reads a customer from a path, query or body undoes
+    the whole boundary. A switched-off tool is 403 (`toolsFor`), a lookup
+    that found nothing 404. `search_knowledge`, `store_info`,
+    `lookup_catalog` and the hand-over stay in the worker.
+    ⚠️ The agent client uses the real `fetch`, never the tick's `fetchImpl` —
+    that one is the Graph stub in tools/wa-local.
+
+  - **Steps 4–6 are in (2026-10-15).** ⚠️ v2 is behind `AppSetting
+    chatbot.pipeline` and stays **v1 until the owner switches it** in /chat →
+    Settings; both pipelines write an `AgentRun` per turn.
+    - **The Sales Advisor IS `converse`** — with `model`, `forcedToolUse:
+      false` (Sonnet 5.5 refuses `tool_choice: any`; plain text is read as a
+      reply citing `greeting`, which `checkReply` still holds to),
+      `excludeTools` (no POS tools) and `preloaded` (Operations' facts,
+      photos, bookings). Do not fork the loop: the v1 checks are the v2
+      checks because it is one loop.
+    - **A booking is two steps and the second is code.** Operations has
+      `propose_reservation` (holds nothing, 30 min, `assertSchedule` exported
+      from `packages/db` so it is refused for a hold's reasons);
+      `confirm_reservation` is in `CODE_ONLY_TOOLS`, never in a model's tool
+      list, and `runPipeline` calls it only on the router's `confirm` with a
+      proposal open. `/api/agent/v1` lets it through on the booking switch +
+      `writes`, not on `toolsFor`.
+    - ⚠️ **No model array reaches a query** (`tools.schema.test.ts`): the
+      new list arguments — `remember_customer`'s usage/apps/preferences/about
+      and `propose_reservation`'s serials — are comma-separated strings.
+    - The lead: router score ≥ threshold sets `leadAt` (agent role); staff's
+      `leadStaffAt`/`leadClearedAt` on the profile; a sale writes
+      `leadClearedAt` in the orders adapter. `isLead` is the one reading.
+    - **The /chat screen is four tabs** — Chat · Knowledge Base · Evaluation ·
+      Settings — and this REPLACES the 2026-08-26 "inbox and knowledge base as
+      two tabs". Chat is three columns (`ThreadList`, the conversation with
+      `ReplyRating` 👍/👎, `CustomerProfilePanel`); Settings holds the switches,
+      Testers, the pipeline, the lead threshold, the three agents' personas and
+      the `Simulator` (a dry run: no reserve, no profile, no run row). The old
+      "Fix this", the Context panel, the banners and stacked task cards are
+      gone; an open task is one line under the header (`ActionItems`).
+      ⚠️ Removed with them: the staff **directive** box (the column and the
+      worker's use of it are unchanged — nothing on the screen writes it now)
+      and the "customer since / orders" block.
+    - Server side: `apps/api/src/routes/inboxV2.ts` (read, lead, profile,
+      facts, media) and `chatV2.ts` (evaluations, agents, settings,
+      simulate); `.context/chatbot-v2-api-contract.md` was the contract.
+    - ⏳ **Step 7 (measure) needs a Console API key** —
+      `docs/chatbot-v2-design.md` §10 has the procedure and the SQL.
+  - ⚠️ `apps/web/test/transactionsPage.test.tsx` hard-coded `SI-2026/09-…`
+    codes and broke on 1 October: the demo seed numbers documents by their
+    month, relative to today. It finds seed sales by number now
+    (`seedCode`); write new seed-code assertions that way.
+
+- **Rules first, AI last — 2026-10-15 (later), and this is the DEFAULT bot.**
+  *"If the process can be rule based or automated, do not use AI. Use AI only
+  to do something that the rule base cannot do. But keep the interface."*
+  `AppSetting chatbot.pipeline` is now `rules` | `v1` | `v2`, and **absent
+  means `rules`** (`loadChatbotSettings`). v1 and v2 are unchanged and one
+  click away in /chat → Settings.
+  - `packages/agent/src/rules/`: `understand.ts` reads intent, product query,
+    budget range (incl. "12-15jt"), serial, "yang kedua", name ("atas nama
+    Budi"), visit time ("besok jam 2" → 14:00, a weekday, "20/10"), usage,
+    apps, preferences and occupation — pure, `test/rulesUnderstand.test.ts`.
+    `replies.ts` are templates that print only what a lookup returned (so no
+    `checkReply` is needed). `run.ts` (`runRules`) is the bot: `routeMessage`
+    hand-overs as before → remember profile facts → greeting / thanks /
+    stock list / price / photos / booking proposal / code-confirm / decline
+    by template → a STRONG knowledge-base match sent word for word → the AI
+    fallback (`converse`, v1) only if a credential exists → else a person.
+  - ⚠️ **The worker answers with NO credential in rules mode.** `draftPass`
+    loads the settings before its dormancy check, and only v1/v2 go dormant
+    without a key. The simulator likewise needs one only for v1/v2.
+  - What a reply showed is kept on the answered row (`entities.units`) and
+    read back by `lastShownUnits` — that is what "yang pertama berapa?" and
+    "minta fotonya" resolve against. The trace records the router as model
+    `rules`, the reply as `template` (or the fallback's real model), cost 0.
+  - The Settings agent list shows each seat's `inRules` job while `rules` is
+    selected; the simulator says "No AI used" and sends `lastShown` back.
+  - ⚠️ Tests that exercise the AI agents pin `chatbot.pipeline = v1`
+    (`pinPipelineV1` in four worker test files) — the default moved under them.
+  - ⚠️ **One Claude Code subscription still cannot run the AI fallback** —
+    Anthropic refuses subscription OAuth outside Claude Code. Without a
+    Console key the rules bot runs and the fallback is simply a person.
+
+- **A hand-over is an outline, not a pop-up — 2026-10-15.** *"Do not
+  display [the task dialog], instead just highlight the unanswered chat (add a
+  shadow / outline, not a popup modal)"*, and, asked: remove the dialog AND the
+  one-line task strip. This REVERSES the 2026-09-29 "opens each one's dialog
+  once by itself" and its negotiation form.
+  - `ChatPage` outlines (2px `colorWarning` + a soft glow, no layout shift) a
+    customer bubble waiting on a PERSON: `PERLU_STAF`, or `BARU` while the bot
+    is off for that chat — not a BARU row with the bot on, which the bot
+    answers in seconds. One caption under it: "Needs your reply · {topic}".
+    `data-waiting` marks it for tests. ⚠️ Read the STATUS, not `m.handoff`:
+    the server keeps the note on rows staff have since answered.
+  - **Mark handled** moved into the conversation header, drawn only while a
+    hand-over or an OPEN task exists.
+  - **A staff reply now closes the thread's OPEN `ChatAction`s** in its own
+    transaction (`POST /api/inbox/:phone/reply`) — with Mark done gone they
+    would otherwise never close, and the 🧑 tag reads them.
+  - `ActionItems.tsx` keeps only `ActionKindTag`, `actionKindLabel` and
+    `budgetText` (the profile panel uses them). The offer/done API routes stay,
+    dormant; their web clients went.
+
+- **The bot always asks what the customer needs — 2026-10-15.** *"The goal of
+  the bot is to always ask about what the user wants/needs … if they have not
+  figured out the preferences, usage, they need to always ask."* In the rules
+  bot every reply that is not a hand-over, a booking read-back or a "what does
+  your booking still need" ends with ONE question about the first thing the
+  profile lacks — usage → preferences → budget → apps (`replies.nextQuestion`,
+  appended in `run.ts` `done()`, so no template can forget it) — asked a
+  second way when the bot's previous reply (`lastReply`) already asked it the
+  first way. `profileKnown` now reports `preferences`. Two new intents keep
+  answers to those questions off a colleague's desk: **`tell`** (only about
+  themselves — "buat kuliah desain", saved and thanked) and **`ack`** ("ok
+  kak" with no booking open). ⚠️ A QUESTION that mentions a fact
+  ("garansinya berapa lama?") stays a question (`QUESTION` in understand.ts).
+  The simulator derives what is "known" from the earlier turns of its
+  made-up conversation.
+
+- **Inventory's units are nested again, 2026-10-02.** *"Instead of showing
+  popup in the UI when a row is clicked, use nested column."* A click on a line
+  (or its chevron) opens its units UNDER it, several lines at once; the lines
+  themselves stay flat — one level, never the product → grade → serial tree
+  of 2026-09-08. The nested table dropped Grade and the warehouse (a line IS
+  one grade in one warehouse, so the row above says both) and its Where
+  became Rack, which is what lets it fit a 1440px screen with the nav open
+  together with `.inventory-lines` in global.css stripping antd's padding and
+  40px indent from the expanded row. The per-unit buttons are pinned right.
+  ⚠️ An expanding table keeps its grid on a phone (DataTable), so Inventory
+  is no longer cards there.
+- **A discount nobody has used can be deleted, 2026-10-02** (owner decision,
+  chosen over hiding one or a Delete that only switched it off). The row's
+  *Delete* sits beside *Edit*, behind a Popconfirm; one a sale has redeemed —
+  `used > 0` OR any order carrying its id, because the two can disagree — is
+  drawn disabled and points at the On switch. ⚠️ This is the app's **third
+  hard delete**, and on Postgres the first real one through the store (a
+  draft stock count is cancelled to `BATAL` there). `removeUnusedDiscount` in
+  `adapters/reference.ts` asks the DATABASE, not the browser's copy, and takes
+  the `DiscountSku` rows with it; `Order.discountId` is ON DELETE RESTRICT, so
+  a redemption racing the commit fails the DELETE rather than orphaning a
+  sale. Migration `20261002090000_discount_delete_unused` grants
+  `nusantara_app` DELETE on `Discount` and `DiscountSku` and nothing else. Do
+  not generalise it.
+- **Staging is a second install on the Mac mini, 2026-10-06.** *"Create
+  staging env … staging.pos.macbooknusantara.com."* It is
+  **`staging-pos.macbooknusantara.com`** (owner's choice once told why): the
+  zone's free certificate is `*.macbooknusantara.com`, one level, and a
+  two-level name needs Advanced Certificate Manager. `docs/staging.md` is the
+  runbook.
+  - `/opt/nusantara-stage`, API `:4001`, Caddy `:8081`, launchd
+    `local.nusantara-stage.{api,caddy}`, database `nusantara_pos_stage`, a
+    route on the same tunnel. A push to `main` deploys it; Run workflow on any
+    branch deploys that branch (`stage-release` needs `static`, not `test`).
+  - **Its data is a copy of the shop's** — `nusantara-deploy --stage refresh`,
+    as the cluster's superuser over the socket, which is the one login that
+    may drop and create a database. The workflow's `refresh_staging_data`
+    input runs it BEFORE migrating, because staging's code may be ahead of the
+    shop's schema.
+  - **One Caddyfile, one `ops/`, two installs.** The Caddyfile reads
+    `{$NUSANTARA_HOME|CADDY_PORT|API_PORT|CADDY_ADMIN}` with prod's values as
+    defaults (prod's parse is unchanged), and `ops/run` finds its install from
+    the `releases/` it sits in.
+  - ⚠️ **Staging never runs the worker or the webhook.** The copy carries
+    every customer's number and the shop's unsent Outbox. The installer loads
+    only api and caddy for it, and `ops/run` refuses both unless
+    `APP_ENV=prod`. Do not weaken either.
+  - ⚠️ **Staging refuses to go up without the shop-password gate file** — the
+    shop's own address does not, and on 2026-10-06 answered 200 without one.
+  - The `stage` key is pinned to `nusantara-deploy --stage` (installer 2,
+    `setup-deploy-access --stage`), so the key a branch can reach cannot name
+    the shop. Roles are cluster-wide, though: staging's owner password IS the
+    shop's.
+- **Four asks, 2026-10-08.**
+  - **The till's catalogue is one row per variant AND grade** — *"per row is
+    per unit with same grade and same spec, then the grade is on the left
+    next to the unit."* This REVISES 2026-08-27's one-row-per-variant: a row
+    with a New, an A and a C quoted three shelves' prices in one range.
+    `shelfRows` groups on (sku, grade) and a row carries `key` and `grade`
+    (`grades` is gone); the grade sits in a fixed-width slot left of the name
+    (`.pos-shelf-grade`) so the names line up, counted products included. The
+    "last one skips the chooser" rule now applies per grade row, so more taps
+    go straight into the basket. The chooser has a **serial search**
+    (`serialMatchesQuery`, the search-box readings as a substring) focused on
+    open, and Enter takes the unit once it has narrowed to one.
+    ⚠️ It is focused by a `setTimeout` after open, not `autoFocus` (the
+    Modal's focus trap takes the caret to its first button) and not
+    `afterOpenChange` (it waits for an animation frame a background tab never
+    draws).
+  - **A discount applies to all, a category or a product**, asked as two
+    questions: a Segmented, then which one. `Discount.scope` is still the one
+    string the store and `scopeOf` read; `scopeKindOf` reads it back in
+    Postgres's order (category first). The list prints "Category: …" /
+    "Product: …".
+  - **The trade-in's product box is `SkuPicker`** — the shop code
+    (`AIR 13" 2020 I5 8/256`) in the box and the model under it, as Inbound
+    picks one. Tests pick by `sku.code`.
+  - **A warehouse prints its number: "01 · Gudang Utama"** — the shop has
+    used 01–04 for six years. `lib/warehouses.ts` (`warehouseLabel`) is the
+    one place; every screen that named a warehouse goes through it. The
+    number is `Location.code`, which already existed: the store contract
+    gained an optional `code`, the adapter projects and writes it, and
+    Settings → Warehouses edits it (a new one is offered the next free
+    number, a duplicate is refused). The adapter used to fill the column with
+    the id, so the go-live import left `wh-01`…`wh-04`; data-only migration
+    `20261008090000_location_code_is_the_shop_number` takes the number back
+    out of every code that is still that id copy. The importer
+    (`masters.py`, `documents.py`) now writes `code` itself, and the fixture's
+    codes are `01`–`04`. A code equal to the id prints as the name alone.
+- **Financial & Report is per person, 2026-10-16.** *"In the financial data
+  management, only Ersen and Dina is allowed."* `Staff.canViewFinance`
+  (migration `20261016090000_staff_can_view_finance`, owner-approved,
+  default false; the migration switches it on for every active OWNER and for
+  the login `dina`). **Not implied by OWNER** — Dina is staff, and making her
+  an owner would hand her everybody's passwords. Settings → Staff accounts has
+  the switch (audited per change); `staff --finance` is the CLI's.
+  - **The API is the control, not the menu.** The store sends the whole shop
+    to every browser, so `apps/api/src/auth/financeScope.ts` empties
+    `FINANCE_COLLECTIONS` (packages/store: expenses, incomes, settlements,
+    settlementLog, paymentLog) in the snapshot, strips them from every
+    change-feed and commit answer, and refuses (403) an edit, removal or
+    reorder of them. **An insert passes** — the return desk writes a refund
+    `Expense` and the customer drawer a `paymentLog` line for everybody.
+  - Sale payments live on the ORDER and are not withheld: the till and the
+    return desk cannot work without them. Supplier deposits and invoice
+    payments are not either (`/suppliers` and Inbound are not in the section).
+  - The menu leaves the section out (`navSectionsFor`) and every `/finance/*`
+    page answers `FinanceLocked` (`isFinancePath`, App.tsx).
+    `test/financeAccess.test.tsx` fails if a new finance leaf escapes it.
+- **A fresh start keeps the master data, 2026-10-16.** *"Empty the inbound &
+  its unit serial history, transaction, stock opname, service, discount,
+  pending payment, receivable, payable, income & expense so only the master
+  data is in."* `deploy/macmini/ops/reset-transactions` (`--dry-run` first)
+  TRUNCATEs every transaction table — units and their ledger and counted
+  stock included, plus reservations, returns, customers' B2Soft debts and the
+  opening cash/bank — and keeps products, suppliers, customers, staff,
+  settings, the audit log and all chatbot data. ⚠️ A one-off owner decision,
+  not a tool and not a precedent for the never-delete rule. It backs up first,
+  asks for the database's name, runs as one transaction, and uses no CASCADE —
+  a table it forgot that still points at one it empties makes PostgreSQL
+  refuse the lot. `ChatAction.unitId` is the one kept reference into it: the
+  script nulls it and lifts/restores that constraint, since TRUNCATE refuses a
+  referenced table whatever the values. Rehearsed on a seeded throwaway
+  database: FK restored byte-identical, no schema drift, the store loads and
+  commits after it, and every open till reloads (StoreChange restarts at 1).
+- **The faktur is B2Soft's, 2026-10-21.** *"Make the bill exactly like this
+  structure, with no extra text … other info could be misleading."*
+  `components/Invoice.tsx` is laid out after B2Soft's FAKTUR PENJUALAN: title
+  and shop / date and *Kepada Yth.*; No Faktur · Salesman · Tgl · JTp; No ·
+  Perincian · Qty · Harga · Diskon · Jumlah; print stamp, Ref, Keterangan
+  beside Total · Diskon · Ongkos · PPN · Lain · Netto; four signatures.
+  Figures print as `5,700,000.00`, the template's own format.
+  - **Gone**: the warranty and "sold as described" paragraphs, channel,
+    payment-method and salesperson lines, the pending / balance-due warnings,
+    and every unit's QC description. Do not add prose back to the paper.
+  - **The address and phone are constants** (`SHOP_ADDRESS`, `SHOP_PHONE`),
+    given by the owner; Settings' address and contact still hold seeded demo
+    text and no longer reach the faktur. The tagline (the opening hours) and
+    the name still come from Settings.
+  - Harga is the LIST price and Diskon the bargain off it, so Jumlah is what
+    was charged; Ongkos is a fee whose label reads as delivery, Lain the rest;
+    PPN is always 0. The serial stays beside the product — the template has
+    none, but a warranty claim is checked against it. *Cetak* and *Hal* are
+    not printed: nothing counts prints, and the browser cannot number pages.
+- **Set price regrades too, 2026-10-21.** *"Make them able to change the
+  grade in bulk together when they change the price."* Inventory's Set price
+  dialog (`PriceEditorModal`) has a Grade select per unit with its own Fill
+  down; Save writes price and grade in one mutation and one `DICATAT` per
+  unit naming what moved ("Grade A → C"). A regraded unit moves to that
+  grade's line, since a line is one grade. A grade-only edit leaves the price
+  — and a hand-typed marketplace price — untouched.
+- **One agent, and the bot decides the lead — 2026-10-21.** *"Keep it a
+  single agent on the chatbot and the user cannot choose / determine the
+  lead."*
+  - **No pipeline setting.** `chatbotSettings(hasCredential)` (packages/agent
+    v2context.ts) replaces `loadChatbotSettings`: the single AI agent (`v1`)
+    answers whenever there is an Anthropic credential, the rules without one —
+    a missing key degrades the bot instead of silencing it, so the worker is
+    never `dormant`. A stored `chatbot.pipeline` is ignored; `PUT
+    /api/chat/settings` is gone and GET is read-only. The three-agent pipeline
+    (`pipeline.ts`) is dormant, tested in packages/agent; its worker tests went.
+  - **The agent's voice is the Advisor seat's persona** — the one card left in
+    Settings → Agent. The worker used the active `Persona` for v1 and ignored
+    an edited Advisor; it reads `personaFor("ADVISOR", …)` now.
+  - **The lead is the bot's.** The staff switch on the profile, `PUT
+    /api/inbox/:phone/lead`, `setLead` and the lead threshold box are gone; the
+    threshold is `DEFAULT_LEAD_THRESHOLD` (60). `isLead` reads `leadAt` alone,
+    so a `leadStaffAt` left by an earlier build no longer counts. A single-agent
+    turn is scored by code — `leadScoreOf(understand(text))`, no model call —
+    and written with the reply, as the rules and v2 always were. A sale still
+    clears it. The 👎 dialog lost its "which agent" picker.
+- **A supplier or customer nobody's paperwork names can be deleted,
+  2026-10-21** (*"hard delete it as long as there are no transaction
+  linked"*). A bin on the /suppliers and /customers rows; disabled with a
+  reason once something names the party (`lib/partyLinks.ts`).
+  `removeUnusedSupplier` / `removeUnusedCustomer` in `adapters/reference.ts`
+  re-check against the DATABASE — a customer with a chat thread counts as
+  linked too — and migration `20261021120000` grants `nusantara_app` DELETE
+  on `Supplier`, `Customer`, `CustomerAddress` only. The fourth hard delete;
+  do not generalise it.
+- **A product is described, not named — 2026-10-21.** *"The current product
+  making flow is very confusing."* The catalogue held one MacBook Air as
+  `MacBook Air 13" 2020`, `AIR 13" 2020` and `AIR 13" 2020 I5`: Add product
+  took a free-typed short name and had no processor field, so `i5` went into
+  the name and became a product.
+  - **Product names are in full** (owner decision): `MacBook Air 13" 2020`,
+    `MacBook Air 13" M2`. **SKU codes stay short** (`AIR 13" 2020 I5 8/256`,
+    `lib/skuCode.ts`). `lib/modelName.ts` reads any name to its identity —
+    line, size, year or (Apple silicon) chip, plus extras like `TB` — and
+    an **Intel processor is a variant, never part of the product**.
+  - **Add product** (`lib/newProduct.ts`) asks category (line for iPads),
+    size, year, Apple chip OR Intel processor options, RAM, SSD, and builds
+    the name. A category with no line (accessories) keeps a name box and one
+    variant. **The same product already there gets the missing variants**,
+    and is renamed to the full name; the dialog says which before Save.
+  - **Delete product** (row bin) archives the product and its variants, and
+    only while nothing has ever been recorded against them — units, counted
+    moves, invoice or sale lines, trade-ins (`productInUse`,
+    `variantInUse`). "Stock is 0" is not enough: an archived variant is not
+    projected, so a past receipt naming it would name nothing. The server
+    checks the same in the skus adapter; the model archive waits in
+    `ctx.later` because models are written before skus.
+  - *Use full product names (n)* renames what is safe to rename; a name with
+    a processor in it, or a product that has a duplicate, is left for a person.
+  - `ops/fix-skus` (2026-10-21) archives same-product duplicate VARIANTS.
+- **Sell prices from a price list, 2026-10-21.** Inventory → *Import sell
+  prices* reads the shop's own *Export stock* sheet with a price column
+  ("Harga IG"), matches each row by the text the export wrote (`Sku.name` +
+  variant label) in the same warehouse, against the LIVE store, and previews
+  (`lib/priceImport.ts`). Only units past QC (`TERSEDIA`, `DIRESERVASI`,
+  `SERVIS`) get `Unit.price`, with a `DICATAT` naming the file; **a unit in QC
+  is never repriced** — its price is its inbound invoice's. `Sku.price`,
+  costs, invoices and the ledger are untouched (`priceImportPage.test.tsx`).
+- **Photos**: a row's photos are a thumbnail stack (`PhotoStackButton` —
+  first photo, second behind it, never more than two). S/N history takes new
+  photos for a unit the shop still holds; a sold unit's were purged by design.
+- **Opening balance on Income & Expense, 2026-10-21** (`OpeningBalanceModal`):
+  bank, cash and an "as of" day, into `AppSettings.openingCash/openingBank/
+  openingBalanceAt`. The running balance starts there and counts only money
+  settled ON or AFTER that day — the figure already holds what came before.
+- **The catalogue is facts, not names — 2026-10-21** (owner approved the plan
+  and its schema). Migration `20261021150000_catalogue_product_identity`,
+  ADDITIVE ONLY, nothing backfilled:
+  - `CatalogModel.family/chip/extra/productKey`, `Sku.mergedIntoId/variantKey`,
+    `ModelIdentifier` (AppleDB links), `ModelNotDuplicate` (pairs a person
+    said differ). Partial unique indexes on LIVE non-null keys.
+  - **Keys refuse a NEW duplicate and never an edit of an old one.**
+    `freeProductKey` / `freeVariantKey` (adapters/catalogue.ts): creating a
+    product or variant another live row already IS is refused; an existing
+    duplicate saves keyless. Import mode lets one through keyless. The
+    identity rules are `packages/domain/catalogIdentity.ts` — one copy for
+    browser and server.
+  - **Merge** (`lib/catalogMerge.ts`, Master Product → *Review duplicates*):
+    a variant the kept product lacks MOVES (same id — its units, invoice
+    lines and receipts follow); one it has JOINS: held units move with a
+    `DICATAT`, counted stock by a KOREKSI pair, and the variant is KEPT,
+    archived and `mergedIntoId`, because receipts name it. Never used →
+    removed. One variant that cannot be placed stops the whole merge.
+    "These are different" is remembered.
+  - ⚠️ **A merged variant is still in `db.skus`** (projected for history).
+    Every picker or list of variants filters with `isLiveSku`; a lookup by id
+    must not. New code listing variants must do the same.
+  - **AppleDB links instead of copying** (`matchAppleDb`): already linked →
+    skipped; the same product here (by facts or name, AppleDB's own wording
+    ignored) → identifier linked, missing RAM × SSD added; two candidates →
+    "Possible match", left for a person; else a new product named in full.
+  - Inbound creates no products (Master Product is the only door), so the
+    matcher and the server refusal cover it. ⚠️ The B2Soft importer runs in
+    import mode and is NOT matched — a re-import can still add a keyless
+    duplicate, which *Review duplicates* will then list.
+- **The bot runs on Haiku 5.5 and remembers more, 2026-10-22** (owner
+  decisions). Two halves: the model, and what the single agent can see.
+  - **`claude-haiku-5-5`** for the replies (`AGENT_MODEL`) and the summary
+    (`SUMMARY_MODEL`), overridable WITHOUT a release by `CHATBOT_MODEL` /
+    `CHATBOT_SUMMARY_MODEL` (worker.env; api.env takes `CHATBOT_MODEL` for
+    Draft and the simulator) — env only, no Settings switch. `costMicros`
+    prices it at $0.10 / $0.50 per MTok (cache reads 0.1×, writes 1.25×), and
+    at $0.50 / $2.50 for a prompt over 100K tokens.
+  - **`tool_choice: any` is kept** (Haiku 5.5 accepts it; a forced call skips
+    thinking). "Every turn ends in reply or handoff_to_staff" stays a
+    guarantee of the API rather than of the prompt, and the facts come from
+    the sources and `checkReply`, not from reasoning. Every call sends
+    `output_config.effort: "low"` and no `temperature` (a non-default one is a
+    400); `MAX_TOKENS` is 4,096 because thinking counts toward it; content is
+    read by `type` and the assistant turn goes back with its thinking blocks
+    unmodified; a `refusal` is a hand-over. ⚠️ No prefill, no `budget_tokens`
+    — both are 400s on this model.
+  - ⚠️ **The same text is ~30% more tokens** on Haiku 5.5's tokenizer. An
+    `AgentRun` token count after the switch is not comparable with one
+    before it; compare `costMicros`.
+  - **A burst is one turn** (`packages/agent/turns.ts`). A reply lands on one
+    row, so the history and the summariser used to read only the last line
+    of "halo / mau tanya / Air M2 ada?". Lines are tied to their reply by
+    `answeredAt` — every claim writes one instant onto all the rows it
+    answers — and walked in `(ts, id)` order within it. `recentTurns` (the
+    8-turn window) and the summary pass both read whole turns now.
+  - **The single agent reads the profile** (`profileLine`) and any open
+    booking proposal; only v2 did. Both ride in the prompt's VOLATILE half,
+    never the cached one.
+  - **The summary keeps what it knew**: 1,500 characters (was 700), and the
+    summariser is told to keep the name, budget, units quoted with their
+    prices, promises and bookings from the previous note and to drop small
+    talk, instead of rewriting from the last dozen turns.
+  - **Recall: `ChatMemoryChunk`** (migration `20261022120000`, owner-approved,
+    additive): one row per answered turn — `from` (the thread key; the
+    brief's `waId`), `fromMessageId` / `toMessageId` (FKs to `WaMessage`,
+    RESTRICT: the chunk is a copy of their words, so a purge must take it
+    too), `text`, and `embedding` BYTEA / `model` / `dims` / `embeddedAt`,
+    all four or none (CHECK). Written by `memoryPass` (apps/worker), after
+    the summary pass, never inside a transaction. At draft time, ONCE the
+    8-turn window is full, the 3 older turns closest to the customer's
+    message — after the thread's `/new` (`resetPointFor`) — go into the
+    volatile prompt as "Earlier with this customer (may be outdated)", dated.
+  - **Embeddings are Voyage AI through MongoDB Atlas** (`voyage-4-lite`, 512
+    dimensions, `int8`, `POST ai.mongodb.com/v1/embeddings`, plain `fetch`).
+    **BYTEA and cosine in JS, not pgvector**: pgvector is not on the Mac mini,
+    `CREATE EXTENSION` needs a superuser, and recall only ever scores ONE
+    customer's own chunks — dozens of rows. The query embedding has a 1.5 s
+    deadline; no key, an error or a timeout falls back to BM25 (retrieval.ts)
+    over the same chunks, so Voyage can delay a reply by the deadline at most
+    and never stop one. The knowledge base itself stays on BM25.
+  - ⚠️ **`VOYAGE_API_KEY` lives in worker.env and nowhere else** — never
+    api.env, a doc, a log or a test. `VoyageError` carries the HTTP status,
+    never the request. Unset, chunks stay text and recall is by keywords.
+  - ⚠️ Grants: `nusantara_agent` has SELECT, INSERT and UPDATE on the four
+    embedding columns only — it cannot rewrite a chunk's words or delete one;
+    `nusantara_app` has nothing (the API never reads the table). The deploy's
+    `t|f|t|f|t` query is untouched. `apps/worker/test/memory.test.ts` runs the
+    pass and recall AS nusantara_agent.
+  - ⚠️ **A test that deletes `WaMessage` rows must delete `ChatMemoryChunk`
+    first** (RESTRICT). Every existing cleanup does; `truncateAll` CASCADEs.
+  - ⚠️ `RECALL_MIN_SIMILARITY` (0.5) is a starting point, not a measurement —
+    no Voyage call was made building this. Tune it on real threads.
+  - `/new` is unchanged: it forgets the conversation (recall included, via
+    the reset point) and leaves the profile and the POS customer alone.
+  - **A Console login runs the bot** (owner, 2026-10-22): `ant auth login`,
+    run once as `_nusantara` with `HOME=/opt/nusantara/var`, leaves a profile
+    the SDK refreshes by itself; `antProfileOf` (packages/agent anthropic.ts)
+    finds it from the PASSED env and the client is built with `{ profile }`.
+    A key or token in the env still wins. `CHANGE_ME` (the env templates'
+    placeholder) is no credential — it used to count as one, so a worker.env
+    copied from the example sent every turn to a 401 and a hand-over.
+    ⚠️ **The owner runs it on an OAuth token** (`ANTHROPIC_AUTH_TOKEN` from
+    `claude setup-token`, 2026-10-22), and that token is a 429 on
+    `claude-haiku-5-5` while `claude-haiku-4-5` answers. So an OAuth token
+    defaults both models to `OAUTH_MODEL` (Haiku 4.5) unless `CHATBOT_MODEL`
+    says otherwise, and `effortConfig` sends `effort` only to a model that
+    takes it — Haiku 4.5 answers it with a 400.
+
+- **WhatsApp through a linked device, 2026-10-22** (owner decision): the
+  chatbot runs on WhatsApp via **Baileys** in production, linked by scanning a
+  QR inside the POS. This REVERSES the 2026-10-14 "Baileys is local testing
+  only; production is the Cloud API" — for the transport, not for
+  `tools/wa-local`, which stays a laptop tool outside the workspace.
+  `docs/whatsapp-baileys.md` is the runbook.
+  - **`apps/wa-gateway`** is one Baileys socket on `127.0.0.1:3002` behind a
+    shared secret (`x-wa-gateway-secret`): `GET /status`, `POST /link`,
+    `POST /logout`, and `POST /graph/{v}/{id}/messages|media` answering in
+    Graph's shapes. Inbound 1:1 messages (never groups, status, channels or
+    the number's own) are re-shaped into Meta's delivery and POSTed to the
+    REAL webhook, signed with its `APP_SECRET`. Only `baileysSocket.ts`
+    imports Baileys; the rules are in `session.ts` / `delivery.ts`, tested
+    with a fake socket and the real Graph client.
+  - **The worker is not forked.** `WHATSAPP_TRANSPORT=baileys` (+
+    `WA_GATEWAY_URL`, `WA_GATEWAY_SECRET`) hands the send pass
+    `gatewayFetch` (`@nusantara/whatsapp`) through the existing `fetchImpl`
+    seam: same request, origin moved, bearer token dropped, secret added. No
+    `WHATSAPP_TOKEN` is read in that mode. Unset or anything else is the
+    Cloud API, unchanged. Baileys mode half-configured is DORMANT, never a
+    fall-back to Meta.
+  - **ONE session.** Link is refused (409) while a session is connected or
+    connecting, rationed to **3 attempts an hour** (429, reported on the
+    card), and a session opened elsewhere (440) is left DISCONNECTED rather
+    than fought over. The POS card (Chatbot → Settings, **owner-only**) shows
+    a permanent warning: unofficial, can be banned, do not link/unlink
+    repeatedly, prefer a dedicated number, keep the phone online (~14 days).
+    `/api/whatsapp/connection` audits a link request as CREATE and an unlink
+    as DELETE (entity `WhatsApp`), after the gateway answered — no network
+    inside a transaction.
+  - ⚠️ **The QR is never logged**, anywhere. For its minute it IS the number.
+  - ⚠️ **SIGTERM does not unlink.** A deploy restarts the gateway; the session
+    is in `WA_GATEWAY_STATE_DIR` (`/opt/nusantara/var/wa-gateway`), outside
+    the release. Unlinking is the owner's Disconnect button or the phone.
+  - ⚠️ **Prod only**, twice: the gateway refuses `APP_ENV` other than `prod`
+    unless `WA_GATEWAY_ALLOW_NONPROD=1`, and `ops/run wa-gateway` refuses
+    before starting it. Staging must never run it — it would be a second
+    device on the shop's number.
+  - ⚠️ **An inbound photo's bytes are not downloaded.** It arrives as
+    `type: "image"` with its caption, exactly as from Meta, and the webhook
+    stores type and text only — no table holds customer media, and a
+    customer's photo is a hand-over anyway. Baileys' optional sharp/jimp are
+    left out of the release (`BAILEYS_OPTIONAL`), so a sent photo carries no
+    thumbnail.
+  - ⚠️ **Installer 3.** `nusantara-deploy` restarts, reloads and
+    health-checks `local.nusantara.wa-gateway`; a release cannot replace the
+    installed copy, so the owner must re-run `setup-deploy-access` on the Mac
+    mini once. The gateway, like the worker and webhook, is LOADED by hand
+    the first time (`docs/whatsapp-baileys.md` step 7).
+- **The activity log can be cleared, 2026-10-22** (*"a button to clear all
+  the activity history"*). Settings → Activity has an owner-only *Clear all
+  activity* behind a two-layer confirm — the dialog, then typing the word
+  shown (`CLEAR` / `HAPUS`), the draft-opname pattern. `DELETE
+  /api/kontrol/audit` (`requireOwner`) empties the table and writes ONE fresh
+  `AuditLog` row — entity `AuditLog`, action `DELETE`, who, when and
+  `{"rows": n}` — in the same transaction, so a cleared log always says who
+  cleared it. ⚠️ `AuditLog` stays append-only: no table-level DELETE, UPDATE
+  or TRUNCATE is granted; the one door is `audit_log_clear()`, a SECURITY
+  DEFINER function (migration `20261022150000_audit_log_clear`, the
+  `unit_event_drop_last` pattern) that takes EVERY row or none — there is no
+  form of it that removes single lines. Only `nusantara_app` may execute it.
+  Do not generalise it.
+- **Mistakes are corrected, not appended around — 2026-10-22.** *"The
+  transaction history should be editable … Do not implement append only. This
+  is an environment where they input amount / product / channel wrongly. So
+  all things should be recoverable and a mistake should not cost lots of
+  additional steps."* Four changes, owner-asked.
+  - **Edit transaction takes accessories and prices** (the owner's bug: a
+    MagSafe could not be added). A counted product is a line — product, qty,
+    price per piece — and a unit's price is a box on its line; the sale's
+    total is re-derived from the lines on save. More pieces is a `TERJUAL`
+    from the shelf, fewer (or the line gone) a `KOREKSI` putting them back at
+    the cost they went out at; a positive KOREKSI naming an order line takes
+    its cost off `OrderItem.cogs`/`Order.cogs` (adapters/stock.ts, and
+    `lineCost`). On Postgres a line taken off is CLOSED with `returnReason =
+    "Dikoreksi"` (`CORRECTED` in documents.ts) and projected nowhere; a unit
+    taken off has its `soldOrderItemId` cleared and its cost leaves the sale.
+    ⚠️ Filter with `NOT_CORRECTED` (an OR with null), never `NOT: {
+    returnReason }` — SQL's NOT drops every null-reason line with it.
+  - **A sale can be deleted** (Transaction History, a bin per row) — *"gone
+    completely"* (owner answer). `lib/saleDeletion.ts` is the rule: refused
+    in a closed month, after a return, with a trade-in, when a unit moved on,
+    with a marketplace payout or an Income & Expense line naming it. Units go
+    back to what their previous row says, counted pieces back by a KOREKSI,
+    a redeemed discount is freed. On Postgres it is `cancelSale`: `BATAL`
+    (projected nowhere), payments voided, lines closed — a deleted invoice's
+    footing. Checked server-side too, book close included.
+  - **The book closes a MONTH at a time** (`endOfMonth`, a month picker) —
+    *"close transaction monthly so before that all the transaction can be
+    deleted"*. What is open can be edited and deleted; what is closed neither.
+  - **A unit's history row can be deleted** from S/N history's ⋯ menu — *"some
+    of the history is irrelevant"*. Any row (`removeEvent`), never the last
+    one standing, never the sold row of a sale that still carries the unit
+    (`historyRowBlock`) — that goes by deleting the transaction. The newest
+    row going restores the row before it; a middle row leaves the unit as it
+    is. The database's door is `unit_event_drop(text[])` (migration
+    `20261022140000`, SECURITY DEFINER, refuses only to empty a unit;
+    `unit_event_drop_last` kept for the release before). ⚠️ New rows number
+    from the highest `seq` + 1, not the count — a gap is normal now.
+  - Inbound's Purchase card shows **Total units purchased** (every line's
+    qty).
+- **One page for a sale's money — 2026-10-22, later.** *"Combine the
+  transaction history and the pending payment … it should just be transaction
+  history + upload the shopee balance"*, *"below the payment method Shopee, we
+  should be able to add deduction immediately"*, and four owner answers.
+  - **Pending Payment is gone.** Its nav leaf is removed and
+    `/finance/receivables` redirects to Transaction History; a sale waiting
+    on a payout is that list's *With a marketplace* payment status. The Shopee
+    upload is a button on Transaction History. `ReceivablesPage` and
+    `SettleModal` are deleted; their writer is `lib/payouts.ts`
+    (`recordPayouts` for the upload, `upsertSettlement` for one payment,
+    `netOfOrder` re-deriving `grossTotal`/`netReceived`).
+  - **Edit transaction holds the payout — in the payment grid itself**
+    (revised the same evening: *"add directly deduction on the rightmost … a
+    '−' button … a nested row below the Shopee row"*). `PaymentsPanel` takes
+    `deductions` / `onDeductionsChange` (Edit transaction only): a "−" on a
+    marketplace row nests a name + amount row under it, with "amount − kept =
+    received". The row's own Status IS the payout landing — Pending → Settled
+    dates it now. The reference sits BESIDE the method on one line. Deductions may be typed while it is still pending, so a
+    `Settlement` can now exist beside a PENDING payment; nothing reads a
+    settlement as "landed" any more. A payout no longer stops a sale from
+    being deleted.
+  - **The reference ID follows the channel** (owner answer: Shopee, Tokopedia
+    or TikTok). A marketplace payment keeps its own under its method; the
+    sale-level box is drawn only for a marketplace channel with no
+    marketplace payment (TikTok, or Shopee taken in cash); any other sale
+    keeps no reference — Shopee → Instagram + transfer strips it.
+  - **Additional charges are rows** in the dialog (`Order.fees`; `extra` and
+    `extraNote` re-derived), and the total follows.
+  - **A closed month locks only what is finished** — *"close book to all the
+    payment that already settled (need to get X, received X, no pending),
+    and we can still add received amount even if it is closed"*.
+    `isSaleLocked` (bookClose.ts): inside the closed month AND fully settled,
+    nothing pending, nothing owed. Every door asks it — Transaction History,
+    Edit transaction, `PaymentsModal`, `DebtPaymentModal`, sale deletion,
+    return undo — and `cancelSale` on Postgres reads `Order.status = LUNAS`
+    the same way.
+- **Cash ↔ bank, and the two balances, 2026-10-22.** *"Take 2mil in bank to
+  cash, use the cash, and return the money again."* The adjustment dialog's
+  third type is **Cash ↔ bank**: *Pencairan Dana Bank* (bank → cash) or
+  *Setor Tunai ke Bank* (cash → bank), written as an `Expense` (kind
+  `TRANSFER`, from one pot) plus a `ManualIncome` (reason `TRANSFER`, into the
+  other) in one save — no schema change, each pot moves and the total does
+  not. Income & Expense shows a **Cash** and a **Bank** card (`balancesOf`,
+  from the opening balance on), following the Cash basis / Accrual switch —
+  accrual adds a pending payout to the bank — and both read **Rp ••••••**
+  until the eye is pressed (per visit, never remembered).
+- **Income & Expense's top row is the latest balance, and an adjustment can
+  be deleted — 2026-10-24.** Owner report: Transaction History said Rp
+  21.722.500 came in, two expenses (Rp 60.200 + Rp 40.100) were typed, and the
+  top row's Latest balance still read Rp 21.722.500 — so the shop counted
+  Rp 100.300 missing. The figures were right; the ORDER was not. A typed
+  adjustment carried a date and no time (it sat at noon UTC), so a day's
+  typed rows tied, and a stable newest-first sort kept them oldest on top.
+  - **Every row shows its hour and minute.** A typed row sits on the day
+    somebody picked at the clock time they typed it (`typedAt`, from
+    `createdAt`); noon only when there is no `createdAt`.
+  - `chronological` (CashflowPage) is a TOTAL order — instant, then when the
+    row was typed (`createdAt`), then key — and the Date column sorts on each
+    row's position in it (`ProColumn.dateValue` keeps the date filter on the
+    date). The running balance walks the same order backwards, so the view and
+    the walk cannot disagree again.
+  - `createdAt` is in the store contract for `expenses` and `incomes` now
+    (optional; the column always existed). The till stamps it and the server
+    keeps it — it orders a day's typed rows and nothing else.
+  - **Delete** is a bin on a typed row (`lib/adjustmentDeletion.ts`), behind a
+    confirm. A cash ↔ bank move goes as BOTH halves (matched by day, amount
+    and note — nothing links them). Refused inside a closed book, in the
+    browser and in the adapter. Migration `20261024090000_adjustment_delete`
+    grants `nusantara_app` DELETE on `Expense` and `ManualIncome` only —
+    nothing points at either table. The fifth hard delete; do not generalise
+    it.
+- **Edit transaction is ONE Items table, 2026-10-22** — *"item name first,
+  then serial or qty"*. Item (every live variant) · Serial / Qty · Price ·
+  remove, and one *Add an item*. The product picked decides the row: a
+  tracked one asks its serial, a counted one (`skuTracksSerial` false) a
+  quantity with a price per piece. ⚠️ A unit row with a product and no serial
+  is REFUSED on save ("Type the serial of …"); it used to be dropped without a
+  word, which is how an added MagSafe vanished in the owner's report.
+- **What was sent can be seen, edited and unsent — 2026-10-23.** *"Display
+  the photo that we sent as well. Can we edit or unsend from the web? I would
+  want to do that in case the AI is wrong."* Owner answers: add the columns;
+  ANY signed-in staff may do it, each action audit-logged with who.
+  - **`Outbox.providerMessageId`, `.retractedAt`, `.editedAt`** (migration
+    `20261023090000_outbox_sent_message_edit_unsend`, additive). The worker
+    keeps the id WhatsApp returned when it marks a row SENT (`markOutboxSent`
+    used to log it and throw it away), text and photo alike. No GRANT: both
+    writer roles already held table-level UPDATE on `Outbox`, and the
+    migration's DO block refuses if that is not so, or if either can DELETE.
+    The deploy's `t|f|t|f|t` reads no `Outbox` privilege and is unchanged.
+  - **`GET /api/inbox/:phone` carries `sent`** — the thread's newest 100
+    WA_REPLY / WA_IMAGE rows by `payload.to`, with `canEdit` / `canUnsend`
+    decided server-side (`routes/inboxSent.ts`). A reply bubble names its row
+    by `reply.outboxId`: the newest WA_REPLY whose `inReplyTo` is that message
+    and whose body is exactly its `replyText` (an edit rewrites both, so the
+    pair still matches). Every sent item no reply claims — a photo, the
+    "Berikut foto…" line, a bot reply a later staff reply overwrote on the
+    same row — is drawn as its own bubble at its time. A reply with no row
+    has no menu.
+  - **The limits are WhatsApp's**: unsend within 48 h of `sentAt`, edit a
+    TEXT within 15 min. Also refused: another phone's row (404), not SENT, no
+    id (sent before this release — and a `wamid.` Cloud API id or the
+    gateway's `wa-gateway-…` stand-in counts as none), already unsent, and
+    **any transport but Baileys** (409; the API reads that as
+    `config.waGateway` being set). Order: validate → `POST /messages/revoke`
+    or `/messages/edit` on the gateway (`gatewayClient.ts`, shared with
+    `/api/whatsapp/connection`) → ONE transaction stamping the row (an edit
+    also rewrites `payload.body`, and `WaMessage.replyText` only while it
+    still holds the old text) and an `AuditLog` row, entity `Outbox`, DELETE
+    or UPDATE with before/after.
+  - **The gateway addresses the chat the send went to** (`jidFor`: the LID a
+    customer wrote from, else `<n>@s.whatsapp.net`) — a delete aimed at the
+    other chat finds nothing.
+  - `/chat` draws a sent photo from `GET /api/inbox/:phone/sent/:id/photo`
+    (click for larger; "Photo no longer stored" on a 404 — a sold unit's
+    photos are purged by design), "Unsent" in place of an unsent item,
+    "Edited" beside an edited one, and a ⋯ (`SentItems.tsx`) with Edit and
+    Unsend (behind a confirm) only while the server says each is possible.
+  - ⚠️ An unsent row keeps `replyText` and its outbox row — nothing is
+    deleted, and *Write it for me* leaves unsent lines out of the turns.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
@@ -2395,7 +3180,12 @@ there is the comment/DM ingest this build has not written yet.
   commit to the Mac mini (`docs/deploy-pipeline.md`). `v2026.09.18` itself is
   taken (a failed run at `f6f5f3c`). Rollback in seconds, on the Mac mini:
   `sudo /usr/local/libexec/nusantara-deploy rollback`
-- Ports: web 3000, api 4000, webhook 3001, monitor 4100
+- `gh workflow run CI --ref <branch>` — deploy a branch to staging
+  (`-f refresh_staging_data=true` for a fresh copy of the shop's data first);
+  a push to `main` does it by itself (`docs/staging.md`)
+- Ports: web 3000, api 4000, webhook 3001, wa-gateway 3002 (loopback), monitor
+  4100; on the Mac mini,
+  staging's api 4001 and Caddy 8081 beside the shop's 4000 and 8080
 - Database: `nusantara_pos_rebuild` on `localhost:5432`, role `nusantara`
 - Meta: App ID `2157052578394015`, WABA `1701973881546032`,
   `PHONE_NUMBER_ID` `1200651716467039`, Graph **v25.0** (one constant, both

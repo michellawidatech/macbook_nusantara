@@ -2,35 +2,57 @@
 # proxy arranges too: the session cookie is SameSite=Lax and HttpOnly, and the
 # sign-in form posts to the same origin that set it.
 #
-# Plain HTTP on loopback only. HTTPS is `tailscale serve`'s job
-# (docs/deploy-macmini.md §5), and nothing on the shop's network can reach this
-# port directly.
+# Plain HTTP on loopback only. HTTPS is `tailscale serve`'s job on the tailnet
+# (docs/deploy-macmini.md §5) and the Cloudflare tunnel's on
+# pos.macbooknusantara.com (docs/public-domain.md); both connect from loopback,
+# and nothing on the shop's network can reach this port directly.
+#
+# ONE file serves both installs on the Mac mini. The NUSANTARA_* placeholders are
+# read from Caddy's environment when it parses this file; prod's plist sets
+# none of them, so prod reads the defaults written here, and staging's
+# (local.nusantara-stage.caddy, docs/staging.md) moves the port, the API it
+# proxies to, the directory it serves and the gate it imports.
 {
 	auto_https off
+	# Two Caddys on one machine cannot share an admin port. Staging turns its
+	# off: nothing here reloads through it — a deploy restarts the process.
+	admin {$NUSANTARA_CADDY_ADMIN:localhost:2019}
 	servers {
-		# tailscale serve connects from loopback; trusting it is what lets the
-		# client's address (X-Forwarded-For) and X-Forwarded-Proto: https reach
-		# the API, whose login throttle keys on the address.
+		# tailscale serve and cloudflared connect from loopback; trusting them is
+		# what lets the client's address (X-Forwarded-For) and
+		# X-Forwarded-Proto: https reach the API, whose login throttle keys on
+		# the address.
 		trusted_proxies static 127.0.0.1/32 ::1/128
 	}
 }
 
-:8080 {
+:{$NUSANTARA_CADDY_PORT:8080} {
 	bind 127.0.0.1 [::1]
 	encode zstd gzip
 
+	# The public gate (docs/public-domain.md §5): a shared shop password in
+	# front of everything that arrives through the Cloudflare tunnel. It lives
+	# on the Mac mini, not in the release — the hash is a secret's cousin — so
+	# a missing file means NO gate; §8 of that doc checks it is there.
+	import {$NUSANTARA_HOME:/opt/nusantara}/etc/caddy/*.caddy
+
 	@backend path /api /api/*
 	handle @backend {
-		reverse_proxy 127.0.0.1:4000
+		reverse_proxy 127.0.0.1:{$NUSANTARA_API_PORT:4000}
 	}
 
 	handle {
-		root * /opt/nusantara/current/web
+		root * {$NUSANTARA_HOME:/opt/nusantara}/current/web
 		# Every client-side route is index.html.
 		try_files {path} /index.html
 		file_server
 
 		header {
+			# Every browser reaches this port through HTTPS — tailscale serve or
+			# the Cloudflare tunnel (docs/public-domain.md) — so the SPA may pin
+			# it. The API sends its own. Cloudflare's HSTS switch stays off: one
+			# source per header.
+			Strict-Transport-Security "max-age=63072000; includeSubDomains"
 			X-Content-Type-Options nosniff
 			X-Frame-Options DENY
 			Referrer-Policy strict-origin-when-cross-origin

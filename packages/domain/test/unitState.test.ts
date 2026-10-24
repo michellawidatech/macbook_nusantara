@@ -8,6 +8,7 @@ import {
   isStatusPreserving,
   isTerminal,
   legalTargets,
+  newestRowOwnedByDocument,
   statusAfter,
 } from "../src/unitState.js";
 
@@ -202,5 +203,71 @@ describe("taking a QC decision back", () => {
     // Refunded and written-off units stay closed to it.
     expect(statusAfter("REFUND_KLAIM", "DICATAT")).toBeNull();
     expect(statusAfter("KOREKSI_KELUAR", "DICATAT")).toBeNull();
+  });
+});
+
+describe("newestRowOwnedByDocument (2026-10-23)", () => {
+  it("keeps a row a return, a hold, a claim or a visit stands on", () => {
+    expect(
+      newestRowOwnedByDocument({
+        type: "RETUR_PELANGGAN",
+        fromStatus: "TERJUAL",
+        toStatus: "TERSEDIA",
+      }),
+    ).toBe(true);
+    expect(
+      newestRowOwnedByDocument({
+        type: "DIRESERVASI",
+        fromStatus: "TERSEDIA",
+        toStatus: "DIRESERVASI",
+      }),
+    ).toBe(true);
+    // Back from service is a plain note, but it leaves SERVIS.
+    expect(
+      newestRowOwnedByDocument({
+        type: "DICATAT",
+        fromStatus: "SERVIS",
+        toStatus: "TERSEDIA",
+      }),
+    ).toBe(true);
+    expect(
+      newestRowOwnedByDocument({
+        type: "KOREKSI",
+        fromStatus: "TERSEDIA",
+        toStatus: "SERVIS",
+      }),
+    ).toBe(true);
+  });
+
+  it("lets a row that changes nothing, or that no document owns, go", () => {
+    expect(
+      newestRowOwnedByDocument({
+        type: "RETUR_PELANGGAN",
+        fromStatus: "TERSEDIA",
+        toStatus: "TERSEDIA",
+      }),
+    ).toBe(false);
+    expect(
+      newestRowOwnedByDocument({
+        type: "KOREKSI",
+        fromStatus: "TERSEDIA",
+        toStatus: "HILANG",
+      }),
+    ).toBe(false);
+    expect(
+      newestRowOwnedByDocument({
+        type: "DITERIMA",
+        fromStatus: null,
+        toStatus: "QC",
+      }),
+    ).toBe(false);
+    // A sale's row is judged against the sale, not here.
+    expect(
+      newestRowOwnedByDocument({
+        type: "TERJUAL",
+        fromStatus: "TERSEDIA",
+        toStatus: "TERJUAL",
+      }),
+    ).toBe(false);
   });
 });

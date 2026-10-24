@@ -404,6 +404,14 @@ const amounts = (text: string): string[] =>
   amountSpans(text).map((a) => a.value);
 
 /**
+ * Every rupiah figure in a text, in order, as whole rupiah — the same reading
+ * `checkReply` and `parseAskPrice` use, for the rule-based reader (rules/).
+ */
+export function moneyAmounts(text: string): number[] {
+  return amountSpans(text.toLowerCase()).map((a) => Number(a.value));
+}
+
+/**
  * The figure a customer is offering, in whole rupiah, or null.
  *
  * The largest figure a person would plausibly pay for a unit — at least

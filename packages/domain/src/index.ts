@@ -7,5 +7,7 @@ export * from "./money.js";
 export * from "./fees.js";
 export * from "./checks.js";
 export * from "./productCode.js";
+export * from "./catalogIdentity.js";
 export * from "./credentials.js";
 export * from "./qaText.js";
+export * from "./qaSheet.js";

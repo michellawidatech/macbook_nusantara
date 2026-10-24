@@ -46,6 +46,14 @@
  * A `null` key is ordinary state: nothing is read or written. That is for a
  * shared component — a list — whose caller decides whether it is worth
  * keeping, without the component needing two code paths.
+ *
+ * ## When the device refuses
+ *
+ * The fourth value, `kept`, is false while the last write was refused. A
+ * refusal still degrades to ordinary state, but a page holding something that
+ * matters — an inbound row's photos before its serial (client report
+ * 2026-10-21) — has to be able to say "this will not survive a refresh"
+ * rather than let the refresh say it.
  */
 import {
   useCallback,
@@ -93,7 +101,7 @@ export function usePersistentState<T>(
   key: string | null,
   initial: T | (() => T),
   parse?: (stored: unknown) => T | undefined,
-): [T, Dispatch<SetStateAction<T>>, () => void] {
+): [T, Dispatch<SetStateAction<T>>, () => void, boolean] {
   const [held, setHeld] = useState<{ key: string | null; value: T }>(() => ({
     key,
     value: read(key, initial, parse),
@@ -107,6 +115,7 @@ export function usePersistentState<T>(
     setHeld(current);
   }
 
+  const [kept, setKept] = useState(true);
   useEffect(() => {
     if (key === null || current.key !== key) return;
     try {
@@ -114,9 +123,12 @@ export function usePersistentState<T>(
       // is not JSON, and the other tabs read a removal as "back to the start".
       if (current.value === undefined) localStorage.removeItem(key);
       else localStorage.setItem(key, JSON.stringify(current.value));
+      setKept(true);
     } catch {
       // Storage refused. The state still works; it just will not outlive the
-      // page, which is what it did before this hook existed.
+      // page, which is what it did before this hook existed — and `kept`
+      // says so.
+      setKept(false);
     }
   }, [key, current]);
 
@@ -163,5 +175,5 @@ export function usePersistentState<T>(
     }
   }, [key]);
 
-  return [current.value, setValue, clear];
+  return [current.value, setValue, clear, kept];
 }

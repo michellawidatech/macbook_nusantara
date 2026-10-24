@@ -57,6 +57,7 @@ import { MoneyInput } from "../../components/MoneyInput";
 import { CommitMoneyInput } from "../../components/CommitMoneyInput";
 import { RP_SYMBOL } from "../../components/money";
 import { fmtRp, fmtNone } from "../../lib/format.js";
+import { startingPrice } from "../../lib/unitPrice.js";
 import { BatteryFields } from "../../components/BatteryFields";
 import { UnitDetailsModal } from "../../components/UnitDetailsModal";
 import { PurchaseLinesTable } from "./PurchaseLinesTable.js";
@@ -101,6 +102,7 @@ import {
 } from "../../lib/inboundDraft.js";
 import { useTranslation } from "react-i18next";
 import type { MockDb, Po, PoItem } from "../../mock/seed.js";
+import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
 /**
  * What the popup behind a line has been told about one of its units (owner
@@ -479,6 +481,8 @@ export function InboundFormPage() {
           u.battery,
           defaultBatteryModeOfSku(d, l.skuId!),
         );
+        const start =
+          u.price ?? startingPrice(d.skus.find((x) => x.id === l.skuId)?.price);
         d.units.push({
           serial,
           skuId: l.skuId!,
@@ -494,7 +498,9 @@ export function InboundFormPage() {
                     .filter(Boolean),
                 ),
           poId: order.id,
-          price: u.price ?? d.skus.find((x) => x.id === l.skuId)?.price ?? 0,
+          // What the bench typed, or what the variant asks — never a Rp 0
+          // nobody typed (`startingPrice`).
+          ...(start === undefined ? {} : { price: start }),
           ...(u.grade === undefined ? {} : { grade: u.grade }),
           ...battery,
         });
@@ -756,7 +762,7 @@ export function InboundFormPage() {
               style={{ width: "100%" }}
               options={db.warehouses.map((w) => ({
                 value: w.id,
-                label: w.name,
+                label: warehouseLabel(w),
               }))}
             />
           </Form.Item>
@@ -1106,8 +1112,12 @@ export function InboundFormPage() {
           <CommitMoneyInput
             id={`inbound-form-sell-${u.key}`}
             label={t("inbound.sellPrice", "Sell price")}
-            value={u.price ?? asking}
-            {...(asking === null ? {} : { placeholder: fmtRp(asking) })}
+            // The unit's own price; the variant's is the hint behind it, so
+            // an emptied box stays empty (owner report 2026-10-08).
+            value={u.price ?? null}
+            {...(startingPrice(asking) === undefined
+              ? {}
+              : { placeholder: fmtRp(asking) })}
             onChange={(v) =>
               editUnit(openLine.key, u.key, { price: v ?? undefined })
             }
@@ -1151,6 +1161,12 @@ export function InboundFormPage() {
           // the moment it is typed (owner ask 2026-09-24).
           sellPriceOf={(view) =>
             db.skus.find((s) => s.id === view.skuId)?.price ?? 0
+          }
+          // Nothing is a unit until Save: the popup's prices are the drafts.
+          unitPricesOf={(view) =>
+            (lines.find((x) => x.key === view.key)?.units ?? []).map(
+              (u) => u.price,
+            )
           }
           onSetSellPrice={(view, v) => {
             if (view.skuId === "") return;
@@ -1255,7 +1271,7 @@ export function InboundFormPage() {
             {
               key: "w",
               label: t("inboundForm.arrivingAt", "Arriving at"),
-              children: db.warehouses.find((w) => w.id === warehouseId)?.name,
+              children: warehouseLabelOf(db.warehouses, warehouseId),
             },
             {
               key: "p",

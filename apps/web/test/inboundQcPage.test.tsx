@@ -141,6 +141,30 @@ const serials = () =>
     .map((el) => (el as HTMLInputElement).value);
 
 /** The dialog mounted most recently — antd leaves closed ones in the DOM. */
+/** Pick a warehouse in a Select by its id (the label carries its number). */
+async function pickWarehouse(control: HTMLElement, id: string, here = false) {
+  const w = snapshot().warehouses.find((x) => x.id === id)!;
+  const label = w.code ? `${w.code} · ${w.name}` : w.name;
+  fireEvent.mouseDown(control);
+  const item = await vi.waitFor(() => {
+    const open = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".ant-select-dropdown:not(.ant-select-dropdown-hidden)",
+      ),
+    );
+    const found = Array.from(
+      open[open.length - 1]?.querySelectorAll<HTMLElement>(
+        ".ant-select-item-option",
+      ) ?? [],
+    ).find((el) =>
+      (el.getAttribute("title") ?? "").startsWith(here ? `${label} (` : label),
+    );
+    if (!found) throw new Error(`no option “${label}” open`);
+    return found;
+  });
+  fireEvent.click(item);
+}
+
 async function lastDialog(): Promise<HTMLElement> {
   const dialogs = await screen.findAllByRole("dialog");
   return dialogs[dialogs.length - 1]!;
@@ -1259,7 +1283,7 @@ describe("sending a machine to service", () => {
     )!.locationId;
     await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
     const dialog = await lastDialog();
-    await userEvent.click(within(dialog).getByRole("switch"));
+    await pickWarehouse(within(dialog).getByLabelText("Send to"), before, true);
     await userEvent.click(await okButton("Send to service"));
 
     const db = snapshot();
@@ -1269,6 +1293,30 @@ describe("sending a machine to service", () => {
     expect(
       db.services.find((r) => r.serial === serial)!.arrivedAt,
     ).toBeTruthy();
+  });
+
+  // Owner ask 2026-10-22: *"make sure we can choose where we send the
+  // product"* — the bench is the default, not the only answer.
+  it("sends it to whichever warehouse the dialog names", async () => {
+    const serial = await described();
+    await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
+    const dialog = await lastDialog();
+    const other = snapshot().warehouses.find(
+      (w) =>
+        w.active &&
+        w.kind !== "SERVIS" &&
+        w.id !== snapshot().units.find((u) => u.serial === serial)!.locationId,
+    )!;
+    await pickWarehouse(within(dialog).getByLabelText("Send to"), other.id);
+    await userEvent.click(await okButton("Send to service"));
+
+    const db = snapshot();
+    const unit = db.units.find((u) => u.serial === serial)!;
+    expect(unit.status).toBe("SERVIS");
+    expect(unit.locationId).toBe(other.id);
+    const visit = db.services.find((r) => r.serial === serial)!;
+    expect(visit.closedAt).toBeUndefined();
+    expect(visit.fromLocationId).not.toBe(other.id);
   });
 
   it("puts the courier and the quote on the visit it opens", async () => {
@@ -1330,4 +1378,64 @@ describe("a counted product's sell price", () => {
     );
     expect(moves.map((m) => m.qty)).toEqual([2]);
   });
+});
+
+/**
+ * The sell price box holds THIS unit's price; what the variant asks is the
+ * grey hint behind it (owner report 2026-10-08: *"why the price cannot be
+ * removed"*). The go-live import priced every variant at Rp 0, and filled in
+ * as a value that zero sat in every box and came straight back when emptied.
+ */
+describe("a unit's sell price", () => {
+  const stored = () => snapshot().units.find((u) => u.serial === SERIAL)!;
+
+  /** Run with the order's product asking `price`, and put it back after. */
+  async function asking<T>(price: number, run: () => Promise<T>) {
+    const was = snapshot().skus.find((s) => s.id === SKU)!.price;
+    mutate((d) => {
+      d.skus.find((s) => s.id === SKU)!.price = price;
+    });
+    try {
+      return await run();
+    } finally {
+      mutate((d) => {
+        d.skus.find((s) => s.id === SKU)!.price = was;
+      });
+    }
+  }
+
+  it("leaves a Rp 0 variant's box empty, and files no price on the unit", () =>
+    asking(0, async () => {
+      await renderUnits();
+      const box = inRow("Sell price") as HTMLInputElement;
+      expect(box.value).toBe("");
+      expect(box.placeholder).toBe("");
+
+      await scanGraded();
+      expect(stored().price).toBeUndefined();
+      expect((inRow("Sell price") as HTMLInputElement).value).toBe("");
+    }));
+
+  it("can be emptied, and the unit then quotes its variant", () =>
+    asking(9_500_000, async () => {
+      await renderUnits();
+      expect((inRow("Sell price") as HTMLInputElement).placeholder).toMatch(
+        /9\.500\.000$/,
+      );
+      await scanGraded();
+      expect(stored().price).toBe(9_500_000);
+
+      const box = inRow("Sell price");
+      await userEvent.clear(box);
+      await userEvent.type(box, "8750000");
+      await userEvent.tab();
+      await settle();
+      expect(stored().price).toBe(8_750_000);
+
+      await userEvent.clear(inRow("Sell price"));
+      await userEvent.tab();
+      await settle();
+      expect(stored().price).toBeUndefined();
+      expect((inRow("Sell price") as HTMLInputElement).value).toBe("");
+    }));
 });

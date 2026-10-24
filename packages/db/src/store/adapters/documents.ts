@@ -39,6 +39,7 @@ import {
   instantOf,
   isoOf,
   lockRows,
+  noRowLock,
   optionalIso,
   refuseEdit,
   refuseRemoval,
@@ -709,6 +710,33 @@ export const reservations: Adapter<"reservations"> = {
 
 type Sale = RowOf<"orders">;
 
+/**
+ * The `returnReason` of a line taken off a sale by Edit transaction (owner,
+ * 2026-10-22: *"the transaction history should be editable … do not implement
+ * append only"*). The line is CLOSED, not deleted — its `TERJUAL` stock moves
+ * and the unit's history name it, and every one of those FKs is RESTRICT —
+ * and a closed-by-correction line is projected nowhere, so on every screen the
+ * sale reads as though it never carried it. A line a customer RETURNED is
+ * closed with another reason and is still shown, marked Returned.
+ */
+const CORRECTED = "Dikoreksi";
+
+/**
+ * A RETUR adjustment whose return was taken back (2026-10-23). Kept, at zero,
+ * because the app cannot delete it; filtered out of every reading.
+ */
+const WITHDRAWN = "Retur dibatalkan";
+const NOT_WITHDRAWN = { NOT: { reason: { startsWith: WITHDRAWN } } };
+
+/**
+ * "Not closed by a correction" as a Prisma filter. ⚠️ Not `NOT: { returnReason:
+ * CORRECTED }`: SQL's `NOT (x = 'y')` is NULL when x is NULL, so that drops
+ * every ordinary line — whose reason is null — along with the corrected ones.
+ */
+const NOT_CORRECTED = {
+  OR: [{ returnReason: null }, { returnReason: { not: CORRECTED } }],
+};
+
 async function syncSaleLines(
   ctx: WriteContext,
   sale: Sale,
@@ -734,13 +762,18 @@ async function syncSaleLines(
   // Unit lines only: a counted product's line has no unit and is kept by
   // `syncCountedLines`.
   const existing = await tx.orderItem.findMany({
-    where: { orderId: sale.id, unitId: { not: null } },
+    where: {
+      orderId: sale.id,
+      unitId: { not: null },
+      ...NOT_CORRECTED,
+    },
     select: {
       id: true,
       unitId: true,
       price: true,
       listPrice: true,
       sortOrder: true,
+      cogs: true,
     },
   });
   const left = new Map(existing.map((i) => [i.unitId, i]));
@@ -762,6 +795,29 @@ async function syncSaleLines(
         });
       }
       continue;
+    }
+    // Only a unit on the shelf (or held for this customer) can go on a sale
+    // (audit 2026-10-23: Edit transaction took a unit still in QC, in
+    // service or gone back to its supplier). Judged by its newest ledger row
+    // BEFORE this commit — events are written after orders, and the unit's
+    // own column may already carry the browser's TERJUAL.
+    if (ctx.mode !== "import") {
+      const last = await tx.unitEvent.findFirst({
+        where: { unitId: unit.id },
+        orderBy: { seq: "desc" },
+        select: { toStatus: true },
+      });
+      if (
+        last !== null &&
+        last.toStatus !== "TERSEDIA" &&
+        last.toStatus !== "DIRESERVASI"
+      ) {
+        throw new StoreValidationError(
+          `Unit ${serial} tidak tersedia untuk dijual (${last.toStatus}).`,
+          "orders",
+          sale.id,
+        );
+      }
     }
     // A machine can be on one open receipt at a time. Its earlier line is
     // closed: the machine came back and is being sold again.
@@ -801,12 +857,23 @@ async function syncSaleLines(
       });
     }
   }
-  if (left.size > 0) {
-    throw new StoreValidationError(
-      "Baris penjualan tidak bisa dihapus — catat retur.",
-      "orders",
-      sale.id,
-    );
+  // Units taken off the sale by a correction: the line closes, the unit is
+  // no longer this sale's, and what it cost leaves the sale's cost. Its sold
+  // row comes off its history in the same commit (`removeEvents`).
+  for (const item of left.values()) {
+    await tx.orderItem.update({
+      where: { id: item.id },
+      data: { returnedAt: ctx.now, returnedQty: 1, returnReason: CORRECTED },
+    });
+    await tx.unit.updateMany({
+      where: { soldOrderItemId: item.id },
+      data: { soldOrderItemId: null },
+    });
+    await tx.order.update({
+      where: { id: sale.id },
+      data: { cogs: { decrement: item.cogs } },
+    });
+    if (item.unitId) await restoreUnitOffSale(ctx, item.unitId, sale.id);
   }
 }
 
@@ -819,8 +886,8 @@ async function syncSaleLines(
 async function syncCountedLines(ctx: WriteContext, sale: Sale): Promise<void> {
   const { tx } = ctx;
   const existing = await tx.orderItem.findMany({
-    where: { orderId: sale.id, unitId: null },
-    select: { id: true },
+    where: { orderId: sale.id, unitId: null, ...NOT_CORRECTED },
+    select: { id: true, qty: true },
   });
   const left = new Set(existing.map((i) => i.id));
   const lines = sale.lines ?? [];
@@ -864,6 +931,13 @@ async function syncCountedLines(ctx: WriteContext, sale: Sale): Promise<void> {
           where: { id: l.id, returnedAt: null },
           data: { returnedAt: ctx.now },
         });
+      } else {
+        // A return taken back (2026-10-23): nothing is out any more, so the
+        // line is open again — left closed, the sale could never be deleted.
+        await tx.orderItem.updateMany({
+          where: { id: l.id, returnReason: "Retur pelanggan" },
+          data: { returnedAt: null, returnReason: null },
+        });
       }
       continue;
     }
@@ -877,12 +951,19 @@ async function syncCountedLines(ctx: WriteContext, sale: Sale): Promise<void> {
       },
     });
   }
-  if (left.size > 0) {
-    throw new StoreValidationError(
-      "Baris penjualan tidak bisa dihapus — catat retur.",
-      "orders",
-      sale.id,
-    );
+  // A line taken off by a correction closes (see `CORRECTED`). Its pieces go
+  // back on the shelf by the KOREKSI moves the browser sends in the same
+  // commit, which also take their cost off the sale (adapters/stock.ts).
+  const qtyOf = new Map(existing.map((i) => [i.id, i.qty]));
+  for (const id of left) {
+    await tx.orderItem.update({
+      where: { id },
+      data: {
+        returnedAt: ctx.now,
+        returnedQty: qtyOf.get(id) ?? 0,
+        returnReason: CORRECTED,
+      },
+    });
   }
 }
 
@@ -986,7 +1067,7 @@ async function syncOrderAdjustments(
 ): Promise<void> {
   const { tx } = ctx;
   const existing = await tx.orderAdjustment.findMany({
-    where: { orderId: sale.id },
+    where: { orderId: sale.id, ...NOT_WITHDRAWN },
   });
   const left = new Map(existing.map((a) => [a.id, a]));
   for (const a of sale.adjustments ?? []) {
@@ -1006,12 +1087,215 @@ async function syncOrderAdjustments(
       });
     }
   }
-  if (left.size > 0) {
-    throw new StoreValidationError(
-      "Penyesuaian penjualan tidak bisa dihapus.",
+  // A return taken back (audit 2026-10-23: the undo was refused here every
+  // time). The app holds no DELETE on this table, so the row is WITHDRAWN —
+  // amount 0, what it was kept in its reason — and projected nowhere. Any
+  // other adjustment that disappears is still refused.
+  for (const a of left.values()) {
+    if (a.type !== "RETUR" || a.code === null) {
+      throw new StoreValidationError(
+        "Penyesuaian penjualan tidak bisa dihapus.",
+        "orders",
+        sale.id,
+      );
+    }
+    await tx.orderAdjustment.update({
+      where: { id: a.id },
+      data: {
+        amount: 0n,
+        reason: `${WITHDRAWN} (${a.amount.toString()}): ${a.reason}`,
+      },
+    });
+  }
+}
+
+/**
+ * A sale deleted from Transaction History (owner ask 2026-10-22: *"add a
+ * button to delete a transaction … close transaction monthly so before that
+ * all the transaction can be deleted"*; asked, *"gone completely"*).
+ *
+ * The browser drops the order, takes each unit's sold row off its ledger
+ * (`removeEvents`, units.ts, which runs after this in the same commit) and
+ * puts counted pieces back with a KOREKSI move. Here the row is CANCELLED,
+ * not deleted — the same footing as a deleted inbound invoice (`cancelPo`):
+ * `BATAL` is projected nowhere, its payments are voided, and its lines are
+ * closed so the units on them can be sold again
+ * (`OrderItem_unitId_unreturned_key`). Every UnitEvent, PaymentLog and
+ * StockMove that names the order still finds it.
+ *
+ * Refused, each because undoing it here would have to guess: a closed book
+ * (`finance.booksClosedAt`), a return (an adjustment, a refund or a line
+ * already closed), a trade-in, a marketplace payout received against it, or
+ * an Income & Expense line naming it. `lib/saleDeletion.ts` in the web app
+ * asks the same questions so the button can say why before anybody presses.
+ */
+async function cancelSale(ctx: WriteContext, id: string): Promise<void> {
+  const { tx } = ctx;
+  const order = await tx.order.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      code: true,
+      ts: true,
+      status: true,
+      _count: {
+        select: {
+          adjustments: { where: NOT_WITHDRAWN },
+          expenses: true,
+          incomes: true,
+          tradeIns: { where: { removedAt: null } },
+          payments: { where: { direction: "KELUAR", voidedAt: null } },
+          items: {
+            where: {
+              returnedAt: { not: null },
+              ...NOT_CORRECTED,
+            },
+          },
+        },
+      },
+    },
+  });
+  if (order === null || order.status === "BATAL") {
+    throw new StoreValidationError("Transaksi tidak ditemukan.", "orders", id);
+  }
+  const refuse = (why: string) =>
+    new StoreValidationError(
+      `Transaksi ${order.code} tidak bisa dihapus: ${why}`,
       "orders",
-      sale.id,
+      id,
     );
+  const closed = await tx.appSetting.findUnique({
+    where: { key: "finance.booksClosedAt" },
+    select: { value: true },
+  });
+  if (closed && closed.value.trim() !== "") {
+    const until = new Date(closed.value);
+    // Locked only once finished (2026-10-22): a sale still waiting on money
+    // stays open after the close.
+    if (
+      !Number.isNaN(until.getTime()) &&
+      order.ts <= until &&
+      order.status === "LUNAS"
+    )
+      throw refuse("bukunya sudah ditutup.");
+  }
+  const c = order._count;
+  if (c.adjustments > 0 || c.payments > 0 || c.items > 0)
+    throw refuse("ada retur di dalamnya.");
+  if (c.tradeIns > 0) throw refuse("ada tukar tambah di dalamnya.");
+  if (c.expenses > 0 || c.incomes > 0)
+    throw refuse("ada catatan pemasukan/pengeluaran yang menautnya.");
+
+  const items = await tx.orderItem.findMany({
+    where: { orderId: id },
+    select: { id: true, qty: true, unitId: true },
+  });
+  await tx.unit.updateMany({
+    where: { soldOrderItemId: { in: items.map((i) => i.id) } },
+    data: { soldOrderItemId: null },
+  });
+  for (const i of items) {
+    await tx.orderItem.update({
+      where: { id: i.id },
+      data: {
+        returnedAt: ctx.now,
+        returnedQty: i.qty,
+        returnReason: "Transaksi dihapus",
+      },
+    });
+  }
+  await tx.payment.updateMany({
+    where: { orderId: id, voidedAt: null },
+    data: { voidedAt: ctx.now },
+  });
+  await tx.orderFee.updateMany({
+    where: { orderId: id, removedAt: null },
+    data: { removedAt: ctx.now },
+  });
+  await tx.order.update({ where: { id }, data: { status: "BATAL" } });
+  ctx.touch("orders", id);
+
+  // The units go back to the shelf HERE, whatever the browser sent (owner
+  // report 2026-10-23: a sale was deleted and its unit still read Sold). Every
+  // ledger row that names this sale comes off — the sold row and any note a
+  // payout wrote after it — and the unit takes the status and place of its
+  // newest remaining row. A unit is never emptied: if the sale's rows are all
+  // it has, it is left for a person.
+  const unitIds = [
+    ...new Set(items.map((i) => i.unitId).filter((u): u is string => !!u)),
+  ];
+  for (const unitId of unitIds) await restoreUnitOffSale(ctx, unitId, id);
+}
+
+/**
+ * A unit that has stopped being part of a sale — the sale deleted, or the unit
+ * taken off it by a correction — goes back to what it was before (owner report
+ * 2026-10-23: a deleted sale left C02D503ZM6KJ Sold). Every ledger row naming
+ * the sale comes off — the sold row and any note written after it — and the
+ * unit takes the status and place of its newest remaining row. Done here
+ * whatever the browser sent; `removeEvents` skips a row already dropped. A
+ * unit is never emptied: if the sale's rows are all it has, it is left alone.
+ */
+async function restoreUnitOffSale(
+  ctx: WriteContext,
+  unitId: string,
+  orderId: string,
+): Promise<void> {
+  const { tx } = ctx;
+  const mine = await tx.unitEvent.findMany({
+    where: { unitId, orderId },
+    select: { id: true },
+  });
+  if (mine.length === 0) return;
+  const total = await tx.unitEvent.count({ where: { unitId } });
+  if (mine.length >= total) return;
+  const ids = mine.map((e) => e.id);
+  await tx.$queryRaw`SELECT unit_event_drop(${ids}::text[])`;
+  for (const e of ids) {
+    ctx.droppedEvents.add(e);
+    ctx.touch("events", e);
+  }
+  const last = await tx.unitEvent.findFirst({
+    where: { unitId },
+    orderBy: { seq: "desc" },
+    select: { toStatus: true },
+  });
+  const moved = await tx.unitEvent.findFirst({
+    where: { unitId, toLocationId: { not: null } },
+    orderBy: { seq: "desc" },
+    select: { toLocationId: true },
+  });
+  const unit = await tx.unit.update({
+    where: { id: unitId },
+    data: {
+      ...(last ? { status: last.toStatus } : {}),
+      ...(moved?.toLocationId ? { locationId: moved.toLocationId } : {}),
+    },
+    select: { serial: true, status: true, locationId: true },
+  });
+  ctx.touch("units", unit.serial);
+  ctx.ledgerAfter.set(unit.serial, {
+    status: unit.status,
+    locationId: unit.locationId,
+  });
+  // Sold out of a hold: the hold had closed as collected, and with the unit
+  // back at DIRESERVASI it is holding again (audit 2026-10-23 — otherwise the
+  // unit is held by a finished reservation nobody can release).
+  if (unit.status === "DIRESERVASI") {
+    const holds = await tx.reservation.findMany({
+      where: {
+        status: "SELESAI",
+        items: { some: { unitId, removedAt: null } },
+      },
+      select: { id: true },
+    });
+    for (const h of holds) {
+      await tx.reservation.update({
+        where: { id: h.id },
+        data: { status: "TERJADWAL" },
+      });
+      ctx.touch("reservations", h.id);
+    }
   }
 }
 
@@ -1019,10 +1303,13 @@ export const orders: Adapter<"orders"> = {
   collection: "orders",
   async project(tx, _ctx, keys) {
     const rows = await tx.order.findMany({
-      where: byId(keys),
+      // A deleted sale (`cancelSale`) is projected nowhere — the browser
+      // removed it, and every screen reads the projection.
+      where: { ...byId(keys), status: { not: "BATAL" } },
       orderBy: [{ ts: "desc" }, { code: "desc" }],
       include: {
         items: {
+          where: { ...NOT_CORRECTED },
           orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
           include: { unit: { select: { serial: true } } },
         },
@@ -1039,7 +1326,10 @@ export const orders: Adapter<"orders"> = {
           orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
           include: { method: { select: { code: true } } },
         },
-        adjustments: { orderBy: [{ at: "asc" }, { id: "asc" }] },
+        adjustments: {
+          where: NOT_WITHDRAWN,
+          orderBy: [{ at: "asc" }, { id: "asc" }],
+        },
         payMethod: { select: { code: true } },
       },
     });
@@ -1163,7 +1453,10 @@ export const orders: Adapter<"orders"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("orders", r.key);
+      if (n === undefined) {
+        await cancelSale(ctx, r.key);
+        continue;
+      }
 
       const unitRows = await tx.unit.findMany({
         where: { serial: { in: n.serials }, archivedAt: null },
@@ -1272,6 +1565,17 @@ export const orders: Adapter<"orders"> = {
               unitRows[0]?.locationId ?? (await defaultLocationId(ctx)),
           },
         });
+        // Chatbot v2: a sale ends the customer's 🔥 lead (owner, 2026-10-14:
+        // "it will clear at sale"). Their WhatsApp thread is keyed by the
+        // bare digits of the number on the order; nothing happens for a
+        // customer who never wrote in.
+        const waId = customer?.phone?.replace(/\D/g, "") ?? "";
+        if (waId) {
+          await tx.waThreadMemory.updateMany({
+            where: { from: waId },
+            data: { leadClearedAt: ctx.now },
+          });
+        }
       } else {
         await tx.order.update({ where: { id: n.id }, data });
       }
@@ -2074,7 +2378,8 @@ export const paymentLog: Adapter<"paymentLog"> = {
       reason: l.reason ?? undefined,
     }));
   },
-  lock: (tx, keys) => lockRows(tx, "PaymentLog", "id", keys),
+  // Inserted only — see `noRowLock`.
+  lock: noRowLock,
   async write(ctx, rows) {
     const { tx } = ctx;
     for (const r of rows) {
@@ -2168,7 +2473,8 @@ export const settlementLog: Adapter<"settlementLog"> = {
       reason: l.reason ?? undefined,
     }));
   },
-  lock: (tx, keys) => lockRows(tx, "SettlementLog", "id", keys),
+  // Inserted only — see `noRowLock`.
+  lock: noRowLock,
   async write(ctx, rows) {
     for (const r of rows) {
       const n = r.next;

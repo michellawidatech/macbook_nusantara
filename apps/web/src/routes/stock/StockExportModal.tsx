@@ -39,6 +39,7 @@ import {
 import { XLSX_MIME, xlsxFile } from "../../lib/xlsxWrite.js";
 import { PDF_MIME } from "../../lib/pdfWrite.js";
 import { SPACE, TYPE } from "../../theme/tokens";
+import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
 export function StockExportModal({
   open,
@@ -133,7 +134,7 @@ export function StockExportModal({
       columns,
       shopName: db.settings.shopName,
       warehouseNames: warehouseIds.map(
-        (id) => db.warehouses.find((w) => w.id === id)?.name ?? id,
+        (id) => warehouseLabelOf(db.warehouses, id) ?? id,
       ),
       categoryNames: categories,
       productNames: modelIds.map(
@@ -197,7 +198,10 @@ export function StockExportModal({
             value={warehouseIds}
             onChange={setWarehouseIds}
             placeholder={t("inventory.anyWarehouse", "Any warehouse")}
-            options={db.warehouses.map((w) => ({ value: w.id, label: w.name }))}
+            options={db.warehouses.map((w) => ({
+              value: w.id,
+              label: warehouseLabel(w),
+            }))}
             optionFilterProp="label"
           />
         </Form.Item>

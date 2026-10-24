@@ -37,6 +37,7 @@ import {
   snapshotStore,
   truncateAll,
 } from "../src/index.js";
+import { ADAPTERS } from "../src/store/adapters/index.js";
 
 const URL =
   process.env["TEST_DATABASE_URL"] ??
@@ -298,6 +299,87 @@ describe("a till's commit", () => {
     expect(written["note"]).toBe(`Sold on ${real}`);
     // The row is attributed to the session, not to the name the browser typed.
     expect(written["staff"]).toBe("Store Test");
+  }, 180_000);
+
+  it("ends the customer's chatbot lead when they buy (chatbot v2)", async () => {
+    const shop = await loadDemo();
+    const unit = (shop["units"] as Row[]).find(
+      (u) => u["status"] === "TERSEDIA",
+    )!;
+    const buyer = (shop["customers"] as Row[]).find(
+      (c) => typeof c["phone"] === "string" && c["phone"] !== "",
+    )!;
+    const waId = String(buyer["phone"]).replace(/\D/g, "");
+    await db.waThreadMemory.deleteMany({ where: { from: waId } });
+    await db.waThreadMemory.create({
+      data: {
+        from: waId,
+        summaryTurns: 0,
+        clarifyCount: 0,
+        updatedAt: NOW,
+        leadScore: 90,
+        leadAt: new Date(NOW.getTime() - 3_600_000),
+      },
+    });
+    const serial = unit["serial"] as string;
+    const seq = (shop["events"] as Row[]).filter(
+      (e) => e["serial"] === serial,
+    ).length;
+    const code = "SI-2026/09-Tlead123";
+    const sale = {
+      id: "o_lead_test",
+      code,
+      ts: NOW.toISOString(),
+      customerId: buyer["id"],
+      serials: [serial],
+      prices: { [serial]: 5_000_000 },
+      discount: 0,
+      source: "OFFLINE",
+      payMethod: "TUNAI",
+      settled: true,
+      payments: [
+        {
+          id: "p_lead_test",
+          method: "TUNAI",
+          amount: 5_000_000,
+          state: "SETTLED",
+          at: NOW.toISOString(),
+        },
+      ],
+      total: 5_000_000,
+    };
+    const event = {
+      id: "ev_lead_test",
+      serial,
+      seq: seq + 1,
+      type: "TERJUAL",
+      at: NOW.toISOString(),
+      fromStatus: "TERSEDIA",
+      toStatus: "TERJUAL",
+      locationId: unit["locationId"],
+      note: `Sold on ${code}`,
+      refCode: code,
+      staff: "Michella",
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [], units: [unit], events: [] },
+          {
+            orders: [sale],
+            units: [{ ...unit, status: "TERJUAL" }],
+            events: [event],
+          },
+        ),
+      ),
+    });
+    const mem = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: waId },
+    });
+    expect(mem.leadClearedAt).not.toBeNull();
+    expect(mem.leadClearedAt!.getTime()).toBeGreaterThan(mem.leadAt!.getTime());
+    await db.waThreadMemory.deleteMany({ where: { from: waId } });
   }, 180_000);
 
   /*
@@ -1053,6 +1135,292 @@ describe("a till's commit", () => {
     );
   }, 180_000);
 
+  it("deletes a discount no sale has used, and refuses one that has been", async () => {
+    await loadDemo();
+    const fresh = (id: string, code: string, used: number): Row => ({
+      id,
+      code,
+      name: code,
+      type: "NOMINAL",
+      amountRp: 100_000,
+      used,
+      active: true,
+      scope: "All products",
+    });
+    const created = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { discounts: [] },
+          {
+            discounts: [
+              fresh("disc_store_unused", "ZZUNUSED", 0),
+              fresh("disc_store_used", "ZZUSED", 1),
+            ],
+          },
+        ),
+      ),
+    });
+    const [unused, used] = (created.rows.discounts as Row[]).map((r) =>
+      decodeRow("discounts", r),
+    );
+
+    const removal = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore({ discounts: [unused!] }, { discounts: [] }),
+      ),
+    });
+    expect(removal.removed.discounts).toEqual(["disc_store_unused"]);
+    expect(
+      await db.discount.findUnique({ where: { id: "disc_store_unused" } }),
+    ).toBeNull();
+
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ discounts: [used!] }, { discounts: [] }),
+        ),
+      }),
+    ).rejects.toThrow(/sudah dipakai/);
+    expect(
+      await db.discount.findUnique({ where: { id: "disc_store_used" } }),
+    ).not.toBeNull();
+  }, 180_000);
+
+  it("renames SKU codes onto a code an archived variant held, and swaps within a batch (2026-10-21)", async () => {
+    const shop = await loadDemo();
+    const modelId = (shop["models"] as Row[])[0]!["id"] as string;
+    const sku = (id: string, code: string, label: string): Row => ({
+      id,
+      modelId,
+      code,
+      name: "ZZ",
+      variantLabel: label,
+      price: 0,
+    });
+    const created = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { skus: [] },
+          {
+            skus: [
+              sku("sku_zz_old", 'ZZ AIR 13" 2020 I7 8/128', "old"),
+              sku("sku_zz_a", "SKU_ZZRANDOMA", "i7 / 8GB / 128GB"),
+              sku("sku_zz_b", "ZZ CODE B", "b"),
+              sku("sku_zz_c", "ZZ CODE C", "c"),
+            ],
+          },
+        ),
+      ),
+    });
+    const byId = new Map(
+      (created.rows.skus as Row[])
+        .map((r) => decodeRow("skus", r))
+        .map((r) => [r["id"] as string, r]),
+    );
+    const [old, a, b, c] = [
+      "sku_zz_old",
+      "sku_zz_a",
+      "sku_zz_b",
+      "sku_zz_c",
+    ].map((id) => byId.get(id));
+    // "Replace all variants" archives the old row; it keeps its code.
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(diffStore({ skus: [old!] }, { skus: [] })),
+    });
+    // The rename takes the archived row's code, and B and C swap theirs.
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { skus: [a!, b!, c!] },
+          {
+            skus: [
+              { ...a!, code: 'ZZ AIR 13" 2020 I7 8/128' },
+              { ...b!, code: "ZZ CODE C" },
+              { ...c!, code: "ZZ CODE B" },
+            ],
+          },
+        ),
+      ),
+    });
+    const code = async (id: string) =>
+      (await db.sku.findUnique({ where: { id } }))!.code;
+    expect(await code("sku_zz_a")).toBe('ZZ AIR 13" 2020 I7 8/128');
+    expect(await code("sku_zz_b")).toBe("ZZ CODE C");
+    expect(await code("sku_zz_c")).toBe("ZZ CODE B");
+    expect(await code("sku_zz_old")).toBe(
+      'ZZ AIR 13" 2020 I7 8/128 [archived sku_zz_old]',
+    );
+
+    // A LIVE holder is still a conflict.
+    const [a2, b2] = await Promise.all(
+      ["sku_zz_a", "sku_zz_b"].map(async (id) => {
+        const row = await db.sku.findUnique({ where: { id } });
+        return id === "sku_zz_a"
+          ? { ...a!, code: row!.code }
+          : { ...b!, code: row!.code };
+      }),
+    );
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ skus: [b2!] }, { skus: [{ ...b2!, code: a2!.code }] }),
+        ),
+      }),
+    ).rejects.toThrow();
+  }, 180_000);
+
+  it("deletes a product by archiving it with its variants, and refuses a variant with history (2026-10-21)", async () => {
+    const shop = await loadDemo();
+    const model: Row = {
+      id: "m_zz_delete",
+      name: 'MacBook Air 13" 2031',
+      category: (shop["models"] as Row[])[0]!["category"],
+      releaseYear: 2031,
+      axes: [
+        { name: "RAM", values: ["8GB"] },
+        { name: "SSD", values: ["256GB"] },
+      ],
+      source: "MANUAL",
+    };
+    const variant: Row = {
+      id: "sku_zz_delete",
+      modelId: "m_zz_delete",
+      code: 'AIR 13" 2031 8/256',
+      name: 'MacBook Air 13" 2031',
+      variantLabel: "8GB / 256GB",
+      price: 0,
+    };
+    const created = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { models: [], skus: [] },
+          { models: [model], skus: [variant] },
+        ),
+      ),
+    });
+    const m = decodeRow("models", (created.rows.models as Row[])[0]!);
+    const v = decodeRow("skus", (created.rows.skus as Row[])[0]!);
+
+    // A product cannot go while a variant of it is still live.
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(diffStore({ models: [m] }, { models: [] })),
+      }),
+    ).rejects.toThrow(/masih punya varian/);
+
+    const removal = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore({ models: [m], skus: [v] }, { models: [], skus: [] }),
+      ),
+    });
+    expect(removal.removed.models).toEqual(["m_zz_delete"]);
+    expect(
+      (await db.catalogModel.findUnique({ where: { id: "m_zz_delete" } }))!
+        .archived,
+    ).toBe(true);
+    expect(
+      (await db.sku.findUnique({ where: { id: "sku_zz_delete" } }))!.archived,
+    ).toBe(true);
+
+    // A counted variant with a stock movement is history, not litter.
+    const moved = (shop["stockMoves"] as Row[])[0]!;
+    const counted = (shop["skus"] as Row[]).find(
+      (k) => k["id"] === moved["skuId"],
+    )!;
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(diffStore({ skus: [counted] }, { skus: [] })),
+      }),
+    ).rejects.toThrow(/riwayat stok atau penjualan/);
+  }, 180_000);
+
+  it("deletes a supplier or customer nothing names, and refuses a used one (2026-10-21)", async () => {
+    const shop = await loadDemo();
+    const created = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { suppliers: [], customers: [] },
+          {
+            suppliers: [{ id: "sup_store_unused", name: "ZZ Unused supplier" }],
+            customers: [
+              {
+                id: "cus_store_unused",
+                name: "ZZ Unused customer",
+                phone: "",
+                addresses: [{ id: "adr_store_unused", line: "Jl. Uji 1" }],
+                createdAt: new Date().toISOString(),
+              },
+            ],
+          },
+        ),
+      ),
+    });
+    const sup = decodeRow("suppliers", (created.rows.suppliers as Row[])[0]!);
+    const cus = decodeRow("customers", (created.rows.customers as Row[])[0]!);
+
+    const removal = await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { suppliers: [sup], customers: [cus] },
+          { suppliers: [], customers: [] },
+        ),
+      ),
+    });
+    expect(removal.removed.suppliers).toEqual(["sup_store_unused"]);
+    expect(removal.removed.customers).toEqual(["cus_store_unused"]);
+    expect(
+      await db.supplier.findUnique({ where: { id: "sup_store_unused" } }),
+    ).toBeNull();
+    expect(
+      await db.customer.findUnique({ where: { id: "cus_store_unused" } }),
+    ).toBeNull();
+    expect(
+      await db.customerAddress.count({
+        where: { customerId: "cus_store_unused" },
+      }),
+    ).toBe(0);
+
+    const usedSupplier = (shop["suppliers"] as Row[]).find((s) =>
+      (shop["pos"] as Row[]).some((p) => p["supplierId"] === s["id"]),
+    )!;
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ suppliers: [usedSupplier] }, { suppliers: [] }),
+        ),
+      }),
+    ).rejects.toThrow(/punya transaksi/);
+
+    const buyer = (shop["customers"] as Row[]).find((c) =>
+      (shop["orders"] as Row[]).some((o) => o["customerId"] === c["id"]),
+    )!;
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ customers: [buyer] }, { customers: [] }),
+        ),
+      }),
+    ).rejects.toThrow(/punya transaksi/);
+    expect(
+      await db.customer.findUnique({ where: { id: buyer["id"] as string } }),
+    ).not.toBeNull();
+  }, 180_000);
+
   it("cancels a draft stock take instead of deleting it", async () => {
     const shop = await loadDemo();
     const draft = (shop["opnames"] as Row[]).find(
@@ -1236,18 +1604,20 @@ describe("a till's commit", () => {
     ).rejects.toThrow(/tidak bisa diubah/);
   }, 180_000);
 
-  it("takes a sold unit's last event back — never one in the middle, never the last one standing", async () => {
+  it("takes any history row back (2026-10-22) — never a live sale's sold row, never the last one standing", async () => {
     const shop = await loadDemo();
     const events = shop["events"] as Row[];
-    const unit = (shop["units"] as Row[]).find(
+    const historyOf = (serial: string) =>
+      events
+        .filter((e) => e["serial"] === serial)
+        .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const sold = (shop["units"] as Row[]).find(
       (u) =>
         u["status"] === "TERJUAL" &&
-        events.filter((e) => e["serial"] === u["serial"]).length >= 3,
+        historyOf(u["serial"] as string).length >= 3,
     )!;
-    const serial = unit["serial"] as string;
-    const mine = events
-      .filter((e) => e["serial"] === serial)
-      .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const serial = sold["serial"] as string;
+    const mine = historyOf(serial);
     const last = mine[mine.length - 1]!;
     const previous = mine[mine.length - 2]!;
     const commit = (
@@ -1259,46 +1629,792 @@ describe("a till's commit", () => {
         changes: encodeChangeset(diffStore(before, after)),
       });
 
-    // In the middle: the chain is not rebuilt around a hole.
+    // A live sale's sold row: deleting the transaction is the way to that.
     await expect(
-      commit({ events: mine }, { events: mine.filter((e) => e !== previous) }),
-    ).rejects.toThrow(/terakhir/);
-    // The last row, with the unit still saying what that row said: the
-    // projection must follow the ledger, in the same commit.
-    await expect(
-      commit({ events: mine }, { events: mine.slice(0, -1) }),
-    ).rejects.toThrow(/riwayatnya/);
-    // The last row, the unit put back where its history now leaves it —
-    // Transaction History's swap, `removeLastEvent` in the browser.
+      commit(
+        { units: [sold], events: mine },
+        {
+          units: [
+            {
+              ...sold,
+              status: previous["toStatus"],
+              locationId: previous["locationId"],
+            },
+          ],
+          events: mine.slice(0, -1),
+        },
+      ),
+    ).rejects.toThrow(/transaksi yang masih ada/);
+    // In the middle: the row goes and the unit stays where it is.
     await commit(
-      { units: [unit], events: mine },
+      { events: mine },
+      { events: mine.filter((e) => e !== previous) },
+    );
+    expect(
+      await db.unitEvent.count({ where: { id: previous["id"] as string } }),
+    ).toBe(0);
+    const still = await db.unit.findUniqueOrThrow({
+      where: { serial },
+      select: { status: true },
+    });
+    expect(still.status).toBe(sold["status"]);
+    expect(
+      await db.unitEvent.count({ where: { id: last["id"] as string } }),
+    ).toBe(1);
+
+    // The last row of a unit on no sale, with the unit still saying what that
+    // row said: the projection must follow the ledger, in the same commit.
+    const shelf = (shop["units"] as Row[]).find(
+      (u) =>
+        u["status"] !== "TERJUAL" &&
+        historyOf(u["serial"] as string).length >= 2 &&
+        historyOf(u["serial"] as string).at(-1)!["type"] !== "TERJUAL",
+    )!;
+    const its = historyOf(shelf["serial"] as string);
+    const before = its[its.length - 2]!;
+    await expect(
+      commit({ events: its }, { events: its.slice(0, -1) }),
+    ).rejects.toThrow(/riwayatnya/);
+    await commit(
+      { units: [shelf], events: its },
       {
         units: [
           {
-            ...unit,
-            status: previous["toStatus"],
-            locationId: previous["locationId"],
+            ...shelf,
+            status: before["toStatus"],
+            locationId: before["locationId"],
           },
         ],
-        events: mine.slice(0, -1),
+        events: its.slice(0, -1),
       },
     );
     const row = await db.unit.findUniqueOrThrow({
-      where: { serial },
+      where: { serial: shelf["serial"] as string },
       select: { status: true, locationId: true },
     });
-    expect(row.status).toBe(previous["toStatus"]);
-    expect(row.locationId).toBe(previous["locationId"]);
-    expect(
-      await db.unitEvent.count({ where: { id: last["id"] as string } }),
-    ).toBe(0);
-    expect(await db.unitEvent.count({ where: { serial } })).toBe(
-      mine.length - 1,
-    );
+    expect(row.status).toBe(before["toStatus"]);
+    expect(row.locationId).toBe(before["locationId"]);
     // Never the last one standing.
+    const left = its.slice(0, -1);
+    await expect(commit({ events: left }, { events: [] })).rejects.toThrow(
+      /harus punya riwayat/,
+    );
+  }, 180_000);
+
+  it("deletes a sale (2026-10-22): cancelled, its units back, sellable again", async () => {
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const units = shop["units"] as Row[];
+    const lastOf = (serial: string) =>
+      events
+        .filter((e) => e["serial"] === serial)
+        .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const order = (shop["orders"] as Row[]).find((o) => {
+      const serials = o["serials"] as string[];
+      return (
+        serials.length > 0 &&
+        o["adjustments"] === undefined &&
+        o["refunds"] === undefined &&
+        o["tradeIns"] === undefined &&
+        o["lines"] === undefined &&
+        serials.every((s) => {
+          const h = lastOf(s);
+          return (
+            h.length >= 2 &&
+            h.at(-1)!["type"] === "TERJUAL" &&
+            h.at(-1)!["refCode"] === o["code"]
+          );
+        })
+      );
+    })!;
+    const serials = order["serials"] as string[];
+    const settlements = await db.settlement.count({
+      where: { orderId: order["id"] as string },
+    });
+    const linked =
+      (await db.expense.count({ where: { orderId: order["id"] as string } })) +
+      (await db.manualIncome.count({
+        where: { orderId: order["id"] as string },
+      }));
+    expect(settlements + linked).toBe(0);
+    const mineUnits = units.filter((u) =>
+      serials.includes(u["serial"] as string),
+    );
+    const mineEvents = serials.flatMap(lastOf);
+    const back = mineUnits.map((u) => {
+      const h = lastOf(u["serial"] as string);
+      const prev = h[h.length - 2]!;
+      return { ...u, status: prev["toStatus"], locationId: prev["locationId"] };
+    });
+    const sold = new Set(serials.map((s) => lastOf(s).at(-1)!["id"]));
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [order], units: mineUnits, events: mineEvents },
+          {
+            orders: [],
+            units: back,
+            events: mineEvents.filter((e) => !sold.has(e["id"])),
+          },
+        ),
+      ),
+    });
+    const row = await db.order.findUniqueOrThrow({
+      where: { id: order["id"] as string },
+      select: {
+        status: true,
+        payments: { select: { voidedAt: true } },
+        items: { select: { returnedAt: true, returnReason: true } },
+      },
+    });
+    expect(row.status).toBe("BATAL");
+    expect(row.payments.every((p) => p.voidedAt !== null)).toBe(true);
+    expect(
+      row.items.every(
+        (i) => i.returnedAt !== null && i.returnReason === "Transaksi dihapus",
+      ),
+    ).toBe(true);
+    for (const s of serials) {
+      const u = await db.unit.findUniqueOrThrow({
+        where: { serial: s },
+        select: { status: true, soldOrderItemId: true },
+      });
+      expect(u.status).not.toBe("TERJUAL");
+      expect(u.soldOrderItemId).toBeNull();
+    }
+    // Gone from the projection, so every screen drops it.
+    const reread = (await snapshotStore(db, { staffId: ACTOR })).db;
+    expect(
+      (reread["orders"] as Row[]).some((o) => o["id"] === order["id"]),
+    ).toBe(false);
+  }, 180_000);
+
+  it("deletes a sale with nothing but the order (2026-10-23): the server puts its units back", async () => {
+    // Owner report: a deleted sale left C02D503ZM6KJ Sold. A browser that
+    // sends only the order's removal must still get the unit back on the shelf
+    // and its sold row gone.
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const historyOf = (serial: string) =>
+      events
+        .filter((e) => e["serial"] === serial)
+        .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const order = (shop["orders"] as Row[]).find((o) => {
+      const serials = o["serials"] as string[];
+      return (
+        serials.length > 0 &&
+        o["adjustments"] === undefined &&
+        o["refunds"] === undefined &&
+        o["tradeIns"] === undefined &&
+        o["lines"] === undefined &&
+        serials.every((s) => {
+          const h = historyOf(s);
+          return (
+            h.length >= 2 &&
+            h.at(-1)!["type"] === "TERJUAL" &&
+            h.at(-1)!["refCode"] === o["code"]
+          );
+        })
+      );
+    })!;
+    const serials = order["serials"] as string[];
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(diffStore({ orders: [order] }, { orders: [] })),
+    });
+    for (const s of serials) {
+      const prev = historyOf(s).at(-2)!;
+      const u = await db.unit.findUniqueOrThrow({
+        where: { serial: s },
+        select: { status: true, soldOrderItemId: true, id: true },
+      });
+      expect(u.status).toBe(prev["toStatus"]);
+      expect(u.soldOrderItemId).toBeNull();
+      expect(
+        await db.unitEvent.count({
+          where: { unitId: u.id, orderId: order["id"] as string },
+        }),
+      ).toBe(0);
+    }
+    // The projection agrees: no sold row left, status off the last row.
+    const reread = (await snapshotStore(db, { staffId: ACTOR })).db;
+    for (const s of serials) {
+      const rows = (reread["events"] as Row[]).filter((e) => e["serial"] === s);
+      expect(rows.some((e) => e["refCode"] === order["code"])).toBe(false);
+      const unit = (reread["units"] as Row[]).find((u) => u["serial"] === s)!;
+      expect(unit["status"]).not.toBe("TERJUAL");
+    }
+  }, 180_000);
+
+  it("takes a unit off a sale with nothing but the order (2026-10-23): the server puts it back", async () => {
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const historyOf = (serial: string) =>
+      events
+        .filter((e) => e["serial"] === serial)
+        .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const order = (shop["orders"] as Row[]).find((o) => {
+      const serials = o["serials"] as string[];
+      return (
+        serials.length >= 1 &&
+        o["adjustments"] === undefined &&
+        o["refunds"] === undefined &&
+        o["tradeIns"] === undefined &&
+        o["lines"] === undefined &&
+        serials.every((s) => {
+          const h = historyOf(s);
+          return (
+            h.length >= 2 &&
+            h.at(-1)!["type"] === "TERJUAL" &&
+            h.at(-1)!["refCode"] === o["code"]
+          );
+        })
+      );
+    })!;
+    const first = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const sale = decodeRow(
+      "orders",
+      (first["orders"] as Row[]).find((o) => o["id"] === order["id"])!,
+    ) as Row;
+    const serials = sale["serials"] as string[];
+    const off = serials[0]!;
+    const { [off]: offPrice, ...prices } = sale["prices"] as Record<
+      string,
+      number
+    >;
+    const listPrices = sale["listPrices"] as Record<string, number> | undefined;
+    const { [off]: _offList, ...restList } = listPrices ?? {};
+    const after: Row = {
+      ...sale,
+      serials: serials.slice(1),
+      prices,
+      ...(listPrices ? { listPrices: restList } : {}),
+      total: (sale["total"] as number) - offPrice!,
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore({ orders: [sale] }, { orders: [after] }),
+      ),
+    });
+    const prev = historyOf(off).at(-2)!;
+    const u = await db.unit.findUniqueOrThrow({
+      where: { serial: off },
+      select: { id: true, status: true, soldOrderItemId: true },
+    });
+    expect(u.status).toBe(prev["toStatus"]);
+    expect(u.soldOrderItemId).toBeNull();
+    expect(
+      await db.unitEvent.count({
+        where: { unitId: u.id, orderId: order["id"] as string },
+      }),
+    ).toBe(0);
+    // A unit still on the sale keeps its sold row.
+    if (serials[1] !== undefined) {
+      const kept = await db.unit.findUniqueOrThrow({
+        where: { serial: serials[1] },
+        select: { status: true },
+      });
+      expect(kept.status).toBe("TERJUAL");
+    }
+  }, 180_000);
+
+  it("takes a customer return back (2026-10-23): the adjustment is withdrawn, the line reopens, the unit is the sale's again", async () => {
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const historyOf = (serial: string) =>
+      events
+        .filter((e) => e["serial"] === serial)
+        .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const order = (shop["orders"] as Row[]).find((o) => {
+      const serials = o["serials"] as string[];
+      return (
+        serials.length >= 1 &&
+        o["adjustments"] === undefined &&
+        o["refunds"] === undefined &&
+        o["tradeIns"] === undefined &&
+        o["lines"] === undefined &&
+        serials.every((s) => {
+          const h = historyOf(s);
+          return (
+            h.length >= 2 &&
+            h.at(-1)!["type"] === "TERJUAL" &&
+            h.at(-1)!["refCode"] === o["code"]
+          );
+        })
+      );
+    })!;
+    const decoded = (snap: Record<string, unknown>, c: string) =>
+      (snap[c] as Row[]).map((r) => decodeRow(c as never, r) as Row);
+    let snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const sale = decoded(snap, "orders").find((o) => o["id"] === order["id"])!;
+    const serial = (sale["serials"] as string[])[0]!;
+    const price = (sale["prices"] as Record<string, number>)[serial]!;
+    const unit = decoded(snap, "units").find((u) => u["serial"] === serial)!;
+    const sold = decoded(snap, "events")
+      .filter((e) => e["serial"] === serial)
+      .sort((a, b) => (a["seq"] as number) - (b["seq"] as number))
+      .at(-1)!;
+    const code = "SG-2026/10-Tundo123";
+    const at = new Date(Date.now() + 60_000).toISOString();
+
+    // The return.
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [sale], returns: [], units: [unit], events: [] },
+          {
+            orders: [
+              {
+                ...sale,
+                adjustments: [
+                  {
+                    id: "adj_undo_test",
+                    type: "RETUR",
+                    code,
+                    amount: price,
+                    reason: `Returned ${serial}`,
+                    at,
+                  },
+                ],
+              },
+            ],
+            returns: [
+              {
+                id: "r_undo_test",
+                code,
+                kind: "CUSTOMER",
+                serial,
+                reason: "Rusak",
+                date: at.slice(0, 10),
+                status: "ARRIVED",
+              },
+            ],
+            units: [{ ...unit, status: "TERSEDIA" }],
+            events: [
+              {
+                id: "ev_undo_ret",
+                serial,
+                seq: (sold["seq"] as number) + 1,
+                type: "RETUR_PELANGGAN",
+                at,
+                fromStatus: "TERJUAL",
+                toStatus: "TERSEDIA",
+                locationId: sold["locationId"],
+                note: "Returned",
+                refCode: code,
+                staff: "Michella",
+              },
+            ],
+          },
+        ),
+      ),
+    });
+    const closed = await db.orderItem.findFirstOrThrow({
+      where: { orderId: order["id"] as string, unit: { serial } },
+    });
+    expect(closed.returnReason).toBe("Retur pelanggan");
+
+    // The undo, exactly as Returns → Delete writes it.
+    snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const sale2 = decoded(snap, "orders").find((o) => o["id"] === order["id"])!;
+    const ret2 = decoded(snap, "returns").find(
+      (r) => r["id"] === "r_undo_test",
+    )!;
+    const unit2 = decoded(snap, "units").find((u) => u["serial"] === serial)!;
+    const realCode = ret2["code"] as string;
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [sale2], returns: [ret2], units: [unit2], events: [] },
+          {
+            orders: [{ ...sale2, adjustments: undefined }],
+            returns: [{ ...ret2, status: "CANCELLED" }],
+            units: [{ ...unit2, status: "TERJUAL" }],
+            events: [
+              {
+                id: "ev_undo_back",
+                serial,
+                seq: (sold["seq"] as number) + 2,
+                type: "KOREKSI",
+                at: new Date(Date.now() + 120_000).toISOString(),
+                fromStatus: "TERSEDIA",
+                toStatus: "TERJUAL",
+                locationId: sold["locationId"],
+                note: `Return ${realCode} taken back`,
+                refCode: realCode,
+                staff: "Michella",
+              },
+            ],
+          },
+        ),
+      ),
+    });
+    const line = await db.orderItem.findUniqueOrThrow({
+      where: { id: closed.id },
+    });
+    expect(line.returnedAt).toBeNull();
+    expect(line.returnReason).toBeNull();
+    const u = await db.unit.findUniqueOrThrow({
+      where: { serial },
+      select: { status: true, soldOrderItemId: true },
+    });
+    expect(u.status).toBe("TERJUAL");
+    expect(u.soldOrderItemId).toBe(closed.id);
+    const adj = await db.orderAdjustment.findUniqueOrThrow({
+      where: { id: "adj_undo_test" },
+    });
+    expect(adj.amount).toBe(0n);
+    // Gone from what the tills read.
+    snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const reread = decoded(snap, "orders").find(
+      (o) => o["id"] === order["id"],
+    )!;
+    expect(reread["adjustments"]).toBeUndefined();
+  }, 180_000);
+
+  it("refuses a unit off the shelf on a sale, and a hold's row in history (2026-10-23)", async () => {
+    await loadDemo();
+    let snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const decoded = (c: string) =>
+      (snap[c] as Row[]).map((r) => decodeRow(c as never, r) as Row);
+    const sale = decoded("orders").find(
+      (o) =>
+        (o["serials"] as string[]).length >= 1 &&
+        o["lines"] === undefined &&
+        o["adjustments"] === undefined,
+    )!;
+    const inQc = decoded("units").find(
+      (u) =>
+        u["status"] !== "TERSEDIA" &&
+        u["status"] !== "TERJUAL" &&
+        u["status"] !== "DIRESERVASI",
+    )!;
+    expect(inQc).toBeDefined();
     await expect(
-      commit({ events: mine.slice(0, -1) }, { events: [] }),
-    ).rejects.toThrow(/harus punya riwayat/);
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { orders: [sale] },
+            {
+              orders: [
+                {
+                  ...sale,
+                  serials: [...(sale["serials"] as string[]), inQc["serial"]],
+                  prices: {
+                    ...(sale["prices"] as Record<string, number>),
+                    [inQc["serial"] as string]: 1_000_000,
+                  },
+                  total: (sale["total"] as number) + 1_000_000,
+                },
+              ],
+            },
+          ),
+        ),
+      }),
+    ).rejects.toThrow(/tidak tersedia untuk dijual/);
+
+    // A hold row on top of a unit's history goes with its hold, not here.
+    const unit = decoded("units").find((u) => u["status"] === "TERSEDIA")!;
+    const last = decoded("events")
+      .filter((e) => e["serial"] === unit["serial"])
+      .sort((a, b) => (a["seq"] as number) - (b["seq"] as number))
+      .at(-1)!;
+    const hold = {
+      id: "ev_hold_doc",
+      serial: unit["serial"],
+      seq: (last["seq"] as number) + 1,
+      type: "DIRESERVASI",
+      at: new Date().toISOString(),
+      fromStatus: "TERSEDIA",
+      toStatus: "DIRESERVASI",
+      locationId: last["locationId"],
+      note: "Held",
+      staff: "Michella",
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { units: [unit], events: [] },
+          { units: [{ ...unit, status: "DIRESERVASI" }], events: [hold] },
+        ),
+      ),
+    });
+    snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const held = decoded("units").find((u) => u["serial"] === unit["serial"])!;
+    const row = decoded("events").find((e) => e["id"] === "ev_hold_doc")!;
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { units: [held], events: [row] },
+            { units: [{ ...held, status: "TERSEDIA" }], events: [] },
+          ),
+        ),
+      }),
+    ).rejects.toThrow(/milik dokumennya/);
+  }, 180_000);
+
+  it("corrects a sale (2026-10-22): a unit off, a price changed, an accessory added and taken off", async () => {
+    const shop = await loadDemo();
+    const events = shop["events"] as Row[];
+    const historyOf = (serial: string) =>
+      events
+        .filter((e) => e["serial"] === serial)
+        .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const lastIsSaleOf = (o: Row, s: string) => {
+      const h = historyOf(s);
+      return (
+        h.length >= 2 &&
+        h.at(-1)!["type"] === "TERJUAL" &&
+        h.at(-1)!["refCode"] === o["code"]
+      );
+    };
+    const order = (shop["orders"] as Row[]).find(
+      (o) =>
+        (o["serials"] as string[]).length >= 1 &&
+        o["adjustments"] === undefined &&
+        o["tradeIns"] === undefined &&
+        (o["serials"] as string[]).some((s) => lastIsSaleOf(o, s)),
+    )!;
+    expect(order).toBeDefined();
+    // The database's own reading of the sale is the base a till would hold.
+    const first = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const sale = decodeRow(
+      "orders",
+      (first["orders"] as Row[]).find((o) => o["id"] === order["id"])!,
+    ) as Row;
+    const serials = sale["serials"] as string[];
+    const prices = sale["prices"] as Record<string, number>;
+    const off = serials.find((s) => lastIsSaleOf(order, s))!;
+    const keep = serials.find((s) => s !== off);
+    const offBase = decodeRow(
+      "units",
+      (first["units"] as Row[]).find((u) => u["serial"] === off)!,
+    ) as Row;
+    const offEvents = (first["events"] as Row[])
+      .map((e) => decodeRow("events", e) as Row)
+      .filter((e) => e["serial"] === off)
+      .sort((a, b) => (a["seq"] as number) - (b["seq"] as number));
+    const prev = offEvents.at(-2)!;
+    const cogsBefore = (
+      await db.order.findUniqueOrThrow({
+        where: { id: order["id"] as string },
+        select: { cogs: true },
+      })
+    ).cogs;
+
+    const { [off]: _gone, ...restPrices } = prices;
+    const listPrices = sale["listPrices"] as Record<string, number> | undefined;
+    const { [off]: _goneList, ...restList } = listPrices ?? {};
+    const corrected: Row = {
+      ...sale,
+      serials: serials.filter((s) => s !== off),
+      prices:
+        keep === undefined
+          ? restPrices
+          : { ...restPrices, [keep]: prices[keep]! + 100_000 },
+      ...(listPrices ? { listPrices: restList } : {}),
+      total:
+        (sale["total"] as number) -
+        prices[off]! +
+        (keep === undefined ? 0 : 100_000),
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          {
+            orders: [sale],
+            units: [offBase],
+            events: offEvents,
+          },
+          {
+            orders: [corrected],
+            units: [
+              {
+                ...offBase,
+                status: prev["toStatus"],
+                locationId: prev["locationId"],
+              },
+            ],
+            events: offEvents.slice(0, -1),
+          },
+        ),
+      ),
+    });
+    let snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    let row = decodeRow(
+      "orders",
+      (snap["orders"] as Row[]).find((o) => o["id"] === order["id"])!,
+    ) as Row;
+    expect(row["serials"]).toEqual(serials.filter((s) => s !== off));
+    if (keep !== undefined)
+      expect((row["prices"] as Record<string, number>)[keep]).toBe(
+        prices[keep]! + 100_000,
+      );
+    const offRow = await db.unit.findUniqueOrThrow({
+      where: { serial: off },
+      select: { status: true, soldOrderItemId: true, buy: true },
+    });
+    expect(offRow.status).toBe(prev["toStatus"]);
+    expect(offRow.soldOrderItemId).toBeNull();
+    const cogsAfter = (
+      await db.order.findUniqueOrThrow({
+        where: { id: order["id"] as string },
+        select: { cogs: true },
+      })
+    ).cogs;
+    expect(cogsAfter).toBe(cogsBefore - offRow.buy);
+
+    // An accessory: a counted variant the demo holds stock of.
+    const moves = shop["stockMoves"] as Row[];
+    const held = new Map<string, number>();
+    for (const m of moves) {
+      const k = `${m["skuId"]}|${m["locationId"]}`;
+      held.set(k, (held.get(k) ?? 0) + (m["qty"] as number));
+    }
+    const [key] = [...held.entries()].find(([, n]) => n > 0)!;
+    const [skuId, locationId] = key.split("|") as [string, string];
+    const withLine: Row = {
+      ...corrected,
+      lines: [
+        ...(((corrected["lines"] as Row[] | undefined) ?? []) as Row[]),
+        { id: "ol_store_edit", skuId, qty: 1, price: 50_000 },
+      ],
+      total: (corrected["total"] as number) + 50_000,
+    };
+    const sold = {
+      id: "sm_store_edit_out",
+      skuId,
+      locationId,
+      qty: -1,
+      cost: 20_000,
+      type: "TERJUAL",
+      at: NOW.toISOString(),
+      refCode: order["code"],
+      orderId: order["id"],
+      orderLineId: "ol_store_edit",
+      staff: "Test",
+    };
+    const base = (await snapshotStore(db, { staffId: ACTOR })).db;
+    const baseOrder = decodeRow(
+      "orders",
+      (base["orders"] as Row[]).find((o) => o["id"] === order["id"])!,
+    ) as Row;
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [baseOrder], stockMoves: [] },
+          {
+            orders: [
+              {
+                ...baseOrder,
+                lines: withLine["lines"],
+                total: withLine["total"],
+              },
+            ],
+            stockMoves: [sold],
+          },
+        ),
+      ),
+    });
+    snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    row = decodeRow(
+      "orders",
+      (snap["orders"] as Row[]).find((o) => o["id"] === order["id"])!,
+    ) as Row;
+    expect(
+      ((row["lines"] as Row[]) ?? []).some((l) => l["id"] === "ol_store_edit"),
+    ).toBe(true);
+
+    // …and taken off again: the line closes and the piece goes back.
+    const { lines: _l, ...noLine } = row;
+    const back = {
+      ...sold,
+      id: "sm_store_edit_back",
+      qty: 1,
+      type: "KOREKSI",
+    };
+    const keptLines = ((row["lines"] as Row[]) ?? []).filter(
+      (l) => l["id"] !== "ol_store_edit",
+    );
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { orders: [row], stockMoves: [] },
+          {
+            orders: [
+              {
+                ...noLine,
+                ...(keptLines.length > 0 ? { lines: keptLines } : {}),
+                total: (row["total"] as number) - 50_000,
+              },
+            ],
+            stockMoves: [back],
+          },
+        ),
+      ),
+    });
+    snap = (await snapshotStore(db, { staffId: ACTOR })).db;
+    row = decodeRow(
+      "orders",
+      (snap["orders"] as Row[]).find((o) => o["id"] === order["id"])!,
+    ) as Row;
+    expect(
+      ((row["lines"] as Row[] | undefined) ?? []).some(
+        (l) => l["id"] === "ol_store_edit",
+      ),
+    ).toBe(false);
+    const item = await db.orderItem.findUniqueOrThrow({
+      where: { id: "ol_store_edit" },
+      select: { returnReason: true },
+    });
+    expect(item.returnReason).toBe("Dikoreksi");
+    const finalCogs = (
+      await db.order.findUniqueOrThrow({
+        where: { id: order["id"] as string },
+        select: { cogs: true },
+      })
+    ).cogs;
+    expect(finalCogs).toBe(cogsAfter);
+  }, 180_000);
+
+  it("refuses to delete a sale inside a closed book", async () => {
+    const shop = await loadDemo();
+    // A settled one: a sale still waiting on money stays open (2026-10-22).
+    const order = (shop["orders"] as Row[]).find(
+      (o) => o["adjustments"] === undefined && o["settled"] === true,
+    )!;
+    await db.appSetting.upsert({
+      where: { key: "finance.booksClosedAt" },
+      create: {
+        key: "finance.booksClosedAt",
+        value: new Date(Date.now() + 86_400_000).toISOString(),
+        updatedAt: new Date(),
+      },
+      update: { value: new Date(Date.now() + 86_400_000).toISOString() },
+    });
+    try {
+      await expect(
+        commitStore(db, {
+          staffId: ACTOR,
+          changes: encodeChangeset(
+            diffStore({ orders: [order] }, { orders: [] }),
+          ),
+        }),
+      ).rejects.toThrow(/bukunya sudah ditutup/);
+    } finally {
+      await db.appSetting.delete({ where: { key: "finance.booksClosedAt" } });
+    }
   }, 180_000);
 });
 
@@ -1563,5 +2679,477 @@ describe("money that settles a debt without moving the balance (2026-09-22)", ()
       direction: "MASUK",
       inBalance: false,
     });
+  }, 180_000);
+});
+
+describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
+  /**
+   * Every other test here commits as the owner, who may do anything — which
+   * is how Receive on Pending Payment shipped broken: the commit locks the
+   * rows it touches with `SELECT … FOR UPDATE`, PostgreSQL wants UPDATE on at
+   * least one column for that, and the app role holds none on an append-only
+   * log. "permission denied for table SettlementLog", and only in production.
+   */
+  const asRole = (role: string): string => {
+    const u = new globalThis.URL(URL);
+    u.username = role;
+    u.password = "";
+    return u.toString();
+  };
+
+  it("can take every collection's lock", async () => {
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    try {
+      const refused: string[] = [];
+      for (const name of COLLECTION_NAMES) {
+        const adapter = ADAPTERS[name] as unknown as {
+          lock: (tx: unknown, keys: readonly string[]) => Promise<void>;
+        };
+        await app
+          .$transaction((tx) => adapter.lock(tx, ["no-such-row"]))
+          .catch((err: unknown) => {
+            refused.push(`${name}: ${String(err).split("\n").at(-1)}`);
+          });
+      }
+      expect(refused).toEqual([]);
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
+  /*
+   * The activity log (owner ask 2026-10-22): every row a till saves is a line
+   * in AuditLog — who, when, what — written in the commit's own transaction,
+   * as the role the API commits as.
+   */
+  it("writes who changed what, field by field, as nusantara_app", async () => {
+    const shop = await loadDemo();
+    // The import above wrote none: a migration's rows are not activity.
+    expect(await db.auditLog.count()).toBe(0);
+    const unit = (shop["units"] as Row[]).find(
+      (u) => u["status"] === "TERSEDIA",
+    )!;
+    const regraded = unit["grade"] === "B" ? "C" : "B";
+    const note = {
+      id: "note-activity-1",
+      serial: unit["serial"],
+      body: "",
+      tag: "QC",
+      staff: "Store Test",
+      at: "2026-09-13T04:00:00.000Z",
+      photos: [
+        {
+          id: "ph-activity-1",
+          url: "data:image/jpeg;base64," + "A".repeat(4000),
+          sortOrder: 0,
+        },
+      ],
+    };
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    try {
+      await commitStore(app, {
+        staffId: ACTOR,
+        ip: "100.64.0.7",
+        changes: encodeChangeset(
+          diffStore(
+            { units: [unit], unitNotes: [] },
+            {
+              units: [{ ...unit, price: 7_250_000, grade: regraded }],
+              unitNotes: [note],
+            },
+          ),
+        ),
+      });
+      // Removed as the server now holds it: the photo's url is its own.
+      const held = (
+        decodeStore((await snapshotStore(db, { staffId: ACTOR })).db) as {
+          unitNotes: Row[];
+        }
+      ).unitNotes.find((n) => n["id"] === note.id)!;
+      await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ unitNotes: [held] }, { unitNotes: [] }),
+        ),
+      });
+    } finally {
+      await app.$disconnect();
+    }
+
+    const lines = await db.auditLog.findMany({ orderBy: { at: "asc" } });
+    const edit = lines.find((l) => l.entity === "units")!;
+    expect(edit).toMatchObject({
+      staffId: ACTOR,
+      action: "UPDATE",
+      entityId: unit["serial"],
+      ip: "100.64.0.7",
+    });
+    expect(edit.field?.split(", ").sort()).toEqual(["grade", "price"]);
+    expect(JSON.parse(edit.after!)).toEqual({
+      price: "7250000",
+      grade: regraded,
+    });
+    expect(JSON.parse(edit.before!)).toMatchObject({
+      price: String(unit["price"]),
+    });
+
+    const notes = lines.filter((l) => l.entity === "unitNotes");
+    expect(notes.map((l) => l.action)).toEqual(["CREATE", "DELETE"]);
+    // A photo is not copied into the log.
+    expect(
+      notes.every((l) => !(l.after ?? l.before ?? "").includes("AAAA")),
+    ).toBe(true);
+    expect(JSON.parse(notes[0]!.after!)).toMatchObject({
+      serial: unit["serial"],
+    });
+  });
+
+  it("deletes an unused supplier and customer, and refuses a used customer", async () => {
+    const shop = await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    try {
+      const created = await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { suppliers: [], customers: [] },
+            {
+              suppliers: [{ id: "sup_app_unused", name: "ZZ App supplier" }],
+              customers: [
+                {
+                  id: "cus_app_unused",
+                  name: "ZZ App customer",
+                  phone: "",
+                  addresses: [{ id: "adr_app_unused", line: "Jl. Uji 2" }],
+                  createdAt: new Date().toISOString(),
+                },
+              ],
+            },
+          ),
+        ),
+      });
+      const sup = decodeRow("suppliers", (created.rows.suppliers as Row[])[0]!);
+      const cus = decodeRow("customers", (created.rows.customers as Row[])[0]!);
+      const removal = await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { suppliers: [sup], customers: [cus] },
+            { suppliers: [], customers: [] },
+          ),
+        ),
+      });
+      expect(removal.removed.suppliers).toEqual(["sup_app_unused"]);
+      expect(removal.removed.customers).toEqual(["cus_app_unused"]);
+
+      const buyer = (shop["customers"] as Row[]).find((c) =>
+        (shop["orders"] as Row[]).some((o) => o["customerId"] === c["id"]),
+      )!;
+      await expect(
+        commitStore(app, {
+          staffId: ACTOR,
+          changes: encodeChangeset(
+            diffStore({ customers: [buyer] }, { customers: [] }),
+          ),
+        }),
+      ).rejects.toThrow(/punya transaksi/);
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
+  it("deletes an Income & Expense adjustment, and refuses one inside a closed book (2026-10-24)", async () => {
+    await loadDemo(); // the payment methods an expense names
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    const today = new Date().toISOString().slice(0, 10);
+    const add = async (id: string): Promise<Row> => {
+      const created = await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { expenses: [] },
+            {
+              expenses: [
+                {
+                  id,
+                  kind: "OPERATIONAL",
+                  amount: 60_200,
+                  date: today,
+                  method: "TRANSFER",
+                  note: "ZZ test input",
+                },
+              ],
+            },
+          ),
+        ),
+      });
+      return decodeRow("expenses", (created.rows.expenses as Row[])[0]!);
+    };
+    const remove = (row: Row) =>
+      commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ expenses: [row] }, { expenses: [] }),
+        ),
+      });
+    try {
+      const first = await add("exp_app_delete");
+      const removal = await remove(first);
+      expect(removal.removed.expenses).toEqual(["exp_app_delete"]);
+      expect(
+        await db.expense.findUnique({ where: { id: "exp_app_delete" } }),
+      ).toBeNull();
+
+      const second = await add("exp_app_closed");
+      await db.appSetting.upsert({
+        where: { key: "finance.booksClosedAt" },
+        create: {
+          key: "finance.booksClosedAt",
+          value: new Date(Date.now() + 86_400_000).toISOString(),
+          updatedAt: new Date(),
+        },
+        update: { value: new Date(Date.now() + 86_400_000).toISOString() },
+      });
+      await expect(remove(second)).rejects.toThrow(/sudah ditutup/);
+    } finally {
+      await db.appSetting.deleteMany({
+        where: { key: "finance.booksClosedAt" },
+      });
+      await db.expense.deleteMany({
+        where: { id: { in: ["exp_app_delete", "exp_app_closed"] } },
+      });
+      await app.$disconnect();
+    }
+  }, 180_000);
+
+  it("merges a duplicate product: units move, the old variant is kept and marked, a third copy is refused (2026-10-21)", async () => {
+    const shop = await loadDemo();
+    const category = (shop["models"] as Row[])[0]!["category"];
+    const model = (id: string, name: string): Row => ({
+      id,
+      name,
+      category,
+      releaseYear: 2031,
+      axes: [
+        { name: "RAM", values: ["8GB"] },
+        { name: "SSD", values: ["512GB"] },
+      ],
+      source: "MANUAL",
+    });
+    const variant = (id: string, modelId: string, code: string): Row => ({
+      id,
+      modelId,
+      code,
+      name: "x",
+      variantLabel: "8GB / 512GB",
+      price: 0,
+    });
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    try {
+      // The shop's duplicates are from before this rule: made in import mode,
+      // which lets one through keyless rather than failing a replay.
+      const created = await commitStore(db, {
+        staffId: ACTOR,
+        mode: "import",
+        changes: encodeChangeset(
+          diffStore(
+            { models: [], skus: [] },
+            {
+              models: [
+                model("m_full", 'MacBook Air 13" 2031'),
+                { ...model("m_dup", 'AIR 13" 2031'), identifiers: ["ZZ99,1"] },
+              ],
+              skus: [
+                variant("s_full", "m_full", 'AIR 13" 2031 8/512'),
+                variant("s_dup", "m_dup", "SKU_ZZDUP"),
+              ],
+            },
+          ),
+        ),
+      });
+      const rows = (name: "models" | "skus") =>
+        new Map(
+          (created.rows[name] as Row[])
+            .map((r) => decodeRow(name, r))
+            .map((r) => [r["id"] as string, r]),
+        );
+      const models = rows("models");
+      const skus = rows("skus");
+      // The second copy is keyless: the first holds the product's key.
+      expect(
+        (await db.catalogModel.findUnique({ where: { id: "m_dup" } }))!
+          .productKey,
+      ).toBeNull();
+
+      // Put a unit on the shelf under the duplicate.
+      const snap = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      const unit = snap["units"]!.find((u) => u["status"] === "TERSEDIA")!;
+      await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { units: [unit] },
+            { units: [{ ...unit, skuId: "s_dup" }] },
+          ),
+        ),
+      });
+
+      // The merge, as the browser sends it.
+      const merged = await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            {
+              models: [models.get("m_full")!, models.get("m_dup")!],
+              skus: [skus.get("s_dup")!],
+              units: [{ ...unit, skuId: "s_dup" }],
+            },
+            {
+              models: [
+                {
+                  ...models.get("m_full")!,
+                  family: "MacBook Air",
+                  sizeInch: 13,
+                  identifiers: ["ZZ99,1"],
+                },
+              ],
+              skus: [
+                {
+                  ...skus.get("s_dup")!,
+                  modelId: "m_full",
+                  mergedIntoId: "s_full",
+                },
+              ],
+              units: [{ ...unit, skuId: "s_full" }],
+            },
+          ),
+        ),
+      });
+      expect(merged.removed.models).toEqual(["m_dup"]);
+      const dup = await db.sku.findUnique({ where: { id: "s_dup" } });
+      expect(dup).toMatchObject({ archived: true, mergedIntoId: "s_full" });
+      expect(
+        (await db.unit.findUnique({
+          where: { serial: unit["serial"] as string },
+        }))!.skuId,
+      ).toBe("s_full");
+      expect(
+        (await db.modelIdentifier.findUnique({
+          where: { identifier: "ZZ99,1" },
+        }))!.modelId,
+      ).toBe("m_full");
+      const full = await db.catalogModel.findUnique({
+        where: { id: "m_full" },
+      });
+      expect(full!.productKey).toBe("MACBOOK AIR|13|2031|");
+      // Still projected, for the receipts that name it.
+      const after = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      expect(after["skus"]!.find((s) => s["id"] === "s_dup")).toMatchObject({
+        mergedIntoId: "s_full",
+      });
+
+      // A third copy of the product is refused…
+      await expect(
+        commitStore(app, {
+          staffId: ACTOR,
+          changes: encodeChangeset(
+            diffStore(
+              { models: [] },
+              { models: [model("m_third", 'MacBook Air 13" 2031')] },
+            ),
+          ),
+        }),
+      ).rejects.toThrow(/sudah ada/);
+      // …and so is a second copy of a variant on its product.
+      await expect(
+        commitStore(app, {
+          staffId: ACTOR,
+          changes: encodeChangeset(
+            diffStore(
+              { skus: [] },
+              { skus: [variant("s_again", "m_full", 'AIR 13" 2031 8/512 X')] },
+            ),
+          ),
+        }),
+      ).rejects.toThrow(/sudah ada/);
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
+  it("records a marketplace payout: the payment, the settlement and its log", async () => {
+    await loadDemo();
+    const snap = decodeStore(
+      (await snapshotStore(db, { staffId: ACTOR })).db,
+    ) as unknown as Record<string, Row[]>;
+    const order = snap["orders"]!.find((o) =>
+      ((o["payments"] as Row[] | undefined) ?? []).some(
+        (p) => p["state"] === "PENDING",
+      ),
+    )!;
+    const pay = (order["payments"] as Row[]).find(
+      (p) => p["state"] === "PENDING",
+    )!;
+    const at = "2026-09-13T04:00:00.000Z";
+    const fee = 500_000;
+    const received = (pay["amount"] as number) - fee;
+    const next = {
+      ...order,
+      payments: (order["payments"] as Row[]).map((p) =>
+        p === pay ? { ...p, state: "SETTLED", at } : p,
+      ),
+      settled: true,
+    };
+    const settlement = {
+      id: "stl-app-1",
+      paymentId: pay["id"],
+      orderId: order["id"],
+      channel: pay["channel"],
+      gross: pay["amount"],
+      fees: [{ id: "fee-app-1", kind: "OTHER", label: "Admin", amount: fee }],
+      received,
+      at,
+      staff: "Store Test",
+    };
+    const log = {
+      id: "slog-app-1",
+      settlementId: "stl-app-1",
+      at,
+      staff: "Store Test",
+      action: "RECORDED",
+      after: { received, deducted: fee },
+    };
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    try {
+      await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            {
+              orders: [order],
+              settlements: [],
+              settlementLog: [],
+            } as unknown as StoreShape,
+            {
+              orders: [next],
+              settlements: [settlement],
+              settlementLog: [log],
+            } as unknown as StoreShape,
+          ),
+        ),
+      });
+    } finally {
+      await app.$disconnect();
+    }
+    expect(
+      await db.payment.findUniqueOrThrow({
+        where: { id: pay["id"] as string },
+      }),
+    ).toMatchObject({ status: "LUNAS" });
+    expect(await db.settlementLog.count()).toBe(1);
   }, 180_000);
 });

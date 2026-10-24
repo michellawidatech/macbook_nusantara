@@ -69,6 +69,7 @@ import {
   type PdfPageSize,
   type PdfStyle,
 } from "./pdfWrite.js";
+import { warehouseLabelOf } from "./warehouses.js";
 
 /** What the export dialog offers to print. */
 export type StockExportColumn =
@@ -258,8 +259,7 @@ export function stockReport(
       return {
         locationId,
         warehouse: opts.byWarehouse
-          ? (src.warehouses.find((w) => w.id === locationId)?.name ??
-            locationId)
+          ? (warehouseLabelOf(src.warehouses, locationId) ?? locationId)
           : "",
         qty: lines.reduce((n, l) => n + l.qty, 0),
         lines,

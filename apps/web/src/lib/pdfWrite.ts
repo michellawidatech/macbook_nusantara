@@ -4,7 +4,7 @@
  *
  * ## Why not a library
  *
- * The same answer `lib/xlsxWrite.ts` and `lib/code128.ts` already give, and it
+ * The same answer `lib/xlsxWrite.ts` already gives, and it
  * holds more strongly here. A PDF that needs no image, no colour profile and
  * no embedded font is a few hundred bytes of ASCII plus a cross-reference
  * table; the standard fourteen fonts — Helvetica among them — are in every

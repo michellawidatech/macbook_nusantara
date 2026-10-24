@@ -112,6 +112,12 @@ export class WriteContext {
     string,
     { status: string; locationId: string }
   >();
+  /**
+   * Ledger rows a sale's deletion already took off (`cancelSale`, 2026-10-23),
+   * so the events adapter does not refuse the browser's removal of the same
+   * rows as "not found" later in the commit.
+   */
+  readonly droppedEvents = new Set<string>();
   /** Units whose row this commit wrote, to be checked against their ledger. */
   readonly unitsWritten = new Set<string>();
   /** Serials archived by this commit; their events' removal is not a ledger edit. */
@@ -302,14 +308,26 @@ const LOCKABLE = new Set([
   "Settlement",
   "UnitEvent",
   "UnitNote",
-  "StockIn",
   "StockAdjustment",
   "StockMove",
   "Expense",
   "ManualIncome",
-  "PaymentLog",
-  "SettlementLog",
 ]);
+
+/**
+ * The lock of a collection whose rows are only ever INSERTED — a log line, a
+ * stock-in record (2026-10-21).
+ *
+ * There is nothing to lock: a new row has no row yet, and the adapter refuses
+ * an edit or a removal outright. Taking one anyway is what broke them in
+ * production. `SELECT … FOR UPDATE` needs UPDATE on at least one column, and
+ * `nusantara_app` holds INSERT and SELECT only on these tables, as an
+ * append-only log should — so every Receive on Pending Payment, every payment
+ * correction's log line and every stock-in failed with "permission denied",
+ * while the tests, which commit as the owner, passed. Concurrent commits are
+ * still ordered by the store lock every commit takes first.
+ */
+export async function noRowLock(): Promise<void> {}
 
 /** `SELECT … FOR UPDATE` on the rows behind these keys, in key order. */
 export async function lockRows(

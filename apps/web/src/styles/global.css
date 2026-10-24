@@ -151,10 +151,10 @@ body {
    * Serial labels on sticker stock.
    *
    * Same visibility switch as the invoice, but the geometry is the opposite:
-   * an invoice wants a 12mm margin and a sticker sheet wants none, because the
-   * die-cut positions are absolute and any page margin shifts every label off
-   * its backing. `@page` cannot be scoped to an element, so the sheet claims a
-   * NAMED page instead — that is the one way both roots can print correctly
+   * an invoice wants a 12mm margin and a sticker wants none, because the
+   * sticker is the page and any page margin shifts the label off its backing.
+   * `@page` cannot be scoped to an element, so the sheet claims a NAMED page
+   * instead — that is the one way both roots can print correctly
    * from the same stylesheet without one overwriting the other.
    */
   .label-print-root,
@@ -175,38 +175,22 @@ body {
   }
 
   /*
-   * The unscaled sheet, which exists only to be printed.
-   *
-   * The dialog shows a `transform: scale`d preview so a whole 210mm page fits
-   * on screen (see `ScaledSheet`), and a transform is inherited by the printer
-   * as faithfully as by the screen — a preview at 0.8 would print at 0.8, and
-   * every sticker would miss its backing by a growing margin down the page.
-   * So the preview is `.no-print` and this second, untransformed copy is what
-   * the paper gets. It is `display: none` on screen and only here.
+   * The copy that prints. The dialog's preview outlines and spaces out each
+   * sticker, so it is `.no-print` and this plain copy is what the printer
+   * gets. It is `display: none` on screen and only here.
    */
   .label-print-only {
     display: block !important;
   }
 
-  /* A sticker split across two sheets of paper is a wasted sticker. */
+  /* One sticker per page, never split (2026-10-22: always 50 × 30 mm). */
   .label-cell {
     page-break-inside: avoid;
     break-inside: avoid;
   }
 
-  /*
-   * The DEFAULT sheet size, and only the default.
-   *
-   * Page setup became a per-print decision on 2026-08-28 — A4, F4, Letter, or
-   * a thermal roll whose page is one sticker — and a stylesheet cannot hold a
-   * decision somebody makes in a dialog. `LabelSheet` emits a `<style>` with
-   * the chosen size, which is later in the document than this file and
-   * therefore wins; `@page` has no selector, so document order is the only
-   * lever either of them has. This stays as what prints if that element is
-   * ever missing.
-   */
   @page label-sheet {
-    size: A4 portrait;
+    size: 50mm 30mm;
     margin: 0;
   }
 }
@@ -412,6 +396,17 @@ body {
 }
 .pos-shelf-row[aria-disabled="true"]:hover {
   background: transparent;
+}
+/*
+ * The row's grade, left of the name (owner ask 2026-10-08). One width on
+ * every row, holding a tag or nothing, so the names line up down the list;
+ * wide enough for "New" / "Baru", and a letter sits in its middle.
+ */
+.pos-shelf-grade {
+  flex: none;
+  width: 44px;
+  display: flex;
+  justify-content: center;
 }
 
 /*
@@ -822,6 +817,24 @@ body {
 }
 
 /*
+ * Inventory's units, nested under their line since 2026-10-02 rather than in
+ * a 1440px popup. antd pads the expanded row on every side; at a laptop's
+ * width that padding is exactly what pushed Sell price under the pinned
+ * per-unit buttons, so the nested table is given the row's full width.
+ */
+.inventory-lines .ant-table-expanded-row > .ant-table-cell {
+  padding: 0 !important;
+}
+.inventory-lines .ant-table-expanded-row-fixed {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+/* antd indents a nested table 40px to sit under the chevron. */
+.inventory-lines .ant-table-expanded-row .ant-table {
+  margin: 0 !important;
+}
+
+/*
  * The two marks on an invoice line (owner ask 2026-09-24): *"add a button
  * called 'Add outside invoice' … and mark that row as yellow. If there is a
  * unit that is not arrived, mark it as red."*
@@ -878,4 +891,33 @@ body {
  */
 .ant-table-content {
   overflow-x: auto;
+}
+
+/*
+ * A table header's date-range filter (ProTable `dateRange`): the calendar is
+ * part of the filter, in the flow below the From/Until box, not a popup laid
+ * over the page (owner report 2026-10-23 — a popup anchored in the narrow
+ * filter dropdown spilled over the sider, hid OK and could not be clicked).
+ * `!important` because rc-trigger writes the popup's position inline.
+ */
+.pro-table-date-filter .ant-picker-dropdown {
+  position: static !important;
+  inset: auto !important;
+  transform: none !important;
+  padding: 0;
+  z-index: auto;
+  /* Keep the whole two-month panel inside the screen. */
+  max-width: calc(100vw - 32px);
+  overflow-x: auto;
+  /* Under the From/Until box, above Reset / OK (it is mounted last). */
+  order: 1;
+}
+.pro-table-date-filter > .pro-table-date-filter-actions {
+  order: 2;
+}
+.pro-table-date-filter .ant-picker-dropdown .ant-picker-range-arrow {
+  display: none;
+}
+.pro-table-date-filter .ant-picker-panel-container {
+  box-shadow: none;
 }

@@ -49,8 +49,27 @@ import { z } from "zod";
 import { Prisma, enqueueOutbox, type PrismaClient } from "@nusantara/db";
 import { currentRequestId } from "@nusantara/logging";
 import { isWithinWindow, windowClosesAt } from "@nusantara/whatsapp";
-import { askingPrice, phoneForms } from "@nusantara/agent";
+import {
+  RESET_INTENT,
+  askingPrice,
+  isResetCommand,
+  phoneForms,
+} from "@nusantara/agent";
 import { ApiError, notFound } from "../errors.js";
+import {
+  evaluationsFor,
+  leadJson,
+  listExtras,
+  profileJson,
+  registerInboxV2,
+  reservationsFor,
+} from "./inboxV2.js";
+import {
+  registerInboxSent,
+  replyOutboxIds,
+  sentItemsFor,
+  type InboxSentDeps,
+} from "./inboxSent.js";
 
 /**
  * A `wa_id` as Meta writes it: digits only, country code first, no `+`.
@@ -228,8 +247,18 @@ export function readHandoff(
   };
 }
 
-export function inboxRouter(db: PrismaClient): Router {
+/**
+ * `sent` is the WhatsApp gateway and a logger (2026-10-23): unsend and edit
+ * go through the linked device, and with no gateway configured they are
+ * refused and never offered. Optional so a test building the router alone
+ * still gets an inbox.
+ */
+export function inboxRouter(
+  db: PrismaClient,
+  sent: InboxSentDeps | null = null,
+): Router {
   const router = Router();
+  const baileys = sent?.gateway != null;
 
   /**
    * GET /api/inbox — every thread, most recently active first.
@@ -299,8 +328,28 @@ export function inboxRouter(db: PrismaClient): Router {
       const kindsOf = new Map<string, string[]>();
       for (const o of open)
         kindsOf.set(o.from, [...(kindsOf.get(o.from) ?? []), o.kind]);
+      // Chatbot v2: unread, the three tags and the best name (inboxV2.ts).
+      const extras = await listExtras(
+        db,
+        rows.map((r) => r.phone),
+      );
       const threads = rows
         .map((r) => ({
+          ...(() => {
+            const x = extras.get(r.phone);
+            const escalation =
+              r.handoffAt !== null || (kindsOf.get(r.phone) ?? []).length > 0;
+            return {
+              displayName: x?.displayName ?? null,
+              unread: x?.unread ?? 0,
+              tags: {
+                lead: x?.lead ?? false,
+                reservation: x?.reservation ?? false,
+                escalation,
+              },
+              leadScore: x?.leadScore ?? null,
+            };
+          })(),
           phone: r.phone,
           name: r.name,
           channel: "WHATSAPP" as const,
@@ -422,19 +471,22 @@ export function inboxRouter(db: PrismaClient): Router {
             take: DONE_ACTIONS_SHOWN,
           }),
         ]).then(([o, d]) => [...o, ...d]),
-        // What the customer told the bot about themselves (remember_customer).
-        db.customerProfile.findUnique({
-          where: { from: phone.data },
-          select: {
-            name: true,
-            useCase: true,
-            budget: true,
-            currentDevice: true,
-            preference: true,
-            updatedAt: true,
-          },
-        }),
+        // What the customer told the bot about themselves (remember_customer),
+        // and what a colleague added — the v2 profile (inboxV2.ts).
+        profileJson(db, phone.data),
       ]);
+      const [lead, reservations, evaluations, sentItems] = await Promise.all([
+        leadJson(db, phone.data),
+        reservationsFor(db, phone.data),
+        evaluationsFor(
+          db,
+          messages.filter((m) => m.replyText).map((m) => m.id),
+        ),
+        // What the shop sent, photos included, each with whether it can
+        // still be edited or unsent (inboxSent.ts, 2026-10-23).
+        sentItemsFor(db, phone.data, { baileys }),
+      ]);
+      const outboxOfReply = replyOutboxIds(messages, sentItems);
 
       // Counts rather than rows: the panel says "3 pesanan", and shipping the
       // orders themselves would be a second, larger payload nobody reads.
@@ -540,16 +592,18 @@ export function inboxRouter(db: PrismaClient): Router {
          * What the customer has told the bot about themselves — their own
          * words, unverified. Null until they have said anything.
          */
-        profile: profile
-          ? {
-              name: profile.name,
-              useCase: profile.useCase,
-              budget: profile.budget?.toString() ?? null,
-              currentDevice: profile.currentDevice,
-              preference: profile.preference,
-              updatedAt: profile.updatedAt.toISOString(),
-            }
-          : null,
+        profile,
+        /** The 🔥 tag: whether, the router's last score, and whose. */
+        lead,
+        /** Open holds under this number, by the bot or at the counter. */
+        reservations,
+        /**
+         * Every text and photo sent to this number (the newest 100, oldest
+         * first). A reply bubble names its own by `reply.outboxId`; the rest
+         * — photos, the line before them, a reply a later one overwrote —
+         * are drawn at their own time.
+         */
+        sent: sentItems,
         messages: messages.map((m) => ({
           id: m.id,
           waMessageId: m.waMessageId,
@@ -558,6 +612,8 @@ export function inboxRouter(db: PrismaClient): Router {
           direction: m.direction,
           status: m.status,
           msgType: m.msgType,
+          /** A tester's `/new`: the conversation starts over after this row. */
+          reset: m.intent === RESET_INTENT && isResetCommand(m.text),
           /** Why the bot gave this message to a person, on the row it answered. */
           handoff:
             m.status === "PERLU_STAF" ||
@@ -570,6 +626,10 @@ export function inboxRouter(db: PrismaClient): Router {
                 byAgent: m.answeredByAgent,
                 by: m.answeredBy?.name ?? null,
                 at: m.answeredAt?.toISOString() ?? null,
+                /** The newest staff verdict on this reply (Evaluation). */
+                evaluation: evaluations.get(m.id) ?? null,
+                /** The sent item this reply IS, or null (no ⋯ menu). */
+                outboxId: outboxOfReply.get(m.id) ?? null,
               }
             : null,
         })),
@@ -652,6 +712,19 @@ export function inboxRouter(db: PrismaClient): Router {
             status: "DIJAWAB_STAF",
             answeredById: staff.id,
             answeredAt: now,
+          },
+        });
+
+        // Answering in the chat is what settles what the bot left for a
+        // person (2026-10-15: the task dialog and its Mark done are gone —
+        // the waiting message is outlined instead). Same close as /handled.
+        await tx.chatAction.updateMany({
+          where: { from: phone.data, status: "OPEN" },
+          data: {
+            status: "DONE",
+            resolvedAt: now,
+            resolvedById: staff.id,
+            updatedAt: now,
           },
         });
 
@@ -960,6 +1033,9 @@ export function inboxRouter(db: PrismaClient): Router {
       next(err);
     }
   });
+
+  registerInboxV2(router, db);
+  if (sent) registerInboxSent(router, db, sent);
 
   return router;
 }

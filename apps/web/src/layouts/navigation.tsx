@@ -96,12 +96,10 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       // History first: chasing a receipt is the daily job, and reading the
       // ledger is the monthly one.
       { path: "/finance/transactions", label: "Transaction History" },
-      // Money the shop is owed, by whoever is holding it (owner ask
-      // 2026-09-08). Its own leaf and not a tab of Income & Expense: chasing a
-      // marketplace payout and chasing a customer are daily jobs with their
-      // own rhythm, and burying them a click inside the monthly screen is how
-      // a Rp23jt payout sits unwithdrawn for a fortnight.
-      { path: "/finance/receivables", label: "Pending Payment" },
+      // Pending Payment was its own leaf from 2026-09-08 and folded into
+      // Transaction History on 2026-10-22 (owner ask): a payout's deductions
+      // are entered under the payment in Edit transaction, and the Shopee
+      // upload is a button on that page. `/finance/receivables` redirects.
       // Piutang and utang, each its own leaf (owner ask 2026-09-22 — they
       // were two tabs of one page for a day). Not tabs of the one above:
       // that screen's first table is money a MARKETPLACE is holding, which is
@@ -110,6 +108,8 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       { path: "/finance/receivable", label: "Receivable" },
       { path: "/finance/payable", label: "Payable" },
       { path: "/finance/income-expense", label: "Income & Expense" },
+      // Laba Rugi, after Olsera's template (owner ask 2026-10-23).
+      { path: "/finance/profit-loss", label: "Profit & Loss" },
     ],
   },
   {
@@ -147,6 +147,27 @@ export const NAV_SECTIONS: readonly NavSection[] = [
     path: "/settings",
   },
 ];
+
+/**
+ * Financial & Report is for the accounts the owner named (2026-10-16: "only
+ * Ersen and Dina") — `Staff.canViewFinance`. Everybody else is not shown the
+ * section, and its addresses answer with a refusal (App.tsx). Neither is the
+ * control: the API sends them none of the money behind it.
+ */
+export const FINANCE_SECTION_KEY = "finance";
+
+export function isFinancePath(pathname: string): boolean {
+  return pathname === "/finance" || pathname.startsWith("/finance/");
+}
+
+/** The sections this person may see. */
+export function navSectionsFor(staff: {
+  readonly canViewFinance: boolean;
+}): readonly NavSection[] {
+  return staff.canViewFinance
+    ? NAV_SECTIONS
+    : NAV_SECTIONS.filter((s) => s.key !== FINANCE_SECTION_KEY);
+}
 
 /**
  * Longest-prefix match, so a child route highlights the section that owns it —

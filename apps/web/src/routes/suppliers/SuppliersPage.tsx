@@ -79,6 +79,8 @@ import dayjs from "dayjs";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { PageContainer } from "../../components/PageContainer";
+import { DeleteAction } from "../../components/DeleteAction";
+import { supplierInUse } from "../../lib/partyLinks.js";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import { poTotals } from "../../lib/inbound.js";
@@ -118,7 +120,6 @@ export function SuppliersPage() {
   const [adding, setAdding] = useState(false);
   const [addForm] = Form.useForm<{
     name: string;
-    code?: string;
     phone?: string;
     address?: string;
   }>();
@@ -287,18 +288,16 @@ export function SuppliersPage() {
     });
 
   /**
-   * Write a supplier down, with what is already owed to them.
+   * Write a supplier down.
    *
-   * The three checks are Settings' own, restated rather than shared because
-   * they read the store and Settings' copy is inside its own form's validator.
-   * A name collision is a warning about a duplicate account; a code collision
-   * is worse than that — two suppliers sharing an origin code would file two
-   * pallets of machines under serials nobody could tell apart.
+   * The name check is Settings' own, restated rather than shared because it
+   * reads the store and Settings' copy is inside its own form's validator.
+   * There is no origin code to ask for any more (owner ask 2026-10-22): the
+   * serial stopped carrying one on 2026-09-21, and nothing reads it.
    */
   const saveSupplier = () =>
     addForm.validateFields().then((v) => {
       const name = v.name.trim();
-      const code = (v.code ?? "").trim().toUpperCase();
       if (
         db.suppliers.some((x) => x.name.toLowerCase() === name.toLowerCase())
       ) {
@@ -307,32 +306,10 @@ export function SuppliersPage() {
         );
         return;
       }
-      if (code !== "" && !/^[A-Z]{2}$/.test(code)) {
-        message.error(
-          t(
-            "supplier.codeShape",
-            "A supplier code is exactly two capital letters.",
-          ),
-        );
-        return;
-      }
-      if (code !== "" && db.suppliers.some((x) => x.code === code)) {
-        message.error(
-          t(
-            "supplier.codeTaken",
-            "{{code}} already belongs to another supplier.",
-            {
-              code,
-            },
-          ),
-        );
-        return;
-      }
       mutate((d) => {
         d.suppliers.push({
           id: nextId("sup"),
           name,
-          ...(code ? { code } : {}),
           ...(v.phone ? { phone: v.phone } : {}),
           ...(v.address ? { address: v.address } : {}),
         });
@@ -987,9 +964,7 @@ export function SuppliersPage() {
                       type="secondary"
                       style={{ fontSize: TYPE.sm }}
                     >
-                      {[r.supplier.code, r.supplier.phone]
-                        .filter(Boolean)
-                        .join(" · ") || fmtNone()}
+                      {r.supplier.phone || fmtNone()}
                     </Typography.Text>
                   </Flex>
                 ),
@@ -1074,22 +1049,45 @@ export function SuppliersPage() {
                 key: "actions",
                 width: COLUMN.actions,
                 render: (_, r) => (
-                  <Tooltip title={t("supplier.addDeposit", "Record a deposit")}>
-                    <Button
+                  <Flex gap={4} justify="end">
+                    <Tooltip
+                      title={t("supplier.addDeposit", "Record a deposit")}
+                    >
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<PlusOutlined />}
+                        aria-label={t(
+                          "supplier.addDepositAria",
+                          "Record a deposit for {{name}}",
+                          { name: r.supplier.name },
+                        )}
+                        onClick={() => {
+                          setDepositTo(r.supplier);
+                          openDeposit();
+                        }}
+                      />
+                    </Tooltip>
+                    <DeleteAction
                       size="small"
-                      type="text"
-                      icon={<PlusOutlined />}
-                      aria-label={t(
-                        "supplier.addDepositAria",
-                        "Record a deposit for {{name}}",
-                        { name: r.supplier.name },
-                      )}
-                      onClick={() => {
-                        setDepositTo(r.supplier);
-                        openDeposit();
+                      entityLabel={r.supplier.name}
+                      blockedReason={
+                        supplierInUse(db, r.supplier.id)
+                          ? t(
+                              "supplier.deleteBlocked",
+                              "This supplier has transactions and cannot be deleted.",
+                            )
+                          : undefined
+                      }
+                      onConfirm={async () => {
+                        mutate((d) => {
+                          d.suppliers = d.suppliers.filter(
+                            (x) => x.id !== r.supplier.id,
+                          );
+                        });
                       }}
                     />
-                  </Tooltip>
+                  </Flex>
                 ),
               },
             ]}
@@ -1209,16 +1207,6 @@ export function SuppliersPage() {
             <Input
               placeholder={t("supplier.namePlaceholder", "CV Apel Segar")}
             />
-          </Form.Item>
-          <Form.Item
-            name="code"
-            label={t("supplier.codeLabel", "Origin code")}
-            tooltip={t(
-              "supplier.codeHint",
-              "Two capitals. It goes on the front of every store barcode printed for a unit bought from them, so a serial says which pallet it came off.",
-            )}
-          >
-            <Input maxLength={2} placeholder="AS" />
           </Form.Item>
           <Form.Item name="phone" label={t("supplier.phone", "Phone")}>
             <Input placeholder="+62…" />

@@ -1,0 +1,14 @@
+#!/bin/bash
+# Stop what tools/wa-local/up started. The WhatsApp link itself survives in
+# .state/auth, so the next `up` needs no new QR.
+here=$(cd "$(dirname "$0")" && pwd)
+for name in bridge web webhook api; do
+  pid_file=$here/.state/$name.pid
+  [ -f "$pid_file" ] || continue
+  pid=$(cat "$pid_file")
+  # The pid is pnpm's; the server is its child.
+  pkill -TERM -P "$pid" 2>/dev/null
+  kill -TERM "$pid" 2>/dev/null
+  rm -f "$pid_file"
+  echo "stopped $name"
+done

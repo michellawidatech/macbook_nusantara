@@ -281,6 +281,12 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
 
   const warehouse = z.strictObject({
     id,
+    /**
+     * `Location.code` — the shop's own number for the warehouse, `01` to `04`
+     * from B2Soft (owner ask 2026-10-08). Optional so a changeset written
+     * before it still commits.
+     */
+    code: text.optional(),
     name: text,
     active: z.boolean(),
     kind: z.enum(LOCATION_KINDS).optional(),
@@ -385,6 +391,14 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     axes: z.array(z.strictObject({ name: text, values: z.array(text) })),
     identifier: text.optional(),
     source: z.enum(CATALOG_SOURCES).optional(),
+    /** The product's facts (2026-10-21) — see `CatalogModel.family`. */
+    family: text.optional(),
+    chip: text.optional(),
+    extra: text.optional(),
+    /** AppleDB identifiers linked to this product. Written once, never removed. */
+    identifiers: z.array(text).optional(),
+    /** Products a person said are NOT this one. Written once, never removed. */
+    notDuplicateOf: z.array(id).optional(),
   });
 
   const sku = z.strictObject({
@@ -395,6 +409,8 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     variantLabel: text,
     axisValues: z.record(z.string(), z.string()).optional(),
     price: money,
+    /** Merged into another variant (2026-10-21): kept for history, offered nowhere. */
+    mergedIntoId: id.optional(),
   });
 
   const unit = z.strictObject({
@@ -751,6 +767,12 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     method: z.string().min(1),
     /** The sale it is about, where the category names one (2026-09-23). */
     orderId: id.optional(),
+    /**
+     * When it was typed — `ManualIncome.createdAt`; the till's clock when it
+     * sends one, the server's otherwise. Orders a day's typed rows on Income &
+     * Expense, which carry a date and no time (2026-10-24), and nothing else.
+     */
+    createdAt: instant.optional(),
   });
 
   const expense = z.strictObject({
@@ -764,6 +786,8 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     method: z.string().min(1),
     /** The sale it is about, where the category names one (2026-09-23). */
     orderId: id.optional(),
+    /** When it was typed — `Expense.createdAt`; see `income`. */
+    createdAt: instant.optional(),
   });
 
   const chat = z.strictObject({

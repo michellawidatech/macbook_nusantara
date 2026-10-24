@@ -30,6 +30,9 @@ import { fmtRp } from "../src/lib/format.js";
 import { latestEvents } from "../src/lib/serialTracker.js";
 import type { MockDb, Unit } from "../src/mock/seed.js";
 
+/** The demo shop's floor, as every screen prints a warehouse since 2026-10-08. */
+const SHOP_FLOOR = "01 · Toko Kelapa Gading";
+
 vi.setConfig({ testTimeout: 60_000 });
 
 /** The store, read through the one door it has. */
@@ -178,7 +181,7 @@ describe("a unit the shop has just accepted", () => {
     // The description is on the card AND on the QC row of the timeline, and
     // the warehouse is on the card and on the timeline.
     expect(visible("Mulus, Fullset dus").length).toBeGreaterThan(0);
-    expect(visible("Toko Kelapa Gading").length).toBeGreaterThan(0);
+    expect(visible(SHOP_FLOOR).length).toBeGreaterThan(0);
   });
 });
 
@@ -191,7 +194,7 @@ describe("the unit card", () => {
     await settle();
 
     expect(visible(new RegExp(`${SERIAL} — ${sku.name}`)).length).toBe(1);
-    expect(visible("Toko Kelapa Gading").length).toBeGreaterThan(0);
+    expect(visible(SHOP_FLOOR).length).toBeGreaterThan(0);
     // The rack, which the API-backed page could only ever render as "—".
     expect(visible("Rack 2")).toHaveLength(1);
     // The invoice is on the card and again on the arrival row.
@@ -307,8 +310,7 @@ describe("the timeline's context", () => {
     const lifecycle = screen.getByText("Lifecycle").closest(".ant-card");
     expect(lifecycle).not.toBeNull();
     expect(
-      within(lifecycle as HTMLElement).getAllByText("Toko Kelapa Gading")
-        .length,
+      within(lifecycle as HTMLElement).getAllByText(SHOP_FLOOR).length,
     ).toBeGreaterThan(0);
   });
 });

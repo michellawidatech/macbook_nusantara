@@ -20,15 +20,21 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import {
+  App,
   Button,
   Card,
   Descriptions,
+  Dropdown,
   Flex,
   Result,
   Timeline,
   Typography,
 } from "antd";
-import { PrinterOutlined } from "@ant-design/icons";
+import {
+  DeleteOutlined,
+  MoreOutlined,
+  PrinterOutlined,
+} from "@ant-design/icons";
 import { ProTable } from "./ProTable";
 import { LongText } from "./LongText";
 import { EnumTag } from "./EnumTag";
@@ -40,9 +46,11 @@ import { customerLabel } from "../lib/customers.js";
 import { labelFor } from "../lib/labels.js";
 import { priceOf } from "../lib/unitPrice.js";
 import type { MockDb, UnitEvent } from "../mock/seed.js";
-import { qcPhotosOf } from "../mock/store.js";
-import { TYPE } from "../theme/tokens";
+import { mutate, qcPhotosOf, removeEvent } from "../mock/store.js";
+import { historyRowBlock } from "../lib/saleDeletion.js";
+import { COLUMN, TYPE } from "../theme/tokens";
 import { labelOf, UNIT_EVENT, UNIT_STATUS } from "../i18n/enumLabels.js";
+import { warehouseLabelOf } from "../lib/warehouses.js";
 
 /**
  * What an event was part of, resolved from the document code it carries.
@@ -214,6 +222,60 @@ export function SerialHistory({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [printing, setPrinting] = useState(false);
+  const { modal, message } = App.useApp();
+
+  /** Why a row's ⋯ → Delete is off, in words; undefined when it is on. */
+  const deleteBlockText = (e: UnitEvent) => {
+    switch (historyRowBlock(db, e)) {
+      case "ONLY_ROW":
+        return t(
+          "snTracking.deleteOnlyRow",
+          "A unit always keeps at least one history row.",
+        );
+      case "LIVE_SALE":
+        return t(
+          "snTracking.deleteLiveSale",
+          "This unit is still on {{code}}. Delete the transaction in Transaction History instead.",
+          { code: e.refCode ?? "" },
+        );
+      case "DOCUMENT_ROW":
+        return t(
+          "snTracking.deleteDocumentRow",
+          "The unit's current status rests on this row ({{code}}). Undo it from its own screen — the return, the reservation or the service bench.",
+          { code: e.refCode ?? "" },
+        );
+      default:
+        return undefined;
+    }
+  };
+
+  /*
+   * One row out of the unit's history (owner ask 2026-10-22). Behind a ⋯
+   * menu and a confirm, because a deleted row is not coming back; the newest
+   * row going puts the unit back to what the row before it says.
+   */
+  const deleteRow = (e: UnitEvent) =>
+    modal.confirm({
+      title: t("snTracking.deleteRowTitle", "Delete this history row?"),
+      content: t(
+        "snTracking.deleteRowBody",
+        "“{{event}}” on {{date}} is removed from this unit's history for good.",
+        { event: labelOf(UNIT_EVENT, e.type, t), date: fmtDateTime(e.at) },
+      ),
+      okText: t("snTracking.deleteRowOk", "Delete row"),
+      okButtonProps: { danger: true },
+      onOk: () => {
+        let done = false;
+        mutate((d) => {
+          const now = d.events.find((x) => x.id === e.id);
+          if (now === undefined || historyRowBlock(d, now) !== undefined)
+            return;
+          done = removeEvent(d, e.id);
+        });
+        if (done)
+          message.success(t("snTracking.rowDeleted", "History row deleted."));
+      },
+    });
 
   const unit = db.units.find((u) => u.serial === serial);
   const sku = db.skus.find((s) => s.id === unit?.skuId);
@@ -231,7 +293,7 @@ export function SerialHistory({
   );
 
   const locationNameOf = (id: string | undefined) =>
-    db.warehouses.find((w) => w.id === id)?.name;
+    warehouseLabelOf(db.warehouses, id);
 
   /*
    * A serial that was asked for and does not exist is a recoverable state, not
@@ -369,15 +431,21 @@ export function SerialHistory({
               // Every QC photograph, larger than a list's thumbnails: this is
               // the one screen that shows a single unit in full (owner ask
               // 2026-09-29). Purged at the sale, so a sold unit says None.
+              // A unit the shop still holds can be photographed here too
+              // (owner ask 2026-10-21) — not a sold one, whose photos the
+              // sale purged on purpose.
               key: "ph",
               label: t("snTracking.photos", "Photos"),
               span: "filled",
-              children:
-                qcPhotosOf(db, unit.serial).length === 0 ? (
-                  fmtNone()
-                ) : (
-                  <UnitPhotos serial={unit.serial} size={72} max={8} />
-                ),
+              children: ["QC", "TERSEDIA", "DIRESERVASI", "SERVIS"].includes(
+                unit.status,
+              ) ? (
+                <UnitPhotos serial={unit.serial} size={72} max={8} editable />
+              ) : qcPhotosOf(db, unit.serial).length === 0 ? (
+                fmtNone()
+              ) : (
+                <UnitPhotos serial={unit.serial} size={72} max={8} />
+              ),
             },
           ]}
         />
@@ -426,9 +494,7 @@ export function SerialHistory({
           })}
         />
       </Card>
-      <Card
-        title={t("snTracking.rawLedgerAppendOnly", "Raw ledger (append-only)")}
-      >
+      <Card title={t("snTracking.rawLedger", "Raw ledger")}>
         <ProTable
           {...(inDialog ? {} : { persistKey: "serials.history" })}
           rowKey="id"
@@ -489,6 +555,49 @@ export function SerialHistory({
               title: t("snTracking.by", "By"),
               dataIndex: "staff",
               facet: true,
+            },
+            {
+              title: "",
+              key: "more",
+              width: COLUMN.action,
+              render: (_: unknown, e: UnitEvent) => {
+                const blocked = deleteBlockText(e);
+                return (
+                  <Dropdown
+                    trigger={["click"]}
+                    menu={{
+                      items: [
+                        {
+                          key: "delete",
+                          danger: true,
+                          icon: <DeleteOutlined />,
+                          disabled: blocked !== undefined,
+                          label:
+                            blocked ?? t("snTracking.deleteRow", "Delete row"),
+                        },
+                      ],
+                      onClick: ({ key, domEvent }) => {
+                        domEvent.stopPropagation();
+                        if (key === "delete") deleteRow(e);
+                      },
+                    }}
+                  >
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<MoreOutlined />}
+                      aria-label={t(
+                        "snTracking.rowMenu",
+                        "More for row {{seq}}",
+                        {
+                          seq: e.seq,
+                        },
+                      )}
+                      onClick={(ev) => ev.stopPropagation()}
+                    />
+                  </Dropdown>
+                );
+              },
             },
           ]}
         />

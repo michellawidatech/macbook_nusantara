@@ -177,7 +177,8 @@ export async function sendPass(deps: SendDeps): Promise<SendPassResult> {
         ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
       });
 
-      await markOutboxSent(db, row.id, now());
+      // The id is what an edit or an unsend from the inbox names later.
+      await markOutboxSent(db, row.id, now(), result.waMessageId);
       sent += 1;
       logger.info(
         {
@@ -314,7 +315,7 @@ async function sendPhoto(
     ...(parsed.data.caption ? { caption: parsed.data.caption } : {}),
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
   });
-  await markOutboxSent(db, row.id, now());
+  await markOutboxSent(db, row.id, now(), result.waMessageId);
   logger.info(
     {
       evt: "worker.send.photo_sent",

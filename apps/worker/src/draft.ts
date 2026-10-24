@@ -46,6 +46,8 @@ import {
   MAX_CORRECTIONS,
   buildAgentPrompt,
   computeWaitMs,
+  isResetCommand,
+  resetPointFor,
   converse,
   hasCredential,
   anthropicClient,
@@ -59,12 +61,35 @@ import {
   loadCapabilities,
   PARALLEL_CAPABILITIES,
   type AgentCapabilities,
+  type AgentApiOptions,
+  type AgentStep,
+  type CallUsage,
+  type PipelineResult,
+  type RulesResult,
+  agentApiDispatch,
+  lastShownUnits,
+  profileKnown,
+  runRules,
+  costMicros,
+  dispatchTool,
+  isLead,
+  loadAgentPersonas,
+  chatbotSettings,
+  leadScoreOf,
+  understand,
+  openProposalLine,
+  personaFor,
+  profileLine,
+  recallEarlier,
+  recentTurns,
+  runPipeline,
   storeOpenAt,
   type AgentClient,
   type AnthropicEnv,
   type ConverseResult,
   type ConverseTurn,
   type ToolContext,
+  type VoyageOptions,
   type WaitProfile,
 } from "@nusantara/agent";
 import {
@@ -77,6 +102,8 @@ import type { Logger } from "@nusantara/logging";
 import { isWithinWindow } from "@nusantara/whatsapp";
 import { DEFAULT_PERSONA } from "@nusantara/agent";
 import { refreshOffers, upsertChatAction } from "./actions.js";
+import { resetPass } from "./reset.js";
+import { claimThread, inPool, leaseHolder, releaseThread } from "./lease.js";
 
 export interface DraftDeps {
   readonly db: PrismaClient;
@@ -96,6 +123,20 @@ export interface DraftDeps {
   readonly debounceMs?: number;
   readonly waits?: WaitProfile;
   readonly maxDraftsPerTick: number;
+  /**
+   * Threads answered at once (chatbot v2). Absent is 1 — sequential — so a
+   * caller that never asked for parallelism keeps the old behaviour; the
+   * worker's config passes `WORKER_DRAFT_CONCURRENCY` (default 8).
+   */
+  readonly concurrency?: number;
+  /**
+   * The POS's agent API. Present, the POS tools go over HTTP with a token for
+   * this turn and this customer (packages/agent agentApi.ts); absent, they
+   * run here against `db`.
+   */
+  readonly agentApi?: AgentApiOptions;
+  /** This process's name on a thread lease. Injectable so a test can be two workers. */
+  readonly leaseHolder?: string;
   /** Messages one reply may cover. A 60-message backlog becomes two replies. */
   readonly maxBatch?: number;
   /** The reserved agent Staff row, so a booking's UnitEvent is attributable. */
@@ -120,6 +161,15 @@ export interface DraftDeps {
   readonly skewToleranceMs?: number;
   /** Injectable so a test can drive the debounce without waiting. */
   readonly now?: () => Date;
+  /**
+   * Recall of turns older than the history window (2026-10-22). `voyage`
+   * null is keyword recall; absent altogether is the same. `timeoutMs` bounds
+   * the one embedding call a turn may make.
+   */
+  readonly recall?: {
+    readonly voyage: VoyageOptions | null;
+    readonly timeoutMs?: number;
+  };
 }
 
 export interface DraftPassResult {
@@ -292,16 +342,20 @@ export function combineBatch(
   return lines.join("\n");
 }
 
-/** Answered history, oldest first, as alternating turns. */
-function toTurns(
-  history: ReadonlyArray<{ text: string | null; replyText: string | null }>,
+/**
+ * Answered history, oldest first, as alternating turns. Each history turn is
+ * the WHOLE burst it answered (packages/agent turns.ts) — every line, not
+ * only the row the reply landed on.
+ */
+export function toTurns(
+  history: ReadonlyArray<{ customer: string; reply: string }>,
   current: string,
 ): ConverseTurn[] {
   const turns: ConverseTurn[] = [];
   for (const m of history) {
-    const text = m.text?.trim();
+    const text = m.customer.trim();
     if (text) turns.push({ role: "user", text });
-    const reply = m.replyText?.trim();
+    const reply = m.reply.trim();
     if (reply) turns.push({ role: "assistant", text: reply });
   }
   turns.push({ role: "user", text: current });
@@ -318,20 +372,25 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   const maxBatch = deps.maxBatch ?? DEFAULT_MAX_BATCH;
   const skewMs = deps.skewToleranceMs ?? DEFAULT_SKEW_MS;
 
+  // A tester's `/new` (reset.ts), before anything reads the thread: it closes
+  // the tasks `refreshOffers` would otherwise refresh and lifts the hold the
+  // candidate query below would otherwise stop at.
+  const { testers } = await resetPass({ db, logger, now });
+
   // Code only, no model, so it runs with or without a credential: a customer
   // who changes their offer while a colleague is still looking moves the
   // figure on the task that colleague has open.
   await refreshOffers(db, logger, now());
 
-  // Dormant, not broken. 06 §12: with no credential "the pipeline degrades to
-  // persist-only" — messages keep landing and keep showing in the inbox, and a
-  // human answers them. Rows are deliberately left at BARU rather than being
-  // escalated, so that configuring a key later answers the backlog instead of
-  // finding it already marked as somebody else's problem.
+  // No credential is no longer a dormant bot (2026-10-21): the rules answer
+  // what they can and hand the rest to a person — see `chatbotSettings`.
   const client =
     deps.client ??
     (hasCredential(anthropic) ? anthropicClient(anthropic) : null);
-  if (!client) return { drafted: 0, escalated: 0, dormant: true };
+  // One agent (owner, 2026-10-21): the single AI agent with a credential.
+  // Without one the rules answer everything a rule can and hand the rest to a
+  // person, so a missing key degrades the bot rather than silencing it.
+  const earlySettings = chatbotSettings(client !== null);
 
   const at = now();
   const candidates = await quietCandidates(
@@ -368,33 +427,100 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   // (docs/chatbot-rag.md) — read once, indexed once, and rendered once into
   // the cached half of the prompt, which is then byte-identical for every
   // thread in the pass.
-  const [knowledge, storeFacts, persona, corrections, capabilities] =
-    await Promise.all([
-      loadKnowledgeBase(db),
-      loadStoreFacts(db).then(renderStoreFacts),
-      db.persona.findFirst({
-        where: { active: true },
-        select: { prompt: true },
-      }),
-      db.agentCorrection.findMany({
-        select: { original: true, corrected: true, note: true },
-        orderBy: { createdAt: "desc" },
-        take: MAX_CORRECTIONS,
-      }),
-      // The four switches on /chat (owner ask 2026-09-29), read each pass so a
-      // switch pressed on the Chat page applies to the next message. The
-      // environment's `AGENT_CAPABILITIES` answers for a switch never pressed.
-      loadCapabilities(db, deps.capabilities ?? PARALLEL_CAPABILITIES),
-    ]);
+  const [
+    knowledge,
+    storeFacts,
+    persona,
+    corrections,
+    capabilities,
+    settings,
+    agentPersonas,
+  ] = await Promise.all([
+    loadKnowledgeBase(db),
+    loadStoreFacts(db).then(renderStoreFacts),
+    db.persona.findFirst({
+      where: { active: true },
+      select: { prompt: true },
+    }),
+    db.agentCorrection.findMany({
+      select: { original: true, corrected: true, note: true },
+      orderBy: { createdAt: "desc" },
+      take: MAX_CORRECTIONS,
+    }),
+    // The four switches on /chat (owner ask 2026-09-29), read each pass so a
+    // switch pressed on the Chat page applies to the next message. The
+    // environment's `AGENT_CAPABILITIES` answers for a switch never pressed.
+    loadCapabilities(db, deps.capabilities ?? PARALLEL_CAPABILITIES),
+    // Chatbot v2: which pipeline answers (Settings, v1 until the owner
+    // switches), the lead threshold, and the three agents' personas.
+    Promise.resolve(earlySettings),
+    loadAgentPersonas(db),
+  ]);
   const knowledgeText = knowledgeBlock(knowledge);
+  const v2 = settings.pipeline === "v2";
+  // The v1 voice is the Advisor's until somebody edits the Advisor.
+  const v1Persona = persona?.prompt ?? DEFAULT_PERSONA;
+  const advisorPersona = personaFor("ADVISOR", agentPersonas, v1Persona);
 
   let drafted = 0;
   let escalated = 0;
 
-  // Sequential on purpose. Answering five customers at once would open five
-  // model calls and five transactions against a database this shop runs on one
-  // laptop, to save a few seconds on a queue that is almost always empty.
-  for (const candidate of due) {
+  // In parallel since chatbot v2 (2026-10-14: "around 50 customers a day,
+  // 10–25 at once"). It used to be sequential, five threads a tick, which left
+  // the twenty-fifth customer waiting minutes behind the other twenty-four.
+  // Each thread is answered under its LEASE (lease.ts), so a thread is never
+  // answered twice whether by two lanes here or by two worker processes; and
+  // everything a turn reads is read by `from`, so two lanes never see each
+  // other's customer. `concurrency` is the number of lanes, each of which
+  // holds at most one database connection at a time.
+  const holder = deps.leaseHolder ?? leaseHolder();
+  const concurrency = Math.max(1, deps.concurrency ?? 1);
+
+  const answer = async (candidate: Candidate): Promise<void> => {
+    const from = candidate.from;
+    let claimed = false;
+    try {
+      claimed = await claimThread(db, from, holder, now());
+    } catch (err) {
+      logger.error(
+        {
+          evt: "worker.lease.failed",
+          ctx: { from },
+          ...(err instanceof Error
+            ? { err: { name: err.name, message: err.message } }
+            : {}),
+        },
+        "could not claim the thread — leaving it for the next pass",
+      );
+      return;
+    }
+    if (!claimed) {
+      // Another lane or another worker is answering this customer right now.
+      logger.info(
+        { evt: "worker.lease.held", ctx: { from } },
+        "the thread is being answered elsewhere — skipping it",
+      );
+      return;
+    }
+    try {
+      await answerThread(candidate);
+    } finally {
+      await releaseThread(db, from, holder).catch((err: unknown) =>
+        logger.warn(
+          {
+            evt: "worker.lease.release_failed",
+            ctx: { from },
+            ...(err instanceof Error
+              ? { err: { name: err.name, message: err.message } }
+              : {}),
+          },
+          "could not release the thread — it frees itself when the lease expires",
+        ),
+      );
+    }
+  };
+
+  const answerThread = async (candidate: Candidate): Promise<void> => {
     const from = candidate.from;
     // Outside the try, so the race handler below can see what was booked.
     let outcome: ConverseResult | null = null;
@@ -409,7 +535,12 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         take: maxBatch,
         select: { id: true, ts: true, text: true, msgType: true },
       });
-      if (batch.length === 0) continue;
+      if (batch.length === 0) return;
+      // A `/new` that landed after this pass's reset ran. It is a command,
+      // not a question: leave the thread for the next pass, which resets it
+      // first, rather than hand the model "/new" to answer.
+      if (testers.includes(from) && batch.some((m) => isResetCommand(m.text)))
+        return;
       const batchIds = batch.map((m) => m.id);
       const anchor = batch[batch.length - 1]!;
       anchorId = anchor.id;
@@ -423,7 +554,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           { evt: "worker.draft.window_closed", ctx: { from } },
           "the 24-hour window has closed — handing the thread to a person",
         );
-        continue;
+        return;
       }
 
       const current = combineBatch(batch);
@@ -432,25 +563,81 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // for the model to read, and guessing is what costs a sale.
         await escalate(db, batchIds, anchor.id, "nothing_to_read");
         escalated += 1;
-        continue;
+        return;
       }
 
-      const history = await db.waMessage.findMany({
-        where: { from, direction: "IN", replyText: { not: null } },
-        orderBy: [{ answeredAt: "desc" }, { ts: "desc" }],
-        take: HISTORY_TURNS,
-        select: { text: true, replyText: true },
-      });
+      // Since a `/new`, when this thread has had one: the turns before it
+      // are still in the inbox and are not this conversation's.
+      const resetAt = await resetPointFor(db, from);
+      // Oldest first; each turn is every line of its burst with the reply.
+      const history = await recentTurns(db, from, resetAt, HISTORY_TURNS);
+      // Newest first, for "what did the bot just say".
+      const newestFirst = [...history].reverse();
 
-      const memory = await db.waThreadMemory.findUnique({
-        where: { from },
-        select: { summary: true, directive: true },
-      });
+      const [memory, profile, openProposal] = await Promise.all([
+        db.waThreadMemory.findUnique({
+          where: { from },
+          select: { summary: true, directive: true },
+        }),
+        // What the customer has told the shop, and a booking proposal still
+        // open — so the single agent stops asking what the profile says
+        // (2026-10-22: only v2 read either before).
+        profileLine(db, from),
+        openProposalLine(db, from, at),
+      ]);
+
+      // Turns older than the window, when the window is full: the few that
+      // look related to what the customer just wrote (recall.ts). Bounded —
+      // one embedding call with a deadline, keyword ranking on any failure —
+      // and skipped outright while the window still holds the whole thread.
+      const recall =
+        history.length >= HISTORY_TURNS
+          ? await recallEarlier(db, {
+              from,
+              before: history[0]!.answeredAt,
+              after: resetAt,
+              query: current,
+              voyage: deps.recall?.voyage ?? null,
+              ...(deps.recall?.timeoutMs !== undefined
+                ? { timeoutMs: deps.recall.timeoutMs }
+                : {}),
+              onError: (err) =>
+                logger.warn(
+                  {
+                    evt: "worker.recall.vector_failed",
+                    ctx: { from },
+                    ...(err instanceof Error
+                      ? {
+                          err: {
+                            name: err.name,
+                            message: err.message,
+                            status: (err as { status?: number }).status,
+                          },
+                        }
+                      : {}),
+                  },
+                  "could not embed the message for recall — ranked by keywords instead",
+                ),
+            }).catch((err: unknown) => {
+              logger.warn(
+                {
+                  evt: "worker.recall.failed",
+                  ctx: { from },
+                  ...(err instanceof Error
+                    ? { err: { name: err.name, message: err.message } }
+                    : {}),
+                },
+                "recall failed — answering without it",
+              );
+              return [];
+            })
+          : [];
 
       const prompt = buildAgentPrompt({
-        // A fresh database has no persona row, and production never runs the
-        // seed, so the compiled-in voice is the fallback rather than an error.
-        persona: persona?.prompt ?? DEFAULT_PERSONA,
+        // The one agent's persona is the one Settings edits (the Advisor's
+        // seat); unedited it is the active persona, and a fresh database with
+        // neither gets the compiled-in voice rather than an error.
+        persona: advisorPersona,
         storeFacts,
         knowledge: knowledgeText,
         capabilities,
@@ -465,11 +652,11 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         openNow: storeOpenAt(at),
         summary: memory?.summary ?? null,
         directive: memory?.directive ?? null,
-        recentReplies: history
-          .map((h) => h.replyText)
-          .filter((r): r is string => Boolean(r))
-          .slice(0, 3),
+        recentReplies: newestFirst.map((h) => h.reply).slice(0, 3),
         customerText: current,
+        // v2 hands the profile and the proposal to its own agents.
+        ...(v2 ? {} : { profile, openProposal }),
+        recall: recall.map((r) => ({ text: r.text, at: r.at })),
       });
 
       // The two reads of the customer's message that do not ask the model:
@@ -516,21 +703,114 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       };
 
       let failure: unknown;
-      const result = await converse({
-        client,
-        db,
-        ctx,
-        prompt,
-        turns: toTurns([...history].reverse(), current),
-        knowledge,
-        storeFacts,
-        route,
-        hint,
-        capabilities,
-        onError: (err) => {
-          failure = err;
-        },
-      });
+      const dispatch = deps.agentApi
+        ? agentApiDispatch(
+            deps.agentApi,
+            (name, input, c) => dispatchTool(db, name, input, c),
+            // The anchor row is unique to this batch: one turn, one id.
+            { id: anchor.id, now: at },
+          )
+        : undefined;
+      const turns = toTurns(history, current);
+      // CHATBOT_MODEL, when the owner moved the bot without a release.
+      const agentModel = anthropic.model;
+      const v1Calls: CallUsage[] = [];
+      const turnStarted = Date.now();
+      let result: ConverseResult | PipelineResult | RulesResult | null;
+      if (settings.pipeline === "rules") {
+        // Rules and templates first; the single agent only for what no rule
+        // answers, and only when there is a credential (rules/run.ts).
+        const [known, lastShown] = await Promise.all([
+          profileKnown(db, from),
+          lastShownUnits(db, from, resetAt),
+        ]);
+        result = await runRules({
+          db,
+          ctx,
+          text: current,
+          knowledge,
+          capabilities,
+          ...(dispatch ? { dispatch } : {}),
+          route,
+          known,
+          // Newest first out of the database: the bot's previous reply.
+          lastReply: newestFirst[0]?.reply ?? null,
+          proposalOpen: openProposal !== null,
+          lastShown,
+          leadThreshold: settings.leadThreshold,
+          ...(client
+            ? {
+                ai: async () => {
+                  const calls: CallUsage[] = [];
+                  const r = await converse({
+                    client,
+                    ...(agentModel ? { model: agentModel } : {}),
+                    db,
+                    ctx,
+                    prompt,
+                    turns,
+                    knowledge,
+                    storeFacts,
+                    route: null,
+                    hint,
+                    capabilities,
+                    onError: (err) => {
+                      failure = err;
+                    },
+                    onCall: (u) => calls.push(u),
+                    ...(dispatch ? { dispatch } : {}),
+                  });
+                  return { result: r, calls };
+                },
+              }
+            : {}),
+        });
+      } else if (v2) {
+        // Chatbot v2: Router → Operations → Sales Advisor (pipeline.ts).
+        result = await runPipeline({
+          client: client!,
+          db,
+          ctx,
+          prompt,
+          turns,
+          knowledge,
+          storeFacts,
+          route,
+          ...(hint ? { hint } : {}),
+          capabilities,
+          ...(dispatch ? { dispatch } : {}),
+          personas: {
+            router: personaFor("ROUTER", agentPersonas, v1Persona),
+            operations: personaFor("OPERATIONS", agentPersonas, v1Persona),
+          },
+          summary: memory?.summary ?? null,
+          profile,
+          openProposal,
+          leadThreshold: settings.leadThreshold,
+          onError: (err) => {
+            failure = err;
+          },
+        });
+      } else {
+        result = await converse({
+          client: client!,
+          ...(agentModel ? { model: agentModel } : {}),
+          db,
+          ctx,
+          prompt,
+          turns,
+          knowledge,
+          storeFacts,
+          route,
+          hint,
+          capabilities,
+          onError: (err) => {
+            failure = err;
+          },
+          onCall: (u) => v1Calls.push(u),
+          ...(dispatch ? { dispatch } : {}),
+        });
+      }
 
       outcome = result;
       if (!result) {
@@ -555,8 +835,19 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         );
         await escalate(db, batchIds, anchor.id, "no_reply");
         escalated += 1;
-        continue;
+        return;
       }
+
+      // The bot's lead score. The rules and the three agents score as they
+      // answer; the single agent does not, so its turn is scored the way the
+      // rules score one — from what the customer said, by code, no model
+      // (owner, 2026-10-21: the bot decides the lead, nobody else).
+      const leadScore =
+        "verdict" in result
+          ? result.verdict.leadScore
+          : leadScoreOf(
+              understand(current, at, { proposalOpen: false, lastShown: [] }),
+            );
 
       // One transaction: the answer and the intent to send it commit together,
       // or neither does (08 §5). No HTTP call happens inside it.
@@ -596,7 +887,16 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                     },
                   },
                 }
-              : { entities: { sources: result.sources } }),
+              : {
+                  entities: {
+                    sources: result.sources,
+                    // What this reply showed, for the next message's "yang
+                    // kedua" (rules/run.ts, v2context `lastShownUnits`).
+                    ...("shown" in result && result.shown.length > 0
+                      ? { units: [...result.shown] }
+                      : {}),
+                  },
+                }),
           },
         });
         await enqueueOutbox(tx, {
@@ -632,6 +932,32 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
             payload: { to: from, photoId, inReplyTo: anchor.id },
           });
         }
+        // The turn's trace (Evaluation and Settings read it), and the bot's
+        // half of the 🔥 lead — in the transaction that commits the reply,
+        // so a reply never exists without the record of how it was made.
+        await recordRun(tx, {
+          from,
+          messageId: anchor.id,
+          pipeline: settings.pipeline,
+          result,
+          v1Calls,
+          leadScore,
+          latencyMs: Date.now() - turnStarted,
+          at: answeredAt,
+        });
+        const mem = await tx.waThreadMemory.findUnique({
+          where: { from },
+          select: { leadAt: true, leadStaffAt: true, leadClearedAt: true },
+        });
+        await tx.waThreadMemory.updateMany({
+          where: { from },
+          data: {
+            leadScore,
+            ...(leadScore >= settings.leadThreshold && !isLead(mem)
+              ? { leadAt: answeredAt }
+              : {}),
+          },
+        });
       }, TXN_TIMEOUTS);
 
       drafted += 1;
@@ -703,7 +1029,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
               ),
             );
         }
-        continue;
+        return;
       }
       // One bad thread must not stop the pass. The rows stay BARU and the next
       // tick tries again.
@@ -718,7 +1044,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         "failed to draft a reply for a thread",
       );
     }
-  }
+  };
+
+  await inPool(due, concurrency, answer);
 
   return { drafted, escalated, dormant: false };
 }
@@ -739,6 +1067,79 @@ function intentOf(result: ConverseResult): string {
   if (result.sources.includes("catalog")) return "jawab:katalog";
   if (result.sources.includes("store")) return "jawab:toko";
   return "sapaan";
+}
+
+/**
+ * One `AgentRun` and its steps for a committed turn (chatbot v2). A v1 turn
+ * is one agent, the Advisor's seat, one step per model call.
+ */
+async function recordRun(
+  tx: Prisma.TransactionClient,
+  r: {
+    from: string;
+    messageId: string;
+    pipeline: "rules" | "v1" | "v2";
+    result: ConverseResult | PipelineResult;
+    v1Calls: readonly CallUsage[];
+    /** The turn's lead score, however it was reached. */
+    leadScore: number;
+    latencyMs: number;
+    at: Date;
+  },
+): Promise<void> {
+  const v2 = "verdict" in r.result ? r.result : null;
+  const steps: AgentStep[] = v2
+    ? [...v2.trace]
+    : r.v1Calls.map((u) => ({
+        agent: "ADVISOR" as const,
+        model: u.model,
+        tool: null,
+        ok: true,
+        ms: u.ms,
+        inputTokens: u.inputTokens + u.cachedTokens + u.cacheWriteTokens,
+        cachedTokens: u.cachedTokens,
+        outputTokens: u.outputTokens,
+      }));
+  const sum = (k: "inputTokens" | "cachedTokens" | "outputTokens") =>
+    steps.reduce((n, s) => n + s[k], 0);
+  const cost = v2
+    ? v2.costMicros
+    : r.v1Calls.reduce((n, u) => n + costMicros(u), 0);
+  await tx.agentRun.create({
+    data: {
+      from: r.from,
+      messageId: r.messageId,
+      pipeline: r.pipeline,
+      ...(v2
+        ? {
+            language: v2.verdict.language,
+            tone: v2.verdict.tone,
+            intent: v2.verdict.intent,
+            escalateTopic: v2.verdict.escalate,
+          }
+        : {}),
+      leadScore: r.leadScore,
+      outcome: r.result.handoff ? "HANDOFF" : "REPLIED",
+      inputTokens: sum("inputTokens"),
+      cachedTokens: sum("cachedTokens"),
+      outputTokens: sum("outputTokens"),
+      costMicros: BigInt(cost),
+      latencyMs: v2 ? v2.latencyMs : r.latencyMs,
+      createdAt: r.at,
+      steps: {
+        create: steps.map((s, i) => ({
+          sortOrder: i,
+          agent: s.agent,
+          model: s.model,
+          tool: s.tool,
+          ok: s.ok,
+          ms: s.ms,
+          inputTokens: s.inputTokens,
+          outputTokens: s.outputTokens,
+        })),
+      },
+    },
+  });
 }
 
 /**

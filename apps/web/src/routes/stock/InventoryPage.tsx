@@ -6,7 +6,7 @@
  * "Stock Movement" listed it by serial and owned the adjustment machinery. The
  * owner asked for one screen with one table, and `InventoryTable` is that
  * table: flat since 2026-09-19 — a line per variant, grade and warehouse, its
- * units in a popup. This file is what remains — the page frame, the stock
+ * units nested under it. This file is what remains — the page frame, the stock
  * movement history (every row of it editable since 2026-09-24, through
  * `StockMovementEditModal`), the stock export (`StockExportModal`), and the
  * two modals that actually write.
@@ -42,6 +42,7 @@
  * never heard of. That is why an adjustment stores a `reasonId` and not text.
  */
 import { useEffect, useRef, useState } from "react";
+import { isLiveSku } from "../../lib/skuCode.js";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { SerialLink } from "../../components/SerialLink";
@@ -64,6 +65,7 @@ import {
 import {
   DeleteOutlined,
   DownloadOutlined,
+  UploadOutlined,
   EditOutlined,
   LoginOutlined,
   LogoutOutlined,
@@ -73,6 +75,7 @@ import { ProTable } from "../../components/ProTable";
 import { EditableTable } from "../../components/EditableTable";
 import { InventoryTable } from "./InventoryTable";
 import { StockExportModal } from "./StockExportModal";
+import { PriceImportModal } from "./PriceImportModal";
 import { StockMovementEditModal } from "./StockMovementEditModal";
 import {
   stockHistoryRows,
@@ -129,6 +132,7 @@ import type {
   MockDb,
   UnitStatus,
 } from "../../mock/seed.js";
+import { warehouseLabel } from "../../lib/warehouses.js";
 
 /** Rows the modal opens with — the owner's "typically three or four". */
 const BLANK_ROWS = 1;
@@ -228,6 +232,7 @@ export function InventoryPage() {
   const { compact } = useLayoutMode();
   /** The stock export dialog (owner ask 2026-09-19). */
   const [exporting, setExporting] = useState(false);
+  const [importingPrices, setImportingPrices] = useState(false);
   /** The history row being corrected (owner ask 2026-09-24). */
   const [editing, setEditing] = useState<StockHistoryRow | null>(null);
   // ── The batch, held as plain state rather than in a Form ──────────────────
@@ -266,6 +271,17 @@ export function InventoryPage() {
     db.myWarehouseId,
     asString,
   );
+  /*
+   * Where a unit sent to service goes (owner ask 2026-10-22: *"make sure we
+   * can choose where we send the product"*). Only a PICKED warehouse is kept;
+   * unpicked it is the service bench, as it always was.
+   */
+  const [serviceToPicked, setServiceToPicked] = usePersistentState<
+    string | undefined
+  >(BATCH_DRAFT("serviceTo"), undefined, asString);
+  const serviceTo =
+    db.warehouses.find((w) => w.active && w.id === serviceToPicked)?.id ??
+    serviceLocationOf(db.warehouses);
   const [rows, setRows] = usePersistentState<BatchRow[]>(
     BATCH_DRAFT("rows"),
     blankRows,
@@ -280,7 +296,9 @@ export function InventoryPage() {
     [],
     asListOf(isCountedRow),
   );
-  const countedSkus = db.skus.filter((s) => !skuTracksSerial(db, s.id));
+  const countedSkus = db.skus.filter(
+    (s) => isLiveSku(s) && !skuTracksSerial(db, s.id),
+  );
   /**
    * One batch, once — a ref rather than state, because that is the only kind
    * of latch that closes in time.
@@ -369,6 +387,7 @@ export function InventoryPage() {
     setOutStatus(direction === "OUT" ? "HILANG" : "HILANG");
     setOutTouched(false);
     setLocationId(db.myWarehouseId);
+    setServiceToPicked(undefined);
     setRows(blankRows());
     setCountedRows([]);
     setAdding(true);
@@ -608,8 +627,8 @@ export function InventoryPage() {
           // Read BEFORE the event, which writes the projection — the visit has
           // to record where the machine set out from.
           const cameFrom = existing.locationId;
-          if (goingToService) existing.rackId = undefined;
-          const serviceBench = serviceLocationOf(d.warehouses);
+          if (goingToService && serviceTo !== cameFrom)
+            existing.rackId = undefined;
           appendEvent(d, serial, {
             type: "KOREKSI",
             toStatus: kind === "IN" ? "TERSEDIA" : outStatus,
@@ -617,7 +636,7 @@ export function InventoryPage() {
               kind === "IN"
                 ? locationId
                 : goingToService
-                  ? serviceBench
+                  ? serviceTo
                   : undefined,
             note: [
               `${kind === "IN" ? "Adjusted in" : "Adjusted out"} — ${label}`,
@@ -725,15 +744,21 @@ export function InventoryPage() {
       <Button icon={<DownloadOutlined />} onClick={() => setExporting(true)}>
         {t("stockExport.button", "Export stock")}
       </Button>
+      <Button
+        icon={<UploadOutlined />}
+        onClick={() => setImportingPrices(true)}
+      >
+        {t("priceImport.button", "Import sell prices")}
+      </Button>
       {addAction}
     </Flex>
   );
 
   /**
    * The one table the merge produced: a flat line per variant, grade and
-   * warehouse since 2026-09-19, its units in a popup.
+   * warehouse since 2026-09-19, its units nested under it.
    *
-   * The popup owns its own per-unit buttons since 2026-09-23 — price change
+   * The nested units carry their own per-unit buttons since 2026-09-23 — price change
    * and edit unit — so nothing about one unit comes back up to this page.
    */
   const stockTab = (
@@ -939,6 +964,12 @@ export function InventoryPage() {
                 onClick: () => setExporting(true),
               },
               {
+                key: "import-prices",
+                label: t("priceImport.button", "Import sell prices"),
+                icon: <UploadOutlined />,
+                onClick: () => setImportingPrices(true),
+              },
+              {
                 key: "in",
                 label: t("stock.stockIn", "Stock in"),
                 icon: <LoginOutlined />,
@@ -1058,7 +1089,7 @@ export function InventoryPage() {
                   onChange={setLocationId}
                   options={db.warehouses
                     .filter((w) => w.active)
-                    .map((w) => ({ value: w.id, label: w.name }))}
+                    .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
                   style={{ width: "100%" }}
                 />
               </Form.Item>
@@ -1084,6 +1115,27 @@ export function InventoryPage() {
                     value: o.value,
                     label: t(o.label),
                   }))}
+                  style={{ width: "100%" }}
+                />
+              </Form.Item>
+            )}
+            {kind === "OUT" && outStatus === "SERVIS" && (
+              <Form.Item
+                label={t("stock.serviceSendTo", "Send to")}
+                required
+                tooltip={t(
+                  "stock.serviceSendToHint",
+                  "Where the units go for their repair — the service bench unless you pick another warehouse.",
+                )}
+                style={{ marginBottom: SPACE.md, minWidth: 220 }}
+              >
+                <Select
+                  value={serviceTo}
+                  onChange={setServiceToPicked}
+                  aria-label={t("stock.serviceSendTo", "Send to")}
+                  options={db.warehouses
+                    .filter((w) => w.active)
+                    .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
                   style={{ width: "100%" }}
                 />
               </Form.Item>
@@ -1486,6 +1538,10 @@ export function InventoryPage() {
       </Modal>
 
       <StockExportModal open={exporting} onClose={() => setExporting(false)} />
+      <PriceImportModal
+        open={importingPrices}
+        onClose={() => setImportingPrices(false)}
+      />
       <StockMovementEditModal
         open={editing !== null}
         row={editing}

@@ -31,6 +31,10 @@ export interface OutboxRow {
   readonly requestId: string | null;
   readonly createdAt: Date;
   readonly sentAt: Date | null;
+  /** WhatsApp's id for the sent message (2026-10-23). */
+  readonly providerMessageId?: string | null;
+  readonly retractedAt?: Date | null;
+  readonly editedAt?: Date | null;
 }
 
 export interface EnqueueInput {
@@ -106,14 +110,22 @@ export async function claimOutbox(
   return rows[0] ?? null;
 }
 
+/**
+ * Mark a row SENT, keeping the id WhatsApp gave the message (2026-10-23).
+ *
+ * That id is what an edit or an unsend from the inbox must name, so it is
+ * stored rather than logged and thrown away. Null when the transport returned
+ * none — such a row simply cannot be edited or unsent later.
+ */
 export async function markOutboxSent(
   client: PrismaClient | Tx,
   id: string,
   sentAt: Date = new Date(),
+  providerMessageId: string | null = null,
 ): Promise<void> {
   await client.outbox.update({
     where: { id },
-    data: { status: "SENT", sentAt, lastError: null },
+    data: { status: "SENT", sentAt, lastError: null, providerMessageId },
   });
 }
 

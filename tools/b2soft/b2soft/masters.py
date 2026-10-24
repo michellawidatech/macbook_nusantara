@@ -62,7 +62,8 @@ def build(src: Path, salesmen: list[str], created_at: str) -> tuple[dict, list[s
 
     for code, name in R.warehouses(src / FILES["warehouses"]):
         kind = "SERVIS" if code == SERVICE_WAREHOUSE else "TOKO" if code == SHOP_WAREHOUSE else "GUDANG"
-        rows["warehouses"].append(dict(id=f"wh-{code}", name=name.title().replace("Qc", "QC"), active=True, kind=kind))
+        rows["warehouses"].append(dict(id=f"wh-{code}", code=code, name=name.title().replace("Qc", "QC"),
+                                       active=True, kind=kind))
 
     listed = {n.strip().upper() for n in R.salesmen(src / FILES["salesmen"])}
     for name in salesmen:

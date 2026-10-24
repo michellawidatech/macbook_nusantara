@@ -78,7 +78,6 @@ import {
 } from "antd";
 import type { MenuProps } from "antd";
 import {
-  CameraOutlined,
   CheckCircleFilled,
   CheckOutlined,
   CloseCircleOutlined,
@@ -96,13 +95,14 @@ import {
   UnlockOutlined,
 } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
+import { PhotoStackButton } from "../../components/PhotoStackButton";
 import { useTranslation } from "react-i18next";
 import { MoneyInput } from "../../components/MoneyInput";
 import { CommitMoneyInput } from "../../components/CommitMoneyInput";
 import { EditableTable } from "../../components/EditableTable";
 import { EnumTag } from "../../components/EnumTag";
 import { PrintLabelsModal } from "../../components/LabelSheet";
-import { isPriceInRange } from "../../lib/unitPrice.js";
+import { isPriceInRange, startingPrice } from "../../lib/unitPrice.js";
 import { labelsFor, type LabelDatum } from "../../lib/labels.js";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import {
@@ -215,6 +215,7 @@ import { UnitDetailsModal } from "../../components/UnitDetailsModal";
 import { ExpenseModal } from "./ExpenseModal.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { isRecord } from "../../lib/draftGuards.js";
+import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
 /**
  * The DOM ids of a row's boxes — what Enter and the scanner hand the caret
@@ -225,6 +226,14 @@ const serialFieldId = (key: string) => `receiving-serial-${key}`;
 const descFieldId = (key: string) => `receiving-desc-${key}`;
 const gradeFieldId = (key: string) => `receiving-grade-${key}`;
 const sellFieldId = (key: string) => `receiving-sell-${key}`;
+
+/**
+ * The widest a unit row's buttons get: *Accept* with its word, then service,
+ * return, not arrived, delete and photos as icons — plus the cell's padding.
+ * Measured, not guessed; at `COLUMN.actionsPair` they spilled left over the
+ * sell price box (owner report 2026-10-08).
+ */
+const UNIT_ACTIONS_WIDTH = 264;
 
 /**
  * The statuses in which a machine's money can still be corrected here.
@@ -418,11 +427,9 @@ export function InboundDetailPage() {
     ),
   );
   /** QC answered before the serial, by row — see `QcDraft`. */
-  const [qcDrafts, setQcDrafts] = usePersistentState<Record<string, QcDraft>>(
-    INBOUND_DRAFT(poId, "qc"),
-    {},
-    mapOf<QcDraft>(isRecord),
-  );
+  const [qcDrafts, setQcDrafts, , qcDraftsKept] = usePersistentState<
+    Record<string, QcDraft>
+  >(INBOUND_DRAFT(poId, "qc"), {}, mapOf<QcDraft>(isRecord));
   /** Battery boxes being typed on a unit's row — written when left. */
   const [batteryTyping, setBatteryTyping] = usePersistentState<
     Record<string, BatteryDraft>
@@ -445,7 +452,8 @@ export function InboundDetailPage() {
    */
   const [sendingToService, setSendingToService] = useState<string | null>(null);
   const [serviceForm] = Form.useForm<{
-    ship: boolean;
+    /** The warehouse the unit goes to — its own when it is not moving. */
+    sendTo?: string;
     shippingFee?: number;
     serviceFee?: number;
     note?: string;
@@ -693,6 +701,14 @@ export function InboundDetailPage() {
     /** QC answered before the serial — written in this same mutation. */
     qc?: QcDraft,
   ) => {
+    /*
+     * Priced from the moment the unit exists: what the bench typed, or what
+     * the shop asks for the product it turned out to be. It is the asking
+     * price, and QC's job is to move it where the unit deserves. A variant
+     * asking Rp 0 has not been priced, and its unit is not either.
+     */
+    const start =
+      price ?? startingPrice(d.skus.find((x) => x.id === skuId)?.price);
     d.units.push({
       serial,
       skuId,
@@ -701,12 +717,7 @@ export function InboundDetailPage() {
       buy: unitCost,
       description: "",
       poId: order.id,
-      /*
-       * Priced from the moment the machine exists: what the bench typed, or
-       * what the shop asks for the product it turned out to be. It is the
-       * asking price, and QC's job is to move it where the machine deserves.
-       */
-      price: price ?? d.skus.find((x) => x.id === skuId)?.price ?? 0,
+      ...(start === undefined ? {} : { price: start }),
     });
     if (line) line.serial = serial;
     appendEvent(d, serial, {
@@ -1125,9 +1136,11 @@ export function InboundDetailPage() {
     if (next === row.unit.price) return;
     mutate((d) => {
       const u = d.units.find((x) => x.serial === serial)!;
-      // Never left blank on a machine that exists: an empty box means "back
-      // to what the shop asks", not "unpriced".
-      u.price = next ?? d.skus.find((x) => x.id === u.skuId)?.price ?? 0;
+      // An empty box takes the unit's own price away, and the unit quotes
+      // what its variant asks (`priceOf`) — the hint the box shows. Writing
+      // that figure in instead made a Rp 0 variant's box impossible to empty.
+      if (next === undefined) delete u.price;
+      else u.price = next;
     });
   };
 
@@ -1492,8 +1505,6 @@ export function InboundDetailPage() {
   const locked = closed || !editing;
 
   const bench = serviceLocationOf(db.warehouses);
-  const benchName =
-    db.warehouses.find((w) => w.id === bench)?.name ?? bench ?? "";
 
   /** An expense's name as the page shows it: its label, else its kind. */
   const feeName = (fee: PoFee) =>
@@ -1569,8 +1580,11 @@ export function InboundDetailPage() {
         const u = d.units.find((x) => x.serial === serial)!;
         const reasonLabel = "On Service";
         ensureReason(d, "ADJUSTMENT", reasonLabel);
-        const travelling =
-          v.ship && bench !== undefined && bench !== u.locationId;
+        // Where it goes is the dialog's answer (owner ask 2026-10-22: *"make
+        // sure we can choose where we send the product"*) — the bench by
+        // default, the unit's own warehouse when it is not moving.
+        const dest: string = v.sendTo ?? u.locationId;
+        const travelling = dest !== u.locationId;
         /*
          * ⚠️ Read BEFORE the event, which writes the projection. The visit is
          * what sends the unit back afterwards, so `fromLocationId` has to be
@@ -1582,10 +1596,10 @@ export function InboundDetailPage() {
         appendEvent(d, serial, {
           type: "DICATAT",
           toStatus: "SERVIS",
-          ...(travelling ? { toLocationId: bench } : {}),
+          ...(travelling ? { toLocationId: dest } : {}),
           refCode: po.code,
           note: travelling
-            ? `Sent to service — ${benchName}`
+            ? `Sent to service — ${warehouseLabelOf(d.warehouses, dest) ?? dest}`
             : "Sent to service",
         });
         // The rack belongs to the warehouse it is leaving.
@@ -1597,7 +1611,7 @@ export function InboundDetailPage() {
             kind: "SHIPPING" as const,
             // Translated where it is WRITTEN — the string is stored and frozen
             // in whatever language the bench happened to be in.
-            label: t("inbound.serviceShipLabel", "Transfer to the bench"),
+            label: t("inbound.serviceShipLabel", "Courier to service"),
             amount: v.shippingFee!,
             at: now,
             staff: currentStaffName(),
@@ -1627,14 +1641,18 @@ export function InboundDetailPage() {
           staff: currentStaffName(),
         });
       });
+      const from = db.units.find((x) => x.serial === serial)?.locationId;
       setSendingToService(null);
       serviceForm.resetFields();
       message.success(
-        v.ship && bench
+        v.sendTo !== undefined && v.sendTo !== from
           ? t(
               "inbound.serviceSentShipping",
               "{{serial}} is now at {{bench}}.",
-              { serial, bench: benchName },
+              {
+                serial,
+                bench: warehouseLabelOf(db.warehouses, v.sendTo) ?? v.sendTo,
+              },
             )
           : t(
               "inbound.serviceSentHere",
@@ -1992,7 +2010,7 @@ export function InboundDetailPage() {
   };
 
   const warehouseName = (id: string) =>
-    db.warehouses.find((w) => w.id === id)?.name ?? id;
+    warehouseLabelOf(db.warehouses, id) ?? id;
 
   // ── The invoice's lines ─────────────────────────────────────────────────
 
@@ -2291,7 +2309,9 @@ export function InboundDetailPage() {
         // The asking price follows the product until somebody has priced this
         // unit: still the old product's price means nobody has.
         if (u.price !== undefined && u.price === was?.price && now) {
-          u.price = now.price;
+          const start = startingPrice(now.price);
+          if (start === undefined) delete u.price;
+          else u.price = start;
         }
         u.skuId = to;
         appendEvent(d, u.serial, {
@@ -2586,7 +2606,7 @@ export function InboundDetailPage() {
                 value={po.locationId}
                 options={db.warehouses.map((w) => ({
                   value: w.id,
-                  label: w.name,
+                  label: warehouseLabel(w),
                 }))}
                 onChange={(v: string) =>
                   setPo((order) => {
@@ -2952,18 +2972,26 @@ export function InboundDetailPage() {
       return <Typography.Text type="secondary">{fmtRp(0)}</Typography.Text>;
     }
     const asking = skuOf(actualSkuOf(r))?.price ?? null;
-    const stored = r.unit ? (r.unit.price ?? asking) : asking;
-    const typed = prices[r.key];
-    const shown = typed !== undefined ? typed : stored;
+    const own = r.unit?.price ?? null;
     if (!moneyOpen(r)) {
-      return <Typography.Text>{fmtRp(shown)}</Typography.Text>;
+      return <Typography.Text>{fmtRp(own ?? asking)}</Typography.Text>;
     }
+    /*
+     * The box holds THIS unit's price and nothing else; what the variant asks
+     * is the grey hint behind it (owner report 2026-10-08: "why the price
+     * cannot be removed"). Filled in as a value, a variant at Rp 0 — every
+     * variant the go-live import made — put a Rp 0 in every box that came
+     * straight back the moment it was emptied.
+     */
+    const typed = prices[r.key];
     return (
       <CommitMoneyInput
         id={sellFieldId(r.key)}
         label={t("inbound.sellPrice", "Sell price")}
-        value={shown}
-        placeholder={asking === null ? undefined : fmtRp(asking)}
+        value={typed !== undefined ? typed : own}
+        placeholder={
+          startingPrice(asking) === undefined ? undefined : fmtRp(asking)
+        }
         onChange={(v) => setPrices((p) => ({ ...p, [r.key]: v }))}
         onCommit={(v) => commitSellPrice(r, v)}
       />
@@ -2977,10 +3005,11 @@ export function InboundDetailPage() {
       : t("inbound.unitN", "unit {{n}}", { n: numberOf(r) });
 
   /** How many photos a row holds — the unit's, or the ones held for it. */
-  const photoCount = (r: ReceivingRow) =>
+  const photoUrls = (r: ReceivingRow): string[] =>
     r.unit
-      ? qcPhotosOf(db, r.unit.serial).length
-      : (qcDrafts[r.key]?.photos?.length ?? 0);
+      ? qcPhotosOf(db, r.unit.serial).map((p) => p.url)
+      : (qcDrafts[r.key]?.photos ?? []).map((p) => p.url);
+  const photoCount = (r: ReceivingRow) => photoUrls(r).length;
 
   /**
    * One of the row's decisions, as an icon with its name in a tooltip. A
@@ -3191,17 +3220,13 @@ export function InboundDetailPage() {
         {shown}
         {!r.notArrived && (rowOpen(r) || photos > 0) && (
           <Tooltip title={t("inbound.photosTip", "Photos")}>
-            <Button
-              size="small"
-              type="text"
-              icon={<CameraOutlined aria-hidden />}
-              aria-label={t("inbound.photosAria", "Photos of {{name}}", {
+            <PhotoStackButton
+              urls={photoUrls(r)}
+              ariaLabel={t("inbound.photosAria", "Photos of {{name}}", {
                 name,
               })}
               onClick={() => setPhotosRow(r.key)}
-            >
-              {photos > 0 ? photos : null}
-            </Button>
+            />
           </Tooltip>
         )}
         {more.length > 0 && (
@@ -3266,6 +3291,7 @@ export function InboundDetailPage() {
       description={({ row }) => descriptionCell(row)}
       sellPrice={({ row }) => sellCell(row)}
       actions={({ row }) => actionsCell(row)}
+      actionsWidth={UNIT_ACTIONS_WIDTH}
     />
   );
 
@@ -3468,6 +3494,13 @@ export function InboundDetailPage() {
           onSetDiscount={setLineDiscount}
           onOpenDetails={(l) => setDetailsKey(l.key)}
           sellPriceOf={sellPriceOfLine}
+          // A price held for a row with no serial yet counts too; one being
+          // typed over a unit's stored price is the one the bench sees.
+          unitPricesOf={(l) =>
+            l.units.map(({ row }) =>
+              prices[row.key] !== undefined ? prices[row.key] : row.unit?.price,
+            )
+          }
           onSetSellPrice={setSellPrice}
           emptyText={
             <>
@@ -3687,6 +3720,14 @@ export function InboundDetailPage() {
     >
       <Flex gap={32} wrap align="flex-start">
         <Flex vertical gap={10} style={{ minWidth: 300, flex: "1 1 300px" }}>
+          {/* How many units the invoice bought (owner ask 2026-10-22) — every
+              line's quantity, a counted product's pieces included. */}
+          <Flex justify="space-between" gap={16}>
+            <span>{t("inbound.unitsPurchased", "Total units purchased")}</span>
+            <span data-testid="units-purchased">
+              {po.items.reduce((n, i) => n + i.qty, 0)}
+            </span>
+          </Flex>
           <Flex vertical>
             <Flex justify="space-between" gap={16}>
               <span>{t("inbound.productsTotal", "Products")}</span>
@@ -4169,42 +4210,58 @@ export function InboundDetailPage() {
               max={12}
             />
           ) : (
-            <UnitPhotos
-              draft={{
-                photos: qcDrafts[photosRowData.key]?.photos ?? [],
-                onAdd: (urls) =>
-                  setQcDrafts((m) => {
-                    const key = photosRowData.key;
-                    const held = m[key]?.photos ?? [];
-                    return {
-                      ...m,
-                      [key]: {
-                        ...m[key],
-                        photos: [
-                          ...held,
-                          ...urls.map((url) => ({ id: nextId("dph"), url })),
-                        ],
-                      },
-                    };
-                  }),
-                onRemove: (id) =>
-                  setQcDrafts((m) => {
-                    const key = photosRowData.key;
-                    return {
-                      ...m,
-                      [key]: {
-                        ...m[key],
-                        photos: (m[key]?.photos ?? []).filter(
-                          (p) => p.id !== id,
-                        ),
-                      },
-                    };
-                  }),
-              }}
-              editable={rowOpen(photosRowData)}
-              size={72}
-              max={12}
-            />
+            <Flex vertical gap={12}>
+              {/* Held on this device until the serial is filed, and the
+                  device refused: say so before a refresh does (client report
+                  2026-10-21). */}
+              {!qcDraftsKept &&
+                (qcDrafts[photosRowData.key]?.photos ?? []).length > 0 && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    title={t(
+                      "inbound.photosNotKept",
+                      "This device has no room to keep these photos. Fill in the serial to save them — a refresh before that loses them.",
+                    )}
+                  />
+                )}
+              <UnitPhotos
+                draft={{
+                  photos: qcDrafts[photosRowData.key]?.photos ?? [],
+                  onAdd: (urls) =>
+                    setQcDrafts((m) => {
+                      const key = photosRowData.key;
+                      const held = m[key]?.photos ?? [];
+                      return {
+                        ...m,
+                        [key]: {
+                          ...m[key],
+                          photos: [
+                            ...held,
+                            ...urls.map((url) => ({ id: nextId("dph"), url })),
+                          ],
+                        },
+                      };
+                    }),
+                  onRemove: (id) =>
+                    setQcDrafts((m) => {
+                      const key = photosRowData.key;
+                      return {
+                        ...m,
+                        [key]: {
+                          ...m[key],
+                          photos: (m[key]?.photos ?? []).filter(
+                            (p) => p.id !== id,
+                          ),
+                        },
+                      };
+                    }),
+                }}
+                editable={rowOpen(photosRowData)}
+                size={72}
+                max={12}
+              />
+            </Flex>
           ))}
       </Modal>
 
@@ -4228,9 +4285,14 @@ export function InboundDetailPage() {
         <Form
           form={serviceForm}
           layout="vertical"
-          // Shipped by default: the bench is a different building, and a
-          // machine graded in warehouse 1 has to get there.
-          initialValues={{ ship: bench !== undefined }}
+          // The bench by default: it is a different building, and a unit
+          // graded in warehouse 1 has to get there. Any warehouse may be
+          // named instead (owner ask 2026-10-22), its own included.
+          initialValues={{
+            sendTo:
+              bench ??
+              db.units.find((x) => x.serial === sendingToService)?.locationId,
+          }}
         >
           <Typography.Paragraph type="secondary">
             {t(
@@ -4239,24 +4301,40 @@ export function InboundDetailPage() {
               { serial: sendingToService ?? "" },
             )}
           </Typography.Paragraph>
-          {bench && (
-            <Form.Item
-              name="ship"
-              valuePropName="checked"
-              label={t("inbound.serviceShip", "Send it to {{bench}}", {
-                bench: benchName,
-              })}
-              tooltip={t(
-                "inbound.serviceShipHint",
-                "Leave this off if the repairer collects it, or if the unit is not moving. Turning it on files the unit at the bench straight away.",
-              )}
-            >
-              <Switch />
-            </Form.Item>
-          )}
-          <Form.Item noStyle shouldUpdate={(a, b) => a.ship !== b.ship}>
+          <Form.Item
+            name="sendTo"
+            label={t("inbound.serviceSendTo", "Send to")}
+            tooltip={t(
+              "inbound.serviceSendToHint",
+              "Where the unit goes for its repair. Pick its own warehouse if the repairer collects it or it is not moving.",
+            )}
+          >
+            <Select
+              aria-label={t("inbound.serviceSendTo", "Send to")}
+              options={db.warehouses
+                .filter((w) => w.active)
+                .map((w) => {
+                  const here =
+                    w.id ===
+                    db.units.find((x) => x.serial === sendingToService)
+                      ?.locationId;
+                  return {
+                    value: w.id,
+                    label: here
+                      ? t("inbound.serviceStaysHere", "{{name}} (stays here)", {
+                          name: warehouseLabel(w),
+                        })
+                      : warehouseLabel(w),
+                  };
+                })}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(a, b) => a.sendTo !== b.sendTo}>
             {({ getFieldValue }) =>
-              bench && getFieldValue("ship") ? (
+              getFieldValue("sendTo") !== undefined &&
+              getFieldValue("sendTo") !==
+                db.units.find((x) => x.serial === sendingToService)
+                  ?.locationId ? (
                 <Form.Item
                   name="shippingFee"
                   label={t(

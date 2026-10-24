@@ -1,147 +1,103 @@
 /**
- * Printable serial labels — on a sheet of A4, or one at a time off a thermal
- * roll.
+ * Printable serial labels — one 50 × 30 mm sticker per page, always.
  *
- * The label carries a barcode of the **serial**, not of the SKU: two units of
- * one model are the same SKU and a scan has to tell them apart, which is the
- * whole reason this shop is built around serials at all. Since 2026-08-28 that
- * serial carries its supplier's two-letter origin code (`lib/serialScan.ts`),
- * so what a sticker encodes is what intake really stored.
+ * ## The sticker (owner, 2026-10-22)
  *
- * Layout follows the owner's sketch (2026-08-24): the barcode at the left with
- * the serial printed beneath it, and the product code beside it on two lines.
- * The serial is printed as text as well as encoded, because a sticker that
- * will not scan — creased, smudged, peeled — still has to be usable by a
- * person typing it in.
+ * *"Remove the customization, the user always print the label in 50 x 30
+ * mm."* The page setup of 2026-08-28 — sheet or roll, paper size, sticker
+ * size, gap, margin, QR or Code 128 — is gone: the shop prints on one thermal
+ * printer and one stock, and every option was another way for the print to
+ * miss it. A label is a page: `@page { size: 50mm 30mm; margin: 0 }`, each
+ * sticker exactly that size with a page break after it.
  *
- * ## A square QR (owner decision 2026-08-28)
+ * Landscape. On the LEFT a square QR of the serial as stored, 26 mm, which
+ * leaves a 2 mm margin above and below. On the RIGHT two blocks of text: the
+ * product's name and, under it, the SKU code (`Sku.code`). **No serial text**
+ * (owner answer) — the serial is in the QR and on the unit already.
  *
- * The sticker carries a QR, and briefly did not: the scanner rules of the same
- * day open with *"Set Code 128 constraint"*, which was over-read here as a
- * statement about what the shop PRINTS. It is not — it is about the supplier's
- * barcode on the way in. The shop reads its own stickers with its own phones,
- * and a QR is both what they read and what survives a sticker's real life on a
- * second-hand laptop: creased, peeling, half under a thumb. A QR carries error
- * correction; a row of bars carries none.
+ * Everything is in absolute millimetres, positioned rather than flowed, and
+ * each text block is clamped to three lines and clipped: a long product name
+ * is cut short with an ellipsis rather than pushing the sticker onto a second
+ * page of the roll.
  *
- * Code 128 is still selectable for a desk with a 1-D handheld on it —
- * `lib/code128.ts` draws it — but it is a choice, not the default.
+ * A QR rather than bars because the shop reads its own stickers with its own
+ * phones, and a QR carries error correction a creased label needs.
  *
  * ## What may be printed at all
  *
  * Every serial is inspected before the dialog will print it
  * (`inspectStoredSerial`). An empty or unencodable one is refused outright:
- * there is nothing to draw, and a sticker whose code says something other than
- * the text under it is worse than no sticker. A serial that merely looks wrong
- * — an `I` where a `1` belongs, a dash — is named and printed anyway. (No
- * length is "wrong" since 2026-09-21: a second-hand serial is taken as read.)
- * See that function for why the two get different answers.
- *
- * ## Page setup (owner ask 2026-08-28)
- *
- * Two modes, because they are two different printers: a **sheet** of stickers
- * tiled onto paper the shop buys (A4, F4, Letter…), or a **roll**, where the
- * label IS the page and the printer feeds exactly one sticker's worth of
- * stock. `lib/labelPaper.ts` holds the geometry and works out how many fit
- * rather than taking a column count on trust.
+ * there is nothing to draw. A serial that merely looks wrong — an `I` where a
+ * `1` belongs, a dash — is named and printed anyway. See that function for why
+ * the two get different answers.
  *
  * Printing reuses the visibility switch in global.css rather than opening a
- * second window, the same mechanism `Invoice` uses. The one addition is a
- * *named* page: the invoice's `@page` sets a 12mm margin, and sticker stock
- * needs zero, so `page: label-sheet` keeps the two from overwriting each
- * other. Its SIZE is now a per-print decision, so it is emitted from here —
- * see `pageRule`.
+ * second window, the same mechanism `Invoice` uses, on a NAMED page
+ * (`label-sheet`) so the invoice's 12 mm margin and the sticker's zero do not
+ * overwrite each other.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import {
-  Alert,
-  App,
-  Button,
-  Flex,
-  InputNumber,
-  Modal,
-  Segmented,
-  Select,
-  Tag,
-  Typography,
-} from "antd";
+import { useEffect, useState } from "react";
+import { Alert, App, Button, Flex, Modal, Tag, Typography } from "antd";
 import { PrinterOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import QRCode from "qrcode";
 import type { LabelDatum } from "../lib/labels.js";
-import {
-  code128Bars,
-  code128Width,
-  QUIET_ZONE_MODULES,
-} from "../lib/code128.js";
 import {
   inspectStoredSerial,
   isPrintableSerial,
   type SerialFault,
   type SerialInspection,
 } from "../lib/serialScan.js";
-import {
-  DEFAULT_SETUP,
-  GAP_MAX_MM,
-  LABEL_MAX_MM,
-  LABEL_MIN_MM,
-  MARGIN_MAX_MM,
-  PAPERS,
-  pageRule,
-  readLabelSetup,
-  tiling,
-  writeLabelSetup,
-  type LabelPageMode,
-  type LabelSetup,
-  type LabelSymbology,
-  type LabelTiling,
-} from "../lib/labelPaper.js";
 
 export type { LabelDatum };
 
+/** The one sticker the shop prints. */
+export const LABEL_WIDTH_MM = 50;
+export const LABEL_HEIGHT_MM = 30;
+/** Ink stays this far off the die-cut edge. */
+const PAD_MM = 2;
+/** The QR's side: the sticker's height less a margin above and below. */
+export const QR_MM = LABEL_HEIGHT_MM - PAD_MM * 2;
+/** Between the QR and the text. */
+const GUTTER_MM = 1.5;
+
 /**
- * A CSS millimetre, in CSS pixels. Fixed by the spec at 96dpi, so this is a
- * constant rather than something to measure: 25.4mm to the inch.
+ * The page rule. Emitted from here as well as written in global.css so that
+ * the size is stated where the sticker is drawn; `@page` has no selector, so
+ * the later of the two wins and they say the same thing.
  */
-const PX_PER_MM = 96 / 25.4;
+export const LABEL_PAGE_RULE = `@page label-sheet { size: ${LABEL_WIDTH_MM}mm ${LABEL_HEIGHT_MM}mm; margin: 0; }`;
+
+/** `qrcode`'s SVG carries a viewBox and no size; it fills its box. */
+const QR_SVG_RULE =
+  ".label-qr > svg { display: block; width: 100%; height: 100%; }";
 
 /**
  * QR markup for each serial, keyed by serial.
  *
  * Generated in an effect because `qrcode` is async, and cached across renders
- * so that re-rendering a 36-label sheet does not re-encode 36 QR codes. SVG
- * rather than a PNG data URL: a sticker is read by a machine at 300dpi and a
- * rasterised QR at label size is exactly the kind of thing that scans on the
- * screen and fails on paper.
- *
- * Skipped entirely when the sheet is printing Code 128 — encoding thirty-six
- * QR codes nobody will look at is thirty-six promises resolved for nothing.
+ * so that re-rendering does not re-encode every QR. SVG rather than a PNG data
+ * URL: a rasterised QR at sticker size scans on the screen and fails on paper.
  */
-function useQrCodes(
-  serials: readonly string[],
-  enabled: boolean,
-): Record<string, string> {
+function useQrCodes(serials: readonly string[]): Record<string, string> {
   const [codes, setCodes] = useState<Record<string, string>>({});
   const key = serials.join(" ");
 
   useEffect(() => {
-    if (!enabled) return;
     let cancelled = false;
     const build = async () => {
       const entries = await Promise.all(
         // Only what can actually be encoded. `QRCode.toString("")` rejects,
-        // and one rejection inside `Promise.all` takes the whole batch down —
-        // so a single bad serial used to mean a sheet of thirty-six blank
-        // squares rather than thirty-five good stickers and one refusal.
+        // and one rejection inside `Promise.all` takes the whole batch down.
         serials.filter(isPrintableSerial).map(
           async (s) =>
             [
               s,
               await QRCode.toString(s, {
                 type: "svg",
-                // No quiet zone from the library: the label's own padding
-                // provides it, and the default 4-module margin would shrink
-                // the modules to the point a cheap imager misses them.
+                // No quiet zone from the library: the sticker's own margin
+                // provides it, and the default 4 modules would shrink the
+                // modules for nothing.
                 margin: 0,
                 errorCorrectionLevel: "M",
               }),
@@ -155,484 +111,127 @@ function useQrCodes(
       cancelled = true;
     };
     // `key` stands in for the array so a new array of the same serials does
-    // not re-encode everything — which is why `serials` itself is not a
-    // dependency.
-  }, [key, enabled]);
+    // not re-encode everything.
+  }, [key]);
 
   return codes;
 }
 
-/**
- * One Code 128 symbol, drawn to fit a box.
- *
- * `preserveAspectRatio="none"` on purpose: the viewBox is in MODULES and the
- * SVG box is in millimetres, so letting the browser preserve the ratio would
- * letterbox a barcode that is meant to fill the width it was given. Bars have
- * no aspect ratio to preserve — only a minimum width, which is what the
- * caller's sizing is for.
- *
- * Drawn as `shape-rendering: crispEdges`. A bar landing on a fractional device
- * pixel is anti-aliased into a grey edge, and grey edges are what turn a
- * marginal print into an unreadable one.
- */
-function Barcode({
-  value,
-  widthMm,
-  heightMm,
-}: {
-  value: string;
-  widthMm: number;
-  heightMm: number;
-}) {
-  const bars = code128Bars(value);
-  if (bars.length === 0) return null;
-  const modules = code128Width(value) + QUIET_ZONE_MODULES * 2;
+/** Up to three lines, then an ellipsis — never onto the next sticker. */
+const clamp = (fontMm: number, weight: number): React.CSSProperties => ({
+  fontSize: `${fontMm}mm`,
+  fontWeight: weight,
+  lineHeight: 1.15,
+  maxHeight: `${fontMm * 1.15 * 3}mm`,
+  display: "-webkit-box",
+  WebkitLineClamp: 3,
+  WebkitBoxOrient: "vertical",
+  overflow: "hidden",
+  overflowWrap: "anywhere",
+});
 
-  return (
-    <svg
-      width={`${widthMm}mm`}
-      height={`${heightMm}mm`}
-      viewBox={`0 0 ${modules} 100`}
-      preserveAspectRatio="none"
-      shapeRendering="crispEdges"
-      aria-hidden="true"
-      style={{ display: "block" }}
-    >
-      {bars.map((b) => (
-        <rect
-          key={b.x}
-          x={b.x + QUIET_ZONE_MODULES}
-          y={0}
-          width={b.width}
-          height={100}
-          fill="#000"
-        />
-      ))}
-    </svg>
-  );
-}
-
-/** One sticker. */
+/** One sticker, which is one page. */
 function Label({
   datum,
   qrSvg,
-  geometry,
-  symbology,
+  last,
+  preview,
 }: {
   datum: LabelDatum;
   qrSvg: string | undefined;
-  geometry: LabelTiling;
-  symbology: LabelSymbology;
+  last: boolean;
+  preview: boolean;
 }) {
-  const { labelWidthMm, labelHeightMm } = geometry;
-  // 2mm of padding all round keeps ink off the die-cut edge, where sticker
-  // stock is never quite aligned with the printer.
-  const padMm = 2;
-  const innerH = labelHeightMm - padMm * 2;
-  // Text scales with the sticker rather than sitting at a fixed 3.1mm, so a
-  // 25mm thermal label does not print its product code over the barcode.
-  const codeFontMm = Math.max(1.8, Math.min(3.1, labelHeightMm / 9.7));
-  const serialFontMm = Math.max(1.6, Math.min(2.4, labelHeightMm / 14));
-
-  /*
-   * Code 128 is WIDE and short; a QR is square. They want different halves of
-   * the sticker, so the layout follows the symbology rather than forcing the
-   * bars into the square the QR used to sit in — a 13-character Code 128 is
-   * about 250 modules, and squeezing that into 20mm puts each module below
-   * what a 203dpi thermal head can lay down.
-   */
-  const bars = symbology === "CODE128";
-  /*
-   * The QR is square, and sized off the sticker's height so that the serial
-   * still has a line under it: 20mm on the 50 × 30 stock the shop prints,
-   * which is the proportion the owner has been looking at.
-   *
-   * The floor is what makes it survive the roll. `labelHeightMm - 10` is a
-   * fine rule at 30mm and a bad one at 15 — `LABEL_MIN_MM` — where it asks
-   * for a 5mm square. A 25-module QR at 5mm is 0.2mm per module, which is
-   * under one dot on a 203dpi thermal head: it would print as a grey smudge
-   * that no scanner reads. 8mm still fits above the serial on the shortest
-   * label the setup allows.
-   */
-  const codeSideMm = Math.max(8, labelHeightMm - 10);
-  const barsWidthMm = labelWidthMm - padMm * 2;
-  const barsHeightMm = Math.max(6, innerH * 0.5);
-
-  const encoded = (
-    <Flex
-      vertical
-      align="center"
-      style={{ flex: bars ? undefined : "0 0 auto" }}
-    >
-      {bars ? (
-        <Barcode
-          value={datum.barcode}
-          widthMm={barsWidthMm}
-          heightMm={barsHeightMm}
-        />
-      ) : (
-        <div
-          style={{ width: `${codeSideMm}mm`, height: `${codeSideMm}mm` }}
-          aria-hidden="true"
-          // Locally generated markup from `qrcode`, never user HTML.
-          dangerouslySetInnerHTML={{ __html: qrSvg ?? "" }}
-        />
-      )}
-      <div
-        style={{
-          fontSize: `${serialFontMm}mm`,
-          fontFamily: "monospace",
-          lineHeight: 1.1,
-          marginTop: "0.6mm",
-          letterSpacing: "0.02em",
-        }}
-      >
-        {/* The store barcode, matching what the code above encodes — a
-            sticker whose text and whose symbol disagree is a sticker nobody
-            can check by eye. `datum.serial` is Apple's and stays off the
-            label; it is on the machine already. */}
-        {datum.barcode}
-      </div>
-    </Flex>
-  );
-
-  const words = (
-    <div
-      style={{
-        flex: bars ? "0 0 auto" : "1 1 auto",
-        minWidth: 0,
-        lineHeight: 1.15,
-        textAlign: bars ? ("center" as const) : ("left" as const),
-        width: bars ? "100%" : undefined,
-      }}
-    >
-      <div style={{ fontSize: `${codeFontMm}mm`, fontWeight: 700 }}>
-        {datum.line1}
-      </div>
-      {datum.line2 !== "" && (
-        <div style={{ fontSize: `${codeFontMm}mm`, fontWeight: 700 }}>
-          {datum.line2}
-        </div>
-      )}
-    </div>
-  );
-
   return (
     <div
       className="label-cell"
       style={{
-        width: `${labelWidthMm}mm`,
-        height: `${labelHeightMm}mm`,
-        display: "flex",
-        // Bars run the full width with the text under them; a QR sits beside
-        // the text, which is the layout the owner sketched.
-        flexDirection: bars ? "column" : "row",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: bars ? "0.5mm" : "2mm",
-        padding: `${padMm}mm`,
+        position: "relative",
+        width: `${LABEL_WIDTH_MM}mm`,
+        height: `${LABEL_HEIGHT_MM}mm`,
         boxSizing: "border-box",
         overflow: "hidden",
+        background: "#fff",
+        color: "#000",
+        // A break after every sticker but the last, so the roll feeds one
+        // sticker per label and no blank one at the end.
+        breakAfter: last ? "auto" : "page",
+        pageBreakAfter: last ? "auto" : "always",
+        breakInside: "avoid",
+        ...(preview ? { outline: "1px dashed #bfbfbf" } : {}),
       }}
     >
-      {bars ? (
-        <>
-          {words}
-          {encoded}
-        </>
-      ) : (
-        <>
-          {encoded}
-          {words}
-        </>
-      )}
-    </div>
-  );
-}
-
-/**
- * The sheet itself.
- *
- * Labels are laid out in a fixed grid rather than a wrapping flex row so that
- * every cell lands on the same millimetre on every page — a sticker sheet is
- * unforgiving about drift, and a wrap that reflows by a fraction prints the
- * last column half onto the gutter.
- *
- * Pages are split explicitly at `columns × rows` so the browser never chooses
- * a break for us in the middle of a row of stickers. On a roll that is one
- * label per page, which is the same code path with a tiling of 1 × 1.
- */
-export function LabelSheet({
-  labels,
-  setup = DEFAULT_SETUP,
-  preview = false,
-}: {
-  labels: readonly LabelDatum[];
-  setup?: LabelSetup;
-  /**
-   * Draw each page as a whole sheet of paper on screen.
-   *
-   * Off when printing, where the paper supplies the page box and forcing a
-   * 297mm minimum height would round its way onto a blank extra sheet.
-   */
-  preview?: boolean;
-}) {
-  const geometry = tiling(setup);
-  const qr = useQrCodes(
-    labels.map((l) => l.barcode),
-    setup.symbology === "QR",
-  );
-  const pages: LabelDatum[][] = [];
-  for (let i = 0; i < labels.length; i += geometry.perPage) {
-    pages.push(labels.slice(i, i + geometry.perPage));
-  }
-
-  return (
-    <div className="label-print-root">
-      {/*
-       * The paper size, injected rather than written in global.css, because it
-       * is a per-print decision now. Later in the document than the
-       * stylesheet, so it wins on order — which is the only lever `@page` has,
-       * having no selector to be specific about.
-       */}
-      <style>{pageRule(setup)}</style>
-      {pages.map((page, pageIndex) => (
-        <div
-          key={pageIndex}
-          className="label-page"
-          style={{
-            display: "grid",
-            gridTemplateColumns: `repeat(${geometry.columns}, ${geometry.labelWidthMm}mm)`,
-            gridAutoRows: `${geometry.labelHeightMm}mm`,
-            gap: `${geometry.gapMm}mm`,
-            justifyContent: "center",
-            alignContent: "start",
-            paddingTop: `${geometry.marginMm}mm`,
-            breakAfter: pageIndex < pages.length - 1 ? "page" : "auto",
-            // On screen the page is drawn at its true size, so the reader is
-            // looking at the actual sheet rather than at a strip of it cropped
-            // to whatever the dialog happened to be wide. `ScaledSheet` below
-            // shrinks the whole thing to fit; see its docblock for why that
-            // has to be a transform rather than a narrower box.
-            ...(preview
-              ? {
-                  width: `${geometry.pageWidthMm}mm`,
-                  height: `${geometry.pageHeightMm}mm`,
-                  boxSizing: "border-box" as const,
-                  background: "#fff",
-                  marginBottom: pageIndex < pages.length - 1 ? "8mm" : 0,
-                }
-              : {}),
-          }}
-        >
-          {page.map((datum) => (
-            <Label
-              key={datum.serial}
-              datum={datum}
-              qrSvg={qr[datum.barcode]}
-              geometry={geometry}
-              symbology={setup.symbology}
-            />
-          ))}
+      <div
+        className="label-qr"
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          left: `${PAD_MM}mm`,
+          top: `${PAD_MM}mm`,
+          width: `${QR_MM}mm`,
+          height: `${QR_MM}mm`,
+        }}
+        // Locally generated markup from `qrcode`, never user HTML.
+        dangerouslySetInnerHTML={{ __html: qrSvg ?? "" }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          left: `${PAD_MM + QR_MM + GUTTER_MM}mm`,
+          right: `${GUTTER_MM}mm`,
+          top: `${PAD_MM}mm`,
+          bottom: `${PAD_MM}mm`,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          gap: "1mm",
+          fontFamily: "Arial, Helvetica, sans-serif",
+        }}
+      >
+        <div className="label-name" style={clamp(2.6, 700)}>
+          {datum.name}
         </div>
-      ))}
-    </div>
-  );
-}
-
-/**
- * The sheet, shrunk to fit the box it is shown in.
- *
- * A preview of A4 is 210mm — 794 CSS pixels — and no dialog on a laptop is
- * that wide once its own padding is taken off. Until 2026-08-26 the sheet was
- * simply dropped into an `overflow: auto` box, and because the grid inside it
- * is `justify-content: center`, the overflow went to BOTH sides: the scrollbar
- * could reach the right-hand columns and could not reach the left-hand ones at
- * all. That is the "barcode on the left is cut off" the owner reported — the
- * first column of every sheet was unreachable, not missing.
- *
- * Centred overflow cannot be scrolled to, so the fix is not to allow the
- * overflow: it is to stop overflowing. The page keeps its true geometry —
- * every millimetre of it is load-bearing, since the die-cut positions on
- * sticker stock are absolute — and a `transform: scale` shrinks the drawn
- * result. A transform does not reflow, so nothing moves relative to anything
- * else and what is on screen is what will come out of the printer.
- *
- * The wrapper's height has to be set by hand for the same reason: a transform
- * leaves layout size untouched, so an unscaled 297mm page would still reserve
- * 297mm of scroll even when drawn at half that.
- */
-function ScaledSheet({
-  labels,
-  setup,
-}: {
-  labels: readonly LabelDatum[];
-  setup: LabelSetup;
-}) {
-  const box = useRef<HTMLDivElement>(null);
-  const inner = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
-  const [height, setHeight] = useState(0);
-  const pageWidthMm = tiling(setup).pageWidthMm;
-
-  useLayoutEffect(() => {
-    const el = box.current;
-    if (!el) return;
-    const measure = () => {
-      const width = el.clientWidth;
-      if (width === 0) return;
-      // Never magnified: a sheet that fits already is shown at 1:1, because
-      // blowing a 50mm sticker up to 70mm would misrepresent what prints.
-      const next = Math.min(1, width / (pageWidthMm * PX_PER_MM));
-      setScale(next);
-      setHeight((inner.current?.offsetHeight ?? 0) * next);
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    if (inner.current) ro.observe(inner.current);
-    return () => ro.disconnect();
-  }, [labels.length, setup, pageWidthMm]);
-
-  return (
-    <div ref={box} style={{ width: "100%", overflow: "hidden" }}>
-      <div style={{ height, position: "relative" }}>
-        <div
-          ref={inner}
-          style={{
-            transform: `scale(${scale})`,
-            // Top LEFT, not top centre: the box is exactly as wide as the
-            // scaled page, so there is nothing to centre within, and a centred
-            // origin would push half the page back out of view — the very bug
-            // this replaces.
-            transformOrigin: "top left",
-            position: "absolute",
-            top: 0,
-            left: 0,
-          }}
-        >
-          <LabelSheet labels={labels} setup={setup} preview />
-        </div>
+        {datum.code !== "" && (
+          <div className="label-code" style={clamp(2.3, 400)}>
+            {datum.code}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-/**
- * Page setup — the owner's ask of 2026-08-28.
- *
- * Sheet or roll first, because it is the one answer that changes what the rest
- * of the panel asks for: a roll has no paper size, no margin and no gap, since
- * the sticker is the page.
- */
-function SetupControls({
-  setup,
-  onChange,
+/** The stickers, one per page. */
+export function LabelSheet({
+  labels,
+  preview = false,
 }: {
-  setup: LabelSetup;
-  onChange: (next: LabelSetup) => void;
+  labels: readonly LabelDatum[];
+  /** Outline each sticker and space them out, for the dialog. */
+  preview?: boolean;
 }) {
-  const { t } = useTranslation();
-  const set = <K extends keyof LabelSetup>(key: K, value: LabelSetup[K]) =>
-    onChange({ ...setup, [key]: value });
-  const sheet = setup.mode === "SHEET";
-
-  const field = (label: string, control: React.ReactNode) => (
-    <Flex vertical gap={4}>
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {label}
-      </Typography.Text>
-      {control}
-    </Flex>
-  );
+  const qr = useQrCodes(labels.map((l) => l.barcode));
 
   return (
-    <Flex gap={12} wrap align="flex-end" style={{ marginBottom: 12 }}>
-      {field(
-        t("labels.printOn", "Print on"),
-        <Segmented<LabelPageMode>
-          value={setup.mode}
-          onChange={(v) => set("mode", v)}
-          options={[
-            { value: "SHEET", label: t("labels.sheet", "Sheet of paper") },
-            { value: "ROLL", label: t("labels.roll", "Thermal roll") },
-          ]}
-        />,
-      )}
-      {sheet &&
-        field(
-          t("labels.paper", "Paper"),
-          <Select
-            value={setup.paperId}
-            style={{ width: 210 }}
-            aria-label={t("labels.paper", "Paper")}
-            onChange={(v) => set("paperId", v)}
-            options={PAPERS.map((p) => ({ value: p.id, label: p.label }))}
-          />,
-        )}
-      {field(
-        t("labels.labelWidth", "Label width (mm)"),
-        <InputNumber
-          value={setup.labelWidthMm}
-          min={LABEL_MIN_MM}
-          max={LABEL_MAX_MM}
-          style={{ width: 96 }}
-          aria-label={t("labels.labelWidth", "Label width (mm)")}
-          onChange={(v) => set("labelWidthMm", v ?? DEFAULT_SETUP.labelWidthMm)}
-        />,
-      )}
-      {field(
-        t("labels.labelHeight", "Label height (mm)"),
-        <InputNumber
-          value={setup.labelHeightMm}
-          min={LABEL_MIN_MM}
-          max={LABEL_MAX_MM}
-          style={{ width: 96 }}
-          aria-label={t("labels.labelHeight", "Label height (mm)")}
-          onChange={(v) =>
-            set("labelHeightMm", v ?? DEFAULT_SETUP.labelHeightMm)
-          }
-        />,
-      )}
-      {sheet &&
-        field(
-          t("labels.gap", "Gap (mm)"),
-          <InputNumber
-            value={setup.gapMm}
-            min={0}
-            max={GAP_MAX_MM}
-            style={{ width: 84 }}
-            aria-label={t("labels.gap", "Gap (mm)")}
-            onChange={(v) => set("gapMm", v ?? 0)}
-          />,
-        )}
-      {sheet &&
-        field(
-          t("labels.margin", "Margin (mm)"),
-          <InputNumber
-            value={setup.marginMm}
-            min={0}
-            max={MARGIN_MAX_MM}
-            style={{ width: 84 }}
-            aria-label={t("labels.margin", "Margin (mm)")}
-            onChange={(v) => set("marginMm", v ?? 0)}
-          />,
-        )}
-      {field(
-        // "Code", not "Barcode". The default is a QR, and a QR is not a
-        // barcode — a label that names one of the two options is a label that
-        // reads as wrong half the time it is looked at.
-        t("labels.symbology", "Code"),
-        <Segmented<LabelSymbology>
-          value={setup.symbology}
-          onChange={(v) => set("symbology", v)}
-          options={[
-            { value: "QR", label: t("labels.qr", "QR") },
-            { value: "CODE128", label: t("labels.code128", "Code 128") },
-          ]}
-        />,
-      )}
-    </Flex>
+    <div
+      className="label-print-root"
+      style={
+        preview
+          ? { display: "flex", flexWrap: "wrap", gap: 12 }
+          : { margin: 0, padding: 0 }
+      }
+    >
+      <style>{`${LABEL_PAGE_RULE}\n${QR_SVG_RULE}`}</style>
+      {labels.map((datum, i) => (
+        <Label
+          key={datum.serial}
+          datum={datum}
+          qrSvg={qr[datum.barcode]}
+          last={i === labels.length - 1}
+          preview={preview}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -753,10 +352,10 @@ function SerialWarnings({ labels }: { labels: readonly LabelDatum[] }) {
 }
 
 /**
- * The print dialog — page setup, a preview of the result, and a button that
+ * The print dialog — the checks, a preview at true size, and a button that
  * fires the browser's own printer.
  *
- * Modelled on `InvoiceModal`: the sheet is mounted inside the modal and
+ * Modelled on `InvoiceModal`: the stickers are mounted inside the modal and
  * global.css hides everything else, rather than opening a second window that a
  * pop-up blocker would eat. Exactly one print root may be mounted at a time,
  * which is why this is a modal and not an inline panel.
@@ -773,36 +372,18 @@ export function PrintLabelsModal({
   const { t } = useTranslation();
   const { message } = App.useApp();
   /**
-   * Read once on mount rather than on every render: `readLabelSetup` parses
-   * JSON, and the setup is edited far more often than the component mounts.
-   */
-  const [setup, setSetup] = useState<LabelSetup>(readLabelSetup);
-  const geometry = tiling(setup);
-  const sheets = Math.ceil(labels.length / geometry.perPage);
-  /**
    * A serial with nothing printable in it stops the whole run, rather than
-   * being quietly dropped from the sheet.
-   *
-   * Skipping it silently would print 35 stickers where 36 were asked for, and
-   * the one machine with no label would be discovered by somebody looking for
-   * it on a shelf. Refusing names the machine while the person is still at the
-   * screen that can fix it.
+   * being quietly dropped: skipping it would print 35 stickers where 36 were
+   * asked for, and the unit with no label would be found by somebody looking
+   * for it on a shelf.
    */
   const blocked = labels.some((l) => !isPrintableSerial(l.serial));
-
-  const change = (next: LabelSetup) => {
-    setSetup(next);
-    writeLabelSetup(next);
-  };
 
   return (
     <Modal
       open={open}
       onCancel={onClose}
-      // As wide as the viewport sensibly allows, so a 210mm page is drawn at
-      // something close to 1:1 rather than shrunk to a thumbnail.
-      // `ScaledSheet` copes with whatever it actually gets.
-      width="min(960px, calc(100vw - 32px))"
+      width="min(640px, calc(100vw - 32px))"
       title={t("labels.title", "Print labels — {{count}} serial(s)", {
         count: labels.length,
       })}
@@ -841,54 +422,28 @@ export function PrintLabelsModal({
     >
       <div className="no-print">
         <SerialWarnings labels={labels} />
-        <SetupControls setup={setup} onChange={change} />
         <Typography.Paragraph type="secondary">
-          {setup.mode === "ROLL"
-            ? t(
-                "labels.rollSummary",
-                "{{count}} label(s), one per {{w}} × {{h}}mm sticker. Set the printer's paper size to match the sticker, and print at 100% scale.",
-                {
-                  count: labels.length,
-                  w: geometry.labelWidthMm,
-                  h: geometry.labelHeightMm,
-                },
-              )
-            : t(
-                "labels.sheetSummary",
-                "{{count}} label(s) across {{sheets}} sheet(s), {{cols}} across and {{rows}} down at {{w}} × {{h}}mm. Print at 100% scale — “fit to page” will shrink every label off its backing.",
-                {
-                  count: labels.length,
-                  sheets,
-                  cols: geometry.columns,
-                  rows: geometry.rows,
-                  w: geometry.labelWidthMm,
-                  h: geometry.labelHeightMm,
-                },
-              )}
+          {t(
+            "labels.summary",
+            "{{count}} label(s), one 50 × 30 mm sticker each. Print at 100% scale with no margins.",
+            { count: labels.length },
+          )}
         </Typography.Paragraph>
       </div>
-      {/*
-       * Scrolls DOWN through the pages and never sideways. Horizontal overflow
-       * is the bug this replaces — see `ScaledSheet` — so the one axis that
-       * must never appear here is `x`.
-       */}
       <div
         className="no-print"
         style={{
           maxHeight: "60vh",
           overflowY: "auto",
-          overflowX: "hidden",
           background: "#f0f0f0",
           padding: 12,
         }}
       >
-        <ScaledSheet labels={labels} setup={setup} />
+        <LabelSheet labels={labels} preview />
       </div>
-      {/* The one that actually prints. Kept out of the scroller so the print
-          stylesheet sees a sheet at its true size with no transform on it —
-          a scaled preview would go to the printer scaled. */}
+      {/* The copy that prints: no outline, no spacing between stickers. */}
       <div className="label-print-only">
-        <LabelSheet labels={labels} setup={setup} />
+        <LabelSheet labels={labels} />
       </div>
     </Modal>
   );

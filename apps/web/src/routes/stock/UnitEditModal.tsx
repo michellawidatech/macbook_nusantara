@@ -28,6 +28,7 @@ import { readSerialInput, serialConditionOf } from "../../lib/serialInput.js";
 import { appendEvent, mutate, useDb } from "../../mock/store.js";
 import type { Unit } from "../../mock/seed.js";
 import { FORM_CENTRE, SPACE } from "../../theme/tokens";
+import { warehouseLabel } from "../../lib/warehouses.js";
 
 export interface UnitEditModalProps {
   readonly open: boolean;
@@ -191,7 +192,7 @@ export function UnitEditModal({ open, unit, onClose }: UnitEditModalProps) {
               onChange={setLocationId}
               options={db.warehouses.map((w) => ({
                 value: w.id,
-                label: w.name,
+                label: warehouseLabel(w),
               }))}
             />
           </Form.Item>

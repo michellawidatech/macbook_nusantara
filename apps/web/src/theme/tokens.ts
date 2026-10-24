@@ -104,8 +104,6 @@ export const LAYOUT = {
   siderWidth: 224,
   /** 48px collapsed sider — icons only, matching Pro. */
   siderCollapsedWidth: 48,
-  /** Width past which content stops stretching and starts centring. */
-  contentMaxWidth: 1600,
   /** The sticky submit bar on long forms. */
   footerToolbarHeight: 64,
   /**
@@ -122,7 +120,7 @@ export const LAYOUT = {
    *
    * Owner decision 2026-08-26: "make all forms centered, don't stick to left".
    * Every form on this app was capped at some width between 420 and 720 and
-   * then left flush against the left edge of a 1600px column, so on a shop
+   * then left flush against the left edge of the content column, so on a shop
    * laptop a settings panel was a narrow strip in the corner with two thirds of
    * the screen empty beside it.
    *

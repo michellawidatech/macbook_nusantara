@@ -1,0 +1,78 @@
+#!/bin/bash
+# Start the POS and the chatbot on this laptop, answering a WhatsApp account
+# linked through Baileys. LOCAL TESTING ONLY — see README.md.
+#
+#   tools/wa-local/up        start everything, print the addresses
+#   tools/wa-local/down      stop everything
+#
+# Four processes, all on the sandbox database and none on the shop's real
+# Meta credentials:
+#
+#   api      :4000   the POS's API
+#   web      :3000   the POS
+#   webhook  :3001   the real webhook, with a secret made up for this laptop
+#   bridge   :3099   Baileys + the real worker loop, and the link page
+#
+# NEVER run `pnpm dev` beside this: it starts the ordinary worker, which loads
+# secrets/webhook-credentials.env and would answer the same queue through the
+# shop's real number.
+set -u
+here=$(cd "$(dirname "$0")" && pwd)
+root=$(cd "$here/../.." && pwd)
+state=$here/.state
+mkdir -p "$state/logs"
+
+export DATABASE_URL=${WA_LOCAL_DATABASE_URL:-postgresql://nusantara@localhost:5432/nusantara_pos_chatbot}
+export APP_ENV=dev
+
+for port in 3000 3001 4000 3099; do
+  if lsof -nP -iTCP:$port -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "Port $port is taken (run tools/wa-local/down, or stop whatever holds it)."
+    exit 1
+  fi
+done
+
+# A secret for THIS laptop's webhook. Not Meta's: nothing here talks to Meta.
+env_file=$state/local.env
+if [ ! -f "$env_file" ]; then
+  umask 077
+  {
+    echo "APP_SECRET='$(openssl rand -hex 24)'"
+    echo "VERIFY_TOKEN='$(openssl rand -hex 12)'"
+    echo "WHATSAPP_TOKEN='wa-local'"
+    echo "PHONE_NUMBER_ID='wa-local'"
+  } >"$env_file"
+fi
+export API_ENV_FILE=$env_file WEBHOOK_ENV_FILE=$env_file WORKER_ENV_FILE=$env_file
+APP_SECRET=$(sed -n "s/^APP_SECRET='\(.*\)'$/\1/p" "$env_file")
+export APP_SECRET
+
+# The Anthropic credential, and only that, out of the real secrets file — which
+# in a git worktree lives in the main checkout. Read into the environment and
+# never written anywhere.
+secrets=$root/secrets/webhook-credentials.env
+[ -f "$secrets" ] || secrets=$(git -C "$root" worktree list --porcelain | sed -n '1s/^worktree //p')/secrets/webhook-credentials.env
+for key in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; do
+  if [ -z "${!key:-}" ] && [ -f "$secrets" ]; then
+    value=$(sed -n "s/^$key=//p" "$secrets" | head -1 | sed -e 's/^["'\'']//' -e 's/["'\'']$//')
+    [ -n "$value" ] && export "$key=$value"
+  fi
+done
+if [ -z "${ANTHROPIC_API_KEY:-}${ANTHROPIC_AUTH_TOKEN:-}" ]; then
+  echo "No Anthropic credential found — the bot will hand every message to staff."
+fi
+
+start() { # name, directory, command…
+  local name=$1 dir=$2
+  shift 2
+  (cd "$dir" && nohup "$@" >"$state/logs/$name.log" 2>&1 &
+   echo $! >"$state/$name.pid")
+}
+start api "$root/apps/api" pnpm exec tsx src/server.ts
+start webhook "$root/apps/whatsapp-webhook" pnpm exec tsx src/server.ts
+start web "$root/apps/web" pnpm exec vite --port 3000 --strictPort
+start bridge "$root" pnpm exec tsx tools/wa-local/src/main.ts
+
+echo "POS            http://localhost:3000"
+echo "Link WhatsApp  http://127.0.0.1:3099"
+echo "Logs           $state/logs/"
