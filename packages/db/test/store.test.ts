@@ -2858,6 +2858,70 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
     }
   }, 180_000);
 
+  it("deletes an Income & Expense adjustment, and refuses one inside a closed book (2026-10-24)", async () => {
+    await loadDemo(); // the payment methods an expense names
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    const today = new Date().toISOString().slice(0, 10);
+    const add = async (id: string): Promise<Row> => {
+      const created = await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { expenses: [] },
+            {
+              expenses: [
+                {
+                  id,
+                  kind: "OPERATIONAL",
+                  amount: 60_200,
+                  date: today,
+                  method: "TRANSFER",
+                  note: "ZZ test input",
+                },
+              ],
+            },
+          ),
+        ),
+      });
+      return decodeRow("expenses", (created.rows.expenses as Row[])[0]!);
+    };
+    const remove = (row: Row) =>
+      commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ expenses: [row] }, { expenses: [] }),
+        ),
+      });
+    try {
+      const first = await add("exp_app_delete");
+      const removal = await remove(first);
+      expect(removal.removed.expenses).toEqual(["exp_app_delete"]);
+      expect(
+        await db.expense.findUnique({ where: { id: "exp_app_delete" } }),
+      ).toBeNull();
+
+      const second = await add("exp_app_closed");
+      await db.appSetting.upsert({
+        where: { key: "finance.booksClosedAt" },
+        create: {
+          key: "finance.booksClosedAt",
+          value: new Date(Date.now() + 86_400_000).toISOString(),
+          updatedAt: new Date(),
+        },
+        update: { value: new Date(Date.now() + 86_400_000).toISOString() },
+      });
+      await expect(remove(second)).rejects.toThrow(/sudah ditutup/);
+    } finally {
+      await db.appSetting.deleteMany({
+        where: { key: "finance.booksClosedAt" },
+      });
+      await db.expense.deleteMany({
+        where: { id: { in: ["exp_app_delete", "exp_app_closed"] } },
+      });
+      await app.$disconnect();
+    }
+  }, 180_000);
+
   it("merges a duplicate product: units move, the old variant is kept and marked, a third copy is refused (2026-10-21)", async () => {
     const shop = await loadDemo();
     const category = (shop["models"] as Row[])[0]!["category"];

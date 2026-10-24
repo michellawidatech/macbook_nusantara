@@ -204,6 +204,8 @@ export function AdjustmentPanel({
   const save = () =>
     form.validateFields().then((v) => {
       const date = v.date.format("YYYY-MM-DD");
+      // Income & Expense sorts a day's typed rows by when they were typed.
+      const createdAt = new Date().toISOString();
       mutate((d) => {
         if (v.direction === "MOVE") {
           const move = MOVES.find((m) => m.value === v.reason) ?? MOVES[0];
@@ -214,6 +216,7 @@ export function AdjustmentPanel({
             label: note,
             amount: v.amount,
             date,
+            createdAt,
             method: move.from,
           });
           d.incomes.unshift({
@@ -221,6 +224,7 @@ export function AdjustmentPanel({
             reason: "TRANSFER",
             amount: v.amount,
             date,
+            createdAt,
             method: move.to,
             note,
           });
@@ -232,6 +236,7 @@ export function AdjustmentPanel({
             reason: v.reason as IncomeReason,
             amount: v.amount,
             date,
+            createdAt,
             method: v.method,
             ...(v.note ? { note: v.note } : {}),
             ...(v.orderId ? { orderId: v.orderId } : {}),
@@ -243,6 +248,7 @@ export function AdjustmentPanel({
           kind: v.reason as ExpenseKind,
           amount: v.amount,
           date,
+          createdAt,
           method: v.method,
           ...(v.note ? { note: v.note } : {}),
           ...(v.orderId ? { orderId: v.orderId } : {}),

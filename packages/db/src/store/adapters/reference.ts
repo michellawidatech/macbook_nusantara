@@ -7,8 +7,9 @@
  * history — a sale names its payment method, an expense its category — so a
  * removal is refused and the page offers "inactive" instead, which is what
  * every one of these screens already does. The exceptions are a discount
- * no sale has redeemed (`removeUnusedDiscount`) and a supplier or customer no
- * document names (`removeUnusedSupplier`, `removeUnusedCustomer`).
+ * no sale has redeemed (`removeUnusedDiscount`), a supplier or customer no
+ * document names (`removeUnusedSupplier`, `removeUnusedCustomer`), and money
+ * typed in by hand (`removeAdjustment`), which nothing points at.
  */
 import { deepEqual } from "@nusantara/store";
 import type { Tx } from "../../client.js";
@@ -963,6 +964,50 @@ async function removeUnusedCustomer(
 // Money typed in by hand
 // ---------------------------------------------------------------------------
 
+/**
+ * An adjustment typed into Income & Expense can be deleted (owner ask
+ * 2026-10-24: "we should be able to delete the income expense adjustment").
+ * No foreign key points at `Expense` or `ManualIncome`, so nothing is
+ * orphaned; what IS checked here is the book close — a day inside a closed
+ * month keeps its adjustments, as it keeps its finished sales, and the browser
+ * asks the same (`lib/adjustmentDeletion.ts`). A cash ↔ bank move arrives as
+ * both halves in one changeset, because the browser removes both.
+ */
+async function removeAdjustment(
+  ctx: WriteContext,
+  collection: "expenses" | "incomes",
+  id: string,
+): Promise<void> {
+  const { tx } = ctx;
+  const row =
+    collection === "expenses"
+      ? await tx.expense.findUnique({ where: { id }, select: { date: true } })
+      : await tx.manualIncome.findUnique({
+          where: { id },
+          select: { date: true },
+        });
+  if (row === null) return;
+  const closed = await tx.appSetting.findUnique({
+    where: { key: "finance.booksClosedAt" },
+    select: { value: true },
+  });
+  if (closed && closed.value.trim() !== "") {
+    const until = new Date(closed.value);
+    // `date` is a Jakarta day; it is inside the close when its first instant is.
+    const starts = new Date(`${row.date}T00:00:00+07:00`);
+    if (!Number.isNaN(until.getTime()) && starts <= until) {
+      throw new StoreValidationError(
+        `Bukunya sudah ditutup untuk tanggal ${row.date}; penyesuaian ini tidak bisa dihapus (${collection} ${id}).`,
+        collection,
+        id,
+      );
+    }
+  }
+  if (collection === "expenses") await tx.expense.delete({ where: { id } });
+  else await tx.manualIncome.delete({ where: { id } });
+  ctx.touch(collection, id);
+}
+
 export const expenses: Adapter<"expenses"> = {
   collection: "expenses",
   async project(tx, _ctx, keys) {
@@ -981,6 +1026,7 @@ export const expenses: Adapter<"expenses"> = {
       referralSourceId: e.referralSourceId ?? undefined,
       method: e.method.code,
       orderId: e.orderId ?? undefined,
+      createdAt: isoOf(e.createdAt),
     }));
   },
   lock: (tx, keys) => lockRows(tx, "Expense", "id", keys),
@@ -988,7 +1034,10 @@ export const expenses: Adapter<"expenses"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("expenses", r.key);
+      if (n === undefined) {
+        await removeAdjustment(ctx, "expenses", r.key);
+        continue;
+      }
       const data = {
         label: blankToNull(n.label),
         kind: n.kind,
@@ -1005,7 +1054,9 @@ export const expenses: Adapter<"expenses"> = {
             id: n.id,
             ...data,
             staffId: ctx.staffId,
-            createdAt: ctx.now,
+            // The till's clock when it sent one: it is what ordered the row
+            // on screen, and it orders nothing but a day's typed rows.
+            createdAt: n.createdAt ? new Date(n.createdAt) : ctx.now,
           },
         });
       } else {
@@ -1032,6 +1083,7 @@ export const incomes: Adapter<"incomes"> = {
       note: i.note ?? undefined,
       method: i.method.code,
       orderId: i.orderId ?? undefined,
+      createdAt: isoOf(i.createdAt),
     }));
   },
   lock: (tx, keys) => lockRows(tx, "ManualIncome", "id", keys),
@@ -1039,7 +1091,10 @@ export const incomes: Adapter<"incomes"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("incomes", r.key);
+      if (n === undefined) {
+        await removeAdjustment(ctx, "incomes", r.key);
+        continue;
+      }
       const data = {
         reason: n.reason,
         amount: n.amount,
@@ -1054,7 +1109,7 @@ export const incomes: Adapter<"incomes"> = {
             id: n.id,
             ...data,
             staffId: ctx.staffId,
-            createdAt: ctx.now,
+            createdAt: n.createdAt ? new Date(n.createdAt) : ctx.now,
           },
         });
       } else {

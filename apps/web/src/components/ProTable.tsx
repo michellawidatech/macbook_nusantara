@@ -112,6 +112,13 @@ export type ProColumn<T> = AntColumn<T> & {
    * already follows for a row with no value.
    */
   dateRange?: boolean;
+  /**
+   * The instant or day the date-range filter reads, when the column SORTS on
+   * something else — Income & Expense sorts its Date column on the order the
+   * running balance was walked in, so two rows of one day cannot trade places
+   * (2026-10-24), and that order is a number, not a date.
+   */
+  dateValue?: (record: T) => string | undefined | null;
 };
 
 /** A date filter's bounds as local `YYYY-MM-DD` days; either may be open. */
@@ -410,7 +417,9 @@ export function ProTable<T extends object>({
       for (const { col, key } of dateCols) {
         const r = ranges[key];
         if (!rangeSet(r)) continue;
-        const day = dayOfValue(valueOf(col, row));
+        const day = dayOfValue(
+          col.dateValue ? (col.dateValue(row) ?? undefined) : valueOf(col, row),
+        );
         if (day === undefined) return false;
         if (r![0] !== null && day < r![0]) return false;
         if (r![1] !== null && day > r![1]) return false;
@@ -454,6 +463,7 @@ export function ProTable<T extends object>({
           searchValue,
           defaultSortOrder,
           dateRange,
+          dateValue: _dateValue,
           ...antCol
         } = col;
         const key = colKey(col, i);

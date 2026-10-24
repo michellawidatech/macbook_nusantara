@@ -668,6 +668,23 @@ describe("an unused supplier or customer can be deleted (2026-10-21)", () => {
   });
 });
 
+describe("an Income & Expense adjustment can be deleted (2026-10-24)", () => {
+  it("grants DELETE on the two tables to the app alone", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_app','"Expense"','DELETE')         AS app_expense,
+              has_table_privilege('nusantara_app','"ManualIncome"','DELETE')    AS app_income,
+              has_table_privilege('nusantara_agent','"Expense"','DELETE')       AS agent_expense,
+              has_table_privilege('nusantara_app','"Expense"','TRUNCATE')       AS app_truncate`,
+    );
+    expect(rows[0]).toEqual({
+      app_expense: true,
+      app_income: true,
+      agent_expense: false,
+      app_truncate: false,
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 
 describe("the ledger's two admitted edits (2026-09-23, in the database 2026-09-24)", () => {

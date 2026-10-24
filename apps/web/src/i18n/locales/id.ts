@@ -4389,4 +4389,15 @@ export const id: Record<string, string> = {
   "cashflow.breakdownTitle": "Rincian pengeluaran",
   "cashflow.otherExpenses": "Lainnya",
   "cashflow.noExpenses": "Tidak ada pengeluaran di periode ini.",
+  "cashflow.deleteClosed":
+    "Buku sudah ditutup untuk bulan ini. Buka kembali untuk menghapus penyesuaian ini.",
+  "cashflow.deleteTitle": "Hapus penyesuaian ini?",
+  "cashflow.deleteMoveBody":
+    "{{description}} — {{amount}}. Kedua sisi perpindahan kas ↔ bank ini dihapus permanen, dan saldo dihitung ulang tanpanya.",
+  "cashflow.deleteBody":
+    "{{description}} — {{amount}}. Penyesuaian ini dihapus permanen, dan saldo dihitung ulang tanpanya.",
+  "cashflow.deleteOk": "Hapus penyesuaian",
+  "cashflow.deleted": "Penyesuaian dihapus.",
+  "cashflow.deleteAdjustment": "Hapus penyesuaian",
+  "cashflow.deleteAdjustmentAria": "Hapus {{description}}",
 };

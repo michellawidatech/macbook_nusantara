@@ -1397,6 +1397,7 @@ export function CustomerReturnPanel({
           kind: "REFUND",
           amount: outcome.refund,
           date: day,
+          createdAt: new Date().toISOString(),
           method: refundMethod,
           note: description,
         });
@@ -1407,6 +1408,7 @@ export function CustomerReturnPanel({
           reason: "REFUND",
           amount: outcome.topUp,
           date: day,
+          createdAt: new Date().toISOString(),
           method: refundMethod,
           note: description,
         });

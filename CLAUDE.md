@@ -3033,6 +3033,31 @@ Decisions that outlived those documents:
   from the opening balance on), following the Cash basis / Accrual switch —
   accrual adds a pending payout to the bank — and both read **Rp ••••••**
   until the eye is pressed (per visit, never remembered).
+- **Income & Expense's top row is the latest balance, and an adjustment can
+  be deleted — 2026-10-24.** Owner report: Transaction History said Rp
+  21.722.500 came in, two expenses (Rp 60.200 + Rp 40.100) were typed, and the
+  top row's Latest balance still read Rp 21.722.500 — so the shop counted
+  Rp 100.300 missing. The figures were right; the ORDER was not. A typed
+  adjustment carried a date and no time (it sat at noon UTC), so a day's
+  typed rows tied, and a stable newest-first sort kept them oldest on top.
+  - **Every row shows its hour and minute.** A typed row sits on the day
+    somebody picked at the clock time they typed it (`typedAt`, from
+    `createdAt`); noon only when there is no `createdAt`.
+  - `chronological` (CashflowPage) is a TOTAL order — instant, then when the
+    row was typed (`createdAt`), then key — and the Date column sorts on each
+    row's position in it (`ProColumn.dateValue` keeps the date filter on the
+    date). The running balance walks the same order backwards, so the view and
+    the walk cannot disagree again.
+  - `createdAt` is in the store contract for `expenses` and `incomes` now
+    (optional; the column always existed). The till stamps it and the server
+    keeps it — it orders a day's typed rows and nothing else.
+  - **Delete** is a bin on a typed row (`lib/adjustmentDeletion.ts`), behind a
+    confirm. A cash ↔ bank move goes as BOTH halves (matched by day, amount
+    and note — nothing links them). Refused inside a closed book, in the
+    browser and in the adapter. Migration `20261024090000_adjustment_delete`
+    grants `nusantara_app` DELETE on `Expense` and `ManualIncome` only —
+    nothing points at either table. The fifth hard delete; do not generalise
+    it.
 - **Edit transaction is ONE Items table, 2026-10-22** — *"item name first,
   then serial or qty"*. Item (every live variant) · Serial / Qty · Price ·
   remove, and one *Add an item*. The product picked decides the row: a

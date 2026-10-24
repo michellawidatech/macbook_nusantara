@@ -767,6 +767,12 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     method: z.string().min(1),
     /** The sale it is about, where the category names one (2026-09-23). */
     orderId: id.optional(),
+    /**
+     * When it was typed — `ManualIncome.createdAt`; the till's clock when it
+     * sends one, the server's otherwise. Orders a day's typed rows on Income &
+     * Expense, which carry a date and no time (2026-10-24), and nothing else.
+     */
+    createdAt: instant.optional(),
   });
 
   const expense = z.strictObject({
@@ -780,6 +786,8 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     method: z.string().min(1),
     /** The sale it is about, where the category names one (2026-09-23). */
     orderId: id.optional(),
+    /** When it was typed — `Expense.createdAt`; see `income`. */
+    createdAt: instant.optional(),
   });
 
   const chat = z.strictObject({
