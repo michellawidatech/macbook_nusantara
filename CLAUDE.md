@@ -3106,6 +3106,52 @@ Decisions that outlived those documents:
     Unsend (behind a confirm) only while the server says each is possible.
   - ⚠️ An unsent row keeps `replyText` and its outbox row — nothing is
     deleted, and *Write it for me* leaves unsent lines out of the turns.
+- **Service, supplier refunds, unpaid returns and the QC finder — 2026-10-26.**
+  Spec `docs/superpowers/specs/2026-10-26-service-returns-qc-design.md`, owner-
+  approved; migration `20261026090000_service_charges_and_supplier_refunds`.
+  - **Nothing finds "the bench" by `Location.kind` any more** — in the shop, 04
+    is *Gudang Masuk Belum QC*, and *Back in stock* defaulting to it while
+    excluding it is what drew a raw `wh-04`. `components/SendToServiceModal`
+    is the ONE dialog (QC row, an accepted row's ⋯, Inventory's unit ⋯): *Where
+    is it serviced?* (its own warehouse by default), courier fee only when it
+    travels, and per charge **Paid with** Bank / Other bank / Cash / Not paid
+    yet. QC and TERSEDIA only. Stock out is write-offs only, and its counted
+    picker lists variants with stock.
+  - **A paid charge is an `Expense` of kind `UNIT`** ("Unit expense",
+    `Expense.serviceFeeId`, unique; `automatic`, so Add adjustment never offers
+    it). It is already in `costOfUnit`, so P&L keeps it out of
+    `OPERATING_KINDS`. ⚠️ The CHARGE owns its expense ON THE SERVER: removing a
+    fee or its visit deletes it, an amount edit moves it — an account without
+    finance access is sent no expenses. `fees[].paid` is DERIVED (no column).
+  - **A charge, or a whole visit (dialog + serial typed back), can be
+    deleted** with the history rows it wrote (`lib/serviceActions.ts`, matched
+    by shared instants — `appendEvent` takes `at`). Refused once the unit
+    moved on, and in a closed book judged by the Jakarta day. ⚠️ The sixth
+    sanctioned hard delete: `nusantara_app` holds DELETE on
+    `ServiceVisit`/`ServiceFee` only. Do not generalise it.
+  - **A supplier return carries its money** (`components/SupplierReturnModal`,
+    `lib/supplierReturn.ts`, rule C — owner answer). The credit (`Unit.buy`,
+    editable, + the service charges on a button) first comes off what the
+    invoice's GOODS still owe, as a `RETUR_SUPPLIER` PoPayment (`inBalance:
+    false`, `returnId`; no pot by name, in no picker, not on Income & Expense);
+    the rest is a REFUND `ManualIncome` naming the return, or *Awaiting refund*
+    until **Mark received**. Undo removes the credit and KEEPS a received
+    refund. `returns[].refundReceived` is derived server-side for the same
+    finance-access reason.
+  - **"Unpaid, returned" / "Partly paid, returned"** (`salePaymentStatus`,
+    `returnedDebt` in lib/saleStatus.ts) replace a misleading Settled; Income &
+    Expense (Accrual) keeps one struck-through row that never counts. ⚠️ Reads
+    0 — the old word — for an exchange and wherever a marketplace was involved:
+    a cut held payment leaves no row to tell it from a debt.
+  - **Waiting for QC** on `/inbound` (`lib/qcWaiting.ts`): units in QC on an
+    invoice plus serial-less slots on an ARRIVED invoice; one search answers
+    "which invoice has this product" and "what is left on this invoice". The
+    list gained **To QC**, its search reads the invoice number, and the nav
+    leaf carries the count (`NavBadge`).
+  - **`ops/purge-unit SERIAL`** (dry run; `--apply` backs up and asks for the
+    serial back) removed the test unit FV29837462 and every row naming it,
+    audit lines included, writing no trace; the invoice line stays waiting for
+    a serial. A one-off like `reset-transactions`; do not generalise it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
