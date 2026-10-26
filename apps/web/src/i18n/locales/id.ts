@@ -4400,4 +4400,18 @@ export const id: Record<string, string> = {
   "cashflow.deleted": "Penyesuaian dihapus.",
   "cashflow.deleteAdjustment": "Hapus penyesuaian",
   "cashflow.deleteAdjustmentAria": "Hapus {{description}}",
+
+  // ── Waiting for QC on /inbound, and its count on the nav (2026-10-26) ─────
+  "qcWaiting.title": "Menunggu QC ({{count}})",
+  "qcWaiting.search": "Cari produk, kode SKU, serial, order atau nomor invoice",
+  "qcWaiting.openRow": "Buka {{code}} untuk {{unit}}",
+  "qcWaiting.product": "Produk",
+  "qcWaiting.serial": "Serial",
+  "qcWaiting.noSerialYet": "Belum ada serial",
+  "qcWaiting.invoice": "Invoice",
+  "qcWaiting.supplier": "Supplier",
+  "qcWaiting.arrived": "Tiba",
+  "qcWaiting.daysWaiting": "Hari menunggu",
+  "inboundList.toQc": "Belum QC",
+  "nav.qcWaiting": "{{count}} unit menunggu QC",
 };

@@ -43,6 +43,8 @@ import {
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { OrphanQcCard } from "../../components/OrphanQcCard";
+import { QcWaitingCard } from "./QcWaitingCard";
+import { qcWaitingByPo, qcWaitingRows } from "../../lib/qcWaiting.js";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import { mutate, useDb } from "../../mock/store.js";
 import {
@@ -72,6 +74,8 @@ interface Row {
   readonly outstanding: number;
   /** Filed away: read-only until reopened, so no payment can be added. */
   readonly closed: boolean;
+  /** Units (and unscanned slots) still waiting for QC — `lib/qcWaiting.ts`. */
+  readonly toQc: number;
 }
 
 export function InboundPage() {
@@ -154,6 +158,13 @@ export function InboundPage() {
     });
   };
 
+  /**
+   * Every unit still owed a grade, across every invoice (owner ask
+   * 2026-10-26) — the card above the list, and the To QC count on each row.
+   */
+  const qcRows = useMemo(() => qcWaitingRows(db, Date.now()), [db]);
+  const toQcByPo = useMemo(() => qcWaitingByPo(qcRows), [qcRows]);
+
   const rows = useMemo<Row[]>(
     () =>
       [...db.pos]
@@ -183,9 +194,10 @@ export function InboundPage() {
             paid: totals.paid,
             outstanding: totals.outstanding,
             closed: poClosed(po),
+            toQc: toQcByPo.get(po.id) ?? 0,
           };
         }),
-    [db, t],
+    [db, t, toQcByPo],
   );
 
   return (
@@ -207,6 +219,7 @@ export function InboundPage() {
        * Above the list because it is work outstanding, and the list behind it
        * is a record. See `components/OrphanQcCard.tsx`.
        */}
+      <QcWaitingCard rows={qcRows} />
       <OrphanQcCard />
       {/*
        * Anchored to the pointer by a zero-size element, which is how antd
@@ -285,6 +298,10 @@ export function InboundPage() {
               title: t("inboundList.order", "Order"),
               dataIndex: "code",
               searchable: true,
+              // The supplier's invoice number is searched too, as the box's
+              // placeholder has always promised (2026-10-26) — it is the
+              // number quoted on the telephone.
+              searchValue: (r) => `${r.code} ${r.invoice}`,
               sortValue: (r) => r.code,
               defaultSortOrder: "descend",
               render: (v: string, r) => (
@@ -310,6 +327,21 @@ export function InboundPage() {
               dataIndex: "date",
               sortValue: (r) => r.date,
               render: (v: string) => fmtDate(v),
+            },
+            {
+              // How many of its units the bench still owes a grade
+              // (2026-10-26). 0 prints as 0: a finished invoice says so.
+              title: t("inboundList.toQc", "To QC"),
+              dataIndex: "toQc",
+              align: "right",
+              width: COLUMN.qty,
+              sortValue: (r) => r.toQc,
+              render: (v: number) =>
+                v === 0 ? (
+                  <Typography.Text type="secondary">0</Typography.Text>
+                ) : (
+                  <Typography.Text strong>{v}</Typography.Text>
+                ),
             },
             {
               /*

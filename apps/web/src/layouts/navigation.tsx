@@ -38,7 +38,15 @@ import {
 export interface NavLeaf {
   readonly path: string;
   readonly label: string;
+  /**
+   * A count drawn beside the label — work waiting behind that leaf. Named
+   * here, drawn by `NavBadge`, so the tree stays the one place that says
+   * what the nav holds.
+   */
+  readonly badge?: NavBadgeKind;
 }
+/** What a leaf's count counts. One so far. */
+export type NavBadgeKind = "qcWaiting";
 export interface NavSection {
   readonly key: string;
   readonly label: string;
@@ -59,7 +67,11 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       // job — Purchase Order and Stock In (QC) were two menu items for two
       // halves of it, which left "where is that order up to?" with no screen
       // that could answer it.
-      { path: "/inbound", label: "Inbound & QC" },
+      //
+      // The badge is the units still waiting for QC across every invoice
+      // (owner ask 2026-10-26) — the one number that says the bench is
+      // behind, visible from any screen.
+      { path: "/inbound", label: "Inbound & QC", badge: "qcWaiting" },
       // The owner's own word for the till. "Point of Sale" named the software
       // category; "New Transaction" names what the button does.
       { path: "/stock/out", label: "New Transaction" },
