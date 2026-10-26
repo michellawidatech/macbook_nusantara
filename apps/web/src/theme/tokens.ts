@@ -464,6 +464,15 @@ export const NAV = {
   panelRadius: 16,
   /** Breathing room between the panels and the column's edges. */
   gutter: 10,
+  /*
+   * A count on a nav row — units waiting for QC on Inbound & QC
+   * (2026-10-26). Gold with the mark's green on it, because the row it sits
+   * on is either the dark gradient or the white selected pill: antd's red
+   * reads as an error on both, and a white badge vanishes into the pill. The
+   * text is 6:1 on the gold, which is what has to be read.
+   */
+  badgeBg: "#ffd666",
+  badgeText: BRAND_DEEP,
 } as const;
 
 /**

@@ -26,6 +26,8 @@ import userEvent from "@testing-library/user-event";
 import { AppLayout } from "../src/layouts/AppLayout.js";
 import { LocaleProvider } from "../src/i18n/LocaleProvider.js";
 import { ThemeProvider } from "../src/theme/ThemeProvider.js";
+import { getDb, mutate } from "../src/mock/store.js";
+import { qcWaitingCount } from "../src/lib/qcWaiting.js";
 
 /**
  * Force the desktop layout.
@@ -200,5 +202,47 @@ describe("the nav column", () => {
     expect(
       document.querySelector(".ant-layout-sider-collapsed"),
     ).not.toBeNull();
+  });
+
+  it("counts the units waiting for QC on Inbound & QC, and nothing at zero", async () => {
+    // Owner ask 2026-10-26: which units are not QCed yet, visible from any
+    // screen. Inbound & QC is under Stock, which the route opens.
+    mutate((d) => {
+      const po = d.pos[0]!;
+      d.units.push({
+        serial: "C02NAVBADGE1",
+        skuId: d.skus[0]!.id,
+        status: "QC",
+        locationId: po.locationId,
+        buy: 1_000_000,
+        description: "",
+        poId: po.id,
+      });
+    });
+    const waiting = qcWaitingCount(getDb());
+    expect(waiting).toBeGreaterThan(0);
+    const first = renderShell();
+    const link = screen.getByRole("link", { name: /^Inbound & QC/ });
+    const badge = link.querySelector('[data-nav-badge="qcWaiting"]');
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toContain(String(waiting));
+    expect(
+      badge!.querySelector(`[title="${waiting} unit(s) waiting for QC"]`),
+    ).not.toBeNull();
+    first.unmount();
+
+    // A caught-up bench: no units in QC on an invoice, no box unscanned.
+    mutate((d) => {
+      d.units = d.units.filter((u) => u.status !== "QC" || u.poId === null);
+      for (const po of d.pos) {
+        if (po.status === "RECEIVED") po.status = "ORDERED";
+      }
+    });
+    renderShell();
+    expect(
+      screen
+        .getByRole("link", { name: /^Inbound & QC/ })
+        .querySelector('[data-nav-badge="qcWaiting"]'),
+    ).toBeNull();
   });
 });

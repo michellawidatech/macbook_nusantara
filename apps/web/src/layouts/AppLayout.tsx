@@ -48,6 +48,7 @@ import {
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { matchLeaf, navSectionsFor } from "./navigation.js";
+import { NavBadge } from "./NavBadge.js";
 import { useLayoutMode } from "./useLayoutMode.js";
 import { ScannerChip } from "../components/ScannerChip.js";
 import { BrandMark } from "../components/BrandMark.js";
@@ -211,7 +212,12 @@ export function AppLayout({ staff }: { staff: Staff }) {
         label: s.path ? <Link to={s.path}>{t(s.label)}</Link> : t(s.label),
         children: s.children?.map((c) => ({
           key: c.path,
-          label: <Link to={c.path}>{t(c.label)}</Link>,
+          label: (
+            <Link to={c.path}>
+              {t(c.label)}
+              {c.badge !== undefined && <NavBadge kind={c.badge} />}
+            </Link>
+          ),
         })),
       })),
     [t, staff],
