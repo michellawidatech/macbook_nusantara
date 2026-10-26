@@ -1,0 +1,286 @@
+#!/bin/zsh
+# Remove a TEST unit as though it was never entered in the POS (owner ask
+# 2026-10-26: FV29837462 was keyed in to try the app out). The serial, its
+# whole history, its notes and QC photos, its service visits and charges, its
+# supplier return, its stock-in and adjustment rows, its stock-count scans and
+# every activity-log line that names it — gone, not marked.
+#
+#   sudo -u _nusantara /opt/nusantara/current/ops/purge-unit FV29837462
+#   sudo -u _nusantara /opt/nusantara/current/ops/purge-unit --apply FV29837462
+#
+# Without --apply it is a DRY RUN: it does all of it inside a transaction,
+# prints a count per table of what goes, and rolls back.
+#
+# Found by `serial`, and also as the app archives one (`SERIAL~ARSIP~<ms>`).
+#
+# KEPT: the purchase invoice and its line (owner answer) — the line's slot
+# reads "waiting for a serial" again; only the serial's link to it goes. A
+# chatbot task that named the unit keeps everything but that link. The chat
+# itself (messages, outbox) is not touched: the preview lists any column that
+# still names the serial afterwards, so nothing is left there unannounced.
+#
+# Refused (nothing changes) when the unit reached anything that involves a
+# person or another document: a sale line, a sold mark, a hold or a booking
+# proposal, a trade-in, a warranty claim, an exchange on another unit's
+# return, or another unit's history naming one of its returns. A test unit
+# that got that far needs a person.
+#
+# Works on a schema with or without the 2026-10-26 money links
+# (Expense.serviceFeeId, Payment.unitReturnId, ManualIncome.unitReturnId):
+# where a link exists, the service-charge expenses and the supplier-return
+# payments and refunds go with the unit.
+#
+# Safety: a pg_dump first (ops/backup, label before-purge-unit), the serial
+# typed back, one transaction, and every open POS tab reloads (StoreChange
+# restarts). NO AuditLog line is written — the owner asked for no trace.
+# A one-off owner decision like reset-transactions — not a tool and not a
+# precedent for the never-delete rule.
+setopt err_exit no_unset pipe_fail
+
+home=${NUSANTARA_HOME:-/opt/nusantara}
+pgbin=${PG_BIN:-/opt/homebrew/opt/postgresql@16/bin}
+dbname=${NUSANTARA_DB:-nusantara_pos_prod}
+apply=0
+if [[ ${1:-} == --apply ]]; then apply=1; shift; fi
+(( $# == 1 )) || { print -u2 "usage: purge-unit [--apply] SERIAL"; exit 64 }
+serial=${1:u}
+[[ $serial =~ '^[A-Z0-9~-]+$' ]] || { print -u2 "purge-unit: not a serial: $serial"; exit 64 }
+
+export PGPASSFILE=$home/etc/pgpass
+psql=($pgbin/psql --host=127.0.0.1 --username=nusantara --dbname=$dbname
+  -X -v ON_ERROR_STOP=1 --quiet -v serial="$serial")
+
+body=$(cat <<'SQL'
+-- The serial as typed, and every serial the unit has been filed under.
+CREATE TEMP TABLE p_unit ON COMMIT DROP AS
+  SELECT id, serial FROM "Unit"
+   WHERE serial = :'serial' OR serial LIKE :'serial' || '~ARSIP~%';
+CREATE TEMP TABLE p_serial ON COMMIT DROP AS
+  SELECT :'serial'::text AS serial UNION SELECT serial FROM p_unit;
+-- A serial standing alone in a text: not the tail of a longer one.
+CREATE TEMP TABLE p_re ON COMMIT DROP AS
+  SELECT '(^|[^A-Z0-9])' || :'serial' || '([^A-Z0-9]|$)' AS re;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM p_unit) THEN
+    RAISE EXCEPTION 'no unit with that serial';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "OrderItem" WHERE "unitId" IN (SELECT id FROM p_unit))
+     OR EXISTS (SELECT 1 FROM "Unit" WHERE id IN (SELECT id FROM p_unit) AND "soldOrderItemId" IS NOT NULL) THEN
+    RAISE EXCEPTION 'this unit is on a sale — delete the transaction in the app first, or ask for a person';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "ReservationItem" WHERE "unitId" IN (SELECT id FROM p_unit)) THEN
+    RAISE EXCEPTION 'this unit has been held for a customer (a reservation names it) — needs a person';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "ReservationProposalItem" WHERE "unitId" IN (SELECT id FROM p_unit)) THEN
+    RAISE EXCEPTION 'the chatbot proposed this unit in a booking — needs a person';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "TradeIn" WHERE "unitId" IN (SELECT id FROM p_unit)
+                OR serial IN (SELECT serial FROM p_serial)) THEN
+    RAISE EXCEPTION 'this unit came in as a trade-in on a sale — needs a person';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "WarrantyClaim" WHERE "unitId" IN (SELECT id FROM p_unit)) THEN
+    RAISE EXCEPTION 'a warranty claim names this unit — needs a person';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "UnitReturn" WHERE "exchangeUnitId" IN (SELECT id FROM p_unit)
+                AND "unitId" NOT IN (SELECT id FROM p_unit)) THEN
+    RAISE EXCEPTION 'this unit went out as the exchange on another unit''s return — needs a person';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "UnitEvent" e JOIN "UnitReturn" r ON r.id = e."unitReturnId"
+              WHERE r."unitId" IN (SELECT id FROM p_unit) AND e."unitId" NOT IN (SELECT id FROM p_unit)) THEN
+    RAISE EXCEPTION 'another unit''s history names one of this unit''s returns — needs a person';
+  END IF;
+END $$;
+
+CREATE TEMP TABLE p_note ON COMMIT DROP AS
+  SELECT id FROM "UnitNote" WHERE "unitId" IN (SELECT id FROM p_unit);
+CREATE TEMP TABLE p_photo ON COMMIT DROP AS
+  SELECT id FROM "UnitNotePhoto" WHERE "noteId" IN (SELECT id FROM p_note);
+CREATE TEMP TABLE p_visit ON COMMIT DROP AS
+  SELECT id FROM "ServiceVisit" WHERE "unitId" IN (SELECT id FROM p_unit);
+CREATE TEMP TABLE p_fee ON COMMIT DROP AS
+  SELECT id FROM "ServiceFee" WHERE "visitId" IN (SELECT id FROM p_visit);
+CREATE TEMP TABLE p_event ON COMMIT DROP AS
+  SELECT id FROM "UnitEvent" WHERE "unitId" IN (SELECT id FROM p_unit);
+CREATE TEMP TABLE p_return ON COMMIT DROP AS
+  SELECT id FROM "UnitReturn" WHERE "unitId" IN (SELECT id FROM p_unit);
+CREATE TEMP TABLE p_sritem ON COMMIT DROP AS
+  SELECT id, "returnId" FROM "SupplierReturnItem" WHERE "unitId" IN (SELECT id FROM p_unit);
+-- An old-style supplier return document left with no lines goes with them.
+CREATE TEMP TABLE p_sreturn ON COMMIT DROP AS
+  SELECT DISTINCT "returnId" AS id FROM p_sritem s
+   WHERE NOT EXISTS (SELECT 1 FROM "SupplierReturnItem" o
+                      WHERE o."returnId" = s."returnId" AND o.id NOT IN (SELECT id FROM p_sritem));
+CREATE TEMP TABLE p_stockin ON COMMIT DROP AS
+  SELECT id FROM "StockIn" WHERE "unitId" IN (SELECT id FROM p_unit);
+CREATE TEMP TABLE p_adjust ON COMMIT DROP AS
+  SELECT id FROM "StockAdjustment" WHERE "unitId" IN (SELECT id FROM p_unit);
+CREATE TEMP TABLE p_scan ON COMMIT DROP AS
+  SELECT id FROM "OpnameScan"
+   WHERE "unitId" IN (SELECT id FROM p_unit) OR serial IN (SELECT serial FROM p_serial);
+CREATE TEMP TABLE p_surplus ON COMMIT DROP AS
+  SELECT id FROM "OpnameSurplus" WHERE serial IN (SELECT serial FROM p_serial);
+CREATE TEMP TABLE p_attr ON COMMIT DROP AS
+  SELECT id FROM "UnitAttribute" WHERE "unitId" IN (SELECT id FROM p_unit);
+CREATE TEMP TABLE p_poserial ON COMMIT DROP AS
+  SELECT id FROM "PurchaseOrderItemSerial"
+   WHERE "unitId" IN (SELECT id FROM p_unit) OR serial IN (SELECT serial FROM p_serial);
+CREATE TEMP TABLE p_chat ON COMMIT DROP AS
+  SELECT id FROM "ChatAction" WHERE "unitId" IN (SELECT id FROM p_unit);
+
+-- The 2026-10-26 money links, when this database has them.
+CREATE TEMP TABLE p_expense (id text) ON COMMIT DROP;
+CREATE TEMP TABLE p_income (id text) ON COMMIT DROP;
+CREATE TEMP TABLE p_payment (id text) ON COMMIT DROP;
+DO $$
+DECLARE
+  has_col boolean;
+BEGIN
+  SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_schema = current_schema() AND table_name = 'Expense'
+                    AND column_name = 'serviceFeeId') INTO has_col;
+  IF has_col THEN
+    EXECUTE 'INSERT INTO p_expense SELECT id FROM "Expense" WHERE "serviceFeeId" IN (SELECT id FROM p_fee)';
+  END IF;
+  SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_schema = current_schema() AND table_name = 'ManualIncome'
+                    AND column_name = 'unitReturnId') INTO has_col;
+  IF has_col THEN
+    EXECUTE 'INSERT INTO p_income SELECT id FROM "ManualIncome" WHERE "unitReturnId" IN (SELECT id FROM p_return)';
+  END IF;
+  SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_schema = current_schema() AND table_name = 'Payment'
+                    AND column_name = 'unitReturnId') INTO has_col;
+  IF has_col THEN
+    EXECUTE 'INSERT INTO p_payment SELECT id FROM "Payment" WHERE "unitReturnId" IN (SELECT id FROM p_return)';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "Settlement" WHERE "paymentId" IN (SELECT id FROM p_payment)) THEN
+    RAISE EXCEPTION 'a marketplace payout names a payment of this unit''s return — needs a person';
+  END IF;
+END $$;
+CREATE TEMP TABLE p_paylog ON COMMIT DROP AS
+  SELECT id FROM "PaymentLog" WHERE "paymentId" IN (SELECT id FROM p_payment);
+
+-- Every activity-log line about any of it.
+CREATE TEMP TABLE p_ids ON COMMIT DROP AS
+            SELECT id FROM p_unit
+  UNION ALL SELECT serial FROM p_serial
+  UNION ALL SELECT id FROM p_note      UNION ALL SELECT id FROM p_photo
+  UNION ALL SELECT id FROM p_visit     UNION ALL SELECT id FROM p_fee
+  UNION ALL SELECT id FROM p_event     UNION ALL SELECT id FROM p_return
+  UNION ALL SELECT id FROM p_sritem    UNION ALL SELECT id FROM p_sreturn
+  UNION ALL SELECT id FROM p_stockin   UNION ALL SELECT id FROM p_adjust
+  UNION ALL SELECT id FROM p_scan      UNION ALL SELECT id FROM p_surplus
+  UNION ALL SELECT id FROM p_attr      UNION ALL SELECT id FROM p_poserial
+  UNION ALL SELECT id FROM p_expense   UNION ALL SELECT id FROM p_income
+  UNION ALL SELECT id FROM p_payment   UNION ALL SELECT id FROM p_paylog;
+CREATE TEMP TABLE p_audit ON COMMIT DROP AS
+  SELECT a.id FROM "AuditLog" a, p_re
+   WHERE a."entityId" IN (SELECT id FROM p_ids)
+      OR a.before ~ p_re.re OR a.after ~ p_re.re;
+
+\echo '== The unit'
+SELECT u.serial, u.status, s.code AS variant, l.name AS warehouse,
+       po.code AS invoice, u."intakeAt"
+  FROM "Unit" u JOIN "Sku" s ON s.id = u."skuId" JOIN "Location" l ON l.id = u."locationId"
+  LEFT JOIN "PurchaseOrder" po ON po.id = u."purchaseOrderId"
+ WHERE u.id IN (SELECT id FROM p_unit) ORDER BY u.serial;
+
+\echo '== What goes, per table'
+SELECT what, n FROM (VALUES
+  (1,  'Unit',                              (SELECT count(*) FROM p_unit)),
+  (2,  'UnitEvent (serial history)',        (SELECT count(*) FROM p_event)),
+  (3,  'UnitNote',                          (SELECT count(*) FROM p_note)),
+  (4,  'UnitNotePhoto (QC photos)',         (SELECT count(*) FROM p_photo)),
+  (5,  'UnitAttribute',                     (SELECT count(*) FROM p_attr)),
+  (6,  'ServiceVisit',                      (SELECT count(*) FROM p_visit)),
+  (7,  'ServiceFee',                        (SELECT count(*) FROM p_fee)),
+  (8,  'Expense (service charges)',         (SELECT count(*) FROM p_expense)),
+  (9,  'UnitReturn',                        (SELECT count(*) FROM p_return)),
+  (10, 'Payment (return credit)',           (SELECT count(*) FROM p_payment)),
+  (11, 'PaymentLog',                        (SELECT count(*) FROM p_paylog)),
+  (12, 'ManualIncome (return refund)',      (SELECT count(*) FROM p_income)),
+  (13, 'SupplierReturnItem',                (SELECT count(*) FROM p_sritem)),
+  (14, 'SupplierReturn (left empty)',       (SELECT count(*) FROM p_sreturn)),
+  (15, 'StockIn',                           (SELECT count(*) FROM p_stockin)),
+  (16, 'StockAdjustment',                   (SELECT count(*) FROM p_adjust)),
+  (17, 'OpnameScan',                        (SELECT count(*) FROM p_scan)),
+  (18, 'OpnameSurplus',                     (SELECT count(*) FROM p_surplus)),
+  (19, 'PurchaseOrderItemSerial',           (SELECT count(*) FROM p_poserial)),
+  (20, 'AuditLog (activity lines)',         (SELECT count(*) FROM p_audit)),
+  (21, 'ChatAction (link cleared, kept)',   (SELECT count(*) FROM p_chat))
+) t(o, what, n) ORDER BY o;
+
+-- The deletes, children first.
+DELETE FROM "UnitNotePhoto" WHERE id IN (SELECT id FROM p_photo);
+DELETE FROM "UnitNote" WHERE id IN (SELECT id FROM p_note);
+DELETE FROM "Expense" WHERE id IN (SELECT id FROM p_expense);
+DELETE FROM "PaymentLog" WHERE id IN (SELECT id FROM p_paylog);
+DELETE FROM "Payment" WHERE id IN (SELECT id FROM p_payment);
+DELETE FROM "ManualIncome" WHERE id IN (SELECT id FROM p_income);
+DELETE FROM "ServiceFee" WHERE id IN (SELECT id FROM p_fee);
+DELETE FROM "ServiceVisit" WHERE id IN (SELECT id FROM p_visit);
+DELETE FROM "UnitEvent" WHERE id IN (SELECT id FROM p_event);
+DELETE FROM "UnitReturn" WHERE id IN (SELECT id FROM p_return);
+DELETE FROM "SupplierReturnItem" WHERE id IN (SELECT id FROM p_sritem);
+DELETE FROM "SupplierReturn" WHERE id IN (SELECT id FROM p_sreturn);
+DELETE FROM "StockIn" WHERE id IN (SELECT id FROM p_stockin);
+DELETE FROM "StockAdjustment" WHERE id IN (SELECT id FROM p_adjust);
+DELETE FROM "OpnameScan" WHERE id IN (SELECT id FROM p_scan);
+DELETE FROM "OpnameSurplus" WHERE id IN (SELECT id FROM p_surplus);
+DELETE FROM "UnitAttribute" WHERE id IN (SELECT id FROM p_attr);
+DELETE FROM "PurchaseOrderItemSerial" WHERE id IN (SELECT id FROM p_poserial);
+UPDATE "ChatAction" SET "unitId" = NULL WHERE id IN (SELECT id FROM p_chat);
+DELETE FROM "Unit" WHERE id IN (SELECT id FROM p_unit);
+DELETE FROM "AuditLog" WHERE id IN (SELECT id FROM p_audit);
+
+-- What still names the serial anywhere, after all of that: left alone on
+-- purpose (the chat), or something this script does not know about yet.
+-- StoreChange is emptied below, so it is not asked.
+CREATE TEMP TABLE p_left (tbl text, col text, n bigint) ON COMMIT DROP;
+DO $$
+DECLARE
+  c record;
+  k bigint;
+  pat text := (SELECT re FROM p_re);
+BEGIN
+  FOR c IN SELECT table_name, column_name FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND data_type IN ('text', 'character varying', 'json', 'jsonb')
+              AND table_name <> 'StoreChange'
+            ORDER BY 1, 2 LOOP
+    EXECUTE format('SELECT count(*) FROM %I WHERE %I::text ~ $1', c.table_name, c.column_name)
+       INTO k USING pat;
+    IF k > 0 THEN INSERT INTO p_left VALUES (c.table_name, c.column_name, k); END IF;
+  END LOOP;
+END $$;
+\echo '== Still naming the serial afterwards (left alone)'
+SELECT tbl AS "table", col AS "column", n FROM p_left ORDER BY 1, 2;
+
+-- Every open till reloads instead of showing what is gone. Last, so the
+-- lock it takes is held for the commit and nothing else.
+TRUNCATE TABLE "StoreChange" RESTART IDENTITY;
+SQL
+)
+
+run() { { print "BEGIN;"; print -r -- "$body"; print "$1;" } | $psql }
+
+print "Database: $dbname — unit: $serial"
+if (( ! apply )); then
+  run ROLLBACK
+  print "\nDRY RUN: nothing changed. Run again with --apply to do it."
+  exit 0
+fi
+
+run ROLLBACK
+print "\nBacking up first…"
+$home/current/ops/backup before-purge-unit
+print
+print "This deletes everything counted above for good, and leaves no line saying so."
+print -n "Type the serial again to go ahead: "
+read -r answer </dev/tty
+[[ ${answer:u} == $serial ]] || { print "Not confirmed. Nothing changed."; exit 1 }
+run COMMIT
+print "\nDone: $serial is gone from $dbname, with every row counted above."
+print "The invoice line it came in on is waiting for a serial again."
+print "Every open POS tab reloads itself on its next poll (a few seconds)."
