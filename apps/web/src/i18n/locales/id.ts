@@ -4418,4 +4418,9 @@ export const id: Record<string, string> = {
   "qcWaiting.daysWaiting": "Hari menunggu",
   "inboundList.toQc": "Belum QC",
   "nav.qcWaiting": "{{count}} unit menunggu QC",
+
+  // English-keyed (2026-10-26): the expense category a paid service charge is
+  // filed under, and the method a supplier-return credit is written with.
+  "Unit expense": "Biaya unit",
+  "Supplier return credit": "Kredit retur supplier",
 };

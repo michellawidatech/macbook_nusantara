@@ -323,6 +323,7 @@ export function AdjustmentPanel({
     readonly guide: string;
     readonly retired?: boolean;
     readonly needsTransaction?: boolean;
+    readonly automatic?: boolean;
   }[] =
     direction === "INCOME"
       ? INCOME_REASONS
@@ -337,6 +338,9 @@ export function AdjustmentPanel({
     // A retired category still reads back on rows already written; it is just
     // not something new money can be filed under (2026-09-23).
     .filter((c) => !c.retired)
+    // Written by the app itself — a paid service charge (2026-10-26) — and
+    // never by hand.
+    .filter((c) => !c.automatic)
     .map((c) => ({ value: c.value, label: t(c.label) }));
   /** Does the picked category mean nothing without a receipt beside it? */
   const needsTransaction =
@@ -687,7 +691,9 @@ export function AdjustmentPanel({
           // covered the expense half would send anyone asking about "Account
           // transfer" away empty-handed.
           dataSource={[...EXPENSE_CATEGORIES, ...INCOME_REASONS].filter(
-            (c) => !("retired" in c && c.retired),
+            (c) =>
+              !("retired" in c && c.retired) &&
+              !("automatic" in c && c.automatic),
           )}
           columns={[
             {

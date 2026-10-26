@@ -102,6 +102,7 @@ import {
 } from "../../lib/inboundDraft.js";
 import { useTranslation } from "react-i18next";
 import type { MockDb, Po, PoItem } from "../../mock/seed.js";
+import { isPickableMethod } from "../../lib/accounts.js";
 import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
 /**
@@ -339,7 +340,10 @@ export function InboundFormPage() {
     set(v ?? undefined);
 
   const poMethods = useMemo(
-    () => db.paymentMethods.filter((m) => m.forPo && m.active),
+    () =>
+      db.paymentMethods.filter(
+        (m) => m.forPo && m.active && isPickableMethod(m.code),
+      ),
     [db.paymentMethods],
   );
   /** What a line is worth, net of the discount knocked off that line. */

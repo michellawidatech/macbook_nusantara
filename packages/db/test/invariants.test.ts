@@ -685,6 +685,33 @@ describe("an Income & Expense adjustment can be deleted (2026-10-24)", () => {
   });
 });
 
+describe("a service charge or visit can be deleted (2026-10-26)", () => {
+  it("grants DELETE on the two service tables to the app alone, and nothing beside them", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_app','"ServiceVisit"','DELETE')   AS app_visit,
+              has_table_privilege('nusantara_app','"ServiceFee"','DELETE')     AS app_fee,
+              has_table_privilege('nusantara_agent','"ServiceFee"','DELETE')   AS agent_fee,
+              has_table_privilege('nusantara_app','"ServiceFee"','TRUNCATE')   AS app_truncate,
+              has_table_privilege('nusantara_app','"Unit"','DELETE')           AS app_unit,
+              has_table_privilege('nusantara_app','"UnitEvent"','DELETE')      AS app_event,
+              has_table_privilege('nusantara_app','"Payment"','DELETE')        AS app_payment,
+              has_table_privilege('nusantara_app','"UnitReturn"','DELETE')     AS app_return,
+              has_table_privilege('nusantara_app','"PurchaseOrder"','DELETE')  AS app_po`,
+    );
+    expect(rows[0]).toEqual({
+      app_visit: true,
+      app_fee: true,
+      agent_fee: false,
+      app_truncate: false,
+      app_unit: false,
+      app_event: false,
+      app_payment: false,
+      app_return: false,
+      app_po: false,
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 
 describe("the ledger's two admitted edits (2026-09-23, in the database 2026-09-24)", () => {

@@ -998,6 +998,12 @@ model Payment {
   /// 2026-09-22). The debt is paid; Income & Expense's balance does not move.
   /// Default true, which is what every payment before the column was.
   inBalance     Boolean      @default(true)
+  /// The supplier return this payment is the credit of (owner 2026-10-26):
+  /// a unit sent back takes what it was worth off what its invoice still
+  /// owes, written as a payment with method RETUR_SUPPLIER and
+  /// `inBalance: false` — the debt shrinks and no money moved. Undoing the
+  /// return voids exactly this payment rather than guessing which one.
+  unitReturnId  String?
 
   order       Order?            @relation(fields: [orderId], references: [id], onDelete: Restrict)
   po          PurchaseOrder?    @relation(fields: [poId], references: [id], onDelete: Restrict)
@@ -1007,6 +1013,7 @@ model Payment {
   method      PaymentMethod     @relation(fields: [methodId], references: [id], onDelete: Restrict)
   fromDeposit SupplierDeposit?  @relation(fields: [fromDepositId], references: [id], onDelete: Restrict)
   poFee       PurchaseOrderFee? @relation(fields: [poFeeId], references: [id], onDelete: Restrict)
+  unitReturn  UnitReturn?       @relation(fields: [unitReturnId], references: [id], onDelete: Restrict)
 
   logs        PaymentLog[]
   settlements Settlement[]
@@ -1016,6 +1023,7 @@ model Payment {
   @@index([methodId])
   @@index([poFeeId])
   @@index([customerId])
+  @@index([unitReturnId])
 }
 
 /// How money moved. A lookup table rather than an enum for the same reason
@@ -2666,6 +2674,10 @@ model UnitReturn {
   staff        Staff     @relation(fields: [staffId], references: [id], onDelete: Restrict)
 
   unitEvents UnitEvent[]
+  /// The credit taken off the unit's invoice (method RETUR_SUPPLIER).
+  payments   Payment[]
+  /// The rest of the credit, once the supplier refunded it.
+  incomes    ManualIncome[]
 }
 
 /// Money out, entered by hand (owner ask 2026-09-01).
@@ -2683,32 +2695,44 @@ model Expense {
   /// The sale this is about, where the category needs one — a customer
   /// compensation, a refund (owner ask 2026-09-23).
   orderId          String?
+  /// The service charge this expense paid (owner 2026-10-26), kind UNIT. One
+  /// expense per charge at most; deleting the charge takes this row with it,
+  /// and the store refuses a charge removed while its expense stays.
+  serviceFeeId     String?     @unique
   createdAt        DateTime
 
   referralSource ReferralSource? @relation(fields: [referralSourceId], references: [id], onDelete: Restrict)
   method         PaymentMethod   @relation(fields: [methodId], references: [id], onDelete: Restrict)
   staff          Staff           @relation(fields: [staffId], references: [id], onDelete: Restrict)
   order          Order?          @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  serviceFee     ServiceFee?     @relation(fields: [serviceFeeId], references: [id], onDelete: Restrict)
 }
 
 /// Money in that no sale accounts for (owner ask 2026-09-01).
 model ManualIncome {
-  id        String       @id @default(cuid())
-  reason    IncomeReason
-  amount    BigInt
+  id           String       @id @default(cuid())
+  reason       IncomeReason
+  amount       BigInt
   /// YYYY-MM-DD.
-  date      String
-  note      String?
-  methodId  String
-  staffId   String
+  date         String
+  note         String?
+  methodId     String
+  staffId      String
   /// The sale or return this is about, where the category needs one — a
   /// supplier's refund credit (owner ask 2026-09-23).
-  orderId   String?
-  createdAt DateTime
+  orderId      String?
+  /// The supplier return this is the refund of (owner 2026-10-26) — the part
+  /// of the credit the unit's invoice no longer owed, received from the
+  /// supplier. Reason REFUND.
+  unitReturnId String?
+  createdAt    DateTime
 
-  method PaymentMethod @relation(fields: [methodId], references: [id], onDelete: Restrict)
-  staff  Staff         @relation(fields: [staffId], references: [id], onDelete: Restrict)
-  order  Order?        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  method     PaymentMethod @relation(fields: [methodId], references: [id], onDelete: Restrict)
+  staff      Staff         @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  order      Order?        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  unitReturn UnitReturn?   @relation(fields: [unitReturnId], references: [id], onDelete: Restrict)
+
+  @@index([unitReturnId])
 }
 
 /// Every change ever made to a sale payment (owner ask 2026-09-08). Append-only.
@@ -2801,7 +2825,9 @@ model ServiceVisit {
   fees ServiceFee[]
 }
 
-/// A charge on a service visit. Edited, never removed — zero says "quoted and not paid".
+/// A charge on a service visit. Edited, and since 2026-10-26 removable (owner
+/// decision; the visit can be deleted whole too) — `nusantara_app` holds
+/// DELETE on this table and `ServiceVisit`, the sixth sanctioned hard delete.
 model ServiceFee {
   id        String         @id @default(cuid())
   visitId   String
@@ -2812,8 +2838,10 @@ model ServiceFee {
   staffId   String
   sortOrder Int
 
-  visit ServiceVisit @relation(fields: [visitId], references: [id], onDelete: Restrict)
-  staff Staff        @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  visit   ServiceVisit @relation(fields: [visitId], references: [id], onDelete: Restrict)
+  staff   Staff        @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  /// What paid it, when it has been paid (kind UNIT).
+  expense Expense?
 }
 
 /// Money paid to a supplier before anybody decided which invoice it settles.
@@ -2998,6 +3026,9 @@ enum ExpenseKind {
   KOMPENSASI
   SUPPLIER
   TRANSFER
+  // A unit's own cost — a service charge paid (owner 2026-10-26). Already in
+  // the unit's COGS, so Profit & Loss never counts it as operating.
+  UNIT
 }
 
 enum IncomeReason {

@@ -88,6 +88,7 @@ not trusted from the browser.
    |---|---|
    | a QC photo, or all of them on sale | DELETE — the sanctioned exception, `tag = 'QC'` only |
    | a draft stock take | `OpnameSession.status = BATAL` (the owner decision left open on 2026-09-01; the soft option) |
+   | a service charge, or a whole service visit (2026-10-26) | DELETE `ServiceFee` / `ServiceVisit` — after every adapter has run (`ctx.later`), refused while an `Expense` still names the charge (`serviceFeeId`; remove it in the same changeset) and inside a closed book |
    | a unit removed from the intake grid | `archivedAt`, a `DIARSIPKAN` event, and the serial moved aside so the row can be re-keyed |
    | a variant with no stock | `Sku.archived` |
    | a PO line, a hold's machine, an axis value, a grading option or rule, an order fee, a payment, an address, a settlement fee, a deposit allocation, a draft count's scope or scan | `removedAt` / `voidedAt` on that row |

@@ -215,6 +215,7 @@ import { UnitDetailsModal } from "../../components/UnitDetailsModal";
 import { ExpenseModal } from "./ExpenseModal.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { isRecord } from "../../lib/draftGuards.js";
+import { isPickableMethod } from "../../lib/accounts.js";
 import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
 /**
@@ -4428,7 +4429,11 @@ export function InboundDetailPage() {
               placeholder={t("inbound.pickMethod", "How the money moved")}
               aria-label={t("inbound.method", "Method")}
               options={db.paymentMethods
-                .filter((m) => (m.forPo && m.active) || m.code === payMethod)
+                .filter(
+                  (m) =>
+                    (m.forPo && m.active && isPickableMethod(m.code)) ||
+                    m.code === payMethod,
+                )
                 .map((m) => ({ value: m.code, label: m.label }))}
             />
             {payAmount !== undefined && payAmount > 0 && !payMethod && (

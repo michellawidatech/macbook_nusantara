@@ -208,6 +208,38 @@ async function syncPoFees(ctx: WriteContext, po: Po): Promise<void> {
   }
 }
 
+/**
+ * A supplier-return credit (method RETUR_SUPPLIER, owner 2026-10-26) names
+ * its return — `Payment.unitReturnId`. Written after every adapter has run,
+ * because the return may be in the same changeset and is written later. A
+ * return that never turns up, or one from a customer, is refused in words.
+ */
+function linkReturnLater(
+  ctx: WriteContext,
+  collection: "pos",
+  key: string,
+  paymentId: string,
+  returnId: string,
+): void {
+  ctx.later.push(async () => {
+    const ret = await ctx.tx.unitReturn.findUnique({
+      where: { id: returnId },
+      select: { kind: true },
+    });
+    if (ret === null || ret.kind !== "SUPPLIER") {
+      throw new StoreValidationError(
+        "Pembayaran menunjuk retur ke supplier yang tidak ada.",
+        collection,
+        key,
+      );
+    }
+    await ctx.tx.payment.update({
+      where: { id: paymentId },
+      data: { unitReturnId: returnId },
+    });
+  });
+}
+
 async function syncPoPayments(ctx: WriteContext, po: Po): Promise<void> {
   const { tx } = ctx;
   const existing = await tx.payment.findMany({ where: { poId: po.id } });
@@ -231,6 +263,11 @@ async function syncPoPayments(ctx: WriteContext, po: Po): Promise<void> {
       );
     }
     const at = instantOf(p.at);
+    // `returns` is written AFTER `pos` (collections.ts), so a supplier return
+    // and the credit naming it arrive in one changeset with the return not
+    // yet in the table: the link is written once every adapter has run.
+    if (p.returnId !== undefined)
+      linkReturnLater(ctx, "pos", po.id, p.id, p.returnId);
     const data = {
       methodId: await ctx.paymentMethodId(p.method),
       amount: p.amount,
@@ -240,6 +277,8 @@ async function syncPoPayments(ctx: WriteContext, po: Po): Promise<void> {
       recordedAt: at,
       fromDepositId: p.fromDepositId ?? null,
       poFeeId: p.feeId ?? null,
+      // Set by `linkReturnLater` when the payment names a return.
+      ...(p.returnId === undefined ? { unitReturnId: null } : {}),
       // Absent means it went through the shop, as every payment did before
       // the switch (owner answer 2026-09-22).
       inBalance: p.inBalance ?? true,
@@ -396,6 +435,7 @@ export const pos: Adapter<"pos"> = {
         feeId: pay.poFeeId ?? undefined,
         // Only a `false` is said; true is the absent key the browser wrote.
         inBalance: pay.inBalance ? undefined : false,
+        returnId: pay.unitReturnId ?? undefined,
       })),
       // In one order on every till, whatever order the rows were written in:
       // the ids are random tokens, and a list that reshuffles on each poll is
@@ -2148,6 +2188,99 @@ export const opnames: Adapter<"opnames"> = {
 // Service visits
 // ---------------------------------------------------------------------------
 
+/**
+ * The instant the book is closed until (`finance.booksClosedAt`), or null
+ * while nothing is closed. Memoised per commit.
+ */
+async function booksClosedUntil(ctx: WriteContext): Promise<Date | null> {
+  if (ctx.memo.has("booksClosedUntil"))
+    return ctx.memo.get("booksClosedUntil") as Date | null;
+  const row = await ctx.tx.appSetting.findUnique({
+    where: { key: "finance.booksClosedAt" },
+    select: { value: true },
+  });
+  let until: Date | null = null;
+  if (row && row.value.trim() !== "") {
+    const d = new Date(row.value);
+    if (!Number.isNaN(d.getTime())) until = d;
+  }
+  ctx.memo.set("booksClosedUntil", until);
+  return until;
+}
+
+/**
+ * A service charge or a whole visit taken out (owner 2026-10-26, spec §2).
+ * This REVERSES 2026-09-08's "a charge is edited, never removed" and is the
+ * sixth sanctioned hard delete: `nusantara_app` holds DELETE on
+ * `ServiceVisit` and `ServiceFee` and nothing else of the kind.
+ *
+ * Refused inside a closed book, on the charge's own instant (a visit: its
+ * opening and every charge on it). A charge that was PAID has an `Expense`
+ * naming it (`serviceFeeId`); the browser removes that expense in the same
+ * changeset, and the `expenses` adapter runs AFTER this one — so the DELETE
+ * waits in `ctx.later`, where a still-standing expense is refused in words
+ * instead of as a foreign-key violation.
+ */
+async function assertServiceBooksOpen(
+  ctx: WriteContext,
+  visitId: string,
+  at: Date,
+): Promise<void> {
+  const until = await booksClosedUntil(ctx);
+  if (until !== null && at <= until) {
+    throw new StoreValidationError(
+      `Bukunya sudah ditutup untuk tanggal ${dayOf(at)}; biaya servis ini tidak bisa dihapus (services ${visitId}).`,
+      "services",
+      visitId,
+    );
+  }
+}
+
+function removeServiceFeesLater(
+  ctx: WriteContext,
+  visitId: string,
+  feeIds: readonly string[],
+  thenVisit: boolean,
+): void {
+  ctx.later.push(async () => {
+    const { tx } = ctx;
+    if (feeIds.length > 0) {
+      const paid = await tx.expense.count({
+        where: { serviceFeeId: { in: [...feeIds] } },
+      });
+      if (paid > 0) {
+        throw new StoreValidationError(
+          "Biaya servis ini sudah tercatat sebagai pengeluaran — hapus pengeluarannya bersama biaya ini.",
+          "services",
+          visitId,
+        );
+      }
+      await tx.serviceFee.deleteMany({ where: { id: { in: [...feeIds] } } });
+    }
+    if (thenVisit) await tx.serviceVisit.delete({ where: { id: visitId } });
+  });
+}
+
+async function removeServiceVisit(
+  ctx: WriteContext,
+  id: string,
+): Promise<void> {
+  const visit = await ctx.tx.serviceVisit.findUnique({
+    where: { id },
+    select: { openedAt: true, fees: { select: { id: true, at: true } } },
+  });
+  if (visit === null) return;
+  await assertServiceBooksOpen(ctx, id, visit.openedAt);
+  for (const f of visit.fees) await assertServiceBooksOpen(ctx, id, f.at);
+  removeServiceFeesLater(
+    ctx,
+    id,
+    visit.fees.map((f) => f.id),
+    true,
+  );
+  ctx.touch("services", id);
+}
+
 export const services: Adapter<"services"> = {
   collection: "services",
   async project(tx, _ctx, keys) {
@@ -2190,7 +2323,10 @@ export const services: Adapter<"services"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("services", r.key);
+      if (n === undefined) {
+        await removeServiceVisit(ctx, r.key);
+        continue;
+      }
       const data = {
         unitId: await ctx.unitId(n.serial),
         fromLocationId: n.fromLocationId,
@@ -2237,11 +2373,9 @@ export const services: Adapter<"services"> = {
           }
         }
         if (left.size > 0) {
-          throw new StoreValidationError(
-            "Biaya servis tidak bisa dihapus — ubah nilainya menjadi nol.",
-            "services",
-            n.id,
-          );
+          for (const f of left.values())
+            await assertServiceBooksOpen(ctx, n.id, f.at);
+          removeServiceFeesLater(ctx, n.id, [...left.keys()], false);
         }
       }
       ctx.touch("services", n.id);

@@ -1026,6 +1026,7 @@ export const expenses: Adapter<"expenses"> = {
       referralSourceId: e.referralSourceId ?? undefined,
       method: e.method.code,
       orderId: e.orderId ?? undefined,
+      serviceFeeId: e.serviceFeeId ?? undefined,
       createdAt: isoOf(e.createdAt),
     }));
   },
@@ -1047,7 +1048,23 @@ export const expenses: Adapter<"expenses"> = {
         referralSourceId: n.referralSourceId ?? null,
         methodId: await ctx.paymentMethodId(n.method),
         orderId: n.orderId ?? null,
+        serviceFeeId: n.serviceFeeId ?? null,
       };
+      if (n.serviceFeeId !== undefined) {
+        // One expense per charge (`Expense.serviceFeeId` is unique): say so
+        // in words rather than as a unique violation.
+        const other = await tx.expense.findFirst({
+          where: { serviceFeeId: n.serviceFeeId, id: { not: n.id } },
+          select: { id: true },
+        });
+        if (other !== null) {
+          throw new StoreValidationError(
+            "Biaya servis ini sudah dibayar oleh pengeluaran lain.",
+            "expenses",
+            n.id,
+          );
+        }
+      }
       if (r.base === undefined) {
         await tx.expense.create({
           data: {
@@ -1083,6 +1100,7 @@ export const incomes: Adapter<"incomes"> = {
       note: i.note ?? undefined,
       method: i.method.code,
       orderId: i.orderId ?? undefined,
+      returnId: i.unitReturnId ?? undefined,
       createdAt: isoOf(i.createdAt),
     }));
   },
@@ -1102,6 +1120,8 @@ export const incomes: Adapter<"incomes"> = {
         note: blankToNull(n.note),
         methodId: await ctx.paymentMethodId(n.method),
         orderId: n.orderId ?? null,
+        // A `returns` row's id; returns are written before incomes.
+        unitReturnId: n.returnId ?? null,
       };
       if (r.base === undefined) {
         await tx.manualIncome.create({

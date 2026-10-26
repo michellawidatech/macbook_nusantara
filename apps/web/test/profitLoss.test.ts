@@ -119,6 +119,61 @@ describe("profit & loss", () => {
     expect(r.netProfit).toBe(-4_000_000 + 5_000 - 20_000);
   });
 
+  it("counts a paid service charge once — in the unit's cost, never as operating (2026-10-26)", () => {
+    const db = empty();
+    const unit = db.units[0]!;
+    db.services = [
+      {
+        id: "svc-pnl",
+        serial: unit.serial,
+        fromLocationId: unit.locationId,
+        openedAt: IN,
+        arrivedAt: IN,
+        fees: [
+          {
+            id: "sf-pnl",
+            kind: "LABOUR",
+            amount: 800_000,
+            at: IN,
+            staff: "Test",
+          },
+        ],
+        raisedBy: "QC",
+        staff: "Test",
+      } as MockDb["services"][number],
+    ];
+    // The charge was paid: an expense of kind UNIT names it.
+    db.expenses.push({
+      id: "e-unit",
+      kind: "UNIT",
+      amount: 800_000,
+      date: "2030-01-10",
+      method: "TRANSFER",
+      serviceFeeId: "sf-pnl",
+    });
+    const cost = costIndex(db)(unit).total;
+    db.orders.push({
+      id: "o-pnl-unit",
+      code: "SI-2030/01-000002",
+      ts: IN,
+      customerId: null,
+      serials: [unit.serial],
+      prices: { [unit.serial]: 9_000_000 },
+      listPrices: { [unit.serial]: 9_000_000 },
+      discount: 0,
+      source: "OFFLINE" as never,
+      payMethod: "TUNAI",
+      settled: true,
+      total: 9_000_000,
+    } as MockDb["orders"][number]);
+
+    const r = profitLoss(db, MONTH);
+    expect(line(r, "cogsSold")).toBe(cost);
+    expect(r.totalOperating).toBe(0);
+    expect(r.totalOther).toBe(0);
+    expect(r.netProfit).toBe(9_000_000 - cost);
+  });
+
   it("takes a return off on its own date, and puts the unit's cost back", () => {
     const db = empty();
     const unit = db.units[0]!;

@@ -13,7 +13,9 @@ import {
   ADJUSTMENT_METHOD_CODES,
   accountOfMethod,
   balancesOf,
+  isPickableMethod,
 } from "../src/lib/accounts";
+import { getDb } from "../src/mock/store.js";
 
 describe("which pot a method belongs to", () => {
   it("puts cash in the drawer and everything bankable in the bank", () => {
@@ -64,6 +66,26 @@ describe("which pot a method belongs to", () => {
     expect(out.cash).toBe(1_000_000);
     expect(out.bank).toBe(9_000_000);
     expect(out.unassigned).toBe(-5_000_000);
+  });
+});
+
+describe("a supplier return's credit (2026-10-26)", () => {
+  it("gives RETUR_SUPPLIER no pot, by name, and keeps it out of every picker", () => {
+    expect(accountOfMethod("RETUR_SUPPLIER")).toBeUndefined();
+    expect(isPickableMethod("RETUR_SUPPLIER")).toBe(false);
+    for (const code of ["TUNAI", "TRANSFER", "TRANSFER_LUAR", "KARTU_KREDIT"])
+      expect(isPickableMethod(code)).toBe(true);
+    expect([...ADJUSTMENT_METHOD_CODES]).not.toContain("RETUR_SUPPLIER");
+  });
+
+  it("is a supplier-side method in the demo store, and is offered nowhere", () => {
+    const m = getDb().paymentMethods.find((p) => p.code === "RETUR_SUPPLIER");
+    expect(m).toMatchObject({
+      label: "Supplier return credit",
+      forPo: true,
+      forSale: false,
+      builtIn: true,
+    });
   });
 });
 

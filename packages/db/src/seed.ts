@@ -131,6 +131,21 @@ const PAYMENT_METHODS = [
     forSale: false,
   },
   {
+    /*
+     * A supplier return's credit against the unit's invoice (owner
+     * 2026-10-26): the debt shrinks and no money moved, so `lib/accounts.ts`
+     * gives it no pot by name and no payment picker offers it — only the
+     * supplier-return dialog writes it. Migration
+     * `20261026090000_service_charges_and_supplier_refunds` inserts the same
+     * row into a database that already exists.
+     */
+    id: "pm_retur_supplier",
+    code: "RETUR_SUPPLIER",
+    label: "Supplier return credit",
+    forPo: true,
+    forSale: false,
+  },
+  {
     // `forPo`, because a supplier deposit is nearly always a transfer.
     id: "pm_transfer",
     code: "TRANSFER",
