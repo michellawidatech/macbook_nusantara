@@ -249,5 +249,35 @@ describe("the ⋯ menu on a sent bubble", () => {
     // A sent line no reply claimed is its own bubble, marked edited.
     const line = await screen.findByText("Berikut foto Air M2 nya ya kak");
     expect(line.parentElement).toHaveTextContent("Edited");
+    // Done before the log said who: the bare word, nobody named.
+    expect(line.parentElement).not.toHaveTextContent("Edited by");
+    expect(within(bubble).queryByText(/Unsent by/)).toBeNull();
+  });
+
+  it("says who edited or unsent it (2026-10-27)", async () => {
+    conversation = baseConversation([
+      sentItem({
+        body: BOT_TEXT,
+        retractedAt: "2026-10-23T03:31:00.000Z",
+        retractedBy: "Rina",
+        canEdit: false,
+        canUnsend: false,
+      }),
+      sentItem({
+        id: "ob3",
+        body: "Berikut foto Air M2 nya ya kak",
+        inReplyTo: "m1",
+        sentAt: "2026-10-23T03:30:30.000Z",
+        editedAt: "2026-10-23T03:32:00.000Z",
+        editedBy: "Budi",
+      }),
+    ]);
+    draw();
+    const bubble = await screen.findByTestId("bot-bubble");
+    expect(within(bubble).getByTestId("sent-unsent")).toHaveTextContent(
+      /^Unsent by Rina · /,
+    );
+    const line = await screen.findByText("Berikut foto Air M2 nya ya kak");
+    expect(line.parentElement).toHaveTextContent(/Edited by Budi · /);
   });
 });

@@ -303,6 +303,10 @@ export function ActivitySettings() {
         return t("activity.e.whatsapp", "WhatsApp connection");
       case "Outbox":
         return t("activity.e.outbox", "WhatsApp message");
+      case "WaThread":
+        return t("activity.e.waThread", "WhatsApp chat");
+      case "AgentEvaluation":
+        return t("activity.e.agentEvaluation", "Chatbot rating");
       case "AuditLog":
         return t("activity.e.auditLog", "Activity log");
       default:
@@ -325,7 +329,10 @@ export function ActivitySettings() {
         </Flex>
       );
     }
-    const v = readValues(e.action === "DELETE" ? e.before : e.after);
+    // A deleted chat records how many rows went in `after` (2026-10-27).
+    const v = readValues(
+      e.action === "DELETE" ? (e.before ?? e.after) : e.after,
+    );
     const parts = Object.entries(v).map(([k, x]) => `${k}: ${shown(k, x)}`);
     return parts.length > 0 ? (
       <Typography.Text type="secondary" style={{ fontSize: 13 }}>
@@ -357,6 +364,8 @@ export function ActivitySettings() {
     "Staff",
     "WhatsApp",
     "Outbox",
+    "WaThread",
+    "AgentEvaluation",
   ];
 
   return (

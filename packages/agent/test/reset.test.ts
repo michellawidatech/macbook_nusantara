@@ -3,7 +3,9 @@ import {
   MAX_TESTERS,
   formatTesters,
   isResetCommand,
+  laterOf,
   parseTesters,
+  summarySince,
   toWaId,
 } from "../src/index.js";
 
@@ -61,5 +63,34 @@ describe("the stored tester list", () => {
   it("is capped, because a long list is a customer list", () => {
     const many = Array.from({ length: 30 }, (_, i) => `6281100000${10 + i}`);
     expect(parseTesters(many.join(","))).toHaveLength(MAX_TESTERS);
+  });
+});
+
+describe("where a thread starts over — /new or a staff Clear chat", () => {
+  const early = new Date("2026-10-27T01:00:00Z");
+  const late = new Date("2026-10-27T02:00:00Z");
+
+  it("is the later of the two, and either alone", () => {
+    expect(laterOf(early, late)).toBe(late);
+    expect(laterOf(late, early)).toBe(late);
+    expect(laterOf(null, early)).toBe(early);
+    expect(laterOf(early, null)).toBe(early);
+    expect(laterOf(null, null)).toBeNull();
+  });
+
+  it("drops a summary that stops at or before it", () => {
+    const note = (coveredThroughAt: Date | null) => ({
+      summary: "Pelanggan mencari Air M1.",
+      coveredThroughAt,
+    });
+    expect(summarySince(note(early), late)).toBeNull();
+    expect(summarySince(note(late), late)).toBeNull();
+    expect(summarySince(note(null), late)).toBeNull();
+    expect(summarySince(note(late), early)).toBe("Pelanggan mencari Air M1.");
+    expect(summarySince(note(early), null)).toBe("Pelanggan mencari Air M1.");
+    expect(summarySince({ summary: null, coveredThroughAt: late }, null)).toBe(
+      null,
+    );
+    expect(summarySince(null, null)).toBeNull();
   });
 });

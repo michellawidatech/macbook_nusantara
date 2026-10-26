@@ -16,6 +16,7 @@ import { PrismaClient, appendUnitEvent, truncateAll } from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
 import {
   dispatchTool,
+  resetPointFor,
   TESTERS_SETTING_KEY,
   type AgentCapabilities,
   type AgentClient,
@@ -24,6 +25,7 @@ import {
 import { draftPass } from "../src/draft.js";
 import { sendPass } from "../src/send.js";
 import { summaryPass } from "../src/summarise.js";
+import { memoryPass } from "../src/memoryPass.js";
 import { expirePass } from "../src/expire.js";
 import { resetPass } from "../src/reset.js";
 import { claimThread } from "../src/lease.js";
@@ -365,6 +367,141 @@ describe("the worker as nusantara_agent", () => {
     await inbound("x.1", "/new", new Date(NOW.getTime() - 5_000));
     const result = await resetPass({ db: agent, logger, now: () => NOW });
     expect(result.reset).toBe(1);
+  });
+});
+
+describe("a chat staff cleared, read as nusantara_agent (2026-10-27)", () => {
+  const CLEARED = new Date(NOW.getTime() - 600_000);
+
+  /** An old turn, a note about it, and the staff clear after both. */
+  async function clearedThread() {
+    await owner.waMessage.create({
+      data: {
+        waMessageId: "c.old",
+        from: FROM,
+        name: "Test",
+        text: "garansinya berapa lama",
+        msgType: "text",
+        ts: new Date(NOW.getTime() - 3_600_000),
+        direction: "IN",
+        status: "DIJAWAB_AGEN",
+        entities: {},
+        replyText: "Garansi SATU-BULAN ya kak",
+        answeredByAgent: true,
+        answeredAt: new Date(NOW.getTime() - 3_590_000),
+      },
+    });
+    await owner.waThreadMemory.create({
+      data: {
+        from: FROM,
+        summary: "Pelanggan mencari Air M1.",
+        summaryAt: new Date(NOW.getTime() - 3_000_000),
+        summaryTurns: 1,
+        // Behind the old turn, so only the clear keeps it out of the note.
+        coveredThroughAt: new Date(NOW.getTime() - 4_000_000),
+        clarifyCount: 0,
+        updatedAt: CLEARED,
+        // What POST /api/inbox/:phone/clear writes, as the app role.
+        clearedAt: CLEARED,
+        clearedById: AGENT_STAFF,
+      },
+    });
+    await inbound("c.new", "halo lagi", new Date(NOW.getTime() - 20_000));
+  }
+
+  /** A model that records what it was shown. */
+  function recorder() {
+    const shown: string[] = [];
+    const base = model();
+    const create = async (args: CreateArgs) => {
+      shown.push(JSON.stringify([args.system, args.messages]));
+      return base.messages.create(args);
+    };
+    return {
+      shown,
+      client: { messages: { create } } as unknown as AgentClient,
+    };
+  }
+
+  it("starts the conversation at the clear", async () => {
+    await clearedThread();
+    expect((await resetPointFor(agent, FROM))?.getTime()).toBe(
+      CLEARED.getTime(),
+    );
+    const { shown, client } = recorder();
+    const result = await draftPass({
+      db: agent,
+      logger,
+      anthropic: { apiKey: "sk-ant-test" },
+      client,
+      debounceMs: 8_000,
+      maxDraftsPerTick: 5,
+      now: () => NOW,
+    });
+    expect(result.drafted).toBe(1);
+    const all = shown.join("\n");
+    expect(all).toContain("halo lagi");
+    expect(all).not.toContain("SATU-BULAN");
+    expect(all).not.toContain("Pelanggan mencari Air M1");
+  });
+
+  it("summarises and chunks only what came after it", async () => {
+    await clearedThread();
+    await owner.waMessage.update({
+      where: { waMessageId: "c.new" },
+      data: {
+        status: "DIJAWAB_AGEN",
+        replyText: "halo kak",
+        answeredByAgent: true,
+        answeredAt: new Date(NOW.getTime() - 10_000),
+      },
+    });
+    const { shown, client } = recorder();
+    const summary = await summaryPass({
+      db: agent,
+      logger,
+      anthropic: { apiKey: "sk-ant-test" },
+      client,
+      everyTurns: 1,
+      quietMs: 60_000,
+      maxPerTick: 3,
+      now: () => NOW,
+    });
+    expect(summary.refreshed).toBe(1);
+    expect(shown.join("\n")).toContain("halo lagi");
+    expect(shown.join("\n")).not.toContain("SATU-BULAN");
+    expect(shown.join("\n")).not.toContain("Pelanggan mencari Air M1");
+    const memory = await owner.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
+    expect(memory.summaryTurns).toBe(1);
+    expect(memory.clearedAt?.getTime()).toBe(CLEARED.getTime());
+
+    const chunks = await memoryPass({
+      db: agent,
+      logger,
+      voyage: null,
+      maxTurns: 40,
+      maxEmbeds: 32,
+    });
+    expect(chunks.chunked).toBe(1);
+    const rows = await owner.chatMemoryChunk.findMany({
+      select: { text: true },
+    });
+    expect(rows.map((r) => r.text).join()).not.toContain("SATU-BULAN");
+  });
+
+  it("may read the clear and never write it", async () => {
+    await clearedThread();
+    await expect(
+      agent.waThreadMemory.update({
+        where: { from: FROM },
+        data: { clearedAt: null, clearedById: null },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      agent.$queryRaw`SELECT wa_thread_delete(${FROM}, ${AGENT_STAFF}, now()::timestamp)`,
+    ).rejects.toThrow(/permission denied/);
   });
 });
 

@@ -3152,6 +3152,22 @@ Decisions that outlived those documents:
     serial back) removed the test unit FV29837462 and every row naming it,
     audit lines included, writing no trace; the invoice line stays waiting for
     a serial. A one-off like `reset-transactions`; do not generalise it.
+- **A chat can be cleared, or deleted for good — 2026-10-27** (migration
+  `20261027090000_chat_clear_and_delete`). **Clear chat** (any staff, the
+  header's ⋯) closes what waited and the open tasks — the Mark-handled close —
+  and writes `WaThreadMemory.clearedAt`/`clearedById`, staff-owned, UPDATE to
+  `nusantara_app` only (invariant 13). Nothing is deleted: `resetPointFor` is
+  the LATER of `/new` and the clear, so draft, recall, the summary and memory
+  passes and *Write it for me* forget it (`summarySince` hides the old note
+  the app cannot blank); /chat shows a row only if answered after the clear or
+  still waiting (`visibleAfter`), never by `ts`. **Delete conversation** (owner,
+  the number typed back) is `wa_thread_delete`, SECURITY DEFINER, EXECUTE to
+  `nusantara_app` only; it keeps the profile, the customer, every rating and
+  correction and exactly the messages/runs they name, behind a fresh clear.
+  ⚠️ The seventh sanctioned hard delete; do not generalise it. A sent bubble
+  says "Edited by / Unsent by {name}" from the `Outbox` audit rows. A 👍/👎 is
+  taken back by pressing it again (`DELETE /api/chat/evaluations/:id`, author
+  or owner, OPEN only); `nusantara_app` gained DELETE on `AgentEvaluation`.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

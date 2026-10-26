@@ -7,6 +7,12 @@
  * word of typing. A better answer identical to what was sent teaches nothing
  * and is left off. The row lands on the Evaluation tab, where applying it is
  * what the bot reads back.
+ *
+ * A rating can be taken back (owner ask 2026-10-27): the same thumb pressed
+ * again withdraws it, and the other thumb replaces it — one request, so the
+ * reply is never left with two verdicts. Only while it is OPEN: one that was
+ * applied became a Knowledge Base answer, and the tooltip says to remove it
+ * there. Its author or an owner may; the server says so to anybody else.
  */
 import { useState } from "react";
 import {
@@ -30,6 +36,7 @@ import { useTranslation } from "react-i18next";
 import {
   EVALUATION_REASONS,
   createEvaluation,
+  withdrawEvaluation,
   type EvaluationReason,
 } from "../../lib/chatApi.js";
 import type { ReplyEvaluation } from "../../lib/inboxApi.js";
@@ -63,10 +70,33 @@ export function ReplyRating({
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm<BadForm>();
 
-  const good = async () => {
+  /** The rating standing now may be replaced or withdrawn: OPEN only. */
+  const isOpen = evaluation?.status === "OPEN";
+  const replaces = evaluation && isOpen ? { replaces: evaluation.id } : {};
+
+  const withdraw = async () => {
+    if (!evaluation) return;
     setBusy(true);
     try {
-      await createEvaluation({ messageId, rating: "GOOD" });
+      await withdrawEvaluation(evaluation.id);
+      message.success(t("chatEval.withdrawn", "Rating taken back."));
+      onChanged();
+    } catch (err) {
+      message.error(
+        err instanceof Error
+          ? err.message
+          : t("chatEval.withdrawFailed", "Could not take the rating back."),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const good = async () => {
+    if (evaluation?.rating === "GOOD") return withdraw();
+    setBusy(true);
+    try {
+      await createEvaluation({ messageId, rating: "GOOD", ...replaces });
       onChanged();
     } catch (err) {
       message.error(
@@ -80,6 +110,10 @@ export function ReplyRating({
   };
 
   const openBad = () => {
+    if (evaluation?.rating === "BAD") {
+      void withdraw();
+      return;
+    }
     form.setFieldsValue({
       reason: undefined,
       note: "",
@@ -102,6 +136,7 @@ export function ReplyRating({
             reason: v.reason,
             ...(note ? { note } : {}),
             ...(corrected && corrected !== text.trim() ? { corrected } : {}),
+            ...replaces,
           });
           setOpen(false);
           message.success(
@@ -124,40 +159,66 @@ export function ReplyRating({
       // A refused form already shows its own message under the field.
       .catch(() => undefined);
 
-  const rated = evaluation !== null;
+  // A decided rating stays as it is; the tooltip says why and where.
+  const locked = evaluation !== null && !isOpen;
+  const lockedHint =
+    evaluation?.status === "APPLIED"
+      ? t(
+          "chatEval.appliedLocked",
+          "This rating became a Knowledge Base answer — remove it there",
+        )
+      : t("chatEval.reviewedLocked", "This rating has already been reviewed");
+  const hint = (rating: "GOOD" | "BAD") =>
+    locked
+      ? lockedHint
+      : evaluation?.rating === rating
+        ? t("chatEval.undoHint", "Press again to take the rating back")
+        : rating === "GOOD"
+          ? t("chatEval.goodHint", "A good reply")
+          : t("chatEval.badHint", "A bad reply: say why");
   return (
     <>
       <Flex align="center" gap={2}>
-        <Tooltip title={t("chatEval.goodHint", "A good reply")}>
-          <Button
-            type="text"
-            size="small"
-            aria-label={t("chatEval.rateGood", "Good reply")}
-            aria-pressed={evaluation?.rating === "GOOD"}
-            icon={
-              evaluation?.rating === "GOOD" ? <LikeFilled /> : <LikeOutlined />
-            }
-            disabled={rated || busy}
-            onClick={() => void good()}
-          />
+        {/* The span carries the tooltip: a disabled button gets no pointer
+            events, and a locked thumb is exactly when the hint matters. */}
+        <Tooltip title={hint("GOOD")}>
+          <span style={{ display: "inline-flex" }} data-testid="rate-good">
+            <Button
+              type="text"
+              size="small"
+              aria-label={t("chatEval.rateGood", "Good reply")}
+              aria-pressed={evaluation?.rating === "GOOD"}
+              icon={
+                evaluation?.rating === "GOOD" ? (
+                  <LikeFilled />
+                ) : (
+                  <LikeOutlined />
+                )
+              }
+              disabled={locked || busy}
+              onClick={() => void good()}
+            />
+          </span>
         </Tooltip>
-        <Tooltip title={t("chatEval.badHint", "A bad reply: say why")}>
-          <Button
-            type="text"
-            size="small"
-            danger={evaluation?.rating === "BAD"}
-            aria-label={t("chatEval.rateBad", "Bad reply")}
-            aria-pressed={evaluation?.rating === "BAD"}
-            icon={
-              evaluation?.rating === "BAD" ? (
-                <DislikeFilled />
-              ) : (
-                <DislikeOutlined />
-              )
-            }
-            disabled={rated || busy}
-            onClick={openBad}
-          />
+        <Tooltip title={hint("BAD")}>
+          <span style={{ display: "inline-flex" }} data-testid="rate-bad">
+            <Button
+              type="text"
+              size="small"
+              danger={evaluation?.rating === "BAD"}
+              aria-label={t("chatEval.rateBad", "Bad reply")}
+              aria-pressed={evaluation?.rating === "BAD"}
+              icon={
+                evaluation?.rating === "BAD" ? (
+                  <DislikeFilled />
+                ) : (
+                  <DislikeOutlined />
+                )
+              }
+              disabled={locked || busy}
+              onClick={openBad}
+            />
+          </span>
         </Tooltip>
         {evaluation?.rating === "BAD" && (
           <Tag

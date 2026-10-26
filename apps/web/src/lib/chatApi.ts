@@ -234,11 +234,24 @@ export const createEvaluation = (body: {
   agent?: AgentKey;
   note?: string;
   corrected?: string;
+  /** The rating this one replaces (👍 pressed where 👎 stood), in one go. */
+  replaces?: string;
 }) =>
   api<{ evaluation: Evaluation }>("/api/chat/evaluations", {
     method: "POST",
     body,
   });
+
+/**
+ * Take a rating back — the same thumb pressed again (2026-10-27). Its author
+ * or an owner, and only while it is OPEN: 409 once it became a Knowledge
+ * Base answer.
+ */
+export const withdrawEvaluation = (id: string) =>
+  api<{ withdrawn: string }>(
+    `/api/chat/evaluations/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
 
 /** Writes an AgentCorrection the bot reads. 400 without a corrected text. */
 export const applyEvaluation = (id: string, corrected?: string) =>

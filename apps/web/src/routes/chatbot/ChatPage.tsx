@@ -24,6 +24,12 @@
  *    is its own bubble, slotted in by time.
  *  - **The profile** (`CustomerProfilePanel`), every field correctable in
  *    place.
+ *  - **Clear chat / Delete conversation** (2026-10-27), behind the header's
+ *    ⋯. Clearing hides the chat and makes the bot forget it (nothing is
+ *    deleted; the customer writing again brings it back with only the new
+ *    messages). Deleting is the owner's, permanent, and asks for the number
+ *    typed back; the profile, ratings and corrections stay. Either way the
+ *    thread leaves the list and the selection moves off it.
  *
  * Below `md` there is room for one column: the list, then a conversation with
  * a back arrow, and the profile behind a button in a drawer.
@@ -49,9 +55,11 @@ import {
   Button,
   Card,
   Drawer,
+  Dropdown,
   Empty,
   Flex,
   Input,
+  Modal,
   Skeleton,
   Switch,
   Tooltip,
@@ -60,6 +68,7 @@ import {
 } from "antd";
 import {
   ArrowLeftOutlined,
+  EllipsisOutlined,
   IdcardOutlined,
   PaperClipOutlined,
   RobotOutlined,
@@ -68,7 +77,7 @@ import {
   WarningOutlined,
 } from "@ant-design/icons";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
-import { fmtDateTime } from "../../lib/format.js";
+import { fmtDateTime, fmtTime } from "../../lib/format.js";
 import { ApiRequestError } from "../../lib/api.js";
 import {
   agentStatus,
@@ -77,6 +86,8 @@ import {
 } from "../../lib/chatApi.js";
 import {
   attachMedia,
+  clearConversation,
+  deleteConversation,
   markHandled,
   markRead,
   sendReply,
@@ -133,11 +144,16 @@ export interface ChatInboxProps {
   /** The thread chosen by hand, or from another tab ("Open chat"). */
   picked: string | null;
   onPick: (phone: string | null) => void;
+  /** Offers Delete conversation, which the server allows the owner only. */
+  isOwner?: boolean;
 }
 
-export function ChatInbox({ picked, onPick }: ChatInboxProps) {
+/** The number as typed back to confirm a delete: its digits. */
+const digitsOf = (v: string) => v.replace(/\D/g, "");
+
+export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
   const { t } = useTranslation();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const { compact } = useLayoutMode();
   const {
     token: {
@@ -156,6 +172,16 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [mediaOpen, setMediaOpen] = useState(false);
   const [attaching, setAttaching] = useState(false);
+  /** Delete conversation's dialog, and the number typed into it. */
+  const [deleting, setDeleting] = useState(false);
+  const [deleteTyped, setDeleteTyped] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  /**
+   * Threads just cleared or deleted, kept off the list until the server's
+   * list has caught up — otherwise the poll in flight would draw it back for
+   * a moment, and the desktop auto-pick could land on it again.
+   */
+  const [gone, setGone] = useState<string[]>([]);
   const messagesRef = useRef<HTMLDivElement>(null);
 
   // Asked once, so "Write it for me" can say why it is off before anyone
@@ -172,9 +198,24 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
    * on the list.
    */
   const [threadsSeen, setThreadsSeen] = useState<string | null>(null);
-  const { threads, conversation, loading, error, refresh } = useInbox(
-    picked ?? threadsSeen,
+  const {
+    threads: listed,
+    conversation,
+    loading,
+    error,
+    refresh,
+  } = useInbox(picked ?? threadsSeen);
+  const threads = useMemo(
+    () => listed.filter((th) => !gone.includes(th.phone)),
+    [listed, gone],
   );
+  // Once the server no longer lists a thread it is truly gone from the list;
+  // forget it here, so the customer writing again brings it back.
+  useEffect(() => {
+    if (gone.length === 0) return;
+    const still = gone.filter((p) => listed.some((th) => th.phone === p));
+    if (still.length !== gone.length) setGone(still);
+  }, [listed, gone]);
   useEffect(() => {
     if (compact || picked || threadsSeen) return;
     const waiting = threads.find((th) => th.needsReply) ?? threads[0];
@@ -388,6 +429,70 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
       );
     } finally {
       setClosing(false);
+    }
+  };
+
+  /**
+   * After a clear or a delete: the thread leaves the list and the selection
+   * moves off it — to the next waiting thread on a desktop, to the list on a
+   * phone.
+   */
+  const leave = (phone: string) => {
+    setGone((g) => (g.includes(phone) ? g : [...g, phone]));
+    const rest = threads.filter((th) => th.phone !== phone);
+    const next = compact
+      ? null
+      : (rest.find((th) => th.needsReply) ?? rest[0] ?? null);
+    onPick(null);
+    setThreadsSeen(next?.phone ?? null);
+    refresh();
+  };
+
+  /** Clear chat: hidden, and the bot forgets it. Anybody signed in. */
+  const clear = () => {
+    if (!active) return;
+    const phone = active;
+    modal.confirm({
+      title: t("chat.clearTitle", "Clear this chat?"),
+      content: t(
+        "chat.clearBody",
+        "The chat leaves the list and the bot forgets the conversation, as if it started over. Nothing is deleted: the knowledge base and the customer's profile stay. If the customer writes again, the chat comes back with only the new messages.",
+      ),
+      okText: t("chat.clearOk", "Clear chat"),
+      cancelText: t("common.cancel", "Cancel"),
+      onOk: async () => {
+        try {
+          await clearConversation(phone);
+          message.success(t("chat.cleared", "Chat cleared."));
+          leave(phone);
+        } catch (err) {
+          message.error(
+            errorText(err, t("chat.clearFailed", "Could not clear the chat.")),
+          );
+        }
+      },
+    });
+  };
+
+  /** Delete conversation, for good — the owner's, after the number typed back. */
+  const remove = async () => {
+    if (!active || digitsOf(deleteTyped) !== active || deleteBusy) return;
+    const phone = active;
+    setDeleteBusy(true);
+    try {
+      await deleteConversation(phone, deleteTyped.trim());
+      setDeleting(false);
+      message.success(t("chat.deleted", "Conversation deleted."));
+      leave(phone);
+    } catch (err) {
+      message.error(
+        errorText(
+          err,
+          t("chat.deleteFailed", "Could not delete the conversation."),
+        ),
+      );
+    } finally {
+      setDeleteBusy(false);
     }
   };
 
@@ -649,6 +754,40 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
                 onClick={() => setProfileOpen(true)}
               />
             )}
+            <Dropdown
+              trigger={["click"]}
+              menu={{
+                items: [
+                  { key: "clear", label: t("chat.clearChat", "Clear chat") },
+                  ...(isOwner
+                    ? [
+                        {
+                          key: "delete",
+                          danger: true,
+                          label: t(
+                            "chat.deleteConversation",
+                            "Delete conversation",
+                          ),
+                        },
+                      ]
+                    : []),
+                ],
+                onClick: ({ key }) => {
+                  if (key === "clear") clear();
+                  else {
+                    setDeleteTyped("");
+                    setDeleting(true);
+                  }
+                },
+              }}
+            >
+              <Button
+                type="text"
+                size="small"
+                icon={<EllipsisOutlined />}
+                aria-label={t("chat.chatActions", "Chat actions")}
+              />
+            </Dropdown>
           </Flex>
         }
       >
@@ -714,7 +853,12 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
                       italic
                       data-testid="sent-unsent"
                     >
-                      {t("chat.unsentLabel", "Unsent")}
+                      {b.sent.retractedBy
+                        ? t("chat.unsentBy", "Unsent by {{name}} · {{time}}", {
+                            name: b.sent.retractedBy,
+                            time: fmtDateTime(b.sent.retractedAt),
+                          })
+                        : t("chat.unsentLabel", "Unsent")}
                     </Typography.Text>
                   ) : b.sent?.kind === "WA_IMAGE" && active ? (
                     <SentPhoto phone={active} item={b.sent} />
@@ -744,7 +888,18 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       {fmtDateTime(b.at)}
                       {b.sent?.editedAt && !b.sent.retractedAt
-                        ? ` · ${t("chat.editedLabel", "Edited")}`
+                        ? ` · ${
+                            b.sent.editedBy
+                              ? t(
+                                  "chat.editedBy",
+                                  "Edited by {{name}} · {{time}}",
+                                  {
+                                    name: b.sent.editedBy,
+                                    time: fmtTime(b.sent.editedAt),
+                                  },
+                                )
+                              : t("chat.editedLabel", "Edited")
+                          }`
                         : ""}
                       {b.sent && b.sent.status === "FAILED"
                         ? ` · ${t("chat.notDelivered", "Not delivered")}`
@@ -870,6 +1025,48 @@ export function ChatInbox({ picked, onPick }: ChatInboxProps) {
           {profilePanel}
         </Drawer>
       )}
+
+      {/* Two layers: this dialog, then the number typed back — the
+          activity log's clear, for the one chat action nothing undoes. */}
+      <Modal
+        open={deleting}
+        title={t("chat.deleteTitle", "Delete this conversation for good?")}
+        okText={t("chat.deleteOk", "Delete conversation")}
+        okButtonProps={{
+          danger: true,
+          disabled: !active || digitsOf(deleteTyped) !== active,
+        }}
+        cancelText={t("common.cancel", "Cancel")}
+        confirmLoading={deleteBusy}
+        onCancel={() => setDeleting(false)}
+        onOk={() => void remove()}
+        destroyOnHidden
+      >
+        <Flex vertical gap={10}>
+          <Typography.Paragraph style={{ marginBottom: 0 }}>
+            {t(
+              "chat.deleteBody",
+              "Every message, what was sent and the bot's memory of this chat are removed and cannot be recovered. The customer's profile, the 👍/👎 ratings and the knowledge-base corrections stay.",
+            )}
+          </Typography.Paragraph>
+          <Typography.Text>
+            {t("chat.deleteTypeIt", "Type the number")}{" "}
+            <Typography.Text code>{active ?? ""}</Typography.Text>{" "}
+            {t("chat.deleteToConfirm", "to confirm.")}
+          </Typography.Text>
+          <Input
+            value={deleteTyped}
+            onChange={(e) => setDeleteTyped(e.target.value)}
+            onPressEnter={() => void remove()}
+            inputMode="numeric"
+            aria-label={t(
+              "chat.deleteTypeAria",
+              "Type the customer's number to confirm",
+            )}
+            placeholder={active ?? ""}
+          />
+        </Flex>
+      </Modal>
 
       <UnitPhotoPicker
         open={mediaOpen}

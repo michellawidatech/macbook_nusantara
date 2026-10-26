@@ -1196,6 +1196,7 @@ model Staff {
   allocations              DepositAllocation[]
   chatActionsResolved      ChatAction[]          @relation("ChatActionResolvedBy")
   waThreadsLeadSet         WaThreadMemory[]      @relation("WaThreadMemoryLeadStaffBy")
+  waThreadsCleared         WaThreadMemory[]      @relation("WaThreadMemoryClearedBy")
   profileFacts             CustomerProfileFact[]
   evaluationsWritten       AgentEvaluation[]     @relation("AgentEvaluationCreatedBy")
   evaluationsReviewed      AgentEvaluation[]     @relation("AgentEvaluationReviewedBy")
@@ -1733,6 +1734,12 @@ model WaThreadMemory {
   leadClearedAt    DateTime?
   /// staff-owned. The inbox read marker: inbound messages after it are unread.
   readAt           DateTime?
+  /// staff-owned. *Clear chat* (owner ask 2026-10-27): the conversation is
+  /// hidden from /chat and the bot forgets it — every reader of the thread's
+  /// past starts at the later of this and the last `/new` (`resetPointFor`).
+  /// Nothing is deleted. A message answered (or waiting) after it shows again.
+  clearedAt        DateTime?
+  clearedById      String?
   clarifyCount     Int
   clarifyAt        DateTime?
   updatedAt        DateTime
@@ -1742,6 +1749,7 @@ model WaThreadMemory {
   directiveBy    Staff?     @relation("WaThreadMemoryDirectedBy", fields: [directiveById], references: [id], onDelete: Restrict)
   autoReplyBy    Staff?     @relation("WaThreadMemoryAutoReplyBy", fields: [autoReplyById], references: [id], onDelete: Restrict)
   leadStaffBy    Staff?     @relation("WaThreadMemoryLeadStaffBy", fields: [leadStaffById], references: [id], onDelete: Restrict)
+  clearedBy      Staff?     @relation("WaThreadMemoryClearedBy", fields: [clearedById], references: [id], onDelete: Restrict)
 }
 
 /// Something a person has to do for a chat customer (owner ask 2026-09-29):

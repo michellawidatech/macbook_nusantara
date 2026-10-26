@@ -117,6 +117,12 @@ export interface SentItem {
   /** Unsent for everyone. */
   retractedAt: string | null;
   editedAt: string | null;
+  /**
+   * Staff name behind the last edit / the unsend (2026-10-27), or null for
+   * one done before the log said who — the bubble then keeps the bare word.
+   */
+  editedBy?: string | null;
+  retractedBy?: string | null;
   canEdit: boolean;
   canUnsend: boolean;
 }
@@ -323,6 +329,27 @@ export const getConversation = (phone: string, signal?: AbortSignal) =>
 export const markHandled = (phone: string) =>
   api<{ closed: number }>(`/api/inbox/${encodeURIComponent(phone)}/handled`, {
     method: "POST",
+  });
+
+/**
+ * *Clear chat* (2026-10-27): the conversation leaves the list and the bot
+ * forgets it, as after a tester's `/new`. Nothing is deleted; the customer
+ * writing again brings the thread back with only the new messages.
+ */
+export const clearConversation = (phone: string) =>
+  api<{ clearedAt: string; closed: number }>(
+    `/api/inbox/${encodeURIComponent(phone)}/clear`,
+    { method: "POST" },
+  );
+
+/**
+ * *Delete conversation*, for good — owner only. `confirm` is the number as
+ * typed back. The customer's profile, ratings and corrections stay.
+ */
+export const deleteConversation = (phone: string, confirm: string) =>
+  api<{ deleted: number }>(`/api/inbox/${encodeURIComponent(phone)}`, {
+    method: "DELETE",
+    body: { confirm },
   });
 
 export const sendReply = (phone: string, text: string) =>

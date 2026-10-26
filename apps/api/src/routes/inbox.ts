@@ -44,7 +44,7 @@
  * silently cannot deliver is worse than a disabled one".
  */
 
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import { z } from "zod";
 import { Prisma, enqueueOutbox, type PrismaClient } from "@nusantara/db";
 import { currentRequestId } from "@nusantara/logging";
@@ -54,8 +54,9 @@ import {
   askingPrice,
   isResetCommand,
   phoneForms,
+  summarySince,
 } from "@nusantara/agent";
-import { ApiError, notFound } from "../errors.js";
+import { ApiError, forbidden, notFound } from "../errors.js";
 import {
   evaluationsFor,
   leadJson,
@@ -82,6 +83,32 @@ const phoneParam = z
   .string()
   .trim()
   .regex(/^\d{6,20}$/, "a wa_id is digits only");
+
+/**
+ * Which of a thread's rows /chat shows (Clear chat, owner ask 2026-10-27).
+ *
+ * A clear closes every row still waiting at that instant, stamping
+ * `answeredAt` with the clear itself, so every row from before it is answered
+ * AT or before `clearedAt`. What shows is what came after: a row answered
+ * later, or one nobody has answered yet — which can only have arrived after
+ * the clear. `ts` is never used: it is the customer's phone clock.
+ */
+export function visibleAfter(
+  clearedAt: Date | null | undefined,
+): Prisma.WaMessageWhereInput {
+  return clearedAt
+    ? { OR: [{ answeredAt: null }, { answeredAt: { gt: clearedAt } }] }
+    : {};
+}
+
+/** `visibleAfter` in SQL, for a message alias and its memory row's alias. */
+const VISIBLE_SQL = (msg: string, mem: string) =>
+  Prisma.raw(
+    `(${mem}."clearedAt" IS NULL OR ${msg}."answeredAt" IS NULL OR ${msg}."answeredAt" > ${mem}."clearedAt")`,
+  );
+
+/** Typed back on Delete conversation: the number itself. */
+const deleteBody = z.object({ confirm: z.string().trim().min(1).max(40) });
 
 const replyBody = z.object({
   text: z.string().trim().min(1).max(4_000),
@@ -256,8 +283,14 @@ export function readHandoff(
 export function inboxRouter(
   db: PrismaClient,
   sent: InboxSentDeps | null = null,
+  requireOwner?: RequestHandler,
 ): Router {
   const router = Router();
+  // Delete conversation is the owner's (2026-10-27). A router built without
+  // the guard — a test building it alone — refuses the route outright rather
+  // than letting anybody through.
+  const ownerOnly: RequestHandler =
+    requireOwner ?? ((_req, _res, next) => next(forbidden()));
   const baileys = sent?.gateway != null;
 
   /**
@@ -303,19 +336,27 @@ export function inboxRouter(
                   WHERE h."from" = m."from"
                     AND h."direction" = 'IN'
                     AND h."status" = 'PERLU_STAF'
+                    AND (mem."clearedAt" IS NULL
+                         OR h."answeredAt" IS NULL
+                         OR h."answeredAt" > mem."clearedAt")
                   ORDER BY h."ts" DESC, h."id" DESC
                   LIMIT 1
                ) esc ON true
+          -- Inner join: a thread with nothing after its clear has no row
+          -- here and so is not listed at all (Clear chat, 2026-10-27).
           JOIN (
-                 SELECT "from",
+                 SELECT a."from",
                         COUNT(*) FILTER (
-                          WHERE "direction" = 'IN'
-                            AND "status" IN ('BARU', 'PERLU_STAF')
+                          WHERE a."direction" = 'IN'
+                            AND a."status" IN ('BARU', 'PERLU_STAF')
                         )::int AS "pending",
-                        MAX("ts") FILTER (WHERE "direction" = 'IN') AS "lastInboundAt"
-                   FROM "WaMessage"
-                  GROUP BY "from"
+                        MAX(a."ts") FILTER (WHERE a."direction" = 'IN') AS "lastInboundAt"
+                   FROM "WaMessage" a
+                   LEFT JOIN "WaThreadMemory" am ON am."from" = a."from"
+                  WHERE ${VISIBLE_SQL("a", "am")}
+                  GROUP BY a."from"
                ) agg ON agg."from" = m."from"
+         WHERE ${VISIBLE_SQL("m", "mem")}
          ORDER BY m."from", m."ts" DESC
       `);
 
@@ -401,8 +442,18 @@ export function inboxRouter(
       if (!phone.success)
         throw new ApiError(400, "VALIDASI", "Nomor WhatsApp tidak valid.");
 
+      // A cleared chat shows only what came after the clear, and a thread
+      // with nothing after it is not a conversation /chat has (404).
+      const cleared =
+        (
+          await db.waThreadMemory.findUnique({
+            where: { from: phone.data },
+            select: { clearedAt: true },
+          })
+        )?.clearedAt ?? null;
+
       const messages = await db.waMessage.findMany({
-        where: { from: phone.data },
+        where: { from: phone.data, ...visibleAfter(cleared) },
         orderBy: { ts: "asc" },
         // Capped: a long-running customer thread should not push a thousand
         // rows at a phone on a shop's connection. Oldest are the ones to drop.
@@ -438,6 +489,7 @@ export function inboxRouter(
           select: {
             summary: true,
             summaryAt: true,
+            coveredThroughAt: true,
             directive: true,
             autoReply: true,
             autoReplyAt: true,
@@ -460,12 +512,20 @@ export function inboxRouter(
         }),
         Promise.all([
           db.chatAction.findMany({
-            where: { from: phone.data, status: "OPEN" },
+            where: {
+              from: phone.data,
+              status: "OPEN",
+              ...(cleared ? { createdAt: { gt: cleared } } : {}),
+            },
             select: ACTION_SELECT,
             orderBy: { updatedAt: "desc" },
           }),
           db.chatAction.findMany({
-            where: { from: phone.data, status: "DONE" },
+            where: {
+              from: phone.data,
+              status: "DONE",
+              ...(cleared ? { createdAt: { gt: cleared } } : {}),
+            },
             select: ACTION_SELECT,
             orderBy: { resolvedAt: "desc" },
             take: DONE_ACTIONS_SHOWN,
@@ -484,7 +544,7 @@ export function inboxRouter(
         ),
         // What the shop sent, photos included, each with whether it can
         // still be edited or unsent (inboxSent.ts, 2026-10-23).
-        sentItemsFor(db, phone.data, { baileys }),
+        sentItemsFor(db, phone.data, { baileys, after: cleared }),
       ]);
       const outboxOfReply = replyOutboxIds(messages, sentItems);
 
@@ -533,12 +593,13 @@ export function inboxRouter(
          * until a thread has had enough answered turns to be worth
          * summarising — the page says so rather than inventing one.
          */
-        summary: memory?.summary
-          ? {
-              text: memory.summary,
-              at: memory.summaryAt?.toISOString() ?? null,
-            }
-          : null,
+        summary:
+          memory && summarySince(memory, cleared)
+            ? {
+                text: memory.summary!,
+                at: memory.summaryAt?.toISOString() ?? null,
+              }
+            : null,
         /** A standing instruction staff left about this customer. */
         directive: memory?.directive ?? null,
         /** The open hand-over, newest first — null once a person has answered. */
@@ -1029,6 +1090,175 @@ export function inboxRouter(
         by: saved.autoReplyBy?.name ?? null,
         at: saved.autoReplyAt?.toISOString() ?? null,
       });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * POST /api/inbox/:phone/clear — *Clear chat* (owner ask 2026-10-27).
+   *
+   * Hides the conversation and makes the bot forget it, the way a tester's
+   * `/new` does, without deleting a thing. One transaction:
+   *
+   *  1. every row still waiting is closed as handled by this person — the
+   *     Mark-handled close, which is what lifts a hand-over hold, so the bot
+   *     is not left silent on the customer's next message;
+   *  2. the thread's open tasks are done;
+   *  3. `WaThreadMemory.clearedAt`/`clearedById` — the app role's own columns
+   *     (invariant 13) — mark the point every reader starts from
+   *     (`resetPointFor`, and `visibleAfter` here);
+   *  4. ONE `AuditLog` row says who (entity `WaThread`, ARCHIVE).
+   *
+   * The thread leaves the list until the customer writes again, and then
+   * shows only what came after. The profile, ratings and corrections are
+   * untouched. Any signed-in staff (owner answer).
+   */
+  router.post("/:phone/clear", async (req, res, next) => {
+    try {
+      const phone = phoneParam.safeParse(req.params["phone"]);
+      if (!phone.success)
+        throw new ApiError(400, "VALIDASI", "Nomor WhatsApp tidak valid.");
+      const staff = req.staff;
+      if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
+
+      const exists = await db.waMessage.findFirst({
+        where: { from: phone.data },
+        select: { id: true },
+      });
+      if (!exists) throw notFound("Percakapan");
+
+      const at = new Date();
+      const closed = await db.$transaction(async (tx) => {
+        const { count } = await tx.waMessage.updateMany({
+          where: {
+            from: phone.data,
+            direction: "IN",
+            status: { in: ["BARU", "PERLU_STAF"] },
+          },
+          data: {
+            status: "DIJAWAB_STAF",
+            answeredByAgent: false,
+            answeredById: staff.id,
+            answeredAt: at,
+          },
+        });
+        await tx.chatAction.updateMany({
+          where: { from: phone.data, status: "OPEN" },
+          data: {
+            status: "DONE",
+            resolvedAt: at,
+            resolvedById: staff.id,
+            updatedAt: at,
+          },
+        });
+        // Only the app's columns on update; the create branch initialises
+        // the two NOT NULL counters on a row that did not exist (auto-reply's
+        // reasoning, above).
+        await tx.waThreadMemory.upsert({
+          where: { from: phone.data },
+          update: { clearedAt: at, clearedById: staff.id, updatedAt: at },
+          create: {
+            from: phone.data,
+            clearedAt: at,
+            clearedById: staff.id,
+            summaryTurns: 0,
+            clarifyCount: 0,
+            updatedAt: at,
+          },
+          select: { id: true },
+        });
+        await tx.auditLog.create({
+          data: {
+            at,
+            staffId: staff.id,
+            entity: "WaThread",
+            entityId: phone.data,
+            action: "ARCHIVE",
+            field: "clearedAt",
+            before: null,
+            after: JSON.stringify({ clearedAt: at.toISOString() }),
+            requestId: currentRequestId() ?? req.get("x-request-id") ?? null,
+            ip: req.ip ?? null,
+          },
+        });
+        return count;
+      });
+      res.json({ clearedAt: at.toISOString(), closed });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * DELETE /api/inbox/:phone — *Delete conversation*, for good (owner only,
+   * 2026-10-27). The body must carry the number typed back (`confirm`), the
+   * second layer of the page's confirm, so a stray request cannot do it.
+   *
+   * The deleting is `wa_thread_delete` (migration 20261027090000), a
+   * SECURITY DEFINER function and the only door to a DELETE on these tables:
+   * messages, recall chunks, tasks, traces, the thread's memory, what was
+   * queued or sent to the number, raw envelopes naming it and booking
+   * proposals. It KEEPS the customer's profile, every rating and correction,
+   * and exactly the messages and traces those name — hidden behind a fresh
+   * `clearedAt`. Real reservations are never touched. The one `AuditLog`
+   * row, in the same transaction, says who and how many rows — never what
+   * the messages said.
+   */
+  router.delete("/:phone", ownerOnly, async (req, res, next) => {
+    try {
+      const phone = phoneParam.safeParse(req.params["phone"]);
+      if (!phone.success)
+        throw new ApiError(400, "VALIDASI", "Nomor WhatsApp tidak valid.");
+      const staff = req.staff;
+      if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
+      const body = deleteBody.safeParse(req.body ?? {});
+      if (!body.success || body.data.confirm.replace(/\D/g, "") !== phone.data)
+        throw new ApiError(
+          400,
+          "VALIDASI",
+          "Ketik nomor WhatsApp-nya untuk menghapus percakapan ini.",
+          { field: "confirm" },
+        );
+
+      const [message, memory] = await Promise.all([
+        db.waMessage.findFirst({
+          where: { from: phone.data },
+          select: { id: true },
+        }),
+        db.waThreadMemory.findUnique({
+          where: { from: phone.data },
+          select: { id: true },
+        }),
+      ]);
+      if (!message && !memory) throw notFound("Percakapan");
+
+      const at = new Date();
+      const removed = await db.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw<{ n: number }[]>(Prisma.sql`
+          SELECT wa_thread_delete(
+                   ${phone.data},
+                   ${staff.id},
+                   (${at}::timestamptz AT TIME ZONE 'UTC')
+                 ) AS n`);
+        const n = Number(rows[0]?.n ?? 0);
+        await tx.auditLog.create({
+          data: {
+            at,
+            staffId: staff.id,
+            entity: "WaThread",
+            entityId: phone.data,
+            action: "DELETE",
+            field: null,
+            before: null,
+            after: JSON.stringify({ rows: n }),
+            requestId: currentRequestId() ?? req.get("x-request-id") ?? null,
+            ip: req.ip ?? null,
+          },
+        });
+        return n;
+      });
+      res.json({ deleted: removed });
     } catch (err) {
       next(err);
     }

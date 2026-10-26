@@ -48,6 +48,7 @@ import {
   computeWaitMs,
   isResetCommand,
   resetPointFor,
+  summarySince,
   converse,
   hasCredential,
   anthropicClient,
@@ -566,8 +567,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         return;
       }
 
-      // Since a `/new`, when this thread has had one: the turns before it
-      // are still in the inbox and are not this conversation's.
+      // Since a `/new` or a staff *Clear chat*, the later of the two, when
+      // this thread has had one: the turns before it are still in the
+      // database and are not this conversation's.
       const resetAt = await resetPointFor(db, from);
       // Oldest first; each turn is every line of its burst with the reply.
       const history = await recentTurns(db, from, resetAt, HISTORY_TURNS);
@@ -577,7 +579,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       const [memory, profile, openProposal] = await Promise.all([
         db.waThreadMemory.findUnique({
           where: { from },
-          select: { summary: true, directive: true },
+          select: { summary: true, coveredThroughAt: true, directive: true },
         }),
         // What the customer has told the shop, and a booking proposal still
         // open — so the single agent stops asking what the profile says
@@ -650,7 +652,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         })),
         now: at,
         openNow: storeOpenAt(at),
-        summary: memory?.summary ?? null,
+        summary: summarySince(memory, resetAt),
         directive: memory?.directive ?? null,
         recentReplies: newestFirst.map((h) => h.reply).slice(0, 3),
         customerText: current,
@@ -783,7 +785,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
             router: personaFor("ROUTER", agentPersonas, v1Persona),
             operations: personaFor("OPERATIONS", agentPersonas, v1Persona),
           },
-          summary: memory?.summary ?? null,
+          summary: summarySince(memory, resetAt),
           profile,
           openProposal,
           leadThreshold: settings.leadThreshold,

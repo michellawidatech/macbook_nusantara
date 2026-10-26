@@ -220,6 +220,10 @@ export async function listExtras(db: PrismaClient, phones: readonly string[]) {
          AND m."from" IN (${Prisma.join([...phones])})
          AND ((t."readAt" IS NULL AND m."status" IN ('BARU', 'PERLU_STAF'))
               OR m."ts" > t."readAt")
+         -- Nothing from before a Clear chat counts (2026-10-27).
+         AND (t."clearedAt" IS NULL
+              OR m."answeredAt" IS NULL
+              OR m."answeredAt" > t."clearedAt")
        GROUP BY m."from"
     `),
     db.reservation.findMany({

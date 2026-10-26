@@ -13,7 +13,8 @@
  *     "customer: …" / "shop: …" text. A turn is found by its reply row, and
  *     "not yet chunked" is "no chunk names it as `toMessageId`" — so the pass
  *     is its own cursor and a missed tick only means later. Reset commands
- *     (`/new`) are not turns.
+ *     (`/new`) are not turns, and nor is anything answered before a staff
+ *     *Clear chat* (`WaThreadMemory.clearedAt`).
  *  2. **Embed.** Without `VOYAGE_API_KEY` this half does nothing: chunks stay
  *     text and recall ranks them by keywords. With one, the oldest pending
  *     chunks go to Voyage in ONE call (input_type "document"), each vector is
@@ -73,10 +74,15 @@ async function unchunkedReplies(
   return db.$queryRaw(Prisma.sql`
     SELECT m."id", m."from", m."answeredAt"
       FROM "WaMessage" m
+      LEFT JOIN "WaThreadMemory" t ON t."from" = m."from"
      WHERE m."direction" = 'IN'
        AND m."replyText" IS NOT NULL
        AND m."answeredAt" IS NOT NULL
        AND m."intent" IS DISTINCT FROM ${RESET_INTENT}
+       -- A cleared chat is forgotten (2026-10-27): a turn answered before the
+       -- clear is never chunked — and after a delete, the turns a rating kept
+       -- are not chunked again either.
+       AND (t."clearedAt" IS NULL OR m."answeredAt" > t."clearedAt")
        AND NOT EXISTS (
              SELECT 1 FROM "ChatMemoryChunk" c WHERE c."toMessageId" = m."id"
            )

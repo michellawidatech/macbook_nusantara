@@ -84,6 +84,14 @@ export async function loadTesters(db: PrismaClient): Promise<string[]> {
 /**
  * When this thread last started over, or null if it never did.
  *
+ * Two things start a conversation over, and this is the LATER of them: a
+ * tester's `/new` (the row stamped `RESET_INTENT`), and staff pressing *Clear
+ * chat* on /chat (`WaThreadMemory.clearedAt`, owner ask 2026-10-27) — which
+ * makes the bot forget a customer's conversation exactly as `/new` does,
+ * without the customer typing anything. Every reader of a thread's past goes
+ * through here: the draft's history, recall and "which unit was shown", the
+ * summary and memory passes, and so *Write it for me*.
+ *
  * Compared against `answeredAt`, which the server stamps, never against `ts`,
  * which is the sender's phone clock in whole seconds: a turn belongs to the
  * new conversation when it was answered after the reset was.
@@ -92,15 +100,50 @@ export async function resetPointFor(
   db: PrismaClient,
   from: string,
 ): Promise<Date | null> {
-  const row = await db.waMessage.findFirst({
-    where: {
-      from,
-      direction: "IN",
-      intent: RESET_INTENT,
-      answeredAt: { not: null },
-    },
-    orderBy: { answeredAt: "desc" },
-    select: { answeredAt: true },
-  });
-  return row?.answeredAt ?? null;
+  const [row, memory] = await Promise.all([
+    db.waMessage.findFirst({
+      where: {
+        from,
+        direction: "IN",
+        intent: RESET_INTENT,
+        answeredAt: { not: null },
+      },
+      orderBy: { answeredAt: "desc" },
+      select: { answeredAt: true },
+    }),
+    db.waThreadMemory.findUnique({
+      where: { from },
+      select: { clearedAt: true },
+    }),
+  ]);
+  return laterOf(row?.answeredAt ?? null, memory?.clearedAt ?? null);
+}
+
+/** The later of two instants, either of which may be absent. */
+export function laterOf(a: Date | null, b: Date | null): Date | null {
+  if (!a) return b;
+  if (!b) return a;
+  return a.getTime() >= b.getTime() ? a : b;
+}
+
+/**
+ * The thread's rolling summary, or null when it describes a conversation
+ * from before the reset point. A summary covers turns up to
+ * `coveredThroughAt`; one that stops at or before the point is all old
+ * conversation. The app role cannot blank the summary (invariant 13: it is
+ * the agent's column), so a clear hides it here and the summary pass starts
+ * afresh on the next turn instead.
+ */
+export function summarySince(
+  memory: { summary: string | null; coveredThroughAt: Date | null } | null,
+  since: Date | null,
+): string | null {
+  if (!memory?.summary) return null;
+  if (!since) return memory.summary;
+  if (
+    !memory.coveredThroughAt ||
+    memory.coveredThroughAt.getTime() <= since.getTime()
+  )
+    return null;
+  return memory.summary;
 }

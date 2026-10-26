@@ -170,11 +170,65 @@ export interface SentItemJson {
   inReplyTo: string | null;
   retractedAt: string | null;
   editedAt: string | null;
+  /**
+   * Who last edited it / who unsent it (owner ask 2026-10-27), read from the
+   * `AuditLog` rows the two routes write. Null for one done before that log
+   * existed — the bubble then keeps the bare word.
+   */
+  editedBy: string | null;
+  retractedBy: string | null;
   canEdit: boolean;
   canUnsend: boolean;
 }
 
-function sentJson(row: SentRow, now: Date, baileys: boolean): SentItemJson {
+/** Who did what to a sent item, by outbox id. */
+export interface SentAttribution {
+  readonly editedBy: string | null;
+  readonly retractedBy: string | null;
+}
+
+/**
+ * The staff names behind each edit and unsend, newest first per row and
+ * action: an edit is `UPDATE` and an unsend `DELETE` on entity `Outbox`.
+ * Only rows that were edited or unsent are asked about.
+ */
+export async function attributionFor(
+  db: PrismaClient,
+  ids: readonly string[],
+): Promise<Map<string, SentAttribution>> {
+  const out = new Map<string, SentAttribution>();
+  if (ids.length === 0) return out;
+  const rows = await db.auditLog.findMany({
+    where: {
+      entity: "Outbox",
+      entityId: { in: [...ids] },
+      action: { in: ["UPDATE", "DELETE"] },
+    },
+    orderBy: [{ at: "desc" }, { id: "desc" }],
+    select: {
+      entityId: true,
+      action: true,
+      staff: { select: { name: true } },
+    },
+  });
+  for (const r of rows) {
+    const had = out.get(r.entityId) ?? { editedBy: null, retractedBy: null };
+    const name = r.staff?.name ?? null;
+    if (!name) continue;
+    if (r.action === "UPDATE" && had.editedBy === null)
+      out.set(r.entityId, { ...had, editedBy: name });
+    else if (r.action === "DELETE" && had.retractedBy === null)
+      out.set(r.entityId, { ...had, retractedBy: name });
+  }
+  return out;
+}
+
+function sentJson(
+  row: SentRow,
+  now: Date,
+  baileys: boolean,
+  who?: SentAttribution,
+): SentItemJson {
   const p = payloadOf(row.payload);
   return {
     id: row.id,
@@ -189,6 +243,8 @@ function sentJson(row: SentRow, now: Date, baileys: boolean): SentItemJson {
     inReplyTo: p.inReplyTo,
     retractedAt: row.retractedAt?.toISOString() ?? null,
     editedAt: row.editedAt?.toISOString() ?? null,
+    editedBy: row.editedAt ? (who?.editedBy ?? null) : null,
+    retractedBy: row.retractedAt ? (who?.retractedBy ?? null) : null,
     canEdit: editRefusal(row, now, baileys) === null,
     canUnsend: unsendRefusal(row, now, baileys) === null,
   };
@@ -202,19 +258,31 @@ function sentJson(row: SentRow, now: Date, baileys: boolean): SentItemJson {
 export async function sentItemsFor(
   db: PrismaClient,
   phone: string,
-  opts: { baileys: boolean; now?: Date },
+  opts: {
+    baileys: boolean;
+    now?: Date;
+    /** A cleared chat's instant: only what was queued after it shows. */
+    after?: Date | null;
+  },
 ): Promise<SentItemJson[]> {
   const now = opts.now ?? new Date();
   const rows = await db.outbox.findMany({
     where: {
       kind: { in: [...SENT_KINDS] },
       payload: { path: ["to"], equals: phone },
+      ...(opts.after ? { createdAt: { gt: opts.after } } : {}),
     },
     select: SENT_SELECT,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: SENT_ITEMS_SHOWN,
   });
-  return rows.reverse().map((r) => sentJson(r, now, opts.baileys));
+  const who = await attributionFor(
+    db,
+    rows.filter((r) => r.editedAt || r.retractedAt).map((r) => r.id),
+  );
+  return rows
+    .reverse()
+    .map((r) => sentJson(r, now, opts.baileys, who.get(r.id)));
 }
 
 /**
@@ -378,7 +446,14 @@ export function registerInboxSent(
           select: SENT_SELECT,
         });
       });
-      res.json(sentJson(saved, at, baileys));
+      res.json(
+        sentJson(
+          saved,
+          at,
+          baileys,
+          (await attributionFor(db, [saved.id])).get(saved.id),
+        ),
+      );
     } catch (err) {
       next(err);
     }
@@ -462,7 +537,14 @@ export function registerInboxSent(
           select: SENT_SELECT,
         });
       });
-      res.json(sentJson(saved, at, baileys));
+      res.json(
+        sentJson(
+          saved,
+          at,
+          baileys,
+          (await attributionFor(db, [saved.id])).get(saved.id),
+        ),
+      );
     } catch (err) {
       next(err);
     }

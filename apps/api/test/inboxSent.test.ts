@@ -343,7 +343,14 @@ describe("unsend", () => {
   it("deletes for everyone, then stamps the row and writes who", async () => {
     const id = await sent({});
     const res = await unsend(id).expect(200);
-    expect(res.body).toMatchObject({ id, canUnsend: false, canEdit: false });
+    expect(res.body).toMatchObject({
+      id,
+      canUnsend: false,
+      canEdit: false,
+      // Who, from the audit row (2026-10-27).
+      retractedBy: "Sent Tester",
+      editedBy: null,
+    });
     expect(res.body.retractedAt).not.toBeNull();
     expect(fake.seen).toEqual([
       { path: "/messages/revoke", body: { to: PHONE, id: "3EB0ABCDEF" } },
@@ -414,6 +421,8 @@ describe("edit", () => {
     expect(res.body).toMatchObject({
       id,
       body: "Rp 14.500.000 kak, maaf",
+      editedBy: "Sent Tester",
+      retractedBy: null,
     });
     expect(res.body.editedAt).not.toBeNull();
     expect(fake.seen).toEqual([
@@ -438,12 +447,31 @@ describe("edit", () => {
     expect(JSON.parse(audit.after!)).toEqual({
       text: "Rp 14.500.000 kak, maaf",
     });
-    // Still tied to its bubble afterwards.
+    // Still tied to its bubble afterwards, and still says who.
     const conv = await request(app)
       .get(`/api/inbox/${PHONE}`)
       .set("Cookie", cookie)
       .expect(200);
     expect(conv.body.messages[0].reply.outboxId).toBe(id);
+    expect(conv.body.sent[0]).toMatchObject({
+      editedBy: "Sent Tester",
+      retractedBy: null,
+    });
+  });
+
+  it("names nobody for an edit or unsend the log never saw", async () => {
+    const id = await sent({ retracted: true });
+    await db.outbox.update({ where: { id }, data: { editedAt: new Date() } });
+    const conv = await request(app)
+      .get(`/api/inbox/${PHONE}`)
+      .set("Cookie", cookie)
+      .expect(200);
+    expect(conv.body.sent[0]).toMatchObject({
+      id,
+      editedBy: null,
+      retractedBy: null,
+    });
+    expect(conv.body.sent[0].retractedAt).not.toBeNull();
   });
 
   it("leaves a reply text that has since been overwritten alone", async () => {

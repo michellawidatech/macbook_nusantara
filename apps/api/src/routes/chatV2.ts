@@ -62,6 +62,11 @@ const evaluationBody = z
     agent: z.enum(["ROUTER", "ADVISOR", "OPERATIONS"]).optional(),
     note: z.string().trim().max(500).optional(),
     corrected: z.string().trim().max(4_000).optional(),
+    /**
+     * The rating this one replaces — 👍 pressed where 👎 stood (2026-10-27).
+     * Withdrawn and replaced in one transaction, under the withdraw rules.
+     */
+    replaces: z.string().trim().min(1).max(40).optional(),
   })
   .strict();
 
@@ -145,6 +150,64 @@ export interface ChatV2Deps {
   readonly ownerOnly: RequestHandler;
 }
 
+type Tx = Parameters<Parameters<PrismaClient["$transaction"]>[0]>[0];
+
+/**
+ * Take a 👍/👎 back (owner ask 2026-10-27) — a real DELETE, and audited.
+ *
+ * Only while it is OPEN: an APPLIED one became an `AgentCorrection` the bot
+ * now reads (removing it is the Knowledge Base's job), and a DISMISSED one
+ * was decided by somebody. Its author may withdraw it, and so may an owner.
+ * Nothing references `AgentEvaluation`, so the delete orphans nothing;
+ * `deleteMany` on (id, OPEN) is what loses a race to an Apply.
+ */
+async function withdrawEvaluation(
+  tx: Tx,
+  id: string,
+  staff: { id: string; role: "OWNER" | "STAFF" },
+  meta: { requestId: string | null; ip: string | null; messageId?: string },
+): Promise<void> {
+  const e = await tx.agentEvaluation.findUnique({
+    where: { id },
+    select: { status: true, createdById: true, messageId: true, rating: true },
+  });
+  if (!e || (meta.messageId !== undefined && e.messageId !== meta.messageId))
+    throw notFound("Penilaian");
+  if (e.status === "APPLIED")
+    throw new ApiError(
+      409,
+      "KONFLIK",
+      "Penilaian ini sudah menjadi jawaban di Knowledge Base — hapus di sana.",
+    );
+  if (e.status !== "OPEN")
+    throw new ApiError(409, "KONFLIK", "Penilaian ini sudah diproses.");
+  if (e.createdById !== staff.id && staff.role !== "OWNER")
+    throw new ApiError(
+      403,
+      "AKSES_DITOLAK",
+      "Hanya yang memberi penilaian ini, atau pemilik, yang bisa menariknya.",
+    );
+  const { count } = await tx.agentEvaluation.deleteMany({
+    where: { id, status: "OPEN" },
+  });
+  if (count !== 1)
+    throw new ApiError(409, "KONFLIK", "Penilaian ini sudah diproses.");
+  await tx.auditLog.create({
+    data: {
+      at: new Date(),
+      staffId: staff.id,
+      entity: "AgentEvaluation",
+      entityId: id,
+      action: "DELETE",
+      field: null,
+      before: JSON.stringify({ messageId: e.messageId, rating: e.rating }),
+      after: null,
+      requestId: meta.requestId,
+      ip: meta.ip,
+    },
+  });
+}
+
 export function registerChatV2(router: Router, deps: ChatV2Deps): void {
   const { db, logger, anthropic, ownerOnly } = deps;
 
@@ -193,19 +256,28 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
         orderBy: { createdAt: "desc" },
         select: { id: true },
       });
-      const row = (await db.agentEvaluation.create({
-        data: {
-          messageId: message.id,
-          ...(run ? { runId: run.id } : {}),
-          rating: body.data.rating,
-          reason: body.data.reason ?? null,
-          agent: body.data.agent ?? null,
-          note: body.data.note || null,
-          corrected: body.data.corrected || null,
-          createdById: staff.id,
-          createdAt: new Date(),
-        },
-        select: EVALUATION_SELECT,
+      const replaces = body.data.replaces;
+      const row = (await db.$transaction(async (tx) => {
+        if (replaces)
+          await withdrawEvaluation(tx, replaces, staff, {
+            requestId: req.get("x-request-id") ?? null,
+            ip: req.ip ?? null,
+            messageId: message.id,
+          });
+        return tx.agentEvaluation.create({
+          data: {
+            messageId: message.id,
+            ...(run ? { runId: run.id } : {}),
+            rating: body.data.rating,
+            reason: body.data.reason ?? null,
+            agent: body.data.agent ?? null,
+            note: body.data.note || null,
+            corrected: body.data.corrected || null,
+            createdById: staff.id,
+            createdAt: new Date(),
+          },
+          select: EVALUATION_SELECT,
+        });
       })) as EvaluationRow;
       res.status(201).json({ evaluation: evaluationJson(row) });
     } catch (err) {
@@ -276,6 +348,24 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
         });
       })) as EvaluationRow;
       res.json({ evaluation: evaluationJson(row) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** DELETE /api/chat/evaluations/:id — the same thumb pressed again. */
+  router.delete("/evaluations/:id", async (req, res, next) => {
+    try {
+      const staff = req.staff;
+      if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
+      const id = String(req.params["id"]);
+      await db.$transaction((tx) =>
+        withdrawEvaluation(tx, id, staff, {
+          requestId: req.get("x-request-id") ?? null,
+          ip: req.ip ?? null,
+        }),
+      );
+      res.json({ withdrawn: id });
     } catch (err) {
       next(err);
     }

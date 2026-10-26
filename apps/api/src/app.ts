@@ -139,7 +139,15 @@ export function createApp(deps: CreateAppDeps): Express {
       requireOwner: requireOwner(logger),
     }),
   );
-  api.use("/inbox", inboxRouter(db, { gateway: config.waGateway, logger }));
+  api.use(
+    "/inbox",
+    inboxRouter(
+      db,
+      { gateway: config.waGateway, logger },
+      // Delete conversation (2026-10-27) is the owner's alone.
+      requireOwner(logger),
+    ),
+  );
   api.use("/reservations", reservationsRouter(db));
   api.use("/inbound", inboundRouter(db));
   api.use("/store", storeRouter(db));

@@ -33,6 +33,7 @@ import { ChatInbox } from "./ChatPage";
 import { KnowledgePanel } from "./KnowledgePage";
 import { EvaluationPanel } from "./EvaluationPanel";
 import { BotSettings } from "./BotSettings";
+import { useSession } from "../../lib/session.js";
 
 type TabKey = "chat" | "knowledge" | "evaluation" | "settings";
 
@@ -51,6 +52,8 @@ export function ChatbotPage() {
    * tab's "Open chat" can switch tabs AND open the conversation in one press.
    */
   const [picked, setPicked] = useState<string | null>(null);
+  // Delete conversation is offered to the owner; the server checks again.
+  const isOwner = useSession().data?.role === "OWNER";
 
   return (
     <PageContainer title="Chatbot" fill>
@@ -67,7 +70,9 @@ export function ChatbotPage() {
           {
             key: "chat",
             label: t("chatbot.chat", "Chat"),
-            children: <ChatInbox picked={picked} onPick={setPicked} />,
+            children: (
+              <ChatInbox picked={picked} onPick={setPicked} isOwner={isOwner} />
+            ),
           },
           {
             key: "knowledge",

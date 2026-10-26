@@ -119,9 +119,11 @@ export {
   TESTERS_SETTING_KEY,
   formatTesters,
   isResetCommand,
+  laterOf,
   loadTesters,
   parseTesters,
   resetPointFor,
+  summarySince,
   toWaId,
 } from "./reset.js";
 export {

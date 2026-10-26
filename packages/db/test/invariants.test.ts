@@ -779,6 +779,109 @@ describe("clearing the activity log (2026-10-22)", () => {
   });
 });
 
+describe("clearing and deleting a chat, taking a rating back (2026-10-27)", () => {
+  it("gives the clear to the app role alone (invariant 13)", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_column_privilege('nusantara_app','"WaThreadMemory"','clearedAt','UPDATE')     AS app_at,
+              has_column_privilege('nusantara_app','"WaThreadMemory"','clearedById','UPDATE')   AS app_by,
+              has_column_privilege('nusantara_agent','"WaThreadMemory"','clearedAt','UPDATE')   AS agent_at,
+              has_column_privilege('nusantara_agent','"WaThreadMemory"','clearedById','UPDATE') AS agent_by,
+              has_column_privilege('nusantara_agent','"WaThreadMemory"','clearedAt','INSERT')   AS agent_insert`,
+    );
+    expect(rows[0]).toEqual({
+      app_at: true,
+      app_by: true,
+      agent_at: false,
+      agent_by: false,
+      agent_insert: false,
+    });
+
+    await owner.query(
+      `INSERT INTO "WaThreadMemory" (id, "from", "summaryTurns", "clarifyCount", "updatedAt")
+       VALUES ('tm_clr', '628111000777', 0, 0, now())`,
+    );
+    await rejectsWith(
+      () =>
+        agent.query(
+          `UPDATE "WaThreadMemory" SET "clearedAt" = now(), "clearedById" = $1 WHERE id = 'tm_clr'`,
+          [STAFF],
+        ),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    // A clear names who; a name means a clear.
+    await rejectsWith(
+      () =>
+        app.query(
+          `UPDATE "WaThreadMemory" SET "clearedAt" = now() WHERE id = 'tm_clr'`,
+        ),
+      CHECK_VIOLATION,
+    );
+    await app.query(
+      `UPDATE "WaThreadMemory" SET "clearedAt" = now(), "clearedById" = $1 WHERE id = 'tm_clr'`,
+      [STAFF],
+    );
+  });
+
+  it("deletes a conversation through one definer function the agent cannot call", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_function_privilege('nusantara_app','wa_thread_delete(text, text, timestamp)','EXECUTE')   AS app_fn,
+              has_function_privilege('nusantara_agent','wa_thread_delete(text, text, timestamp)','EXECUTE') AS agent_fn,
+              has_table_privilege('nusantara_app','"WaMessage"','DELETE')        AS app_msg,
+              has_table_privilege('nusantara_app','"AgentEvaluation"','DELETE')  AS app_eval,
+              has_table_privilege('nusantara_agent','"AgentEvaluation"','DELETE') AS agent_eval,
+              has_table_privilege('nusantara_app','"AgentCorrection"','DELETE')  AS app_corr`,
+    );
+    expect(rows[0]).toEqual({
+      app_fn: true,
+      agent_fn: false,
+      app_msg: false,
+      app_eval: true,
+      agent_eval: false,
+      app_corr: false,
+    });
+
+    const FROM = "628111000778";
+    await owner.query(
+      `INSERT INTO "WaMessage" (id, "waMessageId", "from", "msgType", ts, direction, status, entities, "answeredByAgent", "replyText", "answeredAt")
+       VALUES ('wm_d1','wamid.d1',$1,'text',now(),'IN','DIJAWAB_AGEN','{}',true,'halo kak', now()),
+              ('wm_d2','wamid.d2',$1,'text',now(),'IN','DIJAWAB_AGEN','{}',true,'ada kak', now())`,
+      [FROM],
+    );
+    await owner.query(
+      `INSERT INTO "AgentEvaluation" (id, "messageId", rating, "createdById", "createdAt")
+       VALUES ('ev_d1','wm_d1','GOOD',$1, now())`,
+      [STAFF],
+    );
+    await rejectsWith(
+      () => app.query(`DELETE FROM "WaMessage" WHERE id = 'wm_d2'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    await rejectsWith(
+      () =>
+        agent.query(`SELECT wa_thread_delete($1, $2, now()::timestamp)`, [
+          FROM,
+          STAFF,
+        ]),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    const { rows: n } = await app.query<{ n: number }>(
+      `SELECT wa_thread_delete($1, $2, now()::timestamp) AS n`,
+      [FROM, STAFF],
+    );
+    expect(n[0]!.n).toBe(1);
+    // The rated message stays, hidden behind a fresh clear.
+    const { rows: left } = await owner.query(
+      `SELECT m.id, t."clearedById" FROM "WaMessage" m
+         JOIN "WaThreadMemory" t ON t."from" = m."from"
+        WHERE m."from" = $1`,
+      [FROM],
+    );
+    expect(left).toEqual([{ id: "wm_d1", clearedById: STAFF }]);
+    // And a rating can be taken back by the app role.
+    await app.query(`DELETE FROM "AgentEvaluation" WHERE id = 'ev_d1'`);
+  });
+});
+
 describe("the stock movement history (2026-09-24)", () => {
   it("is correctable per column and never as a ledger", async () => {
     // What a person can get wrong is granted; what the row IS is not. Column
