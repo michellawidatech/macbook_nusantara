@@ -21,6 +21,16 @@
  * balance is the same figure in both — it counts settled movements only, which
  * is what "the real balance" means (owner answer 2026-09-23).
  *
+ * ## A debt a return cancelled (owner ask 2026-10-26)
+ *
+ * An unpaid sale that comes back has its DUE row cut by the return, and the
+ * row used to vanish from Accrual as if the debt had never been. It stays as
+ * ONE row for what the return cancelled (`returnedDebts`, read off what is
+ * stored): dated at the sale, struck through, tagged "Unpaid, returned" or
+ * "Partly paid, returned" — and never counted, in the running balance, the
+ * Cash and Bank cards or the two charts. It is a record that the income was
+ * voided, not money. Cash basis does not list it, as it lists no DUE row.
+ *
  * `AdjustmentPanel` still owns the write path: an expense goes into
  * `db.expenses`, an income into `db.incomes`.
  */
@@ -51,6 +61,7 @@ import { fmtRp, fmtDate, fmtNone, fmtTime } from "../../lib/format.js";
 import { customerLabel } from "../../lib/customers.js";
 import { accountOfMethod, balancesOf } from "../../lib/accounts.js";
 import { paymentsOf } from "../../lib/salePayments.js";
+import { returnedDebts } from "../../lib/saleStatus.js";
 import { mutate, useDb } from "../../mock/store.js";
 import {
   adjustmentDeletionBlock,
@@ -102,7 +113,12 @@ interface Row {
   readonly orderCode?: string;
   /** Always positive. `direction` is the sign. */
   readonly amount: number;
-  readonly status: "SETTLED" | "PENDING" | "DUE";
+  /**
+   * The two `…_RETURNED` are a sale's debt a return cancelled — voided
+   * income, listed and never counted (`isVoided`).
+   */
+  readonly status:
+    "SETTLED" | "PENDING" | "DUE" | "UNPAID_RETURNED" | "PARTLY_PAID_RETURNED";
   /**
    * Orders rows that share an instant — and every hand-typed row of one day
    * does, since an adjustment carries a date and no time: when it was typed
@@ -112,6 +128,10 @@ interface Row {
   /** The `Expense` / `ManualIncome` behind a typed row — what Delete removes. */
   readonly adjustment?: AdjustmentRef & { readonly date: string };
 }
+
+/** A debt a return cancelled: listed in Accrual, never counted anywhere. */
+const isVoided = (r: Row) =>
+  r.status === "UNPAID_RETURNED" || r.status === "PARTLY_PAID_RETURNED";
 
 /**
  * When a typed row happened: the day somebody picked, at the clock time they
@@ -193,7 +213,30 @@ export function IncomeExpensePage() {
    */
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = [];
+    const debts = returnedDebts(db.orders, db.events, db.stockMoves);
     for (const o of db.orders) {
+      /*
+       * What a return cancelled of this sale's debt — at the sale, where the
+       * DUE row it replaces stood. No method: nothing moved, and naming the
+       * one a shortfall row defaults to would put it in a pot.
+       */
+      const voided = debts.get(o.id);
+      if (voided !== undefined && voided.cancelled > 0) {
+        out.push({
+          key: `rd-${o.id}`,
+          at: o.ts,
+          direction: "INCOME",
+          category: "SALES",
+          method: fmtNone(),
+          methodCode: "",
+          inBalance: false,
+          description: saleDescription(o, t),
+          orderCode: o.code,
+          amount: voided.cancelled,
+          status: voided.paid > 0 ? "PARTLY_PAID_RETURNED" : "UNPAID_RETURNED",
+          tie: "",
+        });
+      }
       for (const p of paymentsOf(o)) {
         out.push({
           key: `p-${o.id}-${p.id}`,
@@ -345,6 +388,8 @@ export function IncomeExpensePage() {
     return out.sort((a, b) => chronological(b, a));
   }, [
     db.orders,
+    db.events,
+    db.stockMoves,
     db.incomes,
     db.expenses,
     db.pos,
@@ -436,6 +481,7 @@ export function IncomeExpensePage() {
     for (const r of [...rows].reverse()) {
       if (
         r.status === "SETTLED" &&
+        !isVoided(r) &&
         r.inBalance &&
         accountOfMethod(r.methodCode) &&
         r.at >= from
@@ -465,6 +511,7 @@ export function IncomeExpensePage() {
         .filter(
           (r) =>
             r.inBalance &&
+            !isVoided(r) &&
             r.at >= from &&
             (basis === "ACCRUAL" || r.status === "SETTLED"),
         )
@@ -522,13 +569,14 @@ export function IncomeExpensePage() {
    * The two charts (owner ask 2026-10-23), off the rows the table shows — so
    * the basis switch moves them too — over the last 3, 6 or 12 months.
    */
+  const charted = useMemo(() => shown.filter((r) => !isVoided(r)), [shown]);
   const trend = useMemo(
-    () => monthlyFlow(shown, new Date(), chartMonths),
-    [shown, chartMonths],
+    () => monthlyFlow(charted, new Date(), chartMonths),
+    [charted, chartMonths],
   );
   const slices = useMemo(
-    () => expenseBreakdown(shown, trend[0]!.month),
-    [shown, trend],
+    () => expenseBreakdown(charted, trend[0]!.month),
+    [charted, trend],
   );
   const fmtShort = (n: number) =>
     Math.abs(n) >= 1_000_000
@@ -729,8 +777,16 @@ export function IncomeExpensePage() {
                 r.direction === "INCOME" ? r.amount : -r.amount,
               render: (_: unknown, r: Row) => (
                 <Typography.Text
-                  type={r.direction === "INCOME" ? "success" : "danger"}
-                  strong
+                  type={
+                    isVoided(r)
+                      ? "secondary"
+                      : r.direction === "INCOME"
+                        ? "success"
+                        : "danger"
+                  }
+                  strong={!isVoided(r)}
+                  delete={isVoided(r)}
+                  data-voided={isVoided(r) ? "true" : undefined}
                 >
                   {r.direction === "INCOME" ? "+" : "−"}
                   {fmtRp(r.amount)}
@@ -751,9 +807,10 @@ export function IncomeExpensePage() {
                       the method belongs to no pot — a transfer from an account
                       this app does not keep. Both mean the same thing on this
                       row, so they say the same word. */}
-                  {(!r.inBalance || !accountOfMethod(r.methodCode)) && (
-                    <Tag>{t("cashflow.notInBalance", "Not in balance")}</Tag>
-                  )}
+                  {!isVoided(r) &&
+                    (!r.inBalance || !accountOfMethod(r.methodCode)) && (
+                      <Tag>{t("cashflow.notInBalance", "Not in balance")}</Tag>
+                    )}
                 </span>
               ),
             },
@@ -835,6 +892,10 @@ function statusLabel(
       return t("finance.statusPending", "Pending");
     case "DUE":
       return t("finance.statusDue", "Owed");
+    case "UNPAID_RETURNED":
+      return t("finance.statusUnpaidReturned", "Unpaid, returned");
+    case "PARTLY_PAID_RETURNED":
+      return t("finance.statusPartPaidReturned", "Partly paid, returned");
   }
 }
 
@@ -847,5 +908,8 @@ function statusColour(s: Row["status"]): string {
       return "orange";
     case "DUE":
       return "red";
+    case "UNPAID_RETURNED":
+    case "PARTLY_PAID_RETURNED":
+      return "purple";
   }
 }

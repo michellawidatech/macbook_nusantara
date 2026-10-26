@@ -199,6 +199,126 @@ describe("the payment status", () => {
   });
 });
 
+/*
+ * An unpaid sale, returned (owner ask 2026-10-26). The return cancelled the
+ * customer's debt, so the balance owes nothing — and the screen read Settled,
+ * the word for money that came in.
+ */
+describe("a debt a return cancelled", () => {
+  const RETURN_AT = "2026-09-20T03:00:00.000Z";
+  const retur = (id: string, amount: number) => ({
+    id,
+    type: "RETUR" as const,
+    code: `SG-TEST-${id}`,
+    amount,
+    reason: "Returned — rusak",
+    at: RETURN_AT,
+  });
+
+  function addReturnedSales() {
+    // Nothing paid; the whole bill came back, and the DUE row went with it.
+    addSale({
+      id: "o-tx-unpaid-back",
+      code: "SI-TEST-UNPAID-BACK",
+      payments: [],
+      adjustments: [retur("a1", 2_000_000)],
+    });
+    // A Rp500rb deposit, the rest owed; all of it back, the deposit refunded.
+    addSale({
+      id: "o-tx-part-back",
+      code: "SI-TEST-PART-BACK",
+      payments: [
+        {
+          id: "o-tx-part-back-1",
+          method: "TRANSFER",
+          amount: 500_000,
+          state: "SETTLED",
+          at: "2026-09-18T03:00:00.000Z",
+        },
+      ],
+      refunds: [
+        { id: "rf-tx", method: "TUNAI", amount: 500_000, at: RETURN_AT },
+      ],
+      adjustments: [retur("a2", 2_000_000)],
+    });
+    // Paid in full, then returned: a refund, and still Settled.
+    addSale({
+      id: "o-tx-paid-back",
+      code: "SI-TEST-PAID-BACK",
+      settled: true,
+      payments: [
+        {
+          id: "o-tx-paid-back-1",
+          method: "TUNAI",
+          amount: 2_000_000,
+          state: "SETTLED",
+          at: "2026-09-18T03:00:00.000Z",
+        },
+      ],
+      refunds: [
+        { id: "rf-tx-2", method: "TUNAI", amount: 2_000_000, at: RETURN_AT },
+      ],
+      adjustments: [retur("a3", 2_000_000)],
+    });
+  }
+
+  it("reads Unpaid, returned and Partly paid, returned — and Settled for a refund", async () => {
+    addReturnedSales();
+    renderPage();
+    await settle();
+
+    expect(
+      within(saleCard("SI-TEST-UNPAID-BACK")).getByText("Unpaid, returned"),
+    ).toBeInTheDocument();
+    expect(
+      within(saleCard("SI-TEST-PART-BACK")).getByText("Partly paid, returned"),
+    ).toBeInTheDocument();
+    const paid = saleCard("SI-TEST-PAID-BACK");
+    expect(within(paid).getByText("Settled")).toBeInTheDocument();
+    expect(within(paid).queryByText(/returned$/)).toBeNull();
+  });
+
+  it("carries the words into the CSV export", async () => {
+    addReturnedSales();
+    const created: Blob[] = [];
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      writable: true,
+      value: (b: Blob) => {
+        created.push(b);
+        return "blob:csv";
+      },
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      writable: true,
+      value: () => undefined,
+    });
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    renderPage();
+    await settle();
+    act(() => {
+      screen.getByRole("button", { name: /Export all/ }).click();
+    });
+    click.mockRestore();
+
+    expect(created).toHaveLength(1);
+    // jsdom's Blob has no text(); FileReader reads it.
+    const csv = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.readAsText(created[0]!);
+    });
+    const line = (code: string) =>
+      csv.split("\r\n").find((l) => l.startsWith(`"${code}"`)) ?? "";
+    expect(line("SI-TEST-UNPAID-BACK")).toContain('"Unpaid, returned"');
+    expect(line("SI-TEST-PART-BACK")).toContain('"Partly paid, returned"');
+    expect(line("SI-TEST-PAID-BACK")).toContain('"Settled"');
+  });
+});
+
 describe("what came back", () => {
   it("marks the unit on the sale a customer brought it back from", async () => {
     renderPage();

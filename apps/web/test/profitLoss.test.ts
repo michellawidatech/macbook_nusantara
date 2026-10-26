@@ -177,6 +177,59 @@ describe("profit & loss", () => {
     expect(line(profitLoss(db, MONTH), "cogsReturned")).toBe(0);
   });
 
+  it("nets an unpaid sale returned in the same month to nothing", () => {
+    // Owner ask 2026-10-26: Debit Sales Returns / Credit Accounts Receivable,
+    // Debit Inventory / Credit COGS. Nobody paid, the unit came back, and the
+    // month must show neither a sale nor its cost.
+    const db = empty();
+    const unit = db.units[0]!;
+    const cost = costIndex(db)(unit).total;
+    db.orders.push({
+      id: "o-unpaid",
+      code: "SI-2030/01-000002",
+      ts: IN,
+      customerId: null,
+      serials: [unit.serial],
+      prices: { [unit.serial]: 6_000_000 },
+      discount: 0,
+      source: "OFFLINE" as never,
+      payMethod: "TUNAI",
+      settled: true,
+      total: 6_000_000,
+      // The return cancelled the DUE part, so nothing is left on the list.
+      payments: [],
+      adjustments: [
+        {
+          id: "adj-unpaid",
+          type: "RETUR",
+          code: "SG-2030/01-000002",
+          amount: 6_000_000,
+          reason: "Returned",
+          at: new Date(2030, 0, 12, 10).toISOString(),
+        },
+      ],
+    } as MockDb["orders"][number]);
+    db.events.push({
+      id: "ev-unpaid-back",
+      serial: unit.serial,
+      seq: 9_998,
+      type: "RETUR_PELANGGAN",
+      at: new Date(2030, 0, 12, 10).toISOString(),
+      toStatus: "TERSEDIA",
+      locationId: unit.locationId,
+      refCode: "SG-2030/01-000002",
+      staff: "Test",
+    } as MockDb["events"][number]);
+
+    const r = profitLoss(db, MONTH);
+    expect(line(r, "sales")).toBe(6_000_000);
+    expect(line(r, "returns")).toBe(-6_000_000);
+    expect(r.totalRevenue).toBe(0);
+    expect(line(r, "cogsSold")).toBe(cost);
+    expect(line(r, "cogsReturned")).toBe(-cost);
+    expect(r.grossProfit).toBe(0);
+  });
+
   it("lists the transactions behind every line, adding up to it", () => {
     const db = structuredClone(getDb());
     const p = monthPeriod(new Date());
