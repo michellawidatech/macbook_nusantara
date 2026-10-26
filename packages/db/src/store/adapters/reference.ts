@@ -981,12 +981,17 @@ async function removeAdjustment(
   const { tx } = ctx;
   const row =
     collection === "expenses"
-      ? await tx.expense.findUnique({ where: { id }, select: { date: true } })
+      ? await tx.expense.findUnique({
+          where: { id },
+          select: { date: true, serviceFeeId: true },
+        })
       : await tx.manualIncome.findUnique({
           where: { id },
           select: { date: true },
         });
   if (row === null) return;
+  const feeId = "serviceFeeId" in row ? row.serviceFeeId : null;
+  if (typeof feeId === "string") await touchVisitOfFee(ctx, feeId);
   const closed = await tx.appSetting.findUnique({
     where: { key: "finance.booksClosedAt" },
     select: { value: true },
@@ -1006,6 +1011,20 @@ async function removeAdjustment(
   if (collection === "expenses") await tx.expense.delete({ where: { id } });
   else await tx.manualIncome.delete({ where: { id } });
   ctx.touch(collection, id);
+}
+
+/**
+ * A service charge's `paid` is derived from the expense naming it
+ * (2026-10-26), so paying one — or taking the payment back — changes the
+ * VISIT's projection as well: every till has to hear about both, including
+ * the ones that are sent no expenses at all.
+ */
+async function touchVisitOfFee(ctx: WriteContext, feeId: string) {
+  const fee = await ctx.tx.serviceFee.findUnique({
+    where: { id: feeId },
+    select: { visitId: true },
+  });
+  if (fee !== null) ctx.touch("services", fee.visitId);
 }
 
 export const expenses: Adapter<"expenses"> = {
@@ -1079,6 +1098,13 @@ export const expenses: Adapter<"expenses"> = {
       } else {
         await tx.expense.update({ where: { id: n.id }, data });
       }
+      if (n.serviceFeeId !== undefined)
+        await touchVisitOfFee(ctx, n.serviceFeeId);
+      if (
+        r.base?.serviceFeeId !== undefined &&
+        r.base.serviceFeeId !== n.serviceFeeId
+      )
+        await touchVisitOfFee(ctx, r.base.serviceFeeId);
       ctx.touch("expenses", n.id);
     }
   },

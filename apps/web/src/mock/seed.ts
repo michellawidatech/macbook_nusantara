@@ -60,9 +60,11 @@ export interface Warehouse {
   /**
    * `Location.kind` in the schema — TOKO, GUDANG, SERVIS, TRANSIT.
    *
-   * Carried since 2026-09-08 because the service bench has to be findable by
-   * KIND rather than by id: `wh-4` is this shop's service location and the
-   * next shop's will not be. See `serviceLocationOf` in lib/service.ts.
+   * Carried since 2026-09-08, when the service bench was found by KIND.
+   * ⚠️ Nothing picks a warehouse by it since 2026-10-26: in the shop's own
+   * database 04 is *Gudang Masuk Belum QC* and carries `SERVIS`, so inbound
+   * units sat in "the bench" and the bench was a receiving room. Send to
+   * service asks where; the kind is only what Settings says it is.
    */
   kind?: string;
 }
@@ -1228,8 +1230,10 @@ export interface Expense {
   /**
    * The service charge this paid — a `ServiceFee.id` inside a `ServiceRec`
    * (`Expense.serviceFeeId`, owner 2026-10-26). Kind UNIT; one expense per
-   * charge at most. Removing the charge must remove this expense in the same
-   * mutation, or the store refuses it.
+   * charge at most. The CHARGE owns it: removing the charge, or correcting
+   * its amount, takes the expense with it on the server (a browser without
+   * finance access is sent no expenses and could not do it itself), and a
+   * finance account's browser does the same in its own copy.
    */
   serviceFeeId?: string;
   /** When it was typed — see `ManualIncome.createdAt`. */

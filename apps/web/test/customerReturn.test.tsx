@@ -665,9 +665,7 @@ describe("exchanging (owner, 2026-09-21)", () => {
   /*
    * Where it comes back to is asked, not assumed (owner ask 2026-10-21: "we
    * should be able to choose the warehouse instead of automatically sending
-   * it to warehouse 4"). It starts on this desk's warehouse — but never on the
-   * service bench, which is where an account defaulted to it sent every
-   * return.
+   * it to warehouse 4"). It starts on this desk's warehouse.
    */
   /*
    * A fresh database has no reasons at all (go-live 2026-09-29 imported none),
@@ -713,31 +711,27 @@ describe("exchanging (owner, 2026-09-21)", () => {
     expect(back.at(-1)).toMatchObject({ locationId: "wh-2" });
   });
 
-  it("does not assume the service bench, and asks for a warehouse instead", async () => {
+  /*
+   * The SERVIS-kind warehouse is a warehouse like any other (2026-10-26): in
+   * the shop's database it is 04, *Gudang Masuk Belum QC*. A desk whose own
+   * warehouse it is returns there by default, as any desk does.
+   */
+  it("starts on this desk's warehouse, whatever its kind", async () => {
     mutate((d) => {
       d.myWarehouseId = "wh-4";
     });
-    sellOne([paid("p-ret-wh4", 5_000_000)]);
-    renderPanel();
-    await scanBack(SOLD);
-    await pickReason();
-    await record();
-    // Refused: nothing came back yet.
-    expect(unit(SOLD).status).toBe("TERJUAL");
-    expect(
-      await screen.findByText("Pick the warehouse it goes back to."),
-    ).toBeInTheDocument();
-
-    await chooseOption(
-      within(returnForm()).getByLabelText("Back to warehouse"),
-      "01 · Toko Kelapa Gading",
-      { search: false },
-    );
-    await record();
-    expect(unit(SOLD).status).toBe("TERSEDIA");
-    expect(unit(SOLD).locationId).toBe("wh-1");
-    mutate((d) => {
-      d.myWarehouseId = "wh-1";
-    });
+    try {
+      sellOne([paid("p-ret-wh4", 5_000_000)]);
+      renderPanel();
+      await scanBack(SOLD);
+      await pickReason();
+      await record();
+      expect(unit(SOLD).status).toBe("TERSEDIA");
+      expect(unit(SOLD).locationId).toBe("wh-4");
+    } finally {
+      mutate((d) => {
+        d.myWarehouseId = "wh-1";
+      });
+    }
   });
 });

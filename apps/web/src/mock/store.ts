@@ -955,6 +955,12 @@ export function appendEvent(
     toStatus?: string;
     toLocationId?: string;
     refCode?: string;
+    /**
+     * The instant to record, when the row has to share one with the record
+     * it narrates — a service visit's send and its charges are found again
+     * by it (2026-10-26). Now, otherwise.
+     */
+    at?: string;
   },
   staff = currentStaffName(),
 ): void {
@@ -972,7 +978,7 @@ export function appendEvent(
         0,
       ) + 1,
     type: ev.type,
-    at: new Date().toISOString(),
+    at: ev.at ?? new Date().toISOString(),
     fromStatus: unit.status,
     toStatus: ev.toStatus ?? unit.status,
     locationId: ev.toLocationId ?? unit.locationId,

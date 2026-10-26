@@ -327,6 +327,87 @@ describe("the units behind a line", () => {
   });
 });
 
+describe("a unit's ⋯ (2026-10-26)", () => {
+  /*
+   * Send to service is on the unit's row now — Stock out keeps only
+   * write-offs — and opens the one dialog every door shares. Where it is
+   * serviced defaults to where it is; another warehouse moves it there.
+   */
+  it("sends a unit to service, to the warehouse the dialog names", async () => {
+    renderPage();
+    await settle();
+    const line = expectedLines().find(
+      (l) => l.tracksSerial && l.units.some((u) => u.status === "TERSEDIA"),
+    )!;
+    const unit = line.units.find((u) => u.status === "TERSEDIA")!;
+    const other = getDb().warehouses.find(
+      (w) => w.active && w.id !== unit.locationId,
+    )!;
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    const nested = await unitsUnder(row);
+    await userEvent.click(labelled(nested, `More for ${unit.serial}`));
+    await userEvent.click(await screen.findByText("Send to service"));
+    const dialog = await topModal();
+    expect(within(dialog).getByText(/\(stays here\)/)).toBeInTheDocument();
+    fireEvent.mouseDown(within(dialog).getByLabelText("Where is it serviced?"));
+    const label = other.code ? `${other.code} · ${other.name}` : other.name;
+    const option = await waitFor(() => {
+      const found = Array.from(
+        document.querySelectorAll<HTMLElement>(".ant-select-item-option"),
+      ).find((el) => el.getAttribute("title") === label);
+      expect(found).toBeDefined();
+      return found!;
+    });
+    fireEvent.click(option);
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Send to service" }),
+    );
+
+    await waitFor(() => {
+      const u = getDb().units.find((x) => x.serial === unit.serial)!;
+      expect(u.status).toBe("SERVIS");
+      expect(u.locationId).toBe(other.id);
+    });
+    const visit = getDb().services.find(
+      (r) => r.serial === unit.serial && r.closedAt === undefined,
+    )!;
+    expect(visit).toMatchObject({
+      fromLocationId: unit.locationId,
+      raisedBy: "ADJUSTMENT",
+    });
+  });
+
+  it("will not send a held unit", async () => {
+    // A held unit is the customer's until the hold is released.
+    const held = getDb().units.find(
+      (u) => u.status === "TERSEDIA" && skuTracksSerial(getDb(), u.skuId),
+    )!;
+    mutate((d) => {
+      d.units.find((u) => u.serial === held.serial)!.status = "DIRESERVASI";
+    });
+    try {
+      renderPage();
+      await settle();
+      const line = expectedLines().find((l) =>
+        l.units.some((u) => u.serial === held.serial),
+      )!;
+      const row = await rowFor(line);
+      await userEvent.click(within(row).getByText(line.code));
+      const nested = await unitsUnder(row);
+      await userEvent.click(labelled(nested, `More for ${held.serial}`));
+      const item = (await screen.findByText("Send to service")).closest(
+        "li",
+      ) as HTMLElement;
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+    } finally {
+      mutate((d) => {
+        d.units.find((u) => u.serial === held.serial)!.status = "TERSEDIA";
+      });
+    }
+  });
+});
+
 describe("Set price", () => {
   it("reprices only the line's units, and hands a hand-typed marketplace price back to the rule", async () => {
     const line = expectedLines().find((l) => l.available > 0)!;

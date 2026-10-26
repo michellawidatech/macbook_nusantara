@@ -3087,7 +3087,7 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
    * it; a charge goes only together with its expense; a whole visit can go;
    * nothing inside a closed book.
    */
-  it("removes a service charge with its expense, and a whole visit — never one still paid for, never in a closed book (2026-10-26)", async () => {
+  it("removes a service charge with its expense, and a whole visit — never in a closed book (2026-10-26)", async () => {
     await loadDemo();
     const snap = decodeStore(
       (await snapshotStore(db, { staffId: ACTOR })).db,
@@ -3111,6 +3111,15 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
       raisedBy: "ADJUSTMENT",
       staff: "Store Test",
     });
+    const expenseFor = (id: string, feeId: string, amount: number): Row => ({
+      id,
+      kind: "UNIT",
+      amount,
+      date: "2026-10-26",
+      method: "TRANSFER",
+      note: `${unit["serial"]} · ${feeId}`,
+      serviceFeeId: feeId,
+    });
     const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
     const commit = (before: Partial<StoreShape>, after: Partial<StoreShape>) =>
       commitStore(app, {
@@ -3123,21 +3132,17 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
       // A visit with two charges, the first paid.
       const created = await commit({ services: [], expenses: [] }, {
         services: [visit("svc-app-1", ["sf-app-1", "sf-app-2"])],
-        expenses: [
-          {
-            id: "exp-app-sf-1",
-            kind: "UNIT",
-            amount: 100_000,
-            date: "2026-10-26",
-            method: "TRANSFER",
-            note: `${unit["serial"]} · sf-app-1`,
-            serviceFeeId: "sf-app-1",
-          },
-        ],
+        expenses: [expenseFor("exp-app-sf-1", "sf-app-1", 100_000)],
       } as unknown as Partial<StoreShape>);
       let svc = decodeRow("services", (created.rows.services as Row[])[0]!);
       const exp = decodeRow("expenses", (created.rows.expenses as Row[])[0]!);
       expect(exp).toMatchObject({ kind: "UNIT", serviceFeeId: "sf-app-1" });
+      // The visit says which charge is paid — derived from the expense, for
+      // the tills that are sent no expenses.
+      expect((svc["fees"] as Row[]).map((f) => f["paid"])).toEqual([
+        true,
+        undefined,
+      ]);
       const back = decodeStore(
         (await snapshotStore(db, { staffId: ACTOR })).db,
       ) as unknown as Record<string, Row[]>;
@@ -3152,20 +3157,63 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
         } as unknown as Partial<StoreShape>),
       ).rejects.toThrow(/sudah dibayar/);
 
+      // Paying the second charge on its own changes the VISIT's projection
+      // too, so the commit answers with it.
+      const paidLater = await commit({ expenses: [] }, {
+        expenses: [expenseFor("exp-app-sf-2", "sf-app-2", 200_000)],
+      } as unknown as Partial<StoreShape>);
+      svc = decodeRow("services", (paidLater.rows.services as Row[])[0]!);
+      expect((svc["fees"] as Row[]).map((f) => f["paid"])).toEqual([
+        true,
+        true,
+      ]);
+
       const without = (v: Row, feeId: string): Row => ({
         ...v,
         fees: (v["fees"] as Row[]).filter((f) => f["id"] !== feeId),
       });
 
-      // The paid charge taken off while its expense stays: refused.
-      await expect(
-        commit({ services: [svc] }, { services: [without(svc, "sf-app-1")] }),
-      ).rejects.toThrow(/sudah tercatat sebagai pengeluaran/);
+      // A charge's amount corrected by somebody who cannot see expenses:
+      // the fee alone is sent, and the server moves its expense with it.
+      const corrected = await commit(
+        { services: [svc] },
+        {
+          services: [
+            {
+              ...svc,
+              fees: (svc["fees"] as Row[]).map((f) =>
+                f["id"] === "sf-app-2" ? { ...f, amount: 250_000 } : f,
+              ),
+            },
+          ],
+        },
+      );
       expect(
-        await db.serviceFee.findUnique({ where: { id: "sf-app-1" } }),
-      ).not.toBeNull();
+        (await db.expense.findUniqueOrThrow({ where: { id: "exp-app-sf-2" } }))
+          .amount,
+      ).toBe(250_000n);
+      expect(
+        decodeRow("expenses", (corrected.rows.expenses as Row[])[0]!),
+      ).toMatchObject({ id: "exp-app-sf-2", amount: 250_000 });
+      svc = decodeRow("services", (corrected.rows.services as Row[])[0]!);
 
-      // Taken off together with its expense: both gone.
+      // The paid charge taken off by somebody who cannot see expenses — the
+      // fee alone is sent: the charge owns its expense, and both go.
+      const byStaff = await commit(
+        { services: [svc] },
+        { services: [without(svc, "sf-app-2")] },
+      );
+      expect(byStaff.removed.expenses).toEqual(["exp-app-sf-2"]);
+      expect(
+        await db.serviceFee.findUnique({ where: { id: "sf-app-2" } }),
+      ).toBeNull();
+      expect(
+        await db.expense.findUnique({ where: { id: "exp-app-sf-2" } }),
+      ).toBeNull();
+      svc = decodeRow("services", (byStaff.rows.services as Row[])[0]!);
+
+      // Taken off by a finance account, which removes the expense itself in
+      // the same changeset: both gone, nothing refused.
       const removed = await commit(
         { services: [svc], expenses: [exp] } as unknown as Partial<StoreShape>,
         {
@@ -3181,9 +3229,29 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
         await db.expense.findUnique({ where: { id: "exp-app-sf-1" } }),
       ).toBeNull();
       svc = decodeRow("services", (removed.rows.services as Row[])[0]!);
-      expect((svc["fees"] as Row[]).map((f) => f["id"])).toEqual(["sf-app-2"]);
+      expect(svc["fees"]).toEqual([]);
 
-      // The whole visit, with the charge left on it.
+      // The whole visit, with a paid charge on it, by somebody who cannot see
+      // expenses: the visit, the charge and the expense all go.
+      const third = decodeRow(
+        "services",
+        (
+          (
+            await commit({ services: [], expenses: [] }, {
+              services: [visit("svc-app-3", ["sf-app-4"])],
+              expenses: [expenseFor("exp-app-sf-4", "sf-app-4", 100_000)],
+            } as unknown as Partial<StoreShape>)
+          ).rows.services as Row[]
+        )[0]!,
+      );
+      const gone3 = await commit({ services: [third] }, { services: [] });
+      expect(gone3.removed.services).toEqual(["svc-app-3"]);
+      expect(gone3.removed.expenses).toEqual(["exp-app-sf-4"]);
+      expect(
+        await db.expense.findUnique({ where: { id: "exp-app-sf-4" } }),
+      ).toBeNull();
+
+      // The whole (now chargeless) first visit.
       const gone = await commit({ services: [svc] }, { services: [] });
       expect(gone.removed.services).toEqual(["svc-app-1"]);
       expect(
@@ -3223,6 +3291,48 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
       expect(
         await db.serviceVisit.findUnique({ where: { id: "svc-app-2" } }),
       ).not.toBeNull();
+
+      // The book is judged on the charge's JAKARTA day: closed to 26 Oct
+      // (16:59:59.999Z), a charge at 18:00Z on the 26th is the 27th in
+      // Jakarta and may go — the instant alone would have refused it.
+      await db.appSetting.update({
+        where: { key: "finance.booksClosedAt" },
+        data: { value: "2026-10-26T16:59:59.999Z" },
+      });
+      const late = "2026-10-26T18:00:00.000Z";
+      const evening = decodeRow(
+        "services",
+        (
+          (
+            await commit(
+              { services: [] },
+              {
+                services: [
+                  {
+                    ...visit("svc-app-5", ["sf-app-5"]),
+                    openedAt: late,
+                    arrivedAt: late,
+                    fees: [
+                      {
+                        id: "sf-app-5",
+                        kind: "LABOUR",
+                        amount: 50_000,
+                        at: late,
+                        staff: "Store Test",
+                      },
+                    ],
+                  },
+                ],
+              },
+            )
+          ).rows.services as Row[]
+        )[0]!,
+      );
+      const eveningGone = await commit(
+        { services: [evening] },
+        { services: [] },
+      );
+      expect(eveningGone.removed.services).toEqual(["svc-app-5"]);
     } finally {
       await db.appSetting.deleteMany({
         where: { key: "finance.booksClosedAt" },

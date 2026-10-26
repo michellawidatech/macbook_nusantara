@@ -55,6 +55,7 @@ import { SerialLink } from "../../components/SerialLink";
 import {
   App,
   Button,
+  Dropdown,
   Flex,
   Segmented,
   Select,
@@ -64,10 +65,15 @@ import {
 } from "antd";
 import {
   EditOutlined,
+  MoreOutlined,
   PrinterOutlined,
   QuestionCircleOutlined,
   TagsOutlined,
+  ToolOutlined,
 } from "@ant-design/icons";
+import type { MenuProps } from "antd";
+import { SendToServiceModal } from "../../components/SendToServiceModal";
+import { sendToServiceBlock } from "../../lib/serviceActions.js";
 import { ProTable } from "../../components/ProTable";
 import { DataTable } from "../../components/DataTable";
 import { EnumTag } from "../../components/EnumTag";
@@ -174,6 +180,8 @@ export function InventoryTable({ extra }: InventoryTableProps) {
   } | null>(null);
   /** The unit being corrected, or null (owner ask 2026-09-23). */
   const [editingUnit, setEditingUnit] = useState<Unit | null>(null);
+  /** The unit the Send-to-service dialog is open on (2026-10-26). */
+  const [servicing, setServicing] = useState<string | null>(null);
   /**
    * The lines open to show their units (owner ask 2026-10-02: *"instead of
    * showing popup in the UI when a row is clicked, use nested column"*).
@@ -478,6 +486,48 @@ export function InventoryTable({ extra }: InventoryTableProps) {
   };
 
   /** The units behind the open line, one row each. */
+  /**
+   * A unit row's ⋯ (owner ask 2026-10-26): the decisions about one unit that
+   * are not a price or a correction. *Send to service* opens the one dialog
+   * every door shares; a unit that cannot go is drawn switched off, saying
+   * why. A list, because *Return to supplier* joins it next.
+   */
+  const unitMenu = (u: Unit): MenuProps => {
+    const block = sendToServiceBlock(u.status);
+    const why =
+      block === "HELD"
+        ? t(
+            "service.heldCannotGo",
+            "Reserved for a customer — release the hold first.",
+          )
+        : block === "AT_SERVICE"
+          ? t("service.alreadyAway", "Already at service.")
+          : block === "NOT_IN_STOCK"
+            ? t("service.notInStock", "Not in stock.")
+            : undefined;
+    const sendLabel = t("inbound.serviceOk", "Send to service");
+    return {
+      items: [
+        {
+          key: "service",
+          icon: <ToolOutlined aria-hidden />,
+          disabled: why !== undefined,
+          label:
+            why === undefined ? (
+              sendLabel
+            ) : (
+              <Tooltip title={why}>
+                <span>{sendLabel}</span>
+              </Tooltip>
+            ),
+        },
+      ],
+      onClick: ({ key }) => {
+        if (key === "service") setServicing(u.serial);
+      },
+    };
+  };
+
   const unitColumns = (line: InventoryLine) => [
     {
       title: t("inventory.serial", "Serial"),
@@ -661,6 +711,16 @@ export function InventoryTable({ extra }: InventoryTableProps) {
               onClick={() => setEditingUnit(u)}
             />
           </Tooltip>
+          <Dropdown trigger={["click"]} menu={unitMenu(u)}>
+            <Button
+              size="small"
+              type="text"
+              icon={<MoreOutlined aria-hidden />}
+              aria-label={t("inventory.unitMoreAria", "More for {{serial}}", {
+                serial: u.serial,
+              })}
+            />
+          </Dropdown>
         </Flex>
       ),
     },
@@ -983,6 +1043,12 @@ export function InventoryTable({ extra }: InventoryTableProps) {
           ]}
         />
       </div>
+
+      <SendToServiceModal
+        serial={servicing}
+        raisedBy="ADJUSTMENT"
+        onClose={() => setServicing(null)}
+      />
 
       <UnitEditModal
         open={editingUnit !== null}

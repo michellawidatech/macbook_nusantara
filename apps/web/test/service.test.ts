@@ -13,7 +13,6 @@ import {
   editFee,
   openVisit,
   serviceCostOf,
-  serviceLocationOf,
   splitBench,
   visitCost,
   type ServiceRec,
@@ -187,24 +186,6 @@ describe("openVisit", () => {
     const open = visit({ id: "v2" });
     expect(openVisit(SERIAL, [closed, open])?.id).toBe("v2");
     expect(openVisit(SERIAL, [closed])).toBeUndefined();
-  });
-});
-
-describe("serviceLocationOf", () => {
-  it("finds the bench by KIND, not by id", () => {
-    // `wh-4` is this shop's service location and the next shop's will not be.
-    expect(
-      serviceLocationOf([
-        { id: "wh-1", kind: "TOKO" },
-        { id: "wh-9", kind: "SERVIS" },
-      ]),
-    ).toBe("wh-9");
-  });
-
-  it("answers undefined for a shop with no bench", () => {
-    // The callers then leave the machine where it is, which is exactly what
-    // happened before this feature existed.
-    expect(serviceLocationOf([{ id: "wh-1", kind: "TOKO" }])).toBeUndefined();
   });
 });
 

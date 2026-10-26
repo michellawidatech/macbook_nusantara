@@ -970,6 +970,15 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
         amount: money,
         at: instant,
         staff: text,
+        /*
+         * Has an `Expense` paid this charge (`Expense.serviceFeeId`,
+         * 2026-10-26)? DERIVED on the server from that row, never written —
+         * it exists because an account without finance access is sent no
+         * expenses, and without it the service bench could not tell a paid
+         * charge from an owed one and would offer to pay it twice. `true` or
+         * absent; which method paid it is the expense's, not this.
+         */
+        paid: z.literal(true).optional(),
       }),
     ),
     note: text.optional(),

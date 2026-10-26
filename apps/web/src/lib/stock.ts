@@ -54,6 +54,19 @@ export function onHand(
   return n;
 }
 
+/**
+ * The variants that have pieces to take — at one location, or anywhere.
+ * Stock out's counted-products picker (2026-10-26): offering a sleeve the
+ * shop has none of is offering a line the batch will refuse.
+ */
+export function withStockOnHand<T extends { readonly id: string }>(
+  skus: readonly T[],
+  moves: readonly Pick<StockMove, "skuId" | "locationId" | "qty">[],
+  locationId?: string,
+): T[] {
+  return skus.filter((s) => onHand(moves, s.id, locationId) > 0);
+}
+
 /** Every variant's on-hand, by location: `sku → location → qty`, zeros kept out. */
 export function stockLevels(
   moves: readonly Pick<StockMove, "skuId" | "locationId" | "qty">[],

@@ -510,12 +510,15 @@ export function CustomerReturnPanel({
     (r) => r.activity === "RETURN_CUSTOMER" && r.active,
   );
   const needsDetail = (reason ?? "").trim().toLowerCase() === OTHER;
-  /** Where a returned unit can be put: an active warehouse, not the bench. */
-  const shelves = db.warehouses.filter((w) => w.active && w.kind !== "SERVIS");
   /**
-   * This desk's warehouse when it is a shelf; otherwise nothing, and the form
-   * asks. A unit with a fault goes to service from Inventory, by a decision.
+   * Where a returned unit can be put: any active warehouse. "Not the bench"
+   * (`kind !== "SERVIS"`) went on 2026-10-26 — in the shop's database that
+   * kind is on 04, *Gudang Masuk Belum QC*, a real warehouse a return may
+   * well go to. A unit with a fault goes to service from its row, by a
+   * decision.
    */
+  const shelves = db.warehouses.filter((w) => w.active);
+  /** This desk's warehouse when it is active; otherwise nothing, and the form asks. */
   const returnTo =
     shelves.find((w) => w.id === warehousePicked)?.id ??
     shelves.find((w) => w.id === db.myWarehouseId)?.id;

@@ -2214,12 +2214,11 @@ async function booksClosedUntil(ctx: WriteContext): Promise<Date | null> {
  * sixth sanctioned hard delete: `nusantara_app` holds DELETE on
  * `ServiceVisit` and `ServiceFee` and nothing else of the kind.
  *
- * Refused inside a closed book, on the charge's own instant (a visit: its
- * opening and every charge on it). A charge that was PAID has an `Expense`
- * naming it (`serviceFeeId`); the browser removes that expense in the same
- * changeset, and the `expenses` adapter runs AFTER this one — so the DELETE
- * waits in `ctx.later`, where a still-standing expense is refused in words
- * instead of as a foreign-key violation.
+ * Refused inside a closed book, judged on the charge's JAKARTA DAY (a visit:
+ * the day it opened and every charge's day) — the same reading the browser's
+ * `lib/serviceActions.ts` and an Income & Expense adjustment's deletion use,
+ * so a charge typed at 06:00 on the first of a month is not "closed" by a book
+ * closed to the last day of the month before.
  */
 async function assertServiceBooksOpen(
   ctx: WriteContext,
@@ -2227,7 +2226,7 @@ async function assertServiceBooksOpen(
   at: Date,
 ): Promise<void> {
   const until = await booksClosedUntil(ctx);
-  if (until !== null && at <= until) {
+  if (until !== null && dateOfDay(dayOf(at)) <= until) {
     throw new StoreValidationError(
       `Bukunya sudah ditutup untuk tanggal ${dayOf(at)}; biaya servis ini tidak bisa dihapus (services ${visitId}).`,
       "services",
@@ -2236,6 +2235,19 @@ async function assertServiceBooksOpen(
   }
 }
 
+/**
+ * The charge OWNS its expense (2026-10-26, decided after the foundation).
+ *
+ * A paid charge is an `Expense` of kind UNIT naming it. An account without
+ * finance access is sent no expenses and may not edit or remove one
+ * (`apps/api/src/auth/financeScope.ts`) — so if removing the charge needed the
+ * browser to remove the expense too, only Ersen and Dina could ever delete a
+ * paid charge. Here the server removes it instead, in the same transaction,
+ * after every adapter has run: a finance account's browser may already have
+ * removed it in the same changeset (the `expenses` adapter runs after this
+ * one), in which case there is nothing left to do. A closed book keeps the
+ * expense, and therefore the charge.
+ */
 function removeServiceFeesLater(
   ctx: WriteContext,
   visitId: string,
@@ -2245,19 +2257,51 @@ function removeServiceFeesLater(
   ctx.later.push(async () => {
     const { tx } = ctx;
     if (feeIds.length > 0) {
-      const paid = await tx.expense.count({
+      const paid = await tx.expense.findMany({
         where: { serviceFeeId: { in: [...feeIds] } },
+        select: { id: true, date: true },
       });
-      if (paid > 0) {
-        throw new StoreValidationError(
-          "Biaya servis ini sudah tercatat sebagai pengeluaran — hapus pengeluarannya bersama biaya ini.",
-          "services",
-          visitId,
-        );
+      const until = await booksClosedUntil(ctx);
+      for (const e of paid) {
+        if (until !== null && dateOfDay(e.date) <= until) {
+          throw new StoreValidationError(
+            `Bukunya sudah ditutup untuk tanggal ${e.date}; pembayaran biaya servis ini tidak bisa dihapus (services ${visitId}).`,
+            "services",
+            visitId,
+          );
+        }
+      }
+      if (paid.length > 0) {
+        await tx.expense.deleteMany({
+          where: { id: { in: paid.map((e) => e.id) } },
+        });
+        for (const e of paid) ctx.touch("expenses", e.id);
       }
       await tx.serviceFee.deleteMany({ where: { id: { in: [...feeIds] } } });
     }
     if (thenVisit) await tx.serviceVisit.delete({ where: { id: visitId } });
+  });
+}
+
+/**
+ * A paid charge's amount corrected: its expense follows, for the reason
+ * `removeServiceFeesLater` gives — the person correcting it may not be able to
+ * see the expense. After every adapter, so a finance account's browser that
+ * edited both in one changeset ends at the same figure either way.
+ */
+function syncFeeExpenseLater(
+  ctx: WriteContext,
+  feeId: string,
+  amount: bigint,
+): void {
+  ctx.later.push(async () => {
+    const e = await ctx.tx.expense.findUnique({
+      where: { serviceFeeId: feeId },
+      select: { id: true, amount: true },
+    });
+    if (e === null || e.amount === amount) return;
+    await ctx.tx.expense.update({ where: { id: e.id }, data: { amount } });
+    ctx.touch("expenses", e.id);
   });
 }
 
@@ -2292,7 +2336,10 @@ export const services: Adapter<"services"> = {
         staff: { select: { name: true } },
         fees: {
           orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
-          include: { staff: { select: { name: true } } },
+          include: {
+            staff: { select: { name: true } },
+            expense: { select: { id: true } },
+          },
         },
       },
     });
@@ -2311,6 +2358,8 @@ export const services: Adapter<"services"> = {
         amount: f.amount,
         at: isoOf(f.at),
         staff: f.staff.name,
+        // Derived from the expense, never written: see the contract.
+        ...(f.expense === null ? {} : { paid: true as const }),
       })),
       note: v.note ?? undefined,
       raisedBy: v.raisedBy,
@@ -2357,9 +2406,12 @@ export const services: Adapter<"services"> = {
             amount: f.amount,
             sortOrder,
           };
-          if (left.has(f.id)) {
+          const was = left.get(f.id);
+          if (was !== undefined) {
             left.delete(f.id);
             await tx.serviceFee.update({ where: { id: f.id }, data: fee });
+            if (was.amount !== BigInt(f.amount))
+              syncFeeExpenseLater(ctx, f.id, BigInt(f.amount));
           } else {
             await tx.serviceFee.create({
               data: {

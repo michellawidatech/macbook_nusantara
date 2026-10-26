@@ -64,9 +64,7 @@ import {
   Descriptions,
   Dropdown,
   Flex,
-  Form,
   Input,
-  InputNumber,
   Modal,
   Result,
   Select,
@@ -158,7 +156,9 @@ import {
   type PurchaseLine,
 } from "../../lib/invoiceLines.js";
 import { poRowShares, rowKey } from "../../lib/landedCost.js";
-import { costBreakdown, serviceLocationOf } from "../../lib/service.js";
+import { costBreakdown } from "../../lib/service.js";
+import { sendToServiceBlock } from "../../lib/serviceActions.js";
+import { SendToServiceModal } from "../../components/SendToServiceModal";
 import {
   CODE128_HINT,
   BASE_MAX_LENGTH,
@@ -175,7 +175,6 @@ import { BatteryFields } from "../../components/BatteryFields";
 import { GradeTag } from "../../components/GradeTag";
 import { UnitPhotos } from "../../components/UnitPhotos";
 import { UNIT_STATUS } from "../../i18n/enumLabels.js";
-import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import { planSerialFill, type FillPlan } from "../../lib/scanFill.js";
 import { rendered } from "../../lib/rendered.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
@@ -452,13 +451,6 @@ export function InboundDetailPage() {
    * the desk at the moment somebody decides a machine needs a repair.
    */
   const [sendingToService, setSendingToService] = useState<string | null>(null);
-  const [serviceForm] = Form.useForm<{
-    /** The warehouse the unit goes to — its own when it is not moving. */
-    sendTo?: string;
-    shippingFee?: number;
-    serviceFee?: number;
-    note?: string;
-  }>();
   /**
    * Where normalising moved a row's key (old key → line id).
    *
@@ -1505,8 +1497,6 @@ export function InboundDetailPage() {
   const [editing, setEditing] = useState(false);
   const locked = closed || !editing;
 
-  const bench = serviceLocationOf(db.warehouses);
-
   /** An expense's name as the page shows it: its label, else its kind. */
   const feeName = (fee: PoFee) =>
     fee.label.trim() !== ""
@@ -1558,111 +1548,13 @@ export function InboundDetailPage() {
     });
   };
 
-  /**
-   * A unit that needs a repair.
-   *
-   * ⚠️ The location moves NOW (owner ask 2026-09-25: *"no need to mark as
-   * 'received' first"*), which REVERSES the 2026-09-09 rule that a unit does
-   * not arrive by being sent. The confirmation at /stock/service was what
-   * wrote `Unit.locationId`, so with it gone something else has to, or the
-   * bench's warehouse holds nothing and the shelf it left still counts it.
-   * The status goes to SERVIS in the same breath, as it always did — a unit
-   * promised to a repairer is not sellable from that moment.
-   *
-   * The courier fee and the "does it travel" question stay: what a journey
-   * COSTS is still a fact, and it is asked for while the number is on the
-   * desk. What went is only the second confirmation.
+  /*
+   * ~~`sendToService`~~ went on 2026-10-26: every door into service opens the
+   * one `SendToServiceModal`, which asks where the unit is serviced (its own
+   * warehouse by default — never "the bench" by `Location.kind`) and how each
+   * charge was paid. The location still moves NOW when it travels (owner ask
+   * 2026-09-25: *"no need to mark as 'received' first"*).
    */
-  const sendToService = () => {
-    const serial = sendingToService!;
-    serviceForm.validateFields().then((v) => {
-      const now = new Date().toISOString();
-      mutate((d) => {
-        const u = d.units.find((x) => x.serial === serial)!;
-        const reasonLabel = "On Service";
-        ensureReason(d, "ADJUSTMENT", reasonLabel);
-        // Where it goes is the dialog's answer (owner ask 2026-10-22: *"make
-        // sure we can choose where we send the product"*) — the bench by
-        // default, the unit's own warehouse when it is not moving.
-        const dest: string = v.sendTo ?? u.locationId;
-        const travelling = dest !== u.locationId;
-        /*
-         * ⚠️ Read BEFORE the event, which writes the projection. The visit is
-         * what sends the unit back afterwards, so `fromLocationId` has to be
-         * where it SET OUT from — read after, it is the bench, and *Back in
-         * stock* would default to returning it to the bench it is already on.
-         * `InventoryPage`'s adjustment reads its `cameFrom` the same way.
-         */
-        const cameFrom = u.locationId;
-        appendEvent(d, serial, {
-          type: "DICATAT",
-          toStatus: "SERVIS",
-          ...(travelling ? { toLocationId: dest } : {}),
-          refCode: po.code,
-          note: travelling
-            ? `Sent to service — ${warehouseLabelOf(d.warehouses, dest) ?? dest}`
-            : "Sent to service",
-        });
-        // The rack belongs to the warehouse it is leaving.
-        if (travelling) u.rackId = undefined;
-        const fees = [];
-        if (travelling && (v.shippingFee ?? 0) > 0) {
-          fees.push({
-            id: nextId("svcf"),
-            kind: "SHIPPING" as const,
-            // Translated where it is WRITTEN — the string is stored and frozen
-            // in whatever language the bench happened to be in.
-            label: t("inbound.serviceShipLabel", "Courier to service"),
-            amount: v.shippingFee!,
-            at: now,
-            staff: currentStaffName(),
-          });
-        }
-        if ((v.serviceFee ?? 0) > 0) {
-          fees.push({
-            id: nextId("svcf2"),
-            kind: "LABOUR" as const,
-            label: t("inbound.serviceFeeRaised", "Quoted at QC"),
-            amount: v.serviceFee!,
-            at: now,
-            staff: currentStaffName(),
-          });
-        }
-        d.services.push({
-          id: nextId("svc"),
-          serial,
-          fromLocationId: cameFrom,
-          openedAt: now,
-          // Always. There is no arrival step to set it later (2026-09-25).
-          arrivedAt: now,
-          fees,
-          ...(v.note ? { note: v.note } : {}),
-          raisedBy: "QC",
-          poId: po.id,
-          staff: currentStaffName(),
-        });
-      });
-      const from = db.units.find((x) => x.serial === serial)?.locationId;
-      setSendingToService(null);
-      serviceForm.resetFields();
-      message.success(
-        v.sendTo !== undefined && v.sendTo !== from
-          ? t(
-              "inbound.serviceSentShipping",
-              "{{serial}} is now at {{bench}}.",
-              {
-                serial,
-                bench: warehouseLabelOf(db.warehouses, v.sendTo) ?? v.sendTo,
-              },
-            )
-          : t(
-              "inbound.serviceSentHere",
-              "{{serial}} is at the service bench.",
-              { serial },
-            ),
-      );
-    });
-  };
 
   /**
    * Take a QC decision back — the owner's fourth ask of 2026-08-27.
@@ -3191,6 +3083,33 @@ export function InboundDetailPage() {
           );
         }
         const serial = r.unit.serial;
+        /*
+         * An ACCEPTED unit can go to service from here too (owner ask
+         * 2026-10-26), through the same dialog the QC row opens. A held one
+         * is the customer's — drawn, switched off, saying why.
+         */
+        const block = sendToServiceBlock(r.unit.status);
+        if (block === undefined || block === "HELD") {
+          more.push({
+            key: "service",
+            icon: <ToolOutlined aria-hidden />,
+            disabled: block === "HELD",
+            label:
+              block === "HELD" ? (
+                <Tooltip
+                  title={t(
+                    "service.heldCannotGo",
+                    "Reserved for a customer — release the hold first.",
+                  )}
+                >
+                  <span>{t("inbound.serviceOk", "Send to service")}</span>
+                </Tooltip>
+              ) : (
+                t("inbound.serviceOk", "Send to service")
+              ),
+          });
+          onMore["service"] = () => setSendingToService(serial);
+        }
         if (canReopenQc(r.unit)) {
           item(
             "reopen",
@@ -4266,131 +4185,14 @@ export function InboundDetailPage() {
           ))}
       </Modal>
 
-      {/*
-       * Sending a machine for a repair (owner revision 2026-09-09). A form
-       * rather than a `modal.confirm`, because whether the machine has to
-       * travel decides whether a courier's charge makes any sense to ask for.
-       */}
-      <Modal
-        open={sendingToService !== null}
-        centered
-        title={t("inbound.serviceTitle", "Send this unit to service?")}
-        okText={t("inbound.serviceOk", "Send to service")}
-        onCancel={() => {
-          setSendingToService(null);
-          serviceForm.resetFields();
-        }}
-        onOk={sendToService}
-        destroyOnHidden
-      >
-        <Form
-          form={serviceForm}
-          layout="vertical"
-          // The bench by default: it is a different building, and a unit
-          // graded in warehouse 1 has to get there. Any warehouse may be
-          // named instead (owner ask 2026-10-22), its own included.
-          initialValues={{
-            sendTo:
-              bench ??
-              db.units.find((x) => x.serial === sendingToService)?.locationId,
-          }}
-        >
-          <Typography.Paragraph type="secondary">
-            {t(
-              "inbound.serviceBody",
-              "{{serial}} stops being sellable now. You can take this back from the row afterwards.",
-              { serial: sendingToService ?? "" },
-            )}
-          </Typography.Paragraph>
-          <Form.Item
-            name="sendTo"
-            label={t("inbound.serviceSendTo", "Send to")}
-            tooltip={t(
-              "inbound.serviceSendToHint",
-              "Where the unit goes for its repair. Pick its own warehouse if the repairer collects it or it is not moving.",
-            )}
-          >
-            <Select
-              aria-label={t("inbound.serviceSendTo", "Send to")}
-              options={db.warehouses
-                .filter((w) => w.active)
-                .map((w) => {
-                  const here =
-                    w.id ===
-                    db.units.find((x) => x.serial === sendingToService)
-                      ?.locationId;
-                  return {
-                    value: w.id,
-                    label: here
-                      ? t("inbound.serviceStaysHere", "{{name}} (stays here)", {
-                          name: warehouseLabel(w),
-                        })
-                      : warehouseLabel(w),
-                  };
-                })}
-            />
-          </Form.Item>
-          <Form.Item noStyle shouldUpdate={(a, b) => a.sendTo !== b.sendTo}>
-            {({ getFieldValue }) =>
-              getFieldValue("sendTo") !== undefined &&
-              getFieldValue("sendTo") !==
-                db.units.find((x) => x.serial === sendingToService)
-                  ?.locationId ? (
-                <Form.Item
-                  name="shippingFee"
-                  label={t(
-                    "inbound.serviceShippingFee",
-                    "Cost of getting it there",
-                  )}
-                  tooltip={t(
-                    "inbound.serviceShippingFeeHint",
-                    "The courier between the two warehouses. It joins what this unit has cost the shop.",
-                  )}
-                >
-                  <InputNumber
-                    min={0}
-                    precision={0}
-                    prefix={RP_SYMBOL}
-                    formatter={moneyFormatter}
-                    parser={moneyParser}
-                    style={{ width: "100%" }}
-                  />
-                </Form.Item>
-              ) : null
-            }
-          </Form.Item>
-          <Form.Item
-            name="serviceFee"
-            label={t("inbound.serviceFee", "Service fee")}
-            tooltip={t(
-              "inbound.serviceFeeHint2",
-              "Only if you already know it. Anything the repairer bills later is added at the bench, where it can also be corrected.",
-            )}
-          >
-            <InputNumber
-              min={0}
-              precision={0}
-              prefix={RP_SYMBOL}
-              formatter={moneyFormatter}
-              parser={moneyParser}
-              placeholder={t("inbound.serviceFeeHint", "If you know it")}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="note"
-            label={t("inbound.serviceProblem", "What is wrong with it")}
-          >
-            <Input.TextArea
-              rows={2}
-              placeholder={t(
-                "inbound.serviceProblemHint",
-                "Optional — what the bench should look at",
-              )}
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
+      {/* Sending a unit for a repair: the one dialog every door opens. */}
+      <SendToServiceModal
+        serial={sendingToService}
+        raisedBy="QC"
+        poId={po.id}
+        refCode={po.code}
+        onClose={() => setSendingToService(null)}
+      />
 
       <Modal
         open={paying !== null}

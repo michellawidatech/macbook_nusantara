@@ -64,8 +64,7 @@ export const id: Record<string, string> = {
   "Not in system": "Tidak ada di sistem",
   // Batch adjustment modal — its title and its confirm button.
   "stock.stockInTitle": "Stok masuk — pindahkan atau bawa unit ke gudang",
-  "stock.stockOutTitle":
-    "Stok keluar — hapusbukukan, atau kirim unit ke servis",
+  "stock.stockOutWriteOffTitle": "Stok keluar — hapusbukukan unit",
   "stock.logAdjustments": "Catat penyesuaian",
   "stock.logOneAdjustment": "Catat 1 penyesuaian",
   // Indonesian does not pluralise a counted noun, so both English forms land
@@ -544,7 +543,6 @@ export const id: Record<string, string> = {
   "service.spent": "Biaya servis",
   "service.spentHint":
     "Ditambahkan ke modal tiap unit, supaya marginnya jujur.",
-  "service.bench": "Lokasi servis",
   // Satu tabel sejak 2026-09-25; kolom Grade, Lama dan Modal sekarang ikut
   // hilang bersama pembagian Ditunggu / Sedang diservis.
   "service.atService": "Sedang di servis",
@@ -584,6 +582,66 @@ export const id: Record<string, string> = {
   "service.transferLabel": "Pindah keluar",
   "service.backNote": "Apa yang dikerjakan",
   "service.backInStock": "{{serial}} sudah kembali ke stok.",
+  // Kirim ke servis, dibayar atau belum, dan hapus biaya / kunjungan
+  // (2026-10-26).
+  "service.paidBank": "Bank",
+  "service.paidOtherBank": "Bank lain",
+  "service.paidCash": "Tunai",
+  "service.notPaidYet": "Belum dibayar",
+  "service.quoteLabel": "Perkiraan saat dikirim",
+  "service.sendRefused":
+    "{{serial}} tidak bisa dikirim ke servis lagi — unitnya tidak sedang di QC atau di rak.",
+  "service.sentStays": "{{serial}} diservis di tempatnya sekarang.",
+  "service.sendTitle": "Kirim {{serial}} ke servis",
+  "service.sendBody":
+    "{{serial}} berhenti bisa dijual sekarang. Biayanya ikut dihitung ke modal unit ini, sudah dibayar atau belum.",
+  "service.whereServiced": "Diservis di mana?",
+  "service.courierPaidWith": "Ongkir dibayar dengan",
+  "service.repairQuote": "Perkiraan biaya servis",
+  "service.quotePaidWith": "Servis dibayar dengan",
+  "service.heldCannotGo":
+    "Sedang direservasi untuk pelanggan — lepaskan reservasinya dulu.",
+  "service.alreadyAway": "Sudah di servis.",
+  "service.notInStock": "Tidak ada di stok.",
+  "service.markedPaid": "{{amount}} untuk {{serial}} sudah dibayar.",
+  "service.chargeInClosedBook":
+    "Biaya ini ada di buku yang sudah ditutup — buka bukunya dulu untuk menghapusnya.",
+  "service.feeDeleted": "Biaya {{amount}} untuk {{serial}} sudah dihapus.",
+  "service.visitMovedOn":
+    "{{serial}} sudah berpindah sejak kunjungan ini — riwayat sesudahnya tidak akan masuk akal lagi.",
+  "service.visitInClosedBook":
+    "Kunjungan ini ada di buku yang sudah ditutup — buka bukunya dulu untuk menghapusnya.",
+  "service.visitDeletedNoRow":
+    "Kunjungannya sudah dihapus, tapi baris riwayat yang mengirim {{serial}} tidak ditemukan — hapus dari riwayat unitnya kalau memang harus hilang.",
+  "service.visitDeleted":
+    "Kunjungannya sudah dihapus dan {{serial}} kembali seperti semula.",
+  "service.payment": "Pembayaran",
+  "service.paidWithTag": "Dibayar · {{method}}",
+  "service.paidTag": "Dibayar",
+  "service.notPaidTag": "Belum dibayar",
+  "service.markPaidAria":
+    "Tandai biaya {{amount}} untuk {{serial}} sudah dibayar",
+  "service.markPaid": "Tandai dibayar",
+  "service.markPaidTitle": "Tandai {{amount}} untuk {{serial}} sudah dibayar",
+  "service.paidOn": "Dibayar tanggal",
+  "service.paidWith": "Dibayar dengan",
+  "service.paidElsewhere":
+    "Sudah dibayar. Mengubah jumlahnya ikut mengubah pembayarannya.",
+  "service.deleteFeeTitle": "Hapus biaya ini?",
+  "service.deleteFeeBody":
+    "Biaya ini keluar dari modal unit dan dari riwayatnya, begitu juga pembayaran yang tercatat untuknya.",
+  "service.deleteFeeOk": "Hapus",
+  "service.deleteFee": "Hapus biaya ini",
+  "service.deleteFeeAria": "Hapus biaya {{amount}} untuk {{serial}}",
+  "service.deleteVisit": "Hapus kunjungan ini",
+  "service.deleteVisitAria": "Hapus kunjungan servis {{serial}}",
+  "service.deleteVisitTitle": "Hapus kunjungan servis {{serial}}?",
+  "service.deleteVisitOk": "Hapus kunjungannya",
+  "service.deleteVisitBody":
+    "Semua biayanya ({{amount}}) dan pembayaran yang tercatat untuknya dihapus, begitu juga baris riwayat yang ditulis kunjungan ini. {{serial}} kembali ke status dan gudang sebelum dikirim.",
+  "service.deleteVisitType": "Ketik serialnya untuk konfirmasi.",
+  "service.deleteVisitTypeAria": "Serial, untuk konfirmasi",
+  "inventory.unitMoreAria": "Lainnya untuk {{serial}}",
 
   // ── Customer management — what a person still owes (2026-09-08) ──────
   // Two figures kept apart on purpose: "piutang" is this person's debt and
@@ -800,9 +858,6 @@ export const id: Record<string, string> = {
   // The per-serial price, back on the QC grid since 2026-09-08.
   "inbound.price": "Harga",
   // Mengirim unit ke servis — dialog dengan ongkir dan biaya (2026-09-09).
-  "inbound.serviceBody":
-    "{{serial}} berhenti bisa dijual sekarang. Keputusan ini bisa dibatalkan dari barisnya.",
-  "inbound.serviceFee": "Biaya servis",
   "inbound.serviceFeeFor": "Biaya servis untuk {{serial}}",
   "inbound.serviceFeeHint": "Kalau sudah tahu",
   "inbound.serviceFeeHint2":
@@ -810,15 +865,11 @@ export const id: Record<string, string> = {
   "inbound.serviceFeeRaised": "Dicatat saat QC",
   "inbound.serviceProblem": "Keluhannya apa",
   "inbound.serviceProblemHint": "Opsional — yang perlu dicek meja servis",
-  "inbound.serviceSentHere": "{{serial}} sudah ada di meja servis.",
   "inbound.serviceSentShipping": "{{serial}} sekarang ada di {{bench}}.",
   "inbound.serviceShip": "Kirim ke {{bench}}",
   "inbound.serviceShipHint":
     "Matikan kalau tukang servisnya yang menjemput, atau kalau unitnya tidak dipindahkan. Kalau dinyalakan, unitnya langsung tercatat di meja servis.",
   "inbound.serviceShipLabel": "Ongkir ke servis",
-  "inbound.serviceSendTo": "Kirim ke",
-  "inbound.serviceSendToHint":
-    "Ke mana unit ini dikirim untuk diperbaiki. Pilih gudangnya sendiri kalau teknisi yang mengambil atau unitnya tidak dipindah.",
   "inbound.serviceStaysHere": "{{name}} (tetap di sini)",
   "inbound.serviceShippingFee": "Ongkir ke sana",
   "inbound.serviceShippingFeeHint":
@@ -976,7 +1027,6 @@ export const id: Record<string, string> = {
   "inbound.slotOf": "Unit ke-{{n}} dari {{total}}",
   "inbound.service": "Servis",
   "inbound.serviceOk": "Kirim ke servis",
-  "inbound.serviceTitle": "Kirim unit ini ke servis?",
   "inbound.stage": "Tahap",
   "inbound.status": "Status",
   "inbound.stillOwed": "Masih kurang",
@@ -2024,9 +2074,6 @@ export const id: Record<string, string> = {
   "inventory.editUnitAria": "Ubah {{serial}}",
 
   // The adjustment dialog's two halves, headed the same way.
-  "stock.serviceSendTo": "Kirim ke",
-  "stock.serviceSendToHint":
-    "Ke mana unit dikirim untuk diperbaiki — meja servis, kecuali memilih gudang lain.",
   "stock.serialisedProducts": "Produk berserial",
   "stock.noCounted": "Belum ada produk hitungan di batch ini.",
   "stock.qty": "Jumlah",

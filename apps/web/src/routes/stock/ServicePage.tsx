@@ -46,9 +46,8 @@
  *
  * Every charge is editable afterwards, which is the third step — *"not only
  * add but also reduce"*. A repairer who quotes Rp900k and bills Rp650k is the
- * ordinary case; see `editFee` in lib/service.ts for why the row is corrected
- * rather than removed. The charges are behind the row, which is the one door
- * to correcting one and why the merge did not take the expansion with it.
+ * ordinary case. The charges are behind the row, which is the one door to
+ * correcting one and why the merge did not take the expansion with it.
  *
  * ⚠️ Three columns went with the split and nothing replaced them: **Grade**,
  * **Away** (the days-gone tag, amber past a fortnight) and **Cost now**
@@ -57,53 +56,102 @@
  * this screen just stopped printing the total. `BenchRow` still carries
  * `grade`-adjacent fields, `days`, `total`, `buy`, `shippingTax` and
  * `earlierRepair`, so putting any of them back is a column.
+ *
+ * ## Paid or owed, and taking things back (owner asks 2026-10-26)
+ *
+ * - **The Bench card is gone.** It printed the warehouse whose `Location.kind`
+ *   is SERVIS, and in the shop's database that is 04, *Gudang Masuk Belum QC*
+ *   — the receiving room. Where a unit is serviced is asked when it is sent.
+ * - **Every charge says how it was paid** — Bank, Other bank, Cash — or that
+ *   it is *Not paid yet*. A paid one is an `Expense` of kind UNIT naming it, so
+ *   service money reaches Income & Expense; an owed one carries a *Mark paid*.
+ *   Rules and the money's shape: `lib/serviceActions.ts`.
+ * - **A charge can be deleted**, and so can a **whole visit** (two-layer
+ *   confirm: the dialog, then the serial typed back). Both take the history
+ *   rows they wrote with them through the ordinary remove-event path, so a
+ *   deleted visit's unit is back to what it was before it was sent. Refused
+ *   once the unit has moved on, and inside a closed book.
+ * - **Back in stock offers every active warehouse**, defaulting to where the
+ *   unit set out from. Excluding "the bench" while defaulting to it is what
+ *   drew a raw `wh-04` in the box.
  */
 import { useMemo, useState } from "react";
 import {
   App,
   Button,
   Card,
+  DatePicker,
   Flex,
   Form,
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Select,
   Statistic,
   Table,
+  Tag,
   Tooltip,
   Typography,
 } from "antd";
-import { EditOutlined, InboxOutlined, PlusOutlined } from "@ant-design/icons";
+import {
+  DeleteOutlined,
+  EditOutlined,
+  InboxOutlined,
+  PlusOutlined,
+} from "@ant-design/icons";
+import dayjs, { type Dayjs } from "dayjs";
 import { SerialLink } from "../../components/SerialLink";
 import { useTranslation } from "react-i18next";
 import { PageContainer } from "../../components/PageContainer";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
+import {
+  PaidWithField,
+  usePaidWithLabel,
+} from "../../components/SendToServiceModal";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import {
   SERVICE_FEE_KINDS,
   benchRows,
   editFee,
-  serviceLocationOf,
   visitCost,
   type BenchRow,
   type ServiceFee,
   type ServiceFeeKind,
 } from "../../lib/service.js";
 import {
+  chargeExpense,
+  feePayment,
+  instantClosed,
+  localDay,
+  planChargeDeletion,
+  planVisitDeletion,
+  type PaidWith,
+} from "../../lib/serviceActions.js";
+import {
   appendEvent,
   mutate,
   nextId,
+  removeEvent,
   useDb,
   currentStaffName,
 } from "../../mock/store.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
+import type { MockDb } from "../../mock/seed.js";
+
+/** Out of the draft, so a rule reads the store as the mutation sees it. */
+const sourcesOf = (d: MockDb) => ({
+  events: d.events,
+  expenses: d.expenses,
+  settings: d.settings,
+});
 
 export function ServicePage() {
   const { t } = useTranslation();
   const db = useDb();
   const { message } = App.useApp();
+  const paidWord = usePaidWithLabel();
   const [addingTo, setAddingTo] = useState<BenchRow | null>(null);
   /**
    * The charge being corrected, and the visit it belongs to.
@@ -117,15 +165,29 @@ export function ServicePage() {
     row: BenchRow;
     fee: ServiceFee;
   } | null>(null);
+  /** The owed charge a *Mark paid* is open on. */
+  const [payingFee, setPayingFee] = useState<{
+    row: BenchRow;
+    fee: ServiceFee;
+  } | null>(null);
   const [returning, setReturning] = useState<BenchRow | null>(null);
+  /** The visit whose deletion is being confirmed, and what has been typed. */
+  const [deleting, setDeleting] = useState<BenchRow | null>(null);
+  const [deleteTyped, setDeleteTyped] = useState("");
   const [feeForm] = Form.useForm<{
     kind: ServiceFeeKind;
     label?: string;
     amount: number;
+    paidWith?: PaidWith;
+  }>();
+  const [payForm] = Form.useForm<{
+    method: Exclude<PaidWith, "UNPAID">;
+    day: Dayjs;
   }>();
   const [backForm] = Form.useForm<{
     locationId: string;
     transferFee?: number;
+    transferPaid: PaidWith;
     note?: string;
   }>();
 
@@ -141,17 +203,14 @@ export function ServicePage() {
   };
   const warehouseName = (id: string | undefined) =>
     warehouseLabelOf(db.warehouses, id) ?? fmtNone();
-  /** Found by `Location.kind`: `wh-4` is this shop's bench, not every shop's. */
-  const bench = serviceLocationOf(db.warehouses);
 
   const totalCost = rows.reduce((n, r) => n + r.cost, 0);
 
   /*
    * ~~`markArrived`~~ went on 2026-09-25 (owner: *"no need to mark as
-   * 'received' first"*). A unit now MOVES to the bench in the same
-   * transaction that promises it to a repairer, so there is nothing left to
-   * confirm — see the note on the table below, and `sendToService` in
-   * InboundDetailPage / the adjustment in InventoryPage, which write it.
+   * 'received' first"*). A unit now MOVES to where it is serviced in the same
+   * transaction that promises it to a repairer — `SendToServiceModal` writes
+   * it — so there is nothing left to confirm.
    */
 
   /**
@@ -159,23 +218,40 @@ export function ServicePage() {
    *
    * One handler for both because they are one form. What differs is only
    * whether an id already exists: `editFee` rewrites that row, and a new
-   * charge is appended. Either way the machine's own timeline gets a line —
+   * charge is appended. Either way the unit's own timeline gets a line —
    * somebody chasing a serial should not have to know this screen exists to
-   * find out what it cost.
+   * find out what it cost. A new charge's line carries the charge's own
+   * instant, which is how deleting the charge finds it again.
+   *
+   * Paid with: a charge paid now writes its UNIT expense in the same
+   * mutation. Correcting a paid charge's amount moves its expense with it —
+   * here when this browser holds the expense, and on the server either way
+   * (the charge owns its expense; an account without finance access is sent
+   * none). Switching a paid charge to *Not paid yet* removes the expense, and
+   * is offered only where the expense can be seen.
    */
   const saveFee = () =>
     feeForm.validateFields().then((v) => {
       const target = editingFee ?? { row: addingTo!, fee: undefined };
       const row = target.row;
       const before = target.fee;
-      mutate((d) => {
+      const at = new Date().toISOString();
+      void mutate((d) => {
         const i = d.services.findIndex((r) => r.id === row.rec.id);
         if (i < 0) return;
         // Replaced rather than mutated in place: `ServiceRec` is a readonly
         // shape, the same discipline `Order.payments` follows, and the store
         // is replace-on-write anyway.
         const rec = d.services[i]!;
-        d.services[i] = before
+        const feeId = before?.id ?? nextId("svcf");
+        const paidWith = v.paidWith;
+        const existing = d.expenses.find((e) => e.serviceFeeId === feeId);
+        const paidNow =
+          paidWith !== undefined &&
+          paidWith !== "UNPAID" &&
+          !existing &&
+          !(before?.paid === true);
+        let next = before
           ? editFee(rec, before.id, {
               kind: v.kind,
               label: v.label ?? "",
@@ -186,17 +262,53 @@ export function ServicePage() {
               fees: [
                 ...rec.fees,
                 {
-                  id: nextId("svcf"),
+                  id: feeId,
                   kind: v.kind,
                   ...(v.label ? { label: v.label } : {}),
                   amount: v.amount,
-                  at: new Date().toISOString(),
+                  at,
                   staff: currentStaffName(),
                 },
               ],
             };
+        const fee = next.fees.find((f) => f.id === feeId)!;
+        if (paidNow) {
+          d.expenses.unshift(
+            chargeExpense({
+              id: nextId("exp"),
+              serial: row.serial,
+              fee,
+              method: paidWith,
+              day: localDay(at),
+              createdAt: at,
+            }),
+          );
+        } else if (existing) {
+          if (paidWith === "UNPAID") {
+            d.expenses = d.expenses.filter((e) => e.id !== existing.id);
+          } else {
+            existing.amount = fee.amount;
+            if (paidWith !== undefined) existing.method = paidWith;
+          }
+        }
+        const paid =
+          paidNow || (existing !== undefined && paidWith !== "UNPAID")
+            ? true
+            : existing !== undefined
+              ? false
+              : before?.paid === true;
+        next = {
+          ...next,
+          fees: next.fees.map((f) => {
+            if (f.id !== feeId) return f;
+            const { paid: _was, ...rest } = f;
+            return paid ? { ...rest, paid: true as const } : rest;
+          }),
+        };
+        d.services[i] = next;
         appendEvent(d, row.serial, {
           type: "DICATAT",
+          ...(before ? {} : { at }),
           note: before
             ? // Both figures, because the point of allowing the correction is
               // that somebody has to be able to see what it replaced.
@@ -222,49 +334,211 @@ export function ServicePage() {
       );
     });
 
+  /** *Mark paid* on an owed charge: its expense, on the day it was paid. */
+  const markPaid = () =>
+    payForm.validateFields().then((v) => {
+      const { row, fee } = payingFee!;
+      const at = new Date().toISOString();
+      void mutate((d) => {
+        const i = d.services.findIndex((r) => r.id === row.rec.id);
+        if (i < 0) return;
+        const rec = d.services[i]!;
+        const now = rec.fees.find((f) => f.id === fee.id);
+        // Paid in another tab since: nothing to do, and a second expense on
+        // one charge is refused by the store anyway.
+        if (!now || feePayment(now, d.expenses).paid) return;
+        d.expenses.unshift(
+          chargeExpense({
+            id: nextId("exp"),
+            serial: row.serial,
+            fee: now,
+            method: v.method,
+            day: v.day.format("YYYY-MM-DD"),
+            createdAt: at,
+          }),
+        );
+        d.services[i] = {
+          ...rec,
+          fees: rec.fees.map((f) =>
+            f.id === fee.id ? { ...f, paid: true as const } : f,
+          ),
+        };
+      });
+      setPayingFee(null);
+      payForm.resetFields();
+      message.success(
+        t("service.markedPaid", "{{amount}} on {{serial}} is paid.", {
+          amount: fmtRp(fee.amount),
+          serial: row.serial,
+        }),
+      );
+    });
+
   /**
-   * Send a machine back into stock.
+   * Delete one charge: the charge, its expense, and the line it put on the
+   * unit's timeline. Nothing is appended — a charge typed by mistake leaves
+   * no trace (owner ask 2026-10-26).
+   */
+  const deleteFee = (row: BenchRow, fee: ServiceFee) => {
+    const out: { block?: string } = {};
+    void mutate((d) => {
+      const i = d.services.findIndex((r) => r.id === row.rec.id);
+      if (i < 0) return;
+      const rec = d.services[i]!;
+      const plan = planChargeDeletion(sourcesOf(d), rec, fee.id);
+      if (plan.block) {
+        out.block = plan.block;
+        return;
+      }
+      d.services[i] = { ...rec, fees: rec.fees.filter((f) => f.id !== fee.id) };
+      d.expenses = d.expenses.filter((e) => !plan.expenseIds.includes(e.id));
+      for (const id of plan.eventIds) removeEvent(d, id);
+    });
+    if (out.block) {
+      message.error(
+        t(
+          "service.chargeInClosedBook",
+          "This charge is in a closed book — reopen the book to delete it.",
+        ),
+      );
+      return;
+    }
+    message.success(
+      t(
+        "service.feeDeleted",
+        "The {{amount}} charge on {{serial}} is deleted.",
+        {
+          amount: fmtRp(fee.amount),
+          serial: row.serial,
+        },
+      ),
+    );
+  };
+
+  /**
+   * Delete a whole visit: every charge and its expense, the visit, and the
+   * history rows it wrote — newest first, so the unit falls back to the row
+   * before the send: the status and warehouse it had.
+   */
+  const deleteVisit = () => {
+    const row = deleting!;
+    const out: { block?: string; sendFound?: boolean } = {};
+    void mutate((d) => {
+      const i = d.services.findIndex((r) => r.id === row.rec.id);
+      if (i < 0) return;
+      const rec = d.services[i]!;
+      const plan = planVisitDeletion(
+        {
+          ...sourcesOf(d),
+          unitStatus: d.units.find((u) => u.serial === rec.serial)?.status,
+        },
+        rec,
+      );
+      if (plan.block) {
+        out.block = plan.block;
+        return;
+      }
+      out.sendFound = plan.sendEventFound;
+      d.services.splice(i, 1);
+      d.expenses = d.expenses.filter((e) => !plan.expenseIds.includes(e.id));
+      for (const id of plan.eventIds) removeEvent(d, id);
+    });
+    if (out.block === "MOVED_ON") {
+      message.error(
+        t(
+          "service.visitMovedOn",
+          "{{serial}} has moved on since this visit — its history after it would no longer make sense.",
+          { serial: row.serial },
+        ),
+      );
+      return;
+    }
+    if (out.block === "BOOKS_CLOSED") {
+      message.error(
+        t(
+          "service.visitInClosedBook",
+          "This visit is in a closed book — reopen the book to delete it.",
+        ),
+      );
+      return;
+    }
+    setDeleting(null);
+    setDeleteTyped("");
+    if (out.sendFound === false) {
+      message.warning(
+        t(
+          "service.visitDeletedNoRow",
+          "The visit is deleted, but the history row that sent {{serial}} was not found — remove it from the unit's history if it should go.",
+          { serial: row.serial },
+        ),
+      );
+      return;
+    }
+    message.success(
+      t(
+        "service.visitDeleted",
+        "The visit is deleted and {{serial}} is back as it was.",
+        { serial: row.serial },
+      ),
+    );
+  };
+
+  /**
+   * Send a unit back into stock.
    *
    * One `mutate`: the visit closes, the last fee is recorded, the unit's
-   * status and location move and the event is appended — all together, for the
-   * same reason every other movement in this app is one transaction. A machine
-   * that is TERSEDIA at the service bench, or SERVIS on a shelf, is a machine
-   * two screens disagree about.
+   * status and location move and the event is appended — all together, for
+   * the same reason every other movement in this app is one transaction. The
+   * event carries the closing instant, which is how deleting the visit finds
+   * it again.
    */
   const sendBack = () =>
     backForm.validateFields().then((v) => {
       const row = returning!;
       const at = new Date().toISOString();
       let closed = row.rec;
-      mutate((d) => {
+      void mutate((d) => {
         const i = d.services.findIndex((r) => r.id === row.rec.id);
         if (i >= 0) {
           const rec = d.services[i]!;
+          const paid = v.transferPaid !== "UNPAID";
+          const transfer =
+            v.transferFee && v.transferFee > 0
+              ? {
+                  id: nextId("svcf"),
+                  kind: "SHIPPING" as const,
+                  label: t("service.transferLabel", "Transfer out"),
+                  amount: v.transferFee,
+                  at,
+                  staff: currentStaffName(),
+                  ...(paid ? { paid: true as const } : {}),
+                }
+              : undefined;
           closed = {
             ...rec,
-            fees:
-              v.transferFee && v.transferFee > 0
-                ? [
-                    ...rec.fees,
-                    {
-                      id: nextId("svcf"),
-                      kind: "SHIPPING",
-                      label: t("service.transferLabel", "Transfer out"),
-                      amount: v.transferFee,
-                      at,
-                      staff: currentStaffName(),
-                    },
-                  ]
-                : rec.fees,
+            fees: transfer ? [...rec.fees, transfer] : rec.fees,
             closedAt: at,
             toLocationId: v.locationId,
           };
           d.services[i] = closed;
+          if (transfer && v.transferPaid !== "UNPAID") {
+            d.expenses.unshift(
+              chargeExpense({
+                id: nextId("exp"),
+                serial: row.serial,
+                fee: transfer,
+                method: v.transferPaid,
+                day: localDay(at),
+                createdAt: at,
+              }),
+            );
+          }
         }
         appendEvent(d, row.serial, {
           type: "DICATAT",
           toStatus: "TERSEDIA",
           toLocationId: v.locationId,
+          at,
           note: [
             `Back from service — ${warehouseName(v.locationId)}`,
             v.note,
@@ -274,8 +548,8 @@ export function ServicePage() {
             .join(" · "),
         });
         const u = d.units.find((x) => x.serial === row.serial);
-        // The rack belongs to whichever warehouse it left; a machine coming
-        // back has to be put on a shelf again.
+        // The rack belongs to whichever warehouse it left; a unit coming back
+        // has to be put on a shelf again.
         if (u) u.rackId = undefined;
       });
       setReturning(null);
@@ -286,6 +560,167 @@ export function ServicePage() {
         }),
       );
     });
+
+  /** Where a unit can come back to: every active warehouse, and the one it left. */
+  const backOptions = (r: BenchRow | null) =>
+    db.warehouses
+      .filter((w) => w.active || w.id === r?.rec.fromLocationId)
+      .map((w) => ({ value: w.id, label: warehouseLabel(w) }));
+
+  const feeCells = (r: BenchRow) => [
+    {
+      title: t("service.feeKind", "Charge"),
+      key: "kind",
+      width: COLUMN.status,
+      render: (_: unknown, f: ServiceFee) =>
+        SERVICE_FEE_KINDS.find((k) => k.value === f.kind)?.label ?? f.kind,
+    },
+    {
+      title: t("service.feeLabel", "What for"),
+      key: "label",
+      render: (_: unknown, f: ServiceFee) => f.label ?? fmtNone(),
+    },
+    {
+      title: t("service.feeWhen", "When"),
+      key: "at",
+      width: COLUMN.date,
+      render: (_: unknown, f: ServiceFee) => fmtDate(f.at),
+    },
+    {
+      title: t("service.feeAmount", "Amount"),
+      key: "amount",
+      width: COLUMN.money,
+      align: "right" as const,
+      render: (_: unknown, f: ServiceFee) => fmtRp(f.amount),
+    },
+    {
+      /*
+       * Paid or owed (owner ask 2026-10-26). A paid charge names its method
+       * where this browser can see the expense, and says "Paid" where it
+       * cannot; an owed one carries *Mark paid*.
+       */
+      title: t("service.payment", "Payment"),
+      key: "paid",
+      width: COLUMN.actionsPair,
+      render: (_: unknown, f: ServiceFee) => {
+        const pay = feePayment(f, db.expenses);
+        if (pay.paid) {
+          return (
+            <Tag color="green">
+              {pay.expense
+                ? t("service.paidWithTag", "Paid · {{method}}", {
+                    method: paidWord(pay.expense.method as PaidWith),
+                  })
+                : t("service.paidTag", "Paid")}
+            </Tag>
+          );
+        }
+        return (
+          <Flex gap={SPACE.xs} align="center">
+            <Tag color="orange">{t("service.notPaidTag", "Not paid")}</Tag>
+            <Button
+              size="small"
+              aria-label={t(
+                "service.markPaidAria",
+                "Mark the {{amount}} charge on {{serial}} paid",
+                { amount: fmtRp(f.amount), serial: r.serial },
+              )}
+              onClick={() => {
+                setPayingFee({ row: r, fee: f });
+                payForm.setFieldsValue({ method: "TRANSFER", day: dayjs() });
+              }}
+            >
+              {t("service.markPaid", "Mark paid")}
+            </Button>
+          </Flex>
+        );
+      },
+    },
+    {
+      /*
+       * Correcting a charge (owner ask 2026-09-09): *"not only add but also
+       * reduce"* — and since 2026-10-26, deleting one.
+       */
+      title: "",
+      key: "edit",
+      width: COLUMN.actions,
+      render: (_: unknown, f: ServiceFee) => {
+        const locked =
+          planChargeDeletion(sourcesOf(db), r.rec, f.id).block !== undefined;
+        return (
+          <Flex gap={SPACE.xs} justify="end">
+            <Tooltip title={t("service.editFee", "Change this charge")}>
+              <Button
+                size="small"
+                type="text"
+                icon={<EditOutlined />}
+                aria-label={t(
+                  "service.editFeeAria",
+                  "Change the {{amount}} charge on {{serial}}",
+                  { amount: fmtRp(f.amount), serial: r.serial },
+                )}
+                onClick={() => {
+                  setEditingFee({ row: r, fee: f });
+                  const pay = feePayment(f, db.expenses);
+                  feeForm.setFieldsValue({
+                    kind: f.kind,
+                    label: f.label ?? "",
+                    amount: f.amount,
+                    paidWith: pay.expense
+                      ? (pay.expense.method as PaidWith)
+                      : pay.paid
+                        ? undefined
+                        : "UNPAID",
+                  });
+                }}
+              />
+            </Tooltip>
+            <Popconfirm
+              title={t("service.deleteFeeTitle", "Delete this charge?")}
+              description={t(
+                "service.deleteFeeBody",
+                "It leaves the unit's cost and its timeline, and a payment recorded for it goes too.",
+              )}
+              okText={t("service.deleteFeeOk", "Delete")}
+              okButtonProps={{ danger: true }}
+              disabled={locked}
+              onConfirm={() => deleteFee(r, f)}
+            >
+              <Tooltip
+                title={
+                  locked
+                    ? t(
+                        "service.chargeInClosedBook",
+                        "This charge is in a closed book — reopen the book to delete it.",
+                      )
+                    : t("service.deleteFee", "Delete this charge")
+                }
+              >
+                <Button
+                  size="small"
+                  type="text"
+                  danger
+                  disabled={locked}
+                  icon={<DeleteOutlined />}
+                  aria-label={t(
+                    "service.deleteFeeAria",
+                    "Delete the {{amount}} charge on {{serial}}",
+                    { amount: fmtRp(f.amount), serial: r.serial },
+                  )}
+                />
+              </Tooltip>
+            </Popconfirm>
+          </Flex>
+        );
+      },
+    },
+  ];
+
+  /** Is the charge being edited paid by an expense this browser cannot see? */
+  const editingPaidUnseen =
+    editingFee !== null &&
+    feePayment(editingFee.fee, db.expenses).paid &&
+    feePayment(editingFee.fee, db.expenses).expense === undefined;
 
   return (
     <PageContainer title={t("service.title", "Service bench")}>
@@ -309,28 +744,12 @@ export function ServicePage() {
               )}
             </Typography.Text>
           </Card>
-          <Card style={{ flex: 1, minWidth: 200 }}>
-            <Statistic
-              title={t("service.bench", "Bench")}
-              value={warehouseName(bench)}
-            />
-          </Card>
         </Flex>
 
         {/*
          * ONE table (owner ask 2026-09-25), where there were two — Expected
-         * and On the bench. The split was this screen's own argument, that
-         * "did the van arrive" and "what is this repair costing" are
-         * different jobs; the owner's answer is that they are one list of
-         * units that are not here.
-         *
-         * And there is no arrival step at all any more — *"no need to mark as
-         * 'received' first"*, same ask. This REVERSES 2026-09-09, and the
-         * thing that decision protected had to be moved rather than dropped:
-         * a unit promised to a repairer is now MOVED to the bench in the same
-         * transaction, so the bench's warehouse holds what the bench holds. It
-         * was the confirmation that wrote the location, and without one the
-         * alternative is `wh-4` holding nothing again — the 2026-09-08 bug.
+         * and On the bench — and no arrival step: a unit promised to a
+         * repairer is MOVED in the same transaction when it travels.
          */}
         <Card title={t("service.atService", "At service")}>
           <Table<BenchRow>
@@ -347,78 +766,12 @@ export function ServicePage() {
             expandable={{
               rowExpandable: (r) => r.rec.fees.length > 0,
               expandedRowRender: (r) => (
-                <Table
+                <Table<ServiceFee>
                   size="small"
                   rowKey="id"
                   dataSource={[...r.rec.fees]}
                   pagination={false}
-                  columns={[
-                    {
-                      title: t("service.feeKind", "Charge"),
-                      key: "kind",
-                      width: COLUMN.status,
-                      render: (_: unknown, f: (typeof r.rec.fees)[number]) =>
-                        SERVICE_FEE_KINDS.find((k) => k.value === f.kind)
-                          ?.label ?? f.kind,
-                    },
-                    {
-                      title: t("service.feeLabel", "What for"),
-                      key: "label",
-                      render: (_: unknown, f: (typeof r.rec.fees)[number]) =>
-                        f.label ?? fmtNone(),
-                    },
-                    {
-                      title: t("service.feeWhen", "When"),
-                      key: "at",
-                      width: COLUMN.date,
-                      render: (_: unknown, f: (typeof r.rec.fees)[number]) =>
-                        fmtDate(f.at),
-                    },
-                    {
-                      title: t("service.feeAmount", "Amount"),
-                      key: "amount",
-                      width: COLUMN.money,
-                      align: "right",
-                      render: (_: unknown, f: (typeof r.rec.fees)[number]) =>
-                        fmtRp(f.amount),
-                    },
-                    {
-                      /*
-                       * Correcting a charge (owner ask 2026-09-09): *"not only
-                       * add but also reduce"*. There is no remove beside it on
-                       * purpose — nothing in this database is hard-deleted,
-                       * and a charge edited to zero says "quoted and not
-                       * paid", which is the more useful sentence.
-                       */
-                      title: "",
-                      key: "edit",
-                      width: COLUMN.action,
-                      render: (_: unknown, f: (typeof r.rec.fees)[number]) => (
-                        <Tooltip
-                          title={t("service.editFee", "Change this charge")}
-                        >
-                          <Button
-                            size="small"
-                            type="text"
-                            icon={<EditOutlined />}
-                            aria-label={t(
-                              "service.editFeeAria",
-                              "Change the {{amount}} charge on {{serial}}",
-                              { amount: fmtRp(f.amount), serial: r.serial },
-                            )}
-                            onClick={() => {
-                              setEditingFee({ row: r, fee: f });
-                              feeForm.setFieldsValue({
-                                kind: f.kind,
-                                label: f.label ?? "",
-                                amount: f.amount,
-                              });
-                            }}
-                          />
-                        </Tooltip>
-                      ),
-                    },
-                  ]}
+                  columns={feeCells(r)}
                 />
               ),
             }}
@@ -456,9 +809,9 @@ export function ServicePage() {
               },
               {
                 /*
-                 * What the repair has cost so far — the fees on THIS visit.
-                 * The lines behind the row say what it is made of, and are
-                 * where one of them is corrected.
+                 * What the repair has cost so far — the fees on THIS visit,
+                 * paid or owed. The lines behind the row say what it is made
+                 * of, and are where one of them is corrected.
                  */
                 title: t("service.quoted", "Quoted"),
                 key: "cost",
@@ -468,14 +821,13 @@ export function ServicePage() {
               },
               {
                 /*
-                 * Two buttons, both labelled (owner ask 2026-09-25). They were
-                 * icons, and an icon is fine for a row action nobody has to
-                 * find; these two ARE the screen — everything a bench does to
-                 * a unit at a repairer is one of them.
+                 * Two labelled buttons (owner ask 2026-09-25) — everything a
+                 * bench does to a unit at a repairer is one of them — and the
+                 * visit's own delete beside them (2026-10-26).
                  */
                 title: "",
                 key: "actions",
-                width: COLUMN.actionsWide,
+                width: COLUMN.actionsWide + COLUMN.action,
                 render: (_, r) => (
                   <Flex gap={SPACE.xs} justify="end">
                     <Button
@@ -489,7 +841,10 @@ export function ServicePage() {
                       )}
                       onClick={() => {
                         setAddingTo(r);
-                        feeForm.setFieldsValue({ kind: "LABOUR" });
+                        feeForm.setFieldsValue({
+                          kind: "LABOUR",
+                          paidWith: "UNPAID",
+                        });
                       }}
                     >
                       {t("service.charge", "Charge")}
@@ -507,11 +862,30 @@ export function ServicePage() {
                         setReturning(r);
                         backForm.setFieldsValue({
                           locationId: r.rec.fromLocationId,
+                          transferPaid: "UNPAID",
                         });
                       }}
                     >
                       {t("service.backInStockShort", "Back in stock")}
                     </Button>
+                    <Tooltip
+                      title={t("service.deleteVisit", "Delete this visit")}
+                    >
+                      <Button
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        aria-label={t(
+                          "service.deleteVisitAria",
+                          "Delete the service visit of {{serial}}",
+                          { serial: r.serial },
+                        )}
+                        onClick={() => {
+                          setDeleteTyped("");
+                          setDeleting(r);
+                        }}
+                      />
+                    </Tooltip>
                   </Flex>
                 ),
               },
@@ -588,6 +962,62 @@ export function ServicePage() {
               style={{ width: "100%" }}
             />
           </Form.Item>
+          {editingPaidUnseen ? (
+            // Paid, by an expense this account is not sent: it stays paid,
+            // and its amount follows the charge on the server.
+            <Typography.Paragraph type="secondary">
+              {t(
+                "service.paidElsewhere",
+                "Paid. A change to the amount changes its payment too.",
+              )}
+            </Typography.Paragraph>
+          ) : (
+            <PaidWithField
+              name="paidWith"
+              label={t("service.paidWith", "Paid with")}
+            />
+          )}
+        </Form>
+      </Modal>
+
+      <Modal
+        open={payingFee !== null}
+        title={t(
+          "service.markPaidTitle",
+          "Mark {{amount}} on {{serial}} paid",
+          {
+            amount: fmtRp(payingFee?.fee.amount ?? 0),
+            serial: payingFee?.row.serial ?? "",
+          },
+        )}
+        okText={t("service.markPaid", "Mark paid")}
+        onCancel={() => {
+          setPayingFee(null);
+          payForm.resetFields();
+        }}
+        onOk={markPaid}
+        destroyOnHidden
+      >
+        <Form form={payForm} layout="vertical">
+          <Form.Item
+            name="method"
+            label={t("service.paidWith", "Paid with")}
+            rules={[{ required: true }]}
+          >
+            <Select
+              aria-label={t("service.paidWith", "Paid with")}
+              options={(["TRANSFER", "TRANSFER_LUAR", "TUNAI"] as const).map(
+                (p) => ({ value: p, label: paidWord(p) }),
+              )}
+            />
+          </Form.Item>
+          <Form.Item
+            name="day"
+            label={t("service.paidOn", "Paid on")}
+            rules={[{ required: true }]}
+          >
+            <DatePicker format="DD MMM YYYY" style={{ width: "100%" }} />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -607,11 +1037,11 @@ export function ServicePage() {
             rules={[{ required: true }]}
           >
             <Select
-              // The bench itself is not a destination: a machine that is
-              // finished with is somewhere it can be sold from.
-              options={db.warehouses
-                .filter((w) => w.active && w.id !== bench)
-                .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
+              aria-label={t("service.backTo", "Which warehouse")}
+              // Every active warehouse, and the one it left even if that has
+              // since been switched off: a default missing from its own list is
+              // what drew a raw `wh-04` in this box (owner report 2026-10-26).
+              options={backOptions(returning)}
             />
           </Form.Item>
           <Form.Item
@@ -631,10 +1061,82 @@ export function ServicePage() {
               style={{ width: "100%" }}
             />
           </Form.Item>
+          <Form.Item
+            noStyle
+            shouldUpdate={(a, b) => a.transferFee !== b.transferFee}
+          >
+            {({ getFieldValue }) =>
+              (getFieldValue("transferFee") ?? 0) > 0 ? (
+                <PaidWithField
+                  name="transferPaid"
+                  label={t("service.courierPaidWith", "Courier paid with")}
+                />
+              ) : null
+            }
+          </Form.Item>
           <Form.Item name="note" label={t("service.backNote", "What was done")}>
             <Input.TextArea rows={2} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/*
+       * Deleting a visit, behind two layers (the draft-opname pattern): this
+       * dialog, then the serial typed back. It removes money and history
+       * together, and a slip of the wrong row's bin is not undoable.
+       */}
+      <Modal
+        open={deleting !== null}
+        title={t(
+          "service.deleteVisitTitle",
+          "Delete the service visit of {{serial}}?",
+          {
+            serial: deleting?.serial ?? "",
+          },
+        )}
+        okText={t("service.deleteVisitOk", "Delete the visit")}
+        okButtonProps={{
+          danger: true,
+          disabled: deleteTyped.trim().toUpperCase() !== deleting?.serial,
+        }}
+        onCancel={() => {
+          setDeleting(null);
+          setDeleteTyped("");
+        }}
+        onOk={deleteVisit}
+        destroyOnHidden
+      >
+        <Flex vertical gap={SPACE.sm}>
+          <Typography.Paragraph>
+            {t(
+              "service.deleteVisitBody",
+              "Every charge on it ({{amount}}) and any payment recorded for them are deleted, and so are the history rows the visit wrote. {{serial}} goes back to the status and warehouse it had before it was sent.",
+              {
+                amount: fmtRp(deleting ? visitCost(deleting.rec) : 0),
+                serial: deleting?.serial ?? "",
+              },
+            )}
+          </Typography.Paragraph>
+          {deleting && instantClosed(deleting.rec.openedAt, db.settings) && (
+            <Typography.Text type="danger">
+              {t(
+                "service.visitInClosedBook",
+                "This visit is in a closed book — reopen the book to delete it.",
+              )}
+            </Typography.Text>
+          )}
+          <Typography.Text type="secondary">
+            {t("service.deleteVisitType", "Type the serial to confirm.")}
+          </Typography.Text>
+          <Input
+            value={deleteTyped}
+            onChange={(e) => setDeleteTyped(e.target.value)}
+            aria-label={t("service.deleteVisitTypeAria", "Serial, to confirm")}
+            placeholder={deleting?.serial}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </Flex>
       </Modal>
     </PageContainer>
   );
