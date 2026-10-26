@@ -3081,6 +3081,273 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
     }
   }, 180_000);
 
+  /*
+   * Service charges become money, and can be taken out (owner 2026-10-26,
+   * migration 20261026090000): a paid charge is an Expense of kind UNIT naming
+   * it; a charge goes only together with its expense; a whole visit can go;
+   * nothing inside a closed book.
+   */
+  it("removes a service charge with its expense, and a whole visit — never one still paid for, never in a closed book (2026-10-26)", async () => {
+    await loadDemo();
+    const snap = decodeStore(
+      (await snapshotStore(db, { staffId: ACTOR })).db,
+    ) as unknown as Record<string, Row[]>;
+    const unit = snap["units"]!.find((u) => u["status"] === "TERSEDIA")!;
+    const at = "2026-10-26T03:00:00.000Z";
+    const visit = (id: string, feeIds: string[]): Row => ({
+      id,
+      serial: unit["serial"],
+      fromLocationId: unit["locationId"],
+      openedAt: at,
+      arrivedAt: at,
+      fees: feeIds.map((f, i) => ({
+        id: f,
+        kind: i === 0 ? "LABOUR" : "SHIPPING",
+        label: f,
+        amount: 100_000 * (i + 1),
+        at,
+        staff: "Store Test",
+      })),
+      raisedBy: "ADJUSTMENT",
+      staff: "Store Test",
+    });
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    const commit = (before: Partial<StoreShape>, after: Partial<StoreShape>) =>
+      commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(before as StoreShape, after as StoreShape),
+        ),
+      });
+    try {
+      // A visit with two charges, the first paid.
+      const created = await commit({ services: [], expenses: [] }, {
+        services: [visit("svc-app-1", ["sf-app-1", "sf-app-2"])],
+        expenses: [
+          {
+            id: "exp-app-sf-1",
+            kind: "UNIT",
+            amount: 100_000,
+            date: "2026-10-26",
+            method: "TRANSFER",
+            note: `${unit["serial"]} · sf-app-1`,
+            serviceFeeId: "sf-app-1",
+          },
+        ],
+      } as unknown as Partial<StoreShape>);
+      let svc = decodeRow("services", (created.rows.services as Row[])[0]!);
+      const exp = decodeRow("expenses", (created.rows.expenses as Row[])[0]!);
+      expect(exp).toMatchObject({ kind: "UNIT", serviceFeeId: "sf-app-1" });
+      const back = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      expect(
+        back["expenses"]!.find((e) => e["id"] === "exp-app-sf-1"),
+      ).toMatchObject({ serviceFeeId: "sf-app-1" });
+
+      // A second expense on the same charge is refused in words.
+      await expect(
+        commit({ expenses: [] }, {
+          expenses: [{ ...exp, id: "exp-app-sf-1b" }],
+        } as unknown as Partial<StoreShape>),
+      ).rejects.toThrow(/sudah dibayar/);
+
+      const without = (v: Row, feeId: string): Row => ({
+        ...v,
+        fees: (v["fees"] as Row[]).filter((f) => f["id"] !== feeId),
+      });
+
+      // The paid charge taken off while its expense stays: refused.
+      await expect(
+        commit({ services: [svc] }, { services: [without(svc, "sf-app-1")] }),
+      ).rejects.toThrow(/sudah tercatat sebagai pengeluaran/);
+      expect(
+        await db.serviceFee.findUnique({ where: { id: "sf-app-1" } }),
+      ).not.toBeNull();
+
+      // Taken off together with its expense: both gone.
+      const removed = await commit(
+        { services: [svc], expenses: [exp] } as unknown as Partial<StoreShape>,
+        {
+          services: [without(svc, "sf-app-1")],
+          expenses: [],
+        } as unknown as Partial<StoreShape>,
+      );
+      expect(removed.removed.expenses).toEqual(["exp-app-sf-1"]);
+      expect(
+        await db.serviceFee.findUnique({ where: { id: "sf-app-1" } }),
+      ).toBeNull();
+      expect(
+        await db.expense.findUnique({ where: { id: "exp-app-sf-1" } }),
+      ).toBeNull();
+      svc = decodeRow("services", (removed.rows.services as Row[])[0]!);
+      expect((svc["fees"] as Row[]).map((f) => f["id"])).toEqual(["sf-app-2"]);
+
+      // The whole visit, with the charge left on it.
+      const gone = await commit({ services: [svc] }, { services: [] });
+      expect(gone.removed.services).toEqual(["svc-app-1"]);
+      expect(
+        await db.serviceVisit.findUnique({ where: { id: "svc-app-1" } }),
+      ).toBeNull();
+      expect(
+        await db.serviceFee.count({ where: { visitId: "svc-app-1" } }),
+      ).toBe(0);
+
+      // Inside a closed book: neither a charge nor the visit.
+      const kept = decodeRow(
+        "services",
+        (
+          (
+            await commit(
+              { services: [] },
+              { services: [visit("svc-app-2", ["sf-app-3"])] },
+            )
+          ).rows.services as Row[]
+        )[0]!,
+      );
+      await db.appSetting.upsert({
+        where: { key: "finance.booksClosedAt" },
+        create: {
+          key: "finance.booksClosedAt",
+          value: "2026-10-31T16:59:59.999Z",
+          updatedAt: new Date(),
+        },
+        update: { value: "2026-10-31T16:59:59.999Z" },
+      });
+      await expect(
+        commit({ services: [kept] }, { services: [without(kept, "sf-app-3")] }),
+      ).rejects.toThrow(/sudah ditutup/);
+      await expect(
+        commit({ services: [kept] }, { services: [] }),
+      ).rejects.toThrow(/sudah ditutup/);
+      expect(
+        await db.serviceVisit.findUnique({ where: { id: "svc-app-2" } }),
+      ).not.toBeNull();
+    } finally {
+      await db.appSetting.deleteMany({
+        where: { key: "finance.booksClosedAt" },
+      });
+      await app.$disconnect();
+    }
+  }, 180_000);
+
+  /*
+   * A supplier return's credit comes off its invoice as a RETUR_SUPPLIER
+   * payment, and the rest is a refund income; both name the return
+   * (2026-10-26). The return is written AFTER the invoice in a commit, so the
+   * payment's link has to wait for it.
+   */
+  it("links a supplier-return credit and its refund to the return, in the commit that records it (2026-10-26)", async () => {
+    await loadDemo();
+    const snap = decodeStore(
+      (await snapshotStore(db, { staffId: ACTOR })).db,
+    ) as unknown as Record<string, Row[]>;
+    const po = snap["pos"]!.find((p) => p["status"] !== "DRAFT")!;
+    const unit = snap["units"]!.find((u) => u["status"] === "TERSEDIA")!;
+    const at = "2026-10-26T03:00:00.000Z";
+    const ret = {
+      id: "ret-app-sup-1",
+      code: "SP-2026/10-000901",
+      kind: "SUPPLIER",
+      serial: unit["serial"],
+      reason: "Defect",
+      date: "2026-10-26",
+      status: "PENDING",
+      supplierId: po["supplierId"],
+      expectedCredit: 5_000_000,
+    };
+    const credit = {
+      id: "pay-app-retur-1",
+      method: "RETUR_SUPPLIER",
+      amount: 3_000_000,
+      at,
+      appliedTo: "ORDER",
+      inBalance: false,
+      returnId: ret.id,
+    };
+    const refund = {
+      id: "inc-app-retur-1",
+      reason: "REFUND",
+      amount: 2_000_000,
+      date: "2026-10-26",
+      method: "TRANSFER",
+      returnId: ret.id,
+    };
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    try {
+      const done = await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { pos: [po], returns: [], incomes: [] } as unknown as StoreShape,
+            {
+              pos: [
+                {
+                  ...po,
+                  payments: [...(po["payments"] as Row[]), credit],
+                },
+              ],
+              returns: [ret],
+              incomes: [refund],
+            } as unknown as StoreShape,
+          ),
+        ),
+      });
+      const back = decodeRow("pos", (done.rows.pos as Row[])[0]!);
+      expect(
+        (back["payments"] as Row[]).find((p) => p["id"] === credit.id),
+      ).toEqual(credit);
+      expect(
+        decodeRow("incomes", (done.rows.incomes as Row[])[0]!),
+      ).toMatchObject({ returnId: ret.id });
+      expect(
+        await db.payment.findUniqueOrThrow({ where: { id: credit.id } }),
+      ).toMatchObject({ unitReturnId: ret.id, inBalance: false });
+      expect(
+        await db.manualIncome.findUniqueOrThrow({ where: { id: refund.id } }),
+      ).toMatchObject({ unitReturnId: ret.id });
+
+      // And it survives a reload.
+      const again = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      expect(
+        (
+          again["pos"]!.find((p) => p["id"] === po["id"])!["payments"] as Row[]
+        ).find((p) => p["id"] === credit.id),
+      ).toEqual(credit);
+      expect(
+        again["incomes"]!.find((i) => i["id"] === refund.id),
+      ).toMatchObject({ returnId: ret.id });
+
+      // A credit naming no supplier return is refused in words.
+      const now = again["pos"]!.find((p) => p["id"] === po["id"])!;
+      await expect(
+        commitStore(app, {
+          staffId: ACTOR,
+          changes: encodeChangeset(
+            diffStore(
+              { pos: [now] } as unknown as StoreShape,
+              {
+                pos: [
+                  {
+                    ...now,
+                    payments: [
+                      ...(now["payments"] as Row[]),
+                      { ...credit, id: "pay-app-retur-2", returnId: "nope" },
+                    ],
+                  },
+                ],
+              } as unknown as StoreShape,
+            ),
+          ),
+        }),
+      ).rejects.toThrow(/retur ke supplier yang tidak ada/);
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
   it("records a marketplace payout: the payment, the settlement and its log", async () => {
     await loadDemo();
     const snap = decodeStore(

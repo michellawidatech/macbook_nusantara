@@ -43,6 +43,7 @@ import {
   type PoFeeKind,
 } from "../../mock/seed.js";
 import { mutate, nextId, useDb } from "../../mock/store.js";
+import { isPickableMethod } from "../../lib/accounts.js";
 import { SPACE, TYPE } from "../../theme/tokens";
 
 const KINDS: readonly PoFeeKind[] = ["SHIPPING", "TAX", "CUSTOMS", "OTHER"];
@@ -93,7 +94,8 @@ export function ExpenseModal({ po, editing, onClose }: ExpenseModalProps) {
   }, [editing]);
 
   const methods = db.paymentMethods.filter(
-    (m) => (m.forPo && m.active) || m.code === method,
+    (m) =>
+      (m.forPo && m.active && isPickableMethod(m.code)) || m.code === method,
   );
   /** How many machines the invoice's COGS expenses are spread over. */
   const machines = machinesOnInvoice(po, db.units);

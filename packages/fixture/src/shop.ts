@@ -327,6 +327,9 @@ export const PAYMENT_METHOD_CODES = [
   "MARKETPLACE",
   // Settles a debt and moves neither pot (owner ask 2026-09-23).
   "TRANSFER_LUAR",
+  // A supplier return's credit against its invoice (owner 2026-10-26); no
+  // pot, offered by no picker.
+  "RETUR_SUPPLIER",
 ] as const;
 
 export interface FixtureCustomer {

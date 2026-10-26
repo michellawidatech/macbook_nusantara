@@ -137,6 +137,9 @@ export const EXPENSE_KINDS = [
   "KOMPENSASI",
   "SUPPLIER",
   "TRANSFER",
+  // A unit's own cost — a service charge paid (owner 2026-10-26). Written only
+  // from a charge, never from Add adjustment; already in the unit's COGS.
+  "UNIT",
 ] as const;
 export const INCOME_REASONS = [
   "SALES",
@@ -542,6 +545,13 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
          * written before the column meant.
          */
         inBalance: z.boolean().optional(),
+        /*
+         * The supplier return this payment is the credit of —
+         * `Payment.unitReturnId`, a `returns` row's `id` (2026-10-26). Written
+         * with method RETUR_SUPPLIER. Optional, so a changeset from before
+         * the column still commits.
+         */
+        returnId: id.optional(),
       }),
     ),
     /*
@@ -768,6 +778,11 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     /** The sale it is about, where the category names one (2026-09-23). */
     orderId: id.optional(),
     /**
+     * The supplier return this is the refund of — `ManualIncome.unitReturnId`,
+     * a `returns` row's `id` (2026-10-26).
+     */
+    returnId: id.optional(),
+    /**
      * When it was typed — `ManualIncome.createdAt`; the till's clock when it
      * sends one, the server's otherwise. Orders a day's typed rows on Income &
      * Expense, which carry a date and no time (2026-10-24), and nothing else.
@@ -786,6 +801,12 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     method: z.string().min(1),
     /** The sale it is about, where the category names one (2026-09-23). */
     orderId: id.optional(),
+    /**
+     * The service charge this paid — `Expense.serviceFeeId`, the `id` of a
+     * fee inside a `services` row (2026-10-26). Kind UNIT. At most one
+     * expense per charge.
+     */
+    serviceFeeId: id.optional(),
     /** When it was typed — `Expense.createdAt`; see `income`. */
     createdAt: instant.optional(),
   });

@@ -4400,4 +4400,8 @@ export const id: Record<string, string> = {
   "cashflow.deleted": "Penyesuaian dihapus.",
   "cashflow.deleteAdjustment": "Hapus penyesuaian",
   "cashflow.deleteAdjustmentAria": "Hapus {{description}}",
+  // English-keyed (2026-10-26): the expense category a paid service charge is
+  // filed under, and the method a supplier-return credit is written with.
+  "Unit expense": "Biaya unit",
+  "Supplier return credit": "Kredit retur supplier",
 };

@@ -494,6 +494,13 @@ export interface PoPayment {
    * meant. `Payment.inBalance`.
    */
   inBalance?: boolean;
+  /**
+   * The supplier return this payment is the credit of — a `ReturnRec.id`
+   * (`Payment.unitReturnId`, owner 2026-10-26). Written with method
+   * RETUR_SUPPLIER and `inBalance: false`: the invoice owes less and no money
+   * moved.
+   */
+  returnId?: string;
 }
 
 /**
@@ -1093,6 +1100,19 @@ export const EXPENSE_CATEGORIES = [
     guide: "Subscriptions, hosting and IT hardware.",
     retired: true,
   },
+  {
+    /*
+     * A service charge that was paid (owner 2026-10-26). `automatic`: written
+     * only from the charge dialog, with `Expense.serviceFeeId` naming the
+     * charge — never offered by Add adjustment. Already in the unit's cost
+     * (`costOfUnit`), so Profit & Loss keeps it out of OPERATING_KINDS.
+     */
+    value: "UNIT",
+    label: "Unit expense",
+    guide: "A service charge paid for one unit.",
+    needsTransaction: false,
+    automatic: true,
+  },
 ] as const;
 export type ExpenseKind = (typeof EXPENSE_CATEGORIES)[number]["value"];
 
@@ -1161,6 +1181,11 @@ export interface ManualIncome {
    */
   orderId?: string;
   /**
+   * The supplier return this is the refund of — a `ReturnRec.id`
+   * (`ManualIncome.unitReturnId`, owner 2026-10-26). Reason REFUND.
+   */
+  returnId?: string;
+  /**
    * When it was typed — `ManualIncome.createdAt`, stamped by the till that
    * wrote it. It orders a day's typed rows on Income & Expense, which share a
    * date and no time (2026-10-24); absent, such a row sorts first in its day.
@@ -1200,6 +1225,13 @@ export interface Expense {
    * compensation, a refund to a customer (owner ask 2026-09-23).
    */
   orderId?: string;
+  /**
+   * The service charge this paid — a `ServiceFee.id` inside a `ServiceRec`
+   * (`Expense.serviceFeeId`, owner 2026-10-26). Kind UNIT; one expense per
+   * charge at most. Removing the charge must remove this expense in the same
+   * mutation, or the store refuses it.
+   */
+  serviceFeeId?: string;
   /** When it was typed — see `ManualIncome.createdAt`. */
   createdAt?: string;
 }
@@ -2226,6 +2258,22 @@ export function buildSeed(): MockDb {
       id: "pm_transfer_luar",
       code: "TRANSFER_LUAR",
       label: "Transfer from another bank",
+      builtIn: true,
+      forPo: true,
+      forSale: false,
+      active: true,
+    },
+    {
+      /*
+       * A supplier return's credit against the unit's invoice (owner
+       * 2026-10-26). It settles part of the invoice and moved no money, so
+       * `lib/accounts.ts` gives it no pot BY NAME and `isPickableMethod`
+       * keeps it out of every payment picker — the supplier-return dialog is
+       * the only thing that writes it.
+       */
+      id: "pm_retur_supplier",
+      code: "RETUR_SUPPLIER",
+      label: "Supplier return credit",
       builtIn: true,
       forPo: true,
       forSale: false,

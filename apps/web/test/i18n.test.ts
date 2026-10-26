@@ -122,6 +122,10 @@ describe("catalogue", () => {
       // Shipping and Tax are just above.
       "Customs",
       "Other",
+      // mock/seed.ts EXPENSE_CATEGORIES and the payment method a supplier
+      // return's credit is written with (2026-10-26).
+      "Unit expense",
+      "Supplier return credit",
     ];
     const untranslated = englishKeyed.filter(
       (key) => typeof CATALOGUES.id[key] !== "string",

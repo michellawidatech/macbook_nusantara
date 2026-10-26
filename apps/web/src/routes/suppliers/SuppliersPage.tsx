@@ -99,6 +99,7 @@ import {
 } from "../../lib/supplierLedger.js";
 import { mutate, nextId, useDb, currentStaffName } from "../../mock/store.js";
 import type { Po, Supplier } from "../../mock/seed.js";
+import { isPickableMethod } from "../../lib/accounts.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 
 interface SupplierRow {
@@ -1122,7 +1123,7 @@ export function SuppliersPage() {
           <Form.Item name="method" label={t("supplier.method", "How")}>
             <Select
               options={db.paymentMethods
-                .filter((m) => m.forPo && m.active)
+                .filter((m) => m.forPo && m.active && isPickableMethod(m.code))
                 .map((m) => ({ value: m.code, label: m.label }))}
             />
           </Form.Item>
