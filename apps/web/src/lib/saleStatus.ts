@@ -41,25 +41,254 @@
  * unit is not back yet — so its sale reads Completed until the unit is
  * received at the return desk.
  *
+ * ## Unpaid, returned (owner ask 2026-10-26)
+ *
+ * > *"If the unit is bought, not paid yet, and then returned (the user cancel
+ * > the payment): … the transaction history is marked as Unpaid, returned."*
+ *
+ * A return cancels the customer's debt first (`applyReturnCredit`), so a sale
+ * nobody paid a rupiah of owes nothing afterwards — and read Settled, the
+ * word for money that came in. `returnedDebt` reads the cancelled debt back
+ * off what is stored; nothing new is. Two more words, both only where the
+ * sale would otherwise read Settled — a sale that still owes or still waits
+ * on a marketplace keeps the word that says what to chase:
+ *
+ * | status | the return cancelled debt | anything was ever paid |
+ * |---|---|---|
+ * | Unpaid, returned | yes | no |
+ * | Partly paid, returned | yes | yes (and was handed back) |
+ *
+ * A sale paid in full and then returned keeps Settled: its money went back as
+ * a refund, which is a different event from a debt somebody stopped owing.
+ *
  * Pure: no React, no store. `test/saleStatus.test.ts` is the spec.
  */
-import type { SaleBalance, SalePayment } from "./salePayments.js";
+import { holdsFunds, SALE_CHANNELS } from "./channels.js";
+import {
+  billAfterReturns,
+  paymentsOf,
+  refundedOf,
+  saleBalance,
+  type OrderAdjustmentRec,
+  type SaleBalance,
+  type SalePayment,
+  type SaleRefund,
+} from "./salePayments.js";
 
 /** Where a sale's money stands, in the words Transaction History uses. */
 export type SalePaymentStatus =
-  "SETTLED" | "WITH_MARKETPLACE" | "PARTLY_PAID" | "OWED";
+  | "SETTLED"
+  | "WITH_MARKETPLACE"
+  | "PARTLY_PAID"
+  | "OWED"
+  | "PARTLY_PAID_RETURNED"
+  | "UNPAID_RETURNED";
 
 /**
- * A sale's payment status, from its balance. See the table in the header.
+ * A sale's payment status, from its balance — and, for a sale a return
+ * touched, from what the return cancelled (`returnedDebt`). See the tables in
+ * the header.
  *
  * A bill of zero — a giveaway recorded as a sale — owes nothing and holds
  * nothing, so it reads Settled; there is nothing left to collect.
  */
-export function salePaymentStatus(b: SaleBalance): SalePaymentStatus {
+export function salePaymentStatus(
+  b: SaleBalance,
+  returned?: ReturnedDebt,
+): SalePaymentStatus {
   if (b.customerOwes > 0) {
     return b.settled + b.pending > 0 ? "PARTLY_PAID" : "OWED";
   }
-  return b.pending > 0 ? "WITH_MARKETPLACE" : "SETTLED";
+  if (b.pending > 0) return "WITH_MARKETPLACE";
+  if (returned !== undefined && returned.cancelled > 0) {
+    return returned.paid > 0 ? "PARTLY_PAID_RETURNED" : "UNPAID_RETURNED";
+  }
+  return "SETTLED";
+}
+
+/** What the returns on a sale did to the customer's debt. */
+export interface ReturnedDebt {
+  /** Debt the returns cancelled — never paid, and no longer owed. */
+  readonly cancelled: number;
+  /** What the customer ever put on the sale: settled (refunds included) and held. */
+  readonly paid: number;
+}
+
+/** A sale, as far as `returnedDebt` reads one. */
+export interface DebtReturnedSale {
+  readonly id: string;
+  readonly total: number;
+  readonly payMethod: string;
+  readonly settled: boolean;
+  readonly source: string;
+  readonly ts: string;
+  readonly payments?: readonly SalePayment[];
+  readonly refunds?: readonly SaleRefund[];
+  readonly adjustments?: readonly OrderAdjustmentRec[];
+}
+
+/** "(Shopee 260912…)" — how a RETUR's reason names a marketplace order. */
+const NAMES_MARKETPLACE = new RegExp(
+  `\\((?:[^()]*, )?(?:${SALE_CHANNELS.filter((c) => c.holdsFunds)
+    .map((c) => c.label)
+    .join("|")}) [^()]*\\)\\s*$`,
+);
+
+/**
+ * The debt a sale's returns cancelled, read back off what is stored —
+ * undefined on a sale no return touched.
+ *
+ * A plain return applies its credit (the RETUR adjustments, R) to the debt
+ * first, then to what a marketplace holds, then hands the rest back as a
+ * refund (F). So, with T the bill as sold, S everything ever settled on it
+ * (refunds not taken off), P what a marketplace still holds and O what the
+ * customer owes now:
+ *
+ * - R − F is the credit that did not go back in money — debt cancelled, plus
+ *   whatever a marketplace was holding;
+ * - T − S − P − O is the part of the bill nobody paid and nobody owes.
+ *
+ * Without a marketplace the two are the same figure; the smaller is taken so
+ * neither can overstate the other. Two cases the totals cannot answer, and
+ * which therefore read zero rather than guess:
+ *
+ * - **a marketplace was involved** — the sale's channel holds funds, a part is
+ *   pending or names a marketplace, or a RETUR names a marketplace order. A
+ *   cut held payment leaves no row behind, and it is indistinguishable from a
+ *   cancelled debt by the totals alone. Marketplace customers pay the
+ *   marketplace, so a debt there is the rare case and Settled the honest one;
+ * - **an exchange** (`exchanged`, from `exchangedSales`) — its credit paid
+ *   for the replacements, which were added to the same bill.
+ */
+export function returnedDebt(
+  order: DebtReturnedSale,
+  exchanged = false,
+): ReturnedDebt | undefined {
+  const returns = (order.adjustments ?? []).filter((a) => a.type === "RETUR");
+  if (returns.length === 0) return undefined;
+  const payments = paymentsOf(order);
+  const sum = (state: SalePayment["state"]) =>
+    payments.filter((p) => p.state === state).reduce((t, p) => t + p.amount, 0);
+  const settled = sum("SETTLED");
+  const pending = sum("PENDING");
+  const paid = settled + pending;
+  const marketplace =
+    holdsFunds(order.source) ||
+    payments.some(
+      (p) =>
+        p.state === "PENDING" ||
+        (p.channel !== undefined && holdsFunds(p.channel)),
+    ) ||
+    returns.some((a) => NAMES_MARKETPLACE.test(a.reason));
+  if (exchanged || marketplace) return { cancelled: 0, paid };
+  const credit = returns.reduce((t, a) => t + a.amount, 0);
+  const refunded = refundedOf(order);
+  const owes = saleBalance(
+    billAfterReturns(order),
+    payments,
+    refunded,
+  ).customerOwes;
+  const cancelled = Math.max(
+    0,
+    Math.min(credit - refunded, order.total - settled - pending - owes),
+  );
+  return { cancelled, paid };
+}
+
+/** A ledger row, as far as `exchangedSales` reads one. */
+export interface SoldEvent {
+  readonly serial: string;
+  readonly type: string;
+  readonly at: string;
+  readonly refCode?: string;
+}
+
+/** A counted-stock move, as far as `exchangedSales` reads one. */
+export interface SoldMove {
+  readonly type: string;
+  readonly at: string;
+  readonly orderId?: string;
+}
+
+/**
+ * The sales that took something OUT after a return — an exchange's
+ * replacement, or an item Edit transaction added since — by order id.
+ *
+ * A replacement unit's `TERJUAL` names the return (its SG code) or, when only
+ * counted pieces came back, the sale itself; counted replacements are
+ * `TERJUAL` moves naming the order. Only rows dated at or after the sale's
+ * first return count, and a unit row only under one of the sale's own codes —
+ * the same serial resold on another receipt names that receipt.
+ */
+export function exchangedSales(
+  orders: readonly {
+    readonly id: string;
+    readonly code: string;
+    readonly serials: readonly string[];
+    readonly adjustments?: readonly OrderAdjustmentRec[];
+  }[],
+  events: readonly SoldEvent[],
+  moves: readonly SoldMove[],
+): Set<string> {
+  const out = new Set<string>();
+  const returned = orders.filter((o) =>
+    (o.adjustments ?? []).some((a) => a.type === "RETUR"),
+  );
+  if (returned.length === 0) return out;
+  const soldBySerial = new Map<string, SoldEvent[]>();
+  for (const e of events) {
+    if (e.type !== "TERJUAL") continue;
+    const list = soldBySerial.get(e.serial) ?? [];
+    list.push(e);
+    soldBySerial.set(e.serial, list);
+  }
+  const movesByOrder = new Map<string, SoldMove[]>();
+  for (const m of moves) {
+    if (m.type !== "TERJUAL" || m.orderId === undefined) continue;
+    const list = movesByOrder.get(m.orderId) ?? [];
+    list.push(m);
+    movesByOrder.set(m.orderId, list);
+  }
+  for (const o of returned) {
+    const retur = (o.adjustments ?? []).filter((a) => a.type === "RETUR");
+    const first = retur.reduce(
+      (min, a) => (a.at < min ? a.at : min),
+      retur[0]!.at,
+    );
+    const codes = new Set([
+      o.code,
+      ...retur.flatMap((a) => (a.code === undefined ? [] : [a.code])),
+    ]);
+    const unitOut = o.serials.some((serial) =>
+      (soldBySerial.get(serial) ?? []).some(
+        (e) => e.at >= first && e.refCode !== undefined && codes.has(e.refCode),
+      ),
+    );
+    const piecesOut = (movesByOrder.get(o.id) ?? []).some((m) => m.at >= first);
+    if (unitOut || piecesOut) out.add(o.id);
+  }
+  return out;
+}
+
+/**
+ * Every sale's `returnedDebt`, keyed by order id — what Transaction History
+ * and Income & Expense ask. A sale no return touched is absent.
+ */
+export function returnedDebts(
+  orders: readonly (DebtReturnedSale & {
+    readonly code: string;
+    readonly serials: readonly string[];
+  })[],
+  events: readonly SoldEvent[],
+  moves: readonly SoldMove[],
+): Map<string, ReturnedDebt> {
+  const exchanged = exchangedSales(orders, events, moves);
+  const out = new Map<string, ReturnedDebt>();
+  for (const o of orders) {
+    const r = returnedDebt(o, exchanged.has(o.id));
+    if (r !== undefined) out.set(o.id, r);
+  }
+  return out;
 }
 
 /** Whether any of a sale's units came back. */

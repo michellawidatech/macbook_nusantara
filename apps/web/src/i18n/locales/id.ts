@@ -1663,6 +1663,8 @@ export const id: Record<string, string> = {
   "finance.statusSettled": "Selesai",
   "finance.statusPending": "Tertunda",
   "finance.statusDue": "Jatuh tempo",
+  "finance.statusUnpaidReturned": "Belum dibayar, diretur",
+  "finance.statusPartPaidReturned": "Dibayar sebagian, diretur",
   "cashflow.kindSales": "Pemasukan dari penjualan",
   "cashflow.kindAdjustmentIn": "Penyesuaian pemasukan",
   "cashflow.kindExpense": "Pengeluaran",
@@ -1699,6 +1701,8 @@ export const id: Record<string, string> = {
   "transactions.stPartPaid": "Dibayar sebagian",
   "transactions.stPending": "Ditahan marketplace",
   "transactions.stOwed": "Belum dibayar",
+  "transactions.stUnpaidReturned": "Belum dibayar, diretur",
+  "transactions.stPartPaidReturned": "Dibayar sebagian, diretur",
   "transactions.editPayments":
     "Riwayat pembayaran — catat, koreksi atau hapus pembayaran",
   "transactions.editPaymentsAria": "Pembayaran pada {{code}}",

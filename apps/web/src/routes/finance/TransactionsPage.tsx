@@ -100,6 +100,7 @@ import {
 } from "../../lib/salePayments.js";
 import {
   paymentRefOf,
+  returnedDebts,
   returnedSerials,
   salePaymentStatus,
   saleReturnStatus,
@@ -167,13 +168,17 @@ interface SaleRow {
 /**
  * Amber for money a marketplace is holding, red for money a customer owes —
  * the shop acts differently on each: press a button on Shopee, or telephone a
- * person. Partly paid is the customer's too, a shade short of Owed.
+ * person. Partly paid is the customer's too, a shade short of Owed. A debt a
+ * return cancelled is the purple a returned unit's tag already wears on this
+ * screen: nobody has anything left to chase, and it is not money that came in.
  */
 const PAY_COLOR: Record<SalePaymentStatus, string> = {
   SETTLED: "default",
   WITH_MARKETPLACE: "gold",
   PARTLY_PAID: "volcano",
   OWED: "red",
+  PARTLY_PAID_RETURNED: "purple",
+  UNPAID_RETURNED: "purple",
 };
 
 /** RFC 4180 enough for a spreadsheet: quote everything, double the quotes. */
@@ -345,7 +350,11 @@ export function TransactionsPage() {
         ? t("transactions.stPending", "With a marketplace")
         : s === "PARTLY_PAID"
           ? t("transactions.stPartPaid", "Partly paid")
-          : t("transactions.stOwed", "Owed");
+          : s === "UNPAID_RETURNED"
+            ? t("transactions.stUnpaidReturned", "Unpaid, returned")
+            : s === "PARTLY_PAID_RETURNED"
+              ? t("transactions.stPartPaidReturned", "Partly paid, returned")
+              : t("transactions.stOwed", "Owed");
 
   /**
    * Turn what a marketplace was holding into money the shop has.
@@ -391,6 +400,8 @@ export function TransactionsPage() {
 
   const sales = useMemo<SaleRow[]>(() => {
     const back = returnedSerials(db.orders, db.events);
+    // What a return cancelled of each sale's debt — "Unpaid, returned".
+    const debts = returnedDebts(db.orders, db.events, db.stockMoves);
     // Maps rather than a `find` per sale: the B2Soft history is thousands of
     // receipts against thousands of customers.
     const units = new Map(db.units.map((u) => [u.serial, u]));
@@ -450,12 +461,21 @@ export function TransactionsPage() {
             .map((l) => (l.product ? `${l.product} (${l.serial})` : l.serial))
             .join("; "),
           status: saleReturnStatus(o.serials, returned, o.lines),
-          payStatus: salePaymentStatus(balance),
+          payStatus: salePaymentStatus(balance, debts.get(o.id)),
           balance,
         };
       })
       .sort((a, b) => b.at.localeCompare(a.at));
-  }, [db.orders, db.events, db.customers, db.units, db.skus, db.salesmen, t]);
+  }, [
+    db.orders,
+    db.events,
+    db.stockMoves,
+    db.customers,
+    db.units,
+    db.skus,
+    db.salesmen,
+    t,
+  ]);
 
   /*
    * Summed over the PAYMENTS, not over the sale totals (owner ask
