@@ -23,6 +23,10 @@ import { fmtDate, fmtNone } from "../../lib/format.js";
 import type { QcWaitingRow } from "../../lib/qcWaiting.js";
 import { COLUMN } from "../../theme/tokens";
 
+/** Fits `PI-2026/10-000004` in bold on one line, with the cell's padding. */
+const INVOICE_CODE_WIDTH = 200;
+/** A product name and its variant line wrap; this is a floor, not a cap. */
+const PRODUCT_WIDTH = 240;
 export function QcWaitingCard({ rows }: { readonly rows: QcWaitingRow[] }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -68,6 +72,7 @@ export function QcWaitingCard({ rows }: { readonly rows: QcWaitingRow[] }) {
           {
             title: t("qcWaiting.product", "Product"),
             dataIndex: "product",
+            width: PRODUCT_WIDTH,
             searchable: true,
             facet: true,
             facetValue: (r) => r.product || fmtNone(),
@@ -100,13 +105,18 @@ export function QcWaitingCard({ rows }: { readonly rows: QcWaitingRow[] }) {
           {
             title: t("qcWaiting.invoice", "Invoice"),
             dataIndex: "poCode",
-            width: COLUMN.code,
+            // A real code is `PI-2026/10-000004` — six digits, in bold — which
+            // COLUMN.code (sized for four) broke at its hyphen. Kept on one
+            // line; the product name, which wraps happily, gives up the room.
+            width: INVOICE_CODE_WIDTH,
             searchable: true,
             searchValue: (r) => `${r.poCode} ${r.invoice ?? ""}`,
             sortValue: (r) => r.poCode,
             render: (_: unknown, r) => (
               <>
-                <Typography.Text strong>{r.poCode}</Typography.Text>
+                <Typography.Text strong style={{ whiteSpace: "nowrap" }}>
+                  {r.poCode}
+                </Typography.Text>
                 {secondary(
                   r.invoice ?? t("inboundList.noInvoice", "No invoice"),
                 )}
