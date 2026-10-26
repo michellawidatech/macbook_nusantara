@@ -737,6 +737,14 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     fee: z.optional(money),
     supplierId: id.optional(),
     expectedCredit: z.optional(money),
+    /**
+     * Σ the REFUND incomes naming this return (`ManualIncome.unitReturnId`) —
+     * DERIVED, no column (2026-10-26). An account without finance access is
+     * sent no incomes, and without this would read a supplier's refund as
+     * still awaited and offer to record it twice. The adapter ignores it on
+     * write and recomputes it on every projection.
+     */
+    refundReceived: z.optional(money),
   });
 
   const reservation = z.strictObject({

@@ -1734,6 +1734,8 @@ export const returns: Adapter<"returns"> = {
       include: {
         unit: { select: { serial: true } },
         exchangeUnit: { select: { serial: true } },
+        // `refundReceived` is derived from these (2026-10-26).
+        incomes: { where: { reason: "REFUND" }, select: { amount: true } },
       },
     });
     return rows.map((x) => ({
@@ -1750,6 +1752,9 @@ export const returns: Adapter<"returns"> = {
       fee: x.fee ?? undefined,
       supplierId: x.supplierId ?? undefined,
       expectedCredit: x.expectedCredit ?? undefined,
+      ...(x.incomes.length > 0
+        ? { refundReceived: x.incomes.reduce((n, i) => n + i.amount, 0n) }
+        : {}),
     }));
   },
   lock: (tx, keys) => lockRows(tx, "UnitReturn", "id", keys),

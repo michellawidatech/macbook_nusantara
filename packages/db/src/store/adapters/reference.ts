@@ -987,11 +987,14 @@ async function removeAdjustment(
         })
       : await tx.manualIncome.findUnique({
           where: { id },
-          select: { date: true },
+          select: { date: true, unitReturnId: true },
         });
   if (row === null) return;
   const feeId = "serviceFeeId" in row ? row.serviceFeeId : null;
   if (typeof feeId === "string") await touchVisitOfFee(ctx, feeId);
+  // A supplier refund's return carries the derived `refundReceived`.
+  const returnId = "unitReturnId" in row ? row.unitReturnId : null;
+  if (typeof returnId === "string") ctx.touch("returns", returnId);
   const closed = await tx.appSetting.findUnique({
     where: { key: "finance.booksClosedAt" },
     select: { value: true },
@@ -1161,6 +1164,11 @@ export const incomes: Adapter<"incomes"> = {
       } else {
         await tx.manualIncome.update({ where: { id: n.id }, data });
       }
+      // The return's `refundReceived` is derived from these rows (2026-10-26):
+      // every till has to hear it moved, including those sent no incomes.
+      if (n.returnId !== undefined) ctx.touch("returns", n.returnId);
+      if (r.base?.returnId !== undefined && r.base.returnId !== n.returnId)
+        ctx.touch("returns", r.base.returnId);
       ctx.touch("incomes", n.id);
     }
   },

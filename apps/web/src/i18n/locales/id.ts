@@ -4466,6 +4466,54 @@ export const id: Record<string, string> = {
   "inboundList.toQc": "Belum QC",
   "nav.qcWaiting": "{{count}} unit menunggu QC",
 
+  // ── Return to supplier, with its money (2026-10-26) ───────────────────────
+  "supplierReturn.title": "Retur {{serial}} ke supplier",
+  "supplierReturn.date": "Tanggal",
+  "supplierReturn.credit": "Kredit",
+  "supplierReturn.creditHint":
+    "Yang harus dikembalikan supplier untuk unit ini — harga unitnya, kecuali disepakati lain.",
+  "supplierReturn.serviceCharges": "Biaya servis unit ini: {{amount}}",
+  "supplierReturn.addService": "Tambah biaya servis",
+  "supplierReturn.serviceAdded": "Biaya servis ditambahkan",
+  "supplierReturn.offInvoice":
+    "{{amount}} memotong invoice {{code}} (sisa belum dibayar {{owed}})",
+  "supplierReturn.refundPart": "{{amount}} dikembalikan supplier",
+  "supplierReturn.receivedInto": "Diterima ke",
+  "supplierReturn.receivedIntoRequired":
+    "Pilih ke mana uang kembali, atau bahwa belum dibayar.",
+  "supplierReturn.intoBank": "Bank",
+  "supplierReturn.intoOtherBank": "Bank lain",
+  "supplierReturn.intoCash": "Tunai",
+  "supplierReturn.notPaidYet": "Belum dibayar supplier",
+  "supplierReturn.fromInvoice": "Dari invoice {{code}}",
+  "supplierReturn.held":
+    "Sudah direservasi pelanggan — lepas reservasinya dulu.",
+  "supplierReturn.notInStock":
+    "Hanya unit yang sedang QC, ada di stok, atau di servis yang bisa diretur ke supplier.",
+  "supplierReturn.refused":
+    "{{serial}} tidak bisa lagi diretur ke supplier — sudah direservasi, terjual, atau diretur.",
+  "supplierReturn.done": "{{serial}} sudah diretur ke supplier ({{code}}).",
+  "returns.money": "Kredit",
+  "returns.offInvoice": "{{amount}} memotong {{code}}",
+  "returns.refundReceived": "Diterima: {{amount}}",
+  "returns.refundKept": "Refund tetap tercatat: {{amount}}",
+  "returns.awaitingRefund": "Menunggu refund {{amount}}",
+  "returns.markReceived": "Tandai diterima",
+  "returns.markReceivedAria": "Tandai refund {{code}} diterima",
+  "returns.receiveTitle": "Refund diterima untuk {{code}}",
+  "returns.refundAmount": "Jumlah diterima",
+  "returns.refundAmountRange":
+    "Antara Rp 1 dan sisa yang ditunggu ({{amount}}).",
+  "returns.refundRecorded": "{{amount}} diterima untuk {{code}}.",
+  "returns.undoSupplierBody":
+    "{{code}} tetap ada di riwayat, ditandai ditarik, dan unitnya kembali ke posisi sebelum diretur. Kreditnya dihapus dari invoice. Refund yang sudah dibayar supplier tetap tercatat diterima.",
+  "inbound.returnCredit": "Kredit retur supplier",
+  "inbound.returnCreditLocked":
+    "Kredit dari retur supplier — tarik returnya untuk menghapusnya.",
+  "supplier.entryReturnCredit": "Kredit retur",
+  "service.showFinished": "Tampilkan yang selesai",
+  "service.finished": "Selesai {{when}}",
+
   // English-keyed (2026-10-26): the expense category a paid service charge is
   // filed under, and the method a supplier-return credit is written with.
   "Unit expense": "Biaya unit",

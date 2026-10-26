@@ -29,6 +29,7 @@ import {
   Form,
   Input,
   Modal,
+  Radio,
   Select,
   Table,
   Tag,
@@ -41,8 +42,17 @@ import { useTranslation } from "react-i18next";
 import { ProTable } from "../../components/ProTable";
 import { SerialLink } from "../../components/SerialLink";
 import { GradeTag } from "../../components/GradeTag";
-import { fmtDate, fmtNone } from "../../lib/format.js";
+import { fmtDate, fmtNone, fmtRp } from "../../lib/format.js";
 import { saleOfReturn } from "../../lib/returns.js";
+import {
+  REFUND_METHODS,
+  returnMoney,
+  withdrawSupplierReturnMoney,
+  type RefundMethod,
+  type ReturnMoney,
+} from "../../lib/supplierReturn.js";
+import { useRefundIntoLabel } from "../../components/SupplierReturnModal";
+import { MoneyInput } from "../../components/MoneyInput";
 import {
   applyReturnEdit,
   canUndoReturn,
@@ -102,6 +112,24 @@ interface HistoryRow {
   readonly moveIds: readonly string[];
   /** Every document of the row is already withdrawn. */
   readonly cancelled: boolean;
+  /**
+   * A supplier return's money (2026-10-26): the credit, what came off the
+   * invoice, what the supplier has paid back, and what is still awaited.
+   * Absent on a customer return and on a counted product's move.
+   */
+  readonly money?: ReturnMoney;
+}
+
+/** Two documents of one press, read as one: their figures add up. */
+function addMoney(a: ReturnMoney | undefined, b: ReturnMoney): ReturnMoney {
+  if (a === undefined) return b;
+  return {
+    credit: a.credit + b.credit,
+    applied: a.applied + b.applied,
+    invoices: [...a.invoices, ...b.invoices],
+    received: a.received + b.received,
+    awaiting: a.awaiting + b.awaiting,
+  };
 }
 
 export function ReturnHistoryTable() {
@@ -110,6 +138,14 @@ export function ReturnHistoryTable() {
   const { message, modal } = App.useApp();
   const [open, setOpen] = useState<HistoryRow | null>(null);
   const [editing, setEditing] = useState<HistoryRow | null>(null);
+  /** The supplier return a *Mark received* is open on (2026-10-26). */
+  const [receiving, setReceiving] = useState<HistoryRow | null>(null);
+  const [receiveForm] = Form.useForm<{
+    method: RefundMethod;
+    date: dayjs.Dayjs;
+    amount: number;
+  }>();
+  const intoWord = useRefundIntoLabel();
   const [form] = Form.useForm<{
     date: dayjs.Dayjs;
     reason: string;
@@ -144,6 +180,7 @@ export function ReturnHistoryTable() {
       recIds: string[];
       moveIds: string[];
       live: number;
+      money?: ReturnMoney;
     }
     const groups = new Map<string, Draft>();
     const rowFor = (
@@ -233,6 +270,7 @@ export function ReturnHistoryTable() {
         serial: r.serial,
         ...(unit?.grade ? { grade: unit.grade } : {}),
       });
+      row.money = addMoney(row.money, returnMoney(r, db.pos, db.incomes));
     }
 
     // Counted products move on the ledger and have no return row of their own.
@@ -291,6 +329,7 @@ export function ReturnHistoryTable() {
     db.returns,
     db.stockMoves,
     db.orders,
+    db.incomes,
     db.pos,
     db.units,
     db.skus,
@@ -450,9 +489,21 @@ export function ReturnHistoryTable() {
             note: `Return ${rec.code} taken back — ${staff}`,
           });
         } else {
+          /*
+           * Back to where the return found it: a unit rejected at QC goes back
+           * into QC, not onto the shelf ungraded. Its credit comes off the
+           * invoice again (2026-10-26); a refund the supplier already paid
+           * stays recorded — the money really arrived.
+           */
+          const sent = [...d.events]
+            .filter(
+              (e) => e.serial === rec.serial && e.type === "RETUR_SUPPLIER",
+            )
+            .sort((a, b) => b.seq - a.seq)[0];
+          withdrawSupplierReturnMoney(d, rec.id);
           appendEvent(d, rec.serial, {
             type: "KOREKSI",
-            toStatus: "TERSEDIA",
+            toStatus: sent?.fromStatus === "QC" ? "QC" : "TERSEDIA",
             toLocationId: d.myWarehouseId,
             refCode: rec.code,
             note: `Supplier return ${rec.code} withdrawn — ${staff}`,
@@ -519,12 +570,72 @@ export function ReturnHistoryTable() {
       title: t("returns.undoTitle", "Take this return back?"),
       okText: t("returns.undoOk", "Take it back"),
       okButtonProps: { danger: true },
-      content: t(
-        "returns.undoBody",
-        "{{code}} stays in the history, marked withdrawn, and every unit on it goes back to where the return found it. The sale owes the returned amount again. Money already handed back stays recorded as handed back — collect it or correct the payments yourself.",
-        { code: r.codes.join(", ") },
-      ),
+      content:
+        r.side === "SUPPLIER"
+          ? t(
+              "returns.undoSupplierBody",
+              "{{code}} stays in the history, marked withdrawn, and the unit comes back to where the return found it. Its credit comes off the invoice again. A refund the supplier already paid stays recorded as received.",
+              { code: r.codes.join(", ") },
+            )
+          : t(
+              "returns.undoBody",
+              "{{code}} stays in the history, marked withdrawn, and every unit on it goes back to where the return found it. The sale owes the returned amount again. Money already handed back stays recorded as handed back — collect it or correct the payments yourself.",
+              { code: r.codes.join(", ") },
+            ),
       onOk: () => undo(r),
+    });
+
+  const openReceive = (r: HistoryRow) => {
+    setReceiving(r);
+    receiveForm.setFieldsValue({
+      method: undefined,
+      date: dayjs(),
+      amount: r.money?.awaiting ?? 0,
+    });
+  };
+
+  /**
+   * The supplier paid the refund it owed (2026-10-26): a `ManualIncome` of
+   * reason REFUND naming the return, into the pot the money landed in. The
+   * return's derived `refundReceived` moves with it, so a desk that is sent
+   * no incomes stops offering the same refund again.
+   */
+  const saveReceive = () =>
+    receiveForm.validateFields().then((v) => {
+      const row = receiving!;
+      const recId = row.recIds[0];
+      if (recId === undefined) return;
+      const at = new Date().toISOString();
+      const day = v.date.format("YYYY-MM-DD");
+      void mutate((d) => {
+        const i = d.returns.findIndex((x) => x.id === recId);
+        if (i < 0) return;
+        const rec = d.returns[i]!;
+        const supplier = d.suppliers.find((x) => x.id === rec.supplierId);
+        d.incomes.unshift({
+          id: nextId("inc"),
+          reason: "REFUND",
+          amount: v.amount,
+          date: day,
+          method: v.method,
+          returnId: rec.id,
+          note: supplier
+            ? `Supplier refund — ${supplier.name}`
+            : "Supplier refund",
+          createdAt: at,
+        });
+        d.returns[i] = {
+          ...rec,
+          refundReceived: (rec.refundReceived ?? 0) + v.amount,
+        };
+      });
+      setReceiving(null);
+      message.success(
+        t("returns.refundRecorded", "{{amount}} received on {{code}}.", {
+          amount: fmtRp(v.amount),
+          code: row.codes.join(", "),
+        }),
+      );
     });
 
   return (
@@ -626,6 +737,82 @@ export function ReturnHistoryTable() {
           },
           {
             /*
+             * A supplier return's money (2026-10-26): its credit, what came
+             * off the invoice, what the supplier paid back, and what it still
+             * owes — with the button that records it arriving. A customer
+             * return's money is on its sale.
+             */
+            title: t("returns.money", "Credit"),
+            key: "money",
+            minWidth: COLUMN.money,
+            sortValue: (r) => r.money?.credit ?? 0,
+            render: (_, r) => {
+              const m = r.money;
+              if (m === undefined)
+                return (
+                  <Typography.Text type="secondary">
+                    {fmtNone()}
+                  </Typography.Text>
+                );
+              return (
+                <Flex vertical gap={0} align="flex-start" onClick={stop}>
+                  <Typography.Text strong>{fmtRp(m.credit)}</Typography.Text>
+                  {m.invoices.map((inv) => (
+                    <Typography.Text
+                      key={inv.poId}
+                      type="secondary"
+                      style={{ fontSize: TYPE.sm }}
+                    >
+                      {t("returns.offInvoice", "{{amount}} off {{code}}", {
+                        amount: fmtRp(inv.amount),
+                        code: inv.code,
+                      })}
+                    </Typography.Text>
+                  ))}
+                  {m.received > 0 && (
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: TYPE.sm }}
+                    >
+                      {r.cancelled
+                        ? t("returns.refundKept", "Refund kept: {{amount}}", {
+                            amount: fmtRp(m.received),
+                          })
+                        : t("returns.refundReceived", "Received: {{amount}}", {
+                            amount: fmtRp(m.received),
+                          })}
+                    </Typography.Text>
+                  )}
+                  {m.awaiting > 0 && !r.cancelled && (
+                    <Flex gap={SPACE.xs} align="center" wrap>
+                      <Tag color="gold" style={{ marginInlineEnd: 0 }}>
+                        {t(
+                          "returns.awaitingRefund",
+                          "Awaiting refund {{amount}}",
+                          {
+                            amount: fmtRp(m.awaiting),
+                          },
+                        )}
+                      </Tag>
+                      <Button
+                        size="small"
+                        aria-label={t(
+                          "returns.markReceivedAria",
+                          "Mark the refund of {{code}} received",
+                          { code: r.codes.join(", ") },
+                        )}
+                        onClick={() => openReceive(r)}
+                      >
+                        {t("returns.markReceived", "Mark received")}
+                      </Button>
+                    </Flex>
+                  )}
+                </Flex>
+              );
+            },
+          },
+          {
+            /*
              * Correcting a return, and taking one back (owner ask
              * 2026-09-25). Both stop the click that opens the units — the
              * row is a control and so are these, and a dialog opening behind
@@ -685,6 +872,67 @@ export function ReturnHistoryTable() {
           },
         ]}
       />
+
+      <Modal
+        open={receiving !== null}
+        onCancel={() => setReceiving(null)}
+        onOk={saveReceive}
+        okText={t("returns.markReceived", "Mark received")}
+        destroyOnHidden
+        width={520}
+        title={t("returns.receiveTitle", "Refund received on {{code}}", {
+          code: receiving?.codes.join(", ") ?? "",
+        })}
+      >
+        <Form form={receiveForm} layout="vertical">
+          <Form.Item
+            name="method"
+            label={t("supplierReturn.receivedInto", "Received into")}
+            rules={[{ required: true }]}
+          >
+            <Radio.Group
+              aria-label={t("supplierReturn.receivedInto", "Received into")}
+              optionType="button"
+              options={REFUND_METHODS.map((m) => ({
+                value: m,
+                label: intoWord(m),
+              }))}
+            />
+          </Form.Item>
+          <Form.Item
+            name="date"
+            label={t("returns.date", "Date")}
+            rules={[{ required: true }]}
+          >
+            <DatePicker style={{ width: "100%" }} allowClear={false} />
+          </Form.Item>
+          <Form.Item
+            name="amount"
+            label={t("returns.refundAmount", "Amount received")}
+            rules={[
+              { required: true },
+              {
+                validator: (_, v: number | null) =>
+                  v != null && v > 0 && v <= (receiving?.money?.awaiting ?? 0)
+                    ? Promise.resolve()
+                    : Promise.reject(
+                        new Error(
+                          t(
+                            "returns.refundAmountRange",
+                            "Between Rp 1 and what is still awaited ({{amount}}).",
+                            { amount: fmtRp(receiving?.money?.awaiting ?? 0) },
+                          ),
+                        ),
+                      ),
+              },
+            ]}
+          >
+            <MoneyInput
+              aria-label={t("returns.refundAmount", "Amount received")}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       {/*
        * Correcting a return (owner ask 2026-09-25).

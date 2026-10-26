@@ -89,6 +89,7 @@ import {
   Popconfirm,
   Select,
   Statistic,
+  Switch,
   Table,
   Tag,
   Tooltip,
@@ -191,10 +192,19 @@ export function ServicePage() {
     note?: string;
   }>();
 
-  const rows = useMemo(
-    () => benchRows(db),
-    [db.services, db.units, db.pos, db.events],
+  /**
+   * Finished visits, listed too (owner ask 2026-10-26: any visit can be
+   * deleted). Per visit to the page, never remembered: the bench is about
+   * what is away NOW, and a list that reopens full of finished work is a list
+   * that hides it.
+   */
+  const [showFinished, setShowFinished] = useState(false);
+  const allRows = useMemo(
+    () => benchRows(db, Date.now(), { includeClosed: showFinished }),
+    [db.services, db.units, db.pos, db.events, showFinished],
   );
+  /** What is away now — what the cards count. */
+  const rows = allRows.filter((r) => !r.closed);
 
   const unitOf = (serial: string) => db.units.find((u) => u.serial === serial);
   const skuOf = (serial: string) => {
@@ -751,11 +761,28 @@ export function ServicePage() {
          * and On the bench — and no arrival step: a unit promised to a
          * repairer is MOVED in the same transaction when it travels.
          */}
-        <Card title={t("service.atService", "At service")}>
+        <Card
+          title={t("service.atService", "At service")}
+          extra={
+            <Flex gap={SPACE.xs} align="center">
+              <Switch
+                size="small"
+                checked={showFinished}
+                onChange={setShowFinished}
+                aria-label={t("service.showFinished", "Show finished")}
+              />
+              <Typography.Text style={{ fontSize: TYPE.sm }}>
+                {t("service.showFinished", "Show finished")}
+              </Typography.Text>
+            </Flex>
+          }
+        >
           <Table<BenchRow>
             size="small"
             rowKey={(r) => r.rec.id}
-            dataSource={rows}
+            dataSource={allRows}
+            // A finished visit is listed to be deleted, and reads as history.
+            onRow={(r) => (r.closed ? { style: { opacity: 0.55 } } : {})}
             pagination={false}
             locale={{
               emptyText: t(
@@ -829,45 +856,56 @@ export function ServicePage() {
                 key: "actions",
                 width: COLUMN.actionsWide + COLUMN.action,
                 render: (_, r) => (
-                  <Flex gap={SPACE.xs} justify="end">
-                    <Button
-                      size="small"
-                      type="primary"
-                      icon={<PlusOutlined />}
-                      aria-label={t(
-                        "service.addFeeAria",
-                        "Add a charge to {{serial}}",
-                        { serial: r.serial },
-                      )}
-                      onClick={() => {
-                        setAddingTo(r);
-                        feeForm.setFieldsValue({
-                          kind: "LABOUR",
-                          paidWith: "UNPAID",
-                        });
-                      }}
-                    >
-                      {t("service.charge", "Charge")}
-                    </Button>
-                    <Button
-                      size="small"
-                      type="primary"
-                      icon={<InboxOutlined />}
-                      aria-label={t(
-                        "service.sendBackAria",
-                        "Put {{serial}} back in stock",
-                        { serial: r.serial },
-                      )}
-                      onClick={() => {
-                        setReturning(r);
-                        backForm.setFieldsValue({
-                          locationId: r.rec.fromLocationId,
-                          transferPaid: "UNPAID",
-                        });
-                      }}
-                    >
-                      {t("service.backInStockShort", "Back in stock")}
-                    </Button>
+                  <Flex gap={SPACE.xs} justify="end" align="center">
+                    {r.closed && (
+                      <Tag style={{ marginInlineEnd: 0 }}>
+                        {t("service.finished", "Finished {{when}}", {
+                          when: fmtDate(r.rec.closedAt!),
+                        })}
+                      </Tag>
+                    )}
+                    {!r.closed && (
+                      <Button
+                        size="small"
+                        type="primary"
+                        icon={<PlusOutlined />}
+                        aria-label={t(
+                          "service.addFeeAria",
+                          "Add a charge to {{serial}}",
+                          { serial: r.serial },
+                        )}
+                        onClick={() => {
+                          setAddingTo(r);
+                          feeForm.setFieldsValue({
+                            kind: "LABOUR",
+                            paidWith: "UNPAID",
+                          });
+                        }}
+                      >
+                        {t("service.charge", "Charge")}
+                      </Button>
+                    )}
+                    {!r.closed && (
+                      <Button
+                        size="small"
+                        type="primary"
+                        icon={<InboxOutlined />}
+                        aria-label={t(
+                          "service.sendBackAria",
+                          "Put {{serial}} back in stock",
+                          { serial: r.serial },
+                        )}
+                        onClick={() => {
+                          setReturning(r);
+                          backForm.setFieldsValue({
+                            locationId: r.rec.fromLocationId,
+                            transferPaid: "UNPAID",
+                          });
+                        }}
+                      >
+                        {t("service.backInStockShort", "Back in stock")}
+                      </Button>
+                    )}
                     <Tooltip
                       title={t("service.deleteVisit", "Delete this visit")}
                     >

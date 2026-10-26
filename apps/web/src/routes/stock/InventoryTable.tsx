@@ -68,11 +68,14 @@ import {
   MoreOutlined,
   PrinterOutlined,
   QuestionCircleOutlined,
+  RollbackOutlined,
   TagsOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import { SendToServiceModal } from "../../components/SendToServiceModal";
+import { SupplierReturnModal } from "../../components/SupplierReturnModal";
+import { supplierReturnBlock } from "../../lib/supplierReturn.js";
 import { sendToServiceBlock } from "../../lib/serviceActions.js";
 import { ProTable } from "../../components/ProTable";
 import { DataTable } from "../../components/DataTable";
@@ -182,6 +185,8 @@ export function InventoryTable({ extra }: InventoryTableProps) {
   const [editingUnit, setEditingUnit] = useState<Unit | null>(null);
   /** The unit the Send-to-service dialog is open on (2026-10-26). */
   const [servicing, setServicing] = useState<string | null>(null);
+  /** The unit the Return-to-supplier dialog is open on (2026-10-26). */
+  const [returning, setReturning] = useState<string | null>(null);
   /**
    * The lines open to show their units (owner ask 2026-10-02: *"instead of
    * showing popup in the UI when a row is clicked, use nested column"*).
@@ -490,7 +495,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
    * A unit row's ⋯ (owner ask 2026-10-26): the decisions about one unit that
    * are not a price or a correction. *Send to service* opens the one dialog
    * every door shares; a unit that cannot go is drawn switched off, saying
-   * why. A list, because *Return to supplier* joins it next.
+   * why. *Return to supplier* sits beside it (2026-10-26).
    */
   const unitMenu = (u: Unit): MenuProps => {
     const block = sendToServiceBlock(u.status);
@@ -506,6 +511,21 @@ export function InventoryTable({ extra }: InventoryTableProps) {
             ? t("service.notInStock", "Not in stock.")
             : undefined;
     const sendLabel = t("inbound.serviceOk", "Send to service");
+    /*
+     * Back to the supplier (2026-10-26) — from the shelf or from service, the
+     * one dialog every door opens. A held unit is the customer's.
+     */
+    const returnBlock = supplierReturnBlock(u.status);
+    const returnWhy =
+      returnBlock === "HELD"
+        ? t(
+            "service.heldCannotGo",
+            "Reserved for a customer — release the hold first.",
+          )
+        : returnBlock === "NOT_IN_STOCK"
+          ? t("service.notInStock", "Not in stock.")
+          : undefined;
+    const returnLabel = t("inbound.rejectOk", "Return to supplier");
     return {
       items: [
         {
@@ -521,9 +541,23 @@ export function InventoryTable({ extra }: InventoryTableProps) {
               </Tooltip>
             ),
         },
+        {
+          key: "return",
+          icon: <RollbackOutlined aria-hidden />,
+          disabled: returnWhy !== undefined,
+          label:
+            returnWhy === undefined ? (
+              returnLabel
+            ) : (
+              <Tooltip title={returnWhy}>
+                <span>{returnLabel}</span>
+              </Tooltip>
+            ),
+        },
       ],
       onClick: ({ key }) => {
         if (key === "service") setServicing(u.serial);
+        if (key === "return") setReturning(u.serial);
       },
     };
   };
@@ -1048,6 +1082,11 @@ export function InventoryTable({ extra }: InventoryTableProps) {
         serial={servicing}
         raisedBy="ADJUSTMENT"
         onClose={() => setServicing(null)}
+      />
+
+      <SupplierReturnModal
+        serial={returning}
+        onClose={() => setReturning(null)}
       />
 
       <UnitEditModal

@@ -89,6 +89,7 @@ not trusted from the browser.
    | a QC photo, or all of them on sale | DELETE — the sanctioned exception, `tag = 'QC'` only |
    | a draft stock take | `OpnameSession.status = BATAL` (the owner decision left open on 2026-09-01; the soft option) |
    | a service charge, or a whole service visit (2026-10-26) | DELETE `ServiceFee` / `ServiceVisit` — after every adapter has run (`ctx.later`), taking the `Expense` that names the charge (`serviceFeeId`) with it: the charge owns its expense, because an account without finance access is sent no expenses and cannot remove one. A correction of a paid charge's amount moves its expense too. Refused inside a closed book, judged on the Jakarta day. `fees[].paid` is DERIVED from that expense, never written |
+   | a supplier return's credit, when the return is withdrawn (2026-10-26) | the `RETUR_SUPPLIER` `Payment` naming it (`unitReturnId`) is voided like any PO payment; a REFUND `ManualIncome` naming it is kept. `returns[].refundReceived` is DERIVED from those incomes, never written, and an income insert or removal re-projects its return |
    | a unit removed from the intake grid | `archivedAt`, a `DIARSIPKAN` event, and the serial moved aside so the row can be re-keyed |
    | a variant with no stock | `Sku.archived` |
    | a PO line, a hold's machine, an axis value, a grading option or rule, an order fee, a payment, an address, a settlement fee, a deposit allocation, a draft count's scope or scan | `removedAt` / `voidedAt` on that row |

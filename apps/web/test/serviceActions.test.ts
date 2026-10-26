@@ -308,6 +308,29 @@ describe("planVisitDeletion", () => {
     expect(plan.eventIds).toEqual(["e5", "e4", "e3"]);
   });
 
+  it("never takes a supplier return's row for the visit's own (2026-10-26)", () => {
+    // A return to the supplier closes the visit at its own instant; the row
+    // is the RETURN's, and the unit has moved on.
+    const closedAt = "2026-10-23T03:00:00.000Z";
+    const events = [
+      ...history(),
+      ev({
+        id: "e5",
+        seq: 5,
+        type: "RETUR_SUPPLIER",
+        at: closedAt,
+        fromStatus: "SERVIS",
+        toStatus: "RETUR_SUPPLIER",
+      }),
+    ];
+    const plan = planVisitDeletion(
+      src({ events, unitStatus: "RETUR_SUPPLIER" }),
+      visit({ closedAt }),
+    );
+    expect(plan.eventIds).not.toContain("e5");
+    expect(plan.block).toBe("MOVED_ON");
+  });
+
   it("is refused once the unit has moved on", () => {
     const closedAt = "2026-10-23T03:00:00.000Z";
     const events = [

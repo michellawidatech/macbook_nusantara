@@ -212,6 +212,37 @@ describe("benchRows", () => {
     expect(rows[1]!.days).toBe(2);
   });
 
+  it("lists finished visits after the open ones when asked (2026-10-26)", () => {
+    const rows = benchRows(
+      shop({
+        services: [
+          visit({ id: "v1", openedAt: "2026-09-06T03:00:00.000Z" }),
+          visit({
+            id: "v3",
+            serial: "C",
+            openedAt: "2026-09-01T03:00:00.000Z",
+            closedAt: "2026-09-04T03:00:00.000Z",
+          }),
+          visit({
+            id: "v4",
+            serial: "D",
+            openedAt: "2026-09-01T03:00:00.000Z",
+            closedAt: "2026-09-05T03:00:00.000Z",
+          }),
+        ],
+      }),
+      now,
+      { includeClosed: true },
+    );
+    expect(rows.map((r) => [r.rec.id, r.closed])).toEqual([
+      ["v1", false],
+      ["v4", true],
+      ["v3", true],
+    ]);
+    // A finished visit was away until it finished.
+    expect(rows.find((r) => r.rec.id === "v3")!.days).toBe(3);
+  });
+
   it("reports what each machine will have to sell above", () => {
     const rows = benchRows(
       shop({ services: [visit({ fees: [fee(800_000)] })] }),

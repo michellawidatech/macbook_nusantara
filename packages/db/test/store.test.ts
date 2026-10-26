@@ -3416,6 +3416,15 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
       expect(
         await db.manualIncome.findUniqueOrThrow({ where: { id: refund.id } }),
       ).toMatchObject({ unitReturnId: ret.id });
+      // The return carries what the supplier has paid back, DERIVED from the
+      // incomes naming it (2026-10-26) — so a till sent no incomes can tell a
+      // refund received from one awaited.
+      expect(
+        decodeRow(
+          "returns",
+          (done.rows.returns as Row[]).find((x) => x["id"] === ret.id)!,
+        ),
+      ).toMatchObject({ refundReceived: 2_000_000 });
 
       // And it survives a reload.
       const again = decodeStore(
@@ -3429,6 +3438,27 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
       expect(
         again["incomes"]!.find((i) => i["id"] === refund.id),
       ).toMatchObject({ returnId: ret.id });
+      const retAgain = again["returns"]!.find((x) => x["id"] === ret.id)!;
+      expect(retAgain).toMatchObject({ refundReceived: 2_000_000 });
+
+      // A second refund on the same return moves the derived figure, and the
+      // commit hands the return back to every till.
+      const more = { ...refund, id: "inc-app-retur-2", amount: 500_000 };
+      const second = await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { incomes: [] } as unknown as StoreShape,
+            { incomes: [more] } as unknown as StoreShape,
+          ),
+        ),
+      });
+      expect(
+        decodeRow(
+          "returns",
+          (second.rows.returns as Row[]).find((x) => x["id"] === ret.id)!,
+        ),
+      ).toMatchObject({ refundReceived: 2_500_000 });
 
       // A credit naming no supplier return is refused in words.
       const now = again["pos"]!.find((p) => p["id"] === po["id"])!;
@@ -3453,6 +3483,42 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
           ),
         }),
       ).rejects.toThrow(/retur ke supplier yang tidak ada/);
+
+      // Withdrawing the return voids its credit and keeps the refunds.
+      const fresh = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      const nowPo = fresh["pos"]!.find((p) => p["id"] === po["id"])!;
+      const nowRet = fresh["returns"]!.find((x) => x["id"] === ret.id)!;
+      const withdrawn = await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { pos: [nowPo], returns: [nowRet] } as unknown as StoreShape,
+            {
+              pos: [
+                {
+                  ...nowPo,
+                  payments: (nowPo["payments"] as Row[]).filter(
+                    (p) => p["returnId"] !== ret.id,
+                  ),
+                },
+              ],
+              returns: [{ ...nowRet, status: "CANCELLED" }],
+            } as unknown as StoreShape,
+          ),
+        ),
+      });
+      expect(
+        (await db.payment.findUniqueOrThrow({ where: { id: credit.id } }))
+          .voidedAt,
+      ).not.toBeNull();
+      expect(
+        decodeRow(
+          "returns",
+          (withdrawn.rows.returns as Row[]).find((x) => x["id"] === ret.id)!,
+        ),
+      ).toMatchObject({ status: "CANCELLED", refundReceived: 2_500_000 });
     } finally {
       await app.$disconnect();
     }

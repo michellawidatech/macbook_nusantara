@@ -893,10 +893,30 @@ describe("QC on the row", () => {
     await userEvent.click(
       screen.getByLabelText(`Return ${SERIAL} to the supplier`),
     );
-    await userEvent.click(await okButton("Return to supplier"));
+    // The one Return-to-supplier dialog (2026-10-26), its reason prefilled.
+    await recordReturn();
     expect(stored().status).toBe("RETUR_SUPPLIER");
+    const claim = snapshot().returns.find(
+      (r) => r.serial === SERIAL && r.kind === "SUPPLIER",
+    )!;
+    expect(claim).toMatchObject({ reason: "Rejected at QC", fromQc: true });
   });
 });
+
+/**
+ * Press *Record supplier return* in the dialog on top, saying the refund has
+ * not come yet when the invoice leaves one to say anything about.
+ */
+async function recordReturn() {
+  const dialog = await lastDialog();
+  await settle();
+  const notYet = within(dialog).queryByText("Not paid by supplier yet");
+  if (notYet) await userEvent.click(notYet);
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Record supplier return" }),
+  );
+  await settle();
+}
 
 describe("taking a QC decision back", () => {
   it("puts an accepted unit back on the bench, keeping both events", async () => {
@@ -920,12 +940,23 @@ describe("taking a QC decision back", () => {
 
   it("withdraws the supplier claim when the return was the wrong unit", async () => {
     const serial = await described();
+    // An unpaid invoice, so the whole credit comes off it (rule C).
+    act(() => {
+      mutate((d) => {
+        d.pos.find((p) => p.id === ORDER)!.payments = [];
+      });
+    });
     await userEvent.click(
       screen.getByLabelText(`Return ${serial} to the supplier`),
     );
-    await userEvent.click(await okButton("Return to supplier"));
+    await recordReturn();
     const claim = snapshot().returns.find((r) => r.serial === serial)!;
     expect(claim.status).toBe("DONE");
+    const credits = () =>
+      snapshot()
+        .pos.find((p) => p.id === ORDER)!
+        .payments.filter((p) => p.returnId === claim.id);
+    expect(credits()).toHaveLength(1);
 
     await userEvent.click(screen.getByLabelText(`More for ${serial}`));
     await userEvent.click(await screen.findByText("Reopen QC"));
@@ -935,6 +966,29 @@ describe("taking a QC decision back", () => {
     expect(db.units.find((u) => u.serial === serial)!.status).toBe("QC");
     // Marked withdrawn, not deleted — the claim really was raised.
     expect(db.returns.find((r) => r.id === claim.id)!.status).toBe("CANCELLED");
+    // Its credit is off the invoice again.
+    expect(credits()).toHaveLength(0);
+  });
+
+  it("returns an ACCEPTED unit from its ⋯, through the same dialog", async () => {
+    const serial = await described();
+    await userEvent.click(screen.getByLabelText(`Accept ${serial}`));
+    await userEvent.click(screen.getByLabelText(`More for ${serial}`));
+    await userEvent.click(await screen.findByText("Return to supplier"));
+    const dialog = await lastDialog();
+    // Not a QC rejection any more: the reason is asked.
+    fireEvent.change(within(dialog).getByLabelText("Reason"), {
+      target: { value: "Battery swollen" },
+    });
+    await recordReturn();
+    expect(snapshot().units.find((u) => u.serial === serial)!.status).toBe(
+      "RETUR_SUPPLIER",
+    );
+    expect(
+      snapshot().returns.find(
+        (r) => r.serial === serial && r.kind === "SUPPLIER",
+      ),
+    ).toMatchObject({ reason: "Battery swollen", status: "DONE" });
   });
 
   it("will not reopen a unit somebody else has acted on", async () => {

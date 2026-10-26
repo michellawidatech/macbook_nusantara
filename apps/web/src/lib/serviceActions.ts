@@ -378,7 +378,11 @@ export function isBackEvent(e: Ev, rec: ServiceRec): boolean {
     e.serial === rec.serial &&
     e.at === rec.closedAt &&
     e.fromStatus === "SERVIS" &&
-    e.toStatus !== "SERVIS"
+    e.toStatus !== "SERVIS" &&
+    // A return to the supplier closes the visit at its own instant
+    // (2026-10-26), but that row is the RETURN's: the unit moved on, and
+    // deleting the visit must not take the return's history with it.
+    e.type !== "RETUR_SUPPLIER"
   );
 }
 

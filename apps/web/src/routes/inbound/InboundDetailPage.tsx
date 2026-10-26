@@ -160,6 +160,14 @@ import { costBreakdown } from "../../lib/service.js";
 import { sendToServiceBlock } from "../../lib/serviceActions.js";
 import { SendToServiceModal } from "../../components/SendToServiceModal";
 import {
+  QC_REJECT_REASON,
+  SupplierReturnModal,
+} from "../../components/SupplierReturnModal";
+import {
+  supplierReturnBlock,
+  withdrawSupplierReturnMoney,
+} from "../../lib/supplierReturn.js";
+import {
   CODE128_HINT,
   BASE_MAX_LENGTH,
   BASE_MIN_LENGTH,
@@ -195,9 +203,7 @@ import {
   getDb,
   mutate,
   nextId,
-  docCode,
   appendEvent,
-  ensureReason,
   currentStaffName,
   ensureQcDescription,
   addQcPhoto,
@@ -451,6 +457,8 @@ export function InboundDetailPage() {
    * the desk at the moment somebody decides a machine needs a repair.
    */
   const [sendingToService, setSendingToService] = useState<string | null>(null);
+  /** The unit the Return-to-supplier dialog is open on (2026-10-26). */
+  const [returningSerial, setReturningSerial] = useState<string | null>(null);
   /**
    * Where normalising moved a row's key (old key → line id).
    *
@@ -1503,50 +1511,12 @@ export function InboundDetailPage() {
       ? `${t(PO_FEE_KIND_LABEL[fee.kind])} · ${fee.label}`
       : t(PO_FEE_KIND_LABEL[fee.kind]);
 
-  /**
-   * A unit that fails QC, and goes back to whoever sold it. The managed reason
-   * is written FIRST, so nothing ever points at a reason Settings has not
-   * heard of; the claim is opened at what the invoice says it cost, and the
-   * decision can be taken back from the row.
+  /*
+   * ~~`rejectToSupplier`~~ went on 2026-10-26: the QC row's Return and the
+   * accepted row's ⋯ open the one `SupplierReturnModal`, which asks the
+   * credit (the unit price by default) and where the money went — rule C
+   * takes it off this invoice's unpaid balance first.
    */
-  const rejectToSupplier = (serial: string) => {
-    modal.confirm({
-      title: t("inbound.rejectTitle", "Return this unit to the supplier?"),
-      content: t(
-        "inbound.rejectBody",
-        "{{serial}} will not enter inventory. Its history stays tracked either way, and you can take this back from the row afterwards.",
-        { serial },
-      ),
-      okText: t("inbound.rejectOk", "Return to supplier"),
-      onOk: () =>
-        mutate((d) => {
-          const u = d.units.find((x) => x.serial === serial)!;
-          const reasonLabel = "Rejected at QC";
-          ensureReason(d, "RETURN_SUPPLIER", reasonLabel);
-          const code = docCode("SP");
-          d.returns.unshift({
-            id: nextId("r"),
-            code,
-            kind: "SUPPLIER",
-            serial,
-            reason: reasonLabel,
-            date: new Date().toISOString().slice(0, 10),
-            status: "DONE",
-            fromQc: true,
-            supplierId: d.pos.find((p) => p.id === u.poId)?.supplierId,
-            expectedCredit: u.buy,
-          });
-          appendEvent(d, serial, {
-            type: "RETUR_SUPPLIER",
-            toStatus: "RETUR_SUPPLIER",
-            // `refCode` is the return document, not the order. It is what a
-            // reopen reads to know which claim to withdraw.
-            refCode: code,
-            note: reasonLabel,
-          });
-        }),
-    });
-  };
 
   /*
    * ~~`sendToService`~~ went on 2026-10-26: every door into service opens the
@@ -1586,16 +1556,20 @@ export function InboundDetailPage() {
             d.units.find((u) => u.serial === serial)?.status ===
             "RETUR_SUPPLIER"
           ) {
+            // Whichever door raised it (2026-10-26): the QC row, the ⋯ of an
+            // accepted row, Inventory or the Returns page.
             const claim = d.returns.find(
               (r) =>
                 r.kind === "SUPPLIER" &&
                 r.serial === serial &&
-                r.fromQc &&
                 r.status !== "CANCELLED",
             );
             if (claim) {
               claim.status = "CANCELLED";
               withdrawn = claim.code;
+              // Its credit comes off the invoice again; a refund already
+              // received stays — the money really arrived.
+              withdrawSupplierReturnMoney(d, claim.id);
             }
           }
           const visit = d.services.findIndex(
@@ -3000,7 +2974,7 @@ export function InboundDetailPage() {
         icon: <CloseCircleOutlined aria-hidden />,
         danger: true,
         disabledWhy: serial === null ? needsSerial : null,
-        onClick: () => serial !== null && rejectToSupplier(serial),
+        onClick: () => serial !== null && setReturningSerial(serial),
       });
 
     /**
@@ -3109,6 +3083,34 @@ export function InboundDetailPage() {
               ),
           });
           onMore["service"] = () => setSendingToService(serial);
+        }
+        /*
+         * An accepted unit can go back to its supplier too (owner ask
+         * 2026-10-26: *"even if it is already accepted and QCed, it can still
+         * be returned or serviced"*) — the same dialog as the QC row's.
+         */
+        const returnBlock = supplierReturnBlock(r.unit.status);
+        if (returnBlock === undefined || returnBlock === "HELD") {
+          const returnLabel = t("inbound.rejectOk", "Return to supplier");
+          more.push({
+            key: "return",
+            icon: <CloseCircleOutlined aria-hidden />,
+            disabled: returnBlock === "HELD",
+            label:
+              returnBlock === "HELD" ? (
+                <Tooltip
+                  title={t(
+                    "service.heldCannotGo",
+                    "Reserved for a customer — release the hold first.",
+                  )}
+                >
+                  <span>{returnLabel}</span>
+                </Tooltip>
+              ) : (
+                returnLabel
+              ),
+          });
+          onMore["return"] = () => setReturningSerial(serial);
         }
         if (canReopenQc(r.unit)) {
           item(
@@ -3727,8 +3729,32 @@ export function InboundDetailPage() {
             {
               title: t("inbound.method", "Method"),
               dataIndex: "method",
-              render: (code: string) =>
-                db.paymentMethods.find((m) => m.code === code)?.label ?? code,
+              render: (code: string, p) => {
+                // A supplier return's credit (2026-10-26) names its return.
+                const ret =
+                  p.returnId === undefined
+                    ? undefined
+                    : db.returns.find((r) => r.id === p.returnId);
+                if (code === "RETUR_SUPPLIER" || ret !== undefined)
+                  return (
+                    <Flex vertical gap={0}>
+                      <Typography.Text>
+                        {t("inbound.returnCredit", "Supplier return credit")}
+                      </Typography.Text>
+                      {ret && (
+                        <Typography.Text
+                          type="secondary"
+                          style={{ fontSize: TYPE.sm }}
+                        >
+                          {ret.code} · {ret.serial}
+                        </Typography.Text>
+                      )}
+                    </Flex>
+                  );
+                return (
+                  db.paymentMethods.find((m) => m.code === code)?.label ?? code
+                );
+              },
             },
             {
               title: t("inbound.appliedTo", "Applied to"),
@@ -3758,22 +3784,36 @@ export function InboundDetailPage() {
               width: COLUMN.actions,
               render: (_, p) => {
                 const fromDeposit = p.fromDepositId !== undefined;
+                /*
+                 * A supplier return's credit is the RETURN's money (2026-10-26):
+                 * withdrawing the return on the Returns page or reopening QC
+                 * takes it off. Edited here, the two would disagree.
+                 */
+                const fromReturn =
+                  p.returnId !== undefined || p.method === "RETUR_SUPPLIER";
+                const lockedWhy = fromDeposit
+                  ? t(
+                      "inbound.depositPaymentLocked",
+                      "Paid out of a deposit — correct it on the supplier's account, so the money goes back to the deposit.",
+                    )
+                  : fromReturn
+                    ? t(
+                        "inbound.returnCreditLocked",
+                        "The credit of a supplier return — withdraw the return to take it off.",
+                      )
+                    : undefined;
                 return (
                   <Flex gap={4} justify="end">
                     <Tooltip
                       title={
-                        fromDeposit
-                          ? t(
-                              "inbound.depositPaymentLocked",
-                              "Paid out of a deposit — correct it on the supplier's account, so the money goes back to the deposit.",
-                            )
-                          : t("inbound.editPayment", "Edit this payment")
+                        lockedWhy ??
+                        t("inbound.editPayment", "Edit this payment")
                       }
                     >
                       <Button
                         size="small"
                         type="text"
-                        disabled={locked || fromDeposit}
+                        disabled={locked || lockedWhy !== undefined}
                         aria-label={t(
                           "inbound.editPaymentAria",
                           "Edit the payment of {{amount}}",
@@ -3791,19 +3831,15 @@ export function InboundDetailPage() {
                     </Tooltip>
                     <Tooltip
                       title={
-                        fromDeposit
-                          ? t(
-                              "inbound.depositPaymentLocked",
-                              "Paid out of a deposit — correct it on the supplier's account, so the money goes back to the deposit.",
-                            )
-                          : t("inbound.deletePayment", "Delete this payment")
+                        lockedWhy ??
+                        t("inbound.deletePayment", "Delete this payment")
                       }
                     >
                       <Button
                         size="small"
                         type="text"
                         danger
-                        disabled={locked || fromDeposit}
+                        disabled={locked || lockedWhy !== undefined}
                         aria-label={t(
                           "inbound.deletePaymentAria",
                           "Delete the payment of {{amount}}",
@@ -4192,6 +4228,18 @@ export function InboundDetailPage() {
         poId={po.id}
         refCode={po.code}
         onClose={() => setSendingToService(null)}
+      />
+
+      {/* Back to the supplier, with its money: the one dialog every door opens. */}
+      <SupplierReturnModal
+        serial={returningSerial}
+        defaultReason={
+          returningSerial !== null &&
+          db.units.find((u) => u.serial === returningSerial)?.status === "QC"
+            ? QC_REJECT_REASON
+            : undefined
+        }
+        onClose={() => setReturningSerial(null)}
       />
 
       <Modal

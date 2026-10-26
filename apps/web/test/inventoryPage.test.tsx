@@ -400,11 +400,54 @@ describe("a unit's ⋯ (2026-10-26)", () => {
         "li",
       ) as HTMLElement;
       expect(item.getAttribute("aria-disabled")).toBe("true");
+      // Nor return it to its supplier (2026-10-26).
+      const back = (await screen.findByText("Return to supplier")).closest(
+        "li",
+      ) as HTMLElement;
+      expect(back.getAttribute("aria-disabled")).toBe("true");
     } finally {
       mutate((d) => {
         d.units.find((u) => u.serial === held.serial)!.status = "TERSEDIA";
       });
     }
+  });
+
+  it("returns a unit to its supplier through the one dialog (2026-10-26)", async () => {
+    renderPage();
+    await settle();
+    const line = expectedLines().find(
+      (l) =>
+        l.tracksSerial &&
+        l.units.some((u) => u.status === "TERSEDIA" && u.poId != null),
+    )!;
+    const unit = line.units.find(
+      (u) => u.status === "TERSEDIA" && u.poId != null,
+    )!;
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    const nested = await unitsUnder(row);
+    await userEvent.click(labelled(nested, `More for ${unit.serial}`));
+    await userEvent.click(await screen.findByText("Return to supplier"));
+    const dialog = await topModal();
+    await settle();
+    fireEvent.change(within(dialog).getByLabelText("Reason"), {
+      target: { value: "Wrong spec" },
+    });
+    const notYet = within(dialog).queryByText("Not paid by supplier yet");
+    if (notYet) await userEvent.click(notYet);
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Record supplier return" }),
+    );
+    await waitFor(() =>
+      expect(getDb().units.find((u) => u.serial === unit.serial)!.status).toBe(
+        "RETUR_SUPPLIER",
+      ),
+    );
+    expect(
+      getDb().returns.find(
+        (r) => r.serial === unit.serial && r.kind === "SUPPLIER",
+      ),
+    ).toMatchObject({ expectedCredit: unit.buy, status: "DONE" });
   });
 });
 

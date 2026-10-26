@@ -293,6 +293,11 @@ export interface BenchRow {
   readonly days: number;
   /** Has it actually reached the bench? See `ServiceRec.arrivedAt`. */
   readonly arrived: boolean;
+  /**
+   * A finished visit, listed only when somebody asked to see those
+   * (2026-10-26) — so one can be deleted. Nothing else is done to it.
+   */
+  readonly closed: boolean;
 }
 
 /**
@@ -318,36 +323,54 @@ export type BenchSources = Omit<CostSources, "units"> & {
 export function benchRows(
   store: BenchSources,
   now: number = Date.now(),
+  opts: { readonly includeClosed?: boolean } = {},
 ): BenchRow[] {
   const costOf = costIndex(store);
   const units = new Map(store.units.map((u) => [u.serial, u]));
-  return store.services
-    .filter((r) => r.closedAt === undefined)
-    .map((rec) => {
-      const cost = visitCost(rec);
-      // A visit for a serial the store does not hold still costs what it has
-      // cost; there is simply no purchase behind it.
-      const machine = costOf(
-        units.get(rec.serial) ?? { serial: rec.serial, buy: 0, poId: null },
-      );
-      return {
-        rec,
-        serial: rec.serial,
-        cost,
-        buy: machine.buy,
-        shippingTax: machine.shippingTax,
-        earlierRepair: Math.max(0, machine.repair - cost),
-        total: machine.total,
-        arrived: rec.arrivedAt !== undefined,
-        // Floored at zero: a clock skew must not report a machine as having
-        // been away for minus a day.
-        days: Math.max(
-          0,
-          Math.floor((now - Date.parse(rec.openedAt)) / 86_400_000),
-        ),
-      };
-    })
-    .sort((a, b) => b.days - a.days);
+  return (
+    store.services
+      .filter((r) => opts.includeClosed === true || r.closedAt === undefined)
+      .map((rec) => {
+        const cost = visitCost(rec);
+        // A visit for a serial the store does not hold still costs what it has
+        // cost; there is simply no purchase behind it.
+        const machine = costOf(
+          units.get(rec.serial) ?? { serial: rec.serial, buy: 0, poId: null },
+        );
+        return {
+          rec,
+          serial: rec.serial,
+          cost,
+          buy: machine.buy,
+          shippingTax: machine.shippingTax,
+          earlierRepair: Math.max(0, machine.repair - cost),
+          total: machine.total,
+          arrived: rec.arrivedAt !== undefined,
+          closed: rec.closedAt !== undefined,
+          // Floored at zero: a clock skew must not report a machine as having
+          // been away for minus a day. A finished visit counts to its close.
+          days: Math.max(
+            0,
+            Math.floor(
+              ((rec.closedAt !== undefined ? Date.parse(rec.closedAt) : now) -
+                Date.parse(rec.openedAt)) /
+                86_400_000,
+            ),
+          ),
+        };
+      })
+      // The open ones first, longest away first; then the finished ones, the
+      // most recently finished first.
+      .sort((a, b) =>
+        a.closed !== b.closed
+          ? a.closed
+            ? 1
+            : -1
+          : a.closed
+            ? (b.rec.closedAt ?? "").localeCompare(a.rec.closedAt ?? "")
+            : b.days - a.days,
+      )
+  );
 }
 
 /**

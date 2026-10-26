@@ -510,6 +510,7 @@ export function SuppliersPage() {
               amount: pp.amount,
               method: pp.method,
               ...(pp.fromDepositId ? { fromDepositId: pp.fromDepositId } : {}),
+              ...(pp.returnId ? { returnId: pp.returnId } : {}),
             })),
           };
         }),
@@ -528,6 +529,10 @@ export function SuppliersPage() {
       ALLOCATION: {
         label: t("supplier.entryAllocation", "Deposit used"),
         color: "default",
+      },
+      CREDIT: {
+        label: t("supplier.entryReturnCredit", "Supplier return credit"),
+        color: "purple",
       },
     };
 

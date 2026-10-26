@@ -286,7 +286,12 @@ export type LedgerEntryKind =
   /** Money sent in advance, against nothing yet. */
   | "DEPOSIT"
   /** Part of a deposit put against an invoice. Moves nothing. */
-  | "ALLOCATION";
+  | "ALLOCATION"
+  /**
+   * A supplier return's credit against an invoice (2026-10-26): the shop owes
+   * less, and no money moved. `PoPayment.method` RETUR_SUPPLIER.
+   */
+  | "CREDIT";
 
 export interface LedgerEntry {
   readonly id: string;
@@ -320,6 +325,8 @@ export interface HistoryInvoice extends LedgerInvoice {
     readonly method: string;
     /** Set when this payment came out of a deposit. See `PoPayment`. */
     readonly fromDepositId?: string;
+    /** Set on a supplier return's credit. See `PoPayment.returnId`. */
+    readonly returnId?: string;
   }[];
 }
 
@@ -346,9 +353,11 @@ export function supplierHistory(
       // happened on the day of the deposit. It appears below as an allocation
       // instead, hanging off the deposit it came out of.
       if (p.fromDepositId) continue;
+      const credit = p.method === "RETUR_SUPPLIER" || p.returnId !== undefined;
       out.push({
         id: `pay-${p.id}`,
-        kind: "PAYMENT",
+        // Lowers what is owed exactly as a payment does; named for what it is.
+        kind: credit ? "CREDIT" : "PAYMENT",
         at: p.at,
         ref: inv.code,
         poId: inv.id,

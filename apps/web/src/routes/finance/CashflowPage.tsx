@@ -275,6 +275,13 @@ export function IncomeExpensePage() {
       }
     }
     for (const i of db.incomes) {
+      // A supplier's refund names its return (2026-10-26): the SP code is
+      // what anybody checking it against the bank statement asks for.
+      const sp =
+        i.returnId === undefined
+          ? undefined
+          : db.returns.find((r) => r.id === i.returnId)?.code;
+      const said = i.note?.trim() || labelOf(INCOME_REASON, i.reason, t);
       out.push({
         key: `i-${i.id}`,
         at: typedAt(i.date, i.createdAt),
@@ -283,7 +290,7 @@ export function IncomeExpensePage() {
         method: methodLabel(i.method),
         methodCode: i.method,
         inBalance: true,
-        description: i.note?.trim() || labelOf(INCOME_REASON, i.reason, t),
+        description: sp ? `${said} · ${sp}` : said,
         ...(orderCodeOf(i.orderId)
           ? { orderCode: orderCodeOf(i.orderId)! }
           : {}),
@@ -324,6 +331,9 @@ export function IncomeExpensePage() {
     for (const po of db.pos) {
       for (const p of po.payments) {
         if (p.fromDepositId) continue;
+        // A supplier return's credit (2026-10-26) moved no money at all: the
+        // invoice owes less, and that is Payable's to show, not this page's.
+        if (p.method === "RETUR_SUPPLIER" || p.returnId !== undefined) continue;
         out.push({
           key: `pp-${po.id}-${p.id}`,
           at: p.at,
@@ -392,6 +402,7 @@ export function IncomeExpensePage() {
     db.stockMoves,
     db.incomes,
     db.expenses,
+    db.returns,
     db.pos,
     db.deposits,
     db.suppliers,

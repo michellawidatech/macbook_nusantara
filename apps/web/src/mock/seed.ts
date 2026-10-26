@@ -935,7 +935,21 @@ export interface ReturnRec {
   exchangeSerial?: string;
   fee?: number;
   supplierId?: string;
+  /**
+   * On a supplier return, the CREDIT (2026-10-26): what the unit is worth
+   * back, `Unit.buy` by default plus any service charges somebody added. Rule
+   * C splits it into what comes off the invoice and a refund
+   * (`lib/supplierReturn.ts`).
+   */
   expectedCredit?: number;
+  /**
+   * Σ the REFUND incomes naming this return — DERIVED by the server
+   * (2026-10-26), no column. An account without finance access is sent no
+   * incomes, and without this would read every refund as still awaited and
+   * offer to record it twice. The browser sets it in the same mutation that
+   * writes such an income; the server's projection is the truth.
+   */
+  refundReceived?: number;
   /**
    * The unit's grade BEFORE this return recorded it — snapshotted at write
    * time so the history can show "A → B" without inferring "before" from the
