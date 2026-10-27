@@ -1209,6 +1209,80 @@ export interface ManualIncome {
   createdAt?: string;
 }
 
+/**
+ * The money row a reconciliation names — exactly one of the four (2026-10-27).
+ * A sale payment, a refund, a customer's old-debt payment and a supplier
+ * payment are all `Payment` rows on the server, so all four are `paymentId`.
+ */
+export interface MoneyRef {
+  paymentId?: string;
+  expenseId?: string;
+  incomeId?: string;
+  depositId?: string;
+}
+
+/** One correction a reconciliation made, or one transaction it added. */
+export interface ReconciliationEdit extends MoneyRef {
+  id: string;
+  action: "EDITED" | "ADDED";
+  /** What the record said before; absent for an ADDED one. */
+  before?: number;
+  after: number;
+  staff: string;
+  at: string;
+}
+
+/**
+ * A count of one pot on one day, or the bank against its e-statement for one
+ * month (owner ask 2026-10-27; `Reconciliation`). See `lib/reconciliation.ts`.
+ */
+export interface Reconciliation {
+  id: string;
+  kind: "DAILY" | "MONTHLY";
+  pot: "BANK" | "CASH";
+  /** YYYY-MM-DD — the day, or the month's first day. */
+  periodStart: string;
+  /** YYYY-MM-DD — the same day, or the month's last day. */
+  periodEnd: string;
+  /** The POS balance when it was saved, after any correction it made. */
+  posBalance: number;
+  /** What was counted, or what the bank says. */
+  actualBalance: number;
+  statementOpening?: number;
+  statementClosing?: number;
+  /** The uploaded file's name. */
+  statementFile?: string;
+  status: "OPEN" | "MATCHED" | "ADJUSTED" | "RECONCILED";
+  note?: string;
+  staff: string;
+  createdAt: string;
+  updatedAt: string;
+  edits: ReconciliationEdit[];
+}
+
+/** A statement line's pairing with one POS movement. */
+export interface StatementMatch extends MoneyRef {
+  id: string;
+  /** EXACT, DATE_SHIFT, TYPO, DEDUCTION, SPLIT, MERGE, ADDED, MANUAL. */
+  reason: string;
+}
+
+/** One movement off the bank's e-statement (`BankStatementLine`). */
+export interface StatementLineRec {
+  id: string;
+  /** A MONTHLY reconciliation. */
+  reconciliationId: string;
+  lineNo: number;
+  date: string;
+  description: string;
+  /** Signed whole rupiah: a debit is negative. */
+  amount: number;
+  balance?: number;
+  status: "UNMATCHED" | "MATCHED" | "SUGGESTED" | "IGNORED";
+  note?: string;
+  matches: StatementMatch[];
+}
+
 export interface Expense {
   id: string;
   /**
@@ -1642,6 +1716,13 @@ export interface MockDb {
   settlements: Settlement[];
   /** Every change to a settlement. *"It is editable and logged."* ⚠️ Mock-only. */
   settlementLog: SettlementLogEntry[];
+  /**
+   * Daily counts of the bank and the drawer, and monthly matches of the bank
+   * against its e-statement (owner ask 2026-10-27). See `lib/reconciliation.ts`.
+   */
+  reconciliations: Reconciliation[];
+  /** The e-statements' lines, per MONTHLY reconciliation. */
+  statementLines: StatementLineRec[];
   /**
    * Machines at the repairer, and what each visit cost (owner ask
    * 2026-09-08). See `lib/service.ts`.
@@ -2809,6 +2890,8 @@ export function buildSeed(): MockDb {
     paymentLog: [],
     settlements: [],
     settlementLog: [],
+    reconciliations: [],
+    statementLines: [],
     services: [],
     deposits,
     chats,

@@ -1112,3 +1112,185 @@ describe("the stock movement history (2026-09-24)", () => {
     });
   });
 });
+
+describe("reconciliation (2026-10-27)", () => {
+  const PAY = "tst_recon_pay";
+  const EXP = "tst_recon_exp";
+
+  async function fixtures() {
+    await owner.query(
+      `INSERT INTO "Payment" (id, "orderId", direction, "methodId", amount, status, "staffId")
+       VALUES ($1,$2,'MASUK','pm_tunai',12000000,'LUNAS',$3)`,
+      [PAY, ORDER, STAFF],
+    );
+    await owner.query(
+      `INSERT INTO "Expense" (id, kind, amount, date, "methodId", "staffId", "createdAt")
+       VALUES ($1,'OPERATIONAL',60000,'2026-10-27','pm_tunai',$2,now())`,
+      [EXP, STAFF],
+    );
+  }
+
+  async function reconciliation(id: string, status: string, kind = "DAILY") {
+    await app.query(
+      `INSERT INTO "Reconciliation" (id, kind, pot, "periodStart", "periodEnd", "posBalance",
+                                     "actualBalance", status, "staffId", "createdAt", "updatedAt")
+       VALUES ($1,$2,'BANK',$3,$4,0,0,$5,$6,now(),now())`,
+      [
+        id,
+        kind,
+        kind === "DAILY" ? "2026-10-27" : "2026-09-01",
+        kind === "DAILY" ? "2026-10-27" : "2026-09-30",
+        status,
+        STAFF,
+      ],
+    );
+  }
+
+  it("grants the app what the store needs, DELETE on the statement only, and the agent nothing", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_app','"Reconciliation"','SELECT')        AS rec_select,
+              has_table_privilege('nusantara_app','"Reconciliation"','INSERT')        AS rec_insert,
+              has_table_privilege('nusantara_app','"Reconciliation"','UPDATE')        AS rec_update,
+              has_table_privilege('nusantara_app','"Reconciliation"','DELETE')        AS rec_delete,
+              has_table_privilege('nusantara_app','"ReconciliationEdit"','INSERT')    AS edit_insert,
+              has_table_privilege('nusantara_app','"ReconciliationEdit"','UPDATE')    AS edit_update,
+              has_table_privilege('nusantara_app','"ReconciliationEdit"','DELETE')    AS edit_delete,
+              has_table_privilege('nusantara_app','"BankStatementLine"','INSERT')     AS line_insert,
+              has_table_privilege('nusantara_app','"BankStatementLine"','DELETE')     AS line_delete,
+              has_table_privilege('nusantara_app','"BankStatementMatch"','INSERT')    AS match_insert,
+              has_table_privilege('nusantara_app','"BankStatementMatch"','DELETE')    AS match_delete,
+              has_table_privilege('nusantara_app','"BankStatementLine"','TRUNCATE')   AS line_truncate,
+              has_table_privilege('nusantara_app','"Reconciliation"','TRUNCATE')      AS rec_truncate,
+              has_table_privilege('nusantara_agent','"Reconciliation"','SELECT')      AS agent_select,
+              has_table_privilege('nusantara_agent','"BankStatementMatch"','DELETE')  AS agent_delete,
+              has_function_privilege('nusantara_app','reconciliation_edit_drop(text[])','EXECUTE')   AS app_fn,
+              has_function_privilege('nusantara_agent','reconciliation_edit_drop(text[])','EXECUTE') AS agent_fn`,
+    );
+    expect(rows[0]).toEqual({
+      rec_select: true,
+      rec_insert: true,
+      rec_update: true,
+      rec_delete: false,
+      edit_insert: true,
+      edit_update: true,
+      edit_delete: false,
+      line_insert: true,
+      line_delete: true,
+      match_insert: true,
+      match_delete: true,
+      line_truncate: false,
+      rec_truncate: false,
+      agent_select: false,
+      agent_delete: false,
+      app_fn: true,
+      agent_fn: false,
+    });
+  });
+
+  it("holds one reconciliation per kind, pot and day, and its period's shape", async () => {
+    await reconciliation("rc_1", "MATCHED");
+    await rejectsWith(() => reconciliation("rc_2", "OPEN"), UNIQUE_VIOLATION);
+    // A day is one day; a month is the bank's.
+    await rejectsWith(
+      () =>
+        app.query(
+          `INSERT INTO "Reconciliation" (id, kind, pot, "periodStart", "periodEnd", "posBalance",
+                                         "actualBalance", status, "staffId", "createdAt", "updatedAt")
+           VALUES ('rc_3','DAILY','CASH','2026-10-26','2026-10-27',0,0,'OPEN',$1,now(),now())`,
+          [STAFF],
+        ),
+      CHECK_VIOLATION,
+    );
+    await rejectsWith(
+      () =>
+        app.query(
+          `INSERT INTO "Reconciliation" (id, kind, pot, "periodStart", "periodEnd", "posBalance",
+                                         "actualBalance", status, "staffId", "createdAt", "updatedAt")
+           VALUES ('rc_4','MONTHLY','CASH','2026-09-01','2026-09-30',0,0,'OPEN',$1,now(),now())`,
+          [STAFF],
+        ),
+      CHECK_VIOLATION,
+    );
+  });
+
+  it("names exactly one money row, on an edit and on a match", async () => {
+    await fixtures();
+    await reconciliation("rc_m", "OPEN", "MONTHLY");
+    await rejectsWith(
+      () =>
+        app.query(
+          `INSERT INTO "ReconciliationEdit" (id, "reconciliationId", "paymentId", "expenseId", action, before, after, "staffId", at)
+           VALUES ('re_two','rc_m',$1,$2,'EDITED',1,2,$3,now())`,
+          [PAY, EXP, STAFF],
+        ),
+      CHECK_VIOLATION,
+    );
+    await rejectsWith(
+      () =>
+        app.query(
+          `INSERT INTO "ReconciliationEdit" (id, "reconciliationId", action, after, "staffId", at)
+           VALUES ('re_none','rc_m','EDITED',2,$1,now())`,
+          [STAFF],
+        ),
+      CHECK_VIOLATION,
+    );
+    await app.query(
+      `INSERT INTO "BankStatementLine" (id, "reconciliationId", "lineNo", date, description, amount, status)
+       VALUES ('bl_1','rc_m',1,'2026-09-01','TRSF E-BANKING CR',12000000,'MATCHED')`,
+    );
+    await rejectsWith(
+      () =>
+        app.query(
+          `INSERT INTO "BankStatementMatch" (id, "lineId", "paymentId", "expenseId", reason)
+           VALUES ('bm_two','bl_1',$1,$2,'EXACT')`,
+          [PAY, EXP],
+        ),
+      CHECK_VIOLATION,
+    );
+    await app.query(
+      `INSERT INTO "BankStatementMatch" (id, "lineId", "paymentId", reason)
+       VALUES ('bm_1','bl_1',$1,'EXACT')`,
+      [PAY],
+    );
+    // Re-upload: the app may delete the statement's lines and matches.
+    await app.query(`DELETE FROM "BankStatementMatch" WHERE "lineId" = 'bl_1'`);
+    await app.query(`DELETE FROM "BankStatementLine" WHERE id = 'bl_1'`);
+  });
+
+  it("drops an edit only through the function, and only on an OPEN reconciliation", async () => {
+    await fixtures();
+    await reconciliation("rc_closed", "ADJUSTED");
+    await app.query(
+      `INSERT INTO "ReconciliationEdit" (id, "reconciliationId", "expenseId", action, after, "staffId", at)
+       VALUES ('re_added','rc_closed',$1,'ADDED',60000,$2,now())`,
+      [EXP, STAFF],
+    );
+    await rejectsWith(
+      () => app.query(`DELETE FROM "ReconciliationEdit" WHERE id = 're_added'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    await rejectsWith(
+      () => app.query(`SELECT reconciliation_edit_drop(ARRAY['re_added'])`),
+      CHECK_VIOLATION,
+    );
+    // ADDED has no before.
+    await rejectsWith(
+      () =>
+        app.query(
+          `INSERT INTO "ReconciliationEdit" (id, "reconciliationId", "expenseId", action, before, after, "staffId", at)
+           VALUES ('re_bad','rc_closed',$1,'ADDED',1,60000,$2,now())`,
+          [EXP, STAFF],
+        ),
+      CHECK_VIOLATION,
+    );
+    // Reopened, the edit goes — and with it the foreign key that held the expense.
+    await app.query(
+      `UPDATE "Reconciliation" SET status = 'OPEN' WHERE id = 'rc_closed'`,
+    );
+    const { rows } = await app.query<{ n: number }>(
+      `SELECT reconciliation_edit_drop(ARRAY['re_added']) AS n`,
+    );
+    expect(rows[0]!.n).toBe(1);
+    await app.query(`DELETE FROM "Expense" WHERE id = $1`, [EXP]);
+  });
+});

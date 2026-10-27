@@ -57,6 +57,8 @@ UNION ALL SELECT 'discounts', count(*) FROM "Discount"
 UNION ALL SELECT 'payouts', count(*) FROM "Settlement"
 UNION ALL SELECT 'expenses', count(*) FROM "Expense"
 UNION ALL SELECT 'incomes', count(*) FROM "ManualIncome"
+UNION ALL SELECT 'reconciliations', count(*) FROM "Reconciliation"
+UNION ALL SELECT 'statement-lines', count(*) FROM "BankStatementLine"
 UNION ALL SELECT 'customers-with-old-debt', count(*) FROM "Customer" WHERE "openingBalance" IS NOT NULL
 UNION ALL SELECT 'kept:variants', count(*) FROM "Sku"
 UNION ALL SELECT 'kept:suppliers', count(*) FROM "Supplier"
@@ -119,6 +121,10 @@ TRUNCATE TABLE
   "Discount", "DiscountSku",
   "Settlement", "SettlementFee", "SettlementLog",
   "Expense", "ManualIncome",
+  -- Reconciliation (2026-10-27) points at Payment, Expense, ManualIncome and
+  -- SupplierDeposit, all emptied here.
+  "Reconciliation", "ReconciliationEdit", "BankStatementLine",
+  "BankStatementMatch",
   "Reservation", "ReservationItem", "ReservationProposal",
   "ReservationProposalItem",
   "Shift", "PettyCashEntry",

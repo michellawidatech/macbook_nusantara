@@ -29,6 +29,7 @@ import {
   optionalIso,
   refuseRemoval,
 } from "../context.js";
+import { releaseReconciliationRefs } from "./reconciliation.js";
 
 const byId = (keys?: readonly string[]) =>
   keys === undefined ? {} : { id: { in: [...keys] } };
@@ -1011,6 +1012,16 @@ async function removeAdjustment(
       );
     }
   }
+  // A reconciliation that names the row (2026-10-27): refused while it is
+  // not OPEN; otherwise its edit and its match go first, or their foreign
+  // keys would stop the delete.
+  await releaseReconciliationRefs(
+    ctx,
+    collection === "expenses" ? "expenseId" : "incomeId",
+    [id],
+    collection,
+    id,
+  );
   if (collection === "expenses") await tx.expense.delete({ where: { id } });
   else await tx.manualIncome.delete({ where: { id } });
   ctx.touch(collection, id);

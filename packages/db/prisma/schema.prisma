@@ -1018,8 +1018,12 @@ model Payment {
   poFee       PurchaseOrderFee? @relation(fields: [poFeeId], references: [id], onDelete: Restrict)
   unitReturn  UnitReturn?       @relation(fields: [unitReturnId], references: [id], onDelete: Restrict)
 
-  logs        PaymentLog[]
-  settlements Settlement[]
+  logs                PaymentLog[]
+  settlements         Settlement[]
+  /// What a reconciliation corrected or matched against this payment
+  /// (2026-10-27).
+  reconciliationEdits ReconciliationEdit[]
+  statementMatches    BankStatementMatch[]
 
   // Declared, not just created in SQL: an index that exists in the database
   // but not here is one Prisma emits a DROP for on the next migration.
@@ -1204,6 +1208,8 @@ model Staff {
   evaluationsWritten       AgentEvaluation[]     @relation("AgentEvaluationCreatedBy")
   evaluationsReviewed      AgentEvaluation[]     @relation("AgentEvaluationReviewedBy")
   chatMediaUploaded        ChatMedia[]           @relation("ChatMediaUploadedBy")
+  reconciliations          Reconciliation[]
+  reconciliationEdits      ReconciliationEdit[]
 }
 
 model StaffSession {
@@ -2775,6 +2781,11 @@ model Expense {
   staff          Staff           @relation(fields: [staffId], references: [id], onDelete: Restrict)
   order          Order?          @relation(fields: [orderId], references: [id], onDelete: Restrict)
   serviceFee     ServiceFee?     @relation(fields: [serviceFeeId], references: [id], onDelete: Restrict)
+
+  /// A reconciliation that corrected, added or matched it (2026-10-27). While
+  /// one that is not OPEN names the row, deleting it is refused.
+  reconciliationEdits ReconciliationEdit[]
+  statementMatches    BankStatementMatch[]
 }
 
 /// Money in that no sale accounts for (owner ask 2026-09-01).
@@ -2800,6 +2811,10 @@ model ManualIncome {
   staff      Staff         @relation(fields: [staffId], references: [id], onDelete: Restrict)
   order      Order?        @relation(fields: [orderId], references: [id], onDelete: Restrict)
   unitReturn UnitReturn?   @relation(fields: [unitReturnId], references: [id], onDelete: Restrict)
+
+  /// See `Expense.reconciliationEdits`.
+  reconciliationEdits ReconciliationEdit[]
+  statementMatches    BankStatementMatch[]
 
   @@index([unitReturnId])
 }
@@ -2933,6 +2948,9 @@ model SupplierDeposit {
 
   allocations DepositAllocation[]
   payments    Payment[]
+
+  reconciliationEdits ReconciliationEdit[]
+  statementMatches    BankStatementMatch[]
 }
 
 /// Part of a deposit put against an invoice.
@@ -3154,4 +3172,165 @@ enum StockMoveType {
   /// `UnitReturn`: the SP code is `refCode`, the invoice they came in on is
   /// `purchaseOrderId`, and that invoice is what names the supplier.
   RETUR_SUPPLIER
+}
+
+// ---------------------------------------------------------------------------
+// Reconciliation (owner ask 2026-10-27, answers "1B 2B 3B 4A";
+// docs/superpowers/specs/2026-10-27-reconciliation-design.md)
+// ---------------------------------------------------------------------------
+
+enum ReconKind {
+  /// One pot on one day: the bank balance or the counted drawer.
+  DAILY
+  /// The bank against its e-statement, one month, line by line.
+  MONTHLY
+}
+
+/// Which of `lib/accounts.ts`'s two pots.
+enum ReconPot {
+  BANK
+  CASH
+}
+
+enum ReconStatus {
+  /// Saved with a difference left (a note says why), or reopened.
+  OPEN
+  /// The POS balance equalled what was counted.
+  MATCHED
+  /// It did after corrections made in the reconciliation.
+  ADJUSTED
+  /// A month whose every statement line is matched or ignored.
+  RECONCILED
+}
+
+enum StatementLineStatus {
+  UNMATCHED
+  MATCHED
+  SUGGESTED
+  IGNORED
+}
+
+enum ReconEditAction {
+  /// An amount corrected on the real record.
+  EDITED
+  /// A transaction added from the reconciliation.
+  ADDED
+}
+
+/// A count of the bank or the drawer on one day, or the bank against its
+/// e-statement for one month (owner ask 2026-10-27). `posBalance` is the
+/// cash-basis pot balance Income & Expense computes, stored as it was when the
+/// reconciliation was saved — the page reads "changed since reconciled" by
+/// comparing it with today's figure, so nothing else is stored for that.
+model Reconciliation {
+  id               String      @id @default(cuid())
+  kind             ReconKind
+  pot              ReconPot
+  /// YYYY-MM-DD (Asia/Jakarta): the day, or the month's first day.
+  periodStart      String
+  /// YYYY-MM-DD: the same day, or the month's last day.
+  periodEnd        String
+  posBalance       BigInt
+  actualBalance    BigInt
+  /// MONTHLY: SALDO AWAL and SALDO AKHIR, whole rupiah as printed.
+  statementOpening BigInt?
+  statementClosing BigInt?
+  /// The uploaded file's NAME — the statement itself is not kept.
+  statementFile    String?
+  status           ReconStatus
+  note             String?
+  /// Who saved it last.
+  staffId          String
+  createdAt        DateTime
+  updatedAt        DateTime
+
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  edits ReconciliationEdit[]
+  lines BankStatementLine[]
+
+  @@unique([kind, pot, periodStart])
+  @@index([staffId])
+}
+
+/// One correction a reconciliation wrote to a real record, or one transaction
+/// it added — before → after, who, when. Exactly one money row (CHECK). Written
+/// once; removed only through `reconciliation_edit_drop`, on an OPEN
+/// reconciliation, when the adjustment it names is deleted.
+model ReconciliationEdit {
+  id               String          @id @default(cuid())
+  reconciliationId String
+  paymentId        String?
+  expenseId        String?
+  incomeId         String?
+  depositId        String?
+  action           ReconEditAction
+  before           BigInt?
+  after            BigInt
+  staffId          String
+  at               DateTime
+
+  reconciliation Reconciliation   @relation(fields: [reconciliationId], references: [id], onDelete: Restrict)
+  payment        Payment?         @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  expense        Expense?         @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+  income         ManualIncome?    @relation(fields: [incomeId], references: [id], onDelete: Restrict)
+  deposit        SupplierDeposit? @relation(fields: [depositId], references: [id], onDelete: Restrict)
+  staff          Staff            @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  @@index([reconciliationId])
+  @@index([paymentId])
+  @@index([expenseId])
+  @@index([incomeId])
+  @@index([depositId])
+  @@index([staffId])
+}
+
+/// One movement off the bank's e-statement, for a MONTHLY reconciliation.
+/// `amount` is signed (a debit is negative) and whole rupiah — the sen are
+/// checked when the file is read and are not carried. Re-uploading a month
+/// DELETES its lines and their matches (the eighth sanctioned hard delete; do
+/// not generalise it): the corrections already written stay.
+model BankStatementLine {
+  id               String              @id @default(cuid())
+  reconciliationId String
+  lineNo           Int
+  /// YYYY-MM-DD.
+  date             String
+  description      String
+  amount           BigInt
+  balance          BigInt?
+  status           StatementLineStatus
+  note             String?
+
+  reconciliation Reconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Restrict)
+
+  matches BankStatementMatch[]
+
+  @@unique([reconciliationId, lineNo])
+}
+
+/// A statement line paired with one POS movement. Several rows per line is a
+/// payout covering several sales (SPLIT); several lines naming one movement
+/// is a deposit made in several slips. `reason`: EXACT, DATE_SHIFT, TYPO,
+/// DEDUCTION, SPLIT, MERGE, ADDED, MANUAL.
+model BankStatementMatch {
+  id        String  @id @default(cuid())
+  lineId    String
+  paymentId String?
+  expenseId String?
+  incomeId  String?
+  depositId String?
+  reason    String
+
+  line    BankStatementLine @relation(fields: [lineId], references: [id], onDelete: Restrict)
+  payment Payment?          @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  expense Expense?          @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+  income  ManualIncome?     @relation(fields: [incomeId], references: [id], onDelete: Restrict)
+  deposit SupplierDeposit?  @relation(fields: [depositId], references: [id], onDelete: Restrict)
+
+  @@index([lineId])
+  @@index([paymentId])
+  @@index([expenseId])
+  @@index([incomeId])
+  @@index([depositId])
 }

@@ -312,6 +312,10 @@ const LOCKABLE = new Set([
   "StockMove",
   "Expense",
   "ManualIncome",
+  // Reconciliation (2026-10-27): rewritten as it is reopened, and the lines'
+  // status and pairings.
+  "Reconciliation",
+  "BankStatementLine",
 ]);
 
 /**

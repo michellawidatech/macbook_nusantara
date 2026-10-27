@@ -44,6 +44,7 @@ import {
   refuseEdit,
   refuseRemoval,
 } from "../context.js";
+import { releaseReconciliationRefs } from "./reconciliation.js";
 
 const byId = (keys?: readonly string[]) =>
   keys === undefined ? {} : { id: { in: [...keys] } };
@@ -2277,6 +2278,13 @@ function removeServiceFeesLater(
         }
       }
       if (paid.length > 0) {
+        await releaseReconciliationRefs(
+          ctx,
+          "expenseId",
+          paid.map((e) => e.id),
+          "services",
+          visitId,
+        );
         await tx.expense.deleteMany({
           where: { id: { in: paid.map((e) => e.id) } },
         });

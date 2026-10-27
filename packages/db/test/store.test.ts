@@ -3596,3 +3596,356 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
     expect(await db.settlementLog.count()).toBe(1);
   }, 180_000);
 });
+
+describe("reconciliation, as nusantara_app (2026-10-27)", () => {
+  const asApp = (): string => {
+    const u = new globalThis.URL(URL);
+    u.username = "nusantara_app";
+    u.password = "";
+    return u.toString();
+  };
+  const AT = "2026-10-27T05:00:00.000Z";
+  const expense = (id: string, amount: number): Row => ({
+    id,
+    kind: "OPERATIONAL",
+    amount,
+    date: "2026-10-27",
+    method: "TRANSFER",
+    note: "ZZ recon test",
+  });
+
+  it("writes a day, a month and its lines, and keeps what the bank printed fixed", async () => {
+    await loadDemo();
+    const snap = decodeStore(
+      (await snapshotStore(db, { staffId: ACTOR })).db,
+    ) as unknown as Record<string, Row[]>;
+    const sale = snap["orders"]!.find((o) =>
+      ((o["payments"] as Row[] | undefined) ?? []).some(
+        (p) => p["state"] === "SETTLED",
+      ),
+    )!;
+    const pay = (sale["payments"] as Row[]).find(
+      (p) => p["state"] === "SETTLED",
+    )!;
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    const commit = (before: Partial<StoreShape>, after: Partial<StoreShape>) =>
+      commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(before as StoreShape, after as StoreShape),
+        ),
+      });
+    const read = async (): Promise<Record<string, Row[]>> =>
+      decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+    try {
+      // A day: one correction of a sale payment, one transaction added — the
+      // expense in the same commit.
+      const day: Row = {
+        id: "rc-day",
+        kind: "DAILY",
+        pot: "BANK",
+        periodStart: "2026-10-27",
+        periodEnd: "2026-10-27",
+        posBalance: 1_000_000,
+        actualBalance: 1_000_000,
+        status: "ADJUSTED",
+        note: "ZZ",
+        staff: "Store Test",
+        createdAt: AT,
+        updatedAt: AT,
+        edits: [
+          {
+            id: "re-1",
+            paymentId: pay["id"],
+            action: "EDITED",
+            before: pay["amount"],
+            after: (pay["amount"] as number) - 1,
+            staff: "Store Test",
+            at: AT,
+          },
+          {
+            id: "re-2",
+            expenseId: "exp-recon-1",
+            action: "ADDED",
+            after: 60_200,
+            staff: "Store Test",
+            at: AT,
+          },
+        ],
+      };
+      await commit(
+        { reconciliations: [], expenses: [] },
+        { reconciliations: [day], expenses: [expense("exp-recon-1", 60_200)] },
+      );
+      let back = (await read())["reconciliations"]!.find(
+        (r) => r["id"] === "rc-day",
+      )!;
+      expect(back).toMatchObject({
+        kind: "DAILY",
+        pot: "BANK",
+        status: "ADJUSTED",
+        posBalance: 1_000_000,
+        staff: "Store Test",
+      });
+      expect(
+        (back["edits"] as Row[]).map((e) => [e["id"], e["action"]]),
+      ).toEqual([
+        ["re-1", "EDITED"],
+        ["re-2", "ADDED"],
+      ]);
+
+      // Reopened with a note: the status and note move; what it IS does not.
+      const reopened = { ...back, status: "OPEN", note: "Recount" };
+      await commit(
+        { reconciliations: [back] },
+        { reconciliations: [reopened] },
+      );
+      back = (await read())["reconciliations"]!.find(
+        (r) => r["id"] === "rc-day",
+      )!;
+      expect(back).toMatchObject({ status: "OPEN", note: "Recount" });
+      await expect(
+        commit(
+          { reconciliations: [back] },
+          {
+            reconciliations: [
+              { ...back, periodStart: "2026-10-26", periodEnd: "2026-10-26" },
+            ],
+          },
+        ),
+      ).rejects.toThrow(/tidak bisa diubah/);
+      await expect(
+        commit(
+          { reconciliations: [] },
+          { reconciliations: [{ ...day, id: "rc-day-2", edits: [] }] },
+        ),
+      ).rejects.toThrow(/sudah direkonsiliasi/);
+      await expect(
+        commit(
+          { reconciliations: [back] },
+          {
+            reconciliations: [
+              {
+                ...back,
+                edits: (back["edits"] as Row[]).map((e) =>
+                  e["id"] === "re-1" ? { ...e, after: 1 } : e,
+                ),
+              },
+            ],
+          },
+        ),
+      ).rejects.toThrow(/tidak bisa diubah setelah tersimpan/);
+
+      // A month, two lines: one matched to the sale payment, one to an
+      // expense created in the same commit.
+      const month: Row = {
+        ...day,
+        id: "rc-sep",
+        kind: "MONTHLY",
+        periodStart: "2026-09-01",
+        periodEnd: "2026-09-30",
+        statementOpening: 150_000_000,
+        statementClosing: 167_637_655,
+        statementFile: "bca-sep.pdf",
+        status: "OPEN",
+        edits: [],
+      };
+      const line = (id: string, lineNo: number, matches: Row[]): Row => ({
+        id,
+        reconciliationId: "rc-sep",
+        lineNo,
+        date: "2026-09-01",
+        description: `ZZ LINE ${lineNo}`,
+        amount: lineNo === 1 ? 18_450_000 : -812_345,
+        ...(lineNo === 1 ? { balance: 168_450_000 } : {}),
+        status: matches.length > 0 ? "MATCHED" : "UNMATCHED",
+        matches,
+      });
+      const l1 = line("bl-1", 1, [
+        { id: "bm-1", paymentId: pay["id"], reason: "EXACT" },
+      ]);
+      const l2 = line("bl-2", 2, [
+        { id: "bm-2", expenseId: "exp-recon-2", reason: "MANUAL" },
+      ]);
+      await commit(
+        { reconciliations: [], statementLines: [], expenses: [] },
+        {
+          reconciliations: [month],
+          statementLines: [l1, l2],
+          expenses: [expense("exp-recon-2", 812_345)],
+        },
+      );
+      let lines = (await read())["statementLines"]!.filter(
+        (l) => l["reconciliationId"] === "rc-sep",
+      );
+      expect(lines.map((l) => [l["lineNo"], l["amount"], l["status"]])).toEqual(
+        [
+          [1, 18_450_000, "MATCHED"],
+          [2, -812_345, "MATCHED"],
+        ],
+      );
+      expect(lines[0]!["balance"]).toBe(168_450_000);
+      expect(lines[1]!["balance"]).toBeUndefined();
+
+      // The shop's half of a line moves; the bank's does not.
+      const b1 = lines[0]!;
+      const b2 = lines[1]!;
+      await commit(
+        { statementLines: [b1, b2] },
+        {
+          statementLines: [
+            { ...b1, status: "UNMATCHED", matches: [] },
+            {
+              ...b2,
+              matches: [
+                ...(b2["matches"] as Row[]),
+                { id: "bm-3", expenseId: "exp-recon-1", reason: "SPLIT" },
+              ],
+            },
+          ],
+        },
+      );
+      lines = (await read())["statementLines"]!.filter(
+        (l) => l["reconciliationId"] === "rc-sep",
+      );
+      expect(lines[0]).toMatchObject({ status: "UNMATCHED", matches: [] });
+      expect((lines[1]!["matches"] as Row[]).map((m) => m["id"])).toEqual([
+        "bm-2",
+        "bm-3",
+      ]);
+      await expect(
+        commit(
+          { statementLines: [lines[0]!] },
+          { statementLines: [{ ...lines[0]!, amount: 21_700_001 }] },
+        ),
+      ).rejects.toThrow(/milik bank/);
+
+      // Re-upload in ONE commit: every old line out, the new ones in,
+      // numbered from 1 again.
+      const fresh = [
+        { ...line("bl-n1", 1, []), description: "ZZ NEW 1" },
+        { ...line("bl-n2", 2, []), description: "ZZ NEW 2" },
+      ];
+      await commit({ statementLines: lines }, { statementLines: fresh });
+      lines = (await read())["statementLines"]!.filter(
+        (l) => l["reconciliationId"] === "rc-sep",
+      );
+      expect(lines.map((l) => l["id"])).toEqual(["bl-n1", "bl-n2"]);
+      expect(await db.bankStatementMatch.count()).toBe(0);
+
+      // A RECONCILED month keeps its lines until it is reopened.
+      const sep = (await read())["reconciliations"]!.find(
+        (r) => r["id"] === "rc-sep",
+      )!;
+      await commit(
+        { reconciliations: [sep] },
+        { reconciliations: [{ ...sep, status: "RECONCILED" }] },
+      );
+      await expect(
+        commit({ statementLines: lines }, { statementLines: [] }),
+      ).rejects.toThrow(/buka kembali dulu/);
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
+  it("refuses to delete an adjustment a closed reconciliation names, and takes its edit and match once it is reopened", async () => {
+    await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    const commit = (before: Partial<StoreShape>, after: Partial<StoreShape>) =>
+      commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(before as StoreShape, after as StoreShape),
+        ),
+      });
+    const read = async (): Promise<Record<string, Row[]>> =>
+      decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+    try {
+      const day: Row = {
+        id: "rc-del",
+        kind: "DAILY",
+        pot: "BANK",
+        periodStart: "2026-10-27",
+        periodEnd: "2026-10-27",
+        posBalance: 0,
+        actualBalance: 0,
+        status: "ADJUSTED",
+        staff: "Store Test",
+        createdAt: AT,
+        updatedAt: AT,
+        edits: [
+          {
+            id: "re-del",
+            expenseId: "exp-del",
+            action: "ADDED",
+            after: 50_000,
+            staff: "Store Test",
+            at: AT,
+          },
+        ],
+      };
+      const month: Row = {
+        ...day,
+        id: "rc-del-m",
+        kind: "MONTHLY",
+        periodStart: "2026-10-01",
+        periodEnd: "2026-10-31",
+        status: "OPEN",
+        edits: [],
+      };
+      await commit(
+        { reconciliations: [], statementLines: [], expenses: [] },
+        {
+          expenses: [expense("exp-del", 50_000)],
+          reconciliations: [day, month],
+          statementLines: [
+            {
+              id: "bl-del",
+              reconciliationId: "rc-del-m",
+              lineNo: 1,
+              date: "2026-10-27",
+              description: "ZZ BIAYA",
+              amount: -50_000,
+              status: "MATCHED",
+              matches: [
+                { id: "bm-del", expenseId: "exp-del", reason: "ADDED" },
+              ],
+            },
+          ],
+        },
+      );
+      let snap = await read();
+      const exp = snap["expenses"]!.find((e) => e["id"] === "exp-del")!;
+      await expect(
+        commit({ expenses: [exp] }, { expenses: [] }),
+      ).rejects.toThrow(
+        "Rekonsiliasi Bank 2026-10-27 mencatat baris ini — buka kembali rekonsiliasinya dulu.",
+      );
+
+      const rec = snap["reconciliations"]!.find((r) => r["id"] === "rc-del")!;
+      await commit(
+        { reconciliations: [rec] },
+        { reconciliations: [{ ...rec, status: "OPEN" }] },
+      );
+      const removal = await commit({ expenses: [exp] }, { expenses: [] });
+      expect(removal.removed.expenses).toEqual(["exp-del"]);
+      expect(
+        await db.expense.findUnique({ where: { id: "exp-del" } }),
+      ).toBeNull();
+      snap = await read();
+      expect(
+        snap["reconciliations"]!.find((r) => r["id"] === "rc-del")!["edits"],
+      ).toEqual([]);
+      expect(
+        snap["statementLines"]!.find((l) => l["id"] === "bl-del"),
+      ).toMatchObject({ status: "UNMATCHED", matches: [] });
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+});

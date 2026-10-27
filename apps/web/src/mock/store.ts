@@ -118,6 +118,8 @@ function emptyDb(): MockDb {
     paymentLog: [],
     settlements: [],
     settlementLog: [],
+    reconciliations: [],
+    statementLines: [],
     services: [],
     deposits: [],
     chats: [],

@@ -85,6 +85,11 @@ export const COLLECTIONS = {
   incomes: spec("id"),
   paymentLog: spec("id"),
   settlementLog: spec("id"),
+  // Reconciliation (2026-10-27): after every money row it names — payments
+  // (on orders, invoices, customers), deposits, expenses and incomes — and
+  // the statement's lines after the month they belong to.
+  reconciliations: spec("id"),
+  statementLines: spec("id"),
   chats: spec("phone", false, false),
   corrections: spec("id", false, false),
   personas: spec("id", false, false),
@@ -138,4 +143,6 @@ export const FINANCE_COLLECTIONS: ReadonlySet<CollectionName> =
     "settlements",
     "settlementLog",
     "paymentLog",
+    "reconciliations",
+    "statementLines",
   ]);
