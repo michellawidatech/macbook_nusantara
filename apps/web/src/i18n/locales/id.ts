@@ -3827,21 +3827,7 @@ export const id: Record<string, string> = {
   "inbound.outsideSection": "Datang diluar invoice",
   "inbound.exceptionLine": "{{count}} × {{product}}",
 
-  // ── Transaction History: closing the book (owner ask 2026-09-24) ─────────
-  "transactions.closeBook": "Tutup buku",
-  "transactions.closeBookAsk":
-    "Kunci semua transaksi sampai dengan tanggal ini.",
-  "transactions.closeBookDate": "Tutup buku sampai",
-  "transactions.closeBookTitle": "Tutup buku sampai {{date}}?",
-  "transactions.closeBookBody":
-    "{{count}} transaksi pada atau sebelum tanggal itu menjadi hanya-baca: tidak bisa diubah, dan tidak menerima pembayaran lagi. Buku bisa dibuka lagi kapan saja.",
-  "transactions.closeBookOk": "Tutup buku",
-  "transactions.bookClosedTitle": "Buku sudah ditutup",
-  "transactions.bookClosedBody":
-    "Semua transaksi sampai {{date}} hanya bisa dibaca dan tidak menerima pembayaran lagi. Buka kembali buku untuk memperbaikinya.",
-  "transactions.reopenBook": "Buka kembali buku",
-  "transactions.editLocked":
-    "Buku sudah ditutup untuk tanggal ini. Buka kembali untuk mengubah transaksi ini.",
+  // ── Closing the book (2026-09-24; retired 2026-10-27, these two are inert) ─
   "payEdit.bookClosed":
     "Buku sudah ditutup untuk tanggal ini. Buka kembali di Riwayat Transaksi untuk mengubah uang transaksi ini.",
   "editSale.bookClosed":
@@ -4339,16 +4325,6 @@ export const id: Record<string, string> = {
   "snTracking.rowDeleted": "Baris riwayat dihapus.",
   "snTracking.deleteRow": "Hapus baris",
   "snTracking.rowMenu": "Lainnya untuk baris {{seq}}",
-  "transactions.closeMonthTitle": "Tutup buku sampai akhir {{month}}?",
-  "transactions.closeMonthBody":
-    "{{count}} transaksi sampai akhir bulan itu menjadi hanya-baca: tidak bisa diubah, tidak bisa dihapus, dan tidak menerima pembayaran lagi. Buku bisa dibuka kembali kapan saja.",
-  "transactions.bookClosedMonthBody":
-    "Setiap transaksi sampai akhir {{month}} hanya-baca, tidak bisa dihapus, dan tidak menerima pembayaran lagi. Buka kembali buku untuk mengoreksinya.",
-  "transactions.closeMonthAsk":
-    "Kunci setiap transaksi sampai akhir bulan ini.",
-  "transactions.closeMonthDate": "Tutup buku sampai akhir",
-  "transactions.deleteClosed":
-    "Buku sudah ditutup untuk bulan ini. Buka kembali untuk menghapus penjualan ini.",
   "transactions.deleteReturned":
     "Ada yang diretur dari penjualan ini. Hapus returnya dulu.",
   "transactions.deleteTradeIn":
@@ -4398,10 +4374,6 @@ export const id: Record<string, string> = {
   "editSale.chargeAmountFor": "Jumlah biaya",
   "editSale.removeCharge": "Hapus biaya",
   "editSale.addCharge": "Tambah biaya",
-  "transactions.closeMonthSettledBody":
-    "{{count}} transaksi lunas sampai akhir bulan itu menjadi hanya-baca: tidak bisa diubah dan tidak bisa dihapus. {{open}} yang masih menunggu uang tetap terbuka, jadi pembayarannya masih bisa diterima. Buku bisa dibuka kembali kapan saja.",
-  "transactions.bookClosedSettledBody":
-    "Setiap transaksi lunas sampai akhir {{month}} hanya-baca dan tidak bisa dihapus; yang masih menunggu uang tetap terbuka. Buka kembali buku untuk mengoreksi transaksi yang lunas.",
   "adjust.moveRecorded": "Uang dipindah antara kas dan bank.",
   "adjust.move": "Kas ↔ bank",
   "cashflow.hideBalance": "Sembunyikan {{what}}",

@@ -261,9 +261,10 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     openingBank: z.optional(money),
     openingBalanceAt: instant.optional(),
     /**
-     * The book is closed up to here (owner ask 2026-09-24): every sale on or
-     * before it is read-only and takes no further money. `AppSetting`
-     * `finance.booksClosedAt`; absent means the book is open.
+     * Where the book was closed up to (`AppSetting` `finance.booksClosedAt`).
+     * ⚠️ IGNORED since 2026-10-27, when the book close was retired in favour
+     * of reconciliation; still in the contract so a shop that closed a month
+     * still loads. Nothing writes it and nothing locks by it.
      */
     booksClosedAt: instant.optional(),
     shopName: text.optional(),

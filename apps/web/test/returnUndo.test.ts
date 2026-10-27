@@ -119,22 +119,11 @@ describe("canUndoReturn", () => {
     ).toEqual({ ok: false, why: "MARKETPLACE" });
   });
 
-  it("refuses a settled sale inside a closed period", () => {
+  it("is not refused by a book closed before the close was retired (2026-10-27)", () => {
     expect(
       canUndoReturn({
         recs: [rec()],
         sales: [sale({ settled: true })],
-        units: shelf(),
-        settings: { booksClosedAt: "2026-09-30T16:59:59.999Z" },
-      }),
-    ).toEqual({ ok: false, why: "BOOKS_CLOSED" });
-  });
-
-  it("leaves a sale still waiting on money open after the close (2026-10-22)", () => {
-    expect(
-      canUndoReturn({
-        recs: [rec()],
-        sales: [sale({ settled: false, payments: [{ state: "DUE" }] })],
         units: shelf(),
         settings: { booksClosedAt: "2026-09-30T16:59:59.999Z" },
       }),

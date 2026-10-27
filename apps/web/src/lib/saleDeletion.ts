@@ -19,7 +19,6 @@
  * marketplace payout or an Income & Expense line is in a collection some
  * staff are not sent (`financeScope`), so this side can only see what it can.
  *
- * - `BOOKS_CLOSED` — the month is closed (`lib/bookClose.ts`).
  * - `RETURNED` — something came back: an adjustment, a refund, a returned
  *   counted piece, or a return document naming one of its units. Take the
  *   return back first (Returns → Delete).
@@ -29,32 +28,28 @@
  * - `LINKED_MONEY` — an Income & Expense line names it. (A marketplace payout
  *   no longer refuses it, 2026-10-22 — everything is recoverable.)
  *
+ * A closed month refused it too, until the book close was retired on
+ * 2026-10-27 (`lib/bookClose.ts`): reconciliation flags an edited period
+ * instead.
+ *
  * Pure apart from `deleteSale`, which is a mutation body for `mutate`.
  * `test/saleDeletion.test.ts` is the spec.
  */
 import type { MockDb, Order } from "../mock/seed.js";
 import { newestRowOwnedByDocument } from "@nusantara/domain";
-import { isSaleLocked } from "./bookClose.js";
 import { reprojectHolds } from "./reservations.js";
 
 export type SaleDeletionBlock =
-  "BOOKS_CLOSED" | "RETURNED" | "TRADE_IN" | "UNIT_MOVED" | "LINKED_MONEY";
+  "RETURNED" | "TRADE_IN" | "UNIT_MOVED" | "LINKED_MONEY";
 
 /** Why `order` cannot be deleted, or undefined when it can. */
 export function saleDeletionBlock(
   db: Pick<
     MockDb,
-    | "events"
-    | "returns"
-    | "settlements"
-    | "expenses"
-    | "incomes"
-    | "settings"
-    | "stockMoves"
+    "events" | "returns" | "settlements" | "expenses" | "incomes" | "stockMoves"
   >,
   order: Order,
 ): SaleDeletionBlock | undefined {
-  if (isSaleLocked(order, db.settings)) return "BOOKS_CLOSED";
   const serials = new Set(order.serials);
   if (
     (order.adjustments?.length ?? 0) > 0 ||

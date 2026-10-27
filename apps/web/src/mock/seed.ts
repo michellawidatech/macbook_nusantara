@@ -1504,13 +1504,10 @@ export interface AppSettings {
   /** When the opening balances were entered, so the card can say so. */
   openingBalanceAt?: string;
   /**
-   * The book is closed up to here — every sale dated on or before this
-   * instant is read-only and takes no further money (owner ask 2026-09-24:
-   * *"add a close book button to close and lock all the transaction"*).
-   *
-   * `lib/bookClose.ts` is the rule. Absent or blank means the book is open,
-   * which is what it is until somebody closes it. Mirrors an `AppSetting`
-   * row (`finance.booksClosedAt`), so it needs no column of its own.
+   * Where the book was closed up to (owner ask 2026-09-24). ⚠️ IGNORED since
+   * 2026-10-27: the book close is retired (`lib/bookClose.ts` has why), and
+   * this is kept only so a shop that closed a month still loads. Mirrors an
+   * `AppSetting` row (`finance.booksClosedAt`).
    */
   booksClosedAt?: string;
   /**

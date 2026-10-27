@@ -36,6 +36,8 @@ const SETTING_KEYS = {
   openingCash: "finance.openingCash",
   openingBank: "finance.openingBank",
   openingBalanceAt: "finance.openingBalanceAt",
+  // Ignored since 2026-10-27 (the book close is retired); still carried so an
+  // existing row loads. `booksClosedUntil` in ../context.ts has why.
   booksClosedAt: "finance.booksClosedAt",
   shopName: "shop.name",
   shopTagline: "shop.tagline",

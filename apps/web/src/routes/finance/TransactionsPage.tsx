@@ -41,13 +41,10 @@
  */
 import { useMemo, useState } from "react";
 import {
-  Alert,
   App,
   Button,
   Card,
-  DatePicker,
   Flex,
-  Modal,
   Statistic,
   Tag,
   Tooltip,
@@ -59,21 +56,13 @@ import {
   DownloadOutlined,
   EditOutlined,
   FileTextOutlined,
-  LockOutlined,
-  UnlockOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
-import dayjs, { type Dayjs } from "dayjs";
+import dayjs from "dayjs";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { InvoiceModal } from "../../components/Invoice";
-import {
-  fmtRp,
-  fmtDate,
-  fmtDateTime,
-  fmtMonth,
-  fmtNone,
-} from "../../lib/format.js";
+import { fmtRp, fmtDate, fmtDateTime, fmtNone } from "../../lib/format.js";
 import { customerLabel } from "../../lib/customers.js";
 import {
   appendEvent,
@@ -108,11 +97,6 @@ import {
   type SaleReturnStatus,
 } from "../../lib/saleStatus.js";
 import { labelOf, ORDER_SOURCE } from "../../i18n/enumLabels.js";
-import {
-  booksClosedAt,
-  endOfMonth,
-  isSaleLocked,
-} from "../../lib/bookClose.js";
 import { deleteSale, saleDeletionBlock } from "../../lib/saleDeletion.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
@@ -197,8 +181,6 @@ export function TransactionsPage() {
   const [reprint, setReprint] = useState<Order | null>(null);
   /** Null when the editor is shut; the sale it is about when open. */
   const [editing, setEditing] = useState<Order | null>(null);
-  /** The Close book dialog's date, or null while it is shut. */
-  const [closingTo, setClosingTo] = useState<Dayjs | null>(null);
   /**
    * The Shopee seller-balance upload (2026-09-21), here since Pending Payment
    * was folded into this page (owner ask 2026-10-22: *"it should just be
@@ -207,64 +189,9 @@ export function TransactionsPage() {
    */
   const [importing, setImporting] = useState(false);
 
-  /**
-   * The book (owner ask 2026-09-24: *"add a close book button to close and
-   * lock all the transaction"*). `lib/bookClose.ts` is the rule; this is the
-   * button and what it disables.
-   */
-  const closedTo = booksClosedAt(db.settings);
-  const locked = (o: Order) => isSaleLocked(o, db.settings);
-
-  /*
-   * Monthly since 2026-10-22 (owner ask: *"add a close transaction monthly so
-   * before that all the transaction can be deleted"*): a month is picked and
-   * the book closes at the last instant of it. What is still open can be
-   * corrected and deleted; what is closed can be neither.
-   */
-  const closeBook = () => {
-    const day = closingTo;
-    if (day === null) return;
-    const at = endOfMonth(day.toDate());
-    // Only what is finished locks (owner, 2026-10-22): settled, nothing
-    // pending, nothing owed. The rest of the month stays open.
-    const inMonth = sales.filter((r) => r.at <= at);
-    const count = inMonth.filter(
-      (r) =>
-        r.balance.fullySettled &&
-        r.balance.pending === 0 &&
-        r.balance.customerOwes === 0,
-    ).length;
-    const open = inMonth.length - count;
-    setClosingTo(null);
-    modal.confirm({
-      title: t(
-        "transactions.closeMonthTitle",
-        "Close the book to the end of {{month}}?",
-        {
-          month: fmtMonth(at),
-        },
-      ),
-      content: t(
-        "transactions.closeMonthSettledBody",
-        "{{count}} settled transaction(s) up to the end of that month become read-only: no edits and no deleting. {{open}} still waiting on money stay open, so their payments can still be received. You can reopen the book at any time.",
-        { count, open },
-      ),
-      okText: t("transactions.closeBookOk", "Close the book"),
-      onOk: () =>
-        mutate((d) => {
-          d.settings.booksClosedAt = at;
-        }),
-    });
-  };
-
   /** Why a sale cannot be deleted, in words; undefined when it can. */
   const deleteBlockText = (order: Order) => {
     switch (saleDeletionBlock(db, order)) {
-      case "BOOKS_CLOSED":
-        return t(
-          "transactions.deleteClosed",
-          "The book is closed over this month. Reopen it to delete this sale.",
-        );
       case "RETURNED":
         return t(
           "transactions.deleteReturned",
@@ -326,11 +253,6 @@ export function TransactionsPage() {
       },
     });
 
-  const reopenBook = () =>
-    mutate((d) => {
-      delete d.settings.booksClosedAt;
-    });
-
   /*
    * The words for each status, in a switch rather than a lookup table so
    * `test/i18n.test.ts` can review them: it finds copy by reading the source
@@ -369,10 +291,7 @@ export function TransactionsPage() {
     mutate((d) => {
       for (const order of orders) {
         const o = d.orders.find((x) => x.id === order.id);
-        // A closed period does not take money (owner answer 2026-09-24). The
-        // button is already hidden for such a row; this is the writer saying
-        // the same thing, because `orders` is whatever was ticked.
-        if (!o || locked(o)) continue;
+        if (!o) continue;
         const before = paymentsOf(o);
         if (!before.some((p) => p.state === "PENDING")) continue;
         const next = before.map((p) =>
@@ -557,32 +476,6 @@ export function TransactionsPage() {
       title={t("transactions.transactionHistory", "Transaction History")}
     >
       <Flex vertical gap={16}>
-        {closedTo !== undefined && (
-          /*
-           * The banner IS the way back, one click, for the reason the closed
-           * invoice's banner gives: a lock nobody can lift is a lock people
-           * work around.
-           */
-          <Alert
-            type="info"
-            showIcon
-            title={t("transactions.bookClosedTitle", "The book is closed")}
-            description={t(
-              "transactions.bookClosedSettledBody",
-              "Every settled transaction up to the end of {{month}} is read-only and cannot be deleted; one still waiting on money stays open. Reopen the book to correct a settled one.",
-              { month: fmtMonth(closedTo) },
-            )}
-            action={
-              <Button
-                size="small"
-                icon={<UnlockOutlined />}
-                onClick={reopenBook}
-              >
-                {t("transactions.reopenBook", "Reopen the book")}
-              </Button>
-            }
-          />
-        )}
         <Flex gap={16} wrap>
           <Card style={{ flex: 1, minWidth: 200 }}>
             <Statistic
@@ -632,12 +525,6 @@ export function TransactionsPage() {
             extra={
               <Flex gap={SPACE.sm} wrap>
                 <Button
-                  icon={<LockOutlined />}
-                  onClick={() => setClosingTo(dayjs().subtract(1, "month"))}
-                >
-                  {t("transactions.closeBook", "Close book")}
-                </Button>
-                <Button
                   icon={<UploadOutlined />}
                   onClick={() => setImporting(true)}
                 >
@@ -681,18 +568,12 @@ export function TransactionsPage() {
                       nothing else — a withdrawal whose fees somebody wants
                       itemised is `Receive` on Pending Payment, which keeps a
                       settlement document. */}
-                  {selected.some(
-                    (r) => r.balance.pending > 0 && !locked(r.order),
-                  ) && (
+                  {selected.some((r) => r.balance.pending > 0) && (
                     <Button
                       size="small"
                       icon={<CheckCircleOutlined />}
                       onClick={() => {
-                        settlePending(
-                          selected
-                            .filter((r) => !locked(r.order))
-                            .map((r) => r.order),
-                        );
+                        settlePending(selected.map((r) => r.order));
                         clear();
                       }}
                     >
@@ -908,21 +789,11 @@ export function TransactionsPage() {
                       />
                     </Tooltip>
                     <Tooltip
-                      title={
-                        locked(r.order)
-                          ? t(
-                              "transactions.editLocked",
-                              "The book is closed over this date. Reopen it to change this sale.",
-                            )
-                          : t("transactions.editSale", "Edit transaction")
-                      }
+                      title={t("transactions.editSale", "Edit transaction")}
                     >
-                      {/* A span, so a disabled button still answers a hover:
-                          antd's Tooltip needs an element that fires events. */}
                       <span>
                         <Button
                           size="small"
-                          disabled={locked(r.order)}
                           aria-label={t(
                             "transactions.editSaleAria",
                             "Edit {{code}}",
@@ -967,41 +838,6 @@ export function TransactionsPage() {
         order={editing}
         onClose={() => setEditing(null)}
       />
-
-      {/*
-       * Close book. A month, because the shop closes a month at a time and not
-       * "now": September is closed in October, and October's transactions must
-       * stay live.
-       */}
-      <Modal
-        open={closingTo !== null}
-        title={t("transactions.closeBook", "Close book")}
-        okText={t("transactions.closeBookOk", "Close the book")}
-        onCancel={() => setClosingTo(null)}
-        onOk={closeBook}
-        okButtonProps={{ disabled: closingTo === null }}
-        destroyOnHidden
-      >
-        <Flex vertical gap={SPACE.sm}>
-          <Typography.Text>
-            {t(
-              "transactions.closeMonthAsk",
-              "Lock every transaction up to the end of this month.",
-            )}
-          </Typography.Text>
-          <DatePicker
-            picker="month"
-            value={closingTo}
-            onChange={setClosingTo}
-            allowClear={false}
-            style={{ width: "100%" }}
-            aria-label={t(
-              "transactions.closeMonthDate",
-              "Close the book to the end of",
-            )}
-          />
-        </Flex>
-      </Modal>
 
       <ShopeeSettlementImport
         open={importing}

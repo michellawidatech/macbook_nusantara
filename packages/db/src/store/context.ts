@@ -605,3 +605,23 @@ export function defined<T extends Record<string, unknown>>(value: T): T {
   }
   return out as T;
 }
+
+/**
+ * The instant the book is closed until — always null since 2026-10-27.
+ *
+ * > *"Remove the close book button in the transaction history, it will be the
+ * > reconcile basically."* (owner, 2026-10-27)
+ *
+ * The book close is retired, button AND lock: without the button's Reopen, a
+ * month already closed in the shop would stay locked for ever.
+ * Reconciliation flags a reconciled period that is later edited instead of
+ * refusing the edit. This is the ONE place the server stops honouring
+ * `AppSetting` `finance.booksClosedAt` — the row is still projected (the
+ * settings singleton) so a shop that closed a month still loads, and every
+ * check that asked this (a sale's deletion, an adjustment's or a service
+ * charge's removal) now passes. The browser's twin is `booksClosedAt` in
+ * apps/web/src/lib/bookClose.ts.
+ */
+export function booksClosedUntil(): Date | null {
+  return null;
+}
