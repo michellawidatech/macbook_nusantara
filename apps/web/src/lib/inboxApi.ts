@@ -7,11 +7,13 @@
  * screen for anybody.
  */
 import { api } from "./api.js";
+import type { BotWait } from "./botWait.js";
 
 /**
  * Why the bot gave a conversation to a person (2026-09-18) — see
  * apps/api/src/routes/inbox.ts `readHandoff`.
  */
+
 export interface Handoff {
   /** packages/agent policy.ts `HANDOFF_TOPICS`, e.g. "stock", "price". */
   topic: string;
@@ -189,6 +191,8 @@ export interface InboxConversation {
   watches?: StockWatch[];
   /** Every text and photo sent to this number, oldest first. */
   sent?: SentItem[];
+  /** Why a waiting message is not the bot's to answer (2026-10-27). */
+  botWait?: BotWait;
 }
 
 export interface LeadState {

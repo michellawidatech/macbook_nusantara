@@ -57,6 +57,9 @@ import {
   isResetCommand,
   phoneForms,
   summarySince,
+  BOT_STALE_MS,
+  STAFF_ACTIVE_MS,
+  staffTypedReply,
 } from "@nusantara/agent";
 import { realName } from "@nusantara/domain";
 import { ApiError, forbidden, notFound } from "../errors.js";
@@ -527,6 +530,7 @@ export function inboxRouter(
             autoReply: true,
             autoReplyAt: true,
             autoReplyBy: { select: { name: true } },
+            leaseUntil: true,
           },
         }),
         // `WaMessage.customerId` is never written by any code in this build,
@@ -608,6 +612,23 @@ export function inboxRouter(
           ])
         : [0, null, 0];
 
+      // Why a customer message is still waiting, when the bot is not the
+      // one who will answer it (2026-10-27): the newest reply a colleague
+      // TYPED here within the hold the worker keeps (`staffTypedReply`, the
+      // worker's own reading), and whether a turn holds the thread now.
+      const nowMs = Date.now();
+      const staffReply = messages
+        .filter(
+          (m) =>
+            m.answeredAt !== null &&
+            nowMs - m.answeredAt.getTime() < STAFF_ACTIVE_MS &&
+            staffTypedReply(m),
+        )
+        .reduce<(typeof messages)[number] | null>(
+          (acc, m) => (!acc || m.answeredAt! > acc.answeredAt! ? m : acc),
+          null,
+        );
+
       const lastInboundAt = messages.reduce<Date | null>(
         (acc, m) => (m.direction === "IN" && (!acc || m.ts > acc) ? m.ts : acc),
         null,
@@ -662,6 +683,29 @@ export function inboxRouter(
           enabled: memory?.autoReply ?? true,
           by: memory?.autoReplyBy?.name ?? null,
           at: memory?.autoReplyAt?.toISOString() ?? null,
+        },
+        /**
+         * What /chat needs to say why a customer message is still waiting
+         * (2026-10-27). `staffActive`: a colleague typed a reply here and the
+         * bot stays out until `until`. `writing`: a turn holds the thread
+         * right now. A BARU message older than `staleAfterMs` with neither
+         * is one the bot should have answered — the worker's watchdog sends
+         * the holding line at that point, so the page says the bot is late.
+         */
+        botWait: {
+          staffActive: staffReply
+            ? {
+                by: staffReply.answeredBy?.name ?? null,
+                at: staffReply.answeredAt!.toISOString(),
+                until: new Date(
+                  staffReply.answeredAt!.getTime() + STAFF_ACTIVE_MS,
+                ).toISOString(),
+              }
+            : null,
+          writing: Boolean(
+            memory?.leaseUntil && memory.leaseUntil.getTime() > nowMs,
+          ),
+          staleAfterMs: BOT_STALE_MS,
         },
         /**
          * Who the shop knows this number to be. Null for a number that has

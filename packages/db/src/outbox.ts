@@ -90,7 +90,12 @@ export async function claimOutbox(
   const rows = await client.$queryRaw<OutboxRow[]>(Prisma.sql`
     UPDATE "Outbox"
        SET status = 'SENDING',
-           attempts = attempts + 1
+           attempts = attempts + 1,
+           -- While SENDING, "nextAttemptAt" is WHEN it was claimed
+           -- (2026-10-27): what lets recoverStuckOutbox tell a send in
+           -- flight from one a crashed worker left behind. A failure writes
+           -- the next due time over it, a success leaves it be.
+           "nextAttemptAt" = (${now}::timestamptz AT TIME ZONE 'UTC')
      WHERE id = (
              SELECT id
                FROM "Outbox"
@@ -174,4 +179,45 @@ export async function markOutboxFailed(
   });
 
   return status;
+}
+
+/**
+ * How long a row may sit claimed (SENDING) before it is presumed abandoned.
+ * A send is two Graph calls with a timeout each; five minutes is never one
+ * still in flight.
+ */
+export const OUTBOX_STUCK_MS = 5 * 60_000;
+
+/**
+ * Put back what a worker claimed and never finished (2026-10-27 audit).
+ *
+ * `claimOutbox` only takes PENDING rows, so a row claimed by a worker that
+ * died, was restarted mid-send or was killed by a deploy stayed SENDING for
+ * ever — a reply nobody would ever send and nothing would ever report. Such a
+ * row goes back to PENDING (its attempt already counted), or to FAILED when
+ * that attempt was its last, with the reason in `lastError` either way.
+ *
+ * A send that did reach WhatsApp before the crash is sent again: a duplicate
+ * line is the lesser harm next to a customer who was never answered.
+ */
+export async function recoverStuckOutbox(
+  client: PrismaClient | Tx,
+  now: Date = new Date(),
+  stuckMs: number = OUTBOX_STUCK_MS,
+  maxAttempts = 6,
+): Promise<Array<{ id: string; status: OutboxStatus; attempts: number }>> {
+  const before = new Date(now.getTime() - stuckMs);
+  return client.$queryRaw<
+    Array<{ id: string; status: OutboxStatus; attempts: number }>
+  >(Prisma.sql`
+    UPDATE "Outbox"
+       SET status = CASE WHEN attempts >= ${maxAttempts}
+                         THEN 'FAILED'::"OutboxStatus"
+                         ELSE 'PENDING'::"OutboxStatus" END,
+           "lastError" = 'claimed by a worker that never finished — recovered',
+           "nextAttemptAt" = (${now}::timestamptz AT TIME ZONE 'UTC')
+     WHERE status = 'SENDING'
+       AND "nextAttemptAt" <= (${before}::timestamptz AT TIME ZONE 'UTC')
+    RETURNING id, status::text AS status, attempts
+  `);
 }

@@ -185,7 +185,12 @@ describe("a new message", () => {
   };
 
   it("is not outlined while the bot is about to answer it", async () => {
-    conversation = { ...base, handoff: null, messages: [answered, fresh] };
+    // Seconds old: the bot answers it before anybody could.
+    conversation = {
+      ...base,
+      handoff: null,
+      messages: [answered, { ...fresh, at: new Date().toISOString() }],
+    };
     await draw();
     expect(bubbleOf(fresh.text!)).not.toHaveAttribute("data-waiting");
   });
@@ -201,5 +206,106 @@ describe("a new message", () => {
     const waiting = bubbleOf(fresh.text!);
     expect(waiting).toHaveAttribute("data-waiting", "true");
     expect(waiting).toHaveTextContent("Needs your reply");
+  });
+});
+
+/** Why a message waits, said under it (2026-10-27: the bot never goes silent). */
+describe("a message the bot is not answering", () => {
+  const MIN = 60_000;
+  const minutesAgo = (n: number) =>
+    new Date(Date.now() - n * MIN).toISOString();
+  const waitingFor = (n: number): InboxMessage => ({
+    ...handedOver,
+    status: "BARU",
+    handoff: null,
+    reply: null,
+    at: minutesAgo(n),
+  });
+  const quiet = {
+    staffActive: null,
+    writing: false,
+    staleAfterMs: 3 * MIN,
+  };
+
+  it("says the bot is late once it has waited past three minutes", async () => {
+    conversation = {
+      ...base,
+      handoff: null,
+      messages: [answered, waitingFor(7)],
+      botWait: quiet,
+    };
+    await draw();
+    const waiting = bubbleOf(handedOver.text!);
+    expect(waiting).toHaveAttribute("data-waiting", "true");
+    expect(waiting).toHaveTextContent(
+      "Bot hasn't replied for 7 min — reply yourself or check the worker",
+    );
+  });
+
+  it("is not late while a turn is writing it", async () => {
+    conversation = {
+      ...base,
+      handoff: null,
+      messages: [answered, waitingFor(7)],
+      botWait: { ...quiet, writing: true },
+    };
+    await draw();
+    expect(bubbleOf(handedOver.text!)).not.toHaveAttribute("data-waiting");
+  });
+
+  it("names the colleague whose reply paused the bot", async () => {
+    conversation = {
+      ...base,
+      handoff: null,
+      messages: [answered, waitingFor(1)],
+      botWait: {
+        ...quiet,
+        staffActive: {
+          by: "Dina",
+          at: minutesAgo(3),
+          until: new Date(Date.now() + 12 * MIN).toISOString(),
+        },
+      },
+    };
+    await draw();
+    const waiting = bubbleOf(handedOver.text!);
+    expect(waiting).toHaveAttribute("data-waiting", "true");
+    expect(waiting).toHaveTextContent("Bot paused — Dina replied 3 min ago");
+  });
+
+  it("says the bot is off for the chat", async () => {
+    conversation = {
+      ...base,
+      handoff: null,
+      autoReply: { enabled: false, by: "Ersen", at: null },
+      messages: [answered, waitingFor(1)],
+      botWait: quiet,
+    };
+    await draw();
+    expect(bubbleOf(handedOver.text!)).toHaveTextContent(
+      "Needs your reply · AI switched off for this chat",
+    );
+  });
+
+  it("says when the bot itself could not reply", async () => {
+    const gaveUp: InboxMessage = {
+      ...handedOver,
+      handoff: {
+        topic: "other",
+        summary: null,
+        forcedBy: "deadline",
+        at: minutesAgo(1),
+      },
+    };
+    conversation = {
+      ...base,
+      handoff: gaveUp.handoff,
+      messages: [answered, gaveUp],
+      botWait: quiet,
+    };
+    await draw();
+    expect(bubbleOf(handedOver.text!)).toHaveTextContent(
+      "Bot couldn't reply — handed to you",
+    );
   });
 });

@@ -96,8 +96,10 @@ import {
   type ReplyEvaluation,
   type SentItem,
 } from "../../lib/inboxApi.js";
+import { waitReason, type WaitReason } from "../../lib/botWait.js";
 import { SentMenu, SentPhoto } from "./SentItems.js";
 import { handoffTopicLabel } from "../../lib/handoffTopics.js";
+import type { TFunction } from "../../i18n/translate.js";
 import { CustomerProfilePanel } from "./CustomerProfilePanel.js";
 import { ReplyRating } from "./ReplyRating.js";
 import { ThreadList, threadName } from "./ThreadList.js";
@@ -132,8 +134,57 @@ interface Bubble {
   waiting: boolean;
   /** Why the bot handed it over, for the caption under the outline. */
   waitingTopic: string | null;
+  /**
+   * Why it is waiting on a person (2026-10-27): handed over, the bot could
+   * not reply, the bot is off, a colleague is mid-chat, or the bot is late.
+   */
+  waitingWhy: WaitReason | null;
   /** The outbox row this bubble is, when it was sent through one. */
   sent: SentItem | null;
+}
+
+/**
+ * The caption under a waiting customer message: why it waits (2026-10-27).
+ * Literal `t()` calls, so test/i18n.test.ts can find every one.
+ */
+function waitCaption(
+  t: TFunction,
+  b: Pick<Bubble, "waitingWhy" | "waitingTopic">,
+): string {
+  const why = b.waitingWhy;
+  switch (why?.kind) {
+    case "bot_failed":
+      return t("chat.wait.botFailed", "Bot couldn't reply — handed to you");
+    case "bot_off":
+      return t(
+        "chat.wait.botOff",
+        "Needs your reply · AI switched off for this chat",
+      );
+    case "staff_active":
+      return why.by
+        ? t(
+            "chat.wait.staffActive",
+            "Bot paused — {{name}} replied {{minutes}} min ago",
+            { name: why.by, minutes: why.minutes },
+          )
+        : t(
+            "chat.wait.staffActiveNoName",
+            "Bot paused — staff replied {{minutes}} min ago",
+            { minutes: why.minutes },
+          );
+    case "bot_late":
+      return t(
+        "chat.wait.botLate",
+        "Bot hasn't replied for {{minutes}} min — reply yourself or check the worker",
+        { minutes: why.minutes },
+      );
+    default:
+      return b.waitingTopic
+        ? t("chat.needsReplyTopic", "Needs your reply · {{topic}}", {
+            topic: handoffTopicLabel(t, b.waitingTopic),
+          })
+        : t("chat.needsReply", "Needs your reply");
+  }
 }
 
 /** A column: a card whose body scrolls and nothing else does. */
@@ -277,16 +328,17 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
   const bubbles = useMemo<Bubble[]>(() => {
     if (!conversation) return [];
     const out: Bubble[] = [];
-    const botOff = !conversation.autoReply.enabled;
+    const nowMs = Date.now();
     const sent = conversation.sent ?? [];
     const sentById = new Map(sent.map((x) => [x.id, x]));
     const claimed = new Set<string>();
     for (const m of conversation.messages) {
       // Status, not `m.handoff`: the server keeps the hand-over note on a row
       // staff have since answered (DIJAWAB_STAF), which is no longer waiting.
-      const waiting =
-        m.direction === "IN" &&
-        (m.status === "PERLU_STAF" || (m.status === "BARU" && botOff));
+      // A BARU row with the bot on is outlined only once it is the bot's no
+      // longer — a colleague is mid-chat, or the bot is late (lib/botWait).
+      const why = waitReason(m, conversation, nowMs);
+      const waiting = why !== null;
       out.push({
         key: `${m.id}:in`,
         messageId: m.id,
@@ -299,10 +351,8 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
         by: null,
         evaluation: null,
         waiting,
-        waitingTopic:
-          waiting && m.status === "PERLU_STAF"
-            ? (m.handoff?.topic ?? null)
-            : null,
+        waitingTopic: why?.kind === "handed_over" ? why.topic : null,
+        waitingWhy: why,
         sent: null,
       });
       if (m.reply) {
@@ -319,6 +369,7 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
           evaluation: m.reply.evaluation ?? null,
           waiting: false,
           waitingTopic: null,
+          waitingWhy: null,
           sent: own ?? null,
         });
       }
@@ -343,6 +394,7 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
         evaluation: null,
         waiting: false,
         waitingTopic: null,
+        waitingWhy: null,
         sent: x,
       }))
       .filter((b) => b.at >= first);
@@ -890,15 +942,7 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
                         display: "block",
                       }}
                     >
-                      {b.waitingTopic
-                        ? t(
-                            "chat.needsReplyTopic",
-                            "Needs your reply · {{topic}}",
-                            {
-                              topic: handoffTopicLabel(t, b.waitingTopic),
-                            },
-                          )
-                        : t("chat.needsReply", "Needs your reply")}
+                      {waitCaption(t, b)}
                     </Typography.Text>
                   )}
                   <Flex justify="space-between" align="center" gap={12}>

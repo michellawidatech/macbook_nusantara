@@ -27,6 +27,7 @@ import {
   claimOutbox,
   markOutboxFailed,
   markOutboxSent,
+  recoverStuckOutbox,
   type PrismaClient,
 } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
@@ -89,6 +90,11 @@ export interface SendDeps {
   readonly maxSendsPerTick: number;
   readonly fetchImpl?: typeof fetch;
   readonly now?: () => Date;
+  /**
+   * How long a claimed row may stay SENDING before it is put back
+   * (`recoverStuckOutbox`). Defaults to `OUTBOX_STUCK_MS`.
+   */
+  readonly stuckMs?: number;
 }
 
 export interface SendPassResult {
@@ -111,6 +117,34 @@ export async function sendPass(deps: SendDeps): Promise<SendPassResult> {
 
   let sent = 0;
   let failed = 0;
+
+  // First, what a worker claimed and never finished — killed mid-send by a
+  // deploy, or crashed. Nothing else ever looks at a SENDING row again
+  // (2026-10-27 audit), so without this a reply stays unsent for ever.
+  try {
+    const recovered = await recoverStuckOutbox(db, now(), deps.stuckMs);
+    for (const r of recovered) {
+      logger[r.status === "FAILED" ? "error" : "warn"](
+        {
+          evt: "worker.send.recovered",
+          ctx: { outboxId: r.id, attempts: r.attempts, status: r.status },
+        },
+        r.status === "FAILED"
+          ? "an outbox row was left claimed and had no attempts left — failed"
+          : "an outbox row was left claimed by a worker that never finished — requeued",
+      );
+    }
+  } catch (err) {
+    logger.error(
+      {
+        evt: "worker.send.recover_failed",
+        ...(err instanceof Error
+          ? { err: { name: err.name, message: err.message } }
+          : {}),
+      },
+      "could not look for outbox rows left claimed",
+    );
+  }
 
   for (let i = 0; i < deps.maxSendsPerTick; i += 1) {
     const row = await claimOutbox(db, now());

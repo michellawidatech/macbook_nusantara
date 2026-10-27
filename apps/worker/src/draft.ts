@@ -141,6 +141,15 @@ import {
   type ToolContext,
   type VoyageOptions,
   type WaitProfile,
+  CALL_RETRIES,
+  CALL_TIMEOUT_MS,
+  STAFF_ACTIVE_MS,
+  TURN_DEADLINE_MS,
+  guardClient,
+  holdingMessage,
+  modelErrorReason,
+  staffTypedReply,
+  type CallGuard,
 } from "@nusantara/agent";
 import {
   Prisma,
@@ -215,6 +224,24 @@ export interface DraftDeps {
    * this process's own; a test passes a fresh one.
    */
   readonly superseded?: SupersedeLedger;
+  /**
+   * The bot never goes silent (2026-10-27): one model call's limit and its
+   * retries, and the whole turn's deadline — past which the customer gets the
+   * holding line and a colleague a task, whatever the turn was doing.
+   */
+  readonly callTimeoutMs?: number;
+  readonly callRetries?: number;
+  readonly turnDeadlineMs?: number;
+  /** A test's backoff (sleep, jitter); production uses the guard's own. */
+  readonly callGuard?: Pick<
+    CallGuard,
+    "sleep" | "random" | "baseDelayMs" | "maxDelayMs"
+  >;
+  /**
+   * Turns that threw, per thread. Absent is this process's own; a test
+   * passes a fresh one. The watchdog (stale.ts) reads it for its reason.
+   */
+  readonly failures?: FailureLedger;
   /** Injectable so a test can drive the debounce without waiting. */
   readonly now?: () => Date;
   /**
@@ -238,12 +265,11 @@ export interface DraftPassResult {
 }
 
 /**
- * How long a staff member's own reply keeps the bot out of a thread
- * (2026-10-27). Long enough for a colleague mid-conversation to read the
- * customer's answer and type theirs; short enough that a customer whose
- * colleague walked away is answered within a quarter of an hour.
+ * How long a staff member's own reply keeps the bot out of a thread — in
+ * packages/agent (liveness.ts) since 2026-10-27, so /chat's caption reads the
+ * same number the worker holds to.
  */
-export const STAFF_ACTIVE_MS = 15 * 60_000;
+export { STAFF_ACTIVE_MS };
 
 /** Answered turns shown verbatim. Older ones live in the rolling summary. */
 const HISTORY_TURNS = 8;
@@ -330,6 +356,35 @@ function noteDrop(ledger: SupersedeLedger, from: string, now: Date): number {
   return count;
 }
 
+/**
+ * Turns that THREW for a thread, in a row (2026-10-27). A throw used to leave
+ * the rows BARU for the next tick to try again — every two seconds, for ever,
+ * a model call each time, and the customer answered by nobody. After
+ * `MAX_DRAFT_FAILURES` the thread gets the holding line and a colleague a
+ * task instead (`holdTheLine`). In-process like the supersede count; the
+ * watchdog (stale.ts) catches what a restart forgets.
+ */
+export type FailureLedger = Map<string, { count: number; at: number }>;
+
+const processFailures: FailureLedger = new Map();
+
+/** This process's failure ledger — the watchdog's default. */
+export function processFailureLedger(): FailureLedger {
+  return processFailures;
+}
+
+/** Throws in a row before the thread is handed over with the holding line. */
+export const MAX_DRAFT_FAILURES = 3;
+
+/** Failures this thread has had in a row, within the TTL. */
+export function failuresSoFar(
+  ledger: FailureLedger,
+  from: string,
+  now: Date,
+): number {
+  return dropsSoFar(ledger, from, now);
+}
+
 interface Candidate {
   readonly from: string;
   readonly pending: number;
@@ -403,6 +458,7 @@ async function quietCandidates(
   staffActiveSince: Date,
   limit: number,
 ): Promise<Candidate[]> {
+  const paused = [...(await staffActiveThreads(db, staffActiveSince)).keys()];
   return db.$queryRaw<Candidate[]>(Prisma.sql`
     SELECT "from",
            COUNT(*) FILTER (WHERE "status" = 'BARU')::int AS "pending",
@@ -418,17 +474,7 @@ async function quietCandidates(
               WHERE t."from" = "WaMessage"."from"
                 AND t."autoReply" = false
            )
-       AND NOT EXISTS (
-             SELECT 1
-               FROM "WaMessage" s
-              WHERE s."from" = "WaMessage"."from"
-                AND s."direction" = 'IN'
-                AND s."answeredById" IS NOT NULL
-                AND s."answeredByAgent" = false
-                AND s."replyText" IS NOT NULL
-                AND s."answeredAt"
-                      > (${staffActiveSince}::timestamptz AT TIME ZONE 'UTC')
-           )
+       AND NOT ("from" = ANY(${paused}::text[]))
      GROUP BY "from"
     HAVING COUNT(*) FILTER (WHERE "status" = 'BARU') > 0
        AND (MAX("ts") FILTER (WHERE "status" = 'BARU')
@@ -438,6 +484,65 @@ async function quietCandidates(
      ORDER BY MAX("ts") FILTER (WHERE "status" = 'BARU') ASC
      LIMIT ${limit}
   `);
+}
+
+/**
+ * Threads a colleague is chatting in right now: a reply a PERSON typed
+ * (`staffTypedReply`) since `since`, and no Clear chat after it. Keyed by
+ * thread, with the newest such reply.
+ *
+ * In JS rather than in the candidate query (2026-10-27 audit): the SQL read
+ * any row with a staff id, a reply and a recent `answeredAt` — and a
+ * hand-over row a colleague closed with Mark handled or Clear chat is exactly
+ * that, the bot's holding line under a staff id stamped a second ago. So
+ * pressing Mark handled silenced the bot for fifteen minutes.
+ */
+export async function staffActiveThreads(
+  db: PrismaClient,
+  since: Date,
+  froms?: readonly string[],
+): Promise<Map<string, { at: Date; byId: string }>> {
+  const rows = await db.waMessage.findMany({
+    where: {
+      direction: "IN",
+      answeredByAgent: false,
+      answeredById: { not: null },
+      replyText: { not: null },
+      answeredAt: { gt: since },
+      ...(froms ? { from: { in: [...froms] } } : {}),
+    },
+    select: {
+      from: true,
+      replyText: true,
+      answeredByAgent: true,
+      answeredById: true,
+      answeredAt: true,
+      entities: true,
+    },
+  });
+  const typed = rows.filter((r) => staffTypedReply(r));
+  if (typed.length === 0) return new Map();
+  const cleared = new Map(
+    (
+      await db.waThreadMemory.findMany({
+        where: {
+          from: { in: [...new Set(typed.map((r) => r.from))] },
+          clearedAt: { not: null },
+        },
+        select: { from: true, clearedAt: true },
+      })
+    ).map((m) => [m.from, m.clearedAt!]),
+  );
+  const out = new Map<string, { at: Date; byId: string }>();
+  for (const r of typed) {
+    const at = r.answeredAt!;
+    // A Clear chat after the reply: the colleague is done here.
+    const c = cleared.get(r.from);
+    if (c && c >= at) continue;
+    const prev = out.get(r.from);
+    if (!prev || prev.at < at) out.set(r.from, { at, byId: r.answeredById! });
+  }
+  return out;
 }
 
 /**
@@ -620,7 +725,39 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   // holds at most one database connection at a time.
   const holder = deps.leaseHolder ?? leaseHolder();
   const ledger = deps.superseded ?? processLedger;
+  const failures = deps.failures ?? processFailures;
   const concurrency = Math.max(1, deps.concurrency ?? 1);
+  const turnDeadlineMs = deps.turnDeadlineMs ?? TURN_DEADLINE_MS;
+
+  /** The holding line and a task, logged — every "the bot gave up" path. */
+  const giveUp = async (
+    from: string,
+    why: "failed" | "deadline",
+    extra: Record<string, unknown>,
+  ): Promise<void> => {
+    try {
+      const outcome = await holdTheLine(db, from, why, {
+        now: now(),
+        maxBatch,
+      });
+      if (outcome !== "nothing") escalated += 1;
+      logger.warn(
+        { evt: "worker.draft.gave_up", ctx: { from, why, outcome, ...extra } },
+        "the bot could not answer — the customer got the holding line and a colleague a task",
+      );
+    } catch (err) {
+      logger.error(
+        {
+          evt: "worker.draft.give_up_failed",
+          ctx: { from, why },
+          ...(err instanceof Error
+            ? { err: { name: err.name, message: err.message } }
+            : {}),
+        },
+        "could not even send the holding line — the watchdog will try again",
+      );
+    }
+  };
 
   const answer = async (candidate: Candidate): Promise<void> => {
     const from = candidate.from;
@@ -649,7 +786,51 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       return;
     }
     try {
-      await answerThread(candidate);
+      // Thrown too often: stop trying, tell the customer someone is on it.
+      const failed = failuresSoFar(failures, from, now());
+      if (failed >= MAX_DRAFT_FAILURES) {
+        failures.delete(from);
+        await giveUp(from, "failed", { failures: failed });
+        return;
+      }
+      // The turn's own deadline, as a backstop to the model's (guardClient):
+      // a tool, a lookup or the database hanging must not hold this thread —
+      // or, before 2026-10-27, the whole tick and every send behind it.
+      const turn = { abandoned: false };
+      const work = answerThread(candidate, turn);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = await Promise.race([
+        // answerThread catches its own errors; one escaping anyway (a throw
+        // inside a catch) must not reject the pool and stop the pass.
+        work.then(
+          () => false,
+          (err: unknown) => {
+            noteDrop(failures, from, now());
+            logger.error(
+              {
+                evt: "worker.draft.failed",
+                ctx: { from },
+                ...(err instanceof Error
+                  ? { err: { name: err.name, message: err.message } }
+                  : {}),
+              },
+              "failed to draft a reply for a thread",
+            );
+            return false;
+          },
+        ),
+        new Promise<true>((resolve) => {
+          timer = setTimeout(() => resolve(true), turnDeadlineMs);
+        }),
+      ]).finally(() => clearTimeout(timer));
+      if (late) {
+        // The turn may still finish: it checks this before committing, and
+        // the compare-and-swap refuses it once the holding line has claimed
+        // the rows.
+        turn.abandoned = true;
+        void work.catch(() => {});
+        await giveUp(from, "deadline", { deadlineMs: turnDeadlineMs });
+      }
     } finally {
       await releaseThread(db, from, holder).catch((err: unknown) =>
         logger.warn(
@@ -666,8 +847,28 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
     }
   };
 
-  const answerThread = async (candidate: Candidate): Promise<void> => {
+  const answerThread = async (
+    candidate: Candidate,
+    turn: { abandoned: boolean },
+  ): Promise<void> => {
     const from = candidate.from;
+    // Every model call of this turn: a per-call limit, bounded retries with
+    // jitter, and nothing started past the turn's deadline — less a margin
+    // for the rules fallback and the commit (2026-10-27).
+    const turnStarted = Date.now();
+    const turnClient = client
+      ? guardClient(client, {
+          timeoutMs: deps.callTimeoutMs ?? CALL_TIMEOUT_MS,
+          retries: deps.callRetries ?? CALL_RETRIES,
+          deadline: turnStarted + Math.max(5_000, turnDeadlineMs - 15_000),
+          ...deps.callGuard,
+          onRetry: (info) =>
+            logger.warn(
+              { evt: "worker.model.retry", ctx: { from, ...info } },
+              "the model call failed — trying again",
+            ),
+        })
+      : null;
     // Outside the try, so the race handler below can see what was booked.
     let outcome: ConverseResult | null = null;
     let anchorId: string | null = null;
@@ -915,28 +1116,15 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       // CHATBOT_MODEL, when the owner moved the bot without a release.
       const agentModel = anthropic.model;
       const v1Calls: CallUsage[] = [];
-      const turnStarted = Date.now();
       let result: ConverseResult | PipelineResult | RulesResult | null = null;
-      // The customer's answer to a visit reminder is read by code first,
-      // whichever bot answers (2026-10-27): yes keeps it, no closes it, a new
-      // time moves it. Anything else falls through to the ordinary turn.
-      if (reminded && !route)
-        result = await visitReplyTurn({
-          db,
-          ctx,
-          text: current,
-          capabilities,
-          ...(dispatch ? { dispatch } : {}),
-          reminded,
-          name: known.name,
-        });
-      if (result) {
-        // Answered above.
-      } else if (settings.pipeline === "rules") {
-        // Rules and templates first; the single agent only for what no rule
-        // answers, and only when there is a credential (rules/run.ts).
-        const watchOffer = await lastWatchOffer(db, from, resetAt);
-        result = await runRules({
+      /**
+       * The rules bot for this turn — with the AI as its fallback, or (when
+       * the AI itself failed) without it: it needs no model, so a timed-out
+       * or rate-limited call still leaves the customer an answer or, where
+       * no rule fits, the holding line and a task (2026-10-27).
+       */
+      const rules = async (withAi: boolean): Promise<RulesResult> =>
+        runRules({
           db,
           ctx,
           text: current,
@@ -945,7 +1133,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           ...(dispatch ? { dispatch } : {}),
           route,
           known,
-          watchOffer,
+          watchOffer: await lastWatchOffer(db, from, resetAt),
           visitBooked,
           // Newest first out of the database: the bot's previous reply.
           lastReply: newestFirst[0]?.reply ?? null,
@@ -954,12 +1142,12 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           waiting,
           leadThreshold: settings.leadThreshold,
           dp,
-          ...(client
+          ...(withAi && turnClient
             ? {
                 ai: async () => {
                   const calls: CallUsage[] = [];
                   const r = await converse({
-                    client,
+                    client: turnClient,
                     ...(agentModel ? { model: agentModel } : {}),
                     db,
                     ctx,
@@ -985,10 +1173,31 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
               }
             : {}),
         });
+      /** Set when the AI failed and the rules answered in its place. */
+      let fellBack = false;
+      // The customer's answer to a visit reminder is read by code first,
+      // whichever bot answers (2026-10-27): yes keeps it, no closes it, a new
+      // time moves it. Anything else falls through to the ordinary turn.
+      if (reminded && !route)
+        result = await visitReplyTurn({
+          db,
+          ctx,
+          text: current,
+          capabilities,
+          ...(dispatch ? { dispatch } : {}),
+          reminded,
+          name: known.name,
+        });
+      if (result) {
+        // Answered above.
+      } else if (settings.pipeline === "rules") {
+        // Rules and templates first; the single agent only for what no rule
+        // answers, and only when there is a credential (rules/run.ts).
+        result = await rules(true);
       } else if (v2) {
         // Chatbot v2: Router → Operations → Sales Advisor (pipeline.ts).
         result = await runPipeline({
-          client: client!,
+          client: turnClient!,
           db,
           ctx,
           prompt,
@@ -1013,7 +1222,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         });
       } else {
         result = await converse({
-          client: client!,
+          client: turnClient!,
           ...(agentModel ? { model: agentModel } : {}),
           db,
           ctx,
@@ -1036,15 +1245,15 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         });
       }
 
-      outcome = result;
-      if (!result) {
-        // Fail soft, never silent (the converse docblock's own rule): the
-        // customer gets a human, and the reason lands in the log where somebody
-        // can find out that the token expired.
+      if (!result && settings.pipeline !== "rules") {
+        // The AI failed — a timeout, a 429 past its retries, an expired
+        // token. Never silent (2026-10-27): the rules answer this turn
+        // without it, and where no rule fits they hand over with the holding
+        // line, so the customer always hears back.
         logger.warn(
           {
-            evt: "worker.draft.no_reply",
-            ctx: { from },
+            evt: "worker.draft.ai_failed",
+            ctx: { from, reason: modelErrorReason(failure), fallback: "rules" },
             ...(failure instanceof Error
               ? {
                   err: {
@@ -1055,10 +1264,45 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                 }
               : {}),
           },
-          "the agent produced no reply — handing the thread to a person",
+          "the model could not answer — the rules answer this turn instead",
         );
-        await escalate(db, batchIds, anchor.id, "no_reply");
+        result = await rules(false).catch((err: unknown) => {
+          failure = err;
+          return null;
+        });
+        fellBack = result !== null;
+      }
+
+      outcome = result;
+      if (turn.abandoned) return;
+      if (!result) {
+        // Not even the rules: the holding line and a task, and the reason in
+        // the log where somebody can find out that the token expired.
+        logger.warn(
+          {
+            evt: "worker.draft.no_reply",
+            ctx: { from, reason: modelErrorReason(failure) },
+            ...(failure instanceof Error
+              ? {
+                  err: {
+                    name: failure.name,
+                    message: failure.message,
+                    status: (failure as { status?: number }).status,
+                  },
+                }
+              : {}),
+          },
+          "the agent produced no reply — the holding line goes out and the thread to a person",
+        );
+        await escalate(
+          db,
+          batchIds,
+          anchor.id,
+          "no_reply",
+          holdingMessage("other", storeOpenAt(now())),
+        );
         escalated += 1;
+        failures.delete(from);
         return;
       }
 
@@ -1094,6 +1338,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
               ? "booking"
               : null;
       let arrivedMeanwhile = 0;
+      // Past the deadline the holding line has gone out instead; the claim
+      // below would fail anyway, this saves the transaction.
+      if (turn.abandoned) return;
       await db.$transaction(async (tx) => {
         // The claim, first, so its row locks are what the race is decided on.
         const { count } = await tx.waMessage.updateMany({
@@ -1203,7 +1450,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         await recordRun(tx, {
           from,
           messageId: anchor.id,
-          pipeline: settings.pipeline,
+          pipeline: fellBack ? "rules" : settings.pipeline,
           result,
           v1Calls,
           leadScore,
@@ -1242,6 +1489,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       }, TXN_TIMEOUTS);
 
       ledger.delete(from);
+      failures.delete(from);
       if (arrivedMeanwhile > 0) {
         logger.info(
           {
@@ -1350,11 +1598,12 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         return;
       }
       // One bad thread must not stop the pass. The rows stay BARU and the next
-      // tick tries again.
+      // tick tries again — `MAX_DRAFT_FAILURES` times, then the holding line.
+      const count = turn.abandoned ? 0 : noteDrop(failures, from, now());
       logger.error(
         {
           evt: "worker.draft.failed",
-          ctx: { from },
+          ctx: { from, failures: count },
           ...(err instanceof Error
             ? { err: { name: err.name, message: err.message } }
             : {}),
@@ -1572,7 +1821,18 @@ async function escalate(
   db: PrismaClient,
   batchIds: string[],
   anchorId: string,
-  why: "window_closed" | "nothing_to_read" | "no_reply",
+  why:
+    | "window_closed"
+    | "nothing_to_read"
+    | "no_reply"
+    | "failed"
+    | "deadline"
+    | "stale",
+  /**
+   * The holding line, when the customer must hear back (2026-10-27: a
+   * failed turn used to hand over in silence). Queued in this transaction.
+   */
+  reply?: string,
 ): Promise<number> {
   // One short action item (owner, 2026-10-27), like every hand-over's.
   const summary =
@@ -1581,11 +1841,30 @@ async function escalate(
       : why === "nothing_to_read"
         ? taskNote("reply", TASK_REASON.noText)
         : taskNote("reply", TASK_REASON.botFailed);
+  const at = new Date();
   return db.$transaction(async (tx) => {
     const { count } = await tx.waMessage.updateMany({
       where: { id: { in: batchIds }, status: "BARU" },
-      data: { status: "PERLU_STAF", intent: "staf:other" },
+      data: {
+        status: "PERLU_STAF",
+        intent: "staf:other",
+        ...(reply ? { answeredByAgent: false, answeredAt: at } : {}),
+      },
     });
+    if (count > 0 && reply) {
+      const anchor = await tx.waMessage.findUnique({
+        where: { id: anchorId },
+        select: { from: true },
+      });
+      await tx.waMessage.update({
+        where: { id: anchorId },
+        data: { replyText: reply },
+      });
+      await enqueueOutbox(tx, {
+        kind: "WA_REPLY",
+        payload: { to: anchor!.from, body: reply, inReplyTo: anchorId },
+      });
+    }
     if (count > 0) {
       const rows = await tx.waMessage.findMany({
         where: { id: { in: batchIds } },
@@ -1612,11 +1891,55 @@ async function escalate(
             topic: "other",
             summary,
             forcedBy: why,
-            at: new Date().toISOString(),
+            at: at.toISOString(),
+            // The line the BOT sent, so /chat labels it Bot even after a
+            // colleague closes the row.
+            ...(reply ? { reply } : {}),
           },
         },
       },
     });
     return count;
   }, TXN_TIMEOUTS);
+}
+
+/**
+ * The holding line and a task for whatever of this thread is still waiting —
+ * what every "the bot could not answer" path ends in (2026-10-27): a turn
+ * that kept throwing, one past its deadline, and a message the watchdog
+ * (stale.ts) found left behind. The customer hears "Bentar ya kak, aku cek
+ * dulu 🙏"; a colleague gets the thread outlined and a task.
+ *
+ * Reads the waiting rows itself, so it needs nothing the turn had built, and
+ * claims them by the same compare-and-swap a reply does: a turn still running
+ * in the background can no longer commit over it. Outside the 24-hour window
+ * nothing can be sent, and the thread is handed over silently, as before.
+ */
+export async function holdTheLine(
+  db: PrismaClient,
+  from: string,
+  why: "failed" | "deadline" | "stale",
+  opts: { now: Date; maxBatch?: number },
+): Promise<"sent" | "window_closed" | "nothing"> {
+  const batch = await db.waMessage.findMany({
+    where: { from, direction: "IN", status: "BARU" },
+    orderBy: [{ ts: "asc" }, { id: "asc" }],
+    take: opts.maxBatch ?? DEFAULT_MAX_BATCH,
+    select: { id: true, ts: true },
+  });
+  if (batch.length === 0) return "nothing";
+  const ids = batch.map((m) => m.id);
+  const anchor = batch[batch.length - 1]!;
+  if (!isWithinWindow(anchor.ts, opts.now)) {
+    await escalate(db, ids, anchor.id, "window_closed");
+    return "window_closed";
+  }
+  const claimed = await escalate(
+    db,
+    ids,
+    anchor.id,
+    why,
+    holdingMessage("other", storeOpenAt(opts.now)),
+  );
+  return claimed > 0 ? "sent" : "nothing";
 }

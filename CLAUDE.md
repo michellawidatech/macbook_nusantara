@@ -3323,6 +3323,18 @@ Decisions that outlived those documents:
   hand-over line is labelled Bot (`botWroteReply`, `entities.handoff.reply`);
   `realName` (domain) refuses/hides "unknown"-type names. Evaluation shows
   *Handed over (last 7 days)* (`GET /api/chat/handovers`). No schema change.
+- **The bot never goes silent — 2026-10-27.** *"Improve the chatbot to not get
+  stuck."* Model calls go through `guardClient` (packages/agent liveness.ts):
+  25 s each, 2 jittered retries on 429/5xx/529/timeout, none past the turn's
+  90 s deadline (`CHATBOT_CALL_TIMEOUT_MS`, `…_RETRIES`, `WORKER_TURN_DEADLINE_MS`).
+  A failed AI turn is answered by the RULES; where none fits, `holdTheLine`
+  sends "Bentar ya kak, aku cek dulu 🙏" + a task — so does a turn past its
+  deadline, one that threw `MAX_DRAFT_FAILURES` (3) times, and any answerable
+  BARU the watchdog (`stale.ts`, `worker.draft.stale`) finds 3 min old. Each
+  pass of a tick fails alone. ⚠️ Only `staffTypedReply` holds the bot: Mark
+  handled on a hand-over row silenced it 15 min. A SENDING outbox row claimed
+  5+ min ago is requeued (`recoverStuckOutbox`; the claim stamps
+  `nextAttemptAt`). /chat captions why (`lib/botWait.ts`); so does the doctor.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
