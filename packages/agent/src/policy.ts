@@ -286,8 +286,9 @@ const RESERVATION = /\b(booking|book|reserve|reservasi|janji\s*datang)\b/i;
 
 /**
  * Asking the shop to put a unit aside — keep, hold, a DP (2026-10-27). The
- * bot never holds stock and never quotes a DP, so this is a closing task for
- * a person, whatever the switches say.
+ * bot never holds stock, so this is a closing task for a person, whatever the
+ * switches say; it states the DP rule from the settings (`dpKeepLine`), and a
+ * person records the DP once the transfer is checked.
  */
 const KEEP =
   /\b(keep|di-?keep|kip|tahan(in|kan)?|ditahan|hold|amankan|diamankan|simpan(in|kan)?|disimpan|titip|dp|down\s*payment|uang\s*muka|tanda\s*jadi)\b/i;
@@ -317,6 +318,20 @@ const OFFER =
 
 /** A budget is a request to pick something, not an offer on a unit. */
 const BUDGET = /\b(budget|bajet|dana(nya)?)\b|\bdapa?t\s+apa\b/i;
+
+/**
+ * A DP the customer says they have PAID — "sudah transfer DP", "ini bukti
+ * DP-nya" (2026-10-27). Staff verify the bank and record it; the bot never
+ * does. Past tense or a proof, so "mau DP, transfer ke mana?" stays a keep.
+ */
+const DP_WORD = /\b(dp|down\s*payment|uang\s*muka|tanda\s*jadi)\b/i;
+const PAID_WORD =
+  /\b(sudah|udah|udh|sdh|barusan|telah)\b[^.?!\n]{0,24}\b(transfer|tf|bayar|kirim|dp)\b|\bbukti\b/i;
+
+/** Did the customer say they paid a DP? */
+export function saysDpPaid(text: string): boolean {
+  return DP_WORD.test(text) && PAID_WORD.test(text);
+}
 
 const ORDER_PAYMENT =
   /\b(sudah|udah|udh|sdh)\s*(transfer|tf|bayar|kirim\s*bukti)|\bbukti\s*(transfer|tf|bayar|pembayaran)\b|\b(no\.?\s*)?resi\b|\btracking\b|\blacak\b|\bpesanan\s*(saya|aku|sy)\b|\binvoice\b/i;
@@ -357,9 +372,11 @@ export function routeMessage(
    * cracked screen or a machine they want valued, and every one of those needs
    * eyes.
    */
+  const t = text.toLowerCase();
+  // A DP proof, as words or as a photo captioned with them (2026-10-27).
+  if (saysDpPaid(t)) return { topic: "order_payment", rule: "dp_proof" };
   if (opts.hasMedia) return { topic: "media", rule: "media" };
 
-  const t = text.toLowerCase();
   const product = PRODUCT.test(t);
   const money = MONEY.test(t);
 
@@ -731,13 +748,44 @@ export function checkReply(input: {
  * A hand-over message is held to the strictest version of the same rule: it
  * cites nothing, so it may carry no figure and promise no stock.
  */
-export function checkHoldingMessage(message: string): ReplyProblem | null {
+export function checkHoldingMessage(
+  message: string,
+  /**
+   * Texts whose figures the line may repeat — the DP rule from the shop's
+   * own settings (2026-10-27), a vouched source like an approved answer.
+   */
+  vouched: readonly string[] = [],
+): ReplyProblem | null {
   return checkReply({
     message,
     sourceCount: 1,
     unknownSources: 0,
-    sourceTexts: [],
+    sourceTexts: vouched,
   });
+}
+
+/** The DP rule as the bot says it — `sales.dpAmount` / `sales.dpDays`. */
+export interface DpTerms {
+  readonly amount: number;
+  readonly days: number;
+}
+
+/** Rp500.000 for seven days — the owner's rule while nobody changed it. */
+export const DEFAULT_DP_TERMS: DpTerms = { amount: 500_000, days: 7 };
+
+/**
+ * What the bot says when asked to keep a unit (owner, 2026-10-27): the DP and
+ * how long it holds, from the settings, and that a person checks the
+ * transfer. *"Untuk amankan unitnya bisa DP Rp 500rb kak, unit kami tahan 7
+ * hari. Setelah transfer, kirim buktinya ya, tim kami cek dulu 🙏"*
+ */
+export function dpKeepLine(terms: DpTerms = DEFAULT_DP_TERMS): string {
+  const n = terms.amount;
+  const amount =
+    n >= 1_000_000
+      ? `Rp ${String(Math.round(n / 100_000) / 10).replace(".", ",")}jt`
+      : `Rp ${Math.round(n / 1_000)}rb`;
+  return `Untuk amankan unitnya bisa DP ${amount} kak, unit kami tahan ${terms.days} hari. Setelah transfer, kirim buktinya ya, tim kami cek dulu 🙏`;
 }
 
 // --- what the customer hears when a person takes over -----------------------
@@ -752,6 +800,8 @@ export function holdingMessage(
   open: boolean,
   /** `routeMessage`'s rule, where the line depends on it (closing). */
   rule?: string,
+  /** The DP rule for a keep (2026-10-27); the owner's default when absent. */
+  dp?: DpTerms,
 ): string {
   const when = open
     ? "Admin kami segera balas di chat ini ya kak 🙏"
@@ -766,7 +816,9 @@ export function holdingMessage(
     case "reservation":
       return `Siap kak 😊 Untuk booking unit kami bantu proses langsung ya. ${when}`;
     case "order_payment":
-      return `Terima kasih kak 🙏 Kami cek dulu ya. ${when}`;
+      return rule === "dp_proof"
+        ? `Terima kasih kak 🙏 Bukti DP-nya kami cek dulu ya, nanti kami kabari kalau unitnya sudah kami tahan. ${when}`
+        : `Terima kasih kak 🙏 Kami cek dulu ya. ${when}`;
     case "trade_in":
     case "sell_to_shop":
       return `Siap kak 😊 Untuk estimasi harganya kami cek dulu unitnya ya. ${when}`;
@@ -778,10 +830,10 @@ export function holdingMessage(
     case "photos":
       return `Siap kak 😊 Foto unitnya kami siapkan dulu ya. ${when}`;
     case "closing":
-      // The owner's own words for a keep (2026-10-27). Never an amount: a DP
-      // is a person's to name.
+      // The owner's own words for a keep (2026-10-27): the DP and its days
+      // come from the shop's settings, and a person checks the transfer.
       return rule === "keep"
-        ? `Untuk amankan unitnya bisa DP kak, nanti tim kami bantu ya 🙏 ${when}`
+        ? dpKeepLine(dp)
         : `Siap kak 😊 Tim kami bantu proses pembeliannya ya. ${when}`;
     default:
       return `Baik kak, kami bantu teruskan ke admin ya 😊 ${when}`;

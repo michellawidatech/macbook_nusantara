@@ -294,6 +294,14 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     shopTagline: text.optional(),
     shopAddress: text.optional(),
     shopContact: text.optional(),
+    /**
+     * The DP rule (owner, 2026-10-27): what a DP is, in whole rupiah, and how
+     * many days it holds a unit — `AppSetting` `sales.dpAmount` /
+     * `sales.dpDays`. Absent reads as Rp500.000 for 7 days (`dpRuleOf` in
+     * packages/domain).
+     */
+    dpAmount: z.optional(money),
+    dpDays: count.min(1).optional(),
   });
 
   const paymentMethod = z.strictObject({
@@ -657,6 +665,12 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     ref: text.optional(),
     /** `Payment.inBalance`: false when the money never reached the shop's cash or bank. */
     inBalance: z.boolean().optional(),
+    /**
+     * The reservation this payment is the DP of (`Payment.reservationId`,
+     * 2026-10-27). Set on the DP once a sale takes it: it is the SAME payment
+     * the reservation recorded, adopted by the order, never a copy.
+     */
+    reservationId: id.optional(),
   });
 
   /**
@@ -780,6 +794,37 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     sourceId: id.optional(),
     items: z.array(z.strictObject({ id, serial: z.string().min(1) })),
     status: z.enum(RESERVATION_STATUSES),
+    /**
+     * The end of a FIRM hold — `Reservation.heldUntil`, the DP's moment plus
+     * the rule's days (2026-10-27). Absent: nobody paid a DP, and the hold
+     * holds nothing.
+     */
+    heldUntil: instant.optional(),
+    /**
+     * The DP — a `Payment` MASUK naming the reservation (2026-10-27). `orderId`
+     * is DERIVED (the sale that took it, `Payment.orderId`): the orders adapter
+     * writes it, this one ignores it. `refund` is a `Payment` KELUAR naming the
+     * reservation alone. A DP neither on a sale nor refunded, on a CANCELLED
+     * reservation, was kept ("hangus").
+     */
+    dp: z
+      .strictObject({
+        id,
+        method: z.string().min(1),
+        amount: money,
+        at: instant,
+        note: text.optional(),
+        orderId: id.optional(),
+        refund: z
+          .strictObject({
+            id,
+            method: z.string().min(1),
+            amount: money,
+            at: instant,
+          })
+          .optional(),
+      })
+      .optional(),
   });
 
   const discount = z.strictObject({

@@ -84,6 +84,9 @@ export interface PaymentsPanelProps {
 let seq = 0;
 const newId = () => `pay-${Date.now()}-${++seq}`;
 
+/** A reservation's DP the sale took (2026-10-27) — fixed here. */
+const isDp = (p: SalePayment) => p.reservationId !== undefined;
+
 export function PaymentsPanel({
   orderId,
   total,
@@ -278,7 +281,9 @@ export function PaymentsPanel({
                       width: p.channel !== undefined ? 120 : "100%",
                       flex: "none",
                     }}
-                    disabled={disabled || readOnly}
+                    // A reservation's DP (2026-10-27) is the reservation's
+                    // money: corrected on /reservations, never here.
+                    disabled={disabled || readOnly || isDp(p)}
                     value={key ?? p.method}
                     aria-label={t("pay.methodFor", "How it was paid")}
                     options={
@@ -352,7 +357,7 @@ export function PaymentsPanel({
               <InputNumber
                 size="small"
                 style={{ width: "100%" }}
-                disabled={disabled || readOnly}
+                disabled={disabled || readOnly || isDp(p)}
                 min={0}
                 precision={0}
                 prefix={RP_SYMBOL}
@@ -394,7 +399,7 @@ export function PaymentsPanel({
                       )}
                       <Button
                         type="text"
-                        disabled={disabled}
+                        disabled={disabled || isDp(p)}
                         icon={<DeleteOutlined />}
                         aria-label={t("pay.remove", "Remove this payment")}
                         onClick={() => emit(rows.filter((x) => x.id !== p.id))}

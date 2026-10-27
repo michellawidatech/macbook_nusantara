@@ -139,7 +139,8 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     chunked: memory.chunked,
     embedded: memory.embedded,
     expired: expiry.expired,
-    followedUp: followed.reminded + followed.nudged,
+    followedUp:
+      followed.reminded + followed.nudged + (followed.dpReminded ?? 0),
     watched: watched.notified,
   };
 }

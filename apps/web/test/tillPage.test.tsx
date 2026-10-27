@@ -1341,3 +1341,141 @@ describe("a visit the bot booked (2026-10-27)", () => {
     }
   });
 });
+
+describe("holds and DPs at the till (2026-10-27)", () => {
+  const RV = "rsv-till-dp";
+  const RV_CODE = "RV-2026/10-000992";
+  const clean = () =>
+    mutate((d) => {
+      d.reservations = d.reservations.filter((r) => r.id !== RV);
+      d.events = d.events.filter((e) => e.refCode !== RV_CODE);
+    });
+
+  /** The confirmation dialog, by the button that records. */
+  async function confirmDialog(name: RegExp) {
+    const dialogs = await screen.findAllByRole("dialog");
+    return within(
+      dialogs.find((d) => within(d).queryByRole("button", { name }))!,
+    );
+  }
+
+  it("takes the DP toward the bill, asks only for the rest, and puts the SAME payment on the sale", async () => {
+    mutate((d) => {
+      const u = d.units.find((x) => x.serial === "TILLAAA00001")!;
+      u.status = "DIRESERVASI";
+      d.events.push({
+        id: "till-dp-ev",
+        serial: u.serial,
+        seq: 1,
+        type: "DIRESERVASI",
+        at: "2026-10-27T03:00:00.000Z",
+        fromStatus: "TERSEDIA",
+        toStatus: "DIRESERVASI",
+        locationId: u.locationId,
+        refCode: RV_CODE,
+        staff: "Michella",
+      });
+      d.reservations = d.reservations.filter((r) => r.id !== RV);
+      d.reservations.push({
+        id: RV,
+        code: RV_CODE,
+        customerId: d.customers[0]!.id,
+        when: "2026-10-30T07:00:00.000Z",
+        note: "",
+        items: [{ id: "rvi-till-dp", serial: u.serial }],
+        status: "ACTIVE",
+        heldUntil: "2099-11-03T03:00:00.000Z",
+        dp: {
+          id: "pay-till-dp",
+          method: "TRANSFER",
+          amount: 500_000,
+          at: "2026-10-27T03:00:00.000Z",
+        },
+      });
+    });
+    try {
+      renderTill();
+      await userEvent.click(
+        screen.getAllByRole("button", { name: /Reservations \(\d+\)/ })[0]!,
+      );
+      const picker = await dialog();
+      const row = (await picker.findByText("Rp 500.000 paid")).closest(
+        "tr",
+      ) as HTMLElement;
+      await userEvent.click(
+        within(row).getByRole("button", { name: "Use this" }),
+      );
+      expect(
+        await screen.findByText(`DP already paid (${RV_CODE})`),
+      ).toBeInTheDocument();
+      expect(screen.getByText("Rp 9.500.000")).toBeInTheDocument();
+
+      await payAndFinish();
+      const order = snapshot().orders[0]!;
+      expect(order.total).toBe(10_000_000);
+      expect(order.settled).toBe(true);
+      // The DP first, as the reservation's own row; only the rest collected.
+      expect(
+        order.payments!.map((p) => [p.id, p.method, p.amount, p.reservationId]),
+      ).toEqual([
+        ["pay-till-dp", "TRANSFER", 500_000, RV],
+        [expect.any(String), "TUNAI", 9_500_000, undefined],
+      ]);
+      const hold = snapshot().reservations.find((r) => r.id === RV)!;
+      expect(hold.dp!.orderId).toBe(order.id);
+      expect(hold.status).toBe("DONE");
+    } finally {
+      clean();
+    }
+  });
+
+  it("asks before selling a unit reserved unpaid for somebody else, then takes it off their hold", async () => {
+    mutate((d) => {
+      d.reservations = d.reservations.filter((r) => r.id !== RV);
+      d.reservations.push({
+        id: RV,
+        code: RV_CODE,
+        customerId: d.customers[0]!.id,
+        when: "2026-10-30T07:00:00.000Z",
+        note: "",
+        items: [{ id: "rvi-till-soft", serial: "TILLAAA00001" }],
+        status: "ACTIVE",
+      });
+    });
+    const name = (() => {
+      const c = snapshot().customers[0]!;
+      return c.name || c.phone;
+    })();
+    try {
+      renderTill();
+      await pickFirstMachine();
+      // On sale all along, and tagged for whom it is reserved.
+      expect(
+        screen.getAllByText(`Reserved for ${name}, not paid`).length,
+      ).toBeGreaterThan(0);
+      await userEvent.click(screen.getByRole("button", { name: /^Continue$/ }));
+      await userEvent.click(
+        screen.getByRole("button", { name: /^Pay & finish$/ }),
+      );
+      const confirm = await confirmDialog(/Sell anyway/);
+      expect(
+        confirm.getByText(
+          `TILLAAA00001 is held for ${name}, not paid. Sell anyway?`,
+        ),
+      ).toBeInTheDocument();
+      await userEvent.click(
+        confirm.getByRole("button", { name: /Sell anyway/ }),
+      );
+
+      expect(snapshot().orders).toHaveLength(1);
+      const hold = snapshot().reservations.find((r) => r.id === RV)!;
+      expect(hold.items).toEqual([]);
+      expect(hold.status).toBe("CANCELLED");
+      expect(hold.note).toMatch(
+        /TILLAAA00001 was sold to another buyer on SI-/,
+      );
+    } finally {
+      clean();
+    }
+  });
+});

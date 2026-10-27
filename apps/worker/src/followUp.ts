@@ -1,6 +1,6 @@
 /**
  * Following up once, politely (owner, 2026-10-27): *"the goal of this chatbot
- * is to convert the casual chatter to a lead and even customer."* Two
+ * is to convert the casual chatter to a lead and even customer."* Three
  * messages the worker sends by itself, each at most once:
  *
  *  - **The visit reminder.** On the day of a visit the bot booked, around
@@ -14,6 +14,9 @@
  *    open and no "no" said, is nudged ONCE about the unit they asked about —
  *    *"… masih ready ya"* only while the shelf says so, else the closest unit
  *    that is. Never more than once a week.
+ *  - **The DP reminder** (2026-10-27). A day before a DP hold runs out —
+ *    *"Halo kak 😊 unit {unit} masih kami tahan sampai {tanggal} ya. Kalau
+ *    mau dilunasi atau datang ambil, kabari kami aja kak 🙏"* — once per hold.
  *
  * ## Never twice, never inside a transaction with the network
  *
@@ -47,6 +50,7 @@
 import {
   followUps,
   isLead,
+  jakartaDayLabel,
   lastShownUnits,
   phoneForms,
   resetPointFor,
@@ -61,7 +65,7 @@ import {
 import type { Logger } from "@nusantara/logging";
 import { WINDOW_MS } from "@nusantara/whatsapp";
 
-export type FollowUpKind = "visit_reminder" | "lead_nudge";
+export type FollowUpKind = "visit_reminder" | "lead_nudge" | "dp_reminder";
 
 export interface FollowUpDeps {
   readonly db: PrismaClient;
@@ -78,7 +82,12 @@ export interface FollowUpDeps {
 export interface FollowUpPassResult {
   readonly reminded: number;
   readonly nudged: number;
+  /** DP holds reminded a day before they run out (2026-10-27). */
+  readonly dpReminded?: number;
 }
+
+/** A DP hold is reminded this long before `heldUntil`. */
+export const DP_REMIND_BEFORE_MS = 24 * 3_600_000;
 
 /** A lead is nudged after this long without a word. */
 export const LEAD_QUIET_MS = 20 * 3_600_000;
@@ -297,6 +306,112 @@ async function remindVisits(
   return queued;
 }
 
+/**
+ * A DP hold a day before it runs out (owner, 2026-10-27), once, in the visit
+ * reminder's tone: *"Halo kak 😊 unit {unit} masih kami tahan sampai
+ * {tanggal} ya. Kalau mau dilunasi atau datang ambil, kabari kami aja kak 🙏"*.
+ *
+ * Only while the hold is still holding (a unit DIRESERVASI) and still open;
+ * never for a DP recorded inside the last day (a one-day hold needs no
+ * reminder at the moment it was paid). Same transport and window rules as the
+ * visit reminder, the same `payload.followUp` marker, and `queueOnce` holds it
+ * back while a line of theirs is waiting.
+ */
+async function remindDpHolds(
+  deps: FollowUpDeps,
+  now: Date,
+  max: number,
+): Promise<number> {
+  const { db, logger } = deps;
+  const holds = await db.reservation.findMany({
+    where: {
+      status: "TERJADWAL",
+      phone: { not: null },
+      heldUntil: {
+        gt: now,
+        lte: new Date(now.getTime() + DP_REMIND_BEFORE_MS),
+      },
+      items: { some: { removedAt: null, unit: { status: "DIRESERVASI" } } },
+    },
+    select: {
+      id: true,
+      code: true,
+      phone: true,
+      heldUntil: true,
+      payments: {
+        where: { direction: "MASUK", voidedAt: null, orderId: null },
+        select: { recordedAt: true, paidAt: true },
+        take: 1,
+      },
+      items: {
+        where: { removedAt: null, unit: { status: "DIRESERVASI" } },
+        orderBy: { sortOrder: "asc" },
+        select: {
+          unit: {
+            select: { sku: { select: { name: true, variantLabel: true } } },
+          },
+        },
+      },
+    },
+    orderBy: { heldUntil: "asc" },
+    take: 50,
+  });
+
+  let queued = 0;
+  for (const h of holds) {
+    if (queued >= max) break;
+    const dp = h.payments[0];
+    if (dp === undefined) continue;
+    const remindAt = new Date(h.heldUntil!.getTime() - DP_REMIND_BEFORE_MS);
+    const paidAt = dp.recordedAt ?? dp.paidAt;
+    if (paidAt !== null && paidAt >= remindAt) continue;
+    const to = waIdOf(h.phone!);
+    const memory = await db.waThreadMemory.findUnique({
+      where: { from: to },
+      select: { autoReply: true },
+    });
+    if (memory?.autoReply === false) continue;
+    const last = await lastInbound(db, to);
+    // Never a stranger: a hold whose customer has never written to us is
+    // staff's to phone, not the bot's to message.
+    if (last === null) continue;
+    const inWindow =
+      now.getTime() - last.ts.getTime() < WINDOW_MS - WINDOW_MARGIN_MS;
+    if (!inWindow && deps.transport !== "baileys") {
+      if (!skippedOutsideWindow.has(h.id)) {
+        skippedOutsideWindow.add(h.id);
+        if (skippedOutsideWindow.size > 5_000) skippedOutsideWindow.clear();
+        logger.info(
+          { evt: "worker.followup.window_closed", ctx: { code: h.code } },
+          "DP reminder skipped: the 24-hour window has closed and the Cloud API would need a template",
+        );
+      }
+      continue;
+    }
+    const units = h.items.flatMap((i) =>
+      i.unit === null ? [] : [skuLabel(i.unit.sku)],
+    );
+    const made = await queueOnce(db, {
+      to,
+      body: followUps.dpReminder(
+        units.join(", ") || null,
+        jakartaDayLabel(h.heldUntil!),
+      ),
+      followUp: "dp_reminder",
+      reservationId: h.id,
+      now,
+    });
+    if (made) {
+      queued += 1;
+      logger.info(
+        { evt: "worker.followup.dp_reminder", ctx: { code: h.code } },
+        "reminded a customer their DP hold runs out tomorrow",
+      );
+    }
+  }
+  return queued;
+}
+
 /** What the nudge can honestly say about the unit they asked about. */
 async function nudgeText(
   db: PrismaClient,
@@ -460,6 +575,20 @@ export async function followUpPass(
       "the visit reminders failed — the next tick tries again",
     );
   }
+  let dpReminded = 0;
+  try {
+    dpReminded = await remindDpHolds(deps, now, max);
+  } catch (err) {
+    deps.logger.error(
+      {
+        evt: "worker.followup.dp_reminder_failed",
+        ...(err instanceof Error
+          ? { err: { name: err.name, message: err.message } }
+          : {}),
+      },
+      "the DP reminders failed — the next tick tries again",
+    );
+  }
   try {
     nudged = await nudgeLeads(deps, now, max);
   } catch (err) {
@@ -473,5 +602,5 @@ export async function followUpPass(
       "the lead nudges failed — the next tick tries again",
     );
   }
-  return { reminded, nudged };
+  return { reminded, nudged, dpReminded };
 }

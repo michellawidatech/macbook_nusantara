@@ -414,6 +414,13 @@ export const followUps = {
   leadNudge(unit: string): string {
     return `Halo kak 😊 ${unit} yang kemarin kakak tanyakan masih ready ya. Kalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak 🙏`;
   },
+  /**
+   * A day before a DP hold runs out (2026-10-27), once, in the visit
+   * reminder's tone. `until` is the day as the shop says it ("Senin, 3 Nov").
+   */
+  dpReminder(unit: string | null, until: string): string {
+    return `Halo kak 😊 unit ${unit?.trim() || "kakak"} masih kami tahan sampai ${until} ya. Kalau mau dilunasi atau datang ambil, kabari kami aja kak 🙏`;
+  },
   /** The unit they asked about is gone (never why); the closest in stock, once. */
   leadNudgeAlternative(unit: string, alternative: string): string {
     return `Halo kak 😊 ${unit} yang kemarin kakak tanyakan sedang kosong, tapi ada ${alternative} yang mirip dan ready ya. Kalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak 🙏`;

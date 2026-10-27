@@ -29,9 +29,14 @@ import { returnedDebts } from "./saleStatus.js";
 import type { AdjustmentRef } from "./adjustmentDeletion.js";
 
 /** Category label maps, derived from `seed.ts` so there is one vocabulary. */
-export const INCOME_REASON_LABEL: Record<string, string> = Object.fromEntries(
-  INCOME_REASONS.map((r) => [r.value, r.label]),
-);
+export const INCOME_REASON_LABEL: Record<string, string> = {
+  ...Object.fromEntries(INCOME_REASONS.map((r) => [r.value, r.label])),
+  // A reservation's DP (2026-10-27) — derived rows only, never typed: the
+  // money a customer paid to hold a unit, and the same money once they did
+  // not come back for it (`lib/dp.ts`).
+  DP: "DP received",
+  DP_HANGUS: "DP hangus",
+};
 export const EXPENSE_KIND_LABEL: Record<string, string> = Object.fromEntries(
   EXPENSE_CATEGORIES.map((c) => [c.value, c.label]),
 );
@@ -171,7 +176,8 @@ type CashflowDb = Pick<
   | "suppliers"
   | "customers"
   | "paymentMethods"
->;
+> &
+  Partial<Pick<MockDb, "reservations">>;
 
 /** Every movement, newest first in the one total order (`chronological`). */
 export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
@@ -212,7 +218,9 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
         key: `p-${o.id}-${p.id}`,
         at: p.at,
         direction: "INCOME",
-        category: "SALES",
+        // A DP the sale took is the money that came in on its own day — the
+        // same row the reservation listed, still under its own name.
+        category: p.reservationId === undefined ? "SALES" : "DP",
         method: methodLabel(p.method),
         methodCode: p.method,
         inBalance: p.inBalance !== false,
@@ -369,8 +377,68 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
       });
     }
   }
+  out.push(...dpRows(db, t, methodLabel));
   // Newest first, so the top of the page is what happened last.
   return out.sort((a, b) => chronological(b, a));
+}
+
+/**
+ * A reservation's DP and its refund (owner, 2026-10-27). Listed when the
+ * money came in — cash basis, in the pot its method names — and ONLY while no
+ * sale has taken it: once one has, the sale's payment list carries the same
+ * payment (above, category DP), so it is counted once. A kept DP stays the
+ * same row and reads *DP hangus*; a refund is money out.
+ *
+ * No `source`: a DP is corrected on /reservations, not by a reconciliation.
+ */
+function dpRows(
+  db: CashflowDb,
+  t: TFunction,
+  methodLabel: (code: string) => string,
+): CashflowRow[] {
+  const out: CashflowRow[] = [];
+  for (const r of db.reservations ?? []) {
+    const dp = r.dp;
+    if (dp === undefined || dp.orderId !== undefined) continue;
+    const who = db.customers.find((c) => c.id === r.customerId);
+    const name = who ? customerLabel(who) : r.code;
+    out.push({
+      key: `dp-${r.id}`,
+      at: dp.at,
+      direction: "INCOME",
+      category:
+        r.status === "CANCELLED" && dp.refund === undefined
+          ? "DP_HANGUS"
+          : "DP",
+      method: methodLabel(dp.method),
+      methodCode: dp.method,
+      inBalance: true,
+      description:
+        dp.note?.trim() || t("cashflow.dpFrom", "DP from {{name}}", { name }),
+      orderCode: r.code,
+      amount: dp.amount,
+      status: "SETTLED",
+      tie: "",
+    });
+    if (dp.refund !== undefined)
+      out.push({
+        key: `dpr-${r.id}`,
+        at: dp.refund.at,
+        direction: "EXPENSE",
+        category: "REFUND",
+        method: methodLabel(dp.refund.method),
+        methodCode: dp.refund.method,
+        inBalance: true,
+        description: t("cashflow.dpRefundTo", "DP refunded to {{name}}", {
+          name,
+        }),
+        orderCode: r.code,
+        amount: dp.refund.amount,
+        status: "SETTLED",
+        tie: "",
+      });
+  }
+  return out;
 }
 
 /** The parts of `AppSettings` a balance starts from. */

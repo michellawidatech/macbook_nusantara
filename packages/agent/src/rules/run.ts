@@ -43,6 +43,7 @@ import {
   effectiveCapabilities,
   holdingMessage,
   type AgentCapabilities,
+  type DpTerms,
   type HandoffTopic,
   type Route,
 } from "../policy.js";
@@ -62,7 +63,7 @@ import {
   TASK_REASON,
   closingTask,
   jakartaVisitLabel,
-  routedTask,
+  routeSummary,
   saidColleagueWillReply,
   taskNote,
   unitSubject,
@@ -116,6 +117,11 @@ export interface RulesInput {
    */
   readonly waiting?: readonly WaitingTask[];
   readonly leadThreshold: number;
+  /**
+   * The DP rule from the shop's settings (2026-10-27): what a customer who
+   * asks to keep a unit is told. The owner's default when absent.
+   */
+  readonly dp?: DpTerms;
   /**
    * The AI fallback — only for what no rule covers. Absent (no credential,
    * or the owner wants none), that turn goes to a person.
@@ -544,13 +550,16 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
         }),
         told
           ? reply.passedOnToo(lang)
-          : holdingMessage("closing", open, input.route.rule),
+          : holdingMessage("closing", open, input.route.rule, input.dp),
         serial,
       );
     }
     return handOver(
       input.route.topic,
-      routedTask(input.route.topic, input.text),
+      routeSummary(input.route, input.text, input.known.name ?? u.name),
+      told
+        ? reply.passedOnToo(lang)
+        : holdingMessage(input.route.topic, open, input.route.rule, input.dp),
     );
   }
 

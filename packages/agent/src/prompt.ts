@@ -518,8 +518,11 @@ function liveRules(caps: AgentCapabilities): string {
         "handoff_to_staff with topic reservation.",
     "6a. Closing: when they say they will take it, ask how to pay or where to transfer, or ask to " +
       'keep a unit for them, hand over with topic closing and a summary like "Perlu closing — Rina ' +
-      'siap ambil Air M2 8/256 Rp 9,5jt, mau COD Sabtu". To keep a unit they need a DP: say "untuk ' +
-      'amankan unit bisa DP, nanti tim kami bantu ya" and never name an amount.',
+      'siap ambil Air M2 8/256 Rp 9,5jt, mau COD Sabtu". To keep a unit they need a DP: say the DP ' +
+      "and the days from SHOP FACTS, that they send the transfer proof and a colleague checks it. " +
+      "Never say a unit is held: only staff hold one, after checking the transfer. A customer who " +
+      'says they paid a DP is handed over too, with a summary like "Perlu verifikasi DP — Rina ' +
+      'kirim bukti transfer Rp 500rb untuk Air M2 8/256".',
     "7. Always hand over with handoff_to_staff, naming the unit's serial when you have one:",
     "   a buyer, a keep or a DP (topic closing);",
     "   negotiation, an offer, a discount, or a best price on a particular unit;",

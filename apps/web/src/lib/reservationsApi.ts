@@ -26,7 +26,8 @@
 import { api } from "./api.js";
 
 export type ReservationStatus = "TERJADWAL" | "SELESAI" | "BATAL";
-export type HoldState = "HELD" | "BOUGHT" | "RELEASED";
+/** `SOFT` (2026-10-27): reserved for somebody who paid no DP — still on sale. */
+export type HoldState = "HELD" | "SOFT" | "BOUGHT" | "RELEASED";
 /** Who made the hold — a person or the bot. Not the channel. */
 export type HoldSource = "STAF" | "AGEN";
 

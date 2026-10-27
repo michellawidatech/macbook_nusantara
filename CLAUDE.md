@@ -3263,6 +3263,24 @@ Decisions that outlived those documents:
   entries must be paired or explained before a month closes" is NOT built: no
   table holds a note against a POS movement with no statement line — waiting
   on an owner-approved schema.
+- **A DP holds a unit — 2026-10-27** (owner "yes to DP"; spec
+  `docs/superpowers/specs/2026-10-27-dp-holds-design.md`, migration
+  `20261027210000_dp_holds`). **Only a DP holds**: a reservation without one
+  leaves its units TERSEDIA (`SOFT`), tagged *Reserved for {name}, not paid*;
+  the till asks "Sell anyway?", takes the unit off that hold, and the server
+  leaves `Perlu kabari — {unit} sudah terjual ke pembeli lain`. Staff record a
+  DP after checking the bank (`RecordDpModal`): DIRESERVASI + ledger row,
+  `heldUntil` = DP + `sales.dpDays` (Settings → DP, owner; Rp500.000 / 7 d).
+  ⚠️ **Invariant 7 widened**: `Payment.reservationId` may be the ONLY parent
+  (the DP, its KELUAR refund) or sit beside `orderId` — the sale ADOPTS the
+  same row (`adoptDp`), so Income & Expense counts it once, on its day, as *DP
+  received*; revenue stays the sale's. Kept = that row read as *DP hangus*, P&L
+  other income at `heldUntil` — no `DP_HANGUS`, no second row. An open DP never
+  closes its hold: `expire.ts` (nusantara_agent, no Payment writes) releases it
+  at `heldUntil` and leaves `Perlu putuskan DP`; staff Refund or Keep;
+  `followUp.ts` reminds a day before. The bot now SAYS the rule (`dpKeepLine`,
+  reversing "never names a DP") and hands a paid one over as `Perlu verifikasi
+  DP`. Holds made before this release stay firm.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

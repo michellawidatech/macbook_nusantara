@@ -14,7 +14,7 @@
  * trade-in; the browser's `total` is after it).
  */
 import { byFeeOrder, deepEqual } from "@nusantara/store";
-import type { ScanResult } from "../../../generated/client/index.js";
+import type { PayStatus, ScanResult } from "../../../generated/client/index.js";
 import { StoreValidationError } from "../errors.js";
 import {
   type Adapter,
@@ -634,6 +634,183 @@ export const deposits: Adapter<"deposits"> = {
 // Holds
 // ---------------------------------------------------------------------------
 
+type Hold = RowOf<"reservations">;
+
+/**
+ * The DP on a hold and its refund (2026-10-27) — `Payment` rows naming the
+ * reservation. Inserted here; the sale that takes the DP is the orders
+ * adapter's (`orderId` on the same row), so `dp.orderId` is read, never
+ * written, by this one.
+ */
+async function syncHoldMoney(
+  ctx: WriteContext,
+  base: Hold | undefined,
+  n: Hold,
+): Promise<void> {
+  const { tx } = ctx;
+  const write = async (
+    row: {
+      id: string;
+      method: string;
+      amount: bigint;
+      at: string;
+      note?: string;
+    },
+    direction: "MASUK" | "KELUAR",
+    sortOrder: number,
+  ) => {
+    const at = instantOf(row.at);
+    const data = {
+      methodId: await ctx.paymentMethodId(row.method),
+      amount: row.amount,
+      status: PAY_STATUS_OF_STATE.SETTLED,
+      paidAt: at,
+      recordedAt: at,
+      note: blankToNull(row.note),
+      voidedAt: null,
+    };
+    const had = await tx.payment.findUnique({
+      where: { id: row.id },
+      select: { reservationId: true, orderId: true },
+    });
+    if (had !== null) {
+      if (had.reservationId !== n.id) {
+        throw new StoreValidationError(
+          "Pembayaran ini bukan DP reservasi ini.",
+          "reservations",
+          n.id,
+        );
+      }
+      // Once a sale took it, the sale owns its amount: a correction there is
+      // Transaction History's, and two writers of one row disagree.
+      if (had.orderId === null)
+        await tx.payment.update({ where: { id: row.id }, data });
+      return;
+    }
+    await tx.payment.create({
+      data: {
+        id: row.id,
+        reservationId: n.id,
+        direction,
+        appliedTo: "BARANG",
+        staffId: ctx.staffId,
+        sortOrder,
+        ...data,
+      },
+    });
+  };
+  const voidRow = async (id: string) => {
+    const had = await tx.payment.findUnique({
+      where: { id },
+      select: { reservationId: true, orderId: true, voidedAt: true },
+    });
+    if (had === null || had.reservationId !== n.id || had.voidedAt !== null)
+      return;
+    if (had.orderId !== null) {
+      throw new StoreValidationError(
+        "DP ini sudah dipakai di penjualan — hapus dari transaksinya dulu.",
+        "reservations",
+        n.id,
+      );
+    }
+    await tx.payment.update({ where: { id }, data: { voidedAt: ctx.now } });
+  };
+
+  if (n.dp !== undefined) {
+    if (
+      base?.dp === undefined ||
+      !deepEqual(
+        { ...base.dp, orderId: undefined, refund: undefined },
+        { ...n.dp, orderId: undefined, refund: undefined },
+      )
+    )
+      await write(n.dp, "MASUK", 0);
+    if (base?.dp?.id !== undefined && base.dp.id !== n.dp.id)
+      await voidRow(base.dp.id);
+    const refund = n.dp.refund;
+    if (refund !== undefined && !deepEqual(base?.dp?.refund, refund))
+      await write(refund, "KELUAR", 1);
+    const hadRefund = base?.dp?.refund;
+    if (hadRefund !== undefined && hadRefund.id !== refund?.id)
+      await voidRow(hadRefund.id);
+  } else if (base?.dp !== undefined) {
+    if (base.dp.refund !== undefined) await voidRow(base.dp.refund.id);
+    await voidRow(base.dp.id);
+  }
+}
+
+/**
+ * A unit on a hold nobody paid a DP for, sold to somebody else at the till
+ * (2026-10-27): the till takes the item off the hold, and the customer it was
+ * reserved for has to be told. When they have a chat thread, a colleague gets
+ * the task — `Perlu kabari — {unit} sudah terjual ke pembeli lain` — in the
+ * same transaction as the sale. Run from `ctx.later`, after the order and the
+ * ledger rows this commit carries are written.
+ */
+async function tellSoldOver(
+  ctx: WriteContext,
+  hold: { id: string; phone: string | null; custName: string | null },
+  unitIds: readonly string[],
+): Promise<void> {
+  const { tx } = ctx;
+  if (hold.phone === null || hold.phone.trim() === "" || unitIds.length === 0)
+    return;
+  const from = hold.phone.trim().replace(/^\+/, "");
+  const thread = await tx.waMessage.findFirst({
+    where: { from },
+    select: { id: true },
+  });
+  if (thread === null) return;
+  const sold = await tx.unit.findMany({
+    where: {
+      id: { in: [...unitIds] },
+      status: "TERJUAL",
+      soldOrderItem: {
+        order: {
+          OR: [{ reservationId: null }, { reservationId: { not: hold.id } }],
+        },
+      },
+    },
+    select: {
+      id: true,
+      skuId: true,
+      sku: { select: { name: true, variantLabel: true } },
+    },
+  });
+  for (const u of sold) {
+    const unit = [u.sku.name, u.sku.variantLabel].filter(Boolean).join(" ");
+    const summary = `Perlu kabari — ${unit} sudah terjual ke pembeli lain`;
+    const customer = await tx.customer.findFirst({
+      where: { phone: { in: [from, `+${from}`] } },
+      select: { id: true },
+    });
+    const common = {
+      // Not a hand-over topic: the customer asked nothing, so the bot is not
+      // told to wait on a colleague (`waitingTasks`).
+      topic: "hold",
+      summary,
+      customerText: hold.custName
+        ? `Reservasi ${hold.custName} belum DP`
+        : "Reservasi belum DP",
+      unitId: u.id,
+      skuId: u.skuId,
+      updatedAt: ctx.now,
+      ...(customer ? { customerId: customer.id } : {}),
+    };
+    // One OPEN task per (thread, kind) — the partial unique index.
+    const open = await tx.chatAction.findFirst({
+      where: { from, kind: "RESERVATION", status: "OPEN" },
+      select: { id: true },
+    });
+    if (open)
+      await tx.chatAction.update({ where: { id: open.id }, data: common });
+    else
+      await tx.chatAction.create({
+        data: { from, kind: "RESERVATION", createdAt: ctx.now, ...common },
+      });
+  }
+}
+
 export const reservations: Adapter<"reservations"> = {
   collection: "reservations",
   async project(tx, _ctx, keys) {
@@ -646,20 +823,52 @@ export const reservations: Adapter<"reservations"> = {
           orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
           include: { unit: { select: { serial: true } } },
         },
+        payments: {
+          where: { voidedAt: null },
+          orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+          include: { method: { select: { code: true } } },
+        },
       },
     });
-    return rows.map((h) => ({
-      id: h.id,
-      code: h.code,
-      customerId: h.customerId ?? "",
-      when: isoOf(h.scheduledFor ?? h.createdAt),
-      note: h.note ?? "",
-      sourceId: h.reservationSourceId ?? undefined,
-      items: h.items.flatMap((i) =>
-        i.unit === null ? [] : [{ id: i.id, serial: i.unit.serial }],
-      ),
-      status: RESERVATION_STATUS_FROM[h.status],
-    }));
+    return rows.map((h) => {
+      const paid = h.payments.find((p) => p.direction === "MASUK");
+      const refund = h.payments.find((p) => p.direction === "KELUAR");
+      const at = (p: { paidAt: Date | null; recordedAt: Date | null }) =>
+        isoOf(p.paidAt ?? p.recordedAt ?? h.createdAt);
+      return {
+        id: h.id,
+        code: h.code,
+        customerId: h.customerId ?? "",
+        when: isoOf(h.scheduledFor ?? h.createdAt),
+        note: h.note ?? "",
+        sourceId: h.reservationSourceId ?? undefined,
+        items: h.items.flatMap((i) =>
+          i.unit === null ? [] : [{ id: i.id, serial: i.unit.serial }],
+        ),
+        status: RESERVATION_STATUS_FROM[h.status],
+        heldUntil: optionalIso(h.heldUntil),
+        dp:
+          paid === undefined
+            ? undefined
+            : {
+                id: paid.id,
+                method: paid.method.code,
+                amount: paid.amount,
+                at: at(paid),
+                note: paid.note ?? undefined,
+                orderId: paid.orderId ?? undefined,
+                refund:
+                  refund === undefined
+                    ? undefined
+                    : {
+                        id: refund.id,
+                        method: refund.method.code,
+                        amount: refund.amount,
+                        at: at(refund),
+                      },
+              },
+      };
+    });
   },
   lock: (tx, keys) => lockRows(tx, "Reservation", "id", keys),
   async write(ctx, rows) {
@@ -683,6 +892,7 @@ export const reservations: Adapter<"reservations"> = {
         status: RESERVATION_STATUS_OF[n.status],
         reservationSourceId: n.sourceId ?? null,
         note: blankToNull(n.note),
+        heldUntil: n.heldUntil === undefined ? null : instantOf(n.heldUntil),
       };
       if (r.base === undefined) {
         await tx.reservation.create({
@@ -732,15 +942,33 @@ export const reservations: Adapter<"reservations"> = {
             });
           }
         }
+        const dropped: string[] = [];
         for (const item of left.values()) {
           if (item.removedAt === null) {
             await tx.reservationItem.update({
               where: { id: item.id },
               data: { removedAt: ctx.now },
             });
+            if (item.unitId !== null) dropped.push(item.unitId);
           }
         }
+        // Taken off a hold nobody paid for: if another sale took it, the
+        // customer it was reserved for is owed a message.
+        if (
+          dropped.length > 0 &&
+          n.dp === undefined &&
+          n.heldUntil === undefined
+        ) {
+          const hold = {
+            id: n.id,
+            phone: data.phone,
+            custName: data.custName,
+          };
+          ctx.later.push(() => tellSoldOver(ctx, hold, dropped));
+        }
       }
+      if (r.base === undefined || !deepEqual(r.base.dp, n.dp))
+        await syncHoldMoney(ctx, r.base, n);
       ctx.touch("reservations", n.id);
     }
   },
@@ -1038,6 +1266,8 @@ async function syncSalePayments(ctx: WriteContext, sale: Sale): Promise<void> {
     if (left.has(p.id)) {
       left.delete(p.id);
       await tx.payment.update({ where: { id: p.id }, data });
+    } else if (p.reservationId !== undefined) {
+      await adoptDp(ctx, sale, p.reservationId, p.id, data);
     } else {
       await tx.payment.create({
         data: {
@@ -1088,6 +1318,16 @@ async function syncSalePayments(ctx: WriteContext, sale: Sale): Promise<void> {
     }
   }
   for (const p of left.values()) {
+    if (p.reservationId !== null) {
+      // A DP taken off the sale goes back to its reservation, unspent — the
+      // money still came in, once, on the day it did (2026-10-27).
+      await tx.payment.update({
+        where: { id: p.id },
+        data: { orderId: null, voidedAt: null },
+      });
+      ctx.touch("reservations", p.reservationId);
+      continue;
+    }
     if (p.voidedAt === null) {
       await tx.payment.update({
         where: { id: p.id },
@@ -1095,6 +1335,74 @@ async function syncSalePayments(ctx: WriteContext, sale: Sale): Promise<void> {
       });
     }
   }
+}
+
+/**
+ * A reservation's DP put towards a sale (2026-10-27): the SAME `Payment` row
+ * gains the sale as its parent and keeps the reservation (invariant 7 allows
+ * exactly that pair). Never a copy — a second row would count the money
+ * twice, once when it came in and again at the sale. Refused for a DP that is
+ * not the reservation's, already on another sale, or refunded.
+ */
+async function adoptDp(
+  ctx: WriteContext,
+  sale: Sale,
+  reservationId: string,
+  paymentId: string,
+  data: {
+    methodId: string;
+    amount: bigint;
+    status: PayStatus;
+    paidAt: Date | null;
+    recordedAt: Date;
+  } & Record<string, unknown>,
+): Promise<void> {
+  const { tx } = ctx;
+  const refuse = (why: string) =>
+    new StoreValidationError(
+      `DP tidak bisa dipakai: ${why}`,
+      "orders",
+      sale.id,
+    );
+  const dp = await tx.payment.findUnique({
+    where: { id: paymentId },
+    select: {
+      reservationId: true,
+      orderId: true,
+      direction: true,
+      voidedAt: true,
+    },
+  });
+  if (dp === null) {
+    // Recorded and spent in the same breath: one row with both parents.
+    await tx.payment.create({
+      data: {
+        ...data,
+        id: paymentId,
+        orderId: sale.id,
+        reservationId,
+        direction: "MASUK",
+        appliedTo: "BARANG",
+        staffId: ctx.staffId,
+      },
+    });
+    ctx.touch("reservations", reservationId);
+    return;
+  }
+  if (dp.reservationId !== reservationId || dp.direction !== "MASUK")
+    throw refuse("bukan DP reservasi itu.");
+  if (dp.voidedAt !== null) throw refuse("DP-nya sudah dihapus.");
+  if (dp.orderId !== null && dp.orderId !== sale.id)
+    throw refuse("sudah dipakai di penjualan lain.");
+  const refunded = await tx.payment.count({
+    where: { reservationId, direction: "KELUAR", voidedAt: null },
+  });
+  if (refunded > 0) throw refuse("sudah dikembalikan ke pelanggan.");
+  await tx.payment.update({
+    where: { id: paymentId },
+    data: { ...data, orderId: sale.id },
+  });
+  ctx.touch("reservations", reservationId);
 }
 
 /**
@@ -1215,6 +1523,12 @@ async function cancelSale(ctx: WriteContext, id: string): Promise<void> {
   if (c.adjustments > 0 || c.payments > 0 || c.items > 0)
     throw refuse("ada retur di dalamnya.");
   if (c.tradeIns > 0) throw refuse("ada tukar tambah di dalamnya.");
+  // A reservation's DP (2026-10-27): voiding it with the sale would make the
+  // money vanish from the reservation it came in on.
+  const dps = await tx.payment.count({
+    where: { orderId: id, reservationId: { not: null }, voidedAt: null },
+  });
+  if (dps > 0) throw refuse("ada DP reservasi di dalamnya.");
   if (c.expenses > 0 || c.incomes > 0)
     throw refuse("ada catatan pemasukan/pengeluaran yang menautnya.");
 
@@ -1428,6 +1742,7 @@ export const orders: Adapter<"orders"> = {
                 note: p.note ?? undefined,
                 ref: p.ref ?? undefined,
                 inBalance: p.inBalance ? undefined : false,
+                reservationId: p.reservationId ?? undefined,
               })),
         refunds:
           paidOut.length === 0

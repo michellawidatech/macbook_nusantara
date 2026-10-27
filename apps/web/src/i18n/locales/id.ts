@@ -4793,4 +4793,76 @@ export const id: Record<string, string> = {
     "{{n}} baris memuat sen. Jumlah disimpan dalam rupiah seperti tercetak; sennya sudah diperiksa dan tidak dibawa.",
   "recon.replaces":
     "Bulan ini sudah punya rekening koran. Baris dan pasangannya diganti; koreksi yang sudah dibuat tetap ada.",
+  // DP holds (2026-10-27).
+  "DP received": "DP diterima",
+  "DP hangus": "DP hangus",
+  "cashflow.dpFrom": "DP dari {{name}}",
+  "cashflow.dpRefundTo": "DP dikembalikan ke {{name}}",
+  "dp.amount": "Jumlah DP",
+  "dp.amountNeeded": "Isi jumlah DP.",
+  "dp.applied": "DP {{amount}} · sudah dipakai di penjualan",
+  "dp.date": "Tanggal DP",
+  "dp.decide": "Putuskan DP",
+  "dp.decideAria": "Putuskan DP di {{code}}",
+  "dp.decideBody":
+    "{{name}} sudah DP {{amount}} dan tidak melunasi. Kembalikan, atau hangus?",
+  "dp.decideEarly":
+    "Masa tahannya belum habis — memutuskan sekarang mengembalikan unitnya ke stok jual.",
+  "dp.decideTitle": "Putuskan DP — {{code}}",
+  "dp.heldUntil": "DP {{amount}} · ditahan sampai {{until}}",
+  "dp.keep": "Hangus (simpan)",
+  "dp.kept": "DP {{amount}} · hangus",
+  "dp.keptToast": "DP {{amount}} hangus.",
+  "dp.method": "Dibayar lewat",
+  "dp.noDpNotHeld": "Belum DP — unit masih dijual",
+  "dp.notPaid": "Belum DP",
+  "dp.note": "Catatan",
+  "dp.pickDate": "Pilih tanggal DP.",
+  "dp.record": "Catat DP",
+  "dp.recordAria": "Catat DP di {{code}}",
+  "dp.recordHint":
+    "Cek mutasi bank atau hitung uang tunainya dulu. Unit ditahan {{days}} hari dari tanggal DP.",
+  "dp.recordOk": "Catat DP dan tahan unit",
+  "dp.recordTitle": "Catat DP — {{code}}",
+  "dp.recorded":
+    "DP {{amount}} tercatat — {{count}} unit ditahan untuk {{name}} sampai {{until}}.",
+  "dp.refund": "Kembalikan {{amount}}",
+  "dp.refundFrom": "Dikembalikan lewat",
+  "dp.refunded": "DP {{amount}} · dikembalikan",
+  "dp.refundedToast": "DP {{amount}} dikembalikan ke {{name}}.",
+  "dp.waitingDecision": "DP {{amount}} · masa tahan habis, perlu diputuskan",
+  "handoff.dp": "DP",
+  "handoff.hold": "Reservasi",
+  "pnl.dpForfeited": "DP hangus",
+  "pos.dp": "DP",
+  "pos.dpAlreadyPaid": "DP sudah dibayar ({{code}})",
+  "pos.dpConfirmLine": "{{amount}} sudah dibayar ({{code}})",
+  "pos.dpPaidShort": "{{amount}} sudah dibayar",
+  "pos.dpShort": "DP",
+  "pos.expectedOn": "Rencana datang",
+  "pos.leftToPay": "Sisa yang dibayar",
+  "pos.loadedDp":
+    "{{name}} dan DP {{amount}} dari {{code}} dimuat — pilih unitnya dari rak.",
+  "pos.reservationPickerHintDp":
+    "Memilih satu memuat unit, pelanggan, dan DP-nya ke penjualan di bawah. Hanya reservasi yang sudah DP yang menahan unitnya; tanpa DP unitnya tetap dijual.",
+  "pos.reservedNotPaid": "Direservasi untuk {{name}}, belum DP",
+  "pos.sellAnyway": "Tetap jual",
+  "pos.soldOverAsk":
+    "{{serial}} direservasi untuk {{name}}, belum DP. Tetap jual?",
+  "pos.soldOverBody":
+    "Mencatat penjualan ini melepasnya dari {{code}}, dan rekan mendapat tugas untuk mengabari pelanggannya.",
+  "pos.soldOverNote": "{{serial}} terjual ke pembeli lain di {{code}}.",
+  "reservations.expectedOn": "Rencana datang",
+  "reservations.reservedN":
+    "{{count}} unit direservasi — tetap dijual sampai DP-nya dicatat.",
+  "settings.dpAmount": "Jumlah DP",
+  "settings.dpDays": "Ditahan selama (hari)",
+  "settings.dpHint":
+    "Hanya DP yang menahan unit. Tanpa DP, reservasi tidak menahan unitnya dari penjualan.",
+  "settings.dpTitle": "DP untuk menahan unit",
+  "settings.tabDp": "DP",
+  "task.need.decideDp": "Perlu putuskan DP",
+  "task.need.verifyDp": "Perlu verifikasi DP",
+  "transactions.deleteDp":
+    "Sebagian penjualan ini dibayar dengan DP reservasi.",
 };

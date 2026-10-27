@@ -40,7 +40,10 @@ export type TaskNeed =
   /** Sales, 2026-10-27. */
   | "closing"
   | "welcome"
-  | "notify";
+  | "notify"
+  /** A DP the customer says they paid; a DP whose hold ran out (2026-10-27). */
+  | "verifyDp"
+  | "decideDp";
 
 export type TaskReason =
   | "noSource"
@@ -83,6 +86,8 @@ const NEED_OF_HEAD: Record<string, TaskNeed> = {
   "Perlu closing": "closing",
   "Perlu sambut": "welcome",
   "Perlu kabari": "notify",
+  "Perlu verifikasi DP": "verifyDp",
+  "Perlu putuskan DP": "decideDp",
 };
 
 /** The stored Indonesian reason, back to its key. */
@@ -143,7 +148,11 @@ export function taskNeedLabel(t: TFunction, need: TaskNeed): string {
     case "welcome":
       return t("task.need.welcome", "Need to welcome a visit");
     case "notify":
-      return t("task.need.notify", "Need to tell them it's in stock");
+      return t("task.need.notify", "Need to tell the customer");
+    case "verifyDp":
+      return t("task.need.verifyDp", "Need to verify a DP");
+    case "decideDp":
+      return t("task.need.decideDp", "Need to decide a DP");
     default:
       return t("task.need.reply", "Need reply");
   }
@@ -226,7 +235,10 @@ export function needOfTopic(topic: string): TaskNeed {
     case "visit":
       return "welcome";
     case "restock":
+    case "hold":
       return "notify";
+    case "dp":
+      return "decideDp";
     default:
       return "reply";
   }

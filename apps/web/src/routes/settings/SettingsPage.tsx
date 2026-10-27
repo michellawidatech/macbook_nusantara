@@ -54,6 +54,8 @@ import {
 import { COLUMN, FORM_CENTRE, SPACE } from "../../theme/tokens";
 import { Link } from "react-router-dom";
 import { DEFAULT_MARKETPLACE_MARKUP_PCT } from "../../lib/unitPrice.js";
+import { dpRule } from "../../lib/dp.js";
+import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import type { ReasonActivity, Supplier } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
 import {
@@ -1394,6 +1396,76 @@ export function SettingsPage() {
   );
 
   /**
+   * The DP rule (owner, 2026-10-27, "yes to DP"): what a DP is and how many
+   * days it holds a unit. The bot quotes it when asked to keep one, the till
+   * and /reservations default to it, and the worker releases a hold when its
+   * days are up. The owner's to change — the inputs are read-only to anybody
+   * else.
+   */
+  const dpCard = (() => {
+    const rule = dpRule(db.settings);
+    const ownerOnly = me?.role !== "OWNER";
+    return (
+      <Card title={t("settings.dpTitle", "DP to hold a unit")}>
+        <Flex vertical gap={SPACE.lg}>
+          <Typography.Text type="secondary">
+            {t(
+              "settings.dpHint",
+              "Only a DP holds a unit. Without one, a reservation leaves the unit on sale.",
+            )}
+          </Typography.Text>
+          <Flex gap={SPACE.lg} wrap>
+            <Flex vertical gap={SPACE.xs}>
+              <Typography.Text strong>
+                {t("settings.dpAmount", "DP amount")}
+              </Typography.Text>
+              <InputNumber
+                min={1}
+                precision={0}
+                prefix={RP_SYMBOL}
+                formatter={moneyFormatter}
+                parser={moneyParser}
+                style={{ width: 200 }}
+                disabled={ownerOnly}
+                aria-label={t("settings.dpAmount", "DP amount")}
+                value={rule.amount}
+                onChange={(v: number | null) =>
+                  v != null &&
+                  v > 0 &&
+                  mutate((d) => {
+                    d.settings.dpAmount = Math.round(v);
+                  })
+                }
+              />
+            </Flex>
+            <Flex vertical gap={SPACE.xs}>
+              <Typography.Text strong>
+                {t("settings.dpDays", "Held for (days)")}
+              </Typography.Text>
+              <InputNumber
+                min={1}
+                max={60}
+                precision={0}
+                style={{ width: 160 }}
+                disabled={ownerOnly}
+                aria-label={t("settings.dpDays", "Held for (days)")}
+                value={rule.days}
+                onChange={(v: number | null) =>
+                  v != null &&
+                  v >= 1 &&
+                  mutate((d) => {
+                    d.settings.dpDays = Math.round(v);
+                  })
+                }
+              />
+            </Flex>
+          </Flex>
+        </Flex>
+      </Card>
+    );
+  })();
+
+  /**
    * Who the shop is: the name and tagline the faktur prints, and the contact
    * the chatbot gives out (`shop.contact`, packages/agent systemFacts).
    *
@@ -1497,6 +1569,11 @@ export function SettingsPage() {
             key: "shop",
             label: t("settings.tabShop", "Shop identity"),
             children: shopIdentity,
+          },
+          {
+            key: "dp",
+            label: t("settings.tabDp", "DP"),
+            children: dpCard,
           },
           {
             key: "cat",

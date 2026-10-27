@@ -212,6 +212,11 @@ export function TransactionsPage() {
           "transactions.deleteLinked",
           "An Income & Expense line names this sale.",
         );
+      case "DP":
+        return t(
+          "transactions.deleteDp",
+          "A reservation's DP paid part of this sale.",
+        );
       default:
         return undefined;
     }

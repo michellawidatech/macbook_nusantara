@@ -125,7 +125,10 @@ import {
   isVisit,
   openVisits,
   reprojectHolds,
+  softHolds,
 } from "../../lib/reservations.js";
+import { dpToApply, recordDpBlock } from "../../lib/dp.js";
+import { RecordDpModal } from "../../components/RecordDpModal";
 import {
   ADDRESS_FIELDS,
   composeAddress,
@@ -728,6 +731,8 @@ export function StockOutPage() {
   const [invoiceFor, setInvoiceFor] = useState<Order | null>(null);
   const [newCustomerOpen, setNewCustomerOpen] = useState(false);
   const [reservationPickerOpen, setReservationPickerOpen] = useState(false);
+  /** The reservation a DP is being recorded on, from the picker (2026-10-27). */
+  const [dpFor, setDpFor] = useState<string | null>(null);
   /**
    * The catalogue as a dialog, on a phone (owner ask 2026-09-01).
    *
@@ -754,7 +759,18 @@ export function StockOutPage() {
   // a visit holds nothing, but the customer standing at the counter is the
   // one the bot booked, and picking it loads them into the sale.
   const activeReservations = useMemo(
-    () => [...activeHolds(db), ...openVisits(db)],
+    () => [
+      ...activeHolds(db),
+      ...openVisits(db),
+      // A DP whose hold ran out (2026-10-27): nothing is held, but the
+      // customer may still come and the DP still counts toward their sale.
+      ...db.reservations.filter(
+        (r) =>
+          r.status === "ACTIVE" &&
+          dpToApply(r) !== undefined &&
+          heldItems(db, r).length === 0,
+      ),
+    ],
     [db],
   );
 
@@ -778,9 +794,20 @@ export function StockOutPage() {
     const picked = db.reservations.filter((r) => ids.includes(r.id));
     if (!picked.length) return;
     // A visit brings the customer and the channel, and no unit: nothing was
-    // held, so what they buy is picked off the shelf like any other sale.
-    if (picked.every(isVisit)) {
-      const visit = picked[0]!;
+    // held, so what they buy is picked off the shelf like any other sale. So
+    // does a DP whose hold ran out (2026-10-27): the units went back on sale,
+    // but the customer came after all and the DP still counts toward it.
+    const wantedSerials = only ? new Set(only) : null;
+    const stillWanted = picked.flatMap((r) =>
+      heldItems(db, r).filter(
+        (i) => !wantedSerials || wantedSerials.has(i.serial),
+      ),
+    );
+    if (
+      picked.every(isVisit) ||
+      (stillWanted.length === 0 && picked.some((r) => dpToApply(r)))
+    ) {
+      const visit = picked.find((r) => dpToApply(r)) ?? picked[0]!;
       setCustomerId((prev) => prev ?? visit.customerId);
       const channel = db.reservationSources.find(
         (s) => s.id === visit.sourceId,
@@ -790,11 +817,26 @@ export function StockOutPage() {
       setFromReservations((prev) => [...new Set([...prev, visit.id])]);
       setReservationPickerOpen(false);
       const who = db.customers.find((c) => c.id === visit.customerId);
+      const dp = dpToApply(visit);
       message.success(
-        t("pos.loadedFromVisit", "Loaded {{name}} from the visit {{code}}.", {
-          name: who ? customerLabel(who) : fmtNone(),
-          code: visit.code,
-        }),
+        dp
+          ? t(
+              "pos.loadedDp",
+              "Loaded {{name}} and the DP of {{amount}} from {{code}} — pick the unit(s) off the shelf.",
+              {
+                name: who ? customerLabel(who) : fmtNone(),
+                amount: fmtRp(dp.amount),
+                code: visit.code,
+              },
+            )
+          : t(
+              "pos.loadedFromVisit",
+              "Loaded {{name}} from the visit {{code}}.",
+              {
+                name: who ? customerLabel(who) : fmtNone(),
+                code: visit.code,
+              },
+            ),
       );
       return;
     }
@@ -1050,6 +1092,44 @@ export function StockOutPage() {
   const total = totals.total;
 
   /**
+   * A reservation's DP this sale takes (owner, 2026-10-27): it came in on its
+   * own day, so it counts toward the bill automatically and the chips below
+   * ask only for the rest. It goes on the order as the SAME payment
+   * (`SalePayment.reservationId`), never a copy — see lib/dp.ts.
+   */
+  const dpPaid = useMemo(
+    () =>
+      fromReservations.flatMap((id) => {
+        const r = db.reservations.find((x) => x.id === id);
+        const dp = r ? dpToApply(r) : undefined;
+        return dp && r ? [{ payment: dp, code: r.code }] : [];
+      }),
+    [fromReservations, db.reservations],
+  );
+  const dpTotal = dpPaid.reduce((n, d) => n + d.payment.amount, 0);
+  /** What is still to collect at the counter, after any DP. */
+  const collect = Math.max(0, total - dpTotal);
+  /**
+   * Units on this sale reserved for SOMEBODY ELSE who paid no DP (2026-10-27)
+   * — on sale all along, so sellable; the confirmation names them, and
+   * recording the sale takes each off its hold and leaves a task to tell
+   * that customer.
+   */
+  const softHeld = useMemo(() => softHolds(db), [db]);
+  /** Who a softly reserved unit is reserved for, as the tags say it. */
+  const reservedFor = (serial: string): string => {
+    const r = softHeld.get(serial);
+    const c = db.customers.find((x) => x.id === r?.customerId);
+    return c ? customerLabel(c) : (r?.code ?? fmtNone());
+  };
+  const soldOver = lines.flatMap((l) => {
+    const r = l.serial ? softHeld.get(l.serial) : undefined;
+    return r && l.serial && !fromReservations.includes(r.id)
+      ? [{ serial: l.serial, reservation: r }]
+      : [];
+  });
+
+  /**
    * The payment chips with their arithmetic done — each part's split, what
    * was paid on it and what is still owed (`lib/tillPayments.ts`).
    *
@@ -1058,7 +1138,7 @@ export function StockOutPage() {
    * the bill before the trade-in, so a Rp10jt sale with a Rp2jt trade-in put
    * Rp10jt of cash in a drawer that had received eight.
    */
-  const payRows = tillRows(total, payParts);
+  const payRows = tillRows(collect, payParts);
   /** Change one payment row — what was typed against one chip. */
   const setPart = (i: number, patch: Partial<TillPart>) =>
     setPayParts((parts) =>
@@ -1068,7 +1148,7 @@ export function StockOutPage() {
   const saleRefShown = saleRefNeeded(source, payParts);
   const saleRef = saleRefShown ? payRef : "";
   const payProblems = tillProblems({
-    total,
+    total: collect,
     source,
     parts: payParts,
     ref: saleRef,
@@ -1279,14 +1359,18 @@ export function StockOutPage() {
       listPrices[l.serial!] = listed;
     }
     // What the chips say, as the payment list every finance screen reads.
-    const parts = tillPayments({
-      total,
-      parts: payParts,
-      at: new Date().toISOString(),
-      ...(payDueAt ? { dueAt: payDueAt } : {}),
-      ...(saleRef.trim() ? { ref: saleRef } : {}),
-      newId: () => nextId("pay"),
-    });
+    const parts = [
+      // The DP first: it was paid first, and it is the reservation's own row.
+      ...dpPaid.map((d) => d.payment),
+      ...tillPayments({
+        total: collect,
+        parts: payParts,
+        at: new Date().toISOString(),
+        ...(payDueAt ? { dueAt: payDueAt } : {}),
+        ...(saleRef.trim() ? { ref: saleRef } : {}),
+        newId: () => nextId("pay"),
+      }),
+    ];
     const order: Order = {
       id: nextId("o"),
       code,
@@ -1447,6 +1531,28 @@ export function StockOutPage() {
       if (rule) {
         const r = d.discounts.find((x) => x.id === rule.id);
         if (r) r.used += 1;
+      }
+      // The DP this sale took (2026-10-27): the reservation's own payment is
+      // the sale's now too — before the projection, so a hold whose DP is on
+      // a sale can close as collected.
+      for (const dp of dpPaid) {
+        const r = d.reservations.find((x) => x.id === dp.payment.reservationId);
+        if (r?.dp) r.dp.orderId = order.id;
+      }
+      // Sold over a hold nobody paid for (2026-10-27): the unit leaves that
+      // hold, the hold says so in its note, and the server leaves a colleague
+      // the task of telling the customer.
+      for (const { serial, reservation } of soldOver) {
+        const r = d.reservations.find((x) => x.id === reservation.id);
+        if (!r) continue;
+        r.items = r.items.filter((i) => i.serial !== serial);
+        const line = t(
+          "pos.soldOverNote",
+          "{{serial}} was sold to another buyer on {{code}}.",
+          { serial, code },
+        );
+        r.note = r.note.trim() ? `${r.note.trim()}\n${line}` : line;
+        if (r.items.length === 0) r.status = "CANCELLED";
       }
       // Header projections, in the same transaction as the sale that moved the
       // units. A hold whose last machine has just gone reads DONE; one with
@@ -2042,6 +2148,14 @@ export function StockOutPage() {
             >
               {l.serial ?? fmtNone()}
             </Typography.Text>
+            {/* Reserved for somebody else, unpaid (2026-10-27). */}
+            {soldOver.some((x) => x.serial === l.serial) && (
+              <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                {t("pos.reservedNotPaid", "Reserved for {{name}}, not paid", {
+                  name: reservedFor(l.serial!),
+                })}
+              </Typography.Text>
+            )}
           </Flex>
           <Flex gap={0}>
             <Tooltip
@@ -2382,6 +2496,24 @@ export function StockOutPage() {
             {fmtRp(totals.total)}
           </Typography.Text>
         </Flex>
+        {/* The DP the reservation already took (2026-10-27): counted toward
+            the bill, so the payment below asks only for what is left. */}
+        {dpPaid.map((d) => (
+          <Flex key={d.payment.id} justify="space-between">
+            <span>
+              {t("pos.dpAlreadyPaid", "DP already paid ({{code}})", {
+                code: d.code,
+              })}
+            </span>
+            <span>−{fmtRp(d.payment.amount)}</span>
+          </Flex>
+        ))}
+        {dpTotal > 0 && (
+          <Flex justify="space-between">
+            <strong>{t("pos.leftToPay", "Left to pay")}</strong>
+            <strong>{fmtRp(collect)}</strong>
+          </Flex>
+        )}
         {belowCost.length > 0 && (
           <Typography.Text type="danger" style={{ fontSize: 12 }}>
             {t(
@@ -3942,6 +4074,15 @@ export function StockOutPage() {
                         <Tag color="orange">{t("pos.onHold", "On hold")}</Tag>
                       </Tooltip>
                     )}
+                    {softHeld.has(u.serial) && (
+                      <Tag color="gold">
+                        {t(
+                          "pos.reservedNotPaid",
+                          "Reserved for {{name}}, not paid",
+                          { name: reservedFor(u.serial) },
+                        )}
+                      </Tag>
+                    )}
                     <Button
                       type="primary"
                       size="small"
@@ -4068,7 +4209,9 @@ export function StockOutPage() {
         okText={
           belowCost.length > 0
             ? t("pos.recordAtALoss", "Record at a loss")
-            : t("pos.confirmOk", "Record it")
+            : soldOver.length > 0
+              ? t("pos.sellAnyway", "Sell anyway")
+              : t("pos.confirmOk", "Record it")
         }
         okButtonProps={{ danger: belowCost.length > 0 }}
         cancelText={t("pos.confirmCancel", "Not yet")}
@@ -4100,6 +4243,15 @@ export function StockOutPage() {
                   </Typography.Text>
                 ),
               },
+              ...dpPaid.map((d) => ({
+                key: `dp-${d.payment.id}`,
+                label: t("pos.dpShort", "DP"),
+                children: t(
+                  "pos.dpConfirmLine",
+                  "{{amount}} already paid ({{code}})",
+                  { amount: fmtRp(d.payment.amount), code: d.code },
+                ),
+              })),
               {
                 key: "c",
                 label: t("pos.channel", "CHANNEL"),
@@ -4182,6 +4334,30 @@ export function StockOutPage() {
               )}
             />
           )}
+          {/* Reserved for somebody else who paid no DP (2026-10-27): on sale
+              all along, so this sale may take it — after asking. */}
+          {soldOver.map(({ serial, reservation }) => {
+            const who = db.customers.find(
+              (c) => c.id === reservation.customerId,
+            );
+            return (
+              <Alert
+                key={serial}
+                type="warning"
+                showIcon
+                title={t(
+                  "pos.soldOverAsk",
+                  "{{serial}} is held for {{name}}, not paid. Sell anyway?",
+                  { serial, name: who ? customerLabel(who) : reservation.code },
+                )}
+                description={t(
+                  "pos.soldOverBody",
+                  "Recording the sale takes it off {{code}}, and a colleague gets the task of telling them.",
+                  { code: reservation.code },
+                )}
+              />
+            );
+          })}
           {payParts.some((p) => isMarketplaceMethod(p.method)) && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {t(
@@ -4268,8 +4444,8 @@ export function StockOutPage() {
       >
         <Typography.Paragraph type="secondary">
           {t(
-            "pos.reservationPickerHint",
-            "Picking one loads its unit and customer into the sale below. The hold is released when you record the sale, not now.",
+            "pos.reservationPickerHintDp",
+            "Picking one loads its units, its customer and any DP into the sale below. Only a reservation with a DP holds its units; without one they are still on sale.",
           )}
         </Typography.Paragraph>
         <ProTable
@@ -4339,9 +4515,29 @@ export function StockOutPage() {
               },
             },
             {
-              title: t("pos.holdUntil", "Hold until"),
+              title: t("pos.expectedOn", "Expected on"),
               dataIndex: "when",
               render: fmtDateTime,
+            },
+            {
+              // Only a DP holds (2026-10-27). A DP already paid counts toward
+              // the sale; none means the units were never off sale.
+              title: t("pos.dp", "DP"),
+              key: "dp",
+              render: (_, r) =>
+                isVisit(r) ? (
+                  fmtNone()
+                ) : r.dp ? (
+                  <Typography.Text>
+                    {t("pos.dpPaidShort", "{{amount}} paid", {
+                      amount: fmtRp(r.dp.amount),
+                    })}
+                  </Typography.Text>
+                ) : (
+                  <Tag color="gold" style={{ marginInline: 0 }}>
+                    {t("dp.notPaid", "Not paid")}
+                  </Tag>
+                ),
             },
             {
               title: t("pos.price", "Price"),
@@ -4366,18 +4562,37 @@ export function StockOutPage() {
               key: "actions",
               width: COLUMN.actionsPair,
               render: (_, r) => (
-                <Button
-                  type="primary"
-                  size="small"
-                  onClick={() => applyReservations([r.id])}
-                >
-                  {t("pos.useThis", "Use this")}
-                </Button>
+                <Flex gap={8} wrap>
+                  {recordDpBlock(db, r) === undefined && (
+                    <Button size="small" onClick={() => setDpFor(r.id)}>
+                      {t("dp.record", "Record DP")}
+                    </Button>
+                  )}
+                  <Button
+                    type="primary"
+                    size="small"
+                    onClick={() => applyReservations([r.id])}
+                  >
+                    {t("pos.useThis", "Use this")}
+                  </Button>
+                </Flex>
               ),
             },
           ]}
         />
       </Modal>
+
+      <RecordDpModal
+        reservation={
+          dpFor ? (db.reservations.find((r) => r.id === dpFor) ?? null) : null
+        }
+        customerName={(() => {
+          const r = db.reservations.find((x) => x.id === dpFor);
+          const c = db.customers.find((x) => x.id === r?.customerId);
+          return c ? customerLabel(c) : fmtNone();
+        })()}
+        onClose={() => setDpFor(null)}
+      />
 
       <Modal
         title={t("pos.addCustomer", "Add customer")}

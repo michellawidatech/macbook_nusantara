@@ -20,7 +20,9 @@
  */
 
 import type { PrismaClient } from "@nusantara/db";
+import { DP_SETTING_KEYS, dpRuleOf } from "@nusantara/domain";
 import { STORE_HOURS } from "./hours.js";
+import type { DpTerms } from "./policy.js";
 
 export interface StoreFacts {
   readonly name: string | null;
@@ -29,6 +31,11 @@ export interface StoreFacts {
   readonly stores: ReadonlyArray<{ name: string; address: string | null }>;
   /** Customer-facing words for the active payment methods, in shop order. */
   readonly paymentMethods: readonly string[];
+  /**
+   * The DP rule (owner, 2026-10-27) — `sales.dpAmount` / `sales.dpDays`, or
+   * Rp500.000 for 7 days. What the bot says when asked to keep a unit.
+   */
+  readonly dp: DpTerms;
 }
 
 /**
@@ -53,7 +60,16 @@ const PAYMENT_WORDS: Readonly<Record<string, string>> = {
 export async function loadStoreFacts(db: PrismaClient): Promise<StoreFacts> {
   const [settings, stores, methods] = await Promise.all([
     db.appSetting.findMany({
-      where: { key: { in: ["shop.name", "shop.contact"] } },
+      where: {
+        key: {
+          in: [
+            "shop.name",
+            "shop.contact",
+            DP_SETTING_KEYS.amount,
+            DP_SETTING_KEYS.days,
+          ],
+        },
+      },
       select: { key: true, value: true },
     }),
     db.location.findMany({
@@ -76,6 +92,10 @@ export async function loadStoreFacts(db: PrismaClient): Promise<StoreFacts> {
     paymentMethods: methods
       .filter((m) => !NOT_CUSTOMER_FACING.has(m.code))
       .map((m) => PAYMENT_WORDS[m.code] ?? m.label),
+    dp: dpRuleOf({
+      amount: setting(DP_SETTING_KEYS.amount),
+      days: setting(DP_SETTING_KEYS.days),
+    }),
   };
 }
 
@@ -107,6 +127,9 @@ export function renderStoreFacts(facts: StoreFacts): string {
     lines.push(
       `At the shop a customer can pay by ${facts.paymentMethods.join(", ")}.`,
     );
+  lines.push(
+    `To keep a unit for a customer, the shop asks a DP of Rp ${String(facts.dp.amount).replace(/\B(?=(\d{3})+(?!\d))/g, ".")} and holds the unit ${facts.dp.days} days; the customer sends the transfer proof and a colleague checks it before anything is held. Without a DP nothing is held.`,
+  );
   return lines.join("\n");
 }
 
