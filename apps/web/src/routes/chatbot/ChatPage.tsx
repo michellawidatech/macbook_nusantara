@@ -15,7 +15,8 @@
  *    task strip (owner, 2026-10-15: "just highlight the unanswered chat (add
  *    a shadow / outline, not a popup modal)"). Every bot reply is rated 👍 / 👎
  *    (`ReplyRating`) — that replaced "Fix this". The reply box writes, asks
- *    the bot for a draft, or attaches a unit's QC photos.
+ *    the bot for a draft, or — behind the 📎 — attaches a unit's QC photos or
+ *    a picture from this device (`SendPictureModal`, 2026-10-27).
  *  - **What was sent** (2026-10-23, `SentItems`): a photo the shop sent is
  *    drawn at its time, and every sent bubble carries a ⋯ to edit (a text,
  *    15 minutes) or unsend it. A reply bubble finds its outbox row by
@@ -101,6 +102,7 @@ import { CustomerProfilePanel } from "./CustomerProfilePanel.js";
 import { ReplyRating } from "./ReplyRating.js";
 import { ThreadList, threadName } from "./ThreadList.js";
 import { UnitPhotoPicker } from "./UnitPhotoPicker.js";
+import { SendPictureModal } from "./SendPictureModal.js";
 import { useInbox } from "../../hooks/useInbox.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { asString } from "../../lib/draftGuards.js";
@@ -171,6 +173,7 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [mediaOpen, setMediaOpen] = useState(false);
+  const [pictureOpen, setPictureOpen] = useState(false);
   const [attaching, setAttaching] = useState(false);
   /** Delete conversation's dialog, and the number typed into it. */
   const [deleting, setDeleting] = useState(false);
@@ -833,7 +836,13 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
                             <RobotOutlined /> {t("chat.bot", "Bot")}
                           </>
                         ) : b.key.endsWith(":sent") ? (
-                          t("chat.sentByShop", "Sent")
+                          b.sent?.sentBy ? (
+                            t("chat.sentByName", "Sent by {{name}}", {
+                              name: b.sent.sentBy,
+                            })
+                          ) : (
+                            t("chat.sentByShop", "Sent")
+                          )
                         ) : (
                           (b.by ?? t("chat.staff", "Staff"))
                         )}
@@ -861,7 +870,14 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
                         : t("chat.unsentLabel", "Unsent")}
                     </Typography.Text>
                   ) : b.sent?.kind === "WA_IMAGE" && active ? (
-                    <SentPhoto phone={active} item={b.sent} />
+                    <>
+                      <SentPhoto phone={active} item={b.sent} />
+                      {b.sent.caption && (
+                        <div style={{ whiteSpace: "pre-wrap" }}>
+                          {b.sent.caption}
+                        </div>
+                      )}
+                    </>
                   ) : (
                     <div style={{ whiteSpace: "pre-wrap" }}>{b.text}</div>
                   )}
@@ -972,14 +988,35 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
               </Button>
             </Tooltip>
             <Flex gap={6}>
-              <Tooltip title={t("chat.attachMedia", "Attach a unit's photos")}>
+              {/* One 📎, two sources: a unit's QC photos from the POS, or a
+                  picture from this computer or phone (2026-10-27). */}
+              <Dropdown
+                trigger={["click"]}
+                disabled={!windowOpen}
+                menu={{
+                  items: [
+                    {
+                      key: "unit",
+                      label: t("chat.attachMedia", "Attach a unit's photos"),
+                    },
+                    {
+                      key: "device",
+                      label: t(
+                        "chat.attachPicture",
+                        "Send a picture from this device",
+                      ),
+                    },
+                  ],
+                  onClick: ({ key }) =>
+                    key === "unit" ? setMediaOpen(true) : setPictureOpen(true),
+                }}
+              >
                 <Button
                   icon={<PaperClipOutlined />}
-                  aria-label={t("chat.attachMedia", "Attach a unit's photos")}
+                  aria-label={t("chat.attach", "Attach")}
                   disabled={!windowOpen}
-                  onClick={() => setMediaOpen(true)}
                 />
-              </Tooltip>
+              </Dropdown>
               <Button
                 type="primary"
                 icon={<SendOutlined />}
@@ -1067,6 +1104,16 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
           />
         </Flex>
       </Modal>
+
+      <SendPictureModal
+        phone={active}
+        open={pictureOpen}
+        onClose={() => setPictureOpen(false)}
+        onSent={() => {
+          setPictureOpen(false);
+          refresh();
+        }}
+      />
 
       <UnitPhotoPicker
         open={mediaOpen}

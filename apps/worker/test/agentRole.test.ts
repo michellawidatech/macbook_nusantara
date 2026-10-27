@@ -505,6 +505,146 @@ describe("a chat staff cleared, read as nusantara_agent (2026-10-27)", () => {
   });
 });
 
+describe("a picture staff sent from their own device (2026-10-27)", () => {
+  const BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const CREDS = {
+    whatsappToken: "t",
+    phoneNumberId: "1",
+    graphVersion: "v25.0",
+  };
+
+  /** A ChatMedia row and the WA_IMAGE naming it, written as the API does. */
+  async function queued(payload: Record<string, unknown>) {
+    await owner.staff.create({
+      data: {
+        id: "st_pic",
+        username: "dina",
+        name: "Dina",
+        role: "STAFF",
+        canApprove: false,
+        active: true,
+        passwordHash: "unusable",
+        createdAt: NOW,
+      },
+    });
+    const media = await owner.chatMedia.create({
+      data: {
+        from: FROM,
+        data: BYTES,
+        contentType: "image/png",
+        size: BYTES.length,
+        uploadedById: "st_pic",
+      },
+    });
+    await owner.outbox.create({
+      data: {
+        kind: "WA_IMAGE",
+        payload: { to: FROM, chatMediaId: media.id, ...payload },
+        status: "PENDING",
+        attempts: 0,
+        nextAttemptAt: NOW,
+        createdAt: NOW,
+      },
+    });
+    return media.id;
+  }
+
+  /** Graph, answering the upload and the send, keeping what it was sent. */
+  function graph() {
+    const calls: { url: string; body: unknown }[] = [];
+    const fetchImpl = (async (
+      url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      calls.push({ url: String(url), body: init?.body });
+      const body = String(url).endsWith("/media")
+        ? { id: "media-pic" }
+        : { messages: [{ id: "3EB0PIC" }] };
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as unknown as typeof fetch;
+    return { calls, fetchImpl };
+  }
+
+  it("reads the bytes and sends them, caption and all", async () => {
+    await queued({ caption: "Ini fotonya kak" });
+    const { calls, fetchImpl } = graph();
+    const result = await sendPass({
+      db: agent,
+      logger,
+      credentials: CREDS,
+      maxSendsPerTick: 5,
+      fetchImpl,
+      now: () => NOW,
+    });
+    expect(result.sent).toBe(1);
+    expect(calls).toHaveLength(2);
+    const form = calls[0]!.body as FormData;
+    expect(form.get("type")).toBe("image/png");
+    const file = form.get("file") as Blob;
+    expect(Buffer.from(await file.arrayBuffer())).toEqual(BYTES);
+    expect(JSON.parse(String(calls[1]!.body))).toMatchObject({
+      to: FROM,
+      type: "image",
+      image: { id: "media-pic", caption: "Ini fotonya kak" },
+    });
+    const row = await owner.outbox.findFirstOrThrow({});
+    expect(row.status).toBe("SENT");
+    expect(row.providerMessageId).toBe("3EB0PIC");
+  });
+
+  it("never sends one customer's picture to another", async () => {
+    await queued({ to: "628111000999" });
+    const { calls, fetchImpl } = graph();
+    const result = await sendPass({
+      db: agent,
+      logger,
+      credentials: CREDS,
+      maxSendsPerTick: 5,
+      fetchImpl,
+      now: () => NOW,
+    });
+    expect(result.sent).toBe(0);
+    expect(calls).toHaveLength(0);
+    expect((await owner.outbox.findFirstOrThrow({})).status).toBe("FAILED");
+  });
+
+  it("refuses a payload naming both a QC photo and a picture", async () => {
+    await queued({ photoId: "ph_x" });
+    const { calls, fetchImpl } = graph();
+    await sendPass({
+      db: agent,
+      logger,
+      credentials: CREDS,
+      maxSendsPerTick: 5,
+      fetchImpl,
+      now: () => NOW,
+    });
+    expect(calls).toHaveLength(0);
+    const row = await owner.outbox.findFirstOrThrow({});
+    expect(row.status).toBe("FAILED");
+    expect(row.lastError).toMatch(/malformed WA_IMAGE/);
+  });
+
+  it("may read a picture and never write one", async () => {
+    const id = await queued({});
+    expect(
+      (await agent.chatMedia.findUniqueOrThrow({ where: { id } })).size,
+    ).toBe(BYTES.length);
+    await expect(
+      agent.chatMedia.create({
+        data: {
+          from: FROM,
+          data: BYTES,
+          contentType: "image/png",
+          size: BYTES.length,
+          uploadedById: "st_pic",
+        },
+      }),
+    ).rejects.toThrow();
+    await expect(agent.chatMedia.delete({ where: { id } })).rejects.toThrow();
+  });
+});
+
 describe("the roles stay separate", () => {
   it("refuses the lease to nusantara_app", async () => {
     const app = new PrismaClient({

@@ -882,6 +882,97 @@ describe("clearing and deleting a chat, taking a rating back (2026-10-27)", () =
   });
 });
 
+describe("a picture staff sent from their own device (2026-10-27)", () => {
+  const FROM = "628111000779";
+  const PNG = "\\x89504e470d0a1a0a";
+
+  it("is written by the app, read by the agent, deleted by neither", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_app','"ChatMedia"','INSERT')     AS app_insert,
+              has_table_privilege('nusantara_app','"ChatMedia"','SELECT')     AS app_select,
+              has_table_privilege('nusantara_app','"ChatMedia"','UPDATE')     AS app_update,
+              has_table_privilege('nusantara_app','"ChatMedia"','DELETE')     AS app_delete,
+              has_table_privilege('nusantara_agent','"ChatMedia"','SELECT')   AS agent_select,
+              has_table_privilege('nusantara_agent','"ChatMedia"','INSERT')   AS agent_insert,
+              has_table_privilege('nusantara_agent','"ChatMedia"','DELETE')   AS agent_delete,
+              has_table_privilege('nusantara_readonly','"ChatMedia"','SELECT') AS ro_select`,
+    );
+    expect(rows[0]).toEqual({
+      app_insert: true,
+      app_select: true,
+      app_update: false,
+      app_delete: false,
+      agent_select: true,
+      agent_insert: false,
+      agent_delete: false,
+      ro_select: true,
+    });
+
+    await app.query(
+      `INSERT INTO "ChatMedia" (id, "from", data, "contentType", size, "uploadedById")
+       VALUES ('cm_1', $1, $2::bytea, 'image/png', 8, $3)`,
+      [FROM, PNG, STAFF],
+    );
+    const { rows: read } = await agent.query(
+      `SELECT size FROM "ChatMedia" WHERE id = 'cm_1'`,
+    );
+    expect(read).toEqual([{ size: 8 }]);
+    await rejectsWith(
+      () => app.query(`DELETE FROM "ChatMedia" WHERE id = 'cm_1'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    await rejectsWith(
+      () => app.query(`UPDATE "ChatMedia" SET size = 8 WHERE id = 'cm_1'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    await rejectsWith(
+      () =>
+        agent.query(
+          `INSERT INTO "ChatMedia" (id, "from", data, "contentType", size, "uploadedById")
+           VALUES ('cm_2', $1, $2::bytea, 'image/png', 8, $3)`,
+          [FROM, PNG, STAFF],
+        ),
+      INSUFFICIENT_PRIVILEGE,
+    );
+  });
+
+  it("holds the route's rules: three types, a true size, 5 MB at most", async () => {
+    const insert = (type: string, size: number, from = FROM) =>
+      app.query(
+        `INSERT INTO "ChatMedia" (id, "from", data, "contentType", size, "uploadedById")
+         VALUES ('cm_' || md5(random()::text), $1, $2::bytea, $3, $4, $5)`,
+        [from, PNG, type, size, STAFF],
+      );
+    await rejectsWith(() => insert("image/gif", 8), CHECK_VIOLATION);
+    await rejectsWith(() => insert("image/png", 9), CHECK_VIOLATION);
+    await rejectsWith(() => insert("image/png", 8, "+62811"), CHECK_VIOLATION);
+    await insert("image/webp", 8);
+  });
+
+  it("goes with a deleted conversation, and only that one's", async () => {
+    await owner.query(
+      `INSERT INTO "WaMessage" (id, "waMessageId", "from", "msgType", ts, direction, status, entities, "answeredByAgent")
+       VALUES ('wm_p1','wamid.p1',$1,'text',now(),'IN','BARU','{}',false)`,
+      [FROM],
+    );
+    await owner.query(
+      `INSERT INTO "ChatMedia" (id, "from", data, "contentType", size, "uploadedById")
+       VALUES ('cm_mine', $1, $3::bytea, 'image/png', 8, $4),
+              ('cm_theirs', $2, $3::bytea, 'image/png', 8, $4)`,
+      [FROM, "628111000780", PNG, STAFF],
+    );
+    const { rows: n } = await app.query<{ n: number }>(
+      `SELECT wa_thread_delete($1, $2, now()::timestamp) AS n`,
+      [FROM, STAFF],
+    );
+    expect(n[0]!.n).toBe(2);
+    const { rows: left } = await owner.query(
+      `SELECT id FROM "ChatMedia" WHERE id IN ('cm_mine','cm_theirs')`,
+    );
+    expect(left).toEqual([{ id: "cm_theirs" }]);
+  });
+});
+
 describe("the stock movement history (2026-09-24)", () => {
   it("is correctable per column and never as a ledger", async () => {
     // What a person can get wrong is granted; what the row IS is not. Column

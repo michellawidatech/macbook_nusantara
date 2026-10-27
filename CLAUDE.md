@@ -3168,6 +3168,17 @@ Decisions that outlived those documents:
   says "Edited by / Unsent by {name}" from the `Outbox` audit rows. A 👍/👎 is
   taken back by pressing it again (`DELETE /api/chat/evaluations/:id`, author
   or owner, OPEN only); `nusantara_app` gained DELETE on `AgentEvaluation`.
+- **A picture from staff's own device, 2026-10-27** (migration
+  `20261027120000_chat_media`, owner-approved). The /chat 📎 offers a unit's
+  QC photos or a picture from this device (`SendPictureModal`: JPG/PNG/WebP,
+  ≤ 5 MB, refused before upload, preview, optional caption).
+  `POST /api/inbox/:phone/picture` checks type, bytes and the 24-hour window,
+  then writes **`ChatMedia`** (keyed by wa_id like `ChatMemoryChunk.from`),
+  the WA_IMAGE naming it (`chatMediaId`, exactly one of that or `photoId`) and
+  an `Outbox` CREATE audit line in ONE transaction; the worker sends it like a
+  QC photo. "Sent by {name}", Unsend works, Edit stays text-only. App SELECT +
+  INSERT, agent SELECT, DELETE for neither: `wa_thread_delete` removes them.
+  ⚠️ The Cloud API sends JPEG/PNG images only — WebP works through Baileys.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

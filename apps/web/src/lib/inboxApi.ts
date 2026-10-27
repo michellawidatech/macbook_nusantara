@@ -112,6 +112,12 @@ export interface SentItem {
   body?: string;
   /** A photo: drawn through `sentPhotoUrl`. */
   photoId?: string;
+  /** A picture staff sent from their own device (2026-10-27). */
+  chatMediaId?: string;
+  /** The line sent under a picture, when there was one. */
+  caption?: string;
+  /** Who sent a picture from their own device. */
+  sentBy?: string | null;
   /** The message it answered. */
   inReplyTo: string | null;
   /** Unsent for everyone. */
@@ -412,6 +418,17 @@ export const attachMedia = (phone: string, serials: readonly string[]) =>
     `/api/inbox/${encodeURIComponent(phone)}/media`,
     { method: "POST", body: { serials } },
   );
+
+/**
+ * Send a picture from this device (2026-10-27): a JPG, PNG or WebP of at most
+ * 5 MB, as a data URL, with an optional caption. 409 once the 24-hour window
+ * has closed, 413 / 415 for a file the server will not take.
+ */
+export const sendPicture = (phone: string, image: string, caption?: string) =>
+  api<SentItem>(`/api/inbox/${encodeURIComponent(phone)}/picture`, {
+    method: "POST",
+    body: { image, ...(caption ? { caption } : {}) },
+  });
 
 /** Where a sent photo's bytes are; 404 once the unit sold (photos purged). */
 export const sentPhotoUrl = (phone: string, outboxId: string) =>

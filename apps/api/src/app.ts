@@ -13,7 +13,7 @@ import cookieParser from "cookie-parser";
 import type { PrismaClient } from "@nusantara/db";
 import { type Logger, requestLogger } from "@nusantara/logging";
 import type { ApiConfig } from "./config.js";
-import { errorHandler, notFoundHandler } from "./errors.js";
+import { ApiError, errorHandler, notFoundHandler } from "./errors.js";
 import {
   requireAuth,
   requireOwner,
@@ -28,6 +28,7 @@ import { katalogRouter } from "./routes/katalog.js";
 import { inboundRouter } from "./routes/inbound.js";
 import { chatRouter } from "./routes/chat.js";
 import { inboxRouter } from "./routes/inbox.js";
+import { PICTURE_BODY_LIMIT, PICTURE_PATH } from "./routes/inboxSent.js";
 import { reservationsRouter } from "./routes/reservations.js";
 import { kontrolRouter } from "./routes/kontrol.js";
 import { storeRouter } from "./routes/store.js";
@@ -84,9 +85,27 @@ export function createApp(deps: CreateAppDeps): Express {
   // alone gets a large body; every other endpoint keeps the small limit.
   const smallJson = express.json({ limit: config.bodyLimit });
   const storeJson = express.json({ limit: STORE_BODY_LIMIT });
-  app.use((req, res, next) =>
-    (req.path === "/api/store/commit" ? storeJson : smallJson)(req, res, next),
-  );
+  // A picture sent from staff's own device (2026-10-27) is a 5 MB image as
+  // base64 — the one other route that needs room. Over the limit is the
+  // reader's 413, not an unhandled 500.
+  const pictureJson = express.json({ limit: PICTURE_BODY_LIMIT });
+  app.use((req, res, next) => {
+    if (req.path === "/api/store/commit") return storeJson(req, res, next);
+    if (PICTURE_PATH.test(req.path))
+      return pictureJson(req, res, (err?: unknown) =>
+        next(
+          (err as { type?: string } | undefined)?.type === "entity.too.large"
+            ? new ApiError(
+                413,
+                "VALIDASI",
+                "Gambar terlalu besar (maksimal 5 MB).",
+                { field: "image" },
+              )
+            : err,
+        ),
+      );
+    return smallJson(req, res, next);
+  });
   app.use(cookieParser());
 
   const api = Router();

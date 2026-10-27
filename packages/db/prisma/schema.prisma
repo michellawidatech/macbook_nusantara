@@ -1200,6 +1200,7 @@ model Staff {
   profileFacts             CustomerProfileFact[]
   evaluationsWritten       AgentEvaluation[]     @relation("AgentEvaluationCreatedBy")
   evaluationsReviewed      AgentEvaluation[]     @relation("AgentEvaluationReviewedBy")
+  chatMediaUploaded        ChatMedia[]           @relation("ChatMediaUploadedBy")
 }
 
 model StaffSession {
@@ -1679,6 +1680,29 @@ model ChatMemoryChunk {
   // message has to take its chunk with it rather than leave the words behind.
   fromMessage WaMessage @relation("ChatMemoryChunkFrom", fields: [fromMessageId], references: [id], onDelete: Restrict)
   toMessage   WaMessage @relation("ChatMemoryChunkTo", fields: [toMessageId], references: [id], onDelete: Restrict)
+
+  @@index([from, createdAt])
+}
+
+/// A picture staff sent a customer from their own device (owner ask
+/// 2026-10-27) — not a unit's QC photo, so it has no `UnitNotePhoto` to live
+/// in. The API writes it with the WA_IMAGE `Outbox` row that names it
+/// (`payload.chatMediaId`) in one transaction; the worker reads the bytes at
+/// send time, as it reads a QC photo's. Never updated and never deleted by a
+/// writer role: `wa_thread_delete` removes a deleted conversation's.
+model ChatMedia {
+  id           String   @id @default(cuid())
+  /// wa_id — the thread key WaMessage, WaThreadMemory and ChatMemoryChunk use.
+  from         String
+  /// The image as uploaded. JPEG, PNG or WebP, at most 5 MB (CHECK).
+  data         Bytes
+  contentType  String
+  /// octet_length(data), kept so a list never has to read the bytes.
+  size         Int
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  uploadedBy Staff @relation("ChatMediaUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
 
   @@index([from, createdAt])
 }

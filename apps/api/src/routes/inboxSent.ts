@@ -7,6 +7,9 @@
  *   GET  /api/inbox/:phone/sent/:outboxId/photo    the bytes of a sent photo
  *   POST /api/inbox/:phone/sent/:outboxId/unsend   delete for everyone
  *   POST /api/inbox/:phone/sent/:outboxId/edit     {text}: correct a sent text
+ *   POST /api/inbox/:phone/picture                 {image, caption?}: send a
+ *                                                  picture from staff's own
+ *                                                  device (2026-10-27)
  *
  * The sent items themselves ride on `GET /api/inbox/:phone` (`sentItemsFor`).
  *
@@ -37,9 +40,10 @@
 
 import { type Router } from "express";
 import { z } from "zod";
-import type { Prisma, PrismaClient } from "@nusantara/db";
+import { enqueueOutbox, type Prisma, type PrismaClient } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import { currentRequestId } from "@nusantara/logging";
+import { isWithinWindow } from "@nusantara/whatsapp";
 import { ApiError, notFound } from "../errors.js";
 import { callGateway, type GatewayTarget } from "../gatewayClient.js";
 
@@ -66,6 +70,81 @@ const idParam = z
   .trim()
   .regex(/^[A-Za-z0-9_-]{1,64}$/);
 const editBody = z.object({ text: z.string().trim().min(1).max(4_000) });
+
+/**
+ * A picture from staff's own device (owner ask 2026-10-27): what it may be.
+ * The `ChatMedia` CHECK holds the same three types and the same ceiling, so
+ * a writer that skipped this route would still be refused.
+ */
+export const PICTURE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+export const PICTURE_MAX_BYTES = 5 * 1024 * 1024;
+/** WhatsApp's own limit on an image caption. */
+export const PICTURE_CAPTION_MAX = 1_024;
+/**
+ * The body limit `app.ts` gives this one route: a 5 MB picture is ~6.7 MB as
+ * base64, plus the caption and the JSON around them.
+ */
+export const PICTURE_BODY_LIMIT = "8mb";
+/** The path that limit applies to. */
+export const PICTURE_PATH = /^\/api\/inbox\/\d{6,20}\/picture$/;
+
+const pictureBody = z
+  .object({
+    /** A data URL, `data:image/png;base64,…` — how the app sends QC photos. */
+    image: z.string().min(1),
+    caption: z.string().trim().max(PICTURE_CAPTION_MAX).optional(),
+  })
+  .strict();
+
+type PictureType = (typeof PICTURE_TYPES)[number];
+
+/** The first bytes each type starts with — a renamed file is not a picture. */
+function looksLike(type: PictureType, b: Buffer): boolean {
+  if (type === "image/jpeg")
+    return b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+  if (type === "image/png")
+    return (
+      b.length > 8 &&
+      b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    );
+  return (
+    b.length > 12 &&
+    b.subarray(0, 4).toString("latin1") === "RIFF" &&
+    b.subarray(8, 12).toString("latin1") === "WEBP"
+  );
+}
+
+/** The picture's bytes and type, or the refusal a person reads. */
+export function decodePicture(
+  dataUrl: string,
+):
+  | { ok: true; data: Buffer; contentType: PictureType }
+  | { ok: false; status: number; message: string } {
+  const m = /^data:([^;,]+);base64,(.*)$/s.exec(dataUrl);
+  const type = m?.[1]?.toLowerCase() === "image/jpg" ? "image/jpeg" : m?.[1];
+  if (!m || !(PICTURE_TYPES as readonly string[]).includes(type ?? ""))
+    return {
+      ok: false,
+      status: 415,
+      message: "Hanya gambar JPG, PNG atau WebP yang bisa dikirim.",
+    };
+  const data = Buffer.from(m[2] ?? "", "base64");
+  if (data.length === 0)
+    return { ok: false, status: 400, message: "Gambarnya kosong." };
+  if (data.length > PICTURE_MAX_BYTES)
+    return {
+      ok: false,
+      status: 413,
+      message: "Gambar terlalu besar (maksimal 5 MB).",
+    };
+  if (!looksLike(type as PictureType, data))
+    return {
+      ok: false,
+      status: 415,
+      message: "Berkas itu bukan gambar JPG, PNG atau WebP.",
+    };
+  return { ok: true, data, contentType: type as PictureType };
+}
 
 const SENT_KINDS = ["WA_REPLY", "WA_IMAGE"] as const;
 
@@ -113,6 +192,8 @@ function payloadOf(p: unknown): {
   to: string | null;
   body: string | null;
   photoId: string | null;
+  chatMediaId: string | null;
+  caption: string | null;
   inReplyTo: string | null;
 } {
   const r = p && typeof p === "object" ? (p as Record<string, unknown>) : {};
@@ -121,6 +202,8 @@ function payloadOf(p: unknown): {
     to: str("to"),
     body: str("body"),
     photoId: str("photoId"),
+    chatMediaId: str("chatMediaId"),
+    caption: str("caption"),
     inReplyTo: str("inReplyTo"),
   };
 }
@@ -166,6 +249,12 @@ export interface SentItemJson {
   body?: string;
   /** WA_IMAGE: the photo, drawn through `/sent/:id/photo`. */
   photoId?: string;
+  /** WA_IMAGE: a picture staff sent from their own device (2026-10-27). */
+  chatMediaId?: string;
+  /** WA_IMAGE: the line sent under it, when there was one. */
+  caption?: string;
+  /** Who sent a picture from their own device — the `ChatMedia` uploader. */
+  sentBy?: string | null;
   /** The `WaMessage.id` it answered, when the writer recorded one. */
   inReplyTo: string | null;
   retractedAt: string | null;
@@ -185,6 +274,31 @@ export interface SentItemJson {
 export interface SentAttribution {
   readonly editedBy: string | null;
   readonly retractedBy: string | null;
+  /** The staff who uploaded a picture from their own device. */
+  readonly sentBy?: string | null;
+}
+
+/**
+ * Who uploaded each picture the rows name, by outbox id — read off
+ * `ChatMedia.uploadedBy`, never the bytes.
+ */
+export async function uploadersFor(
+  db: PrismaClient,
+  rows: ReadonlyArray<{ id: string; kind: string; payload: unknown }>,
+): Promise<Map<string, string>> {
+  const byMedia = new Map<string, string>();
+  for (const r of rows) {
+    const id = r.kind === "WA_IMAGE" ? payloadOf(r.payload).chatMediaId : null;
+    if (id) byMedia.set(id, r.id);
+  }
+  const out = new Map<string, string>();
+  if (byMedia.size === 0) return out;
+  const media = await db.chatMedia.findMany({
+    where: { id: { in: [...byMedia.keys()] } },
+    select: { id: true, uploadedBy: { select: { name: true } } },
+  });
+  for (const m of media) out.set(byMedia.get(m.id)!, m.uploadedBy.name);
+  return out;
 }
 
 /**
@@ -240,6 +354,10 @@ function sentJson(
     ...(row.kind === "WA_IMAGE" && p.photoId !== null
       ? { photoId: p.photoId }
       : {}),
+    ...(row.kind === "WA_IMAGE" && p.chatMediaId !== null
+      ? { chatMediaId: p.chatMediaId, sentBy: who?.sentBy ?? null }
+      : {}),
+    ...(row.kind === "WA_IMAGE" && p.caption ? { caption: p.caption } : {}),
     inReplyTo: p.inReplyTo,
     retractedAt: row.retractedAt?.toISOString() ?? null,
     editedAt: row.editedAt?.toISOString() ?? null,
@@ -276,13 +394,21 @@ export async function sentItemsFor(
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: SENT_ITEMS_SHOWN,
   });
-  const who = await attributionFor(
-    db,
-    rows.filter((r) => r.editedAt || r.retractedAt).map((r) => r.id),
+  const [who, uploaders] = await Promise.all([
+    attributionFor(
+      db,
+      rows.filter((r) => r.editedAt || r.retractedAt).map((r) => r.id),
+    ),
+    uploadersFor(db, rows),
+  ]);
+  return rows.reverse().map((r) =>
+    sentJson(r, now, opts.baileys, {
+      editedBy: null,
+      retractedBy: null,
+      ...who.get(r.id),
+      sentBy: uploaders.get(r.id) ?? null,
+    }),
   );
-  return rows
-    .reverse()
-    .map((r) => sentJson(r, now, opts.baileys, who.get(r.id)));
 }
 
 /**
@@ -316,6 +442,23 @@ export function replyOutboxIds(
     }
   }
   return out;
+}
+
+/** Everything `sentJson` says about who, for one row just written. */
+async function whoOf(
+  db: PrismaClient,
+  row: { id: string; kind: string; payload: unknown },
+): Promise<SentAttribution> {
+  const [who, uploaders] = await Promise.all([
+    attributionFor(db, [row.id]),
+    uploadersFor(db, [row]),
+  ]);
+  return {
+    editedBy: null,
+    retractedBy: null,
+    ...who.get(row.id),
+    sentBy: uploaders.get(row.id) ?? null,
+  };
 }
 
 export function registerInboxSent(
@@ -369,15 +512,26 @@ export function registerInboxSent(
 
   router.get("/:phone/sent/:outboxId/photo", async (req, res, next) => {
     try {
-      const { row } = await load(req.params["phone"], req.params["outboxId"]);
-      const photoId = payloadOf(row.payload).photoId;
-      if (row.kind !== "WA_IMAGE" || !photoId) throw notFound("Foto");
-      // Gone when the unit sold: QC photos are purged at the sale (CLAUDE.md's
-      // one sanctioned delete). The page says so; nothing is wrong.
-      const photo = await db.unitNotePhoto.findUnique({
-        where: { id: photoId },
-        select: { data: true, contentType: true },
-      });
+      const { phone, row } = await load(
+        req.params["phone"],
+        req.params["outboxId"],
+      );
+      const { photoId, chatMediaId } = payloadOf(row.payload);
+      if (row.kind !== "WA_IMAGE" || (!photoId && !chatMediaId))
+        throw notFound("Foto");
+      // A QC photo is gone when the unit sold: QC photos are purged at the
+      // sale (CLAUDE.md's one sanctioned delete). The page says so; nothing
+      // is wrong. A picture from staff's device goes only with the whole
+      // conversation, and is served only to the thread it was sent to.
+      const photo = photoId
+        ? await db.unitNotePhoto.findUnique({
+            where: { id: photoId },
+            select: { data: true, contentType: true },
+          })
+        : await db.chatMedia.findFirst({
+            where: { id: chatMediaId!, from: phone },
+            select: { data: true, contentType: true },
+          });
       if (!photo?.data || photo.data.length === 0) throw notFound("Foto");
       res.set("Content-Type", photo.contentType ?? "image/jpeg");
       res.set("Cache-Control", "private, max-age=86400");
@@ -433,7 +587,9 @@ export function registerInboxSent(
             field: null,
             before: JSON.stringify(
               row.kind === "WA_IMAGE"
-                ? { to: phone, photo: p.photoId }
+                ? p.chatMediaId
+                  ? { to: phone, picture: p.chatMediaId, caption: p.caption }
+                  : { to: phone, photo: p.photoId }
                 : { to: phone, text: p.body },
             ),
             after: null,
@@ -446,14 +602,7 @@ export function registerInboxSent(
           select: SENT_SELECT,
         });
       });
-      res.json(
-        sentJson(
-          saved,
-          at,
-          baileys,
-          (await attributionFor(db, [saved.id])).get(saved.id),
-        ),
-      );
+      res.json(sentJson(saved, at, baileys, await whoOf(db, saved)));
     } catch (err) {
       next(err);
     }
@@ -537,14 +686,109 @@ export function registerInboxSent(
           select: SENT_SELECT,
         });
       });
-      res.json(
-        sentJson(
-          saved,
-          at,
-          baileys,
-          (await attributionFor(db, [saved.id])).get(saved.id),
-        ),
-      );
+      res.json(sentJson(saved, at, baileys, await whoOf(db, saved)));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * POST /api/inbox/:phone/picture — a picture from staff's own computer or
+   * phone, not a unit's QC photo (owner ask 2026-10-27). `{ image, caption? }`,
+   * the image a data URL of a JPG, PNG or WebP of at most 5 MB.
+   *
+   * Refused up front when the 24-hour window has closed — the same rule the
+   * reply box is held to — so staff are told now rather than seeing a failed
+   * row later. Then ONE transaction, with no network in it: the `ChatMedia`
+   * row, the WA_IMAGE `Outbox` row naming it (`chatMediaId`), and the
+   * `AuditLog` line saying who (entity `Outbox`, CREATE — the same entity an
+   * unsend of it is logged under). The worker sends it like a QC photo.
+   *
+   * Any signed-in staff may send one, as any may reply.
+   */
+  router.post("/:phone/picture", async (req, res, next) => {
+    try {
+      const staff = req.staff;
+      if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
+      const phone = phoneParam.safeParse(req.params["phone"]);
+      if (!phone.success)
+        throw new ApiError(400, "VALIDASI", "Nomor WhatsApp tidak valid.");
+      const body = pictureBody.safeParse(req.body);
+      if (!body.success)
+        throw new ApiError(400, "VALIDASI", "Gambar tidak valid.", {
+          field: "image",
+        });
+      const picture = decodePicture(body.data.image);
+      if (!picture.ok)
+        throw new ApiError(picture.status, "VALIDASI", picture.message, {
+          field: "image",
+        });
+      const caption = body.data.caption || undefined;
+
+      const latest = await db.waMessage.findFirst({
+        where: { from: phone.data, direction: "IN" },
+        orderBy: { ts: "desc" },
+        select: { id: true, ts: true },
+      });
+      if (!latest) throw notFound("Percakapan");
+      if (!isWithinWindow(latest.ts, now()))
+        throw new ApiError(
+          409,
+          "KONFLIK",
+          "Jendela 24 jam WhatsApp sudah tutup — gambar tidak akan terkirim.",
+        );
+
+      const at = now();
+      const saved = await db.$transaction(async (tx) => {
+        const media = await tx.chatMedia.create({
+          data: {
+            from: phone.data,
+            data: new Uint8Array(picture.data),
+            contentType: picture.contentType,
+            size: picture.data.length,
+            uploadedById: staff.id,
+            createdAt: at,
+          },
+          select: { id: true },
+        });
+        const queued = await enqueueOutbox(tx, {
+          kind: "WA_IMAGE",
+          payload: {
+            to: phone.data,
+            chatMediaId: media.id,
+            ...(caption ? { caption } : {}),
+            inReplyTo: latest.id,
+          },
+          requestId: currentRequestId() ?? null,
+        });
+        await tx.auditLog.create({
+          data: {
+            at,
+            staffId: staff.id,
+            entity: "Outbox",
+            entityId: queued.id,
+            action: "CREATE",
+            field: null,
+            before: null,
+            after: JSON.stringify({
+              to: phone.data,
+              picture: media.id,
+              contentType: picture.contentType,
+              size: picture.data.length,
+              ...(caption ? { caption } : {}),
+            }),
+            requestId: currentRequestId() ?? req.get("x-request-id") ?? null,
+            ip: req.ip ?? null,
+          },
+        });
+        return tx.outbox.findUniqueOrThrow({
+          where: { id: queued.id },
+          select: SENT_SELECT,
+        });
+      });
+      res
+        .status(201)
+        .json(sentJson(saved, at, baileys, await whoOf(db, saved)));
     } catch (err) {
       next(err);
     }
