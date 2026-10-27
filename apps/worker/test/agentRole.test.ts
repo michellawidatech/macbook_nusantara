@@ -240,6 +240,43 @@ describe("the worker as nusantara_agent", () => {
     expect(await owner.outbox.count()).toBe(1);
   });
 
+  it("drops a draft when the customer wrote again meanwhile (2026-10-27)", async () => {
+    await inbound("sp.1", "Hmmm kemahalan", new Date(NOW.getTime() - 30_000));
+    const base = model();
+    let raced = false;
+    const racing = {
+      messages: {
+        create: async (args: CreateArgs) => {
+          if (!raced) {
+            raced = true;
+            await inbound(
+              "sp.2",
+              "ada yg 15 jutaan gak ya",
+              new Date(NOW.getTime() - 20_000),
+            );
+          }
+          return base.messages.create(args as never);
+        },
+      },
+    } as unknown as AgentClient;
+    const run = (client: AgentClient) =>
+      draftPass({
+        db: agent,
+        logger,
+        anthropic: { apiKey: "sk-ant-test" },
+        client,
+        debounceMs: 8_000,
+        maxDraftsPerTick: 5,
+        now: () => NOW,
+        superseded: new Map(),
+      });
+    expect((await run(racing)).drafted).toBe(0);
+    expect(await owner.outbox.count()).toBe(0);
+    expect((await run(base)).drafted).toBe(1);
+    expect(await owner.outbox.count()).toBe(1);
+    expect(await owner.waMessage.count({ where: { status: "BARU" } })).toBe(0);
+  });
+
   it("sends what is queued", async () => {
     await inbound("s.1", "halo kak", new Date(NOW.getTime() - 20_000));
     await draftPass({
@@ -831,6 +868,20 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
     },
   });
 
+  /**
+   * The turn that booked the visit answered the customer's message — a
+   * follow-up is never queued while a line of theirs is still BARU.
+   */
+  const answeredByBot = () =>
+    owner.waMessage.updateMany({
+      data: {
+        status: "DIJAWAB_AGEN",
+        answeredByAgent: true,
+        answeredAt: new Date(NOW.getTime() + 5_000),
+        replyText: "siap kak",
+      },
+    });
+
   it("reminds a customer of their visit once, on its morning", async () => {
     await seedUnit();
     await inbound("v.1", "mau lihat air m2 besok jam 3", NOW);
@@ -841,6 +892,7 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
       toolCtx(),
     )) as { ok?: boolean };
     expect(booked.ok).toBe(true);
+    await answeredByBot();
     const pass = (now: Date, transport: "cloud" | "baileys" = "cloud") =>
       followUpPass({ db: agent, logger, transport, now: () => now });
 
@@ -859,6 +911,43 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
     });
   });
 
+  it("holds a reminder back while a line of theirs is waiting for a reply", async () => {
+    await seedUnit();
+    await inbound("v.w", "mau lihat air m2 besok jam 3", NOW);
+    await dispatchTool(
+      agent,
+      "book_visit",
+      { when: "2026-08-21T15:00", serials: "SERX", custName: "Budi" },
+      toolCtx(),
+    );
+    await answeredByBot();
+    // Their morning question, not yet answered: the reply comes first.
+    await inbound(
+      "v.q",
+      "jam berapa buka kak?",
+      new Date(VISIT_MORNING.getTime() - 5_000),
+    );
+    const pass = () =>
+      followUpPass({
+        db: agent,
+        logger,
+        transport: "cloud",
+        now: () => VISIT_MORNING,
+      });
+    expect(await pass()).toMatchObject({ reminded: 0 });
+    expect(await owner.outbox.count()).toBe(0);
+    await owner.waMessage.updateMany({
+      where: { waMessageId: "v.q" },
+      data: {
+        status: "DIJAWAB_AGEN",
+        answeredByAgent: true,
+        answeredAt: VISIT_MORNING,
+        replyText: "jam 10 kak",
+      },
+    });
+    expect(await pass()).toMatchObject({ reminded: 1 });
+  });
+
   it("sends a reminder past the 24-hour window only through the linked device", async () => {
     await seedUnit();
     await inbound("v.2", "mau lihat air m2", NOW);
@@ -868,6 +957,7 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
       { when: "2026-08-21T15:00", custName: "Budi" },
       toolCtx(),
     );
+    await answeredByBot();
     // 14:00 Jakarta on the day: 28 hours after their last message.
     const late = new Date("2026-08-21T07:00:00.000Z");
     expect(
@@ -901,19 +991,12 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
       { when: "2026-08-21T15:00", serials: "SERX", custName: "Budi" },
       toolCtx(),
     );
+    await answeredByBot();
     await followUpPass({
       db: agent,
       logger,
       transport: "cloud",
       now: () => VISIT_MORNING,
-    });
-    await owner.waMessage.updateMany({
-      data: {
-        status: "DIJAWAB_AGEN",
-        answeredByAgent: true,
-        answeredAt: new Date(NOW.getTime() + 5_000),
-        replyText: "siap kak",
-      },
     });
     const answerAt = new Date(VISIT_MORNING.getTime() + 600_000);
     await inbound("v.4", "iya jadi kak", new Date(answerAt.getTime() - 20_000));
