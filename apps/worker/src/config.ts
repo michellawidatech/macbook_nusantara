@@ -15,6 +15,10 @@
 
 import { readFileSync } from "node:fs";
 import {
+  BOT_STALE_MS,
+  CALL_RETRIES,
+  CALL_TIMEOUT_MS,
+  TURN_DEADLINE_MS,
   BASE_WAIT_MS,
   MAX_WAIT_MS,
   MIN_WAIT_MS,
@@ -33,6 +37,8 @@ import {
   type GatewayTarget,
   type WhatsAppCredentials,
 } from "@nusantara/whatsapp";
+import { OUTBOX_STUCK_MS } from "@nusantara/db";
+import { LEASE_MS } from "./lease.js";
 
 /**
  * How a reply reaches WhatsApp (owner decision 2026-10-22).
@@ -132,6 +138,11 @@ export const WORKER_ENV_KEYS = [
   "WHATSAPP_TRANSPORT",
   "WA_GATEWAY_URL",
   "WA_GATEWAY_SECRET",
+  "CHATBOT_CALL_TIMEOUT_MS",
+  "CHATBOT_CALL_RETRIES",
+  "WORKER_TURN_DEADLINE_MS",
+  "WORKER_STALE_MS",
+  "WORKER_OUTBOX_STUCK_MS",
 ] as const;
 
 /**
@@ -238,11 +249,31 @@ export interface WorkerConfig {
   readonly memoryTurnsPerTick: number;
   /** Chunks embedded per tick — one Voyage call. */
   readonly memoryEmbedsPerTick: number;
+  /**
+   * The bot never goes silent (2026-10-27). One model call's limit
+   * (`CHATBOT_CALL_TIMEOUT_MS`) and its retries (`CHATBOT_CALL_RETRIES`, 0
+   * allowed); a whole turn's (`WORKER_TURN_DEADLINE_MS`, kept under the
+   * lease); how long a message the bot could answer may wait before the
+   * watchdog answers it (`WORKER_STALE_MS`); and how long an outbox row may
+   * sit claimed before it is requeued (`WORKER_OUTBOX_STUCK_MS`).
+   */
+  readonly callTimeoutMs: number;
+  readonly callRetries: number;
+  readonly turnDeadlineMs: number;
+  readonly staleMs: number;
+  readonly outboxStuckMs: number;
 }
 
 function int(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+/** As `int`, but 0 is a real answer (no retries). */
+function nonNegative(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
 }
 
 export function loadWorkerConfig(
@@ -315,5 +346,15 @@ export function loadWorkerConfig(
     voyage: readVoyageEnv(env),
     memoryTurnsPerTick: int(env["WORKER_MEMORY_TURNS"], 40),
     memoryEmbedsPerTick: int(env["WORKER_MEMORY_EMBEDS"], 32),
+    callTimeoutMs: int(env["CHATBOT_CALL_TIMEOUT_MS"], CALL_TIMEOUT_MS),
+    callRetries: nonNegative(env["CHATBOT_CALL_RETRIES"], CALL_RETRIES),
+    // Never past the lease: a turn that outlived its claim could be answered
+    // twice, by this worker and by whoever took the thread over.
+    turnDeadlineMs: Math.min(
+      int(env["WORKER_TURN_DEADLINE_MS"], TURN_DEADLINE_MS),
+      LEASE_MS - 10_000,
+    ),
+    staleMs: int(env["WORKER_STALE_MS"], BOT_STALE_MS),
+    outboxStuckMs: int(env["WORKER_OUTBOX_STUCK_MS"], OUTBOX_STUCK_MS),
   };
 }

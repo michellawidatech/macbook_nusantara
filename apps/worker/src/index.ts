@@ -13,6 +13,7 @@ export {
 export { draftPass, type DraftDeps, type DraftPassResult } from "./draft.js";
 export { sendPass, type SendDeps, type SendPassResult } from "./send.js";
 export { resetPass, type ResetDeps, type ResetPassResult } from "./reset.js";
+export { stalePass, type StaleDeps, type StalePassResult } from "./stale.js";
 export {
   run,
   tick,

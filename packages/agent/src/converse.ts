@@ -108,7 +108,19 @@ import {
  */
 export interface AgentClient {
   readonly messages: {
-    create(args: CreateArgs): Promise<{
+    /**
+     * `options` is the SDK's own request options, of which the guard
+     * (liveness.ts `guardClient`) passes a signal, a timeout and no retries
+     * of its own. A fake may ignore it.
+     */
+    create(
+      args: CreateArgs,
+      options?: {
+        signal?: AbortSignal;
+        timeout?: number;
+        maxRetries?: number;
+      },
+    ): Promise<{
       content: Anthropic.ContentBlock[];
       stop_reason?: string | null;
       /** Absent from a test's fake; read as zeros. */

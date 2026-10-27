@@ -172,6 +172,14 @@ export const id: Record<string, string> = {
   "chat.markHandled": "Tandai selesai",
   "chat.needsReply": "Perlu dibalas",
   "chat.needsReplyTopic": "Perlu dibalas · {{topic}}",
+  "chat.wait.botFailed": "Bot gagal membalas — diteruskan ke Anda",
+  "chat.wait.botOff": "Perlu dibalas · AI dimatikan untuk chat ini",
+  "chat.wait.staffActive":
+    "Bot berhenti sejenak — {{name}} membalas {{minutes}} menit lalu",
+  "chat.wait.staffActiveNoName":
+    "Bot berhenti sejenak — staf membalas {{minutes}} menit lalu",
+  "chat.wait.botLate":
+    "Bot belum membalas {{minutes}} menit — balas sendiri atau cek worker",
   "handoff.stock": "Stok",
   "handoff.price": "Harga",
   "handoff.negotiation": "Nego",

@@ -1294,7 +1294,7 @@ describe("handing a customer to a person", () => {
     expect(body).toMatch(/^Untuk harganya aku tanyain dulu ya kak 🙏/);
   });
 
-  it("says why when the model itself fails", async () => {
+  it("answers by the rules when the model itself fails — never silent (2026-10-27)", async () => {
     await inbound({ id: "x.1", from: SENDER, text: "halo", ts: ago(20_000) });
     const broken = {
       messages: {
@@ -1304,14 +1304,19 @@ describe("handing a customer to a person", () => {
       },
     } as unknown as AgentClient;
 
+    // Before 2026-10-27 this handed the thread over and sent NOTHING: the
+    // customer heard silence until a colleague happened to look.
     const result = await pass(broken);
-    expect(result).toMatchObject({ drafted: 0, escalated: 1 });
+    expect(result).toMatchObject({ drafted: 1, escalated: 0 });
     const row = await db.waMessage.findFirstOrThrow({
       where: { from: SENDER },
     });
-    expect(row.status).toBe("PERLU_STAF");
-    expect(row.entities).toMatchObject({ handoff: { forcedBy: "no_reply" } });
-    expect(await db.outbox.count()).toBe(0);
+    expect(row.status).toBe("DIJAWAB_AGEN");
+    expect(await db.outbox.count()).toBe(1);
+    expect(
+      (await db.agentRun.findFirstOrThrow({ select: { pipeline: true } }))
+        .pipeline,
+    ).toBe("rules");
   });
 });
 
