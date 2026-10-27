@@ -19,10 +19,12 @@
  * - **A closed month keeps its adjustments**, as it keeps its sales: the
  *   figures were reported, and the book has to be reopened to change them.
  * - **A closed reconciliation keeps them too** (2026-10-27). One that
- *   corrected, added or matched the row names it, and the count it closed on
- *   would stop adding up; reopen the reconciliation first. Once it is open,
- *   the delete takes the reconciliation's edit and match with it
- *   (`forgetRecord`) — the server does the same, and refuses the same.
+ *   corrected, added, matched or set aside (an active aside) the row names
+ *   it, and the count it closed on would stop adding up; reopen the
+ *   reconciliation first. Once it is open, the delete takes the
+ *   reconciliation's edit, match and aside with it (`forgetRecord`) — the
+ *   server does the same, and refuses the same. A withdrawn aside never
+ *   blocks.
  */
 import dayjs from "dayjs";
 import { isBookClosed, type BookCloseSettings } from "./bookClose.js";

@@ -65,4 +65,36 @@ describe("finance scope — reconciliation (2026-10-27)", () => {
     );
     expect(() => assertFinanceWritable(withAccess, edit)).not.toThrow();
   });
+
+  it("withholds and refuses a month's asides with it (owner-approved 2026-10-27)", () => {
+    // An aside is nested on its reconciliation, so the collection's scope is
+    // its scope: no separate list to forget.
+    const rec = {
+      id: "r",
+      asides: [{ id: "ra-1", paymentId: "p", note: "Owner's account" }],
+    };
+    expect(
+      scopeSnapshot(without, { reconciliations: [rec], units: [] }),
+    ).toEqual({ reconciliations: [], units: [] });
+    const withdraw = {
+      collections: {
+        reconciliations: {
+          rows: [
+            {
+              key: "r",
+              base: rec,
+              next: {
+                ...rec,
+                asides: [{ ...rec.asides[0], withdrawnAt: "2026-10-27" }],
+              },
+            },
+          ],
+        },
+      },
+    };
+    expect(() => assertFinanceWritable(without, withdraw)).toThrow(
+      /akses keuangan/,
+    );
+    expect(() => assertFinanceWritable(withAccess, withdraw)).not.toThrow();
+  });
 });

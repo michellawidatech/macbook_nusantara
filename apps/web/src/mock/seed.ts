@@ -1273,6 +1273,25 @@ export interface Reconciliation {
   createdAt: string;
   updatedAt: string;
   edits: ReconciliationEdit[];
+  /**
+   * POS bank movements the statement never shows, explained instead of
+   * paired (MONTHLY only; owner-approved 2026-10-27). Withdrawn, never
+   * removed — except with the adjustment it names (`forgetRecord`).
+   */
+  asides: ReconciliationAside[];
+}
+
+/**
+ * A POS movement set aside with a note on a month's reconciliation
+ * (`ReconciliationAside`). Active until `withdrawnAt` is stamped — by Undo, or
+ * by the movement being paired after all.
+ */
+export interface ReconciliationAside extends MoneyRef {
+  id: string;
+  note: string;
+  staff: string;
+  at: string;
+  withdrawnAt?: string;
 }
 
 /** A statement line's pairing with one POS movement. */

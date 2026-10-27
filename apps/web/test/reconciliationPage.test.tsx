@@ -346,4 +346,108 @@ describe("the monthly statement", () => {
     expect(screen.getByText(/but the statement closes at/)).toBeTruthy();
     expect(getDb().statementLines).toEqual([]);
   });
+
+  it("closes only once every POS entry the bank never saw is paired or set aside (owner-approved 2026-10-27)", async () => {
+    const small = [
+      "No. rekening : 0001234567",
+      "Nama : TOKO CONTOH",
+      "Periode : 01/04/2026 - 30/04/2026",
+      "Kode Mata Uang : Rp",
+      "",
+      "Tanggal Transaksi,Keterangan,Cabang,Jumlah,,Saldo",
+      `'02/04,"TRSF E-BANKING CR BUDI",'0000,2000000.00,CR,2000000.00`,
+      `'05/04,"TRSF E-BANKING CR SITI",'0000,1520000.00,CR,3520000.00`,
+      "",
+      "Saldo Awal,=0.00",
+      "Mutasi Kredit,=3520000.00,2",
+      "Mutasi Debet,=0.00,0",
+      "Saldo Akhir,=3520000.00",
+    ].join("\r\n");
+    // April: the test above leaves its March incomes in the shared store.
+    mutate((d) => {
+      const income = (id: string, day: string, amount: number) =>
+        d.incomes.unshift({
+          id,
+          reason: "SALES",
+          amount,
+          date: day,
+          method: "TRANSFER",
+          note: `ZZ ${id}`,
+          createdAt: dayjs(`${day}T10:00:00`).toISOString(),
+        });
+      income("m-a", "2026-04-02", 2_000_000);
+      income("m-b", "2026-04-05", 1_520_000);
+      // Recorded as a transfer; the bank never saw it.
+      income("m-lost", "2026-04-20", 750_000);
+    });
+    renderAt("/finance/reconciliation?tab=monthly");
+    await userEvent.upload(
+      document.querySelector('input[type="file"]') as HTMLInputElement,
+      new File([small], "mutasi-april.csv", { type: "text/csv" }),
+    );
+    const preview = (await screen.findByText(/2 movements read/)).closest(
+      ".ant-modal",
+    ) as HTMLElement;
+    fireEvent.click(
+      within(preview).getByText("Match against the POS").closest("button")!,
+    );
+    const press = (scope: HTMLElement, label: string) =>
+      fireEvent.click(within(scope).getByText(label).closest("button")!);
+    const markButton = () =>
+      screen.getByText("Mark the month reconciled").closest("button")!;
+
+    // Every line matched, one POS entry left: blocked, and it says why.
+    expect((await screen.findByTestId("month-close-blocked")).textContent).toBe(
+      "1 POS entries never reached the bank — pair or explain them",
+    );
+    expect(markButton().disabled).toBe(true);
+    const rec = () =>
+      getDb().reconciliations.find((r) => r.kind === "MONTHLY")!;
+
+    // Set aside, with a note.
+    const row = () =>
+      screen.getByText("ZZ m-lost").closest("tr") as HTMLElement;
+    press(row(), "Set aside with a note");
+    const dialog = (await screen.findByText("Set this entry aside")).closest(
+      ".ant-modal",
+    ) as HTMLElement;
+    fireEvent.change(
+      within(dialog).getByLabelText("Why did the bank never see it?"),
+      { target: { value: "Paid into the owner's own account" } },
+    );
+    press(dialog, "Set aside");
+    await vi.waitFor(() =>
+      expect(rec().asides).toMatchObject([
+        { incomeId: "m-lost", note: "Paid into the owner's own account" },
+      ]),
+    );
+    expect(
+      within(row()).getByText("Paid into the owner's own account"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("month-close-blocked")).toBeNull();
+    expect(markButton().disabled).toBe(false);
+
+    // Undo: withdrawn, kept, and the month is blocked again.
+    press(row(), "Undo");
+    await vi.waitFor(() => expect(rec().asides[0]!.withdrawnAt).toBeDefined());
+    expect(rec().asides).toHaveLength(1);
+    expect((await screen.findByTestId("month-close-blocked")).textContent).toBe(
+      "1 POS entries never reached the bank — pair or explain them",
+    );
+    expect(markButton().disabled).toBe(true);
+
+    // Set aside again, and the month closes.
+    press(row(), "Set aside with a note");
+    const again = (await screen.findByText("Set this entry aside")).closest(
+      ".ant-modal",
+    ) as HTMLElement;
+    fireEvent.change(
+      within(again).getByLabelText("Why did the bank never see it?"),
+      { target: { value: "Owner's account" } },
+    );
+    press(again, "Set aside");
+    await vi.waitFor(() => expect(markButton().disabled).toBe(false));
+    fireEvent.click(markButton());
+    await vi.waitFor(() => expect(rec().status).toBe("RECONCILED"));
+  });
 });

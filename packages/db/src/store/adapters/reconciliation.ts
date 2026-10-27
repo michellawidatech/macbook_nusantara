@@ -18,10 +18,20 @@
  *   matches (the eighth sanctioned hard delete — do not generalise it), and
  *   is refused on a RECONCILED month, which is reopened first.
  *
+ * A reconciliation also carries its `ReconciliationAside`s (owner-approved
+ * 2026-10-27): a POS bank movement the statement never shows, set aside with
+ * a note — a month is reconciled only once each is paired or explained. An
+ * aside belongs to a MONTHLY reconciliation, is written once, and is taken
+ * back by stamping `withdrawnAt` (the only column the app may UPDATE); a
+ * client never removes one.
+ *
  * `releaseReconciliationRefs` is the rule every deletion of an `Expense` or a
  * `ManualIncome` asks first: refused while a reconciliation that is not OPEN
- * names the row, and otherwise the edits and matches naming it go with it,
- * because their foreign keys would stop the delete.
+ * names the row (an edit, a match or an ACTIVE aside), and otherwise the
+ * edits, matches and asides naming it go with it, because their foreign keys
+ * would stop the delete — an active aside is withdrawn first, and an aside
+ * leaves only through `reconciliation_aside_drop` (20261027200000), which
+ * refuses one that is not withdrawn.
  */
 import type { Tx } from "../../client.js";
 import { StoreValidationError } from "../errors.js";
@@ -160,6 +170,7 @@ async function ensureRef(
 
 type Recon = RowOf<"reconciliations">;
 type ReconEditRow = Recon["edits"][number];
+type AsideRow = Recon["asides"][number];
 
 /** Drop edits through the one door, after saying in words why it would refuse. */
 async function dropEdits(
@@ -220,6 +231,116 @@ async function writeEdits(
   await dropEdits(ctx, gone, "reconciliations", recId);
 }
 
+/** The aside's identity, everything but `withdrawnAt`. */
+const asideFacts = (a: AsideRow) => {
+  const { withdrawnAt: _w, ...rest } = a;
+  return rest;
+};
+
+/**
+ * A month's asides: new ones inserted, a withdrawal stamped, and nothing else.
+ * What an aside says, against what and by whom is written once; it is never
+ * un-withdrawn (set it aside again instead); and a client never removes one —
+ * the only way out is with the adjustment it names, which
+ * `releaseReconciliationRefs` handles before this runs (expenses and incomes
+ * are written before reconciliations), so an aside missing from `next` must
+ * already be gone.
+ */
+async function writeAsides(
+  ctx: WriteContext,
+  rec: { id: string; kind: string },
+  wasReconciled: boolean,
+  stillReconciled: boolean,
+  base: readonly AsideRow[],
+  next: readonly AsideRow[],
+): Promise<void> {
+  const { tx } = ctx;
+  const was = new Map(base.map((a) => [a.id, a]));
+  const now = new Set(next.map((a) => a.id));
+  // An aside missing from `next` left with its adjustment earlier in this
+  // commit — on any reconciliation, a closed one included, when it was
+  // withdrawn — so it is not a change to judge. One still there was removed
+  // by a client, which is never allowed.
+  const gone = base.filter((a) => !now.has(a.id)).map((a) => a.id);
+  if (gone.length > 0) {
+    const left = await tx.reconciliationAside.count({
+      where: { id: { in: gone } },
+    });
+    if (left > 0) {
+      throw new StoreValidationError(
+        "Catatan rekonsiliasi tidak dihapus — batalkan saja.",
+        "reconciliations",
+        rec.id,
+      );
+    }
+  }
+  if (!next.some((a) => !deepEqual(was.get(a.id), a))) return;
+  if (rec.kind !== "MONTHLY") {
+    throw new StoreValidationError(
+      "Catatan untuk transaksi yang tidak ada di mutasi hanya untuk rekonsiliasi bulanan.",
+      "reconciliations",
+      rec.id,
+    );
+  }
+  if (wasReconciled && stillReconciled) {
+    throw new StoreValidationError(
+      "Bulan ini sudah direkonsiliasi — buka kembali dulu.",
+      "reconciliations",
+      rec.id,
+    );
+  }
+  for (const a of next) {
+    const old = was.get(a.id);
+    if (old !== undefined) {
+      if (deepEqual(old, a)) continue;
+      if (
+        !deepEqual(asideFacts(old), asideFacts(a)) ||
+        old.withdrawnAt !== undefined ||
+        a.withdrawnAt === undefined
+      ) {
+        throw refuseEdit("reconciliations", rec.id);
+      }
+      await tx.reconciliationAside.updateMany({
+        where: { id: a.id, reconciliationId: rec.id, withdrawnAt: null },
+        data: { withdrawnAt: instantOf(a.withdrawnAt) },
+      });
+      continue;
+    }
+    await ensureRef(ctx, a, "reconciliations", rec.id);
+    if (a.withdrawnAt === undefined) {
+      // The partial unique indexes hold this too; asked first so the answer
+      // is a sentence rather than a constraint name.
+      const twin = await tx.reconciliationAside.findFirst({
+        where: {
+          reconciliationId: rec.id,
+          withdrawnAt: null,
+          ...refColumns(a),
+        },
+        select: { id: true },
+      });
+      if (twin !== null) {
+        throw new StoreValidationError(
+          "Transaksi ini sudah diberi catatan di bulan ini — muat ulang halaman ini.",
+          "reconciliations",
+          rec.id,
+        );
+      }
+    }
+    await tx.reconciliationAside.create({
+      data: {
+        id: a.id,
+        reconciliationId: rec.id,
+        ...refColumns(a),
+        note: a.note.trim(),
+        staffId: await ctx.staffFor(a.staff),
+        at: instantOf(a.at),
+        withdrawnAt:
+          a.withdrawnAt === undefined ? null : instantOf(a.withdrawnAt),
+      },
+    });
+  }
+}
+
 export const reconciliations: Adapter<"reconciliations"> = {
   collection: "reconciliations",
   async project(tx, _ctx, keys) {
@@ -229,6 +350,10 @@ export const reconciliations: Adapter<"reconciliations"> = {
       include: {
         staff: { select: { name: true } },
         edits: {
+          orderBy: [{ at: "asc" }, { id: "asc" }],
+          include: { staff: { select: { name: true } } },
+        },
+        asides: {
           orderBy: [{ at: "asc" }, { id: "asc" }],
           include: { staff: { select: { name: true } } },
         },
@@ -258,6 +383,14 @@ export const reconciliations: Adapter<"reconciliations"> = {
         after: e.after,
         staff: e.staff.name,
         at: isoOf(e.at),
+      })),
+      asides: r.asides.map((a) => ({
+        id: a.id,
+        ...refOfRow(a),
+        note: a.note,
+        staff: a.staff.name,
+        at: isoOf(a.at),
+        withdrawnAt: a.withdrawnAt === null ? undefined : isoOf(a.withdrawnAt),
       })),
     }));
   },
@@ -308,6 +441,14 @@ export const reconciliations: Adapter<"reconciliations"> = {
           },
         });
         await writeEdits(ctx, n.id, [], n.edits);
+        await writeAsides(
+          ctx,
+          n,
+          false,
+          n.status === "RECONCILED",
+          [],
+          n.asides,
+        );
       } else {
         const b = r.base;
         if (
@@ -331,6 +472,14 @@ export const reconciliations: Adapter<"reconciliations"> = {
           },
         });
         await writeEdits(ctx, n.id, b.edits, n.edits);
+        await writeAsides(
+          ctx,
+          n,
+          b.status === "RECONCILED",
+          n.status === "RECONCILED",
+          b.asides,
+          n.asides,
+        );
       }
       ctx.touch("reconciliations", n.id);
     }
@@ -495,8 +644,9 @@ export const statementLines: Adapter<"statementLines"> = {
  * Before an `Expense` or a `ManualIncome` is deleted: refused while a
  * reconciliation that is not OPEN names it (spec: "reopen the reconciliation
  * first"); otherwise the edits naming it are dropped through
- * `reconciliation_edit_drop`, and the matches deleted — a line left with none
- * goes back to UNMATCHED.
+ * `reconciliation_edit_drop`, the asides withdrawn and dropped through
+ * `reconciliation_aside_drop`, and the matches deleted — a line left with none
+ * goes back to UNMATCHED. A WITHDRAWN aside never blocks: it no longer counts.
  */
 export async function releaseReconciliationRefs(
   ctx: WriteContext,
@@ -531,9 +681,23 @@ export async function releaseReconciliationRefs(
       },
     },
   });
+  const asides = await tx.reconciliationAside.findMany({
+    where,
+    select: {
+      id: true,
+      withdrawnAt: true,
+      reconciliation: {
+        select: { id: true, status: true, pot: true, periodStart: true },
+      },
+    },
+  });
   const closed = [
     ...edits.map((e) => e.reconciliation),
     ...matches.map((m) => m.line.reconciliation),
+    // A withdrawn aside no longer says anything; an active one does.
+    ...asides
+      .filter((a) => a.withdrawnAt === null)
+      .map((a) => a.reconciliation),
   ].find((rec) => rec.status !== "OPEN");
   if (closed !== undefined) {
     throw new StoreValidationError(
@@ -550,6 +714,17 @@ export async function releaseReconciliationRefs(
       key,
     );
     for (const e of edits) ctx.touch("reconciliations", e.reconciliation.id);
+  }
+  if (asides.length > 0) {
+    // Active ones are withdrawn first — every one of them is on an OPEN
+    // reconciliation, or the delete was refused above — and then the lot
+    // leaves through the one door, which takes only withdrawn asides.
+    await tx.reconciliationAside.updateMany({
+      where: { id: { in: asides.map((a) => a.id) }, withdrawnAt: null },
+      data: { withdrawnAt: ctx.now },
+    });
+    await tx.$queryRaw`SELECT reconciliation_aside_drop(${asides.map((a) => a.id)}::text[]) AS removed`;
+    for (const a of asides) ctx.touch("reconciliations", a.reconciliation.id);
   }
   if (matches.length > 0) {
     await tx.bankStatementMatch.deleteMany({

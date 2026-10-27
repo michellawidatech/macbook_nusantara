@@ -1293,4 +1293,122 @@ describe("reconciliation (2026-10-27)", () => {
     expect(rows[0]!.n).toBe(1);
     await app.query(`DELETE FROM "Expense" WHERE id = $1`, [EXP]);
   });
+
+  describe("a POS entry set aside (20261027200000, owner-approved)", () => {
+    const aside = (id: string, ref: string, col = "paymentId", note = "x") =>
+      app.query(
+        `INSERT INTO "ReconciliationAside" (id, "reconciliationId", "${col}", note, "staffId", at)
+         VALUES ($1,'rc_m',$2,$3,$4,now())`,
+        [id, ref, note, STAFF],
+      );
+
+    it("grants SELECT, INSERT and an UPDATE of withdrawnAt alone — no DELETE — and the agent nothing", async () => {
+      const { rows } = await owner.query(
+        `SELECT has_table_privilege('nusantara_app','"ReconciliationAside"','SELECT')               AS a_select,
+                has_table_privilege('nusantara_app','"ReconciliationAside"','INSERT')               AS a_insert,
+                has_table_privilege('nusantara_app','"ReconciliationAside"','UPDATE')               AS a_update,
+                has_column_privilege('nusantara_app','"ReconciliationAside"','withdrawnAt','UPDATE') AS a_withdraw,
+                has_column_privilege('nusantara_app','"ReconciliationAside"','note','UPDATE')        AS a_note,
+                has_table_privilege('nusantara_app','"ReconciliationAside"','DELETE')               AS a_delete,
+                has_table_privilege('nusantara_app','"ReconciliationAside"','TRUNCATE')             AS a_truncate,
+                has_table_privilege('nusantara_agent','"ReconciliationAside"','SELECT')             AS agent_select,
+                has_function_privilege('nusantara_app','reconciliation_aside_drop(text[])','EXECUTE')   AS app_fn,
+                has_function_privilege('nusantara_agent','reconciliation_aside_drop(text[])','EXECUTE') AS agent_fn`,
+      );
+      expect(rows[0]).toEqual({
+        a_select: true,
+        a_insert: true,
+        a_update: false,
+        a_withdraw: true,
+        a_note: false,
+        a_delete: false,
+        a_truncate: false,
+        agent_select: false,
+        app_fn: true,
+        agent_fn: false,
+      });
+    });
+
+    it("names exactly one money row, with a note that is not blank", async () => {
+      await fixtures();
+      await reconciliation("rc_m", "OPEN", "MONTHLY");
+      await rejectsWith(
+        () =>
+          app.query(
+            `INSERT INTO "ReconciliationAside" (id, "reconciliationId", "paymentId", "expenseId", note, "staffId", at)
+             VALUES ('ra_two','rc_m',$1,$2,'x',$3,now())`,
+            [PAY, EXP, STAFF],
+          ),
+        CHECK_VIOLATION,
+      );
+      await rejectsWith(
+        () =>
+          app.query(
+            `INSERT INTO "ReconciliationAside" (id, "reconciliationId", note, "staffId", at)
+             VALUES ('ra_none','rc_m','x',$1,now())`,
+            [STAFF],
+          ),
+        CHECK_VIOLATION,
+      );
+      await rejectsWith(
+        () => aside("ra_blank", PAY, "paymentId", "   "),
+        CHECK_VIOLATION,
+      );
+      await rejectsWith(
+        () => aside("ra_ghost", "no_such_payment"),
+        FOREIGN_KEY_VIOLATION,
+      );
+    });
+
+    it("holds one ACTIVE aside per movement, withdrawn by a stamp and never deleted or rewritten", async () => {
+      await fixtures();
+      await reconciliation("rc_m", "OPEN", "MONTHLY");
+      await aside("ra_1", PAY);
+      await rejectsWith(() => aside("ra_2", PAY), UNIQUE_VIOLATION);
+      await rejectsWith(
+        () => app.query(`DELETE FROM "ReconciliationAside" WHERE id = 'ra_1'`),
+        INSUFFICIENT_PRIVILEGE,
+      );
+      await rejectsWith(
+        () =>
+          app.query(
+            `UPDATE "ReconciliationAside" SET note = 'other' WHERE id = 'ra_1'`,
+          ),
+        INSUFFICIENT_PRIVILEGE,
+      );
+      await app.query(
+        `UPDATE "ReconciliationAside" SET "withdrawnAt" = now() WHERE id = 'ra_1'`,
+      );
+      // Withdrawn, it no longer holds the place: the movement can be set
+      // aside again, and both rows stay.
+      await aside("ra_2", PAY);
+      const { rows } = await app.query<{ n: string }>(
+        `SELECT count(*) AS n FROM "ReconciliationAside" WHERE "paymentId" = $1`,
+        [PAY],
+      );
+      expect(Number(rows[0]!.n)).toBe(2);
+    });
+
+    it("leaves only through the function, and only once withdrawn — which frees its expense", async () => {
+      await fixtures();
+      await reconciliation("rc_m", "RECONCILED", "MONTHLY");
+      await aside("ra_e", EXP, "expenseId");
+      await rejectsWith(
+        () => app.query(`DELETE FROM "Expense" WHERE id = $1`, [EXP]),
+        FOREIGN_KEY_VIOLATION,
+      );
+      await rejectsWith(
+        () => app.query(`SELECT reconciliation_aside_drop(ARRAY['ra_e'])`),
+        CHECK_VIOLATION,
+      );
+      await app.query(
+        `UPDATE "ReconciliationAside" SET "withdrawnAt" = now() WHERE id = 'ra_e'`,
+      );
+      const { rows } = await app.query<{ n: number }>(
+        `SELECT reconciliation_aside_drop(ARRAY['ra_e']) AS n`,
+      );
+      expect(rows[0]!.n).toBe(1);
+      await app.query(`DELETE FROM "Expense" WHERE id = $1`, [EXP]);
+    });
+  });
 });

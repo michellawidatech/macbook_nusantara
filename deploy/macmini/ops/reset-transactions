@@ -124,7 +124,7 @@ TRUNCATE TABLE
   -- Reconciliation (2026-10-27) points at Payment, Expense, ManualIncome and
   -- SupplierDeposit, all emptied here.
   "Reconciliation", "ReconciliationEdit", "BankStatementLine",
-  "BankStatementMatch",
+  "BankStatementMatch", "ReconciliationAside",
   "Reservation", "ReservationItem", "ReservationProposal",
   "ReservationProposalItem",
   "Shift", "PettyCashEntry",

@@ -25,13 +25,22 @@
  * "Changed since reconciled" (owner answer 2B) is derived and stored nowhere:
  * the POS balance of that day today against the one saved.
  *
+ * ## POS entries the bank never saw (owner-approved 2026-10-27)
+ *
+ * A month is reconciled only once every POS bank movement the statement does
+ * not show is paired with a line or SET ASIDE with a note (`asides`,
+ * `ReconciliationAside`): `canCloseMonth` / `monthBlockers`. An aside is
+ * withdrawn, never removed — by Undo, or by the movement being paired after
+ * all (`withdrawPairedAsides`) — and a withdrawn one no longer counts.
+ *
  * ## Deleting what a reconciliation names
  *
- * An adjustment a reconciliation corrected, added or matched cannot be
- * deleted while that reconciliation is closed (anything but OPEN): reopen it
- * first. Once it is open the delete takes the edit and the match with it —
- * the database's door for the edit is `reconciliation_edit_drop`, which
- * refuses the same thing.
+ * An adjustment a reconciliation corrected, added, matched or set aside (an
+ * ACTIVE aside) cannot be deleted while that reconciliation is closed
+ * (anything but OPEN): reopen it first. Once it is open the delete takes the
+ * edit, the match and the aside with it — the database's doors are
+ * `reconciliation_edit_drop` and `reconciliation_aside_drop`. A withdrawn
+ * aside never blocks, and goes with the adjustment from any reconciliation.
  *
  * Pure: no React, no store. Mutation helpers take the draft and are called
  * inside `mutate`. `test/reconciliation.test.ts` is the spec.
@@ -41,6 +50,7 @@ import type {
   MockDb,
   MoneyRef,
   Reconciliation,
+  ReconciliationAside,
   ReconciliationEdit,
   StatementLineRec,
   StatementMatch,
@@ -502,6 +512,7 @@ export function upsertDaily(
     createdAt: ctx.at,
     updatedAt: ctx.at,
     edits: [...save.edits],
+    asides: [],
   };
   d.reconciliations.push(rec);
   return rec;
@@ -535,7 +546,10 @@ export function changedSinceReconciled(
 const sameRef = (a: MoneyRef, b: MoneyRef) =>
   refKey(moneyRefOf(a)) === refKey(moneyRefOf(b));
 
-/** Every reconciliation that names this record, by an edit or a match. */
+/**
+ * Every reconciliation that names this record, by an edit, a match or an
+ * ACTIVE aside — a withdrawn aside no longer says anything about it.
+ */
 export function reconciliationsNaming(
   db: Pick<MockDb, "reconciliations" | "statementLines">,
   ref: MoneyRef,
@@ -543,6 +557,7 @@ export function reconciliationsNaming(
   const ids = new Set<string>();
   for (const r of db.reconciliations) {
     if (r.edits.some((e) => sameRef(e, ref))) ids.add(r.id);
+    if (activeAsides(r).some((a) => sameRef(a, ref))) ids.add(r.id);
   }
   for (const l of db.statementLines) {
     if (l.matches.some((m) => sameRef(m, ref))) ids.add(l.reconciliationId);
@@ -563,14 +578,23 @@ export function closedReconciliationNaming(
 
 /**
  * Take a record out of every OPEN reconciliation that names it — its edit
- * rows and its matches — before the record itself is deleted. A line left
- * with no match is unmatched again. Call inside `mutate`.
+ * rows, its matches and its asides — before the record itself is deleted. A
+ * line left with no match is unmatched again. A WITHDRAWN aside goes from any
+ * reconciliation: it no longer counts, and its foreign key would stop the
+ * delete. The server does the same (`releaseReconciliationRefs`, which
+ * withdraws an active aside and then drops it through
+ * `reconciliation_aside_drop`). Call inside `mutate`, after
+ * `closedReconciliationNaming` said nothing.
  */
 export function forgetRecord(
   d: Pick<MockDb, "reconciliations" | "statementLines">,
   ref: MoneyRef,
 ): void {
   for (const r of d.reconciliations) {
+    if (r.asides.some((a) => sameRef(a, ref)))
+      r.asides = r.asides.filter(
+        (a) => !sameRef(a, ref) || (r.status !== "OPEN" && !a.withdrawnAt),
+      );
     if (r.status !== "OPEN") continue;
     if (r.edits.some((e) => sameRef(e, ref)))
       r.edits = r.edits.filter((e) => !sameRef(e, ref));
@@ -666,6 +690,7 @@ export function uploadStatement(
       createdAt: ctx.at,
       updatedAt: ctx.at,
       edits: [],
+      asides: [],
     };
     d.reconciliations.push(rec);
   } else {
@@ -899,9 +924,121 @@ export function monthCounts(lines: readonly StatementLineRec[]): MonthCounts {
   return { matched, fixed, left, ignored };
 }
 
-/** May the month be marked reconciled? Every line matched or set aside. */
-export const canCloseMonth = (lines: readonly StatementLineRec[]): boolean =>
-  lines.length > 0 && monthCounts(lines).left === 0;
+// ---------------------------------------------------------------------------
+// POS-only movements set aside (owner-approved 2026-10-27)
+// ---------------------------------------------------------------------------
+
+/** The asides that still count: not withdrawn. */
+export const activeAsides = (
+  rec: Pick<Reconciliation, "asides">,
+): ReconciliationAside[] => rec.asides.filter((a) => !a.withdrawnAt);
+
+/** The active aside on this record in this month, if there is one. */
+export function asideFor(
+  rec: Pick<Reconciliation, "asides">,
+  key: string,
+): ReconciliationAside | undefined {
+  return activeAsides(rec).find((a) => refKey(moneyRefOf(a)) === key);
+}
+
+/**
+ * Set a POS-only movement aside with a note — why the bank never saw it. One
+ * active aside per movement: setting it aside again changes nothing.
+ */
+export function setAside(
+  d: Pick<MockDb, "reconciliations">,
+  recId: string,
+  key: string,
+  note: string,
+  ctx: EditContext,
+): void {
+  const rec = d.reconciliations.find((r) => r.id === recId);
+  const text = note.trim();
+  if (rec === undefined || rec.kind !== "MONTHLY" || text === "") return;
+  if (asideFor(rec, key) !== undefined) return;
+  rec.asides.push({
+    id: ctx.nextId("ra"),
+    ...refOfKey(key),
+    note: text,
+    staff: ctx.staff,
+    at: ctx.at,
+  });
+}
+
+/** Take an aside back (Undo): it stays, withdrawn, and stops counting. */
+export function withdrawAside(
+  d: Pick<MockDb, "reconciliations">,
+  recId: string,
+  asideId: string,
+  at: string,
+): void {
+  const a = d.reconciliations
+    .find((r) => r.id === recId)
+    ?.asides.find((x) => x.id === asideId);
+  if (a !== undefined && !a.withdrawnAt) a.withdrawnAt = at;
+}
+
+/**
+ * Withdraw every active aside whose movement the month's lines now pair — a
+ * movement set aside and then found on the statement after all is explained
+ * by the bank, not by the note. Call after any pairing, inside `mutate`.
+ */
+export function withdrawPairedAsides(
+  d: Pick<MockDb, "reconciliations" | "statementLines">,
+  recId: string,
+  at: string,
+): void {
+  const rec = d.reconciliations.find((r) => r.id === recId);
+  if (rec === undefined) return;
+  // MATCHED lines only: a suggestion nobody has answered pairs nothing yet,
+  // and rejecting it puts the movement back in the list, note and all.
+  const paired = matchedKeys(
+    linesOf(d, recId).filter((l) => l.status === "MATCHED"),
+  );
+  for (const a of rec.asides) {
+    if (!a.withdrawnAt && paired.has(refKey(moneyRefOf(a)))) a.withdrawnAt = at;
+  }
+}
+
+/** What still keeps a month from being marked reconciled. */
+export interface MonthBlockers {
+  /** No statement uploaded — nothing to reconcile against. */
+  readonly noLines: boolean;
+  /** Statement lines unmatched, or a suggestion nobody answered. */
+  readonly lines: number;
+  /** POS bank movements the statement never shows, neither paired nor set aside. */
+  readonly posOnly: number;
+}
+
+/**
+ * Where a month stands against closing: every line matched or set aside, AND
+ * every POS-only movement paired or explained (owner-approved 2026-10-27).
+ * `posOnlyKeys` are the month's POS bank movements no line names.
+ */
+export function monthBlockers(
+  lines: readonly StatementLineRec[],
+  posOnlyKeys: readonly string[],
+  rec: Pick<Reconciliation, "asides">,
+): MonthBlockers {
+  const explained = new Set(
+    activeAsides(rec).map((a) => refKey(moneyRefOf(a))),
+  );
+  return {
+    noLines: lines.length === 0,
+    lines: monthCounts(lines).left,
+    posOnly: posOnlyKeys.filter((k) => !explained.has(k)).length,
+  };
+}
+
+/** May the month be marked reconciled? Nothing in `monthBlockers` is left. */
+export const canCloseMonth = (
+  lines: readonly StatementLineRec[],
+  posOnlyKeys: readonly string[],
+  rec: Pick<Reconciliation, "asides">,
+): boolean => {
+  const b = monthBlockers(lines, posOnlyKeys, rec);
+  return !b.noLines && b.lines === 0 && b.posOnly === 0;
+};
 
 /**
  * The pots of a day still to be counted — what Income & Expense's "Today

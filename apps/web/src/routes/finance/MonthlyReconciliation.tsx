@@ -16,7 +16,11 @@
  *    nothing explains can be added to the POS (category guessed from its
  *    words), paired by hand, or set aside with a note.
  * 4. **POS-only movements** — money the POS says went through the bank that
- *    the bank never saw. Open the record to correct or delete it, or pair it.
+ *    the bank never saw. Open the record to correct or delete it, pair it, or
+ *    set it aside with a note saying why (owner-approved 2026-10-27: a month
+ *    is reconciled only once each is paired or explained). An aside shows its
+ *    note, who and when, and Undo withdraws it; pairing the movement later
+ *    withdraws it by itself (`withdrawPairedAsides`).
  */
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
@@ -33,12 +37,19 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { ProTable } from "../../components/ProTable";
-import { fmtDate, fmtMonth, fmtNone, fmtRp } from "../../lib/format.js";
+import {
+  fmtDate,
+  fmtDateTime,
+  fmtMonth,
+  fmtNone,
+  fmtRp,
+} from "../../lib/format.js";
 import { accountOfMethod } from "../../lib/accounts.js";
 import { cashflowRows, type CashflowRow } from "../../lib/cashflowRows.js";
 import {
@@ -49,7 +60,7 @@ import {
 import {
   addMatch,
   applyAmountEdit,
-  canCloseMonth,
+  asideFor,
   confirmLines,
   dayBefore,
   editBlock,
@@ -61,6 +72,7 @@ import {
   logEdits,
   matchKey,
   matchedKeys,
+  monthBlockers,
   monthCounts,
   pairManually,
   posBalanceAt,
@@ -68,12 +80,16 @@ import {
   rejectSuggestion,
   rowRefKey,
   runMatching,
+  setAside,
   signedAmount,
   toPosMovement,
   unmatchLine,
+  withdrawAside,
+  withdrawPairedAsides,
   type HeldSuggestion,
+  type MonthBlockers,
 } from "../../lib/reconciliation.js";
-import type { StatementLineRec } from "../../mock/seed.js";
+import type { MockDb, StatementLineRec } from "../../mock/seed.js";
 import { currentStaffName, mutate, nextId, useDb } from "../../mock/store.js";
 import { COLUMN, SPACE } from "../../theme/tokens";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
@@ -167,6 +183,33 @@ function screenOf(r: CashflowRow): string {
 
 const signedRp = (n: number) => (n < 0 ? `−${fmtRp(-n)}` : `+${fmtRp(n)}`);
 
+/** Why *Mark the month reconciled* is disabled, in words; undefined when it is not. */
+export function closeBlockedText(
+  b: MonthBlockers,
+  t: TFunction,
+): string | undefined {
+  if (b.noLines)
+    return t("recon.blockNoLines", "Upload the bank statement first");
+  const parts: string[] = [];
+  if (b.lines > 0)
+    parts.push(
+      t(
+        "recon.blockLines",
+        "{{n}} statement line(s) still to match or set aside",
+        { n: b.lines },
+      ),
+    );
+  if (b.posOnly > 0)
+    parts.push(
+      t(
+        "recon.blockPosOnly",
+        "{{n}} POS entries never reached the bank — pair or explain them",
+        { n: b.posOnly },
+      ),
+    );
+  return parts.length === 0 ? undefined : parts.join("; ");
+}
+
 export function MonthlyReconciliation({
   recId,
   onBack,
@@ -187,6 +230,9 @@ export function MonthlyReconciliation({
   >();
   const [ignoring, setIgnoring] = useState<string | undefined>();
   const [ignoreNote, setIgnoreNote] = useState("");
+  /** The POS-only movement being set aside, by its key. */
+  const [asiding, setAsiding] = useState<string | undefined>();
+  const [asideNote, setAsideNote] = useState("");
   const [adding, setAdding] = useState<
     { line: StatementLineRec; preset: AdjustmentPreset } | undefined
   >();
@@ -207,6 +253,12 @@ export function MonthlyReconciliation({
   const posOnly = movements.filter((r) => !taken.has(rowRefKey(r) ?? ""));
   const held = heldSuggestions(lines);
   const counts = monthCounts(lines);
+  const blockers = monthBlockers(
+    lines,
+    posOnly.map(rowRefKey).filter((k) => k !== undefined),
+    rec,
+  );
+  const blockedText = closeBlockedText(blockers, t);
   const lineById = new Map(lines.map((l) => [l.id, l]));
   const openingDiff = (rec.statementOpening ?? 0) - posOpening;
   const closingDiff = (rec.statementClosing ?? 0) - posClosing;
@@ -215,6 +267,15 @@ export function MonthlyReconciliation({
     staff: currentStaffName(),
     nextId,
   });
+  /**
+   * Every mutation that can pair a movement goes through here, so an aside
+   * on a movement the statement turns out to show is withdrawn with it.
+   */
+  const mutatePairing = (fn: (d: MockDb) => void) =>
+    mutate((d) => {
+      fn(d);
+      withdrawPairedAsides(d, recId, new Date().toISOString());
+    });
 
   /** A wider window than the month for pairing by hand: postings lag. */
   const pairable = potMovements(
@@ -280,7 +341,7 @@ export function MonthlyReconciliation({
         message.error(editBlockText(block, t));
         return;
       }
-      mutate((d) => {
+      mutatePairing((d) => {
         const c = ctx();
         const edits = applyAmountEdit(
           d,
@@ -297,7 +358,7 @@ export function MonthlyReconciliation({
     if (s.reason === "DEDUCTION") {
       if (move === undefined) return;
       const fee = signedAmount(move) - line.amount;
-      mutate((d) => {
+      mutatePairing((d) => {
         const c = ctx();
         const id = nextId("e");
         d.expenses.unshift({
@@ -324,7 +385,7 @@ export function MonthlyReconciliation({
       message.success(t("recon.feeRecorded", "Fee recorded as an expense."));
       return;
     }
-    mutate((d) => confirmLines(d, s.lineIds));
+    mutatePairing((d) => confirmLines(d, s.lineIds));
     message.success(t("recon.paired", "Matched."));
   };
 
@@ -354,7 +415,7 @@ export function MonthlyReconciliation({
       written.find((w) => accountOfMethod(w.method) === "BANK") ?? written[0]!;
     const ref =
       pick.kind === "expense" ? { expenseId: pick.id } : { incomeId: pick.id };
-    mutate((d) => {
+    mutatePairing((d) => {
       const c = ctx();
       addMatch(d, target.id, ref, "ADDED", nextId);
       logEdits(d, recId, editRows([], [{ ref, amount: pick.amount }], c), c);
@@ -459,7 +520,7 @@ export function MonthlyReconciliation({
             <>
               <Button
                 onClick={() => {
-                  mutate((d) => {
+                  mutatePairing((d) => {
                     const fresh = cashflowRows(d, t);
                     runMatching(
                       d,
@@ -474,22 +535,33 @@ export function MonthlyReconciliation({
               >
                 {t("recon.matchAgain", "Match again")}
               </Button>
-              <Button
-                type="primary"
-                disabled={!canCloseMonth(lines)}
-                onClick={() =>
-                  mutate((d) => {
-                    const r = d.reconciliations.find((x) => x.id === recId);
-                    if (!r) return;
-                    r.status = "RECONCILED";
-                    r.posBalance = posClosing;
-                    r.staff = currentStaffName();
-                    r.updatedAt = new Date().toISOString();
-                  })
-                }
-              >
-                {t("recon.markReconciled", "Mark the month reconciled")}
-              </Button>
+              <Tooltip title={blockedText}>
+                <Button
+                  type="primary"
+                  disabled={blockedText !== undefined}
+                  onClick={() =>
+                    mutate((d) => {
+                      const r = d.reconciliations.find((x) => x.id === recId);
+                      if (!r) return;
+                      r.status = "RECONCILED";
+                      r.posBalance = posClosing;
+                      r.staff = currentStaffName();
+                      r.updatedAt = new Date().toISOString();
+                    })
+                  }
+                >
+                  {t("recon.markReconciled", "Mark the month reconciled")}
+                </Button>
+              </Tooltip>
+              {blockedText !== undefined && (
+                <Typography.Text
+                  type="secondary"
+                  data-testid="month-close-blocked"
+                  style={{ alignSelf: "center" }}
+                >
+                  {blockedText}
+                </Typography.Text>
+              )}
             </>
           )}
         </Flex>
@@ -746,23 +818,80 @@ export function MonthlyReconciliation({
               render: (_: unknown, r) => signedRp(signedAmount(r)),
             },
             {
+              title: t("recon.explained", "Explained"),
+              key: "aside",
+              render: (_: unknown, r) => {
+                const key = rowRefKey(r);
+                const aside =
+                  key === undefined ? undefined : asideFor(rec, key);
+                if (aside === undefined) return fmtNone();
+                return (
+                  <Flex vertical data-testid={`aside-${key}`}>
+                    <span>
+                      <Tag>{t("recon.setAsideTag", "Set aside")}</Tag>
+                      {aside.note}
+                    </span>
+                    <Typography.Text type="secondary">
+                      {t("recon.asideBy", "{{who}} · {{when}}", {
+                        who: aside.staff,
+                        when: fmtDateTime(aside.at),
+                      })}
+                    </Typography.Text>
+                  </Flex>
+                );
+              },
+            },
+            {
               key: "actions",
-              width: COLUMN.actionsWide - 40,
-              render: (_: unknown, r) => (
-                <Space size={4}>
-                  {!closed && (
-                    <Button
-                      size="small"
-                      onClick={() =>
-                        setPairing({ lineIds: [], keys: [rowRefKey(r)!] })
-                      }
-                    >
-                      {t("recon.pair", "Pair")}
-                    </Button>
-                  )}
-                  <Link to={screenOf(r)}>{t("recon.openRecord", "Open")}</Link>
-                </Space>
-              ),
+              width: COLUMN.actionsWide + 40,
+              render: (_: unknown, r) => {
+                const key = rowRefKey(r);
+                const aside =
+                  key === undefined ? undefined : asideFor(rec, key);
+                return (
+                  <Space size={4} wrap>
+                    {!closed && key !== undefined && (
+                      <Button
+                        size="small"
+                        onClick={() => setPairing({ lineIds: [], keys: [key] })}
+                      >
+                        {t("recon.pair", "Pair")}
+                      </Button>
+                    )}
+                    {!closed && key !== undefined && aside === undefined && (
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          setAsideNote("");
+                          setAsiding(key);
+                        }}
+                      >
+                        {t("recon.setAside", "Set aside with a note")}
+                      </Button>
+                    )}
+                    {!closed && aside !== undefined && (
+                      <Button
+                        size="small"
+                        onClick={() =>
+                          mutate((d) =>
+                            withdrawAside(
+                              d,
+                              recId,
+                              aside.id,
+                              new Date().toISOString(),
+                            ),
+                          )
+                        }
+                      >
+                        {t("recon.undo", "Undo")}
+                      </Button>
+                    )}
+                    <Link to={screenOf(r)}>
+                      {t("recon.openRecord", "Open")}
+                    </Link>
+                  </Space>
+                );
+              },
             },
           ]}
         />
@@ -795,7 +924,9 @@ export function MonthlyReconciliation({
         onCancel={() => setPairing(undefined)}
         onOk={() => {
           if (pairing === undefined) return;
-          mutate((d) => pairManually(d, pairing.lineIds, pairing.keys, nextId));
+          mutatePairing((d) =>
+            pairManually(d, pairing.lineIds, pairing.keys, nextId),
+          );
           setPairing(undefined);
           message.success(t("recon.paired", "Matched."));
         }}
@@ -889,6 +1020,37 @@ export function MonthlyReconciliation({
                 "Why does the POS not need this line?",
               )}
               onChange={(e) => setIgnoreNote(e.target.value)}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        open={asiding !== undefined}
+        title={t("recon.setAsideTitle", "Set this entry aside")}
+        okText={t("recon.setAsideOk", "Set aside")}
+        okButtonProps={{ disabled: asideNote.trim() === "" }}
+        onCancel={() => setAsiding(undefined)}
+        onOk={() => {
+          if (asiding === undefined || asideNote.trim() === "") return;
+          mutate((d) => setAside(d, recId, asiding, asideNote, ctx()));
+          setAsiding(undefined);
+        }}
+        destroyOnHidden
+      >
+        <Form layout="vertical">
+          <Form.Item
+            required
+            label={t("recon.setAsideWhy", "Why did the bank never see it?")}
+          >
+            <Input.TextArea
+              rows={2}
+              value={asideNote}
+              aria-label={t(
+                "recon.setAsideWhy",
+                "Why did the bank never see it?",
+              )}
+              onChange={(e) => setAsideNote(e.target.value)}
             />
           </Form.Item>
         </Form>

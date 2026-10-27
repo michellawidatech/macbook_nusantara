@@ -4754,6 +4754,18 @@ export const id: Record<string, string> = {
     "Bank mencatat {{bank}} dan POS {{pos}}. Memasangkan tidak mengubah keduanya; koreksi catatannya kalau POS yang salah.",
   "recon.ignoreTitle": "Kesampingkan baris ini",
   "recon.ignoreWhy": "Kenapa POS tidak perlu mencatat baris ini?",
+  "recon.blockNoLines": "Unggah rekening koran dulu",
+  "recon.blockLines":
+    "{{n}} baris rekening koran belum dicocokkan atau dikesampingkan",
+  "recon.blockPosOnly":
+    "{{n}} transaksi POS tidak pernah masuk ke bank — pasangkan atau beri penjelasan",
+  "recon.explained": "Penjelasan",
+  "recon.setAsideTag": "Dikesampingkan",
+  "recon.asideBy": "{{who}} · {{when}}",
+  "recon.setAside": "Kesampingkan dengan catatan",
+  "recon.setAsideTitle": "Kesampingkan transaksi ini",
+  "recon.setAsideOk": "Kesampingkan",
+  "recon.setAsideWhy": "Kenapa bank tidak pernah mencatatnya?",
   "recon.statusMatched": "Cocok",
   "recon.statusAdjusted": "Dikoreksi",
   "recon.problemNoLines": "File ini tidak berisi mutasi.",

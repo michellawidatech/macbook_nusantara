@@ -1105,6 +1105,26 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
           message: "an edit names exactly one money row",
         }),
     ),
+    /**
+     * POS bank movements the statement never shows, explained instead of
+     * paired — `ReconciliationAside` (owner-approved 2026-10-27). MONTHLY
+     * only. Taken back by stamping `withdrawnAt`; nothing else of one ever
+     * changes, and one is never removed by a client.
+     */
+    asides: z.array(
+      z
+        .strictObject({
+          id,
+          ...moneyRef,
+          note: text.refine((s) => s.trim() !== "", "Catatan wajib diisi."),
+          staff: text,
+          at: instant,
+          withdrawnAt: instant.optional(),
+        })
+        .refine(exactlyOneRef, {
+          message: "an aside names exactly one money row",
+        }),
+    ),
   });
 
   /**
