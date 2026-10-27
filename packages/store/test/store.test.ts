@@ -394,3 +394,51 @@ describe("service charges and supplier-return money (2026-10-26)", () => {
     );
   });
 });
+
+describe("a POS entry set aside on a month (owner-approved 2026-10-27)", () => {
+  const month = (asides: Record<string, unknown>[]) => ({
+    id: "rc-1",
+    kind: "MONTHLY",
+    pot: "BANK",
+    periodStart: "2026-09-01",
+    periodEnd: "2026-09-30",
+    posBalance: 1_000_000,
+    actualBalance: 1_000_000,
+    status: "OPEN",
+    staff: "Dina",
+    createdAt: "2026-10-27T03:00:00.000Z",
+    updatedAt: "2026-10-27T03:00:00.000Z",
+    edits: [],
+    asides,
+  });
+  const aside = (extra: Record<string, unknown> = {}) => ({
+    id: "ra-1",
+    paymentId: "pay-1",
+    note: "Paid into the owner's account",
+    staff: "Dina",
+    at: "2026-10-27T03:00:00.000Z",
+    ...extra,
+  });
+
+  it("carries one, active or withdrawn, nested on the reconciliation", () => {
+    const row = month([
+      aside(),
+      aside({ id: "ra-2", withdrawnAt: "2026-10-27T04:00:00.000Z" }),
+    ]);
+    expect(
+      decodeRow("reconciliations", encodeRow("reconciliations", row)),
+    ).toEqual(row);
+  });
+
+  it("refuses a blank note, two money rows or none", () => {
+    expect(() =>
+      encodeRow("reconciliations", month([aside({ note: "  " })])),
+    ).toThrow();
+    expect(() =>
+      encodeRow("reconciliations", month([aside({ expenseId: "e-1" })])),
+    ).toThrow();
+    expect(() =>
+      encodeRow("reconciliations", month([aside({ paymentId: undefined })])),
+    ).toThrow();
+  });
+});

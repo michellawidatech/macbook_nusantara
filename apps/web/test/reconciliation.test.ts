@@ -14,24 +14,34 @@ import {
   deleteAdjustment,
 } from "../src/lib/adjustmentDeletion.js";
 import {
+  activeAsides,
   applyAmountEdit,
   canCloseMonth,
+  confirmLines,
   changedSinceReconciled,
   closedReconciliationNaming,
   dailyStatus,
   editBlock,
   editRows,
   heldSuggestions,
+  ignoreLine,
   linesOf,
+  matchedKeys,
+  monthBlockers,
   monthCounts,
+  pairManually,
   posBalanceAt,
   potMovements,
   rejectSuggestion,
+  rowRefKey,
   runMatching,
+  setAside,
   toPosMovement,
   unreconciledPots,
   upsertDaily,
   uploadStatement,
+  withdrawAside,
+  withdrawPairedAsides,
   type EditContext,
 } from "../src/lib/reconciliation.js";
 
@@ -505,7 +515,7 @@ describe("the monthly statement", () => {
       left: 3,
       ignored: 0,
     });
-    expect(canCloseMonth(lines)).toBe(false);
+    expect(canCloseMonth(lines, [], db.reconciliations[0]!)).toBe(false);
     rejectSuggestion(db, [lines[1]!.id]);
     expect(linesOf(db, id)[1]).toMatchObject({
       status: "UNMATCHED",
@@ -543,5 +553,191 @@ describe("the monthly statement", () => {
     expect(linesOf(db, id).map((l) => [l.lineNo, l.status])).toEqual([
       [1, "UNMATCHED"],
     ]);
+  });
+});
+
+describe("POS entries the bank never saw (owner-approved 2026-10-27)", () => {
+  /** September as `month` leaves it, with every statement line answered. */
+  function answered(db: MockDb): string {
+    sale(db, "s1", "2026-09-02", 2_000_000);
+    sale(db, "s2", "2026-09-05", 1_250_000);
+    // Paid to the shop's account and never seen on the statement.
+    sale(db, "s4", "2026-09-09", 700_000);
+    const id = uploadStatement(
+      db,
+      {
+        month: "2026-09",
+        file: "statement.pdf",
+        opening: 10_000_000,
+        closing: 13_250_000,
+        posOpening: 10_000_000,
+        posClosing: 13_950_000,
+        lines: [
+          {
+            lineNo: 1,
+            date: "2026-09-02",
+            description: "TRSF CR",
+            amount: 2_000_000,
+          },
+          {
+            lineNo: 2,
+            date: "2026-09-05",
+            description: "TRSF CR",
+            amount: 1_250_000,
+          },
+          {
+            lineNo: 3,
+            date: "2026-09-30",
+            description: "BUNGA",
+            amount: 4_512,
+          },
+        ],
+      },
+      ctx,
+    );
+    runMatching(
+      db,
+      id,
+      potMovements(rowsOf(db), db.settings, "BANK", "2026-09-01", "2026-09-30")
+        .map(toPosMovement)
+        .filter((m) => m !== undefined),
+      ctx.nextId,
+    );
+    ignoreLine(db, linesOf(db, id)[2]!.id, "Interest, booked next month");
+    return id;
+  }
+  const posOnlyKeys = (db: MockDb, id: string) => {
+    const taken = matchedKeys(linesOf(db, id));
+    return potMovements(
+      rowsOf(db),
+      db.settings,
+      "BANK",
+      "2026-09-01",
+      "2026-09-30",
+    )
+      .map(rowRefKey)
+      .filter((k) => k !== undefined && !taken.has(k)) as string[];
+  };
+  const recOf = (db: MockDb, id: string) =>
+    db.reconciliations.find((r) => r.id === id)!;
+
+  it("closes a month only once each one is paired or set aside, and not after Undo", () => {
+    const db = shop();
+    const id = answered(db);
+    const keys = posOnlyKeys(db, id);
+    expect(keys).toEqual(["p:s4-p1"]);
+    expect(monthBlockers(linesOf(db, id), keys, recOf(db, id))).toEqual({
+      noLines: false,
+      lines: 0,
+      posOnly: 1,
+    });
+    expect(canCloseMonth(linesOf(db, id), keys, recOf(db, id))).toBe(false);
+
+    // A blank note explains nothing.
+    setAside(db, id, "p:s4-p1", "   ", ctx);
+    expect(recOf(db, id).asides).toEqual([]);
+
+    setAside(db, id, "p:s4-p1", " Paid into the old account ", ctx);
+    expect(recOf(db, id).asides).toMatchObject([
+      { paymentId: "s4-p1", note: "Paid into the old account", staff: "Dina" },
+    ]);
+    expect(canCloseMonth(linesOf(db, id), keys, recOf(db, id))).toBe(true);
+    // One active aside per movement.
+    setAside(db, id, "p:s4-p1", "again", ctx);
+    expect(recOf(db, id).asides).toHaveLength(1);
+
+    // Undo withdraws it — kept, no longer counted.
+    const aside = recOf(db, id).asides[0]!;
+    withdrawAside(db, id, aside.id, "2026-10-01T00:00:00.000Z");
+    expect(recOf(db, id).asides[0]!.withdrawnAt).toBe(
+      "2026-10-01T00:00:00.000Z",
+    );
+    expect(activeAsides(recOf(db, id))).toEqual([]);
+    expect(canCloseMonth(linesOf(db, id), keys, recOf(db, id))).toBe(false);
+
+    // Set aside again: a second row, the withdrawn one still there.
+    setAside(db, id, "p:s4-p1", "Paid into the old account", ctx);
+    expect(recOf(db, id).asides).toHaveLength(2);
+    expect(canCloseMonth(linesOf(db, id), keys, recOf(db, id))).toBe(true);
+  });
+
+  it("reports both counts when lines and POS entries are both open", () => {
+    const db = shop();
+    const id = answered(db);
+    const lines = linesOf(db, id);
+    rejectSuggestion(db, [lines[0]!.id]);
+    const after = linesOf(db, id);
+    expect(after[0]!.status).toBe("UNMATCHED");
+    const keys = posOnlyKeys(db, id);
+    expect(monthBlockers(after, keys, recOf(db, id))).toEqual({
+      noLines: false,
+      lines: 1,
+      posOnly: 2,
+    });
+    expect(monthBlockers([], [], recOf(db, id)).noLines).toBe(true);
+    expect(canCloseMonth([], [], recOf(db, id))).toBe(false);
+  });
+
+  it("withdraws an aside by itself once the movement is paired, never for a suggestion", () => {
+    const db = shop();
+    const id = answered(db);
+    setAside(db, id, "p:s4-p1", "Not on the statement", ctx);
+    const bunga = linesOf(db, id)[2]!;
+    // A suggestion naming it pairs nothing yet.
+    bunga.status = "SUGGESTED";
+    bunga.matches = [{ id: "sm-x", paymentId: "s4-p1", reason: "TYPO" }];
+    withdrawPairedAsides(db, id, "2026-10-01T00:00:00.000Z");
+    expect(activeAsides(recOf(db, id))).toHaveLength(1);
+    // Paired by hand: the bank explains it, not the note.
+    pairManually(db, [bunga.id], ["p:s4-p1"], ctx.nextId);
+    withdrawPairedAsides(db, id, "2026-10-01T00:00:00.000Z");
+    expect(activeAsides(recOf(db, id))).toEqual([]);
+    expect(recOf(db, id).asides[0]!.withdrawnAt).toBe(
+      "2026-10-01T00:00:00.000Z",
+    );
+    confirmLines(db, [bunga.id]);
+    expect(posOnlyKeys(db, id)).toEqual([]);
+  });
+
+  it("lets an adjustment it names be deleted: withdrawn never blocks, active blocks only a closed month", () => {
+    const db = shop();
+    const id = answered(db);
+    db.expenses.push({
+      id: "e-aside",
+      kind: "OPERATIONAL",
+      amount: 25_000,
+      date: "2026-09-10",
+      method: "TRANSFER",
+    });
+    setAside(db, id, "e:e-aside", "Paid from the owner's card", ctx);
+    const rec = recOf(db, id);
+    rec.status = "RECONCILED";
+    expect(
+      adjustmentReconciliationBlock(db, { kind: "expense", id: "e-aside" })?.id,
+    ).toBe(id);
+
+    // Withdrawn, it no longer says anything — even on a closed month.
+    withdrawAside(db, id, rec.asides[0]!.id, "2026-10-01T00:00:00.000Z");
+    expect(
+      adjustmentReconciliationBlock(db, { kind: "expense", id: "e-aside" }),
+    ).toBeUndefined();
+    expect(deleteAdjustment(db, { kind: "expense", id: "e-aside" })).toBe(1);
+    expect(rec.asides).toEqual([]);
+
+    // Active on an OPEN month: it goes with the adjustment.
+    db.expenses.push({
+      id: "e-aside-2",
+      kind: "OPERATIONAL",
+      amount: 30_000,
+      date: "2026-09-11",
+      method: "TRANSFER",
+    });
+    rec.status = "OPEN";
+    setAside(db, id, "e:e-aside-2", "Card", ctx);
+    expect(
+      adjustmentReconciliationBlock(db, { kind: "expense", id: "e-aside-2" }),
+    ).toBeUndefined();
+    expect(deleteAdjustment(db, { kind: "expense", id: "e-aside-2" })).toBe(1);
+    expect(rec.asides).toEqual([]);
   });
 });

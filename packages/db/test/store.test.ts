@@ -3710,6 +3710,7 @@ describe("reconciliation, as nusantara_app (2026-10-27)", () => {
         staff: "Store Test",
         createdAt: AT,
         updatedAt: AT,
+        asides: [],
         edits: [
           {
             id: "re-1",
@@ -3933,6 +3934,7 @@ describe("reconciliation, as nusantara_app (2026-10-27)", () => {
         staff: "Store Test",
         createdAt: AT,
         updatedAt: AT,
+        asides: [],
         edits: [
           {
             id: "re-del",
@@ -3999,6 +4001,240 @@ describe("reconciliation, as nusantara_app (2026-10-27)", () => {
       expect(
         snap["statementLines"]!.find((l) => l["id"] === "bl-del"),
       ).toMatchObject({ status: "UNMATCHED", matches: [] });
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
+  it("sets a POS entry aside on a month, withdraws it, and never rewrites or removes one (owner-approved 2026-10-27)", async () => {
+    await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    const commit = (before: Partial<StoreShape>, after: Partial<StoreShape>) =>
+      commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(before as StoreShape, after as StoreShape),
+        ),
+      });
+    const read = async (): Promise<Record<string, Row[]>> =>
+      decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+    const month = async () =>
+      (await read())["reconciliations"]!.find((r) => r["id"] === "rc-as")!;
+    const asidesOf = (r: Row) => r["asides"] as Row[];
+    const aside = (id: string, expenseId: string, note: string): Row => ({
+      id,
+      expenseId,
+      note,
+      staff: "Store Test",
+      at: AT,
+    });
+    const LATER = "2026-10-27T06:00:00.000Z";
+    try {
+      await commit(
+        { reconciliations: [], expenses: [] },
+        {
+          expenses: [expense("exp-as-1", 70_000), expense("exp-as-2", 80_000)],
+          reconciliations: [
+            {
+              id: "rc-as",
+              kind: "MONTHLY",
+              pot: "BANK",
+              periodStart: "2026-08-01",
+              periodEnd: "2026-08-31",
+              posBalance: 0,
+              actualBalance: 0,
+              status: "OPEN",
+              staff: "Store Test",
+              createdAt: AT,
+              updatedAt: AT,
+              edits: [],
+              asides: [
+                aside("ra-1", "exp-as-1", "Paid on the owner's card"),
+                aside("ra-2", "exp-as-2", "Cash, filed as transfer"),
+              ],
+            },
+          ],
+        },
+      );
+      let rec = await month();
+      expect(asidesOf(rec)).toEqual([
+        {
+          id: "ra-1",
+          expenseId: "exp-as-1",
+          note: "Paid on the owner's card",
+          staff: "Store Test",
+          at: AT,
+        },
+        {
+          id: "ra-2",
+          expenseId: "exp-as-2",
+          note: "Cash, filed as transfer",
+          staff: "Store Test",
+          at: AT,
+        },
+      ]);
+
+      // Written once: the note does not move, one is never removed, and a
+      // second active one on the same movement is refused.
+      await expect(
+        commit(
+          { reconciliations: [rec] },
+          {
+            reconciliations: [
+              {
+                ...rec,
+                asides: [
+                  { ...asidesOf(rec)[0]!, note: "Something else" },
+                  asidesOf(rec)[1]!,
+                ],
+              },
+            ],
+          },
+        ),
+      ).rejects.toThrow(/tidak bisa diubah setelah tersimpan/);
+      await expect(
+        commit(
+          { reconciliations: [rec] },
+          { reconciliations: [{ ...rec, asides: [asidesOf(rec)[1]!] }] },
+        ),
+      ).rejects.toThrow(/tidak dihapus/);
+      await expect(
+        commit(
+          { reconciliations: [rec] },
+          {
+            reconciliations: [
+              {
+                ...rec,
+                asides: [...asidesOf(rec), aside("ra-x", "exp-as-1", "Twice")],
+              },
+            ],
+          },
+        ),
+      ).rejects.toThrow(/sudah diberi catatan/);
+
+      // A day has no statement to set anything aside against.
+      await expect(
+        commit(
+          { reconciliations: [] },
+          {
+            reconciliations: [
+              {
+                ...rec,
+                id: "rc-as-day",
+                kind: "DAILY",
+                periodStart: "2026-08-02",
+                periodEnd: "2026-08-02",
+                asides: [aside("ra-d", "exp-as-1", "Day")],
+              },
+            ],
+          },
+        ),
+      ).rejects.toThrow(/hanya untuk rekonsiliasi bulanan/);
+
+      // Undo: withdrawn and kept; never un-withdrawn.
+      await commit(
+        { reconciliations: [rec] },
+        {
+          reconciliations: [
+            {
+              ...rec,
+              asides: [
+                asidesOf(rec)[0]!,
+                { ...asidesOf(rec)[1]!, withdrawnAt: LATER },
+              ],
+            },
+          ],
+        },
+      );
+      rec = await month();
+      expect(asidesOf(rec)[1]).toMatchObject({
+        id: "ra-2",
+        withdrawnAt: LATER,
+      });
+      await expect(
+        commit(
+          { reconciliations: [rec] },
+          {
+            reconciliations: [
+              {
+                ...rec,
+                asides: [
+                  asidesOf(rec)[0]!,
+                  { ...asidesOf(rec)[1]!, withdrawnAt: undefined },
+                ],
+              },
+            ],
+          },
+        ),
+      ).rejects.toThrow(/tidak bisa diubah setelah tersimpan/);
+
+      // Reconciled: an active aside keeps its expense; a withdrawn one never
+      // blocks, and leaves with it.
+      await commit(
+        { reconciliations: [rec] },
+        { reconciliations: [{ ...rec, status: "RECONCILED" }] },
+      );
+      rec = await month();
+      await expect(
+        commit(
+          { reconciliations: [rec] },
+          {
+            reconciliations: [
+              {
+                ...rec,
+                asides: [
+                  ...asidesOf(rec),
+                  aside("ra-3", "exp-as-2", "Too late"),
+                ],
+              },
+            ],
+          },
+        ),
+      ).rejects.toThrow(/buka kembali dulu/);
+      let snap = await read();
+      const exp1 = snap["expenses"]!.find((e) => e["id"] === "exp-as-1")!;
+      const exp2 = snap["expenses"]!.find((e) => e["id"] === "exp-as-2")!;
+      await expect(
+        commit({ expenses: [exp1] }, { expenses: [] }),
+      ).rejects.toThrow(
+        "Rekonsiliasi Bank 2026-08-01 mencatat baris ini — buka kembali rekonsiliasinya dulu.",
+      );
+      // The browser's half (`forgetRecord`) drops the withdrawn aside from
+      // the closed month's list in the same commit.
+      await commit(
+        { expenses: [exp2], reconciliations: [rec] },
+        {
+          expenses: [],
+          reconciliations: [
+            {
+              ...rec,
+              asides: asidesOf(rec).filter((a) => a["id"] !== "ra-2"),
+            },
+          ],
+        },
+      );
+      rec = await month();
+      expect(asidesOf(rec).map((a) => a["id"])).toEqual(["ra-1"]);
+      expect(rec["status"]).toBe("RECONCILED");
+
+      // Reopened: the active aside is withdrawn and goes with its expense —
+      // the browser's half (`forgetRecord`) drops it from the list in the
+      // same commit.
+      await commit(
+        { reconciliations: [rec] },
+        { reconciliations: [{ ...rec, status: "OPEN" }] },
+      );
+      rec = await month();
+      await commit(
+        { expenses: [exp1], reconciliations: [rec] },
+        { expenses: [], reconciliations: [{ ...rec, asides: [] }] },
+      );
+      snap = await read();
+      expect(asidesOf(await month())).toEqual([]);
+      expect(snap["expenses"]!.some((e) => e["id"] === "exp-as-1")).toBe(false);
+      expect(await db.reconciliationAside.count()).toBe(0);
     } finally {
       await app.$disconnect();
     }

@@ -3259,10 +3259,20 @@ Decisions that outlived those documents:
   (`BIAYA_ADMIN`, migration `20261027190000_fee_expense_category`, additive).
   An accepted DEDUCTION and a "BIAYA ADM"/"BIAYA TXN" debit (`guessCategory`)
   file under it, not OPERATIONAL / BUNGA; Add adjustment offers it; Profit &
-  Loss counts it as operating, its own line after the running costs. ⚠️ "POS-only
-  entries must be paired or explained before a month closes" is NOT built: no
-  table holds a note against a POS movement with no statement line — waiting
-  on an owner-approved schema.
+  Loss counts it as operating, its own line after the running costs.
+- **A month closes only once every POS-only entry is paired or explained —
+  2026-10-27** (owner-approved; `ReconciliationAside`, migration
+  `20261027200000_reconciliation_aside`). Each "In the POS, not on the
+  statement" row has *Set aside with a note*; the note, who and when show on
+  the row with *Undo*. An aside is WITHDRAWN (`withdrawnAt`, the one column the
+  app may UPDATE), never deleted — by Undo, or by the movement being paired
+  later (`withdrawPairedAsides`) — and one active aside per movement (partial
+  unique indexes). `canCloseMonth(lines, posOnlyKeys, rec)` /
+  `monthBlockers`; *Mark the month reconciled* says what is open. MONTHLY only
+  (adapter). ⚠️ Deleting an adjustment an aside names: an active one on a
+  closed month refuses ("reopen it first"); otherwise it is withdrawn and
+  leaves through `reconciliation_aside_drop` (SECURITY DEFINER, withdrawn
+  rows only) — part of the eighth hard delete, do not generalise it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
