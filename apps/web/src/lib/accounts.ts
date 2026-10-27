@@ -80,6 +80,13 @@ export function accountOfMethod(code: string): AccountKind | undefined {
        * neither figure.
        */
       return undefined;
+    case "RETUR_SUPPLIER":
+      /*
+       * A supplier return's credit against the unit's invoice (owner
+       * 2026-10-26): the invoice owes less and no money moved anywhere. No
+       * pot, by name, for the reason TRANSFER_LUAR has none.
+       */
+      return undefined;
     default:
       return undefined;
   }
@@ -101,6 +108,20 @@ export const ADJUSTMENT_METHOD_CODES = [
   // from an account this app does not keep.
   "TRANSFER_LUAR",
 ] as const;
+
+/**
+ * Methods the app writes by itself and no payment picker offers: a supplier
+ * return's credit (2026-10-26) is written by the return dialog, and typing
+ * one by hand would shrink an invoice with no unit going back.
+ */
+export const UNPICKABLE_METHOD_CODES: ReadonlySet<string> = new Set([
+  "RETUR_SUPPLIER",
+]);
+
+/** May a person pick this method in a payment dialog? */
+export function isPickableMethod(code: string): boolean {
+  return !UNPICKABLE_METHOD_CODES.has(code);
+}
 
 /** One movement of money, reduced to the two things a balance needs. */
 export interface Movement {

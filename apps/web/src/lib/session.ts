@@ -26,6 +26,11 @@ export interface Staff {
   readonly name: string;
   readonly role: "OWNER" | "STAFF";
   readonly canApprove: boolean;
+  /**
+   * May open Financial & Report (owner ask 2026-10-16: "only Ersen and
+   * Dina"). The menu and the route read it; the API is what enforces it.
+   */
+  readonly canViewFinance: boolean;
   /** On a password somebody else chose: may do nothing but choose a new one. */
   readonly mustChangePassword: boolean;
 }

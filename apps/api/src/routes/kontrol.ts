@@ -10,8 +10,12 @@
  *
  * `AuditLog` is append-only for the app role by privilege, not by convention
  * (invariant 14, migration 20260815060658: INSERT and SELECT, with UPDATE and
- * DELETE revoked). So this router is a reader and there is deliberately no
- * sibling that writes, edits or prunes.
+ * DELETE revoked). So this router is a reader, with ONE exception the owner
+ * asked for on 2026-10-22: `DELETE /audit` clears the WHOLE log through the
+ * SECURITY DEFINER function `audit_log_clear()` (migration
+ * 20261022150000) and writes one fresh row saying who cleared it and how many
+ * rows went. There is still no route that edits a row or takes single rows
+ * out — the function has no such form.
  *
  * `entity`/`entityId` are untyped by design — an audit row must outlive the
  * table it points at, so it is the one link in the schema that is not an FK.
@@ -28,6 +32,7 @@ import { ApiError } from "../errors.js";
 const ACTIONS = [
   "CREATE",
   "UPDATE",
+  "DELETE",
   "ARCHIVE",
   "LOGIN",
   "LOGIN_GAGAL",
@@ -190,6 +195,41 @@ export function kontrolRouter({ db, requireOwner }: KontrolDeps): Router {
         }));
 
         res.json({ entries, page, perPage, total });
+      } catch (error) {
+        next(error);
+      }
+    })();
+  });
+
+  /**
+   * Clear the whole activity log (owner ask 2026-10-22). One transaction: the
+   * definer function empties the table, then ONE row records the clear — so a
+   * cleared log always says who emptied it, when, and how much went, and never
+   * reads as a log nothing was ever written to. No network I/O inside it.
+   */
+  router.delete("/audit", requireOwner, (req, res, next) => {
+    void (async () => {
+      try {
+        const staffId = req.staff?.id ?? null;
+        const cleared = await db.$transaction(async (tx) => {
+          const rows = await tx.$queryRaw<{ n: number }[]>`
+            SELECT audit_log_clear() AS n`;
+          const n = Number(rows[0]?.n ?? 0);
+          await tx.auditLog.create({
+            data: {
+              at: new Date(),
+              staffId,
+              entity: "AuditLog",
+              entityId: "all",
+              action: "DELETE",
+              before: JSON.stringify({ rows: n }),
+              requestId: req.get("x-request-id") ?? null,
+              ip: req.ip ?? null,
+            },
+          });
+          return n;
+        });
+        res.json({ cleared });
       } catch (error) {
         next(error);
       }

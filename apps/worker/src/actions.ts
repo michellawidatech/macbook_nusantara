@@ -20,23 +20,38 @@ import {
   askingPrice,
   parseAskPrice,
   phoneForms,
+  type ChatActionKind,
   type HandoffTopic,
 } from "@nusantara/agent";
-import type { Prisma, PrismaClient } from "@nusantara/db";
+import {
+  DP_PROOF_PREFIX,
+  recordStoreChanges,
+  type Prisma,
+  type PrismaClient,
+} from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 
 type Tx = Prisma.TransactionClient;
 
 export interface ActionInput {
   readonly from: string;
-  readonly topic: HandoffTopic;
+  /**
+   * A hand-over topic — or, for a job that is not a hand-over (2026-10-27),
+   * its own word with an explicit `kind`: `visit` ("Perlu sambut"),
+   * `restock` ("Perlu kabari") and `dp` ("Perlu putuskan DP", 2026-10-27).
+   * Those are not hand-over topics on purpose, so `waitingTasks` does not
+   * tell the bot to stop answering while they are open.
+   */
+  readonly topic: HandoffTopic | "visit" | "restock" | "dp";
+  /** Overrides the kind the topic implies — required for a non-hand-over topic. */
+  readonly kind?: ChatActionKind;
   readonly summary: string;
   /** The customer's words that raised it. */
   readonly customerText: string;
   /** The unit it is about, when the bot named one. */
   readonly serial?: string;
-  /** The newest inbound message it has read. */
-  readonly messageId: string;
+  /** The newest inbound message it has read, when there is one. */
+  readonly messageId?: string;
   readonly now: Date;
 }
 
@@ -45,7 +60,13 @@ export async function upsertChatAction(
   tx: Tx,
   input: ActionInput,
 ): Promise<{ id: string; created: boolean }> {
-  const kind = actionKindOf(input.topic);
+  const kind =
+    input.kind ??
+    (input.topic === "visit" || input.topic === "dp"
+      ? "RESERVATION"
+      : input.topic === "restock"
+        ? "STOCK"
+        : actionKindOf(input.topic));
   const [unit, customer] = await Promise.all([
     input.serial
       ? tx.unit.findUnique({
@@ -71,13 +92,30 @@ export async function upsertChatAction(
     topic: input.topic,
     summary: input.summary.slice(0, 1_000),
     customerText: input.customerText.slice(0, 2_000),
-    messageId: input.messageId,
+    ...(input.messageId ? { messageId: input.messageId } : {}),
     updatedAt: input.now,
     ...(customer ? { customerId: customer.id } : {}),
     ...unitFields,
     ...(ask !== null ? { askPrice: ask } : {}),
   };
 
+  // A DP proof is what a pending reservation request is waiting for
+  // (2026-10-27): every open Requests tab redraws that request's status.
+  if (input.summary.startsWith(DP_PROOF_PREFIX)) {
+    const waiting = await tx.reservationProposal.findMany({
+      where: {
+        from: input.from,
+        confirmedAt: null,
+        cancelledAt: null,
+        expiresAt: { gt: input.now },
+      },
+      select: { id: true },
+    });
+    await recordStoreChanges(
+      tx,
+      waiting.map((w) => ["reservationRequests", w.id] as const),
+    );
+  }
   const open = await tx.chatAction.findFirst({
     where: { from: input.from, kind, status: "OPEN" },
     select: { id: true },
@@ -96,11 +134,11 @@ export async function upsertChatAction(
 /**
  * Carry a customer's newer offer onto an open negotiation.
  *
- * A thread the bot handed over is HELD (draft.ts `quietCandidates`): the bot
- * says nothing more until a person answers, so a customer writing "kalau 7jt
- * boleh?" and then "7,2 deh" is never read by the draft pass. This reads it —
- * code only, no model — so the colleague opening the task sees the latest
- * figure, not the first.
+ * Code only, no model, and run before the draft pass: a customer writing
+ * "kalau 7jt boleh?" and then "7,2 deh" moves the figure on the task the
+ * colleague has open, whether or not the bot gets to answer the newer line —
+ * it may not, while a colleague is chatting (draft.ts `quietCandidates`). A
+ * hand-over no longer holds the thread itself since 2026-10-27.
  */
 export async function refreshOffers(
   db: PrismaClient,

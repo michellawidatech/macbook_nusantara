@@ -13,6 +13,7 @@
  *   own tables; `/chat` edits them through `/api/chat`. `chats` is always
  *   empty — the inbox reads `/api/inbox`.
  */
+import { DP_SETTING_KEYS } from "@nusantara/domain";
 import type { Tx } from "../../client.js";
 import { StoreValidationError } from "../errors.js";
 import {
@@ -36,11 +37,16 @@ const SETTING_KEYS = {
   openingCash: "finance.openingCash",
   openingBank: "finance.openingBank",
   openingBalanceAt: "finance.openingBalanceAt",
+  // Ignored since 2026-10-27 (the book close is retired); still carried so an
+  // existing row loads. `booksClosedUntil` in ../context.ts has why.
   booksClosedAt: "finance.booksClosedAt",
   shopName: "shop.name",
   shopTagline: "shop.tagline",
   shopAddress: "shop.address",
   shopContact: "shop.contact",
+  // The DP rule (2026-10-27) — `DP_SETTING_KEYS` in packages/domain.
+  dpAmount: DP_SETTING_KEYS.amount,
+  dpDays: DP_SETTING_KEYS.days,
 } as const;
 
 const FEE_PREFIX = "marketplace.fee.";
@@ -85,6 +91,14 @@ export async function projectSettings(tx: Tx): Promise<Settings> {
     shopTagline: text(SETTING_KEYS.shopTagline),
     shopAddress: text(SETTING_KEYS.shopAddress),
     shopContact: text(SETTING_KEYS.shopContact),
+    // A stored zero or a fraction is no rule; absent reads as the default.
+    dpAmount: ((v) => (v !== undefined && v > 0n ? v : undefined))(
+      money(SETTING_KEYS.dpAmount),
+    ),
+    dpDays: ((v) =>
+      v !== undefined && Number.isInteger(v) && v > 0 ? v : undefined)(
+      num(SETTING_KEYS.dpDays),
+    ),
   };
 }
 

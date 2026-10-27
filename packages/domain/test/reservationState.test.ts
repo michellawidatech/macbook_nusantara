@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  DP_DEFAULT_AMOUNT,
+  DP_DEFAULT_DAYS,
+  dpRuleOf,
   headerState,
+  heldUntilOf,
   holdProgress,
   isReservationStatus,
   itemState,
@@ -105,5 +109,80 @@ describe("the vocabulary", () => {
     expect(isReservationStatus("DONE")).toBe(false);
     expect(isReservationStatus("CANCELLED")).toBe(false);
     expect(isReservationStatus("TERJADWAL")).toBe(true);
+  });
+});
+
+describe("a hold without a DP (2026-10-27)", () => {
+  it("reads a TERSEDIA unit as softly reserved only when told it is soft", () => {
+    expect(itemState("TERSEDIA", true)).toBe("SOFT");
+    expect(itemState("TERSEDIA")).toBe("RELEASED");
+    // Soft says nothing about a unit that is held, sold or gone elsewhere.
+    expect(itemState("DIRESERVASI", true)).toBe("HELD");
+    expect(itemState("TERJUAL", true)).toBe("BOUGHT");
+    expect(itemState("QC", true)).toBe("RELEASED");
+  });
+
+  it("keeps a softly reserved hold open", () => {
+    expect(headerState("TERJADWAL", ["SOFT"])).toBe("TERJADWAL");
+    expect(headerState("TERJADWAL", ["SOFT", "BOUGHT"])).toBe("TERJADWAL");
+    expect(holdProgress(["SOFT", "HELD", "BOUGHT"]).held).toBe(2);
+  });
+});
+
+describe("a hold with an open DP (2026-10-27)", () => {
+  it("never closes itself while the money waits for a decision", () => {
+    expect(headerState("TERJADWAL", ["RELEASED"], { dpOpen: true })).toBe(
+      "TERJADWAL",
+    );
+    // Bought without the DP on the sale: still staff's to settle.
+    expect(headerState("TERJADWAL", ["BOUGHT"], { dpOpen: true })).toBe(
+      "TERJADWAL",
+    );
+  });
+
+  it("closes as before once the DP is settled", () => {
+    expect(headerState("TERJADWAL", ["BOUGHT"], { dpOpen: false })).toBe(
+      "SELESAI",
+    );
+    expect(headerState("TERJADWAL", ["RELEASED"], { dpOpen: false })).toBe(
+      "BATAL",
+    );
+    // A decision already taken absorbs, as every settled hold does.
+    expect(headerState("BATAL", ["RELEASED"], { dpOpen: true })).toBe("BATAL");
+  });
+});
+
+describe("the DP rule", () => {
+  it("is Rp500.000 for seven days until somebody types otherwise", () => {
+    expect(dpRuleOf({})).toEqual({
+      amount: DP_DEFAULT_AMOUNT,
+      days: DP_DEFAULT_DAYS,
+    });
+    expect(DP_DEFAULT_AMOUNT).toBe(500_000);
+    expect(DP_DEFAULT_DAYS).toBe(7);
+    expect(dpRuleOf({ amount: "1000000", days: "3" })).toEqual({
+      amount: 1_000_000,
+      days: 3,
+    });
+  });
+
+  it("falls back half by half on a blank, a zero or a non-number", () => {
+    expect(dpRuleOf({ amount: " ", days: null })).toEqual({
+      amount: 500_000,
+      days: 7,
+    });
+    expect(dpRuleOf({ amount: "0", days: "abc" })).toEqual({
+      amount: 500_000,
+      days: 7,
+    });
+    expect(dpRuleOf({ amount: "250000.5", days: "-2" })).toEqual({
+      amount: 500_000,
+      days: 7,
+    });
+  });
+
+  it("holds until the DP's moment plus the days", () => {
+    const paid = new Date("2026-10-27T07:00:00.000Z");
+    expect(heldUntilOf(paid, 7).toISOString()).toBe("2026-11-03T07:00:00.000Z");
   });
 });

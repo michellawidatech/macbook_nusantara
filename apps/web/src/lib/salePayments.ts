@@ -105,6 +105,12 @@ export interface SalePayment {
    * not move. Absent means it counts. `Payment.inBalance`.
    */
   readonly inBalance?: boolean;
+  /**
+   * The reservation this is the DP of (2026-10-27) — the SAME payment the
+   * reservation recorded, taken by this sale. It came in on its own day and
+   * is counted then, never again at the sale.
+   */
+  readonly reservationId?: string;
 }
 
 /**

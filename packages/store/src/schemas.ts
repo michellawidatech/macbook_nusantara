@@ -137,6 +137,12 @@ export const EXPENSE_KINDS = [
   "KOMPENSASI",
   "SUPPLIER",
   "TRANSFER",
+  // A unit's own cost — a service charge paid (owner 2026-10-26). Written only
+  // from a charge, never from Add adjustment; already in the unit's COGS.
+  "UNIT",
+  // A bank's or a marketplace's fee — what the monthly reconciliation records
+  // a deduction under (owner 2026-10-27).
+  "BIAYA_ADMIN",
 ] as const;
 export const INCOME_REASONS = [
   "SALES",
@@ -148,6 +154,26 @@ export const INCOME_REASONS = [
   "SELISIH",
 ] as const;
 export const PAYMENT_LOG_ACTIONS = ["ADDED", "AMENDED", "REMOVED"] as const;
+/**
+ * Reconciliation (owner ask 2026-10-27, docs/superpowers/specs/
+ * 2026-10-27-reconciliation-design.md): a DAILY count of the bank and the
+ * drawer, and a MONTHLY match of the bank against its e-statement.
+ */
+export const RECON_KINDS = ["DAILY", "MONTHLY"] as const;
+export const RECON_POTS = ["BANK", "CASH"] as const;
+export const RECON_STATUSES = [
+  "OPEN",
+  "MATCHED",
+  "ADJUSTED",
+  "RECONCILED",
+] as const;
+export const STATEMENT_LINE_STATUSES = [
+  "UNMATCHED",
+  "MATCHED",
+  "SUGGESTED",
+  "IGNORED",
+] as const;
+export const RECON_EDIT_ACTIONS = ["EDITED", "ADDED"] as const;
 export const SETTLEMENT_FEE_KINDS = [
   "COMMISSION",
   "SERVICE",
@@ -258,15 +284,24 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     openingBank: z.optional(money),
     openingBalanceAt: instant.optional(),
     /**
-     * The book is closed up to here (owner ask 2026-09-24): every sale on or
-     * before it is read-only and takes no further money. `AppSetting`
-     * `finance.booksClosedAt`; absent means the book is open.
+     * Where the book was closed up to (`AppSetting` `finance.booksClosedAt`).
+     * ⚠️ IGNORED since 2026-10-27, when the book close was retired in favour
+     * of reconciliation; still in the contract so a shop that closed a month
+     * still loads. Nothing writes it and nothing locks by it.
      */
     booksClosedAt: instant.optional(),
     shopName: text.optional(),
     shopTagline: text.optional(),
     shopAddress: text.optional(),
     shopContact: text.optional(),
+    /**
+     * The DP rule (owner, 2026-10-27): what a DP is, in whole rupiah, and how
+     * many days it holds a unit — `AppSetting` `sales.dpAmount` /
+     * `sales.dpDays`. Absent reads as Rp500.000 for 7 days (`dpRuleOf` in
+     * packages/domain).
+     */
+    dpAmount: z.optional(money),
+    dpDays: count.min(1).optional(),
   });
 
   const paymentMethod = z.strictObject({
@@ -281,6 +316,12 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
 
   const warehouse = z.strictObject({
     id,
+    /**
+     * `Location.code` — the shop's own number for the warehouse, `01` to `04`
+     * from B2Soft (owner ask 2026-10-08). Optional so a changeset written
+     * before it still commits.
+     */
+    code: text.optional(),
     name: text,
     active: z.boolean(),
     kind: z.enum(LOCATION_KINDS).optional(),
@@ -385,6 +426,14 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     axes: z.array(z.strictObject({ name: text, values: z.array(text) })),
     identifier: text.optional(),
     source: z.enum(CATALOG_SOURCES).optional(),
+    /** The product's facts (2026-10-21) — see `CatalogModel.family`. */
+    family: text.optional(),
+    chip: text.optional(),
+    extra: text.optional(),
+    /** AppleDB identifiers linked to this product. Written once, never removed. */
+    identifiers: z.array(text).optional(),
+    /** Products a person said are NOT this one. Written once, never removed. */
+    notDuplicateOf: z.array(id).optional(),
   });
 
   const sku = z.strictObject({
@@ -395,6 +444,8 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     variantLabel: text,
     axisValues: z.record(z.string(), z.string()).optional(),
     price: money,
+    /** Merged into another variant (2026-10-21): kept for history, offered nowhere. */
+    mergedIntoId: id.optional(),
   });
 
   const unit = z.strictObject({
@@ -526,6 +577,13 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
          * written before the column meant.
          */
         inBalance: z.boolean().optional(),
+        /*
+         * The supplier return this payment is the credit of —
+         * `Payment.unitReturnId`, a `returns` row's `id` (2026-10-26). Written
+         * with method RETUR_SUPPLIER. Optional, so a changeset from before
+         * the column still commits.
+         */
+        returnId: id.optional(),
       }),
     ),
     /*
@@ -607,6 +665,12 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     ref: text.optional(),
     /** `Payment.inBalance`: false when the money never reached the shop's cash or bank. */
     inBalance: z.boolean().optional(),
+    /**
+     * The reservation this payment is the DP of (`Payment.reservationId`,
+     * 2026-10-27). Set on the DP once a sale takes it: it is the SAME payment
+     * the reservation recorded, adopted by the order, never a copy.
+     */
+    reservationId: id.optional(),
   });
 
   /**
@@ -711,6 +775,14 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     fee: z.optional(money),
     supplierId: id.optional(),
     expectedCredit: z.optional(money),
+    /**
+     * Σ the REFUND incomes naming this return (`ManualIncome.unitReturnId`) —
+     * DERIVED, no column (2026-10-26). An account without finance access is
+     * sent no incomes, and without this would read a supplier's refund as
+     * still awaited and offer to record it twice. The adapter ignores it on
+     * write and recomputes it on every projection.
+     */
+    refundReceived: z.optional(money),
   });
 
   const reservation = z.strictObject({
@@ -722,6 +794,37 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     sourceId: id.optional(),
     items: z.array(z.strictObject({ id, serial: z.string().min(1) })),
     status: z.enum(RESERVATION_STATUSES),
+    /**
+     * The end of a FIRM hold — `Reservation.heldUntil`, the DP's moment plus
+     * the rule's days (2026-10-27). Absent: nobody paid a DP, and the hold
+     * holds nothing.
+     */
+    heldUntil: instant.optional(),
+    /**
+     * The DP — a `Payment` MASUK naming the reservation (2026-10-27). `orderId`
+     * is DERIVED (the sale that took it, `Payment.orderId`): the orders adapter
+     * writes it, this one ignores it. `refund` is a `Payment` KELUAR naming the
+     * reservation alone. A DP neither on a sale nor refunded, on a CANCELLED
+     * reservation, was kept ("hangus").
+     */
+    dp: z
+      .strictObject({
+        id,
+        method: z.string().min(1),
+        amount: money,
+        at: instant,
+        note: text.optional(),
+        orderId: id.optional(),
+        refund: z
+          .strictObject({
+            id,
+            method: z.string().min(1),
+            amount: money,
+            at: instant,
+          })
+          .optional(),
+      })
+      .optional(),
   });
 
   const discount = z.strictObject({
@@ -751,6 +854,17 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     method: z.string().min(1),
     /** The sale it is about, where the category names one (2026-09-23). */
     orderId: id.optional(),
+    /**
+     * The supplier return this is the refund of — `ManualIncome.unitReturnId`,
+     * a `returns` row's `id` (2026-10-26).
+     */
+    returnId: id.optional(),
+    /**
+     * When it was typed — `ManualIncome.createdAt`; the till's clock when it
+     * sends one, the server's otherwise. Orders a day's typed rows on Income &
+     * Expense, which carry a date and no time (2026-10-24), and nothing else.
+     */
+    createdAt: instant.optional(),
   });
 
   const expense = z.strictObject({
@@ -764,6 +878,39 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     method: z.string().min(1),
     /** The sale it is about, where the category names one (2026-09-23). */
     orderId: id.optional(),
+    /**
+     * The service charge this paid — `Expense.serviceFeeId`, the `id` of a
+     * fee inside a `services` row (2026-10-26). Kind UNIT. At most one
+     * expense per charge.
+     */
+    serviceFeeId: id.optional(),
+    /** When it was typed — `Expense.createdAt`; see `income`. */
+    createdAt: instant.optional(),
+  });
+
+  /**
+   * A reservation REQUEST the bot filed from a chat (2026-10-27) — a
+   * `ReservationProposal`, read-only here: staff approve or reject it through
+   * `/api/reservations/requests`, which books the reservation in the same
+   * transaction. Its status is DERIVED in the browser
+   * (`requestStatus`, packages/domain) because `expiresAt` passes by itself.
+   */
+  const reservationRequest = z.strictObject({
+    id,
+    /** wa_id — the chat it came from. */
+    phone: z.string().min(1),
+    custName: text,
+    when: instant,
+    createdAt: instant,
+    expiresAt: instant,
+    confirmedAt: instant.optional(),
+    cancelledAt: instant.optional(),
+    /** A later request of the same customer replaced this one. */
+    replaced: z.boolean(),
+    reservationId: id.optional(),
+    items: z.array(z.strictObject({ id, serial: z.string().min(1) })),
+    /** A `Perlu verifikasi DP` task raised on the thread since it was filed. */
+    dpProofAt: instant.optional(),
   });
 
   const chat = z.strictObject({
@@ -925,6 +1072,15 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
         amount: money,
         at: instant,
         staff: text,
+        /*
+         * Has an `Expense` paid this charge (`Expense.serviceFeeId`,
+         * 2026-10-26)? DERIVED on the server from that row, never written —
+         * it exists because an account without finance access is sent no
+         * expenses, and without it the service bench could not tell a paid
+         * charge from an owed one and would offer to pay it twice. `true` or
+         * absent; which method paid it is the expense's, not this.
+         */
+        paid: z.literal(true).optional(),
       }),
     ),
     note: text.optional(),
@@ -959,6 +1115,113 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     ),
   });
 
+  /**
+   * The money row a reconciliation names — exactly one of the four, as the
+   * database's CHECK says (`ReconciliationEdit`, `BankStatementMatch`). A sale
+   * payment, a refund, a customer's old-debt payment and a supplier payment
+   * are all `Payment` rows; a deposit, an expense and an income are their own.
+   */
+  const moneyRef = {
+    paymentId: id.optional(),
+    expenseId: id.optional(),
+    incomeId: id.optional(),
+    depositId: id.optional(),
+  };
+  const exactlyOneRef = (r: {
+    paymentId?: string | undefined;
+    expenseId?: string | undefined;
+    incomeId?: string | undefined;
+    depositId?: string | undefined;
+  }) =>
+    [r.paymentId, r.expenseId, r.incomeId, r.depositId].filter(
+      (x) => x !== undefined,
+    ).length === 1;
+
+  /**
+   * A count of one pot (DAILY, one day) or the bank against its e-statement
+   * (MONTHLY, one month) — `Reconciliation` (2026-10-27). `edits` are the
+   * corrections it made to the real records and the transactions it added,
+   * before → after, each written once.
+   */
+  const reconciliation = z.strictObject({
+    id,
+    kind: z.enum(RECON_KINDS),
+    pot: z.enum(RECON_POTS),
+    periodStart: day,
+    periodEnd: day,
+    posBalance: money,
+    actualBalance: money,
+    statementOpening: z.optional(money),
+    statementClosing: z.optional(money),
+    /** The uploaded file's NAME, never its contents. */
+    statementFile: text.optional(),
+    status: z.enum(RECON_STATUSES),
+    note: text.optional(),
+    staff: text,
+    createdAt: instant,
+    updatedAt: instant,
+    edits: z.array(
+      z
+        .strictObject({
+          id,
+          ...moneyRef,
+          action: z.enum(RECON_EDIT_ACTIONS),
+          before: z.optional(money),
+          after: money,
+          staff: text,
+          at: instant,
+        })
+        .refine(exactlyOneRef, {
+          message: "an edit names exactly one money row",
+        }),
+    ),
+    /**
+     * POS bank movements the statement never shows, explained instead of
+     * paired — `ReconciliationAside` (owner-approved 2026-10-27). MONTHLY
+     * only. Taken back by stamping `withdrawnAt`; nothing else of one ever
+     * changes, and one is never removed by a client.
+     */
+    asides: z.array(
+      z
+        .strictObject({
+          id,
+          ...moneyRef,
+          note: text.refine((s) => s.trim() !== "", "Catatan wajib diisi."),
+          staff: text,
+          at: instant,
+          withdrawnAt: instant.optional(),
+        })
+        .refine(exactlyOneRef, {
+          message: "an aside names exactly one money row",
+        }),
+    ),
+  });
+
+  /**
+   * One movement off a bank's e-statement — `BankStatementLine` — with the
+   * POS movements it is matched to (`BankStatementMatch`). `amount` is signed
+   * (a debit is negative) and in whole rupiah: the statement's sen are
+   * checked when the file is read and are not carried (lib/bankStatement.ts).
+   */
+  const statementLine = z.strictObject({
+    id,
+    reconciliationId: id,
+    lineNo: count.min(1),
+    date: day,
+    description: text,
+    amount: money,
+    balance: z.optional(money),
+    status: z.enum(STATEMENT_LINE_STATUSES),
+    note: text.optional(),
+    matches: z.array(
+      z
+        .strictObject({ id, ...moneyRef, reason: z.string().min(1) })
+        .refine(exactlyOneRef, {
+          message: "a match names exactly one money row",
+        }),
+    ),
+  });
+
   const rows = {
     paymentMethods: paymentMethod,
     warehouses: warehouse,
@@ -982,6 +1245,7 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     stockMoves: stockMove,
     deposits: deposit,
     reservations: reservation,
+    reservationRequests: reservationRequest,
     orders: order,
     returns: unitReturn,
     opnames: opname,
@@ -995,6 +1259,8 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     incomes: income,
     paymentLog,
     settlementLog,
+    reconciliations: reconciliation,
+    statementLines: statementLine,
     chats: chat,
     corrections: correction,
     personas: persona,
@@ -1033,12 +1299,15 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     orders: z.array(order),
     returns: z.array(unitReturn),
     reservations: z.array(reservation),
+    reservationRequests: z.array(reservationRequest),
     discounts: z.array(discount),
     expenses: z.array(expense),
     incomes: z.array(income),
     paymentLog: z.array(paymentLog),
     settlements: z.array(settlement),
     settlementLog: z.array(settlementLog),
+    reconciliations: z.array(reconciliation),
+    statementLines: z.array(statementLine),
     services: z.array(service),
     deposits: z.array(deposit),
     chats: z.array(chat),

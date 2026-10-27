@@ -203,8 +203,9 @@ If an existing rule has `"src": ["*"]`, change it to `"autogroup:member"` —
 
 Then **Settings → Trust credentials → New credential → OpenID Connect**:
 issuer GitHub, subject
-`repo:michellawidatech/macbook_nusantara:environment:prod`, scope *Auth keys:
-write*, tag `tag:ci`. Note the client ID and audience.
+`repo:michellawidatech@300295019/macbook_nusantara@1333015804:environment:prod`
+(the repository's immutable subject — the short form never matches), scope
+*Auth keys: write*, tag `tag:ci`. Note the client ID and audience.
 
 **3.2 The deploy key and the installer. LAPTOP:**
 

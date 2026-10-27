@@ -33,9 +33,12 @@ import {
   SUMMARY_INPUT_LIMIT,
   hasCredential,
   anthropicClient,
+  laterOf,
   markSummaryAttempt,
   saveSummary,
   summarize,
+  summarySince,
+  turnsFor,
   type AgentClient,
   type AnthropicEnv,
 } from "@nusantara/agent";
@@ -54,6 +57,8 @@ export interface SummaryDeps {
   readonly quietMs: number;
   readonly maxPerTick: number;
   readonly inputLimit?: number;
+  /** `CHATBOT_SUMMARY_MODEL`; the package default when absent. */
+  readonly model?: string;
   readonly now?: () => Date;
 }
 
@@ -102,6 +107,9 @@ async function summaryCandidates(
        AND m."answeredAt" IS NOT NULL
        AND (t."coveredThroughAt" IS NULL
             OR m."answeredAt" > t."coveredThroughAt")
+       -- A cleared chat (2026-10-27) starts over: what was answered before
+       -- the clear is not this conversation's and is never summarised again.
+       AND (t."clearedAt" IS NULL OR m."answeredAt" > t."clearedAt")
      GROUP BY m."from", t."summaryAt"
     HAVING COUNT(*) >= ${everyTurns}
         OR MAX(m."answeredAt")
@@ -142,17 +150,23 @@ export async function summaryPass(
     try {
       const memo = await db.waThreadMemory.findUnique({
         where: { from },
-        select: { summary: true, coveredThroughAt: true },
+        select: { summary: true, coveredThroughAt: true, clearedAt: true },
       });
+      // After a *Clear chat* the cursor starts at the clear and the old note
+      // is not carried forward: the app role cannot blank the agent's summary
+      // (invariant 13), so the pass that rewrites it is where it is dropped.
+      const since = laterOf(
+        memo?.coveredThroughAt ?? null,
+        memo?.clearedAt ?? null,
+      );
+      const previous = summarySince(memo, memo?.clearedAt ?? null);
 
       const rows = await db.waMessage.findMany({
         where: {
           from,
           direction: "IN",
           replyText: { not: null },
-          answeredAt: memo?.coveredThroughAt
-            ? { gt: memo.coveredThroughAt }
-            : { not: null },
+          answeredAt: since ? { gt: since } : { not: null },
         },
         // Oldest first, so the cursor lands on the last row we actually read
         // and no turn is ever jumped over. `id` breaks the tie.
@@ -165,11 +179,20 @@ export async function summaryPass(
       const newest = rows[rows.length - 1]!;
       if (!newest.answeredAt) continue;
 
+      // Whole turns: every line of each burst, not only the row its reply
+      // landed on (packages/agent turns.ts). The cursor is still the reply
+      // rows', so what is covered does not change.
+      const turns = await turnsFor(db, from, rows);
+
       let failure: unknown;
       const summary = await summarize({
         client,
-        previous: memo?.summary ?? null,
-        turns: rows,
+        ...(deps.model ? { model: deps.model } : {}),
+        previous,
+        turns: turns.map((t) => ({
+          text: t.customer || null,
+          replyText: t.reply,
+        })),
         onError: (err) => {
           failure = err;
         },

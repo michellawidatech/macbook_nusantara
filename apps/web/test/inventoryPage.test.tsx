@@ -86,13 +86,20 @@ function expectedLines(): InventoryLine[] {
   });
 }
 
-/** The table's body rows — the product table, not a dialog's. */
+/**
+ * The table's body rows — the product table's lines, not a dialog's rows nor
+ * the unit rows nested under an opened line.
+ */
 function tableRows(): HTMLElement[] {
   return Array.from(
     document.querySelectorAll<HTMLElement>(
       ".ant-table-tbody > tr.ant-table-row",
     ),
-  ).filter((tr) => tr.closest(".ant-modal") === null);
+  ).filter(
+    (tr) =>
+      tr.closest(".ant-modal") === null &&
+      tr.closest(".ant-table-expanded-row") === null,
+  );
 }
 
 /** The row showing a line: its product, variant and code, grade and warehouse. */
@@ -132,6 +139,18 @@ async function rowFor(line: InventoryLine): Promise<HTMLElement> {
   );
   await settle();
   return rowOf(line);
+}
+
+/**
+ * What an opened line shows under it: the expanded row that follows it
+ * (owner ask 2026-10-02 — nested, not a popup).
+ */
+async function unitsUnder(row: HTMLElement): Promise<HTMLElement> {
+  return waitFor(() => {
+    const next = row.nextElementSibling as HTMLElement | null;
+    expect(next?.classList.contains("ant-table-expanded-row")).toBe(true);
+    return next!;
+  });
 }
 
 /** The modal on top: the last one open. */
@@ -219,15 +238,18 @@ describe("the flat table", () => {
 });
 
 describe("the units behind a line", () => {
-  it("opens on a click with every unit of the line, and its cost taken apart", async () => {
+  it("opens under the line on a click with every unit, and its cost taken apart", async () => {
     renderPage();
     await settle();
     const cost = costIndex(getDb());
     const line = expectedLines().find(
       (l) => l.tracksSerial && l.units.some((u) => u.poId !== null),
     )!;
-    await userEvent.click(within(await rowFor(line)).getByText(line.code));
-    const dialog = await topModal();
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    const dialog = await unitsUnder(row);
+    // Nested, not a popup.
+    expect(document.querySelector(".ant-modal-wrap")).toBeNull();
     for (const u of line.units) {
       expect(within(dialog).getByText(u.serial)).toBeInTheDocument();
     }
@@ -257,8 +279,9 @@ describe("the units behind a line", () => {
     const db = getDb();
     const line = expectedLines().find((l) => !skuTracksSerial(db, l.skuId));
     expect(line, "the seed should hold an accessory").toBeDefined();
-    await userEvent.click(within(await rowFor(line!)).getByText(line!.code));
-    const dialog = await topModal();
+    const row = await rowFor(line!);
+    await userEvent.click(within(row).getByText(line!.code));
+    const dialog = await unitsUnder(row);
     expect(headings(dialog)).not.toContain("Battery");
     expect(headings(dialog)).toContain("Qty");
     expect(
@@ -266,7 +289,25 @@ describe("the units behind a line", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("opens Edit unit above the popup", async () => {
+  it("closes again on a second click", async () => {
+    renderPage();
+    await settle();
+    const line = expectedLines().find((l) => l.tracksSerial)!;
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    await unitsUnder(row);
+    await userEvent.click(within(row).getByText(line.code));
+    await waitFor(() => {
+      const next = row.nextElementSibling as HTMLElement | null;
+      expect(
+        next === null ||
+          !next.classList.contains("ant-table-expanded-row") ||
+          next.style.display === "none",
+      ).toBe(true);
+    });
+  });
+
+  it("opens Edit unit from a unit under the line", async () => {
     // The per-unit action is Edit unit since 2026-09-23 (owner ask), and it
     // opens the dialog that corrects the serial, grade, battery, shelf,
     // description and unit price — not the old warehouse-and-note form.
@@ -274,17 +315,139 @@ describe("the units behind a line", () => {
     await settle();
     const line = expectedLines().find((l) => l.tracksSerial)!;
     const unit = line.units[0]!;
-    await userEvent.click(within(await rowFor(line)).getByText(line.code));
-    const popup = await topModal();
-    await userEvent.click(labelled(popup, `Edit ${unit.serial}`));
-    const title = await screen.findByText("Edit unit", {
-      selector: ".ant-modal-title, .ant-modal-title *",
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    const nested = await unitsUnder(row);
+    await userEvent.click(labelled(nested, `Edit ${unit.serial}`));
+    expect(
+      await screen.findByText("Edit unit", {
+        selector: ".ant-modal-title, .ant-modal-title *",
+      }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("a unit's ⋯ (2026-10-26)", () => {
+  /*
+   * Send to service is on the unit's row now — Stock out keeps only
+   * write-offs — and opens the one dialog every door shares. Where it is
+   * serviced defaults to where it is; another warehouse moves it there.
+   */
+  it("sends a unit to service, to the warehouse the dialog names", async () => {
+    renderPage();
+    await settle();
+    const line = expectedLines().find(
+      (l) => l.tracksSerial && l.units.some((u) => u.status === "TERSEDIA"),
+    )!;
+    const unit = line.units.find((u) => u.status === "TERSEDIA")!;
+    const other = getDb().warehouses.find(
+      (w) => w.active && w.id !== unit.locationId,
+    )!;
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    const nested = await unitsUnder(row);
+    await userEvent.click(labelled(nested, `More for ${unit.serial}`));
+    await userEvent.click(await screen.findByText("Send to service"));
+    const dialog = await topModal();
+    expect(within(dialog).getByText(/\(stays here\)/)).toBeInTheDocument();
+    fireEvent.mouseDown(within(dialog).getByLabelText("Where is it serviced?"));
+    const label = other.code ? `${other.code} · ${other.name}` : other.name;
+    const option = await waitFor(() => {
+      const found = Array.from(
+        document.querySelectorAll<HTMLElement>(".ant-select-item-option"),
+      ).find((el) => el.getAttribute("title") === label);
+      expect(found).toBeDefined();
+      return found!;
     });
-    const wrap = title.closest(".ant-modal-wrap") as HTMLElement;
-    const under = popup.closest(".ant-modal-wrap") as HTMLElement;
-    expect(Number(wrap.style.zIndex)).toBeGreaterThan(
-      Number(under.style.zIndex || 1000),
+    fireEvent.click(option);
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Send to service" }),
     );
+
+    await waitFor(() => {
+      const u = getDb().units.find((x) => x.serial === unit.serial)!;
+      expect(u.status).toBe("SERVIS");
+      expect(u.locationId).toBe(other.id);
+    });
+    const visit = getDb().services.find(
+      (r) => r.serial === unit.serial && r.closedAt === undefined,
+    )!;
+    expect(visit).toMatchObject({
+      fromLocationId: unit.locationId,
+      raisedBy: "ADJUSTMENT",
+    });
+  });
+
+  it("will not send a held unit", async () => {
+    // A held unit is the customer's until the hold is released.
+    const held = getDb().units.find(
+      (u) => u.status === "TERSEDIA" && skuTracksSerial(getDb(), u.skuId),
+    )!;
+    mutate((d) => {
+      d.units.find((u) => u.serial === held.serial)!.status = "DIRESERVASI";
+    });
+    try {
+      renderPage();
+      await settle();
+      const line = expectedLines().find((l) =>
+        l.units.some((u) => u.serial === held.serial),
+      )!;
+      const row = await rowFor(line);
+      await userEvent.click(within(row).getByText(line.code));
+      const nested = await unitsUnder(row);
+      await userEvent.click(labelled(nested, `More for ${held.serial}`));
+      const item = (await screen.findByText("Send to service")).closest(
+        "li",
+      ) as HTMLElement;
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+      // Nor return it to its supplier (2026-10-26).
+      const back = (await screen.findByText("Return to supplier")).closest(
+        "li",
+      ) as HTMLElement;
+      expect(back.getAttribute("aria-disabled")).toBe("true");
+    } finally {
+      mutate((d) => {
+        d.units.find((u) => u.serial === held.serial)!.status = "TERSEDIA";
+      });
+    }
+  });
+
+  it("returns a unit to its supplier through the one dialog (2026-10-26)", async () => {
+    renderPage();
+    await settle();
+    const line = expectedLines().find(
+      (l) =>
+        l.tracksSerial &&
+        l.units.some((u) => u.status === "TERSEDIA" && u.poId != null),
+    )!;
+    const unit = line.units.find(
+      (u) => u.status === "TERSEDIA" && u.poId != null,
+    )!;
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    const nested = await unitsUnder(row);
+    await userEvent.click(labelled(nested, `More for ${unit.serial}`));
+    await userEvent.click(await screen.findByText("Return to supplier"));
+    const dialog = await topModal();
+    await settle();
+    fireEvent.change(within(dialog).getByLabelText("Reason"), {
+      target: { value: "Wrong spec" },
+    });
+    const notYet = within(dialog).queryByText("Not paid by supplier yet");
+    if (notYet) await userEvent.click(notYet);
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Record supplier return" }),
+    );
+    await waitFor(() =>
+      expect(getDb().units.find((u) => u.serial === unit.serial)!.status).toBe(
+        "RETUR_SUPPLIER",
+      ),
+    );
+    expect(
+      getDb().returns.find(
+        (r) => r.serial === unit.serial && r.kind === "SUPPLIER",
+      ),
+    ).toMatchObject({ expectedCredit: unit.buy, status: "DONE" });
   });
 });
 
@@ -328,7 +491,7 @@ describe("Set price", () => {
     expect(
       within(grid).getByText(/^Marketplace price after saving:/),
     ).toBeInTheDocument();
-    await userEvent.click(worded(grid, "Save prices"));
+    await userEvent.click(worded(grid, "Save"));
     await settle();
 
     const after = getDb().units.find((u) => u.serial === unit.serial)!;
@@ -340,6 +503,58 @@ describe("Set price", () => {
     expect(last.type).toBe("DICATAT");
     expect(last.note).toContain(`→ ${fmtRp(7_000_000)}`);
     expect(last.note).toContain("set by hand dropped");
+  });
+});
+
+describe("Set price, the grade with it", () => {
+  it("regrades the whole line from the top row, and leaves the prices alone", async () => {
+    // Owner ask 2026-10-21: change the grade in bulk while repricing.
+    const line = expectedLines().find(
+      (l) => l.units.length >= 2 && l.units.every((u) => u.grade !== "C"),
+    )!;
+    const prices = new Map(
+      line.units.map((u) => [
+        u.serial,
+        getDb().units.find((x) => x.serial === u.serial)!.price,
+      ]),
+    );
+    renderPage();
+    await settle();
+    await userEvent.click(worded(await rowFor(line), "Set price"));
+    const grid = await topModal();
+
+    const first = within(grid).getByRole("combobox", {
+      name: `Grade of ${line.units[0]!.serial}`,
+    });
+    fireEvent.mouseDown(first);
+    const option = await vi.waitFor(() => {
+      const open = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          ".ant-select-dropdown:not(.ant-select-dropdown-hidden)",
+        ),
+      );
+      const found = open
+        .at(-1)
+        ?.querySelector<HTMLElement>('.ant-select-item-option[title="C"]');
+      if (!found) throw new Error("no grade list open");
+      return found;
+    });
+    fireEvent.click(option);
+    await userEvent.click(
+      within(grid).getByRole("button", { name: "Fill the grade down" }),
+    );
+    await userEvent.click(worded(grid, "Save"));
+    await settle();
+
+    for (const u of line.units) {
+      const after = getDb().units.find((x) => x.serial === u.serial)!;
+      expect(after.grade).toBe("C");
+      expect(after.price).toBe(prices.get(u.serial));
+      const last = getDb()
+        .events.filter((e) => e.serial === u.serial)
+        .at(-1)!;
+      expect(last.note).toBe(`Grade ${u.grade ?? "none"} → C`);
+    }
   });
 });
 
@@ -427,27 +642,17 @@ describe("on a phone", () => {
     });
   });
 
-  it("draws a card per line, and a tap on one opens the same units", async () => {
+  it("keeps its grid, and a tap on a line opens the same units under it", async () => {
+    // An expanding table keeps its grid on a phone — a card has no second
+    // level to open into (DataTable's docblock). Nested since 2026-10-02.
     renderPage();
     await settle();
     const line = expectedLines().find((l) => l.tracksSerial)!;
-    fireEvent.change(
-      screen.getByPlaceholderText(
-        "Search product, specs, code or a serial number",
-      ),
-      { target: { value: line.code } },
-    );
-    await settle();
-    // Nothing expands any more, so the list is cards, not a sideways grid.
-    expect(tableRows()).toHaveLength(0);
-    const card = Array.from(
-      document.querySelectorAll<HTMLElement>(".ant-card"),
-    ).find((c) => (c.textContent ?? "").includes(line.code))!;
-    expect(card).toBeDefined();
-    await userEvent.click(within(card).getByText(line.code));
-    const dialog = await topModal();
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    const nested = await unitsUnder(row);
     for (const u of line.units) {
-      expect(within(dialog).getByText(u.serial)).toBeInTheDocument();
+      expect(within(nested).getByText(u.serial)).toBeInTheDocument();
     }
   });
 });

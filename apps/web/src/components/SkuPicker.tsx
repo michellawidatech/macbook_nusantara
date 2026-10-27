@@ -29,6 +29,7 @@
  * shows both the way `InventoryPage`'s serial picker already does.
  */
 import { Flex, Select, Typography } from "antd";
+import { isLiveSku } from "../lib/skuCode.js";
 import { TYPE } from "../theme/tokens";
 import { useTranslation } from "react-i18next";
 
@@ -39,6 +40,8 @@ export interface PickableSku {
   code: string;
   name: string;
   variantLabel: string;
+  /** Merged into another variant — offered only while it is the value. */
+  mergedIntoId?: string;
 }
 
 /** The half that goes under the box: the model and what is in it. */
@@ -56,6 +59,8 @@ export interface SkuPickerProps {
   status?: "warning" | "error";
   /** Names the box, where the column header cannot. Required — see `CountInput`. */
   "aria-label": string;
+  /** What a `Form.Item` hands its control, so its label points at the box. */
+  id?: string;
 }
 
 export function SkuPicker({
@@ -66,6 +71,7 @@ export function SkuPicker({
   placeholder,
   status,
   "aria-label": ariaLabel,
+  id,
 }: SkuPickerProps) {
   const { t } = useTranslation();
   const chosen = skus.find((s) => s.id === value);
@@ -92,10 +98,15 @@ export function SkuPicker({
         onChange={onChange}
         status={status}
         aria-label={ariaLabel}
+        {...(id === undefined ? {} : { id })}
         placeholder={
           placeholder ?? t("skuPicker.pick", "Search a code or a model name")
         }
-        options={skus.map((s) => ({ value: s.id, label: s.code }))}
+        // A merged variant is offered nowhere — but a line already on it still
+        // shows its code.
+        options={skus
+          .filter((s) => isLiveSku(s) || s.id === value)
+          .map((s) => ({ value: s.id, label: s.code }))}
         optionRender={(opt) => {
           const sku = skus.find((s) => s.id === opt.value);
           return (

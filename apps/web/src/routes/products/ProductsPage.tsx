@@ -7,6 +7,7 @@ import { useState } from "react";
 import {
   App,
   Alert,
+  AutoComplete,
   Button,
   Card,
   Flex,
@@ -14,6 +15,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Segmented,
   Select,
   Switch,
   Table,
@@ -24,12 +26,16 @@ import {
 import {
   CloudDownloadOutlined,
   DeleteOutlined,
+  EditOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
+  MergeCellsOutlined,
   PlusOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
+import { DeleteAction } from "../../components/DeleteAction";
+import { productInUse, variantInUse } from "../../lib/partyLinks.js";
 import { ProTable } from "../../components/ProTable";
 import { EditableTable } from "../../components/EditableTable";
 import { MoneyInput } from "../../components/MoneyInput";
@@ -39,8 +45,41 @@ import { fetchMacModels, type ImportCandidate } from "../../lib/appledb.js";
 import { useDb, mutate, nextId } from "../../mock/store.js";
 import type { CatalogModel, Sku } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
-import { parseProductName, shopProductName } from "../../lib/productCode.js";
+import {
+  freeSkuCode,
+  isLiveSku,
+  isMachineSkuCode,
+  sameVariant,
+  skuCodeFor,
+} from "../../lib/skuCode.js";
 import { COLUMN } from "../../theme/tokens";
+import {
+  fullModelName,
+  fullNameRenames,
+  modelIdentity,
+} from "../../lib/modelName.js";
+import { duplicateGroups, matchAppleDb } from "../../lib/catalogMerge.js";
+import { DuplicateReviewModal } from "./DuplicateReviewModal";
+import {
+  applyNewProduct,
+  familiesFor,
+  planNewProduct,
+  type NewProductInput,
+} from "../../lib/newProduct.js";
+
+interface AddForm {
+  category: string;
+  family?: string;
+  name?: string;
+  sizeInch?: number;
+  releaseYear: number;
+  kind: "APPLE" | "INTEL";
+  appleChip?: string;
+  processors?: string[];
+  ram?: string[];
+  ssd?: string[];
+  price?: number;
+}
 
 function combos(axes: { name: string; values: string[] }[]): string[] {
   return axes.reduce<string[]>(
@@ -48,59 +87,6 @@ function combos(axes: { name: string; values: string[] }[]): string[] {
       acc.flatMap((p) => a.values.map((v) => (p ? `${p} / ${v}` : v))),
     [""],
   );
-}
-
-/**
- * One variant's SKU CODE, in the shop's own naming convention (owner ask
- * 2026-09-21: *"in the SKU and product input, actually they use the naming
- * convention in stock persediaan"*).
- *
- * `AIR 13" 2020 I5 8/256` — B2Soft's `PERSEDIAAN BARANG` spelling, which the
- * shop has read its stock off for years and which the bookkeeper's sheets
- * start from. It replaces `nextId("SKU")`, which produced `SKU_17`: a code
- * nobody could look up, match against a supplier's quotation or find in the
- * old system.
- *
- * The MODEL NAME is read for its parts rather than trusted to be in the
- * convention (`parseProductName`), because a product added by hand or brought
- * in from AppleDB is named however whoever added it named it. A name the
- * convention cannot read — an accessory, a spare part — keeps its own words
- * and simply gains the variant, which is the honest answer: `KOLI` has no
- * chip, no size and nothing to configure.
- *
- * Deliberately NOT unique on its own. Two products genuinely named the same
- * thing are the same thing, and `Sku.code` is unique in the schema, so the
- * caller appends a discriminator when the shop really does hold two.
- */
-function skuCodeFor(
-  modelName: string,
-  year: number | string | undefined,
-  variantLabel: string,
-): string {
-  const parsed = parseProductName(modelName);
-  // "8GB / 256GB" as the axes joined it. RAM first, storage second, which is
-  // the order `combos` builds and the order the convention prints.
-  const [ram, ssd] = variantLabel.split("/").map((v) => v.trim());
-  const name = shopProductName({
-    line: parsed.line,
-    ...(parsed.sizeInch === undefined ? {} : { sizeInch: parsed.sizeInch }),
-    year: parsed.year ?? (year === undefined ? null : String(year)),
-    ...(parsed.chip === undefined ? {} : { chip: parsed.chip }),
-    ...(ram ? { ram } : {}),
-    ...(ssd ? { ssd } : {}),
-    ...(parsed.extra === undefined ? {} : { extra: parsed.extra }),
-  });
-  return name === "" ? modelName.trim().toUpperCase() : name;
-}
-
-/** A code nothing else in the catalogue is using. See `skuCodeFor`. */
-function freeSkuCode(taken: ReadonlySet<string>, wanted: string): string {
-  if (!taken.has(wanted)) return wanted;
-  for (let n = 2; n < 100; n += 1) {
-    const tried = `${wanted} (${n})`;
-    if (!taken.has(tried)) return tried;
-  }
-  return `${wanted} ${Date.now()}`;
 }
 
 const SPEC_SOURCE_TAG: Record<
@@ -137,20 +123,61 @@ export function ProductsPage() {
   const [showHidden, setShowHidden] = useState(false);
 
   const [addOpen, setAddOpen] = useState(false);
-  const [addForm] = Form.useForm<{
-    name: string;
-    category: string;
-    releaseYear: number;
-    ram: string[];
-    ssd: string[];
-    price: number;
-  }>();
+  const [addForm] = Form.useForm<AddForm>();
+
+  /**
+   * The variant whose SKU is being corrected (owner ask 2026-10-02). A model
+   * brought in from AppleDB, or variants generated from its axes, carry a
+   * machine-made code (`SKU_HIBGR8C90134KEFC`) that nobody can look up or
+   * match against B2Soft's stock list, and there was no way to change one.
+   */
+  const [skuEditing, setSkuEditing] = useState<Sku | null>(null);
+  const [skuForm] = Form.useForm<{ code: string; price: number }>();
+  const openSkuEdit = (s: Sku) => setSkuEditing(s);
+  const submitSkuEdit = () =>
+    skuForm
+      .validateFields()
+      .then((v) => {
+        const s = skuEditing!;
+        const code = v.code.trim().toUpperCase();
+        mutate((d) => {
+          const sku = d.skus.find((k) => k.id === s.id)!;
+          sku.code = code;
+          sku.price = v.price ?? 0;
+        });
+        setSkuEditing(null);
+        message.success(t("products.skuSaved", "{{code}} saved.", { code }));
+      })
+      .catch(() => {
+        // The refusal is already painted under the box that failed.
+      });
+  const skuModel =
+    skuEditing && db.models.find((m) => m.id === skuEditing.modelId);
 
   const [variantOpen, setVariantOpen] = useState(false);
   const [variantForm] = Form.useForm<{ variantLabel: string; price: number }>();
-  // Watched so the code preview under the name field follows what is typed.
-  const addName = Form.useWatch("name", addForm);
-  const addYear = Form.useWatch("releaseYear", addForm);
+  // Every field is watched: the preview under the form IS what Save writes.
+  const addValues = Form.useWatch([], addForm) as Partial<AddForm> | undefined;
+  const addFamilies = familiesFor(addValues?.category);
+  const addInput: NewProductInput = {
+    category: addValues?.category ?? "",
+    releaseYear: addValues?.releaseYear ?? new Date().getFullYear(),
+    ...(addFamilies.length > 0
+      ? {
+          family: addFamilies.length === 1 ? addFamilies[0] : addValues?.family,
+          ...(addValues?.sizeInch ? { sizeInch: addValues.sizeInch } : {}),
+          ...(addValues?.kind === "APPLE"
+            ? { appleChip: addValues?.appleChip ?? "" }
+            : { processors: addValues?.processors ?? [] }),
+          ram: addValues?.ram ?? [],
+          ssd: addValues?.ssd ?? [],
+        }
+      : { name: addValues?.name ?? "" }),
+  };
+  const addPlan =
+    addValues?.kind === "APPLE" && !addValues?.appleChip?.trim()
+      ? { name: "", axes: [], variants: [], problem: "INCOMPLETE" as const }
+      : planNewProduct(db, addInput);
 
   const model = editing && db.models.find((m) => m.id === editing.id);
 
@@ -189,14 +216,14 @@ export function ProductsPage() {
   const generate = (mode: "APPEND" | "REPLACE") => {
     const m = model!;
     const wanted = combos(m.axes);
-    const existing = db.skus.filter((s) => s.modelId === m.id);
+    const existing = db.skus.filter((s) => isLiveSku(s) && s.modelId === m.id);
     const inStock = new Set(db.units.map((u) => u.skuId));
     modal.confirm({
       title:
         mode === "APPEND" ? `Add missing variants?` : `Replace all variants?`,
       content:
         mode === "APPEND"
-          ? `${wanted.filter((w) => !existing.some((s) => s.variantLabel === w)).length} new SKU(s) will be created. Nothing is created silently.`
+          ? `${wanted.filter((w) => !existing.some((s) => sameVariant(s.variantLabel, w))).length} new SKU(s) will be created. Nothing is created silently.`
           : `Variants with stock are kept; the rest are replaced by ${wanted.length} combination(s).`,
       onOk: () => {
         mutate((d) => {
@@ -206,13 +233,31 @@ export function ProductsPage() {
               (s) => s.modelId !== m.id || inStock.has(s.id),
             );
           }
+          const taken = new Set(d.skus.map((x) => x.code));
           for (const w of wanted) {
-            if (d.skus.some((s) => s.modelId === m.id && s.variantLabel === w))
+            if (
+              d.skus.some(
+                (s) =>
+                  isLiveSku(s) &&
+                  s.modelId === m.id &&
+                  sameVariant(s.variantLabel, w),
+              )
+            )
               continue;
+            const code = freeSkuCode(
+              taken,
+              skuCodeFor(
+                m.name,
+                m.releaseYear,
+                w,
+                m.axes.map((a) => a.name),
+              ),
+            );
+            taken.add(code);
             d.skus.push({
               id: nextId("sku"),
               modelId: m.id,
-              code: nextId("SKU").toUpperCase(),
+              code,
               name: m.name,
               variantLabel: w,
               price: base,
@@ -251,18 +296,80 @@ export function ProductsPage() {
    */
   const runImport = (picked: ImportCandidate[]) => {
     let added = 0;
+    let linked = 0;
     let skus = 0;
     let skipped = 0;
     mutate((d) => {
+      const taken = new Set(d.skus.map((x) => x.code));
       for (const c of picked) {
-        if (d.models.some((m) => m.identifier === c.identifier)) {
+        /*
+         * One product, one row (2026-10-21): an entry whose machine is
+         * already in the catalogue — typed in by hand, from B2Soft, or under
+         * another AppleDB identifier — is LINKED to that product, and only
+         * the RAM × SSD it lacks is added. It is never copied in beside it.
+         */
+        const match = matchAppleDb(d, c);
+        // A possible match is a person's call: it is listed, not imported.
+        if (match.status === "LINKED" || match.status === "POSSIBLE") {
           skipped += 1;
           continue;
         }
+        const labels = combos([
+          { name: "RAM", values: c.ram },
+          { name: "SSD", values: c.ssd },
+        ]);
+        if (match.status === "MATCH") {
+          const m = d.models.find((x) => x.id === match.model.id)!;
+          m.identifiers = [
+            ...new Set([...(m.identifiers ?? []), c.identifier]),
+          ];
+          linked += 1;
+          // Only onto a RAM × SSD product: one with a processor option
+          // cannot take a variant that names none.
+          const keys = m.axes
+            .map((a) => a.name.toUpperCase())
+            .sort()
+            .join("|");
+          if (keys !== "RAM|SSD") continue;
+          for (const label of labels) {
+            if (
+              d.skus.some(
+                (s) =>
+                  isLiveSku(s) &&
+                  s.modelId === m.id &&
+                  sameVariant(s.variantLabel, label),
+              )
+            ) {
+              continue;
+            }
+            const [ram, ssd] = label.split(" / ");
+            for (const a of m.axes) {
+              const v = a.name.toUpperCase() === "RAM" ? ram! : ssd!;
+              if (!a.values.includes(v)) a.values.push(v);
+            }
+            const code = freeSkuCode(
+              taken,
+              skuCodeFor(m.name, m.releaseYear, label, ["RAM", "SSD"]),
+            );
+            taken.add(code);
+            d.skus.push({
+              id: nextId("sku"),
+              modelId: m.id,
+              code,
+              name: m.name,
+              variantLabel: label,
+              price: 0,
+            });
+            skus += 1;
+          }
+          continue;
+        }
         const id = nextId("m");
+        const identity = modelIdentity(c.name, c.releaseYear);
+        const name = identity ? fullModelName(identity) : c.name;
         d.models.push({
           id,
-          name: c.name,
+          name,
           category: c.category,
           releaseYear: c.releaseYear,
           identifier: c.identifier,
@@ -271,17 +378,27 @@ export function ProductsPage() {
             { name: "RAM", values: c.ram },
             { name: "SSD", values: c.ssd },
           ],
+          ...(identity
+            ? {
+                family: identity.family,
+                ...(identity.sizeInch ? { sizeInch: identity.sizeInch } : {}),
+                ...(/^M\d/.test(identity.era) ? { chip: identity.era } : {}),
+                ...(identity.extra ? { extra: identity.extra } : {}),
+              }
+            : {}),
         });
         added += 1;
-        for (const label of combos([
-          { name: "RAM", values: c.ram },
-          { name: "SSD", values: c.ssd },
-        ])) {
+        for (const label of labels) {
+          const code = freeSkuCode(
+            taken,
+            skuCodeFor(name, c.releaseYear, label, ["RAM", "SSD"]),
+          );
+          taken.add(code);
           d.skus.push({
             id: nextId("sku"),
             modelId: id,
-            code: nextId("SKU").toUpperCase(),
-            name: c.name,
+            code,
+            name,
             variantLabel: label,
             price: 0,
           });
@@ -290,59 +407,48 @@ export function ProductsPage() {
       }
     });
     setImportOpen(false);
-    if (added === 0) {
+    if (added === 0 && linked === 0) {
       message.info(
-        "Nothing new — every model picked is already in the catalogue.",
+        t(
+          "products.importNothingNew",
+          "Nothing new — every model picked is already in the catalogue.",
+        ),
       );
       return;
     }
     message.success(
-      `Imported ${added} model(s) and ${skus} variant(s) from AppleDB${
-        skipped ? `, skipping ${skipped} already in the catalogue` : ""
-      }. Prices start at Rp 0 — set them before selling.`,
+      t(
+        "products.importDone",
+        "{{added}} new product(s), {{linked}} linked to a product already here, {{skus}} variant(s) added, {{skipped}} left out (already linked, or a possible match to check by hand). Prices start at Rp 0 — set them before selling.",
+        { added, linked, skus, skipped },
+      ),
     );
   };
 
   const submitAdd = () =>
     addForm.validateFields().then((v) => {
-      const id = nextId("m");
-      let count = 0;
+      if (addPlan.problem) return;
       mutate((d) => {
-        d.models.push({
-          id,
-          name: v.name,
-          category: v.category,
-          releaseYear: v.releaseYear,
-          source: "MANUAL",
-          axes: [
-            { name: "RAM", values: v.ram },
-            { name: "SSD", values: v.ssd },
-          ],
-        });
-        const taken = new Set(d.skus.map((x) => x.code));
-        for (const label of combos([
-          { name: "RAM", values: v.ram },
-          { name: "SSD", values: v.ssd },
-        ])) {
-          const code = freeSkuCode(
-            taken,
-            skuCodeFor(v.name, v.releaseYear, label),
-          );
-          taken.add(code);
-          d.skus.push({
-            id: nextId("sku"),
-            modelId: id,
-            code,
-            name: v.name,
-            variantLabel: label,
-            price: v.price ?? 0,
-          });
-          count += 1;
-        }
+        applyNewProduct(d, addInput, addPlan, v.price ?? 0, nextId);
       });
       setAddOpen(false);
       addForm.resetFields();
-      message.success(`${v.name} added with ${count} variant(s).`);
+      message.success(
+        addPlan.existing
+          ? t(
+              "products.variantsAddedTo",
+              "{{n}} variant(s) added to {{name}}.",
+              { n: addPlan.variants.length, name: addPlan.name },
+            )
+          : t(
+              "products.productAdded",
+              "{{name}} added with {{n}} variant(s).",
+              {
+                n: addPlan.variants.length,
+                name: addPlan.name,
+              },
+            ),
+      );
     });
 
   const submitVariant = () =>
@@ -350,7 +456,10 @@ export function ProductsPage() {
       const m = model!;
       if (
         db.skus.some(
-          (s) => s.modelId === m.id && s.variantLabel === v.variantLabel.trim(),
+          (s) =>
+            isLiveSku(s) &&
+            s.modelId === m.id &&
+            sameVariant(s.variantLabel, v.variantLabel.trim()),
         )
       ) {
         return void message.warning(
@@ -363,7 +472,12 @@ export function ProductsPage() {
           modelId: m.id,
           code: freeSkuCode(
             new Set(d.skus.map((x) => x.code)),
-            skuCodeFor(m.name, m.releaseYear, v.variantLabel.trim()),
+            skuCodeFor(
+              m.name,
+              m.releaseYear,
+              v.variantLabel.trim(),
+              m.axes.map((a) => a.name),
+            ),
           ),
           name: m.name,
           variantLabel: v.variantLabel.trim(),
@@ -373,6 +487,66 @@ export function ProductsPage() {
       setVariantOpen(false);
       variantForm.resetFields();
       message.success("Variant added.");
+    });
+
+  /**
+   * Every variant still carrying a machine-made `SKU_…` code, renamed to the
+   * shop's naming in one press (owner ask 2026-10-21: "make the SKU actually
+   * display what's in the variant"). The generators no longer mint such codes;
+   * this clears the ones they already did. A code somebody typed is left alone.
+   */
+  const machineCodes = db.skus.filter(
+    (k) => isLiveSku(k) && isMachineSkuCode(k.code),
+  ).length;
+  // Product names in the shop's short style, written in full (owner decision
+  // 2026-10-21). Duplicates and names with a processor in them are left for
+  // a person: see `fullNameRenames`.
+  const nameRenames = fullNameRenames(db.models);
+  // The same product, in the catalogue more than once (2026-10-21).
+  const dupGroups = duplicateGroups(db).length;
+  const [reviewing, setReviewing] = useState(false);
+  const renameMachineCodes = () =>
+    modal.confirm({
+      title: t(
+        "products.renameMachineCodesTitle",
+        "Rename {{n}} SKU code(s)?",
+        {
+          n: machineCodes,
+        },
+      ),
+      content: t(
+        "products.renameMachineCodesBody",
+        "Each SKU_… code becomes the shop's naming, e.g. AIR 13\" 2020 I7 8/128. Codes typed by hand are not touched.",
+      ),
+      okText: t("products.renameMachineCodesOk", "Rename"),
+      onOk: () => {
+        let n = 0;
+        mutate((d) => {
+          const taken = new Set(d.skus.map((x) => x.code));
+          for (const sku of d.skus) {
+            if (!isLiveSku(sku) || !isMachineSkuCode(sku.code)) continue;
+            const m = d.models.find((x) => x.id === sku.modelId);
+            if (!m) continue;
+            taken.delete(sku.code);
+            sku.code = freeSkuCode(
+              taken,
+              skuCodeFor(
+                m.name,
+                m.releaseYear,
+                sku.variantLabel,
+                m.axes.map((a) => a.name),
+              ),
+            );
+            taken.add(sku.code);
+            n += 1;
+          }
+        });
+        message.success(
+          t("products.renameMachineCodesDone", "{{n}} SKU code(s) renamed.", {
+            n,
+          }),
+        );
+      },
     });
 
   return (
@@ -392,6 +566,84 @@ export function ProductsPage() {
           icon: <CloudDownloadOutlined />,
           onClick: openImport,
         },
+        ...(dupGroups > 0
+          ? [
+              {
+                key: "duplicates",
+                label: t(
+                  "products.reviewDuplicates",
+                  "Review duplicates ({{n}})",
+                  { n: dupGroups },
+                ),
+                icon: <MergeCellsOutlined />,
+                onClick: () => setReviewing(true),
+              },
+            ]
+          : []),
+        ...(nameRenames.length > 0
+          ? [
+              {
+                key: "full-names",
+                label: t(
+                  "products.useFullNames",
+                  "Use full product names ({{n}})",
+                  {
+                    n: nameRenames.length,
+                  },
+                ),
+                icon: <EditOutlined />,
+                onClick: () =>
+                  modal.confirm({
+                    title: t(
+                      "products.useFullNamesTitle",
+                      "Rename {{n}} product(s) to their full name?",
+                      { n: nameRenames.length },
+                    ),
+                    content: (
+                      <div style={{ maxHeight: 320, overflow: "auto" }}>
+                        {nameRenames.map((r) => (
+                          <div key={r.id}>
+                            {r.from} → <b>{r.to}</b>
+                          </div>
+                        ))}
+                      </div>
+                    ),
+                    okText: t("products.renameMachineCodesOk", "Rename"),
+                    onOk: () => {
+                      mutate((d) => {
+                        for (const r of nameRenames) {
+                          const m = d.models.find((x) => x.id === r.id);
+                          if (m) m.name = r.to;
+                        }
+                      });
+                      message.success(
+                        t(
+                          "products.fullNamesDone",
+                          "{{n}} product(s) renamed.",
+                          {
+                            n: nameRenames.length,
+                          },
+                        ),
+                      );
+                    },
+                  }),
+              },
+            ]
+          : []),
+        ...(machineCodes > 0
+          ? [
+              {
+                key: "rename-codes",
+                label: t(
+                  "products.renameMachineCodes",
+                  "Rename SKU codes ({{n}})",
+                  { n: machineCodes },
+                ),
+                icon: <EditOutlined />,
+                onClick: renameMachineCodes,
+              },
+            ]
+          : []),
       ]}
     >
       <Card>
@@ -412,7 +664,9 @@ export function ProductsPage() {
                 rowKey="id"
                 size="small"
                 pagination={false}
-                dataSource={db.skus.filter((s) => s.modelId === m.id)}
+                dataSource={db.skus.filter(
+                  (s) => isLiveSku(s) && s.modelId === m.id,
+                )}
                 columns={[
                   { title: "SKU", dataIndex: "code" },
                   {
@@ -444,6 +698,24 @@ export function ProductsPage() {
                           u.skuId === s.id &&
                           ["TERSEDIA", "DIRESERVASI"].includes(u.status),
                       ).length,
+                  },
+                  {
+                    title: "",
+                    key: "edit",
+                    width: COLUMN.actionsPair,
+                    align: "right",
+                    render: (_, s) => (
+                      <Button
+                        size="small"
+                        icon={<EditOutlined />}
+                        aria-label={t("products.editSkuAria", "Edit {{code}}", {
+                          code: s.code,
+                        })}
+                        onClick={() => openSkuEdit(s)}
+                      >
+                        {t("common.edit", "Edit")}
+                      </Button>
+                    ),
                   },
                 ]}
               />
@@ -496,23 +768,50 @@ export function ProductsPage() {
               title: t("products.variants", "Variants"),
               key: "variants",
               sortValue: (m) =>
-                db.skus.filter((s) => s.modelId === m.id).length,
+                db.skus.filter((s) => isLiveSku(s) && s.modelId === m.id)
+                  .length,
               render: (_, m) =>
-                db.skus.filter((s) => s.modelId === m.id).length,
+                db.skus.filter((s) => isLiveSku(s) && s.modelId === m.id)
+                  .length,
             },
             {
               title: "",
               key: "actions",
               width: COLUMN.actions,
               render: (_, m) => (
-                <Tooltip title={t("products.variants", "Variants")}>
-                  <Button
-                    aria-label={`Variants for ${m.name}`}
-                    icon={<SettingOutlined />}
+                <Flex gap={4} justify="end">
+                  <Tooltip title={t("products.variants", "Variants")}>
+                    <Button
+                      aria-label={`Variants for ${m.name}`}
+                      icon={<SettingOutlined />}
+                      size="small"
+                      onClick={() => setEditing(m)}
+                    />
+                  </Tooltip>
+                  <DeleteAction
                     size="small"
-                    onClick={() => setEditing(m)}
+                    entityLabel={m.name}
+                    blockedReason={
+                      productInUse(db, m.id)
+                        ? t(
+                            "products.deleteBlocked",
+                            "This product has stock or sales history and cannot be deleted.",
+                          )
+                        : undefined
+                    }
+                    onConfirm={async () => {
+                      mutate((d) => {
+                        d.skus = d.skus.filter((s) => s.modelId !== m.id);
+                        d.models = d.models.filter((x) => x.id !== m.id);
+                      });
+                      message.success(
+                        t("products.deleted", "{{name}} deleted.", {
+                          name: m.name,
+                        }),
+                      );
+                    }}
                   />
-                </Tooltip>
+                </Flex>
               ),
             },
           ]}
@@ -612,6 +911,74 @@ export function ProductsPage() {
                   title: t("products.model", "Model"),
                   dataIndex: "name",
                   searchable: true,
+                },
+                {
+                  // What the import would do with it (2026-10-21): an entry
+                  // already in the catalogue is linked, never copied.
+                  title: t("products.inCatalogue", "In catalogue"),
+                  key: "match",
+                  facet: true,
+                  sortValue: (c) => matchAppleDb(db, c).status,
+                  facetValue: (c) => {
+                    const m = matchAppleDb(db, c);
+                    return m.status === "NEW"
+                      ? t("products.matchNew", "New")
+                      : m.status === "LINKED"
+                        ? t("products.matchLinked", "Already linked")
+                        : m.status === "POSSIBLE"
+                          ? t("products.matchPossible", "Possible match")
+                          : t("products.matchSame", "Same product");
+                  },
+                  render: (_, c) => {
+                    const m = matchAppleDb(db, c);
+                    if (m.status === "NEW") {
+                      return (
+                        <Tag color="green">{t("products.matchNew", "New")}</Tag>
+                      );
+                    }
+                    if (m.status === "POSSIBLE") {
+                      return (
+                        <Tooltip
+                          title={t(
+                            "products.matchPossibleTip",
+                            "Could be {{names}} — not imported. Pick it by hand if it is new.",
+                            { names: m.models.map((x) => x.name).join(", ") },
+                          )}
+                        >
+                          <Tag color="orange">
+                            {t("products.matchPossible", "Possible match")}
+                          </Tag>
+                        </Tooltip>
+                      );
+                    }
+                    return (
+                      <Tooltip
+                        title={
+                          m.status === "LINKED"
+                            ? t(
+                                "products.matchLinkedTip",
+                                "Already linked to {{name}}",
+                                {
+                                  name: m.model.name,
+                                },
+                              )
+                            : t(
+                                "products.matchSameTip",
+                                "Same product as {{name}} — importing links it there and adds only missing variants",
+                                { name: m.model.name },
+                              )
+                        }
+                      >
+                        <Tag color={m.status === "LINKED" ? undefined : "blue"}>
+                          {m.status === "LINKED"
+                            ? t("products.matchLinked", "Already linked")
+                            : t("products.matchSameAs", "Same as {{name}}", {
+                                name: m.model.name,
+                              })}
+                        </Tag>
+                      </Tooltip>
+                    );
+                  },
                 },
                 {
                   title: t("products.category", "Category"),
@@ -746,54 +1113,38 @@ export function ProductsPage() {
         )}
       </Modal>
 
+      <DuplicateReviewModal
+        open={reviewing}
+        onClose={() => setReviewing(false)}
+      />
+
       <Modal
         title={t("products.addProduct", "Add product")}
         open={addOpen}
         onCancel={() => setAddOpen(false)}
         onOk={submitAdd}
-        okText={t(
-          "products.createProductAndVariants",
-          "Create product and variants",
-        )}
+        okButtonProps={{ disabled: Boolean(addPlan.problem) }}
+        okText={
+          addPlan.existing
+            ? t("products.addNVariants", "Add {{n}} variant(s)", {
+                n: addPlan.variants.length,
+              })
+            : t(
+                "products.createProductAndVariants",
+                "Create product and variants",
+              )
+        }
       >
         <Form
           form={addForm}
           layout="vertical"
           initialValues={{
             releaseYear: new Date().getFullYear(),
+            kind: "APPLE",
             ram: ["8GB", "16GB"],
             ssd: ["256GB", "512GB"],
           }}
         >
-          <Form.Item
-            name="name"
-            label={t("products.modelName", "Model name")}
-            rules={[{ required: true }]}
-            /*
-             * The shop's own convention, from B2Soft's PERSEDIAAN BARANG
-             * (owner ask 2026-09-21). The placeholder is a real row from it,
-             * and the line under the field shows what this product's SKU
-             * codes will read as — so somebody who types a name outside the
-             * convention sees it before they create eight variants under it.
-             */
-            extra={
-              addName?.trim()
-                ? t("products.codePreview", "SKU codes will read: {{code}}", {
-                    code: skuCodeFor(addName, addYear, "8GB / 256GB"),
-                  })
-                : t(
-                    "products.namingHint",
-                    "The shop's convention: line, size, year or chip, processor. An Apple-silicon machine is named by its chip instead of its year.",
-                  )
-            }
-          >
-            <Input
-              placeholder={t(
-                "products.eGAir13",
-                'e.g. AIR 13" 2020 I5, or AIR 13" M2',
-              )}
-            />
-          </Form.Item>
           <Form.Item
             name="category"
             label={t("products.category", "Category")}
@@ -804,53 +1155,164 @@ export function ProductsPage() {
               placeholder={t("products.macbookAir", "MacBook Air")}
               options={[
                 ...new Set([
+                  ...db.categories.map((c) => c.name),
                   ...db.models.map((m) => m.category),
-                  "MacBook",
-                  "MacBook Air",
-                  "MacBook Pro",
-                  "iMac",
-                  "Mac mini",
                 ]),
               ].map((c) => ({ value: c, label: c }))}
             />
           </Form.Item>
-          <Form.Item
-            name="releaseYear"
-            label={t("products.releaseYear", "Release year")}
-            rules={[{ required: true }]}
-          >
-            <InputNumber min={2006} max={2100} style={{ width: 160 }} />
-          </Form.Item>
-          {/* Free-typed tags rather than a fixed list: an axis value is whatever
-              the model actually shipped with, and that changes every year. */}
-          <Form.Item
-            name="ram"
-            label={t("products.ramOptions", "RAM options")}
-            rules={[
-              { required: true, message: t("form.atLeastOne", "At least one") },
-            ]}
-          >
-            <Select
-              mode="tags"
-              placeholder={t("products.8gb16gb", "8GB, 16GB…")}
-              open={false}
-              suffixIcon={null}
-            />
-          </Form.Item>
-          <Form.Item
-            name="ssd"
-            label={t("products.ssdOptions", "SSD options")}
-            rules={[
-              { required: true, message: t("form.atLeastOne", "At least one") },
-            ]}
-          >
-            <Select
-              mode="tags"
-              placeholder={t("products.256gb512gb", "256GB, 512GB…")}
-              open={false}
-              suffixIcon={null}
-            />
-          </Form.Item>
+
+          {addFamilies.length === 0 ? (
+            <Form.Item
+              name="name"
+              label={t("products.productName", "Product name")}
+              rules={[{ required: true }]}
+            >
+              <Input
+                placeholder={t("products.eGMagicMouse", "e.g. Magic Mouse 2")}
+              />
+            </Form.Item>
+          ) : (
+            <>
+              {addFamilies.length > 1 && (
+                <Form.Item
+                  name="family"
+                  label={t("products.line", "Line")}
+                  rules={[{ required: true }]}
+                >
+                  <Select
+                    options={addFamilies.map((f) => ({ value: f, label: f }))}
+                  />
+                </Form.Item>
+              )}
+              <Flex gap={16} wrap>
+                <Form.Item
+                  name="sizeInch"
+                  label={t("products.screenSize", "Screen size")}
+                >
+                  <InputNumber
+                    min={7}
+                    max={32}
+                    step={0.1}
+                    suffix={'"'}
+                    placeholder="13"
+                    style={{ width: 140 }}
+                  />
+                </Form.Item>
+                <Form.Item
+                  name="releaseYear"
+                  label={t("products.releaseYear", "Release year")}
+                  rules={[{ required: true }]}
+                >
+                  <InputNumber min={2006} max={2100} style={{ width: 140 }} />
+                </Form.Item>
+              </Flex>
+              <Form.Item
+                name="kind"
+                label={t("products.processor", "Processor")}
+              >
+                <Segmented
+                  options={[
+                    {
+                      value: "APPLE",
+                      label: t(
+                        "products.appleSilicon",
+                        "Apple silicon (M1, M2…)",
+                      ),
+                    },
+                    {
+                      value: "INTEL",
+                      label: t("products.intel", "Intel (i3, i5, i7…)"),
+                    },
+                  ]}
+                />
+              </Form.Item>
+              {addValues?.kind === "INTEL" ? (
+                <Form.Item
+                  name="processors"
+                  label={t("products.processorOptions", "Processor options")}
+                  extra={t(
+                    "products.processorOptionsHint",
+                    "Each processor becomes a variant of the same product.",
+                  )}
+                >
+                  <Select
+                    mode="tags"
+                    placeholder={t("products.i5i7", "i5, i7…")}
+                    options={["i3", "i5", "i7", "i9"].map((v) => ({
+                      value: v,
+                      label: v,
+                    }))}
+                  />
+                </Form.Item>
+              ) : (
+                <Form.Item
+                  name="appleChip"
+                  label={t("products.chip", "Chip")}
+                  rules={[{ required: true }]}
+                >
+                  <AutoComplete
+                    placeholder={t("products.eGM2", "e.g. M2")}
+                    options={[
+                      "M1",
+                      "M1 Pro",
+                      "M1 Max",
+                      "M2",
+                      "M2 Pro",
+                      "M2 Max",
+                      "M3",
+                      "M3 Pro",
+                      "M3 Max",
+                      "M4",
+                      "M4 Pro",
+                      "M4 Max",
+                    ].map((v) => ({ value: v }))}
+                    filterOption={(input, o) =>
+                      String(o?.value ?? "")
+                        .toLowerCase()
+                        .startsWith(input.toLowerCase())
+                    }
+                  />
+                </Form.Item>
+              )}
+              {/* Free-typed tags rather than a fixed list: an axis value is
+                  whatever the model actually shipped with. */}
+              <Form.Item
+                name="ram"
+                label={t("products.ramOptions", "RAM options")}
+                rules={[
+                  {
+                    required: true,
+                    message: t("form.atLeastOne", "At least one"),
+                  },
+                ]}
+              >
+                <Select
+                  mode="tags"
+                  placeholder={t("products.8gb16gb", "8GB, 16GB…")}
+                  open={false}
+                  suffixIcon={null}
+                />
+              </Form.Item>
+              <Form.Item
+                name="ssd"
+                label={t("products.ssdOptions", "SSD options")}
+                rules={[
+                  {
+                    required: true,
+                    message: t("form.atLeastOne", "At least one"),
+                  },
+                ]}
+              >
+                <Select
+                  mode="tags"
+                  placeholder={t("products.256gb512gb", "256GB, 512GB…")}
+                  open={false}
+                  suffixIcon={null}
+                />
+              </Form.Item>
+            </>
+          )}
           <Form.Item
             name="price"
             label={t("products.startingListPrice", "Starting list price")}
@@ -862,6 +1324,51 @@ export function ProductsPage() {
             <MoneyInput />
           </Form.Item>
         </Form>
+
+        {addPlan.name !== "" && (
+          <Alert
+            type={
+              addPlan.problem
+                ? "warning"
+                : addPlan.existing
+                  ? "info"
+                  : "success"
+            }
+            showIcon
+            message={
+              addPlan.problem === "EXISTS"
+                ? t(
+                    "products.planExists",
+                    "{{name}} already has every one of these variants.",
+                    { name: addPlan.name },
+                  )
+                : addPlan.problem === "AXES"
+                  ? t(
+                      "products.planAxes",
+                      "{{name}} already exists with different options (processor or not). Add these from its Variants button instead.",
+                      { name: addPlan.name },
+                    )
+                  : addPlan.existing
+                    ? t(
+                        "products.planAddTo",
+                        "{{name}} already exists — the {{n}} missing variant(s) will be added to it.",
+                        { name: addPlan.name, n: addPlan.variants.length },
+                      )
+                    : t(
+                        "products.planNew",
+                        "New product {{name}} with {{n}} variant(s).",
+                        { name: addPlan.name, n: addPlan.variants.length },
+                      )
+            }
+            description={
+              addPlan.variants.length > 0 && (
+                <div data-testid="add-product-codes">
+                  {addPlan.variants.map((v) => v.code).join(", ")}
+                </div>
+              )
+            }
+          />
+        )}
       </Modal>
 
       {/*
@@ -990,7 +1497,9 @@ export function ProductsPage() {
               <EditableTable<Sku>
                 rowKey="id"
                 size="small"
-                dataSource={db.skus.filter((s) => s.modelId === model.id)}
+                dataSource={db.skus.filter(
+                  (s) => isLiveSku(s) && s.modelId === model.id,
+                )}
                 // A price box is a cell you fill in, so this is an editor and
                 // not a list: the columns hold their widths rather than being
                 // divided up, and below `md` a variant becomes a card with its
@@ -1041,12 +1550,15 @@ export function ProductsPage() {
                     key: "remove",
                     width: COLUMN.action,
                     render: (_, s) => {
-                      const held = db.units.some((u) => u.skuId === s.id);
+                      const held = variantInUse(db, s.id);
                       return (
                         <Tooltip
                           title={
                             held
-                              ? "Units exist on this variant — it cannot be removed"
+                              ? t(
+                                  "products.variantInUse",
+                                  "This variant has stock or sales history — it cannot be removed",
+                                )
                               : "Remove variant"
                           }
                         >
@@ -1108,6 +1620,101 @@ export function ProductsPage() {
           </Form.Item>
           <Form.Item name="price" label={t("products.listPrice", "List price")}>
             <MoneyInput />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={t("products.editSku", "Edit SKU")}
+        open={skuEditing !== null}
+        onCancel={() => setSkuEditing(null)}
+        onOk={submitSkuEdit}
+        okText={t("products.saveSku", "Save")}
+        destroyOnHidden
+      >
+        {skuEditing && (
+          <Typography.Paragraph type="secondary">
+            {skuEditing.name}
+            {skuEditing.variantLabel ? ` · ${skuEditing.variantLabel}` : ""}
+          </Typography.Paragraph>
+        )}
+        <Form
+          form={skuForm}
+          layout="vertical"
+          initialValues={
+            skuEditing
+              ? {
+                  code: skuEditing.code,
+                  price: skuEditing.price > 0 ? skuEditing.price : undefined,
+                }
+              : undefined
+          }
+        >
+          <Form.Item
+            name="code"
+            label={t("products.skuCode", "SKU code")}
+            normalize={(v: string) => v.toUpperCase()}
+            rules={[
+              {
+                required: true,
+                whitespace: true,
+                message: t("products.skuCodeRequired", "Give the SKU a code"),
+              },
+              {
+                // `Sku.code` is unique in the schema; saying so here beats a
+                // refused commit after the dialog has closed.
+                validator: (_, v: string | undefined) =>
+                  v !== undefined &&
+                  db.skus.some(
+                    (k) =>
+                      k.id !== skuEditing?.id &&
+                      k.code === v.trim().toUpperCase(),
+                  )
+                    ? Promise.reject(
+                        new Error(
+                          t(
+                            "products.skuCodeTaken",
+                            "Another variant already uses this code",
+                          ),
+                        ),
+                      )
+                    : Promise.resolve(),
+              },
+            ]}
+            extra={
+              skuEditing &&
+              skuModel && (
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ paddingInline: 0 }}
+                  onClick={() =>
+                    skuForm.setFieldsValue({
+                      code: freeSkuCode(
+                        new Set(
+                          db.skus
+                            .filter((k) => k.id !== skuEditing.id)
+                            .map((k) => k.code),
+                        ),
+                        skuCodeFor(
+                          skuModel.name,
+                          skuModel.releaseYear,
+                          skuEditing.variantLabel,
+                          skuModel.axes.map((a) => a.name),
+                        ),
+                      ),
+                    })
+                  }
+                >
+                  {t("products.useShopNaming", "Use the shop's naming")}
+                </Button>
+              )
+            }
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item name="price" label={t("products.listPrice", "List price")}>
+            <MoneyInput placeholder={t("products.notPriced", "not priced")} />
           </Form.Item>
         </Form>
       </Modal>

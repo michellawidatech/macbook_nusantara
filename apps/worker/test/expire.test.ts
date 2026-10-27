@@ -197,7 +197,7 @@ describe("a hold that has run out", () => {
 
     const result = await sweep();
 
-    expect(result).toEqual({ expired: 1, released: 1 });
+    expect(result).toEqual({ expired: 1, released: 1, dpExpired: 0 });
     const unit = await db.unit.findUniqueOrThrow({ where: { serial: "EXP1" } });
     expect(unit.status).toBe("TERSEDIA");
     expect((await db.reservation.findFirstOrThrow()).status).toBe("BATAL");
@@ -229,7 +229,7 @@ describe("a hold that has run out", () => {
       createdAt: ago(30 * HOUR),
     });
 
-    expect(await sweep()).toEqual({ expired: 0, released: 0 });
+    expect(await sweep()).toEqual({ expired: 0, released: 0, dpExpired: 0 });
     expect(
       (await db.unit.findUniqueOrThrow({ where: { serial: "EXP1" } })).status,
     ).toBe("DIRESERVASI");
@@ -241,7 +241,7 @@ describe("a hold that has run out", () => {
       scheduledFor: new Date(NOW.getTime() + 24 * HOUR),
       createdAt: ago(1 * HOUR),
     });
-    expect(await sweep()).toEqual({ expired: 0, released: 0 });
+    expect(await sweep()).toEqual({ expired: 0, released: 0, dpExpired: 0 });
   });
 
   it("ages out a booking that never got an appointment at all", async () => {
@@ -250,7 +250,7 @@ describe("a hold that has run out", () => {
       scheduledFor: null,
       createdAt: ago(72 * HOUR),
     });
-    expect(await sweep()).toEqual({ expired: 1, released: 1 });
+    expect(await sweep()).toEqual({ expired: 1, released: 1, dpExpired: 0 });
   });
 
   it("gives an appointment-less booking its full time first", async () => {
@@ -259,7 +259,7 @@ describe("a hold that has run out", () => {
       scheduledFor: null,
       createdAt: ago(10 * HOUR),
     });
-    expect(await sweep()).toEqual({ expired: 0, released: 0 });
+    expect(await sweep()).toEqual({ expired: 0, released: 0, dpExpired: 0 });
   });
 });
 
@@ -273,7 +273,7 @@ describe("whose booking it is", () => {
       createdAt: ago(200 * HOUR),
     });
 
-    expect(await sweep()).toEqual({ expired: 0, released: 0 });
+    expect(await sweep()).toEqual({ expired: 0, released: 0, dpExpired: 0 });
     expect((await db.reservation.findFirstOrThrow()).status).toBe("TERJADWAL");
     expect(
       (await db.unit.findUniqueOrThrow({ where: { serial: "EXP1" } })).status,
@@ -291,7 +291,7 @@ describe("whose booking it is", () => {
       data: { status: "SELESAI" },
     });
 
-    expect(await sweep()).toEqual({ expired: 0, released: 0 });
+    expect(await sweep()).toEqual({ expired: 0, released: 0, dpExpired: 0 });
   });
 
   it("does not touch a booking already cancelled", async () => {
@@ -305,7 +305,7 @@ describe("whose booking it is", () => {
       data: { status: "BATAL" },
     });
 
-    expect(await sweep()).toEqual({ expired: 0, released: 0 });
+    expect(await sweep()).toEqual({ expired: 0, released: 0, dpExpired: 0 });
   });
 });
 
@@ -350,6 +350,6 @@ describe("safety", () => {
   });
 
   it("does nothing at all when there is nothing stale", async () => {
-    expect(await sweep()).toEqual({ expired: 0, released: 0 });
+    expect(await sweep()).toEqual({ expired: 0, released: 0, dpExpired: 0 });
   });
 });

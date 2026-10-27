@@ -71,8 +71,8 @@ import { Link } from "react-router-dom";
 import { MoneyInput } from "../../components/MoneyInput";
 import { InvoiceModal } from "../../components/Invoice";
 import { fmtDate, fmtRp } from "../../lib/format.js";
-import { accountOfMethod } from "../../lib/accounts.js";
-import { isBookClosed } from "../../lib/bookClose.js";
+import { accountOfMethod, isPickableMethod } from "../../lib/accounts.js";
+import { isSaleLocked } from "../../lib/bookClose.js";
 import {
   EMPTY_ALLOCATION,
   allocate,
@@ -210,7 +210,7 @@ export function DebtPaymentModal({
              * would be a tick that could never be saved. The rows come back
              * when the book is reopened.
              */
-            db.orders.filter((o) => !isBookClosed(o.ts, db.settings)),
+            db.orders.filter((o) => !isSaleLocked(o, db.settings)),
             db.customers,
             walkIn,
           ).map((g) => ({
@@ -359,7 +359,10 @@ export function DebtPaymentModal({
   const refused = overpaid && !canDeposit;
 
   const methods = db.paymentMethods
-    .filter((m) => m.active && (payable ? m.forPo : m.forSale))
+    .filter(
+      (m) =>
+        m.active && (payable ? m.forPo : m.forSale) && isPickableMethod(m.code),
+    )
     .filter((m) => DEBT_METHOD_CODES.includes(m.code));
   const pot = accountOfMethod(method);
 

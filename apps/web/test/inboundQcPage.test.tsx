@@ -141,6 +141,30 @@ const serials = () =>
     .map((el) => (el as HTMLInputElement).value);
 
 /** The dialog mounted most recently — antd leaves closed ones in the DOM. */
+/** Pick a warehouse in a Select by its id (the label carries its number). */
+async function pickWarehouse(control: HTMLElement, id: string, here = false) {
+  const w = snapshot().warehouses.find((x) => x.id === id)!;
+  const label = w.code ? `${w.code} · ${w.name}` : w.name;
+  fireEvent.mouseDown(control);
+  const item = await vi.waitFor(() => {
+    const open = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".ant-select-dropdown:not(.ant-select-dropdown-hidden)",
+      ),
+    );
+    const found = Array.from(
+      open[open.length - 1]?.querySelectorAll<HTMLElement>(
+        ".ant-select-item-option",
+      ) ?? [],
+    ).find((el) =>
+      (el.getAttribute("title") ?? "").startsWith(here ? `${label} (` : label),
+    );
+    if (!found) throw new Error(`no option “${label}” open`);
+    return found;
+  });
+  fireEvent.click(item);
+}
+
 async function lastDialog(): Promise<HTMLElement> {
   const dialogs = await screen.findAllByRole("dialog");
   return dialogs[dialogs.length - 1]!;
@@ -869,10 +893,30 @@ describe("QC on the row", () => {
     await userEvent.click(
       screen.getByLabelText(`Return ${SERIAL} to the supplier`),
     );
-    await userEvent.click(await okButton("Return to supplier"));
+    // The one Return-to-supplier dialog (2026-10-26), its reason prefilled.
+    await recordReturn();
     expect(stored().status).toBe("RETUR_SUPPLIER");
+    const claim = snapshot().returns.find(
+      (r) => r.serial === SERIAL && r.kind === "SUPPLIER",
+    )!;
+    expect(claim).toMatchObject({ reason: "Rejected at QC", fromQc: true });
   });
 });
+
+/**
+ * Press *Record supplier return* in the dialog on top, saying the refund has
+ * not come yet when the invoice leaves one to say anything about.
+ */
+async function recordReturn() {
+  const dialog = await lastDialog();
+  await settle();
+  const notYet = within(dialog).queryByText("Not paid by supplier yet");
+  if (notYet) await userEvent.click(notYet);
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Record supplier return" }),
+  );
+  await settle();
+}
 
 describe("taking a QC decision back", () => {
   it("puts an accepted unit back on the bench, keeping both events", async () => {
@@ -896,12 +940,23 @@ describe("taking a QC decision back", () => {
 
   it("withdraws the supplier claim when the return was the wrong unit", async () => {
     const serial = await described();
+    // An unpaid invoice, so the whole credit comes off it (rule C).
+    act(() => {
+      mutate((d) => {
+        d.pos.find((p) => p.id === ORDER)!.payments = [];
+      });
+    });
     await userEvent.click(
       screen.getByLabelText(`Return ${serial} to the supplier`),
     );
-    await userEvent.click(await okButton("Return to supplier"));
+    await recordReturn();
     const claim = snapshot().returns.find((r) => r.serial === serial)!;
     expect(claim.status).toBe("DONE");
+    const credits = () =>
+      snapshot()
+        .pos.find((p) => p.id === ORDER)!
+        .payments.filter((p) => p.returnId === claim.id);
+    expect(credits()).toHaveLength(1);
 
     await userEvent.click(screen.getByLabelText(`More for ${serial}`));
     await userEvent.click(await screen.findByText("Reopen QC"));
@@ -911,6 +966,29 @@ describe("taking a QC decision back", () => {
     expect(db.units.find((u) => u.serial === serial)!.status).toBe("QC");
     // Marked withdrawn, not deleted — the claim really was raised.
     expect(db.returns.find((r) => r.id === claim.id)!.status).toBe("CANCELLED");
+    // Its credit is off the invoice again.
+    expect(credits()).toHaveLength(0);
+  });
+
+  it("returns an ACCEPTED unit from its ⋯, through the same dialog", async () => {
+    const serial = await described();
+    await userEvent.click(screen.getByLabelText(`Accept ${serial}`));
+    await userEvent.click(screen.getByLabelText(`More for ${serial}`));
+    await userEvent.click(await screen.findByText("Return to supplier"));
+    const dialog = await lastDialog();
+    // Not a QC rejection any more: the reason is asked.
+    fireEvent.change(within(dialog).getByLabelText("Reason"), {
+      target: { value: "Battery swollen" },
+    });
+    await recordReturn();
+    expect(snapshot().units.find((u) => u.serial === serial)!.status).toBe(
+      "RETUR_SUPPLIER",
+    );
+    expect(
+      snapshot().returns.find(
+        (r) => r.serial === serial && r.kind === "SUPPLIER",
+      ),
+    ).toMatchObject({ reason: "Battery swollen", status: "DONE" });
   });
 
   it("will not reopen a unit somebody else has acted on", async () => {
@@ -1220,76 +1298,124 @@ describe("a closed invoice", () => {
 });
 
 /**
- * Sending a unit for a repair. The dialog asks rather than confirms, and the
- * charges it asks for land on the visit it opens.
- *
- * ⚠️ There is no arrival to wait for since 2026-09-25 (owner: *"no need to
- * mark as 'received' first"*), so the visit opens already arrived and a unit
- * that travels is filed at the bench in the SAME transaction. The 2026-09-09
- * confirmation used to be the only thing that wrote `Unit.locationId`;
- * without one, nothing else would, and warehouse 4 would hold nothing —
- * which is the bug `Location.kind` was introduced to fix on 2026-09-08.
+ * Sending a unit for a repair — the one `SendToServiceModal` every door opens
+ * (owner asks 2026-10-26). It asks where the unit is serviced, defaulting to
+ * where it already is: "the bench" found by `Location.kind === "SERVIS"` was 04,
+ * *Gudang Masuk Belum QC*, in the shop's own database. The visit opens already
+ * arrived (2026-09-25), a unit that travels moves in the same transaction, and
+ * each charge says how it was paid — a paid one is a UNIT expense.
  */
-describe("sending a machine to service", () => {
-  it("opens an arrived visit and files the unit at the bench", async () => {
-    // *Send it to the bench* is on by default: the bench is a different
-    // building, and a unit graded in warehouse 1 has to get there.
-    const serial = await described();
-    await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
-    await userEvent.click(await okButton("Send to service"));
-
-    const db = snapshot();
-    const unit = db.units.find((u) => u.serial === serial)!;
-    const bench = db.warehouses.find((w) => w.kind === "SERVIS")!;
-    expect(unit.status).toBe("SERVIS");
-    expect(unit.locationId).toBe(bench.id);
-    const visit = db.services.find((r) => r.serial === serial)!;
-    expect(visit.arrivedAt).toBeTruthy();
-    expect(visit.raisedBy).toBe("QC");
-    // Where it set out from is on the visit, which is what sends it back.
-    expect(visit.fromLocationId).not.toBe(bench.id);
-  });
-
-  it("leaves a unit nobody is shipping where it is", async () => {
-    // The repairer-collects case, or a unit already at the bench: it stops
-    // being sellable, and it has not travelled, so it has not moved.
+describe("sending a unit to service", () => {
+  it("services it where it stands by default, and opens an arrived visit", async () => {
     const serial = await described();
     const before = snapshot().units.find(
       (u) => u.serial === serial,
     )!.locationId;
     await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
-    const dialog = await lastDialog();
-    await userEvent.click(within(dialog).getByRole("switch"));
     await userEvent.click(await okButton("Send to service"));
 
     const db = snapshot();
     const unit = db.units.find((u) => u.serial === serial)!;
     expect(unit.status).toBe("SERVIS");
     expect(unit.locationId).toBe(before);
-    expect(
-      db.services.find((r) => r.serial === serial)!.arrivedAt,
-    ).toBeTruthy();
+    const visit = db.services.find((r) => r.serial === serial)!;
+    expect(visit.arrivedAt).toBeTruthy();
+    expect(visit.raisedBy).toBe("QC");
+    expect(visit.poId).toBe(ORDER);
+    expect(visit.fromLocationId).toBe(before);
+    // The send row shares the visit's instant — how deleting it finds it.
+    const sent = db.events.filter((e) => e.serial === serial).at(-1)!;
+    expect(sent).toMatchObject({ toStatus: "SERVIS", at: visit.openedAt });
   });
 
-  it("puts the courier and the quote on the visit it opens", async () => {
+  // Owner ask 2026-10-22: *"make sure we can choose where we send the
+  // product"* — any active warehouse, its kind notwithstanding.
+  it("sends it to whichever warehouse the dialog names", async () => {
     const serial = await described();
     await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
     const dialog = await lastDialog();
-    await userEvent.type(
-      within(dialog).getByLabelText(/Cost of getting it there/),
-      "150000",
+    const from = snapshot().units.find((u) => u.serial === serial)!.locationId;
+    const other = snapshot().warehouses.find((w) => w.active && w.id !== from)!;
+    await pickWarehouse(
+      within(dialog).getByLabelText("Where is it serviced?"),
+      other.id,
+    );
+    await userEvent.click(await okButton("Send to service"));
+
+    const db = snapshot();
+    const unit = db.units.find((u) => u.serial === serial)!;
+    expect(unit.status).toBe("SERVIS");
+    expect(unit.locationId).toBe(other.id);
+    const visit = db.services.find((r) => r.serial === serial)!;
+    expect(visit.closedAt).toBeUndefined();
+    expect(visit.fromLocationId).toBe(from);
+  });
+
+  it("puts the courier and the quote on the visit, and pays the one paid", async () => {
+    const serial = await described();
+    await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
+    const dialog = await lastDialog();
+    const from = snapshot().units.find((u) => u.serial === serial)!.locationId;
+    const other = snapshot().warehouses.find((w) => w.active && w.id !== from)!;
+    await pickWarehouse(
+      within(dialog).getByLabelText("Where is it serviced?"),
+      other.id,
     );
     await userEvent.type(
-      within(dialog).getByLabelText(/Service fee/),
+      await within(dialog).findByLabelText(/Cost of getting it there/),
+      "150000",
+    );
+    await userEvent.click(
+      within(
+        await within(dialog).findByRole("radiogroup", {
+          name: "Courier paid with",
+        }),
+      ).getByText("Cash"),
+    );
+    await userEvent.type(
+      within(dialog).getByLabelText(/Repair quote/),
       "800000",
     );
     await userEvent.click(await okButton("Send to service"));
 
-    const visit = snapshot().services.find((r) => r.serial === serial)!;
+    const db = snapshot();
+    const visit = db.services.find((r) => r.serial === serial)!;
     expect(visit.fees.map((f) => [f.kind, f.amount]).sort()).toEqual([
       ["LABOUR", 800_000],
       ["SHIPPING", 150_000],
     ]);
+    const ship = visit.fees.find((f) => f.kind === "SHIPPING")!;
+    const quote = visit.fees.find((f) => f.kind === "LABOUR")!;
+    expect(ship.paid).toBe(true);
+    expect(quote.paid).toBeUndefined();
+    const paid = db.expenses.filter((e) =>
+      visit.fees.some((f) => f.id === e.serviceFeeId),
+    );
+    expect(paid).toEqual([
+      expect.objectContaining({
+        kind: "UNIT",
+        amount: 150_000,
+        method: "TUNAI",
+        serviceFeeId: ship.id,
+      }),
+    ]);
+  });
+
+  it("sends an accepted unit too, from the row's ⋯", async () => {
+    const serial = await described();
+    await userEvent.click(screen.getByLabelText(`Accept ${serial}`));
+    expect(snapshot().units.find((u) => u.serial === serial)!.status).toBe(
+      "TERSEDIA",
+    );
+    await userEvent.click(screen.getByLabelText(`More for ${serial}`));
+    await userEvent.click(await screen.findByText("Send to service"));
+    await userEvent.click(await okButton("Send to service"));
+
+    const db = snapshot();
+    expect(db.units.find((u) => u.serial === serial)!.status).toBe("SERVIS");
+    expect(
+      db.services.find((r) => r.serial === serial && !r.closedAt)!.raisedBy,
+    ).toBe("QC");
   });
 });
 
@@ -1330,4 +1456,64 @@ describe("a counted product's sell price", () => {
     );
     expect(moves.map((m) => m.qty)).toEqual([2]);
   });
+});
+
+/**
+ * The sell price box holds THIS unit's price; what the variant asks is the
+ * grey hint behind it (owner report 2026-10-08: *"why the price cannot be
+ * removed"*). The go-live import priced every variant at Rp 0, and filled in
+ * as a value that zero sat in every box and came straight back when emptied.
+ */
+describe("a unit's sell price", () => {
+  const stored = () => snapshot().units.find((u) => u.serial === SERIAL)!;
+
+  /** Run with the order's product asking `price`, and put it back after. */
+  async function asking<T>(price: number, run: () => Promise<T>) {
+    const was = snapshot().skus.find((s) => s.id === SKU)!.price;
+    mutate((d) => {
+      d.skus.find((s) => s.id === SKU)!.price = price;
+    });
+    try {
+      return await run();
+    } finally {
+      mutate((d) => {
+        d.skus.find((s) => s.id === SKU)!.price = was;
+      });
+    }
+  }
+
+  it("leaves a Rp 0 variant's box empty, and files no price on the unit", () =>
+    asking(0, async () => {
+      await renderUnits();
+      const box = inRow("Sell price") as HTMLInputElement;
+      expect(box.value).toBe("");
+      expect(box.placeholder).toBe("");
+
+      await scanGraded();
+      expect(stored().price).toBeUndefined();
+      expect((inRow("Sell price") as HTMLInputElement).value).toBe("");
+    }));
+
+  it("can be emptied, and the unit then quotes its variant", () =>
+    asking(9_500_000, async () => {
+      await renderUnits();
+      expect((inRow("Sell price") as HTMLInputElement).placeholder).toMatch(
+        /9\.500\.000$/,
+      );
+      await scanGraded();
+      expect(stored().price).toBe(9_500_000);
+
+      const box = inRow("Sell price");
+      await userEvent.clear(box);
+      await userEvent.type(box, "8750000");
+      await userEvent.tab();
+      await settle();
+      expect(stored().price).toBe(8_750_000);
+
+      await userEvent.clear(inRow("Sell price"));
+      await userEvent.tab();
+      await settle();
+      expect(stored().price).toBeUndefined();
+      expect((inRow("Sell price") as HTMLInputElement).value).toBe("");
+    }));
 });

@@ -1,0 +1,106 @@
+#!/bin/zsh
+# Put a unit stuck as Sold back on the shelf, when the sale that sold it has
+# been DELETED (owner report 2026-10-23: "C02D503ZM6KJ is sold then the
+# transaction is deleted, why the status still sold"). Until v2026.10.23.4 a
+# deleted sale could leave its sold row on a unit; the app now removes it
+# itself, and this repairs a unit left behind before that.
+#
+#   sudo -u _nusantara /opt/nusantara/current/ops/release-unit C02D503ZM6KJ
+#   sudo -u _nusantara /opt/nusantara/current/ops/release-unit --apply C02D503ZM6KJ
+#
+# Without --apply it is a DRY RUN: it does it inside a transaction, prints what
+# it found and what the unit becomes, and rolls back.
+#
+# It removes ONLY the unit's history rows that belong to a deleted sale
+# (`Order.status = 'BATAL'`) — never a live sale's — and the unit takes the
+# status and place of its newest remaining row. Refused (nothing changes)
+# when the serial is unknown, when no such row exists, or when the unit would
+# be left with no history at all.
+#
+# Safety: a pg_dump first (ops/backup, label before-release-unit), the serial
+# typed back, one transaction, an AuditLog line, and every open POS tab
+# reloads (StoreChange restarts).
+setopt err_exit no_unset pipe_fail
+
+home=${NUSANTARA_HOME:-/opt/nusantara}
+pgbin=${PG_BIN:-/opt/homebrew/opt/postgresql@16/bin}
+dbname=${NUSANTARA_DB:-nusantara_pos_prod}
+apply=0
+if [[ ${1:-} == --apply ]]; then apply=1; shift; fi
+(( $# == 1 )) || { print -u2 "usage: release-unit [--apply] SERIAL"; exit 64 }
+serial=${1:u}
+[[ $serial =~ '^[A-Z0-9~-]+$' ]] || { print -u2 "release-unit: not a serial: $serial"; exit 64 }
+
+export PGPASSFILE=$home/etc/pgpass
+psql=($pgbin/psql --host=127.0.0.1 --username=nusantara --dbname=$dbname
+  -X -v ON_ERROR_STOP=1 --quiet -v serial="$serial")
+
+body=$(cat <<'SQL'
+CREATE TEMP TABLE r_unit ON COMMIT DROP AS
+  SELECT id, serial FROM "Unit" WHERE serial = :'serial' AND "archivedAt" IS NULL;
+CREATE TEMP TABLE r_event ON COMMIT DROP AS
+  SELECT e.id FROM "UnitEvent" e JOIN "Order" o ON o.id = e."orderId"
+   WHERE e."unitId" IN (SELECT id FROM r_unit) AND o.status = 'BATAL';
+DO $$ BEGIN
+  IF (SELECT count(*) FROM r_unit) <> 1 THEN
+    RAISE EXCEPTION 'no unit with that serial';
+  END IF;
+  IF (SELECT count(*) FROM r_event) = 0 THEN
+    RAISE EXCEPTION 'this unit has no history row from a deleted sale — nothing to release';
+  END IF;
+  IF (SELECT count(*) FROM "UnitEvent" WHERE "unitId" IN (SELECT id FROM r_unit)
+       AND id NOT IN (SELECT id FROM r_event)) = 0 THEN
+    RAISE EXCEPTION 'the unit would be left with no history at all';
+  END IF;
+END $$;
+
+\echo '== The unit now'
+SELECT u.serial, u.status, l.name AS location FROM "Unit" u JOIN "Location" l ON l.id = u."locationId"
+ WHERE u.id IN (SELECT id FROM r_unit);
+\echo '== History rows removed (from deleted sales)'
+SELECT e.seq, e.type, e.at, o.code FROM "UnitEvent" e JOIN "Order" o ON o.id = e."orderId"
+ WHERE e.id IN (SELECT id FROM r_event) ORDER BY e.seq;
+
+UPDATE "Unit" SET "soldOrderItemId" = NULL
+ WHERE id IN (SELECT id FROM r_unit)
+   AND "soldOrderItemId" IN (SELECT i.id FROM "OrderItem" i JOIN "Order" o ON o.id = i."orderId"
+                              WHERE o.status = 'BATAL');
+DELETE FROM "UnitEvent" WHERE id IN (SELECT id FROM r_event);
+UPDATE "Unit" u
+   SET status = (SELECT "toStatus" FROM "UnitEvent" WHERE "unitId" = u.id ORDER BY seq DESC LIMIT 1),
+       "locationId" = coalesce(
+         (SELECT "toLocationId" FROM "UnitEvent" WHERE "unitId" = u.id AND "toLocationId" IS NOT NULL
+           ORDER BY seq DESC LIMIT 1),
+         u."locationId")
+ WHERE u.id IN (SELECT id FROM r_unit);
+
+\echo '== The unit after'
+SELECT u.serial, u.status, l.name AS location FROM "Unit" u JOIN "Location" l ON l.id = u."locationId"
+ WHERE u.id IN (SELECT id FROM r_unit);
+
+INSERT INTO "AuditLog" (id, at, entity, "entityId", action, before)
+VALUES (md5(random()::text || clock_timestamp()::text), now() AT TIME ZONE 'UTC', 'Unit',
+        :'serial', 'UPDATE', 'release-unit: history rows of deleted sales removed');
+
+TRUNCATE TABLE "StoreChange" RESTART IDENTITY;
+SQL
+)
+
+run() { { print "BEGIN;"; print -r -- "$body"; print "$1;" } | $psql }
+
+print "Database: $dbname — unit: $serial"
+if (( ! apply )); then
+  run ROLLBACK
+  print "\nDRY RUN: nothing changed. Run again with --apply to do it."
+  exit 0
+fi
+
+run ROLLBACK
+print "\nBacking up first…"
+$home/current/ops/backup before-release-unit
+print
+print -n "Type the serial again to go ahead: "
+read -r answer </dev/tty
+[[ ${answer:u} == $serial ]] || { print "Not confirmed. Nothing changed."; exit 1 }
+run COMMIT
+print "\nDone. Every open POS tab reloads itself on its next poll (a few seconds)."

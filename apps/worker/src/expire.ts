@@ -1,9 +1,12 @@
 /**
  * The expiry pass — letting go of a hold nobody came for.
  *
- * A booking made through chat takes a real unit out of stock: it stops showing
- * in `search_stock` for everybody, including the walk-in standing at the
- * counter. `Reservation` has no `expiresAt` column and nothing has ever swept
+ * A booking the bot made before 2026-10-27 took a real unit out of stock: it
+ * stopped showing in `search_stock` for everybody, including the walk-in
+ * standing at the counter. Since then a bot booking is a VISIT and holds
+ * nothing (`createVisit`) — and the same sweep closes one nobody came to:
+ * `releaseHold` finds no unit on it, writes no event, and reprojects the
+ * empty header to BATAL. A visit's expiry never touches a unit. `Reservation` has no `expiresAt` column and nothing has ever swept
  * it, so without this pass a hold created at 2am by an unauthenticated phone
  * number ends only when a human notices. That is the one genuine hazard in
  * letting a chat move inventory, and this is the answer to it.
@@ -32,8 +35,10 @@
  * copies had drifted apart on locking.
  */
 
+import { dpDecisionTask } from "@nusantara/agent";
 import { releaseHold, TXN_TIMEOUTS, type PrismaClient } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
+import { upsertChatAction } from "./actions.js";
 
 export interface ExpireDeps {
   readonly db: PrismaClient;
@@ -53,6 +58,8 @@ export interface ExpirePassResult {
   readonly expired: number;
   /** Units handed back to stock. */
   readonly released: number;
+  /** DP holds that ran out unpaid — their units back on sale (2026-10-27). */
+  readonly dpExpired?: number;
 }
 
 export async function expirePass(deps: ExpireDeps): Promise<ExpirePassResult> {
@@ -136,5 +143,140 @@ export async function expirePass(deps: ExpireDeps): Promise<ExpirePassResult> {
     }
   }
 
+  const dp = await expireDpHolds(deps, at);
+  return { expired, released: released + dp.released, dpExpired: dp.expired };
+}
+
+/**
+ * A DP hold that ran out unpaid (owner, 2026-10-27: *"After that, back in
+ * stock"*).
+ *
+ * A firm hold is one with `heldUntil` — set when staff record a DP. Past it,
+ * with a unit still `DIRESERVASI`, the units go back on sale through
+ * `releaseHold` (the ledger row says why) and the reservation STAYS open:
+ * `reprojectHold` keeps a hold with an undecided DP at TERJADWAL, which is
+ * what /reservations reads as **Decide DP**. Refunding or keeping the money is
+ * staff's decision — this role cannot write a payment, and does not try.
+ *
+ * When the customer has a chat thread, a colleague also gets the task:
+ * `Perlu putuskan DP — Budi tidak melunasi Air M2, DP Rp 500rb: kembalikan
+ * atau hangus?`. Once only: a hold whose units are already back on sale is
+ * not found again, because the query wants one still DIRESERVASI.
+ *
+ * Staff holds included, unlike the sweep above — the DP set the deadline, and
+ * the owner set the DP's rule.
+ */
+async function expireDpHolds(
+  deps: ExpireDeps,
+  at: Date,
+): Promise<{ expired: number; released: number }> {
+  const { db, logger } = deps;
+  const due = await db.reservation.findMany({
+    where: {
+      status: "TERJADWAL",
+      heldUntil: { lt: at },
+      items: { some: { removedAt: null, unit: { status: "DIRESERVASI" } } },
+    },
+    select: {
+      id: true,
+      code: true,
+      phone: true,
+      custName: true,
+      payments: {
+        where: { direction: "MASUK", voidedAt: null, orderId: null },
+        select: { amount: true },
+        take: 1,
+      },
+      items: {
+        where: { removedAt: null },
+        orderBy: { sortOrder: "asc" },
+        select: {
+          unit: {
+            select: {
+              serial: true,
+              sku: { select: { name: true, variantLabel: true } },
+            },
+          },
+        },
+      },
+    },
+    orderBy: { heldUntil: "asc" },
+    take: deps.maxPerTick,
+  });
+
+  let expired = 0;
+  let released = 0;
+  for (const hold of due) {
+    try {
+      const n = await db.$transaction(async (tx) => {
+        const result = await releaseHold(tx, {
+          target: { reservationId: hold.id },
+          staffId: deps.agentStaffId,
+          at,
+          expectStatus: "TERJADWAL",
+          note: `DP ${hold.code} lewat batas, unit kembali dijual`,
+        });
+        if (result.skipped || result.released === 0) return 0;
+        const dp = hold.payments[0];
+        const from = hold.phone?.trim().replace(/^\+/, "") ?? "";
+        const thread =
+          dp !== undefined && from !== ""
+            ? await tx.waMessage.findFirst({
+                where: { from },
+                select: { id: true },
+              })
+            : null;
+        if (dp !== undefined && thread !== null) {
+          const units = hold.items.flatMap((i) =>
+            i.unit === null
+              ? []
+              : [
+                  [i.unit.sku.name, i.unit.sku.variantLabel]
+                    .filter(Boolean)
+                    .join(" "),
+                ],
+          );
+          await upsertChatAction(tx, {
+            from,
+            topic: "dp",
+            kind: "RESERVATION",
+            summary: dpDecisionTask({
+              name: hold.custName,
+              unit: units.join(", ") || null,
+              amount: dp.amount,
+            }),
+            customerText: `Reservasi ${hold.code}`,
+            ...(hold.items[0]?.unit
+              ? { serial: hold.items[0].unit.serial }
+              : {}),
+            now: at,
+          });
+        }
+        return result.released;
+      }, TXN_TIMEOUTS);
+      if (n > 0) {
+        expired += 1;
+        released += n;
+        logger.info(
+          {
+            evt: "worker.reservation.dp_expired",
+            ctx: { code: hold.code, released: n },
+          },
+          "a DP hold ran out unpaid — units back on sale, the DP waits for staff",
+        );
+      }
+    } catch (err) {
+      logger.error(
+        {
+          evt: "worker.reservation.dp_expire_failed",
+          ctx: { code: hold.code },
+          ...(err instanceof Error
+            ? { err: { name: err.name, message: err.message } }
+            : {}),
+        },
+        "failed to release a DP hold that ran out",
+      );
+    }
+  }
   return { expired, released };
 }

@@ -1,8 +1,9 @@
 /**
- * Return an in-stock unit to its supplier. The history includes units rejected
- * at QC, which arrive here without anyone filling in this form — the Stock In
- * page opens them. Those rows carry `fromQc`, and the table says so, because
- * "why is there a supplier return I never created" is otherwise a real question.
+ * Return an in-stock unit to its supplier. The UNIT mode is
+ * `components/SupplierReturnModal`'s form since 2026-10-26 — the same
+ * questions, the same money (rule C) as the QC row and the ⋯ menus on
+ * Inbound and Inventory. The history includes units rejected at QC; those
+ * rows carry `fromQc`.
  *
  * A counted product — an accessory — goes back by QUANTITY (owner ask
  * 2026-09-19). It has no unit to hang a `UnitReturn` on, so it leaves as a
@@ -12,8 +13,18 @@
  * Both kinds share the one history table below.
  */
 import { useState } from "react";
-import { App, Button, Flex, Form, Input, Modal, Segmented, Select } from "antd";
-import { MoneyInput } from "../../components/MoneyInput";
+import {
+  App,
+  AutoComplete,
+  Button,
+  Flex,
+  Form,
+  Input,
+  Modal,
+  Segmented,
+  Select,
+} from "antd";
+import { SupplierReturnForm } from "../../components/SupplierReturnModal";
 import { CountInput } from "../../components/CountInput";
 import { fmtDate, fmtNone } from "../../lib/format.js";
 import { averageCost, onHand, stockLevels } from "../../lib/stock.js";
@@ -22,11 +33,12 @@ import {
   mutate,
   nextId,
   docCode,
-  appendEvent,
   currentStaffName,
+  ensureReason,
 } from "../../mock/store.js";
 import { FORM_CENTRE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
+import { warehouseLabelOf } from "../../lib/warehouses.js";
 
 /** The label that turns on the "specify" field. Matched case-insensitively. */
 const OTHER = "other";
@@ -58,15 +70,12 @@ export function SupplierReturnPanel({
   );
   const needsDetail = (reason ?? "").trim().toLowerCase() === OTHER;
 
-  const returnable = db.units.filter((u) =>
-    ["TERSEDIA", "QC", "SERVIS"].includes(u.status),
-  );
   const skuName = (id: string | undefined) => {
     const k = db.skus.find((s) => s.id === id);
     return k ? `${k.name} ${k.variantLabel}` : fmtNone();
   };
   const warehouseName = (id: string) =>
-    db.warehouses.find((w) => w.id === id)?.name ?? id;
+    warehouseLabelOf(db.warehouses, id) ?? id;
 
   /** Counted products the shop holds, and where. */
   const levels = stockLevels(db.stockMoves);
@@ -89,46 +98,6 @@ export function SupplierReturnPanel({
       .sort((a, b) => b.date.localeCompare(a.date));
   const invoices = invoicesOf(skuId);
 
-  const label = (serial: string) => {
-    const k = db.skus.find(
-      (s) => s.id === db.units.find((u) => u.serial === serial)!.skuId,
-    )!;
-    return `${serial} — ${k.name} ${k.variantLabel}`;
-  };
-
-  const submit = (v: {
-    serial: string;
-    supplierId: string;
-    reason: string;
-    reasonDetail?: string;
-    credit?: number;
-  }) => {
-    mutate((d) => {
-      d.returns.unshift({
-        id: nextId("r"),
-        code: docCode("SP"),
-        kind: "SUPPLIER",
-        serial: v.serial,
-        reason: v.reason,
-        reasonDetail: needsDetail ? v.reasonDetail?.trim() : undefined,
-        date: new Date().toISOString().slice(0, 10),
-        status: "DONE",
-        supplierId: v.supplierId,
-        expectedCredit: v.credit,
-      });
-      appendEvent(d, v.serial, {
-        type: "RETUR_SUPPLIER",
-        toStatus: "RETUR_SUPPLIER",
-        note: [v.reason, needsDetail ? v.reasonDetail : null]
-          .filter(Boolean)
-          .join(": "),
-      });
-    });
-    message.success("Unit returned to the supplier.");
-    form.resetFields();
-    setReason(undefined);
-  };
-
   const submitCounted = (v: {
     skuId: string;
     locationId: string;
@@ -137,7 +106,6 @@ export function SupplierReturnPanel({
     reason: string;
     reasonDetail?: string;
   }) => {
-    const reasonId = reasons.find((r) => r.label === v.reason)?.id;
     let short = false;
     mutate((d) => {
       // Checked again inside the write: another till may have sold some.
@@ -145,6 +113,9 @@ export function SupplierReturnPanel({
         short = true;
         return;
       }
+      // A typed reason joins Settings' list in the same write (2026-10-21).
+      const reasonId =
+        ensureReason(d, "RETURN_SUPPLIER", v.reason) || undefined;
       d.stockMoves.push({
         id: nextId("sm"),
         skuId: v.skuId,
@@ -186,23 +157,23 @@ export function SupplierReturnPanel({
         name="reason"
         label={t("returnSupplier.reason", "Reason")}
         tooltip={t(
-          "returnSupplier.managedInSettingsReasonsPer",
-          "Managed in Settings → Reasons per activity",
+          "returnSupplier.pickOneOrTypeA",
+          "Pick one, or type a new reason — a new one is added to Settings automatically",
         )}
         rules={[{ required: true }]}
       >
-        <Select
-          showSearch
-          optionFilterProp="label"
+        <AutoComplete
           placeholder={t(
-            "returnSupplier.pickOrSearchAReason",
-            "Pick or search a reason",
+            "returnSupplier.searchAReasonOrType",
+            "Search a reason, or type a new one",
           )}
-          options={reasons.map((r) => ({
-            value: r.label,
-            label: r.label,
-          }))}
-          onChange={setReason}
+          options={reasons.map((r) => ({ value: r.label }))}
+          filterOption={(input, opt) =>
+            String(opt?.value ?? "")
+              .toLowerCase()
+              .includes(input.toLowerCase())
+          }
+          onChange={(v: string) => setReason(v)}
         />
       </Form.Item>
       {needsDetail && (
@@ -281,68 +252,9 @@ export function SupplierReturnPanel({
               style={{ ...FORM_CENTRE, maxWidth: 640, marginBottom: 16 }}
             />
             {what === "UNIT" ? (
-              <Form
-                form={form}
-                layout="vertical"
-                style={{ ...FORM_CENTRE, maxWidth: 640 }}
-                onFinish={submit}
-              >
-                <Form.Item
-                  name="serial"
-                  label={t(
-                    "returnSupplier.unitInInventory",
-                    "Unit in inventory",
-                  )}
-                  rules={[{ required: true }]}
-                >
-                  <Select
-                    showSearch
-                    optionFilterProp="label"
-                    placeholder={t(
-                      "returnSupplier.searchSerial",
-                      "Search serial",
-                    )}
-                    options={returnable.map((u) => ({
-                      value: u.serial,
-                      label: label(u.serial),
-                    }))}
-                    onChange={(serial: string) => {
-                      const u = db.units.find((x) => x.serial === serial);
-                      const sup = db.pos.find(
-                        (p) => p.id === u?.poId,
-                      )?.supplierId;
-                      form.setFieldsValue({ supplierId: sup, credit: u?.buy });
-                    }}
-                  />
-                </Form.Item>
-                <Form.Item
-                  name="supplierId"
-                  label={t("returnSupplier.supplier", "Supplier")}
-                  rules={[{ required: true }]}
-                >
-                  <Select
-                    showSearch
-                    optionFilterProp="label"
-                    options={db.suppliers.map((s) => ({
-                      value: s.id,
-                      label: s.name,
-                    }))}
-                  />
-                </Form.Item>
-                {reasonFields}
-                <Form.Item
-                  name="credit"
-                  label={t("returnSupplier.expectedCredit", "Expected credit")}
-                >
-                  <MoneyInput />
-                </Form.Item>
-                <Button type="primary" htmlType="submit">
-                  {t(
-                    "returnSupplier.recordSupplierReturn",
-                    "Record supplier return",
-                  )}
-                </Button>
-              </Form>
+              // The one Return-to-supplier form every door shares
+              // (2026-10-26): the credit, rule C and where the money went.
+              <SupplierReturnForm onDone={onCloseAdd} />
             ) : (
               <Form
                 form={form}

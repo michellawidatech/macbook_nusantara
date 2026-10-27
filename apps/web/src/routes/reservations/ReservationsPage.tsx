@@ -45,6 +45,7 @@ import { useNavigate } from "react-router-dom";
 import dayjs from "dayjs";
 import {
   App,
+  Badge,
   Button,
   Card,
   Checkbox,
@@ -53,25 +54,45 @@ import {
   Form,
   Input,
   Modal,
+  Segmented,
   Select,
   Switch,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from "antd";
 import {
+  CheckOutlined,
   PlusOutlined,
   ShoppingCartOutlined,
   StopOutlined,
 } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
+import { RequestsTab } from "./RequestsTab";
+import { pendingRequestCount } from "../../lib/reservationRequests.js";
 import { ProTable } from "../../components/ProTable";
 import { EnumTag } from "../../components/EnumTag";
 import { GradeTag } from "../../components/GradeTag";
 import { LongText } from "../../components/LongText";
-import { fmtDateTime, fmtNone } from "../../lib/format.js";
+import { fmtDate, fmtDateTime, fmtNone, fmtRp } from "../../lib/format.js";
 import { customerLabel } from "../../lib/customers.js";
-import { itemState, reprojectHolds } from "../../lib/reservations.js";
+import {
+  itemState,
+  reprojectHolds,
+  softHolds,
+} from "../../lib/reservations.js";
+import {
+  DP_METHODS,
+  dpStage,
+  keepDp,
+  recordDpBlock,
+  refundDp,
+  type DpMethod,
+  type DpStage,
+} from "../../lib/dp.js";
+import { RecordDpModal } from "../../components/RecordDpModal";
+import type { Reservation } from "../../mock/seed.js";
 import {
   appendEvent,
   docCode,
@@ -85,13 +106,34 @@ import type { Hold, HoldItem, HoldState } from "../../lib/reservationsApi.js";
 import { tagOf, RESERVATION_STATUS } from "../../i18n/enumLabels.js";
 import { COLUMN } from "../../theme/tokens";
 
-/** Machines still waiting to be collected on this hold. */
+/**
+ * A row of this page: the server's `Hold`, plus what became of its DP
+ * (2026-10-27). Kept beside the server shape rather than in it, because the
+ * dormant API does not carry a DP yet.
+ */
+type HoldRow = Hold & {
+  readonly dp?: Reservation["dp"];
+  readonly heldUntil?: string;
+  readonly dpStage?: DpStage;
+};
+
+/**
+ * Units still waiting to be collected on this hold — firmly held (a DP) or
+ * reserved unpaid, which leaves them on sale (2026-10-27).
+ */
 const heldOf = (r: Hold): readonly HoldItem[] =>
-  r.items.filter((i) => i.state === "HELD");
+  r.items.filter((i) => i.state === "HELD" || i.state === "SOFT");
+
+/**
+ * A visit — the bot's "janji datang" (2026-10-27): a time and a customer and
+ * no units, because the bot holds nothing. Its status is somebody's decision
+ * (came, cancelled), not a fact about a unit.
+ */
+const isVisitRow = (r: Hold) => r.items.length === 0;
 
 /** How far along a hold is, for the one line a table cell can afford. */
 const holdProgress = (r: Hold) => ({
-  held: r.items.filter((i) => i.state === "HELD").length,
+  held: r.items.filter((i) => i.state === "HELD" || i.state === "SOFT").length,
   bought: r.items.filter((i) => i.state === "BOUGHT").length,
   released: r.items.filter((i) => i.state === "RELEASED").length,
   total: r.items.length,
@@ -108,6 +150,8 @@ const holdProgress = (r: Hold) => ({
  */
 const ITEM_STATE: Record<HoldState, string> = {
   HELD: "TERJADWAL",
+  // Drawn as its own tag below — "not paid" is the one thing it must say.
+  SOFT: "TERJADWAL",
   BOUGHT: "SELESAI",
   RELEASED: "BATAL",
 };
@@ -155,6 +199,12 @@ export function ReservationsPage() {
    * decision made about one hold cannot carry into the next one.
    */
   const [releaseRest, setReleaseRest] = useState(false);
+  /** The hold a DP is being recorded on (2026-10-27). */
+  const [recording, setRecording] = useState<HoldRow | null>(null);
+  /** The hold whose DP is being refunded or kept. */
+  const [deciding, setDeciding] = useState<HoldRow | null>(null);
+  /** Holds, or the bot's requests waiting on a person (2026-10-27). */
+  const [tab, setTab] = useState<"holds" | "requests">("holds");
 
   /**
    * The holds themselves, read off the store.
@@ -186,8 +236,8 @@ export function ReservationsPage() {
    */
   const db = useDb();
 
-  const rows = useMemo((): Hold[] => {
-    const holds = db.reservations.map((r): Hold => {
+  const rows = useMemo((): HoldRow[] => {
+    const holds = db.reservations.map((r): HoldRow => {
       const customer = db.customers.find((c) => c.id === r.customerId);
       const channel = db.reservationSources.find((s) => s.id === r.sourceId);
       return {
@@ -223,9 +273,12 @@ export function ReservationsPage() {
             // Never stored: whether a machine is held, bought or let go is a
             // fact about the MACHINE, and a second copy is the one that goes
             // stale. `itemState` is the same derivation the till uses.
-            state: itemState(db, i),
+            state: itemState(db, i, r),
           };
         }),
+        ...(r.dp ? { dp: r.dp } : {}),
+        ...(r.heldUntil ? { heldUntil: r.heldUntil } : {}),
+        ...(r.dp ? { dpStage: dpStage(db, r) } : {}),
       };
     });
     return holds.sort(
@@ -261,8 +314,12 @@ export function ReservationsPage() {
   const [unitQuery, setUnitQuery] = useState("");
   const availableMatches = useMemo(() => {
     const q = unitQuery.trim().toLowerCase();
+    // On sale and not already reserved for somebody else (2026-10-27): a
+    // hold without a DP leaves its unit TERSEDIA, and one unit promised to
+    // two customers is the promise this page exists to keep.
+    const reserved = softHolds(db);
     return db.units
-      .filter((u) => u.status === "TERSEDIA")
+      .filter((u) => u.status === "TERSEDIA" && !reserved.has(u.serial))
       .map((u) => ({ unit: u, sku: db.skus.find((s) => s.id === u.skuId) }))
       .filter(({ unit, sku }) => {
         if (q === "") return true;
@@ -272,7 +329,7 @@ export function ReservationsPage() {
           (sku?.variantLabel ?? "").toLowerCase().includes(q)
         );
       });
-  }, [db.units, db.skus, unitQuery]);
+  }, [db, unitQuery]);
   const UNIT_PICKER_CAP = 200;
   const unitOptions = availableMatches
     .slice(0, UNIT_PICKER_CAP)
@@ -288,12 +345,13 @@ export function ReservationsPage() {
   );
 
   /**
-   * Put machines aside.
+   * Reserve units for a customer.
    *
-   * One `mutate`, so the reservation, the ledger rows and the header
-   * projection land together — the same rule the till follows. A hold written
-   * without the `DIRESERVASI` events would be a hold that holds nothing, which
-   * is precisely the bug this page came back to the store to fix.
+   * Since 2026-10-27 this holds NOTHING (owner: *"if reservation makes the
+   * stock decrease and reduce sale, it is bad"*): the units stay `TERSEDIA`
+   * and on sale, tagged *Reserved for {name}, not paid* at the till and in
+   * Inventory. Only a DP holds — recorded on the row once staff have checked
+   * the transfer (`RecordDpModal`), which writes the `DIRESERVASI` rows then.
    */
   const [saving, setSaving] = useState(false);
   const addHold = (v: HoldForm) => {
@@ -328,19 +386,13 @@ export function ReservationsPage() {
           })),
           status: "ACTIVE",
         });
-        for (const serial of v.serials) {
-          appendEvent(d, serial, {
-            type: "DIRESERVASI",
-            toStatus: "DIRESERVASI",
-            refCode: code,
-          });
-        }
-        reprojectHolds(d, v.serials);
       });
       message.success(
-        t("reservations.heldN", "{{count}} unit(s) are now on hold.", {
-          count: v.serials.length,
-        }),
+        t(
+          "reservations.reservedN",
+          "{{count}} unit(s) reserved — still on sale until a DP is recorded.",
+          { count: v.serials.length },
+        ),
       );
       form.resetFields();
       setAdding(false);
@@ -358,13 +410,29 @@ export function ReservationsPage() {
    */
   const releaseNow = (r: Hold, serials: readonly string[]) => {
     if (serials.length === 0) return Promise.resolve();
+    const soft = new Set(
+      r.items.filter((i) => i.state === "SOFT").map((i) => i.serial),
+    );
     mutate((d) => {
+      const hold = d.reservations.find((x) => x.id === r.id);
+      // A unit held by a DP goes back with its ledger row; one reserved
+      // unpaid was never off sale, so it only leaves the list (2026-10-27).
       for (const serial of serials) {
+        if (soft.has(serial)) continue;
         appendEvent(d, serial, {
           type: "RESERVASI_BATAL",
           toStatus: "TERSEDIA",
           refCode: r.code,
         });
+      }
+      if (hold) {
+        const wanted = heldOf(r).flatMap((i) => (i.serial ? [i.serial] : []));
+        const everything = wanted.every((sn) => serials.includes(sn));
+        if (everything && hold.dp === undefined) hold.status = "CANCELLED";
+        else
+          hold.items = hold.items.filter(
+            (i) => !(soft.has(i.serial) && serials.includes(i.serial)),
+          );
       }
       reprojectHolds(d, serials);
     });
@@ -429,6 +497,36 @@ export function ReservationsPage() {
     );
   };
 
+  /**
+   * Close a visit: the customer came, or is not coming. One `mutate` on the
+   * header alone — a visit holds no unit, so there is no ledger row to write.
+   */
+  const closeVisit = (r: Hold, status: "DONE" | "CANCELLED") => {
+    mutate((d) => {
+      const visit = d.reservations.find((x) => x.id === r.id);
+      if (visit && visit.items.length === 0) visit.status = status;
+    });
+    message.success(
+      status === "DONE"
+        ? t("reservations.visitCame", "Visit marked as came.")
+        : t("reservations.visitCancelled", "Visit cancelled."),
+    );
+  };
+
+  const cancelVisit = (r: Hold) =>
+    modal.confirm({
+      title: t("reservations.cancelVisit", "Cancel this visit?"),
+      content: t(
+        "reservations.cancelVisitBody",
+        "{{name}} is no longer expected. Nothing was held, so no unit moves.",
+        { name: r.customerName },
+      ),
+      okText: t("reservations.cancelVisitOk", "Cancel the visit"),
+      okButtonProps: { danger: true },
+      cancelText: t("reservations.keepVisit", "Keep it"),
+      onOk: () => closeVisit(r, "CANCELLED"),
+    });
+
   /** Open the units dialog for one hold, with nothing assumed about it. */
   const manage = (r: Hold) => {
     setPicked((p) => ({ ...p, [r.id]: [] }));
@@ -489,7 +587,9 @@ export function ReservationsPage() {
                   // Only a machine still on hold can be checked out. One
                   // already bought is history; one released is somebody
                   // else's to sell.
-                  disabled={state !== "HELD" || serial === null}
+                  disabled={
+                    (state !== "HELD" && state !== "SOFT") || serial === null
+                  }
                   aria-label={t(
                     "reservations.selectAria",
                     "Select {{serial}}",
@@ -536,165 +636,324 @@ export function ReservationsPage() {
             title: t("reservations.status", "Status"),
             key: "state",
             width: COLUMN.tag,
-            render: (_, item) => (
-              <EnumTag
-                map={RESERVATION_STATUS}
-                value={ITEM_STATE[item.state]}
-              />
-            ),
+            render: (_, item) =>
+              item.state === "SOFT" ? (
+                <Tag color="gold" style={{ marginInline: 0 }}>
+                  {t("dp.notPaid", "Not paid")}
+                </Tag>
+              ) : (
+                <EnumTag
+                  map={RESERVATION_STATUS}
+                  value={ITEM_STATE[item.state]}
+                />
+              ),
           },
         ]}
       />
     );
   };
 
-  return (
-    <PageContainer
-      title={t("reservations.reservation", "Reservation")}
-      actions={[
-        {
-          key: "add",
-          label: t("reservations.addReservation", "Add reservation"),
-          icon: <PlusOutlined />,
-          type: "primary",
-          onClick: () => setAdding(true),
-        },
-      ]}
-    >
-      <Flex vertical gap={16}>
-        <Card title={t("reservations.reservations", "Reservations")}>
-          <ProTable<Hold>
-            persistKey="reservations"
-            rowKey="id"
-            dataSource={rows}
-            searchPlaceholder={t(
-              "reservations.searchSerialProductOrCustomer",
-              "Search serial, product or customer",
-            )}
-            columns={[
-              {
-                title: t("reservations.customer", "Customer"),
-                key: "customer",
-                width: COLUMN.code,
-                searchable: true,
-                facet: true,
-                sortValue: (r) => r.customerName,
-                render: (_, r) => (
-                  <Flex vertical>
-                    <strong>{r.customerName}</strong>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {r.code}
-                    </Typography.Text>
-                  </Flex>
-                ),
-              },
-              {
-                title: t("reservations.when", "When"),
-                dataIndex: "scheduledFor",
-                // A date with its time on a second line (2026-09-28: widths
-                // are the least the content needs).
-                width: COLUMN.date,
-                // A hold made through chat may carry no appointment at all —
-                // the customer never named one — so the cell has to say that
-                // rather than render an empty box.
-                render: (v) => (v ? fmtDateTime(v as string) : fmtNone()),
-              },
-              {
-                title: t("reservations.product", "Product"),
-                key: "product",
-                width: 152,
-                searchable: true,
-                searchValue: (r) => r.items.map((i) => i.productName).join(" "),
-                sortValue: (r) => r.items[0]?.productName ?? "",
-                render: (_, r) => (
-                  <Flex vertical gap={2}>
-                    {r.items.map((i) => (
-                      <span key={i.id}>{i.productName}</span>
-                    ))}
-                  </Flex>
-                ),
-              },
-              {
-                // Deliberately a second column rather than a line under the
-                // product: they line up row for row, so the reader can run a
-                // finger across and match the third product to the third
-                // serial. That is what "serial per product" asked for.
-                title: t("reservations.serial", "Serial"),
-                key: "serials",
-                width: COLUMN.serial,
-                searchable: true,
-                searchValue: (r) => r.items.map((i) => i.serial).join(" "),
-                render: (_, r) => (
-                  <Flex vertical gap={2}>
-                    {r.items.map((i) => (
-                      <Typography.Text key={i.id} type="secondary">
-                        {i.serial}
-                      </Typography.Text>
-                    ))}
-                  </Flex>
-                ),
-              },
-              {
-                title: t("reservations.cameFrom", "Came from"),
-                key: "source",
-                width: COLUMN.tag,
-                facet: true,
-                sortValue: (r) => r.channelName ?? fmtNone(),
-                render: (_, r) =>
-                  r.channelName ? <Tag>{r.channelName}</Tag> : fmtNone(),
-              },
-              {
-                title: t("reservations.note", "Note"),
-                dataIndex: "note",
-                // A floor, not a size (2026-09-28): the sentence or two staff
-                // write wraps over two lines here and takes a wider screen's
-                // slack. 140 was the ellipsis nobody could read.
-                width: 152,
-                render: (v: string) => <LongText>{v}</LongText>,
-              },
-              {
-                title: t("reservations.status", "Status"),
-                dataIndex: "status",
-                width: COLUMN.status,
-                facet: true,
-                sortValue: (r) => tagOf(RESERVATION_STATUS, r.status, t).label,
-                render: (v: string, r) => {
-                  const p = holdProgress(r);
-                  return (
-                    <Flex vertical gap={2}>
-                      <EnumTag map={RESERVATION_STATUS} value={v} />
-                      {/* The count only earns its place on a hold that is
+  /**
+   * What the hold's money says, under its status (2026-10-27): no DP means
+   * nothing is held; a DP holds until a date; a DP whose hold is over waits
+   * for a decision; and what was decided.
+   */
+  const dpLine = (r: HoldRow) => {
+    const small = { fontSize: 12 } as const;
+    if (r.dp === undefined) {
+      // Only where something is reserved unpaid: a hold made before
+      // 2026-10-27 holds its units firmly, DP or not, and is left as it was.
+      if (!r.items.some((i) => i.state === "SOFT")) return null;
+      return (
+        <Typography.Text type="warning" style={small}>
+          {t("dp.noDpNotHeld", "No DP — still on sale")}
+        </Typography.Text>
+      );
+    }
+    const amount = fmtRp(r.dp.amount);
+    switch (r.dpStage) {
+      case "HOLDING":
+        return (
+          <Typography.Text type="secondary" style={small}>
+            {t("dp.heldUntil", "DP {{amount}} · held until {{until}}", {
+              amount,
+              until: r.heldUntil ? fmtDate(r.heldUntil) : fmtNone(),
+            })}
+          </Typography.Text>
+        );
+      case "DECIDE":
+        return (
+          <Typography.Text type="danger" style={small}>
+            {t("dp.waitingDecision", "DP {{amount}} · hold over, decide", {
+              amount,
+            })}
+          </Typography.Text>
+        );
+      case "APPLIED":
+        return (
+          <Typography.Text type="secondary" style={small}>
+            {t("dp.applied", "DP {{amount}} · on the sale", { amount })}
+          </Typography.Text>
+        );
+      case "REFUNDED":
+        return (
+          <Typography.Text type="secondary" style={small}>
+            {t("dp.refunded", "DP {{amount}} · refunded", { amount })}
+          </Typography.Text>
+        );
+      case "KEPT":
+        return (
+          <Typography.Text type="secondary" style={small}>
+            {t("dp.kept", "DP {{amount}} · kept (hangus)", { amount })}
+          </Typography.Text>
+        );
+      default:
+        return null;
+    }
+  };
+
+  /** Refund the DP, out of the pot named, or keep it — and end the hold. */
+  const [refundMethod, setRefundMethod] = useState<DpMethod>("TRANSFER");
+  const decideDp = (r: HoldRow, how: "REFUND" | "KEEP") => {
+    const at = new Date().toISOString();
+    mutate((d) => {
+      if (how === "REFUND")
+        refundDp(
+          d,
+          r.id,
+          { id: nextId("pay"), method: refundMethod, at },
+          appendEvent,
+        );
+      else keepDp(d, r.id, at, appendEvent);
+    });
+    message.success(
+      how === "REFUND"
+        ? t("dp.refundedToast", "DP {{amount}} refunded to {{name}}.", {
+            amount: fmtRp(r.dp?.amount ?? 0),
+            name: r.customerName,
+          })
+        : t("dp.keptToast", "DP {{amount}} kept (hangus).", {
+            amount: fmtRp(r.dp?.amount ?? 0),
+          }),
+    );
+    setDeciding(null);
+  };
+  const openDecide = (r: HoldRow) => {
+    setRefundMethod(
+      (DP_METHODS as readonly string[]).includes(r.dp?.method ?? "")
+        ? (r.dp!.method as DpMethod)
+        : "TRANSFER",
+    );
+    setDeciding(r);
+  };
+
+  const pendingRequests = pendingRequestCount(db, new Date());
+  const holdsCard = (
+    <Card title={t("reservations.reservations", "Reservations")}>
+      <ProTable<HoldRow>
+        persistKey="reservations"
+        rowKey="id"
+        dataSource={rows}
+        searchPlaceholder={t(
+          "reservations.searchSerialProductOrCustomer",
+          "Search serial, product or customer",
+        )}
+        columns={[
+          {
+            title: t("reservations.customer", "Customer"),
+            key: "customer",
+            width: COLUMN.code,
+            searchable: true,
+            facet: true,
+            sortValue: (r) => r.customerName,
+            render: (_, r) => (
+              <Flex vertical>
+                <strong>{r.customerName}</strong>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {r.code}
+                </Typography.Text>
+              </Flex>
+            ),
+          },
+          {
+            title: t("reservations.when", "When"),
+            dataIndex: "scheduledFor",
+            // A date with its time on a second line (2026-09-28: widths
+            // are the least the content needs).
+            width: COLUMN.date,
+            // A hold made through chat may carry no appointment at all —
+            // the customer never named one — so the cell has to say that
+            // rather than render an empty box.
+            render: (v) => (v ? fmtDateTime(v as string) : fmtNone()),
+          },
+          {
+            title: t("reservations.product", "Product"),
+            key: "product",
+            width: 152,
+            searchable: true,
+            searchValue: (r) => r.items.map((i) => i.productName).join(" "),
+            sortValue: (r) => r.items[0]?.productName ?? "",
+            render: (_, r) =>
+              isVisitRow(r) ? (
+                <Tag color="cyan" style={{ marginInline: 0 }}>
+                  {t("reservations.visit", "Visit")}
+                </Tag>
+              ) : (
+                <Flex vertical gap={2}>
+                  {r.items.map((i) => (
+                    <span key={i.id}>{i.productName}</span>
+                  ))}
+                </Flex>
+              ),
+          },
+          {
+            // Deliberately a second column rather than a line under the
+            // product: they line up row for row, so the reader can run a
+            // finger across and match the third product to the third
+            // serial. That is what "serial per product" asked for.
+            title: t("reservations.serial", "Serial"),
+            key: "serials",
+            width: COLUMN.serial,
+            searchable: true,
+            searchValue: (r) => r.items.map((i) => i.serial).join(" "),
+            render: (_, r) => (
+              <Flex vertical gap={2}>
+                {r.items.map((i) => (
+                  <Typography.Text key={i.id} type="secondary">
+                    {i.serial}
+                  </Typography.Text>
+                ))}
+              </Flex>
+            ),
+          },
+          {
+            title: t("reservations.cameFrom", "Came from"),
+            key: "source",
+            width: COLUMN.tag,
+            facet: true,
+            sortValue: (r) => r.channelName ?? fmtNone(),
+            render: (_, r) =>
+              r.channelName ? <Tag>{r.channelName}</Tag> : fmtNone(),
+          },
+          {
+            title: t("reservations.note", "Note"),
+            dataIndex: "note",
+            // A floor, not a size (2026-09-28): the sentence or two staff
+            // write wraps over two lines here and takes a wider screen's
+            // slack. 140 was the ellipsis nobody could read.
+            width: 152,
+            render: (v: string) => <LongText>{v}</LongText>,
+          },
+          {
+            title: t("reservations.status", "Status"),
+            dataIndex: "status",
+            width: COLUMN.status,
+            facet: true,
+            sortValue: (r) => tagOf(RESERVATION_STATUS, r.status, t).label,
+            render: (v: string, r) => {
+              const p = holdProgress(r);
+              return (
+                <Flex vertical gap={2}>
+                  <EnumTag map={RESERVATION_STATUS} value={v} />
+                  {dpLine(r)}
+                  {/* The count only earns its place on a hold that is
                           part-collected — on a single-machine hold the tag
                           above has already said everything. */}
-                      {p.total > 1 && p.held > 0 && p.held < p.total && (
-                        <Typography.Text
-                          type="secondary"
-                          style={{ fontSize: 12 }}
-                        >
-                          {t(
-                            "reservations.heldOfTotal",
-                            "{{held}} of {{total}} left",
-                            { held: p.held, total: p.total },
-                          )}
-                        </Typography.Text>
+                  {p.total > 1 && p.held > 0 && p.held < p.total && (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {t(
+                        "reservations.heldOfTotal",
+                        "{{held}} of {{total}} left",
+                        { held: p.held, total: p.total },
                       )}
-                    </Flex>
-                  );
-                },
-              },
-              {
-                // Blank by convention: DataTable drops an untitled column to
-                // the foot of the card on a phone, where buttons belong.
-                title: "",
-                key: "actions",
-                // One small button, "Units" (2026-09-28: the least it needs).
-                width: 112,
-                render: (_, r) => {
-                  const held = heldOf(r).flatMap((i) =>
-                    i.serial ? [i.serial] : [],
-                  );
-                  if (held.length === 0) return null;
-                  return (
+                    </Typography.Text>
+                  )}
+                </Flex>
+              );
+            },
+          },
+          {
+            // Blank by convention: DataTable drops an untitled column to
+            // the foot of the card on a phone, where buttons belong.
+            title: "",
+            key: "actions",
+            // One small button, "Units" (2026-09-28: the least it needs).
+            width: 112,
+            render: (_, r) => {
+              // A visit has nothing to sell from and nothing to release:
+              // the customer came, or is not coming (2026-10-27).
+              if (isVisitRow(r))
+                return r.status === "TERJADWAL" ? (
+                  <Flex gap={8} wrap>
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<CheckOutlined />}
+                      aria-label={t(
+                        "reservations.cameAria",
+                        "{{name}} came for {{code}}",
+                        { name: r.customerName, code: r.code },
+                      )}
+                      onClick={() => closeVisit(r, "DONE")}
+                    >
+                      {t("reservations.came", "Came")}
+                    </Button>
+                    <Button
+                      size="small"
+                      danger
+                      aria-label={t(
+                        "reservations.cancelVisitAria",
+                        "Cancel the visit {{code}}",
+                        { code: r.code },
+                      )}
+                      onClick={() => cancelVisit(r)}
+                    >
+                      {t("reservations.cancel", "Cancel")}
+                    </Button>
+                  </Flex>
+                ) : null;
+              const held = heldOf(r).flatMap((i) =>
+                i.serial ? [i.serial] : [],
+              );
+              const reservation = db.reservations.find((x) => x.id === r.id);
+              // Only a DP holds (2026-10-27): record one once the
+              // transfer is checked, and decide it once the hold is over.
+              const canRecord =
+                reservation !== undefined &&
+                recordDpBlock(db, reservation) === undefined;
+              const decide = r.dpStage === "DECIDE";
+              if (held.length === 0 && !decide) return null;
+              return (
+                <Flex gap={8} wrap>
+                  {decide && (
+                    <Button
+                      type="primary"
+                      size="small"
+                      danger
+                      aria-label={t(
+                        "dp.decideAria",
+                        "Decide the DP on {{code}}",
+                        { code: r.code },
+                      )}
+                      onClick={() => openDecide(r)}
+                    >
+                      {t("dp.decide", "Decide DP")}
+                    </Button>
+                  )}
+                  {canRecord && (
+                    <Button
+                      size="small"
+                      aria-label={t(
+                        "dp.recordAria",
+                        "Record a DP on {{code}}",
+                        { code: r.code },
+                      )}
+                      onClick={() => setRecording(r)}
+                    >
+                      {t("dp.record", "Record DP")}
+                    </Button>
+                  )}
+                  {held.length > 0 && (
                     // One button, and it opens the dialog rather than doing
                     // anything on its own (owner revision 2026-08-27). Two
                     // icon buttons used to sit here — sell everything, cancel
@@ -716,13 +975,52 @@ export function ReservationsPage() {
                         {t("reservations.units", "Units")}
                       </Button>
                     </Flex>
-                  );
-                },
-              },
-            ]}
-          />
-        </Card>
-      </Flex>
+                  )}
+                </Flex>
+              );
+            },
+          },
+        ]}
+      />
+    </Card>
+  );
+
+  return (
+    <PageContainer
+      title={t("reservations.reservation", "Reservation")}
+      actions={[
+        {
+          key: "add",
+          label: t("reservations.addReservation", "Add reservation"),
+          icon: <PlusOutlined />,
+          type: "primary",
+          onClick: () => setAdding(true),
+        },
+      ]}
+    >
+      <Tabs
+        activeKey={tab}
+        onChange={(k) => setTab(k as "holds" | "requests")}
+        items={[
+          {
+            key: "holds",
+            label: t("reservations.reservations", "Reservations"),
+            children: holdsCard,
+          },
+          {
+            // The bot's reservation requests (2026-10-27), waiting on a
+            // person to approve or reject.
+            key: "requests",
+            label: (
+              <Flex align="center" gap={6}>
+                {t("requests.tab", "Requests")}
+                <Badge count={pendingRequests} size="small" />
+              </Flex>
+            ),
+            children: <RequestsTab />,
+          },
+        ]}
+      />
 
       {/**
        * The units on one hold — the only place they can be picked among.
@@ -845,6 +1143,81 @@ export function ReservationsPage() {
           })()}
       </Modal>
 
+      <RecordDpModal
+        reservation={
+          recording
+            ? (db.reservations.find((x) => x.id === recording.id) ?? null)
+            : null
+        }
+        customerName={recording?.customerName ?? ""}
+        onClose={() => setRecording(null)}
+      />
+
+      {/* Refund or keep a DP (2026-10-27). Staff's decision, never the
+          worker's: it can release the hold, it cannot move money. */}
+      <Modal
+        open={deciding !== null}
+        onCancel={() => setDeciding(null)}
+        title={t("dp.decideTitle", "Decide the DP — {{code}}", {
+          code: deciding?.code ?? "",
+        })}
+        footer={null}
+        destroyOnHidden
+        width={520}
+      >
+        {deciding && (
+          <Flex vertical gap={16}>
+            <Typography.Text>
+              {t(
+                "dp.decideBody",
+                "{{name}} paid a DP of {{amount}} and did not complete the purchase. Refund it, or keep it (hangus)?",
+                {
+                  name: deciding.customerName,
+                  amount: fmtRp(deciding.dp?.amount ?? 0),
+                },
+              )}
+            </Typography.Text>
+            {deciding.dpStage === "HOLDING" && (
+              <Typography.Text type="warning">
+                {t(
+                  "dp.decideEarly",
+                  "The hold has not run out yet — deciding now puts its units back on sale.",
+                )}
+              </Typography.Text>
+            )}
+            <Flex align="center" gap={8} wrap>
+              <Typography.Text>
+                {t("dp.refundFrom", "Refund from")}
+              </Typography.Text>
+              <Segmented<DpMethod>
+                value={refundMethod}
+                onChange={setRefundMethod}
+                options={DP_METHODS.map((m) => ({
+                  value: m,
+                  label:
+                    m === "TRANSFER"
+                      ? t("pos.methodTransfer", "Transfer")
+                      : t("pos.methodCash", "Cash"),
+                }))}
+              />
+            </Flex>
+            <Flex gap={8} justify="flex-end" wrap>
+              <Button onClick={() => decideDp(deciding, "KEEP")}>
+                {t("dp.keep", "Keep (hangus)")}
+              </Button>
+              <Button
+                type="primary"
+                onClick={() => decideDp(deciding, "REFUND")}
+              >
+                {t("dp.refund", "Refund {{amount}}", {
+                  amount: fmtRp(deciding.dp?.amount ?? 0),
+                })}
+              </Button>
+            </Flex>
+          </Flex>
+        )}
+      </Modal>
+
       <Modal
         open={adding}
         onCancel={() => setAdding(false)}
@@ -961,7 +1334,7 @@ export function ReservationsPage() {
             </Form.Item>
             <Form.Item
               name="when"
-              label={t("reservations.holdUntil", "Hold until")}
+              label={t("reservations.expectedOn", "Expected on")}
               rules={[
                 { required: true, message: t("form.pickTime", "Pick a time") },
               ]}

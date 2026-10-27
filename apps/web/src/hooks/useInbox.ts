@@ -29,6 +29,7 @@ import {
   type InboxConversation,
   type InboxThread,
 } from "../lib/inboxApi.js";
+import { ApiRequestError } from "../lib/api.js";
 
 /** Fast enough that a reply feels prompt, slow enough to be free. */
 export const POLL_MS = 5_000;
@@ -73,21 +74,43 @@ export function useInbox(
       controllers.add(controller);
       const phone = phoneRef.current;
       try {
-        const [list, thread] = await Promise.all([
+        // Settled separately: a conversation that 404s — cleared, or deleted
+        // by the owner (2026-10-27) — must not stop the list beside it from
+        // updating, or the list keeps showing the thread that went.
+        const [list, thread] = await Promise.allSettled([
           listThreads(controller.signal),
           phone
             ? getConversation(phone, controller.signal)
             : Promise.resolve(null),
         ]);
-        if (cancelled) return;
-        setThreads(list.threads);
+        if (cancelled || controller.signal.aborted) return;
+        if (list.status === "fulfilled") setThreads(list.value.threads);
         // Only if the user has not switched threads while this was in flight.
-        if (phoneRef.current === phone) setConversation(thread);
-        setError(null);
+        const gone =
+          thread.status === "rejected" &&
+          thread.reason instanceof ApiRequestError &&
+          thread.reason.status === 404;
+        if (phoneRef.current === phone) {
+          if (thread.status === "fulfilled") setConversation(thread.value);
+          else if (gone) setConversation(null);
+        }
+        // A thread that is gone is not worth an error banner — the list
+        // beside it is still correct.
+        const failed =
+          list.status === "rejected"
+            ? list.reason
+            : thread.status === "rejected" && !gone
+              ? thread.reason
+              : null;
+        setError(
+          failed === null
+            ? null
+            : failed instanceof Error
+              ? failed
+              : new Error(String(failed)),
+        );
       } catch (err) {
         if (cancelled || controller.signal.aborted) return;
-        // A thread whose messages were all deleted 404s. That is not worth an
-        // error banner — the list beside it is still correct.
         setError(err instanceof Error ? err : new Error(String(err)));
       } finally {
         controllers.delete(controller);

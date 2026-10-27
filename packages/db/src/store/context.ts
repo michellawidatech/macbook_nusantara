@@ -112,6 +112,12 @@ export class WriteContext {
     string,
     { status: string; locationId: string }
   >();
+  /**
+   * Ledger rows a sale's deletion already took off (`cancelSale`, 2026-10-23),
+   * so the events adapter does not refuse the browser's removal of the same
+   * rows as "not found" later in the commit.
+   */
+  readonly droppedEvents = new Set<string>();
   /** Units whose row this commit wrote, to be checked against their ledger. */
   readonly unitsWritten = new Set<string>();
   /** Serials archived by this commit; their events' removal is not a ledger edit. */
@@ -135,6 +141,20 @@ export class WriteContext {
    * invoices come after deposits in the collection order.
    */
   readonly later: (() => Promise<void>)[] = [];
+  /**
+   * Activity lines an adapter wrote itself, in place of the generic ones for
+   * the rows in `quietActivity` (`collection\u0000key`). A deleted
+   * reconciliation (2026-10-27) is ONE line naming what it was and how many
+   * rows went with it — not one for it and one per statement line.
+   */
+  readonly ownActivity: {
+    entity: string;
+    entityId: string;
+    action: "CREATE" | "UPDATE" | "DELETE";
+    before?: string | null;
+    after?: string | null;
+  }[] = [];
+  readonly quietActivity = new Set<string>();
 
   private readonly methodIds = new Map<string, string>();
   private readonly categoryIds = new Map<string, string>();
@@ -302,14 +322,30 @@ const LOCKABLE = new Set([
   "Settlement",
   "UnitEvent",
   "UnitNote",
-  "StockIn",
   "StockAdjustment",
   "StockMove",
   "Expense",
   "ManualIncome",
-  "PaymentLog",
-  "SettlementLog",
+  // Reconciliation (2026-10-27): rewritten as it is reopened, and the lines'
+  // status and pairings.
+  "Reconciliation",
+  "BankStatementLine",
 ]);
+
+/**
+ * The lock of a collection whose rows are only ever INSERTED — a log line, a
+ * stock-in record (2026-10-21).
+ *
+ * There is nothing to lock: a new row has no row yet, and the adapter refuses
+ * an edit or a removal outright. Taking one anyway is what broke them in
+ * production. `SELECT … FOR UPDATE` needs UPDATE on at least one column, and
+ * `nusantara_app` holds INSERT and SELECT only on these tables, as an
+ * append-only log should — so every Receive on Pending Payment, every payment
+ * correction's log line and every stock-in failed with "permission denied",
+ * while the tests, which commit as the owner, passed. Concurrent commits are
+ * still ordered by the store lock every commit takes first.
+ */
+export async function noRowLock(): Promise<void> {}
 
 /** `SELECT … FOR UPDATE` on the rows behind these keys, in key order. */
 export async function lockRows(
@@ -586,4 +622,24 @@ export function defined<T extends Record<string, unknown>>(value: T): T {
     if (v !== undefined) out[k] = v;
   }
   return out as T;
+}
+
+/**
+ * The instant the book is closed until — always null since 2026-10-27.
+ *
+ * > *"Remove the close book button in the transaction history, it will be the
+ * > reconcile basically."* (owner, 2026-10-27)
+ *
+ * The book close is retired, button AND lock: without the button's Reopen, a
+ * month already closed in the shop would stay locked for ever.
+ * Reconciliation flags a reconciled period that is later edited instead of
+ * refusing the edit. This is the ONE place the server stops honouring
+ * `AppSetting` `finance.booksClosedAt` — the row is still projected (the
+ * settings singleton) so a shop that closed a month still loads, and every
+ * check that asked this (a sale's deletion, an adjustment's or a service
+ * charge's removal) now passes. The browser's twin is `booksClosedAt` in
+ * apps/web/src/lib/bookClose.ts.
+ */
+export function booksClosedUntil(): Date | null {
+  return null;
 }

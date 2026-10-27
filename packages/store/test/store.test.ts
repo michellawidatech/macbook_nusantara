@@ -303,3 +303,168 @@ describe("a customer is a name or a phone number (owner ask 2026-09-24)", () => 
     ).toThrow();
   });
 });
+
+describe("service charges and supplier-return money (2026-10-26)", () => {
+  const visit = {
+    id: "svc-1",
+    serial: "SC02AAA11111",
+    fromLocationId: "wh-1",
+    openedAt: "2026-10-26T03:00:00.000Z",
+    arrivedAt: "2026-10-26T03:00:00.000Z",
+    fees: [
+      {
+        id: "sf-1",
+        kind: "LABOUR",
+        label: "Keyboard",
+        amount: 800_000,
+        at: "2026-10-26T03:00:00.000Z",
+        staff: "Dimas",
+      },
+      {
+        id: "sf-2",
+        kind: "SHIPPING",
+        amount: 25_000,
+        at: "2026-10-26T03:05:00.000Z",
+        staff: "Dimas",
+      },
+    ],
+    raisedBy: "QC",
+    staff: "Dimas",
+  };
+
+  it("carries an expense's service charge, an income's and a payment's return", () => {
+    const expense = {
+      id: "exp-1",
+      kind: "UNIT",
+      amount: 800_000,
+      date: "2026-10-26",
+      method: "TRANSFER",
+      serviceFeeId: "sf-1",
+    };
+    expect(decodeRow("expenses", encodeRow("expenses", expense))).toEqual(
+      expense,
+    );
+    const income = {
+      id: "inc-1",
+      reason: "REFUND",
+      amount: 1_000_000,
+      date: "2026-10-26",
+      method: "TUNAI",
+      returnId: "ret-1",
+    };
+    expect(decodeRow("incomes", encodeRow("incomes", income))).toEqual(income);
+    const po = {
+      id: "po-1",
+      code: "PI-2026/10-000001",
+      supplierId: "sup-1",
+      invoice: "",
+      date: "2026-10-26",
+      locationId: "wh-1",
+      items: [],
+      payments: [
+        {
+          id: "pp-1",
+          method: "RETUR_SUPPLIER",
+          amount: 4_000_000,
+          at: "2026-10-26T03:00:00.000Z",
+          inBalance: false,
+          returnId: "ret-1",
+        },
+      ],
+      fees: [],
+      discount: 0,
+      status: "RECEIVED",
+    };
+    expect(decodeRow("pos", encodeRow("pos", po))).toEqual(po);
+  });
+
+  it("diffs a charge taken off a visit as a change, and a whole visit as a removal", () => {
+    const less = { ...visit, fees: [visit.fees[1]!] };
+    const one = diffStore({ services: [visit] }, { services: [less] });
+    expect(one.collections.services!.rows).toEqual([
+      { key: "svc-1", base: visit, next: less },
+    ]);
+    const gone = diffStore({ services: [visit] }, { services: [] });
+    expect(gone.collections.services!.rows).toEqual([
+      { key: "svc-1", base: visit },
+    ]);
+    // Both survive the wire.
+    expect(encodeChangeset(one).collections.services!.rows[0]!.next).toEqual(
+      encodeRow("services", less),
+    );
+  });
+});
+
+describe("a POS entry set aside on a month (owner-approved 2026-10-27)", () => {
+  const month = (asides: Record<string, unknown>[]) => ({
+    id: "rc-1",
+    kind: "MONTHLY",
+    pot: "BANK",
+    periodStart: "2026-09-01",
+    periodEnd: "2026-09-30",
+    posBalance: 1_000_000,
+    actualBalance: 1_000_000,
+    status: "OPEN",
+    staff: "Dina",
+    createdAt: "2026-10-27T03:00:00.000Z",
+    updatedAt: "2026-10-27T03:00:00.000Z",
+    edits: [],
+    asides,
+  });
+  const aside = (extra: Record<string, unknown> = {}) => ({
+    id: "ra-1",
+    paymentId: "pay-1",
+    note: "Paid into the owner's account",
+    staff: "Dina",
+    at: "2026-10-27T03:00:00.000Z",
+    ...extra,
+  });
+
+  it("carries one, active or withdrawn, nested on the reconciliation", () => {
+    const row = month([
+      aside(),
+      aside({ id: "ra-2", withdrawnAt: "2026-10-27T04:00:00.000Z" }),
+    ]);
+    expect(
+      decodeRow("reconciliations", encodeRow("reconciliations", row)),
+    ).toEqual(row);
+  });
+
+  it("refuses a blank note, two money rows or none", () => {
+    expect(() =>
+      encodeRow("reconciliations", month([aside({ note: "  " })])),
+    ).toThrow();
+    expect(() =>
+      encodeRow("reconciliations", month([aside({ expenseId: "e-1" })])),
+    ).toThrow();
+    expect(() =>
+      encodeRow("reconciliations", month([aside({ paymentId: undefined })])),
+    ).toThrow();
+  });
+
+  it("diffs a deleted month as the reconciliation and its lines removed (2026-10-27)", () => {
+    const rec = month([aside()]);
+    const line = {
+      id: "sl-1",
+      reconciliationId: "rc-1",
+      lineNo: 1,
+      date: "2026-09-02",
+      description: "TRSF CR",
+      amount: 1_000_000,
+      status: "MATCHED",
+      matches: [{ id: "sm-1", paymentId: "pay-1", reason: "EXACT" }],
+    };
+    const gone = encodeChangeset(
+      diffStore(
+        { reconciliations: [rec], statementLines: [line] },
+        { reconciliations: [], statementLines: [] },
+      ),
+    );
+    expect(gone.collections.reconciliations!.rows).toEqual([
+      { key: "rc-1", base: encodeRow("reconciliations", rec) },
+    ]);
+    expect(gone.collections.statementLines!.rows).toEqual([
+      { key: "sl-1", base: encodeRow("statementLines", line) },
+    ]);
+  });
+});

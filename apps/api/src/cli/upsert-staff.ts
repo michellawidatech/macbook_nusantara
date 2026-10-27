@@ -16,7 +16,10 @@
  * Or `--initial` instead of a password on stdin: the shop's initial password
  * (`INITIAL_PASSWORD`), which the person must replace at their next sign-in.
  *
- *   pnpm --filter @nusantara/api staff --username ersen --name Ersen --role OWNER --initial
+ *   pnpm --filter @nusantara/api staff --username ersen --name Ersen --role OWNER --initial --finance
+ *
+ * `--finance` opens Financial & Report to the account (2026-10-16). It is not
+ * implied by OWNER, and leaving it off an existing account switches it off.
  *
  * Either way every session of the account ends: whoever was signed in as it
  * before this ran is signed in with a password that no longer exists.
@@ -32,23 +35,30 @@ interface Args {
   readonly name: string;
   readonly role: "OWNER" | "STAFF";
   readonly canApprove: boolean;
+  /** May read the shop's money — Financial & Report. */
+  readonly canViewFinance: boolean;
   /** Use the shop's initial password and require a change at next sign-in. */
   readonly initial: boolean;
 }
 
-const USAGE = `usage: staff --username <name> [--name <full name>] [--role OWNER|STAFF] [--approve] [--initial]
+const USAGE = `usage: staff --username <name> [--name <full name>] [--role OWNER|STAFF] [--approve] [--finance] [--initial]
        the password is read from stdin, unless --initial gives the account the
        shop's initial password (changed at the next sign-in)`;
 
 function parseArgs(argv: readonly string[]): Args {
   const flags = new Map<string, string>();
   let canApprove = false;
+  let canViewFinance = false;
   let initial = false;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i] ?? "";
     if (arg === "--approve") {
       canApprove = true;
+      continue;
+    }
+    if (arg === "--finance") {
+      canViewFinance = true;
       continue;
     }
     if (arg === "--initial") {
@@ -82,6 +92,7 @@ function parseArgs(argv: readonly string[]): Args {
     // An owner who cannot approve is a contradiction in 03 §Settings; every
     // approval gate there is "owner or canApprove".
     canApprove: canApprove || role === "OWNER",
+    canViewFinance,
     initial,
   };
 }
@@ -140,6 +151,7 @@ async function main(): Promise<void> {
               name: args.name,
               role: args.role,
               canApprove: args.canApprove,
+              canViewFinance: args.canViewFinance,
               active: true,
               passwordHash,
               mustChangePassword: args.initial,
@@ -152,6 +164,7 @@ async function main(): Promise<void> {
               name: args.name,
               role: args.role,
               canApprove: args.canApprove,
+              canViewFinance: args.canViewFinance,
               active: true,
               passwordHash,
               mustChangePassword: args.initial,
@@ -183,7 +196,7 @@ async function main(): Promise<void> {
   });
 
   console.log(
-    `${existing === null ? "dibuat" : "diperbarui"}: ${staff.username} (${staff.id}) role=${staff.role} canApprove=${String(staff.canApprove)}` +
+    `${existing === null ? "dibuat" : "diperbarui"}: ${staff.username} (${staff.id}) role=${staff.role} canApprove=${String(staff.canApprove)} canViewFinance=${String(staff.canViewFinance)}` +
       (args.initial
         ? ` — kata sandi awal "${INITIAL_PASSWORD}", wajib diganti saat masuk`
         : ""),

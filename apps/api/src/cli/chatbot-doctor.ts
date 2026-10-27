@@ -29,8 +29,13 @@
  * what it is, is not.
  */
 
-import { db, disconnect, type PrismaClient } from "@nusantara/db";
-import { agentCapabilities } from "@nusantara/agent";
+import {
+  OUTBOX_STUCK_MS,
+  db,
+  disconnect,
+  type PrismaClient,
+} from "@nusantara/db";
+import { BOT_STALE_MS, agentCapabilities } from "@nusantara/agent";
 
 type Level = "ok" | "warn" | "fail";
 
@@ -132,6 +137,40 @@ export async function runDoctor(
       ts: { lt: new Date(now.getTime() - 600_000) },
     },
   });
+  // The oldest one, so a stuck bot shows at a glance (2026-10-27). Past
+  // BOT_STALE_MS the worker's watchdog should already have sent the holding
+  // line — unless the chat is the bot-off or a colleague's, which the line
+  // says, or the worker is not running at all.
+  const oldest = await prisma.waMessage.findFirst({
+    where: { direction: "IN", status: "BARU" },
+    orderBy: { ts: "asc" },
+    select: { from: true, ts: true },
+  });
+  if (oldest) {
+    const ageMs = now.getTime() - oldest.ts.getTime();
+    const minutes = Math.floor(ageMs / 60_000);
+    const memory = await prisma.waThreadMemory.findUnique({
+      where: { from: oldest.from },
+      select: { autoReply: true },
+    });
+    const botOff = memory?.autoReply === false;
+    out.push(
+      ageMs < BOT_STALE_MS
+        ? {
+            level: "ok",
+            title: `Oldest unanswered customer message: ${minutes} min old`,
+          }
+        : {
+            level: botOff ? "warn" : ageMs >= 600_000 ? "fail" : "warn",
+            title: `Oldest unanswered customer message: ${minutes} min old (…${oldest.from.slice(-4)}${botOff ? ", bot switched off for that chat" : ""})`,
+            fix: botOff
+              ? "A colleague has to answer it — the bot is off for that chat on /chat."
+              : "The worker should have answered or sent the holding line by now. Is it running?\n" +
+                "      sudo launchctl print system/local.nusantara.worker | head -5\n" +
+                "      grep -E 'worker.draft.(stale|gave_up|ai_failed|failed)|worker.pass.failed' /opt/nusantara/logs/worker.log | tail",
+          },
+    );
+  }
   if (stale > 0) {
     out.push({
       level: "fail",
@@ -176,27 +215,47 @@ export async function runDoctor(
 
   // --- 6. what the bot is allowed to do ------------------------------------
   const can = agentCapabilities(env);
+  const mode = env["AGENT_CAPABILITIES"]?.trim().toLowerCase();
   out.push({
     level: "ok",
-    title: can.stock
-      ? "AGENT_CAPABILITIES=live — the bot reads stock, sends unit photos and may book a hold"
-      : "AGENT_CAPABILITIES is not 'live' — the bot answers from the approved sheet and hands the rest over",
+    title: !can.stock
+      ? "AGENT_CAPABILITIES=parallel — the bot answers from the approved sheet and hands every unit question over"
+      : can.reserve
+        ? "AGENT_CAPABILITIES=live — unless a switch on /chat says otherwise, the bot reads stock and prices, sends unit photos and may book a hold"
+        : `${mode ? `AGENT_CAPABILITIES=${mode}` : "AGENT_CAPABILITIES unset"} — the POS is the source of truth: unless a switch on /chat says otherwise, the bot reads stock and prices and sends unit photos; bookings stay off`,
     ...(can.stock
       ? {}
       : {
-          fix: "Set AGENT_CAPABILITIES='live' in /opt/nusantara/etc/worker.env once this database holds the shop's real stock.",
+          fix: "Unset AGENT_CAPABILITIES in /opt/nusantara/etc/worker.env once this database holds the shop's real stock.",
         }),
   });
 
   // --- 7. can the bot speak ------------------------------------------------
+  // Baileys mode (2026-10-22) sends through apps/wa-gateway and has no token;
+  // whether the device is LINKED is on /chat → Settings, not in this file.
+  const baileys = env["WHATSAPP_TRANSPORT"]?.trim().toLowerCase() === "baileys";
   out.push(
-    isSet(env["WHATSAPP_TOKEN"]) && isSet(env["PHONE_NUMBER_ID"])
-      ? { level: "ok", title: "A WhatsApp send credential is set" }
-      : {
-          level: "fail",
-          title: "No WhatsApp credential — replies queue and never send",
-          fix: "Set WHATSAPP_TOKEN and PHONE_NUMBER_ID in /opt/nusantara/etc/worker.env.",
-        },
+    baileys
+      ? isSet(env["WA_GATEWAY_URL"]) && isSet(env["WA_GATEWAY_SECRET"])
+        ? {
+            level: "ok",
+            title:
+              "WHATSAPP_TRANSPORT=baileys — replies go through the WhatsApp gateway",
+            fix: "Check the device is linked: Chatbot → Settings → WhatsApp connection.",
+          }
+        : {
+            level: "fail",
+            title:
+              "WHATSAPP_TRANSPORT=baileys without the gateway's URL and secret — replies queue and never send",
+            fix: "Set WA_GATEWAY_URL and WA_GATEWAY_SECRET in /opt/nusantara/etc/worker.env (docs/whatsapp-baileys.md).",
+          }
+      : isSet(env["WHATSAPP_TOKEN"]) && isSet(env["PHONE_NUMBER_ID"])
+        ? { level: "ok", title: "A WhatsApp send credential is set" }
+        : {
+            level: "fail",
+            title: "No WhatsApp credential — replies queue and never send",
+            fix: "Set WHATSAPP_TOKEN and PHONE_NUMBER_ID in /opt/nusantara/etc/worker.env.",
+          },
   );
 
   const pending = await prisma.outbox.count({ where: { status: "PENDING" } });
@@ -206,6 +265,36 @@ export async function runDoctor(
       level: "warn",
       title: `${failedRows} outbox row(s) have exhausted their retries`,
       fix: 'Read their lastError: select kind, "lastError" from "Outbox" where status = \'FAILED\' order by "createdAt" desc limit 5;',
+    });
+  }
+  // A row claimed (SENDING) and never finished — the claim stamps
+  // "nextAttemptAt", and the worker requeues one older than
+  // OUTBOX_STUCK_MS by itself (2026-10-27). One still here is a worker that
+  // is not running; a PENDING row long overdue is the same, or no credential.
+  const stuck = await prisma.outbox.count({
+    where: {
+      status: "SENDING",
+      nextAttemptAt: { lt: new Date(now.getTime() - OUTBOX_STUCK_MS) },
+    },
+  });
+  if (stuck > 0) {
+    out.push({
+      level: "fail",
+      title: `${stuck} outbox row(s) were claimed and never finished`,
+      fix: "A running worker puts these back by itself within a tick — so the worker is not running. Check local.nusantara.worker.",
+    });
+  }
+  const overdue = await prisma.outbox.count({
+    where: {
+      status: "PENDING",
+      nextAttemptAt: { lt: new Date(now.getTime() - OUTBOX_STUCK_MS) },
+    },
+  });
+  if (overdue > 0) {
+    out.push({
+      level: "warn",
+      title: `${overdue} outbox row(s) have been due for over five minutes and not sent`,
+      fix: "The worker is not running, or it has no WhatsApp credential (see above).",
     });
   }
   if (pending > 20) {

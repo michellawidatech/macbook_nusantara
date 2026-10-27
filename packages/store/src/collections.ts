@@ -85,9 +85,17 @@ export const COLLECTIONS = {
   incomes: spec("id"),
   paymentLog: spec("id"),
   settlementLog: spec("id"),
+  // Reconciliation (2026-10-27): after every money row it names — payments
+  // (on orders, invoices, customers), deposits, expenses and incomes — and
+  // the statement's lines after the month they belong to.
+  reconciliations: spec("id"),
+  statementLines: spec("id"),
   chats: spec("phone", false, false),
   corrections: spec("id", false, false),
   personas: spec("id", false, false),
+  // The bot's reservation requests (2026-10-27): approved or rejected through
+  // `/api/reservations/requests`, never through a commit.
+  reservationRequests: spec("id", false, false),
 } as const satisfies Record<string, CollectionSpec>;
 
 export type CollectionName = keyof typeof COLLECTIONS;
@@ -119,3 +127,25 @@ export function isCollectionName(name: string): name is CollectionName {
 export function isSingletonName(name: string): name is SingletonName {
   return Object.prototype.hasOwnProperty.call(SINGLETONS, name);
 }
+
+/**
+ * The money only Financial & Report reads (owner ask 2026-10-16: "only Ersen
+ * and Dina"). For an account without `Staff.canViewFinance` the API projects
+ * these as empty lists, leaves them out of every change it sends, and accepts
+ * nothing for them but a NEW row — a refund written by the return desk, a
+ * payment-log line written by the customer drawer — because a person who
+ * cannot read a row cannot have based an edit on it.
+ *
+ * Sale payments are NOT here: they live on the order, and the till and the
+ * return desk cannot work without them.
+ */
+export const FINANCE_COLLECTIONS: ReadonlySet<CollectionName> =
+  new Set<CollectionName>([
+    "expenses",
+    "incomes",
+    "settlements",
+    "settlementLog",
+    "paymentLog",
+    "reconciliations",
+    "statementLines",
+  ]);

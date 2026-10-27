@@ -144,12 +144,14 @@ export interface FixtureLocation {
  *
  * The ids stay `wh-1`…`wh-4` because the opname scope tests name them and
  * because a warehouse id is printed on nothing — the NAMES are what changed,
- * from "Warehouse 1" to a place a person could walk to.
+ * from "Warehouse 1" to a place a person could walk to. The codes are the
+ * two-digit numbers the real shop has used for six years (01–04 in B2Soft),
+ * printed beside the name on every screen since 2026-10-08.
  */
 export const LOCATIONS: readonly FixtureLocation[] = [
   {
     id: "wh-1",
-    code: "TOKO",
+    code: "01",
     name: "Toko Kelapa Gading",
     kind: "TOKO",
     address: "Jl. Boulevard Raya Blok C2, Jakarta Utara",
@@ -157,7 +159,7 @@ export const LOCATIONS: readonly FixtureLocation[] = [
   },
   {
     id: "wh-2",
-    code: "GDG-SRP",
+    code: "02",
     name: "Gudang Serpong",
     kind: "GUDANG",
     address: "Jl. Raya Serpong KM 8, Tangerang Selatan",
@@ -165,7 +167,7 @@ export const LOCATIONS: readonly FixtureLocation[] = [
   },
   {
     id: "wh-3",
-    code: "GDG-BDG",
+    code: "03",
     name: "Gudang Bandung",
     kind: "GUDANG",
     address: "Jl. Soekarno Hatta 210, Bandung",
@@ -173,7 +175,7 @@ export const LOCATIONS: readonly FixtureLocation[] = [
   },
   {
     id: "wh-4",
-    code: "SERVIS",
+    code: "04",
     name: "Meja Servis",
     kind: "SERVIS",
     sortOrder: 4,
@@ -325,6 +327,9 @@ export const PAYMENT_METHOD_CODES = [
   "MARKETPLACE",
   // Settles a debt and moves neither pot (owner ask 2026-09-23).
   "TRANSFER_LUAR",
+  // A supplier return's credit against its invoice (owner 2026-10-26); no
+  // pot, offered by no picker.
+  "RETUR_SUPPLIER",
 ] as const;
 
 export interface FixtureCustomer {

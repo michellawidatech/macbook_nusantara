@@ -17,6 +17,8 @@ import {
   BookingTooFarAheadError,
   DuplicateHoldError,
   HoldAlreadySettledError,
+  RequestNotFoundError,
+  RequestSettledError,
   HoldNotFoundError,
   OutsideStoreHoursError,
   Prisma,
@@ -38,6 +40,8 @@ export type ErrorCode =
   | "TIDAK_DITEMUKAN"
   | "KONFLIK"
   | "TERLALU_BANYAK"
+  /** The WhatsApp gateway (apps/wa-gateway) is not configured or not up. */
+  | "GATEWAY_MATI"
   | "KESALAHAN_SERVER";
 
 export class ApiError extends Error {
@@ -107,6 +111,10 @@ export function mapServiceError(err: unknown): unknown {
     return new ApiError(404, "TIDAK_DITEMUKAN", err.message);
   if (err instanceof HoldNotFoundError)
     return new ApiError(404, "TIDAK_DITEMUKAN", err.message);
+  if (err instanceof RequestNotFoundError)
+    return new ApiError(404, "TIDAK_DITEMUKAN", err.message);
+  if (err instanceof RequestSettledError)
+    return new ApiError(409, "KONFLIK", err.message);
 
   if (err instanceof UnitNotAvailableError)
     return new ApiError(409, "KONFLIK", err.message);

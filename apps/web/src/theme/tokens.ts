@@ -104,8 +104,6 @@ export const LAYOUT = {
   siderWidth: 224,
   /** 48px collapsed sider — icons only, matching Pro. */
   siderCollapsedWidth: 48,
-  /** Width past which content stops stretching and starts centring. */
-  contentMaxWidth: 1600,
   /** The sticky submit bar on long forms. */
   footerToolbarHeight: 64,
   /**
@@ -122,7 +120,7 @@ export const LAYOUT = {
    *
    * Owner decision 2026-08-26: "make all forms centered, don't stick to left".
    * Every form on this app was capped at some width between 420 and 720 and
-   * then left flush against the left edge of a 1600px column, so on a shop
+   * then left flush against the left edge of the content column, so on a shop
    * laptop a settings panel was a narrow strip in the corner with two thirds of
    * the screen empty beside it.
    *
@@ -466,6 +464,15 @@ export const NAV = {
   panelRadius: 16,
   /** Breathing room between the panels and the column's edges. */
   gutter: 10,
+  /*
+   * A count on a nav row — units waiting for QC on Inbound & QC
+   * (2026-10-26). Gold with the mark's green on it, because the row it sits
+   * on is either the dark gradient or the white selected pill: antd's red
+   * reads as an error on both, and a white badge vanishes into the pill. The
+   * text is 6:1 on the gold, which is what has to be read.
+   */
+  badgeBg: "#ffd666",
+  badgeText: BRAND_DEEP,
 } as const;
 
 /**

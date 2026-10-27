@@ -31,9 +31,15 @@ import { z } from "zod";
 import type { PrismaClient } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import { ApiError } from "../errors.js";
+import { registerChatV2 } from "./chatV2.js";
 import {
   CAPABILITY_SETTING_KEYS,
+  MAX_TESTERS,
+  TESTERS_SETTING_KEY,
   agentCapabilities,
+  formatTesters,
+  loadTesters,
+  toWaId,
   effectiveCapabilities,
   loadCapabilities,
   type AgentCapabilities,
@@ -129,6 +135,16 @@ const capabilitiesBody = z
   .partial()
   .strict();
 
+/**
+ * The numbers `/new` is honoured from (owner ask 2026-10-14). Written the way
+ * somebody types a phone number; stored as wa_ids. A number that is not one
+ * is refused rather than dropped — a tester who was silently left off the
+ * list would type `/new` and get an answer to it.
+ */
+const testersBody = z
+  .object({ numbers: z.array(z.string().max(40)).max(MAX_TESTERS) })
+  .strict();
+
 /** What the page shows: as set, and what that actually allows. */
 const capabilitiesJson = (set: AgentCapabilities) => ({
   set,
@@ -157,6 +173,57 @@ export function chatRouter({
           await loadCapabilities(db, agentCapabilities(process.env)),
         ),
       );
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * GET /api/chat/testers — the numbers that may type `/new` to start their
+   * conversation over (packages/agent/src/reset.ts). Staff may read it: who
+   * can make the bot forget a thread is worth knowing at the desk.
+   */
+  router.get("/testers", async (_req, res, next) => {
+    try {
+      res.json({ numbers: await loadTesters(db) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * PUT /api/chat/testers — replace the list. The owner's call, like the
+   * switches: a reset closes a colleague's open tasks, so who may type one
+   * is a decision about which chats can leave a colleague's desk by themselves.
+   */
+  router.put("/testers", ownerOnly, async (req, res, next) => {
+    try {
+      const parsed = testersBody.safeParse(req.body);
+      if (!parsed.success)
+        throw new ApiError(400, "VALIDASI", "Daftar nomor tidak valid.");
+      const ids = parsed.data.numbers.map((n) => toWaId(n));
+      if (ids.some((id) => id === null))
+        throw new ApiError(
+          400,
+          "VALIDASI",
+          "Ada nomor yang bukan nomor WhatsApp.",
+        );
+      const value = formatTesters(ids as string[]);
+      const now = new Date();
+      await db.appSetting.upsert({
+        where: { key: TESTERS_SETTING_KEY },
+        update: { value, updatedAt: now },
+        create: { key: TESTERS_SETTING_KEY, value, updatedAt: now },
+      });
+      const numbers = await loadTesters(db);
+      logger.info(
+        {
+          evt: "chat.testers.changed",
+          ctx: { staffId: req.staff?.id, count: numbers.length },
+        },
+        "the chatbot's tester numbers changed",
+      );
+      res.json({ numbers });
     } catch (err) {
       next(err);
     }
@@ -287,6 +354,8 @@ export function chatRouter({
       let failure: unknown;
       const result = await converse({
         client,
+        // CHATBOT_MODEL: Draft writes with the model the worker runs.
+        ...(anthropic.model ? { model: anthropic.model } : {}),
         db,
         // No `reserve` capability, deliberately. Pressing Draft should propose
         // a sentence for a staff member to send, not book a reservation and
@@ -563,6 +632,8 @@ export function chatRouter({
       next(err);
     }
   });
+
+  registerChatV2(router, { db, logger, anthropic, ownerOnly });
 
   return router;
 }

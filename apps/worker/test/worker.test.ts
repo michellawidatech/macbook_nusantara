@@ -28,6 +28,20 @@ import { draftPass } from "../src/draft.js";
 import { sendPass } from "../src/send.js";
 import { loadWorkerConfig } from "../src/config.js";
 
+/**
+ * These tests are about the single AI agent (pipeline v1). The default is the
+ * rules-first bot since 2026-10-15, so the setting is pinned here.
+ */
+async function pinPipelineV1(client: {
+  appSetting: PrismaClient["appSetting"];
+}) {
+  await client.appSetting.upsert({
+    where: { key: "chatbot.pipeline" },
+    update: { value: "v1" },
+    create: { key: "chatbot.pipeline", value: "v1", updatedAt: new Date() },
+  });
+}
+
 const URL =
   process.env["TEST_DATABASE_URL"] ??
   "postgresql://nusantara@localhost:5432/nusantara_pos_test";
@@ -52,14 +66,22 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await db.appSetting.deleteMany({ where: { key: "chatbot.pipeline" } });
   await db.$disconnect();
 });
 
 beforeEach(async () => {
+  await pinPipelineV1(db);
   await db.outbox.deleteMany({});
   // ChatAction points at WaMessage, Unit and Customer (2026-09-29).
   await db.chatAction.deleteMany({});
+  await db.customerProfileFact.deleteMany({});
   await db.customerProfile.deleteMany({});
+  // AgentRun points at the message it answered (chatbot v2).
+  await db.agentRunStep.deleteMany({});
+  await db.agentRun.deleteMany({});
+  // Chunks first: their message links are RESTRICT (20261022120000).
+  await db.chatMemoryChunk.deleteMany({});
   await db.waMessage.deleteMany({});
 });
 
@@ -109,8 +131,10 @@ describe("loadWorkerConfig", () => {
 });
 
 describe("draftPass", () => {
-  it("is dormant with no Anthropic credential, and leaves rows at BARU", async () => {
-    const msg = await inbound({
+  it("answers by the rules with no Anthropic credential, whatever was stored", async () => {
+    // One agent, and nobody chooses (owner, 2026-10-21): the stored "v1" is
+    // ignored, and with no key the rules answer rather than nobody.
+    await inbound({
       id: "wamid.D1",
       from: "628111000111",
       text: "halo",
@@ -125,13 +149,11 @@ describe("draftPass", () => {
       maxDraftsPerTick: 5,
     });
 
-    expect(result).toEqual({ drafted: 0, escalated: 0, dormant: true });
-    // The backlog must survive: configuring a key later should answer it, not
-    // find it already marked as somebody else's problem.
-    const after = await db.waMessage.findUniqueOrThrow({
-      where: { id: msg.id },
+    expect(result).toMatchObject({ drafted: 1, dormant: false });
+    const run = await db.agentRun.findFirstOrThrow({
+      where: { from: "628111000111" },
     });
-    expect(after.status).toBe("BARU");
+    expect(run.pipeline).toBe("rules");
   });
 
   it("hands a thread to a person once the 24-hour window has closed", async () => {
@@ -231,6 +253,8 @@ describe("sendPass", () => {
     const row = await db.outbox.findFirstOrThrow({});
     expect(row.status).toBe("SENT");
     expect(row.sentAt).not.toBeNull();
+    // Kept, so the inbox can edit or unsend it later (2026-10-23).
+    expect(row.providerMessageId).toBe("wamid.OUT");
   });
 
   it("retries a Graph error carried by a 200 instead of marking it sent", async () => {

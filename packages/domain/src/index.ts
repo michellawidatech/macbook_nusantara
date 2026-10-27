@@ -3,9 +3,14 @@
 
 export * from "./unitState.js";
 export * from "./reservationState.js";
+export * from "./reservationRequest.js";
 export * from "./money.js";
 export * from "./fees.js";
 export * from "./checks.js";
 export * from "./productCode.js";
+export * from "./catalogIdentity.js";
 export * from "./credentials.js";
 export * from "./qaText.js";
+export * from "./qaSheet.js";
+export * from "./personName.js";
+export * from "./chatSummary.js";

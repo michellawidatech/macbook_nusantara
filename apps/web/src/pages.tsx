@@ -29,7 +29,8 @@ import { DiscountFormPage } from "./routes/discounts/DiscountFormPage.js";
 import { DiscountsPage } from "./routes/discounts/DiscountsPage.js";
 import { IncomeExpensePage } from "./routes/finance/CashflowPage.js";
 import { TransactionsPage } from "./routes/finance/TransactionsPage.js";
-import { ReceivablesPage } from "./routes/finance/ReceivablesPage.js";
+import { ProfitLossPage } from "./routes/finance/ProfitLossPage.js";
+import { ReconciliationPage } from "./routes/finance/ReconciliationPage.js";
 import {
   PayablePage,
   ReceivablePage,
@@ -60,9 +61,11 @@ export const PAGE_ROUTES: readonly PageRoute[] = [
   { path: "/products", element: <ProductsPage /> },
   { path: "/discounts", element: <DiscountsPage /> },
   { path: "/discounts/new", element: <DiscountFormPage /> },
+  { path: "/discounts/:discountId/edit", element: <DiscountFormPage /> },
   { path: "/finance/income-expense", element: <IncomeExpensePage /> },
+  { path: "/finance/profit-loss", element: <ProfitLossPage /> },
+  { path: "/finance/reconciliation", element: <ReconciliationPage /> },
   { path: "/finance/transactions", element: <TransactionsPage /> },
-  { path: "/finance/receivables", element: <ReceivablesPage /> },
   { path: "/finance/receivable", element: <ReceivablePage /> },
   { path: "/finance/payable", element: <PayablePage /> },
   { path: "/chat", element: <ChatbotPage /> },

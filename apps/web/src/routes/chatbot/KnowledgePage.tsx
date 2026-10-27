@@ -24,7 +24,12 @@ import {
   Switch,
   Tooltip,
 } from "antd";
-import { EditOutlined, ImportOutlined, PlusOutlined } from "@ant-design/icons";
+import {
+  DownloadOutlined,
+  EditOutlined,
+  ImportOutlined,
+  PlusOutlined,
+} from "@ant-design/icons";
 import { ProTable } from "../../components/ProTable";
 import { LongText } from "../../components/LongText";
 import { fmtDate } from "../../lib/format.js";
@@ -32,6 +37,9 @@ import { useDb, mutate, nextId } from "../../mock/store.js";
 import { useTranslation } from "react-i18next";
 import type { Knowledge } from "../../mock/seed.js";
 import { KnowledgeImport } from "./KnowledgeImport.js";
+import { knowledgeWorkbook } from "../../lib/knowledgeSheet.js";
+import { downloadBytes } from "../../lib/tableExport.js";
+import { XLSX_MIME, xlsxFile } from "../../lib/xlsxWrite.js";
 import { COLUMN } from "../../theme/tokens";
 
 export function KnowledgePanel() {
@@ -86,11 +94,25 @@ export function KnowledgePanel() {
         )}
         extra={
           <Flex gap={8} wrap>
+            {/* The file an import reads back, so the round trip is download,
+                edit, upload — and with nothing saved yet it is the template. */}
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={() =>
+                downloadBytes(
+                  xlsxFile(knowledgeWorkbook(db.knowledge)),
+                  XLSX_MIME,
+                  `knowledge-${new Date().toISOString().slice(0, 10)}.xlsx`,
+                )
+              }
+            >
+              {t("knowledge.download", "Download .xlsx")}
+            </Button>
             <Button
               icon={<ImportOutlined />}
               onClick={() => setImporting(true)}
             >
-              {t("knowledge.import", "Import from a document")}
+              {t("knowledge.import", "Import from a file")}
             </Button>
             <Button
               type="primary"

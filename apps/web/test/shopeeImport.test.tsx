@@ -15,7 +15,7 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ReceivablesPage } from "../src/routes/finance/ReceivablesPage.js";
+import { TransactionsPage } from "../src/routes/finance/TransactionsPage.js";
 import { settlementTotals } from "../src/lib/marketplace.js";
 import { paymentsOf } from "../src/lib/salePayments.js";
 import { getDb, mutate } from "../src/mock/store.js";
@@ -126,7 +126,7 @@ async function upload() {
   render(
     <AntdApp>
       <MemoryRouter>
-        <ReceivablesPage />
+        <TransactionsPage />
       </MemoryRouter>
     </AntdApp>,
   );

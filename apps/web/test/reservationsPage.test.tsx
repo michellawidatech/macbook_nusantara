@@ -30,6 +30,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ReservationsPage } from "../src/routes/reservations/ReservationsPage.js";
 import { getDb, mutate } from "../src/mock/store.js";
+import { reprojectHolds } from "../src/lib/reservations.js";
 import type { MockDb } from "../src/mock/seed.js";
 
 // Same budget and the same reason as inboundQcPage: this renders a whole page
@@ -41,6 +42,26 @@ vi.setConfig({ testTimeout: 60_000 });
 const HOLD = "rsv-tst-1";
 const CODE = "RV-2026/09-000771";
 const SERIALS = ["SC02RS1111111", "SC02RS2222222"] as const;
+
+/** A visit the bot booked (2026-10-27): a time, a customer, no units. */
+const VISIT = "rsv-tst-visit";
+const VISIT_CODE = "RV-2026/10-000881";
+
+function makeVisit() {
+  mutate((d) => {
+    d.reservations.push({
+      id: VISIT,
+      code: VISIT_CODE,
+      customerId: d.customers[0]!.id,
+      when: "2026-10-31T07:00:00.000Z",
+      note: "Janji datang — lihat MacBook Air M2 8/256",
+      items: [],
+      status: "ACTIVE",
+    });
+  });
+}
+
+const visitRow = () => getDb().reservations.find((r) => r.id === VISIT);
 
 /** The store, read through the one door it has. */
 function snapshot(): MockDb {
@@ -155,7 +176,9 @@ beforeEach(() => {
     const mine = new Set<string>(SERIALS);
     d.units = d.units.filter((u) => !mine.has(u.serial));
     d.events = d.events.filter((e) => !mine.has(e.serial));
-    d.reservations = d.reservations.filter((r) => r.id !== HOLD);
+    d.reservations = d.reservations.filter(
+      (r) => r.id !== HOLD && r.id !== VISIT,
+    );
   });
   makeHold();
 });
@@ -371,5 +394,235 @@ describe("cancelling a whole hold", () => {
     // The header is a PROJECTION of its machines, written in the same mutation
     // — never a column somebody remembered to set.
     expect(holdRow()?.status).toBe("CANCELLED");
+  });
+});
+
+describe("a visit the bot booked (2026-10-27)", () => {
+  it("reads as a Visit with its time, and the customer can be marked as came", async () => {
+    makeVisit();
+    renderPage();
+    await settle();
+    expect(screen.getAllByText("Visit").length).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("button", { name: `Open the units on ${VISIT_CODE}` }),
+    ).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: new RegExp(`came for ${VISIT_CODE}`),
+      }),
+    );
+    await settle();
+    expect(visitRow()?.status).toBe("DONE");
+  });
+
+  it("can be cancelled, behind a confirm, moving no unit", async () => {
+    makeVisit();
+    const before = getDb().units.map((u) => `${u.serial}:${u.status}`);
+    renderPage();
+    await settle();
+    await userEvent.click(
+      screen.getByRole("button", { name: `Cancel the visit ${VISIT_CODE}` }),
+    );
+    await settle();
+    await userEvent.click(
+      screen.getByRole("button", { name: /Cancel the visit$/ }),
+    );
+    await settle();
+    expect(visitRow()?.status).toBe("CANCELLED");
+    expect(getDb().units.map((u) => `${u.serial}:${u.status}`)).toEqual(before);
+  });
+
+  it("is never cancelled by a projection that walks every hold", () => {
+    makeVisit();
+    mutate((d) => reprojectHolds(d));
+    expect(visitRow()?.status).toBe("ACTIVE");
+  });
+});
+
+describe("a DP holds a unit (2026-10-27)", () => {
+  const SOFT = "rsv-tst-soft";
+  const SOFT_CODE = "RV-2026/10-000991";
+  const SOFT_SERIAL = "SC02RSSOFT001";
+
+  /** A hold nobody paid for: its unit stays TERSEDIA, with no ledger row. */
+  function makeSoft() {
+    mutate((d) => {
+      d.units = d.units.filter((u) => u.serial !== SOFT_SERIAL);
+      d.events = d.events.filter((e) => e.serial !== SOFT_SERIAL);
+      d.reservations = d.reservations.filter((r) => r.id !== SOFT);
+      d.units.push({
+        serial: SOFT_SERIAL,
+        skuId: d.skus[0]!.id,
+        status: "TERSEDIA",
+        locationId: "wh-1",
+        buy: 9_000_000,
+        description: "Mulus",
+        poId: null,
+        grade: "A",
+      });
+      d.reservations.push({
+        id: SOFT,
+        code: SOFT_CODE,
+        customerId: d.customers[0]!.id,
+        when: "2026-10-30T08:00:00.000Z",
+        note: "",
+        items: [{ id: "rs-soft-1", serial: SOFT_SERIAL }],
+        status: "ACTIVE",
+      });
+    });
+  }
+  const soft = () => getDb().reservations.find((r) => r.id === SOFT)!;
+
+  it("says a hold without a DP holds nothing, and recording one holds the unit", async () => {
+    makeSoft();
+    try {
+      renderPage();
+      await settle();
+      expect(screen.getByText("No DP — still on sale")).toBeInTheDocument();
+      expect(unitOf(SOFT_SERIAL)?.status).toBe("TERSEDIA");
+
+      await userEvent.click(
+        screen.getByRole("button", { name: `Record a DP on ${SOFT_CODE}` }),
+      );
+      await settle();
+      const dialog = screen
+        .getAllByRole("dialog")
+        .find((d) => within(d).queryByText(`Record DP — ${SOFT_CODE}`))!;
+      // The owner's rule is the default amount.
+      expect(
+        within(dialog).getByRole("spinbutton", { name: /DP amount/ }),
+      ).toHaveValue("500.000");
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: /Record DP and hold/ }),
+      );
+      await settle();
+
+      expect(unitOf(SOFT_SERIAL)?.status).toBe("DIRESERVASI");
+      const r = soft();
+      expect(r.dp).toMatchObject({ amount: 500_000, method: "TRANSFER" });
+      const days =
+        (new Date(r.heldUntil!).getTime() - new Date(r.dp!.at).getTime()) /
+        86_400_000;
+      expect(days).toBe(7);
+      expect(
+        getDb().events.filter(
+          (e) => e.serial === SOFT_SERIAL && e.type === "DIRESERVASI",
+        ),
+      ).toHaveLength(1);
+      expect(
+        await screen.findByText(/DP Rp\s?500\.000 · held until/),
+      ).toBeInTheDocument();
+    } finally {
+      mutate((d) => {
+        d.reservations = d.reservations.filter((x) => x.id !== SOFT);
+      });
+    }
+  });
+
+  it("asks staff to refund or keep a DP whose hold is over — and refunds it", async () => {
+    makeSoft();
+    try {
+      mutate((d) => {
+        const r = d.reservations.find((x) => x.id === SOFT)!;
+        // Paid a week and a day ago; the worker has let the unit go since.
+        r.dp = {
+          id: "pay-soft-dp",
+          method: "TUNAI",
+          amount: 500_000,
+          at: "2026-10-01T03:00:00.000Z",
+        };
+        r.heldUntil = "2026-10-08T03:00:00.000Z";
+        d.events.push({
+          id: "rs-soft-ev1",
+          serial: SOFT_SERIAL,
+          seq: 1,
+          type: "DIRESERVASI",
+          at: "2026-10-01T03:00:00.000Z",
+          fromStatus: "TERSEDIA",
+          toStatus: "DIRESERVASI",
+          locationId: "wh-1",
+          refCode: SOFT_CODE,
+          staff: "Michella",
+        });
+        d.events.push({
+          id: "rs-soft-ev2",
+          serial: SOFT_SERIAL,
+          seq: 2,
+          type: "RESERVASI_BATAL",
+          at: "2026-10-08T03:00:00.000Z",
+          fromStatus: "DIRESERVASI",
+          toStatus: "TERSEDIA",
+          locationId: "wh-1",
+          refCode: SOFT_CODE,
+          staff: "Agen WhatsApp",
+        });
+      });
+      renderPage();
+      await settle();
+      expect(
+        screen.getByText(/DP Rp\s?500\.000 · hold over, decide/),
+      ).toBeInTheDocument();
+      await userEvent.click(
+        screen.getByRole("button", { name: `Decide the DP on ${SOFT_CODE}` }),
+      );
+      await settle();
+      const dialog = screen
+        .getAllByRole("dialog")
+        .find((d) => within(d).queryByText(`Decide the DP — ${SOFT_CODE}`))!;
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: /Refund Rp/ }),
+      );
+      await settle();
+      const r = soft();
+      expect(r.status).toBe("CANCELLED");
+      // Out of the pot it came into, by default.
+      expect(r.dp!.refund).toMatchObject({ amount: 500_000, method: "TUNAI" });
+      expect(
+        await screen.findByText(/DP Rp\s?500\.000 · refunded/),
+      ).toBeInTheDocument();
+    } finally {
+      mutate((d) => {
+        d.reservations = d.reservations.filter((x) => x.id !== SOFT);
+      });
+    }
+  });
+
+  it("keeps a DP (hangus) without writing any money", async () => {
+    makeSoft();
+    try {
+      mutate((d) => {
+        const r = d.reservations.find((x) => x.id === SOFT)!;
+        r.dp = {
+          id: "pay-soft-dp2",
+          method: "TRANSFER",
+          amount: 500_000,
+          at: "2026-10-01T03:00:00.000Z",
+        };
+        r.heldUntil = "2026-10-08T03:00:00.000Z";
+      });
+      renderPage();
+      await settle();
+      await userEvent.click(
+        screen.getByRole("button", { name: `Decide the DP on ${SOFT_CODE}` }),
+      );
+      await settle();
+      const dialog = screen
+        .getAllByRole("dialog")
+        .find((d) => within(d).queryByText(`Decide the DP — ${SOFT_CODE}`))!;
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: /Keep \(hangus\)/ }),
+      );
+      await settle();
+      const r = soft();
+      expect(r.status).toBe("CANCELLED");
+      expect(r.dp!.refund).toBeUndefined();
+      expect(
+        await screen.findByText(/DP Rp\s?500\.000 · kept \(hangus\)/),
+      ).toBeInTheDocument();
+    } finally {
+      mutate((d) => {
+        d.reservations = d.reservations.filter((x) => x.id !== SOFT);
+      });
+    }
   });
 });

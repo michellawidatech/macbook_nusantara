@@ -661,4 +661,77 @@ describe("exchanging (owner, 2026-09-21)", () => {
     // product went OUT, which its stock move above already records.
     expect(within(await openRow(ret.code)).getByText(SOLD)).toBeInTheDocument();
   });
+
+  /*
+   * Where it comes back to is asked, not assumed (owner ask 2026-10-21: "we
+   * should be able to choose the warehouse instead of automatically sending
+   * it to warehouse 4"). It starts on this desk's warehouse.
+   */
+  /*
+   * A fresh database has no reasons at all (go-live 2026-09-29 imported none),
+   * and a pick-only box with nothing in it refused every return. A reason
+   * typed here joins Settings' list, as an adjustment's always has.
+   */
+  it("takes a reason nobody has listed yet, and adds it to the list", async () => {
+    sellOne([paid("p-ret-newreason", 5_000_000)]);
+    renderPanel();
+    await scanBack(SOLD);
+    await userEvent.type(
+      within(returnForm()).getByLabelText("Reason"),
+      "Layar bergaris",
+    );
+    await record();
+
+    expect(unit(SOLD).status).toBe("TERSEDIA");
+    expect(
+      getDb().reasons.filter(
+        (r) => r.activity === "RETURN_CUSTOMER" && r.label === "Layar bergaris",
+      ),
+    ).toHaveLength(1);
+    expect(returnOf(SOLD).reason).toBe("Layar bergaris");
+  });
+
+  it("puts the unit back in the warehouse the form names", async () => {
+    sellOne([paid("p-ret-wh", 5_000_000)]);
+    renderPanel();
+    await scanBack(SOLD);
+    await pickReason();
+    await chooseOption(
+      within(returnForm()).getByLabelText("Back to warehouse"),
+      "02 · Gudang Serpong",
+      { search: false },
+    );
+    await record();
+
+    expect(unit(SOLD).locationId).toBe("wh-2");
+    const back = getDb().events.filter(
+      (e) => e.serial === SOLD && e.type === "RETUR_PELANGGAN",
+    );
+    // The serial is reused by every test here; the newest return is this one.
+    expect(back.at(-1)).toMatchObject({ locationId: "wh-2" });
+  });
+
+  /*
+   * The SERVIS-kind warehouse is a warehouse like any other (2026-10-26): in
+   * the shop's database it is 04, *Gudang Masuk Belum QC*. A desk whose own
+   * warehouse it is returns there by default, as any desk does.
+   */
+  it("starts on this desk's warehouse, whatever its kind", async () => {
+    mutate((d) => {
+      d.myWarehouseId = "wh-4";
+    });
+    try {
+      sellOne([paid("p-ret-wh4", 5_000_000)]);
+      renderPanel();
+      await scanBack(SOLD);
+      await pickReason();
+      await record();
+      expect(unit(SOLD).status).toBe("TERSEDIA");
+      expect(unit(SOLD).locationId).toBe("wh-4");
+    } finally {
+      mutate((d) => {
+        d.myWarehouseId = "wh-1";
+      });
+    }
+  });
 });

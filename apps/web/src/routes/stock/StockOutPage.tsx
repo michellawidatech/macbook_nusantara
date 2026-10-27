@@ -65,6 +65,7 @@ import {
   Tooltip,
   Typography,
 } from "antd";
+import type { InputRef } from "antd";
 import {
   ArrowLeftOutlined,
   ArrowUpOutlined,
@@ -72,6 +73,7 @@ import {
   PlusOutlined,
   ClockCircleOutlined,
   DeleteOutlined,
+  EditOutlined,
   EyeOutlined,
   GiftOutlined,
   ShoppingCartOutlined,
@@ -120,8 +122,13 @@ import {
 import {
   activeHolds,
   heldItems,
+  isVisit,
+  openVisits,
   reprojectHolds,
+  softHolds,
 } from "../../lib/reservations.js";
+import { dpHeldSerials, dpToApply, recordDpBlock } from "../../lib/dp.js";
+import { RecordDpModal } from "../../components/RecordDpModal";
 import {
   ADDRESS_FIELDS,
   composeAddress,
@@ -143,8 +150,12 @@ import {
   channelOf,
   type SaleSource,
 } from "../../lib/channels.js";
-import { gradeForCondition } from "../../lib/condition.js";
-import { resolveSerialQuery, serialNamedBy } from "../../lib/serialInput.js";
+import { gradeForCondition, gradeText } from "../../lib/condition.js";
+import {
+  resolveSerialQuery,
+  serialMatchesQuery,
+  serialNamedBy,
+} from "../../lib/serialInput.js";
 import { EnumTag } from "../../components/EnumTag";
 import { UNIT_STATUS } from "../../i18n/enumLabels.js";
 import { skuTracksSerial } from "../../lib/serialTracking.js";
@@ -630,15 +641,32 @@ export function StockOutPage() {
     asString,
   );
   /**
-   * Which variant's serials are being chosen between.
+   * Which catalogue row's serials are being chosen between — a variant in one
+   * grade, by `ShelfRow.key`.
    *
    * The chooser opens whenever there is a CHOICE (owner answer 2026-08-27) —
-   * grade, battery and shelf are worth reading before a particular second-hand
-   * laptop goes out of the door. When one machine is all that is left of a
-   * variant there is nothing to choose, so tapping the row puts that machine
-   * straight in the basket (owner revision 2026-08-27) — see `pickFromRow`.
+   * battery, shelf and the QC note are worth reading before a particular
+   * second-hand laptop goes out of the door. When one machine is all that is
+   * left of a row there is nothing to choose, so tapping the row puts that
+   * machine straight in the basket (owner revision 2026-08-27) — see
+   * `pickFromRow`.
    */
-  const [pickingSku, setPickingSku] = useState<string>();
+  const [pickingRow, setPickingRow] = useState<string>();
+  /** The chooser's serial search (owner ask 2026-10-08). */
+  const [chooserQuery, setChooserQuery] = useState("");
+  /**
+   * Its box, focused when the dialog opens and again after each pick.
+   * `autoFocus` loses: the Modal's focus trap moves the caret to its first
+   * button as it opens, so the box takes it back a tick later. Not on
+   * `afterOpenChange`, which waits for the open animation — a frame that a
+   * background tab never draws.
+   */
+  const chooserSearch = useRef<InputRef>(null);
+  useEffect(() => {
+    if (pickingRow === undefined) return;
+    const id = window.setTimeout(() => chooserSearch.current?.focus(), 0);
+    return () => window.clearTimeout(id);
+  }, [pickingRow]);
   /**
    * The charges the shop is adding on top (owner ask 2026-09-01: *"additional
    * fee could be more than 1"*).
@@ -669,6 +697,8 @@ export function StockOutPage() {
     asListOf(isTradeIn),
   );
   const [tradeOpen, setTradeOpen] = useState(false);
+  /** The trade-in line being corrected, when the dialog is editing one. */
+  const [tradeEditing, setTradeEditing] = useState<TradeInLine | null>(null);
   const [discountOpen, setDiscountOpen] = useState(false);
   /** The basket line whose price breakdown is open — the eye button. */
   const [inspecting, setInspecting] = useState<number | null>(null);
@@ -701,6 +731,8 @@ export function StockOutPage() {
   const [invoiceFor, setInvoiceFor] = useState<Order | null>(null);
   const [newCustomerOpen, setNewCustomerOpen] = useState(false);
   const [reservationPickerOpen, setReservationPickerOpen] = useState(false);
+  /** The reservation a DP is being recorded on, from the picker (2026-10-27). */
+  const [dpFor, setDpFor] = useState<string | null>(null);
   /**
    * The catalogue as a dialog, on a phone (owner ask 2026-09-01).
    *
@@ -716,14 +748,37 @@ export function StockOutPage() {
   );
   const [ncForm] = Form.useForm<{ name: string; phone: string }>();
 
-  const sellable = useMemo(
-    () =>
-      db.units.filter(
-        (u) => u.status === "TERSEDIA" || u.status === "DIRESERVASI",
+  /**
+   * What this till can sell. A unit a paid DP holds is off sale for anyone
+   * else (owner, 2026-10-27) — it stays only for the sale loaded FROM its
+   * own reservation. A hold without a DP never reaches DIRESERVASI.
+   */
+  const sellable = useMemo(() => {
+    const dpHeld = dpHeldSerials(db);
+    return db.units.filter((u) => {
+      if (u.status !== "TERSEDIA" && u.status !== "DIRESERVASI") return false;
+      const holder = dpHeld.get(u.serial);
+      return holder === undefined || fromReservations.includes(holder);
+    });
+  }, [db, fromReservations]);
+  // Holds with a unit still waiting, then the bot's open visits (2026-10-27):
+  // a visit holds nothing, but the customer standing at the counter is the
+  // one the bot booked, and picking it loads them into the sale.
+  const activeReservations = useMemo(
+    () => [
+      ...activeHolds(db),
+      ...openVisits(db),
+      // A DP whose hold ran out (2026-10-27): nothing is held, but the
+      // customer may still come and the DP still counts toward their sale.
+      ...db.reservations.filter(
+        (r) =>
+          r.status === "ACTIVE" &&
+          dpToApply(r) !== undefined &&
+          heldItems(db, r).length === 0,
       ),
-    [db.units],
+    ],
+    [db],
   );
-  const activeReservations = useMemo(() => activeHolds(db), [db]);
 
   const skuOf = (serial?: string) =>
     db.skus.find(
@@ -744,6 +799,53 @@ export function StockOutPage() {
   const applyReservations = (ids: string[], only?: readonly string[]) => {
     const picked = db.reservations.filter((r) => ids.includes(r.id));
     if (!picked.length) return;
+    // A visit brings the customer and the channel, and no unit: nothing was
+    // held, so what they buy is picked off the shelf like any other sale. So
+    // does a DP whose hold ran out (2026-10-27): the units went back on sale,
+    // but the customer came after all and the DP still counts toward it.
+    const wantedSerials = only ? new Set(only) : null;
+    const stillWanted = picked.flatMap((r) =>
+      heldItems(db, r).filter(
+        (i) => !wantedSerials || wantedSerials.has(i.serial),
+      ),
+    );
+    if (
+      picked.every(isVisit) ||
+      (stillWanted.length === 0 && picked.some((r) => dpToApply(r)))
+    ) {
+      const visit = picked.find((r) => dpToApply(r)) ?? picked[0]!;
+      setCustomerId((prev) => prev ?? visit.customerId);
+      const channel = db.reservationSources.find(
+        (s) => s.id === visit.sourceId,
+      )?.name;
+      const mapped = channel ? SOURCE_BY_RESERVATION[channel] : undefined;
+      if (mapped && source === "OFFLINE") pickChannel(mapped);
+      setFromReservations((prev) => [...new Set([...prev, visit.id])]);
+      setReservationPickerOpen(false);
+      const who = db.customers.find((c) => c.id === visit.customerId);
+      const dp = dpToApply(visit);
+      message.success(
+        dp
+          ? t(
+              "pos.loadedDp",
+              "Loaded {{name}} and the DP of {{amount}} from {{code}} — pick the unit(s) off the shelf.",
+              {
+                name: who ? customerLabel(who) : fmtNone(),
+                amount: fmtRp(dp.amount),
+                code: visit.code,
+              },
+            )
+          : t(
+              "pos.loadedFromVisit",
+              "Loaded {{name}} from the visit {{code}}.",
+              {
+                name: who ? customerLabel(who) : fmtNone(),
+                code: visit.code,
+              },
+            ),
+      );
+      return;
+    }
     // A hold can be collected in pieces (owner decision 2026-08-26), so the
     // caller may name which machines are being taken. Naming none takes
     // everything still on hold, which is what "sell this reservation" means.
@@ -996,6 +1098,44 @@ export function StockOutPage() {
   const total = totals.total;
 
   /**
+   * A reservation's DP this sale takes (owner, 2026-10-27): it came in on its
+   * own day, so it counts toward the bill automatically and the chips below
+   * ask only for the rest. It goes on the order as the SAME payment
+   * (`SalePayment.reservationId`), never a copy — see lib/dp.ts.
+   */
+  const dpPaid = useMemo(
+    () =>
+      fromReservations.flatMap((id) => {
+        const r = db.reservations.find((x) => x.id === id);
+        const dp = r ? dpToApply(r) : undefined;
+        return dp && r ? [{ payment: dp, code: r.code }] : [];
+      }),
+    [fromReservations, db.reservations],
+  );
+  const dpTotal = dpPaid.reduce((n, d) => n + d.payment.amount, 0);
+  /** What is still to collect at the counter, after any DP. */
+  const collect = Math.max(0, total - dpTotal);
+  /**
+   * Units on this sale reserved for SOMEBODY ELSE who paid no DP (2026-10-27)
+   * — on sale all along, so sellable; the confirmation names them, and
+   * recording the sale takes each off its hold and leaves a task to tell
+   * that customer.
+   */
+  const softHeld = useMemo(() => softHolds(db), [db]);
+  /** Who a softly reserved unit is reserved for, as the tags say it. */
+  const reservedFor = (serial: string): string => {
+    const r = softHeld.get(serial);
+    const c = db.customers.find((x) => x.id === r?.customerId);
+    return c ? customerLabel(c) : (r?.code ?? fmtNone());
+  };
+  const soldOver = lines.flatMap((l) => {
+    const r = l.serial ? softHeld.get(l.serial) : undefined;
+    return r && l.serial && !fromReservations.includes(r.id)
+      ? [{ serial: l.serial, reservation: r }]
+      : [];
+  });
+
+  /**
    * The payment chips with their arithmetic done — each part's split, what
    * was paid on it and what is still owed (`lib/tillPayments.ts`).
    *
@@ -1004,7 +1144,7 @@ export function StockOutPage() {
    * the bill before the trade-in, so a Rp10jt sale with a Rp2jt trade-in put
    * Rp10jt of cash in a drawer that had received eight.
    */
-  const payRows = tillRows(total, payParts);
+  const payRows = tillRows(collect, payParts);
   /** Change one payment row — what was typed against one chip. */
   const setPart = (i: number, patch: Partial<TillPart>) =>
     setPayParts((parts) =>
@@ -1014,7 +1154,7 @@ export function StockOutPage() {
   const saleRefShown = saleRefNeeded(source, payParts);
   const saleRef = saleRefShown ? payRef : "";
   const payProblems = tillProblems({
-    total,
+    total: collect,
     source,
     parts: payParts,
     ref: saleRef,
@@ -1225,14 +1365,18 @@ export function StockOutPage() {
       listPrices[l.serial!] = listed;
     }
     // What the chips say, as the payment list every finance screen reads.
-    const parts = tillPayments({
-      total,
-      parts: payParts,
-      at: new Date().toISOString(),
-      ...(payDueAt ? { dueAt: payDueAt } : {}),
-      ...(saleRef.trim() ? { ref: saleRef } : {}),
-      newId: () => nextId("pay"),
-    });
+    const parts = [
+      // The DP first: it was paid first, and it is the reservation's own row.
+      ...dpPaid.map((d) => d.payment),
+      ...tillPayments({
+        total: collect,
+        parts: payParts,
+        at: new Date().toISOString(),
+        ...(payDueAt ? { dueAt: payDueAt } : {}),
+        ...(saleRef.trim() ? { ref: saleRef } : {}),
+        newId: () => nextId("pay"),
+      }),
+    ];
     const order: Order = {
       id: nextId("o"),
       code,
@@ -1394,6 +1538,28 @@ export function StockOutPage() {
         const r = d.discounts.find((x) => x.id === rule.id);
         if (r) r.used += 1;
       }
+      // The DP this sale took (2026-10-27): the reservation's own payment is
+      // the sale's now too — before the projection, so a hold whose DP is on
+      // a sale can close as collected.
+      for (const dp of dpPaid) {
+        const r = d.reservations.find((x) => x.id === dp.payment.reservationId);
+        if (r?.dp) r.dp.orderId = order.id;
+      }
+      // Sold over a hold nobody paid for (2026-10-27): the unit leaves that
+      // hold, the hold says so in its note, and the server leaves a colleague
+      // the task of telling the customer.
+      for (const { serial, reservation } of soldOver) {
+        const r = d.reservations.find((x) => x.id === reservation.id);
+        if (!r) continue;
+        r.items = r.items.filter((i) => i.serial !== serial);
+        const line = t(
+          "pos.soldOverNote",
+          "{{serial}} was sold to another buyer on {{code}}.",
+          { serial, code },
+        );
+        r.note = r.note.trim() ? `${r.note.trim()}\n${line}` : line;
+        if (r.items.length === 0) r.status = "CANCELLED";
+      }
       // Header projections, in the same transaction as the sale that moved the
       // units. A hold whose last machine has just gone reads DONE; one with
       // machines left stays ACTIVE, which is what partial collection is.
@@ -1401,6 +1567,13 @@ export function StockOutPage() {
         d,
         chosen.map((l) => l.serial!),
       );
+      // A visit this sale came out of is done: the customer came and bought
+      // (2026-10-27). A visit holds no unit, so nothing above closes it.
+      for (const id of fromReservations) {
+        const visit = d.reservations.find((r) => r.id === id);
+        if (visit && isVisit(visit) && visit.status === "ACTIVE")
+          visit.status = "DONE";
+      }
       // CLAUDE.md's one sanctioned hard delete: the QC photographs of a
       // machine go, row and file, the moment it is sold. The `UnitEvent`
       // ledger above still records the sale, so the timeline is intact —
@@ -1601,7 +1774,8 @@ export function StockOutPage() {
       addSuggestion(left[0]!.serial);
       return;
     }
-    setPickingSku(row.sku.id);
+    setChooserQuery("");
+    setPickingRow(row.key);
   };
 
   /**
@@ -1720,13 +1894,13 @@ export function StockOutPage() {
   })();
 
   /**
-   * The catalogue — one row per variant, with what is left of it.
+   * The catalogue — one row per variant and grade, with what is left of it.
    *
    * It listed every sellable SERIAL until 2026-08-27, one row each, and that
    * was honest and useless: a customer points at a machine and says "the Air,
    * the silver one", and the screen answered with forty rows of C02XY… that
    * all looked the same. A till lists models. WHICH machine goes out is a
-   * separate question, asked whenever there is a choice — `pickingSku` opens
+   * separate question, asked whenever there is a choice — `pickingRow` opens
    * the chooser where a serial's grade and battery are worth reading. A row
    * down to its last machine skips it (owner revision 2026-08-27); see
    * `pickFromRow`.
@@ -1853,9 +2027,11 @@ export function StockOutPage() {
         <Flex vertical>
           {catalogue.map((row) => {
             const out = row.remaining === 0;
+            const product = `${row.sku.name} ${row.sku.variantLabel}`;
+            const grade = gradeText(row.grade, t("grade.new", "New"));
             return (
               <Flex
-                key={row.sku.id}
+                key={row.key}
                 align="center"
                 gap={12}
                 className="pos-shelf-row"
@@ -1866,9 +2042,17 @@ export function StockOutPage() {
                 role="button"
                 tabIndex={out ? -1 : 0}
                 aria-disabled={out || undefined}
-                aria-label={t("pos.pickFrom", "Choose a {{product}}", {
-                  product: `${row.sku.name} ${row.sku.variantLabel}`,
-                })}
+                // The grade is in the name: two rows of one variant differ by
+                // nothing else.
+                aria-label={
+                  grade === null
+                    ? t("pos.pickFrom", "Choose a {{product}}", { product })
+                    : t(
+                        "pos.pickFromGrade",
+                        "Choose a {{product}}, grade {{grade}}",
+                        { product, grade },
+                      )
+                }
                 style={{
                   padding: "10px 8px",
                   cursor: out ? "not-allowed" : "pointer",
@@ -1883,6 +2067,18 @@ export function StockOutPage() {
                   }
                 }}
               >
+                {/*
+                 * The grade first, beside the name (owner ask 2026-10-08): a
+                 * row is one variant in one grade, so the grade is half of
+                 * what the row IS. A slot of one width on every row, filled
+                 * or not, so the names line up down the list — a counted
+                 * product has no grade and still starts where the others do.
+                 * `plain`: a tooltip on a chip inside a row that is itself
+                 * one big button would fire on the way past.
+                 */}
+                <span className="pos-shelf-grade">
+                  {row.grade && <GradeTag grade={row.grade} plain />}
+                </span>
                 <Flex vertical style={{ flex: 1, minWidth: 0 }}>
                   <Typography.Text strong ellipsis>
                     {row.sku.name}
@@ -1896,20 +2092,6 @@ export function StockOutPage() {
                   </Typography.Text>
                 </Flex>
 
-                {/*
-                 * The grades present, not a price per grade. Two machines of
-                 * one variant in different condition ask the same money (owner
-                 * revision 2026-08-27) — the grade is recorded, shown, and
-                 * does not move the number.
-                 */}
-                <Flex gap={4}>
-                  {row.grades.map((g) => (
-                    // `plain`: a tooltip on every chip of a catalogue row that
-                    // is itself one big button would fire on the way past.
-                    <GradeTag key={g} grade={g} plain />
-                  ))}
-                </Flex>
-
                 <Typography.Text
                   type={out ? "danger" : "warning"}
                   style={{ fontSize: 12, whiteSpace: "nowrap" }}
@@ -1921,9 +2103,9 @@ export function StockOutPage() {
                       })}
                 </Typography.Text>
 
-                {/* A RANGE since 2026-09-08: the price is per serial, so a
-                    row holding an A and a C quotes two numbers. `single`
-                    collapses it where the machines agree. */}
+                {/* A RANGE since 2026-09-08: the price is per serial, so two
+                    machines of one grade can still ask two numbers — a tired
+                    battery. `single` collapses it where they agree. */}
                 <Typography.Text strong style={{ whiteSpace: "nowrap" }}>
                   {row.price.count === 0
                     ? fmtRp(row.sku.price)
@@ -1972,6 +2154,14 @@ export function StockOutPage() {
             >
               {l.serial ?? fmtNone()}
             </Typography.Text>
+            {/* Reserved for somebody else, unpaid (2026-10-27). */}
+            {soldOver.some((x) => x.serial === l.serial) && (
+              <Typography.Text type="warning" style={{ fontSize: 12 }}>
+                {t("pos.reservedNotPaid", "Reserved for {{name}}, not paid", {
+                  name: reservedFor(l.serial!),
+                })}
+              </Typography.Text>
+            )}
           </Flex>
           <Flex gap={0}>
             <Tooltip
@@ -2312,6 +2502,24 @@ export function StockOutPage() {
             {fmtRp(totals.total)}
           </Typography.Text>
         </Flex>
+        {/* The DP the reservation already took (2026-10-27): counted toward
+            the bill, so the payment below asks only for what is left. */}
+        {dpPaid.map((d) => (
+          <Flex key={d.payment.id} justify="space-between">
+            <span>
+              {t("pos.dpAlreadyPaid", "DP already paid ({{code}})", {
+                code: d.code,
+              })}
+            </span>
+            <span>−{fmtRp(d.payment.amount)}</span>
+          </Flex>
+        ))}
+        {dpTotal > 0 && (
+          <Flex justify="space-between">
+            <strong>{t("pos.leftToPay", "Left to pay")}</strong>
+            <strong>{fmtRp(collect)}</strong>
+          </Flex>
+        )}
         {belowCost.length > 0 && (
           <Typography.Text type="danger" style={{ fontSize: 12 }}>
             {t(
@@ -2717,6 +2925,22 @@ export function StockOutPage() {
                 </Typography.Text>
                 <Flex align="center" gap={4}>
                   <Typography.Text>−{fmtRp(x.value)}</Typography.Text>
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label={t(
+                      "pos.editTradeIn",
+                      "Edit trade-in {{label}}",
+                      {
+                        label: x.label,
+                      },
+                    )}
+                    icon={<EditOutlined />}
+                    onClick={() => {
+                      setTradeEditing(x);
+                      setTradeOpen(true);
+                    }}
+                  />
                   <Button
                     type="text"
                     danger
@@ -3715,29 +3939,68 @@ export function StockOutPage() {
        * under them. Picked rows leave the list as they are taken, the count in
        * the title comes down, and *Done* closes it — or it closes itself when
        * there is nothing left to pick.
+       *
+       * One row is one variant in ONE grade since 2026-10-08, so every unit
+       * here shares the grade in the heading, and a search box over the
+       * serials sits on top (owner ask, same day): a row of nine units is
+       * found by the serial on the sticker faster than by reading nine notes.
+       * Enter takes the unit when the search has narrowed to one.
        */}
       <Modal
-        open={pickingSku !== undefined}
+        open={pickingRow !== undefined}
         title={t("pos.whichMachine", "Which unit?")}
         footer={
-          <Button type="primary" onClick={() => setPickingSku(undefined)}>
+          <Button type="primary" onClick={() => setPickingRow(undefined)}>
             {t("pos.done", "Done")}
           </Button>
         }
         width={720}
-        onCancel={() => setPickingSku(undefined)}
+        onCancel={() => setPickingRow(undefined)}
       >
         {(() => {
-          const row = catalogue.find((r) => r.sku.id === pickingSku);
+          const row = catalogue.find((r) => r.key === pickingRow);
           if (!row) return null;
           const taken = new Set(lines.map((l) => l.serial));
           const left = row.units.filter((u) => !taken.has(u.serial));
           const chosen = row.units.filter((u) => taken.has(u.serial));
+          const shown = left.filter((u) =>
+            serialMatchesQuery(chooserQuery, u.serial),
+          );
+          /** Put a unit on the sale; close once nothing is left to pick. */
+          const pick = (serial: string) => {
+            addSuggestion(serial);
+            setChooserQuery("");
+            if (left.length === 1) setPickingRow(undefined);
+            else chooserSearch.current?.focus();
+          };
           return (
             <Flex vertical gap={12}>
-              <Typography.Text type="secondary">
-                {row.sku.name} {row.sku.variantLabel}
-              </Typography.Text>
+              <Flex align="center" gap={8}>
+                {row.grade && <GradeTag grade={row.grade} />}
+                <Typography.Text type="secondary">
+                  {row.sku.name} {row.sku.variantLabel}
+                </Typography.Text>
+              </Flex>
+              {left.length > 0 && (
+                <Input.Search
+                  // A fresh box on every row opened: `pickFromRow` empties it.
+                  ref={chooserSearch}
+                  allowClear
+                  value={chooserQuery}
+                  onChange={(e) => setChooserQuery(e.target.value)}
+                  // Enter, never the clear button: antd reports both here, and
+                  // clearing a box narrowed to one unit must not sell it.
+                  onSearch={(value, _e, info) => {
+                    if (info?.source === "clear") return;
+                    const hits = left.filter((u) =>
+                      serialMatchesQuery(value, u.serial),
+                    );
+                    if (hits.length === 1) pick(hits[0]!.serial);
+                  }}
+                  placeholder={t("pos.searchSerial", "Search the serial")}
+                  aria-label={t("pos.searchSerial", "Search the serial")}
+                />
+              )}
               {/* What this dialog has already put on the sale, so somebody
                   taking three of a kind can see how many they have without
                   closing it to look at the basket. */}
@@ -3763,7 +4026,15 @@ export function StockOutPage() {
                   )}
                 </Typography.Text>
               )}
-              {left.map((u) => {
+              {left.length > 0 && shown.length === 0 && (
+                <Typography.Text type="secondary">
+                  {t(
+                    "pos.noSerialMatches",
+                    "No unit here has a serial like that.",
+                  )}
+                </Typography.Text>
+              )}
+              {shown.map((u) => {
                 // In whichever units this machine's era reports — a 2017
                 // body says "312 cycles", an M2 says "94%".
                 const battery = readUnitBattery(u, db, batterySettings);
@@ -3787,7 +4058,6 @@ export function StockOutPage() {
                         {u.description || t("pos.noNote", "No QC note")}
                       </Typography.Text>
                     </Flex>
-                    <GradeTag grade={u.grade} />
                     {battery.grade !== null && (
                       <Tag color={BATTERY_GRADE_COLOR[battery.grade]}>
                         {battery.text}
@@ -3810,6 +4080,15 @@ export function StockOutPage() {
                         <Tag color="orange">{t("pos.onHold", "On hold")}</Tag>
                       </Tooltip>
                     )}
+                    {softHeld.has(u.serial) && (
+                      <Tag color="gold">
+                        {t(
+                          "pos.reservedNotPaid",
+                          "Reserved for {{name}}, not paid",
+                          { name: reservedFor(u.serial) },
+                        )}
+                      </Tag>
+                    )}
                     <Button
                       type="primary"
                       size="small"
@@ -3820,12 +4099,9 @@ export function StockOutPage() {
                       aria-label={t("pos.pickAria", "Pick {{serial}}", {
                         serial: u.serial,
                       })}
-                      onClick={() => {
-                        addSuggestion(u.serial);
-                        // Closes only when this was the last one. Otherwise it
-                        // stays open for the next machine — see the docblock.
-                        if (left.length === 1) setPickingSku(undefined);
-                      }}
+                      // Closes only when this was the last one. Otherwise it
+                      // stays open for the next machine — see the docblock.
+                      onClick={() => pick(u.serial)}
                     >
                       {t("pos.pickThisOne", "Pick")}
                     </Button>
@@ -3840,10 +4116,23 @@ export function StockOutPage() {
       <TradeInDialog
         open={tradeOpen}
         db={db}
-        onCancel={() => setTradeOpen(false)}
-        onAdd={(draft) => {
-          setTradeIns((prev) => [...prev, { id: nextId("ti"), ...draft }]);
+        {...(tradeEditing ? { initial: tradeEditing } : {})}
+        onCancel={() => {
           setTradeOpen(false);
+          setTradeEditing(null);
+        }}
+        onAdd={(draft) => {
+          // An edit replaces the line where it stands, under its own id.
+          const editing = tradeEditing;
+          setTradeIns((prev) =>
+            editing
+              ? prev.map((y) =>
+                  y.id === editing.id ? { id: editing.id, ...draft } : y,
+                )
+              : [...prev, { id: nextId("ti"), ...draft }],
+          );
+          setTradeOpen(false);
+          setTradeEditing(null);
         }}
       />
 
@@ -3926,7 +4215,9 @@ export function StockOutPage() {
         okText={
           belowCost.length > 0
             ? t("pos.recordAtALoss", "Record at a loss")
-            : t("pos.confirmOk", "Record it")
+            : soldOver.length > 0
+              ? t("pos.sellAnyway", "Sell anyway")
+              : t("pos.confirmOk", "Record it")
         }
         okButtonProps={{ danger: belowCost.length > 0 }}
         cancelText={t("pos.confirmCancel", "Not yet")}
@@ -3958,6 +4249,15 @@ export function StockOutPage() {
                   </Typography.Text>
                 ),
               },
+              ...dpPaid.map((d) => ({
+                key: `dp-${d.payment.id}`,
+                label: t("pos.dpShort", "DP"),
+                children: t(
+                  "pos.dpConfirmLine",
+                  "{{amount}} already paid ({{code}})",
+                  { amount: fmtRp(d.payment.amount), code: d.code },
+                ),
+              })),
               {
                 key: "c",
                 label: t("pos.channel", "CHANNEL"),
@@ -4040,6 +4340,30 @@ export function StockOutPage() {
               )}
             />
           )}
+          {/* Reserved for somebody else who paid no DP (2026-10-27): on sale
+              all along, so this sale may take it — after asking. */}
+          {soldOver.map(({ serial, reservation }) => {
+            const who = db.customers.find(
+              (c) => c.id === reservation.customerId,
+            );
+            return (
+              <Alert
+                key={serial}
+                type="warning"
+                showIcon
+                title={t(
+                  "pos.soldOverAsk",
+                  "{{serial}} is held for {{name}}, not paid. Sell anyway?",
+                  { serial, name: who ? customerLabel(who) : reservation.code },
+                )}
+                description={t(
+                  "pos.soldOverBody",
+                  "Recording the sale takes it off {{code}}, and a colleague gets the task of telling them.",
+                  { code: reservation.code },
+                )}
+              />
+            );
+          })}
           {payParts.some((p) => isMarketplaceMethod(p.method)) && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {t(
@@ -4126,8 +4450,8 @@ export function StockOutPage() {
       >
         <Typography.Paragraph type="secondary">
           {t(
-            "pos.reservationPickerHint",
-            "Picking one loads its unit and customer into the sale below. The hold is released when you record the sale, not now.",
+            "pos.reservationPickerHintDp",
+            "Picking one loads its units, its customer and any DP into the sale below. Only a reservation with a DP holds its units; without one they are still on sale.",
           )}
         </Typography.Paragraph>
         <ProTable
@@ -4163,19 +4487,24 @@ export function StockOutPage() {
                       `${i.serial} ${skuOf(i.serial)?.name ?? ""} ${skuOf(i.serial)?.variantLabel ?? ""}`,
                   )
                   .join(" "),
-              render: (_, r) => (
-                <Flex vertical gap={2}>
-                  {heldItems(db, r).map((i) => (
-                    <span key={i.id}>
-                      {skuOf(i.serial)?.name ?? fmtNone()}{" "}
-                      {skuOf(i.serial)?.variantLabel ?? ""}{" "}
-                      <Typography.Text type="secondary">
-                        {i.serial}
-                      </Typography.Text>
-                    </span>
-                  ))}
-                </Flex>
-              ),
+              render: (_, r) =>
+                isVisit(r) ? (
+                  <Tag color="cyan" style={{ marginInline: 0 }}>
+                    {t("pos.visit", "Visit")}
+                  </Tag>
+                ) : (
+                  <Flex vertical gap={2}>
+                    {heldItems(db, r).map((i) => (
+                      <span key={i.id}>
+                        {skuOf(i.serial)?.name ?? fmtNone()}{" "}
+                        {skuOf(i.serial)?.variantLabel ?? ""}{" "}
+                        <Typography.Text type="secondary">
+                          {i.serial}
+                        </Typography.Text>
+                      </span>
+                    ))}
+                  </Flex>
+                ),
             },
             {
               title: t("pos.cameFrom", "Came from"),
@@ -4192,9 +4521,29 @@ export function StockOutPage() {
               },
             },
             {
-              title: t("pos.holdUntil", "Hold until"),
+              title: t("pos.expectedOn", "Expected on"),
               dataIndex: "when",
               render: fmtDateTime,
+            },
+            {
+              // Only a DP holds (2026-10-27). A DP already paid counts toward
+              // the sale; none means the units were never off sale.
+              title: t("pos.dp", "DP"),
+              key: "dp",
+              render: (_, r) =>
+                isVisit(r) ? (
+                  fmtNone()
+                ) : r.dp ? (
+                  <Typography.Text>
+                    {t("pos.dpPaidShort", "{{amount}} paid", {
+                      amount: fmtRp(r.dp.amount),
+                    })}
+                  </Typography.Text>
+                ) : (
+                  <Tag color="gold" style={{ marginInline: 0 }}>
+                    {t("dp.notPaid", "Not paid")}
+                  </Tag>
+                ),
             },
             {
               title: t("pos.price", "Price"),
@@ -4219,18 +4568,37 @@ export function StockOutPage() {
               key: "actions",
               width: COLUMN.actionsPair,
               render: (_, r) => (
-                <Button
-                  type="primary"
-                  size="small"
-                  onClick={() => applyReservations([r.id])}
-                >
-                  {t("pos.useThis", "Use this")}
-                </Button>
+                <Flex gap={8} wrap>
+                  {recordDpBlock(db, r) === undefined && (
+                    <Button size="small" onClick={() => setDpFor(r.id)}>
+                      {t("dp.record", "Record DP")}
+                    </Button>
+                  )}
+                  <Button
+                    type="primary"
+                    size="small"
+                    onClick={() => applyReservations([r.id])}
+                  >
+                    {t("pos.useThis", "Use this")}
+                  </Button>
+                </Flex>
               ),
             },
           ]}
         />
       </Modal>
+
+      <RecordDpModal
+        reservation={
+          dpFor ? (db.reservations.find((r) => r.id === dpFor) ?? null) : null
+        }
+        customerName={(() => {
+          const r = db.reservations.find((x) => x.id === dpFor);
+          const c = db.customers.find((x) => x.id === r?.customerId);
+          return c ? customerLabel(c) : fmtNone();
+        })()}
+        onClose={() => setDpFor(null)}
+      />
 
       <Modal
         title={t("pos.addCustomer", "Add customer")}

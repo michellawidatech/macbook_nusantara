@@ -31,6 +31,8 @@ import { fileURLToPath } from "node:url";
 export const API_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
+  // The chat model, when it is not the package default (2026-10-22).
+  "CHATBOT_MODEL",
 ] as const;
 
 /**

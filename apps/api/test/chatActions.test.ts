@@ -68,7 +68,13 @@ beforeEach(async () => {
   await db.outbox.deleteMany({});
   await db.waThreadMemory.deleteMany({});
   await db.chatAction.deleteMany({});
+  await db.customerProfileFact.deleteMany({});
   await db.customerProfile.deleteMany({});
+  // AgentRun points at the message it answered (chatbot v2).
+  await db.agentRunStep.deleteMany({});
+  await db.agentRun.deleteMany({});
+  // Chunks first: their message links are RESTRICT (20261022120000).
+  await db.chatMemoryChunk.deleteMany({});
   await db.waMessage.deleteMany({});
   await db.appSetting.deleteMany({
     where: { key: { startsWith: "chatbot." } },
@@ -109,16 +115,18 @@ async function handedOver(text: string) {
 }
 
 describe("the chatbot's switches", () => {
-  it("read as the environment says until somebody presses one", async () => {
+  it("read the POS as the source of truth until somebody presses one (2026-10-27)", async () => {
     const res = await request(app)
       .get("/api/chat/capabilities")
       .set("Cookie", staffCookie);
     expect(res.status).toBe(200);
+    // Everything on: a bot booking is a visit that holds nothing, so
+    // bookings no longer wait for the owner's switch (2026-10-27).
     expect(res.body.set).toEqual({
-      stock: false,
-      price: false,
-      reserve: false,
-      photos: false,
+      stock: true,
+      price: true,
+      reserve: true,
+      photos: true,
     });
   });
 
@@ -134,10 +142,10 @@ describe("the chatbot's switches", () => {
     const res = await request(app)
       .put("/api/chat/capabilities")
       .set("Cookie", ownerCookie)
-      .send({ price: true });
+      .send({ stock: false });
     expect(res.status).toBe(200);
-    // Price is saved as on, and allows nothing while Stock is off.
-    expect(res.body.set.price).toBe(true);
+    // Price is still on as set, and allows nothing while Stock is off.
+    expect(res.body.set).toMatchObject({ stock: false, price: true });
     expect(res.body.effective.price).toBe(false);
 
     const on = await request(app)
@@ -153,6 +161,73 @@ describe("the chatbot's switches", () => {
       .set("Cookie", ownerCookie)
       .send({ payments: true });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("the tester numbers", () => {
+  it("start empty, and staff may read them", async () => {
+    const res = await request(app)
+      .get("/api/chat/testers")
+      .set("Cookie", staffCookie);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ numbers: [] });
+  });
+
+  it("are the owner's to change", async () => {
+    const res = await request(app)
+      .put("/api/chat/testers")
+      .set("Cookie", staffCookie)
+      .send({ numbers: ["08980092978"] });
+    expect(res.status).toBe(403);
+  });
+
+  it("are stored as wa_ids however they were typed, once each", async () => {
+    const res = await request(app)
+      .put("/api/chat/testers")
+      .set("Cookie", ownerCookie)
+      .send({ numbers: ["0898-0092-978", "+62 898 0092 978", "628111000888"] });
+    expect(res.status).toBe(200);
+    expect(res.body.numbers).toEqual(["628980092978", "628111000888"]);
+
+    const read = await request(app)
+      .get("/api/chat/testers")
+      .set("Cookie", staffCookie);
+    expect(read.body.numbers).toEqual(["628980092978", "628111000888"]);
+  });
+
+  it("refuse an entry that is not a number, rather than dropping it", async () => {
+    const res = await request(app)
+      .put("/api/chat/testers")
+      .set("Cookie", ownerCookie)
+      .send({ numbers: ["08980092978", "ersen"] });
+    expect(res.status).toBe(400);
+  });
+
+  it("mark the message a conversation started over at", async () => {
+    const at = new Date();
+    await db.waMessage.create({
+      data: {
+        waMessageId: "wamid.CA.reset",
+        from: PHONE,
+        text: "/new",
+        msgType: "text",
+        ts: at,
+        direction: "IN",
+        status: "DIJAWAB_AGEN",
+        intent: "sistem:reset",
+        entities: {},
+        answeredByAgent: true,
+        answeredAt: at,
+        replyText: "Chat baru dimulai",
+      },
+    });
+    const res = await request(app)
+      .get(`/api/inbox/${PHONE}`)
+      .set("Cookie", staffCookie);
+    expect(res.status).toBe(200);
+    expect(res.body.messages.map((m: { reset: boolean }) => m.reset)).toEqual([
+      true,
+    ]);
   });
 });
 
@@ -243,6 +318,37 @@ describe("action items on a conversation", () => {
       .set("Cookie", staffCookie);
     expect(await db.chatAction.count({ where: { status: "OPEN" } })).toBe(0);
   });
+
+  it("close when a colleague answers in the chat, and only that chat's", async () => {
+    // 2026-10-15: the task dialog and its Mark done are gone; the answer is
+    // what settles the hand-over.
+    const { action } = await handedOver("7jt ya");
+    const now = new Date();
+    const elsewhere = await db.chatAction.create({
+      data: {
+        from: "628980093999",
+        kind: "PRICE",
+        topic: "price",
+        summary: "Harga Air M2",
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+    const res = await request(app)
+      .post(`/api/inbox/${PHONE}/reply`)
+      .set("Cookie", staffCookie)
+      .send({ text: "Bisa kak, 7,2 ya" });
+    expect(res.status).toBe(201);
+    const closed = await db.chatAction.findUniqueOrThrow({
+      where: { id: action.id },
+    });
+    expect(closed.status).toBe("DONE");
+    expect(closed.resolvedById).not.toBeNull();
+    expect(
+      (await db.chatAction.findUniqueOrThrow({ where: { id: elsewhere.id } }))
+        .status,
+    ).toBe("OPEN");
+  });
 });
 
 describe("the customer profile", () => {
@@ -260,10 +366,13 @@ describe("the customer profile", () => {
     const res = await request(app)
       .get(`/api/inbox/${PHONE}`)
       .set("Cookie", staffCookie);
+    // A budget saved before the range existed reads as a range of one.
     expect(res.body.profile).toMatchObject({
       name: "Budi",
       useCase: "editing video",
-      budget: "15000000",
+      budgetMin: "15000000",
+      budgetMax: "15000000",
+      facts: [],
     });
   });
 });

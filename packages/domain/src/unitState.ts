@@ -286,3 +286,47 @@ export function assertTransition(
   }
   return to;
 }
+
+/** Statuses an open document holds a unit in — a hold, a visit, a claim, a supplier return. */
+const DOCUMENT_STATUSES: ReadonlySet<string> = new Set([
+  "DIRESERVASI",
+  "SERVIS",
+  "KLAIM_GARANSI",
+  "RETUR_SUPPLIER",
+]);
+
+/** Event types whose document (a return, a hold, a claim) has its own undo. */
+const DOCUMENT_EVENTS: ReadonlySet<string> = new Set([
+  "RETUR_PELANGGAN",
+  "RETUR_SUPPLIER",
+  "DIRESERVASI",
+  "RESERVASI_BATAL",
+  "KLAIM_DIBUKA",
+  "KLAIM_SELESAI",
+]);
+
+/**
+ * May the NEWEST row of a unit's history be deleted from S/N history's ⋯
+ * menu? Deleting it puts the unit back to what the row before says, so a row
+ * that a document stands on would leave the two disagreeing (audit
+ * 2026-10-23): a return row gone reads Sold while the return stands, a hold
+ * row gone reads Available while the hold holds it, a service row gone reads
+ * In service with the visit closed. Such a row is undone from its own screen.
+ *
+ * A row that changes nothing, or one no document owns (a correction, a move,
+ * a stock-count find), may go. A sale's row is judged elsewhere — against the
+ * sale (`historyRowBlock`, `removeEvents`) — because deleting it is also how
+ * a unit a deleted sale left Sold is put right.
+ */
+export function newestRowOwnedByDocument(row: {
+  readonly type: string;
+  readonly fromStatus: string | null;
+  readonly toStatus: string;
+}): boolean {
+  if (row.fromStatus === row.toStatus) return false;
+  if (DOCUMENT_EVENTS.has(row.type)) return true;
+  return (
+    DOCUMENT_STATUSES.has(row.toStatus) ||
+    (row.fromStatus !== null && DOCUMENT_STATUSES.has(row.fromStatus))
+  );
+}

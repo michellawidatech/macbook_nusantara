@@ -15,16 +15,25 @@
  * the model is agreed, where a serial's grade, battery and shelf are worth
  * reading. That is the owner's answer of 2026-08-27: *always ask which one*.
  *
+ * ## One row per variant AND grade (owner ask 2026-10-08)
+ *
+ * *"Per row is per unit with same grade and same spec, then the grade is on
+ * the left next to the unit."* A row holding a New, an A and a C quoted
+ * "Rp12.387.623 – Rp23.847.634", which is three shelves' worth of price in
+ * one line and answers nothing a customer asked. Grade is what makes the
+ * price differ, so it splits the row; the range that is left is the spread
+ * WITHIN a grade — a tired battery — which is how Inventory has drawn its
+ * lines since 2026-09-08.
+ *
  * ## A price RANGE per row
  *
  * A variant had one asking price between 2026-08-27 and 2026-09-08, and does
  * not any more: the price is per serial again (owner revision), because two
  * machines of one variant in different condition are not worth the same money.
- * So the row carries a RANGE and the grades behind it, and the chooser says
- * what each particular machine asks. A cashier who sees "Rp7.900.000 –
- * Rp9.400.000" beside an A and a B knows there is a decision to make; the same
- * row showing one number would have them quote whichever machine came out of
- * the dialog first.
+ * So the row carries a RANGE, and the chooser says what each particular
+ * machine asks. A cashier who sees "Rp7.900.000 – Rp9.400.000" beside an A
+ * knows there is a decision to make; the same row showing one number would
+ * have them quote whichever machine came out of the dialog first.
  *
  * Pure: no React, no store. The page renders what this returns.
  */
@@ -34,9 +43,19 @@ import { fmtNone } from "./format.js";
 import { priceOf, priceRange, type PriceRange } from "./unitPrice.js";
 import { stockLevels } from "./stock.js";
 
-/** One row of the till's catalogue: a variant, and what is left of it. */
+/**
+ * One row of the till's catalogue: a variant in one grade, and what is left
+ * of it. A counted product is one row per variant — it has no grade.
+ */
 export interface ShelfRow {
+  /** Unique across the catalogue: the variant and the grade. */
+  readonly key: string;
   readonly sku: Sku;
+  /**
+   * The grade every unit on the row shares; undefined for an ungraded unit
+   * and for a counted product.
+   */
+  readonly grade: string | undefined;
   /** The category its model belongs to — "MacBook", "iPad". Drives the chips. */
   readonly category: string;
   /**
@@ -48,8 +67,6 @@ export interface ShelfRow {
   readonly units: readonly Unit[];
   /** How many are left once the basket has taken its share. */
   readonly remaining: number;
-  /** The grades present among what is left, deduped, best first. */
-  readonly grades: readonly string[];
   /**
    * What the machines left on this row ask (owner revision 2026-09-08).
    *
@@ -124,15 +141,19 @@ export function shelfRows(
   const taken = new Set(opts.taken ?? []);
   const q = (opts.query ?? "").trim().toLowerCase();
 
-  const bySku = new Map<string, Unit[]>();
+  // By variant AND grade (owner ask 2026-10-08) — see the module docblock.
+  const byRow = new Map<string, Unit[]>();
   for (const u of sellableUnits(db)) {
-    const held = bySku.get(u.skuId);
+    const key = shelfKey(u.skuId, u.grade);
+    const held = byRow.get(key);
     if (held) held.push(u);
-    else bySku.set(u.skuId, [u]);
+    else byRow.set(key, [u]);
   }
 
   const rows: ShelfRow[] = [];
-  for (const [skuId, units] of bySku) {
+  for (const [key, units] of byRow) {
+    const skuId = units[0]!.skuId;
+    const grade = units[0]!.grade || undefined;
     const sku = db.skus.find((s) => s.id === skuId);
     if (!sku) continue;
     const category =
@@ -173,13 +194,12 @@ export function shelfRows(
     const ordered = [...units].sort((a, b) => a.serial.localeCompare(b.serial));
     const left = ordered.filter((u) => !taken.has(u.serial));
     rows.push({
+      key,
       sku,
+      grade,
       category,
       units: ordered,
       remaining: left.length,
-      grades: [...new Set(left.map((u) => u.grade).filter(Boolean))]
-        .sort((a, b) => gradeRank(a) - gradeRank(b))
-        .map(String),
       // Over what is LEFT, not over every machine of the variant: a row's
       // price has to be a price a customer could still be quoted, and a
       // basket that has already taken the cheap one must not go on advertising
@@ -208,11 +228,12 @@ export function shelfRows(
     for (const n of at.values()) held += n;
     if (held <= 0) continue;
     rows.push({
+      key: shelfKey(skuId, undefined),
       sku,
+      grade: undefined,
       category,
       units: [],
       remaining: Math.max(0, held - (opts.takenQty?.[skuId] ?? 0)),
-      grades: [],
       price: priceRange([sku.price]),
       anyReserved: false,
       counted: true,
@@ -222,8 +243,14 @@ export function shelfRows(
   return rows.sort(
     (a, b) =>
       a.sku.name.localeCompare(b.sku.name) ||
-      a.sku.variantLabel.localeCompare(b.sku.variantLabel),
+      a.sku.variantLabel.localeCompare(b.sku.variantLabel) ||
+      gradeRank(a.grade) - gradeRank(b.grade),
   );
+}
+
+/** A catalogue row's key: the variant, and the grade its units share. */
+export function shelfKey(skuId: string, grade: string | undefined): string {
+  return `${skuId}|${grade ?? ""}`;
 }
 
 /**

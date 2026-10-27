@@ -69,6 +69,7 @@ import {
   ensureQcDescription,
 } from "../mock/store.js";
 import { COLUMN } from "../theme/tokens";
+import { warehouseLabelOf } from "../lib/warehouses.js";
 
 export function OrphanQcCard() {
   const { t } = useTranslation();
@@ -243,8 +244,7 @@ export function OrphanQcCard() {
             title: t("orphanQc.warehouse", "Warehouse"),
             width: 150,
             render: (_, u) =>
-              db.warehouses.find((w) => w.id === u.locationId)?.name ??
-              fmtNone(),
+              warehouseLabelOf(db.warehouses, u.locationId) ?? fmtNone(),
           },
           {
             title: t("orphanQc.condition", "Condition"),

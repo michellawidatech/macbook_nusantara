@@ -1,0 +1,175 @@
+#!/bin/zsh
+# Find and clean up duplicated product variants (owner ask 2026-10-21: "fix
+# the data on the production … check for duplicates and confirm").
+#
+#   sudo -u _nusantara /opt/nusantara/current/ops/fix-skus --dry-run
+#   sudo -u _nusantara /opt/nusantara/current/ops/fix-skus
+#
+# A DUPLICATE is two live variants of ONE product whose variant labels are the
+# same once the separator is ignored: `i3 · 8GB · 256GB` and `i3 / 8GB / 256GB`.
+# "Generate variants" compared the labels as text until v2026.10.21.9 and
+# minted the second one, with a random SKU_ code.
+#
+# Per duplicate group ONE variant is kept: the one anything refers to (units,
+# invoices, sales, holds, stock moves, trade-ins, stock takes, discounts),
+# then one whose code is not a random SKU_ code, then the oldest. Each other
+# variant in the group is ARCHIVED — exactly what deleting an unstocked
+# variant on Master Product does; nothing is deleted — and only when nothing
+# refers to it. A duplicate something DOES refer to is listed and left alone:
+# moving units between variants is a decision for a person.
+#
+# When the kept variant has a SKU_ code and the archived one had the shop's
+# name, the kept one takes that name. Every remaining SKU_ code is then one
+# press of "Rename SKU codes" on Master Product.
+#
+# Also reported, never changed: PRODUCTS that look like the same product twice
+# (same name once case, spaces and punctuation are ignored) — typically one
+# typed by hand and one from AppleDB.
+#
+# Safety: a pg_dump first (ops/backup, label before-fix-skus), the database's
+# name typed back, one transaction. Every open POS tab picks the change up on
+# its next poll.
+setopt err_exit no_unset pipe_fail
+
+home=${NUSANTARA_HOME:-/opt/nusantara}
+pgbin=${PG_BIN:-/opt/homebrew/opt/postgresql@16/bin}
+dbname=${NUSANTARA_DB:-nusantara_pos_prod}
+dry=0
+[[ ${1:-} == --dry-run ]] && dry=1
+
+export PGPASSFILE=$home/etc/pgpass
+psql=($pgbin/psql --host=${PGHOST:-127.0.0.1} --username=${PGUSER:-nusantara}
+  --dbname=$dbname -X -v ON_ERROR_STOP=1 --quiet)
+
+# The plan, as SQL every step below reads. One row per live variant that is in
+# a duplicate group: what it is, how much refers to it, and what happens to it.
+PLAN=$(cat <<'SQL'
+CREATE TEMP TABLE refs ON COMMIT DROP AS
+SELECT s.id,
+       (SELECT count(*) FROM "Unit" x WHERE x."skuId" = s.id)
+     + (SELECT count(*) FROM "PurchaseOrderItem" x WHERE x."skuId" = s.id)
+     + (SELECT count(*) FROM "OrderItem" x WHERE x."skuId" = s.id)
+     + (SELECT count(*) FROM "ReservationItem" x WHERE x."skuId" = s.id)
+     + (SELECT count(*) FROM "StockMove" x WHERE x."skuId" = s.id)
+     + (SELECT count(*) FROM "StockIn" x WHERE x."skuId" = s.id)
+     + (SELECT count(*) FROM "TradeIn" x WHERE x."skuId" = s.id)
+     + (SELECT count(*) FROM "OpnameCount" x WHERE x."skuId" = s.id)
+     + (SELECT count(*) FROM "OpnameSurplus" x WHERE x."skuId" = s.id)
+     + (SELECT count(*) FROM "DiscountSku" x WHERE x."skuId" = s.id) AS n
+  FROM "Sku" s WHERE NOT s.archived;
+
+CREATE TEMP TABLE plan ON COMMIT DROP AS
+WITH live AS (
+  SELECT s.id, s."modelId", s.code, s."variantLabel", s."createdAt", r.n,
+         upper(regexp_replace(
+           regexp_replace(coalesce(s."variantLabel", ''), '\s*[/·]\s*', '|', 'g'),
+           '\s+', '', 'g')) AS norm
+    FROM "Sku" s JOIN refs r ON r.id = s.id
+),
+grouped AS (
+  SELECT l.*,
+         count(*) OVER (PARTITION BY "modelId", norm) AS size,
+         row_number() OVER (
+           PARTITION BY "modelId", norm
+           ORDER BY (n > 0) DESC, (code ~ '^SKU_') ASC, "createdAt" ASC, id
+         ) AS rank
+    FROM live l
+)
+SELECT g.id, g."modelId", m.name AS product, g.code, g."variantLabel", g.n,
+       g.norm, g.rank,
+       CASE WHEN g.rank = 1 THEN 'KEEP'
+            WHEN g.n = 0 THEN 'ARCHIVE'
+            ELSE 'LEAVE (in use)' END AS action
+  FROM grouped g JOIN "CatalogModel" m ON m.id = g."modelId"
+ WHERE g.size > 1 AND g.norm <> '';
+SQL
+)
+
+report() {
+  $psql -P pager=off <<SQL
+BEGIN;
+$PLAN
+\echo
+\echo '== Duplicated variants (same product, same variant) =='
+SELECT product, "variantLabel" AS variant, code, n AS "in use by", action
+  FROM plan ORDER BY product, norm, rank;
+SELECT count(*) FILTER (WHERE action = 'ARCHIVE') AS "to archive",
+       count(*) FILTER (WHERE action = 'LEAVE (in use)') AS "need a person",
+       count(DISTINCT ("modelId", norm)) AS "duplicate groups"
+  FROM plan;
+\echo
+\echo '== Products that look like the same product twice (report only) =='
+SELECT string_agg(m.name || '  [' || m.id || ', ' ||
+         (SELECT count(*) FROM "Sku" s WHERE s."modelId" = m.id AND NOT s.archived)
+         || ' variants]', E'\n' ORDER BY m.name) AS products
+  FROM "CatalogModel" m
+ WHERE NOT m.archived
+ GROUP BY regexp_replace(upper(m.name), '[^A-Z0-9]', '', 'g')
+HAVING count(*) > 1;
+\echo
+\echo '== Live variants whose codes are the same apart from case or spaces =='
+SELECT string_agg(code, '  |  ') AS codes
+  FROM "Sku" WHERE NOT archived
+ GROUP BY regexp_replace(upper(code), '\s+', '', 'g')
+HAVING count(*) > 1;
+\echo
+\echo '== Random SKU_ codes still on live variants =='
+SELECT count(*) AS "SKU_ codes" FROM "Sku" WHERE NOT archived AND code ~ '^SKU_';
+ROLLBACK;
+SQL
+}
+
+print "Database: $dbname"
+report
+(( dry )) && { print "\n--dry-run: nothing changed."; exit 0 }
+
+print "\nBacking up first…"
+$home/current/ops/backup before-fix-skus
+
+print
+print "This archives every variant marked ARCHIVE above. Nothing is deleted."
+print -n "Type the database name ($dbname) to go ahead: "
+read -r answer </dev/tty
+[[ $answer == $dbname ]] || { print "Not confirmed. Nothing changed."; exit 1 }
+
+$psql <<SQL
+BEGIN;
+$PLAN
+
+-- The kept variant takes the shop's name off the first archived duplicate
+-- that has one, when its own code is a random SKU_ one.
+CREATE TEMP TABLE handover ON COMMIT DROP AS
+SELECT DISTINCT ON (k.id) k.id AS keep_id, a.id AS archive_id, a.code AS code
+  FROM plan k JOIN plan a
+    ON a."modelId" = k."modelId" AND a.norm = k.norm
+ WHERE k.action = 'KEEP' AND k.code ~ '^SKU_'
+   AND a.action = 'ARCHIVE' AND a.code !~ '^SKU_'
+ ORDER BY k.id, a.rank;
+
+-- Archive first, parking each archived code where nothing can want it, so the
+-- kept variant can take its name without a unique-code clash.
+UPDATE "Sku" s
+   SET archived = true, code = s.code || ' [archived ' || s.id || ']'
+  FROM plan p WHERE p.id = s.id AND p.action = 'ARCHIVE';
+
+UPDATE "Sku" s SET code = h.code FROM handover h WHERE h.keep_id = s.id;
+
+INSERT INTO "StoreChange" (collection, "rowKey")
+SELECT 'skus', id FROM plan WHERE action = 'ARCHIVE'
+UNION SELECT 'skus', keep_id FROM handover;
+
+INSERT INTO "AuditLog" (id, at, entity, "entityId", action, field, before, after)
+SELECT 'fixskus-' || p.id, now() AT TIME ZONE 'UTC', 'Sku', p.id, 'ARCHIVE',
+       'archived', p.code, 'archived as a duplicate (ops/fix-skus)'
+  FROM plan p WHERE p.action = 'ARCHIVE';
+
+\echo
+SELECT (SELECT count(*) FROM plan WHERE action = 'ARCHIVE') AS archived,
+       (SELECT count(*) FROM handover) AS "kept variants renamed",
+       (SELECT count(*) FROM plan WHERE action = 'LEAVE (in use)') AS "left for a person";
+COMMIT;
+SQL
+
+print "\nAfter the fix:"
+report
+print "\nNext: Master Product → Rename SKU codes, for the SKU_ codes counted above."

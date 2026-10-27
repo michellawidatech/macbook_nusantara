@@ -149,7 +149,14 @@ export function canUndoReturn(input: UndoInput): UndoCheck {
   }
 
   for (const sale of input.sales) {
-    if (isBookClosed(sale.ts, input.settings))
+    // Locked only once finished (2026-10-22, `isSaleLocked`): settled, with
+    // nothing pending or owed. This file holds the slim `UndoSale`, so the
+    // same reading is made off its flag and its payments' states.
+    if (
+      isBookClosed(sale.ts, input.settings) &&
+      sale.settled === true &&
+      !(sale.payments ?? []).some((p) => p.state !== "SETTLED")
+    )
       return { ok: false, why: "BOOKS_CLOSED" };
     /*
      * Marketplace money. The conservative reading, on purpose: a sale whose

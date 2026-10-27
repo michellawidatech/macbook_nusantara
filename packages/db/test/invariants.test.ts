@@ -347,6 +347,121 @@ describe("08 §2 — the fifteen invariants", () => {
     expect(rows.map((r) => r.inBalance)).toEqual([true]);
   });
 
+  it("7c. a DP's one parent is its reservation, and the sale takes the SAME row (2026-10-27)", async () => {
+    await owner.query(
+      `INSERT INTO "Customer" (id, name, "createdAt") VALUES ('cus1','Pelanggan A',now())`,
+    );
+    await owner.query(
+      `INSERT INTO "Supplier" (id, name, active, "createdAt") VALUES ('sup1','Supplier A',true,now())`,
+    );
+    await owner.query(
+      `INSERT INTO "PurchaseOrder" (id, "supplierId", "noInvoice", status, "orderedAt", subtotal,
+                                    "feesTaxPct", "feesTotal", total, "locationId", "staffId", "createdAt")
+       VALUES ('po1','sup1',false,'DRAF',now(),0,0,0,0,$1,$2,now())`,
+      [LOC, STAFF],
+    );
+    await owner.query(
+      `INSERT INTO "Reservation" (id, status, source, "createdAt", "heldUntil")
+       VALUES ('rv1','TERJADWAL','STAF',now(), now() + interval '7 days')`,
+    );
+    const pay = (
+      id: string,
+      parents: {
+        reservationId?: string;
+        orderId?: string;
+        poId?: string;
+        customerId?: string;
+      },
+      direction: "MASUK" | "KELUAR" = "MASUK",
+    ) =>
+      app.query(
+        `INSERT INTO "Payment" (id, "reservationId", "orderId", "poId", "customerId", direction, "methodId", amount, status, "staffId")
+         VALUES ($1,$2,$3,$4,$5,$6,'pm_tunai',500000,'LUNAS',$7)`,
+        [
+          id,
+          parents.reservationId ?? null,
+          parents.orderId ?? null,
+          parents.poId ?? null,
+          parents.customerId ?? null,
+          direction,
+          STAFF,
+        ],
+      );
+
+    // Before the sale the reservation alone is the parent — as the app role.
+    await pay("dp1", { reservationId: "rv1" });
+    // Its refund names the reservation alone too.
+    await pay("dp1r", { reservationId: "rv1" }, "KELUAR");
+    // The sale takes the same row: the reservation stays as history.
+    await app.query(`UPDATE "Payment" SET "orderId" = $1 WHERE id = 'dp1'`, [
+      ORDER,
+    ]);
+    // Never a supplier's invoice or an old debt beside a reservation.
+    await rejectsWith(
+      () => pay("dp2", { reservationId: "rv1", poId: "po1" }),
+      CHECK_VIOLATION,
+    );
+    await rejectsWith(
+      () => pay("dp3", { reservationId: "rv1", customerId: "cus1" }),
+      CHECK_VIOLATION,
+    );
+    // Without a reservation the old rule stands: exactly one parent.
+    await rejectsWith(() => pay("dp4", {}), CHECK_VIOLATION);
+    await rejectsWith(
+      () => pay("dp5", { orderId: ORDER, poId: "po1" }),
+      CHECK_VIOLATION,
+    );
+    // A reservation that does not exist is a foreign key failing.
+    await rejectsWith(
+      () => pay("dp6", { reservationId: "nobody" }),
+      FOREIGN_KEY_VIOLATION,
+    );
+    const { rows } = await owner.query<{
+      orderId: string | null;
+      reservationId: string | null;
+    }>(`SELECT "orderId", "reservationId" FROM "Payment" WHERE id = 'dp1'`);
+    expect(rows).toEqual([{ orderId: ORDER, reservationId: "rv1" }]);
+  });
+
+  it("7d. the worker reads a firm hold and its DP, and can never write money (2026-10-27)", async () => {
+    await owner.query(
+      `INSERT INTO "Reservation" (id, status, source, "createdAt", "heldUntil")
+       VALUES ('rv1','TERJADWAL','STAF',now(), now())`,
+    );
+    await owner.query(
+      `INSERT INTO "Payment" (id, "reservationId", direction, "methodId", amount, status, "staffId")
+       VALUES ('dp1','rv1','MASUK','pm_tunai',500000,'LUNAS',$1)`,
+      [STAFF],
+    );
+    const { rows } = await agent.query<{
+      heldUntil: Date;
+      reservationId: string;
+    }>(
+      `SELECT r."heldUntil", p."reservationId"
+         FROM "Reservation" r JOIN "Payment" p ON p."reservationId" = r.id`,
+    );
+    expect(rows).toHaveLength(1);
+    // The refund / keep decision is staff's.
+    await rejectsWith(
+      () =>
+        agent.query(
+          `INSERT INTO "Payment" (id, "reservationId", direction, "methodId", amount, status, "staffId")
+           VALUES ('dp2','rv1','KELUAR','pm_tunai',500000,'LUNAS',$1)`,
+          [STAFF],
+        ),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    await rejectsWith(
+      () =>
+        agent.query(`UPDATE "Payment" SET "orderId" = NULL WHERE id = 'dp1'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    // It may end a hold: the release writes the reservation.
+    await agent.query(
+      `UPDATE "Reservation" SET "heldUntil" = now() WHERE id = 'rv1'`,
+    );
+  });
+
   it("8. money is never negative where it cannot be, and quantities are positive", async () => {
     const line = (id: string, qty: number, price: number) =>
       owner.query(
@@ -583,6 +698,28 @@ describe("08 §2 — the fifteen invariants", () => {
       [UNIT],
     );
     expect(left.map((r) => r.id)).toEqual(["ue1"]);
+
+    // Since 2026-10-22 any row may go (20261022140000) — from the middle too —
+    // but never the last one standing.
+    await owner.query(
+      `INSERT INTO "UnitEvent" (id, "unitId", serial, seq, type, at, "toStatus", "costDelta", "staffId")
+       VALUES ('ue4',$1,'SER-001X',4,'QC_SELESAI',now(),'TERSEDIA',0,$2),
+              ('ue5',$1,'SER-001X',5,'DICATAT',now(),'TERSEDIA',0,$2)`,
+      [UNIT, STAFF],
+    );
+    const { rows: mid } = await app.query<{ n: number }>(
+      `SELECT unit_event_drop(ARRAY['ue4']) AS n`,
+    );
+    expect(mid[0]!.n).toBe(1);
+    await rejectsWith(
+      () => app.query(`SELECT unit_event_drop(ARRAY['ue1','ue5'])`),
+      CHECK_VIOLATION,
+    );
+    const { rows: kept } = await owner.query<{ id: string }>(
+      `SELECT id FROM "UnitEvent" WHERE "unitId" = $1 ORDER BY seq`,
+      [UNIT],
+    );
+    expect(kept.map((r) => r.id)).toEqual(["ue1", "ue5"]);
   });
 
   it("15. a unit always has a location", async () => {
@@ -607,6 +744,86 @@ describe("the app role has no DELETE anywhere", () => {
       () => app.query(`DELETE FROM "Unit" WHERE id = $1`, [UNIT]),
       INSUFFICIENT_PRIVILEGE,
     );
+  });
+});
+
+describe("an unused discount can be deleted (2026-10-02)", () => {
+  it("grants DELETE on the discount tables to the app alone", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_app','"Discount"','DELETE')      AS app_discount,
+              has_table_privilege('nusantara_app','"DiscountSku"','DELETE')   AS app_sku,
+              has_table_privilege('nusantara_agent','"Discount"','DELETE')    AS agent_discount,
+              has_table_privilege('nusantara_app','"Discount"','TRUNCATE')    AS app_truncate`,
+    );
+    expect(rows[0]).toEqual({
+      app_discount: true,
+      app_sku: true,
+      agent_discount: false,
+      app_truncate: false,
+    });
+  });
+});
+
+describe("an unused supplier or customer can be deleted (2026-10-21)", () => {
+  it("grants DELETE on the three tables to the app alone", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_app','"Supplier"','DELETE')        AS app_supplier,
+              has_table_privilege('nusantara_app','"Customer"','DELETE')        AS app_customer,
+              has_table_privilege('nusantara_app','"CustomerAddress"','DELETE') AS app_address,
+              has_table_privilege('nusantara_agent','"Customer"','DELETE')      AS agent_customer,
+              has_table_privilege('nusantara_app','"Customer"','TRUNCATE')      AS app_truncate`,
+    );
+    expect(rows[0]).toEqual({
+      app_supplier: true,
+      app_customer: true,
+      app_address: true,
+      agent_customer: false,
+      app_truncate: false,
+    });
+  });
+});
+
+describe("an Income & Expense adjustment can be deleted (2026-10-24)", () => {
+  it("grants DELETE on the two tables to the app alone", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_app','"Expense"','DELETE')         AS app_expense,
+              has_table_privilege('nusantara_app','"ManualIncome"','DELETE')    AS app_income,
+              has_table_privilege('nusantara_agent','"Expense"','DELETE')       AS agent_expense,
+              has_table_privilege('nusantara_app','"Expense"','TRUNCATE')       AS app_truncate`,
+    );
+    expect(rows[0]).toEqual({
+      app_expense: true,
+      app_income: true,
+      agent_expense: false,
+      app_truncate: false,
+    });
+  });
+});
+
+describe("a service charge or visit can be deleted (2026-10-26)", () => {
+  it("grants DELETE on the two service tables to the app alone, and nothing beside them", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_app','"ServiceVisit"','DELETE')   AS app_visit,
+              has_table_privilege('nusantara_app','"ServiceFee"','DELETE')     AS app_fee,
+              has_table_privilege('nusantara_agent','"ServiceFee"','DELETE')   AS agent_fee,
+              has_table_privilege('nusantara_app','"ServiceFee"','TRUNCATE')   AS app_truncate,
+              has_table_privilege('nusantara_app','"Unit"','DELETE')           AS app_unit,
+              has_table_privilege('nusantara_app','"UnitEvent"','DELETE')      AS app_event,
+              has_table_privilege('nusantara_app','"Payment"','DELETE')        AS app_payment,
+              has_table_privilege('nusantara_app','"UnitReturn"','DELETE')     AS app_return,
+              has_table_privilege('nusantara_app','"PurchaseOrder"','DELETE')  AS app_po`,
+    );
+    expect(rows[0]).toEqual({
+      app_visit: true,
+      app_fee: true,
+      agent_fee: false,
+      app_truncate: false,
+      app_unit: false,
+      app_event: false,
+      app_payment: false,
+      app_return: false,
+      app_po: false,
+    });
   });
 });
 
@@ -638,6 +855,349 @@ describe("the ledger's two admitted edits (2026-09-23, in the database 2026-09-2
   });
 });
 
+describe("clearing the activity log (2026-10-22)", () => {
+  it("is one definer function, and the table stays append-only", async () => {
+    // No table-level DELETE, UPDATE or TRUNCATE: the only way the app empties
+    // the log is audit_log_clear(), which takes EVERY row or none — there is
+    // no form of it that edits the history by removing single lines.
+    const { rows } = await owner.query(
+      `SELECT has_function_privilege('nusantara_app','audit_log_clear()','EXECUTE')   AS app_clear,
+              has_function_privilege('nusantara_agent','audit_log_clear()','EXECUTE') AS agent_clear,
+              has_table_privilege('nusantara_app','"AuditLog"','DELETE')               AS app_delete,
+              has_table_privilege('nusantara_app','"AuditLog"','UPDATE')               AS app_update,
+              has_table_privilege('nusantara_app','"AuditLog"','TRUNCATE')             AS app_truncate`,
+    );
+    expect(rows[0]).toEqual({
+      app_clear: true,
+      agent_clear: false,
+      app_delete: false,
+      app_update: false,
+      app_truncate: false,
+    });
+
+    await owner.query(
+      `INSERT INTO "AuditLog" (id, at, entity, "entityId", action)
+       VALUES ('clr1', now(),'Unit','x','CREATE'), ('clr2', now(),'Unit','y','UPDATE')`,
+    );
+    await rejectsWith(
+      () => app.query(`DELETE FROM "AuditLog" WHERE id = 'clr1'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    const { rows: cleared } = await app.query<{ n: number }>(
+      `SELECT audit_log_clear() AS n`,
+    );
+    expect(cleared[0]!.n).toBe(2);
+    const { rows: left } = await owner.query<{ n: string }>(
+      `SELECT count(*) AS n FROM "AuditLog"`,
+    );
+    expect(left[0]!.n).toBe("0");
+  });
+});
+
+describe("clearing and deleting a chat, taking a rating back (2026-10-27)", () => {
+  it("gives the clear to the app role alone (invariant 13)", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_column_privilege('nusantara_app','"WaThreadMemory"','clearedAt','UPDATE')     AS app_at,
+              has_column_privilege('nusantara_app','"WaThreadMemory"','clearedById','UPDATE')   AS app_by,
+              has_column_privilege('nusantara_agent','"WaThreadMemory"','clearedAt','UPDATE')   AS agent_at,
+              has_column_privilege('nusantara_agent','"WaThreadMemory"','clearedById','UPDATE') AS agent_by,
+              has_column_privilege('nusantara_agent','"WaThreadMemory"','clearedAt','INSERT')   AS agent_insert`,
+    );
+    expect(rows[0]).toEqual({
+      app_at: true,
+      app_by: true,
+      agent_at: false,
+      agent_by: false,
+      agent_insert: false,
+    });
+
+    await owner.query(
+      `INSERT INTO "WaThreadMemory" (id, "from", "summaryTurns", "clarifyCount", "updatedAt")
+       VALUES ('tm_clr', '628111000777', 0, 0, now())`,
+    );
+    await rejectsWith(
+      () =>
+        agent.query(
+          `UPDATE "WaThreadMemory" SET "clearedAt" = now(), "clearedById" = $1 WHERE id = 'tm_clr'`,
+          [STAFF],
+        ),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    // A clear names who; a name means a clear.
+    await rejectsWith(
+      () =>
+        app.query(
+          `UPDATE "WaThreadMemory" SET "clearedAt" = now() WHERE id = 'tm_clr'`,
+        ),
+      CHECK_VIOLATION,
+    );
+    await app.query(
+      `UPDATE "WaThreadMemory" SET "clearedAt" = now(), "clearedById" = $1 WHERE id = 'tm_clr'`,
+      [STAFF],
+    );
+  });
+
+  it("deletes a conversation through one definer function the agent cannot call", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_function_privilege('nusantara_app','wa_thread_delete(text, text, timestamp)','EXECUTE')   AS app_fn,
+              has_function_privilege('nusantara_agent','wa_thread_delete(text, text, timestamp)','EXECUTE') AS agent_fn,
+              has_table_privilege('nusantara_app','"WaMessage"','DELETE')        AS app_msg,
+              has_table_privilege('nusantara_app','"AgentEvaluation"','DELETE')  AS app_eval,
+              has_table_privilege('nusantara_agent','"AgentEvaluation"','DELETE') AS agent_eval,
+              has_table_privilege('nusantara_app','"AgentCorrection"','DELETE')  AS app_corr`,
+    );
+    expect(rows[0]).toEqual({
+      app_fn: true,
+      agent_fn: false,
+      app_msg: false,
+      app_eval: true,
+      agent_eval: false,
+      app_corr: false,
+    });
+
+    const FROM = "628111000778";
+    await owner.query(
+      `INSERT INTO "WaMessage" (id, "waMessageId", "from", "msgType", ts, direction, status, entities, "answeredByAgent", "replyText", "answeredAt")
+       VALUES ('wm_d1','wamid.d1',$1,'text',now(),'IN','DIJAWAB_AGEN','{}',true,'halo kak', now()),
+              ('wm_d2','wamid.d2',$1,'text',now(),'IN','DIJAWAB_AGEN','{}',true,'ada kak', now())`,
+      [FROM],
+    );
+    await owner.query(
+      `INSERT INTO "AgentEvaluation" (id, "messageId", rating, "createdById", "createdAt")
+       VALUES ('ev_d1','wm_d1','GOOD',$1, now())`,
+      [STAFF],
+    );
+    await rejectsWith(
+      () => app.query(`DELETE FROM "WaMessage" WHERE id = 'wm_d2'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    await rejectsWith(
+      () =>
+        agent.query(`SELECT wa_thread_delete($1, $2, now()::timestamp)`, [
+          FROM,
+          STAFF,
+        ]),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    const { rows: n } = await app.query<{ n: number }>(
+      `SELECT wa_thread_delete($1, $2, now()::timestamp) AS n`,
+      [FROM, STAFF],
+    );
+    expect(n[0]!.n).toBe(1);
+    // The rated message stays, hidden behind a fresh clear.
+    const { rows: left } = await owner.query(
+      `SELECT m.id, t."clearedById" FROM "WaMessage" m
+         JOIN "WaThreadMemory" t ON t."from" = m."from"
+        WHERE m."from" = $1`,
+      [FROM],
+    );
+    expect(left).toEqual([{ id: "wm_d1", clearedById: STAFF }]);
+    // And a rating can be taken back by the app role.
+    await app.query(`DELETE FROM "AgentEvaluation" WHERE id = 'ev_d1'`);
+  });
+});
+
+describe("a picture staff sent from their own device (2026-10-27)", () => {
+  const FROM = "628111000779";
+  const PNG = "\\x89504e470d0a1a0a";
+
+  it("is written by the app, read by the agent, deleted by neither", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_app','"ChatMedia"','INSERT')     AS app_insert,
+              has_table_privilege('nusantara_app','"ChatMedia"','SELECT')     AS app_select,
+              has_table_privilege('nusantara_app','"ChatMedia"','UPDATE')     AS app_update,
+              has_table_privilege('nusantara_app','"ChatMedia"','DELETE')     AS app_delete,
+              has_table_privilege('nusantara_agent','"ChatMedia"','SELECT')   AS agent_select,
+              has_table_privilege('nusantara_agent','"ChatMedia"','INSERT')   AS agent_insert,
+              has_table_privilege('nusantara_agent','"ChatMedia"','DELETE')   AS agent_delete,
+              has_table_privilege('nusantara_readonly','"ChatMedia"','SELECT') AS ro_select`,
+    );
+    expect(rows[0]).toEqual({
+      app_insert: true,
+      app_select: true,
+      app_update: false,
+      app_delete: false,
+      agent_select: true,
+      agent_insert: false,
+      agent_delete: false,
+      ro_select: true,
+    });
+
+    await app.query(
+      `INSERT INTO "ChatMedia" (id, "from", data, "contentType", size, "uploadedById")
+       VALUES ('cm_1', $1, $2::bytea, 'image/png', 8, $3)`,
+      [FROM, PNG, STAFF],
+    );
+    const { rows: read } = await agent.query(
+      `SELECT size FROM "ChatMedia" WHERE id = 'cm_1'`,
+    );
+    expect(read).toEqual([{ size: 8 }]);
+    await rejectsWith(
+      () => app.query(`DELETE FROM "ChatMedia" WHERE id = 'cm_1'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    await rejectsWith(
+      () => app.query(`UPDATE "ChatMedia" SET size = 8 WHERE id = 'cm_1'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    await rejectsWith(
+      () =>
+        agent.query(
+          `INSERT INTO "ChatMedia" (id, "from", data, "contentType", size, "uploadedById")
+           VALUES ('cm_2', $1, $2::bytea, 'image/png', 8, $3)`,
+          [FROM, PNG, STAFF],
+        ),
+      INSUFFICIENT_PRIVILEGE,
+    );
+  });
+
+  it("holds the route's rules: three types, a true size, 5 MB at most", async () => {
+    const insert = (type: string, size: number, from = FROM) =>
+      app.query(
+        `INSERT INTO "ChatMedia" (id, "from", data, "contentType", size, "uploadedById")
+         VALUES ('cm_' || md5(random()::text), $1, $2::bytea, $3, $4, $5)`,
+        [from, PNG, type, size, STAFF],
+      );
+    await rejectsWith(() => insert("image/gif", 8), CHECK_VIOLATION);
+    await rejectsWith(() => insert("image/png", 9), CHECK_VIOLATION);
+    await rejectsWith(() => insert("image/png", 8, "+62811"), CHECK_VIOLATION);
+    await insert("image/webp", 8);
+  });
+
+  it("goes with a deleted conversation, and only that one's", async () => {
+    await owner.query(
+      `INSERT INTO "WaMessage" (id, "waMessageId", "from", "msgType", ts, direction, status, entities, "answeredByAgent")
+       VALUES ('wm_p1','wamid.p1',$1,'text',now(),'IN','BARU','{}',false)`,
+      [FROM],
+    );
+    await owner.query(
+      `INSERT INTO "ChatMedia" (id, "from", data, "contentType", size, "uploadedById")
+       VALUES ('cm_mine', $1, $3::bytea, 'image/png', 8, $4),
+              ('cm_theirs', $2, $3::bytea, 'image/png', 8, $4)`,
+      [FROM, "628111000780", PNG, STAFF],
+    );
+    const { rows: n } = await app.query<{ n: number }>(
+      `SELECT wa_thread_delete($1, $2, now()::timestamp) AS n`,
+      [FROM, STAFF],
+    );
+    expect(n[0]!.n).toBe(2);
+    const { rows: left } = await owner.query(
+      `SELECT id FROM "ChatMedia" WHERE id IN ('cm_mine','cm_theirs')`,
+    );
+    expect(left).toEqual([{ id: "cm_theirs" }]);
+  });
+});
+
+describe("sell, don't hold — stock watches and the closing task (2026-10-27)", () => {
+  const FROM = "628111000881";
+
+  it("lets the agent write and close a watch, and staff only close one", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_agent','"StockWatch"','SELECT')  AS agent_select,
+              has_table_privilege('nusantara_agent','"StockWatch"','INSERT')  AS agent_insert,
+              has_table_privilege('nusantara_agent','"StockWatch"','UPDATE')  AS agent_update,
+              has_table_privilege('nusantara_agent','"StockWatch"','DELETE')  AS agent_delete,
+              has_table_privilege('nusantara_app','"StockWatch"','SELECT')    AS app_select,
+              has_table_privilege('nusantara_app','"StockWatch"','INSERT')    AS app_insert,
+              has_column_privilege('nusantara_app','"StockWatch"','closedAt','UPDATE') AS app_close,
+              has_column_privilege('nusantara_app','"StockWatch"','query','UPDATE')    AS app_rewrite,
+              has_table_privilege('nusantara_app','"StockWatch"','DELETE')    AS app_delete,
+              has_table_privilege('nusantara_agent','"StockMove"','SELECT')   AS agent_reads_moves,
+              has_table_privilege('nusantara_agent','"StockMove"','INSERT')   AS agent_writes_moves`,
+    );
+    expect(rows[0]).toEqual({
+      agent_select: true,
+      agent_insert: true,
+      agent_update: true,
+      agent_delete: false,
+      app_select: true,
+      app_insert: false,
+      app_close: true,
+      app_rewrite: false,
+      app_delete: false,
+      agent_reads_moves: true,
+      agent_writes_moves: false,
+    });
+
+    await agent.query(
+      `INSERT INTO "StockWatch" (id, "from", query, "skuId", budget, "createdAt")
+       VALUES ('sw_1', $1, 'air m1 8/256', $2, 13000000, now())`,
+      [FROM, SKU],
+    );
+    await app.query(
+      `UPDATE "StockWatch" SET "closedAt" = now() WHERE id = 'sw_1'`,
+    );
+    await rejectsWith(
+      () => app.query(`UPDATE "StockWatch" SET query = 'x' WHERE id = 'sw_1'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    await rejectsWith(
+      () => agent.query(`DELETE FROM "StockWatch" WHERE id = 'sw_1'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+  });
+
+  it("holds a watch to words, a thread and money", async () => {
+    const insert = (query: string, budget: number | null) =>
+      agent.query(
+        `INSERT INTO "StockWatch" (id, "from", query, budget, "createdAt")
+         VALUES ('sw_' || md5(random()::text), $1, $2, $3, now())`,
+        [FROM, query, budget],
+      );
+    await rejectsWith(() => insert("  ", null), CHECK_VIOLATION);
+    await rejectsWith(() => insert("air m1", 0), CHECK_VIOLATION);
+    await rejectsWith(
+      () =>
+        agent.query(
+          `INSERT INTO "StockWatch" (id, "from", query, "skuId", "createdAt")
+           VALUES ('sw_x', $1, 'air', 'no_such_sku', now())`,
+          [FROM],
+        ),
+      FOREIGN_KEY_VIOLATION,
+    );
+    await insert("air m1", null);
+  });
+
+  it("goes with a deleted conversation, and only that one's", async () => {
+    await owner.query(
+      `INSERT INTO "WaMessage" (id, "waMessageId", "from", "msgType", ts, direction, status, entities, "answeredByAgent")
+       VALUES ('wm_w1','wamid.w1',$1,'text',now(),'IN','BARU','{}',false)`,
+      [FROM],
+    );
+    await owner.query(
+      `INSERT INTO "StockWatch" (id, "from", query, "createdAt")
+       VALUES ('sw_mine', $1, 'air m3', now()), ('sw_theirs', $2, 'air m3', now())`,
+      [FROM, "628111000882"],
+    );
+    const { rows: n } = await app.query<{ n: number }>(
+      `SELECT wa_thread_delete($1, $2, now()::timestamp) AS n`,
+      [FROM, STAFF],
+    );
+    expect(n[0]!.n).toBe(2);
+    const { rows: left } = await owner.query(
+      `SELECT id FROM "StockWatch" WHERE id IN ('sw_mine','sw_theirs')`,
+    );
+    expect(left).toEqual([{ id: "sw_theirs" }]);
+  });
+
+  it("knows a CLOSING task, one open per thread like every kind", async () => {
+    await agent.query(
+      `INSERT INTO "ChatAction" (id, "from", kind, topic, summary, "createdAt", "updatedAt")
+       VALUES ('ca_c1', $1, 'CLOSING', 'closing', 'Perlu closing — Budi siap ambil', now(), now())`,
+      [FROM],
+    );
+    await rejectsWith(
+      () =>
+        agent.query(
+          `INSERT INTO "ChatAction" (id, "from", kind, topic, summary, "createdAt", "updatedAt")
+           VALUES ('ca_c2', $1, 'CLOSING', 'closing', 'Perlu closing — lagi', now(), now())`,
+          [FROM],
+        ),
+      UNIQUE_VIOLATION,
+    );
+  });
+});
+
 describe("the stock movement history (2026-09-24)", () => {
   it("is correctable per column and never as a ledger", async () => {
     // What a person can get wrong is granted; what the row IS is not. Column
@@ -664,6 +1224,420 @@ describe("the stock movement history (2026-09-24)", () => {
       move_table: false,
       adj_table: false,
       move_delete: false,
+    });
+  });
+});
+
+describe("reconciliation (2026-10-27)", () => {
+  const PAY = "tst_recon_pay";
+  const EXP = "tst_recon_exp";
+
+  async function fixtures() {
+    await owner.query(
+      `INSERT INTO "Payment" (id, "orderId", direction, "methodId", amount, status, "staffId")
+       VALUES ($1,$2,'MASUK','pm_tunai',12000000,'LUNAS',$3)`,
+      [PAY, ORDER, STAFF],
+    );
+    await owner.query(
+      `INSERT INTO "Expense" (id, kind, amount, date, "methodId", "staffId", "createdAt")
+       VALUES ($1,'OPERATIONAL',60000,'2026-10-27','pm_tunai',$2,now())`,
+      [EXP, STAFF],
+    );
+  }
+
+  async function reconciliation(id: string, status: string, kind = "DAILY") {
+    await app.query(
+      `INSERT INTO "Reconciliation" (id, kind, pot, "periodStart", "periodEnd", "posBalance",
+                                     "actualBalance", status, "staffId", "createdAt", "updatedAt")
+       VALUES ($1,$2,'BANK',$3,$4,0,0,$5,$6,now(),now())`,
+      [
+        id,
+        kind,
+        kind === "DAILY" ? "2026-10-27" : "2026-09-01",
+        kind === "DAILY" ? "2026-10-27" : "2026-09-30",
+        status,
+        STAFF,
+      ],
+    );
+  }
+
+  it("grants the app what the store needs, DELETE on the statement only, and the agent nothing", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_app','"Reconciliation"','SELECT')        AS rec_select,
+              has_table_privilege('nusantara_app','"Reconciliation"','INSERT')        AS rec_insert,
+              has_table_privilege('nusantara_app','"Reconciliation"','UPDATE')        AS rec_update,
+              has_table_privilege('nusantara_app','"Reconciliation"','DELETE')        AS rec_delete,
+              has_table_privilege('nusantara_app','"ReconciliationEdit"','INSERT')    AS edit_insert,
+              has_table_privilege('nusantara_app','"ReconciliationEdit"','UPDATE')    AS edit_update,
+              has_table_privilege('nusantara_app','"ReconciliationEdit"','DELETE')    AS edit_delete,
+              has_table_privilege('nusantara_app','"BankStatementLine"','INSERT')     AS line_insert,
+              has_table_privilege('nusantara_app','"BankStatementLine"','DELETE')     AS line_delete,
+              has_table_privilege('nusantara_app','"BankStatementMatch"','INSERT')    AS match_insert,
+              has_table_privilege('nusantara_app','"BankStatementMatch"','DELETE')    AS match_delete,
+              has_table_privilege('nusantara_app','"BankStatementLine"','TRUNCATE')   AS line_truncate,
+              has_table_privilege('nusantara_app','"Reconciliation"','TRUNCATE')      AS rec_truncate,
+              has_table_privilege('nusantara_agent','"Reconciliation"','SELECT')      AS agent_select,
+              has_table_privilege('nusantara_agent','"BankStatementMatch"','DELETE')  AS agent_delete,
+              has_function_privilege('nusantara_app','reconciliation_edit_drop(text[])','EXECUTE')   AS app_fn,
+              has_function_privilege('nusantara_agent','reconciliation_edit_drop(text[])','EXECUTE') AS agent_fn`,
+    );
+    expect(rows[0]).toEqual({
+      rec_select: true,
+      rec_insert: true,
+      rec_update: true,
+      rec_delete: false,
+      edit_insert: true,
+      edit_update: true,
+      edit_delete: false,
+      line_insert: true,
+      line_delete: true,
+      match_insert: true,
+      match_delete: true,
+      line_truncate: false,
+      rec_truncate: false,
+      agent_select: false,
+      agent_delete: false,
+      app_fn: true,
+      agent_fn: false,
+    });
+  });
+
+  it("holds one reconciliation per kind, pot and day, and its period's shape", async () => {
+    await reconciliation("rc_1", "MATCHED");
+    await rejectsWith(() => reconciliation("rc_2", "OPEN"), UNIQUE_VIOLATION);
+    // A day is one day; a month is the bank's.
+    await rejectsWith(
+      () =>
+        app.query(
+          `INSERT INTO "Reconciliation" (id, kind, pot, "periodStart", "periodEnd", "posBalance",
+                                         "actualBalance", status, "staffId", "createdAt", "updatedAt")
+           VALUES ('rc_3','DAILY','CASH','2026-10-26','2026-10-27',0,0,'OPEN',$1,now(),now())`,
+          [STAFF],
+        ),
+      CHECK_VIOLATION,
+    );
+    await rejectsWith(
+      () =>
+        app.query(
+          `INSERT INTO "Reconciliation" (id, kind, pot, "periodStart", "periodEnd", "posBalance",
+                                         "actualBalance", status, "staffId", "createdAt", "updatedAt")
+           VALUES ('rc_4','MONTHLY','CASH','2026-09-01','2026-09-30',0,0,'OPEN',$1,now(),now())`,
+          [STAFF],
+        ),
+      CHECK_VIOLATION,
+    );
+  });
+
+  it("names exactly one money row, on an edit and on a match", async () => {
+    await fixtures();
+    await reconciliation("rc_m", "OPEN", "MONTHLY");
+    await rejectsWith(
+      () =>
+        app.query(
+          `INSERT INTO "ReconciliationEdit" (id, "reconciliationId", "paymentId", "expenseId", action, before, after, "staffId", at)
+           VALUES ('re_two','rc_m',$1,$2,'EDITED',1,2,$3,now())`,
+          [PAY, EXP, STAFF],
+        ),
+      CHECK_VIOLATION,
+    );
+    await rejectsWith(
+      () =>
+        app.query(
+          `INSERT INTO "ReconciliationEdit" (id, "reconciliationId", action, after, "staffId", at)
+           VALUES ('re_none','rc_m','EDITED',2,$1,now())`,
+          [STAFF],
+        ),
+      CHECK_VIOLATION,
+    );
+    await app.query(
+      `INSERT INTO "BankStatementLine" (id, "reconciliationId", "lineNo", date, description, amount, status)
+       VALUES ('bl_1','rc_m',1,'2026-09-01','TRSF E-BANKING CR',12000000,'MATCHED')`,
+    );
+    await rejectsWith(
+      () =>
+        app.query(
+          `INSERT INTO "BankStatementMatch" (id, "lineId", "paymentId", "expenseId", reason)
+           VALUES ('bm_two','bl_1',$1,$2,'EXACT')`,
+          [PAY, EXP],
+        ),
+      CHECK_VIOLATION,
+    );
+    await app.query(
+      `INSERT INTO "BankStatementMatch" (id, "lineId", "paymentId", reason)
+       VALUES ('bm_1','bl_1',$1,'EXACT')`,
+      [PAY],
+    );
+    // Re-upload: the app may delete the statement's lines and matches.
+    await app.query(`DELETE FROM "BankStatementMatch" WHERE "lineId" = 'bl_1'`);
+    await app.query(`DELETE FROM "BankStatementLine" WHERE id = 'bl_1'`);
+  });
+
+  it("drops an edit only through the function, and only on an OPEN reconciliation", async () => {
+    await fixtures();
+    await reconciliation("rc_closed", "ADJUSTED");
+    await app.query(
+      `INSERT INTO "ReconciliationEdit" (id, "reconciliationId", "expenseId", action, after, "staffId", at)
+       VALUES ('re_added','rc_closed',$1,'ADDED',60000,$2,now())`,
+      [EXP, STAFF],
+    );
+    await rejectsWith(
+      () => app.query(`DELETE FROM "ReconciliationEdit" WHERE id = 're_added'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    await rejectsWith(
+      () => app.query(`SELECT reconciliation_edit_drop(ARRAY['re_added'])`),
+      CHECK_VIOLATION,
+    );
+    // ADDED has no before.
+    await rejectsWith(
+      () =>
+        app.query(
+          `INSERT INTO "ReconciliationEdit" (id, "reconciliationId", "expenseId", action, before, after, "staffId", at)
+           VALUES ('re_bad','rc_closed',$1,'ADDED',1,60000,$2,now())`,
+          [EXP, STAFF],
+        ),
+      CHECK_VIOLATION,
+    );
+    // Reopened, the edit goes — and with it the foreign key that held the expense.
+    await app.query(
+      `UPDATE "Reconciliation" SET status = 'OPEN' WHERE id = 'rc_closed'`,
+    );
+    const { rows } = await app.query<{ n: number }>(
+      `SELECT reconciliation_edit_drop(ARRAY['re_added']) AS n`,
+    );
+    expect(rows[0]!.n).toBe(1);
+    await app.query(`DELETE FROM "Expense" WHERE id = $1`, [EXP]);
+  });
+
+  describe("a POS entry set aside (20261027200000, owner-approved)", () => {
+    const aside = (id: string, ref: string, col = "paymentId", note = "x") =>
+      app.query(
+        `INSERT INTO "ReconciliationAside" (id, "reconciliationId", "${col}", note, "staffId", at)
+         VALUES ($1,'rc_m',$2,$3,$4,now())`,
+        [id, ref, note, STAFF],
+      );
+
+    it("grants SELECT, INSERT and an UPDATE of withdrawnAt alone — no DELETE — and the agent nothing", async () => {
+      const { rows } = await owner.query(
+        `SELECT has_table_privilege('nusantara_app','"ReconciliationAside"','SELECT')               AS a_select,
+                has_table_privilege('nusantara_app','"ReconciliationAside"','INSERT')               AS a_insert,
+                has_table_privilege('nusantara_app','"ReconciliationAside"','UPDATE')               AS a_update,
+                has_column_privilege('nusantara_app','"ReconciliationAside"','withdrawnAt','UPDATE') AS a_withdraw,
+                has_column_privilege('nusantara_app','"ReconciliationAside"','note','UPDATE')        AS a_note,
+                has_table_privilege('nusantara_app','"ReconciliationAside"','DELETE')               AS a_delete,
+                has_table_privilege('nusantara_app','"ReconciliationAside"','TRUNCATE')             AS a_truncate,
+                has_table_privilege('nusantara_agent','"ReconciliationAside"','SELECT')             AS agent_select,
+                has_function_privilege('nusantara_app','reconciliation_aside_drop(text[])','EXECUTE')   AS app_fn,
+                has_function_privilege('nusantara_agent','reconciliation_aside_drop(text[])','EXECUTE') AS agent_fn`,
+      );
+      expect(rows[0]).toEqual({
+        a_select: true,
+        a_insert: true,
+        a_update: false,
+        a_withdraw: true,
+        a_note: false,
+        a_delete: false,
+        a_truncate: false,
+        agent_select: false,
+        app_fn: true,
+        agent_fn: false,
+      });
+    });
+
+    it("names exactly one money row, with a note that is not blank", async () => {
+      await fixtures();
+      await reconciliation("rc_m", "OPEN", "MONTHLY");
+      await rejectsWith(
+        () =>
+          app.query(
+            `INSERT INTO "ReconciliationAside" (id, "reconciliationId", "paymentId", "expenseId", note, "staffId", at)
+             VALUES ('ra_two','rc_m',$1,$2,'x',$3,now())`,
+            [PAY, EXP, STAFF],
+          ),
+        CHECK_VIOLATION,
+      );
+      await rejectsWith(
+        () =>
+          app.query(
+            `INSERT INTO "ReconciliationAside" (id, "reconciliationId", note, "staffId", at)
+             VALUES ('ra_none','rc_m','x',$1,now())`,
+            [STAFF],
+          ),
+        CHECK_VIOLATION,
+      );
+      await rejectsWith(
+        () => aside("ra_blank", PAY, "paymentId", "   "),
+        CHECK_VIOLATION,
+      );
+      await rejectsWith(
+        () => aside("ra_ghost", "no_such_payment"),
+        FOREIGN_KEY_VIOLATION,
+      );
+    });
+
+    it("holds one ACTIVE aside per movement, withdrawn by a stamp and never deleted or rewritten", async () => {
+      await fixtures();
+      await reconciliation("rc_m", "OPEN", "MONTHLY");
+      await aside("ra_1", PAY);
+      await rejectsWith(() => aside("ra_2", PAY), UNIQUE_VIOLATION);
+      await rejectsWith(
+        () => app.query(`DELETE FROM "ReconciliationAside" WHERE id = 'ra_1'`),
+        INSUFFICIENT_PRIVILEGE,
+      );
+      await rejectsWith(
+        () =>
+          app.query(
+            `UPDATE "ReconciliationAside" SET note = 'other' WHERE id = 'ra_1'`,
+          ),
+        INSUFFICIENT_PRIVILEGE,
+      );
+      await app.query(
+        `UPDATE "ReconciliationAside" SET "withdrawnAt" = now() WHERE id = 'ra_1'`,
+      );
+      // Withdrawn, it no longer holds the place: the movement can be set
+      // aside again, and both rows stay.
+      await aside("ra_2", PAY);
+      const { rows } = await app.query<{ n: string }>(
+        `SELECT count(*) AS n FROM "ReconciliationAside" WHERE "paymentId" = $1`,
+        [PAY],
+      );
+      expect(Number(rows[0]!.n)).toBe(2);
+    });
+
+    it("leaves only through the function, and only once withdrawn — which frees its expense", async () => {
+      await fixtures();
+      await reconciliation("rc_m", "RECONCILED", "MONTHLY");
+      await aside("ra_e", EXP, "expenseId");
+      await rejectsWith(
+        () => app.query(`DELETE FROM "Expense" WHERE id = $1`, [EXP]),
+        FOREIGN_KEY_VIOLATION,
+      );
+      await rejectsWith(
+        () => app.query(`SELECT reconciliation_aside_drop(ARRAY['ra_e'])`),
+        CHECK_VIOLATION,
+      );
+      await app.query(
+        `UPDATE "ReconciliationAside" SET "withdrawnAt" = now() WHERE id = 'ra_e'`,
+      );
+      const { rows } = await app.query<{ n: number }>(
+        `SELECT reconciliation_aside_drop(ARRAY['ra_e']) AS n`,
+      );
+      expect(rows[0]!.n).toBe(1);
+      await app.query(`DELETE FROM "Expense" WHERE id = $1`, [EXP]);
+    });
+  });
+
+  describe("a reconciliation deleted whole (20261027230000)", () => {
+    it("is EXECUTE for the app alone, and the tables stay undeletable", async () => {
+      const { rows } = await owner.query(
+        `SELECT has_function_privilege('nusantara_app','reconciliation_delete(text)','EXECUTE')   AS app_fn,
+                has_function_privilege('nusantara_agent','reconciliation_delete(text)','EXECUTE') AS agent_fn,
+                has_table_privilege('nusantara_app','"Reconciliation"','DELETE')                   AS rec_delete,
+                has_table_privilege('nusantara_app','"ReconciliationEdit"','DELETE')               AS edit_delete,
+                has_table_privilege('nusantara_app','"ReconciliationAside"','DELETE')              AS aside_delete`,
+      );
+      expect(rows[0]).toEqual({
+        app_fn: true,
+        agent_fn: false,
+        rec_delete: false,
+        edit_delete: false,
+        aside_delete: false,
+      });
+      await reconciliation("rc_d", "MATCHED");
+      await rejectsWith(
+        () => agent.query(`SELECT reconciliation_delete('rc_d')`),
+        INSUFFICIENT_PRIVILEGE,
+      );
+      await rejectsWith(
+        () => app.query(`DELETE FROM "Reconciliation" WHERE id = 'rc_d'`),
+        INSUFFICIENT_PRIVILEGE,
+      );
+    });
+
+    it("takes a day with its edits, and leaves the record it corrected", async () => {
+      await fixtures();
+      await reconciliation("rc_d", "ADJUSTED");
+      await app.query(
+        `INSERT INTO "ReconciliationEdit" (id, "reconciliationId", "expenseId", "paymentId", action, before, after, "staffId", at)
+         VALUES ('re_d1','rc_d',$1,NULL,'EDITED',70000,60000,$2,now()),
+                ('re_d2','rc_d',NULL,$3,'EDITED',12500000,12000000,$2,now())`,
+        [EXP, STAFF, PAY],
+      );
+      const { rows } = await app.query<{ n: number }>(
+        `SELECT reconciliation_delete('rc_d') AS n`,
+      );
+      expect(rows[0]!.n).toBe(3);
+      const left = await owner.query(
+        `SELECT (SELECT count(*) FROM "Reconciliation" WHERE id = 'rc_d')::int        AS rec,
+                (SELECT count(*) FROM "ReconciliationEdit" WHERE "reconciliationId" = 'rc_d')::int AS edits,
+                (SELECT amount FROM "Expense" WHERE id = $1)::int                       AS expense`,
+        [EXP],
+      );
+      expect(left.rows[0]).toEqual({ rec: 0, edits: 0, expense: 60000 });
+      // The day can be reconciled afresh.
+      await reconciliation("rc_d2", "OPEN");
+    });
+
+    it("takes a month with its lines, matches and asides, active or withdrawn — and only that month", async () => {
+      await fixtures();
+      await reconciliation("rc_m", "RECONCILED", "MONTHLY");
+      await app.query(
+        `INSERT INTO "Reconciliation" (id, kind, pot, "periodStart", "periodEnd", "posBalance",
+                                       "actualBalance", status, "staffId", "createdAt", "updatedAt")
+         VALUES ('rc_aug','MONTHLY','BANK','2026-08-01','2026-08-31',0,0,'OPEN',$1,now(),now())`,
+        [STAFF],
+      );
+      await app.query(
+        `INSERT INTO "BankStatementLine" (id, "reconciliationId", "lineNo", date, description, amount, status)
+         VALUES ('bl_s1','rc_m',1,'2026-09-01','TRSF CR',12000000,'MATCHED'),
+                ('bl_s2','rc_m',2,'2026-09-02','BIAYA ADM',-60000,'MATCHED'),
+                ('bl_a1','rc_aug',1,'2026-08-01','TRSF CR',12000000,'MATCHED')`,
+      );
+      await app.query(
+        `INSERT INTO "BankStatementMatch" (id, "lineId", "paymentId", "expenseId", reason)
+         VALUES ('bm_s1','bl_s1',$1,NULL,'EXACT'),
+                ('bm_s2','bl_s2',NULL,$2,'EXACT'),
+                ('bm_a1','bl_a1',$1,NULL,'EXACT')`,
+        [PAY, EXP],
+      );
+      await app.query(
+        `INSERT INTO "ReconciliationAside" (id, "reconciliationId", "expenseId", note, "staffId", at, "withdrawnAt")
+         VALUES ('ra_act','rc_m',$1,'Owner account',$2,now(),NULL),
+                ('ra_wd','rc_m',$1,'Earlier note',$2,now(),now())`,
+        [EXP, STAFF],
+      );
+      await app.query(
+        `INSERT INTO "ReconciliationEdit" (id, "reconciliationId", "expenseId", action, after, "staffId", at)
+         VALUES ('re_m1','rc_m',$1,'ADDED',60000,$2,now())`,
+        [EXP, STAFF],
+      );
+      const { rows } = await app.query<{ n: number }>(
+        `SELECT reconciliation_delete('rc_m') AS n`,
+      );
+      // 2 matches + 2 lines + 2 asides + 1 edit + the reconciliation.
+      expect(rows[0]!.n).toBe(8);
+      const left = await owner.query(
+        `SELECT (SELECT count(*) FROM "Reconciliation")::int        AS recs,
+                (SELECT count(*) FROM "BankStatementLine")::int     AS lines,
+                (SELECT count(*) FROM "BankStatementMatch")::int    AS matches,
+                (SELECT count(*) FROM "ReconciliationAside")::int   AS asides,
+                (SELECT count(*) FROM "ReconciliationEdit")::int    AS edits,
+                (SELECT count(*) FROM "Expense" WHERE id = $1)::int AS expense`,
+        [EXP],
+      );
+      expect(left.rows[0]).toEqual({
+        recs: 1,
+        lines: 1,
+        matches: 1,
+        asides: 0,
+        edits: 0,
+        expense: 1,
+      });
+      // Nothing to take is not an error.
+      const again = await app.query<{ n: number }>(
+        `SELECT reconciliation_delete('rc_m') AS n`,
+      );
+      expect(again.rows[0]!.n).toBe(0);
     });
   });
 });

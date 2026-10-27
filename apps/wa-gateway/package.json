@@ -1,0 +1,25 @@
+{
+  "name": "@nusantara/wa-gateway",
+  "version": "0.0.0",
+  "private": true,
+  "description": "WhatsApp over Baileys (a linked device) for the chatbot: one session, loopback HTTP (:3002)",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config ../../vitest.config.ts",
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts"
+  },
+  "devDependencies": {
+    "@nusantara/whatsapp": "workspace:^",
+    "@types/qrcode": "^1.5.5",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@nusantara/logging": "workspace:^",
+    "baileys": "7.0.0-rc14",
+    "pino": "^9.6.0",
+    "qrcode": "^1.5.4"
+  }
+}

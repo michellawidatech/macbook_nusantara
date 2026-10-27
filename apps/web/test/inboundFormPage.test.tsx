@@ -159,6 +159,29 @@ describe("the order form's products", () => {
     expect(within(dialog).getByLabelText("Sell price")).toBeInTheDocument();
   });
 
+  it("reads the line's sell price off the popup, lowest to highest", async () => {
+    // Owner report 2026-10-21: the cell said None over priced units, because
+    // nothing on the form is a unit until Save.
+    renderForm();
+    await fillOrderStep();
+    await addLine(2);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /Serials and QC for/ }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    const boxes = within(dialog).getAllByLabelText("Sell price");
+    await userEvent.click(boxes[0]!);
+    await userEvent.paste("9000000");
+    await userEvent.click(boxes[1]!);
+    await userEvent.paste("7500000");
+    await userEvent.tab();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+
+    expect(await screen.findByText("Rp 7.500.000 –")).toBeInTheDocument();
+    expect(screen.getByText("Rp 9.000.000")).toBeInTheDocument();
+  });
+
   it("makes a unit in QC of every serial the popup was given", async () => {
     renderForm();
     await fillOrderStep();

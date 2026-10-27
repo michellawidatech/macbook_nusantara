@@ -88,6 +88,10 @@ not trusted from the browser.
    |---|---|
    | a QC photo, or all of them on sale | DELETE — the sanctioned exception, `tag = 'QC'` only |
    | a draft stock take | `OpnameSession.status = BATAL` (the owner decision left open on 2026-09-01; the soft option) |
+   | a month's e-statement lines, re-uploaded (2026-10-27) | DELETE `BankStatementLine` and its `BankStatementMatch`es — the eighth sanctioned hard delete; refused on a RECONCILED month. The corrections already written stay |
+   | a reconciliation's edit, when the adjustment it added or corrected is deleted (2026-10-27) | `reconciliation_edit_drop`, a definer function and the app's only door to it — only on an OPEN reconciliation; while one that is not OPEN names an `Expense` or `ManualIncome`, deleting it is refused ("buka kembali rekonsiliasinya dulu"). A match naming it is deleted with it |
+   | a service charge, or a whole service visit (2026-10-26) | DELETE `ServiceFee` / `ServiceVisit` — after every adapter has run (`ctx.later`), taking the `Expense` that names the charge (`serviceFeeId`) with it: the charge owns its expense, because an account without finance access is sent no expenses and cannot remove one. A correction of a paid charge's amount moves its expense too. Refused inside a closed book, judged on the Jakarta day. `fees[].paid` is DERIVED from that expense, never written |
+   | a supplier return's credit, when the return is withdrawn (2026-10-26) | the `RETUR_SUPPLIER` `Payment` naming it (`unitReturnId`) is voided like any PO payment; a REFUND `ManualIncome` naming it is kept. `returns[].refundReceived` is DERIVED from those incomes, never written, and an income insert or removal re-projects its return |
    | a unit removed from the intake grid | `archivedAt`, a `DIARSIPKAN` event, and the serial moved aside so the row can be re-keyed |
    | a variant with no stock | `Sku.archived` |
    | a PO line, a hold's machine, an axis value, a grading option or rule, an order fee, a payment, an address, a settlement fee, a deposit allocation, a draft count's scope or scan | `removedAt` / `voidedAt` on that row |
@@ -217,6 +221,8 @@ own event type, is the follow-up.
 | `expenses` / `incomes` | `Expense` / `ManualIncome` | id |
 | `paymentLog` | `PaymentLog` | id |
 | `settlements` / `settlementLog` | `Settlement` + `SettlementFee` / `SettlementLog` | id |
+| `reconciliations` | `Reconciliation` + `ReconciliationEdit` — a day's count of one pot, or a month against the bank's e-statement (2026-10-27) | id |
+| `statementLines` | `BankStatementLine` + `BankStatementMatch` | id |
 | `services` | `ServiceVisit` + `ServiceFee` | id |
 | `deposits` | `SupplierDeposit` + `DepositAllocation` | id |
 | `opnames` | `OpnameSession` + scope tables, `OpnameScan`, `OpnameSurplus` | id |

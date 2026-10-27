@@ -332,15 +332,60 @@ model CatalogModel {
   source     CatalogSource?
   archived   Boolean
   createdAt  DateTime
+  /// The product's facts (owner ask 2026-10-21: "a smart system and
+  /// structured product"). `family` is the line in full ("MacBook Air"),
+  /// `chip` an Apple-silicon chip — part of the product; an Intel processor
+  /// is a variant — and `extra` what else makes it a different product
+  /// ("TB"). Null on a product still known only by its name.
+  family     String?
+  chip       String?
+  extra      String?
+  /// `productKeyOf` the facts, or of the name. Unique among live products
+  /// (partial index `CatalogModel_productKey_live`, hand-written), so a
+  /// second copy of a product cannot be created. Null when it cannot be
+  /// placed, and on an existing duplicate until it is merged.
+  productKey String?
 
   category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
 
-  axes      ModelAxis[]
-  photos    ModelPhoto[]
-  skus      Sku[]
-  discounts Discount[]
+  axes          ModelAxis[]
+  photos        ModelPhoto[]
+  skus          Sku[]
+  discounts     Discount[]
+  identifiers   ModelIdentifier[]
+  notDuplicateA ModelNotDuplicate[] @relation("NotDuplicateA")
+  notDuplicateB ModelNotDuplicate[] @relation("NotDuplicateB")
+  stockWatches  StockWatch[]
 
   @@unique([categoryId, name, year])
+}
+
+/// An AppleDB identifier (`Mac14,2`) LINKED to a product (2026-10-21). Apple
+/// gives one marketing model several identifiers, and an import that finds
+/// the product already in the catalogue links instead of copying it.
+model ModelIdentifier {
+  id         String   @id @default(cuid())
+  modelId    String
+  identifier String   @unique
+  createdAt  DateTime
+
+  model CatalogModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+
+  @@index([modelId])
+}
+
+/// Two products a person said are NOT the same (2026-10-21), so the
+/// duplicate review stops suggesting them. Stored with aModelId < bModelId.
+model ModelNotDuplicate {
+  id        String   @id @default(cuid())
+  aModelId  String
+  bModelId  String
+  createdAt DateTime
+
+  a CatalogModel @relation("NotDuplicateA", fields: [aModelId], references: [id], onDelete: Restrict)
+  b CatalogModel @relation("NotDuplicateB", fields: [bModelId], references: [id], onDelete: Restrict)
+
+  @@unique([aModelId, bModelId])
 }
 
 model ModelAxis {
@@ -387,8 +432,17 @@ model Sku {
   landed       BigInt
   archived     Boolean
   createdAt    DateTime
+  /// Set when this variant was merged into another (2026-10-21). It stays —
+  /// past receipts and invoices name it — but is archived and offered by no
+  /// picker; its units and stock moved to `mergedInto`.
+  mergedIntoId String?
+  /// `variantKeyOf` the label. Unique per live product (partial index
+  /// `Sku_variantKey_live`, hand-written); null on an existing duplicate.
+  variantKey   String?
 
-  model CatalogModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  model      CatalogModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  mergedInto Sku?         @relation("SkuMerge", fields: [mergedIntoId], references: [id], onDelete: Restrict)
+  mergedFrom Sku[]        @relation("SkuMerge")
 
   units            Unit[]
   poItems          PurchaseOrderItem[]
@@ -404,6 +458,7 @@ model Sku {
   opnameCounts     OpnameCount[]
   stockMoves       StockMove[]
   chatActions      ChatAction[]
+  stockWatches     StockWatch[]
 }
 
 // ============================================================================
@@ -473,6 +528,7 @@ model Unit {
   orderItems          OrderItem[]               @relation("OrderItemUnit")
   tradeIns            TradeIn[]
   reservationItems    ReservationItem[]
+  proposalItems       ReservationProposalItem[]
   warrantyClaims      WarrantyClaim[]
   stockIns            StockIn[]
   adjustments         StockAdjustment[]
@@ -770,6 +826,7 @@ model Customer {
   openingPayments  Payment[]
   chatActions      ChatAction[]
   chatProfiles     CustomerProfile[]
+  stockWatches     StockWatch[]
 }
 
 model Order {
@@ -944,6 +1001,21 @@ model Payment {
   /// 2026-09-22). The debt is paid; Income & Expense's balance does not move.
   /// Default true, which is what every payment before the column was.
   inBalance     Boolean      @default(true)
+  /// The supplier return this payment is the credit of (owner 2026-10-26):
+  /// a unit sent back takes what it was worth off what its invoice still
+  /// owes, written as a payment with method RETUR_SUPPLIER and
+  /// `inBalance: false` — the debt shrinks and no money moved. Undoing the
+  /// return voids exactly this payment rather than guessing which one.
+  unitReturnId  String?
+  /// The reservation this payment is the DP of, or the refund of one (owner
+  /// 2026-10-27, "yes to DP"). A DP is customer money MASUK that belongs to a
+  /// hold before there is any sale, so before the sale the reservation is the
+  /// payment's ONE parent (invariant 7). At the sale the SAME row gains
+  /// `orderId` and keeps this as history: the money arrived once, and one row
+  /// is what keeps every reader from counting it twice. A refund of a DP is a
+  /// KELUAR naming the reservation alone; a kept DP ("hangus") is this row and
+  /// a cancelled reservation — no second row.
+  reservationId String?
 
   order       Order?            @relation(fields: [orderId], references: [id], onDelete: Restrict)
   po          PurchaseOrder?    @relation(fields: [poId], references: [id], onDelete: Restrict)
@@ -953,15 +1025,24 @@ model Payment {
   method      PaymentMethod     @relation(fields: [methodId], references: [id], onDelete: Restrict)
   fromDeposit SupplierDeposit?  @relation(fields: [fromDepositId], references: [id], onDelete: Restrict)
   poFee       PurchaseOrderFee? @relation(fields: [poFeeId], references: [id], onDelete: Restrict)
+  unitReturn  UnitReturn?       @relation(fields: [unitReturnId], references: [id], onDelete: Restrict)
+  reservation Reservation?      @relation(fields: [reservationId], references: [id], onDelete: Restrict)
 
-  logs        PaymentLog[]
-  settlements Settlement[]
+  logs                 PaymentLog[]
+  settlements          Settlement[]
+  /// What a reconciliation corrected or matched against this payment
+  /// (2026-10-27).
+  reconciliationEdits  ReconciliationEdit[]
+  statementMatches     BankStatementMatch[]
+  reconciliationAsides ReconciliationAside[]
 
   // Declared, not just created in SQL: an index that exists in the database
   // but not here is one Prisma emits a DROP for on the next migration.
   @@index([methodId])
   @@index([poFeeId])
   @@index([customerId])
+  @@index([unitReturnId])
+  @@index([reservationId])
 }
 
 /// How money moved. A lookup table rather than an enum for the same reason
@@ -1074,6 +1155,11 @@ model Staff {
   /// initial password, or an owner's reset (owner ask 2026-09-18). A session
   /// of such an account can do nothing but choose a new one.
   mustChangePassword Boolean   @default(false)
+  /// May open Financial & Report and read the money behind it — expenses,
+  /// incomes, payouts and the payment edit logs (owner ask 2026-10-16: "only
+  /// Ersen and Dina"). Per person rather than per role: Dina is staff, and
+  /// making her an owner would also hand her everybody's passwords.
+  canViewFinance     Boolean   @default(false)
   /// ⚠️ Dead since 2026-09-18, when Auth0 was retired for the app's own login.
   /// Kept for one release so the release before it still reads the table it
   /// expects through a deploy (docs/deploy-pipeline.md); drop it after that.
@@ -1093,25 +1179,25 @@ model Staff {
   stockMoves               StockMove[]
   unitNotes                UnitNote[]
   opnameSessions           OpnameSession[]
-  ordersApproved           Order[]             @relation("OrderApprovedBy")
-  ordersSold               Order[]             @relation("OrderSoldBy")
+  ordersApproved           Order[]               @relation("OrderApprovedBy")
+  ordersSold               Order[]               @relation("OrderSoldBy")
   payments                 Payment[]
   orderAdjustments         OrderAdjustment[]
   shifts                   Shift[]
   shipmentEvents           ShipmentEvent[]
   warrantyClaims           WarrantyClaim[]
-  priceLogs                PriceLog[]          @relation("PriceLogStaff")
-  priceLogsApproved        PriceLog[]          @relation("PriceLogApprovedBy")
-  priceReqsRequested       PriceReq[]          @relation("PriceReqRequestedBy")
-  priceReqsDecided         PriceReq[]          @relation("PriceReqDecidedBy")
+  priceLogs                PriceLog[]            @relation("PriceLogStaff")
+  priceLogsApproved        PriceLog[]            @relation("PriceLogApprovedBy")
+  priceReqsRequested       PriceReq[]            @relation("PriceReqRequestedBy")
+  priceReqsDecided         PriceReq[]            @relation("PriceReqDecidedBy")
   auditLogs                AuditLog[]
   pettyCashEntries         PettyCashEntry[]
   waMessagesAnswered       WaMessage[]
-  waThreadMemoriesDirected WaThreadMemory[]    @relation("WaThreadMemoryDirectedBy")
-  waThreadMemoriesToggled  WaThreadMemory[]    @relation("WaThreadMemoryAutoReplyBy")
+  waThreadMemoriesDirected WaThreadMemory[]      @relation("WaThreadMemoryDirectedBy")
+  waThreadMemoriesToggled  WaThreadMemory[]      @relation("WaThreadMemoryAutoReplyBy")
   idempotencyKeys          IdempotencyKey[]
-  igCommentsReplied        IgComment[]         @relation("IgCommentRepliedBy")
-  igCommentsDmSent         IgComment[]         @relation("IgCommentDmSentBy")
+  igCommentsReplied        IgComment[]           @relation("IgCommentRepliedBy")
+  igCommentsDmSent         IgComment[]           @relation("IgCommentDmSentBy")
   agentKnowledge           AgentKnowledge[]
   personas                 Persona[]
   agentCorrections         AgentCorrection[]
@@ -1127,7 +1213,16 @@ model Staff {
   serviceFees              ServiceFee[]
   deposits                 SupplierDeposit[]
   allocations              DepositAllocation[]
-  chatActionsResolved      ChatAction[]        @relation("ChatActionResolvedBy")
+  chatActionsResolved      ChatAction[]          @relation("ChatActionResolvedBy")
+  waThreadsLeadSet         WaThreadMemory[]      @relation("WaThreadMemoryLeadStaffBy")
+  waThreadsCleared         WaThreadMemory[]      @relation("WaThreadMemoryClearedBy")
+  profileFacts             CustomerProfileFact[]
+  evaluationsWritten       AgentEvaluation[]     @relation("AgentEvaluationCreatedBy")
+  evaluationsReviewed      AgentEvaluation[]     @relation("AgentEvaluationReviewedBy")
+  chatMediaUploaded        ChatMedia[]           @relation("ChatMediaUploadedBy")
+  reconciliations          Reconciliation[]
+  reconciliationEdits      ReconciliationEdit[]
+  reconciliationAsides     ReconciliationAside[]
 }
 
 model StaffSession {
@@ -1200,13 +1295,22 @@ model Reservation {
   reservationSourceId String?
   note                String?
   createdAt           DateTime
+  /// The end of a FIRM hold — the DP's date plus `sales.dpDays` (owner
+  /// 2026-10-27). Null on a hold nobody has paid a DP for, which holds
+  /// nothing: its units stay TERSEDIA and sellable. Past it the worker's
+  /// expiry pass puts the units back on sale and staff decide the DP.
+  heldUntil           DateTime?
 
   customer          Customer?          @relation(fields: [customerId], references: [id], onDelete: Restrict)
   reservationSource ReservationSource? @relation(fields: [reservationSourceId], references: [id], onDelete: Restrict)
 
   items      ReservationItem[]
+  /// The DP and, if it was handed back, its refund (`Payment.reservationId`).
+  payments   Payment[]
   unitEvents UnitEvent[]
   orders     Order[]
+  /// The chatbot's confirmed proposal, when the bot made this booking.
+  proposal   ReservationProposal?
 
   /// The agent's duplicate guard and the phone-scoped cancel both read
   /// (phone, status) on every booking attempt.
@@ -1393,17 +1497,26 @@ model AuditLog {
 /// worker claims it with FOR UPDATE SKIP LOCKED and sends. No network I/O
 /// ever happens inside a database transaction.
 model Outbox {
-  id            String       @id @default(cuid())
-  kind          OutboxKind
+  id                String       @id @default(cuid())
+  kind              OutboxKind
   /// send intent — see the note on JSON columns at the top of this file
-  payload       Json
-  status        OutboxStatus
-  attempts      Int
-  nextAttemptAt DateTime
-  lastError     String?
-  requestId     String?
-  createdAt     DateTime
-  sentAt        DateTime?
+  payload           Json
+  status            OutboxStatus
+  attempts          Int
+  nextAttemptAt     DateTime
+  lastError         String?
+  requestId         String?
+  createdAt         DateTime
+  sentAt            DateTime?
+  /// The id WhatsApp gave the message when it went out (2026-10-23) — what an
+  /// edit or an unsend must name. Written by the worker with SENT; null on a
+  /// row sent before then, which can therefore be neither edited nor unsent.
+  providerMessageId String?
+  /// Staff unsent it (delete for everyone). The row stays; AuditLog says who.
+  retractedAt       DateTime?
+  /// Staff corrected its text; the new text is `payload.body`, the old one is
+  /// in the AuditLog row.
+  editedAt          DateTime?
 }
 
 /// NOT in docs/erd-pos-chatbot.drawio's original 62 tables. Added in S6 with the
@@ -1554,6 +1667,10 @@ model WaMessage {
   coveredThreadMemories WaThreadMemory[]
   corrections           AgentCorrection[]
   chatActions           ChatAction[]
+  agentRuns             AgentRun[]
+  evaluations           AgentEvaluation[]
+  memoryChunksFrom      ChatMemoryChunk[] @relation("ChatMemoryChunkFrom")
+  memoryChunksTo        ChatMemoryChunk[] @relation("ChatMemoryChunkTo")
 
   // Declared here because they exist in the database. Both were hand-written
   // into 20260820002832 without a matching @@index, so every `migrate dev`
@@ -1564,6 +1681,90 @@ model WaMessage {
   // syntax for that, which is also why the differ leaves it alone.
   @@index([from, ts])
   @@index([from, answeredAt])
+}
+
+/// One answered turn of a WhatsApp thread, kept for recall (owner,
+/// 2026-10-22). The turn's words — every inbound line of the burst and the
+/// reply — and, once the worker has embedded it, its vector. Recall searches
+/// ONE customer's own chunks, so the vector is int8 bytes scored in JS: no
+/// pgvector (not on the Mac mini, and CREATE EXTENSION needs a superuser).
+/// Written by the worker (nusantara_agent) only; the app role has no grant.
+model ChatMemoryChunk {
+  id            String    @id @default(cuid())
+  /// wa_id — the thread key WaMessage and WaThreadMemory use.
+  from          String
+  /// The first inbound row of the turn, and the row carrying the reply.
+  fromMessageId String
+  toMessageId   String
+  /// "customer: …" / "shop: …" lines, trimmed.
+  text          String
+  /// int8 vector, one byte per dimension. Null = not embedded yet.
+  embedding     Bytes?
+  model         String?
+  dims          Int?
+  createdAt     DateTime  @default(now())
+  embeddedAt    DateTime?
+
+  // Restrict: the chunk is a copy of those messages' words, so a purge of a
+  // message has to take its chunk with it rather than leave the words behind.
+  fromMessage WaMessage @relation("ChatMemoryChunkFrom", fields: [fromMessageId], references: [id], onDelete: Restrict)
+  toMessage   WaMessage @relation("ChatMemoryChunkTo", fields: [toMessageId], references: [id], onDelete: Restrict)
+
+  @@index([from, createdAt])
+}
+
+/// A picture staff sent a customer from their own device (owner ask
+/// 2026-10-27) — not a unit's QC photo, so it has no `UnitNotePhoto` to live
+/// in. The API writes it with the WA_IMAGE `Outbox` row that names it
+/// (`payload.chatMediaId`) in one transaction; the worker reads the bytes at
+/// send time, as it reads a QC photo's. Never updated and never deleted by a
+/// writer role: `wa_thread_delete` removes a deleted conversation's.
+model ChatMedia {
+  id           String   @id @default(cuid())
+  /// wa_id — the thread key WaMessage, WaThreadMemory and ChatMemoryChunk use.
+  from         String
+  /// The image as uploaded. JPEG, PNG or WebP, at most 5 MB (CHECK).
+  data         Bytes
+  contentType  String
+  /// octet_length(data), kept so a list never has to read the bytes.
+  size         Int
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  uploadedBy Staff @relation("ChatMediaUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([from, createdAt])
+}
+
+/// "Tell me when it's in stock" (owner-approved 2026-10-27). The bot offers
+/// it when what a customer asked for is not on the shelf; their yes writes a
+/// row, and a worker pass leaves ONE staff task per thread ("Perlu kabari —
+/// …") once a matching unit is sellable, stamping `notifiedAt`. Staff send
+/// the message; nothing goes out by itself. Keyed by wa_id like
+/// `ChatMemoryChunk.from` — there is no thread table to point at.
+model StockWatch {
+  id         String    @id @default(cuid())
+  /// wa_id — the thread key WaMessage and WaThreadMemory use.
+  from       String
+  customerId String?
+  /// What they asked for, in the shop's words ("macbook air m3 16/512").
+  query      String
+  /// Resolved when the words name exactly one product or one variant.
+  modelId    String?
+  skuId      String?
+  /// Whole rupiah, when they gave a ceiling.
+  budget     BigInt?
+  createdAt  DateTime
+  /// The staff task was left. Never twice.
+  notifiedAt DateTime?
+  /// Closed by staff on /chat, or by the worker once sixty days old unmet.
+  closedAt   DateTime?
+
+  customer Customer?     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  model    CatalogModel? @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  sku      Sku?          @relation(fields: [skuId], references: [id], onDelete: Restrict)
+
+  @@index([from, createdAt])
 }
 
 /// Two writers, disjoint column sets (08 §7). The webhook summarizer owns the
@@ -1592,9 +1793,37 @@ model WaThreadMemory {
   /// pass skips it entirely and answers every other thread as before. Defaults
   /// true, so a number nobody has ruled on is answered by the bot — the
   /// behaviour every thread had before this column existed.
-  autoReply        Boolean   @default(true)
+  /// ⚠️ `dbgenerated`, not `@default(true)`: with a plain default Prisma
+  /// sends `true` in every INSERT, and the agent role holds no INSERT on this
+  /// staff-owned column — so every memory row the worker tried to create was
+  /// refused (found 2026-10-15, apps/worker/test/agentRole.test.ts). The
+  /// database's own DEFAULT true is unchanged; Prisma now leaves it to it.
+  autoReply        Boolean   @default(dbgenerated("true"))
   autoReplyAt      DateTime?
   autoReplyById    String?
+  /// agent-owned. The worker's claim on this thread: only the holder may
+  /// answer it until the lease runs out, so N threads run in parallel and one
+  /// thread never runs twice (chatbot v2, 2026-10-14).
+  leaseUntil       DateTime?
+  leasedBy         String?
+  /// agent-owned. The router's last lead score (0–100), and when it last
+  /// crossed the threshold — the bot's half of the 🔥 tag.
+  leadScore        Int?
+  leadAt           DateTime?
+  /// staff-owned. The staff half of the 🔥 tag, and the clear that ends both
+  /// halves — written by a person, or by the sale (owner: a lead clears at
+  /// sale). A lead is shown while max(leadAt, leadStaffAt) > leadClearedAt.
+  leadStaffAt      DateTime?
+  leadStaffById    String?
+  leadClearedAt    DateTime?
+  /// staff-owned. The inbox read marker: inbound messages after it are unread.
+  readAt           DateTime?
+  /// staff-owned. *Clear chat* (owner ask 2026-10-27): the conversation is
+  /// hidden from /chat and the bot forgets it — every reader of the thread's
+  /// past starts at the later of this and the last `/new` (`resetPointFor`).
+  /// Nothing is deleted. A message answered (or waiting) after it shows again.
+  clearedAt        DateTime?
+  clearedById      String?
   clarifyCount     Int
   clarifyAt        DateTime?
   updatedAt        DateTime
@@ -1603,6 +1832,8 @@ model WaThreadMemory {
   coveredThrough WaMessage? @relation(fields: [coveredThroughId], references: [id], onDelete: Restrict)
   directiveBy    Staff?     @relation("WaThreadMemoryDirectedBy", fields: [directiveById], references: [id], onDelete: Restrict)
   autoReplyBy    Staff?     @relation("WaThreadMemoryAutoReplyBy", fields: [autoReplyById], references: [id], onDelete: Restrict)
+  leadStaffBy    Staff?     @relation("WaThreadMemoryLeadStaffBy", fields: [leadStaffById], references: [id], onDelete: Restrict)
+  clearedBy      Staff?     @relation("WaThreadMemoryClearedBy", fields: [clearedById], references: [id], onDelete: Restrict)
 }
 
 /// Something a person has to do for a chat customer (owner ask 2026-09-29):
@@ -1662,15 +1893,163 @@ model CustomerProfile {
   name          String?
   /// What they want it for: kuliah, editing video, kantor…
   useCase       String?
-  /// Whole rupiah, as the customer stated it.
+  /// Whole rupiah, as the customer stated it. ⚠️ Superseded by budgetMin /
+  /// budgetMax (2026-10-14) and kept one release so the release before reads
+  /// it during a deploy. Drop it after.
   budget        BigInt?
+  /// The budget as a range, whole rupiah (owner: budget is a min–max range).
+  /// "sekitar 15 jt" is min = max = 15.000.000; "di bawah 20" is max only.
+  budgetMin     BigInt?
+  budgetMax     BigInt?
+  /// The bot's GUESS at an age band ("20–25"). Always shown as an estimate.
+  ageEstimate   String?
+  /// Job or school, as told or guessed ("mahasiswa DKV", "programmer").
+  occupation    String?
   /// What they use now.
   currentDevice String?
   /// Anything else they asked for: colour, size, "yang ringan".
   preference    String?
   updatedAt     DateTime
 
-  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  customer Customer?             @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  facts    CustomerProfileFact[]
+}
+
+/// One bullet of a customer profile: a usage area, an app, a preference or
+/// anything else worth knowing (chatbot v2, 2026-10-14). A table rather than a
+/// comma list so "who uses Photoshop" is a query, and rather than JSON because
+/// JSON columns are forbidden here. Never deleted: a fact taken back carries
+/// `removedAt`.
+model CustomerProfileFact {
+  id          String          @id @default(cuid())
+  profileId   String
+  kind        ProfileFactKind
+  value       String
+  source      FactSource
+  createdById String?
+  createdAt   DateTime
+  removedAt   DateTime?
+
+  profile   CustomerProfile @relation(fields: [profileId], references: [id], onDelete: Restrict)
+  createdBy Staff?          @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([profileId])
+  @@index([kind, value])
+}
+
+/// A booking the bot has PROPOSED and the customer has not yet confirmed
+/// (chatbot v2). Holds no unit and writes no UnitEvent; confirming it creates
+/// the real Reservation in one transaction and sets `reservationId`. The
+/// confirm is refused past `expiresAt` or once confirmed.
+model ReservationProposal {
+  id            String    @id @default(cuid())
+  /// wa_id — the only phone the booking can be made for.
+  from          String
+  custName      String
+  /// The visit: when the customer will come to see the units.
+  scheduledFor  DateTime
+  createdAt     DateTime
+  expiresAt     DateTime
+  confirmedAt   DateTime?
+  cancelledAt   DateTime?
+  reservationId String?   @unique
+
+  reservation Reservation?              @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  items       ReservationProposalItem[]
+
+  @@index([from, createdAt])
+}
+
+model ReservationProposalItem {
+  id         String @id @default(cuid())
+  proposalId String
+  unitId     String
+  sortOrder  Int    @default(0)
+
+  proposal ReservationProposal @relation(fields: [proposalId], references: [id], onDelete: Restrict)
+  unit     Unit                @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@unique([proposalId, unitId])
+}
+
+/// One bot turn: what the router read, which agents ran, what it cost and how
+/// long it took (chatbot v2). Evaluation and the simulator read it.
+model AgentRun {
+  id            String   @id @default(cuid())
+  /// wa_id. A simulator turn has its own tester id.
+  from          String
+  /// The inbound row whose replyText holds this turn's answer.
+  messageId     String?
+  dryRun        Boolean  @default(false)
+  pipeline      String
+  language      String?
+  tone          String?
+  intent        String?
+  leadScore     Int?
+  escalateTopic String?
+  /// REPLIED, HANDOFF, SKIPPED or ERROR.
+  outcome       String
+  inputTokens   Int      @default(0)
+  cachedTokens  Int      @default(0)
+  outputTokens  Int      @default(0)
+  /// US dollars × 1 000 000. Not rupiah: what Anthropic bills.
+  costMicros    BigInt   @default(0)
+  latencyMs     Int      @default(0)
+  createdAt     DateTime
+
+  message     WaMessage?        @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  steps       AgentRunStep[]
+  evaluations AgentEvaluation[]
+
+  @@index([from, createdAt])
+  @@index([messageId])
+}
+
+model AgentRunStep {
+  id           String    @id @default(cuid())
+  runId        String
+  sortOrder    Int
+  agent        AgentRole
+  model        String
+  /// The tool called, or null for the model call itself.
+  tool         String?
+  ok           Boolean
+  ms           Int
+  inputTokens  Int       @default(0)
+  outputTokens Int       @default(0)
+
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+
+  @@index([runId])
+}
+
+/// A staff verdict on one bot reply (owner, 2026-10-14). A BAD one reaches the
+/// bot only when somebody presses Apply, which writes `correctionId`.
+model AgentEvaluation {
+  id           String      @id @default(cuid())
+  messageId    String
+  runId        String?
+  rating       EvalRating
+  reason       EvalReason?
+  /// Which agent the reviewer blames, when they can tell.
+  agent        AgentRole?
+  note         String?
+  corrected    String?
+  status       EvalStatus  @default(OPEN)
+  correctionId String?     @unique
+  createdById  String
+  createdAt    DateTime
+  reviewedById String?
+  reviewedAt   DateTime?
+
+  message    WaMessage        @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  run        AgentRun?        @relation(fields: [runId], references: [id], onDelete: Restrict)
+  correction AgentCorrection? @relation(fields: [correctionId], references: [id], onDelete: Restrict)
+  createdBy  Staff            @relation("AgentEvaluationCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  reviewedBy Staff?           @relation("AgentEvaluationReviewedBy", fields: [reviewedById], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+  @@index([messageId])
 }
 
 model AgentCache {
@@ -1704,14 +2083,17 @@ model AgentKnowledge {
 /// The agent's voice. Exactly one row is active, enforced by a partial unique
 /// index rather than by convention — see the migration.
 model Persona {
-  id          String   @id @default(cuid())
-  name        String   @unique
+  id          String     @id @default(cuid())
+  name        String     @unique
   blurb       String?
   /// The prompt text itself. Free text a staff member wrote.
   prompt      String
   active      Boolean
   /// A built-in cannot be deleted by staff, only deactivated.
   builtIn     Boolean
+  /// Which of the three chatbot agents this persona is (chatbot v2). One
+  /// persona per agent (owner, 2026-10-14); null for a persona no agent uses.
+  agent       AgentRole? @unique
   createdById String?
   createdAt   DateTime
   updatedAt   DateTime
@@ -1732,8 +2114,10 @@ model AgentCorrection {
   createdById String
   createdAt   DateTime
 
-  message   WaMessage? @relation(fields: [messageId], references: [id], onDelete: Restrict)
-  createdBy Staff      @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  message    WaMessage?       @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  createdBy  Staff            @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  /// The evaluation whose Apply wrote this correction, if any.
+  evaluation AgentEvaluation?
 }
 
 // ============================================================================
@@ -2018,6 +2402,9 @@ enum ReqStatus {
 enum AuditAction {
   CREATE
   UPDATE
+  /// A row the store REMOVED — a QC photo purged, an unused discount, a
+  /// draft count (2026-10-22, the activity log).
+  DELETE
   ARCHIVE
   LOGIN
   LOGIN_GAGAL
@@ -2080,11 +2467,54 @@ enum ChatActionKind {
   RESERVATION
   PHOTOS
   OTHER
+  /// The customer is ready to buy, asked to keep a unit (a DP) or how to pay
+  /// (2026-10-27): a person closes the sale. The bot never quotes a DP.
+  CLOSING
 }
 
 enum ChatActionStatus {
   OPEN
   DONE
+}
+
+/// The three chatbot v2 agents.
+enum AgentRole {
+  ROUTER
+  ADVISOR
+  OPERATIONS
+}
+
+enum ProfileFactKind {
+  USAGE
+  APP
+  PREFERENCE
+  ABOUT
+}
+
+enum FactSource {
+  BOT
+  STAFF
+}
+
+enum EvalRating {
+  GOOD
+  BAD
+}
+
+enum EvalReason {
+  WRONG_FACT
+  WRONG_TONE
+  TOO_LONG
+  MISSED_QUESTION
+  SHOULD_ESCALATE
+  SHOULD_NOT_ESCALATE
+  OTHER
+}
+
+enum EvalStatus {
+  OPEN
+  APPLIED
+  DISMISSED
 }
 
 enum WaMsgStatus {
@@ -2339,6 +2769,10 @@ model UnitReturn {
   staff        Staff     @relation(fields: [staffId], references: [id], onDelete: Restrict)
 
   unitEvents UnitEvent[]
+  /// The credit taken off the unit's invoice (method RETUR_SUPPLIER).
+  payments   Payment[]
+  /// The rest of the credit, once the supplier refunded it.
+  incomes    ManualIncome[]
 }
 
 /// Money out, entered by hand (owner ask 2026-09-01).
@@ -2356,32 +2790,55 @@ model Expense {
   /// The sale this is about, where the category needs one — a customer
   /// compensation, a refund (owner ask 2026-09-23).
   orderId          String?
+  /// The service charge this expense paid (owner 2026-10-26), kind UNIT. One
+  /// expense per charge at most; deleting the charge takes this row with it,
+  /// and the store refuses a charge removed while its expense stays.
+  serviceFeeId     String?     @unique
   createdAt        DateTime
 
   referralSource ReferralSource? @relation(fields: [referralSourceId], references: [id], onDelete: Restrict)
   method         PaymentMethod   @relation(fields: [methodId], references: [id], onDelete: Restrict)
   staff          Staff           @relation(fields: [staffId], references: [id], onDelete: Restrict)
   order          Order?          @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  serviceFee     ServiceFee?     @relation(fields: [serviceFeeId], references: [id], onDelete: Restrict)
+
+  /// A reconciliation that corrected, added or matched it (2026-10-27). While
+  /// one that is not OPEN names the row, deleting it is refused.
+  reconciliationEdits  ReconciliationEdit[]
+  statementMatches     BankStatementMatch[]
+  reconciliationAsides ReconciliationAside[]
 }
 
 /// Money in that no sale accounts for (owner ask 2026-09-01).
 model ManualIncome {
-  id        String       @id @default(cuid())
-  reason    IncomeReason
-  amount    BigInt
+  id           String       @id @default(cuid())
+  reason       IncomeReason
+  amount       BigInt
   /// YYYY-MM-DD.
-  date      String
-  note      String?
-  methodId  String
-  staffId   String
+  date         String
+  note         String?
+  methodId     String
+  staffId      String
   /// The sale or return this is about, where the category needs one — a
   /// supplier's refund credit (owner ask 2026-09-23).
-  orderId   String?
-  createdAt DateTime
+  orderId      String?
+  /// The supplier return this is the refund of (owner 2026-10-26) — the part
+  /// of the credit the unit's invoice no longer owed, received from the
+  /// supplier. Reason REFUND.
+  unitReturnId String?
+  createdAt    DateTime
 
-  method PaymentMethod @relation(fields: [methodId], references: [id], onDelete: Restrict)
-  staff  Staff         @relation(fields: [staffId], references: [id], onDelete: Restrict)
-  order  Order?        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  method     PaymentMethod @relation(fields: [methodId], references: [id], onDelete: Restrict)
+  staff      Staff         @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  order      Order?        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  unitReturn UnitReturn?   @relation(fields: [unitReturnId], references: [id], onDelete: Restrict)
+
+  /// See `Expense.reconciliationEdits`.
+  reconciliationEdits  ReconciliationEdit[]
+  statementMatches     BankStatementMatch[]
+  reconciliationAsides ReconciliationAside[]
+
+  @@index([unitReturnId])
 }
 
 /// Every change ever made to a sale payment (owner ask 2026-09-08). Append-only.
@@ -2474,7 +2931,9 @@ model ServiceVisit {
   fees ServiceFee[]
 }
 
-/// A charge on a service visit. Edited, never removed — zero says "quoted and not paid".
+/// A charge on a service visit. Edited, and since 2026-10-26 removable (owner
+/// decision; the visit can be deleted whole too) — `nusantara_app` holds
+/// DELETE on this table and `ServiceVisit`, the sixth sanctioned hard delete.
 model ServiceFee {
   id        String         @id @default(cuid())
   visitId   String
@@ -2485,8 +2944,10 @@ model ServiceFee {
   staffId   String
   sortOrder Int
 
-  visit ServiceVisit @relation(fields: [visitId], references: [id], onDelete: Restrict)
-  staff Staff        @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  visit   ServiceVisit @relation(fields: [visitId], references: [id], onDelete: Restrict)
+  staff   Staff        @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  /// What paid it, when it has been paid (kind UNIT).
+  expense Expense?
 }
 
 /// Money paid to a supplier before anybody decided which invoice it settles.
@@ -2509,6 +2970,10 @@ model SupplierDeposit {
 
   allocations DepositAllocation[]
   payments    Payment[]
+
+  reconciliationEdits  ReconciliationEdit[]
+  statementMatches     BankStatementMatch[]
+  reconciliationAsides ReconciliationAside[]
 }
 
 /// Part of a deposit put against an invoice.
@@ -2671,6 +3136,13 @@ enum ExpenseKind {
   KOMPENSASI
   SUPPLIER
   TRANSFER
+  // A unit's own cost — a service charge paid (owner 2026-10-26). Already in
+  // the unit's COGS, so Profit & Loss never counts it as operating.
+  UNIT
+  // What a bank or a marketplace kept on the way: an admin charge, a transfer
+  // fee, a payout deduction (owner 2026-10-27). An operating cost, its own
+  // Profit & Loss line.
+  BIAYA_ADMIN
 }
 
 enum IncomeReason {
@@ -2727,4 +3199,203 @@ enum StockMoveType {
   /// `UnitReturn`: the SP code is `refCode`, the invoice they came in on is
   /// `purchaseOrderId`, and that invoice is what names the supplier.
   RETUR_SUPPLIER
+}
+
+// ---------------------------------------------------------------------------
+// Reconciliation (owner ask 2026-10-27, answers "1B 2B 3B 4A";
+// docs/superpowers/specs/2026-10-27-reconciliation-design.md)
+// ---------------------------------------------------------------------------
+
+enum ReconKind {
+  /// One pot on one day: the bank balance or the counted drawer.
+  DAILY
+  /// The bank against its e-statement, one month, line by line.
+  MONTHLY
+}
+
+/// Which of `lib/accounts.ts`'s two pots.
+enum ReconPot {
+  BANK
+  CASH
+}
+
+enum ReconStatus {
+  /// Saved with a difference left (a note says why), or reopened.
+  OPEN
+  /// The POS balance equalled what was counted.
+  MATCHED
+  /// It did after corrections made in the reconciliation.
+  ADJUSTED
+  /// A month whose every statement line is matched or ignored.
+  RECONCILED
+}
+
+enum StatementLineStatus {
+  UNMATCHED
+  MATCHED
+  SUGGESTED
+  IGNORED
+}
+
+enum ReconEditAction {
+  /// An amount corrected on the real record.
+  EDITED
+  /// A transaction added from the reconciliation.
+  ADDED
+}
+
+/// A count of the bank or the drawer on one day, or the bank against its
+/// e-statement for one month (owner ask 2026-10-27). `posBalance` is the
+/// cash-basis pot balance Income & Expense computes, stored as it was when the
+/// reconciliation was saved — the page reads "changed since reconciled" by
+/// comparing it with today's figure, so nothing else is stored for that.
+model Reconciliation {
+  id               String      @id @default(cuid())
+  kind             ReconKind
+  pot              ReconPot
+  /// YYYY-MM-DD (Asia/Jakarta): the day, or the month's first day.
+  periodStart      String
+  /// YYYY-MM-DD: the same day, or the month's last day.
+  periodEnd        String
+  posBalance       BigInt
+  actualBalance    BigInt
+  /// MONTHLY: SALDO AWAL and SALDO AKHIR, whole rupiah as printed.
+  statementOpening BigInt?
+  statementClosing BigInt?
+  /// The uploaded file's NAME — the statement itself is not kept.
+  statementFile    String?
+  status           ReconStatus
+  note             String?
+  /// Who saved it last.
+  staffId          String
+  createdAt        DateTime
+  updatedAt        DateTime
+
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  edits  ReconciliationEdit[]
+  lines  BankStatementLine[]
+  asides ReconciliationAside[]
+
+  @@unique([kind, pot, periodStart])
+  @@index([staffId])
+}
+
+/// One correction a reconciliation wrote to a real record, or one transaction
+/// it added — before → after, who, when. Exactly one money row (CHECK). Written
+/// once; removed only through `reconciliation_edit_drop`, on an OPEN
+/// reconciliation, when the adjustment it names is deleted.
+model ReconciliationEdit {
+  id               String          @id @default(cuid())
+  reconciliationId String
+  paymentId        String?
+  expenseId        String?
+  incomeId         String?
+  depositId        String?
+  action           ReconEditAction
+  before           BigInt?
+  after            BigInt
+  staffId          String
+  at               DateTime
+
+  reconciliation Reconciliation   @relation(fields: [reconciliationId], references: [id], onDelete: Restrict)
+  payment        Payment?         @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  expense        Expense?         @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+  income         ManualIncome?    @relation(fields: [incomeId], references: [id], onDelete: Restrict)
+  deposit        SupplierDeposit? @relation(fields: [depositId], references: [id], onDelete: Restrict)
+  staff          Staff            @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  @@index([reconciliationId])
+  @@index([paymentId])
+  @@index([expenseId])
+  @@index([incomeId])
+  @@index([depositId])
+  @@index([staffId])
+}
+
+/// One movement off the bank's e-statement, for a MONTHLY reconciliation.
+/// `amount` is signed (a debit is negative) and whole rupiah — the sen are
+/// checked when the file is read and are not carried. Re-uploading a month
+/// DELETES its lines and their matches (the eighth sanctioned hard delete; do
+/// not generalise it): the corrections already written stay.
+model BankStatementLine {
+  id               String              @id @default(cuid())
+  reconciliationId String
+  lineNo           Int
+  /// YYYY-MM-DD.
+  date             String
+  description      String
+  amount           BigInt
+  balance          BigInt?
+  status           StatementLineStatus
+  note             String?
+
+  reconciliation Reconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Restrict)
+
+  matches BankStatementMatch[]
+
+  @@unique([reconciliationId, lineNo])
+}
+
+/// A statement line paired with one POS movement. Several rows per line is a
+/// payout covering several sales (SPLIT); several lines naming one movement
+/// is a deposit made in several slips. `reason`: EXACT, DATE_SHIFT, TYPO,
+/// DEDUCTION, SPLIT, MERGE, ADDED, MANUAL.
+model BankStatementMatch {
+  id        String  @id @default(cuid())
+  lineId    String
+  paymentId String?
+  expenseId String?
+  incomeId  String?
+  depositId String?
+  reason    String
+
+  line    BankStatementLine @relation(fields: [lineId], references: [id], onDelete: Restrict)
+  payment Payment?          @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  expense Expense?          @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+  income  ManualIncome?     @relation(fields: [incomeId], references: [id], onDelete: Restrict)
+  deposit SupplierDeposit?  @relation(fields: [depositId], references: [id], onDelete: Restrict)
+
+  @@index([lineId])
+  @@index([paymentId])
+  @@index([expenseId])
+  @@index([incomeId])
+  @@index([depositId])
+}
+
+/// A POS bank movement the e-statement never shows, explained with a note
+/// instead of paired (owner, 2026-10-27): a month is reconciled only once
+/// every such movement is paired or set aside. Belongs to a MONTHLY
+/// reconciliation (the adapter holds that). Exactly one money row (CHECK);
+/// at most one ACTIVE aside per (reconciliation, money row) — partial unique
+/// indexes, hand-written in `20261027200000_reconciliation_aside`. Taken back
+/// by stamping `withdrawnAt`, never by a delete: the app may UPDATE that column
+/// alone. The one door out is `reconciliation_aside_drop`, for a WITHDRAWN
+/// aside whose Expense or ManualIncome is being deleted.
+model ReconciliationAside {
+  id               String    @id @default(cuid())
+  reconciliationId String
+  paymentId        String?
+  expenseId        String?
+  incomeId         String?
+  depositId        String?
+  /// Why the bank never saw it. Never blank (CHECK).
+  note             String
+  staffId          String
+  at               DateTime
+  withdrawnAt      DateTime?
+
+  reconciliation Reconciliation   @relation(fields: [reconciliationId], references: [id], onDelete: Restrict)
+  payment        Payment?         @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  expense        Expense?         @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+  income         ManualIncome?    @relation(fields: [incomeId], references: [id], onDelete: Restrict)
+  deposit        SupplierDeposit? @relation(fields: [depositId], references: [id], onDelete: Restrict)
+  staff          Staff            @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  @@index([reconciliationId])
+  @@index([paymentId])
+  @@index([expenseId])
+  @@index([incomeId])
+  @@index([depositId])
+  @@index([staffId])
 }

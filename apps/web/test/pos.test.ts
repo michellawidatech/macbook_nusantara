@@ -149,22 +149,27 @@ describe("shelfRows", () => {
     expect(only[0]!.sku.id).toBe("sku-mouse");
   });
 
-  it("shows the grades left, not a price per grade", () => {
-    // Two machines of one variant in different condition ask the same money
-    // (owner revision 2026-08-27). The grade is worth seeing — there is an A
-    // and a B to choose between — and it does not move the number.
+  it("is one row per variant AND grade, best grade first (owner ask 2026-10-08)", () => {
+    // "Per row is per unit with same grade and same spec." A row holding an A
+    // and a B quoted both shelves' prices at once.
     const rows = shelfRows(
       db([
         unit({ serial: "S1", grade: "B" }),
         unit({ serial: "S2", grade: "A" }),
         unit({ serial: "S3", grade: "A" }),
+        unit({ serial: "S4", grade: "NEW" }),
       ]),
     );
-    expect(rows[0]!.grades).toEqual(["A", "B"]);
-    expect(rows[0]!.sku.price).toBe(11_500_000);
+    expect(rows.map((r) => [r.grade, r.remaining])).toEqual([
+      ["NEW", 1],
+      ["A", 2],
+      ["B", 1],
+    ]);
+    expect(new Set(rows.map((r) => r.key)).size).toBe(3);
+    expect(rows[1]!.units.map((u) => u.serial)).toEqual(["S2", "S3"]);
   });
 
-  it("counts a grade off the row once its machine is in the basket", () => {
+  it("counts a unit in the basket off its own grade's row only", () => {
     const rows = shelfRows(
       db([
         unit({ serial: "S1", grade: "B" }),
@@ -172,7 +177,21 @@ describe("shelfRows", () => {
       ]),
       { taken: ["S1"] },
     );
-    expect(rows[0]!.grades).toEqual(["A"]);
+    expect(rows.map((r) => [r.grade, r.remaining])).toEqual([
+      ["A", 1],
+      ["B", 0],
+    ]);
+  });
+
+  it("finds by serial only the grade's row that holds it", () => {
+    const rows = shelfRows(
+      db([
+        unit({ serial: "C02AAA111111", grade: "A" }),
+        unit({ serial: "C02BBB222222", grade: "B" }),
+      ]),
+      { query: "c02bbb" },
+    );
+    expect(rows.map((r) => r.grade)).toEqual(["B"]);
   });
 
   it("keeps a held machine sellable, and says it is held", () => {

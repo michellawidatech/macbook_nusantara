@@ -10,13 +10,16 @@
  * What these pin is the BOUNDARY, not the wording: which messages still reach
  * a person whatever the capability, and which stop doing so when it is on.
  * `policy.test.ts` still holds the parallel-operation rules, unchanged —
- * they are what `AGENT_CAPABILITIES` unset still means.
+ * they are what `AGENT_CAPABILITIES=parallel` means (unset is the POS as the
+ * source of truth since 2026-10-27).
  */
 import { describe, expect, it } from "vitest";
 import {
   agentCapabilities,
+  capabilitiesFromSettings,
   LIVE_CAPABILITIES,
   PARALLEL_CAPABILITIES,
+  SHOP_CAPABILITIES,
   routeMessage,
 } from "../src/policy.js";
 import { buildAgentPrompt } from "../src/prompt.js";
@@ -43,10 +46,16 @@ describe("what the bot may answer once it can read the shelf", () => {
     }
   });
 
-  it("books a hold itself", () => {
-    expect(live("bisa di keep dulu ga kak?")).toBeNull();
+  it("books a visit itself, and never a hold (2026-10-27)", () => {
+    expect(live("mau booking datang besok jam 3 kak")).toBeNull();
+    // Keeping a unit is a DP, and a DP is a person's: a closing task,
+    // whatever the switches say.
+    expect(live("bisa di keep dulu ga kak?")).toMatchObject({
+      topic: "closing",
+      rule: "keep",
+    });
     expect(parallel("bisa di keep dulu ga kak?")).toMatchObject({
-      topic: "reservation",
+      topic: "closing",
     });
   });
 });
@@ -77,25 +86,47 @@ describe("what still goes to a person, capability or not", () => {
 });
 
 describe("agentCapabilities", () => {
-  it("reads live, and nothing else", () => {
+  it("reads live, and parallel", () => {
     expect(agentCapabilities({ AGENT_CAPABILITIES: "live" })).toEqual(
       LIVE_CAPABILITIES,
     );
     expect(agentCapabilities({ AGENT_CAPABILITIES: " LIVE " })).toEqual(
       LIVE_CAPABILITIES,
     );
+    expect(agentCapabilities({ AGENT_CAPABILITIES: "parallel" })).toEqual(
+      PARALLEL_CAPABILITIES,
+    );
   });
 
-  it("defaults to the cautious reading, including on a typo", () => {
-    // The live design is right only once the stock in this database is the
-    // shop's real stock. A misspelt variable must not be what decides that.
+  it("makes the POS the source of truth when unset (2026-10-27)", () => {
+    // The shelf in this database is the shop's real shelf now: stock, price
+    // and photos are on unless the owner switched one off — and bookings,
+    // since a bot booking is a visit that holds nothing (2026-10-27).
     for (const env of [
       {},
       { AGENT_CAPABILITIES: "" },
       { AGENT_CAPABILITIES: "liv" },
     ]) {
-      expect(agentCapabilities(env)).toEqual(PARALLEL_CAPABILITIES);
+      expect(agentCapabilities(env)).toEqual(SHOP_CAPABILITIES);
     }
+    expect(SHOP_CAPABILITIES).toEqual({
+      stock: true,
+      price: true,
+      reserve: true,
+      photos: true,
+    });
+  });
+
+  it("lets a switch the owner pressed win over the default", () => {
+    expect(
+      capabilitiesFromSettings(
+        [
+          { key: "chatbot.price", value: "false" },
+          { key: "chatbot.reservation", value: "true" },
+        ],
+        agentCapabilities({}),
+      ),
+    ).toEqual({ stock: true, price: false, reserve: true, photos: true });
   });
 });
 
@@ -122,11 +153,24 @@ describe("the prompt follows the capability", () => {
     });
     expect(stable).toContain('cite "stock"');
     expect(stable).toContain("Look before you speak");
-    expect(stable).toContain("Get to know them first");
-    expect(stable).toContain("Offer ONE step up");
+    expect(stable).toContain("Get to know them");
+    expect(stable).toContain("ONE step up");
+    expect(stable).toContain("Recommend ONE first");
+    // The sales strategy (2026-10-27): one first, honest urgency, a next
+    // step, a visit that holds nothing, and a person for the close — and it
+    // reads like WhatsApp, not a spec sheet.
+    expect(stable).toContain("Never a list");
+    expect(stable).toContain('Never "8GB · 256GB grade A"');
+    expect(stable).toContain("Wanting to buy is NOT closing");
+    expect(stable).toContain('cites "greeting". Small talk');
+    expect(stable).toContain('"tinggal 1 unit kak"');
+    expect(stable).toContain("Mau lihat");
+    expect(stable).toContain("It books and holds NOTHING");
+    expect(stable).toContain("a REQUEST a colleague approves");
+    expect(stable).toContain("topic closing");
     // The booking lifecycle, said in the rules as well as enforced in `toolsFor`.
     expect(stable).toContain(
-      "make, check, move and cancel THIS customer's own booking",
+      "file, check, move and cancel THIS customer's own booking",
     );
     expect(stable).not.toContain("nobody can see today's stock");
   });

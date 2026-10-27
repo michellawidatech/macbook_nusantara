@@ -21,8 +21,30 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient } from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
-import type { AgentClient, CreateArgs } from "@nusantara/agent";
-import { draftPass } from "../src/draft.js";
+import {
+  PARALLEL_CAPABILITIES,
+  type AgentClient,
+  type CreateArgs,
+} from "@nusantara/agent";
+import {
+  MAX_SUPERSEDES,
+  draftPass,
+  type SupersedeLedger,
+} from "../src/draft.js";
+
+/**
+ * These tests are about the single AI agent (pipeline v1). The default is the
+ * rules-first bot since 2026-10-15, so the setting is pinned here.
+ */
+async function pinPipelineV1(client: {
+  appSetting: PrismaClient["appSetting"];
+}) {
+  await client.appSetting.upsert({
+    where: { key: "chatbot.pipeline" },
+    update: { value: "v1" },
+    create: { key: "chatbot.pipeline", value: "v1", updatedAt: new Date() },
+  });
+}
 
 const URL =
   process.env["TEST_DATABASE_URL"] ??
@@ -39,6 +61,8 @@ const NOW = new Date("2026-08-20T03:00:00.000Z");
 const ago = (ms: number) => new Date(NOW.getTime() - ms);
 
 let db: PrismaClient;
+/** Drafts dropped per thread — fresh per test, so no test inherits a count. */
+let ledger: SupersedeLedger;
 
 beforeAll(async () => {
   db = new PrismaClient({ datasources: { db: { url: URL } } });
@@ -46,17 +70,26 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await db.appSetting.deleteMany({ where: { key: "chatbot.pipeline" } });
   await db.$disconnect();
 });
 
 beforeEach(async () => {
+  ledger = new Map();
+  await pinPipelineV1(db);
   await db.outbox.deleteMany({});
   // WaThreadMemory.coveredThroughId is an FK to WaMessage with onDelete:
   // Restrict, so the memory rows have to go first.
   await db.waThreadMemory.deleteMany({});
   // ChatAction points at WaMessage, Unit and Customer (2026-09-29).
   await db.chatAction.deleteMany({});
+  await db.customerProfileFact.deleteMany({});
   await db.customerProfile.deleteMany({});
+  // AgentRun points at the message it answered (chatbot v2).
+  await db.agentRunStep.deleteMany({});
+  await db.agentRun.deleteMany({});
+  // Chunks first: their message links are RESTRICT (20261022120000).
+  await db.chatMemoryChunk.deleteMany({});
   await db.waMessage.deleteMany({});
 });
 
@@ -155,8 +188,15 @@ const pass = (client: AgentClient, over: Record<string, unknown> = {}) =>
     debounceMs: 8_000,
     maxDraftsPerTick: 5,
     now: () => NOW,
+    superseded: ledger,
     ...over,
   });
+
+/** The customer's turn the model was handed: the last user message's words. */
+const customerTurn = (args: CreateArgs): string => {
+  const last = args.messages[args.messages.length - 1]!;
+  return (last.content as Array<{ text: string }>)[0]!.text;
+};
 
 describe("batching a burst", () => {
   it("answers a burst of four messages with one reply and one outbox row", async () => {
@@ -369,10 +409,237 @@ describe("batching a burst", () => {
   });
 });
 
+describe("a line that arrives while the reply is being written (2026-10-27)", () => {
+  // The owner's report: "Hmmm kemahalan", then "ada yg 15 jutaan gak ya" a
+  // few seconds later — and two replies, one per line.
+  it("drops the draft, queues nothing and leaves both lines waiting", async () => {
+    await inbound({
+      id: "k.1",
+      from: SENDER,
+      text: "Hmmm kemahalan",
+      ts: ago(30_000),
+    });
+    const first = scripted(["siap kak"]);
+    first.before(0, async () => {
+      await inbound({
+        id: "k.2",
+        from: SENDER,
+        text: "ada yg 15 jutaan gak ya",
+        ts: ago(20_000),
+      });
+    });
+
+    const result = await pass(first.client);
+
+    expect(first.calls).toHaveLength(1);
+    expect(result.drafted).toBe(0);
+    expect(await db.outbox.count()).toBe(0);
+    expect(await db.agentRun.count()).toBe(0);
+    const rows = await db.waMessage.findMany({ where: { from: SENDER } });
+    expect(rows.map((r) => r.status)).toEqual(["BARU", "BARU"]);
+    expect(rows.every((r) => r.replyText === null)).toBe(true);
+    expect(ledger.get(SENDER)?.count).toBe(1);
+  });
+
+  it("then answers the whole burst with ONE reply that read both lines", async () => {
+    await inbound({
+      id: "k.1",
+      from: SENDER,
+      text: "Hmmm kemahalan",
+      ts: ago(30_000),
+    });
+    const first = scripted(["siap kak"]);
+    first.before(0, async () => {
+      await inbound({
+        id: "k.2",
+        from: SENDER,
+        text: "ada yg 15 jutaan gak ya",
+        ts: ago(20_000),
+      });
+    });
+    await pass(first.client);
+
+    const second = scripted(["ada kak, mau saya carikan?"]);
+    const result = await pass(second.client);
+
+    expect(result.drafted).toBe(1);
+    expect(second.calls).toHaveLength(1);
+    expect(customerTurn(second.calls[0]!)).toBe(
+      "Hmmm kemahalan\nada yg 15 jutaan gak ya",
+    );
+    const sent = await db.outbox.findMany();
+    expect(sent).toHaveLength(1);
+    expect((sent[0]!.payload as { body: string }).body).toBe(
+      "ada kak, mau saya carikan?",
+    );
+    const rows = await db.waMessage.findMany({ where: { from: SENDER } });
+    expect(rows.every((r) => r.status === "DIJAWAB_AGEN")).toBe(true);
+    expect(rows.filter((r) => r.replyText !== null)).toHaveLength(1);
+    // A committed reply ends the run of drops.
+    expect(ledger.has(SENDER)).toBe(false);
+  });
+
+  it("drops it the same way when the rules bot answers (no model at all)", async () => {
+    await inbound({ id: "rb.1", from: SENDER, text: "halo", ts: ago(30_000) });
+    // Rules mode is no client: the line is raced in by the profile lookup
+    // instead, which every rules turn makes before its template.
+    let raced = false;
+    const spy = db.$extends({
+      query: {
+        customerProfile: {
+          async findUnique({ args, query }) {
+            if (!raced) {
+              raced = true;
+              await db.waMessage.create({
+                data: {
+                  waMessageId: "rb.2",
+                  from: SENDER,
+                  name: "Test",
+                  text: "ada air m2?",
+                  msgType: "text",
+                  ts: ago(20_000),
+                  direction: "IN",
+                  status: "BARU",
+                  entities: {},
+                  answeredByAgent: false,
+                },
+              });
+            }
+            return query(args);
+          },
+        },
+      },
+    }) as unknown as PrismaClient;
+
+    const result = await draftPass({
+      db: spy,
+      logger,
+      anthropic: {},
+      debounceMs: 8_000,
+      maxDraftsPerTick: 5,
+      now: () => NOW,
+      superseded: ledger,
+    });
+
+    expect(raced).toBe(true);
+    expect(result.drafted).toBe(0);
+    expect(await db.outbox.count()).toBe(0);
+    expect(
+      await db.waMessage.count({ where: { from: SENDER, status: "BARU" } }),
+    ).toBe(2);
+
+    const again = await draftPass({
+      db,
+      logger,
+      anthropic: {},
+      debounceMs: 8_000,
+      maxDraftsPerTick: 5,
+      now: () => NOW,
+      superseded: ledger,
+    });
+    expect(again.drafted).toBe(1);
+    expect(await db.outbox.count()).toBe(1);
+    expect(
+      await db.waMessage.count({ where: { from: SENDER, status: "BARU" } }),
+    ).toBe(0);
+  });
+
+  it(`commits anyway after ${MAX_SUPERSEDES} drops in a row, so a customer who keeps typing is answered`, async () => {
+    await inbound({ id: "st.0", from: SENDER, text: "halo", ts: ago(40_000) });
+    let line = 0;
+    const typing = () => {
+      const model = scripted(["siap kak"]);
+      model.before(0, async () => {
+        line += 1;
+        await inbound({
+          id: `st.${line}`,
+          from: SENDER,
+          text: `baris ${line}`,
+          ts: ago(30_000 - line * 1_000),
+        });
+      });
+      return model;
+    };
+
+    expect((await pass(typing().client)).drafted).toBe(0);
+    expect((await pass(typing().client)).drafted).toBe(0);
+    expect(ledger.get(SENDER)?.count).toBe(MAX_SUPERSEDES);
+    const third = typing();
+    expect((await pass(third.client)).drafted).toBe(1);
+
+    // The third reply covered everything but the line that arrived during it.
+    expect(customerTurn(third.calls[0]!)).toBe("halo\nbaris 1\nbaris 2");
+    expect(await db.outbox.count()).toBe(1);
+    const waiting = await db.waMessage.findMany({
+      where: { from: SENDER, status: "BARU" },
+    });
+    expect(waiting.map((m) => m.waMessageId)).toEqual(["st.3"]);
+    expect(ledger.has(SENDER)).toBe(false);
+  });
+
+  it("commits anyway once the burst's first line has waited a minute", async () => {
+    await inbound({
+      id: "old.1",
+      from: SENDER,
+      text: "mau tanya",
+      ts: ago(70_000),
+    });
+    const model = scripted(["silakan kak"]);
+    model.before(0, async () => {
+      await inbound({
+        id: "old.2",
+        from: SENDER,
+        text: "eh satu lagi",
+        ts: NOW,
+      });
+    });
+
+    expect((await pass(model.client)).drafted).toBe(1);
+    expect(await db.outbox.count()).toBe(1);
+    expect(
+      (await db.waMessage.findFirstOrThrow({ where: { waMessageId: "old.2" } }))
+        .status,
+    ).toBe("BARU");
+  });
+
+  it("changes nothing when no line arrived", async () => {
+    await inbound({ id: "q.1", from: SENDER, text: "halo", ts: ago(30_000) });
+    await inbound({
+      id: "q.2",
+      from: SENDER,
+      text: "ada m2 ga",
+      ts: ago(28_000),
+    });
+
+    const model = scripted(["siap kak"]);
+    expect((await pass(model.client)).drafted).toBe(1);
+    expect(model.calls).toHaveLength(1);
+    expect(await db.outbox.count()).toBe(1);
+    expect(ledger.size).toBe(0);
+  });
+
+  it("does not read a backlog's second half as the customer still typing", async () => {
+    // Six lines, a batch ceiling of four: the two left over were there at the
+    // freeze, so the first reply is sent and they wait for the second.
+    for (let i = 0; i < 6; i += 1) {
+      await inbound({
+        id: `bl.${i}`,
+        from: SENDER,
+        text: `baris ${i}`,
+        ts: ago(30_000 - i * 100),
+      });
+    }
+    const first = await pass(scripted(["oke kak"]).client, { maxBatch: 4 });
+    expect(first.drafted).toBe(1);
+    expect(await db.outbox.count()).toBe(1);
+    expect(ledger.size).toBe(0);
+  });
+});
+
 describe("the adaptive wait", () => {
   it("answers a customer who asked a question before one who is still muttering", async () => {
-    // Both last spoke 6 seconds ago: past the 4s question wait, short of the
-    // 8s base window.
+    // Both last spoke 6 seconds ago: past the 3s question wait, short of the
+    // 8s base window this file passes.
     await inbound({
       id: "a.q",
       from: SENDER,
@@ -395,12 +662,13 @@ describe("the adaptive wait", () => {
   });
 
   it("keeps waiting on nanti saya kabarin long after an ordinary message would have been answered", async () => {
-    // 20 seconds: well past the base window, well short of the 45s hold.
+    // 15 seconds: past the base window (8s here) and the filler stretch,
+    // short of the 20s hold (MAX_WAIT_MS since 2026-10-14).
     await inbound({
       id: "w.later",
       from: SENDER,
       text: "nanti saya kabarin ya",
-      ts: ago(20_000),
+      ts: ago(15_000),
     });
 
     const result = await pass(scripted(["siap kak"]).client);
@@ -741,7 +1009,11 @@ describe("handing a customer to a person", () => {
         "Siap kak 😊 untuk Air M1 kami cekkan dulu ya, admin kami segera balas 🙏",
       ),
     ]);
-    const result = await pass(model.client);
+    // The 2026-09-18 design, where a named unit's stock is a person's: since
+    // 2026-10-27 the POS is the source of truth unless the owner says not.
+    const result = await pass(model.client, {
+      capabilities: PARALLEL_CAPABILITIES,
+    });
 
     expect(result).toMatchObject({ drafted: 1, escalated: 1 });
     // The routed turn was offered no way to answer.
@@ -752,8 +1024,12 @@ describe("handing a customer to a person", () => {
     expect(row.status).toBe("PERLU_STAF");
     expect(row.answeredByAgent).toBe(false);
     expect(row.intent).toBe("staf:stock");
+    // The job first, the model's note under it (2026-10-27).
     expect(row.entities).toMatchObject({
-      handoff: { topic: "stock", summary: "Tanya stok MacBook Air M1" },
+      handoff: {
+        topic: "stock",
+        summary: "Perlu cek stok — Air M1\nTanya stok MacBook Air M1",
+      },
     });
     const sent = await db.outbox.findFirstOrThrow();
     expect((sent.payload as { body: string }).body).toMatch(
@@ -761,49 +1037,155 @@ describe("handing a customer to a person", () => {
     );
   });
 
-  it("says nothing more to that customer until a person has answered", async () => {
+  it("answers the customer's newer message, naming what is still with a colleague (2026-10-27)", async () => {
     await inbound({
       id: "hold.1",
       from: SENDER,
-      text: "air m1 ready kak?",
+      text: "air m1 bisa nego ga kak?",
       ts: ago(60_000),
     });
     await pass(
       scripted([
-        handsOver("stock", "Stok Air M1", "Admin kami cek dulu ya kak 🙏"),
+        handsOver(
+          "negotiation",
+          "Nego Air M1",
+          "Admin kami cek dulu ya kak 🙏",
+        ),
       ]).client,
     );
 
-    // The customer gets impatient.
+    // The customer asks something else. It used to wait, unanswered, until a
+    // person had dealt with the negotiation.
     await inbound({
       id: "hold.2",
       from: SENDER,
-      text: "kak?",
+      text: "oh iya, garansinya berapa lama?",
       ts: ago(20_000),
     });
-    const held = scripted(["halo kak"]);
-    expect((await pass(held.client)).drafted).toBe(0);
-    expect(held.calls).toHaveLength(0);
+    const next = scripted(["Garansi toko 1 bulan ya kak 😊"]);
+    expect((await pass(next.client)).drafted).toBe(1);
+    expect(next.calls).toHaveLength(1);
+    // Told what is waiting, so it neither answers nor contradicts it.
+    const system = JSON.stringify(next.calls[0]!.system);
+    expect(system).toContain("WAITING FOR A COLLEAGUE");
+    expect(system).toContain("air m1 bisa nego ga kak?");
+
+    // The negotiation is still the colleague's: outlined and open.
+    expect(
+      (
+        await db.waMessage.findFirstOrThrow({
+          where: { waMessageId: "hold.1" },
+        })
+      ).status,
+    ).toBe("PERLU_STAF");
     expect(
       (
         await db.waMessage.findFirstOrThrow({
           where: { waMessageId: "hold.2" },
         })
       ).status,
-    ).toBe("BARU");
+    ).toBe("DIJAWAB_AGEN");
+    expect(
+      await db.chatAction.count({ where: { from: SENDER, status: "OPEN" } }),
+    ).toBe(1);
+  });
 
-    // A colleague answers through the inbox, which closes every waiting row.
-    await db.waMessage.updateMany({
-      where: { from: SENDER, status: { in: ["BARU", "PERLU_STAF"] } },
-      data: { status: "DIJAWAB_STAF", answeredAt: NOW },
+  it("stays out while a colleague is chatting, and comes back once they stop", async () => {
+    await db.staff.upsert({
+      where: { id: "staff_chat_i" },
+      update: {},
+      create: {
+        id: "staff_chat_i",
+        username: "chat_i_kasir",
+        name: "Kasir",
+        role: "STAFF",
+        canApprove: false,
+        active: true,
+        passwordHash: "unusable",
+        createdAt: NOW,
+      },
+    });
+    // A colleague answered by hand two minutes ago (routes/inbox.ts).
+    const answered = await inbound({
+      id: "s.1",
+      from: SENDER,
+      text: "air m1 bisa nego?",
+      ts: ago(300_000),
+    });
+    await db.waMessage.update({
+      where: { id: answered.id },
+      data: {
+        status: "DIJAWAB_STAF",
+        replyText: "Bisa kak, 7,8jt ya",
+        answeredById: "staff_chat_i",
+        answeredAt: ago(120_000),
+      },
     });
     await inbound({
-      id: "hold.3",
+      id: "s.2",
       from: SENDER,
-      text: "makasih kak",
-      ts: ago(20_000),
+      text: "oke kak, garansinya berapa lama?",
+      ts: ago(30_000),
     });
-    expect((await pass(scripted(["sama-sama kak 😊"]).client)).drafted).toBe(1);
+
+    const quiet = scripted(["siap kak"]);
+    expect((await pass(quiet.client)).drafted).toBe(0);
+    expect(quiet.calls).toHaveLength(0);
+    expect(
+      (await db.waMessage.findFirstOrThrow({ where: { waMessageId: "s.2" } }))
+        .status,
+    ).toBe("BARU");
+
+    // Mark handled writes no reply, so it is not somebody typing.
+    await db.waMessage.update({
+      where: { id: answered.id },
+      data: { replyText: null },
+    });
+    expect((await pass(scripted(["siap kak"]).client)).drafted).toBe(1);
+  });
+
+  it("answers once the colleague has been quiet for the window", async () => {
+    await db.staff.upsert({
+      where: { id: "staff_chat_i" },
+      update: {},
+      create: {
+        id: "staff_chat_i",
+        username: "chat_i_kasir",
+        name: "Kasir",
+        role: "STAFF",
+        canApprove: false,
+        active: true,
+        passwordHash: "unusable",
+        createdAt: NOW,
+      },
+    });
+    const answered = await inbound({
+      id: "w.1",
+      from: SENDER,
+      text: "halo",
+      ts: ago(1_500_000),
+    });
+    await db.waMessage.update({
+      where: { id: answered.id },
+      data: {
+        status: "DIJAWAB_STAF",
+        replyText: "Halo kak",
+        answeredById: "staff_chat_i",
+        answeredAt: ago(1_200_000),
+      },
+    });
+    await inbound({ id: "w.2", from: SENDER, text: "kak?", ts: ago(30_000) });
+    // Twenty minutes is past the default quarter of an hour.
+    expect((await pass(scripted(["siap kak"]).client)).drafted).toBe(1);
+    await inbound({ id: "w.3", from: SENDER, text: "kak??", ts: ago(30_000) });
+    // …and inside a longer window it would still be the colleague's.
+    expect(
+      (
+        await pass(scripted(["siap kak"]).client, {
+          staffActiveMs: 30 * 60_000,
+        })
+      ).drafted,
+    ).toBe(0);
   });
 
   it("holds only that customer", async () => {
@@ -849,7 +1231,7 @@ describe("handing a customer to a person", () => {
     expect(action).toMatchObject({
       kind: "NEGOTIATION",
       status: "OPEN",
-      summary: "Nego Air M1 ke 7jt",
+      summary: "Perlu jawab tawaran — Air M1\nNego Air M1 ke 7jt",
       askPrice: 7_000_000n,
     });
   });
@@ -870,16 +1252,18 @@ describe("handing a customer to a person", () => {
         ),
       ]).client,
     );
-    // Held: the bot says nothing more, but the new figure is still read.
+    // A new offer is a hand-over of its own, onto the same task.
     await inbound({
       id: "n.2",
       from: SENDER,
       text: "kalau 7,2jt deh kak",
       ts: ago(20_000),
     });
-    const quiet = scripted([]);
-    await pass(quiet.client);
-    expect(quiet.calls).toHaveLength(0);
+    await pass(
+      scripted([
+        handsOver("negotiation", "Nego Air M1", "Siap kak, kami teruskan 🙏"),
+      ]).client,
+    );
 
     const actions = await db.chatAction.findMany({ where: { from: SENDER } });
     expect(actions).toHaveLength(1);
@@ -906,10 +1290,11 @@ describe("handing a customer to a person", () => {
       (await db.outbox.findFirstOrThrow()).payload as { body: string }
     ).body;
     expect(body).not.toMatch(/7\.500\.000/);
-    expect(body).toMatch(/admin kami/i);
+    // The admin's own short line for a price (2026-10-27), not "admin kami".
+    expect(body).toMatch(/^Untuk harganya aku tanyain dulu ya kak 🙏/);
   });
 
-  it("says why when the model itself fails", async () => {
+  it("answers by the rules when the model itself fails — never silent (2026-10-27)", async () => {
     await inbound({ id: "x.1", from: SENDER, text: "halo", ts: ago(20_000) });
     const broken = {
       messages: {
@@ -919,14 +1304,19 @@ describe("handing a customer to a person", () => {
       },
     } as unknown as AgentClient;
 
+    // Before 2026-10-27 this handed the thread over and sent NOTHING: the
+    // customer heard silence until a colleague happened to look.
     const result = await pass(broken);
-    expect(result).toMatchObject({ drafted: 0, escalated: 1 });
+    expect(result).toMatchObject({ drafted: 1, escalated: 0 });
     const row = await db.waMessage.findFirstOrThrow({
       where: { from: SENDER },
     });
-    expect(row.status).toBe("PERLU_STAF");
-    expect(row.entities).toMatchObject({ handoff: { forcedBy: "no_reply" } });
-    expect(await db.outbox.count()).toBe(0);
+    expect(row.status).toBe("DIJAWAB_AGEN");
+    expect(await db.outbox.count()).toBe(1);
+    expect(
+      (await db.agentRun.findFirstOrThrow({ select: { pipeline: true } }))
+        .pipeline,
+    ).toBe("rules");
   });
 });
 
@@ -991,5 +1381,34 @@ describe("the prompt", () => {
     expect(row.status).toBe("DIJAWAB_AGEN");
     expect(row.intent).toBe("jawab:faq");
     await db.agentKnowledge.deleteMany({});
+  });
+});
+
+describe("the lead, decided by the bot (owner, 2026-10-21)", () => {
+  it("scores a single-agent turn and marks a likely buyer", async () => {
+    await inbound({
+      id: "l.1",
+      from: SENDER,
+      text: "mau booking macbook air m2 besok jam 2 ya kak",
+      ts: ago(30_000),
+    });
+    await pass(scripted(["siap kak"]).client);
+
+    const mem = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: SENDER },
+    });
+    // Scored by code, the way the rules score a turn: product, a booking and
+    // a time — no model call spent on it.
+    expect(mem.leadScore).toBe(85);
+    expect(mem.leadAt).not.toBeNull();
+    const run = await db.agentRun.findFirstOrThrow({ where: { from: SENDER } });
+    expect(run).toMatchObject({ pipeline: "v1", leadScore: 85 });
+  });
+
+  it("does not mark a greeting", async () => {
+    await inbound({ id: "l.2", from: OTHER, text: "halo", ts: ago(30_000) });
+    await pass(scripted(["siap kak"]).client);
+    const mem = await db.waThreadMemory.findUnique({ where: { from: OTHER } });
+    expect(mem?.leadAt ?? null).toBeNull();
   });
 });

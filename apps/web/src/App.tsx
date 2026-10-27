@@ -8,6 +8,8 @@ import { useSession, watchSession } from "./lib/session.js";
 import { LoginPage } from "./routes/LoginPage.js";
 import { ChangePasswordPage } from "./routes/ChangePasswordPage.js";
 import { PAGE_ROUTES } from "./pages.js";
+import { isFinancePath } from "./layouts/navigation.js";
+import { FinanceLocked } from "./routes/finance/FinanceLocked.js";
 
 export function App() {
   const session = useSession();
@@ -43,7 +45,17 @@ export function App() {
       <Route element={<AppLayout staff={staff} />}>
         {/* The pages come from `pages.tsx` — one table of every screen. */}
         {PAGE_ROUTES.map((r) => (
-          <Route key={r.path} path={r.path} element={r.element} />
+          <Route
+            key={r.path}
+            path={r.path}
+            element={
+              isFinancePath(r.path) && !staff.canViewFinance ? (
+                <FinanceLocked />
+              ) : (
+                r.element
+              )
+            }
+          />
         ))}
 
         {/* The shift opens on stock, which is the screen a shift opens on. */}
@@ -94,6 +106,12 @@ export function App() {
         <Route
           path="/finance/payable-receivable"
           element={<Navigate to="/finance/receivable" replace />}
+        />
+        {/* Pending Payment folded into Transaction History (owner ask
+            2026-10-22). */}
+        <Route
+          path="/finance/receivables"
+          element={<Navigate to="/finance/transactions" replace />}
         />
         {/* The inbox and the knowledge base are two tabs of one page since
             2026-08-26. The old leaf path still resolves. */}

@@ -47,7 +47,8 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { NAV_SECTIONS, matchLeaf } from "./navigation.js";
+import { matchLeaf, navSectionsFor } from "./navigation.js";
+import { NavBadge } from "./NavBadge.js";
 import { useLayoutMode } from "./useLayoutMode.js";
 import { ScannerChip } from "../components/ScannerChip.js";
 import { BrandMark } from "../components/BrandMark.js";
@@ -205,16 +206,21 @@ export function AppLayout({ staff }: { staff: Staff }) {
   // still one target.
   const items = useMemo(
     () =>
-      NAV_SECTIONS.map((s) => ({
+      navSectionsFor(staff).map((s) => ({
         key: s.children ? s.key : (s.path ?? s.key),
         icon: s.icon,
         label: s.path ? <Link to={s.path}>{t(s.label)}</Link> : t(s.label),
         children: s.children?.map((c) => ({
           key: c.path,
-          label: <Link to={c.path}>{t(c.label)}</Link>,
+          label: (
+            <Link to={c.path}>
+              {t(c.label)}
+              {c.badge !== undefined && <NavBadge kind={c.badge} />}
+            </Link>
+          ),
         })),
       })),
-    [t],
+    [t, staff],
   );
 
   const brand = (
@@ -825,7 +831,9 @@ export function AppLayout({ staff }: { staff: Staff }) {
                 ? LAYOUT.contentPadding.compact
                 : LAYOUT.contentPadding.comfortable
             }px + env(safe-area-inset-bottom))`,
-            maxWidth: LAYOUT.contentMaxWidth,
+            // No max width: content fills the screen however far it is zoomed
+            // out (owner, 2026-10-14). It used to stop at 1600px and leave
+            // the right of a wide monitor empty.
             width: "100%",
             // Without this, a wide table inside a fixed-width flex child
             // refuses to shrink and the whole document scrolls sideways —

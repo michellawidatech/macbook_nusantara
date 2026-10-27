@@ -25,6 +25,12 @@
  * database (a projection is written with its event) applied to the one status
  * that was exempt from it.
  *
+ * ⚠️ Which warehouse is ASKED since 2026-10-26, never found by
+ * `Location.kind === "SERVIS"`: in the shop's database 04 is *Gudang Masuk
+ * Belum QC* and carries that kind, so every inbound unit "was at the bench".
+ * `components/SendToServiceModal` asks *Where is it serviced?* and defaults to
+ * where the unit already is.
+ *
  * ## 2. What a repair costs is a list, not a number
  *
  * A repair is a labour charge, a part, and — very often — the courier both
@@ -88,6 +94,13 @@ export interface ServiceFee {
   readonly amount: number;
   readonly at: string;
   readonly staff: string;
+  /**
+   * Has an `Expense` (kind UNIT) paid it? Derived by the server from that
+   * row (2026-10-26) and set by the browser in the same mutation that writes
+   * one — it is how an account that is sent no expenses can tell a paid
+   * charge from an owed one. Which method paid it is the expense's.
+   */
+  readonly paid?: true;
 }
 
 /**
@@ -256,21 +269,6 @@ export function openVisit(
   return records.find((r) => r.serial === serial && r.closedAt === undefined);
 }
 
-/**
- * The shop's service bench, by `Location.kind`.
- *
- * By KIND and not by id, because `wh-4` is this shop's service location and
- * the next shop's will not be. A shop with no service location answers
- * undefined and the callers fall back to leaving the machine where it is —
- * which is exactly what happened before this feature, so nothing breaks in a
- * database that has not got one.
- */
-export function serviceLocationOf(
-  locations: readonly { readonly id: string; readonly kind?: string }[],
-): string | undefined {
-  return locations.find((l) => l.kind === "SERVIS")?.id;
-}
-
 /** What a bench row shows. */
 export interface BenchRow {
   readonly rec: ServiceRec;
@@ -295,6 +293,11 @@ export interface BenchRow {
   readonly days: number;
   /** Has it actually reached the bench? See `ServiceRec.arrivedAt`. */
   readonly arrived: boolean;
+  /**
+   * A finished visit, listed only when somebody asked to see those
+   * (2026-10-26) — so one can be deleted. Nothing else is done to it.
+   */
+  readonly closed: boolean;
 }
 
 /**
@@ -320,36 +323,54 @@ export type BenchSources = Omit<CostSources, "units"> & {
 export function benchRows(
   store: BenchSources,
   now: number = Date.now(),
+  opts: { readonly includeClosed?: boolean } = {},
 ): BenchRow[] {
   const costOf = costIndex(store);
   const units = new Map(store.units.map((u) => [u.serial, u]));
-  return store.services
-    .filter((r) => r.closedAt === undefined)
-    .map((rec) => {
-      const cost = visitCost(rec);
-      // A visit for a serial the store does not hold still costs what it has
-      // cost; there is simply no purchase behind it.
-      const machine = costOf(
-        units.get(rec.serial) ?? { serial: rec.serial, buy: 0, poId: null },
-      );
-      return {
-        rec,
-        serial: rec.serial,
-        cost,
-        buy: machine.buy,
-        shippingTax: machine.shippingTax,
-        earlierRepair: Math.max(0, machine.repair - cost),
-        total: machine.total,
-        arrived: rec.arrivedAt !== undefined,
-        // Floored at zero: a clock skew must not report a machine as having
-        // been away for minus a day.
-        days: Math.max(
-          0,
-          Math.floor((now - Date.parse(rec.openedAt)) / 86_400_000),
-        ),
-      };
-    })
-    .sort((a, b) => b.days - a.days);
+  return (
+    store.services
+      .filter((r) => opts.includeClosed === true || r.closedAt === undefined)
+      .map((rec) => {
+        const cost = visitCost(rec);
+        // A visit for a serial the store does not hold still costs what it has
+        // cost; there is simply no purchase behind it.
+        const machine = costOf(
+          units.get(rec.serial) ?? { serial: rec.serial, buy: 0, poId: null },
+        );
+        return {
+          rec,
+          serial: rec.serial,
+          cost,
+          buy: machine.buy,
+          shippingTax: machine.shippingTax,
+          earlierRepair: Math.max(0, machine.repair - cost),
+          total: machine.total,
+          arrived: rec.arrivedAt !== undefined,
+          closed: rec.closedAt !== undefined,
+          // Floored at zero: a clock skew must not report a machine as having
+          // been away for minus a day. A finished visit counts to its close.
+          days: Math.max(
+            0,
+            Math.floor(
+              ((rec.closedAt !== undefined ? Date.parse(rec.closedAt) : now) -
+                Date.parse(rec.openedAt)) /
+                86_400_000,
+            ),
+          ),
+        };
+      })
+      // The open ones first, longest away first; then the finished ones, the
+      // most recently finished first.
+      .sort((a, b) =>
+        a.closed !== b.closed
+          ? a.closed
+            ? 1
+            : -1
+          : a.closed
+            ? (b.rec.closedAt ?? "").localeCompare(a.rec.closedAt ?? "")
+            : b.days - a.days,
+      )
+  );
 }
 
 /**
@@ -379,9 +400,9 @@ export function splitBench(rows: readonly BenchRow[]): {
  *
  * A repairer who quoted Rp900k and billed Rp650k is the ordinary case, not the
  * exception, and before this the only way to record it was a second visit or a
- * number nobody could correct. What is NOT offered is removing the row: this
- * database does not hard-delete, and a charge edited to zero says "we were
- * quoted this and did not pay it", which is the more useful sentence anyway.
+ * number nobody could correct. ~~Removing the row is not offered~~ — it is
+ * since 2026-10-26 (owner: a charge typed by mistake should go, not sit at
+ * zero); see `planChargeDeletion` in lib/serviceActions.ts.
  *
  * Returns a new record — `ServiceRec` is readonly and the store is
  * replace-on-write, the same discipline `Order.payments` follows.

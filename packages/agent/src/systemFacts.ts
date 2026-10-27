@@ -20,7 +20,9 @@
  */
 
 import type { PrismaClient } from "@nusantara/db";
+import { DP_SETTING_KEYS, dpRuleOf } from "@nusantara/domain";
 import { STORE_HOURS } from "./hours.js";
+import type { DpTerms } from "./policy.js";
 
 export interface StoreFacts {
   readonly name: string | null;
@@ -29,6 +31,11 @@ export interface StoreFacts {
   readonly stores: ReadonlyArray<{ name: string; address: string | null }>;
   /** Customer-facing words for the active payment methods, in shop order. */
   readonly paymentMethods: readonly string[];
+  /**
+   * The DP rule (owner, 2026-10-27) — `sales.dpAmount` / `sales.dpDays`, or
+   * Rp500.000 for 7 days. What the bot says when asked to keep a unit.
+   */
+  readonly dp: DpTerms;
 }
 
 /**
@@ -36,6 +43,21 @@ export interface StoreFacts {
  * marketplace's own escrow, the import's placeholder. Offering "Tempo" to a
  * stranger on WhatsApp would be offering credit.
  */
+/**
+ * The shop's own name (owner, 2026-10-27: *"ofc it is macbook nusantara"*).
+ * A customer asking "benar ini Macbook Nusantara?" was handed to a person
+ * because the bot could not vouch for a name it was never given. Settings'
+ * `shop.name` wins when it names the shop; empty — or demo text that does not
+ * mention Nusantara — falls back to the shop's real name, the way the faktur's
+ * address does (`SHOP_ADDRESS`).
+ */
+export const SHOP_NAME = "Macbook Nusantara";
+
+export function shopName(setting: string | null | undefined): string {
+  const v = setting?.trim() ?? "";
+  return /nusantara/i.test(v) ? v : SHOP_NAME;
+}
+
 const NOT_CUSTOMER_FACING = new Set(["TEMPO", "MARKETPLACE", "B2SOFT"]);
 
 /** The shop's own words for a method, by code. Unknown codes keep their label. */
@@ -53,7 +75,16 @@ const PAYMENT_WORDS: Readonly<Record<string, string>> = {
 export async function loadStoreFacts(db: PrismaClient): Promise<StoreFacts> {
   const [settings, stores, methods] = await Promise.all([
     db.appSetting.findMany({
-      where: { key: { in: ["shop.name", "shop.contact"] } },
+      where: {
+        key: {
+          in: [
+            "shop.name",
+            "shop.contact",
+            DP_SETTING_KEYS.amount,
+            DP_SETTING_KEYS.days,
+          ],
+        },
+      },
       select: { key: true, value: true },
     }),
     db.location.findMany({
@@ -70,12 +101,16 @@ export async function loadStoreFacts(db: PrismaClient): Promise<StoreFacts> {
   const setting = (key: string) =>
     settings.find((s) => s.key === key)?.value.trim() || null;
   return {
-    name: setting("shop.name"),
+    name: shopName(setting("shop.name")),
     contact: setting("shop.contact"),
     stores,
     paymentMethods: methods
       .filter((m) => !NOT_CUSTOMER_FACING.has(m.code))
       .map((m) => PAYMENT_WORDS[m.code] ?? m.label),
+    dp: dpRuleOf({
+      amount: setting(DP_SETTING_KEYS.amount),
+      days: setting(DP_SETTING_KEYS.days),
+    }),
   };
 }
 
@@ -107,6 +142,9 @@ export function renderStoreFacts(facts: StoreFacts): string {
     lines.push(
       `At the shop a customer can pay by ${facts.paymentMethods.join(", ")}.`,
     );
+  lines.push(
+    `To keep a unit for a customer, the shop asks a DP of Rp ${String(facts.dp.amount).replace(/\B(?=(\d{3})+(?!\d))/g, ".")} and holds the unit ${facts.dp.days} days; the customer sends the transfer proof and a colleague checks it before anything is held. Without a DP nothing is held.`,
+  );
   return lines.join("\n");
 }
 

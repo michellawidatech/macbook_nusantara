@@ -148,3 +148,259 @@ export const setCapabilities = (body: Partial<BotCapabilities>) =>
     method: "PUT",
     body,
   });
+
+/**
+ * The numbers that may type `/new` to start their conversation over (owner
+ * ask 2026-10-14). For trying the bot out: a reset leaves the earlier turns,
+ * the summary and any open hand-over behind. Written as wa_ids.
+ */
+export const getTesters = () => api<{ numbers: string[] }>("/api/chat/testers");
+
+/** The owner's call — the server answers 403 to anybody else. */
+export const setTesters = (numbers: string[]) =>
+  api<{ numbers: string[] }>("/api/chat/testers", {
+    method: "PUT",
+    body: { numbers },
+  });
+
+// ── Chatbot v2 (2026-10-15) ────────────────────────────────────────────────
+
+export type AgentKey = "ROUTER" | "ADVISOR" | "OPERATIONS";
+
+export type EvaluationReason =
+  | "WRONG_FACT"
+  | "WRONG_TONE"
+  | "TOO_LONG"
+  | "MISSED_QUESTION"
+  | "SHOULD_ESCALATE"
+  | "SHOULD_NOT_ESCALATE"
+  | "OTHER";
+
+export const EVALUATION_REASONS: readonly EvaluationReason[] = [
+  "WRONG_FACT",
+  "WRONG_TONE",
+  "TOO_LONG",
+  "MISSED_QUESTION",
+  "SHOULD_ESCALATE",
+  "SHOULD_NOT_ESCALATE",
+  "OTHER",
+];
+
+export const AGENT_KEYS: readonly AgentKey[] = [
+  "ROUTER",
+  "ADVISOR",
+  "OPERATIONS",
+];
+
+/** Staff's verdict on one bot reply. */
+export interface Evaluation {
+  id: string;
+  rating: "GOOD" | "BAD";
+  reason: EvaluationReason | null;
+  agent: AgentKey | null;
+  note: string | null;
+  /** The better answer, when somebody wrote one. */
+  corrected: string | null;
+  status: "OPEN" | "APPLIED" | "DISMISSED";
+  createdAt: string;
+  createdBy: string;
+  reviewedAt: string | null;
+  reviewedBy: string | null;
+  phone: string;
+  customerText: string | null;
+  reply: string | null;
+  messageId: string;
+}
+
+export const listEvaluations = (
+  query: {
+    status?: "OPEN" | "APPLIED" | "DISMISSED" | "ALL";
+    rating?: "GOOD" | "BAD";
+  } = {},
+) => {
+  const params = new URLSearchParams();
+  if (query.status) params.set("status", query.status);
+  if (query.rating) params.set("rating", query.rating);
+  const qs = params.toString();
+  return api<{ evaluations: Evaluation[] }>(
+    `/api/chat/evaluations${qs ? `?${qs}` : ""}`,
+  );
+};
+
+export const createEvaluation = (body: {
+  messageId: string;
+  rating: "GOOD" | "BAD";
+  reason?: EvaluationReason;
+  agent?: AgentKey;
+  note?: string;
+  corrected?: string;
+  /** The rating this one replaces (👍 pressed where 👎 stood), in one go. */
+  replaces?: string;
+}) =>
+  api<{ evaluation: Evaluation }>("/api/chat/evaluations", {
+    method: "POST",
+    body,
+  });
+
+/**
+ * Take a rating back — the same thumb pressed again (2026-10-27). Its author
+ * or an owner, and only while it is OPEN: 409 once it became a Knowledge
+ * Base answer.
+ */
+export const withdrawEvaluation = (id: string) =>
+  api<{ withdrawn: string }>(
+    `/api/chat/evaluations/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+
+/**
+ * Delete a row from the Evaluation list, whatever its status — the author or
+ * an owner. An applied rating's Knowledge Base answer stays.
+ */
+export const deleteEvaluation = (id: string) =>
+  api<{ withdrawn: string }>(
+    `/api/chat/evaluations/${encodeURIComponent(id)}?any=1`,
+    { method: "DELETE" },
+  );
+
+/** Writes an AgentCorrection the bot reads. 400 without a corrected text. */
+export const applyEvaluation = (id: string, corrected?: string) =>
+  api<{ evaluation: Evaluation }>(
+    `/api/chat/evaluations/${encodeURIComponent(id)}/apply`,
+    { method: "POST", body: corrected === undefined ? {} : { corrected } },
+  );
+
+export const dismissEvaluation = (id: string) =>
+  api<{ evaluation: Evaluation }>(
+    `/api/chat/evaluations/${encodeURIComponent(id)}/dismiss`,
+    { method: "POST" },
+  );
+
+/** One of the three agents and the persona it speaks with. */
+export interface AgentPersona {
+  agent: AgentKey;
+  name: string;
+  /** One-line main task (fixed). */
+  task: string;
+  /** What this seat does when the rules-first pipeline is selected. */
+  inRules: string;
+  model: string;
+  /** The persona prompt in force. */
+  prompt: string;
+  /** True while nobody has edited it. */
+  isDefault: boolean;
+  updatedAt: string | null;
+}
+
+export const listAgents = () =>
+  api<{ agents: AgentPersona[] }>("/api/chat/agents");
+
+/** Owner only. */
+export const saveAgentPrompt = (agent: AgentKey, prompt: string) =>
+  api<{ agent: AgentPersona }>(
+    `/api/chat/agents/${encodeURIComponent(agent)}`,
+    { method: "PUT", body: { prompt } },
+  );
+
+/** Owner only. Back to the shipped persona. */
+export const resetAgentPrompt = (agent: AgentKey) =>
+  api<{ agent: AgentPersona }>(
+    `/api/chat/agents/${encodeURIComponent(agent)}/reset`,
+    { method: "POST" },
+  );
+
+/**
+ * What answers, read-only since 2026-10-21 (owner: "keep it a single agent …
+ * the user cannot choose / determine the lead"): `v1`, the one agent, when the
+ * server has a credential; `rules` without one.
+ */
+export interface ChatSettings {
+  pipeline: "rules" | "v1" | "v2";
+  /** 0–100, fixed: the bot's score from which a thread is a lead. */
+  leadThreshold: number;
+}
+
+export const getChatSettings = () => api<ChatSettings>("/api/chat/settings");
+
+export interface SimulationStep {
+  agent: AgentKey;
+  model: string;
+  tool: string | null;
+  ok: boolean;
+  ms: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface SimulationResult {
+  reply: string;
+  handoff: null | { topic: string; summary: string };
+  /** Photo ids the reply would attach. */
+  photos: string[];
+  router: {
+    language: string;
+    tone: string;
+    intent: string;
+    leadScore: number;
+    escalate: string | null;
+  };
+  steps: SimulationStep[];
+  /** USD × 1e6. */
+  costMicros: number;
+  latencyMs: number;
+  pipeline: ChatSettings["pipeline"];
+  /** Serials this reply showed — sent back as `lastShown` next turn. */
+  shown: string[];
+  /** False: answered by rules and templates alone. */
+  usedAi: boolean;
+}
+
+/**
+ * A dry run of the bot on a made-up conversation: reads the POS, books
+ * nothing, sends nothing, writes nothing. 503 when no Anthropic credential.
+ */
+export const simulate = (turns: AgentTurn[], lastShown: string[] = []) =>
+  api<SimulationResult>("/api/chat/simulate", {
+    method: "POST",
+    body: { turns, ...(lastShown.length ? { lastShown } : {}) },
+  });
+
+/**
+ * The chatbot's funnel for one window (2026-10-27): chats → leads → visits
+ * booked → closing tasks → sales. Counts only; any staff may read it.
+ */
+export interface FunnelWindow {
+  days: number;
+  since: string;
+  chats: number;
+  leads: number;
+  visits: number;
+  closing: number;
+  sales: number;
+}
+
+export const getFunnel = () =>
+  api<{ windows: FunnelWindow[] }>("/api/chat/funnel");
+
+/**
+ * Why the bot handed over in the last 7 days (2026-10-27, owner: *"it
+ * escalates too much"*): per topic and per what forced it, with the newest
+ * few examples. Any staff may read it.
+ */
+export interface HandoverReason {
+  topic: string;
+  /** `route`, a refused draft's code, `no_terminal_tool`, `no_reply` — or `bot`. */
+  reason: string;
+  count: number;
+  examples: Array<{
+    phone: string;
+    text: string | null;
+    summary: string | null;
+    at: string;
+  }>;
+}
+
+export const getHandovers = () =>
+  api<{ days: number; total: number; reasons: HandoverReason[] }>(
+    "/api/chat/handovers",
+  );

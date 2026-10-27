@@ -55,10 +55,10 @@ WhatsApp ─▶ webhook ─▶ WaMessage (BARU)
 ## Retrieval from documents
 
 **Source.** `AgentKnowledge` rows: question, answer, active. Staff edit them on
-/chat → Knowledge; *Import from a document* takes a pasted `Q:`/`A:` sheet;
-`ops/run knowledge <file>` loads one on the server. Both read the text with
-`parseQaText` (packages/domain/src/qaText.ts), skip a question already there,
-and show nothing they have not been asked to save.
+/chat → Knowledge; *Import from a file* takes a spreadsheet of two columns
+(`qaFromRows`, packages/domain/src/qaSheet.ts) and updates an answer the file
+changed; `ops/run knowledge <file>` loads a `Q:`/`A:` document on the server
+(`parseQaText`) and skips a question already there.
 
 **Ranking** (packages/agent/src/retrieval.ts). Customers do not type the
 owner's questions — they type "garansinya brp lama", "co dari shopee bs ambil
@@ -75,11 +75,22 @@ scores collapse. `test/retrieval.test.ts` runs 29 of the owner's questions,
 typed the way customers type them, against the real sheet; every one ranks its
 own answer first.
 
-Why not embeddings: tens of entries, one language, a small known vocabulary,
-and every decision is a line a person can read and a test can pin. An
-embedding store needs a provider, a column type and a migration to answer the
-same questions with less explanation. `indexKnowledge` is the seam if that
-changes.
+Why not embeddings *for the knowledge base*: tens of entries, one language, a
+small known vocabulary, and every decision is a line a person can read and a
+test can pin. That still holds for the owner's answers, which stay on BM25.
+
+**Embeddings are used since 2026-10-22 — for the conversation, not the
+answers** (owner decision). A returning customer's older turns are recalled
+from `ChatMemoryChunk`: one row per answered turn, embedded through Voyage AI
+(`voyage-4-lite`, 512 int8 dimensions, via MongoDB Atlas's
+`ai.mongodb.com/v1/embeddings`; Anthropic has no embeddings API) and scored by
+cosine in JS — no pgvector, because recall only ever searches ONE customer's
+own chunks. Without `VOYAGE_API_KEY`, or when Voyage fails or misses its
+1.5 s deadline, the same chunks are ranked by this file's BM25
+(`indexKnowledge`). Recalled turns ride in the per-turn half of the prompt,
+dated and fenced as "may be outdated", never in the cached half.
+`packages/agent/src/memoryRecall.ts`, `recall.ts`, `voyage.ts`;
+`apps/worker/src/memoryPass.ts`.
 
 **How the answers reach the model** (packages/agent/src/knowledge.ts). The
 owner's sheet is ~12,000 characters, so the WHOLE base rides in the prompt,
@@ -158,8 +169,11 @@ messages against the dev database: 17 calls, ~$0.03 in all.
 
 ## Loading and changing the knowledge
 
-- First load: `ops/run knowledge <file> --by ersen` on the server, or paste the
-  sheet into /chat → Knowledge → Import from a document.
+- First load: `ops/run knowledge <file> --by ersen` on the server (the `Q:` /
+  `A:` document), or /chat → Knowledge → **Import from a file**: an .xlsx or
+  .csv with the question in column A and the answer in column B (2026-10-14).
+  *Download .xlsx* gives the current base in that shape; uploading an edited
+  copy adds what is new and updates what changed, after a preview.
 - Edit an answer, or switch one off, on /chat → Knowledge. The next reply uses
   it; nothing restarts.
 - A question customers keep asking that ends in a hand-over is a missing

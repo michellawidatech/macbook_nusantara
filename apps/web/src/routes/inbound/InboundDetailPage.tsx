@@ -64,9 +64,7 @@ import {
   Descriptions,
   Dropdown,
   Flex,
-  Form,
   Input,
-  InputNumber,
   Modal,
   Result,
   Select,
@@ -78,7 +76,6 @@ import {
 } from "antd";
 import type { MenuProps } from "antd";
 import {
-  CameraOutlined,
   CheckCircleFilled,
   CheckOutlined,
   CloseCircleOutlined,
@@ -96,13 +93,14 @@ import {
   UnlockOutlined,
 } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
+import { PhotoStackButton } from "../../components/PhotoStackButton";
 import { useTranslation } from "react-i18next";
 import { MoneyInput } from "../../components/MoneyInput";
 import { CommitMoneyInput } from "../../components/CommitMoneyInput";
 import { EditableTable } from "../../components/EditableTable";
 import { EnumTag } from "../../components/EnumTag";
 import { PrintLabelsModal } from "../../components/LabelSheet";
-import { isPriceInRange } from "../../lib/unitPrice.js";
+import { isPriceInRange, startingPrice } from "../../lib/unitPrice.js";
 import { labelsFor, type LabelDatum } from "../../lib/labels.js";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import {
@@ -158,7 +156,17 @@ import {
   type PurchaseLine,
 } from "../../lib/invoiceLines.js";
 import { poRowShares, rowKey } from "../../lib/landedCost.js";
-import { costBreakdown, serviceLocationOf } from "../../lib/service.js";
+import { costBreakdown } from "../../lib/service.js";
+import { sendToServiceBlock } from "../../lib/serviceActions.js";
+import { SendToServiceModal } from "../../components/SendToServiceModal";
+import {
+  QC_REJECT_REASON,
+  SupplierReturnModal,
+} from "../../components/SupplierReturnModal";
+import {
+  supplierReturnBlock,
+  withdrawSupplierReturnMoney,
+} from "../../lib/supplierReturn.js";
 import {
   CODE128_HINT,
   BASE_MAX_LENGTH,
@@ -175,7 +183,6 @@ import { BatteryFields } from "../../components/BatteryFields";
 import { GradeTag } from "../../components/GradeTag";
 import { UnitPhotos } from "../../components/UnitPhotos";
 import { UNIT_STATUS } from "../../i18n/enumLabels.js";
-import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import { planSerialFill, type FillPlan } from "../../lib/scanFill.js";
 import { rendered } from "../../lib/rendered.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
@@ -196,9 +203,7 @@ import {
   getDb,
   mutate,
   nextId,
-  docCode,
   appendEvent,
-  ensureReason,
   currentStaffName,
   ensureQcDescription,
   addQcPhoto,
@@ -215,6 +220,8 @@ import { UnitDetailsModal } from "../../components/UnitDetailsModal";
 import { ExpenseModal } from "./ExpenseModal.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { isRecord } from "../../lib/draftGuards.js";
+import { isPickableMethod } from "../../lib/accounts.js";
+import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
 /**
  * The DOM ids of a row's boxes — what Enter and the scanner hand the caret
@@ -225,6 +232,14 @@ const serialFieldId = (key: string) => `receiving-serial-${key}`;
 const descFieldId = (key: string) => `receiving-desc-${key}`;
 const gradeFieldId = (key: string) => `receiving-grade-${key}`;
 const sellFieldId = (key: string) => `receiving-sell-${key}`;
+
+/**
+ * The widest a unit row's buttons get: *Accept* with its word, then service,
+ * return, not arrived, delete and photos as icons — plus the cell's padding.
+ * Measured, not guessed; at `COLUMN.actionsPair` they spilled left over the
+ * sell price box (owner report 2026-10-08).
+ */
+const UNIT_ACTIONS_WIDTH = 264;
 
 /**
  * The statuses in which a machine's money can still be corrected here.
@@ -418,11 +433,9 @@ export function InboundDetailPage() {
     ),
   );
   /** QC answered before the serial, by row — see `QcDraft`. */
-  const [qcDrafts, setQcDrafts] = usePersistentState<Record<string, QcDraft>>(
-    INBOUND_DRAFT(poId, "qc"),
-    {},
-    mapOf<QcDraft>(isRecord),
-  );
+  const [qcDrafts, setQcDrafts, , qcDraftsKept] = usePersistentState<
+    Record<string, QcDraft>
+  >(INBOUND_DRAFT(poId, "qc"), {}, mapOf<QcDraft>(isRecord));
   /** Battery boxes being typed on a unit's row — written when left. */
   const [batteryTyping, setBatteryTyping] = usePersistentState<
     Record<string, BatteryDraft>
@@ -444,12 +457,8 @@ export function InboundDetailPage() {
    * the desk at the moment somebody decides a machine needs a repair.
    */
   const [sendingToService, setSendingToService] = useState<string | null>(null);
-  const [serviceForm] = Form.useForm<{
-    ship: boolean;
-    shippingFee?: number;
-    serviceFee?: number;
-    note?: string;
-  }>();
+  /** The unit the Return-to-supplier dialog is open on (2026-10-26). */
+  const [returningSerial, setReturningSerial] = useState<string | null>(null);
   /**
    * Where normalising moved a row's key (old key → line id).
    *
@@ -693,6 +702,14 @@ export function InboundDetailPage() {
     /** QC answered before the serial — written in this same mutation. */
     qc?: QcDraft,
   ) => {
+    /*
+     * Priced from the moment the unit exists: what the bench typed, or what
+     * the shop asks for the product it turned out to be. It is the asking
+     * price, and QC's job is to move it where the unit deserves. A variant
+     * asking Rp 0 has not been priced, and its unit is not either.
+     */
+    const start =
+      price ?? startingPrice(d.skus.find((x) => x.id === skuId)?.price);
     d.units.push({
       serial,
       skuId,
@@ -701,12 +718,7 @@ export function InboundDetailPage() {
       buy: unitCost,
       description: "",
       poId: order.id,
-      /*
-       * Priced from the moment the machine exists: what the bench typed, or
-       * what the shop asks for the product it turned out to be. It is the
-       * asking price, and QC's job is to move it where the machine deserves.
-       */
-      price: price ?? d.skus.find((x) => x.id === skuId)?.price ?? 0,
+      ...(start === undefined ? {} : { price: start }),
     });
     if (line) line.serial = serial;
     appendEvent(d, serial, {
@@ -1125,9 +1137,11 @@ export function InboundDetailPage() {
     if (next === row.unit.price) return;
     mutate((d) => {
       const u = d.units.find((x) => x.serial === serial)!;
-      // Never left blank on a machine that exists: an empty box means "back
-      // to what the shop asks", not "unpriced".
-      u.price = next ?? d.skus.find((x) => x.id === u.skuId)?.price ?? 0;
+      // An empty box takes the unit's own price away, and the unit quotes
+      // what its variant asks (`priceOf`) — the hint the box shows. Writing
+      // that figure in instead made a Rp 0 variant's box impossible to empty.
+      if (next === undefined) delete u.price;
+      else u.price = next;
     });
   };
 
@@ -1491,159 +1505,26 @@ export function InboundDetailPage() {
   const [editing, setEditing] = useState(false);
   const locked = closed || !editing;
 
-  const bench = serviceLocationOf(db.warehouses);
-  const benchName =
-    db.warehouses.find((w) => w.id === bench)?.name ?? bench ?? "";
-
   /** An expense's name as the page shows it: its label, else its kind. */
   const feeName = (fee: PoFee) =>
     fee.label.trim() !== ""
       ? `${t(PO_FEE_KIND_LABEL[fee.kind])} · ${fee.label}`
       : t(PO_FEE_KIND_LABEL[fee.kind]);
 
-  /**
-   * A unit that fails QC, and goes back to whoever sold it. The managed reason
-   * is written FIRST, so nothing ever points at a reason Settings has not
-   * heard of; the claim is opened at what the invoice says it cost, and the
-   * decision can be taken back from the row.
+  /*
+   * ~~`rejectToSupplier`~~ went on 2026-10-26: the QC row's Return and the
+   * accepted row's ⋯ open the one `SupplierReturnModal`, which asks the
+   * credit (the unit price by default) and where the money went — rule C
+   * takes it off this invoice's unpaid balance first.
    */
-  const rejectToSupplier = (serial: string) => {
-    modal.confirm({
-      title: t("inbound.rejectTitle", "Return this unit to the supplier?"),
-      content: t(
-        "inbound.rejectBody",
-        "{{serial}} will not enter inventory. Its history stays tracked either way, and you can take this back from the row afterwards.",
-        { serial },
-      ),
-      okText: t("inbound.rejectOk", "Return to supplier"),
-      onOk: () =>
-        mutate((d) => {
-          const u = d.units.find((x) => x.serial === serial)!;
-          const reasonLabel = "Rejected at QC";
-          ensureReason(d, "RETURN_SUPPLIER", reasonLabel);
-          const code = docCode("SP");
-          d.returns.unshift({
-            id: nextId("r"),
-            code,
-            kind: "SUPPLIER",
-            serial,
-            reason: reasonLabel,
-            date: new Date().toISOString().slice(0, 10),
-            status: "DONE",
-            fromQc: true,
-            supplierId: d.pos.find((p) => p.id === u.poId)?.supplierId,
-            expectedCredit: u.buy,
-          });
-          appendEvent(d, serial, {
-            type: "RETUR_SUPPLIER",
-            toStatus: "RETUR_SUPPLIER",
-            // `refCode` is the return document, not the order. It is what a
-            // reopen reads to know which claim to withdraw.
-            refCode: code,
-            note: reasonLabel,
-          });
-        }),
-    });
-  };
 
-  /**
-   * A unit that needs a repair.
-   *
-   * ⚠️ The location moves NOW (owner ask 2026-09-25: *"no need to mark as
-   * 'received' first"*), which REVERSES the 2026-09-09 rule that a unit does
-   * not arrive by being sent. The confirmation at /stock/service was what
-   * wrote `Unit.locationId`, so with it gone something else has to, or the
-   * bench's warehouse holds nothing and the shelf it left still counts it.
-   * The status goes to SERVIS in the same breath, as it always did — a unit
-   * promised to a repairer is not sellable from that moment.
-   *
-   * The courier fee and the "does it travel" question stay: what a journey
-   * COSTS is still a fact, and it is asked for while the number is on the
-   * desk. What went is only the second confirmation.
+  /*
+   * ~~`sendToService`~~ went on 2026-10-26: every door into service opens the
+   * one `SendToServiceModal`, which asks where the unit is serviced (its own
+   * warehouse by default — never "the bench" by `Location.kind`) and how each
+   * charge was paid. The location still moves NOW when it travels (owner ask
+   * 2026-09-25: *"no need to mark as 'received' first"*).
    */
-  const sendToService = () => {
-    const serial = sendingToService!;
-    serviceForm.validateFields().then((v) => {
-      const now = new Date().toISOString();
-      mutate((d) => {
-        const u = d.units.find((x) => x.serial === serial)!;
-        const reasonLabel = "On Service";
-        ensureReason(d, "ADJUSTMENT", reasonLabel);
-        const travelling =
-          v.ship && bench !== undefined && bench !== u.locationId;
-        /*
-         * ⚠️ Read BEFORE the event, which writes the projection. The visit is
-         * what sends the unit back afterwards, so `fromLocationId` has to be
-         * where it SET OUT from — read after, it is the bench, and *Back in
-         * stock* would default to returning it to the bench it is already on.
-         * `InventoryPage`'s adjustment reads its `cameFrom` the same way.
-         */
-        const cameFrom = u.locationId;
-        appendEvent(d, serial, {
-          type: "DICATAT",
-          toStatus: "SERVIS",
-          ...(travelling ? { toLocationId: bench } : {}),
-          refCode: po.code,
-          note: travelling
-            ? `Sent to service — ${benchName}`
-            : "Sent to service",
-        });
-        // The rack belongs to the warehouse it is leaving.
-        if (travelling) u.rackId = undefined;
-        const fees = [];
-        if (travelling && (v.shippingFee ?? 0) > 0) {
-          fees.push({
-            id: nextId("svcf"),
-            kind: "SHIPPING" as const,
-            // Translated where it is WRITTEN — the string is stored and frozen
-            // in whatever language the bench happened to be in.
-            label: t("inbound.serviceShipLabel", "Transfer to the bench"),
-            amount: v.shippingFee!,
-            at: now,
-            staff: currentStaffName(),
-          });
-        }
-        if ((v.serviceFee ?? 0) > 0) {
-          fees.push({
-            id: nextId("svcf2"),
-            kind: "LABOUR" as const,
-            label: t("inbound.serviceFeeRaised", "Quoted at QC"),
-            amount: v.serviceFee!,
-            at: now,
-            staff: currentStaffName(),
-          });
-        }
-        d.services.push({
-          id: nextId("svc"),
-          serial,
-          fromLocationId: cameFrom,
-          openedAt: now,
-          // Always. There is no arrival step to set it later (2026-09-25).
-          arrivedAt: now,
-          fees,
-          ...(v.note ? { note: v.note } : {}),
-          raisedBy: "QC",
-          poId: po.id,
-          staff: currentStaffName(),
-        });
-      });
-      setSendingToService(null);
-      serviceForm.resetFields();
-      message.success(
-        v.ship && bench
-          ? t(
-              "inbound.serviceSentShipping",
-              "{{serial}} is now at {{bench}}.",
-              { serial, bench: benchName },
-            )
-          : t(
-              "inbound.serviceSentHere",
-              "{{serial}} is at the service bench.",
-              { serial },
-            ),
-      );
-    });
-  };
 
   /**
    * Take a QC decision back — the owner's fourth ask of 2026-08-27.
@@ -1675,16 +1556,20 @@ export function InboundDetailPage() {
             d.units.find((u) => u.serial === serial)?.status ===
             "RETUR_SUPPLIER"
           ) {
+            // Whichever door raised it (2026-10-26): the QC row, the ⋯ of an
+            // accepted row, Inventory or the Returns page.
             const claim = d.returns.find(
               (r) =>
                 r.kind === "SUPPLIER" &&
                 r.serial === serial &&
-                r.fromQc &&
                 r.status !== "CANCELLED",
             );
             if (claim) {
               claim.status = "CANCELLED";
               withdrawn = claim.code;
+              // Its credit comes off the invoice again; a refund already
+              // received stays — the money really arrived.
+              withdrawSupplierReturnMoney(d, claim.id);
             }
           }
           const visit = d.services.findIndex(
@@ -1992,7 +1877,7 @@ export function InboundDetailPage() {
   };
 
   const warehouseName = (id: string) =>
-    db.warehouses.find((w) => w.id === id)?.name ?? id;
+    warehouseLabelOf(db.warehouses, id) ?? id;
 
   // ── The invoice's lines ─────────────────────────────────────────────────
 
@@ -2291,7 +2176,9 @@ export function InboundDetailPage() {
         // The asking price follows the product until somebody has priced this
         // unit: still the old product's price means nobody has.
         if (u.price !== undefined && u.price === was?.price && now) {
-          u.price = now.price;
+          const start = startingPrice(now.price);
+          if (start === undefined) delete u.price;
+          else u.price = start;
         }
         u.skuId = to;
         appendEvent(d, u.serial, {
@@ -2586,7 +2473,7 @@ export function InboundDetailPage() {
                 value={po.locationId}
                 options={db.warehouses.map((w) => ({
                   value: w.id,
-                  label: w.name,
+                  label: warehouseLabel(w),
                 }))}
                 onChange={(v: string) =>
                   setPo((order) => {
@@ -2952,18 +2839,26 @@ export function InboundDetailPage() {
       return <Typography.Text type="secondary">{fmtRp(0)}</Typography.Text>;
     }
     const asking = skuOf(actualSkuOf(r))?.price ?? null;
-    const stored = r.unit ? (r.unit.price ?? asking) : asking;
-    const typed = prices[r.key];
-    const shown = typed !== undefined ? typed : stored;
+    const own = r.unit?.price ?? null;
     if (!moneyOpen(r)) {
-      return <Typography.Text>{fmtRp(shown)}</Typography.Text>;
+      return <Typography.Text>{fmtRp(own ?? asking)}</Typography.Text>;
     }
+    /*
+     * The box holds THIS unit's price and nothing else; what the variant asks
+     * is the grey hint behind it (owner report 2026-10-08: "why the price
+     * cannot be removed"). Filled in as a value, a variant at Rp 0 — every
+     * variant the go-live import made — put a Rp 0 in every box that came
+     * straight back the moment it was emptied.
+     */
+    const typed = prices[r.key];
     return (
       <CommitMoneyInput
         id={sellFieldId(r.key)}
         label={t("inbound.sellPrice", "Sell price")}
-        value={shown}
-        placeholder={asking === null ? undefined : fmtRp(asking)}
+        value={typed !== undefined ? typed : own}
+        placeholder={
+          startingPrice(asking) === undefined ? undefined : fmtRp(asking)
+        }
         onChange={(v) => setPrices((p) => ({ ...p, [r.key]: v }))}
         onCommit={(v) => commitSellPrice(r, v)}
       />
@@ -2977,10 +2872,11 @@ export function InboundDetailPage() {
       : t("inbound.unitN", "unit {{n}}", { n: numberOf(r) });
 
   /** How many photos a row holds — the unit's, or the ones held for it. */
-  const photoCount = (r: ReceivingRow) =>
+  const photoUrls = (r: ReceivingRow): string[] =>
     r.unit
-      ? qcPhotosOf(db, r.unit.serial).length
-      : (qcDrafts[r.key]?.photos?.length ?? 0);
+      ? qcPhotosOf(db, r.unit.serial).map((p) => p.url)
+      : (qcDrafts[r.key]?.photos ?? []).map((p) => p.url);
+  const photoCount = (r: ReceivingRow) => photoUrls(r).length;
 
   /**
    * One of the row's decisions, as an icon with its name in a tooltip. A
@@ -3078,7 +2974,7 @@ export function InboundDetailPage() {
         icon: <CloseCircleOutlined aria-hidden />,
         danger: true,
         disabledWhy: serial === null ? needsSerial : null,
-        onClick: () => serial !== null && rejectToSupplier(serial),
+        onClick: () => serial !== null && setReturningSerial(serial),
       });
 
     /**
@@ -3161,6 +3057,61 @@ export function InboundDetailPage() {
           );
         }
         const serial = r.unit.serial;
+        /*
+         * An ACCEPTED unit can go to service from here too (owner ask
+         * 2026-10-26), through the same dialog the QC row opens. A held one
+         * is the customer's — drawn, switched off, saying why.
+         */
+        const block = sendToServiceBlock(r.unit.status);
+        if (block === undefined || block === "HELD") {
+          more.push({
+            key: "service",
+            icon: <ToolOutlined aria-hidden />,
+            disabled: block === "HELD",
+            label:
+              block === "HELD" ? (
+                <Tooltip
+                  title={t(
+                    "service.heldCannotGo",
+                    "Reserved for a customer — release the hold first.",
+                  )}
+                >
+                  <span>{t("inbound.serviceOk", "Send to service")}</span>
+                </Tooltip>
+              ) : (
+                t("inbound.serviceOk", "Send to service")
+              ),
+          });
+          onMore["service"] = () => setSendingToService(serial);
+        }
+        /*
+         * An accepted unit can go back to its supplier too (owner ask
+         * 2026-10-26: *"even if it is already accepted and QCed, it can still
+         * be returned or serviced"*) — the same dialog as the QC row's.
+         */
+        const returnBlock = supplierReturnBlock(r.unit.status);
+        if (returnBlock === undefined || returnBlock === "HELD") {
+          const returnLabel = t("inbound.rejectOk", "Return to supplier");
+          more.push({
+            key: "return",
+            icon: <CloseCircleOutlined aria-hidden />,
+            disabled: returnBlock === "HELD",
+            label:
+              returnBlock === "HELD" ? (
+                <Tooltip
+                  title={t(
+                    "service.heldCannotGo",
+                    "Reserved for a customer — release the hold first.",
+                  )}
+                >
+                  <span>{returnLabel}</span>
+                </Tooltip>
+              ) : (
+                returnLabel
+              ),
+          });
+          onMore["return"] = () => setReturningSerial(serial);
+        }
         if (canReopenQc(r.unit)) {
           item(
             "reopen",
@@ -3191,17 +3142,13 @@ export function InboundDetailPage() {
         {shown}
         {!r.notArrived && (rowOpen(r) || photos > 0) && (
           <Tooltip title={t("inbound.photosTip", "Photos")}>
-            <Button
-              size="small"
-              type="text"
-              icon={<CameraOutlined aria-hidden />}
-              aria-label={t("inbound.photosAria", "Photos of {{name}}", {
+            <PhotoStackButton
+              urls={photoUrls(r)}
+              ariaLabel={t("inbound.photosAria", "Photos of {{name}}", {
                 name,
               })}
               onClick={() => setPhotosRow(r.key)}
-            >
-              {photos > 0 ? photos : null}
-            </Button>
+            />
           </Tooltip>
         )}
         {more.length > 0 && (
@@ -3266,6 +3213,7 @@ export function InboundDetailPage() {
       description={({ row }) => descriptionCell(row)}
       sellPrice={({ row }) => sellCell(row)}
       actions={({ row }) => actionsCell(row)}
+      actionsWidth={UNIT_ACTIONS_WIDTH}
     />
   );
 
@@ -3468,6 +3416,13 @@ export function InboundDetailPage() {
           onSetDiscount={setLineDiscount}
           onOpenDetails={(l) => setDetailsKey(l.key)}
           sellPriceOf={sellPriceOfLine}
+          // A price held for a row with no serial yet counts too; one being
+          // typed over a unit's stored price is the one the bench sees.
+          unitPricesOf={(l) =>
+            l.units.map(({ row }) =>
+              prices[row.key] !== undefined ? prices[row.key] : row.unit?.price,
+            )
+          }
           onSetSellPrice={setSellPrice}
           emptyText={
             <>
@@ -3687,6 +3642,14 @@ export function InboundDetailPage() {
     >
       <Flex gap={32} wrap align="flex-start">
         <Flex vertical gap={10} style={{ minWidth: 300, flex: "1 1 300px" }}>
+          {/* How many units the invoice bought (owner ask 2026-10-22) — every
+              line's quantity, a counted product's pieces included. */}
+          <Flex justify="space-between" gap={16}>
+            <span>{t("inbound.unitsPurchased", "Total units purchased")}</span>
+            <span data-testid="units-purchased">
+              {po.items.reduce((n, i) => n + i.qty, 0)}
+            </span>
+          </Flex>
           <Flex vertical>
             <Flex justify="space-between" gap={16}>
               <span>{t("inbound.productsTotal", "Products")}</span>
@@ -3766,8 +3729,32 @@ export function InboundDetailPage() {
             {
               title: t("inbound.method", "Method"),
               dataIndex: "method",
-              render: (code: string) =>
-                db.paymentMethods.find((m) => m.code === code)?.label ?? code,
+              render: (code: string, p) => {
+                // A supplier return's credit (2026-10-26) names its return.
+                const ret =
+                  p.returnId === undefined
+                    ? undefined
+                    : db.returns.find((r) => r.id === p.returnId);
+                if (code === "RETUR_SUPPLIER" || ret !== undefined)
+                  return (
+                    <Flex vertical gap={0}>
+                      <Typography.Text>
+                        {t("inbound.returnCredit", "Supplier return credit")}
+                      </Typography.Text>
+                      {ret && (
+                        <Typography.Text
+                          type="secondary"
+                          style={{ fontSize: TYPE.sm }}
+                        >
+                          {ret.code} · {ret.serial}
+                        </Typography.Text>
+                      )}
+                    </Flex>
+                  );
+                return (
+                  db.paymentMethods.find((m) => m.code === code)?.label ?? code
+                );
+              },
             },
             {
               title: t("inbound.appliedTo", "Applied to"),
@@ -3797,22 +3784,36 @@ export function InboundDetailPage() {
               width: COLUMN.actions,
               render: (_, p) => {
                 const fromDeposit = p.fromDepositId !== undefined;
+                /*
+                 * A supplier return's credit is the RETURN's money (2026-10-26):
+                 * withdrawing the return on the Returns page or reopening QC
+                 * takes it off. Edited here, the two would disagree.
+                 */
+                const fromReturn =
+                  p.returnId !== undefined || p.method === "RETUR_SUPPLIER";
+                const lockedWhy = fromDeposit
+                  ? t(
+                      "inbound.depositPaymentLocked",
+                      "Paid out of a deposit — correct it on the supplier's account, so the money goes back to the deposit.",
+                    )
+                  : fromReturn
+                    ? t(
+                        "inbound.returnCreditLocked",
+                        "The credit of a supplier return — withdraw the return to take it off.",
+                      )
+                    : undefined;
                 return (
                   <Flex gap={4} justify="end">
                     <Tooltip
                       title={
-                        fromDeposit
-                          ? t(
-                              "inbound.depositPaymentLocked",
-                              "Paid out of a deposit — correct it on the supplier's account, so the money goes back to the deposit.",
-                            )
-                          : t("inbound.editPayment", "Edit this payment")
+                        lockedWhy ??
+                        t("inbound.editPayment", "Edit this payment")
                       }
                     >
                       <Button
                         size="small"
                         type="text"
-                        disabled={locked || fromDeposit}
+                        disabled={locked || lockedWhy !== undefined}
                         aria-label={t(
                           "inbound.editPaymentAria",
                           "Edit the payment of {{amount}}",
@@ -3830,19 +3831,15 @@ export function InboundDetailPage() {
                     </Tooltip>
                     <Tooltip
                       title={
-                        fromDeposit
-                          ? t(
-                              "inbound.depositPaymentLocked",
-                              "Paid out of a deposit — correct it on the supplier's account, so the money goes back to the deposit.",
-                            )
-                          : t("inbound.deletePayment", "Delete this payment")
+                        lockedWhy ??
+                        t("inbound.deletePayment", "Delete this payment")
                       }
                     >
                       <Button
                         size="small"
                         type="text"
                         danger
-                        disabled={locked || fromDeposit}
+                        disabled={locked || lockedWhy !== undefined}
                         aria-label={t(
                           "inbound.deletePaymentAria",
                           "Delete the payment of {{amount}}",
@@ -4169,149 +4166,81 @@ export function InboundDetailPage() {
               max={12}
             />
           ) : (
-            <UnitPhotos
-              draft={{
-                photos: qcDrafts[photosRowData.key]?.photos ?? [],
-                onAdd: (urls) =>
-                  setQcDrafts((m) => {
-                    const key = photosRowData.key;
-                    const held = m[key]?.photos ?? [];
-                    return {
-                      ...m,
-                      [key]: {
-                        ...m[key],
-                        photos: [
-                          ...held,
-                          ...urls.map((url) => ({ id: nextId("dph"), url })),
-                        ],
-                      },
-                    };
-                  }),
-                onRemove: (id) =>
-                  setQcDrafts((m) => {
-                    const key = photosRowData.key;
-                    return {
-                      ...m,
-                      [key]: {
-                        ...m[key],
-                        photos: (m[key]?.photos ?? []).filter(
-                          (p) => p.id !== id,
-                        ),
-                      },
-                    };
-                  }),
-              }}
-              editable={rowOpen(photosRowData)}
-              size={72}
-              max={12}
-            />
+            <Flex vertical gap={12}>
+              {/* Held on this device until the serial is filed, and the
+                  device refused: say so before a refresh does (client report
+                  2026-10-21). */}
+              {!qcDraftsKept &&
+                (qcDrafts[photosRowData.key]?.photos ?? []).length > 0 && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    title={t(
+                      "inbound.photosNotKept",
+                      "This device has no room to keep these photos. Fill in the serial to save them — a refresh before that loses them.",
+                    )}
+                  />
+                )}
+              <UnitPhotos
+                draft={{
+                  photos: qcDrafts[photosRowData.key]?.photos ?? [],
+                  onAdd: (urls) =>
+                    setQcDrafts((m) => {
+                      const key = photosRowData.key;
+                      const held = m[key]?.photos ?? [];
+                      return {
+                        ...m,
+                        [key]: {
+                          ...m[key],
+                          photos: [
+                            ...held,
+                            ...urls.map((url) => ({ id: nextId("dph"), url })),
+                          ],
+                        },
+                      };
+                    }),
+                  onRemove: (id) =>
+                    setQcDrafts((m) => {
+                      const key = photosRowData.key;
+                      return {
+                        ...m,
+                        [key]: {
+                          ...m[key],
+                          photos: (m[key]?.photos ?? []).filter(
+                            (p) => p.id !== id,
+                          ),
+                        },
+                      };
+                    }),
+                }}
+                editable={rowOpen(photosRowData)}
+                size={72}
+                max={12}
+              />
+            </Flex>
           ))}
       </Modal>
 
-      {/*
-       * Sending a machine for a repair (owner revision 2026-09-09). A form
-       * rather than a `modal.confirm`, because whether the machine has to
-       * travel decides whether a courier's charge makes any sense to ask for.
-       */}
-      <Modal
-        open={sendingToService !== null}
-        centered
-        title={t("inbound.serviceTitle", "Send this unit to service?")}
-        okText={t("inbound.serviceOk", "Send to service")}
-        onCancel={() => {
-          setSendingToService(null);
-          serviceForm.resetFields();
-        }}
-        onOk={sendToService}
-        destroyOnHidden
-      >
-        <Form
-          form={serviceForm}
-          layout="vertical"
-          // Shipped by default: the bench is a different building, and a
-          // machine graded in warehouse 1 has to get there.
-          initialValues={{ ship: bench !== undefined }}
-        >
-          <Typography.Paragraph type="secondary">
-            {t(
-              "inbound.serviceBody",
-              "{{serial}} stops being sellable now. You can take this back from the row afterwards.",
-              { serial: sendingToService ?? "" },
-            )}
-          </Typography.Paragraph>
-          {bench && (
-            <Form.Item
-              name="ship"
-              valuePropName="checked"
-              label={t("inbound.serviceShip", "Send it to {{bench}}", {
-                bench: benchName,
-              })}
-              tooltip={t(
-                "inbound.serviceShipHint",
-                "Leave this off if the repairer collects it, or if the unit is not moving. Turning it on files the unit at the bench straight away.",
-              )}
-            >
-              <Switch />
-            </Form.Item>
-          )}
-          <Form.Item noStyle shouldUpdate={(a, b) => a.ship !== b.ship}>
-            {({ getFieldValue }) =>
-              bench && getFieldValue("ship") ? (
-                <Form.Item
-                  name="shippingFee"
-                  label={t(
-                    "inbound.serviceShippingFee",
-                    "Cost of getting it there",
-                  )}
-                  tooltip={t(
-                    "inbound.serviceShippingFeeHint",
-                    "The courier between the two warehouses. It joins what this unit has cost the shop.",
-                  )}
-                >
-                  <InputNumber
-                    min={0}
-                    precision={0}
-                    prefix={RP_SYMBOL}
-                    formatter={moneyFormatter}
-                    parser={moneyParser}
-                    style={{ width: "100%" }}
-                  />
-                </Form.Item>
-              ) : null
-            }
-          </Form.Item>
-          <Form.Item
-            name="serviceFee"
-            label={t("inbound.serviceFee", "Service fee")}
-            tooltip={t(
-              "inbound.serviceFeeHint2",
-              "Only if you already know it. Anything the repairer bills later is added at the bench, where it can also be corrected.",
-            )}
-          >
-            <InputNumber
-              min={0}
-              precision={0}
-              prefix={RP_SYMBOL}
-              formatter={moneyFormatter}
-              parser={moneyParser}
-              placeholder={t("inbound.serviceFeeHint", "If you know it")}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-          <Form.Item
-            name="note"
-            label={t("inbound.serviceProblem", "What is wrong with it")}
-          >
-            <Input.TextArea
-              rows={2}
-              placeholder={t(
-                "inbound.serviceProblemHint",
-                "Optional — what the bench should look at",
-              )}
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
+      {/* Sending a unit for a repair: the one dialog every door opens. */}
+      <SendToServiceModal
+        serial={sendingToService}
+        raisedBy="QC"
+        poId={po.id}
+        refCode={po.code}
+        onClose={() => setSendingToService(null)}
+      />
+
+      {/* Back to the supplier, with its money: the one dialog every door opens. */}
+      <SupplierReturnModal
+        serial={returningSerial}
+        defaultReason={
+          returningSerial !== null &&
+          db.units.find((u) => u.serial === returningSerial)?.status === "QC"
+            ? QC_REJECT_REASON
+            : undefined
+        }
+        onClose={() => setReturningSerial(null)}
+      />
 
       <Modal
         open={paying !== null}
@@ -4350,7 +4279,11 @@ export function InboundDetailPage() {
               placeholder={t("inbound.pickMethod", "How the money moved")}
               aria-label={t("inbound.method", "Method")}
               options={db.paymentMethods
-                .filter((m) => (m.forPo && m.active) || m.code === payMethod)
+                .filter(
+                  (m) =>
+                    (m.forPo && m.active && isPickableMethod(m.code)) ||
+                    m.code === payMethod,
+                )
                 .map((m) => ({ value: m.code, label: m.label }))}
             />
             {payAmount !== undefined && payAmount > 0 && !payMethod && (

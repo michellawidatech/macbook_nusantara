@@ -13,3 +13,6 @@ docs/
 secrets/
 CLAUDE.md
 .claude/
+
+# The local WhatsApp test link's session files (tools/wa-local/README.md).
+tools/wa-local/.state/

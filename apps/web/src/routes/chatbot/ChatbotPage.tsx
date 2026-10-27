@@ -1,5 +1,7 @@
 /**
- * The chatbot, in one screen: what it said, and what it knows to say.
+ * The chatbot, in one screen: Chat · Knowledge Base · Evaluation · Settings
+ * (owner redesign 2026-10-15). What it said, what it knows to say, how well it
+ * said it, and how it is put together.
  *
  * Two nav items until 2026-08-26 (owner decision). Reading a reply that came
  * out wrong and fixing the answer behind it was a trip to another menu item and
@@ -20,21 +22,44 @@
  * the outer one so the tab strip's siblings can be bounded, the inner one so
  * the active pane inherits that bound.
  *
- * The Knowledge tab does not need any of this and is unharmed by it — an
- * ordinary table in a full-height box is still an ordinary table.
+ * The other three tabs are ordinary pages, so each is wrapped in a box that
+ * scrolls — the frame itself never does.
  */
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Tabs } from "antd";
 import { useTranslation } from "react-i18next";
+import { useLocation } from "react-router-dom";
 import { PageContainer } from "../../components/PageContainer";
 import { ChatInbox } from "./ChatPage";
 import { KnowledgePanel } from "./KnowledgePage";
+import { EvaluationPanel } from "./EvaluationPanel";
+import { BotSettings } from "./BotSettings";
+import { useSession } from "../../lib/session.js";
 
-type TabKey = "inbox" | "knowledge";
+type TabKey = "chat" | "knowledge" | "evaluation" | "settings";
+
+/** A tab that is an ordinary page: it scrolls inside the fill frame. */
+function Scrolling({ children }: { children: ReactNode }) {
+  return (
+    <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>{children}</div>
+  );
+}
 
 export function ChatbotPage() {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<TabKey>("inbox");
+  const [tab, setTab] = useState<TabKey>("chat");
+  /*
+   * The open thread lives here rather than in the inbox, so the Evaluation
+   * tab's "Open chat" can switch tabs AND open the conversation in one press.
+   */
+  // "Open chat" on a reservation request (2026-10-27) arrives with the
+  // number in the navigation STATE — nothing navigates from an effect.
+  const location = useLocation();
+  const [picked, setPicked] = useState<string | null>(
+    () => (location.state as { openPhone?: string } | null)?.openPhone ?? null,
+  );
+  // Delete conversation is offered to the owner; the server checks again.
+  const isOwner = useSession().data?.role === "OWNER";
 
   return (
     <PageContainer title="Chatbot" fill>
@@ -44,21 +69,48 @@ export function ChatbotPage() {
         onChange={(k) => setTab(k as TabKey)}
         // Mounted lazily and kept mounted afterwards. The inbox polls and holds
         // a scroll position; destroying it on every tab change would restart
-        // the poll and throw the reader back to the newest message. Not
-        // mounting Knowledge until it is first opened keeps that cost off the
-        // page load, which is the inbox's.
+        // the poll and throw the reader back to the newest message.
         destroyOnHidden={false}
         style={{ flex: 1, minHeight: 0 }}
         items={[
           {
-            key: "inbox",
-            label: t("chatbot.inbox", "Chat Inbox"),
-            children: <ChatInbox />,
+            key: "chat",
+            label: t("chatbot.chat", "Chat"),
+            children: (
+              <ChatInbox picked={picked} onPick={setPicked} isOwner={isOwner} />
+            ),
           },
           {
             key: "knowledge",
-            label: t("chatbot.knowledge", "Knowledge"),
-            children: <KnowledgePanel />,
+            label: t("chatbot.knowledgeBase", "Knowledge Base"),
+            children: (
+              <Scrolling>
+                <KnowledgePanel />
+              </Scrolling>
+            ),
+          },
+          {
+            key: "evaluation",
+            label: t("chatbot.evaluation", "Evaluation"),
+            children: (
+              <Scrolling>
+                <EvaluationPanel
+                  onOpenChat={(phone) => {
+                    setPicked(phone);
+                    setTab("chat");
+                  }}
+                />
+              </Scrolling>
+            ),
+          },
+          {
+            key: "settings",
+            label: t("chatbot.settings", "Settings"),
+            children: (
+              <Scrolling>
+                <BotSettings />
+              </Scrolling>
+            ),
           },
         ]}
       />

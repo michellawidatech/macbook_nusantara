@@ -48,14 +48,23 @@ export type UnitStatus =
 
 export interface Warehouse {
   id: string;
+  /**
+   * `Location.code` — the shop's own number, `01`…`04` (owner ask
+   * 2026-10-08: they have used them for six years). Printed beside the name
+   * through `warehouseLabel`; optional because a warehouse can be made
+   * without one.
+   */
+  code?: string;
   name: string;
   active: boolean;
   /**
    * `Location.kind` in the schema — TOKO, GUDANG, SERVIS, TRANSIT.
    *
-   * Carried since 2026-09-08 because the service bench has to be findable by
-   * KIND rather than by id: `wh-4` is this shop's service location and the
-   * next shop's will not be. See `serviceLocationOf` in lib/service.ts.
+   * Carried since 2026-09-08, when the service bench was found by KIND.
+   * ⚠️ Nothing picks a warehouse by it since 2026-10-26: in the shop's own
+   * database 04 is *Gudang Masuk Belum QC* and carries `SERVIS`, so inbound
+   * units sat in "the bench" and the bench was a receiving room. Send to
+   * service asks where; the kind is only what Settings says it is.
    */
   kind?: string;
 }
@@ -205,6 +214,11 @@ export interface Sku {
    */
   axisValues?: Record<string, string>;
   price: number;
+  /**
+   * Merged into another variant (2026-10-21). Kept because receipts and
+   * invoices name it; offered by no picker or list — see `isLiveSku`.
+   */
+  mergedIntoId?: string;
 }
 /** A product category — see `MockDb.categories`. */
 export interface ProductCategory {
@@ -228,6 +242,19 @@ export interface CatalogModel {
   /** Apple's model identifier when the row came from AppleDB (e.g. Mac14,2). */
   identifier?: string;
   source?: "MANUAL" | "APPLEDB";
+  /**
+   * The product's facts (2026-10-21) — `lib/modelName.ts`. `family` is the
+   * line in full ("MacBook Air"), `chip` an Apple-silicon chip, `extra` what
+   * else makes it a different product ("TB"). Absent on a product still known
+   * only by its name.
+   */
+  family?: string;
+  chip?: string;
+  extra?: string;
+  /** AppleDB identifiers linked to it — added, never removed. */
+  identifiers?: string[];
+  /** Products a person said are NOT this one — added, never removed. */
+  notDuplicateOf?: string[];
 }
 export interface Unit {
   serial: string;
@@ -469,6 +496,13 @@ export interface PoPayment {
    * meant. `Payment.inBalance`.
    */
   inBalance?: boolean;
+  /**
+   * The supplier return this payment is the credit of — a `ReturnRec.id`
+   * (`Payment.unitReturnId`, owner 2026-10-26). Written with method
+   * RETUR_SUPPLIER and `inBalance: false`: the invoice owes less and no money
+   * moved.
+   */
+  returnId?: string;
 }
 
 /**
@@ -901,7 +935,21 @@ export interface ReturnRec {
   exchangeSerial?: string;
   fee?: number;
   supplierId?: string;
+  /**
+   * On a supplier return, the CREDIT (2026-10-26): what the unit is worth
+   * back, `Unit.buy` by default plus any service charges somebody added. Rule
+   * C splits it into what comes off the invoice and a refund
+   * (`lib/supplierReturn.ts`).
+   */
   expectedCredit?: number;
+  /**
+   * Σ the REFUND incomes naming this return — DERIVED by the server
+   * (2026-10-26), no column. An account without finance access is sent no
+   * incomes, and without this would read every refund as still awaited and
+   * offer to record it twice. The browser sets it in the same mutation that
+   * writes such an income; the server's projection is the truth.
+   */
+  refundReceived?: number;
   /**
    * The unit's grade BEFORE this return recorded it — snapshotted at write
    * time so the history can show "A → B" without inferring "before" from the
@@ -969,6 +1017,61 @@ export interface Reservation {
   sourceId?: string;
   items: ReservationItem[];
   status: "ACTIVE" | "DONE" | "CANCELLED";
+  /**
+   * The end of a FIRM hold — `Reservation.heldUntil`, the DP's moment plus
+   * the rule's days (owner, 2026-10-27). Absent: nobody paid a DP, and the
+   * hold holds nothing — its units stay on sale, tagged for the customer.
+   */
+  heldUntil?: string;
+  /** The DP, once staff have checked the transfer and recorded it. */
+  dp?: ReservationDp;
+}
+
+/**
+ * A reservation REQUEST the bot filed from a chat (2026-10-27) — a
+ * `ReservationProposal`, read-only in the store: staff approve or reject it
+ * through `/api/reservations/requests` (`lib/reservationRequests.ts`). Its
+ * status is derived (`requestStatus`, packages/domain), because `expiresAt`
+ * passes by itself.
+ */
+export interface ReservationRequest {
+  id: string;
+  /** wa_id — the chat it came from. */
+  phone: string;
+  custName: string;
+  /** When they will come or pay. */
+  when: string;
+  createdAt: string;
+  expiresAt: string;
+  confirmedAt?: string;
+  cancelledAt?: string;
+  /** A later request of the same customer replaced it. */
+  replaced: boolean;
+  reservationId?: string;
+  items: { id: string; serial: string }[];
+  /** A `Perlu verifikasi DP` task on the thread since it was filed. */
+  dpProofAt?: string;
+}
+
+/**
+ * A reservation's DP (owner, 2026-10-27, "yes to DP"): a `Payment` MASUK
+ * naming the reservation. ONE row for its whole life — a sale that takes it
+ * adopts the same payment (`orderId`), so the money is counted once, on the
+ * day it came in. `lib/dp.ts` reads what became of it.
+ */
+export interface ReservationDp {
+  /** `Payment.id` — the same id the sale's payment carries once applied. */
+  id: string;
+  /** A `PaymentMethod` code: TUNAI or TRANSFER. */
+  method: string;
+  amount: number;
+  /** When the money came in. */
+  at: string;
+  note?: string;
+  /** The sale it went towards — DERIVED by the server (`Payment.orderId`). */
+  orderId?: string;
+  /** Handed back: a `Payment` KELUAR naming the reservation. */
+  refund?: { id: string; method: string; amount: number; at: string };
 }
 /**
  * A discount, in one of three shapes.
@@ -1055,7 +1158,22 @@ export const EXPENSE_CATEGORIES = [
     label: "Bank transfer",
     guide: "Money moved out to another account of the business.",
   },
-  { value: "BUNGA", label: "Interest", guide: "Bank interest and charges." },
+  {
+    value: "BUNGA",
+    label: "Interest",
+    guide: "Bank interest, and the tax on it.",
+  },
+  {
+    /*
+     * What a bank or a marketplace kept on the way (owner 2026-10-27): an
+     * admin charge, a transfer fee, a payout deduction. The monthly
+     * reconciliation records an accepted DEDUCTION, and adds a "BIAYA ADM"
+     * line, under it. An operating cost — its own Profit & Loss line.
+     */
+    value: "BIAYA_ADMIN",
+    label: "Bank / marketplace fee",
+    guide: "Admin charges, transfer fees and what a marketplace kept.",
+  },
   {
     value: "PROFESSIONAL",
     label: "Professional Services",
@@ -1067,6 +1185,19 @@ export const EXPENSE_CATEGORIES = [
     label: "Software & Technology",
     guide: "Subscriptions, hosting and IT hardware.",
     retired: true,
+  },
+  {
+    /*
+     * A service charge that was paid (owner 2026-10-26). `automatic`: written
+     * only from the charge dialog, with `Expense.serviceFeeId` naming the
+     * charge — never offered by Add adjustment. Already in the unit's cost
+     * (`costOfUnit`), so Profit & Loss keeps it out of OPERATING_KINDS.
+     */
+    value: "UNIT",
+    label: "Unit expense",
+    guide: "A service charge paid for one unit.",
+    needsTransaction: false,
+    automatic: true,
   },
 ] as const;
 export type ExpenseKind = (typeof EXPENSE_CATEGORIES)[number]["value"];
@@ -1135,6 +1266,111 @@ export interface ManualIncome {
    * balance mismatch, none of which is about a particular receipt.
    */
   orderId?: string;
+  /**
+   * The supplier return this is the refund of — a `ReturnRec.id`
+   * (`ManualIncome.unitReturnId`, owner 2026-10-26). Reason REFUND.
+   */
+  returnId?: string;
+  /**
+   * When it was typed — `ManualIncome.createdAt`, stamped by the till that
+   * wrote it. It orders a day's typed rows on Income & Expense, which share a
+   * date and no time (2026-10-24); absent, such a row sorts first in its day.
+   */
+  createdAt?: string;
+}
+
+/**
+ * The money row a reconciliation names — exactly one of the four (2026-10-27).
+ * A sale payment, a refund, a customer's old-debt payment and a supplier
+ * payment are all `Payment` rows on the server, so all four are `paymentId`.
+ */
+export interface MoneyRef {
+  paymentId?: string;
+  expenseId?: string;
+  incomeId?: string;
+  depositId?: string;
+}
+
+/** One correction a reconciliation made, or one transaction it added. */
+export interface ReconciliationEdit extends MoneyRef {
+  id: string;
+  action: "EDITED" | "ADDED";
+  /** What the record said before; absent for an ADDED one. */
+  before?: number;
+  after: number;
+  staff: string;
+  at: string;
+}
+
+/**
+ * A count of one pot on one day, or the bank against its e-statement for one
+ * month (owner ask 2026-10-27; `Reconciliation`). See `lib/reconciliation.ts`.
+ */
+export interface Reconciliation {
+  id: string;
+  kind: "DAILY" | "MONTHLY";
+  pot: "BANK" | "CASH";
+  /** YYYY-MM-DD — the day, or the month's first day. */
+  periodStart: string;
+  /** YYYY-MM-DD — the same day, or the month's last day. */
+  periodEnd: string;
+  /** The POS balance when it was saved, after any correction it made. */
+  posBalance: number;
+  /** What was counted, or what the bank says. */
+  actualBalance: number;
+  statementOpening?: number;
+  statementClosing?: number;
+  /** The uploaded file's name. */
+  statementFile?: string;
+  status: "OPEN" | "MATCHED" | "ADJUSTED" | "RECONCILED";
+  note?: string;
+  staff: string;
+  createdAt: string;
+  updatedAt: string;
+  edits: ReconciliationEdit[];
+  /**
+   * POS bank movements the statement never shows, explained instead of
+   * paired (MONTHLY only; owner-approved 2026-10-27). Withdrawn, never
+   * removed — except with the adjustment it names (`forgetRecord`), or with
+   * the whole reconciliation (`deleteReconciliation`, 2026-10-27).
+   */
+  asides: ReconciliationAside[];
+}
+
+/**
+ * A POS movement set aside with a note on a month's reconciliation
+ * (`ReconciliationAside`). Active until `withdrawnAt` is stamped — by Undo, or
+ * by the movement being paired after all.
+ */
+export interface ReconciliationAside extends MoneyRef {
+  id: string;
+  note: string;
+  staff: string;
+  at: string;
+  withdrawnAt?: string;
+}
+
+/** A statement line's pairing with one POS movement. */
+export interface StatementMatch extends MoneyRef {
+  id: string;
+  /** EXACT, DATE_SHIFT, TYPO, DEDUCTION, SPLIT, MERGE, ADDED, MANUAL. */
+  reason: string;
+}
+
+/** One movement off the bank's e-statement (`BankStatementLine`). */
+export interface StatementLineRec {
+  id: string;
+  /** A MONTHLY reconciliation. */
+  reconciliationId: string;
+  lineNo: number;
+  date: string;
+  description: string;
+  /** Signed whole rupiah: a debit is negative. */
+  amount: number;
+  balance?: number;
+  status: "UNMATCHED" | "MATCHED" | "SUGGESTED" | "IGNORED";
+  note?: string;
+  matches: StatementMatch[];
 }
 
 export interface Expense {
@@ -1169,6 +1405,17 @@ export interface Expense {
    * compensation, a refund to a customer (owner ask 2026-09-23).
    */
   orderId?: string;
+  /**
+   * The service charge this paid — a `ServiceFee.id` inside a `ServiceRec`
+   * (`Expense.serviceFeeId`, owner 2026-10-26). Kind UNIT; one expense per
+   * charge at most. The CHARGE owns it: removing the charge, or correcting
+   * its amount, takes the expense with it on the server (a browser without
+   * finance access is sent no expenses and could not do it itself), and a
+   * finance account's browser does the same in its own copy.
+   */
+  serviceFeeId?: string;
+  /** When it was typed — see `ManualIncome.createdAt`. */
+  createdAt?: string;
 }
 export interface ChatMsg {
   id: string;
@@ -1421,13 +1668,10 @@ export interface AppSettings {
   /** When the opening balances were entered, so the card can say so. */
   openingBalanceAt?: string;
   /**
-   * The book is closed up to here — every sale dated on or before this
-   * instant is read-only and takes no further money (owner ask 2026-09-24:
-   * *"add a close book button to close and lock all the transaction"*).
-   *
-   * `lib/bookClose.ts` is the rule. Absent or blank means the book is open,
-   * which is what it is until somebody closes it. Mirrors an `AppSetting`
-   * row (`finance.booksClosedAt`), so it needs no column of its own.
+   * Where the book was closed up to (owner ask 2026-09-24). ⚠️ IGNORED since
+   * 2026-10-27: the book close is retired (`lib/bookClose.ts` has why), and
+   * this is kept only so a shop that closed a month still loads. Mirrors an
+   * `AppSetting` row (`finance.booksClosedAt`).
    */
   booksClosedAt?: string;
   /**
@@ -1452,6 +1696,13 @@ export interface AppSettings {
   shopTagline?: string;
   shopAddress?: string;
   shopContact?: string;
+  /**
+   * The DP rule (owner, 2026-10-27): what a DP is and how many days it holds
+   * a unit. `AppSetting` `sales.dpAmount` / `sales.dpDays`; absent reads as
+   * Rp500.000 for 7 days (`dpRuleOf`, packages/domain).
+   */
+  dpAmount?: number;
+  dpDays?: number;
 }
 
 /**
@@ -1534,6 +1785,8 @@ export interface MockDb {
   orders: Order[];
   returns: ReturnRec[];
   reservations: Reservation[];
+  /** The bot's reservation requests (2026-10-27). Read-only. */
+  reservationRequests: ReservationRequest[];
   discounts: Discount[];
   expenses: Expense[];
   /** Money in, entered by hand. See `ManualIncome`. ⚠️ Mock-only. */
@@ -1559,6 +1812,13 @@ export interface MockDb {
   settlements: Settlement[];
   /** Every change to a settlement. *"It is editable and logged."* ⚠️ Mock-only. */
   settlementLog: SettlementLogEntry[];
+  /**
+   * Daily counts of the bank and the drawer, and monthly matches of the bank
+   * against its e-statement (owner ask 2026-10-27). See `lib/reconciliation.ts`.
+   */
+  reconciliations: Reconciliation[];
+  /** The e-statements' lines, per MONTHLY reconciliation. */
+  statementLines: StatementLineRec[];
   /**
    * Machines at the repairer, and what each visit cost (owner ask
    * 2026-09-08). See `lib/service.ts`.
@@ -1612,6 +1872,7 @@ export function buildSeed(): MockDb {
   const shop = buildShop();
   const warehouses: Warehouse[] = shop.locations.map((l) => ({
     id: l.id,
+    code: l.code,
     name: l.name,
     active: true,
     kind: l.kind,
@@ -2198,6 +2459,22 @@ export function buildSeed(): MockDb {
       active: true,
     },
     {
+      /*
+       * A supplier return's credit against the unit's invoice (owner
+       * 2026-10-26). It settles part of the invoice and moved no money, so
+       * `lib/accounts.ts` gives it no pot BY NAME and `isPickableMethod`
+       * keeps it out of every payment picker — the supplier-return dialog is
+       * the only thing that writes it.
+       */
+      id: "pm_retur_supplier",
+      code: "RETUR_SUPPLIER",
+      label: "Supplier return credit",
+      builtIn: true,
+      forPo: true,
+      forSale: false,
+      active: true,
+    },
+    {
       // `forPo` since 2026-09-09: the owner's three for money going out are
       // cash, transfer and card, and a supplier deposit is a transfer nine
       // times in ten. The deposit dialog defaulted to TRANSFER while this said
@@ -2396,6 +2673,7 @@ export function buildSeed(): MockDb {
       reason: "SALES",
       amount: 4_250_000,
       date: iso(6).slice(0, 10),
+      createdAt: iso(6),
       method: "TUNAI",
       note: "Walk-in paid cash while the till was down",
     },
@@ -2404,6 +2682,7 @@ export function buildSeed(): MockDb {
       reason: "TRANSFER",
       amount: 15_000_000,
       date: iso(11).slice(0, 10),
+      createdAt: iso(11),
       method: "TRANSFER",
       note: "Topped up the shop float from the owner's account",
     },
@@ -2417,6 +2696,7 @@ export function buildSeed(): MockDb {
       kind: "RENT",
       amount: 7_500_000,
       date: iso(14).slice(0, 10),
+      createdAt: iso(14),
     },
     {
       id: "e-2",
@@ -2425,6 +2705,7 @@ export function buildSeed(): MockDb {
       kind: "OPERATIONAL",
       amount: 240_000,
       date: iso(0).slice(0, 10),
+      createdAt: iso(0),
     },
     {
       id: "e-3",
@@ -2433,6 +2714,7 @@ export function buildSeed(): MockDb {
       kind: "MARKETING",
       amount: 2_400_000,
       date: iso(12).slice(0, 10),
+      createdAt: iso(12),
       referralSourceId: "ref_instagram_ads",
     },
     {
@@ -2442,6 +2724,7 @@ export function buildSeed(): MockDb {
       kind: "MARKETING",
       amount: 1_100_000,
       date: iso(10).slice(0, 10),
+      createdAt: iso(10),
       referralSourceId: "ref_shopee_ads",
     },
     {
@@ -2451,6 +2734,7 @@ export function buildSeed(): MockDb {
       kind: "MARKETING",
       amount: 900_000,
       date: iso(4).slice(0, 10),
+      createdAt: iso(4),
       referralSourceId: "ref_tiktok_ads",
     },
     {
@@ -2460,6 +2744,7 @@ export function buildSeed(): MockDb {
       kind: "PAYROLL",
       amount: 12_000_000,
       date: iso(8).slice(0, 10),
+      createdAt: iso(8),
     },
     {
       id: "e-7",
@@ -2468,6 +2753,7 @@ export function buildSeed(): MockDb {
       kind: "OPERATIONAL",
       amount: 1_500_000,
       date: iso(7).slice(0, 10),
+      createdAt: iso(7),
     },
     {
       id: "e-8",
@@ -2476,6 +2762,7 @@ export function buildSeed(): MockDb {
       kind: "OPERATIONAL",
       amount: 650_000,
       date: iso(2).slice(0, 10),
+      createdAt: iso(2),
     },
   ];
   const chats: ChatThread[] = [
@@ -2693,12 +2980,16 @@ export function buildSeed(): MockDb {
     orders,
     returns,
     reservations,
+    // The bot files these from a chat; the demo shop has none waiting.
+    reservationRequests: [],
     discounts,
     expenses,
     incomes,
     paymentLog: [],
     settlements: [],
     settlementLog: [],
+    reconciliations: [],
+    statementLines: [],
     services: [],
     deposits,
     chats,

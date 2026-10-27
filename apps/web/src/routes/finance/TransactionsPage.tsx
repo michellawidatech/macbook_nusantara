@@ -41,13 +41,10 @@
  */
 import { useMemo, useState } from "react";
 import {
-  Alert,
   App,
   Button,
   Card,
-  DatePicker,
   Flex,
-  Modal,
   Statistic,
   Tag,
   Tooltip,
@@ -55,21 +52,32 @@ import {
 } from "antd";
 import {
   CheckCircleOutlined,
+  DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
   FileTextOutlined,
-  LockOutlined,
-  UnlockOutlined,
+  UploadOutlined,
 } from "@ant-design/icons";
-import dayjs, { type Dayjs } from "dayjs";
+import dayjs from "dayjs";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { InvoiceModal } from "../../components/Invoice";
 import { fmtRp, fmtDate, fmtDateTime, fmtNone } from "../../lib/format.js";
 import { customerLabel } from "../../lib/customers.js";
-import { currentStaffName, mutate, nextId, useDb } from "../../mock/store.js";
+import {
+  appendEvent,
+  currentStaffName,
+  mutate,
+  nextId,
+  useDb,
+} from "../../mock/store.js";
 import type { Order } from "../../mock/seed.js";
 import { EditTransactionModal } from "./EditTransactionModal";
+import {
+  ShopeeSettlementImport,
+  pendingShopeePayments,
+} from "./ShopeeSettlementImport.js";
+import { recordPayouts } from "../../lib/payouts.js";
 import { diffPayments } from "../../lib/paymentEdits.js";
 import {
   billAfterReturns,
@@ -81,6 +89,7 @@ import {
 } from "../../lib/salePayments.js";
 import {
   paymentRefOf,
+  returnedDebts,
   returnedSerials,
   salePaymentStatus,
   saleReturnStatus,
@@ -88,7 +97,7 @@ import {
   type SaleReturnStatus,
 } from "../../lib/saleStatus.js";
 import { labelOf, ORDER_SOURCE } from "../../i18n/enumLabels.js";
-import { booksClosedAt, endOfDay, isBookClosed } from "../../lib/bookClose.js";
+import { deleteSale, saleDeletionBlock } from "../../lib/saleDeletion.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
 
@@ -143,13 +152,17 @@ interface SaleRow {
 /**
  * Amber for money a marketplace is holding, red for money a customer owes —
  * the shop acts differently on each: press a button on Shopee, or telephone a
- * person. Partly paid is the customer's too, a shade short of Owed.
+ * person. Partly paid is the customer's too, a shade short of Owed. A debt a
+ * return cancelled is the purple a returned unit's tag already wears on this
+ * screen: nobody has anything left to chase, and it is not money that came in.
  */
 const PAY_COLOR: Record<SalePaymentStatus, string> = {
   SETTLED: "default",
   WITH_MARKETPLACE: "gold",
   PARTLY_PAID: "volcano",
   OWED: "red",
+  PARTLY_PAID_RETURNED: "purple",
+  UNPAID_RETURNED: "purple",
 };
 
 /** RFC 4180 enough for a spreadsheet: quote everything, double the quotes. */
@@ -168,43 +181,81 @@ export function TransactionsPage() {
   const [reprint, setReprint] = useState<Order | null>(null);
   /** Null when the editor is shut; the sale it is about when open. */
   const [editing, setEditing] = useState<Order | null>(null);
-  /** The Close book dialog's date, or null while it is shut. */
-  const [closingTo, setClosingTo] = useState<Dayjs | null>(null);
-
   /**
-   * The book (owner ask 2026-09-24: *"add a close book button to close and
-   * lock all the transaction"*). `lib/bookClose.ts` is the rule; this is the
-   * button and what it disables.
+   * The Shopee seller-balance upload (2026-09-21), here since Pending Payment
+   * was folded into this page (owner ask 2026-10-22: *"it should just be
+   * transaction history + upload the shopee balance"*). A sale still waiting
+   * on its payout is the "With a marketplace" payment status of this list.
    */
-  const closedTo = booksClosedAt(db.settings);
-  const locked = (at: string) => isBookClosed(at, db.settings);
+  const [importing, setImporting] = useState(false);
 
-  const closeBook = () => {
-    const day = closingTo;
-    if (day === null) return;
-    const at = endOfDay(day.toDate());
-    const count = sales.filter((r) => r.at <= at).length;
-    setClosingTo(null);
-    modal.confirm({
-      title: t("transactions.closeBookTitle", "Close the book to {{date}}?", {
-        date: fmtDate(at),
-      }),
-      content: t(
-        "transactions.closeBookBody",
-        "{{count}} transaction(s) on or before that day become read-only: no edits, and no further payments against them. You can reopen the book at any time.",
-        { count },
-      ),
-      okText: t("transactions.closeBookOk", "Close the book"),
-      onOk: () =>
-        mutate((d) => {
-          d.settings.booksClosedAt = at;
-        }),
-    });
+  /** Why a sale cannot be deleted, in words; undefined when it can. */
+  const deleteBlockText = (order: Order) => {
+    switch (saleDeletionBlock(db, order)) {
+      case "RETURNED":
+        return t(
+          "transactions.deleteReturned",
+          "Something on this sale was returned. Delete the return first.",
+        );
+      case "TRADE_IN":
+        return t(
+          "transactions.deleteTradeIn",
+          "This sale took a trade-in, which is in stock now.",
+        );
+      case "UNIT_MOVED":
+        return t(
+          "transactions.deleteMoved",
+          "A unit on this sale has moved on since (reserved, moved or sold again).",
+        );
+      case "LINKED_MONEY":
+        return t(
+          "transactions.deleteLinked",
+          "An Income & Expense line names this sale.",
+        );
+      case "DP":
+        return t(
+          "transactions.deleteDp",
+          "A reservation's DP paid part of this sale.",
+        );
+      default:
+        return undefined;
+    }
   };
 
-  const reopenBook = () =>
-    mutate((d) => {
-      delete d.settings.booksClosedAt;
+  /*
+   * Delete a sale (owner ask 2026-10-22; asked, "gone completely"). The units
+   * go back on the shelf as they were before it, its money stops counting,
+   * and it leaves every list. `lib/saleDeletion.ts` is the rule.
+   */
+  const removeSale = (order: Order) =>
+    modal.confirm({
+      title: t("transactions.deleteTitle", "Delete {{code}}?", {
+        code: order.code,
+      }),
+      content: t(
+        "transactions.deleteBody",
+        "The sale and its payments are removed for good, and its {{count}} unit(s) go back on the shelf as they were before it. This cannot be undone.",
+        { count: order.serials.length + (order.lines?.length ?? 0) },
+      ),
+      okText: t("transactions.deleteOk", "Delete transaction"),
+      okButtonProps: { danger: true },
+      onOk: () => {
+        let done = false;
+        const staff = currentStaffName();
+        mutate((d) => {
+          done = deleteSale(d, order.id, {
+            staff,
+            now: new Date().toISOString(),
+            nextMoveId: () => nextId("sm"),
+          });
+        });
+        if (done)
+          message.success(
+            t("transactions.deleted", "{{code}} deleted.", {
+              code: order.code,
+            }),
+          );
+      },
     });
 
   /*
@@ -226,7 +277,11 @@ export function TransactionsPage() {
         ? t("transactions.stPending", "With a marketplace")
         : s === "PARTLY_PAID"
           ? t("transactions.stPartPaid", "Partly paid")
-          : t("transactions.stOwed", "Owed");
+          : s === "UNPAID_RETURNED"
+            ? t("transactions.stUnpaidReturned", "Unpaid, returned")
+            : s === "PARTLY_PAID_RETURNED"
+              ? t("transactions.stPartPaidReturned", "Partly paid, returned")
+              : t("transactions.stOwed", "Owed");
 
   /**
    * Turn what a marketplace was holding into money the shop has.
@@ -241,10 +296,7 @@ export function TransactionsPage() {
     mutate((d) => {
       for (const order of orders) {
         const o = d.orders.find((x) => x.id === order.id);
-        // A closed period does not take money (owner answer 2026-09-24). The
-        // button is already hidden for such a row; this is the writer saying
-        // the same thing, because `orders` is whatever was ticked.
-        if (!o || locked(o.ts)) continue;
+        if (!o) continue;
         const before = paymentsOf(o);
         if (!before.some((p) => p.state === "PENDING")) continue;
         const next = before.map((p) =>
@@ -272,6 +324,8 @@ export function TransactionsPage() {
 
   const sales = useMemo<SaleRow[]>(() => {
     const back = returnedSerials(db.orders, db.events);
+    // What a return cancelled of each sale's debt — "Unpaid, returned".
+    const debts = returnedDebts(db.orders, db.events, db.stockMoves);
     // Maps rather than a `find` per sale: the B2Soft history is thousands of
     // receipts against thousands of customers.
     const units = new Map(db.units.map((u) => [u.serial, u]));
@@ -331,12 +385,21 @@ export function TransactionsPage() {
             .map((l) => (l.product ? `${l.product} (${l.serial})` : l.serial))
             .join("; "),
           status: saleReturnStatus(o.serials, returned, o.lines),
-          payStatus: salePaymentStatus(balance),
+          payStatus: salePaymentStatus(balance, debts.get(o.id)),
           balance,
         };
       })
       .sort((a, b) => b.at.localeCompare(a.at));
-  }, [db.orders, db.events, db.customers, db.units, db.skus, db.salesmen, t]);
+  }, [
+    db.orders,
+    db.events,
+    db.stockMoves,
+    db.customers,
+    db.units,
+    db.skus,
+    db.salesmen,
+    t,
+  ]);
 
   /*
    * Summed over the PAYMENTS, not over the sale totals (owner ask
@@ -418,32 +481,6 @@ export function TransactionsPage() {
       title={t("transactions.transactionHistory", "Transaction History")}
     >
       <Flex vertical gap={16}>
-        {closedTo !== undefined && (
-          /*
-           * The banner IS the way back, one click, for the reason the closed
-           * invoice's banner gives: a lock nobody can lift is a lock people
-           * work around.
-           */
-          <Alert
-            type="info"
-            showIcon
-            title={t("transactions.bookClosedTitle", "The book is closed")}
-            description={t(
-              "transactions.bookClosedBody",
-              "Every transaction up to {{date}} is read-only and takes no further payments. Reopen the book to correct one.",
-              { date: fmtDate(closedTo) },
-            )}
-            action={
-              <Button
-                size="small"
-                icon={<UnlockOutlined />}
-                onClick={reopenBook}
-              >
-                {t("transactions.reopenBook", "Reopen the book")}
-              </Button>
-            }
-          />
-        )}
         <Flex gap={16} wrap>
           <Card style={{ flex: 1, minWidth: 200 }}>
             <Statistic
@@ -493,10 +530,10 @@ export function TransactionsPage() {
             extra={
               <Flex gap={SPACE.sm} wrap>
                 <Button
-                  icon={<LockOutlined />}
-                  onClick={() => setClosingTo(dayjs())}
+                  icon={<UploadOutlined />}
+                  onClick={() => setImporting(true)}
                 >
-                  {t("transactions.closeBook", "Close book")}
+                  {t("piutang.uploadShopee", "Upload a Shopee report")}
                 </Button>
                 <Button
                   icon={<DownloadOutlined />}
@@ -536,18 +573,12 @@ export function TransactionsPage() {
                       nothing else — a withdrawal whose fees somebody wants
                       itemised is `Receive` on Pending Payment, which keeps a
                       settlement document. */}
-                  {selected.some(
-                    (r) => r.balance.pending > 0 && !locked(r.at),
-                  ) && (
+                  {selected.some((r) => r.balance.pending > 0) && (
                     <Button
                       size="small"
                       icon={<CheckCircleOutlined />}
                       onClick={() => {
-                        settlePending(
-                          selected
-                            .filter((r) => !locked(r.at))
-                            .map((r) => r.order),
-                        );
+                        settlePending(selected.map((r) => r.order));
                         clear();
                       }}
                     >
@@ -744,7 +775,8 @@ export function TransactionsPage() {
                 // the foot of the card on a phone, where buttons belong.
                 title: "",
                 key: "actions",
-                width: COLUMN.actions,
+                // Three icon buttons since 2026-10-22 (Delete joined them).
+                width: COLUMN.actions + 32,
                 render: (_, r) => (
                   <Flex gap={4}>
                     <Tooltip
@@ -762,21 +794,11 @@ export function TransactionsPage() {
                       />
                     </Tooltip>
                     <Tooltip
-                      title={
-                        locked(r.at)
-                          ? t(
-                              "transactions.editLocked",
-                              "The book is closed over this date. Reopen it to change this sale.",
-                            )
-                          : t("transactions.editSale", "Edit transaction")
-                      }
+                      title={t("transactions.editSale", "Edit transaction")}
                     >
-                      {/* A span, so a disabled button still answers a hover:
-                          antd's Tooltip needs an element that fires events. */}
                       <span>
                         <Button
                           size="small"
-                          disabled={locked(r.at)}
                           aria-label={t(
                             "transactions.editSaleAria",
                             "Edit {{code}}",
@@ -784,6 +806,27 @@ export function TransactionsPage() {
                           )}
                           icon={<EditOutlined />}
                           onClick={() => setEditing(r.order)}
+                        />
+                      </span>
+                    </Tooltip>
+                    <Tooltip
+                      title={
+                        deleteBlockText(r.order) ??
+                        t("transactions.deleteSale", "Delete transaction")
+                      }
+                    >
+                      <span>
+                        <Button
+                          size="small"
+                          danger
+                          disabled={deleteBlockText(r.order) !== undefined}
+                          aria-label={t(
+                            "transactions.deleteSaleAria",
+                            "Delete {{code}}",
+                            { code: r.code },
+                          )}
+                          icon={<DeleteOutlined />}
+                          onClick={() => removeSale(r.order)}
                         />
                       </span>
                     </Tooltip>
@@ -801,36 +844,45 @@ export function TransactionsPage() {
         onClose={() => setEditing(null)}
       />
 
-      {/*
-       * Close book. A date, because a book is closed to a day and not "now":
-       * the shop closes September in October, and the transactions of the days
-       * in between must stay live.
-       */}
-      <Modal
-        open={closingTo !== null}
-        title={t("transactions.closeBook", "Close book")}
-        okText={t("transactions.closeBookOk", "Close the book")}
-        onCancel={() => setClosingTo(null)}
-        onOk={closeBook}
-        okButtonProps={{ disabled: closingTo === null }}
-        destroyOnHidden
-      >
-        <Flex vertical gap={SPACE.sm}>
-          <Typography.Text>
-            {t(
-              "transactions.closeBookAsk",
-              "Lock every transaction up to and including this day.",
-            )}
-          </Typography.Text>
-          <DatePicker
-            value={closingTo}
-            onChange={setClosingTo}
-            allowClear={false}
-            style={{ width: "100%" }}
-            aria-label={t("transactions.closeBookDate", "Close the book to")}
-          />
-        </Flex>
-      </Modal>
+      <ShopeeSettlementImport
+        open={importing}
+        pending={pendingShopeePayments(db, paymentsOf)}
+        settledRefs={db.settlements
+          .filter((s) =>
+            db.orders
+              .find((o) => o.id === s.orderId)
+              ?.payments?.some(
+                (p) => p.id === s.paymentId && p.state === "SETTLED",
+              ),
+          )
+          .map(
+            (s) =>
+              db.orders
+                .find((o) => o.id === s.orderId)
+                ?.payments?.find((p) => p.id === s.paymentId)?.ref ?? "",
+          )
+          .filter((r) => r !== "")}
+        onClose={() => setImporting(false)}
+        onRecord={(drafts) => {
+          let done = { written: 0, landed: 0 };
+          const staff = currentStaffName();
+          mutate((d) => {
+            done = recordPayouts(d, "SHOPEE", drafts, {
+              staff,
+              at: new Date().toISOString(),
+              nextId,
+              appendEvent,
+            });
+          });
+          message.success(
+            t(
+              "piutang.imported",
+              "{{count}} payout(s) recorded — {{amount}}.",
+              { count: done.written, amount: fmtRp(done.landed) },
+            ),
+          );
+        }}
+      />
 
       <InvoiceModal
         db={db}

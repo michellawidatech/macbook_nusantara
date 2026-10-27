@@ -1,0 +1,98 @@
+#!/bin/zsh
+# docs/staging.md §1–4 in one run, on the Mac mini, as an admin:
+#
+#   sudo zsh setup-staging 'ssh-ed25519 AAAA… github-actions-stage@nusantara'
+#
+# from a directory holding this script, nusantara-deploy and
+# setup-deploy-access side by side. It makes /opt/nusantara-stage and its
+# configuration (common.env FROM the shop's, so no password is typed), asks
+# for the staging gate's password, pins the staging deploy key and installs
+# installer 2, and copies the shop's database into nusantara_pos_stage.
+#
+# Re-runnable: what is already there — the configuration, the gate — is kept,
+# and only `refresh` is done again (staging's data is a copy and nothing more).
+setopt err_exit no_unset pipe_fail
+umask 022
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+shop=/opt/nusantara
+home=/opt/nusantara-stage
+user=_nusantara
+caddy=/opt/homebrew/bin/caddy
+here=${0:A:h}
+
+die() { print -u2 -- "✗ setup-staging: $*"; exit 1 }
+say() { print -r -- "$*" }
+
+(( EUID == 0 )) || die "run it with sudo"
+(( $# == 1 )) || die "usage: sudo zsh setup-staging 'ssh-ed25519 AAAA… comment'"
+for f in nusantara-deploy setup-deploy-access; do
+  [[ -f $here/$f ]] || die "$f must sit next to this script"
+done
+id $user >/dev/null 2>&1 || die "$user does not exist — the shop's install comes first (docs/deploy-macmini.md §2)"
+[[ -r $shop/etc/common.env ]] || die "$shop/etc/common.env is missing — the shop's install comes first"
+[[ -x $caddy ]] || die "no Caddy at $caddy"
+
+# Staging's two ports must be free — unless staging itself is what holds
+# them, on a re-run — or its first deploy health-checks whatever answers there.
+if ! launchctl print system/local.nusantara-stage.api >/dev/null 2>&1; then
+  busy=$(lsof -nP -iTCP:4001 -iTCP:8081 -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 { print $1, $9 }' || true)
+  [[ -z $busy ]] || die "something already listens on 4001 or 8081:
+$busy"
+fi
+
+# 1. The install and its configuration.
+mkdir -p $home/etc/caddy $home/logs $home/var $home/releases
+chown -R ${user}:staff $home
+chmod 700 $home
+say "✓ $home"
+
+if [[ -e $home/etc/common.env ]]; then
+  say "  common.env is already there — kept"
+else
+  # The shop's, with only APP_ENV and the database name changed: the
+  # nusantara_app password is the shop's (roles belong to the cluster).
+  sed -e "s/^APP_ENV=.*/APP_ENV='stage'/" -e 's#/nusantara_pos_prod#/nusantara_pos_stage#' \
+    $shop/etc/common.env >$home/etc/common.env
+  grep -q "^APP_ENV='stage'" $home/etc/common.env || die "common.env did not get APP_ENV='stage'"
+  grep -q '/nusantara_pos_stage' $home/etc/common.env || die "common.env does not name nusantara_pos_stage"
+  say "✓ common.env (from the shop's: APP_ENV='stage', database nusantara_pos_stage)"
+fi
+if [[ -e $home/etc/api.env ]]; then
+  say "  api.env is already there — kept"
+else
+  print -r -- "API_PORT='4001'
+CORS_ORIGIN='https://staging-pos.macbooknusantara.com'" >$home/etc/api.env
+  say "✓ api.env (port 4001, https://staging-pos.macbooknusantara.com)"
+fi
+chown ${user}:staff $home/etc/common.env $home/etc/api.env
+chmod 600 $home/etc/common.env $home/etc/api.env
+
+# 2. The gate. caddy asks for the password twice and prints only its hash.
+gate=$home/etc/caddy/public-gate.caddy
+if [[ -e $gate ]]; then
+  say "  the gate is already there — kept (delete $gate and re-run to change its password)"
+else
+  say "
+The staging gate: username 'nusantara', and a password you choose now."
+  hash=$($caddy hash-password) || die "no password was set"
+  [[ $hash == '$2'* ]] || die "caddy did not print a bcrypt hash"
+  print -r -- "# The shop-password gate for staging (docs/staging.md §2).
+@public header Cf-Connecting-IP *
+basic_auth @public {
+	nusantara $hash
+}" >$gate
+  chown ${user}:staff $gate
+  chmod 644 $gate
+  say "✓ the gate"
+fi
+
+# 3. The staging key, and installer 2.
+zsh $here/setup-deploy-access --stage "$1" | sed -nE '/^(pinned|installed|created|added)/p'
+say "✓ installer $(sed -n 's/^INSTALLER_VERSION=//p' /usr/local/libexec/nusantara-deploy)"
+
+# 4. The data.
+/usr/local/libexec/nusantara-deploy --stage refresh
+
+say "
+Done on the Mac mini. What is left is GitHub and Cloudflare (docs/staging.md §5–8)."

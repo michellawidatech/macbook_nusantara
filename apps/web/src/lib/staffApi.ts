@@ -15,6 +15,8 @@ export interface StaffAccount {
   readonly name: string;
   readonly role: "OWNER" | "STAFF";
   readonly canApprove: boolean;
+  /** May open Financial & Report (2026-10-16). */
+  readonly canViewFinance: boolean;
   readonly active: boolean;
   readonly mustChangePassword: boolean;
   /** ISO string, or null if they have never signed in. */
@@ -50,6 +52,7 @@ export function useCreateAccount() {
       name: string;
       role: "OWNER" | "STAFF";
       canApprove: boolean;
+      canViewFinance: boolean;
     }) =>
       api<{ account: StaffAccount }>("/api/staff", {
         method: "POST",
@@ -68,6 +71,7 @@ export function useUpdateAccount() {
       name?: string;
       role?: "OWNER" | "STAFF";
       canApprove?: boolean;
+      canViewFinance?: boolean;
       active?: boolean;
     }) =>
       api<{ account: StaffAccount }>(`/api/staff/${encodeURIComponent(id)}`, {

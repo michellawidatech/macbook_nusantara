@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The shop's WhatsApp number as a linked device (Baileys) on 127.0.0.1:3002 —
+  docs/whatsapp-baileys.md. Install it only when WHATSAPP_TRANSPORT=baileys:
+  it is the number itself, and a second copy anywhere is a second device
+  fighting the first. The linked session lives in /opt/nusantara/var/wa-gateway
+  (WA_GATEWAY_STATE_DIR), outside the release, so a deploy does not unlink it.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>local.nusantara.wa-gateway</string>
+	<key>UserName</key>
+	<string>_nusantara</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/nusantara/current/ops/run</string>
+		<string>wa-gateway</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/opt/nusantara/var</string>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>/opt/nusantara</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<!-- Slower than the worker's: a crash loop here is a device reconnecting to
+	     WhatsApp every few seconds, which is what gets a number flagged. -->
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>StandardOutPath</key>
+	<string>/opt/nusantara/logs/wa-gateway.log</string>
+	<key>StandardErrorPath</key>
+	<string>/opt/nusantara/logs/wa-gateway.log</string>
+</dict>
+</plist>

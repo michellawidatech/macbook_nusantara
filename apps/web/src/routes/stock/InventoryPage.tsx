@@ -6,7 +6,7 @@
  * "Stock Movement" listed it by serial and owned the adjustment machinery. The
  * owner asked for one screen with one table, and `InventoryTable` is that
  * table: flat since 2026-09-19 — a line per variant, grade and warehouse, its
- * units in a popup. This file is what remains — the page frame, the stock
+ * units nested under it. This file is what remains — the page frame, the stock
  * movement history (every row of it editable since 2026-09-24, through
  * `StockMovementEditModal`), the stock export (`StockExportModal`), and the
  * two modals that actually write.
@@ -32,7 +32,8 @@
  *   the real case this replaces: a machine turns up in the shop that no PO ever
  *   covered, and until now the only way in was inventing a purchase order.
  * - **Out** takes the unit out of stock to the status picked in the header —
- *   away at service, or written off. `UnitStatus` has no "adjusted out" member
+ *   written off (a repair is *Send to service* on the unit's row since
+ *   2026-10-26). `UnitStatus` has no "adjusted out" member
  *   and this file does not invent one; the header names the destination so what
  *   the log says and what the unit's status says cannot disagree.
  *
@@ -42,6 +43,7 @@
  * never heard of. That is why an adjustment stores a `reasonId` and not text.
  */
 import { useEffect, useRef, useState } from "react";
+import { isLiveSku } from "../../lib/skuCode.js";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { SerialLink } from "../../components/SerialLink";
@@ -64,6 +66,7 @@ import {
 import {
   DeleteOutlined,
   DownloadOutlined,
+  UploadOutlined,
   EditOutlined,
   LoginOutlined,
   LogoutOutlined,
@@ -73,15 +76,20 @@ import { ProTable } from "../../components/ProTable";
 import { EditableTable } from "../../components/EditableTable";
 import { InventoryTable } from "./InventoryTable";
 import { StockExportModal } from "./StockExportModal";
+import { PriceImportModal } from "./PriceImportModal";
 import { StockMovementEditModal } from "./StockMovementEditModal";
 import {
   stockHistoryRows,
   stockHistorySkuId,
   type StockHistoryRow,
 } from "../../lib/stockHistory.js";
-import { serviceLocationOf } from "../../lib/service.js";
 import { skuTracksSerial } from "../../lib/serialTracking.js";
-import { averageCost, onHand, takeFrom } from "../../lib/stock.js";
+import {
+  averageCost,
+  onHand,
+  takeFrom,
+  withStockOnHand,
+} from "../../lib/stock.js";
 import { EnumTag } from "../../components/EnumTag";
 import { LongText } from "../../components/LongText";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
@@ -129,23 +137,26 @@ import type {
   MockDb,
   UnitStatus,
 } from "../../mock/seed.js";
+import { warehouseLabel } from "../../lib/warehouses.js";
 
 /** Rows the modal opens with — the owner's "typically three or four". */
 const BLANK_ROWS = 1;
 
-/** Where an OUT adjustment leaves the unit. */
-type OutStatus = Extract<UnitStatus, "HILANG" | "SERVIS">;
+/**
+ * Where an OUT adjustment leaves the unit — a write-off, and nothing else.
+ *
+ * "On service" left this list on 2026-10-26 (owner ask): a unit going to a
+ * repairer goes through *Send to service* on its row, the one dialog every
+ * door opens, which asks where and how each charge was paid. Stock out asked
+ * neither, so the two doors disagreed about what a visit is.
+ */
+type OutStatus = Extract<UnitStatus, "HILANG">;
 
 const OUT_STATUSES: { value: OutStatus; label: string; hint: string }[] = [
   {
     value: "HILANG",
     label: "Lost / written off",
     hint: "the unit is gone: shrinkage, damaged beyond sale, taken for internal use",
-  },
-  {
-    value: "SERVIS",
-    label: "On service",
-    hint: "the unit is away at a repairer and is expected back",
   },
 ];
 
@@ -228,6 +239,7 @@ export function InventoryPage() {
   const { compact } = useLayoutMode();
   /** The stock export dialog (owner ask 2026-09-19). */
   const [exporting, setExporting] = useState(false);
+  const [importingPrices, setImportingPrices] = useState(false);
   /** The history row being corrected (owner ask 2026-09-24). */
   const [editing, setEditing] = useState<StockHistoryRow | null>(null);
   // ── The batch, held as plain state rather than in a Form ──────────────────
@@ -253,13 +265,7 @@ export function InventoryPage() {
   const [outStatus, setOutStatus] = usePersistentState<OutStatus>(
     BATCH_DRAFT("outStatus"),
     "HILANG",
-    asOneOf<OutStatus>(["HILANG", "SERVIS"]),
-  );
-  /** Once the destination is chosen by hand, the reason stops guessing at it. */
-  const [outTouched, setOutTouched] = usePersistentState<boolean>(
-    BATCH_DRAFT("outTouched"),
-    false,
-    asBoolean,
+    asOneOf<OutStatus>(["HILANG"]),
   );
   const [locationId, setLocationId] = usePersistentState<string>(
     BATCH_DRAFT("location"),
@@ -280,7 +286,18 @@ export function InventoryPage() {
     [],
     asListOf(isCountedRow),
   );
-  const countedSkus = db.skus.filter((s) => !skuTracksSerial(db, s.id));
+  const countedSkus = db.skus.filter(
+    (s) => isLiveSku(s) && !skuTracksSerial(db, s.id),
+  );
+  /*
+   * What the counted picker offers (owner ask 2026-10-26). Stock in may bring
+   * in any variant; Stock out only one the shop has pieces of — offering the
+   * rest is offering a line the batch refuses. Counted anywhere, not only at
+   * this desk's warehouse: an OUT batch names no warehouse, and `takeFrom`
+   * takes from this desk first and then wherever else holds the product.
+   */
+  const pickableCounted =
+    kind === "OUT" ? withStockOnHand(countedSkus, db.stockMoves) : countedSkus;
   /**
    * One batch, once — a ref rather than state, because that is the only kind
    * of latch that closes in time.
@@ -366,8 +383,7 @@ export function InventoryPage() {
     submitted.current = false;
     setKind(direction);
     setReason("");
-    setOutStatus(direction === "OUT" ? "HILANG" : "HILANG");
-    setOutTouched(false);
+    setOutStatus("HILANG");
     setLocationId(db.myWarehouseId);
     setRows(blankRows());
     setCountedRows([]);
@@ -589,36 +605,14 @@ export function InventoryPage() {
             existing.rackId = undefined;
           }
           /*
-           * A machine adjusted out to SERVICE opens a visit at the bench,
-           * exactly as one rejected at QC does (owner ask 2026-09-08).
-           *
-           * Without this the two doors into service disagreed: QC opened a
-           * visit while an adjustment changed a status and nothing else — so
-           * the machine never appeared on the bench and its repair cost
-           * nothing.
-           *
-           * ⚠️ It MOVES the unit to the bench (owner ask 2026-09-25: *"no
-           * need to mark as 'received' first"*), which reverses the
-           * 2026-09-09 rule that the bench signs a unit in. That confirmation
-           * was what wrote the location, so with it gone this has to, or the
-           * shelf the unit left goes on counting it. The rack goes with it,
-           * because the unit comes off the shelf when it is picked up.
+           * ~~A unit adjusted out to SERVICE~~ — not since 2026-10-26: Stock
+           * out is write-offs only, and a repair goes through *Send to
+           * service* on the unit's row (`components/SendToServiceModal`).
            */
-          const goingToService = kind === "OUT" && outStatus === "SERVIS";
-          // Read BEFORE the event, which writes the projection — the visit has
-          // to record where the machine set out from.
-          const cameFrom = existing.locationId;
-          if (goingToService) existing.rackId = undefined;
-          const serviceBench = serviceLocationOf(d.warehouses);
           appendEvent(d, serial, {
             type: "KOREKSI",
             toStatus: kind === "IN" ? "TERSEDIA" : outStatus,
-            toLocationId:
-              kind === "IN"
-                ? locationId
-                : goingToService
-                  ? serviceBench
-                  : undefined,
+            toLocationId: kind === "IN" ? locationId : undefined,
             note: [
               `${kind === "IN" ? "Adjusted in" : "Adjusted out"} — ${label}`,
               kind === "OUT" ? statusLabel(outStatus) : undefined,
@@ -628,20 +622,6 @@ export function InventoryPage() {
               .filter(Boolean)
               .join(" — "),
           });
-          if (kind === "OUT" && outStatus === "SERVIS") {
-            d.services.push({
-              id: nextId("svc"),
-              serial,
-              fromLocationId: cameFrom,
-              openedAt: at,
-              // Always: there is no arrival step to set it later (2026-09-25).
-              arrivedAt: at,
-              fees: [],
-              ...(description ? { note: description } : {}),
-              raisedBy: "ADJUSTMENT",
-              staff: currentStaffName(),
-            });
-          }
           // A unit that has left stock cannot stay on hold for a customer. The
           // reservation is closed in the same transaction as the event, or the
           // Reservation page goes on offering a machine that is not there.
@@ -654,6 +634,10 @@ export function InventoryPage() {
               const mine = rsv.items.filter((it) => it.serial === serial);
               if (mine.length === 0) continue;
               rsv.items = rsv.items.filter((it) => it.serial !== serial);
+              // A hold with nothing left on it is cancelled here, by name:
+              // an item-less reservation is otherwise a VISIT (2026-10-27),
+              // whose status `reprojectHolds` leaves alone.
+              if (rsv.items.length === 0) rsv.status = "CANCELLED";
               released += mine.length;
             }
             reprojectHolds(d);
@@ -725,15 +709,21 @@ export function InventoryPage() {
       <Button icon={<DownloadOutlined />} onClick={() => setExporting(true)}>
         {t("stockExport.button", "Export stock")}
       </Button>
+      <Button
+        icon={<UploadOutlined />}
+        onClick={() => setImportingPrices(true)}
+      >
+        {t("priceImport.button", "Import sell prices")}
+      </Button>
       {addAction}
     </Flex>
   );
 
   /**
    * The one table the merge produced: a flat line per variant, grade and
-   * warehouse since 2026-09-19, its units in a popup.
+   * warehouse since 2026-09-19, its units nested under it.
    *
-   * The popup owns its own per-unit buttons since 2026-09-23 — price change
+   * The nested units carry their own per-unit buttons since 2026-09-23 — price change
    * and edit unit — so nothing about one unit comes back up to this page.
    */
   const stockTab = (
@@ -939,6 +929,12 @@ export function InventoryPage() {
                 onClick: () => setExporting(true),
               },
               {
+                key: "import-prices",
+                label: t("priceImport.button", "Import sell prices"),
+                icon: <UploadOutlined />,
+                onClick: () => setImportingPrices(true),
+              },
+              {
                 key: "in",
                 label: t("stock.stockIn", "Stock in"),
                 icon: <LoginOutlined />,
@@ -981,10 +977,7 @@ export function InventoryPage() {
                 "stock.stockInTitle",
                 "Stock in — transfer or bring units into a warehouse",
               )
-            : t(
-                "stock.stockOutTitle",
-                "Stock out — write off, or send units to service",
-              )
+            : t("stock.stockOutWriteOffTitle", "Stock out — write units off")
         }
         open={adding}
         onCancel={() => setAdding(false)}
@@ -1022,17 +1015,7 @@ export function InventoryPage() {
             >
               <AutoComplete
                 value={reason}
-                onChange={(v: string) => {
-                  setReason(v);
-                  // A reason that names service points the destination at
-                  // service, until someone says otherwise by hand. It tracks
-                  // BOTH ways: a one-way guess would leave "On service"
-                  // standing under a reason since retyped to "Internal Use",
-                  // which is a wrong status nobody was asked about.
-                  if (!outTouched) {
-                    setOutStatus(/servi[cs]/i.test(v) ? "SERVIS" : "HILANG");
-                  }
-                }}
+                onChange={(v: string) => setReason(v)}
                 options={adjustmentReasons.map((r) => ({ value: r.label }))}
                 filterOption={(input, opt) =>
                   String(opt?.value ?? "")
@@ -1058,7 +1041,7 @@ export function InventoryPage() {
                   onChange={setLocationId}
                   options={db.warehouses
                     .filter((w) => w.active)
-                    .map((w) => ({ value: w.id, label: w.name }))}
+                    .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
                   style={{ width: "100%" }}
                 />
               </Form.Item>
@@ -1074,10 +1057,7 @@ export function InventoryPage() {
               >
                 <Select<OutStatus>
                   value={outStatus}
-                  onChange={(v) => {
-                    setOutStatus(v);
-                    setOutTouched(true);
-                  }}
+                  onChange={setOutStatus}
                   // Translated here rather than in the constant — see
                   // SettingsPage's REASON_ACTIVITIES for why.
                   options={OUT_STATUSES.map((o) => ({
@@ -1424,7 +1404,7 @@ export function InventoryPage() {
                       "stock.countedProductAria",
                       "Counted product",
                     )}
-                    options={countedSkus.map((s) => ({
+                    options={pickableCounted.map((s) => ({
                       value: s.id,
                       label: `${s.name} ${s.variantLabel} · ${onHand(db.stockMoves, s.id)}`,
                     }))}
@@ -1486,6 +1466,10 @@ export function InventoryPage() {
       </Modal>
 
       <StockExportModal open={exporting} onClose={() => setExporting(false)} />
+      <PriceImportModal
+        open={importingPrices}
+        onClose={() => setImportingPrices(false)}
+      />
       <StockMovementEditModal
         open={editing !== null}
         row={editing}

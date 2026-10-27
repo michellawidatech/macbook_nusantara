@@ -312,6 +312,32 @@ describe("supplierHistory", () => {
     ).toEqual([30_000_000]);
   });
 
+  it("names a supplier return's credit for what it is (2026-10-26)", () => {
+    const rows = supplierHistory(
+      "sup-1",
+      [
+        invoice({
+          paid: 4_000_000,
+          payments: [
+            {
+              id: "pp-credit",
+              at: "2026-09-06",
+              amount: 4_000_000,
+              method: "RETUR_SUPPLIER",
+              returnId: "r_1",
+            },
+          ],
+        }),
+      ],
+      [],
+    );
+    const credit = rows.find((r) => r.id === "pay-pp-credit")!;
+    expect(credit.kind).toBe("CREDIT");
+    // It lowers what is owed, exactly as a payment does.
+    expect(credit.direction).toBe("PAYMENT");
+    expect(rows.filter((r) => r.kind === "PAYMENT")).toHaveLength(0);
+  });
+
   it("leaves another supplier's paperwork out", () => {
     const rows = supplierHistory(
       "sup-1",

@@ -19,8 +19,9 @@ import { db as prisma, disconnect } from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
 import { hasCredential } from "@nusantara/agent";
 import { canSend } from "@nusantara/whatsapp";
-import { loadEnvFile, loadWorkerConfig } from "./config.js";
+import { loadEnvFile, loadWorkerConfig, sendFetchFor } from "./config.js";
 import { run } from "./loop.js";
+import { checkDatabaseRole } from "./role.js";
 
 /** Resolved from this file, not from `process.cwd()` — see server.ts in the webhook. */
 function defaultEnvFile(): string {
@@ -54,7 +55,9 @@ export function main(): void {
   if (!canDeliver) {
     logger.warn(
       { evt: "worker.config.no_whatsapp" },
-      "no WhatsApp token — replies will be queued in the outbox but not sent",
+      config.transport.kind === "baileys"
+        ? "WHATSAPP_TRANSPORT=baileys without WA_GATEWAY_URL and WA_GATEWAY_SECRET — replies will be queued in the outbox but not sent"
+        : "no WhatsApp token — replies will be queued in the outbox but not sent",
     );
   }
   logger.info(
@@ -62,6 +65,7 @@ export function main(): void {
       evt: "worker.config.loaded",
       ctx: {
         envFile,
+        transport: config.transport.kind,
         graphVersion: config.whatsapp.graphVersion,
         canDraft,
         canDeliver,
@@ -78,9 +82,26 @@ export function main(): void {
     requestStop = resolve;
   });
 
-  logger.info({ evt: "worker.started" }, "worker started");
-
-  void run({ db, logger, config, stop })
+  // Before the first pass, so a worker on the wrong role writes nothing at
+  // all rather than everything but the columns its passes depend on — and
+  // `run` is never entered, not even for one tick.
+  void checkDatabaseRole(db, process.env["APP_ENV"] ?? "dev", logger)
+    .then(async (ok) => {
+      if (!ok) {
+        process.exitCode = 78; // EX_CONFIG, as ops/run uses for bad config
+        return;
+      }
+      logger.info({ evt: "worker.started" }, "worker started");
+      // Baileys mode: the same Graph requests, to the gateway on loopback.
+      const fetchImpl = sendFetchFor(config.transport);
+      await run({
+        db,
+        logger,
+        config,
+        stop,
+        ...(fetchImpl ? { fetchImpl } : {}),
+      });
+    })
     .catch((err: unknown) => {
       logger.error(
         {

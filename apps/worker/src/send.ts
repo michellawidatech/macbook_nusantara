@@ -27,6 +27,7 @@ import {
   claimOutbox,
   markOutboxFailed,
   markOutboxSent,
+  recoverStuckOutbox,
   type PrismaClient,
 } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
@@ -57,23 +58,30 @@ const waReplyPayload = z.object({
 });
 
 /**
- * A WA_IMAGE intent: one photograph of one unit (owner ask 2026-09-21).
+ * A WA_IMAGE intent: one photograph of one unit (owner ask 2026-09-21), or a
+ * picture staff sent from their own device (owner ask 2026-10-27).
  *
- * It names a `UnitNotePhoto` and carries no bytes. Reading them at SEND time
- * rather than at draft time is what keeps the transaction that decided to send
- * a picture from carrying a megabyte of it, and it is what makes the queue
- * readable: an outbox row is an intent, and an intent with an image inlined
- * into a JSON column is a blob store nobody meant to build.
+ * It names a `UnitNotePhoto` (`photoId`) or a `ChatMedia` (`chatMediaId`) —
+ * exactly one — and carries no bytes. Reading them at SEND time rather than at
+ * draft time is what keeps the transaction that decided to send a picture from
+ * carrying a megabyte of it, and it is what makes the queue readable: an
+ * outbox row is an intent, and an intent with an image inlined into a JSON
+ * column is a blob store nobody meant to build.
  */
-const waImagePayload = z.object({
-  to: z
-    .string()
-    .trim()
-    .regex(/^\d{6,20}$/),
-  photoId: z.string().trim().min(1),
-  caption: z.string().trim().optional(),
-  inReplyTo: z.string().trim().optional(),
-});
+const waImagePayload = z
+  .object({
+    to: z
+      .string()
+      .trim()
+      .regex(/^\d{6,20}$/),
+    photoId: z.string().trim().min(1).optional(),
+    chatMediaId: z.string().trim().min(1).optional(),
+    caption: z.string().trim().optional(),
+    inReplyTo: z.string().trim().optional(),
+  })
+  .refine((p) => (p.photoId === undefined) !== (p.chatMediaId === undefined), {
+    message: "a WA_IMAGE names exactly one of photoId and chatMediaId",
+  });
 
 export interface SendDeps {
   readonly db: PrismaClient;
@@ -82,6 +90,11 @@ export interface SendDeps {
   readonly maxSendsPerTick: number;
   readonly fetchImpl?: typeof fetch;
   readonly now?: () => Date;
+  /**
+   * How long a claimed row may stay SENDING before it is put back
+   * (`recoverStuckOutbox`). Defaults to `OUTBOX_STUCK_MS`.
+   */
+  readonly stuckMs?: number;
 }
 
 export interface SendPassResult {
@@ -104,6 +117,34 @@ export async function sendPass(deps: SendDeps): Promise<SendPassResult> {
 
   let sent = 0;
   let failed = 0;
+
+  // First, what a worker claimed and never finished — killed mid-send by a
+  // deploy, or crashed. Nothing else ever looks at a SENDING row again
+  // (2026-10-27 audit), so without this a reply stays unsent for ever.
+  try {
+    const recovered = await recoverStuckOutbox(db, now(), deps.stuckMs);
+    for (const r of recovered) {
+      logger[r.status === "FAILED" ? "error" : "warn"](
+        {
+          evt: "worker.send.recovered",
+          ctx: { outboxId: r.id, attempts: r.attempts, status: r.status },
+        },
+        r.status === "FAILED"
+          ? "an outbox row was left claimed and had no attempts left — failed"
+          : "an outbox row was left claimed by a worker that never finished — requeued",
+      );
+    }
+  } catch (err) {
+    logger.error(
+      {
+        evt: "worker.send.recover_failed",
+        ...(err instanceof Error
+          ? { err: { name: err.name, message: err.message } }
+          : {}),
+      },
+      "could not look for outbox rows left claimed",
+    );
+  }
 
   for (let i = 0; i < deps.maxSendsPerTick; i += 1) {
     const row = await claimOutbox(db, now());
@@ -177,7 +218,8 @@ export async function sendPass(deps: SendDeps): Promise<SendPassResult> {
         ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
       });
 
-      await markOutboxSent(db, row.id, now());
+      // The id is what an edit or an unsend from the inbox names later.
+      await markOutboxSent(db, row.id, now(), result.waMessageId);
       sent += 1;
       logger.info(
         {
@@ -266,15 +308,13 @@ async function sendPhoto(
     return false;
   }
 
-  const photo = await db.unitNotePhoto.findUnique({
-    where: { id: parsed.data.photoId },
-    select: { data: true, contentType: true, url: true },
-  });
+  const photo = await imageOf(db, parsed.data);
   /*
    * A photo row with no bytes is one that was LINKED rather than uploaded
-   * (`UnitNotePhoto.url` with a null `data`). There is nothing to push to
-   * Graph and nothing this side can do about it, so it is exhausted at once
-   * rather than retried six times against the same absent column.
+   * (`UnitNotePhoto.url` with a null `data`), or one purged since it was
+   * queued. There is nothing to push to Graph and nothing this side can do
+   * about it, so it is exhausted at once rather than retried six times
+   * against the same absent column.
    */
   if (!photo || !photo.data || photo.data.length === 0) {
     await markOutboxFailed(db, row, "the photo has no stored image", {
@@ -284,7 +324,13 @@ async function sendPhoto(
     logger.warn(
       {
         evt: "worker.send.photo_missing",
-        ctx: { outboxId: row.id, photoId: parsed.data.photoId },
+        ctx: {
+          outboxId: row.id,
+          ...(parsed.data.photoId ? { photoId: parsed.data.photoId } : {}),
+          ...(parsed.data.chatMediaId
+            ? { chatMediaId: parsed.data.chatMediaId }
+            : {}),
+        },
       },
       "a queued photo had no bytes to send",
     );
@@ -314,13 +360,40 @@ async function sendPhoto(
     ...(parsed.data.caption ? { caption: parsed.data.caption } : {}),
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
   });
-  await markOutboxSent(db, row.id, now());
+  await markOutboxSent(db, row.id, now(), result.waMessageId);
   logger.info(
     {
       evt: "worker.send.photo_sent",
       ctx: { outboxId: row.id, waMessageId: result.waMessageId },
     },
-    "sent a unit photo",
+    parsed.data.chatMediaId ? "sent a staff picture" : "sent a unit photo",
   );
   return true;
+}
+
+/**
+ * The bytes a WA_IMAGE names: a unit's QC photo, or a picture staff uploaded.
+ *
+ * A `ChatMedia` row is read only when it belongs to the number the row is
+ * addressed to. The API writes both from one request, so they always agree;
+ * a payload that names another thread's picture is a bug, and sending one
+ * customer's picture to another is the one outcome worse than not sending.
+ */
+async function imageOf(
+  db: PrismaClient,
+  p: { to: string; photoId?: string; chatMediaId?: string },
+): Promise<{ data: Uint8Array | null; contentType: string | null } | null> {
+  if (p.photoId) {
+    return db.unitNotePhoto.findUnique({
+      where: { id: p.photoId },
+      select: { data: true, contentType: true },
+    });
+  }
+  if (!p.chatMediaId) return null;
+  const media = await db.chatMedia.findUnique({
+    where: { id: p.chatMediaId },
+    select: { from: true, data: true, contentType: true },
+  });
+  if (!media || media.from !== p.to) return null;
+  return { data: media.data, contentType: media.contentType };
 }

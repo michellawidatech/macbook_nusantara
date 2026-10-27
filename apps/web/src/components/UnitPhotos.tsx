@@ -16,10 +16,16 @@
  *
  * ## Why a data URL
  *
- * There is no object store in the browser build, so a chosen file is read into
- * a data URL and kept in the mock database exactly where a real `url` would
- * go. Nothing that displays a photo can tell the difference, so swapping in an
- * upload endpoint is a change to `addQcPhoto` and to nothing here.
+ * A chosen file is shrunk (`lib/photoShrink.ts`) and read into a data URL,
+ * which the store commit carries; the server keeps the bytes and answers with
+ * a `/api/store/photos/:id` url in its place.
+ *
+ * ## Added means saved (client report 2026-10-21)
+ *
+ * The photo is drawn the moment it is picked, like every change, but it is
+ * not ANNOUNCED until the server has it — the button spins until then. A
+ * full-size phone photo used to say "added" while it was still being sent,
+ * and a refresh in that window lost it without a word.
  *
  * ⚠️ These are the one thing in this codebase that is ever hard-deleted: they
  * are purged, row and file, when the machine is sold. `purgeQcPhotos` carries
@@ -29,6 +35,7 @@ import { useRef, useState } from "react";
 import { App, Button, Flex, Image, Tooltip, Typography, theme } from "antd";
 import { CameraOutlined, DeleteOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
+import { shrinkPhoto } from "../lib/photoShrink.js";
 import {
   useDb,
   mutate,
@@ -38,12 +45,9 @@ import {
 } from "../mock/store.js";
 
 /**
- * The largest file a phone camera should be able to hand us, in bytes.
- *
- * A data URL is held in memory and cloned on every `mutate`, so an 8MP JPEG
- * straight off a phone is a real cost rather than a theoretical one. Six
- * megabytes is comfortably above any photo of a laptop lid and below the size
- * at which the store starts to hurt.
+ * The largest photo kept, in bytes — measured AFTER shrinking, so it bites
+ * only on a file the browser could not decode and shrink (HEIC on a desktop
+ * browser). The server refuses anything over 8MB.
  */
 const MAX_BYTES = 6 * 1024 * 1024;
 
@@ -110,7 +114,8 @@ export function UnitPhotos({
         );
         continue;
       }
-      if (file.size > MAX_BYTES) {
+      const photo = await shrinkPhoto(file);
+      if (photo.bytes > MAX_BYTES) {
         message.error(
           t("photos.tooBig", "{{name}} is too large — 6MB is the limit.", {
             name: file.name,
@@ -118,20 +123,16 @@ export function UnitPhotos({
         );
         continue;
       }
-      urls.push(
-        await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result));
-          reader.onerror = () => reject(reader.error);
-          reader.readAsDataURL(file);
-        }),
-      );
+      urls.push(photo.url);
     }
-    setBusy(false);
     // Toasts and writes only once the reads are done — never inside a state
     // updater, and never inside `mutate`.
-    if (urls.length === 0) return;
+    if (urls.length === 0) {
+      setBusy(false);
+      return;
+    }
     if (draft) {
+      setBusy(false);
       draft.onAdd(urls);
       message.success(
         t("photos.addedDraft", "{{count}} photo(s) added.", {
@@ -140,9 +141,12 @@ export function UnitPhotos({
       );
       return;
     }
-    mutate((d) => {
+    const saved = await mutate((d) => {
       for (const url of urls) addQcPhoto(d, serial, url);
     });
+    setBusy(false);
+    // A refusal has already been said, by the store, and taken off screen.
+    if (!saved) return;
     message.success(
       t("photos.added", "{{count}} photo(s) added to {{serial}}.", {
         count: urls.length,
@@ -151,9 +155,9 @@ export function UnitPhotos({
     );
   };
 
-  const drop = (photoId: string) => {
+  const drop = async (photoId: string) => {
     if (draft) draft.onRemove(photoId);
-    else mutate((d) => removeQcPhoto(d, serial, photoId));
+    else if (!(await mutate((d) => removeQcPhoto(d, serial, photoId)))) return;
     message.success(t("photos.removed", "Photo removed."));
   };
 
@@ -198,7 +202,7 @@ export function UnitPhotos({
                     danger
                     icon={<DeleteOutlined />}
                     aria-label={t("photos.remove", "Remove this photo")}
-                    onClick={() => drop(p.id)}
+                    onClick={() => void drop(p.id)}
                     style={{
                       position: "absolute",
                       top: -6,

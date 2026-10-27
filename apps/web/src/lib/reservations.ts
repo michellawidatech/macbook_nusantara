@@ -33,21 +33,98 @@
  */
 import type { MockDb, Reservation, ReservationItem } from "../mock/seed.js";
 
-/** Where one machine on a hold has got to. */
-export type HoldState = "HELD" | "BOUGHT" | "RELEASED";
+/**
+ * Where one machine on a hold has got to.
+ *
+ * `SOFT` (owner, 2026-10-27): reserved for a customer who has paid no DP.
+ * Only a DP holds a unit — *"if reservation makes the stock decrease and
+ * reduce sale, it is bad"* — so the unit stays `TERSEDIA` and on sale, tagged
+ * *Reserved for Budi, not paid*, and the till asks before selling it.
+ */
+export type HoldState = "HELD" | "SOFT" | "BOUGHT" | "RELEASED";
+
+/** Nobody has paid a DP on this hold, so it holds nothing (2026-10-27). */
+export function isUnpaidHold(
+  r: Pick<Reservation, "dp" | "heldUntil">,
+): boolean {
+  return r.dp === undefined && r.heldUntil === undefined;
+}
 
 /**
- * The state of one item, read off its unit.
+ * Has the ledger ever put this serial on hold for this reservation? A unit
+ * RELEASED from a firm hold (every hold made before 2026-10-27 was one) is
+ * back at `TERSEDIA` with its item still on the row, and must not read as
+ * softly reserved again.
+ */
+function heldByLedger(db: MockDb, r: Reservation, serial: string): boolean {
+  return db.events.some(
+    (e) =>
+      e.serial === serial && e.type === "DIRESERVASI" && e.refCode === r.code,
+  );
+}
+
+/**
+ * The state of one item, read off its unit — and, for a unit still on sale,
+ * off the hold it is on (`SOFT`).
  *
  * A serial with no unit behind it answers `RELEASED`: whatever happened to the
  * machine, it is certainly not being held for anybody now.
  */
-export function itemState(db: MockDb, item: ReservationItem): HoldState {
+export function itemState(
+  db: MockDb,
+  item: ReservationItem,
+  r: Reservation,
+): HoldState {
   const unit = db.units.find((u) => u.serial === item.serial);
   if (!unit) return "RELEASED";
   if (unit.status === "DIRESERVASI") return "HELD";
   if (unit.status === "TERJUAL") return "BOUGHT";
+  if (
+    unit.status === "TERSEDIA" &&
+    r.status === "ACTIVE" &&
+    isUnpaidHold(r) &&
+    !heldByLedger(db, r, item.serial)
+  )
+    return "SOFT";
   return "RELEASED";
+}
+
+/**
+ * Every unit on sale that a hold nobody paid for names — the till's and
+ * Inventory's *Reserved for {name}, not paid* tag (2026-10-27). One pass, so
+ * a catalogue of a thousand rows asks a map rather than every hold.
+ */
+export function softHolds(db: MockDb): Map<string, Reservation> {
+  const out = new Map<string, Reservation>();
+  for (const r of db.reservations) {
+    if (r.status !== "ACTIVE" || !isUnpaidHold(r)) continue;
+    for (const i of r.items)
+      if (!out.has(i.serial) && itemState(db, i, r) === "SOFT")
+        out.set(i.serial, r);
+  }
+  return out;
+}
+
+/** Whether a DP on this hold is neither on a sale nor handed back. */
+export function dpOpen(r: Pick<Reservation, "dp">): boolean {
+  return (
+    r.dp !== undefined &&
+    r.dp.orderId === undefined &&
+    r.dp.refund === undefined
+  );
+}
+
+/**
+ * A visit: a reservation that holds nothing — the bot's "janji datang"
+ * (2026-10-27). It has a time and a customer and no units.
+ */
+export function isVisit(r: Pick<Reservation, "items">): boolean {
+  return r.items.length === 0;
+}
+
+/** Every visit still open — the customer has not come, nor cancelled. */
+export function openVisits(db: MockDb): Reservation[] {
+  return db.reservations.filter((r) => isVisit(r) && r.status === "ACTIVE");
 }
 
 /** The items still waiting to be collected. */
@@ -55,7 +132,10 @@ export function heldItems(
   db: MockDb,
   r: Reservation,
 ): readonly ReservationItem[] {
-  return r.items.filter((i) => itemState(db, i) === "HELD");
+  return r.items.filter((i) => {
+    const state = itemState(db, i, r);
+    return state === "HELD" || state === "SOFT";
+  });
 }
 
 /**
@@ -66,12 +146,25 @@ export function heldItems(
  * least one machine reads as bought — the customer came and collected, and
  * that is the outcome — and one that sold none reads as cancelled.
  *
- * An empty hold is `CANCELLED`: every machine has been taken off it, which is
- * what cancelling one looks like from the item side.
+ * A hold whose items have all been taken off is `CANCELLED`, which is what
+ * cancelling one looks like from the item side.
+ *
+ * ⚠️ A reservation with NO items at all is a VISIT (2026-10-27: the bot books
+ * "janji datang" and holds nothing) — its status is a decision somebody made
+ * (came, cancelled) and not a fact about any unit, so it is returned as it
+ * stands. Without this, `reprojectHolds(d)` with no serials — Inventory's
+ * write-off does exactly that — cancelled every visit in the shop.
  */
 export function headerState(db: MockDb, r: Reservation): Reservation["status"] {
-  const states = r.items.map((i) => itemState(db, i));
-  if (states.includes("HELD")) return "ACTIVE";
+  if (isVisit(r)) return r.status;
+  // A DP refunded or kept (2026-10-27) closed the hold by a person's
+  // decision; no projection reopens it.
+  if (r.status === "CANCELLED" && r.dp !== undefined) return r.status;
+  const states = r.items.map((i) => itemState(db, i, r));
+  if (states.includes("HELD") || states.includes("SOFT")) return "ACTIVE";
+  // An open DP waits for staff to refund or keep it (2026-10-27): closing the
+  // hold IS that decision, and a CANCELLED written here would read as "kept".
+  if (dpOpen(r)) return "ACTIVE";
   if (states.includes("BOUGHT")) return "DONE";
   return "CANCELLED";
 }
@@ -111,9 +204,9 @@ export interface HoldProgress {
 }
 
 export function holdProgress(db: MockDb, r: Reservation): HoldProgress {
-  const states = r.items.map((i) => itemState(db, i));
+  const states = r.items.map((i) => itemState(db, i, r));
   return {
-    held: states.filter((s) => s === "HELD").length,
+    held: states.filter((s) => s === "HELD" || s === "SOFT").length,
     bought: states.filter((s) => s === "BOUGHT").length,
     released: states.filter((s) => s === "RELEASED").length,
     total: states.length,
