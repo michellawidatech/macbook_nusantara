@@ -110,6 +110,13 @@ import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { asString } from "../../lib/draftGuards.js";
 import { useTranslation } from "react-i18next";
 import { realName } from "@nusantara/domain";
+import { useDb } from "../../mock/store.js";
+import { pendingRequestFor } from "../../lib/reservationRequests.js";
+import {
+  ApproveRequestModal,
+  RejectRequestModal,
+  RequestStrip,
+} from "../../components/ReservationRequestDialogs";
 
 /**
  * One line in the conversation. A `WaMessage` row can produce two: what the
@@ -847,6 +854,9 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
           </Flex>
         }
       >
+        {/* The bot's reservation request waiting on this chat (2026-10-27):
+            the same Approve / Reject the Requests tab has. */}
+        <ChatRequestStrip phone={conversation.phone} />
         <Flex
           ref={messagesRef}
           vertical
@@ -1165,6 +1175,34 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
         sending={attaching}
         onCancel={() => setMediaOpen(false)}
         onSend={(serials) => void attach(serials)}
+      />
+    </>
+  );
+}
+
+/** The thread's waiting reservation request, with its two decisions. */
+function ChatRequestStrip({ phone }: { readonly phone: string }) {
+  const db = useDb();
+  const row = pendingRequestFor(db, phone, new Date());
+  const [approving, setApproving] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  if (!row && !approving && !rejecting) return null;
+  return (
+    <>
+      {row && (
+        <RequestStrip
+          row={row}
+          onApprove={() => setApproving(true)}
+          onReject={() => setRejecting(true)}
+        />
+      )}
+      <ApproveRequestModal
+        row={approving && row ? row : null}
+        onClose={() => setApproving(false)}
+      />
+      <RejectRequestModal
+        row={rejecting && row ? row : null}
+        onClose={() => setRejecting(false)}
       />
     </>
   );

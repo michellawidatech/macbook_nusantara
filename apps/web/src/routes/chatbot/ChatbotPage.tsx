@@ -28,6 +28,7 @@
 import { useState, type ReactNode } from "react";
 import { Tabs } from "antd";
 import { useTranslation } from "react-i18next";
+import { useLocation } from "react-router-dom";
 import { PageContainer } from "../../components/PageContainer";
 import { ChatInbox } from "./ChatPage";
 import { KnowledgePanel } from "./KnowledgePage";
@@ -51,7 +52,12 @@ export function ChatbotPage() {
    * The open thread lives here rather than in the inbox, so the Evaluation
    * tab's "Open chat" can switch tabs AND open the conversation in one press.
    */
-  const [picked, setPicked] = useState<string | null>(null);
+  // "Open chat" on a reservation request (2026-10-27) arrives with the
+  // number in the navigation STATE — nothing navigates from an effect.
+  const location = useLocation();
+  const [picked, setPicked] = useState<string | null>(
+    () => (location.state as { openPhone?: string } | null)?.openPhone ?? null,
+  );
   // Delete conversation is offered to the owner; the server checks again.
   const isOwner = useSession().data?.role === "OWNER";
 

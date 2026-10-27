@@ -83,6 +83,8 @@ export const TASK_REASON = {
   confirmFailed: "konfirmasi gagal",
   notAutomatic: "belum bisa dibuat otomatis",
   notTold: "belum disampaikan ke pelanggan",
+  /** A DP proof beside a pending reservation request (2026-10-27). */
+  requestWaiting: "ada permintaan reservasi yang menunggu — setujui dengan DP",
 } as const;
 
 /** The job a hand-over topic leaves. */

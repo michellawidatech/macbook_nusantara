@@ -3353,6 +3353,21 @@ Decisions that outlived those documents:
   handled on a hand-over row silenced it 15 min. A SENDING outbox row claimed
   5+ min ago is requeued (`recoverStuckOutbox`; the claim stamps
   `nextAttemptAt`). /chat captions why (`lib/botWait.ts`); so does the doctor.
+- **Reservations are requests a person approves — 2026-10-27.** The bot (rules
+  and AI) files a `ReservationProposal` for a keep or a visit
+  (`propose_reservation`, now in `RESERVATION_TOOLS`; `book_visit` and
+  `confirm_reservation` are called by nobody), says "Siap kak, aku catat ya 😊
+  Nanti tim kami konfirmasi" (+ `dpKeepLine` on a keep) and holds nothing;
+  `expiresAt` +3 days. With bookings on a keep is a request, not a closing
+  hand-over. Status is DERIVED (`requestStatus`, packages/domain): Pending (DP
+  proof sent / Waiting for DP / Visit only), Approved, Rejected, Replaced,
+  Expired. Browser: READ-ONLY store collection `reservationRequests`.
+  `POST /api/reservations/requests/:id/approve|reject` is ONE transaction
+  (packages/db `approveRequest`): a STAF reservation (with a DP: `Payment`,
+  `DIRESERVASI`, `heldUntil`), the proposal linked, booking/closing/DP tasks
+  closed, a WA_REPLY if the window or Baileys allows, an audit row (a reject's
+  reason lives there). Requests tab on /reservations + nav badge, a strip in
+  /chat, one dialog component. No migration (20261014 grants suffice).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

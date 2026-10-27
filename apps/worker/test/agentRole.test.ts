@@ -405,6 +405,57 @@ describe("the worker as nusantara_agent", () => {
     expect(await owner.unitEvent.count()).toBe(2);
   });
 
+  it("files a reservation request, holding nothing and booking nothing (2026-10-27)", async () => {
+    await seedUnit();
+    const ctx = {
+      from: FROM,
+      now: NOW,
+      capabilities: LIVE,
+      reserve: { write: agent, staffId: AGENT_STAFF },
+      writesUsed: new Set<string>(),
+      onError: (_t: string, e: unknown) => {
+        throw e;
+      },
+    };
+    const filed = (await dispatchTool(
+      agent,
+      "propose_reservation",
+      {
+        when: "2026-08-21T15:00",
+        serials: "SERX",
+        custName: "Budi",
+        keep: true,
+      },
+      ctx,
+    )) as { requested?: boolean; requestId?: string };
+    expect(filed.requested).toBe(true);
+    // Nothing was booked and nothing held: a person approves it.
+    expect(await owner.reservation.count()).toBe(0);
+    expect(
+      (await owner.unit.findUniqueOrThrow({ where: { serial: "SERX" } }))
+        .status,
+    ).toBe("TERSEDIA");
+    const request = await owner.reservationProposal.findUniqueOrThrow({
+      where: { id: filed.requestId! },
+      include: { items: true },
+    });
+    expect(request).toMatchObject({
+      from: FROM,
+      custName: "Budi",
+      confirmedAt: null,
+      cancelledAt: null,
+      reservationId: null,
+    });
+    expect(request.items).toHaveLength(1);
+    expect(request.expiresAt.getTime() - NOW.getTime()).toBe(3 * 86_400_000);
+    // ...and every open till hears of it, written as the agent.
+    expect(
+      await owner.storeChange.count({
+        where: { collection: "reservationRequests", rowKey: request.id },
+      }),
+    ).toBe(1);
+  });
+
   it("starts a tester's chat over", async () => {
     await owner.appSetting.create({
       data: { key: TESTERS_SETTING_KEY, value: FROM, updatedAt: NOW },

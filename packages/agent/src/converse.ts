@@ -369,7 +369,13 @@ export interface ConverseResult {
 /** A booking write that succeeded this turn. */
 export interface BookingWrite {
   /** `book_visit` since 2026-10-27: a visit, which holds nothing. */
-  readonly tool: "book_visit" | "reschedule_reservation" | "cancel_reservation";
+  readonly tool:
+    | "book_visit"
+    | "reschedule_reservation"
+    | "cancel_reservation"
+    // A reservation REQUEST (2026-10-27): `code` is the request's id, never
+    // shown — the customer is told it is noted, not given a code.
+    | "propose_reservation";
   readonly code: string;
   readonly when?: string;
 }
@@ -446,6 +452,8 @@ export function stockFactsOf(tool: string, output: unknown): StockFact[] {
 
 /** The fixed line that tells a customer about a booking the bot made. */
 function bookingLine(b: BookingWrite): string {
+  if (b.tool === "propose_reservation")
+    return "Siap kak, aku catat ya 😊 Nanti tim kami konfirmasi.";
   if (b.tool === "cancel_reservation")
     return `Booking ${b.code} sudah kami batalkan ya kak.`;
   const when = b.when ? ` untuk ${b.when} WIB` : "";
@@ -453,6 +461,21 @@ function bookingLine(b: BookingWrite): string {
     ? `Booking ${b.code} sudah kami pindahkan${when} ya kak.`
     : // A visit holds nothing (2026-10-27): never "unitnya kami tahan".
       `Jadwal datangnya sudah kami catat dengan kode booking ${b.code}${when} ya kak.`;
+}
+
+/**
+ * The shop's note for a "keep it for me" while bookings are on (2026-10-27):
+ * not a hand-over any more, but a reservation REQUEST the bot files and a
+ * person approves. The DP rule is said word for word.
+ */
+export function keepRequestNote(dp?: DpTerms): string {
+  return (
+    "They want a unit KEPT for them. This is not a hand-over: file a reservation request with " +
+    "propose_reservation (keep: true) for the unit they mean, once you know when they will come " +
+    "or pay and the name it is under — ask for whichever is missing, never invent one. Then say " +
+    "it is noted and the team will confirm, and give the DP rule exactly: " +
+    `"${dpKeepLine(dp)}". Never say the unit is held or booked.`
+  );
 }
 
 const TERMINAL = new Set(["reply", "handoff_to_staff"]);
@@ -1168,6 +1191,20 @@ export async function converse(
             bookings.push({
               tool: use.name,
               code: o.code,
+              ...(typeof o.when === "string" ? { when: o.when } : {}),
+            });
+          }
+          if (
+            use.name === "propose_reservation" &&
+            output !== null &&
+            typeof output === "object" &&
+            (output as { requested?: unknown }).requested === true &&
+            typeof (output as { requestId?: unknown }).requestId === "string"
+          ) {
+            const o = output as { requestId: string; when?: unknown };
+            bookings.push({
+              tool: "propose_reservation",
+              code: o.requestId,
               ...(typeof o.when === "string" ? { when: o.when } : {}),
             });
           }

@@ -30,6 +30,7 @@ import { chatRouter } from "./routes/chat.js";
 import { inboxRouter } from "./routes/inbox.js";
 import { PICTURE_BODY_LIMIT, PICTURE_PATH } from "./routes/inboxSent.js";
 import { reservationsRouter } from "./routes/reservations.js";
+import { reservationRequestsRouter } from "./routes/reservationRequests.js";
 import { kontrolRouter } from "./routes/kontrol.js";
 import { storeRouter } from "./routes/store.js";
 import { staffRouter } from "./routes/staff.js";
@@ -166,6 +167,11 @@ export function createApp(deps: CreateAppDeps): Express {
       // Delete conversation (2026-10-27) is the owner's alone.
       requireOwner(logger),
     ),
+  );
+  // Longer prefix first: `/reservations/:id` would read "requests" as an id.
+  api.use(
+    "/reservations/requests",
+    reservationRequestsRouter({ db, linkedDevice: config.waGateway !== null }),
   );
   api.use("/reservations", reservationsRouter(db));
   api.use("/inbound", inboundRouter(db));

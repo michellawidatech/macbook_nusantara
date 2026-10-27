@@ -148,8 +148,18 @@ describe("proposing a visit", () => {
       when: TOMORROW_2PM,
       custName: "Budi",
     });
-    expect(out).toMatchObject({ ok: true, proposed: true, custName: "Budi" });
+    expect(out).toMatchObject({ ok: true, requested: true, custName: "Budi" });
     expect((out["units"] as unknown[]).length).toBe(2);
+    // A REQUEST waits three days for a person (2026-10-27).
+    const filed = await db.reservationProposal.findFirstOrThrow();
+    expect(filed.expiresAt.getTime() - NOW.getTime()).toBe(3 * 86_400_000);
+    expect(filed.confirmedAt).toBeNull();
+    // Every open /reservations sees it through the change feed.
+    expect(
+      await db.storeChange.count({
+        where: { collection: "reservationRequests", rowKey: filed.id },
+      }),
+    ).toBe(1);
     expect(await db.reservation.count()).toBe(0);
     const units = await db.unit.findMany({ select: { status: true } });
     expect(units.every((u) => u.status === "TERSEDIA")).toBe(true);
@@ -218,9 +228,9 @@ describe("confirming it", () => {
     expect(await db.reservation.count()).toBe(0);
   });
 
-  it("lets a proposal go stale after half an hour", async () => {
+  it("lets a request lapse after three days (2026-10-27)", async () => {
     await propose({ serials: "MBP1", when: TOMORROW_2PM, custName: "Budi" });
-    const late = new Date(NOW.getTime() + 31 * 60_000);
+    const late = new Date(NOW.getTime() + 3 * 86_400_000 + 60_000);
     expect(await confirm(ctx(FROM, late))).toMatchObject({ noProposal: true });
   });
 
@@ -356,5 +366,62 @@ describe("how many photos each unit has (2026-10-27)", () => {
     expect(
       await dispatchTool(db, "check_serial", { serial: "MBP2" }, live),
     ).toMatchObject({ photos: 0 });
+  });
+});
+
+describe("a reservation request (2026-10-27)", () => {
+  it("takes the name the customer already told the bot, never a placeholder", async () => {
+    await db.customerProfile.create({
+      data: { from: FROM, name: "Sari", updatedAt: NOW },
+    });
+    const out = await propose({ serials: "MBP1", when: TOMORROW_2PM });
+    expect(out).toMatchObject({ requested: true, custName: "Sari" });
+  });
+
+  it("asks for a time rather than inventing one", async () => {
+    expect(await propose({ serials: "MBP1", custName: "Budi" })).toMatchObject({
+      needWhen: true,
+    });
+    expect(await db.reservationProposal.count()).toBe(0);
+  });
+
+  it("reads a keep back as a keep, and holds nothing either way", async () => {
+    const out = await propose({
+      serials: "MBP1",
+      when: TOMORROW_2PM,
+      custName: "Budi",
+      keep: true,
+    });
+    expect(out).toMatchObject({ requested: true, keep: true });
+    expect(await db.unitEvent.count({ where: { type: "DIRESERVASI" } })).toBe(
+      0,
+    );
+    expect(await db.reservation.count()).toBe(0);
+  });
+
+  it("marks the request it replaces at the instant the new one is filed", async () => {
+    await propose({ serials: "MBP1", when: TOMORROW_2PM, custName: "Budi" });
+    const later = new Date(NOW.getTime() + 60_000);
+    await propose(
+      { serials: "MBP2", when: TOMORROW_2PM, custName: "Budi" },
+      ctx(FROM, later),
+    );
+    const [old, fresh] = await db.reservationProposal.findMany({
+      orderBy: { createdAt: "asc" },
+    });
+    expect(old!.cancelledAt?.getTime()).toBe(fresh!.createdAt.getTime());
+    expect(fresh!.cancelledAt).toBeNull();
+  });
+
+  it("files one request per reply", async () => {
+    const c = ctx();
+    await propose({ serials: "MBP1", when: TOMORROW_2PM, custName: "Budi" }, c);
+    expect(
+      await propose(
+        { serials: "MBP2", when: TOMORROW_2PM, custName: "Budi" },
+        c,
+      ),
+    ).toMatchObject({ alreadyRequested: true });
+    expect(await db.reservationProposal.count()).toBe(1);
   });
 });

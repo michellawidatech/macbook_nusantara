@@ -98,6 +98,8 @@ import {
   matchesNote,
   renderStoreFacts,
   routeMessage,
+  effectiveCapabilities,
+  keepRequestNote,
   loadCapabilities,
   SHOP_CAPABILITIES,
   TASK_REASON,
@@ -1063,6 +1065,17 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         shown: lastShown.length > 0,
       });
       const hint = matchesNote(knowledge, matchesFor(knowledge, current));
+      // "Keep it for me" with bookings on is a reservation REQUEST the bot
+      // files and a person approves (2026-10-27), not a closing hand-over.
+      // The rules bot reads the keep off `route` itself; the AI is told.
+      const keepAsRequest =
+        route?.rule === "keep" &&
+        effectiveCapabilities(capabilities).reserve &&
+        deps.agentStaffId !== undefined;
+      const aiRoute = keepAsRequest ? null : route;
+      const aiHint = keepAsRequest
+        ? [hint, keepRequestNote(dp)].filter(Boolean).join("\n\n")
+        : hint;
       // Only telling the bot about themselves, in answer to its own question
       // ("Buat nyatet aja sih", "Kuliah"): saved and answered, never handed
       // over (owner report 2026-10-27).
@@ -1231,8 +1244,8 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           knowledge,
           storeFacts,
           dp,
-          route,
-          hint,
+          route: aiRoute,
+          hint: aiHint,
           capabilities,
           alreadyTold,
           selfAnswer,
@@ -1566,7 +1579,14 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // person is told to (audit 2026-09-29).
         const booked = outcome?.bookings ?? [];
         if (booked.length > 0 && anchorId) {
-          const codes = booked.map((b) => b.code).join(", ");
+          // A request has no code to give: it is "noted", not booked.
+          const codes = booked
+            .map((b) =>
+              b.tool === "propose_reservation"
+                ? "permintaan reservasi"
+                : b.code,
+            )
+            .join(", ");
           await db
             .$transaction((tx) =>
               upsertChatAction(tx, {

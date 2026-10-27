@@ -112,6 +112,7 @@ function emptyDb(): MockDb {
     orders: [],
     returns: [],
     reservations: [],
+    reservationRequests: [],
     discounts: [],
     expenses: [],
     incomes: [],
@@ -716,6 +717,16 @@ export function __useRemoteStore(fake: StoreTransport): void {
 export function __stopStorePolling(): void {
   if (poller !== undefined) clearInterval(poller);
   poller = undefined;
+}
+
+/**
+ * Fetch what the server changed, now rather than at the next tick — for a
+ * page that has just written through its own API (an approved reservation
+ * request, 2026-10-27) and wants the result on screen at once. A no-op on
+ * the demo store.
+ */
+export function syncStoreNow(): Promise<void> {
+  return poll();
 }
 
 /** Tests only: run one poll now. */

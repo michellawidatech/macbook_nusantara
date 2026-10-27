@@ -45,8 +45,8 @@ export interface NavLeaf {
    */
   readonly badge?: NavBadgeKind;
 }
-/** What a leaf's count counts. One so far. */
-export type NavBadgeKind = "qcWaiting";
+/** What a leaf's count counts. */
+export type NavBadgeKind = "qcWaiting" | "reservationRequests";
 export interface NavSection {
   readonly key: string;
   readonly label: string;
@@ -87,7 +87,13 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       { path: "/stock/service", label: "Service" },
       // Back under Stock on 2026-08-26 after four days as sections of their
       // own. Both are a unit moving: onto hold, or back out of the shop.
-      { path: "/reservations", label: "Reservation" },
+      // The badge is the bot's reservation requests waiting on a person
+      // (2026-10-27).
+      {
+        path: "/reservations",
+        label: "Reservation",
+        badge: "reservationRequests",
+      },
       { path: "/returns", label: "Return" },
     ],
   },

@@ -888,6 +888,31 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     createdAt: instant.optional(),
   });
 
+  /**
+   * A reservation REQUEST the bot filed from a chat (2026-10-27) — a
+   * `ReservationProposal`, read-only here: staff approve or reject it through
+   * `/api/reservations/requests`, which books the reservation in the same
+   * transaction. Its status is DERIVED in the browser
+   * (`requestStatus`, packages/domain) because `expiresAt` passes by itself.
+   */
+  const reservationRequest = z.strictObject({
+    id,
+    /** wa_id — the chat it came from. */
+    phone: z.string().min(1),
+    custName: text,
+    when: instant,
+    createdAt: instant,
+    expiresAt: instant,
+    confirmedAt: instant.optional(),
+    cancelledAt: instant.optional(),
+    /** A later request of the same customer replaced this one. */
+    replaced: z.boolean(),
+    reservationId: id.optional(),
+    items: z.array(z.strictObject({ id, serial: z.string().min(1) })),
+    /** A `Perlu verifikasi DP` task raised on the thread since it was filed. */
+    dpProofAt: instant.optional(),
+  });
+
   const chat = z.strictObject({
     phone: z.string().min(1),
     name: text,
@@ -1220,6 +1245,7 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     stockMoves: stockMove,
     deposits: deposit,
     reservations: reservation,
+    reservationRequests: reservationRequest,
     orders: order,
     returns: unitReturn,
     opnames: opname,
@@ -1273,6 +1299,7 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     orders: z.array(order),
     returns: z.array(unitReturn),
     reservations: z.array(reservation),
+    reservationRequests: z.array(reservationRequest),
     discounts: z.array(discount),
     expenses: z.array(expense),
     incomes: z.array(income),

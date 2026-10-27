@@ -17,6 +17,8 @@ import {
   BookingTooFarAheadError,
   DuplicateHoldError,
   HoldAlreadySettledError,
+  RequestNotFoundError,
+  RequestSettledError,
   HoldNotFoundError,
   OutsideStoreHoursError,
   Prisma,
@@ -109,6 +111,10 @@ export function mapServiceError(err: unknown): unknown {
     return new ApiError(404, "TIDAK_DITEMUKAN", err.message);
   if (err instanceof HoldNotFoundError)
     return new ApiError(404, "TIDAK_DITEMUKAN", err.message);
+  if (err instanceof RequestNotFoundError)
+    return new ApiError(404, "TIDAK_DITEMUKAN", err.message);
+  if (err instanceof RequestSettledError)
+    return new ApiError(409, "KONFLIK", err.message);
 
   if (err instanceof UnitNotAvailableError)
     return new ApiError(409, "KONFLIK", err.message);

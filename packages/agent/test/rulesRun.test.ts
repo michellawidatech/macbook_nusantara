@@ -182,11 +182,12 @@ describe("answered by rules, with no AI at all", () => {
     expect(out.reply).not.toContain("unit yang mau dilihat");
   });
 
-  it("proposes a visit and reads it back, booking nothing", async () => {
+  it("files a visit REQUEST and says the team will confirm (2026-10-27)", async () => {
     const p = pos({
       propose_reservation: {
         ok: true,
-        proposed: true,
+        requested: true,
+        requestId: "req_1",
         when: "2026-10-16 14:00",
         custName: "Budi",
         units: [MBP],
@@ -201,23 +202,24 @@ describe("answered by rules, with no AI at all", () => {
         serials: MBP.serial,
         when: "2026-10-16T14:00",
         custName: "Budi",
+        keep: false,
       },
     );
-    expect(out.reply).toContain('Sudah betul? Balas "iya"');
-    expect(out.bookings ?? []).toHaveLength(0);
+    expect(out.reply).toContain("Siap kak, aku catat ya");
+    expect(out.reply).toContain("Nanti tim kami konfirmasi");
+    expect(out.reply).not.toMatch(/kode booking|tahan|Sudah betul/i);
+    expect(out.bookings?.[0]).toMatchObject({
+      tool: "propose_reservation",
+      code: "req_1",
+    });
   });
 
-  it("books on the customer's yes, by code", async () => {
-    const p = pos({
-      confirm_reservation: {
-        ok: true,
-        code: "RV-2026/10-000123",
-        when: "2026-10-16 14:00",
-      },
-    });
+  it("confirms nothing on the customer's yes — a person does (2026-10-27)", async () => {
+    const p = pos({});
     const out = await run("iya betul kak", p, { proposalOpen: true });
-    expect(out.reply).toContain("RV-2026/10-000123");
-    expect(out.bookings?.[0]?.code).toBe("RV-2026/10-000123");
+    expect(p.asked.map((a) => a.name)).not.toContain("confirm_reservation");
+    expect(out.reply).toContain("Tinggal tunggu konfirmasi dari tim kami");
+    expect(out.bookings ?? []).toHaveLength(0);
   });
 
   it("answers from the owner's sheet, word for word", async () => {
@@ -373,7 +375,8 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
       pos({
         propose_reservation: {
           ok: true,
-          proposed: true,
+          requested: true,
+          requestId: "req_5",
           when: "2026-10-16 14:00",
           custName: "Budi",
           units: [MBP],
@@ -598,22 +601,95 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
     expect(out.reply).toContain("Siap kak, aku bantu prosesnya ya");
   });
 
-  it("answers a keep with the DP rule from the settings (2026-10-27)", async () => {
-    const out = await run("bisa di keep dulu ga kak?", pos({}), {
+  it("answers a keep with the DP rule and asks when, filing nothing yet (2026-10-27)", async () => {
+    const p = pos({});
+    const out = await run("bisa di keep dulu ga kak?", p, {
       known: budi,
       lastShown: [AIR.serial],
     });
-    expect(out.handoff?.topic).toBe("closing");
-    expect(out.reply).toBe(
+    // A keep is a request the bot files, not a closing hand-over.
+    expect(out.handoff).toBeUndefined();
+    expect(out.reply).toContain("mau datang / transfer hari apa jam berapa");
+    expect(out.reply).toContain(
       "Untuk amankan unitnya bisa DP Rp 500rb kak, unit kami tahan 7 hari. Setelah transfer, kirim buktinya ya, tim kami cek dulu 🙏",
     );
-    expect(out.handoff?.summary).toContain("minta unit di-keep (DP)");
+    expect(p.asked.map((a) => a.name)).not.toContain("propose_reservation");
+    // The unit rides on, so the time in the next message files it for it.
+    expect(out.shown).toEqual([AIR.serial]);
     const custom = await run("bisa di keep dulu ga kak?", pos({}), {
       known: budi,
       lastShown: [AIR.serial],
       dp: { amount: 1_000_000, days: 5 },
     });
     expect(custom.reply).toContain("DP Rp 1jt kak, unit kami tahan 5 hari");
+  });
+
+  it("files a keep request once it has the unit, the name and the time", async () => {
+    const p = pos({
+      propose_reservation: {
+        ok: true,
+        requested: true,
+        requestId: "req_2",
+        keep: true,
+        when: "2026-10-16 14:00",
+        custName: "Budi",
+        units: [AIR],
+      },
+    });
+    const out = await run(
+      "tolong di keep dulu ya kak, besok jam 2 saya transfer",
+      p,
+      {
+        known: budi,
+        lastShown: [AIR.serial],
+      },
+    );
+    expect(p.asked.find((a) => a.name === "propose_reservation")?.args).toEqual(
+      {
+        serials: AIR.serial,
+        when: "2026-10-16T14:00",
+        custName: "Budi",
+        keep: true,
+      },
+    );
+    expect(out.handoff).toBeUndefined();
+    expect(out.reply).toContain("Nanti tim kami konfirmasi");
+    expect(out.reply).toContain("Untuk amankan unitnya bisa DP Rp 500rb kak");
+  });
+
+  it("files the keep when the time comes in the next message", async () => {
+    const p = pos({
+      propose_reservation: {
+        ok: true,
+        requested: true,
+        requestId: "req_3",
+        keep: true,
+        when: "2026-10-16 14:00",
+        custName: "Budi",
+        units: [AIR],
+      },
+    });
+    await run("besok jam 2 kak", p, {
+      known: budi,
+      lastShown: [AIR.serial],
+      lastReply:
+        "Bisa kak 😊 Kabarin mau datang / transfer hari apa jam berapa ya.\n\nUntuk amankan unitnya bisa DP Rp 500rb kak, unit kami tahan 7 hari. Setelah transfer, kirim buktinya ya, tim kami cek dulu 🙏",
+    });
+    expect(
+      p.asked.find((a) => a.name === "propose_reservation")?.args,
+    ).toMatchObject({ serials: AIR.serial, keep: true });
+  });
+
+  it("still hands a keep to a person while bookings are switched off", async () => {
+    const off = { ...LIVE, reserve: false } as AgentCapabilities;
+    const out = await run("bisa di keep dulu ga kak?", pos({}), {
+      known: budi,
+      lastShown: [AIR.serial],
+      capabilities: off,
+      route: routeMessage("bisa di keep dulu ga kak?", { capabilities: off }),
+    });
+    expect(out.handoff?.topic).toBe("closing");
+    expect(out.handoff?.summary).toContain("minta unit di-keep (DP)");
   });
 
   it("hands a DP the customer says they paid to staff to verify — never records it", async () => {
@@ -627,6 +703,16 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
       /^Perlu verifikasi DP — Budi kirim bukti transfer Rp 500rb/,
     );
     expect(out.reply).toContain("bukti DP-nya aku cek dulu");
+    // Beside a waiting request, the task says it is that request's DP.
+    const linked = await run("kak sudah saya transfer dp 500rb ya", pos({}), {
+      known: budi,
+      lastShown: [AIR.serial],
+      proposalOpen: true,
+    });
+    expect(linked.handoff?.summary).toMatch(/^Perlu verifikasi DP — /);
+    expect(linked.handoff?.summary).toContain(
+      "ada permintaan reservasi yang menunggu",
+    );
     // Nothing was written: the bot holds nothing and records no money.
     expect(p.asked.map((a) => a.name)).not.toContain("propose_reservation");
   });
@@ -635,7 +721,8 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
     const p = pos({
       propose_reservation: {
         ok: true,
-        proposed: true,
+        requested: true,
+        requestId: "req_4",
         when: "2026-10-16 14:00",
         custName: "Budi",
         units: [],
@@ -646,7 +733,11 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
       p,
     );
     const asked = p.asked.find((a) => a.name === "propose_reservation");
-    expect(asked?.args).toEqual({ when: "2026-10-16T14:00", custName: "Budi" });
+    expect(asked?.args).toEqual({
+      when: "2026-10-16T14:00",
+      custName: "Budi",
+      keep: false,
+    });
     expect(out.reply).toContain("2026-10-16 jam 14:00 WIB, atas nama Budi");
     expect(out.reply).not.toMatch(/tahan/i);
   });

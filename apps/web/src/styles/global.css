@@ -940,3 +940,9 @@ body {
 .pro-table-date-filter .ant-picker-panel-container {
   box-shadow: none;
 }
+
+/* A reservation request nobody answered in time (2026-10-27): at the bottom of
+   the Requests tab, dimmed — read, not acted on. */
+.request-row-expired > td {
+  opacity: 0.55;
+}

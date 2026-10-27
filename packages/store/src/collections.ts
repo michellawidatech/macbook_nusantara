@@ -93,6 +93,9 @@ export const COLLECTIONS = {
   chats: spec("phone", false, false),
   corrections: spec("id", false, false),
   personas: spec("id", false, false),
+  // The bot's reservation requests (2026-10-27): approved or rejected through
+  // `/api/reservations/requests`, never through a commit.
+  reservationRequests: spec("id", false, false),
 } as const satisfies Record<string, CollectionSpec>;
 
 export type CollectionName = keyof typeof COLLECTIONS;

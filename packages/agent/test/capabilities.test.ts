@@ -165,11 +165,12 @@ describe("the prompt follows the capability", () => {
     expect(stable).toContain('cites "greeting". Small talk');
     expect(stable).toContain('"tinggal 1 unit kak"');
     expect(stable).toContain("Mau lihat");
-    expect(stable).toContain("It holds NOTHING");
+    expect(stable).toContain("It books and holds NOTHING");
+    expect(stable).toContain("a REQUEST a colleague approves");
     expect(stable).toContain("topic closing");
     // The booking lifecycle, said in the rules as well as enforced in `toolsFor`.
     expect(stable).toContain(
-      "make, check, move and cancel THIS customer's own booking",
+      "file, check, move and cancel THIS customer's own booking",
     );
     expect(stable).not.toContain("nobody can see today's stock");
   });
