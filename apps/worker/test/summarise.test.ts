@@ -178,6 +178,34 @@ describe("when a summary is due", () => {
     expect(memo.summaryTurns).toBe(3);
   });
 
+  it("stores the note whole: the staff lines on top, the bot's memory under them (2026-10-27)", async () => {
+    await threeTurns();
+    const note = [
+      "Mau: Mau beli MacBook Air M2, tanya grade",
+      "Selanjutnya: Tunggu balasan pelanggan",
+      "",
+      "Dikasih harga Air M2 Rp15.500.000, grade A",
+    ].join("\n");
+    const model = scripted([note]);
+    await pass(model.client);
+
+    const memo = await db.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
+    // One column, two readers: /chat shows the first two lines
+    // (staffSummary), the bot reads all of it.
+    expect(memo.summary).toBe(note);
+    expect(memo.summary!.split("\n").slice(0, 2)).toEqual([
+      "Mau: Mau beli MacBook Air M2, tanya grade",
+      "Selanjutnya: Tunggu balasan pelanggan",
+    ]);
+    // The summariser was asked for that shape, in Indonesian, from an
+    // Indonesian-labelled transcript.
+    const sent = model.calls[0]!;
+    expect(String(sent.system)).toMatch(/whole note in bahasa indonesia/i);
+    expect(JSON.stringify(sent.messages)).toContain("pelanggan: ada m2?");
+  });
+
   it("refreshes a conversation that went quiet even though it never reached three turns", async () => {
     // Two turns and then silence is the shape of most real threads. Without
     // this trigger they would never be summarised at all.

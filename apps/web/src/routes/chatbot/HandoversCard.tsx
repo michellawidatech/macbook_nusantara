@@ -34,6 +34,8 @@ export function handoverReasonLabel(t: TFunction, reason: string): string {
         "chatHandovers.reasonStock",
         "Draft claimed stock it could not back",
       );
+    case "DISCOUNT_OFFERED":
+      return t("chatHandovers.reasonDiscount", "Draft offered a discount");
     case "UNKNOWN_SOURCE":
     case "NO_SOURCE":
       return t("chatHandovers.reasonSource", "Draft cited no real source");

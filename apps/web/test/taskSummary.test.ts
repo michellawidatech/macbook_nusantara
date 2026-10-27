@@ -34,6 +34,10 @@ describe("an old note that named a code", () => {
       "Need stock check — stock in the draft has no source",
     );
     expect(head("UNKNOWN_SOURCE")).toMatch(/^Need reply — /);
+    // A draft that offered a discount (2026-10-27): the owner's call.
+    expect(head("DISCOUNT_OFFERED")).toBe(
+      "Need answer to an offer — the draft offered a discount",
+    );
     // The code itself is never on screen.
     for (const code of ["NO_SOURCE", "TOO_LONG", "EMPTY"])
       expect(head(code)).not.toContain(code);
@@ -69,6 +73,17 @@ describe("an old note that named a code", () => {
 });
 
 describe("a note the worker writes now", () => {
+  it("reads a refused discount draft back in either language", () => {
+    const note =
+      'Perlu jawab tawaran — draf menawarkan diskon\n"bisa nego kok kak"';
+    expect(taskSummaryLines(en, note, "negotiation").head).toBe(
+      "Need answer to an offer — the draft offered a discount",
+    );
+    expect(taskSummaryLines(id, note, "negotiation").head).toBe(
+      "Perlu jawab tawaran — draf menawarkan diskon",
+    );
+  });
+
   it("translates the head, keeps the unit, and keeps the quote apart", () => {
     const note =
       'Perlu cek harga — Air 15" M2 8/256\n"air 15 m2 8/256 berapa kak?"';

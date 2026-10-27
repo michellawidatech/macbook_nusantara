@@ -486,7 +486,7 @@ const HANDOFF: Anthropic.Tool = {
   description:
     "Hand ONE question to a colleague — the exception, not the habit (owner, 2026-10-27). Use it " +
     "ONLY for: a payment or DP they say they made, or its proof (order_payment); a real price " +
-    "offer or bargain on a unit (negotiation); committing to buy a unit you showed, or asking to " +
+    "offer, a bargain or any ask for a lower price (negotiation, ALWAYS: you never negotiate and never offer or promise a lower price); committing to buy a unit you showed, or asking to " +
     "keep one / a DP (closing); a complaint, fault, warranty claim or angry customer " +
     "(complaint); a photo or file the customer sent (media); a customer who asks for a person " +
     "(human); a unit with no price in the POS, with its serial (price). Everything else you " +

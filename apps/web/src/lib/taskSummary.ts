@@ -52,6 +52,7 @@ export type TaskReason =
   | "empty"
   | "amount"
   | "availability"
+  | "discount"
   | "noAnswer"
   | "windowClosed"
   | "noText"
@@ -98,6 +99,7 @@ const REASON_OF_TEXT: Record<string, TaskReason> = {
   "draf kosong": "empty",
   "angka di draf tidak ada sumbernya": "amount",
   "stok di draf tidak ada sumbernya": "availability",
+  "draf menawarkan diskon": "discount",
   "bot tidak punya jawabannya": "noAnswer",
   "jendela 24 jam sudah tutup": "windowClosed",
   "pesan tanpa teks": "noText",
@@ -175,6 +177,8 @@ export function taskReasonLabel(t: TFunction, reason: TaskReason): string {
       return t("task.reason.amount", "a figure in the draft has no source");
     case "availability":
       return t("task.reason.availability", "stock in the draft has no source");
+    case "discount":
+      return t("task.reason.discount", "the draft offered a discount");
     case "noAnswer":
       return t("task.reason.noAnswer", "the bot has no answer");
     case "windowClosed":
@@ -251,6 +255,8 @@ function heldCode(code: string): { need: TaskNeed; reason: TaskReason } {
       return { need: "price", reason: "amount" };
     case "AVAILABILITY_NOT_IN_SOURCE":
       return { need: "stock", reason: "availability" };
+    case "DISCOUNT_OFFERED":
+      return { need: "offer", reason: "discount" };
     case "UNKNOWN_SOURCE":
       return { need: "reply", reason: "unknownSource" };
     case "TOO_LONG":

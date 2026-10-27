@@ -97,6 +97,27 @@ describe("a refused draft gets one second chance", () => {
     });
   });
 
+  it("a draft offering a discount is told it may not, and a second one is the owner's (2026-10-27)", async () => {
+    const t = talk(
+      [
+        search,
+        replies("Air M2 mulus 11,9jt kak, masih bisa nego kok 😊", "stock"),
+        replies("Air M2 mulus 11,9jt kak, bisa kurang dikit 😊", "stock"),
+      ],
+      "air m2 berapa kak?",
+      shelf,
+    );
+    const r = await t.result;
+    expect(JSON.stringify(t.calls[2]!.messages.at(-1))).toContain(
+      "never negotiate",
+    );
+    expect(r?.handoff).toMatchObject({
+      topic: "negotiation",
+      forcedBy: "DISCOUNT_OFFERED",
+    });
+    expect(r?.handoff?.summary).toMatch(/^Perlu jawab tawaran/);
+  });
+
   it("a draft that is too long is shortened on the retry", async () => {
     const t = talk(
       [

@@ -167,6 +167,43 @@ describe("the customer profile", () => {
     expect(tasks).not.toHaveTextContent("Balasan bot ditahan");
   });
 
+  it("shows only what the customer wants and what is next, never the bot's notes (2026-10-27)", () => {
+    draw({
+      ...CONVERSATION,
+      summary: {
+        text: [
+          'Mau: Mau beli MacBook Pro 14" M1 Pro 16/512, mau reservasi',
+          "Selanjutnya: Konfirmasi unit yang dipilih + jam datang",
+          "",
+          "Nama Rina, budget 20jt, buat edit video. Dikasih harga Pro 14 21,5jt.",
+        ].join("\n"),
+        at: "2026-10-27T03:33:00.000Z",
+      },
+    });
+    const summary = screen.getByRole("region", { name: "Summary" });
+    expect(summary).toHaveTextContent(
+      'Wants: Mau beli MacBook Pro 14" M1 Pro 16/512, mau reservasi',
+    );
+    expect(summary).toHaveTextContent(
+      "Next: Konfirmasi unit yang dipilih + jam datang",
+    );
+    expect(summary).not.toHaveTextContent("Nama Rina");
+    expect(summary).not.toHaveTextContent("21,5jt");
+  });
+
+  it("shows an old-format summary's opening, clipped", () => {
+    const old = `The customer wants a MacBook Pro 14 M1 Pro. ${"The shop is open 10.00 to 20.00 and a DP holds a unit. ".repeat(6)}`;
+    draw({
+      ...CONVERSATION,
+      summary: { text: old, at: "2026-10-27T03:33:00.000Z" },
+    });
+    const summary = screen.getByRole("region", { name: "Summary" });
+    expect(summary).toHaveTextContent(
+      /^SUMMARYThe customer wants a MacBook Pro 14 M1 Pro\..*…$/,
+    );
+    expect(summary.textContent!.length).toBeLessThan(200);
+  });
+
   it("draws every field as None for a customer the bot knows nothing about", () => {
     draw({ ...CONVERSATION, profile: null, reservations: [], summary: null });
     expect(screen.getByRole("region", { name: "Budget" })).toHaveTextContent(

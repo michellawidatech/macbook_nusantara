@@ -12,6 +12,7 @@ import {
   isHandoffTopic,
   mentionsProduct,
   moneyAmounts,
+  offersDiscount,
   routeMessage,
   actionKindOf,
   saysDpPaid,
@@ -70,7 +71,6 @@ describe("routeMessage — the generic questions the owner answered stay with th
   it.each([
     "Apakah unitnya ready?",
     "Ada price list nya ga kak?",
-    "Untuk harga udah net atau masih bisa nego kak?",
     // How to pay is in the approved answers (2026-10-27): not a hand-over.
     "cara bayarnya gimana kak?",
     "Kenapa harga di shopee/tokped lebih mahal ka?",
@@ -92,6 +92,54 @@ describe("mentionsProduct", () => {
     expect(mentionsProduct("pro 14 m3 max")).toBe(true);
     expect(mentionsProduct("yang i5 aja kak")).toBe(true);
     expect(mentionsProduct("apakah macbook nya ready")).toBe(false);
+  });
+});
+
+describe("checkReply — the bot never offers a discount (2026-10-27)", () => {
+  const draft = (message: string) =>
+    checkReply({
+      message,
+      sourceCount: 1,
+      unknownSources: 0,
+      sourceTexts: [],
+    });
+
+  it.each([
+    "Harganya masih bisa nego kok kak 😊",
+    "Bisa kurang dikit kak, mau datang kapan?",
+    "Untuk kakak aku kasih diskon ya",
+    "Ada harga khusus buat kakak 🙏",
+    "Nanti aku cekin best price-nya ya kak",
+    "Bisa dikurangin kak kalau ambil hari ini",
+    "Kalau cash dapat potongan kak",
+    "Boleh ditawar kak",
+    "Bisa aku turunin dikit kak",
+  ])("refuses %s", (message) => {
+    expect(offersDiscount(message)).toBe(true);
+    expect(draft(message)).toBe("DISCOUNT_OFFERED");
+  });
+
+  it.each([
+    "Harganya sudah net kak, belum bisa nego ya 🙏",
+    "Maaf kak, tidak ada diskon untuk unit ini",
+    "Untuk nego harganya aku tanyain ke owner dulu ya kak 🙏",
+    "Ada yang lebih murah kak, Air M1 8/256",
+    "Kalau budgetnya bisa kurang dari itu, kabari ya kak",
+    "Mau datang lihat langsung kak, kapan enaknya?",
+  ])("lets %s through", (message) => {
+    expect(offersDiscount(message)).toBe(false);
+    expect(draft(message)).toBeNull();
+  });
+
+  it("holds the hand-over line to the same rule", () => {
+    expect(
+      checkHoldingMessage("Untuk diskonnya bisa kok kak, aku cek dulu"),
+    ).toBe("DISCOUNT_OFFERED");
+    expect(
+      checkHoldingMessage(
+        "Untuk nego harganya aku tanyain ke owner dulu ya kak 🙏",
+      ),
+    ).toBeNull();
   });
 });
 

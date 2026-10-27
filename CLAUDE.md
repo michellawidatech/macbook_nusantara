@@ -3323,6 +3323,14 @@ Decisions that outlived those documents:
   hand-over line is labelled Bot (`botWroteReply`, `entities.handoff.reply`);
   `realName` (domain) refuses/hides "unknown"-type names. Evaluation shows
   *Handed over (last 7 days)* (`GET /api/chat/handovers`). No schema change.
+- **Negotiation is a person's; the summary is intent + next step — 2026-10-27,
+  later.** ANY bargaining word ("bisa kurang?", "ada diskon?", "bisa ditawar?",
+  "masih bisa nego?") or an offer on a shown unit routes to `negotiation`;
+  "lebih murah?" / "kemahalan" stay the bot's. `checkReply` refuses a draft
+  offering a discount (`DISCOUNT_OFFERED`, a "tidak/belum" before it is a no).
+  The summary is `Mau: …` / `Selanjutnya: …`, blank line, the bot's memory — in
+  Indonesian, never the shop's own facts; /chat shows only the two lines
+  (`staffSummary`, packages/domain), an old note its first 160 chars.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

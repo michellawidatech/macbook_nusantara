@@ -269,9 +269,12 @@ const asksPrice = (t: string) =>
   PRICE_WORD.test(t) || (HOW_MUCH.test(t) && !COUNTED.test(t));
 
 /**
- * Words that bargain — but only with a unit, a figure or a unit the bot just
- * showed beside them (`routeMessage`). "Untuk harga udah net atau masih bisa
- * nego?" with nothing named is the generic question the owner answered.
+ * Words that bargain. ANY of them is a person's (owner, 2026-10-27, later:
+ * *"for negotiating it should be handled by human"*) — "bisa kurang kak?",
+ * "ada diskon gak?", "bisa ditawar?", "harga udah net atau masih bisa nego?"
+ * with nothing named included. Until then they went over only beside a unit,
+ * a figure or a unit just shown, and the rest reached the model, which could
+ * answer them — or discount.
  *
  * ⚠️ 2026-10-27 (owner: *"the chatbot always escalates to human for things
  * that they can actually answer"*): "murah" and "turun" are NOT here. "Ada
@@ -292,12 +295,12 @@ const BARGAIN =
   /(?<!\b(bisa|boleh|masih|gak|ga|nggak|tidak)\s+)\bnego\s*(dong|donk|dund|ya|yah|yuk|lah|deh|kak|ka|gan|min|bos|boss|sis|bang|bro)\b|\b(di)?kurang(in|i)\s*(dikit|sedikit|lagi|dong|donk|ya|lah|deh)\b|\bharga\s*pas(nya)?\s*(berapa|brp|brapa)\b|\bbest\s*price\b|\bnet\s*(nya\s*)?berapa\b|\b(di)?murahin\b|\bdiskon(in)?\s*(dong|donk|dikit|lah|ya|deh)\b/i;
 
 /**
- * Not a bargain, though the words are there: a promotion asked about ("ada
- * diskon?"), a budget ("kurang dari 10jt", "kurang lebih"). Taken out of the
- * text before the bargaining words are read.
+ * Not a bargain, though the words are there: a budget ("kurang dari 10jt",
+ * "kurang lebih"). Taken out of the text before the bargaining words are
+ * read. "Ada diskon?" is no longer here (2026-10-27, later): asking for a
+ * discount is negotiating, and the owner wants every one of those.
  */
-const NOT_A_BARGAIN =
-  /\bada\s+(diskon|promo|potongan)\w*|\bkurang\s+(dari|lebih|tau|tahu|paham|ngerti|jelas)\b/gi;
+const NOT_A_BARGAIN = /\bkurang\s+(dari|lebih|tau|tahu|paham|ngerti|jelas)\b/gi;
 
 /**
  * A battery's HEALTH, which the owner answers with a photo of that machine
@@ -500,15 +503,14 @@ export function routeMessage(
    * discounting it. An OFFER counts as negotiating even without the word
    * "nego": "kalau 7jt boleh?" names a figure the customer wants to pay.
    *
-   * Only a REAL ask (2026-10-27): "ada yang lebih murah?", "kemahalan",
-   * "turun harga gak?" and "kalo yang 12 jutaan ada?" are the bot's — a
-   * cheaper unit, an answer — and never a colleague's.
+   * Any bargaining word at all (2026-10-27, later), with or without a unit
+   * beside it. Still not "ada yang lebih murah?", "kemahalan", "turun harga
+   * gak?" or "kalo yang 12 jutaan ada?": those ask for a cheaper unit or an
+   * answer, and the bot gives one.
    */
   const bargain = t.replace(NOT_A_BARGAIN, " ");
-  if (BARGAIN.test(bargain))
+  if (BARGAIN.test(bargain) || NEGOTIATION.test(bargain))
     return { topic: "negotiation", rule: "negotiation" };
-  if (NEGOTIATION.test(bargain) && (product || money || shown))
-    return { topic: "negotiation", rule: "negotiation+product" };
   const budget = BUDGET.test(t);
   if (!budget && money && OFFER.test(t))
     return { topic: "negotiation", rule: "offer" };
@@ -776,7 +778,37 @@ export type ReplyProblem =
   | "UNKNOWN_SOURCE"
   | "AMOUNT_NOT_IN_SOURCE"
   | "AVAILABILITY_NOT_IN_SOURCE"
+  | "DISCOUNT_OFFERED"
   | "TOO_LONG";
+
+/**
+ * A reply that offers to bargain (owner, 2026-10-27: *"for negotiating it
+ * should be handled by human"*): "bisa kurang", "masih bisa nego", "aku kasih
+ * diskon", "ada harga khusus", "best price", "bisa dikurangin". The bot never
+ * negotiates and never offers or promises a discount — a lower price is the
+ * owner's to give — so such a draft is refused whatever it cites. The approved
+ * answer about "harga net" ends on "best price khusus", which is exactly why
+ * the source does not vouch for it.
+ *
+ * Saying NO is not an offer: "harganya sudah net, belum bisa nego" and "tidak
+ * ada diskon" pass (`NEGATED_BEFORE`). Nor is the hand-over line "Untuk nego
+ * harganya aku tanyain ke owner dulu" — "nego" counts only after a "bisa".
+ */
+const DISCOUNT_OFFER =
+  /\b(?:bisa|boleh|dapat|dapet|dpt)\s+(?:aku\s+|kami\s+|saya\s+)?(?:di\s*)?(?:nego\w*|kurang(?!\s+(?:dari|lebih))\w*|potong\w*|turun\w*|tawar\w*|murah(?:in|kan)|diskon\w*)|\bharga\s+(?:khusus|spesial|special|teman|temen|nego|miring)\b|\bbest\s*price\b|\b(?:diskon|potongan|korting|cashback)\w*|\b(?:di)?(?:kurangin|kurangi|turunin|turunkan|murahin|murahkan|diskonin)\b/gi;
+
+/** "tidak", "belum", "gak" … just before an offer word turns it into a no. */
+const NEGATED_BEFORE =
+  /\b(?:tidak|tdk|gak|ga|gk|nggak|ngga|enggak|engga|ndak|belum|blm|bukan|tanpa)\b[^.?!\n]{0,12}$/i;
+
+/** Does the reply offer a discount or invite a bargain? */
+export function offersDiscount(message: string): boolean {
+  for (const m of message.matchAll(DISCOUNT_OFFER)) {
+    const before = message.slice(Math.max(0, (m.index ?? 0) - 24), m.index);
+    if (!NEGATED_BEFORE.test(before)) return true;
+  }
+  return false;
+}
 
 /**
  * "Tinggal 1 unit", "sisa 2", "only one left": a count of what is left
@@ -849,6 +881,7 @@ export function checkReply(input: {
   if (message.length > MAX_REPLY_CHARS) return "TOO_LONG";
   if (input.unknownSources > 0) return "UNKNOWN_SOURCE";
   if (input.sourceCount === 0) return "NO_SOURCE";
+  if (offersDiscount(message)) return "DISCOUNT_OFFERED";
 
   const available = (input.stockFacts ?? []).filter((f) => f.available);
   const allowed = new Set(input.sourceTexts.flatMap(amounts));

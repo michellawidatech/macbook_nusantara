@@ -5,9 +5,10 @@
  *
  * Run with the shop's real switches (`SHOP_CAPABILITIES`): the bot reads the
  * shelf, quotes prices, sends photos and books visits. Against that, only
- * five things are a person's — a payment or DP already made, a real offer or
- * bargain, committing to a unit, a hold, and a picture the customer sent —
- * and every line below that is none of those must come back null.
+ * five things are a person's — a payment or DP already made, ANY negotiation
+ * (an offer, a bargain, a discount asked for: owner, 2026-10-27, later), committing to a unit, a hold,
+ * and a picture the customer sent — and every line below that is none of
+ * those must come back null.
  *
  * `shown` is whether the bot's previous reply showed units: "bisa nego?" and
  * "mau ambil yang M2" are about those units then, and a person takes them.
@@ -42,8 +43,10 @@ describe("the bot answers these itself (the 2026-10-27 false hand-overs)", () =>
     ["hmm kemahalan", null],
     ["kemahalan kak, ada yang lain?", null, true],
     ["turun harga gak?", null],
-    ["ada diskon ga kak?", null],
-    ["harga udah net atau masih bisa nego kak?", null],
+    ["turun harga gak kak?", null, true],
+    ["hmm kemahalan ya", null, true],
+    ["ada yang lebih murah dari itu?", null, true],
+    ["ada promo ga kak?", null],
     // A price range is a budget, not an offer.
     ["kalo yang 12 jutaan ada?", null],
     ["ada yg 15 jutaan gak ya", null],
@@ -94,6 +97,24 @@ describe("a person takes these", () => {
     ["bisa nego?", "negotiation", true],
     ["7,5 aja ya kak", "negotiation", true],
     ["bisa dimurahin ga?", "negotiation"],
+    // ANY negotiation (owner, 2026-10-27, later: "for negotiating it should
+    // be handled by human") — with nothing named, nothing shown, no figure.
+    ["bisa kurang kak?", "negotiation"],
+    ["bisa kurang kak?", "negotiation", true],
+    ["ada diskon gak?", "negotiation"],
+    ["ada diskon ga kak?", "negotiation", true],
+    ["nego dong", "negotiation", true],
+    ["harga pas berapa?", "negotiation", true],
+    ["bisa ditawar?", "negotiation"],
+    ["bisa ditawar ga kak?", "negotiation", true],
+    ["masih bisa nego ga?", "negotiation"],
+    ["harga udah net atau masih bisa nego kak?", "negotiation"],
+    ["ada potongan ga kalau cash?", "negotiation"],
+    ["bisa dikurangin dikit?", "negotiation"],
+    // An offer on a unit the bot just showed.
+    ["bisa 14jt aja?", "negotiation", true],
+    ["kalo 14 gimana?", "negotiation", true],
+    ["13,5 aja ya kak", "negotiation", true],
     // Committing to a unit the bot showed, or an explicit close.
     ["saya ambil yang air m2", "closing"],
     ["oke jadi ambil yang pertama", "closing"],

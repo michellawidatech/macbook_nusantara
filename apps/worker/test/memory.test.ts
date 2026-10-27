@@ -245,7 +245,7 @@ describe("a burst is one turn", () => {
       now: () => NOW,
     });
     const sent = made[0]!.messages[0]!.content as string;
-    expect(sent).toMatch(/customer: halo\nnama saya Budi\nbudget 15jt/);
+    expect(sent).toMatch(/pelanggan: halo\nnama saya Budi\nbudget 15jt/);
     expect(made[0]!.model).toBe("claude-haiku-5-5");
   });
 });

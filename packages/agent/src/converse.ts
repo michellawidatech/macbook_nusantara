@@ -812,6 +812,8 @@ export async function converse(
         return `${head} It states a figure no source gives for that unit. ${shelfLine()} Quote only those prices, beside the unit each belongs to; never quote one for a unit with no price in the POS — leave the price out. Cite stock. Send the corrected reply.`;
       case "AVAILABILITY_NOT_IN_SOURCE":
         return `${head} It says a unit is ready, or how many are left, where this turn's lookups do not. ${shelfLine()} Only those are on the shelf; anything else is not in stock right now (never say why). Say "tinggal 1 unit" only where left is 1. Cite stock. Send the corrected reply.`;
+      case "DISCOUNT_OFFERED":
+        return `${head} It offers a discount or invites a bargain ("bisa kurang", "bisa nego", "diskon", "harga khusus", "best price"). You never negotiate, never offer, promise or hint at a lower price: a discount is the owner's to give. Quote the POS price as it is; if the customer is asking for a lower price, hand over with handoff_to_staff, topic negotiation. Send the corrected reply or the hand-over.`;
       case "TOO_LONG":
         return `${head} It is too long (${message.length} characters). Three short WhatsApp sentences at most. Send the shorter reply.`;
       case "EMPTY":

@@ -35,6 +35,7 @@ import {
   saveSummary,
   summarize,
 } from "../src/index.js";
+import { staffSummary } from "@nusantara/domain";
 import { ANCHOR, says, scriptedClient } from "./fixtures.js";
 
 const URL =
@@ -96,15 +97,46 @@ async function answered(opts: {
 }
 
 describe("the summariser's own prompt", () => {
-  it("asks for the request, what is answered, what is pending, the key data and the mood", () => {
-    // These five are what a staff member picking the thread up actually needs,
-    // and the model will not produce them unless asked by name.
-    expect(SUMMARY_SYSTEM).toMatch(/what the customer wants/i);
-    expect(SUMMARY_SYSTEM).toMatch(/already been answered|already answered/i);
-    expect(SUMMARY_SYSTEM).toMatch(/still open|still pending/i);
+  it("leads with what the customer wants and what is next, for staff (2026-10-27)", () => {
+    // Owner: "only summarize the user intent and what needs to be done next".
+    // The panel on /chat shows these two lines and nothing else.
+    expect(SUMMARY_SYSTEM).toMatch(/^Mau: <what the customer wants/m);
+    expect(SUMMARY_SYSTEM).toMatch(/^Selanjutnya: <what staff or the bot/m);
+    expect(SUMMARY_SYSTEM).toMatch(/never retell the conversation/i);
+    // And the example it gives is the shape staffSummary reads.
+    const example = SUMMARY_SYSTEM.slice(
+      SUMMARY_SYSTEM.indexOf("For example:"),
+    );
+    expect(staffSummary(example)).toMatchObject({
+      wants: 'Mau beli MacBook Pro 14" M1 Pro 16/512, mau reservasi',
+      next: expect.stringMatching(/^Konfirmasi unit yang dipilih/),
+    });
+  });
+
+  it("writes in Indonesian whatever the conversation is in", () => {
+    expect(SUMMARY_SYSTEM).toMatch(/whole note in bahasa indonesia/i);
+  });
+
+  it("still keeps the bot's memory: name, budget, units quoted, promises, bookings, mood", () => {
+    // The column is ALSO the bot's long-term memory (2026-10-22): losing
+    // these is the bot forgetting a quoted price twelve turns on.
+    expect(SUMMARY_SYSTEM).toMatch(/KEEP every durable fact/);
     expect(SUMMARY_SYSTEM).toMatch(/budget/i);
-    expect(SUMMARY_SYSTEM).toMatch(/reservation code/i);
-    expect(SUMMARY_SYSTEM).toMatch(/in a hurry|mood|how they seem/i);
+    expect(SUMMARY_SYSTEM).toMatch(/any price the shop\s+quoted/i);
+    expect(SUMMARY_SYSTEM).toMatch(/anything the shop promised/i);
+    expect(SUMMARY_SYSTEM).toMatch(/reservation or booking code/i);
+    expect(SUMMARY_SYSTEM).toMatch(/how they seem/i);
+  });
+
+  it("never stores the shop's own facts, which the bot already has", () => {
+    expect(SUMMARY_SYSTEM).toMatch(/NEVER write the shop's own facts/);
+    for (const fact of [
+      /address/,
+      /opening hours/,
+      /payment methods/,
+      /DP rule/,
+    ])
+      expect(SUMMARY_SYSTEM).toMatch(fact);
   });
 
   it("forbids inventing anything, because a summary becomes a fact next turn", () => {
@@ -134,7 +166,7 @@ describe("renderTranscript", () => {
       { text: "berapa?", replyText: "15.500.000" },
     ]);
     expect(out).toBe(
-      "customer: ada m2?\nshop: ada kak\ncustomer: berapa?\nshop: 15.500.000",
+      "pelanggan: ada m2?\ntoko: ada kak\npelanggan: berapa?\ntoko: 15.500.000",
     );
   });
 
@@ -161,6 +193,37 @@ describe("summarize", () => {
     const sent = JSON.stringify(model.calls[0]!.messages);
     expect(sent).toContain("Mau MacBook Air M2.");
     expect(sent).toContain("budget 15jt");
+  });
+
+  it("keeps the staff lines and the memory under them through the sanitiser", async () => {
+    const model = scriptedClient([
+      says(
+        [
+          '**Mau:** Mau beli MacBook Pro 14" M1 Pro 16/512, mau reservasi',
+          "**Selanjutnya:** Konfirmasi jam datang; tunggu bukti DP",
+          "",
+          "Nama Rina, budget 20jt, buat edit video.",
+          "Dikasih harga Pro 14 M1 Pro 16/512 Rp21.500.000.",
+        ].join("\n"),
+      ),
+    ]);
+    const out = await summarize({
+      client: model.client,
+      previous: "The customer wants a MacBook Pro.",
+      turns: [{ text: "mau reservasi", replyText: "boleh kak, jam berapa?" }],
+    });
+    expect(staffSummary(out)).toEqual({
+      wants: 'Mau beli MacBook Pro 14" M1 Pro 16/512, mau reservasi',
+      next: "Konfirmasi jam datang, tunggu bukti DP",
+      excerpt: null,
+    });
+    // The bot's memory is still in the note it reads.
+    expect(out).toContain("\n\nNama Rina, budget 20jt");
+    expect(out).toContain("Rp21.500.000");
+    // An old English note goes in, to be rewritten in the new shape.
+    const sent = JSON.stringify(model.calls[0]!.messages);
+    expect(sent).toContain("Catatan sebelumnya");
+    expect(sent).toContain("The customer wants a MacBook Pro.");
   });
 
   it("returns an empty string when the model says there is nothing worth keeping", async () => {

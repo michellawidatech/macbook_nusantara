@@ -29,7 +29,7 @@ import {
   PlusOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { realName } from "@nusantara/domain";
+import { realName, staffSummary } from "@nusantara/domain";
 import { MoneyInput } from "../../components/MoneyInput.js";
 import { fmtDateTime, fmtNone, fmtRp } from "../../lib/format.js";
 import {
@@ -46,6 +46,45 @@ import {
 import { ActionKindTag, TaskSummaryText, budgetText } from "./ActionItems.js";
 
 /** A labelled block. Keeps every section the same shape. */
+/**
+ * What the customer wants and what happens next (owner, 2026-10-27: *"only
+ * summarize the user intent and what needs to be done next"*). The note under
+ * those two lines is the bot's memory of the customer and is not shown; an
+ * older note without them shows its opening, clipped (`staffSummary`).
+ */
+function SummaryLines({ text }: { text: string | null }) {
+  const { t } = useTranslation();
+  const summary = staffSummary(text);
+  if (summary === null)
+    return <Typography.Text type="secondary">{fmtNone()}</Typography.Text>;
+  if (summary.excerpt !== null)
+    return (
+      <Typography.Paragraph style={{ marginBottom: 0 }}>
+        {summary.excerpt}
+      </Typography.Paragraph>
+    );
+  return (
+    <Flex vertical gap={2}>
+      {summary.wants !== null && (
+        <Typography.Text>
+          <Typography.Text strong>
+            {t("chatProfile.summaryWants", "Wants")}:
+          </Typography.Text>{" "}
+          {summary.wants}
+        </Typography.Text>
+      )}
+      {summary.next !== null && (
+        <Typography.Text>
+          <Typography.Text strong>
+            {t("chatProfile.summaryNext", "Next")}:
+          </Typography.Text>{" "}
+          {summary.next}
+        </Typography.Text>
+      )}
+    </Flex>
+  );
+}
+
 function Section({
   title,
   extra,
@@ -418,12 +457,7 @@ export function CustomerProfilePanel({
       </Flex>
 
       <Section title={t("chatProfile.summary", "Summary")}>
-        <Typography.Paragraph
-          style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}
-          type={conversation.summary ? undefined : "secondary"}
-        >
-          {conversation.summary?.text ?? fmtNone()}
-        </Typography.Paragraph>
+        <SummaryLines text={conversation.summary?.text ?? null} />
       </Section>
 
       <Section title={t("chatProfile.about", "About")}>
