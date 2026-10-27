@@ -9,6 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  dpHeldSerials,
   dpRule,
   dpStage,
   dpToApply,
@@ -175,6 +176,16 @@ describe("only a DP holds a unit", () => {
     expect(softHolds(db).has(SERIAL)).toBe(false);
     // One DP a hold.
     expect(recordDpBlock(db, hold(db))).toBe("HAS_DP");
+  });
+
+  it("is off sale for anyone else while the DP holds it", () => {
+    const db = withDp();
+    const during = new Date(2030, 0, 11);
+    expect(dpHeldSerials(db, during).get(SERIAL)).toBe(RV);
+    // After the days run out it no longer holds anything for the till.
+    expect(dpHeldSerials(db, new Date(2030, 0, 20)).has(SERIAL)).toBe(false);
+    // A hold with no DP holds nothing.
+    expect(dpHeldSerials(shop(), during).size).toBe(0);
   });
 
   it("follows the DP rule in Settings", () => {

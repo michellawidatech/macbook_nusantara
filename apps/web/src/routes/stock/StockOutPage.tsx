@@ -127,7 +127,7 @@ import {
   reprojectHolds,
   softHolds,
 } from "../../lib/reservations.js";
-import { dpToApply, recordDpBlock } from "../../lib/dp.js";
+import { dpHeldSerials, dpToApply, recordDpBlock } from "../../lib/dp.js";
 import { RecordDpModal } from "../../components/RecordDpModal";
 import {
   ADDRESS_FIELDS,
@@ -748,13 +748,19 @@ export function StockOutPage() {
   );
   const [ncForm] = Form.useForm<{ name: string; phone: string }>();
 
-  const sellable = useMemo(
-    () =>
-      db.units.filter(
-        (u) => u.status === "TERSEDIA" || u.status === "DIRESERVASI",
-      ),
-    [db.units],
-  );
+  /**
+   * What this till can sell. A unit a paid DP holds is off sale for anyone
+   * else (owner, 2026-10-27) — it stays only for the sale loaded FROM its
+   * own reservation. A hold without a DP never reaches DIRESERVASI.
+   */
+  const sellable = useMemo(() => {
+    const dpHeld = dpHeldSerials(db);
+    return db.units.filter((u) => {
+      if (u.status !== "TERSEDIA" && u.status !== "DIRESERVASI") return false;
+      const holder = dpHeld.get(u.serial);
+      return holder === undefined || fromReservations.includes(holder);
+    });
+  }, [db, fromReservations]);
   // Holds with a unit still waiting, then the bot's open visits (2026-10-27):
   // a visit holds nothing, but the customer standing at the counter is the
   // one the bot booked, and picking it loads them into the sale.

@@ -3294,7 +3294,9 @@ Decisions that outlived those documents:
   at `heldUntil` and leaves `Perlu putuskan DP`; staff Refund or Keep;
   `followUp.ts` reminds a day before. The bot now SAYS the rule (`dpKeepLine`,
   reversing "never names a DP") and hands a paid one over as `Perlu verifikasi
-  DP`. Holds made before this release stay firm.
+  DP`. Holds made before this release stay firm. A unit a DP is holding is
+  OFF the till for anyone else (`dpHeldSerials`): only a sale loaded from its
+  own reservation can take it — the release had left "Sell anyway" on it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

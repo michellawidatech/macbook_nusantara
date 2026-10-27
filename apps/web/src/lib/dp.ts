@@ -78,6 +78,26 @@ export function dpStage(
     : "DECIDE";
 }
 
+/**
+ * The units a paid DP holds right now, each with the reservation holding it
+ * (owner, 2026-10-27: a DP holds a unit — "off sale for anyone else"). The
+ * till leaves these out of what it can sell, unless the sale is being made
+ * FROM that reservation.
+ */
+export function dpHeldSerials(
+  db: MockDb,
+  now: Date = new Date(),
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const r of db.reservations) {
+    if (dpStage(db, r, now) !== "HOLDING") continue;
+    for (const i of r.items) {
+      if (i.serial && itemState(db, i, r) === "HELD") out.set(i.serial, r.id);
+    }
+  }
+  return out;
+}
+
 /** The DP a sale from this reservation would take, if it has one to take. */
 export function dpToApply(r: Reservation): SalePayment | undefined {
   const dp = r.dp;
