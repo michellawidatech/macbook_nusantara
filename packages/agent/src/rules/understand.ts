@@ -339,7 +339,7 @@ export function visitTimeOf(text: string, now: Date): string | null {
 const NAME =
   /\b(?:nama(?:ku| saya| aku| gw| gue)?|atas nama|a\.?n\.?|my name is|i am|i'm|saya|aku)\s*:?\s+([a-z][a-z.']{1,20}(?: [a-z][a-z.']{1,20}){0,2})/i;
 const NOT_A_NAME =
-  /^(mau|ingin|pengen|pingin|cari|lagi|sudah|udah|bisa|tanya|ke|di|dari|jam|besok|lusa|hari|yang|nya|ok|oke|iya|ya|tertarik|butuh|perlu|dateng|datang|ambil|mahasiswa|kerja|pakai|pake)\b/i;
+  /^(mau|ingin|pengen|pingin|cari|lagi|sudah|udah|bisa|tanya|ke|di|dari|jam|besok|lusa|hari|yang|nya|ok|oke|iya|ya|tertarik|butuh|perlu|dateng|datang|ambil|mahasiswa|kerja|pakai|pake|transfer|tf|bayar|dp|kirim|beli|order|pesan|nanti|coba)\b/i;
 
 export function nameOf(text: string): string | null {
   // Every candidate, not the first: "saya ke toko, atas nama Budi" has a

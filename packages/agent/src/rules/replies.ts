@@ -374,6 +374,59 @@ export const reply = {
     );
   },
 
+  /**
+   * A reservation REQUEST filed (2026-10-27): noted, and a person confirms —
+   * never "booked", never "held".
+   */
+  requestNoted(
+    r: {
+      readonly units: readonly ShownUnit[];
+      readonly when: string;
+      readonly custName: string;
+    },
+    lang: Lang,
+  ): string {
+    const units = r.units.map((u, i) =>
+      unitLine(u, lang, r.units.length > 1 ? i + 1 : undefined),
+    );
+    const [date, time] = r.when.split(" ");
+    const what = units.length ? `${units.join("\n")}\n` : "";
+    if (lang === "en")
+      return (
+        `Noted 😊\n${what}${date} at ${time}, under ${r.custName}.\n` +
+        "Our team will confirm it shortly 🙏"
+      );
+    return (
+      `Siap kak, aku catat ya 😊\n${what}${date} jam ${time} WIB, atas nama ${r.custName}.\n` +
+      "Nanti tim kami konfirmasi ya 🙏"
+    );
+  },
+
+  /** A request is already waiting on the team: nothing to confirm by chat. */
+  requestPending(lang: Lang): string {
+    return lang === "en"
+      ? "It's noted 😊 Our team will confirm it shortly 🙏"
+      : "Sudah aku catat ya kak 😊 Tinggal tunggu konfirmasi dari tim kami 🙏";
+  },
+
+  /** What a keep still needs before it can be filed. */
+  askForKeep(
+    missing: { unit: boolean; name: boolean; when: boolean },
+    lang: Lang,
+  ): string {
+    const need: string[] = [];
+    if (lang === "en") {
+      if (missing.unit) need.push("which unit");
+      if (missing.name) need.push("your name");
+      if (missing.when) need.push("when you'll come or pay");
+      return `Sure 😊 Just send ${need.join(", ")}.`;
+    }
+    if (missing.unit) need.push("unit yang mana");
+    if (missing.name) need.push("atas nama siapa");
+    if (missing.when) need.push("mau datang / transfer hari apa jam berapa");
+    return `Bisa kak 😊 Kabarin ${need.join(", ")} ya.`;
+  },
+
   booked(
     b: {
       readonly code: string;

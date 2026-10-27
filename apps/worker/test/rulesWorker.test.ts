@@ -178,7 +178,7 @@ async function turn(id: string, text: string, step: number): Promise<string> {
 }
 
 describe("the rules bot, with no AI credential at all", () => {
-  it("greets, finds the unit, prices it, proposes a visit and books it on a yes", async () => {
+  it("greets, finds the unit, prices it, and files a reservation request a person approves", async () => {
     expect(await turn("r1", "halo kak", 0)).toMatch(/^Halo kak/);
 
     const list = await turn("r2", "kak ada macbook pro 16 m3?", 1);
@@ -188,18 +188,30 @@ describe("the rules bot, with no AI credential at all", () => {
     const price = await turn("r3", "yang pertama berapa kak?", 2);
     expect(price).toContain("32,5jt");
 
-    const proposal = await turn(
+    // A REQUEST (2026-10-27): noted, the team confirms, nothing booked.
+    const noted = await turn(
       "r4",
       "besok jam 2 saya ke toko, atas nama Budi",
       3,
     );
-    expect(proposal).toContain("Sudah betul?");
+    expect(noted).toContain("Siap kak, aku catat ya");
+    expect(noted).toContain("Nanti tim kami konfirmasi");
     expect(await owner.reservation.count()).toBe(0);
+    const request = await owner.reservationProposal.findFirstOrThrow({
+      include: { items: true },
+    });
+    expect(request).toMatchObject({
+      from: FROM,
+      custName: "Budi",
+      confirmedAt: null,
+      reservationId: null,
+    });
+    expect(request.items).toHaveLength(1);
 
-    const booked = await turn("r5", "iya betul kak", 4);
-    const hold = await owner.reservation.findFirstOrThrow();
-    expect(booked).toContain(hold.code);
-    expect(hold).toMatchObject({ custName: "Budi", status: "TERJADWAL" });
+    // The customer's yes confirms nothing: a person does.
+    const yes = await turn("r5", "iya betul kak", 4);
+    expect(yes).toContain("Tinggal tunggu konfirmasi dari tim kami");
+    expect(await owner.reservation.count()).toBe(0);
 
     // Every turn was traced, none of it cost anything.
     const runs = await owner.agentRun.findMany();

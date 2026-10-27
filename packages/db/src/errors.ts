@@ -152,3 +152,32 @@ export class OutsideStoreHoursError extends Error {
     this.closeHour = closeHour;
   }
 }
+
+// --- reservation requests (2026-10-27) --------------------------------------
+
+/** No such reservation request. */
+export class RequestNotFoundError extends Error {
+  constructor(id: string) {
+    super(`Permintaan reservasi ${id} tidak ditemukan.`);
+    this.name = "RequestNotFoundError";
+  }
+}
+
+/**
+ * The request was already approved, rejected, replaced by a newer one, or
+ * lapsed — somebody (or the clock) decided first, and that decision stands.
+ */
+export class RequestSettledError extends Error {
+  readonly state: "APPROVED" | "REJECTED" | "REPLACED" | "EXPIRED";
+  constructor(state: RequestSettledError["state"]) {
+    const word = {
+      APPROVED: "sudah disetujui",
+      REJECTED: "sudah ditolak",
+      REPLACED: "sudah diganti permintaan yang lebih baru",
+      EXPIRED: "sudah kedaluwarsa",
+    }[state];
+    super(`Permintaan reservasi ini ${word}.`);
+    this.name = "RequestSettledError";
+    this.state = state;
+  }
+}

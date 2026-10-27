@@ -45,6 +45,7 @@ import { useNavigate } from "react-router-dom";
 import dayjs from "dayjs";
 import {
   App,
+  Badge,
   Button,
   Card,
   Checkbox,
@@ -57,6 +58,7 @@ import {
   Select,
   Switch,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from "antd";
@@ -67,6 +69,8 @@ import {
   StopOutlined,
 } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
+import { RequestsTab } from "./RequestsTab";
+import { pendingRequestCount } from "../../lib/reservationRequests.js";
 import { ProTable } from "../../components/ProTable";
 import { EnumTag } from "../../components/EnumTag";
 import { GradeTag } from "../../components/GradeTag";
@@ -199,6 +203,8 @@ export function ReservationsPage() {
   const [recording, setRecording] = useState<HoldRow | null>(null);
   /** The hold whose DP is being refunded or kept. */
   const [deciding, setDeciding] = useState<HoldRow | null>(null);
+  /** Holds, or the bot's requests waiting on a person (2026-10-27). */
+  const [tab, setTab] = useState<"holds" | "requests">("holds");
 
   /**
    * The holds themselves, read off the store.
@@ -741,6 +747,244 @@ export function ReservationsPage() {
     setDeciding(r);
   };
 
+  const pendingRequests = pendingRequestCount(db, new Date());
+  const holdsCard = (
+    <Card title={t("reservations.reservations", "Reservations")}>
+      <ProTable<HoldRow>
+        persistKey="reservations"
+        rowKey="id"
+        dataSource={rows}
+        searchPlaceholder={t(
+          "reservations.searchSerialProductOrCustomer",
+          "Search serial, product or customer",
+        )}
+        columns={[
+          {
+            title: t("reservations.customer", "Customer"),
+            key: "customer",
+            width: COLUMN.code,
+            searchable: true,
+            facet: true,
+            sortValue: (r) => r.customerName,
+            render: (_, r) => (
+              <Flex vertical>
+                <strong>{r.customerName}</strong>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {r.code}
+                </Typography.Text>
+              </Flex>
+            ),
+          },
+          {
+            title: t("reservations.when", "When"),
+            dataIndex: "scheduledFor",
+            // A date with its time on a second line (2026-09-28: widths
+            // are the least the content needs).
+            width: COLUMN.date,
+            // A hold made through chat may carry no appointment at all —
+            // the customer never named one — so the cell has to say that
+            // rather than render an empty box.
+            render: (v) => (v ? fmtDateTime(v as string) : fmtNone()),
+          },
+          {
+            title: t("reservations.product", "Product"),
+            key: "product",
+            width: 152,
+            searchable: true,
+            searchValue: (r) => r.items.map((i) => i.productName).join(" "),
+            sortValue: (r) => r.items[0]?.productName ?? "",
+            render: (_, r) =>
+              isVisitRow(r) ? (
+                <Tag color="cyan" style={{ marginInline: 0 }}>
+                  {t("reservations.visit", "Visit")}
+                </Tag>
+              ) : (
+                <Flex vertical gap={2}>
+                  {r.items.map((i) => (
+                    <span key={i.id}>{i.productName}</span>
+                  ))}
+                </Flex>
+              ),
+          },
+          {
+            // Deliberately a second column rather than a line under the
+            // product: they line up row for row, so the reader can run a
+            // finger across and match the third product to the third
+            // serial. That is what "serial per product" asked for.
+            title: t("reservations.serial", "Serial"),
+            key: "serials",
+            width: COLUMN.serial,
+            searchable: true,
+            searchValue: (r) => r.items.map((i) => i.serial).join(" "),
+            render: (_, r) => (
+              <Flex vertical gap={2}>
+                {r.items.map((i) => (
+                  <Typography.Text key={i.id} type="secondary">
+                    {i.serial}
+                  </Typography.Text>
+                ))}
+              </Flex>
+            ),
+          },
+          {
+            title: t("reservations.cameFrom", "Came from"),
+            key: "source",
+            width: COLUMN.tag,
+            facet: true,
+            sortValue: (r) => r.channelName ?? fmtNone(),
+            render: (_, r) =>
+              r.channelName ? <Tag>{r.channelName}</Tag> : fmtNone(),
+          },
+          {
+            title: t("reservations.note", "Note"),
+            dataIndex: "note",
+            // A floor, not a size (2026-09-28): the sentence or two staff
+            // write wraps over two lines here and takes a wider screen's
+            // slack. 140 was the ellipsis nobody could read.
+            width: 152,
+            render: (v: string) => <LongText>{v}</LongText>,
+          },
+          {
+            title: t("reservations.status", "Status"),
+            dataIndex: "status",
+            width: COLUMN.status,
+            facet: true,
+            sortValue: (r) => tagOf(RESERVATION_STATUS, r.status, t).label,
+            render: (v: string, r) => {
+              const p = holdProgress(r);
+              return (
+                <Flex vertical gap={2}>
+                  <EnumTag map={RESERVATION_STATUS} value={v} />
+                  {dpLine(r)}
+                  {/* The count only earns its place on a hold that is
+                          part-collected — on a single-machine hold the tag
+                          above has already said everything. */}
+                  {p.total > 1 && p.held > 0 && p.held < p.total && (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {t(
+                        "reservations.heldOfTotal",
+                        "{{held}} of {{total}} left",
+                        { held: p.held, total: p.total },
+                      )}
+                    </Typography.Text>
+                  )}
+                </Flex>
+              );
+            },
+          },
+          {
+            // Blank by convention: DataTable drops an untitled column to
+            // the foot of the card on a phone, where buttons belong.
+            title: "",
+            key: "actions",
+            // One small button, "Units" (2026-09-28: the least it needs).
+            width: 112,
+            render: (_, r) => {
+              // A visit has nothing to sell from and nothing to release:
+              // the customer came, or is not coming (2026-10-27).
+              if (isVisitRow(r))
+                return r.status === "TERJADWAL" ? (
+                  <Flex gap={8} wrap>
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<CheckOutlined />}
+                      aria-label={t(
+                        "reservations.cameAria",
+                        "{{name}} came for {{code}}",
+                        { name: r.customerName, code: r.code },
+                      )}
+                      onClick={() => closeVisit(r, "DONE")}
+                    >
+                      {t("reservations.came", "Came")}
+                    </Button>
+                    <Button
+                      size="small"
+                      danger
+                      aria-label={t(
+                        "reservations.cancelVisitAria",
+                        "Cancel the visit {{code}}",
+                        { code: r.code },
+                      )}
+                      onClick={() => cancelVisit(r)}
+                    >
+                      {t("reservations.cancel", "Cancel")}
+                    </Button>
+                  </Flex>
+                ) : null;
+              const held = heldOf(r).flatMap((i) =>
+                i.serial ? [i.serial] : [],
+              );
+              const reservation = db.reservations.find((x) => x.id === r.id);
+              // Only a DP holds (2026-10-27): record one once the
+              // transfer is checked, and decide it once the hold is over.
+              const canRecord =
+                reservation !== undefined &&
+                recordDpBlock(db, reservation) === undefined;
+              const decide = r.dpStage === "DECIDE";
+              if (held.length === 0 && !decide) return null;
+              return (
+                <Flex gap={8} wrap>
+                  {decide && (
+                    <Button
+                      type="primary"
+                      size="small"
+                      danger
+                      aria-label={t(
+                        "dp.decideAria",
+                        "Decide the DP on {{code}}",
+                        { code: r.code },
+                      )}
+                      onClick={() => openDecide(r)}
+                    >
+                      {t("dp.decide", "Decide DP")}
+                    </Button>
+                  )}
+                  {canRecord && (
+                    <Button
+                      size="small"
+                      aria-label={t(
+                        "dp.recordAria",
+                        "Record a DP on {{code}}",
+                        { code: r.code },
+                      )}
+                      onClick={() => setRecording(r)}
+                    >
+                      {t("dp.record", "Record DP")}
+                    </Button>
+                  )}
+                  {held.length > 0 && (
+                    // One button, and it opens the dialog rather than doing
+                    // anything on its own (owner revision 2026-08-27). Two
+                    // icon buttons used to sit here — sell everything, cancel
+                    // everything — and both acted on a whole hold from a
+                    // 100px column, with no step in between where an operator
+                    // could see which machines they were about to commit.
+                    <Flex gap={8}>
+                      <Button
+                        type="primary"
+                        size="small"
+                        icon={<ShoppingCartOutlined />}
+                        aria-label={t(
+                          "reservations.manageAria",
+                          "Open the units on {{code}}",
+                          { code: r.code },
+                        )}
+                        onClick={() => manage(r)}
+                      >
+                        {t("reservations.units", "Units")}
+                      </Button>
+                    </Flex>
+                  )}
+                </Flex>
+              );
+            },
+          },
+        ]}
+      />
+    </Card>
+  );
+
   return (
     <PageContainer
       title={t("reservations.reservation", "Reservation")}
@@ -754,247 +998,29 @@ export function ReservationsPage() {
         },
       ]}
     >
-      <Flex vertical gap={16}>
-        <Card title={t("reservations.reservations", "Reservations")}>
-          <ProTable<HoldRow>
-            persistKey="reservations"
-            rowKey="id"
-            dataSource={rows}
-            searchPlaceholder={t(
-              "reservations.searchSerialProductOrCustomer",
-              "Search serial, product or customer",
-            )}
-            columns={[
-              {
-                title: t("reservations.customer", "Customer"),
-                key: "customer",
-                width: COLUMN.code,
-                searchable: true,
-                facet: true,
-                sortValue: (r) => r.customerName,
-                render: (_, r) => (
-                  <Flex vertical>
-                    <strong>{r.customerName}</strong>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {r.code}
-                    </Typography.Text>
-                  </Flex>
-                ),
-              },
-              {
-                title: t("reservations.when", "When"),
-                dataIndex: "scheduledFor",
-                // A date with its time on a second line (2026-09-28: widths
-                // are the least the content needs).
-                width: COLUMN.date,
-                // A hold made through chat may carry no appointment at all —
-                // the customer never named one — so the cell has to say that
-                // rather than render an empty box.
-                render: (v) => (v ? fmtDateTime(v as string) : fmtNone()),
-              },
-              {
-                title: t("reservations.product", "Product"),
-                key: "product",
-                width: 152,
-                searchable: true,
-                searchValue: (r) => r.items.map((i) => i.productName).join(" "),
-                sortValue: (r) => r.items[0]?.productName ?? "",
-                render: (_, r) =>
-                  isVisitRow(r) ? (
-                    <Tag color="cyan" style={{ marginInline: 0 }}>
-                      {t("reservations.visit", "Visit")}
-                    </Tag>
-                  ) : (
-                    <Flex vertical gap={2}>
-                      {r.items.map((i) => (
-                        <span key={i.id}>{i.productName}</span>
-                      ))}
-                    </Flex>
-                  ),
-              },
-              {
-                // Deliberately a second column rather than a line under the
-                // product: they line up row for row, so the reader can run a
-                // finger across and match the third product to the third
-                // serial. That is what "serial per product" asked for.
-                title: t("reservations.serial", "Serial"),
-                key: "serials",
-                width: COLUMN.serial,
-                searchable: true,
-                searchValue: (r) => r.items.map((i) => i.serial).join(" "),
-                render: (_, r) => (
-                  <Flex vertical gap={2}>
-                    {r.items.map((i) => (
-                      <Typography.Text key={i.id} type="secondary">
-                        {i.serial}
-                      </Typography.Text>
-                    ))}
-                  </Flex>
-                ),
-              },
-              {
-                title: t("reservations.cameFrom", "Came from"),
-                key: "source",
-                width: COLUMN.tag,
-                facet: true,
-                sortValue: (r) => r.channelName ?? fmtNone(),
-                render: (_, r) =>
-                  r.channelName ? <Tag>{r.channelName}</Tag> : fmtNone(),
-              },
-              {
-                title: t("reservations.note", "Note"),
-                dataIndex: "note",
-                // A floor, not a size (2026-09-28): the sentence or two staff
-                // write wraps over two lines here and takes a wider screen's
-                // slack. 140 was the ellipsis nobody could read.
-                width: 152,
-                render: (v: string) => <LongText>{v}</LongText>,
-              },
-              {
-                title: t("reservations.status", "Status"),
-                dataIndex: "status",
-                width: COLUMN.status,
-                facet: true,
-                sortValue: (r) => tagOf(RESERVATION_STATUS, r.status, t).label,
-                render: (v: string, r) => {
-                  const p = holdProgress(r);
-                  return (
-                    <Flex vertical gap={2}>
-                      <EnumTag map={RESERVATION_STATUS} value={v} />
-                      {dpLine(r)}
-                      {/* The count only earns its place on a hold that is
-                          part-collected — on a single-machine hold the tag
-                          above has already said everything. */}
-                      {p.total > 1 && p.held > 0 && p.held < p.total && (
-                        <Typography.Text
-                          type="secondary"
-                          style={{ fontSize: 12 }}
-                        >
-                          {t(
-                            "reservations.heldOfTotal",
-                            "{{held}} of {{total}} left",
-                            { held: p.held, total: p.total },
-                          )}
-                        </Typography.Text>
-                      )}
-                    </Flex>
-                  );
-                },
-              },
-              {
-                // Blank by convention: DataTable drops an untitled column to
-                // the foot of the card on a phone, where buttons belong.
-                title: "",
-                key: "actions",
-                // One small button, "Units" (2026-09-28: the least it needs).
-                width: 112,
-                render: (_, r) => {
-                  // A visit has nothing to sell from and nothing to release:
-                  // the customer came, or is not coming (2026-10-27).
-                  if (isVisitRow(r))
-                    return r.status === "TERJADWAL" ? (
-                      <Flex gap={8} wrap>
-                        <Button
-                          type="primary"
-                          size="small"
-                          icon={<CheckOutlined />}
-                          aria-label={t(
-                            "reservations.cameAria",
-                            "{{name}} came for {{code}}",
-                            { name: r.customerName, code: r.code },
-                          )}
-                          onClick={() => closeVisit(r, "DONE")}
-                        >
-                          {t("reservations.came", "Came")}
-                        </Button>
-                        <Button
-                          size="small"
-                          danger
-                          aria-label={t(
-                            "reservations.cancelVisitAria",
-                            "Cancel the visit {{code}}",
-                            { code: r.code },
-                          )}
-                          onClick={() => cancelVisit(r)}
-                        >
-                          {t("reservations.cancel", "Cancel")}
-                        </Button>
-                      </Flex>
-                    ) : null;
-                  const held = heldOf(r).flatMap((i) =>
-                    i.serial ? [i.serial] : [],
-                  );
-                  const reservation = db.reservations.find(
-                    (x) => x.id === r.id,
-                  );
-                  // Only a DP holds (2026-10-27): record one once the
-                  // transfer is checked, and decide it once the hold is over.
-                  const canRecord =
-                    reservation !== undefined &&
-                    recordDpBlock(db, reservation) === undefined;
-                  const decide = r.dpStage === "DECIDE";
-                  if (held.length === 0 && !decide) return null;
-                  return (
-                    <Flex gap={8} wrap>
-                      {decide && (
-                        <Button
-                          type="primary"
-                          size="small"
-                          danger
-                          aria-label={t(
-                            "dp.decideAria",
-                            "Decide the DP on {{code}}",
-                            { code: r.code },
-                          )}
-                          onClick={() => openDecide(r)}
-                        >
-                          {t("dp.decide", "Decide DP")}
-                        </Button>
-                      )}
-                      {canRecord && (
-                        <Button
-                          size="small"
-                          aria-label={t(
-                            "dp.recordAria",
-                            "Record a DP on {{code}}",
-                            { code: r.code },
-                          )}
-                          onClick={() => setRecording(r)}
-                        >
-                          {t("dp.record", "Record DP")}
-                        </Button>
-                      )}
-                      {held.length > 0 && (
-                        // One button, and it opens the dialog rather than doing
-                        // anything on its own (owner revision 2026-08-27). Two
-                        // icon buttons used to sit here — sell everything, cancel
-                        // everything — and both acted on a whole hold from a
-                        // 100px column, with no step in between where an operator
-                        // could see which machines they were about to commit.
-                        <Flex gap={8}>
-                          <Button
-                            type="primary"
-                            size="small"
-                            icon={<ShoppingCartOutlined />}
-                            aria-label={t(
-                              "reservations.manageAria",
-                              "Open the units on {{code}}",
-                              { code: r.code },
-                            )}
-                            onClick={() => manage(r)}
-                          >
-                            {t("reservations.units", "Units")}
-                          </Button>
-                        </Flex>
-                      )}
-                    </Flex>
-                  );
-                },
-              },
-            ]}
-          />
-        </Card>
-      </Flex>
+      <Tabs
+        activeKey={tab}
+        onChange={(k) => setTab(k as "holds" | "requests")}
+        items={[
+          {
+            key: "holds",
+            label: t("reservations.reservations", "Reservations"),
+            children: holdsCard,
+          },
+          {
+            // The bot's reservation requests (2026-10-27), waiting on a
+            // person to approve or reject.
+            key: "requests",
+            label: (
+              <Flex align="center" gap={6}>
+                {t("requests.tab", "Requests")}
+                <Badge count={pendingRequests} size="small" />
+              </Flex>
+            ),
+            children: <RequestsTab />,
+          },
+        ]}
+      />
 
       {/**
        * The units on one hold — the only place they can be picked among.

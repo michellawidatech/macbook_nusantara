@@ -1,6 +1,7 @@
 /**
- * A count beside a nav label (2026-10-26) — so far, the units waiting for QC
- * on Inbound & QC.
+ * A count beside a nav label (2026-10-26) — the units waiting for QC on
+ * Inbound & QC, and the bot's reservation requests waiting on a person
+ * (2026-10-27).
  *
  * Its own component so that only IT subscribes to the store: the menu around
  * it is built once per language and staff, and a nav that re-rendered on
@@ -15,6 +16,7 @@ import { Badge } from "antd";
 import { useTranslation } from "react-i18next";
 import { useDb } from "../mock/store.js";
 import { qcWaitingCount } from "../lib/qcWaiting.js";
+import { pendingRequestCount } from "../lib/reservationRequests.js";
 import { NAV } from "../theme/tokens";
 import type { NavBadgeKind } from "./navigation.js";
 
@@ -22,13 +24,21 @@ export function NavBadge({ kind }: { readonly kind: NavBadgeKind }) {
   const { t } = useTranslation();
   const db = useDb();
   const count = useMemo(
-    () => (kind === "qcWaiting" ? qcWaitingCount(db) : 0),
+    () =>
+      kind === "qcWaiting"
+        ? qcWaitingCount(db)
+        : pendingRequestCount(db, new Date()),
     [db, kind],
   );
   if (count === 0) return null;
-  const label = t("nav.qcWaiting", "{{count}} unit(s) waiting for QC", {
-    count,
-  });
+  const label =
+    kind === "qcWaiting"
+      ? t("nav.qcWaiting", "{{count}} unit(s) waiting for QC", { count })
+      : t(
+          "nav.reservationRequests",
+          "{{count}} reservation request(s) waiting",
+          { count },
+        );
   return (
     <Badge
       count={count}

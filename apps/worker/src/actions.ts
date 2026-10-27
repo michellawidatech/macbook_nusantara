@@ -23,7 +23,12 @@ import {
   type ChatActionKind,
   type HandoffTopic,
 } from "@nusantara/agent";
-import type { Prisma, PrismaClient } from "@nusantara/db";
+import {
+  DP_PROOF_PREFIX,
+  recordStoreChanges,
+  type Prisma,
+  type PrismaClient,
+} from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 
 type Tx = Prisma.TransactionClient;
@@ -94,6 +99,23 @@ export async function upsertChatAction(
     ...(ask !== null ? { askPrice: ask } : {}),
   };
 
+  // A DP proof is what a pending reservation request is waiting for
+  // (2026-10-27): every open Requests tab redraws that request's status.
+  if (input.summary.startsWith(DP_PROOF_PREFIX)) {
+    const waiting = await tx.reservationProposal.findMany({
+      where: {
+        from: input.from,
+        confirmedAt: null,
+        cancelledAt: null,
+        expiresAt: { gt: input.now },
+      },
+      select: { id: true },
+    });
+    await recordStoreChanges(
+      tx,
+      waiting.map((w) => ["reservationRequests", w.id] as const),
+    );
+  }
   const open = await tx.chatAction.findFirst({
     where: { from: input.from, kind, status: "OPEN" },
     select: { id: true },

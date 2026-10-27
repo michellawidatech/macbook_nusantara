@@ -63,7 +63,7 @@ import {
   type PrismaClient,
 } from "@nusantara/db";
 import type Anthropic from "@anthropic-ai/sdk";
-import { formatRupiah, realName } from "@nusantara/domain";
+import { formatRupiah, realName, REQUEST_TTL_MS } from "@nusantara/domain";
 import { loadKnowledgeBase, type KnowledgeBase } from "./knowledge.js";
 import { isStrongMatch } from "./retrieval.js";
 import {
@@ -820,17 +820,22 @@ const REMEMBER_CUSTOMER: Anthropic.Tool = {
 };
 
 /**
- * Chatbot v2 step 5: a booking the customer has NOT yet agreed to. Holds
- * nothing. The customer's next message decides — and that decision is read by
- * the router and acted on by CODE (`confirm_reservation` is never offered to
- * a model), so no sentence of the model's can turn a proposal into a hold.
+ * A reservation REQUEST (owner, 2026-10-27: *"now the reservation has to be
+ * manually verified by humans"*). It holds nothing and books nothing: a
+ * person approves or rejects it on /reservations or in /chat, and only then
+ * is there a reservation. `confirm_reservation` is never offered to a model
+ * and the bot never calls it any more.
  */
 const PROPOSE_RESERVATION: Anthropic.Tool = {
   name: "propose_reservation",
   description:
-    "Prepare a visit to the shop. This does NOT book anything and holds nothing: it returns the " +
-    "units they want to see (if any) and the time, for the advisor to read back to the customer " +
-    "for confirmation. Use the serials search_stock returned. A new proposal replaces the last.",
+    "File a reservation request for a colleague to approve: when the customer wants a unit " +
+    "kept for them, or wants to come and see a unit (or the shop) at a time. It books NOTHING " +
+    "and holds nothing — never say it is booked, confirmed or held. Call it once you know the " +
+    "day and time they will come (or pay) and their name; ask for whichever is missing, never " +
+    "invent one. Use the serials search_stock returned. Then tell them it is noted and the team " +
+    "will confirm; when they want a unit kept, also give the DP rule. A new request replaces " +
+    "their last one.",
   input_schema: {
     type: "object",
     properties: {
@@ -838,20 +843,30 @@ const PROPOSE_RESERVATION: Anthropic.Tool = {
         type: "string",
         maxLength: 120,
         description:
-          "The serials of the units the customer wants to see, comma-separated, at most three. " +
-          "Leave it out when they are coming to look around.",
+          "The serials of the units they want kept or want to see, comma-separated, at most " +
+          "three. Leave it out when they are coming to look around.",
       },
       when: {
         type: "string",
-        description: "The visit, YYYY-MM-DDTHH:MM in Jakarta time.",
+        maxLength: 20,
+        description:
+          "When they will come or pay, YYYY-MM-DDTHH:MM in Jakarta time. Work out the real " +
+          "date first; never send a word like besok.",
       },
       custName: {
         type: "string",
         maxLength: 80,
-        description: "The name the customer gave for the booking.",
+        description:
+          "The name the customer gave. Leave it out if they gave none and you know it from " +
+          "the profile.",
+      },
+      keep: {
+        type: "boolean",
+        description:
+          "True when they asked to keep / hold a unit (a DP holds it), false for a visit.",
       },
     },
-    required: ["when", "custName"],
+    required: ["when"],
     additionalProperties: false,
   },
 };
@@ -919,7 +934,10 @@ export const PHOTO_TOOLS = ["unit_photos", "find_unit_photos"] as const;
  * phone from the WhatsApp envelope, never an argument.
  */
 export const RESERVATION_TOOLS = [
-  "book_visit",
+  // A REQUEST a person approves (2026-10-27). `book_visit` booked by itself
+  // and is offered to nobody now; it still answers for the tests and the
+  // agent API's old route.
+  "propose_reservation",
   "check_reservation",
   "reschedule_reservation",
   "cancel_reservation",
@@ -3114,17 +3132,25 @@ async function rememberCustomer(
   };
 }
 
-/** How long a proposal waits for the customer's yes. */
+/**
+ * How long a v2 proposal waited for the customer's yes. A reservation
+ * REQUEST waits for a person instead, for `REQUEST_TTL_MS` (three days,
+ * packages/domain).
+ */
 export const PROPOSAL_TTL_MS = 30 * 60_000;
 
 /**
- * Chatbot v2 step 5: record a visit the customer has not agreed to yet.
+ * File a reservation REQUEST (2026-10-27): who (the sender's wa_id, the name
+ * they gave or the one the shop already knows — never a placeholder), which
+ * units, and when they will come or pay. It holds nothing and writes no
+ * UnitEvent: a person approves it in the POS (`approveRequest`, packages/db),
+ * which is where a reservation is made, and a DP firms it.
  *
- * Validated exactly as the hold it may become (`assertSchedule`, the same
- * stock filter the search uses), so a proposal the customer says yes to does
- * not then fail for a reason that was knowable now. Writes no hold and no
- * UnitEvent; an earlier open proposal of this customer's is cancelled, so
- * "the one they said yes to" is never ambiguous.
+ * Validated as the reservation it may become (`assertSchedule`, the stock
+ * filter the search uses), so an approval does not then fail for a reason
+ * that was knowable now. An earlier PENDING request of this customer's is
+ * cancelled at the same instant (the Requests tab reads that as "replaced",
+ * not as a rejection), so one customer is one line on the list.
  */
 async function proposeReservation(
   args: Record<string, unknown>,
@@ -3132,6 +3158,15 @@ async function proposeReservation(
 ) {
   if (!ctx.reserve)
     return { error: "Booking is not available on this channel." };
+  // One request per reply: two blocks in one step would race the cancel.
+  const guard = ctx.writesUsed;
+  if (guard?.has("propose_reservation"))
+    return {
+      alreadyRequested: true,
+      guidance:
+        "You already filed this request in this reply; do not file it twice.",
+    };
+  guard?.add("propose_reservation");
   const { write } = ctx.reserve;
   const serials = [
     ...new Set(
@@ -3141,18 +3176,35 @@ async function proposeReservation(
         .filter(Boolean),
     ),
   ].slice(0, 3);
-  const custName = realName(clip(args["custName"], 80));
-  if (!custName)
-    return {
-      needName: true,
-      guidance: "Ask the customer for the name the booking should be under.",
-    };
+  const keep = args["keep"] === true || args["keep"] === "true";
   const at = parseJakarta(String(args["when"] ?? ""));
-  if (!at)
+  if (!at) {
+    guard?.delete("propose_reservation");
     return {
       needWhen: true,
-      note: "The date was not understood. Send it as YYYY-MM-DDTHH:MM in Jakarta time.",
+      note: "Ask when they will come (or pay). Send it as YYYY-MM-DDTHH:MM in Jakarta time.",
     };
+  }
+  const known = await write.customerProfile.findUnique({
+    where: { from: ctx.from },
+    select: { name: true },
+  });
+  const customer = await write.customer.findFirst({
+    where: { phone: { in: phoneForms(ctx.from) } },
+    select: { name: true },
+  });
+  const custName =
+    realName(clip(args["custName"], 80)) ??
+    realName(known?.name) ??
+    realName(customer?.name) ??
+    realName(ctx.profileName);
+  if (!custName) {
+    guard?.delete("propose_reservation");
+    return {
+      needName: true,
+      guidance: "Ask the customer which name the reservation should be under.",
+    };
+  }
   try {
     assertSchedule(at, ctx.now, {
       requireFuture: true,
@@ -3160,6 +3212,7 @@ async function proposeReservation(
       storeHours: STORE_HOURS,
     });
   } catch (err) {
+    guard?.delete("propose_reservation");
     if (err instanceof BookingInPastError) return { pastDate: true };
     if (err instanceof BookingTooFarAheadError)
       return { tooFarAhead: true, maxDays: err.maxDays };
@@ -3178,25 +3231,36 @@ async function proposeReservation(
       })
     : [];
   const missing = serials.filter((s) => !units.some((u) => u.serial === s));
-  if (missing.length > 0)
+  if (missing.length > 0) {
+    guard?.delete("propose_reservation");
     return toolJson({
       unavailable: true,
       serials: missing,
       guidance: NEVER_INVENT_REASON,
     });
+  }
 
-  const proposal = await write.$transaction(async (tx) => {
+  const request = await write.$transaction(async (tx) => {
+    const earlier = await tx.reservationProposal.findMany({
+      where: {
+        from: ctx.from,
+        confirmedAt: null,
+        cancelledAt: null,
+        expiresAt: { gt: ctx.now },
+      },
+      select: { id: true },
+    });
     await tx.reservationProposal.updateMany({
-      where: { from: ctx.from, confirmedAt: null, cancelledAt: null },
+      where: { id: { in: earlier.map((e) => e.id) } },
       data: { cancelledAt: ctx.now },
     });
-    return tx.reservationProposal.create({
+    const made = await tx.reservationProposal.create({
       data: {
         from: ctx.from,
         custName,
         scheduledFor: at,
         createdAt: ctx.now,
-        expiresAt: new Date(ctx.now.getTime() + PROPOSAL_TTL_MS),
+        expiresAt: new Date(ctx.now.getTime() + REQUEST_TTL_MS),
         items: {
           create: serials.map((serial, i) => ({
             unitId: units.find((u) => u.serial === serial)!.id,
@@ -3206,12 +3270,19 @@ async function proposeReservation(
       },
       select: { id: true },
     });
+    // Every open /reservations and /chat sees it — and the one it replaced.
+    await recordStoreChanges(tx, [
+      ...earlier.map((e) => ["reservationRequests", e.id] as const),
+      ["reservationRequests", made.id],
+    ]);
+    return made;
   }, TXN_TIMEOUTS);
 
   return toolJson({
     ok: true,
-    proposed: true,
-    proposalId: proposal.id,
+    requested: true,
+    requestId: request.id,
+    keep: keep && serials.length > 0,
     when: `${jakartaDate(at)} ${jakartaTime(at)}`,
     custName,
     units: serials.map((serial) => {
@@ -3224,8 +3295,9 @@ async function proposeReservation(
       };
     }),
     guidance:
-      "NOT booked yet. Read the visit back — the day and time and any unit they want to see — " +
-      "and ask them to confirm. Nothing will be held for them; do not say it is booked or held.",
+      "NOT booked: a colleague confirms it. Tell the customer, short and warm, that it is " +
+      'noted and the team will confirm ("Siap kak, aku catat ya 😊 Nanti tim kami konfirmasi"). ' +
+      "Never say it is booked, confirmed or held.",
   });
 }
 

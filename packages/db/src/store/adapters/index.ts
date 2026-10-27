@@ -40,6 +40,7 @@ import { chats, corrections, personas } from "./singletons.js";
 import { adjustments, events, stockIns, unitNotes, units } from "./units.js";
 import { stockMoves } from "./stock.js";
 import { reconciliations, statementLines } from "./reconciliation.js";
+import { reservationRequests } from "./requests.js";
 
 export const ADAPTERS: { readonly [C in CollectionName]: Adapter<C> } = {
   paymentMethods,
@@ -82,6 +83,7 @@ export const ADAPTERS: { readonly [C in CollectionName]: Adapter<C> } = {
   chats,
   corrections,
   personas,
+  reservationRequests,
 };
 
 /** The adapter for a collection named at run time. */

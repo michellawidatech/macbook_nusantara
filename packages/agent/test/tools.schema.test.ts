@@ -147,13 +147,16 @@ describe("the tool whitelist", () => {
       "unit_photos",
       "find_unit_photos",
       "lookup_customer",
-      "book_visit",
+      // A REQUEST a person approves (2026-10-27), not a visit it books.
+      "propose_reservation",
       "check_reservation",
       "reschedule_reservation",
       "cancel_reservation",
     ]) {
       expect(offered).toContain(wanted);
     }
+    expect(offered).not.toContain("book_visit");
+    expect(offered).not.toContain("confirm_reservation");
   });
 
   it("follows each switch on its own, and none of them without Stock", () => {

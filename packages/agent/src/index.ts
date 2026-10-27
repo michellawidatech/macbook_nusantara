@@ -82,6 +82,7 @@ export {
   MAX_TOKENS,
   EFFORT,
   converse,
+  keepRequestNote,
   stockFactsOf,
   type AgentClient,
   type CreateArgs,

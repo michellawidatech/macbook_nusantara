@@ -40,6 +40,7 @@ import {
 import { costMicros } from "../agents.js";
 import { matchesFor, type KnowledgeBase } from "../knowledge.js";
 import {
+  dpKeepLine,
   effectiveCapabilities,
   holdingMessage,
   type AgentCapabilities,
@@ -515,8 +516,85 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     (u.pick !== null ? (input.lastShown[u.pick] ?? null) : null) ??
     (input.lastShown.length === 1 ? input.lastShown[0]! : null);
 
+  /**
+   * File a reservation REQUEST (2026-10-27) — a person approves it in the
+   * POS, so the customer hears "noted, the team will confirm", never a
+   * booking code and never "held". A keep also hears the DP rule.
+   */
+  const fileRequest = async (r: {
+    readonly serial: string | null;
+    readonly name: string;
+    readonly when: string;
+    readonly keep: boolean;
+  }): Promise<RulesResult> => {
+    const out = await call("propose_reservation", {
+      ...(r.serial ? { serials: r.serial } : {}),
+      when: r.when,
+      custName: r.name,
+      keep: r.keep,
+    });
+    if (out["requested"] === true) {
+      const units = unitsIn(out);
+      shown.push(...units.map((x) => x.serial));
+      bookings.push({
+        tool: "propose_reservation",
+        code: String(out["requestId"] ?? ""),
+        ...(typeof out["when"] === "string" ? { when: out["when"] } : {}),
+      });
+      const noted = reply.requestNoted(
+        {
+          units,
+          when: String(out["when"] ?? ""),
+          custName: String(out["custName"] ?? r.name),
+        },
+        lang,
+      );
+      return done(
+        r.keep && units.length > 0
+          ? `${noted}\n\n${dpKeepLine(input.dp)}`
+          : noted,
+        // The line asks the one thing that matters now: nothing more.
+        { ask: false },
+      );
+    }
+    if (out["closedThen"] || out["pastDate"] || out["tooFarAhead"])
+      return done(
+        reply.askForVisit({ unit: false, name: false, when: true }, lang),
+        { ask: false },
+      );
+    if (out["needName"])
+      return done(
+        reply.askForVisit({ unit: false, name: true, when: false }, lang),
+        { ask: false },
+      );
+    if (out["unavailable"] && r.serial)
+      // The unit they named has gone; the visit can still be to look.
+      return fileRequest({ ...r, serial: null, keep: false });
+    return handOver(
+      "reservation",
+      taskNote("booking", TASK_REASON.notAutomatic, input.text),
+    );
+  };
+  /** The bot's last line was the DP rule: a time now completes a keep. */
+  const keepAsked = (input.lastReply ?? "").includes("amankan unitnya");
+
   // --- 1. What the code already sends to a person --------------------------
   if (input.route) {
+    if (input.route.rule === "keep" && caps.reserve && ctx.reserve) {
+      // "Keep it for me" is a reservation REQUEST now (2026-10-27), not a
+      // closing hand-over: the bot files it, a person approves it.
+      const serial = pickSerial() ?? input.lastShown[0] ?? null;
+      const name = u.name ?? input.known.name;
+      if (!serial || !name || !u.when) {
+        // Carried as "shown", so "besok jam 2" next files it for this unit.
+        if (serial) shown.push(serial);
+        return done(
+          `${reply.askForKeep({ unit: !serial, name: !name, when: !u.when }, lang)}\n\n${dpKeepLine(input.dp)}`,
+          { ask: false },
+        );
+      }
+      return fileRequest({ serial, name, when: u.when, keep: true });
+    }
     if (input.route.topic === "closing") {
       // Ready to buy, a keep / DP, how to pay (2026-10-27): a person closes,
       // and the task says who, what, which unit and at what price.
@@ -557,9 +635,18 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
         serial,
       );
     }
+    const summary = routeSummary(
+      input.route,
+      input.text,
+      input.known.name ?? u.name,
+    );
     return handOver(
       input.route.topic,
-      routeSummary(input.route, input.text, input.known.name ?? u.name),
+      // A DP proof beside a waiting request is that request's DP: say so, so
+      // the colleague approves the request with the DP (2026-10-27).
+      input.route.rule === "dp_proof" && input.proposalOpen
+        ? `${summary} · ${TASK_REASON.requestWaiting}`
+        : summary,
       told
         ? reply.passedOnToo(lang)
         : holdingMessage(input.route.topic, open, input.route.rule, input.dp),
@@ -790,31 +877,10 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       );
 
     case "confirm": {
-      if (!caps.reserve || !ctx.reserve) break;
-      const out = await call("confirm_reservation", {});
-      if (out["ok"] === true && typeof out["code"] === "string") {
-        bookings.push({
-          tool: "book_visit",
-          code: out["code"],
-          ...(typeof out["when"] === "string" ? { when: out["when"] } : {}),
-        });
-        return done(
-          reply.booked(
-            {
-              code: out["code"],
-              ...(typeof out["when"] === "string" ? { when: out["when"] } : {}),
-            },
-            lang,
-          ),
-          { ask: false },
-        );
-      }
-      if (out["noProposal"] === true) break;
-      return handOver(
-        "reservation",
-        taskNote("booking", TASK_REASON.confirmFailed, input.text),
-        reply.bookingFailed(lang),
-      );
+      // A yes while a request waits (2026-10-27): a person confirms it, never
+      // the bot — `confirm_reservation` is not called any more.
+      if (!caps.reserve || !ctx.reserve || !input.proposalOpen) break;
+      return done(reply.requestPending(lang), { ask: false });
     }
 
     case "decline":
@@ -861,62 +927,19 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
 
     case "reserve": {
       if (!caps.reserve || !ctx.reserve) break;
-      // A VISIT (2026-10-27): the units are what they come to see, if any —
-      // nothing is held — so only a name and a time are needed.
+      // A REQUEST (2026-10-27): the units are what they want to see — or,
+      // right after the DP rule was given, to keep — and a person approves.
       const serial = pickSerial() ?? input.lastShown[0] ?? null;
       const name = u.name ?? input.known.name;
       const missing = { unit: false, name: !name, when: !u.when };
       if (missing.name || missing.when)
         return done(reply.askForVisit(missing, lang), { ask: false });
-      const out = await call("propose_reservation", {
-        ...(serial ? { serials: serial } : {}),
+      return fileRequest({
+        serial,
+        name: name!,
         when: u.when!,
-        custName: name!,
+        keep: keepAsked && serial !== null,
       });
-      if (out["ok"] === true) {
-        const units = unitsIn(out);
-        shown.push(...units.map((x) => x.serial));
-        return done(
-          reply.proposal(
-            {
-              units,
-              when: String(out["when"] ?? ""),
-              custName: String(out["custName"] ?? name),
-            },
-            lang,
-          ),
-          // The read-back asks for a yes; another question would bury it.
-          { ask: false },
-        );
-      }
-      if (out["closedThen"] || out["pastDate"] || out["tooFarAhead"])
-        return done(
-          reply.askForVisit({ unit: false, name: false, when: true }, lang),
-          { ask: false },
-        );
-      if (out["unavailable"]) {
-        // The unit they named has gone; the visit can still be to look.
-        const again = await call("propose_reservation", {
-          when: u.when!,
-          custName: name!,
-        });
-        if (again["ok"] === true)
-          return done(
-            reply.proposal(
-              {
-                units: [],
-                when: String(again["when"] ?? ""),
-                custName: String(again["custName"] ?? name),
-              },
-              lang,
-            ),
-            { ask: false },
-          );
-      }
-      return handOver(
-        "reservation",
-        taskNote("booking", TASK_REASON.notAutomatic, input.text),
-      );
     }
 
     case "ask_price": {

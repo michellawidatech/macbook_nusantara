@@ -11,7 +11,12 @@ import { Writable } from "node:stream";
 import express, { type Express } from "express";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { PrismaClient, appendUnitEvent, truncateAll } from "@nusantara/db";
+import {
+  PrismaClient,
+  appendUnitEvent,
+  createVisit,
+  truncateAll,
+} from "@nusantara/db";
 import { mintAgentToken, type AgentCapabilities } from "@nusantara/agent";
 import { createLogger } from "@nusantara/logging";
 import { createApp } from "../src/app.js";
@@ -267,10 +272,14 @@ describe("reading the POS", () => {
 });
 
 describe("a customer's own data, and only theirs", () => {
-  // A visit since 2026-10-27: it holds nothing.
-  async function book(who: string, serial: string, body: object = {}) {
+  /*
+   * The bot files a reservation REQUEST since 2026-10-27; a person approves
+   * it in the POS. So a request is what crosses this door, and a booking to
+   * check or cancel is one a person already made — seeded straight in.
+   */
+  async function request_(who: string, serial: string, body: object = {}) {
     return request(agentApp)
-      .post("/api/agent/v1/me/visits")
+      .post("/api/agent/v1/me/reservations/proposals")
       .set("authorization", token(who))
       .send({
         when: TOMORROW_3PM,
@@ -279,26 +288,44 @@ describe("a customer's own data, and only theirs", () => {
         ...body,
       });
   }
+  const requestsFor = (from: string) =>
+    db.reservationProposal.findMany({
+      where: { from, confirmedAt: null, cancelledAt: null },
+    });
+  /** A visit staff approved for this customer. */
+  async function booked(who: string) {
+    await db.$transaction((tx) =>
+      createVisit(tx, {
+        customer: { phone: `+${who}`, name: "Alice" },
+        scheduledFor: new Date("2026-08-21T08:00:00.000Z"),
+        source: "STAF",
+        at: new Date(),
+      }),
+    );
+  }
 
-  it("books under the token's customer, whatever the body says", async () => {
-    const res = await book(ALICE, "SERA", {
+  it("files a request under the token's customer, whatever the body says", async () => {
+    const res = await request_(ALICE, "SERA", {
       phone: BOB,
       from: BOB,
       waId: BOB,
     });
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ ok: true });
-    expect(await holdsFor(ALICE)).toHaveLength(1);
-    expect(await holdsFor(BOB)).toHaveLength(0);
+    expect(res.body).toMatchObject({ ok: true, requested: true });
+    expect(await requestsFor(ALICE)).toHaveLength(1);
+    expect(await requestsFor(BOB)).toHaveLength(0);
+    // A request books nothing and holds nothing.
+    expect(await holdsFor(ALICE)).toHaveLength(0);
+    expect(await db.unit.count({ where: { status: "DIRESERVASI" } })).toBe(0);
   });
 
   it("shows a customer their holds and nobody else's", async () => {
-    await book(ALICE, "SERA");
+    await booked(ALICE);
     const bobs = await request(agentApp)
       .get("/api/agent/v1/me/reservations")
       .set("authorization", token(BOB))
       .expect(200);
-    expect(JSON.stringify(bobs.body)).not.toContain("SERA");
+    expect(JSON.stringify(bobs.body)).not.toContain("RV-");
     const alices = await request(agentApp)
       .get("/api/agent/v1/me/reservations")
       .set("authorization", token(ALICE))
@@ -307,7 +334,7 @@ describe("a customer's own data, and only theirs", () => {
   });
 
   it("will not let one customer cancel another's hold, even by its code", async () => {
-    await book(ALICE, "SERA");
+    await booked(ALICE);
     const { code } = (await holdsFor(ALICE))[0]!;
 
     await request(agentApp)
@@ -322,22 +349,32 @@ describe("a customer's own data, and only theirs", () => {
     expect((await holdsFor(ALICE))[0]!.status).toBe("BATAL");
   });
 
-  it("refuses a booking from a caller that may not write", async () => {
+  it("refuses a request from a caller that may not write", async () => {
+    await request(agentApp)
+      .post("/api/agent/v1/me/reservations/proposals")
+      .set("authorization", token(ALICE, { writes: false }))
+      .send({ when: TOMORROW_3PM, serials: "SERA", custName: "Alice" })
+      .expect(403);
+    expect(await requestsFor(ALICE)).toHaveLength(0);
+  });
+
+  it("files once per turn, and a later turn replaces it — one pending request per customer", async () => {
+    const first = await request_(ALICE, "SERA");
+    const retry = await request_(ALICE, "SERB");
+    expect(first.body).toMatchObject({ requested: true });
+    expect(retry.body).toMatchObject({ alreadyRequested: true });
+    const later = await request(agentApp)
+      .post("/api/agent/v1/me/reservations/proposals")
+      .set("authorization", token(ALICE, { turn: "a-later-turn" }))
+      .send({ when: TOMORROW_3PM, serials: "SERB", custName: "Alice" });
+    expect(later.body).toMatchObject({ requested: true });
+    expect(await requestsFor(ALICE)).toHaveLength(1);
+    // The bot's own door to a visit is closed: a person books it.
     await request(agentApp)
       .post("/api/agent/v1/me/visits")
-      .set("authorization", token(ALICE, { writes: false }))
+      .set("authorization", token(ALICE, { turn: "a-third-turn" }))
       .send({ when: TOMORROW_3PM, serials: "SERA" })
       .expect(403);
     expect(await holdsFor(ALICE)).toHaveLength(0);
-  });
-
-  it("books once per turn, however often the call is retried", async () => {
-    const first = await book(ALICE, "SERA");
-    const again = await book(ALICE, "SERB");
-    expect(first.body).toMatchObject({ ok: true, visit: true });
-    expect(again.body).not.toMatchObject({ ok: true });
-    expect(await holdsFor(ALICE)).toHaveLength(1);
-    // A visit: neither unit left the shelf.
-    expect(await db.unit.count({ where: { status: "DIRESERVASI" } })).toBe(0);
   });
 });

@@ -521,17 +521,22 @@ function liveRules(caps: AgentCapabilities): string {
         ", then ask whether they would like to see another one with better specs or a better price."
       : "5. Photos: you cannot send photos. A request to see a unit goes to handoff_to_staff with topic photos.",
     can.reserve
-      ? "6. Bookings: you may make, check, move and cancel THIS customer's own booking, and nothing else " +
-        "in the shop's records except what they tell you about themselves. A booking is a VISIT " +
-        "(book_visit): a day and time to come and see units in person. It holds NOTHING — never say a " +
-        "unit is kept, held or reserved for them. Book only when the customer has agreed to come and " +
-        "given a day and a time; tell them the code and the day and time. You may not change a price, " +
-        "take a payment or record a sale."
+      ? "6. Bookings: you may file, check, move and cancel THIS customer's own booking, and nothing else " +
+        "in the shop's records except what they tell you about themselves. A new booking is a REQUEST " +
+        "a colleague approves (propose_reservation, 2026-10-27): to come and see units at a time, or to " +
+        "keep a unit (keep: true). It books and holds NOTHING — never say it is booked, confirmed, kept " +
+        "or held. File it once you know the day and time they will come or pay and the name it is " +
+        "under; ask for whichever is missing, never invent one. Then say it is noted and the team will " +
+        'confirm ("Siap kak, aku catat ya 😊 Nanti tim kami konfirmasi"); for a keep, also give the DP ' +
+        "and the days from SHOP FACTS. You may not change a price, take a payment or record a sale."
       : "6. Bookings: you cannot book. Making, checking, moving or cancelling a booking goes to " +
         "handoff_to_staff with topic reservation.",
     '6a. Closing — only when they COMMIT: they take a unit you showed ("saya ambil yang Air M2",',
-    '      "jadi yang pertama"), say deal, ask for the account number or where to transfer, or ask',
-    '      you to keep a unit. Then hand over with topic closing and a summary like "Perlu closing —',
+    '      "jadi yang pertama"), say deal, or ask for the account number or where to transfer' +
+      (can.reserve
+        ? ". Asking to KEEP a unit is a reservation request (6, keep: true), not a hand-over."
+        : ", or ask you to keep a unit.") +
+      ' Then hand over with topic closing and a summary like "Perlu closing —',
     '      Rina siap ambil Air M2 8/256 Rp 9,5jt, mau COD Sabtu". Wanting to buy is NOT closing:',
     '      "mau beli macbook buat kuliah" is a customer starting out, so ask and recommend. How to',
     "      pay, transfer, QRIS, COD and instalments are questions: answer them from the APPROVED",
@@ -548,7 +553,9 @@ function liveRules(caps: AgentCapabilities): string {
     "   - a payment or DP they say they made, or its proof (topic order_payment);",
     '   - a real offer or bargain on a unit ("bisa 14jt aja?", "nego dong", "harga pas berapa")',
     '     (topic negotiation) — "ada yang lebih murah?" or "kemahalan" is yours: show a cheaper one;',
-    "   - committing to buy a unit you showed, or asking to keep one / a DP (topic closing, 6a);",
+    can.reserve
+      ? "   - committing to buy a unit you showed (topic closing, 6a) — a keep is a request (6);"
+      : "   - committing to buy a unit you showed, or asking to keep one / a DP (topic closing, 6a);",
     "   - a complaint, a fault, a warranty claim or an angry customer (topic complaint);",
     "   - a photo, video or file the customer sent (topic media);",
     "   - a customer who asks for a person (topic human);",

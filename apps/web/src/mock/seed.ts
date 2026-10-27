@@ -1028,6 +1028,32 @@ export interface Reservation {
 }
 
 /**
+ * A reservation REQUEST the bot filed from a chat (2026-10-27) — a
+ * `ReservationProposal`, read-only in the store: staff approve or reject it
+ * through `/api/reservations/requests` (`lib/reservationRequests.ts`). Its
+ * status is derived (`requestStatus`, packages/domain), because `expiresAt`
+ * passes by itself.
+ */
+export interface ReservationRequest {
+  id: string;
+  /** wa_id — the chat it came from. */
+  phone: string;
+  custName: string;
+  /** When they will come or pay. */
+  when: string;
+  createdAt: string;
+  expiresAt: string;
+  confirmedAt?: string;
+  cancelledAt?: string;
+  /** A later request of the same customer replaced it. */
+  replaced: boolean;
+  reservationId?: string;
+  items: { id: string; serial: string }[];
+  /** A `Perlu verifikasi DP` task on the thread since it was filed. */
+  dpProofAt?: string;
+}
+
+/**
  * A reservation's DP (owner, 2026-10-27, "yes to DP"): a `Payment` MASUK
  * naming the reservation. ONE row for its whole life — a sale that takes it
  * adopts the same payment (`orderId`), so the money is counted once, on the
@@ -1758,6 +1784,8 @@ export interface MockDb {
   orders: Order[];
   returns: ReturnRec[];
   reservations: Reservation[];
+  /** The bot's reservation requests (2026-10-27). Read-only. */
+  reservationRequests: ReservationRequest[];
   discounts: Discount[];
   expenses: Expense[];
   /** Money in, entered by hand. See `ManualIncome`. ⚠️ Mock-only. */
@@ -2951,6 +2979,8 @@ export function buildSeed(): MockDb {
     orders,
     returns,
     reservations,
+    // The bot files these from a chat; the demo shop has none waiting.
+    reservationRequests: [],
     discounts,
     expenses,
     incomes,
