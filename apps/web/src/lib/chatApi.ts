@@ -381,3 +381,26 @@ export interface FunnelWindow {
 
 export const getFunnel = () =>
   api<{ windows: FunnelWindow[] }>("/api/chat/funnel");
+
+/**
+ * Why the bot handed over in the last 7 days (2026-10-27, owner: *"it
+ * escalates too much"*): per topic and per what forced it, with the newest
+ * few examples. Any staff may read it.
+ */
+export interface HandoverReason {
+  topic: string;
+  /** `route`, a refused draft's code, `no_terminal_tool`, `no_reply` — or `bot`. */
+  reason: string;
+  count: number;
+  examples: Array<{
+    phone: string;
+    text: string | null;
+    summary: string | null;
+    at: string;
+  }>;
+}
+
+export const getHandovers = () =>
+  api<{ days: number; total: number; reasons: HandoverReason[] }>(
+    "/api/chat/handovers",
+  );

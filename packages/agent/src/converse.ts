@@ -58,6 +58,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import type { PrismaClient } from "@nusantara/db";
+import { formatRupiah } from "@nusantara/domain";
 import type { KnowledgeBase } from "./knowledge.js";
 import type { ToolDispatch } from "./agentApi.js";
 import {
@@ -67,7 +68,9 @@ import {
   holdingMessage,
   isHandoffTopic,
   modelTokens,
+  offersPhotos,
   PARALLEL_CAPABILITIES,
+  withoutPhotoOffer,
   type AgentCapabilities,
   type DpTerms,
   type HandoffTopic,
@@ -76,8 +79,9 @@ import {
   type StockFact,
 } from "./policy.js";
 import type { AgentPrompt } from "./prompt.js";
-import { sanitiseReply } from "./sanitise.js";
+import { detectLanguage, sanitiseReply } from "./sanitise.js";
 import { reply as ruleReply } from "./rules/replies.js";
+import { profileFactsOf, understand } from "./rules/understand.js";
 import {
   dispatchTool,
   storeOpenAt,
@@ -291,6 +295,18 @@ export interface ConverseInput {
    * words is then a short "passed that on too", not the same promise again.
    */
   readonly alreadyTold?: boolean;
+  /**
+   * The customer's message only tells the bot about themselves — what it is
+   * for, a budget, a preference — in answer to its own question
+   * (`answersOwnQuestion`, 2026-10-27). It is saved by code, the model is
+   * told to carry on, a hand-over is pushed back once, and a turn that would
+   * still end with a person ends with a short "noted" and a yes-question
+   * instead: "Buat nyatet aja sih" and "Kuliah" went to a colleague as "Not
+   * in the answers".
+   */
+  readonly selfAnswer?: boolean;
+  /** The bot's previous reply, so a short answer to "buat apa?" is kept as the use case. */
+  readonly lastReply?: string | null;
 }
 
 export interface ConverseHandoff {
@@ -363,6 +379,7 @@ export function stockFactsOf(tool: string, output: unknown): StockFact[] {
     const r = u as Record<string, unknown>;
     const name = [r["model"], r["variant"]].filter(str).join(" ");
     const left = r["left"];
+    const photos = r["photos"];
     return name
       ? [
           {
@@ -371,6 +388,8 @@ export function stockFactsOf(tool: string, output: unknown): StockFact[] {
             prices: digitsOf(r["price"]),
             // "Tinggal 1 unit" may rest on this and on nothing else.
             ...(typeof left === "number" ? { count: left } : {}),
+            // "Mau lihat fotonya?" only where there is something to show.
+            ...(typeof photos === "number" ? { photos } : {}),
           },
         ]
       : [];
@@ -425,6 +444,38 @@ function bookingLine(b: BookingWrite): string {
 }
 
 const TERMINAL = new Set(["reply", "handoff_to_staff"]);
+
+/**
+ * The only things a person must take (owner, 2026-10-27: *"it escalates too
+ * much, it is not smart enough to make the decision"*): a payment or DP
+ * proof, a real offer or bargain, committing to a unit or asking to keep one,
+ * a complaint or warranty claim, a photo or file the customer sent — and a
+ * customer who insists on a person. A unit with no price in the POS is the
+ * one more (topic price WITH its serial): nobody can quote it.
+ */
+const HANDOVER_CASES = new Set<string>([
+  "order_payment",
+  "negotiation",
+  "closing",
+  "complaint",
+  "warranty_claim",
+  "media",
+  "human",
+]);
+
+/** What a hand-over outside those cases is told, once. */
+const NOT_THESE_CASES =
+  "Not handed over: a person takes only a payment or DP proof, a real offer or bargain on a " +
+  "unit, committing to buy or keep a unit, a complaint, a photo or file the customer sent, or " +
+  "a customer who asks for a person. Answer this yourself from the shelf, the approved " +
+  "answers, the shop facts or the conversation; if their meaning is unclear, reply with ONE " +
+  "short question to find out. Hand over again only if it truly is one of those cases.";
+
+/** What a hand-over of an answer to the bot's own question is told (2026-10-27). */
+const NOT_A_HANDOFF =
+  "Not a hand-over: the customer is answering your own question about what they need. It is " +
+  "saved. Use reply — recommend from search_stock if you know enough, otherwise ask the next " +
+  'question — citing "chat" (and "stock" if you looked).';
 
 /** A unit a stock lookup returned this turn: its serial, name and price digits. */
 interface SeenUnit {
@@ -557,7 +608,19 @@ export async function converse(
             "confirm it was received or that the unit is held."
           : "")
     : "";
-  const shopNote = [routedNote, input.preloaded?.note ?? "", input.hint ?? ""]
+  const selfAnswer = input.selfAnswer === true && !route;
+  const selfNote = selfAnswer
+    ? "The customer is answering your own question about what they need (what it is for, " +
+      "their budget or what they like) — it is saved already. This is never a hand-over: " +
+      "recommend from search_stock if you now know enough, otherwise ask the next question, " +
+      'and reply citing "chat" (and "stock" if you looked).'
+    : "";
+  const shopNote = [
+    routedNote,
+    selfNote,
+    input.preloaded?.note ?? "",
+    input.hint ?? "",
+  ]
     .filter(Boolean)
     .join("\n\n");
   const messages: Anthropic.MessageParam[] = turns.map((t, i) =>
@@ -608,6 +671,27 @@ export async function converse(
           input.dp,
         );
 
+  /**
+   * An answer to the bot's own question that would otherwise end with a
+   * person (2026-10-27): "noted", and one yes-question to carry on. Rests on
+   * the chat and claims nothing, so it needs no check.
+   */
+  const lang = detectLanguage(customerText) === "en" ? "en" : "id";
+  const carryOn = (steps: number): ConverseResult => {
+    const line = [
+      ...bookings.map(bookingLine),
+      `${ruleReply.noted(lang)} ${ruleReply.offerSearch(lang)}`,
+    ].join("\n");
+    return {
+      reply: line,
+      rawReply: line,
+      toolsUsed,
+      steps,
+      sources: ["chat"],
+      ...(bookings.length ? { bookings } : {}),
+    };
+  };
+
   /** The code handing over, in the shop's fixed words. */
   const forced = (
     topic: HandoffTopic,
@@ -615,6 +699,7 @@ export async function converse(
     forcedBy: ConverseHandoff["forcedBy"],
     steps: number,
   ): ConverseResult => {
+    if (selfAnswer) return carryOn(steps);
     // A booking made this turn is announced whatever else happened: the
     // unit is held either way, and a customer who is not told is a customer
     // who does not come (audit 2026-09-29).
@@ -641,6 +726,8 @@ export async function converse(
     args: Record<string, unknown>,
     steps: number,
   ): ConverseResult => {
+    // Pushed back once already and handed over again: carry on anyway.
+    if (selfAnswer) return carryOn(steps);
     const topic = isHandoffTopic(args["topic"])
       ? args["topic"]
       : (route?.topic ?? "other");
@@ -692,12 +779,62 @@ export async function converse(
     };
   };
 
+  /**
+   * What the model is told when its draft is refused (2026-10-27): exactly
+   * what was wrong, and the facts it may use instead — so the second draft
+   * can be right rather than merely different.
+   */
+  const shelfLine = (): string => {
+    const on = stockFacts.filter((f) => f.available).slice(0, 8);
+    if (on.length === 0)
+      return "You have looked nothing up on the shelf this turn: call search_stock first, or leave it out.";
+    return `What this turn's lookups found on the shelf: ${on
+      .map(
+        (f) =>
+          `${f.label} — ${
+            f.prices[0]
+              ? formatRupiah(BigInt(f.prices[0])).replace(/\u00a0/g, " ")
+              : "no price in the POS"
+          }${f.count !== undefined ? `, left ${f.count}` : ""}${
+            f.photos !== undefined ? `, photos ${f.photos}` : ""
+          }`,
+      )
+      .join("; ")}.`;
+  };
+  const retryNote = (
+    problem: ReplyProblem | "PHOTOS",
+    message: string,
+    cited: readonly string[],
+  ): string => {
+    const head = "Your reply was NOT sent.";
+    switch (problem) {
+      case "AMOUNT_NOT_IN_SOURCE":
+        return `${head} It states a figure no source gives for that unit. ${shelfLine()} Quote only those prices, beside the unit each belongs to; never quote one for a unit with no price in the POS — leave the price out. Cite stock. Send the corrected reply.`;
+      case "AVAILABILITY_NOT_IN_SOURCE":
+        return `${head} It says a unit is ready, or how many are left, where this turn's lookups do not. ${shelfLine()} Only those are on the shelf; anything else is not in stock right now (never say why). Say "tinggal 1 unit" only where left is 1. Cite stock. Send the corrected reply.`;
+      case "TOO_LONG":
+        return `${head} It is too long (${message.length} characters). Three short WhatsApp sentences at most. Send the shorter reply.`;
+      case "EMPTY":
+        return `${head} It was empty. Send what the customer should read.`;
+      case "PHOTOS":
+        return `${head} It offers photos, but none of the units you found has any (photos 0). Do not mention photos; ask whether they would like to come and see it instead. Send the corrected reply.`;
+      default:
+        return `${head} It cites a source that does not exist (${cited.join(", ") || "none"}). Cite approved answers by handle (K3), store, catalog (only after lookup_catalog), stock (only after a stock lookup), greeting, or chat for the conversation itself — and state nothing that source does not. Send the corrected reply.`;
+    }
+  };
+
   const answer = (
     args: Record<string, unknown>,
     steps: number,
-  ): ConverseResult => {
+    /**
+     * May a refused draft go back to the model once, with what was wrong
+     * (2026-10-27, owner: *"it escalates too much"*)? Only a second refusal
+     * becomes a hand-over.
+     */
+    canRetry = false,
+  ): ConverseResult | { readonly retry: string } => {
     const raw = typeof args["message"] === "string" ? args["message"] : "";
-    const message = sanitiseReply(raw);
+    let message = sanitiseReply(raw);
     const cited = String(args["sources"] ?? "")
       .split(/[\s,;]+/)
       .map((s) => s.trim())
@@ -727,6 +864,14 @@ export async function converse(
         // aku siapa?"). Brings no text, like a greeting: a figure, a "ready"
         // or a "tinggal 1" in it is still refused by `checkReply`.
         sources.push("chat");
+      } else if (!/^(k\d+|stock|catalog)$/i.test(c)) {
+        // Not a source at all — "remember_customer", "profile_saved",
+        // "usage". Read as the chat, which vouches for nothing (2026-10-27):
+        // a reply resting on it may still carry no figure and no stock claim,
+        // and refusing it outright handed "Kuliah" to a colleague. An approved
+        // answer that does not exist (K99), and "stock" or "catalog" with no
+        // lookup behind it, are still refused: their words are the claim.
+        if (!sources.includes("chat")) sources.push("chat");
       } else {
         unknown += 1;
       }
@@ -735,6 +880,35 @@ export async function converse(
     // (2026-10-27): "wkwk", "masih ingat aku siapa?" were held as hand-overs.
     // It may then claim nothing — the same checks as `chat`.
     if (cited.length === 0) sources.push("chat");
+    /*
+     * "Mau lihat fotonya kak?" about units with no photos (owner's chat,
+     * 2026-10-27: an iPad mini nobody had photographed). When this turn's
+     * lookups counted the photos of every unit they returned and none has
+     * any, and no photo goes with the reply, the offer comes out and the next
+     * rung — a visit — takes its place.
+     */
+    const counted = stockFacts.filter(
+      (f) => f.available && f.photos !== undefined,
+    );
+    const noPhotos =
+      counted.length > 0 &&
+      counted.every((f) => f.photos === 0) &&
+      offeredPhotos.size === 0;
+    if (noPhotos && offersPhotos(message)) {
+      if (canRetry) return { retry: retryNote("PHOTOS", message, cited) };
+      message = sanitiseReply(
+        withoutPhotoOffer(
+          message,
+          lang === "en"
+            ? capabilities.reserve
+              ? "Want to come and see it? When suits you?"
+              : "Shall I help you get it sorted?"
+            : capabilities.reserve
+              ? "Mau datang lihat langsung kak, kapan enaknya?"
+              : "Mau aku bantu proses kak?",
+        ),
+      );
+    }
     const problem = checkReply({
       message,
       sourceCount: sources.length,
@@ -742,6 +916,8 @@ export async function converse(
       sourceTexts: texts,
       ...(sources.includes("stock") ? { stockFacts } : {}),
     });
+    if (problem !== null && canRetry)
+      return { retry: retryNote(problem, message, cited) };
     if (problem !== null) {
       // A figure nothing vouched for is a price somebody has to check, a
       // "ready" nothing vouched for is stock — and the task says so in one
@@ -776,7 +952,40 @@ export async function converse(
   };
 
   try {
-    for (let step = 1; step <= MAX_STEPS; step += 1) {
+    /*
+     * An answer to the bot's own question is saved by code (2026-10-27),
+     * whatever the model then does with it: the rules' reading of the words
+     * (`profileFactsOf`), through the same tool. The model may add more.
+     */
+    if (selfAnswer && ctx.profile) {
+      const facts = profileFactsOf(
+        understand(customerText, ctx.now, {
+          proposalOpen: false,
+          lastShown: [],
+        }),
+        customerText,
+        input.lastReply ?? null,
+      );
+      if (Object.keys(facts).length > 0) {
+        toolsUsed.push("remember_customer");
+        // A profile that fails to save is no reason not to answer.
+        await Promise.resolve(
+          dispatch("remember_customer", facts, {
+            ...ctx,
+            knowledge,
+            capabilities,
+          }),
+        ).catch((err: unknown) => ctx.onError?.("remember_customer", err));
+      }
+    }
+    let pushedBack = false;
+    /** A refused draft has had its one second chance (2026-10-27). */
+    let retried = false;
+    /** The loop's end — moved one step on for a retry or a last forced reply. */
+    let maxSteps = MAX_STEPS;
+    /** This call must be a reply: the lookups ran out without an answer. */
+    let replyNow = false;
+    for (let step = 1; step <= maxSteps; step += 1) {
       const t0 = Date.now();
       // No `temperature`: Haiku 5.5 and Sonnet 5.5 refuse a non-default one,
       // and variation is what the default gives anyway.
@@ -786,9 +995,11 @@ export async function converse(
         system,
         tools,
         messages,
-        tool_choice: forcedToolUse
-          ? { type: "any" as const }
-          : { type: "auto" as const },
+        tool_choice: replyNow
+          ? { type: "tool" as const, name: "reply" }
+          : forcedToolUse
+            ? { type: "any" as const }
+            : { type: "auto" as const },
         ...effortConfig(model),
       });
       input.onCall?.(usageOf(model, Date.now() - t0, response.usage));
@@ -816,16 +1027,45 @@ export async function converse(
               "route",
               step,
             );
-          return answer({ message: text, sources: "greeting" }, step);
+          return answer(
+            { message: text, sources: "greeting" },
+            step,
+          ) as ConverseResult;
         }
         break;
       }
 
       // A hand-over wins over a reply sent in the same breath: when the model
       // is of two minds, the person is the safe one.
-      const terminal =
-        uses.find((u) => u.name === "handoff_to_staff") ??
-        uses.find((u) => u.name === "reply");
+      const handoffUse = uses.find((u) => u.name === "handoff_to_staff");
+      const replyUse = uses.find((u) => u.name === "reply");
+      let terminal = handoffUse ?? replyUse;
+      // ...except for an answer to the bot's own question, which is never a
+      // hand-over (2026-10-27): the reply wins, and a hand-over alone is sent
+      // back once with the reason, while there are steps left to answer in.
+      //
+      // And a hand-over is the exception (owner, 2026-10-27: *"it escalates
+      // too much"*): one for anything outside the short list a person must
+      // take (`HANDOVER_CASES`) is sent back once with the reason. Asked
+      // twice, the model's judgement stands — it may know what the list
+      // does not.
+      let pushBack: string | null = null;
+      if (!route && terminal === handoffUse && handoffUse) {
+        const h = (handoffUse.input ?? {}) as Record<string, unknown>;
+        const needed =
+          !selfAnswer &&
+          (HANDOVER_CASES.has(String(h["topic"])) ||
+            (h["topic"] === "price" &&
+              typeof h["serial"] === "string" &&
+              h["serial"].trim() !== ""));
+        if (!needed && replyUse) terminal = replyUse;
+        else if (!needed && !pushedBack) {
+          pushedBack = true;
+          pushBack = selfAnswer ? NOT_A_HANDOFF : NOT_THESE_CASES;
+          maxSteps = Math.max(maxSteps, step + 1);
+          terminal = undefined;
+        }
+      }
       if (terminal) {
         toolsUsed.push(terminal.name);
         const args =
@@ -842,7 +1082,27 @@ export async function converse(
             "route",
             step,
           );
-        return answer(args, step);
+        const out = answer(args, step, !retried);
+        if (!("retry" in out)) return out;
+        // Refused once: back to the model with what was wrong and the facts
+        // (2026-10-27). Its second draft is checked the same way, and only a
+        // second refusal becomes a hand-over.
+        retried = true;
+        maxSteps = Math.max(maxSteps, step + 1);
+        messages.push({ role: "assistant", content: response.content });
+        messages.push({
+          role: "user",
+          content: uses.map((u) => ({
+            type: "tool_result" as const,
+            tool_use_id: u.id,
+            is_error: true,
+            content:
+              u.id === terminal.id
+                ? out.retry
+                : "Not run: correct the reply first.",
+          })),
+        });
+        continue;
       }
 
       // The whole turn, thinking blocks included and unmodified: Haiku 5.5
@@ -853,7 +1113,12 @@ export async function converse(
         uses.map(async (use) => {
           toolsUsed.push(use.name);
           const output = TERMINAL.has(use.name)
-            ? { error: "not available" }
+            ? {
+                error:
+                  pushBack && use.name === "handoff_to_staff"
+                    ? pushBack
+                    : "not available",
+              }
             : await dispatch(use.name, use.input, {
                 ...ctx,
                 knowledge,
@@ -899,7 +1164,28 @@ export async function converse(
           };
         }),
       );
-      messages.push({ role: "user", content: results });
+      // Out of steps with only lookups: one more call that MUST reply
+      // (2026-10-27) — what the lookups found is answerable, and running out
+      // of steps is no reason for a person. Checked like any reply.
+      if (step === maxSteps && !route && forcedToolUse && !replyNow) {
+        replyNow = true;
+        maxSteps += 1;
+      }
+      // One step left: say so, or a model still looking things up runs out
+      // of steps and the turn goes to a person for nothing (2026-10-27).
+      messages.push({
+        role: "user",
+        content:
+          step === maxSteps - 1
+            ? [
+                ...results,
+                {
+                  type: "text" as const,
+                  text: "<shop_note>\nThis is your last step: end the turn now with reply or handoff_to_staff, no more lookups.\n</shop_note>",
+                },
+              ]
+            : results,
+      });
     }
 
     // Out of steps, or the model ended without choosing: a person it is.
@@ -909,7 +1195,7 @@ export async function converse(
         ? routeSummary(route, customerText)
         : taskNote("reply", TASK_REASON.noAnswer, customerText),
       "no_terminal_tool",
-      MAX_STEPS,
+      maxSteps,
     );
   } catch (err) {
     // Swallowed as far as the CUSTOMER is concerned — they get a human reply,

@@ -29,6 +29,7 @@ import {
   PlusOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
+import { realName } from "@nusantara/domain";
 import { MoneyInput } from "../../components/MoneyInput.js";
 import { fmtDateTime, fmtNone, fmtRp } from "../../lib/format.js";
 import {
@@ -428,7 +429,7 @@ export function CustomerProfilePanel({
       <Section title={t("chatProfile.about", "About")}>
         <EditableField
           label={t("chatProfile.name", "Name")}
-          value={profile?.name ?? null}
+          value={realName(profile?.name)}
           onSave={(name) => save({ name })}
         />
         <EditableField

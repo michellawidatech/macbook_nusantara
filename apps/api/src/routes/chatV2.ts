@@ -44,6 +44,7 @@ import {
   type AnthropicEnv,
 } from "@nusantara/agent";
 import { ApiError, notFound } from "../errors.js";
+import { botWroteReply } from "./inbox.js";
 
 const REASONS = [
   "WRONG_FACT",
@@ -335,6 +336,115 @@ export async function funnelFor(
   };
 }
 
+/** One reason the bot handed over, counted, with the newest examples. */
+export interface HandoverReason {
+  /** The hand-over topic (`HANDOFF_TOPICS`), "other" when none was kept. */
+  readonly topic: string;
+  /**
+   * What forced it — `route` (the message itself), a refused draft
+   * (`AMOUNT_NOT_IN_SOURCE`…), `no_terminal_tool`, `no_reply` — or `bot`
+   * when the model chose to hand over.
+   */
+  readonly reason: string;
+  readonly count: number;
+  readonly examples: ReadonlyArray<{
+    readonly phone: string;
+    readonly text: string | null;
+    readonly summary: string | null;
+    readonly at: string;
+  }>;
+}
+
+/** Examples kept per reason: a reminder, not the transcript. */
+export const HANDOVER_EXAMPLES = 3;
+
+/**
+ * Why the bot handed over, in the last `days` (owner, 2026-10-27: *"it
+ * escalates too much"*) — every row that carries a hand-over note
+ * (`entities.handoff`, one per hand-over: the worker writes it on the batch's
+ * newest row), grouped by topic and by what forced it, with the newest few
+ * of each. Tester numbers are INCLUDED: this is about how the bot behaves,
+ * and the owner tests it from their own number.
+ *
+ * The time is the note's own `at` (the moment it was handed over); a colleague
+ * closing the row later moves `answeredAt`, which is why that is only the
+ * fallback. Read-only; counts and the customer's own words, no money.
+ */
+export async function handoversFor(
+  db: PrismaClient,
+  days: number,
+  now: Date,
+): Promise<{ days: number; total: number; reasons: HandoverReason[] }> {
+  const since = new Date(now.getTime() - days * 86_400_000);
+  const rows = await db.$queryRaw<
+    Array<{
+      topic: string;
+      reason: string;
+      count: number;
+      phone: string;
+      text: string | null;
+      summary: string | null;
+      at: Date;
+    }>
+  >(Prisma.sql`
+    WITH h AS (
+      SELECT m."from" AS phone,
+             m."text" AS text,
+             COALESCE(NULLIF(m."entities"->'handoff'->>'topic', ''),
+                      NULLIF(substring(m."intent" from '^staf:(.*)$'), ''),
+                      'other') AS topic,
+             COALESCE(NULLIF(m."entities"->'handoff'->>'forcedBy', ''), 'bot')
+               AS reason,
+             m."entities"->'handoff'->>'summary' AS summary,
+             CASE WHEN m."entities"->'handoff'->>'at' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
+                  THEN (m."entities"->'handoff'->>'at')::timestamptz
+                  ELSE m."answeredAt" AT TIME ZONE 'UTC' END AS at
+        FROM "WaMessage" m
+       WHERE m."direction" = 'IN'
+         AND (m."entities"->'handoff') IS NOT NULL
+    ), w AS (
+      SELECT h.*,
+             COUNT(*) OVER (PARTITION BY topic, reason)::int AS count,
+             ROW_NUMBER() OVER (PARTITION BY topic, reason ORDER BY at DESC)
+               AS rn
+        FROM h
+       WHERE at >= ${since}::timestamptz
+    )
+    SELECT topic, reason, count, phone, text, summary, at
+      FROM w
+     WHERE rn <= ${HANDOVER_EXAMPLES}
+     ORDER BY count DESC, topic, reason, at DESC
+  `);
+  const out = new Map<string, HandoverReason & { examples: unknown[] }>();
+  for (const r of rows) {
+    const key = `${r.topic}\u0000${r.reason}`;
+    const reason =
+      out.get(key) ??
+      ({
+        topic: r.topic,
+        reason: r.reason,
+        count: r.count,
+        examples: [],
+      } as HandoverReason & { examples: unknown[] });
+    reason.examples.push({
+      phone: r.phone,
+      text: r.text,
+      summary: r.summary,
+      at: new Date(r.at).toISOString(),
+    });
+    out.set(key, reason);
+  }
+  const reasons = [...out.values()] as HandoverReason[];
+  return {
+    days,
+    total: reasons.reduce((n, r) => n + r.count, 0),
+    reasons,
+  };
+}
+
+/** The window the Evaluation tab's hand-over card reads. */
+export const HANDOVER_DAYS = 7;
+
 export function registerChatV2(router: Router, deps: ChatV2Deps): void {
   const { db, logger, anthropic, ownerOnly } = deps;
 
@@ -352,6 +462,19 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
         FUNNEL_WINDOWS.map((d) => funnelFor(db, d, now, testers)),
       );
       res.json({ windows });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * GET /api/chat/handovers — why the bot handed over in the last 7 days,
+   * by topic and by what forced it, with a few examples each (2026-10-27).
+   * Any signed-in staff: counts and the customers' own words, no money.
+   */
+  router.get("/handovers", async (_req, res, next) => {
+    try {
+      res.json(await handoversFor(db, HANDOVER_DAYS, new Date()));
     } catch (err) {
       next(err);
     }
@@ -389,9 +512,17 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
       if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
       const message = await db.waMessage.findUnique({
         where: { id: body.data.messageId },
-        select: { id: true, replyText: true, answeredByAgent: true },
+        select: {
+          id: true,
+          replyText: true,
+          answeredByAgent: true,
+          answeredById: true,
+          entities: true,
+        },
       });
-      if (!message || !message.replyText || !message.answeredByAgent)
+      // The bot's hand-over lines are the bot's too (2026-10-27), and /chat
+      // offers 👍/👎 on whatever it labels Bot.
+      if (!message || !message.replyText || !botWroteReply(message))
         throw new ApiError(
           400,
           "VALIDASI",

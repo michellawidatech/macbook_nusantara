@@ -107,6 +107,7 @@ import { useInbox } from "../../hooks/useInbox.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { asString } from "../../lib/draftGuards.js";
 import { useTranslation } from "react-i18next";
+import { realName } from "@nusantara/domain";
 
 /**
  * One line in the conversation. A `WaMessage` row can produce two: what the
@@ -600,8 +601,8 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
 
   const name = conversation
     ? ((thread ? threadName(thread) : null) ??
-      conversation.profile?.name ??
-      conversation.name ??
+      realName(conversation.profile?.name) ??
+      realName(conversation.name) ??
       conversation.phone)
     : "";
 

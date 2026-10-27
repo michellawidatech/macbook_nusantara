@@ -32,6 +32,8 @@ const MBP = {
   variant: "18/512",
   grade: "A",
   price: "Rp 32.500.000",
+  // QC photographed it: the reply may offer to show them (2026-10-27).
+  photos: 3,
 };
 const AIR = {
   serial: "C02AIRM2XX",
@@ -39,6 +41,7 @@ const AIR = {
   variant: "8/256",
   grade: "B",
   price: "Rp 11.900.000",
+  photos: 2,
 };
 
 const KB = knowledgeBase([

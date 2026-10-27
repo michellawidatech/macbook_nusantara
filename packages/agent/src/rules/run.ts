@@ -71,6 +71,9 @@ import {
   type WaitingTask,
 } from "../tasks.js";
 import {
+  answersOwnQuestion,
+  isQuestion,
+  profileFactsOf,
   saysNo,
   saysYes,
   understand,
@@ -565,22 +568,17 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
 
   // --- 2. Remember what they said about themselves -------------------------
   if (ctx.profile) {
-    const facts: Record<string, unknown> = {};
-    if (u.name) facts["name"] = u.name;
-    if (u.budgetMin !== null) facts["budget_min"] = u.budgetMin;
-    if (u.budgetMax !== null) facts["budget_max"] = u.budgetMax;
-    if (u.usage.length) facts["usage"] = u.usage.join(", ");
-    if (u.apps.length) facts["apps"] = u.apps.join(", ");
-    if (u.preferences.length) facts["preferences"] = u.preferences.join(", ");
-    if (u.occupation) {
-      facts["occupation"] = u.occupation;
-      // An estimate, and labelled one on the screen: a student is a student.
-      if (u.occupation === "student (university)")
-        facts["age_estimate"] = "18-24";
-      if (u.occupation === "student (school)") facts["age_estimate"] = "15-18";
-    }
+    const facts = profileFactsOf(u, input.text, input.lastReply ?? null);
     if (Object.keys(facts).length > 0) await call("remember_customer", facts);
   }
+  /**
+   * Their answer to the bot's own question, in words no table here knows
+   * ("buat bisnis online" after "Rencananya buat apa kak?"): a `tell`, never
+   * a hand-over (owner report 2026-10-27).
+   */
+  const selfAnswer =
+    u.intent === "other" &&
+    answersOwnQuestion(input.text, ctx.now, input.lastReply ?? null);
 
   const lacks = {
     usage: !input.known.usage && u.usage.length === 0,
@@ -604,9 +602,18 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
    * never the same one twice running: see it → come and see it → let us get
    * it moving.
    */
-  const nextStep = (after: "recommend" | "photos" | "price"): string => {
+  const nextStep = (
+    after: "recommend" | "photos" | "price",
+    /**
+     * The units this reply names. "Mau lihat fotonya?" only when one of them
+     * has photos (owner's chat, 2026-10-27: offered for an iPad nobody had
+     * photographed) — otherwise the ladder starts at the visit.
+     */
+    units: ReadonlyArray<ShownUnit | null> = [],
+  ): string => {
     const ladder: NextStep[] = [];
-    if (after !== "photos" && caps.photos) ladder.push("photos");
+    const pictured = units.some((x) => (x?.photos ?? 0) > 0);
+    if (after !== "photos" && caps.photos && pictured) ladder.push("photos");
     if (caps.reserve && !input.visitBooked) ladder.push("visit");
     ladder.push("process");
     const last = input.lastReply ?? "";
@@ -681,7 +688,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
           reply.alternatives(alternatives, lang),
           stepUp ? reply.stepUp(stepUp, lang) : null,
           accessory ? reply.accessory(accessory, lang) : null,
-          watchLine ?? nextStep("recommend"),
+          watchLine ?? nextStep("recommend", [...alternatives, stepUp]),
         ),
         { sources: ["stock"], ask: false, ...(watch ? { watch } : {}) },
       );
@@ -714,7 +721,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     return done(
       join(
         reply.recommend({ best, cheaper, stepUp }, lang),
-        nextStep("recommend"),
+        nextStep("recommend", [best, cheaper, stepUp]),
       ),
       { sources: ["stock"], ask: false },
     );
@@ -774,6 +781,8 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     }
 
     case "tell":
+    case "other":
+      if (u.intent === "other" && !selfAnswer) break;
       return done(
         followUp()
           ? reply.noted(lang)
@@ -929,7 +938,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
           return done(
             join(
               reply.price(out as unknown as ShownUnit, lang),
-              nextStep("price"),
+              nextStep("price", [out as unknown as ShownUnit]),
             ),
             { ask: false },
           );
@@ -981,5 +990,16 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       });
     }
   }
+  // No rule, no approved answer, no AI (2026-10-27, owner: *"it escalates
+  // too much"*): a statement or small talk ("wkwk", "oh gitu", "lagi liat2
+  // aja") keeps the conversation going with the next discovery question. Only
+  // a QUESTION nothing here can answer goes to a person.
+  if (!isQuestion(input.text))
+    return done(
+      nudge() ??
+        (followUp()
+          ? reply.ack(lang)
+          : `${reply.ack(lang)} ${reply.offerSearch(lang)}`),
+    );
   return handOver("other", taskNote("reply", TASK_REASON.noAnswer, input.text));
 }

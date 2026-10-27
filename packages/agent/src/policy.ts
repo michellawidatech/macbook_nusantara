@@ -718,6 +718,56 @@ export interface StockFact {
    * 1 unit".
    */
   readonly count?: number;
+  /**
+   * How many of the shop's own photos the unit has, when the lookup counted
+   * them (2026-10-27). "Mau lihat fotonya?" may be offered only where one of
+   * the units has some (`offersPhotos`, converse.ts).
+   */
+  readonly photos?: number;
+}
+
+/**
+ * A reply offering to SHOW photos: "Mau lihat fotonya kak?", "aku kirimin
+ * fotonya ya", "Want to see photos?". Not "fotonya belum ada" — saying there
+ * are none is not an offer.
+ */
+const PHOTO_OFFER =
+  /\b(mau|boleh|perlu|pengen|ingin)\s+(aku\s+|saya\s+|kami\s+)?(lihat|liat|dikirim(in|kan)?|kirim(in|kan)?)\s+(foto|poto|gambar|video)(-?nya)?\b|\b(aku|saya|kami)\s+(kirim(in|kan)?|share)\s+(foto|poto|gambar)(-?nya)?\b|\b(see|send)\s+(you\s+)?(some\s+|the\s+)?(photos?|pictures?|pics?)\b/i;
+
+/** Does this sentence offer to show the customer photos? */
+export function offersPhotos(text: string): boolean {
+  return PHOTO_OFFER.test(text);
+}
+
+/**
+ * Take an offer of photos out of a reply whose units have none (2026-10-27:
+ * "Mau lihat fotonya kak?" about an iPad nobody had photographed). The
+ * sentence goes, and when no question is left the visit question takes its
+ * place — the next rung of the same ladder. Pure; returns the text unchanged
+ * when nothing in it offers photos.
+ */
+export function withoutPhotoOffer(
+  message: string,
+  visitQuestion = "Mau datang lihat langsung kak, kapan enaknya?",
+): string {
+  if (!offersPhotos(message)) return message;
+  const kept = message
+    .split("\n")
+    .map((line) =>
+      line
+        .split(/(?<=[.!?…])\s+/)
+        .filter((sentence) => !offersPhotos(sentence))
+        .join(" "),
+    )
+    .filter(
+      (line, i, all) =>
+        line.trim() !== "" || (i > 0 && all[i - 1]!.trim() !== ""),
+    )
+    .join("\n")
+    .trim();
+  return kept.includes("?")
+    ? kept
+    : `${kept}${kept ? "\n" : ""}${visitQuestion}`;
 }
 
 export type ReplyProblem =
@@ -974,6 +1024,32 @@ const HOLDING_LINE: Readonly<Record<HandoffTopic, string>> = {
   human: "Siap kak, aku teruskan ke owner ya 🙏",
   other: "Bentar ya kak, aku cek dulu 🙏",
 };
+
+/**
+ * Is this one of the bot's own fixed hand-over lines (`holdingMessage`, the
+ * DP line, the closed-shop suffix)? /chat labels a reply by who wrote it, and
+ * a hand-over row that staff later closed carries a staff id although the bot
+ * wrote the line (2026-10-27: "Bentar ya kak, aku cek dulu 🙏" read as Staff).
+ */
+export function isHoldingLine(text: string | null | undefined): boolean {
+  const t = (text ?? "").trim();
+  if (t === "") return false;
+  const lines = new Set<string>([
+    ...Object.values(HOLDING_LINE),
+    "Makasih kak, bukti DP-nya aku cek dulu ya 🙏",
+    // rules/replies.ts `passedOnToo` — the short line once a customer was told.
+    "Siap kak, yang ini sekalian aku tanyain ya 🙏",
+    "Noted, I'll check that one too 🙏",
+  ]);
+  const base = t.replace(CLOSED_SUFFIX, "").trim();
+  return (
+    lines.has(base) ||
+    /^Untuk amankan unitnya bisa DP Rp .+ tim kami cek dulu 🙏$/.test(base)
+  );
+}
+
+const CLOSED_SUFFIX =
+  / Toko lagi tutup, nanti aku kabari pas buka jam 10\.00 ya\.$/;
 
 // --- what a person is left to do ---------------------------------------------
 

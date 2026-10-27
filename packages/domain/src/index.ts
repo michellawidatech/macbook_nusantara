@@ -11,3 +11,4 @@ export * from "./catalogIdentity.js";
 export * from "./credentials.js";
 export * from "./qaText.js";
 export * from "./qaSheet.js";
+export * from "./personName.js";

@@ -63,7 +63,7 @@ import {
   type PrismaClient,
 } from "@nusantara/db";
 import type Anthropic from "@anthropic-ai/sdk";
-import { formatRupiah } from "@nusantara/domain";
+import { formatRupiah, realName } from "@nusantara/domain";
 import { loadKnowledgeBase, type KnowledgeBase } from "./knowledge.js";
 import { isStrongMatch } from "./retrieval.js";
 import {
@@ -484,14 +484,15 @@ const REPLY: Anthropic.Tool = {
 const HANDOFF: Anthropic.Tool = {
   name: "handoff_to_staff",
   description:
-    "Hand ONE question to a colleague. Use it for the stock, price or condition of a " +
-    "particular unit you cannot look up, a real price offer or bargain on a unit, payments " +
-    "already made, trade-in or buy-back quotes, shipping costs, complaints and warranty claims, " +
-    "when the customer asks for a person, and for a question about how the shop works that the " +
-    "approved answers and the shop facts do not cover. When they COMMIT — take a unit you showed, " +
-    "say deal, ask for the account number, or want a unit kept (a DP) — use topic closing. " +
-    "Wanting to buy, asking how to pay, or asking for something cheaper is NOT a hand-over: " +
-    "answer it. Never guess instead of using this.",
+    "Hand ONE question to a colleague — the exception, not the habit (owner, 2026-10-27). Use it " +
+    "ONLY for: a payment or DP they say they made, or its proof (order_payment); a real price " +
+    "offer or bargain on a unit (negotiation); committing to buy a unit you showed, or asking to " +
+    "keep one / a DP (closing); a complaint, fault, warranty claim or angry customer " +
+    "(complaint); a photo or file the customer sent (media); a customer who asks for a person " +
+    "(human); a unit with no price in the POS, with its serial (price). Everything else you " +
+    "answer from the shelf, the approved answers, the shop facts or the conversation — and when " +
+    "their meaning is unclear, reply with ONE short question instead. A hand-over outside these " +
+    "cases is sent back to you once.",
   input_schema: {
     type: "object",
     properties: {
@@ -734,7 +735,13 @@ const REMEMBER_CUSTOMER: Anthropic.Tool = {
   input_schema: {
     type: "object",
     properties: {
-      name: { type: "string", maxLength: 80, description: "Their name." },
+      name: {
+        type: "string",
+        maxLength: 80,
+        description:
+          "Their name, only when they told you it. Leave it out otherwise — never 'unknown', " +
+          "'-', 'tidak tahu' or their number.",
+      },
       use_case: {
         type: "string",
         maxLength: 160,
@@ -1224,6 +1231,8 @@ function quote(
 
 const pricesOn = (ctx: ToolContext) =>
   effectiveCapabilities(ctx.capabilities ?? PARALLEL_CAPABILITIES).price;
+const photosOn = (ctx: ToolContext) =>
+  effectiveCapabilities(ctx.capabilities ?? PARALLEL_CAPABILITIES).photos;
 
 /**
  * The battery reading a unit carries — a `UnitAttribute`, not a column: the
@@ -1362,6 +1371,13 @@ async function searchStock(
     ...(alternatives?.units.map((u) => u.skuId) ?? []),
     ...(stepUp ? [stepUp.skuId] : []),
   ]);
+  // How many of the shop's own photos each unit has, so "Mau lihat fotonya?"
+  // is offered only where there is something to show (2026-10-27).
+  const photos = await photoCountsOf(db, [
+    ...shown.map((u) => u.serial),
+    ...(alternatives?.units.map((u) => u.serial) ?? []),
+    ...(stepUp ? [stepUp.serial] : []),
+  ]);
 
   return {
     matched: total,
@@ -1388,11 +1404,14 @@ async function searchStock(
             `price so the list means something. Then recommend from what comes back.`,
         }
       : {}),
-    units: shown.map((u) => shelfUnit(u, ctx, left)),
+    units: shown.map((u) => shelfUnit(u, ctx, left, photos)),
     leftNote: LEFT_NOTE,
+    ...(photosOn(ctx) ? { photosNote: PHOTOS_NOTE } : {}),
     ...(alternatives && alternatives.units.length > 0
       ? {
-          alternatives: alternatives.units.map((u) => shelfUnit(u, ctx, left)),
+          alternatives: alternatives.units.map((u) =>
+            shelfUnit(u, ctx, left, photos),
+          ),
           alternativesNote: ALTERNATIVES_NOTE,
         }
       : {}),
@@ -1400,7 +1419,10 @@ async function searchStock(
       ? { accessory: alternatives.accessory, accessoryNote: ACCESSORY_NOTE }
       : {}),
     ...(stepUp
-      ? { stepUp: shelfUnit(stepUp, ctx, left), stepUpNote: STEP_UP_NOTE }
+      ? {
+          stepUp: shelfUnit(stepUp, ctx, left, photos),
+          stepUpNote: STEP_UP_NOTE,
+        }
       : {}),
     ...(shown.length === 0 && query && ctx.profile !== undefined
       ? { watchNote: WATCH_NOTE }
@@ -1432,6 +1454,11 @@ const LEFT_NOTE =
   "left is how many units of that exact variant are on the shelf. Only when left is 1 may you " +
   'say so ("tinggal 1 unit kak"), once, beside that unit. Never say a unit is the last one, ' +
   "or that stock is running out, unless left says so.";
+const PHOTOS_NOTE =
+  "photos is how many of the shop's own photos a unit has. Offer to show photos (\"Mau lihat " +
+  'fotonya kak?") only for a unit you named whose photos is above 0. When none of the units ' +
+  "you named has any, do not mention photos: ask whether they would like to come and see it " +
+  '("Mau datang lihat langsung kak, kapan enaknya?") instead.';
 const WATCH_NOTE =
   "Nothing they asked for is on the shelf. After any alternatives, offer to tell them when it " +
   'is in: "Mau saya kabari kalau sudah ready kak?". If they say yes, call watch_stock with ' +
@@ -1500,8 +1527,10 @@ function shelfUnit(
   },
   ctx: ToolContext,
   left?: ReadonlyMap<string, number>,
+  photos?: ReadonlyMap<string, number>,
 ) {
   const count = u.skuId !== undefined ? left?.get(u.skuId) : undefined;
+  const pictures = photos?.get(u.serial);
   return {
     serial: u.serial,
     ...label(u),
@@ -1511,7 +1540,39 @@ function shelfUnit(
     // How many of this variant are on the shelf — the ONLY source of "tinggal
     // 1 unit" (2026-10-27, honest urgency; `checkReply` holds a reply to it).
     ...(count !== undefined ? { left: count } : {}),
+    // How many photos `unit_photos` would send — the only thing that may
+    // offer "Mau lihat fotonya?" (2026-10-27). Absent when unknown.
+    ...(pictures !== undefined ? { photos: pictures } : {}),
   };
+}
+
+/**
+ * How many of the shop's own photos each unit carries (`UnitNotePhoto`
+ * under its notes — what `unit_photos` sends), by serial, every serial asked
+ * about included at 0. One read. A failure answers an empty map — "unknown",
+ * which offers no photos — rather than failing the search it rides on.
+ */
+export async function photoCountsOf(
+  db: PrismaClient,
+  serials: readonly string[],
+): Promise<Map<string, number>> {
+  const wanted = [...new Set(serials)];
+  if (wanted.length === 0) return new Map();
+  try {
+    const notes = await db.unitNote.findMany({
+      where: { unit: { serial: { in: wanted } } },
+      select: {
+        unit: { select: { serial: true } },
+        _count: { select: { photos: true } },
+      },
+    });
+    const out = new Map<string, number>(wanted.map((x) => [x, 0]));
+    for (const n of notes)
+      out.set(n.unit.serial, (out.get(n.unit.serial) ?? 0) + n._count.photos);
+    return out;
+  } catch {
+    return new Map();
+  }
 }
 
 /** Sellable units per variant, for `left`. One grouped read. */
@@ -1853,6 +1914,9 @@ async function checkSerial(
   const left = available
     ? await leftOf(db, [unit.skuId]).catch(() => new Map<string, number>())
     : new Map<string, number>();
+  const photos = available
+    ? await photoCountsOf(db, [unit.serial])
+    : new Map<string, number>();
   return {
     found: true,
     serial: unit.serial,
@@ -1862,6 +1926,12 @@ async function checkSerial(
     available,
     ...(available && left.has(unit.skuId)
       ? { left: left.get(unit.skuId)! }
+      : {}),
+    ...(photos.has(unit.serial)
+      ? {
+          photos: photos.get(unit.serial)!,
+          ...(photosOn(ctx) ? { photosNote: PHOTOS_NOTE } : {}),
+        }
       : {}),
     ...(available
       ? quote(askingPrice(unit), ctx)
@@ -2174,7 +2244,12 @@ async function lookupCustomer(db: PrismaClient, ctx: ToolContext) {
   return {
     known: true,
     ...(customer
-      ? { name: customer.name, customerSince: jakartaDate(customer.createdAt) }
+      ? {
+          // A placeholder filed by an earlier build ("unknown") is no name to
+          // greet anybody by (2026-10-27).
+          ...(realName(customer.name) ? { name: realName(customer.name) } : {}),
+          customerSince: jakartaDate(customer.createdAt),
+        }
       : {}),
     orders: orders.map((o) => ({
       code: o.code,
@@ -2444,7 +2519,8 @@ async function bookVisit(args: Record<string, unknown>, ctx: ToolContext) {
 
   const { write } = ctx.reserve;
   const e164 = toE164(ctx.from);
-  const name = clip(args["custName"], 80) || ctx.profileName?.trim() || e164;
+  const name =
+    realName(clip(args["custName"], 80)) ?? realName(ctx.profileName) ?? e164;
   const customerNote = clip(args["note"], 280) ?? null;
 
   try {
@@ -2748,6 +2824,7 @@ async function findUnitPhotos(
     ...label(best.u),
     ...(best.u.grade ? { grade: best.u.grade } : {}),
     ...quote(askingPrice(best.u), ctx),
+    photos: best.ids.length,
     photoIds: best.ids.slice(0, MAX_UNIT_PHOTOS),
     otherMatchingUnits: others,
     guidance:
@@ -2888,7 +2965,10 @@ async function rememberCustomer(
   ctx: ToolContext,
 ) {
   if (!ctx.profile) return { error: "Not available here." };
-  const name = clip(args["name"], 80);
+  // "unknown", "-", "tidak tahu", a phone number: a model that does not know
+  // a name writes one of these rather than leaving the field out, and saved
+  // it became the customer's name on /chat and every till (2026-10-27).
+  const name = realName(clip(args["name"], 80)) ?? undefined;
   const useCase = clip(args["use_case"], 160);
   const currentDevice = clip(args["current_device"], 120);
   const preference = clip(args["preference"], 200);
@@ -3061,7 +3141,7 @@ async function proposeReservation(
         .filter(Boolean),
     ),
   ].slice(0, 3);
-  const custName = clip(args["custName"], 80);
+  const custName = realName(clip(args["custName"], 80));
   if (!custName)
     return {
       needName: true,

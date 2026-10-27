@@ -21,6 +21,8 @@ export interface ShownUnit {
   readonly cycleCount?: number;
   /** Sellable units of this variant — the only source of "tinggal 1". */
   readonly left?: number;
+  /** The shop's own photos of it — the only reason to offer "Mau lihat fotonya?". */
+  readonly photos?: number;
 }
 
 /** A counted accessory as the stock lookup returns it — no serial. */

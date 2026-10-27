@@ -405,6 +405,15 @@ const USAGE: ReadonlyArray<[RegExp, string]> = [
     "school",
   ],
   [/\b(kantor|kerja|office|admin|ngetik|laporan|presentasi)\b/, "office"],
+  // "Buat nyatet aja sih" (owner's chat, 2026-10-27) was read as nothing.
+  [
+    /\b(nyatet|nyatat|catat|nyatet2|catatan|mencatat|notes?|note ?taking|nulis|menulis)\b/,
+    "note-taking",
+  ],
+  [
+    /\b(browsing|nonton|streaming|netflix|sosmed|sosial media|social media|sehari-?hari|daily)\b/,
+    "everyday use",
+  ],
   [/\b(gaming|game|main game)\b/, "gaming"],
   [
     /\b(machine learning|deep learning|ml|ai model|data science|training model)\b/,
@@ -470,6 +479,11 @@ const EN =
 const ID =
   /\b(ada|berapa|kak|min|mau|ya|yg|yang|gak|ga|nggak|bisa|dong|nya|kah|apa|aku|saya)\b/i;
 
+/** Does the message ask something ("?", "berapa", "bisa", "gimana"…)? */
+export function isQuestion(text: string): boolean {
+  return QUESTION.test(norm(text));
+}
+
 /** A plain yes: "iya", "boleh", "mau kak", "ok" (2026-10-27). */
 export function saysYes(text: string): boolean {
   const t = norm(text);
@@ -496,7 +510,12 @@ export function understand(
   const language = EN.test(t) && !ID.test(t) ? "en" : "id";
   const query = productQuery(t);
   const budgetWord = BUDGET_WORDS.test(t);
-  const { min, max } = budgetOf(t, Boolean(query) || budgetWord);
+  // "15 jutaan", "12 juta-an": about that much (2026-10-27 — read as nothing
+  // before, so a budget given in answer to the bot's question was lost).
+  const { min, max } = budgetOf(
+    t.replace(/(\d)\s*(?:jt|juta)\s*-?\s*an\b/g, "$1 juta"),
+    Boolean(query) || budgetWord,
+  );
   const serials = [...t.matchAll(SERIAL)]
     .map((m) => m[1]!.toUpperCase())
     .filter(looksLikeSerial);
@@ -572,4 +591,97 @@ export function understand(
     occupation,
     buying: asksToBuy(text),
   };
+}
+
+// --- an answer to the bot's own question ---------------------------------------
+
+/**
+ * The bot's own discovery questions (replies.ts `QUESTIONS`, and the AI's
+ * versions of them): what it is for, the budget, new or second, the screen,
+ * the apps.
+ */
+const ASKED_ABOUT_THEM =
+  /\b(buat apa|untuk apa|dipakai buat|dipake buat|dipakai untuk|keperluan|kebutuhan(nya)?|budget(nya)?|bajet|kisaran|baru atau second|ukuran layar|layar 13|aplikasi(nya)?|use it for|budget|spend|preferences?|screen size|which apps)\b/i;
+
+/** Did the bot's last reply ask about the customer's needs? */
+export function askedAboutThem(lastReply: string | null | undefined): boolean {
+  const r = lastReply ?? "";
+  return r.includes("?") && ASKED_ABOUT_THEM.test(r);
+}
+
+/**
+ * Is this message only the customer telling the bot about themselves — what
+ * it is for, a budget, what they like — typically in answer to the bot's own
+ * question (owner report 2026-10-27: "Buat nyatet aja sih" and "Kuliah" were
+ * both handed to a colleague as "Not in the answers")? Such a message is
+ * saved and answered — a recommendation or the next question — and is never a
+ * hand-over.
+ *
+ * A QUESTION is not one ("garansinya berapa lama?"), whatever it mentions.
+ * Pure.
+ */
+export function answersOwnQuestion(
+  text: string,
+  now: Date,
+  lastReply: string | null = null,
+): boolean {
+  const t = norm(text);
+  if (t.trim() === "" || QUESTION.test(t)) return false;
+  const u = understand(text, now, { proposalOpen: false, lastShown: [] });
+  if (u.buying) return false;
+  if (u.intent === "tell") return true;
+  // A budget on its own: "15 jutaan", "di bawah 12jt".
+  if (
+    u.intent === "browse" &&
+    !u.query &&
+    (u.budgetMin !== null || u.budgetMax !== null)
+  )
+    return true;
+  // A short answer right after the bot asked about them, in words no table
+  // here knows ("buat bisnis online").
+  return (
+    u.intent === "other" &&
+    askedAboutThem(lastReply) &&
+    t.trim().split(" ").length <= 8
+  );
+}
+
+/**
+ * What a message says about the customer, as `remember_customer`'s
+ * arguments — the rules bot's reading, shared with the AI path so an answer
+ * to the bot's question is saved by code whatever the model does with it.
+ * `lastReply` lets a short answer to "buat apa?" in words no table knows be
+ * kept as the use case itself.
+ */
+export function profileFactsOf(
+  u: Understanding,
+  text?: string,
+  lastReply: string | null = null,
+): Record<string, string | number> {
+  const facts: Record<string, string | number> = {};
+  if (u.name) facts["name"] = u.name;
+  if (u.budgetMin !== null) facts["budget_min"] = u.budgetMin;
+  if (u.budgetMax !== null) facts["budget_max"] = u.budgetMax;
+  if (u.usage.length) facts["usage"] = u.usage.join(", ");
+  if (u.apps.length) facts["apps"] = u.apps.join(", ");
+  if (u.preferences.length) facts["preferences"] = u.preferences.join(", ");
+  if (u.occupation) {
+    facts["occupation"] = u.occupation;
+    // An estimate, and labelled one on the screen: a student is a student.
+    if (u.occupation === "student (university)")
+      facts["age_estimate"] = "18-24";
+    if (u.occupation === "student (school)") facts["age_estimate"] = "15-18";
+  }
+  const said = text?.replace(/\s+/g, " ").trim() ?? "";
+  if (
+    Object.keys(facts).length === 0 &&
+    said !== "" &&
+    u.intent === "other" &&
+    !QUESTION.test(norm(said)) &&
+    /\b(buat apa|untuk apa|dipakai|dipake|keperluan|kebutuhan|use it for)\b/i.test(
+      lastReply ?? "",
+    )
+  )
+    facts["use_case"] = said.slice(0, 160);
+  return facts;
 }

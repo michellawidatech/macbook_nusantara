@@ -5,7 +5,7 @@
  */
 
 import type { PrismaClient } from "@nusantara/db";
-import { formatRupiah } from "@nusantara/domain";
+import { formatRupiah, realName } from "@nusantara/domain";
 import type { AgentRole } from "./agents.js";
 import { visibleProfile } from "./reset.js";
 import { jakartaDate, jakartaTime } from "./tools.js";
@@ -141,7 +141,7 @@ export async function profileLine(
   const of = (k: string) =>
     p.facts.filter((f) => f.kind === k).map((f) => f.value);
   const parts = [
-    p.name ? `name ${p.name}` : "",
+    realName(p.name) ? `name ${realName(p.name)}` : "",
     p.occupation ? `occupation (estimate) ${p.occupation}` : "",
     p.ageEstimate ? `age (estimate) ${p.ageEstimate}` : "",
     budget ? `budget ${budget}` : "",
@@ -249,7 +249,7 @@ export async function profileKnown(
   const facts = seen.facts;
   const f = seen.fields;
   return {
-    name: (f && p.name?.trim()) || null,
+    name: (f && realName(p.name)) || null,
     usage: (f && Boolean(p.useCase)) || facts.some((x) => x.kind === "USAGE"),
     preferences:
       (f && Boolean(p.preference)) ||

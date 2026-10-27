@@ -81,9 +81,31 @@ const getFunnel = vi.fn(async () => ({
   ],
 }));
 
+const getHandovers = vi.fn(async () => ({
+  days: 7,
+  total: 3,
+  reasons: [
+    {
+      topic: "other",
+      reason: "no_terminal_tool",
+      count: 2,
+      examples: [
+        {
+          phone: "628980092978",
+          text: "Buat nyatet aja sih",
+          summary: "Perlu dibalas",
+          at: "2026-10-27T03:00:00.000Z",
+        },
+      ],
+    },
+    { topic: "negotiation", reason: "route", count: 1, examples: [] },
+  ],
+}));
+
 vi.mock("../src/lib/chatApi.js", async (original) => ({
   ...(await original<typeof import("../src/lib/chatApi.js")>()),
   getFunnel: () => getFunnel(),
+  getHandovers: () => getHandovers(),
   listEvaluations: (...a: unknown[]) => listEvaluations(...(a as [])),
   applyEvaluation: (...a: unknown[]) => applyEvaluation(...(a as [string])),
   dismissEvaluation: (id: string) => dismissEvaluation(id),
@@ -192,5 +214,23 @@ describe("the funnel (2026-10-27)", () => {
     expect(await row("Ready to buy")).toHaveTextContent("11 (7%)");
     expect(await row("Sales")).toHaveTextContent("9 (6%)");
     expect(getFunnel).toHaveBeenCalled();
+  });
+});
+
+describe("why the bot hands over (2026-10-27)", () => {
+  it("counts the last 7 days by topic and reason, and shows the messages behind one on click", async () => {
+    const user = userEvent.setup();
+    draw();
+    expect(
+      await screen.findByText("Handed over (last 7 days)"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("3 in total")).toBeInTheDocument();
+    expect(
+      screen.getByText("The bot never finished its answer"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("The message itself (a rule)")).toBeInTheDocument();
+    expect(screen.getByText("Negotiation")).toBeInTheDocument();
+    await user.click(screen.getByText("The bot never finished its answer"));
+    expect(await screen.findByText("Buat nyatet aja sih")).toBeInTheDocument();
   });
 });

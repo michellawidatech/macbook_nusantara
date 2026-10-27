@@ -150,8 +150,11 @@ export {
   dpKeepLine,
   holdingMessage,
   isHandoffTopic,
+  isHoldingLine,
   mentionsProduct,
+  offersPhotos,
   routeMessage,
+  withoutPhotoOffer,
   type AgentCapabilities,
   type HandoffTopic,
   type ReplyProblem,
@@ -249,6 +252,10 @@ export {
 } from "./rules/run.js";
 export {
   understand,
+  answersOwnQuestion,
+  askedAboutThem,
+  isQuestion,
+  profileFactsOf,
   nameOf,
   saysNo,
   saysYes,

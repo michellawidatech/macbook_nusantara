@@ -124,7 +124,10 @@ describe("an answer", () => {
     expect(hello?.handoff).toBeUndefined();
 
     const sneaky = await run(
-      [replies("Halo kak, Air M1 nya 7jt ya", "greeting")],
+      [
+        replies("Halo kak, Air M1 nya 7jt ya", "greeting"),
+        replies("Halo kak, Air M1 nya 7jt ya", "greeting"),
+      ],
       "halo kak",
     ).result;
     // A figure nothing vouched for is a price question (2026-09-29): the
@@ -141,7 +144,10 @@ describe("an answer", () => {
   });
 
   it("becomes a hand-over when it cites a source that does not exist", async () => {
-    const r = await run([replies("Bisa kak", "K99")], "bisa cicil?").result;
+    const r = await run(
+      [replies("Bisa kak", "K99"), replies("Bisa kak", "K99")],
+      "bisa cicil?",
+    ).result;
     expect(r?.handoff).toMatchObject({ forcedBy: "UNKNOWN_SOURCE" });
     // The customer gets the shop's fixed words, not the refused ones.
     expect(r?.reply).toBe("Bentar ya kak, aku cek dulu 🙏");
@@ -150,7 +156,10 @@ describe("an answer", () => {
 
   it("becomes a hand-over when it carries a figure the source does not", async () => {
     const r = await run(
-      [replies("Garansi 1 bulan kak, perpanjang 3 bulan tambah 500rb", "K3")],
+      [
+        replies("Garansi 1 bulan kak, perpanjang 3 bulan tambah 500rb", "K3"),
+        replies("Garansi 1 bulan kak, perpanjang 3 bulan tambah 500rb", "K3"),
+      ],
       "garansi berapa lama",
     ).result;
     expect(r?.handoff).toMatchObject({ forcedBy: "AMOUNT_NOT_IN_SOURCE" });
@@ -158,7 +167,10 @@ describe("an answer", () => {
 
   it("becomes a hand-over when it promises stock the source does not", async () => {
     const r = await run(
-      [replies("Ready kak, tokonya buka sampai jam 8", "store")],
+      [
+        replies("Ready kak, tokonya buka sampai jam 8", "store"),
+        replies("Ready kak, tokonya buka sampai jam 8", "store"),
+      ],
       "buka sampai jam berapa?",
     ).result;
     expect(r?.handoff).toMatchObject({
@@ -193,7 +205,10 @@ describe("an answer", () => {
     expect(looked?.toolsUsed).toEqual(["lookup_catalog", "reply"]);
 
     const unlooked = await run(
-      [replies("MacBook Air M2 ada varian 8/256 kak 😊", "catalog")],
+      [
+        replies("MacBook Air M2 ada varian 8/256 kak 😊", "catalog"),
+        replies("MacBook Air M2 ada varian 8/256 kak 😊", "catalog"),
+      ],
       "air m2 ram nya berapa?",
     ).result;
     expect(unlooked?.handoff).toMatchObject({ forcedBy: "UNKNOWN_SOURCE" });
@@ -275,9 +290,28 @@ describe("a message the code has already given to a person", () => {
 });
 
 describe("a turn that never decides", () => {
-  it("goes to a person once the lookups run out", async () => {
+  it("is made to reply once the lookups run out (2026-10-27)", async () => {
+    const { result, calls: made } = run(
+      [
+        ...Array.from({ length: 4 }, () =>
+          calls("search_knowledge", { query: "x" }),
+        ),
+        replies(
+          "Untuk crypto belum bisa kak, transfer atau cash ya 😊",
+          "chat",
+        ),
+      ],
+      "bisa bayar pakai crypto?",
+    );
+    const r = await result;
+    expect(r?.handoff).toBeUndefined();
+    expect(made[4]!.tool_choice).toEqual({ type: "tool", name: "reply" });
+    expect(made[3]!.tool_choice).toEqual({ type: "any" });
+  });
+
+  it("goes to a person only when even the forced reply never comes", async () => {
     const r = await run(
-      Array.from({ length: 4 }, () =>
+      Array.from({ length: 5 }, () =>
         calls("search_knowledge", { query: "x" }),
       ),
       "bisa bayar pakai crypto?",
@@ -286,7 +320,7 @@ describe("a turn that never decides", () => {
       topic: "other",
       forcedBy: "no_terminal_tool",
     });
-    expect(r?.steps).toBe(4);
+    expect(r?.steps).toBe(5);
   });
 
   it("goes to a person when the model writes words and calls nothing", async () => {
@@ -306,9 +340,9 @@ describe("a turn that never decides", () => {
             {
               name: "handoff_to_staff",
               input: {
-                topic: "other",
+                topic: "complaint",
                 summary: "ragu",
-                customer_message: "Admin kami bantu ya kak 🙏",
+                customer_message: "Aku bantu cek dulu ya kak 🙏",
               },
             },
           ],
@@ -316,7 +350,34 @@ describe("a turn that never decides", () => {
       ],
       "cod?",
     ).result;
-    expect(r?.handoff?.topic).toBe("other");
+    expect(r?.handoff?.topic).toBe("complaint");
+  });
+
+  it("…unless the hand-over is not one a person must take (2026-10-27)", async () => {
+    const r = await run(
+      [
+        {
+          kind: "tools",
+          uses: [
+            {
+              name: "reply",
+              input: { message: "Bisa kak 😊", sources: "K1" },
+            },
+            {
+              name: "handoff_to_staff",
+              input: {
+                topic: "other",
+                summary: "ragu",
+                customer_message: "Aku cek dulu ya kak 🙏",
+              },
+            },
+          ],
+        },
+      ],
+      "cod?",
+    ).result;
+    expect(r?.handoff).toBeUndefined();
+    expect(r?.reply).toBe("Bisa kak 😊");
   });
 });
 
@@ -377,14 +438,20 @@ describe("a reply that rests on the chat itself (2026-10-27)", () => {
 
   it("still holds a price or a 'ready' that only the chat vouches for", async () => {
     const price = await run(
-      [replies("Air M1 nya 7,5jt kak", "chat")],
+      [
+        replies("Air M1 nya 7,5jt kak", "chat"),
+        replies("Air M1 nya 7,5jt kak", "chat"),
+      ],
       "masih ingat yang kemarin?",
     ).result;
     expect(price?.handoff).toMatchObject({
       forcedBy: "AMOUNT_NOT_IN_SOURCE",
     });
     const ready = await run(
-      [replies("Air M2 nya masih ready kak", "")],
+      [
+        replies("Air M2 nya masih ready kak", ""),
+        replies("Air M2 nya masih ready kak", ""),
+      ],
       "yang kemarin gimana?",
     ).result;
     expect(ready?.handoff).toMatchObject({

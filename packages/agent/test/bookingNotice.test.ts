@@ -57,7 +57,9 @@ describe("a booking the bot made", () => {
         when: "2026-09-30T15:00",
         serials: "C02AIRM1",
       }),
-      // A figure no source gave: refused, and the turn goes to a person.
+      // A figure no source gave: refused, sent back once (2026-10-27),
+      // refused again — and the turn goes to a person.
+      replies("Siap kak, sudah di-keep, DP Rp500.000 ya", "greeting"),
       replies("Siap kak, sudah di-keep, DP Rp500.000 ya", "greeting"),
     ]);
     expect(result?.handoff?.forcedBy).toBe("AMOUNT_NOT_IN_SOURCE");
@@ -89,6 +91,7 @@ describe("a booking the bot made", () => {
         when: "2026-09-30T15:00",
         serials: "C02AIRM1",
       }),
+      replies("Siap kak, kode booking RV-2026/09-000007 ya 😊", "greeting"),
       replies("Siap kak, kode booking RV-2026/09-000007 ya 😊", "greeting"),
     ]);
     expect(result?.reply.match(/RV-2026\/09-000007/g)).toHaveLength(1);

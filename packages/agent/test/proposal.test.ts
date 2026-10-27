@@ -275,3 +275,86 @@ describe("remembering the customer", () => {
     ).toMatchObject({ budgetMin: 15_000_000n, budgetMax: 15_000_000n });
   });
 });
+
+describe("no placeholder for a name (owner report 2026-10-27)", () => {
+  it.each(["unknown", "-", "tidak tahu", "N/A", "628111000801"])(
+    "remember_customer drops the name %j and keeps the rest",
+    async (name) => {
+      const out = await dispatchTool(
+        db,
+        "remember_customer",
+        { name, usage: "kuliah" },
+        ctx(),
+      );
+      expect(out).toMatchObject({ saved: true });
+      const p = await db.customerProfile.findUniqueOrThrow({
+        where: { from: FROM },
+        include: { facts: true },
+      });
+      expect(p.name).toBeNull();
+      expect(p.facts.map((f) => f.value)).toEqual(["kuliah"]);
+      // And no Customer row is made under it.
+      expect(await db.customer.count()).toBe(0);
+    },
+  );
+
+  it("a placeholder alone saves nothing", async () => {
+    expect(
+      await dispatchTool(db, "remember_customer", { name: "unknown" }, ctx()),
+    ).toEqual({ saved: false });
+  });
+
+  it("a visit is not proposed under one: the name is asked for", async () => {
+    expect(
+      await propose({ when: TOMORROW_2PM, custName: "unknown" }),
+    ).toMatchObject({ needName: true });
+  });
+});
+
+describe("how many photos each unit has (2026-10-27)", () => {
+  const photograph = async (serial: string, n: number) => {
+    const unit = await db.unit.findUniqueOrThrow({ where: { serial } });
+    await db.unitNote.create({
+      data: {
+        unitId: unit.id,
+        serial,
+        body: "QC",
+        tag: "QC",
+        staffId: AGENT_STAFF,
+        at: NOW,
+        photos: {
+          create: Array.from({ length: n }, (_, i) => ({
+            url: `qc/${serial}/${i}.jpg`,
+            sortOrder: i,
+          })),
+        },
+      },
+    });
+  };
+
+  it("search_stock and check_serial carry the count, 0 included", async () => {
+    await photograph("MBP1", 2);
+    const live = {
+      ...ctx(),
+      capabilities: { stock: true, price: true, reserve: true, photos: true },
+    };
+    const out = (await dispatchTool(
+      db,
+      "search_stock",
+      { query: "macbook pro" },
+      live,
+    )) as {
+      units: Array<{ serial: string; photos?: number }>;
+      photosNote?: string;
+    };
+    const by = new Map(out.units.map((u) => [u.serial, u.photos]));
+    expect(by.get("MBP1")).toBe(2);
+    expect(by.get("MBP2")).toBe(0);
+    expect(out.photosNote).toMatch(
+      /only for a unit you named whose photos is above 0/,
+    );
+    expect(
+      await dispatchTool(db, "check_serial", { serial: "MBP2" }, live),
+    ).toMatchObject({ photos: 0 });
+  });
+});

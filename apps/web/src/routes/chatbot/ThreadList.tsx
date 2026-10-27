@@ -11,6 +11,7 @@
 import { Badge, Empty, Flex, Skeleton, Tooltip, Typography, theme } from "antd";
 import { CalendarFilled, FireFilled, UserOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
+import { realName } from "@nusantara/domain";
 import { fmtDateTime } from "../../lib/format.js";
 import type { InboxThread } from "../../lib/inboxApi.js";
 
@@ -18,7 +19,8 @@ import type { InboxThread } from "../../lib/inboxApi.js";
 export function threadName(
   t: Pick<InboxThread, "displayName" | "name" | "phone">,
 ) {
-  return t.displayName?.trim() || t.name?.trim() || t.phone;
+  // Never a placeholder like "unknown" (2026-10-27): the number instead.
+  return realName(t.displayName) ?? realName(t.name) ?? t.phone;
 }
 
 export interface ThreadListProps {

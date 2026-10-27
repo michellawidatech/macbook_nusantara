@@ -39,6 +39,7 @@ import {
   type Evaluation,
 } from "../../lib/chatApi.js";
 import { FunnelCard } from "./FunnelCard.js";
+import { HandoversCard } from "./HandoversCard.js";
 import {
   EVAL_STATUS_COLOR,
   agentLabel,
@@ -309,6 +310,8 @@ export function EvaluationPanel({ onOpenChat }: EvaluationPanelProps) {
     <Flex vertical gap={16}>
       {/* Where the chats go, before what the bot said in them (2026-10-27). */}
       <FunnelCard />
+      {/* Why it hands over (owner, 2026-10-27: "it escalates too much"). */}
+      <HandoversCard />
       <Card>
         <ProTable<Evaluation>
           rowKey="id"

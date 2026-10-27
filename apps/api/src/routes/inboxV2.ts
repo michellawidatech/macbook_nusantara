@@ -20,6 +20,7 @@ import {
   resetPointsFor,
   visibleProfile,
 } from "@nusantara/agent";
+import { realName } from "@nusantara/domain";
 import { ApiError, notFound } from "../errors.js";
 
 /** How many units one "attach media" may carry. */
@@ -128,7 +129,8 @@ export async function profileJson(
   const seen = visibleProfile(p, await resetPointFor(db, phone));
   const f = seen.fields;
   return {
-    name: (f ? p.name : null) ?? p.customer?.name ?? null,
+    // Never a placeholder a model filed ("unknown", 2026-10-27).
+    name: (f ? realName(p.name) : null) ?? realName(p.customer?.name),
     ageEstimate: f ? p.ageEstimate : null,
     occupation: f ? p.occupation : null,
     // A profile written before the range existed has only `budget`.
@@ -347,7 +349,7 @@ export async function listExtras(db: PrismaClient, phones: readonly string[]) {
       lead: isLead(m, resets.get(phone) ?? null),
       leadScore: scored.has(phone) ? (m?.leadScore ?? null) : null,
       reservation: held.has(phone),
-      displayName: customer?.name?.trim() || profile?.name?.trim() || null,
+      displayName: realName(customer?.name) ?? realName(profile?.name),
     });
   }
   return out;

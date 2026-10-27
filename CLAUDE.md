@@ -3309,6 +3309,20 @@ Decisions that outlived those documents:
   `/new` call `forgetProfile` (learned columns incl. name nulled, BOT facts
   `removedAt`; staff facts and the POS customer stay) and every reader ignores
   a lead, score or fact older than `resetPointFor`. No schema change.
+- **The AI decides; a hand-over is the exception — 2026-10-27, later.** *"It
+  escalates too much."* "Buat nyatet aja sih" / "Kuliah" went to staff as "Not
+  in the answers": the fixed `HOLDING_LINE.other` is only sent by a forced
+  hand-over (a refused draft, or out of steps). Now: an answer to the bot's own
+  question (`answersOwnQuestion`) is saved by code (`profileFactsOf`) and never
+  handed over; a refused draft goes back ONCE with what was wrong and the shelf's
+  facts (`retryNote`), only a second refusal hands over; a hand-over outside
+  `HANDOVER_CASES` (payment proof, offer, closing, complaint, customer media,
+  asks for a person, unpriced unit) is sent back once; out of steps, one call is
+  forced to `reply`; the rules bot answers small talk. Stock facts carry
+  `photos` — "Mau lihat fotonya?" only where >0, else the visit question. A
+  hand-over line is labelled Bot (`botWroteReply`, `entities.handoff.reply`);
+  `realName` (domain) refuses/hides "unknown"-type names. Evaluation shows
+  *Handed over (last 7 days)* (`GET /api/chat/handovers`). No schema change.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

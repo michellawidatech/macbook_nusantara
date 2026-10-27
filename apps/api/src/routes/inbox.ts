@@ -53,10 +53,12 @@ import {
   forgetProfile,
   RESET_INTENT,
   askingPrice,
+  isHoldingLine,
   isResetCommand,
   phoneForms,
   summarySince,
 } from "@nusantara/agent";
+import { realName } from "@nusantara/domain";
 import { ApiError, forbidden, notFound } from "../errors.js";
 import {
   evaluationsFor,
@@ -250,6 +252,34 @@ export interface Handoff {
  * cast, and a row escalated before 2026-09-18 — no `handoff` object, intent
  * `perlu_staf` — still reads as a hand-over with no note.
  */
+/**
+ * Did the BOT write this row's reply? (owner report 2026-10-27: the bot's own
+ * "Bentar ya kak, aku cek dulu 🙏" read as Staff on /chat.)
+ *
+ * `answeredByAgent` says so for an answer, but a hand-over row is written
+ * with it false — the flag also means "the bot dealt with this", which a
+ * hand-over did not — and a colleague's later close stamps their id on it.
+ * So the reply is the bot's when the flag says so, when no person is named on
+ * the row (staff replies always are), when it is the line the worker recorded
+ * with the hand-over (`entities.handoff.reply`), or — rows from before that
+ * was recorded — when it is one of the bot's own fixed hand-over lines.
+ */
+export function botWroteReply(m: {
+  readonly replyText: string | null;
+  readonly answeredByAgent: boolean;
+  readonly answeredById?: string | null;
+  readonly entities?: unknown;
+}): boolean {
+  if (!m.replyText) return false;
+  if (m.answeredByAgent || !m.answeredById) return true;
+  const h =
+    m.entities && typeof m.entities === "object"
+      ? (m.entities as { handoff?: { reply?: unknown } }).handoff
+      : undefined;
+  if (h && typeof h === "object" && h.reply === m.replyText) return true;
+  return isHoldingLine(m.replyText);
+}
+
 export function readHandoff(
   intent: string | null,
   entities: unknown,
@@ -394,7 +424,7 @@ export function inboxRouter(
             };
           })(),
           phone: r.phone,
-          name: r.name,
+          name: realName(r.name),
           channel: "WHATSAPP" as const,
           lastText: r.lastText,
           lastAt: r.lastAt.toISOString(),
@@ -470,6 +500,7 @@ export function inboxRouter(
           msgType: true,
           replyText: true,
           answeredByAgent: true,
+          answeredById: true,
           answeredAt: true,
           name: true,
           intent: true,
@@ -587,7 +618,11 @@ export function inboxRouter(
         phone: phone.data,
         // The most recent profile name Meta sent, since a customer can
         // rename themselves mid-thread and the newest is the right one.
-        name: messages.reduce<string | null>((acc, m) => m.name ?? acc, null),
+        // Never a placeholder ("unknown"): the page falls back to the number.
+        name: messages.reduce<string | null>(
+          (acc, m) => realName(m.name) ?? acc,
+          null,
+        ),
         channel: "WHATSAPP",
         windowClosesAt:
           lastInboundAt && open
@@ -636,7 +671,7 @@ export function inboxRouter(
         customer: customer
           ? {
               id: customer.id,
-              name: customer.name,
+              name: realName(customer.name),
               phone: customer.phone,
               since: customer.createdAt.toISOString(),
               referralSource: customer.referralSource?.name ?? null,
@@ -691,8 +726,8 @@ export function inboxRouter(
           reply: m.replyText
             ? {
                 text: m.replyText,
-                byAgent: m.answeredByAgent,
-                by: m.answeredBy?.name ?? null,
+                byAgent: botWroteReply(m),
+                by: botWroteReply(m) ? null : (m.answeredBy?.name ?? null),
                 at: m.answeredAt?.toISOString() ?? null,
                 /** The newest staff verdict on this reply (Evaluation). */
                 evaluation: evaluations.get(m.id) ?? null,

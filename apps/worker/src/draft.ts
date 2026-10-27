@@ -126,6 +126,7 @@ import {
   chatbotSettings,
   leadScoreOf,
   understand,
+  answersOwnQuestion,
   openProposalLine,
   personaFor,
   profileLine,
@@ -861,6 +862,11 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         shown: lastShown.length > 0,
       });
       const hint = matchesNote(knowledge, matchesFor(knowledge, current));
+      // Only telling the bot about themselves, in answer to its own question
+      // ("Buat nyatet aja sih", "Kuliah"): saved and answered, never handed
+      // over (owner report 2026-10-27).
+      const lastReply = newestFirst[0]?.reply ?? null;
+      const selfAnswer = !route && answersOwnQuestion(current, at, lastReply);
 
       const ctx: ToolContext = {
         from,
@@ -966,6 +972,8 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                     hint,
                     capabilities,
                     alreadyTold,
+                    selfAnswer,
+                    lastReply,
                     onError: (err) => {
                       failure = err;
                     },
@@ -1018,6 +1026,8 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           hint,
           capabilities,
           alreadyTold,
+          selfAnswer,
+          lastReply,
           onError: (err) => {
             failure = err;
           },
@@ -1115,6 +1125,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                         ? { forcedBy: result.handoff.forcedBy }
                         : {}),
                       at: answeredAt.toISOString(),
+                      // The line the BOT sent with it, so /chat labels it Bot
+                      // even after a colleague closes the row (2026-10-27).
+                      reply: result.reply,
                     },
                   },
                 }
