@@ -20,6 +20,7 @@ import {
   type RowOf,
   type WriteContext,
   blankToNull,
+  booksClosedUntil,
   dateOfDay,
   dayOf,
   indexIn,
@@ -969,9 +970,8 @@ async function removeUnusedCustomer(
  * An adjustment typed into Income & Expense can be deleted (owner ask
  * 2026-10-24: "we should be able to delete the income expense adjustment").
  * No foreign key points at `Expense` or `ManualIncome`, so nothing is
- * orphaned; what IS checked here is the book close — a day inside a closed
- * month keeps its adjustments, as it keeps its finished sales, and the browser
- * asks the same (`lib/adjustmentDeletion.ts`). A cash ↔ bank move arrives as
+ * orphaned; what WAS checked here is the book close (retired 2026-10-27, so
+ * nothing is refused now — `booksClosedUntil`). A cash ↔ bank move arrives as
  * both halves in one changeset, because the browser removes both.
  */
 async function removeAdjustment(
@@ -996,15 +996,13 @@ async function removeAdjustment(
   // A supplier refund's return carries the derived `refundReceived`.
   const returnId = "unitReturnId" in row ? row.unitReturnId : null;
   if (typeof returnId === "string") ctx.touch("returns", returnId);
-  const closed = await tx.appSetting.findUnique({
-    where: { key: "finance.booksClosedAt" },
-    select: { value: true },
-  });
-  if (closed && closed.value.trim() !== "") {
-    const until = new Date(closed.value);
-    // `date` is a Jakarta day; it is inside the close when its first instant is.
+  // Never closed since the book close was retired, 2026-10-27
+  // (`booksClosedUntil`). `date` is a Jakarta day; it was inside the close
+  // when its first instant was.
+  const until = booksClosedUntil();
+  if (until !== null) {
     const starts = new Date(`${row.date}T00:00:00+07:00`);
-    if (!Number.isNaN(until.getTime()) && starts <= until) {
+    if (!Number.isNaN(starts.getTime()) && starts <= until) {
       throw new StoreValidationError(
         `Bukunya sudah ditutup untuk tanggal ${row.date}; penyesuaian ini tidak bisa dihapus (${collection} ${id}).`,
         collection,

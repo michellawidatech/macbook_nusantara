@@ -34,6 +34,7 @@ import {
   SOURCE_OF_PLATFORM,
   STATE_OF_PAY_STATUS,
   blankToNull,
+  booksClosedUntil,
   dateOfDay,
   dayOf,
   instantOf,
@@ -1165,7 +1166,7 @@ async function syncOrderAdjustments(
  * StockMove that names the order still finds it.
  *
  * Refused, each because undoing it here would have to guess: a closed book
- * (`finance.booksClosedAt`), a return (an adjustment, a refund or a line
+ * (retired 2026-10-27, `booksClosedUntil`), a return (an adjustment, a refund or a line
  * already closed), a trade-in, a marketplace payout received against it, or
  * an Income & Expense line naming it. `lib/saleDeletion.ts` in the web app
  * asks the same questions so the button can say why before anybody presses.
@@ -1205,21 +1206,11 @@ async function cancelSale(ctx: WriteContext, id: string): Promise<void> {
       "orders",
       id,
     );
-  const closed = await tx.appSetting.findUnique({
-    where: { key: "finance.booksClosedAt" },
-    select: { value: true },
-  });
-  if (closed && closed.value.trim() !== "") {
-    const until = new Date(closed.value);
-    // Locked only once finished (2026-10-22): a sale still waiting on money
-    // stays open after the close.
-    if (
-      !Number.isNaN(until.getTime()) &&
-      order.ts <= until &&
-      order.status === "LUNAS"
-    )
-      throw refuse("bukunya sudah ditutup.");
-  }
+  // Locked only once finished (2026-10-22) — and never, since the book close
+  // was retired on 2026-10-27 (`booksClosedUntil`).
+  const until = booksClosedUntil();
+  if (until !== null && order.ts <= until && order.status === "LUNAS")
+    throw refuse("bukunya sudah ditutup.");
   const c = order._count;
   if (c.adjustments > 0 || c.payments > 0 || c.items > 0)
     throw refuse("ada retur di dalamnya.");
@@ -2195,26 +2186,6 @@ export const opnames: Adapter<"opnames"> = {
 // ---------------------------------------------------------------------------
 
 /**
- * The instant the book is closed until (`finance.booksClosedAt`), or null
- * while nothing is closed. Memoised per commit.
- */
-async function booksClosedUntil(ctx: WriteContext): Promise<Date | null> {
-  if (ctx.memo.has("booksClosedUntil"))
-    return ctx.memo.get("booksClosedUntil") as Date | null;
-  const row = await ctx.tx.appSetting.findUnique({
-    where: { key: "finance.booksClosedAt" },
-    select: { value: true },
-  });
-  let until: Date | null = null;
-  if (row && row.value.trim() !== "") {
-    const d = new Date(row.value);
-    if (!Number.isNaN(d.getTime())) until = d;
-  }
-  ctx.memo.set("booksClosedUntil", until);
-  return until;
-}
-
-/**
  * A service charge or a whole visit taken out (owner 2026-10-26, spec §2).
  * This REVERSES 2026-09-08's "a charge is edited, never removed" and is the
  * sixth sanctioned hard delete: `nusantara_app` holds DELETE on
@@ -2224,14 +2195,11 @@ async function booksClosedUntil(ctx: WriteContext): Promise<Date | null> {
  * the day it opened and every charge's day) — the same reading the browser's
  * `lib/serviceActions.ts` and an Income & Expense adjustment's deletion use,
  * so a charge typed at 06:00 on the first of a month is not "closed" by a book
- * closed to the last day of the month before.
+ * closed to the last day of the month before. Never refused since the book
+ * close was retired on 2026-10-27 (`booksClosedUntil`).
  */
-async function assertServiceBooksOpen(
-  ctx: WriteContext,
-  visitId: string,
-  at: Date,
-): Promise<void> {
-  const until = await booksClosedUntil(ctx);
+function assertServiceBooksOpen(visitId: string, at: Date): void {
+  const until = booksClosedUntil();
   if (until !== null && dateOfDay(dayOf(at)) <= until) {
     throw new StoreValidationError(
       `Bukunya sudah ditutup untuk tanggal ${dayOf(at)}; biaya servis ini tidak bisa dihapus (services ${visitId}).`,
@@ -2267,7 +2235,7 @@ function removeServiceFeesLater(
         where: { serviceFeeId: { in: [...feeIds] } },
         select: { id: true, date: true },
       });
-      const until = await booksClosedUntil(ctx);
+      const until = booksClosedUntil();
       for (const e of paid) {
         if (until !== null && dateOfDay(e.date) <= until) {
           throw new StoreValidationError(
@@ -2327,8 +2295,8 @@ async function removeServiceVisit(
     select: { openedAt: true, fees: { select: { id: true, at: true } } },
   });
   if (visit === null) return;
-  await assertServiceBooksOpen(ctx, id, visit.openedAt);
-  for (const f of visit.fees) await assertServiceBooksOpen(ctx, id, f.at);
+  assertServiceBooksOpen(id, visit.openedAt);
+  for (const f of visit.fees) assertServiceBooksOpen(id, f.at);
   removeServiceFeesLater(
     ctx,
     id,
@@ -2438,8 +2406,7 @@ export const services: Adapter<"services"> = {
           }
         }
         if (left.size > 0) {
-          for (const f of left.values())
-            await assertServiceBooksOpen(ctx, n.id, f.at);
+          for (const f of left.values()) assertServiceBooksOpen(n.id, f.at);
           removeServiceFeesLater(ctx, n.id, [...left.keys()], false);
         }
       }

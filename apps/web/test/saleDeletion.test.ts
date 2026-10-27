@@ -10,7 +10,6 @@ import {
   saleDeletionBlock,
   takeUnitOffSale,
 } from "../src/lib/saleDeletion.js";
-import { endOfMonth, isBookClosed } from "../src/lib/bookClose.js";
 import { appendEvent, getDb, removeEvent } from "../src/mock/store.js";
 import type { MockDb, Order } from "../src/mock/seed.js";
 
@@ -25,8 +24,7 @@ function plainSale(db: MockDb): Order {
     (x) =>
       x.serials.length > 0 &&
       (x.lines?.length ?? 0) === 0 &&
-      saleDeletionBlock({ ...db, settings: {} as MockDb["settings"] }, x) ===
-        undefined,
+      saleDeletionBlock(db, x) === undefined,
   );
   expect(o).toBeDefined();
   return o!;
@@ -44,7 +42,6 @@ const opts = () => {
 describe("deleting a sale", () => {
   it("removes it and puts each unit back as its history was before the sale", () => {
     const db = copy();
-    db.settings = { ...db.settings, booksClosedAt: "" };
     const sale = plainSale(db);
     const before = new Map(
       sale.serials.map((s) => [s, historyOf(db, s).at(-2)!]),
@@ -71,7 +68,6 @@ describe("deleting a sale", () => {
     // Owner report: a deleted sale left C02D503ZM6KJ Sold — a note the sale
     // wrote after the sold row hid the sold row from the delete.
     const db = copy();
-    db.settings = { ...db.settings, booksClosedAt: "" };
     const sale = plainSale(db);
     const serial = sale.serials[0]!;
     const before = historyOf(db, serial).at(-2)!;
@@ -92,7 +88,6 @@ describe("deleting a sale", () => {
 
   it("refuses when another document wrote on the unit after the sale", () => {
     const db = copy();
-    db.settings = { ...db.settings, booksClosedAt: "" };
     const sale = plainSale(db);
     appendEvent(
       db,
@@ -105,7 +100,6 @@ describe("deleting a sale", () => {
 
   it("puts a counted piece back with an opposite move, never by removing the sale's", () => {
     const db = copy();
-    db.settings = { ...db.settings, booksClosedAt: "" };
     const sale = plainSale(db);
     db.stockMoves.push({
       id: "sm-sold",
@@ -131,7 +125,6 @@ describe("deleting a sale", () => {
 
   it("frees a redeemed discount", () => {
     const db = copy();
-    db.settings = { ...db.settings, booksClosedAt: "" };
     const sale = plainSale(db);
     const discount = db.discounts[0]!;
     discount.used = 3;
@@ -140,7 +133,10 @@ describe("deleting a sale", () => {
     expect(db.discounts[0]!.used).toBe(2);
   });
 
-  it("refuses a settled sale inside a closed month, and changes nothing", () => {
+  it("deletes a settled sale in a month an old book close had closed (retired 2026-10-27)", () => {
+    // A shop that closed a month before the book close was retired still has
+    // `booksClosedAt` stored. It is ignored: reconciliation flags an edited
+    // period instead of refusing the edit.
     const db = copy();
     const sale = plainSale(db);
     sale.settled = true;
@@ -155,17 +151,15 @@ describe("deleting a sale", () => {
     ];
     db.settings = {
       ...db.settings,
-      booksClosedAt: endOfMonth(new Date(sale.ts)),
+      booksClosedAt: "2099-12-31T16:59:59.999Z",
     };
-    expect(saleDeletionBlock(db, sale)).toBe("BOOKS_CLOSED");
-    const orders = db.orders.length;
-    expect(deleteSale(db, sale.id, opts())).toBe(false);
-    expect(db.orders).toHaveLength(orders);
+    expect(saleDeletionBlock(db, sale)).toBeUndefined();
+    expect(deleteSale(db, sale.id, opts())).toBe(true);
+    expect(db.orders.some((o) => o.id === sale.id)).toBe(false);
   });
 
   it("refuses a sale with a return, a trade-in, or a unit that moved on", () => {
     const db = copy();
-    db.settings = { ...db.settings, booksClosedAt: "" };
     const sale = plainSale(db);
     expect(
       saleDeletionBlock(db, {
@@ -187,30 +181,9 @@ describe("deleting a sale", () => {
 
   it("refuses a sale an Income & Expense line names", () => {
     const db = copy();
-    db.settings = { ...db.settings, booksClosedAt: "" };
     const sale = plainSale(db);
     db.expenses.push({ ...db.expenses[0]!, id: "ex-link", orderId: sale.id });
     expect(saleDeletionBlock(db, sale)).toBe("LINKED_MONEY");
-  });
-});
-
-describe("closing the book a month at a time", () => {
-  it("closes at the last instant of the picked month, local time", () => {
-    const at = endOfMonth(new Date(2026, 8, 12));
-    const end = new Date(at);
-    expect(end.getMonth()).toBe(8);
-    expect(end.getDate()).toBe(30);
-    expect(end.getHours()).toBe(23);
-    expect(
-      isBookClosed(new Date(2026, 8, 30, 22).toISOString(), {
-        booksClosedAt: at,
-      }),
-    ).toBe(true);
-    expect(
-      isBookClosed(new Date(2026, 9, 1, 0, 1).toISOString(), {
-        booksClosedAt: at,
-      }),
-    ).toBe(false);
   });
 });
 

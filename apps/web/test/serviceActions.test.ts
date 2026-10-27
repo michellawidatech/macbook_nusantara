@@ -244,13 +244,13 @@ describe("planChargeDeletion", () => {
     expect(planChargeDeletion(src(), rec, "sf-0").eventIds).toEqual([]);
   });
 
-  it("is refused inside a closed book", () => {
+  it("is not refused by a book closed before the close was retired (2026-10-27)", () => {
     const plan = planChargeDeletion(
       src({ settings: { booksClosedAt: "2026-10-31T16:59:59.999Z" } }),
       visit(),
       "sf-1",
     );
-    expect(plan.block).toBe("BOOKS_CLOSED");
+    expect(plan.block).toBeUndefined();
   });
 });
 
@@ -377,13 +377,13 @@ describe("planVisitDeletion", () => {
     );
   });
 
-  it("is refused inside a closed book", () => {
+  it("is not refused by a book closed before the close was retired (2026-10-27)", () => {
     expect(
       planVisitDeletion(
         src({ settings: { booksClosedAt: "2026-10-31T16:59:59.999Z" } }),
         visit(),
       ).block,
-    ).toBe("BOOKS_CLOSED");
+    ).toBeUndefined();
   });
 
   it("says so, and guesses nothing, when the send row cannot be found", () => {
@@ -398,10 +398,10 @@ describe("planVisitDeletion", () => {
   });
 });
 
-describe("the closed book, by day", () => {
-  it("closes a day on or before the closing day, and not the day after", () => {
+describe("the closed book, by day — retired 2026-10-27", () => {
+  it("closes no day, even one inside a book closed before the retirement", () => {
     const settings = { booksClosedAt: "2026-10-31T16:59:59.999Z" };
-    expect(dayClosed("2026-10-15", settings)).toBe(true);
+    expect(dayClosed("2026-10-15", settings)).toBe(false);
     expect(dayClosed("2026-11-01", settings)).toBe(false);
     expect(dayClosed("2026-10-15", {})).toBe(false);
   });

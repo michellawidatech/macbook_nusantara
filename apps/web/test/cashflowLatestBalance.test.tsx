@@ -160,7 +160,7 @@ describe("deleting an adjustment", () => {
     );
   });
 
-  it("is refused inside a closed book", () => {
+  it("is not refused by a book closed before the close was retired (2026-10-27)", () => {
     typeTheClientsDay();
     mutate((d) => {
       d.settings.booksClosedAt = new Date(
@@ -170,8 +170,8 @@ describe("deleting an adjustment", () => {
     renderPage();
     expect(
       screen.getByRole("button", { name: "Delete ZZ ISI BENSIN" }),
-    ).toBeDisabled();
-    expect(adjustmentDeletionBlock(DAY, getDb().settings)).toBe("BOOKS_CLOSED");
+    ).toBeEnabled();
+    expect(adjustmentDeletionBlock(DAY, getDb().settings)).toBeUndefined();
   });
 
   it("takes both halves of a cash ↔ bank move, and only those", () => {

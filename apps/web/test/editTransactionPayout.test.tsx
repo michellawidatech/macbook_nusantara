@@ -151,10 +151,13 @@ describe("the reference ID follows the channel", () => {
   });
 });
 
-describe("closing a month locks only what is settled", () => {
+describe("the retired book close (2026-10-27)", () => {
+  // A month a shop closed before the retirement stays stored, and is ignored:
+  // reconciliation flags an edited period instead of locking it.
   const closed = { booksClosedAt: "2026-10-31T16:59:59.999Z" };
-  const sale = (over: Partial<Order>): Order =>
-    ({
+
+  it("locks no sale, even a settled one inside the old closed month", () => {
+    const sale = {
       id: "x",
       code: "SI-X",
       ts: "2026-10-10T03:00:00.000Z",
@@ -163,55 +166,19 @@ describe("closing a month locks only what is settled", () => {
       prices: {},
       discount: 0,
       source: "SHOPEE",
-      payMethod: "MARKETPLACE",
+      payMethod: "TRANSFER",
       settled: true,
       total: 1_000_000,
-      ...over,
-    }) as Order;
-
-  it("locks a settled sale inside the month", () => {
-    expect(
-      isSaleLocked(
-        sale({
-          payments: [
-            {
-              id: "p",
-              method: "TRANSFER",
-              amount: 1_000_000,
-              state: "SETTLED",
-              at: "2026-10-10T03:00:00.000Z",
-            },
-          ],
-        }),
-        closed,
-      ),
-    ).toBe(true);
-  });
-
-  it("leaves one still waiting on a marketplace open", () => {
-    expect(
-      isSaleLocked(
-        sale({
-          settled: false,
-          payments: [
-            {
-              id: "p",
-              method: "MARKETPLACE",
-              amount: 1_000_000,
-              state: "PENDING",
-              channel: "SHOPEE",
-              at: "2026-10-10T03:00:00.000Z",
-            },
-          ],
-        }),
-        closed,
-      ),
-    ).toBe(false);
-  });
-
-  it("leaves a sale after the month open", () => {
-    expect(isSaleLocked(sale({ ts: "2026-11-02T03:00:00.000Z" }), closed)).toBe(
-      false,
-    );
+      payments: [
+        {
+          id: "p",
+          method: "TRANSFER",
+          amount: 1_000_000,
+          state: "SETTLED",
+          at: "2026-10-10T03:00:00.000Z",
+        },
+      ],
+    } as Order;
+    expect(isSaleLocked(sale, closed)).toBe(false);
   });
 });

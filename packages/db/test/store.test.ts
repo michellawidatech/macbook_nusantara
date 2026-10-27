@@ -2388,9 +2388,9 @@ describe("a till's commit", () => {
     expect(finalCogs).toBe(cogsAfter);
   }, 180_000);
 
-  it("refuses to delete a sale inside a closed book", async () => {
+  it("deletes a settled sale inside a book closed before the close was retired (2026-10-27)", async () => {
     const shop = await loadDemo();
-    // A settled one: a sale still waiting on money stays open (2026-10-22).
+    // A settled one: that is what the old close locked (2026-10-22).
     const order = (shop["orders"] as Row[]).find(
       (o) => o["adjustments"] === undefined && o["settled"] === true,
     )!;
@@ -2404,14 +2404,17 @@ describe("a till's commit", () => {
       update: { value: new Date(Date.now() + 86_400_000).toISOString() },
     });
     try {
-      await expect(
-        commitStore(db, {
-          staffId: ACTOR,
-          changes: encodeChangeset(
-            diffStore({ orders: [order] }, { orders: [] }),
-          ),
-        }),
-      ).rejects.toThrow(/bukunya sudah ditutup/);
+      await commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ orders: [order] }, { orders: [] }),
+        ),
+      });
+      const row = await db.order.findUniqueOrThrow({
+        where: { id: order["id"] as string },
+        select: { status: true },
+      });
+      expect(row.status).toBe("BATAL");
     } finally {
       await db.appSetting.delete({ where: { key: "finance.booksClosedAt" } });
     }
@@ -2910,7 +2913,9 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
         },
         update: { value: new Date(Date.now() + 86_400_000).toISOString() },
       });
-      await expect(remove(second)).rejects.toThrow(/sudah ditutup/);
+      // The book close is retired (2026-10-27): a stored close is ignored.
+      const removed = await remove(second);
+      expect(removed.removed.expenses).toEqual(["exp_app_closed"]);
     } finally {
       await db.appSetting.deleteMany({
         where: { key: "finance.booksClosedAt" },
@@ -3261,7 +3266,8 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
         await db.serviceFee.count({ where: { visitId: "svc-app-1" } }),
       ).toBe(0);
 
-      // Inside a closed book: neither a charge nor the visit.
+      // Inside a book closed before the close was retired (2026-10-27): a
+      // charge and the visit go anyway — the stored close is ignored.
       const kept = decodeRow(
         "services",
         (
@@ -3282,19 +3288,27 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
         },
         update: { value: "2026-10-31T16:59:59.999Z" },
       });
-      await expect(
-        commit({ services: [kept] }, { services: [without(kept, "sf-app-3")] }),
-      ).rejects.toThrow(/sudah ditutup/);
-      await expect(
-        commit({ services: [kept] }, { services: [] }),
-      ).rejects.toThrow(/sudah ditutup/);
+      const lighter = decodeRow(
+        "services",
+        (
+          (
+            await commit(
+              { services: [kept] },
+              { services: [without(kept, "sf-app-3")] },
+            )
+          ).rows.services as Row[]
+        )[0]!,
+      );
+      expect(lighter["fees"] as Row[]).toHaveLength(0);
+      const keptGone = await commit({ services: [lighter] }, { services: [] });
+      expect(keptGone.removed.services).toEqual(["svc-app-2"]);
       expect(
         await db.serviceVisit.findUnique({ where: { id: "svc-app-2" } }),
-      ).not.toBeNull();
+      ).toBeNull();
 
-      // The book is judged on the charge's JAKARTA day: closed to 26 Oct
-      // (16:59:59.999Z), a charge at 18:00Z on the 26th is the 27th in
-      // Jakarta and may go — the instant alone would have refused it.
+      // It once judged the book on the charge's JAKARTA day (closed to 26 Oct
+      // 16:59:59.999Z, a charge at 18:00Z on the 26th was the 27th and could
+      // go). With the close retired the evening charge goes all the same.
       await db.appSetting.update({
         where: { key: "finance.booksClosedAt" },
         data: { value: "2026-10-26T16:59:59.999Z" },

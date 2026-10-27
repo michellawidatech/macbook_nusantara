@@ -1992,7 +1992,7 @@ Decisions that outlived those documents:
     STORE after the payment — `totals` is the render before it — and asks;
     it never closes by itself, because an invoice can be settled with a unit
     still waiting for a serial.
-  - **The book closes** (`lib/bookClose.ts`, `AppSetting`
+  - ⚠️ Retired 2026-10-27 — see below. **The book closes** (`lib/bookClose.ts`, `AppSetting`
     `finance.booksClosedAt`, no column) — *"for the transaction, add a close
     book button to close and lock all the transaction."* The parallel is
     `Po.closedAt`: that makes one purchase read-only, this makes a PERIOD of
@@ -2973,7 +2973,7 @@ Decisions that outlived those documents:
     a redeemed discount is freed. On Postgres it is `cancelSale`: `BATAL`
     (projected nowhere), payments voided, lines closed — a deleted invoice's
     footing. Checked server-side too, book close included.
-  - **The book closes a MONTH at a time** (`endOfMonth`, a month picker) —
+  - ⚠️ Retired 2026-10-27 — see below. **The book closes a MONTH at a time** (`endOfMonth`, a month picker) —
     *"close transaction monthly so before that all the transaction can be
     deleted"*. What is open can be edited and deleted; what is closed neither.
   - **A unit's history row can be deleted** from S/N history's ⋯ menu — *"some
@@ -3015,7 +3015,7 @@ Decisions that outlived those documents:
     keeps no reference — Shopee → Instagram + transfer strips it.
   - **Additional charges are rows** in the dialog (`Order.fees`; `extra` and
     `extraNote` re-derived), and the total follows.
-  - **A closed month locks only what is finished** — *"close book to all the
+  - ⚠️ Retired 2026-10-27 — see below. **A closed month locks only what is finished** — *"close book to all the
     payment that already settled (need to get X, received X, no pending),
     and we can still add received amount even if it is closed"*.
     `isSaleLocked` (bookClose.ts): inside the closed month AND fully settled,
@@ -3228,6 +3228,26 @@ Decisions that outlived those documents:
   delete: statement lines and matches (re-upload). A non-OPEN reconciliation
   blocks deleting an adjustment it names; reopened, `reconciliation_edit_drop`
   takes the edit with it. Do not generalise either.
+- **The book close is retired — 2026-10-27.** *"Remove the close book button
+  in the transaction history, it will be the reconcile basically."* The
+  button, its month dialog and the closed-book banner with its Reopen left
+  Transaction History, and the LOCK went with them (decided with the owner):
+  without the banner's Reopen, a month already closed in the shop would have
+  stayed read-only for ever. Reconciliation (daily cash + bank, monthly
+  e-statement matching) replaces it — a reconciled period that is later
+  edited is FLAGGED there, not refused here.
+  - Made inert in ONE place per side: the browser's `booksClosedAt`
+    (`lib/bookClose.ts`) answers undefined whatever is stored, so
+    `isBookClosed` / `isSaleLocked` answer false everywhere; the server's
+    `booksClosedUntil` (packages/db `store/context.ts`) answers null for sale
+    deletion, adjustment deletion and service-charge deletion. Sale
+    deletion's `BOOKS_CLOSED` reason is gone; the other call sites
+    (PaymentsModal, DebtPaymentModal, EditTransactionModal, CustomersPage,
+    returnUndo, adjustmentDeletion, serviceActions) were left, inert.
+  - ⚠️ **`finance.booksClosedAt` is kept and ignored** — still in the store
+    contract and the settings singleton so a shop that closed a month still
+    loads; nothing writes it any more. No migration, no data deleted.
+    `endOfDay` / `endOfMonth` went with the dialog.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
