@@ -3193,6 +3193,24 @@ Decisions that outlived those documents:
   API) `StockMove` is unreadable, so no accessory. Tasks read
   `Perlu cek harga — Air 15" M2 8/256` + a quote (`tasks.ts`); /chat maps old
   `Balasan bot ditahan (CODE)` notes the same way (`lib/taskSummary.ts`).
+- **Reconciliation, daily and monthly — 2026-10-27** (owner "1B 2B 3B 4A";
+  `docs/superpowers/specs/2026-10-27-reconciliation-design.md`, migration
+  `20261027170000_reconciliation`), finance access only. "POS balance" IS the
+  Cash and Bank cards: Income & Expense's row projection moved to
+  `lib/cashflowRows.ts` so both screens read one (`balancesOfRows`).
+  **Daily** counts bank and cash; a pot that differs lists that day's
+  movements with editable amounts, and an edit corrects the REAL record by its
+  own screen's rules (`applyAmountEdit`/`editBlock`), logged before → after on
+  `ReconciliationEdit`. "Changed since reconciled" is derived; Income & Expense
+  says "Today isn't reconciled" until both pots are. **Monthly** reads BCA's
+  PDF (`pdfjs-dist`, lazy-loaded) or KlikBCA's CSV by position and refuses one
+  that does not add up in SEN (`lib/bankStatement.ts`). ⚠️ A line stores the
+  rupiah as printed (truncated); sen are checked and shown, never carried.
+  `lib/bankMatch.ts`: EXACT and DATE_SHIFT ±3 match at once; SPLIT, MERGE,
+  TYPO, DEDUCTION (≤5%) are held SUGGESTED for Accept/Reject. ⚠️ Eighth hard
+  delete: statement lines and matches (re-upload). A non-OPEN reconciliation
+  blocks deleting an adjustment it names; reopened, `reconciliation_edit_drop`
+  takes the edit with it. Do not generalise either.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

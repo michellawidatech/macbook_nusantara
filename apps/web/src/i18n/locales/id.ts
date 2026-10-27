@@ -4598,4 +4598,172 @@ export const id: Record<string, string> = {
   // filed under, and the method a supplier-return credit is written with.
   "Unit expense": "Biaya unit",
   "Supplier return credit": "Kredit retur supplier",
+
+  // ── Reconciliation (2026-10-27) ──────────────────────────────────────────
+  // "Rekonsiliasi" is the bookkeeper's word and the one the owner used. A pot
+  // is "Bank" / "Kas" — the drawer is the shop's kas, as on Income & Expense.
+  Reconciliation: "Rekonsiliasi",
+  "finance.reconciliation": "Rekonsiliasi",
+  "cashflow.deleteReconciledMonth":
+    "Rekonsiliasi bank {{month}} mencocokkan baris ini. Buka kembali rekonsiliasi itu dulu.",
+  "cashflow.deleteReconciledDay":
+    "Rekonsiliasi {{pot}} tanggal {{day}} mencatat baris ini. Buka kembali rekonsiliasi itu dulu.",
+  "cashflow.todayUnreconciled": "Hari ini belum direkonsiliasi",
+  "recon.bank": "Bank",
+  "recon.cash": "Kas",
+  "recon.reconcile": "Rekonsiliasi",
+  "recon.blockNotFound": "Catatan ini sudah tidak ada.",
+  "recon.blockSaleLocked":
+    "Penjualan ini sudah selesai di bulan yang bukunya ditutup. Buka kembali buku untuk mengoreksinya.",
+  "recon.blockBooksClosed":
+    "Buku sudah ditutup untuk tanggal ini. Buka kembali untuk mengoreksi jumlahnya.",
+  "recon.blockServiceCharge":
+    "Ini membayar biaya servis — koreksi biayanya di meja servis, dan ini ikut.",
+  "recon.blockInvoiceClosed":
+    "Invoice supplier sudah ditutup. Buka kembali untuk mengoreksi pembayarannya.",
+  "recon.blockBelowAllocated":
+    "Dari deposit ini sudah dialokasikan ke invoice lebih dari jumlah ini.",
+  "recon.blockNotPositive":
+    "Jumlah harus lebih dari nol. Hapus catatannya di layarnya sendiri.",
+  "recon.enterOne": "Isi saldo bank, kas yang dihitung, atau keduanya.",
+  "recon.matchedPots": "{{pots}} cocok dengan POS.",
+  "recon.reconcileTitle": "Rekonsiliasi satu hari",
+  "recon.check": "Cocokkan dengan POS",
+  "recon.day": "Tanggal",
+  "recon.pickDay": "Pilih tanggalnya.",
+  "recon.actualBank": "Saldo bank (dari bank)",
+  "recon.countedCash": "Kas yang dihitung di laci",
+  "recon.savedOpen": "Tersimpan dengan selisih yang masih terbuka.",
+  "recon.savedBalanced": "{{pot}} sudah direkonsiliasi.",
+  "recon.potTitle": "Rekonsiliasi {{pot}} — {{day}}",
+  "recon.save": "Simpan rekonsiliasi",
+  "recon.posBalance": "Saldo POS",
+  "recon.actual": "Saldo sebenarnya",
+  "recon.difference": "Selisih",
+  "recon.noMovements":
+    "Tidak ada uang yang bergerak di kas/bank ini pada hari ini.",
+  "recon.time": "Jam",
+  "recon.descriptionItem": "Keterangan / barang",
+  "recon.added": "Ditambahkan",
+  "recon.amountOf": "Jumlah {{what}}",
+  "recon.addTransaction": "Tambah transaksi",
+  "recon.note": "Catatan",
+  "recon.noteNeeded":
+    "Tulis kenapa selisihnya dibiarkan — disimpan sebagai terbuka.",
+  "recon.leftOpen":
+    "Masih ada selisih {{amount}}. Kalau disimpan sekarang, hari ini tetap terbuka.",
+  "recon.whatChanged": "Yang diubah rekonsiliasi ini ({{n}})",
+  "recon.when": "Kapan",
+  "recon.record": "Catatan",
+  "recon.change": "Perubahan",
+  "recon.who": "Oleh",
+  "recon.reasonExact": "Jumlah sama, hari sama",
+  "recon.reasonDateShift": "Jumlah sama, dibukukan belakangan",
+  "recon.reasonTypo": "Salah ketik",
+  "recon.reasonDeduction": "Potongan",
+  "recon.reasonSplit": "Satu baris bank, beberapa transaksi POS",
+  "recon.reasonMerge": "Beberapa baris bank, satu transaksi POS",
+  "recon.reasonAdded": "Ditambahkan ke POS",
+  "recon.reasonManual": "Dipasangkan manual",
+  "recon.lineMatched": "Cocok",
+  "recon.lineSuggested": "Saran",
+  "recon.lineIgnored": "Dikesampingkan",
+  "recon.lineUnmatched": "Belum cocok",
+  "recon.guessNone": "Kategori belum ditebak",
+  "recon.doTypo": "Koreksi jumlah di POS menjadi {{amount}}",
+  "recon.doDeduction": "Catat {{amount}} sebagai biaya (pengeluaran)",
+  "recon.doSplit":
+    "{{n}} transaksi POS ini jumlahnya sama dengan baris bank ini",
+  "recon.doMerge":
+    "{{n}} baris bank ini jumlahnya sama dengan transaksi POS ini",
+  "recon.typoFixed": "Jumlah di POS sudah dikoreksi.",
+  "recon.feeLabel": "Biaya terpotong — {{what}}",
+  "recon.feeRecorded": "Biaya dicatat sebagai pengeluaran.",
+  "recon.paired": "Sudah dicocokkan.",
+  "recon.allMonths": "Semua bulan",
+  "recon.monthTitle": "Rekening koran — {{month}}",
+  "recon.statusReconciled": "Sudah direkonsiliasi",
+  "recon.statusOpen": "Terbuka",
+  "recon.openingOff":
+    "Rekening koran dibuka di {{statement}} dan POS di {{pos}} — selisih {{diff}}. Ada bulan sebelumnya yang tidak cocok; rekonsiliasi bulan itu dulu.",
+  "recon.statementOpening": "Saldo awal rekening koran",
+  "recon.posOpening": "Saldo awal POS",
+  "recon.statementClosing": "Saldo akhir rekening koran",
+  "recon.posClosing": "Saldo akhir POS",
+  "recon.linesState": "Cocok · dikoreksi · sisa",
+  "recon.reopen": "Buka kembali",
+  "recon.matchAgain": "Cocokkan lagi",
+  "recon.markReconciled": "Tandai bulan ini sudah direkonsiliasi",
+  "recon.suggestions": "Saran ({{n}})",
+  "recon.reason": "Alasan",
+  "recon.bankSide": "Bank",
+  "recon.posSide": "POS",
+  "recon.whatToDo": "Yang perlu dilakukan",
+  "recon.accept": "Terima",
+  "recon.reject": "Tolak",
+  "recon.statementLines": "Baris rekening koran",
+  "recon.searchLines": "Cari keterangan atau jumlah",
+  "recon.no": "No.",
+  "recon.matchedTo": "Dicocokkan dengan",
+  "recon.addToPos": "Tambah ke POS",
+  "recon.pair": "Pasangkan",
+  "recon.ignore": "Kesampingkan",
+  "recon.undo": "Batalkan",
+  "recon.posOnly": "Ada di POS, tidak ada di rekening koran ({{n}})",
+  "recon.posOnlyNone":
+    "Semua transaksi bank POS bulan ini ada di rekening koran.",
+  "recon.openRecord": "Buka",
+  "recon.pairTitle": "Pasangkan manual",
+  "recon.bankLines": "Baris bank",
+  "recon.posMovements": "Transaksi POS",
+  "recon.pairDiffers":
+    "Bank mencatat {{bank}} dan POS {{pos}}. Memasangkan tidak mengubah keduanya; koreksi catatannya kalau POS yang salah.",
+  "recon.ignoreTitle": "Kesampingkan baris ini",
+  "recon.ignoreWhy": "Kenapa POS tidak perlu mencatat baris ini?",
+  "recon.statusMatched": "Cocok",
+  "recon.statusAdjusted": "Dikoreksi",
+  "recon.problemNoLines": "File ini tidak berisi mutasi.",
+  "recon.problemAddUp":
+    "Saldo awal + kredit − debit menjadi {{computed}}, tetapi rekening koran ditutup di {{closing}}.",
+  "recon.problemCreditTotal":
+    "Total kredit menjadi {{summed}}; rekening koran menyebut {{stated}}.",
+  "recon.problemDebitTotal":
+    "Total debit menjadi {{summed}}; rekening koran menyebut {{stated}}.",
+  "recon.problemCreditCount":
+    "{{counted}} kredit terbaca; rekening koran menyebut {{stated}}.",
+  "recon.problemDebitCount":
+    "{{counted}} debit terbaca; rekening koran menyebut {{stated}}.",
+  "recon.problemBalance":
+    "Di baris {{line}} saldo berjalan seharusnya {{expected}}; rekening koran mencetak {{printed}}.",
+  "recon.posShort": "POS",
+  "recon.actualShort": "Sebenarnya",
+  "recon.diffShort": "Selisih",
+  "recon.changedSince": "Berubah sejak direkonsiliasi",
+  "recon.continuePot": "Lanjutkan {{pot}}",
+  "recon.reopenPot": "Buka kembali {{pot}}",
+  "recon.searchNote": "Cari catatan",
+  "recon.notAStatement":
+    "File ini tidak terbaca sebagai e-statement BCA atau unduhan mutasi KlikBCA.",
+  "recon.unreadable": "File tidak bisa dibaca.",
+  "recon.uploaded": "Rekening koran terbaca dan sudah dicocokkan.",
+  "recon.month": "Bulan",
+  "recon.statementOpenClose": "Saldo awal / akhir rekening koran",
+  "recon.posOpenClose": "Saldo awal / akhir POS",
+  "recon.openMonth": "Buka",
+  "recon.uploadStatement": "Unggah rekening koran",
+  "recon.daily": "Harian",
+  "recon.monthly": "Bulanan",
+  "recon.refusedTitle": "Rekening koran ini tidak diterima",
+  "recon.previewTitle": "Rekening koran — {{month}}",
+  "recon.replaceAndMatch": "Ganti barisnya dan cocokkan",
+  "recon.readAndMatch": "Cocokkan dengan POS",
+  "recon.addsUp":
+    "{{n}} mutasi terbaca — {{cr}} kredit dan {{db}} debit — dan rekening korannya cocok jumlahnya.",
+  "recon.period": "Periode",
+  "recon.openingOffShort":
+    "Saldo awalnya berbeda {{diff}} dari POS — ada bulan sebelumnya yang tidak cocok.",
+  "recon.senNote":
+    "{{n}} baris memuat sen. Jumlah disimpan dalam rupiah seperti tercetak; sennya sudah diperiksa dan tidak dibawa.",
+  "recon.replaces":
+    "Bulan ini sudah punya rekening koran. Baris dan pasangannya diganti; koreksi yang sudah dibuat tetap ada.",
 };

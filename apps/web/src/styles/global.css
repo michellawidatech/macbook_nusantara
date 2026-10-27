@@ -756,6 +756,25 @@ body {
     var(--nusantara-surface, #ffffff)
   ) !important;
 }
+/*
+ * Reconciliation's daily dialog (2026-10-27): an amount somebody corrected is
+ * yellow, a transaction added from the dialog blue — what Save is about to
+ * write, visible before it is written. On the cells, as above.
+ */
+.recon-row-changed > td {
+  background: color-mix(
+    in srgb,
+    var(--nusantara-warning, #faad14) 22%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
+.recon-row-added > td {
+  background: color-mix(
+    in srgb,
+    #1677ff 14%,
+    var(--nusantara-surface, #ffffff)
+  ) !important;
+}
 .shopee-legend-swatch {
   display: inline-block;
   width: 12px;

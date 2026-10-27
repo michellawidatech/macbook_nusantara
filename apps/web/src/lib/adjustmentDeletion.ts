@@ -18,16 +18,32 @@
  *   same day, amount and note.
  * - **A closed month keeps its adjustments**, as it keeps its sales: the
  *   figures were reported, and the book has to be reopened to change them.
+ * - **A closed reconciliation keeps them too** (2026-10-27). One that
+ *   corrected, added or matched the row names it, and the count it closed on
+ *   would stop adding up; reopen the reconciliation first. Once it is open,
+ *   the delete takes the reconciliation's edit and match with it
+ *   (`forgetRecord`) — the server does the same, and refuses the same.
  */
 import dayjs from "dayjs";
 import { isBookClosed, type BookCloseSettings } from "./bookClose.js";
-import type { Expense, ManualIncome, MockDb } from "../mock/seed.js";
+import type {
+  Expense,
+  ManualIncome,
+  MockDb,
+  MoneyRef,
+  Reconciliation,
+} from "../mock/seed.js";
+import { closedReconciliationNaming, forgetRecord } from "./reconciliation.js";
 
 export type AdjustmentRef =
   | { readonly kind: "expense"; readonly id: string }
   | { readonly kind: "income"; readonly id: string };
 
 type Ledgers = Pick<MockDb, "expenses" | "incomes">;
+type Reconciled = Pick<MockDb, "reconciliations" | "statementLines">;
+
+const moneyRef = (r: AdjustmentRef): MoneyRef =>
+  r.kind === "expense" ? { expenseId: r.id } : { incomeId: r.id };
 
 /** The words a cash ↔ bank pair shares: the expense's label, the income's note. */
 const moveNote = (e: Expense) => e.label ?? e.note ?? "";
@@ -72,15 +88,40 @@ export function adjustmentDeletionBlock(
 }
 
 /**
+ * The closed reconciliation that names this adjustment (or its other half),
+ * if one does — "reopen the reconciliation first".
+ */
+export function adjustmentReconciliationBlock(
+  db: Ledgers & Reconciled,
+  ref: AdjustmentRef,
+): Reconciliation | undefined {
+  const partner = transferPartner(db, ref);
+  return [ref, ...(partner ? [partner] : [])]
+    .map((r) => closedReconciliationNaming(db, moneyRef(r)))
+    .find((r) => r !== undefined);
+}
+
+/**
  * Remove the adjustment, and its other half when it is a cash ↔ bank move.
  * Returns how many rows went — 0 when it was already gone.
  */
-export function deleteAdjustment(db: Ledgers, ref: AdjustmentRef): number {
+export function deleteAdjustment(
+  db: Ledgers & Partial<Reconciled>,
+  ref: AdjustmentRef,
+): number {
   const refs = [ref];
   const partner = transferPartner(db, ref);
   if (partner) refs.push(partner);
   let removed = 0;
   for (const r of refs) {
+    if (db.reconciliations && db.statementLines)
+      forgetRecord(
+        {
+          reconciliations: db.reconciliations,
+          statementLines: db.statementLines,
+        },
+        moneyRef(r),
+      );
     const list: { id: string }[] =
       r.kind === "expense" ? db.expenses : db.incomes;
     const at = list.findIndex((x) => x.id === r.id);

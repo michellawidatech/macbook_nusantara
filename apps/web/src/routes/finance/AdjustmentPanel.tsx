@@ -31,7 +31,7 @@
  * different thing. ⚠️ Mock-only: prisma has neither a manual-income table nor
  * a nullable `Expense.label`.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dayjs, { type Dayjs } from "dayjs";
 import {
   App,
@@ -121,13 +121,44 @@ interface Row {
   channel?: string;
 }
 
+/**
+ * What the dialog opens with, when somebody else knows the answers already —
+ * Reconciliation adds the transaction a day or a statement line is missing
+ * (2026-10-27): its day, its pot's method, and for a bank line its amount,
+ * its words and a category guessed from them.
+ */
+export interface AdjustmentPreset {
+  direction?: Direction;
+  /** "" opens with no reason picked — the category is left to the person. */
+  reason?: string;
+  /** YYYY-MM-DD. */
+  date?: string;
+  amount?: number;
+  method?: string;
+  note?: string;
+}
+
+/** A row the dialog wrote. A cash ↔ bank move writes two. */
+export interface RecordedAdjustment {
+  kind: "expense" | "income";
+  id: string;
+  method: string;
+  amount: number;
+}
+
 export function AdjustmentPanel({
   addOpen,
   onCloseAdd,
   showHistory = true,
+  preset,
+  onRecorded,
 }: {
   addOpen: boolean;
   onCloseAdd: () => void;
+  /** The answers to open with. Read each time the dialog opens. */
+  preset?: AdjustmentPreset;
+  /** Told what was written, after it is. */
+  onRecorded?: (rows: RecordedAdjustment[]) => void;
   /**
    * Whether the adjustment history Card is drawn. Off on Income & Expense
    * from 2026-09-21 evening — every row this list would carry appears in the
@@ -148,6 +179,17 @@ export function AdjustmentPanel({
    */
   const [direction, setDirection] = useState<Direction>("EXPENSE");
   const [reason, setReason] = useState<string>("OPERATIONAL");
+  /*
+   * A preset is read when the dialog OPENS — the reason list depends on the
+   * direction, so both have to be in state before the form draws them.
+   */
+  useEffect(() => {
+    if (!addOpen) return;
+    setDirection(preset?.direction ?? "EXPENSE");
+    setReason(preset?.reason ?? "OPERATIONAL");
+    // Only on opening: a preset object rebuilt on every render of the caller
+    // must not reset what somebody has since picked.
+  }, [addOpen]);
   const [guideOpen, setGuideOpen] = useState(false);
   /** What has been typed into the transaction picker — a code, a serial. */
   const [orderQuery, setOrderQuery] = useState("");
@@ -206,12 +248,19 @@ export function AdjustmentPanel({
       const date = v.date.format("YYYY-MM-DD");
       // Income & Expense sorts a day's typed rows by when they were typed.
       const createdAt = new Date().toISOString();
+      const written: RecordedAdjustment[] = [];
       mutate((d) => {
         if (v.direction === "MOVE") {
           const move = MOVES.find((m) => m.value === v.reason) ?? MOVES[0];
           const note = v.note?.trim() || moveLabel(move.value);
+          const outId = nextId("e");
+          const inId = nextId("mi");
+          written.push(
+            { kind: "expense", id: outId, method: move.from, amount: v.amount },
+            { kind: "income", id: inId, method: move.to, amount: v.amount },
+          );
           d.expenses.unshift({
-            id: nextId("e"),
+            id: outId,
             kind: "TRANSFER",
             label: note,
             amount: v.amount,
@@ -220,7 +269,7 @@ export function AdjustmentPanel({
             method: move.from,
           });
           d.incomes.unshift({
-            id: nextId("mi"),
+            id: inId,
             reason: "TRANSFER",
             amount: v.amount,
             date,
@@ -231,8 +280,15 @@ export function AdjustmentPanel({
           return;
         }
         if (v.direction === "INCOME") {
+          const id = nextId("mi");
+          written.push({
+            kind: "income",
+            id,
+            method: v.method,
+            amount: v.amount,
+          });
           d.incomes.unshift({
-            id: nextId("mi"),
+            id,
             reason: v.reason as IncomeReason,
             amount: v.amount,
             date,
@@ -243,8 +299,15 @@ export function AdjustmentPanel({
           });
           return;
         }
+        const id = nextId("e");
+        written.push({
+          kind: "expense",
+          id,
+          method: v.method,
+          amount: v.amount,
+        });
         d.expenses.unshift({
-          id: nextId("e"),
+          id,
           kind: v.reason as ExpenseKind,
           amount: v.amount,
           date,
@@ -267,6 +330,7 @@ export function AdjustmentPanel({
             ? t("adjust.incomeRecorded", "Income recorded.")
             : t("adjust.expenseRecorded", "Expense recorded."),
       );
+      onRecorded?.(written);
       close();
     });
 
@@ -502,14 +566,19 @@ export function AdjustmentPanel({
           form={form}
           layout="vertical"
           initialValues={{
-            direction: "EXPENSE",
-            reason: "OPERATIONAL",
-            date: dayjs(),
+            direction: preset?.direction ?? "EXPENSE",
+            reason:
+              preset?.reason === ""
+                ? undefined
+                : (preset?.reason ?? "OPERATIONAL"),
+            date: preset?.date ? dayjs(preset.date) : dayjs(),
             // Cash, because the adjustments this dialog exists for are the
             // over-the-counter ones — a courier paid from the drawer, takings
             // the till missed. Anything on a bank statement is usually already
             // a sale or an invoice.
-            method: "TUNAI",
+            method: preset?.method ?? "TUNAI",
+            ...(preset?.amount !== undefined ? { amount: preset.amount } : {}),
+            ...(preset?.note ? { note: preset.note } : {}),
           }}
         >
           {/* Segmented rather than a Select: two mutually exclusive options

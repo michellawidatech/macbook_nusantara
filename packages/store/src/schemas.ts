@@ -151,6 +151,26 @@ export const INCOME_REASONS = [
   "SELISIH",
 ] as const;
 export const PAYMENT_LOG_ACTIONS = ["ADDED", "AMENDED", "REMOVED"] as const;
+/**
+ * Reconciliation (owner ask 2026-10-27, docs/superpowers/specs/
+ * 2026-10-27-reconciliation-design.md): a DAILY count of the bank and the
+ * drawer, and a MONTHLY match of the bank against its e-statement.
+ */
+export const RECON_KINDS = ["DAILY", "MONTHLY"] as const;
+export const RECON_POTS = ["BANK", "CASH"] as const;
+export const RECON_STATUSES = [
+  "OPEN",
+  "MATCHED",
+  "ADJUSTED",
+  "RECONCILED",
+] as const;
+export const STATEMENT_LINE_STATUSES = [
+  "UNMATCHED",
+  "MATCHED",
+  "SUGGESTED",
+  "IGNORED",
+] as const;
+export const RECON_EDIT_ACTIONS = ["EDITED", "ADDED"] as const;
 export const SETTLEMENT_FEE_KINDS = [
   "COMMISSION",
   "SERVICE",
@@ -1021,6 +1041,93 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     ),
   });
 
+  /**
+   * The money row a reconciliation names — exactly one of the four, as the
+   * database's CHECK says (`ReconciliationEdit`, `BankStatementMatch`). A sale
+   * payment, a refund, a customer's old-debt payment and a supplier payment
+   * are all `Payment` rows; a deposit, an expense and an income are their own.
+   */
+  const moneyRef = {
+    paymentId: id.optional(),
+    expenseId: id.optional(),
+    incomeId: id.optional(),
+    depositId: id.optional(),
+  };
+  const exactlyOneRef = (r: {
+    paymentId?: string | undefined;
+    expenseId?: string | undefined;
+    incomeId?: string | undefined;
+    depositId?: string | undefined;
+  }) =>
+    [r.paymentId, r.expenseId, r.incomeId, r.depositId].filter(
+      (x) => x !== undefined,
+    ).length === 1;
+
+  /**
+   * A count of one pot (DAILY, one day) or the bank against its e-statement
+   * (MONTHLY, one month) — `Reconciliation` (2026-10-27). `edits` are the
+   * corrections it made to the real records and the transactions it added,
+   * before → after, each written once.
+   */
+  const reconciliation = z.strictObject({
+    id,
+    kind: z.enum(RECON_KINDS),
+    pot: z.enum(RECON_POTS),
+    periodStart: day,
+    periodEnd: day,
+    posBalance: money,
+    actualBalance: money,
+    statementOpening: z.optional(money),
+    statementClosing: z.optional(money),
+    /** The uploaded file's NAME, never its contents. */
+    statementFile: text.optional(),
+    status: z.enum(RECON_STATUSES),
+    note: text.optional(),
+    staff: text,
+    createdAt: instant,
+    updatedAt: instant,
+    edits: z.array(
+      z
+        .strictObject({
+          id,
+          ...moneyRef,
+          action: z.enum(RECON_EDIT_ACTIONS),
+          before: z.optional(money),
+          after: money,
+          staff: text,
+          at: instant,
+        })
+        .refine(exactlyOneRef, {
+          message: "an edit names exactly one money row",
+        }),
+    ),
+  });
+
+  /**
+   * One movement off a bank's e-statement — `BankStatementLine` — with the
+   * POS movements it is matched to (`BankStatementMatch`). `amount` is signed
+   * (a debit is negative) and in whole rupiah: the statement's sen are
+   * checked when the file is read and are not carried (lib/bankStatement.ts).
+   */
+  const statementLine = z.strictObject({
+    id,
+    reconciliationId: id,
+    lineNo: count.min(1),
+    date: day,
+    description: text,
+    amount: money,
+    balance: z.optional(money),
+    status: z.enum(STATEMENT_LINE_STATUSES),
+    note: text.optional(),
+    matches: z.array(
+      z
+        .strictObject({ id, ...moneyRef, reason: z.string().min(1) })
+        .refine(exactlyOneRef, {
+          message: "a match names exactly one money row",
+        }),
+    ),
+  });
+
   const rows = {
     paymentMethods: paymentMethod,
     warehouses: warehouse,
@@ -1057,6 +1164,8 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     incomes: income,
     paymentLog,
     settlementLog,
+    reconciliations: reconciliation,
+    statementLines: statementLine,
     chats: chat,
     corrections: correction,
     personas: persona,
@@ -1101,6 +1210,8 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     paymentLog: z.array(paymentLog),
     settlements: z.array(settlement),
     settlementLog: z.array(settlementLog),
+    reconciliations: z.array(reconciliation),
+    statementLines: z.array(statementLine),
     services: z.array(service),
     deposits: z.array(deposit),
     chats: z.array(chat),
