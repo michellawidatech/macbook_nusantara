@@ -126,6 +126,9 @@ describe("catalogue", () => {
       // return's credit is written with (2026-10-26).
       "Unit expense",
       "Supplier return credit",
+      // The bank / marketplace fee category and its guide (2026-10-27).
+      "Bank / marketplace fee",
+      "Admin charges, transfer fees and what a marketplace kept.",
     ];
     const untranslated = englishKeyed.filter(
       (key) => typeof CATALOGUES.id[key] !== "string",

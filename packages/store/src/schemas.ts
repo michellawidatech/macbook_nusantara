@@ -140,6 +140,9 @@ export const EXPENSE_KINDS = [
   // A unit's own cost — a service charge paid (owner 2026-10-26). Written only
   // from a charge, never from Add adjustment; already in the unit's COGS.
   "UNIT",
+  // A bank's or a marketplace's fee — what the monthly reconciliation records
+  // a deduction under (owner 2026-10-27).
+  "BIAYA_ADMIN",
 ] as const;
 export const INCOME_REASONS = [
   "SALES",

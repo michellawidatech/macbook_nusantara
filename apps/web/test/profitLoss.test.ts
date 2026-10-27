@@ -84,6 +84,8 @@ describe("profit & loss", () => {
     exp("PAYROLL", 3_000_000);
     exp("RENT", 1_000_000);
     exp("BUNGA", 20_000);
+    // A bank's fee is an operating cost on its own line (2026-10-27).
+    exp("BIAYA_ADMIN", 6_500);
     // Not costs: stock bought, money moved, a refund the RETUR already counts.
     exp("SUPPLIER", 50_000_000);
     exp("TRANSFER", 2_000_000);
@@ -112,11 +114,17 @@ describe("profit & loss", () => {
     } as MockDb["expenses"][number]);
 
     const r = profitLoss(db, MONTH);
-    expect(r.totalOperating).toBe(4_000_000);
+    expect(r.totalOperating).toBe(4_006_500);
+    expect(line(r, "BIAYA_ADMIN")).toBe(6_500);
+    // Listed after the running costs, beside the itemised marketplace payouts.
+    expect(r.operating.map((l) => l.key).slice(-2)).toEqual([
+      "BIAYA_ADMIN",
+      "marketplaceFees",
+    ]);
     expect(line(r, "interestIn")).toBe(5_000);
     expect(line(r, "interestOut")).toBe(20_000);
     expect(r.totalOther).toBe(5_000 - 20_000);
-    expect(r.netProfit).toBe(-4_000_000 + 5_000 - 20_000);
+    expect(r.netProfit).toBe(-4_006_500 + 5_000 - 20_000);
   });
 
   it("counts a paid service charge once — in the unit's cost, never as operating (2026-10-26)", () => {

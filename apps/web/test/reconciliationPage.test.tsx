@@ -274,7 +274,11 @@ describe("the monthly statement", () => {
     await vi.waitFor(() =>
       expect(
         getDb().expenses.some(
-          (e) => e.amount === 300_000 && e.method === "TRANSFER",
+          (e) =>
+            e.amount === 300_000 &&
+            e.method === "TRANSFER" &&
+            // A bank's or a marketplace's fee, not "Operational" (2026-10-27).
+            e.kind === "BIAYA_ADMIN",
         ),
       ).toBe(true),
     );

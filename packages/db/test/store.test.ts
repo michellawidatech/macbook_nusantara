@@ -2927,6 +2927,47 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
     }
   }, 180_000);
 
+  it("files an expense as a bank / marketplace fee and reads it back (2026-10-27)", async () => {
+    await loadDemo(); // the payment methods an expense names
+    const app = new PrismaClient({ datasourceUrl: asRole("nusantara_app") });
+    try {
+      const created = await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { expenses: [] },
+            {
+              expenses: [
+                {
+                  id: "exp_app_fee",
+                  kind: "BIAYA_ADMIN",
+                  amount: 6_500,
+                  date: new Date().toISOString().slice(0, 10),
+                  method: "TRANSFER",
+                  label: "ZZ BIAYA ADM",
+                },
+              ],
+            },
+          ),
+        ),
+      });
+      expect(
+        decodeRow("expenses", (created.rows.expenses as Row[])[0]!),
+      ).toMatchObject({ kind: "BIAYA_ADMIN", amount: 6_500 });
+      const row = await db.expense.findUnique({ where: { id: "exp_app_fee" } });
+      expect(row?.kind).toBe("BIAYA_ADMIN");
+      const back = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      expect(
+        back["expenses"]!.find((e) => e["id"] === "exp_app_fee"),
+      ).toMatchObject({ kind: "BIAYA_ADMIN", amount: 6_500 });
+    } finally {
+      await db.expense.deleteMany({ where: { id: "exp_app_fee" } });
+      await app.$disconnect();
+    }
+  }, 180_000);
+
   it("merges a duplicate product: units move, the old variant is kept and marked, a third copy is refused (2026-10-21)", async () => {
     const shop = await loadDemo();
     const category = (shop["models"] as Row[])[0]!["category"];

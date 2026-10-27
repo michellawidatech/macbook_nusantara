@@ -3116,6 +3116,10 @@ enum ExpenseKind {
   // A unit's own cost — a service charge paid (owner 2026-10-26). Already in
   // the unit's COGS, so Profit & Loss never counts it as operating.
   UNIT
+  // What a bank or a marketplace kept on the way: an admin charge, a transfer
+  // fee, a payout deduction (owner 2026-10-27). An operating cost, its own
+  // Profit & Loss line.
+  BIAYA_ADMIN
 }
 
 enum IncomeReason {

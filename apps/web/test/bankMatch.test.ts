@@ -47,10 +47,17 @@ describe("guessCategory", () => {
       direction: "EXPENSE",
       reason: "BUNGA",
     });
+    // A bank's fee is its own category since 2026-10-27, not interest.
     expect(guessCategory("BIAYA ADM", -10_000)).toEqual({
       direction: "EXPENSE",
-      reason: "BUNGA",
+      reason: "BIAYA_ADMIN",
     });
+    expect(guessCategory("BIAYA TXN KLIKBCA", -2_500)).toEqual({
+      direction: "EXPENSE",
+      reason: "BIAYA_ADMIN",
+    });
+    // Money IN is not a fee the shop paid.
+    expect(guessCategory("BIAYA ADM", 10_000)).toBeUndefined();
     expect(guessCategory("TRSF E-BANKING DB GAJI OKTOBER", -4_000_000)).toEqual(
       { direction: "EXPENSE", reason: "PAYROLL" },
     );

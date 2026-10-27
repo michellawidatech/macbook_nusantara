@@ -1103,7 +1103,22 @@ export const EXPENSE_CATEGORIES = [
     label: "Bank transfer",
     guide: "Money moved out to another account of the business.",
   },
-  { value: "BUNGA", label: "Interest", guide: "Bank interest and charges." },
+  {
+    value: "BUNGA",
+    label: "Interest",
+    guide: "Bank interest, and the tax on it.",
+  },
+  {
+    /*
+     * What a bank or a marketplace kept on the way (owner 2026-10-27): an
+     * admin charge, a transfer fee, a payout deduction. The monthly
+     * reconciliation records an accepted DEDUCTION, and adds a "BIAYA ADM"
+     * line, under it. An operating cost — its own Profit & Loss line.
+     */
+    value: "BIAYA_ADMIN",
+    label: "Bank / marketplace fee",
+    guide: "Admin charges, transfer fees and what a marketplace kept.",
+  },
   {
     value: "PROFESSIONAL",
     label: "Professional Services",

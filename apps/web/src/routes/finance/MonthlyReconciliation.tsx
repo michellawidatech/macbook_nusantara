@@ -302,7 +302,8 @@ export function MonthlyReconciliation({
         const id = nextId("e");
         d.expenses.unshift({
           id,
-          kind: "OPERATIONAL",
+          // A bank's or a marketplace's fee (owner 2026-10-27).
+          kind: "BIAYA_ADMIN",
           label: t("recon.feeLabel", "Fee deducted — {{what}}", {
             what: move.orderCode ?? move.description,
           }),

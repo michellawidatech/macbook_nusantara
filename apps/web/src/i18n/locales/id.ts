@@ -4438,6 +4438,7 @@ export const id: Record<string, string> = {
   "pnl.rent": "Sewa dan fasilitas",
   "pnl.professional": "Jasa profesional",
   "pnl.software": "Software & teknologi",
+  "pnl.bankFees": "Biaya bank & marketplace",
   "pnl.marketplaceFees": "Biaya marketplace",
   "pnl.interestIn": "Pendapatan bunga",
   "pnl.mismatchIn": "Selisih saldo lebih",
@@ -4577,6 +4578,10 @@ export const id: Record<string, string> = {
   // filed under, and the method a supplier-return credit is written with.
   "Unit expense": "Biaya unit",
   "Supplier return credit": "Kredit retur supplier",
+  // English-keyed (2026-10-27): the bank / marketplace fee expense category.
+  "Bank / marketplace fee": "Biaya bank / marketplace",
+  "Admin charges, transfer fees and what a marketplace kept.":
+    "Biaya admin, biaya transfer, dan potongan marketplace.",
   // The sales strategy (2026-10-27): the funnel, the bot's visits, the
   // closing / welcome / restock tasks and "tell me when it's in stock".
   "chatAction.closing": "Closing",

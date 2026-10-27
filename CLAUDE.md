@@ -3255,6 +3255,14 @@ Decisions that outlived those documents:
   answers the whole burst. At most `MAX_SUPERSEDES` (2) drops in a row (an
   in-process map), never past 60 s or when the turn wrote a booking.
   `followUp.ts` queues nothing while a line is BARU. Debounce unchanged.
+- **Bank / marketplace fee is an expense category — 2026-10-27, later**
+  (`BIAYA_ADMIN`, migration `20261027190000_fee_expense_category`, additive).
+  An accepted DEDUCTION and a "BIAYA ADM"/"BIAYA TXN" debit (`guessCategory`)
+  file under it, not OPERATIONAL / BUNGA; Add adjustment offers it; Profit &
+  Loss counts it as operating, its own line after the running costs. ⚠️ "POS-only
+  entries must be paired or explained before a month closes" is NOT built: no
+  table holds a note against a POS movement with no statement line — waiting
+  on an owner-approved schema.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

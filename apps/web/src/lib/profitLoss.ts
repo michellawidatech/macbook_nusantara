@@ -85,6 +85,9 @@ export const OPERATING_KINDS = [
   "RENT",
   "PROFESSIONAL",
   "SOFTWARE",
+  // What a bank or a marketplace kept (owner 2026-10-27): a cost of running
+  // the shop, on its own line beside the itemised marketplace payouts.
+  "BIAYA_ADMIN",
 ] as const;
 
 /** The two categories no longer offered; listed only while something uses them. */

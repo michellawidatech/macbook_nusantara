@@ -29,7 +29,8 @@
  *    neighbouring digits swapped: the POS was typed wrong; correct it to the
  *    bank's figure.
  * 6. **DEDUCTION** — the bank RECEIVED less than the POS recorded, by at most
- *    5%, within ±3 days: a fee was kept on the way. Record it as an expense.
+ *    5%, within ±3 days: a fee was kept on the way. Record it as an expense
+ *    under *Bank / marketplace fee* (`BIAYA_ADMIN`, owner 2026-10-27).
  * 7. **Bank-only** — a line nothing explains: suggest adding it, with a
  *    category guessed from its words (`guessCategory`).
  * 8. **POS-only** — a movement the bank never saw: somebody should open it.
@@ -157,7 +158,10 @@ export function guessCategory(
   const credit = amount > 0;
   if (d.includes("PAJAK BUNGA"))
     return { direction: "EXPENSE", reason: "BUNGA" };
-  if (/BIAYA\s+ADM/.test(d)) return { direction: "EXPENSE", reason: "BUNGA" };
+  // What the bank kept: its admin charge, a transfer fee (owner 2026-10-27 —
+  // its own category, no longer filed under interest).
+  if (/BIAYA\s+(ADM|TXN|TRANSFER|TRF)|\bADM(IN)?\s+FEE\b/.test(d) && !credit)
+    return { direction: "EXPENSE", reason: "BIAYA_ADMIN" };
   if (d.includes("BUNGA"))
     return credit
       ? { direction: "INCOME", reason: "BUNGA" }

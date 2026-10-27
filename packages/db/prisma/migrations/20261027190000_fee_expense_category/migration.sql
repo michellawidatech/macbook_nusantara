@@ -1,0 +1,12 @@
+-- Bank and marketplace fees are their own expense category (owner 2026-10-27).
+--
+-- The monthly reconciliation recorded a DEDUCTION — the bank got less than the
+-- POS said, by a fee's worth — as OPERATIONAL, and guessed a bank's "BIAYA
+-- ADM" line as interest. Both are what a bank or a marketplace kept on the
+-- way, and the owner wants them read as that: an operating cost on a Profit &
+-- Loss line of its own ("Bank & marketplace fees"), offered by Add adjustment
+-- like any other expense category.
+--
+-- Additive: one enum value, nothing backfilled. An expense already filed under
+-- OPERATIONAL or BUNGA stays where it is.
+ALTER TYPE "ExpenseKind" ADD VALUE IF NOT EXISTS 'BIAYA_ADMIN';
