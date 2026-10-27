@@ -111,9 +111,10 @@ worker reads them at the start of every pass. `AGENT_CAPABILITIES` in
 pressed (`capabilitiesFromSettings`, packages/agent/src/policy.ts). Price,
 Reservations and Photos each need Stock on. A switch that is off sends its
 kind of question to a person, with an action item on the chat. The table
-below is the two extremes: every switch off, and every switch on.
+below is the two extremes: every switch off (`parallel`), and every switch on
+(`live`). Unset is `live` with bookings off — see below.
 
-| | unset (the default) | `live` |
+| | `parallel` | `live` |
 |---|---|---|
 | the owner's approved answers | ✅ | ✅ |
 | shop facts, hours, payment methods | ✅ | ✅ |
@@ -130,15 +131,13 @@ below is the two extremes: every switch off, and every switch on.
 | a photo the CUSTOMER sent | → a person | → a person |
 | checking, moving, cancelling a booking | → a person | ✅ |
 
-**The default is the cautious one, deliberately.** The live design is right
-only once the stock in this database is the shop's real stock; a variable
-nobody set should not be what decides that a bot is quoting prices off a
-half-migrated shelf. A value the code does not recognise also reads as
-cautious.
-
-`live` is the owner's 2026-09-21 ask — *"the chatbot can send pictures per unit
-and get detail about a unit, and the only write operation is to make a
-reservation"* — so set it on the day the migration lands and the shelf is real.
+**Since 2026-10-27 the POS is the source of truth by default** (owner: *"the
+stocks, prices, conditions are already synced with the POS"*). Unset — or a
+value the code does not recognise — reads stock, quotes prices and sends the
+shop's photos, and leaves bookings off until the owner switches them on, since
+a booking is a write. `parallel` is the 2026-09-18 design, for a database
+whose shelf is not the shop's real one. A switch the owner pressed on /chat
+wins over the variable either way.
 
 ### What does not change either way
 

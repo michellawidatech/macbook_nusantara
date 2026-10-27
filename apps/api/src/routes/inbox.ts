@@ -824,8 +824,9 @@ export function inboxRouter(
    * For the hand-over answered some other way: the colleague rang the
    * customer, or the customer walked in. Closes every waiting row of the thread
    * as answered by this staff member — the same thing a reply here does to
-   * them — so the worker's hand-over hold lifts and the bot answers the next
-   * message. Nothing is sent and nothing is queued; `replyText` stays empty,
+   * them — so nothing stays outlined as waiting and the bot stops naming it
+   * as with a colleague (since 2026-10-27 a hand-over no longer silences the
+   * thread; the bot answers newer messages either way). Nothing is sent and nothing is queued; `replyText` stays empty,
    * which is how the thread shows that nobody wrote back in the chat.
    */
   router.post("/:phone/handled", async (req, res, next) => {
@@ -881,7 +882,7 @@ export function inboxRouter(
    *
    * One transaction, exactly as a reply by hand: the action closes with the
    * price recorded, the answer lands on the customer's newest message, every
-   * waiting row is closed (which lifts the bot's hold), and the send is
+   * waiting row is closed (nothing is left outlined), and the send is
    * queued. The customer's offer is not re-read here — the modal showed the
    * figure the worker last saw, and the staff member answered that.
    */
@@ -974,7 +975,7 @@ export function inboxRouter(
   /**
    * POST /api/inbox/:phone/actions/:id/done — the task was dealt with some
    * other way. Nothing is sent. The thread's waiting messages are untouched:
-   * a reply, or Mark handled, is what lifts the bot's hold.
+   * a reply, or Mark handled, is what closes them.
    */
   router.post("/:phone/actions/:id/done", async (req, res, next) => {
     try {
@@ -1102,8 +1103,7 @@ export function inboxRouter(
    * `/new` does, without deleting a thing. One transaction:
    *
    *  1. every row still waiting is closed as handled by this person — the
-   *     Mark-handled close, which is what lifts a hand-over hold, so the bot
-   *     is not left silent on the customer's next message;
+   *     Mark-handled close, so nothing is left outlined as waiting;
    *  2. the thread's open tasks are done;
    *  3. `WaThreadMemory.clearedAt`/`clearedById` — the app role's own columns
    *     (invariant 13) — mark the point every reader starts from

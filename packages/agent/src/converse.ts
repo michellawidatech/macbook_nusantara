@@ -74,12 +74,22 @@ import {
 } from "./policy.js";
 import type { AgentPrompt } from "./prompt.js";
 import { sanitiseReply } from "./sanitise.js";
+import { reply as ruleReply } from "./rules/replies.js";
 import {
   dispatchTool,
   storeOpenAt,
   toolsFor,
   type ToolContext,
 } from "./tools.js";
+import {
+  TASK_REASON,
+  clipQuote,
+  heldReplyTask,
+  needOfTopic,
+  routedTask,
+  taskNote,
+  unitSubject,
+} from "./tasks.js";
 
 /**
  * The client, structurally.
@@ -267,6 +277,12 @@ export interface ConverseInput {
   };
   /** Called after every model call with its tokens and time. */
   readonly onCall?: (usage: CallUsage) => void;
+  /**
+   * Something of this customer's is already with a colleague and the bot's
+   * last reply told them so (2026-10-27). A hand-over in the shop's fixed
+   * words is then a short "passed that on too", not the same promise again.
+   */
+  readonly alreadyTold?: boolean;
 }
 
 export interface ConverseHandoff {
@@ -338,7 +354,15 @@ export function stockFactsOf(tool: string, output: unknown): StockFact[] {
   const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
   switch (tool) {
     case "search_stock":
-      return list(o["units"]).flatMap((u) => unit(u, true));
+      // The closest units in stock when nothing matched, the one step up,
+      // and a fitting accessory (2026-10-27) are all on the shelf too: a
+      // reply may quote them, and only at the price this lookup gave.
+      return [
+        ...list(o["units"]),
+        ...list(o["alternatives"]),
+        ...(o["stepUp"] ? [o["stepUp"]] : []),
+        ...(o["accessory"] ? [o["accessory"]] : []),
+      ].flatMap((u) => unit(u, true));
     case "check_serial":
       return o["found"] === true ? unit(o, o["available"] === true) : [];
     case "find_unit_photos":
@@ -412,6 +436,8 @@ export async function converse(
   ];
 
   const last = turns.length - 1;
+  // The customer's newest words, for the one-line task a hand-over leaves.
+  const customerText = turns[last]?.role === "user" ? turns[last]!.text : "";
   const routedNote = route
     ? `This message must go to a colleague (${route.topic.replace("_", " ")}). ` +
       "Do not answer it with reply. Use handoff_to_staff: first answer anything an approved " +
@@ -455,6 +481,11 @@ export async function converse(
   /** The photo handles `unit_photos` offered, so `reply` cannot invent one. */
   const offeredPhotos = new Set<string>(input.preloaded?.photoIds ?? []);
   const open = storeOpenAt(ctx.now);
+  /** The shop's fixed hand-over line — shorter once the customer was told. */
+  const fixedLine = (topic: HandoffTopic) =>
+    input.alreadyTold
+      ? ruleReply.passedOnToo("id")
+      : holdingMessage(topic, open);
 
   /** The code handing over, in the shop's fixed words. */
   const forced = (
@@ -466,10 +497,7 @@ export async function converse(
     // A booking made this turn is announced whatever else happened: the
     // unit is held either way, and a customer who is not told is a customer
     // who does not come (audit 2026-09-29).
-    const line = [
-      ...bookings.map(bookingLine),
-      holdingMessage(topic, open),
-    ].join("\n");
+    const line = [...bookings.map(bookingLine), fixedLine(topic)].join("\n");
     const booked = bookings.map((b) => b.code).join(", ");
     return {
       reply: line,
@@ -480,7 +508,7 @@ export async function converse(
       handoff: {
         topic,
         summary: booked
-          ? `${summary} Bot sudah membuat/mengubah booking ${booked}.`
+          ? `${summary}\nBot sudah membuat/mengubah booking ${booked}.`
           : summary,
         forcedBy,
       },
@@ -495,7 +523,14 @@ export async function converse(
     const topic = isHandoffTopic(args["topic"])
       ? args["topic"]
       : (route?.topic ?? "other");
-    const summary = note(args["summary"], "Pelanggan perlu dibantu staf.");
+    // The model's own note when it reads as an action item ("Perlu …");
+    // otherwise the job its topic implies, with its note under it.
+    const own = note(args["summary"], "");
+    const summary = /^perlu\b/i.test(own)
+      ? own
+      : own
+        ? `${taskNote(needOfTopic(topic), unitSubject(customerText))}\n${clipQuote(own)}`
+        : taskNote(needOfTopic(topic), unitSubject(customerText), customerText);
     const serial =
       typeof args["serial"] === "string" && args["serial"].trim() !== ""
         ? args["serial"].trim().slice(0, 40)
@@ -508,10 +543,7 @@ export async function converse(
     if (checkHoldingMessage(message) !== null) {
       // An empty line, or one carrying a figure or a stock promise: the
       // customer gets the shop's fixed words instead of the model's.
-      const line = [
-        ...bookings.map(bookingLine),
-        holdingMessage(topic, open),
-      ].join("\n");
+      const line = [...bookings.map(bookingLine), fixedLine(topic)].join("\n");
       return {
         reply: line,
         rawReply: raw || line,
@@ -580,14 +612,11 @@ export async function converse(
       ...(sources.includes("stock") ? { stockFacts } : {}),
     });
     if (problem !== null) {
-      return forced(
-        // A figure nothing vouched for is a price question somebody has to
-        // answer, and the action item should say so.
-        problem === "AMOUNT_NOT_IN_SOURCE" ? "price" : "other",
-        `Balasan bot ditahan (${problem}): "${message.slice(0, 160)}"`,
-        problem,
-        steps,
-      );
+      // A figure nothing vouched for is a price somebody has to check, a
+      // "ready" nothing vouched for is stock — and the task says so in one
+      // line, with the held draft quoted under it (owner, 2026-10-27).
+      const task = heldReplyTask(problem, message, customerText);
+      return forced(task.topic, task.summary, problem, steps);
     }
     /*
      * Only handles `unit_photos` actually offered this turn. A model asked for
@@ -650,7 +679,7 @@ export async function converse(
           if (route)
             return forced(
               route.topic,
-              `Dialihkan ke staf (${route.rule}).`,
+              routedTask(route.topic, customerText),
               "route",
               step,
             );
@@ -676,7 +705,7 @@ export async function converse(
         if (route)
           return forced(
             route.topic,
-            `Dialihkan ke staf (${route.rule}).`,
+            routedTask(route.topic, customerText),
             "route",
             step,
           );
@@ -743,8 +772,8 @@ export async function converse(
     return forced(
       route?.topic ?? "other",
       route
-        ? `Dialihkan ke staf (${route.rule}).`
-        : "Bot tidak menemukan jawaban yang disetujui.",
+        ? routedTask(route.topic, customerText)
+        : taskNote("reply", TASK_REASON.noAnswer, customerText),
       "no_terminal_tool",
       MAX_STEPS,
     );

@@ -133,6 +133,11 @@ describe("an answer", () => {
       topic: "price",
       forcedBy: "AMOUNT_NOT_IN_SOURCE",
     });
+    // And reads as the job, with the held draft under it — never the code
+    // (owner, 2026-10-27).
+    expect(sneaky?.handoff?.summary).toBe(
+      'Perlu cek harga — Air M1\n"Halo kak, Air M1 nya 7jt ya"',
+    );
   });
 
   it("becomes a hand-over when it cites a source that does not exist", async () => {
@@ -225,11 +230,23 @@ describe("a message the code has already given to a person", () => {
     expect(JSON.stringify(made[0]!.messages)).toContain(
       "must go to a colleague",
     );
+    // The model's note is kept under a "Perlu …" head (2026-10-27): a task
+    // reads as the job first, whatever the model wrote.
     expect(r?.handoff).toEqual({
       topic: "stock",
-      summary: "Tanya stok MacBook Air M1",
+      summary: "Perlu cek stok — Air M1\nTanya stok MacBook Air M1",
     });
     expect(r?.reply).toMatch(/Air M1 kami cekkan/);
+  });
+
+  it("does not repeat the promise when the customer was just given it (2026-10-27)", async () => {
+    const r = await run([replies("Ready kak", "K2")], "kak air m1 ready?", {
+      alreadyTold: true,
+    }).result;
+    expect(r?.handoff).toMatchObject({ topic: "stock", forcedBy: "route" });
+    expect(r?.reply).toBe(
+      "Siap kak, yang ini juga sudah kami teruskan ke tim kami ya 🙏",
+    );
   });
 
   it("is handed over even if a reply comes back anyway", async () => {

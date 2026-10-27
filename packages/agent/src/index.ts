@@ -140,6 +140,7 @@ export {
   type StockFact,
   MAX_REPLY_CHARS,
   PARALLEL_CAPABILITIES,
+  SHOP_CAPABILITIES,
   checkHoldingMessage,
   checkReply,
   holdingMessage,
@@ -283,3 +284,16 @@ export {
   turnsFor,
   type RecallInput,
 } from "./recall.js";
+export {
+  TASK_NEED,
+  TASK_REASON,
+  clipQuote,
+  heldReplyTask,
+  needOfTopic,
+  routedTask,
+  taskNote,
+  saidColleagueWillReply,
+  unitSubject,
+  type TaskNeed,
+  type WaitingTask,
+} from "./tasks.js";

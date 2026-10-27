@@ -21,7 +21,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient } from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
-import type { AgentClient, CreateArgs } from "@nusantara/agent";
+import {
+  PARALLEL_CAPABILITIES,
+  type AgentClient,
+  type CreateArgs,
+} from "@nusantara/agent";
 import { draftPass } from "../src/draft.js";
 
 /**
@@ -764,7 +768,11 @@ describe("handing a customer to a person", () => {
         "Siap kak 😊 untuk Air M1 kami cekkan dulu ya, admin kami segera balas 🙏",
       ),
     ]);
-    const result = await pass(model.client);
+    // The 2026-09-18 design, where a named unit's stock is a person's: since
+    // 2026-10-27 the POS is the source of truth unless the owner says not.
+    const result = await pass(model.client, {
+      capabilities: PARALLEL_CAPABILITIES,
+    });
 
     expect(result).toMatchObject({ drafted: 1, escalated: 1 });
     // The routed turn was offered no way to answer.
@@ -775,8 +783,12 @@ describe("handing a customer to a person", () => {
     expect(row.status).toBe("PERLU_STAF");
     expect(row.answeredByAgent).toBe(false);
     expect(row.intent).toBe("staf:stock");
+    // The job first, the model's note under it (2026-10-27).
     expect(row.entities).toMatchObject({
-      handoff: { topic: "stock", summary: "Tanya stok MacBook Air M1" },
+      handoff: {
+        topic: "stock",
+        summary: "Perlu cek stok — Air M1\nTanya stok MacBook Air M1",
+      },
     });
     const sent = await db.outbox.findFirstOrThrow();
     expect((sent.payload as { body: string }).body).toMatch(
@@ -784,49 +796,155 @@ describe("handing a customer to a person", () => {
     );
   });
 
-  it("says nothing more to that customer until a person has answered", async () => {
+  it("answers the customer's newer message, naming what is still with a colleague (2026-10-27)", async () => {
     await inbound({
       id: "hold.1",
       from: SENDER,
-      text: "air m1 ready kak?",
+      text: "air m1 bisa nego ga kak?",
       ts: ago(60_000),
     });
     await pass(
       scripted([
-        handsOver("stock", "Stok Air M1", "Admin kami cek dulu ya kak 🙏"),
+        handsOver(
+          "negotiation",
+          "Nego Air M1",
+          "Admin kami cek dulu ya kak 🙏",
+        ),
       ]).client,
     );
 
-    // The customer gets impatient.
+    // The customer asks something else. It used to wait, unanswered, until a
+    // person had dealt with the negotiation.
     await inbound({
       id: "hold.2",
       from: SENDER,
-      text: "kak?",
+      text: "oh iya, garansinya berapa lama?",
       ts: ago(20_000),
     });
-    const held = scripted(["halo kak"]);
-    expect((await pass(held.client)).drafted).toBe(0);
-    expect(held.calls).toHaveLength(0);
+    const next = scripted(["Garansi toko 1 bulan ya kak 😊"]);
+    expect((await pass(next.client)).drafted).toBe(1);
+    expect(next.calls).toHaveLength(1);
+    // Told what is waiting, so it neither answers nor contradicts it.
+    const system = JSON.stringify(next.calls[0]!.system);
+    expect(system).toContain("WAITING FOR A COLLEAGUE");
+    expect(system).toContain("air m1 bisa nego ga kak?");
+
+    // The negotiation is still the colleague's: outlined and open.
+    expect(
+      (
+        await db.waMessage.findFirstOrThrow({
+          where: { waMessageId: "hold.1" },
+        })
+      ).status,
+    ).toBe("PERLU_STAF");
     expect(
       (
         await db.waMessage.findFirstOrThrow({
           where: { waMessageId: "hold.2" },
         })
       ).status,
-    ).toBe("BARU");
+    ).toBe("DIJAWAB_AGEN");
+    expect(
+      await db.chatAction.count({ where: { from: SENDER, status: "OPEN" } }),
+    ).toBe(1);
+  });
 
-    // A colleague answers through the inbox, which closes every waiting row.
-    await db.waMessage.updateMany({
-      where: { from: SENDER, status: { in: ["BARU", "PERLU_STAF"] } },
-      data: { status: "DIJAWAB_STAF", answeredAt: NOW },
+  it("stays out while a colleague is chatting, and comes back once they stop", async () => {
+    await db.staff.upsert({
+      where: { id: "staff_chat_i" },
+      update: {},
+      create: {
+        id: "staff_chat_i",
+        username: "chat_i_kasir",
+        name: "Kasir",
+        role: "STAFF",
+        canApprove: false,
+        active: true,
+        passwordHash: "unusable",
+        createdAt: NOW,
+      },
+    });
+    // A colleague answered by hand two minutes ago (routes/inbox.ts).
+    const answered = await inbound({
+      id: "s.1",
+      from: SENDER,
+      text: "air m1 bisa nego?",
+      ts: ago(300_000),
+    });
+    await db.waMessage.update({
+      where: { id: answered.id },
+      data: {
+        status: "DIJAWAB_STAF",
+        replyText: "Bisa kak, 7,8jt ya",
+        answeredById: "staff_chat_i",
+        answeredAt: ago(120_000),
+      },
     });
     await inbound({
-      id: "hold.3",
+      id: "s.2",
       from: SENDER,
-      text: "makasih kak",
-      ts: ago(20_000),
+      text: "oke kak, garansinya berapa lama?",
+      ts: ago(30_000),
     });
-    expect((await pass(scripted(["sama-sama kak 😊"]).client)).drafted).toBe(1);
+
+    const quiet = scripted(["siap kak"]);
+    expect((await pass(quiet.client)).drafted).toBe(0);
+    expect(quiet.calls).toHaveLength(0);
+    expect(
+      (await db.waMessage.findFirstOrThrow({ where: { waMessageId: "s.2" } }))
+        .status,
+    ).toBe("BARU");
+
+    // Mark handled writes no reply, so it is not somebody typing.
+    await db.waMessage.update({
+      where: { id: answered.id },
+      data: { replyText: null },
+    });
+    expect((await pass(scripted(["siap kak"]).client)).drafted).toBe(1);
+  });
+
+  it("answers once the colleague has been quiet for the window", async () => {
+    await db.staff.upsert({
+      where: { id: "staff_chat_i" },
+      update: {},
+      create: {
+        id: "staff_chat_i",
+        username: "chat_i_kasir",
+        name: "Kasir",
+        role: "STAFF",
+        canApprove: false,
+        active: true,
+        passwordHash: "unusable",
+        createdAt: NOW,
+      },
+    });
+    const answered = await inbound({
+      id: "w.1",
+      from: SENDER,
+      text: "halo",
+      ts: ago(1_500_000),
+    });
+    await db.waMessage.update({
+      where: { id: answered.id },
+      data: {
+        status: "DIJAWAB_STAF",
+        replyText: "Halo kak",
+        answeredById: "staff_chat_i",
+        answeredAt: ago(1_200_000),
+      },
+    });
+    await inbound({ id: "w.2", from: SENDER, text: "kak?", ts: ago(30_000) });
+    // Twenty minutes is past the default quarter of an hour.
+    expect((await pass(scripted(["siap kak"]).client)).drafted).toBe(1);
+    await inbound({ id: "w.3", from: SENDER, text: "kak??", ts: ago(30_000) });
+    // …and inside a longer window it would still be the colleague's.
+    expect(
+      (
+        await pass(scripted(["siap kak"]).client, {
+          staffActiveMs: 30 * 60_000,
+        })
+      ).drafted,
+    ).toBe(0);
   });
 
   it("holds only that customer", async () => {
@@ -872,7 +990,7 @@ describe("handing a customer to a person", () => {
     expect(action).toMatchObject({
       kind: "NEGOTIATION",
       status: "OPEN",
-      summary: "Nego Air M1 ke 7jt",
+      summary: "Perlu jawab tawaran — Air M1\nNego Air M1 ke 7jt",
       askPrice: 7_000_000n,
     });
   });
@@ -893,16 +1011,18 @@ describe("handing a customer to a person", () => {
         ),
       ]).client,
     );
-    // Held: the bot says nothing more, but the new figure is still read.
+    // A new offer is a hand-over of its own, onto the same task.
     await inbound({
       id: "n.2",
       from: SENDER,
       text: "kalau 7,2jt deh kak",
       ts: ago(20_000),
     });
-    const quiet = scripted([]);
-    await pass(quiet.client);
-    expect(quiet.calls).toHaveLength(0);
+    await pass(
+      scripted([
+        handsOver("negotiation", "Nego Air M1", "Siap kak, kami teruskan 🙏"),
+      ]).client,
+    );
 
     const actions = await db.chatAction.findMany({ where: { from: SENDER } });
     expect(actions).toHaveLength(1);

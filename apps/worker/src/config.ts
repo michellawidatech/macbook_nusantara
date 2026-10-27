@@ -211,18 +211,14 @@ export interface WorkerConfig {
    */
   readonly agentStaffId: string;
   /**
-   * What the bot may do for itself — `AGENT_CAPABILITIES` (2026-09-21).
+   * What the bot may do for itself when a switch on /chat was never pressed
+   * — `AGENT_CAPABILITIES`.
    *
-   * `live` is the owner's 2026-09-21 design: the bot reads the shelf, sends
-   * the shop's own photographs of a unit, and may book a hold. Anything else,
-   * including the variable being unset, is the 2026-09-18 design: it answers
-   * from the owner's approved sheet and hands every question about a
-   * particular unit to a person.
-   *
-   * The cautious reading is the DEFAULT, deliberately. The live one is right
-   * only once the stock in this database is the shop's real stock, and a
-   * variable nobody set should not be the thing that decides a bot is quoting
-   * prices off a half-migrated shelf.
+   * Since 2026-10-27 the POS is the bot's source of truth: unset reads as
+   * stock, price and photos on and bookings off (`SHOP_CAPABILITIES`). `live`
+   * turns bookings on too; `parallel` is the 2026-09-18 design, for a
+   * database whose shelf is not the shop's. A switch the owner pressed wins
+   * over all three.
    */
   readonly capabilities: AgentCapabilities;
   /**

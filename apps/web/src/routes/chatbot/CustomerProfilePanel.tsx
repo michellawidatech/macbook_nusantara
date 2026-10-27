@@ -40,7 +40,7 @@ import {
   type ProfileFactKind,
   type ProfilePatch,
 } from "../../lib/inboxApi.js";
-import { ActionKindTag, budgetText } from "./ActionItems.js";
+import { ActionKindTag, TaskSummaryText, budgetText } from "./ActionItems.js";
 
 /** A labelled block. Keeps every section the same shape. */
 function Section({
@@ -543,7 +543,7 @@ export function CustomerProfilePanel({
           openTasks.map((a) => (
             <Flex key={a.id} gap={6} align="baseline">
               <ActionKindTag kind={a.kind} />
-              <Typography.Text>{a.summary}</Typography.Text>
+              <TaskSummaryText summary={a.summary} topic={a.topic} />
             </Flex>
           ))
         )}

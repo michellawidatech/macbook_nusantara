@@ -10,13 +10,16 @@
  * What these pin is the BOUNDARY, not the wording: which messages still reach
  * a person whatever the capability, and which stop doing so when it is on.
  * `policy.test.ts` still holds the parallel-operation rules, unchanged —
- * they are what `AGENT_CAPABILITIES` unset still means.
+ * they are what `AGENT_CAPABILITIES=parallel` means (unset is the POS as the
+ * source of truth since 2026-10-27).
  */
 import { describe, expect, it } from "vitest";
 import {
   agentCapabilities,
+  capabilitiesFromSettings,
   LIVE_CAPABILITIES,
   PARALLEL_CAPABILITIES,
+  SHOP_CAPABILITIES,
   routeMessage,
 } from "../src/policy.js";
 import { buildAgentPrompt } from "../src/prompt.js";
@@ -77,25 +80,47 @@ describe("what still goes to a person, capability or not", () => {
 });
 
 describe("agentCapabilities", () => {
-  it("reads live, and nothing else", () => {
+  it("reads live, and parallel", () => {
     expect(agentCapabilities({ AGENT_CAPABILITIES: "live" })).toEqual(
       LIVE_CAPABILITIES,
     );
     expect(agentCapabilities({ AGENT_CAPABILITIES: " LIVE " })).toEqual(
       LIVE_CAPABILITIES,
     );
+    expect(agentCapabilities({ AGENT_CAPABILITIES: "parallel" })).toEqual(
+      PARALLEL_CAPABILITIES,
+    );
   });
 
-  it("defaults to the cautious reading, including on a typo", () => {
-    // The live design is right only once the stock in this database is the
-    // shop's real stock. A misspelt variable must not be what decides that.
+  it("makes the POS the source of truth when unset (2026-10-27)", () => {
+    // The shelf in this database is the shop's real shelf now: stock, price
+    // and photos are on unless the owner switched one off. Bookings are a
+    // write, so they wait for the owner's switch.
     for (const env of [
       {},
       { AGENT_CAPABILITIES: "" },
       { AGENT_CAPABILITIES: "liv" },
     ]) {
-      expect(agentCapabilities(env)).toEqual(PARALLEL_CAPABILITIES);
+      expect(agentCapabilities(env)).toEqual(SHOP_CAPABILITIES);
     }
+    expect(SHOP_CAPABILITIES).toEqual({
+      stock: true,
+      price: true,
+      reserve: false,
+      photos: true,
+    });
+  });
+
+  it("lets a switch the owner pressed win over the default", () => {
+    expect(
+      capabilitiesFromSettings(
+        [
+          { key: "chatbot.price", value: "false" },
+          { key: "chatbot.reservation", value: "true" },
+        ],
+        agentCapabilities({}),
+      ),
+    ).toEqual({ stock: true, price: false, reserve: true, photos: true });
   });
 });
 

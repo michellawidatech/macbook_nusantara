@@ -193,8 +193,8 @@ export function chatRouter({
 
   /**
    * PUT /api/chat/testers — replace the list. The owner's call, like the
-   * switches: a reset lifts a hand-over hold, so who may type one is a
-   * decision about which chats can leave a colleague's desk by themselves.
+   * switches: a reset closes a colleague's open tasks, so who may type one
+   * is a decision about which chats can leave a colleague's desk by themselves.
    */
   router.put("/testers", ownerOnly, async (req, res, next) => {
     try {

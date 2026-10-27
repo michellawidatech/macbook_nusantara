@@ -373,3 +373,135 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
     expect(proposal.reply).not.toContain("dipakai untuk apa");
   });
 });
+
+describe("out of stock, and one step up (owner, 2026-10-27)", () => {
+  const M1 = {
+    serial: "C02AIRM1XX",
+    model: "MacBook Air M1",
+    variant: "8/256",
+    grade: "A",
+    price: "Rp 8.000.000",
+  };
+  const AIR16 = {
+    serial: "C02AIRM216",
+    model: "MacBook Air M2",
+    variant: "16/512",
+    grade: "A",
+    price: "Rp 14.000.000",
+  };
+
+  it("offers the closest units in stock instead of stopping at 'kosong'", async () => {
+    const p = pos({
+      search_stock: {
+        matched: 0,
+        units: [],
+        alternatives: [AIR, M1],
+        accessory: { model: "Charger MacBook Air 30W", price: "Rp 450.000" },
+      },
+    });
+    const out = await run("air m3 16/512 ready kak?", p);
+    expect(out.reply).toContain("sedang kosong");
+    expect(out.reply).toContain("Yang paling mirip dan ready");
+    expect(out.reply).toContain(
+      "1. MacBook Air M2 8/256, grade B — Rp 11.900.000",
+    );
+    expect(out.reply).toContain(
+      "2. MacBook Air M1 8/256, grade A — Rp 8.000.000",
+    );
+    expect(out.reply).toContain("Charger MacBook Air 30W — Rp 450.000");
+    expect(out.sources).toEqual(["stock"]);
+    expect(out.shown).toEqual([AIR.serial, M1.serial]);
+    expect(out.handoff).toBeUndefined();
+  });
+
+  it("still says so plainly when nothing close is in stock", async () => {
+    const p = pos({ search_stock: { matched: 0, units: [] } });
+    const out = await run("air m3 16/512 ready kak?", p);
+    expect(out.reply).toContain("sedang kosong");
+  });
+
+  it("offers one step up after the main pick, as an option", async () => {
+    const p = pos({
+      search_stock: { matched: 1, units: [AIR], stepUp: AIR16 },
+    });
+    const out = await run("air m2 8/256 ada kak?", p);
+    const list = out.reply.indexOf("MacBook Air M2 8/256");
+    const up = out.reply.indexOf(
+      "Kalau mau lebih lega, ada juga MacBook Air M2 16/512, grade A — Rp 14.000.000",
+    );
+    expect(list).toBeGreaterThanOrEqual(0);
+    expect(up).toBeGreaterThan(list);
+    // The step up can be picked like any unit shown: "yang kedua".
+    expect(out.shown).toEqual([AIR.serial, AIR16.serial]);
+  });
+
+  it("offers a step up from the alternatives too", async () => {
+    const p = pos({
+      search_stock: {
+        matched: 0,
+        units: [],
+        alternatives: [AIR],
+        stepUp: AIR16,
+      },
+    });
+    const out = await run("air m3 ada kak?", p);
+    expect(out.reply).toContain("Kalau mau lebih lega, ada juga");
+  });
+});
+
+describe("a hand-over no longer silences the chat (owner, 2026-10-27)", () => {
+  const waiting = [{ topic: "negotiation" as const, text: "kalau 7jt boleh?" }];
+  const holding =
+    "Siap kak 😊 Untuk stok, harga, dan kondisi unit terbarunya kami cekkan dulu ya. Admin kami segera balas di chat ini ya kak 🙏";
+
+  it("answers a newer question that needs no person", async () => {
+    const p = pos({ search_stock: { matched: 1, units: [AIR] } });
+    const out = await run("kalau air m2 ada?", p, {
+      waiting,
+      lastReply: holding,
+    });
+    expect(out.handoff).toBeUndefined();
+    expect(out.reply).toContain("MacBook Air M2 8/256");
+  });
+
+  it("tells a nudge once that the team is on it — and not twice", async () => {
+    const first = await run("kak?", pos({}), {
+      waiting,
+      lastReply: "Ada kak 😊 Ini yang ready: …",
+    });
+    expect(first.reply).toContain(
+      "Untuk tawarannya tadi masih dicek tim kami ya kak",
+    );
+    expect(first.handoff).toBeUndefined();
+    // The bot's previous reply already promised it: carry on instead.
+    const again = await run("kak?", pos({}), { waiting, lastReply: holding });
+    expect(again.reply).not.toContain("masih dicek");
+    expect(again.reply).not.toContain("Selamat datang");
+  });
+
+  it("does not welcome a customer mid-conversation", async () => {
+    const out = await run("halo kak", pos({}), {
+      waiting,
+      lastReply: "Ada kak 😊",
+    });
+    expect(out.reply).not.toContain("Selamat datang");
+  });
+
+  it("hands a second question for a person over without repeating the promise", async () => {
+    const out = await run("air m2 bisa nego ga kak?", pos({}), {
+      waiting,
+      lastReply: holding,
+    });
+    expect(out.handoff?.topic).toBe("negotiation");
+    expect(out.reply).toBe(
+      "Siap kak, yang ini juga sudah kami teruskan ke tim kami ya 🙏",
+    );
+  });
+
+  it("leaves a short action item, not a code", async () => {
+    const out = await run("air m2 bisa nego ga kak?", pos({}));
+    expect(out.handoff?.summary).toBe(
+      'Perlu jawab tawaran — Air M2\n"air m2 bisa nego ga kak?"',
+    );
+  });
+});

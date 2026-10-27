@@ -11,9 +11,10 @@
  *
  * ## Three decisions, all the owner's (2026-10-14)
  *
- *  - **Tester numbers only.** A reset has to lift a hand-over hold or the bot
- *    stays silent after it, and a command that lifts a hold must not be one a
- *    customer can type: it would dismiss the task a colleague is working on.
+ *  - **Tester numbers only.** A reset closes the thread's hand-over rows and
+ *    open tasks (it used to have to lift the hand-over hold, gone since
+ *    2026-10-27), and a command that does that must not be one a customer
+ *    can type: it would dismiss the task a colleague is working on.
  *    The list is an `AppSetting` row the owner edits on /chat. From anybody
  *    else `/new` is an ordinary message.
  *  - **The conversation only.** What is left behind is what the chat itself

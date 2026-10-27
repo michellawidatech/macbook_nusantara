@@ -27,6 +27,7 @@
 import { detectLanguage } from "./sanitise.js";
 import { recallBlock } from "./memoryRecall.js";
 import { effectiveCapabilities, type AgentCapabilities } from "./policy.js";
+import { clipQuote, type WaitingTask } from "./tasks.js";
 
 /** A staff rewrite of an agent reply, replayed as a lesson. */
 export interface CorrectionExample {
@@ -171,6 +172,28 @@ function profileBlock(
     "anything it already says.",
     "",
     ...lines,
+  ].join("\n");
+}
+
+/**
+ * What is waiting for a colleague (owner, 2026-10-27: a hand-over no longer
+ * stops the conversation). The customer's quoted words are fenced as a note;
+ * the instruction around them is the shop's.
+ */
+function waitingBlock(waiting: readonly WaitingTask[] | undefined): string {
+  if (!waiting?.length) return "";
+  return [
+    "",
+    "WAITING FOR A COLLEAGUE. These earlier questions were handed to the shop's admin, and the",
+    "customer was already told the admin will reply in this chat:",
+    ...waiting.map(
+      (w) =>
+        `- ${w.topic.replace("_", " ")}${w.text ? `: "${clipQuote(w.text)}"` : ""}`,
+    ),
+    "Do not answer these and do not say anything that contradicts or pre-empts the admin's answer",
+    "(no figure, no promise, no yes or no about them). Answer what the customer asks NOW as usual.",
+    "Do not repeat that the admin will reply. Only if they ask about one of these again, say once",
+    'and briefly that the team is on it, for example "Soal harganya nanti dibantu tim kami ya kak".',
   ].join("\n");
 }
 
@@ -455,7 +478,12 @@ function liveRules(caps: AgentCapabilities): string {
     "   When you have found something that fits, say why it fits them, in one line.",
     "   Offer ONE step up when it is genuinely better for what they described, such as more",
     "   memory for photo editing or more storage for video, and say what the difference buys,",
-    "   never just that it is better. If they have said no once, do not offer again.",
+    "   never just that it is better. A search may hand you one as stepUp: offer it after your",
+    '   main pick as an option ("kalau mau lebih lega, ada juga …"), never lead with it and never',
+    "   push. If they have said no once, do not offer again.",
+    "   Out of stock is not the end: when a search finds nothing it returns alternatives, the",
+    "   closest units that ARE in stock. Say the one they asked for is not in stock right now",
+    "   (never why) and offer those instead of stopping at 'kosong'.",
     can.price
       ? "4. Prices: quote only the price a stock lookup gives for THAT unit. A unit whose price is null " +
         "has no price yet: hand over with topic price and its serial, never estimate one."
@@ -561,6 +589,12 @@ export interface AgentPromptInput {
   readonly openProposal?: string | null;
   /** Earlier turns recall picked (recall.ts), dated. Volatile, never cached. */
   readonly recall?: readonly { readonly text: string; readonly at: Date }[];
+  /**
+   * Questions this thread handed to a colleague that nobody has answered yet
+   * (2026-10-27). The bot carries on with the customer's newer messages and
+   * must neither answer these nor contradict whoever will.
+   */
+  readonly waiting?: readonly WaitingTask[];
 }
 
 export interface AgentPrompt {
@@ -618,6 +652,7 @@ export function buildAgentPrompt(input: AgentPromptInput): AgentPrompt {
     directiveBlock(input.directive),
     summaryBlock(input.summary),
     profileBlock(input.profile, input.openProposal),
+    waitingBlock(input.waiting),
     recallBlock(input.recall ?? []),
     languageBlock(input.customerText),
     varietyBlock(input.recentReplies),

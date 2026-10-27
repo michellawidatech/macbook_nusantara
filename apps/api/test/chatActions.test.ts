@@ -115,16 +115,17 @@ async function handedOver(text: string) {
 }
 
 describe("the chatbot's switches", () => {
-  it("read as the environment says until somebody presses one", async () => {
+  it("read the POS as the source of truth until somebody presses one (2026-10-27)", async () => {
     const res = await request(app)
       .get("/api/chat/capabilities")
       .set("Cookie", staffCookie);
     expect(res.status).toBe(200);
+    // Stock, prices and photos on; bookings wait for the owner's switch.
     expect(res.body.set).toEqual({
-      stock: false,
-      price: false,
+      stock: true,
+      price: true,
       reserve: false,
-      photos: false,
+      photos: true,
     });
   });
 
@@ -140,10 +141,10 @@ describe("the chatbot's switches", () => {
     const res = await request(app)
       .put("/api/chat/capabilities")
       .set("Cookie", ownerCookie)
-      .send({ price: true });
+      .send({ stock: false });
     expect(res.status).toBe(200);
-    // Price is saved as on, and allows nothing while Stock is off.
-    expect(res.body.set.price).toBe(true);
+    // Price is still on as set, and allows nothing while Stock is off.
+    expect(res.body.set).toMatchObject({ stock: false, price: true });
     expect(res.body.effective.price).toBe(false);
 
     const on = await request(app)
