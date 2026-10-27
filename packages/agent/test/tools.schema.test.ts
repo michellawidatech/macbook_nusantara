@@ -12,9 +12,11 @@
  *  1. **Nothing here can move money.** No order, no payment, no price, no
  *     discount, no refund. A customer's sentence cannot reach those because
  *     there is no tool that performs them, not because the prompt says not to.
- *  2. **`create_reservation` cannot be pointed at somebody else.** The phone
- *     number comes from the WhatsApp envelope, which the model never sees and
- *     cannot write. "reserve it under 0812..." is a sentence, not an argument.
+ *  2. **`book_visit` cannot be pointed at somebody else, and holds nothing.**
+ *     The phone number comes from the WhatsApp envelope, which the model never
+ *     sees and cannot write. "book it under 0812..." is a sentence, not an
+ *     argument. The hold it replaced (`create_reservation`) is gone from the
+ *     list altogether since 2026-10-27.
  *
  * Pure: this reads the exported schema and calls nothing.
  */
@@ -47,13 +49,16 @@ const ALLOWED = [
   "find_unit_photos",
   "handoff_to_staff",
   "reply",
-  "create_reservation",
+  // A visit, which holds nothing (2026-10-27).
+  "book_visit",
   "check_reservation",
   "reschedule_reservation",
   "cancel_reservation",
   "remember_customer",
   // Chatbot v2 step 5: a booking proposal, which holds nothing.
   "propose_reservation",
+  // "Tell me when it's in stock" (2026-10-27).
+  "watch_stock",
 ] as const;
 
 const names = () => ANTHROPIC_TOOLS.map((t) => t.name).sort();
@@ -78,9 +83,10 @@ describe("the tool whitelist", () => {
     // cancel reservation"), all of it behind the Reservations switch. The
     // profile write is the customer's own words about themselves.
     expect([...WRITE_TOOLS].sort()).toEqual([
+      "book_visit",
       "cancel_reservation",
-      "create_reservation",
       "reschedule_reservation",
+      "watch_stock",
     ]);
     // Every read tool is a tool, and none of them is a write or a terminal.
     expect([...READ_TOOLS].sort()).toEqual(
@@ -117,7 +123,7 @@ describe("the tool whitelist", () => {
         "browse_catalog",
         "lookup_customer",
         "check_order",
-        "create_reservation",
+        "book_visit",
         "cancel_reservation",
       ]) {
         expect(offered).not.toContain(hidden);
@@ -141,7 +147,7 @@ describe("the tool whitelist", () => {
       "unit_photos",
       "find_unit_photos",
       "lookup_customer",
-      "create_reservation",
+      "book_visit",
       "check_reservation",
       "reschedule_reservation",
       "cancel_reservation",
@@ -160,16 +166,12 @@ describe("the tool whitelist", () => {
       toolsFor(ctx, { capabilities: { ...LIVE_CAPABILITIES, ...c } }).map(
         (t) => t.name,
       );
-    expect(offered({ reserve: false })).not.toContain("create_reservation");
+    expect(offered({ reserve: false })).not.toContain("book_visit");
     expect(offered({ reserve: false })).not.toContain("cancel_reservation");
     expect(offered({ photos: false })).not.toContain("find_unit_photos");
     // Price, photos and bookings are all about a unit on the shelf.
     const noStock = offered({ stock: false });
-    for (const hidden of [
-      "search_stock",
-      "find_unit_photos",
-      "create_reservation",
-    ]) {
+    for (const hidden of ["search_stock", "find_unit_photos", "book_visit"]) {
       expect(noStock).not.toContain(hidden);
     }
   });
@@ -192,7 +194,18 @@ describe("the tool whitelist", () => {
       { capabilities: LIVE_CAPABILITIES },
     ).map((t) => t.name);
     expect(offered).toContain("search_stock");
-    expect(offered).not.toContain("create_reservation");
+    expect(offered).not.toContain("book_visit");
+  });
+
+  it("offers watch_stock only with Stock on and a caller that may write", () => {
+    const base = { from: "628111000111", now: new Date() };
+    const of = (c: object, caps = LIVE_CAPABILITIES) =>
+      toolsFor({ ...base, ...c }, { capabilities: caps }).map((t) => t.name);
+    expect(of({})).not.toContain("watch_stock");
+    expect(of({ profile: { write: noDb } })).toContain("watch_stock");
+    expect(
+      of({ profile: { write: noDb } }, { ...LIVE_CAPABILITIES, stock: false }),
+    ).not.toContain("watch_stock");
   });
 
   it("withholds photos when only the stock capability is on", () => {
@@ -273,11 +286,11 @@ describe("the tool whitelist", () => {
     expect(byName("search_stock").input_schema.required ?? []).toEqual([]);
   });
 
-  it("gives create_reservation no phone argument, so the sender cannot be spoofed", () => {
+  it("gives book_visit no phone argument, so the sender cannot be spoofed", () => {
     // The wa_id comes from the WhatsApp envelope via the dispatch context. If
-    // the model could supply it, "reserve it for 62812..." would book a unit
+    // the model could supply it, "book it for 62812..." would book a visit
     // against a stranger's number.
-    const p = Object.keys(props("create_reservation"));
+    const p = Object.keys(props("book_visit"));
     expect(p).not.toContain("phone");
     expect(p).not.toContain("from");
     expect(p).not.toContain("waId");
@@ -289,18 +302,13 @@ describe("the tool whitelist", () => {
     expect(Object.keys(props("lookup_customer"))).toEqual([]);
   });
 
-  it("lets create_reservation carry only what a customer would actually say", () => {
-    const p = Object.keys(props("create_reservation")).sort();
-    expect(p).toEqual(["custName", "note", "serial", "when"]);
+  it("lets book_visit carry only what a customer would actually say", () => {
+    const p = Object.keys(props("book_visit")).sort();
+    expect(p).toEqual(["custName", "note", "serials", "when"]);
   });
 
-  it("requires a real date and a chosen unit before anything is held", () => {
-    // Both, because a hold with no time is a unit nobody comes for, and a time
-    // with no unit is not a hold at all.
-    expect(byName("create_reservation").input_schema.required).toEqual([
-      "when",
-      "serial",
-    ]);
+  it("requires a real date for a visit, and no unit — a visit can be to look around", () => {
+    expect(byName("book_visit").input_schema.required).toEqual(["when"]);
   });
 
   it("closes every schema to extra properties, so a smuggled key is an error not a shrug", () => {
@@ -313,9 +321,9 @@ describe("the tool whitelist", () => {
     }
   });
 
-  it("keeps the reservation tool's description honest about it being a real hold", () => {
+  it("keeps the visit tool's description honest that it holds nothing", () => {
     // Staff read this description when they audit what the bot can do.
-    expect(byName("create_reservation").description).toMatch(/hold|reserve/i);
+    expect(byName("book_visit").description).toMatch(/holds NOTHING/);
   });
 });
 

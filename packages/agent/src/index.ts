@@ -37,6 +37,7 @@ export {
   PROFILE_TOOLS,
   RESERVATION_TOOLS,
   STOCK_TOOLS,
+  WATCH_TOOLS,
   askingPrice,
   READ_TOOLS,
   TERMINAL_TOOLS,
@@ -223,6 +224,7 @@ export {
   PIPELINES,
   isLead,
   lastShownUnits,
+  lastWatchOffer,
   profileKnown,
   loadAgentPersonas,
   chatbotSettings,
@@ -234,18 +236,24 @@ export {
 export {
   leadScoreOf,
   runRules,
+  visitReplyTurn,
+  type RemindedVisit,
   type RulesInput,
   type RulesResult,
+  type RulesTask,
+  type WatchOffer,
 } from "./rules/run.js";
 export {
   understand,
   nameOf,
+  saysNo,
+  saysYes,
   visitTimeOf,
   type RuleIntent,
   type Understanding,
 } from "./rules/understand.js";
-export { reply as ruleReplies, unitLine } from "./rules/replies.js";
-export { moneyAmounts } from "./policy.js";
+export { followUps, reply as ruleReplies, unitLine } from "./rules/replies.js";
+export { asksToBuy, moneyAmounts } from "./policy.js";
 export {
   answeredTurns,
   lineOf,
@@ -288,6 +296,11 @@ export {
   TASK_NEED,
   TASK_REASON,
   clipQuote,
+  closingTask,
+  jakartaVisitLabel,
+  notifyTask,
+  shortRupiah,
+  welcomeTask,
   heldReplyTask,
   needOfTopic,
   routedTask,

@@ -24,6 +24,8 @@ import { sendPass } from "./send.js";
 import { expirePass } from "./expire.js";
 import { summaryPass } from "./summarise.js";
 import { memoryPass } from "./memoryPass.js";
+import { followUpPass } from "./followUp.js";
+import { watchPass } from "./watchPass.js";
 
 export interface TickDeps {
   readonly db: PrismaClient;
@@ -43,6 +45,10 @@ export interface TickResult {
   readonly embedded: number;
   /** Agent bookings nobody came for, released back into stock. */
   readonly expired: number;
+  /** Visit reminders and lead nudges queued (followUp.ts). */
+  readonly followedUp: number;
+  /** Stock watches that became a staff task (watchPass.ts). */
+  readonly watched: number;
 }
 
 /** One pass of each. Exported so a test — or the CLI — can run exactly one. */
@@ -102,6 +108,17 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     maxEmbeds: config.memoryEmbedsPerTick,
   });
 
+  // Once, politely (2026-10-27): the reminder on a visit's day and the one
+  // nudge a quiet hot lead gets. Queued here, sent by the next send pass.
+  const followed = await followUpPass({
+    db,
+    logger,
+    transport: config.transport.kind,
+  });
+
+  // A unit somebody asked to hear about is back: a task for a colleague.
+  const watched = await watchPass({ db, logger });
+
   // Last. A held unit that nobody came for is costing the shop a sale right
   // now, but not as urgently as an unanswered customer.
   const expiry = await expirePass({
@@ -122,6 +139,8 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     chunked: memory.chunked,
     embedded: memory.embedded,
     expired: expiry.expired,
+    followedUp: followed.reminded + followed.nudged,
+    watched: watched.notified,
   };
 }
 
@@ -153,7 +172,11 @@ export async function run(options: RunOptions): Promise<void> {
       const result = await tick(options);
       // A summary backlog counts as busy, so it drains at API speed rather
       // than one thread every poll interval.
-      busy = result.drafted > 0 || result.sent > 0 || result.summarised > 0;
+      busy =
+        result.drafted > 0 ||
+        result.sent > 0 ||
+        result.summarised > 0 ||
+        result.followedUp > 0;
       if (busy || result.escalated > 0 || result.failed > 0) {
         logger.info({ evt: "worker.tick", ctx: { ...result } }, "worker tick");
       }

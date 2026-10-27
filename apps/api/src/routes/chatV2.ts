@@ -8,7 +8,7 @@
 
 import { type RequestHandler, type Router } from "express";
 import { z } from "zod";
-import type { PrismaClient } from "@nusantara/db";
+import { Prisma, type PrismaClient } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import {
   AGENT_DEFINITIONS,
@@ -208,8 +208,114 @@ async function withdrawEvaluation(
   });
 }
 
+/** The funnel's windows, in days (owner ask 2026-10-27). */
+export const FUNNEL_WINDOWS = [7, 30] as const;
+
+/** How long after a thread's first message a sale is credited to it. */
+export const FUNNEL_SALE_DAYS = 30;
+
+export interface FunnelStage {
+  readonly days: number;
+  readonly since: string;
+  /** Threads with an inbound message in the window. */
+  readonly chats: number;
+  /** Threads the bot marked a 🔥 lead in the window (`leadAt`). */
+  readonly leads: number;
+  /** Visits the bot booked in the window: AGEN reservations with no units. */
+  readonly visits: number;
+  /** Closing tasks raised in the window. */
+  readonly closing: number;
+  /**
+   * Sales to those chats: orders (not cancelled) whose customer's number is
+   * a thread's, made within 30 days of that thread's FIRST message in the
+   * window. Counts only — the funnel is finance-free.
+   */
+  readonly sales: number;
+}
+
+/**
+ * The chatbot's funnel for one window — chats → leads → visits → closing
+ * tasks → sales (owner, 2026-10-27: "convert the casual chatter to a lead and
+ * even customer"). Read-only, counts only.
+ *
+ * A thread is a wa_id (`62812…`) and a customer is an E.164 number
+ * (`+62812…`), so a sale matches either form, on the customer or on the
+ * order's own phone. Dates are bound as timestamptz and converted to UTC
+ * before comparing with the `timestamp` columns (CLAUDE.md).
+ */
+export async function funnelFor(
+  db: PrismaClient,
+  days: number,
+  now: Date,
+): Promise<FunnelStage> {
+  const since = new Date(now.getTime() - days * 86_400_000);
+  const at = Prisma.sql`(${since}::timestamptz AT TIME ZONE 'UTC')`;
+  const saleMs = FUNNEL_SALE_DAYS * 86_400_000;
+  const [row] = await db.$queryRaw<
+    Array<{
+      chats: number;
+      leads: number;
+      visits: number;
+      closing: number;
+      sales: number;
+    }>
+  >(Prisma.sql`
+    WITH first_in AS (
+      SELECT m."from", MIN(m."ts") AS first_at
+        FROM "WaMessage" m
+       WHERE m."direction" = 'IN' AND m."ts" >= ${at}
+       GROUP BY m."from"
+    )
+    SELECT
+      (SELECT COUNT(*) FROM first_in)::int AS chats,
+      (SELECT COUNT(*) FROM "WaThreadMemory" t
+        WHERE t."leadAt" >= ${at})::int AS leads,
+      (SELECT COUNT(*) FROM "Reservation" r
+        WHERE r."source" = 'AGEN' AND r."createdAt" >= ${at}
+          AND NOT EXISTS (SELECT 1 FROM "ReservationItem" i
+                           WHERE i."reservationId" = r."id"))::int AS visits,
+      (SELECT COUNT(*) FROM "ChatAction" a
+        WHERE a."kind" = 'CLOSING' AND a."createdAt" >= ${at})::int AS closing,
+      (SELECT COUNT(DISTINCT o."id") FROM first_in f
+         JOIN "Order" o
+           ON o."ts" >= f.first_at
+          AND o."ts" <= f.first_at + (${saleMs}::bigint * interval '1 millisecond')
+          AND o."status" <> 'BATAL'
+         LEFT JOIN "Customer" c ON c."id" = o."customerId"
+        WHERE c."phone" IN (f."from", '+' || f."from")
+           OR o."phone" IN (f."from", '+' || f."from"))::int AS sales
+  `);
+  return {
+    days,
+    since: since.toISOString(),
+    chats: row?.chats ?? 0,
+    leads: row?.leads ?? 0,
+    visits: row?.visits ?? 0,
+    closing: row?.closing ?? 0,
+    sales: row?.sales ?? 0,
+  };
+}
+
 export function registerChatV2(router: Router, deps: ChatV2Deps): void {
   const { db, logger, anthropic, ownerOnly } = deps;
+
+  // --- the funnel -------------------------------------------------------------
+
+  /**
+   * GET /api/chat/funnel — chats → leads → visits → closing → sales for the
+   * last 7 and 30 days. Any signed-in staff: counts only, no money.
+   */
+  router.get("/funnel", async (_req, res, next) => {
+    try {
+      const now = new Date();
+      const windows = await Promise.all(
+        FUNNEL_WINDOWS.map((d) => funnelFor(db, d, now)),
+      );
+      res.json({ windows });
+    } catch (err) {
+      next(err);
+    }
+  });
 
   // --- evaluations ----------------------------------------------------------
 
@@ -760,7 +866,7 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
         latencyMs: out.latencyMs,
         pipeline: settings.pipeline,
         /** Serials this reply showed — send back as `lastShown` next turn. */
-        shown: "shown" in out ? [...out.shown] : [],
+        shown: "shown" in out && out.shown ? [...out.shown] : [],
         /** Whether a model answered (false: rules and templates only). */
         usedAi:
           "usedAi" in out

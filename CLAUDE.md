@@ -3193,6 +3193,23 @@ Decisions that outlived those documents:
   API) `StockMove` is unreadable, so no accessory. Tasks read
   `Perlu cek harga — Air 15" M2 8/256` + a quote (`tasks.ts`); /chat maps old
   `Balasan bot ditahan (CODE)` notes the same way (`lib/taskSummary.ts`).
+- **Sell, don't hold — 2026-10-27** (migration
+  `20261027150000_chat_sales_visits_and_stock_watch`, owner-approved). ⚠️ This
+  REVERSES bot holds: *"if reservation makes the stock decrease and reduce
+  sale, it is bad."* The bot books a VISIT — `book_visit` / the proposal
+  confirm → `createVisit`, a `Reservation` with no items, no `DIRESERVASI`;
+  the units to see ride on its confirmed `ReservationProposal`.
+  `create_reservation` is gone from every tool list; visits default ON. A
+  keep / DP / "saya ambil" / how-to-pay routes to a CLOSING task (new
+  `ChatActionKind`, `closingTask`); the bot never names a DP. It asks briefly
+  (usage → budget, then stops), recommends best fit + cheaper + one step up
+  with battery, says "tinggal 1 unit" only from `left` (`checkReply` refuses
+  any other count) and ends on one yes-question. `followUp.ts` reminds a visit
+  once (09:00, or 2 h before one before 11:00; past the window only on
+  Baileys) and nudges a quiet 🔥 lead once a week, both marked `payload.followUp`;
+  the reply to a reminder is read by code (`visitReplyTurn`). **`StockWatch`**:
+  agent S/I/U, app SELECT + UPDATE("closedAt"), in `wa_thread_delete`; `watchPass`
+  leaves one "Perlu kabari" task. Agent reads `StockMove`; Evaluation has a funnel.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

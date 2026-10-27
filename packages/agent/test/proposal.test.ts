@@ -184,24 +184,27 @@ describe("proposing a visit", () => {
 });
 
 describe("confirming it", () => {
-  it("holds every proposed unit under the customer's own number", async () => {
+  it("books a visit under the customer's own number, holding none of the units (2026-10-27)", async () => {
     await propose({
       serials: "MBP1, MBP2",
       when: TOMORROW_2PM,
       custName: "Budi",
     });
     const out = await confirm();
-    expect(out).toMatchObject({ ok: true, custName: "Budi" });
+    expect(out).toMatchObject({ ok: true, visit: true, custName: "Budi" });
     expect(String(out["code"])).toMatch(/^RV-/);
-    const hold = await db.reservation.findFirstOrThrow({
+    const visit = await db.reservation.findFirstOrThrow({
       select: { phone: true, custName: true, items: true, status: true },
     });
-    expect(hold).toMatchObject({
+    expect(visit).toMatchObject({
       phone: `+${FROM}`,
       custName: "Budi",
       status: "TERJADWAL",
     });
-    expect(hold.items).toHaveLength(2);
+    // A visit: nothing leaves the shelf, and the proposal keeps which units.
+    expect(visit.items).toHaveLength(0);
+    expect(await db.unit.count({ where: { status: "DIRESERVASI" } })).toBe(0);
+    expect(await db.reservationProposalItem.count()).toBe(2);
     expect(
       await db.reservationProposal.count({
         where: { confirmedAt: { not: null } },

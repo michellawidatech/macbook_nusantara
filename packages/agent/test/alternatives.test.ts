@@ -411,3 +411,115 @@ describe("the grounding check vouches for what the lookup offered", () => {
     ]);
   });
 });
+
+describe("what a recommendation may say about a unit (2026-10-27)", () => {
+  it("counts each variant on the shelf, so only a true last one reads 'tinggal 1'", async () => {
+    const lone = await unit("air_m2_16");
+    await unit("air_m2_8");
+    await unit("air_m2_8");
+    await unit("air_m2_8", { status: "TERJUAL" });
+    const out = await search({ query: "air m2" });
+    const byserial = new Map(
+      (out["units"] as Array<{ serial: string; left?: number }>).map((u) => [
+        u.serial,
+        u.left,
+      ]),
+    );
+    expect(byserial.get(lone)).toBe(1);
+    expect([...byserial.values()].filter((l) => l === 2)).toHaveLength(2);
+    const facts = stockFactsOf("search_stock", out);
+    expect(
+      checkReply({
+        message: "Air M2 16/512 tinggal 1 unit kak",
+        sourceCount: 1,
+        unknownSources: 0,
+        sourceTexts: [],
+        stockFacts: facts,
+      }),
+    ).toBeNull();
+    expect(
+      checkReply({
+        message: "Air M2 8/256 tinggal 1 unit kak",
+        sourceCount: 1,
+        unknownSources: 0,
+        sourceTexts: [],
+        stockFacts: facts,
+      }),
+    ).toBe("AVAILABILITY_NOT_IN_SOURCE");
+  });
+
+  it("carries the battery reading the unit's era records", async () => {
+    const s = await unit("air_m2_8");
+    const attr = await db.categoryAttribute.create({
+      data: {
+        categoryId: "cat_air",
+        key: "baterai",
+        label: "Baterai",
+        type: "NUMBER",
+        unit: "%",
+        sortOrder: 1,
+      },
+    });
+    await db.unitAttribute.create({
+      data: { unitId: `u_${s}`, attributeId: attr.id, value: "91" },
+    });
+    const out = await search({ query: "air m2" });
+    expect((out["units"] as Array<Record<string, unknown>>)[0]).toMatchObject({
+      serial: s,
+      batteryHealth: 91,
+    });
+  });
+});
+
+describe("tell me when it's in stock (2026-10-27)", () => {
+  const watch = (
+    args: Record<string, unknown>,
+    over: Partial<ToolContext> = {},
+  ) =>
+    dispatchTool(db, "watch_stock", args, {
+      ...ctx,
+      profile: { write: db },
+      ...over,
+    }) as Promise<Record<string, unknown>>;
+
+  it("remembers what they want, resolved to the variant when the words name one", async () => {
+    expect(
+      await watch({ query: "air m3 16/512", budget: 20_000_000 }),
+    ).toMatchObject({ saved: true });
+    const w = await db.stockWatch.findFirstOrThrow();
+    expect(w).toMatchObject({
+      from: FROM,
+      query: "air m3 16/512",
+      skuId: "air_m3_16",
+      modelId: 'mdl_MacBook Air 13" M3',
+      budget: 20_000_000n,
+      notifiedAt: null,
+      closedAt: null,
+    });
+  });
+
+  it("is one wish however many times they say yes", async () => {
+    await watch({ query: "air m3 16/512" });
+    expect(await watch({ query: "Air M3 16/512" })).toMatchObject({
+      already: true,
+    });
+    expect(await db.stockWatch.count()).toBe(1);
+  });
+
+  it("resolves to the product, not a variant, when the words fit several", async () => {
+    await watch({ query: "air m2" });
+    expect(await db.stockWatch.findFirstOrThrow()).toMatchObject({
+      skuId: null,
+      modelId: 'mdl_MacBook Air 13" M2',
+    });
+  });
+
+  it("writes nothing for a caller that may not write", async () => {
+    expect(
+      await watch({ query: "air m3" }, { profile: undefined }),
+    ).toMatchObject({
+      error: expect.any(String),
+    });
+    expect(await db.stockWatch.count()).toBe(0);
+  });
+});

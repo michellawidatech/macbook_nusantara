@@ -171,6 +171,45 @@ export async function reservationsFor(db: PrismaClient, phone: string) {
   }));
 }
 
+/**
+ * "Tell me when it's in stock" (2026-10-27): this thread's watches, open ones
+ * first, newest first within each. The bot writes them; staff only close one.
+ */
+export async function stockWatchesFor(db: PrismaClient, phone: string) {
+  const rows = await db.stockWatch.findMany({
+    where: { from: phone },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+    select: {
+      id: true,
+      query: true,
+      budget: true,
+      createdAt: true,
+      notifiedAt: true,
+      closedAt: true,
+      model: { select: { name: true } },
+      sku: { select: { name: true, variantLabel: true } },
+    },
+  });
+  return rows
+    .map((w) => ({
+      id: w.id,
+      query: w.query,
+      label: w.sku
+        ? [w.sku.name, w.sku.variantLabel].filter(Boolean).join(" ")
+        : (w.model?.name ?? null),
+      budget: w.budget?.toString() ?? null,
+      createdAt: w.createdAt.toISOString(),
+      notifiedAt: w.notifiedAt?.toISOString() ?? null,
+      closedAt: w.closedAt?.toISOString() ?? null,
+    }))
+    .sort((a, b) => Number(a.closedAt !== null) - Number(b.closedAt !== null));
+}
+
+export type StockWatchJson = Awaited<
+  ReturnType<typeof stockWatchesFor>
+>[number];
+
 /** The newest evaluation of each answered message, keyed by message id. */
 export async function evaluationsFor(
   db: PrismaClient,
@@ -381,6 +420,55 @@ export function registerInboxV2(router: Router, db: PrismaClient): void {
         select: { id: true, kind: true, value: true, source: true },
       });
       res.status(201).json({ fact });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** GET /api/inbox/:phone/watches — what this customer wants back in stock. */
+  router.get("/:phone/watches", async (req, res, next) => {
+    try {
+      const phone = phoneOf(req.params["phone"]);
+      res.json({ watches: await stockWatchesFor(db, phone) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * POST /api/inbox/:phone/watches/:id/close — staff close a watch (the
+   * customer bought elsewhere, or was told). `closedAt` is the one column
+   * the app role may write on the table; nothing is deleted.
+   */
+  router.post("/:phone/watches/:id/close", async (req, res, next) => {
+    try {
+      const phone = phoneOf(req.params["phone"]);
+      const staff = req.staff;
+      if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
+      const id = String(req.params["id"]);
+      const now = new Date();
+      await db.$transaction(async (tx) => {
+        const { count } = await tx.stockWatch.updateMany({
+          where: { id, from: phone, closedAt: null },
+          data: { closedAt: now },
+        });
+        if (count === 0) throw notFound("Permintaan stok");
+        await tx.auditLog.create({
+          data: {
+            at: now,
+            staffId: staff.id,
+            entity: "StockWatch",
+            entityId: id,
+            action: "UPDATE",
+            field: "closedAt",
+            before: null,
+            after: JSON.stringify(now.toISOString()),
+            requestId: req.get("x-request-id") ?? null,
+            ip: req.ip ?? null,
+          },
+        });
+      });
+      res.json({ watches: await stockWatchesFor(db, phone) });
     } catch (err) {
       next(err);
     }

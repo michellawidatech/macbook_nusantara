@@ -306,6 +306,108 @@ export async function createHold(
   };
 }
 
+// --- a visit ---------------------------------------------------------------
+
+export interface CreateVisitInput {
+  readonly customer: HoldCustomer;
+  readonly scheduledFor: Date;
+  /**
+   * The header's note, composed by the CALLER — what they are coming to see
+   * ("Janji datang — lihat MacBook Air M2 8/256"). A customer's own words go
+   * in `customerNote`, which is marked `[agen]` like a hold's.
+   */
+  readonly note?: string | null;
+  readonly customerNote?: string | null;
+  readonly source: HoldSource;
+  readonly at: Date;
+  readonly duplicateScope?: {
+    readonly phone: string;
+    readonly source: HoldSource;
+  } | null;
+  readonly policy?: HoldPolicy;
+}
+
+/**
+ * Book a VISIT — "janji datang" — and hold nothing (owner, 2026-10-27: *"if
+ * reservation makes the stock decrease and reduce sale, it is bad"*).
+ *
+ * A `Reservation` with `scheduledFor` and no `ReservationItem`: no unit leaves
+ * TERSEDIA and no `DIRESERVASI` is written, so the walk-in at the counter can
+ * still buy what the chatting customer only wants to look at. Everything else
+ * is `createHold`'s — the same schedule policy, the same per-sender advisory
+ * lock and duplicate guard, the same create-only customer — so a visit and a
+ * hold are refused for the same reasons.
+ *
+ * Releasing one is `releaseHold` unchanged: an item-less header reprojects to
+ * BATAL and no unit is touched, which is what closing a visit is.
+ *
+ * @throws DuplicateHoldError | BookingInPastError | BookingTooFarAheadError
+ * @throws OutsideStoreHoursError
+ */
+export async function createVisit(
+  tx: Tx,
+  input: CreateVisitInput,
+): Promise<{ id: string; code: string; scheduledFor: Date }> {
+  assertSchedule(input.scheduledFor, input.at, input.policy);
+
+  if (input.duplicateScope) {
+    await advisoryLock(tx, `hold:${input.duplicateScope.phone}`);
+    const open = await tx.reservation.findFirst({
+      where: {
+        phone: input.duplicateScope.phone,
+        status: "TERJADWAL",
+        source: input.duplicateScope.source,
+      },
+      select: { code: true, scheduledFor: true },
+    });
+    if (open) throw new DuplicateHoldError(open.code, open.scheduledFor);
+  }
+
+  const customer =
+    "customerId" in input.customer
+      ? await tx.customer.findUniqueOrThrow({
+          where: { id: input.customer.customerId },
+          select: { id: true, name: true, phone: true },
+        })
+      : await tx.customer.upsert({
+          where: { phone: input.customer.phone },
+          update: {},
+          create: {
+            phone: input.customer.phone,
+            name: input.customer.name,
+            createdAt: input.at,
+          },
+          select: { id: true, name: true, phone: true },
+        });
+  if (!("customerId" in input.customer)) {
+    await recordStoreChanges(tx, [["customers", customer.id]]);
+  }
+
+  const own = input.note?.trim() ?? "";
+  const theirs = input.customerNote?.trim() ?? "";
+  const note = [
+    own,
+    theirs ? (input.source === "AGEN" ? `[agen] ${theirs}` : theirs) : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const visit = await tx.reservation.create({
+    data: {
+      customerId: customer.id,
+      custName: customer.name,
+      phone: customer.phone,
+      scheduledFor: input.scheduledFor,
+      status: "TERJADWAL",
+      source: input.source,
+      note: note || null,
+      createdAt: input.at,
+    },
+    select: { id: true, code: true },
+  });
+  await recordStoreChanges(tx, [["reservations", visit.id]]);
+  return { id: visit.id, code: visit.code, scheduledFor: input.scheduledFor };
+}
+
 // --- releasing -------------------------------------------------------------
 
 export type ReleaseTarget =

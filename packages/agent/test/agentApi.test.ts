@@ -77,14 +77,15 @@ describe("the routes", () => {
   });
 
   it("are the POS tools and only those", () => {
+    // watch_stock is the worker's own (the API's role may only close one).
     expect([...REMOTE_TOOLS].sort()).toEqual([
+      "book_visit",
       "browse_catalog",
       "cancel_reservation",
       "check_order",
       "check_reservation",
       "check_serial",
       "confirm_reservation",
-      "create_reservation",
       "find_unit_photos",
       "lookup_customer",
       "propose_reservation",
@@ -165,7 +166,7 @@ describe("the worker's client", () => {
     expect(claims).toMatchObject({ waId: "628111000101", turn: "turn-1" });
   });
 
-  it("puts a serial in the path and a booking in the body", async () => {
+  it("puts a serial in the path and a visit in the body", async () => {
     const f = fakeFetch(200, {});
     const dispatch = agentApiDispatch(
       { baseUrl: "http://pos/api/agent/v1", secret: SECRET, fetchImpl: f.impl },
@@ -174,8 +175,8 @@ describe("the worker's client", () => {
     );
     await dispatch("check_serial", { serial: "C02 X/1" }, ctx());
     await dispatch(
-      "create_reservation",
-      { serial: "C02X1", when: "2026-10-16 14:00" },
+      "book_visit",
+      { serials: "C02X1", when: "2026-10-16 14:00" },
       ctx({
         reserve: { write: {} as never, staffId: "s", graceMs: 3_600_000 },
       }),
@@ -183,8 +184,9 @@ describe("the worker's client", () => {
 
     expect(f.calls[0]!.url).toBe("http://pos/api/agent/v1/units/C02%20X%2F1");
     expect(f.calls[1]!.init.method).toBe("POST");
+    expect(f.calls[1]!.url).toBe("http://pos/api/agent/v1/me/visits");
     expect(JSON.parse(String(f.calls[1]!.init.body))).toEqual({
-      serial: "C02X1",
+      serials: "C02X1",
       when: "2026-10-16 14:00",
     });
     const auth = (f.calls[1]!.init.headers as Record<string, string>)[

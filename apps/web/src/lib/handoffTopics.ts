@@ -40,6 +40,12 @@ export function handoffTopicLabel(t: TFunction, topic: string): string {
       return t("handoff.photos", "Wants photos");
     case "human":
       return t("handoff.human", "Wants a person");
+    case "closing":
+      return t("handoff.closing", "Ready to buy");
+    case "visit":
+      return t("handoff.visit", "Visit");
+    case "restock":
+      return t("handoff.restock", "Back in stock");
     default:
       return t("handoff.other", "Not in the answers");
   }

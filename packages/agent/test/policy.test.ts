@@ -11,6 +11,8 @@ import {
   isHandoffTopic,
   mentionsProduct,
   routeMessage,
+  actionKindOf,
+  type StockFact,
 } from "../src/policy.js";
 
 const topic = (text: string, hasMedia = false) =>
@@ -44,8 +46,12 @@ describe("routeMessage — always a person, machine or not", () => {
     ["kak saya sudah transfer ya", "order_payment"],
     ["ini bukti tf nya", "order_payment"],
     ["no resi nya berapa kak", "order_payment"],
-    ["bisa di keep dulu ga kak", "reservation"],
-    ["dp dulu boleh?", "reservation"],
+    // Keep it / a DP / I'll take it: a person closes the sale (2026-10-27).
+    ["bisa di keep dulu ga kak", "closing"],
+    ["dp dulu boleh?", "closing"],
+    ["oke kak saya ambil yang kedua", "closing"],
+    ["cara bayarnya gimana kak?", "closing"],
+    ["minta no rek nya kak", "closing"],
     ["budget 10jt dapet apa ya", "recommendation"],
     ["dana 8 juta cukup?", "recommendation"],
   ])("%s → %s", (text, expected) => {
@@ -187,5 +193,70 @@ describe("the holding line", () => {
     expect(isHandoffTopic("stock")).toBe(true);
     expect(isHandoffTopic("price_negotiation")).toBe(false);
     expect(isHandoffTopic(3)).toBe(false);
+  });
+});
+
+describe("honest urgency (2026-10-27)", () => {
+  const facts: StockFact[] = [
+    {
+      label: "MacBook Air M2 8/256",
+      available: true,
+      prices: ["11900000"],
+      count: 1,
+    },
+    {
+      label: "MacBook Air M1 8/256",
+      available: true,
+      prices: ["8000000"],
+      count: 3,
+    },
+  ];
+  const check = (message: string, stockFacts: readonly StockFact[] = facts) =>
+    checkReply({
+      message,
+      sourceCount: 1,
+      unknownSources: 0,
+      sourceTexts: [],
+      stockFacts,
+    });
+
+  it("lets the shelf's own count of one say 'tinggal 1 unit'", () => {
+    expect(check("Air M2 8/256 tinggal 1 unit kak 😊")).toBeNull();
+  });
+
+  it("refuses a 'tinggal 1' the count does not say", () => {
+    expect(check("Air M1 8/256 tinggal 1 unit kak")).toBe(
+      "AVAILABILITY_NOT_IN_SOURCE",
+    );
+    expect(check("Air M1 sisa 2 lagi kak")).toBe("AVAILABILITY_NOT_IN_SOURCE");
+    expect(check("Air M1 tinggal 3 unit kak")).toBeNull();
+  });
+
+  it("refuses scarcity about nothing in particular when the units disagree", () => {
+    expect(check("Tinggal 1 unit kak, buruan ya")).toBe(
+      "AVAILABILITY_NOT_IN_SOURCE",
+    );
+    expect(check("Tinggal 1 unit kak", [facts[0]!])).toBeNull();
+  });
+
+  it("refuses it outright when nothing was counted", () => {
+    expect(
+      check("Air M2 tinggal satu kak", [
+        { label: "MacBook Air M2 8/256", available: true, prices: [] },
+      ]),
+    ).toBe("AVAILABILITY_NOT_IN_SOURCE");
+  });
+});
+
+describe("the closing task (2026-10-27)", () => {
+  it("is its own kind of task, and its line never names a DP amount", () => {
+    expect(actionKindOf("closing")).toBe("CLOSING");
+    expect(holdingMessage("closing", true, "keep")).toMatch(
+      /^Untuk amankan unitnya bisa DP kak/,
+    );
+    expect(holdingMessage("closing", true, "keep")).not.toMatch(/\d/);
+    expect(holdingMessage("closing", false, "buy")).toContain(
+      "Tim kami bantu proses pembeliannya",
+    );
   });
 });

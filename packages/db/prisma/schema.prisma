@@ -355,6 +355,7 @@ model CatalogModel {
   identifiers   ModelIdentifier[]
   notDuplicateA ModelNotDuplicate[] @relation("NotDuplicateA")
   notDuplicateB ModelNotDuplicate[] @relation("NotDuplicateB")
+  stockWatches  StockWatch[]
 
   @@unique([categoryId, name, year])
 }
@@ -457,6 +458,7 @@ model Sku {
   opnameCounts     OpnameCount[]
   stockMoves       StockMove[]
   chatActions      ChatAction[]
+  stockWatches     StockWatch[]
 }
 
 // ============================================================================
@@ -824,6 +826,7 @@ model Customer {
   openingPayments  Payment[]
   chatActions      ChatAction[]
   chatProfiles     CustomerProfile[]
+  stockWatches     StockWatch[]
 }
 
 model Order {
@@ -1707,6 +1710,37 @@ model ChatMedia {
   @@index([from, createdAt])
 }
 
+/// "Tell me when it's in stock" (owner-approved 2026-10-27). The bot offers
+/// it when what a customer asked for is not on the shelf; their yes writes a
+/// row, and a worker pass leaves ONE staff task per thread ("Perlu kabari —
+/// …") once a matching unit is sellable, stamping `notifiedAt`. Staff send
+/// the message; nothing goes out by itself. Keyed by wa_id like
+/// `ChatMemoryChunk.from` — there is no thread table to point at.
+model StockWatch {
+  id         String    @id @default(cuid())
+  /// wa_id — the thread key WaMessage and WaThreadMemory use.
+  from       String
+  customerId String?
+  /// What they asked for, in the shop's words ("macbook air m3 16/512").
+  query      String
+  /// Resolved when the words name exactly one product or one variant.
+  modelId    String?
+  skuId      String?
+  /// Whole rupiah, when they gave a ceiling.
+  budget     BigInt?
+  createdAt  DateTime
+  /// The staff task was left. Never twice.
+  notifiedAt DateTime?
+  /// Closed by staff on /chat, or by the worker once sixty days old unmet.
+  closedAt   DateTime?
+
+  customer Customer?     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  model    CatalogModel? @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  sku      Sku?          @relation(fields: [skuId], references: [id], onDelete: Restrict)
+
+  @@index([from, createdAt])
+}
+
 /// Two writers, disjoint column sets (08 §7). The webhook summarizer owns the
 /// summary and coveredThrough columns; POS staff own the directive columns and
 /// the autoReply switch — whether the bot answers this customer at all.
@@ -2407,6 +2441,9 @@ enum ChatActionKind {
   RESERVATION
   PHOTOS
   OTHER
+  /// The customer is ready to buy, asked to keep a unit (a DP) or how to pay
+  /// (2026-10-27): a person closes the sale. The bot never quotes a DP.
+  CLOSING
 }
 
 enum ChatActionStatus {

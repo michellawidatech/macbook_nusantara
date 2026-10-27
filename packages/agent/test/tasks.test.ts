@@ -5,7 +5,12 @@
 import { describe, expect, it } from "vitest";
 import {
   TASK_NEED,
+  closingTask,
   heldReplyTask,
+  jakartaVisitLabel,
+  notifyTask,
+  shortRupiah,
+  welcomeTask,
   routedTask,
   saidColleagueWillReply,
   taskNote,
@@ -109,5 +114,52 @@ describe("the prompt names what is waiting for a colleague", () => {
     expect(p.volatile).toContain("Do not repeat that the admin will reply");
     expect(p.stable).toBe(buildAgentPrompt(base).stable);
     expect(buildAgentPrompt(base).volatile).not.toContain("WAITING");
+  });
+});
+
+describe("the sales tasks (2026-10-27)", () => {
+  it("writes a closing task the way the owner wrote one", () => {
+    expect(
+      closingTask({
+        name: "Budi",
+        wants: "buy",
+        unit: "Air M2 8/256",
+        price: "Rp 9.500.000",
+        how: "mau COD Sabtu",
+        text: "oke kak saya ambil",
+      }),
+    ).toBe(
+      'Perlu closing — Budi siap ambil Air M2 8/256 Rp 9,5jt, mau COD Sabtu\n"oke kak saya ambil"',
+    );
+    expect(
+      closingTask({ name: null, wants: "keep", unit: null, text: "" }),
+    ).toBe("Perlu closing — Pelanggan minta unit di-keep (DP)");
+  });
+
+  it("writes the welcome and the restock tasks", () => {
+    expect(
+      welcomeTask({ name: "Budi", when: "Sabtu 14.00", unit: "Air M2" }),
+    ).toBe("Perlu sambut — Budi datang Sabtu 14.00 lihat Air M2");
+    expect(notifyTask({ name: "Budi", unit: "Air M3 16/512" })).toBe(
+      "Perlu kabari — Air M3 16/512 sudah ready, Budi minta dikabari",
+    );
+  });
+
+  it("reads a visit in the shop's words and a price in its shorthand", () => {
+    // Saturday 17 October 2026, 14:00 Jakarta.
+    expect(jakartaVisitLabel(new Date("2026-10-17T07:00:00.000Z"))).toBe(
+      "Sabtu 14.00",
+    );
+    expect(shortRupiah("Rp 11.900.000")).toBe("Rp 11,9jt");
+    expect(shortRupiah(9_000_000)).toBe("Rp 9jt");
+    expect(shortRupiah(450_000)).toBe("Rp 450rb");
+    expect(shortRupiah(null)).toBe("");
+  });
+
+  it("names the job a closing hand-over leaves", () => {
+    expect(TASK_NEED.closing).toBe("Perlu closing");
+    expect(routedTask("closing", "cara bayarnya gimana?")).toBe(
+      'Perlu closing\n"cara bayarnya gimana?"',
+    );
   });
 });

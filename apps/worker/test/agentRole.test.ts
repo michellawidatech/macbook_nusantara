@@ -30,6 +30,8 @@ import { expirePass } from "../src/expire.js";
 import { resetPass } from "../src/reset.js";
 import { claimThread } from "../src/lease.js";
 import { checkDatabaseRole } from "../src/role.js";
+import { followUpPass } from "../src/followUp.js";
+import { watchPass } from "../src/watchPass.js";
 
 const URL =
   process.env["TEST_DATABASE_URL"] ??
@@ -325,12 +327,12 @@ describe("the worker as nusantara_agent", () => {
     expect(memory.summaryAt?.getTime()).toBe(NOW.getTime() + 3_600_000);
   });
 
-  it("books a visit, then lets it go when nobody came", async () => {
+  it("books a visit holding nothing, then closes it when nobody came", async () => {
     await seedUnit();
     const booked = (await dispatchTool(
       agent,
-      "create_reservation",
-      { when: "2026-08-21T15:00", serial: "SERX", custName: "Budi" },
+      "book_visit",
+      { when: "2026-08-21T15:00", serials: "SERX", custName: "Budi" },
       {
         from: FROM,
         now: NOW,
@@ -343,6 +345,11 @@ describe("the worker as nusantara_agent", () => {
       },
     )) as { ok?: boolean };
     expect(booked.ok).toBe(true);
+    // A visit: the unit never left the shelf.
+    expect(
+      (await owner.unit.findUniqueOrThrow({ where: { serial: "SERX" } }))
+        .status,
+    ).toBe("TERSEDIA");
 
     const result = await expirePass({
       db: agent,
@@ -353,11 +360,9 @@ describe("the worker as nusantara_agent", () => {
       maxPerTick: 5,
       now: () => new Date(NOW.getTime() + 3 * 86_400_000),
     });
-    expect(result.expired).toBe(1);
-    expect(
-      (await owner.unit.findUniqueOrThrow({ where: { serial: "SERX" } }))
-        .status,
-    ).toBe("TERSEDIA");
+    expect(result).toEqual({ expired: 1, released: 0 });
+    expect((await owner.reservation.findFirstOrThrow()).status).toBe("BATAL");
+    expect(await owner.unitEvent.count()).toBe(2);
   });
 
   it("starts a tester's chat over", async () => {
@@ -457,7 +462,7 @@ describe("a hand-over, read as nusantara_agent (2026-10-27)", () => {
 });
 
 describe("out of stock, read as nusantara_agent (2026-10-27)", () => {
-  it("offers what is in stock, and leaves out the accessory it may not read", async () => {
+  it("offers what is in stock, and the accessory it may read since 20261027150000", async () => {
     await seedUnit();
     await owner.category.create({
       data: {
@@ -512,8 +517,10 @@ describe("out of stock, read as nusantara_agent (2026-10-27)", () => {
     )) as Record<string, unknown>;
     expect(asAgent["error"]).toBeUndefined();
     expect(JSON.stringify(asAgent["alternatives"])).toContain("SERX");
-    // nusantara_agent holds no grant on StockMove: no accessory, no failure.
-    expect(asAgent["accessory"]).toBeUndefined();
+    // nusantara_agent reads StockMove now (GRANT SELECT, 20261027150000).
+    expect(asAgent["accessory"]).toMatchObject({
+      model: "Charger MacBook Air 30W",
+    });
     // The POS's agent API runs it as nusantara_app, which may read the ledger.
     const app = new PrismaClient({
       datasources: { db: { url: asRole("nusantara_app") } },
@@ -806,6 +813,237 @@ describe("a picture staff sent from their own device (2026-10-27)", () => {
       }),
     ).rejects.toThrow();
     await expect(agent.chatMedia.delete({ where: { id } })).rejects.toThrow();
+  });
+});
+
+describe("selling, as nusantara_agent (2026-10-27)", () => {
+  /** Friday 21 August 2026, 09:30 Jakarta — the visit's morning. */
+  const VISIT_MORNING = new Date("2026-08-21T02:30:00.000Z");
+  const toolCtx = (now = NOW) => ({
+    from: FROM,
+    now,
+    capabilities: LIVE,
+    reserve: { write: agent, staffId: AGENT_STAFF },
+    profile: { write: agent },
+    writesUsed: new Set<string>(),
+    onError: (_t: string, e: unknown) => {
+      throw e;
+    },
+  });
+
+  it("reminds a customer of their visit once, on its morning", async () => {
+    await seedUnit();
+    await inbound("v.1", "mau lihat air m2 besok jam 3", NOW);
+    const booked = (await dispatchTool(
+      agent,
+      "book_visit",
+      { when: "2026-08-21T15:00", serials: "SERX", custName: "Budi" },
+      toolCtx(),
+    )) as { ok?: boolean };
+    expect(booked.ok).toBe(true);
+    const pass = (now: Date, transport: "cloud" | "baileys" = "cloud") =>
+      followUpPass({ db: agent, logger, transport, now: () => now });
+
+    // The evening before: not yet.
+    expect(await pass(new Date("2026-08-20T13:00:00.000Z"))).toMatchObject({
+      reminded: 0,
+    });
+    expect(await pass(VISIT_MORNING)).toMatchObject({ reminded: 1 });
+    expect(await pass(VISIT_MORNING)).toMatchObject({ reminded: 0 });
+    const rows = await owner.outbox.findMany();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.payload).toMatchObject({
+      to: FROM,
+      followUp: "visit_reminder",
+      body: "Halo kak 😊 apakah kakak jadi datang ke toko kami untuk lihat MacBook Air M2 256GB 8/256? Kami tunggu ya kedatangannya 🙏",
+    });
+  });
+
+  it("sends a reminder past the 24-hour window only through the linked device", async () => {
+    await seedUnit();
+    await inbound("v.2", "mau lihat air m2", NOW);
+    await dispatchTool(
+      agent,
+      "book_visit",
+      { when: "2026-08-21T15:00", custName: "Budi" },
+      toolCtx(),
+    );
+    // 14:00 Jakarta on the day: 28 hours after their last message.
+    const late = new Date("2026-08-21T07:00:00.000Z");
+    expect(
+      await followUpPass({
+        db: agent,
+        logger,
+        transport: "cloud",
+        now: () => late,
+      }),
+    ).toMatchObject({ reminded: 0 });
+    expect(
+      await followUpPass({
+        db: agent,
+        logger,
+        transport: "baileys",
+        now: () => late,
+      }),
+    ).toMatchObject({ reminded: 1 });
+    expect(
+      ((await owner.outbox.findFirstOrThrow()).payload as { body: string })
+        .body,
+    ).toContain("untuk lihat unitnya?");
+  });
+
+  it("reads the yes to a reminder by code and leaves a colleague 'Perlu sambut'", async () => {
+    await seedUnit();
+    await inbound("v.3", "mau lihat air m2", NOW);
+    await dispatchTool(
+      agent,
+      "book_visit",
+      { when: "2026-08-21T15:00", serials: "SERX", custName: "Budi" },
+      toolCtx(),
+    );
+    await followUpPass({
+      db: agent,
+      logger,
+      transport: "cloud",
+      now: () => VISIT_MORNING,
+    });
+    await owner.waMessage.updateMany({
+      data: {
+        status: "DIJAWAB_AGEN",
+        answeredByAgent: true,
+        answeredAt: new Date(NOW.getTime() + 5_000),
+        replyText: "siap kak",
+      },
+    });
+    const answerAt = new Date(VISIT_MORNING.getTime() + 600_000);
+    await inbound("v.4", "iya jadi kak", new Date(answerAt.getTime() - 20_000));
+    const result = await draftPass({
+      db: agent,
+      logger,
+      anthropic: { apiKey: "sk-ant-test" },
+      client: model(),
+      debounceMs: 8_000,
+      maxDraftsPerTick: 5,
+      agentStaffId: AGENT_STAFF,
+      now: () => answerAt,
+    });
+    expect(result.drafted).toBe(1);
+    const task = await owner.chatAction.findFirstOrThrow();
+    expect(task).toMatchObject({
+      kind: "RESERVATION",
+      topic: "visit",
+      status: "OPEN",
+    });
+    expect(task.summary).toBe(
+      "Perlu sambut — Budi datang Jumat 15.00 lihat MacBook Air M2 256GB 8/256",
+    );
+    expect((await owner.reservation.findFirstOrThrow()).status).toBe(
+      "TERJADWAL",
+    );
+  });
+
+  it("nudges a quiet hot lead once, about the unit they asked about", async () => {
+    await seedUnit();
+    const asked = new Date(NOW.getTime() - 21 * 3_600_000);
+    await owner.waMessage.create({
+      data: {
+        waMessageId: "l.1",
+        from: FROM,
+        name: "Test",
+        text: "air m2 ada kak?",
+        msgType: "text",
+        ts: asked,
+        direction: "IN",
+        status: "DIJAWAB_AGEN",
+        entities: { units: ["SERX"] },
+        replyText: "Ada kak 😊",
+        answeredByAgent: true,
+        answeredAt: new Date(asked.getTime() + 10_000),
+      },
+    });
+    await owner.waThreadMemory.create({
+      data: {
+        from: FROM,
+        summaryTurns: 0,
+        clarifyCount: 0,
+        updatedAt: asked,
+        leadScore: 70,
+        leadAt: asked,
+      },
+    });
+    const pass = () =>
+      followUpPass({ db: agent, logger, transport: "cloud", now: () => NOW });
+    expect(await pass()).toMatchObject({ nudged: 1 });
+    expect(await pass()).toMatchObject({ nudged: 0 });
+    expect(
+      ((await owner.outbox.findFirstOrThrow()).payload as { body: string })
+        .body,
+    ).toBe(
+      "Halo kak 😊 MacBook Air M2 256GB 8/256 yang kemarin kakak tanyakan masih ready ya. Kalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak 🙏",
+    );
+  });
+
+  it("remembers a wish and leaves one task when the unit arrives", async () => {
+    await seedUnit();
+    await inbound("w.1", "air m2 16/512 ada?", NOW);
+    expect(
+      await dispatchTool(
+        agent,
+        "watch_stock",
+        { query: "air m2 256gb" },
+        toolCtx(),
+      ),
+    ).toMatchObject({ saved: true });
+    // Nothing new on the shelf since the wish.
+    expect(
+      await watchPass({ db: agent, logger, now: () => NOW }),
+    ).toMatchObject({ notified: 0 });
+    // The unit is re-checked and put back on sale the next day.
+    const later = new Date(NOW.getTime() + 86_400_000);
+    await owner.$transaction((tx) =>
+      appendUnitEvent(tx, {
+        serial: "SERX",
+        type: "DICATAT",
+        staffId: AGENT_STAFF,
+        at: later,
+        note: "dicek ulang",
+      }),
+    );
+    expect(
+      await watchPass({ db: agent, logger, now: () => later }),
+    ).toMatchObject({ notified: 1 });
+    expect(
+      await watchPass({ db: agent, logger, now: () => later }),
+    ).toMatchObject({ notified: 0 });
+    const task = await owner.chatAction.findFirstOrThrow();
+    expect(task).toMatchObject({ kind: "STOCK", topic: "restock" });
+    expect(task.summary).toBe(
+      "Perlu kabari — MacBook Air M2 256GB 8/256 sudah ready, pelanggan minta dikabari",
+    );
+    expect((await owner.stockWatch.findFirstOrThrow()).notifiedAt).toEqual(
+      later,
+    );
+  });
+
+  it("hands a buyer to a person as a CLOSING task", async () => {
+    await inbound(
+      "c.1",
+      "oke kak saya ambil, cara bayarnya gimana?",
+      new Date(NOW.getTime() - 20_000),
+    );
+    await draftPass({
+      db: agent,
+      logger,
+      anthropic: { apiKey: "sk-ant-test" },
+      client: model(),
+      debounceMs: 8_000,
+      maxDraftsPerTick: 5,
+      now: () => NOW,
+    });
+    expect(await owner.chatAction.findFirstOrThrow()).toMatchObject({
+      kind: "CLOSING",
+      topic: "closing",
+    });
   });
 });
 

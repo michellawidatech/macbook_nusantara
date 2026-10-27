@@ -122,6 +122,8 @@ import {
 import {
   activeHolds,
   heldItems,
+  isVisit,
+  openVisits,
   reprojectHolds,
 } from "../../lib/reservations.js";
 import {
@@ -748,7 +750,13 @@ export function StockOutPage() {
       ),
     [db.units],
   );
-  const activeReservations = useMemo(() => activeHolds(db), [db]);
+  // Holds with a unit still waiting, then the bot's open visits (2026-10-27):
+  // a visit holds nothing, but the customer standing at the counter is the
+  // one the bot booked, and picking it loads them into the sale.
+  const activeReservations = useMemo(
+    () => [...activeHolds(db), ...openVisits(db)],
+    [db],
+  );
 
   const skuOf = (serial?: string) =>
     db.skus.find(
@@ -769,6 +777,27 @@ export function StockOutPage() {
   const applyReservations = (ids: string[], only?: readonly string[]) => {
     const picked = db.reservations.filter((r) => ids.includes(r.id));
     if (!picked.length) return;
+    // A visit brings the customer and the channel, and no unit: nothing was
+    // held, so what they buy is picked off the shelf like any other sale.
+    if (picked.every(isVisit)) {
+      const visit = picked[0]!;
+      setCustomerId((prev) => prev ?? visit.customerId);
+      const channel = db.reservationSources.find(
+        (s) => s.id === visit.sourceId,
+      )?.name;
+      const mapped = channel ? SOURCE_BY_RESERVATION[channel] : undefined;
+      if (mapped && source === "OFFLINE") pickChannel(mapped);
+      setFromReservations((prev) => [...new Set([...prev, visit.id])]);
+      setReservationPickerOpen(false);
+      const who = db.customers.find((c) => c.id === visit.customerId);
+      message.success(
+        t("pos.loadedFromVisit", "Loaded {{name}} from the visit {{code}}.", {
+          name: who ? customerLabel(who) : fmtNone(),
+          code: visit.code,
+        }),
+      );
+      return;
+    }
     // A hold can be collected in pieces (owner decision 2026-08-26), so the
     // caller may name which machines are being taken. Naming none takes
     // everything still on hold, which is what "sell this reservation" means.
@@ -1426,6 +1455,13 @@ export function StockOutPage() {
         d,
         chosen.map((l) => l.serial!),
       );
+      // A visit this sale came out of is done: the customer came and bought
+      // (2026-10-27). A visit holds no unit, so nothing above closes it.
+      for (const id of fromReservations) {
+        const visit = d.reservations.find((r) => r.id === id);
+        if (visit && isVisit(visit) && visit.status === "ACTIVE")
+          visit.status = "DONE";
+      }
       // CLAUDE.md's one sanctioned hard delete: the QC photographs of a
       // machine go, row and file, the moment it is sold. The `UnitEvent`
       // ledger above still records the sale, so the timeline is intact —
@@ -4269,19 +4305,24 @@ export function StockOutPage() {
                       `${i.serial} ${skuOf(i.serial)?.name ?? ""} ${skuOf(i.serial)?.variantLabel ?? ""}`,
                   )
                   .join(" "),
-              render: (_, r) => (
-                <Flex vertical gap={2}>
-                  {heldItems(db, r).map((i) => (
-                    <span key={i.id}>
-                      {skuOf(i.serial)?.name ?? fmtNone()}{" "}
-                      {skuOf(i.serial)?.variantLabel ?? ""}{" "}
-                      <Typography.Text type="secondary">
-                        {i.serial}
-                      </Typography.Text>
-                    </span>
-                  ))}
-                </Flex>
-              ),
+              render: (_, r) =>
+                isVisit(r) ? (
+                  <Tag color="cyan" style={{ marginInline: 0 }}>
+                    {t("pos.visit", "Visit")}
+                  </Tag>
+                ) : (
+                  <Flex vertical gap={2}>
+                    {heldItems(db, r).map((i) => (
+                      <span key={i.id}>
+                        {skuOf(i.serial)?.name ?? fmtNone()}{" "}
+                        {skuOf(i.serial)?.variantLabel ?? ""}{" "}
+                        <Typography.Text type="secondary">
+                          {i.serial}
+                        </Typography.Text>
+                      </span>
+                    ))}
+                  </Flex>
+                ),
             },
             {
               title: t("pos.cameFrom", "Came from"),

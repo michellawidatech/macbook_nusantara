@@ -565,15 +565,16 @@ describe("GET /api/reservations", () => {
 });
 
 /**
- * The point of the whole exercise.
+ * The point of the whole exercise, revised 2026-10-27.
  *
- * The WhatsApp agent has been writing real `Reservation` rows since it shipped.
- * The POS could not see a single one of them, because it read a browser-memory
- * mock — so a machine the bot had promised a customer still showed as sellable
- * at the counter. Both callers now go through the same `createHold`, and this
- * asserts the consequence rather than the mechanism.
+ * The WhatsApp agent writes real `Reservation` rows, and the POS reads them.
+ * Until 2026-10-27 a bot booking was a HOLD that took the machine off the
+ * shelf; the owner reversed that (*"if reservation makes the stock decrease
+ * and reduce sale, it is bad"*), so a bot booking is now a VISIT — a time to
+ * come and look, with no line and nothing held. This asserts the consequence
+ * at the counter.
  */
-describe("one hold, two callers", () => {
+describe("a bot visit and the counter", () => {
   const agentCtx = (): ToolContext => ({
     from: "628111000321",
     profileName: "Budi",
@@ -582,11 +583,11 @@ describe("one hold, two callers", () => {
     writesUsed: new Set<string>(),
   });
 
-  it("shows a hold the chat agent made, with the machine held for everybody", async () => {
+  it("shows a visit the chat agent booked, with the machine still on sale", async () => {
     const booked = (await dispatchTool(
       db,
-      "create_reservation",
-      { when: "2026-08-21T15:00", serial: "RSV0", custName: "Budi" },
+      "book_visit",
+      { when: "2026-08-21T15:00", serials: "RSV0", custName: "Budi" },
       agentCtx(),
     )) as Record<string, unknown>;
     expect(booked["ok"]).toBe(true);
@@ -596,22 +597,19 @@ describe("one hold, two callers", () => {
     expect(res.body.total).toBe(1);
 
     const row = res.body.rows[0];
-    // Staff can tell a bot booking from a counter one — that is what
-    // `source` is for, and it is a different axis from the channel.
     expect(row.source).toBe("AGEN");
     expect(row.code).toBe(booked["code"]);
-    expect(row.items[0]).toMatchObject({ serial: "RSV0", state: "HELD" });
+    expect(row.items).toEqual([]);
 
-    // And the machine is out of sellable stock for the cashier too.
     const unit = await db.unit.findUniqueOrThrow({ where: { serial: "RSV0" } });
-    expect(unit.status).toBe("DIRESERVASI");
+    expect(unit.status).toBe("TERSEDIA");
   });
 
-  it("lets the counter release a hold the agent made", async () => {
+  it("lets the counter cancel a visit the agent booked, touching no unit", async () => {
     await dispatchTool(
       db,
-      "create_reservation",
-      { when: "2026-08-21T15:00", serial: "RSV0" },
+      "book_visit",
+      { when: "2026-08-21T15:00", serials: "RSV0" },
       agentCtx(),
     );
     const list = await get();
@@ -621,19 +619,18 @@ describe("one hold, two callers", () => {
     expect(res.status).toBe(200);
     expect(res.body.reservation.status).toBe("BATAL");
     expect(
-      (await db.unit.findUniqueOrThrow({ where: { serial: "RSV0" } })).status,
-    ).toBe("TERSEDIA");
+      await db.unitEvent.count({ where: { type: "RESERVASI_BATAL" } }),
+    ).toBe(0);
   });
 
-  it("refuses at the counter a machine the agent is already holding", async () => {
+  it("lets the counter hold the very machine the visit is to see", async () => {
     await dispatchTool(
       db,
-      "create_reservation",
-      { when: "2026-08-21T15:00", serial: "RSV0" },
+      "book_visit",
+      { when: "2026-08-21T15:00", serials: "RSV0" },
       agentCtx(),
     );
     const res = await post("/", newHold(["RSV0"], { phone: "+628111000777" }));
-    expect(res.status).toBe(409);
-    expect(res.body.error.message).toContain("RSV0");
+    expect(res.status).toBe(201);
   });
 });

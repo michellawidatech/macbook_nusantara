@@ -70,8 +70,10 @@ export interface AgentCapabilities {
    */
   readonly price: boolean;
   /**
-   * May it make, check, move and cancel the customer's own booking? Since
-   * 2026-09-29 this is the whole booking lifecycle, not only making one.
+   * May it book, check, move and cancel the customer's own VISIT? Since
+   * 2026-10-27 a bot booking holds nothing (owner: *"if reservation makes the
+   * stock decrease and reduce sale, it is bad"*) — it is a time to come and
+   * look, and every unit stays on sale — so this defaults ON.
    */
   readonly reserve: boolean;
   /** May it send the shop's own photos of a unit? */
@@ -101,13 +103,16 @@ export const LIVE_CAPABILITIES: AgentCapabilities = {
  * operation with B2Soft that made the cautious reading the right default is
  * over: the shelf in this database is the shop's shelf. So the bot reads
  * stock, quotes prices and sends the shop's photos unless the owner switched
- * one off on /chat. Bookings stay off until somebody switches them on — a
- * booking is a WRITE, and holding a unit for a stranger is the owner's call.
+ * one off on /chat.
+ *
+ * Bookings are ON as well since the same day's sales strategy: the bot books
+ * a VISIT and never holds a unit (`book_visit`, `createVisit`), so the reason
+ * they were off — a stranger taking stock off the shelf — is gone.
  */
 export const SHOP_CAPABILITIES: AgentCapabilities = {
   stock: true,
   price: true,
-  reserve: false,
+  reserve: true,
   photos: true,
 };
 
@@ -134,8 +139,8 @@ export function effectiveCapabilities(c: AgentCapabilities): AgentCapabilities {
  * pressed falls back to this.
  *
  * Since 2026-10-27 the POS is the bot's source of truth, so an unset (or
- * unrecognised) variable reads as `SHOP_CAPABILITIES` — stock, price and
- * photos on, bookings off. `live` still turns bookings on as well, and
+ * unrecognised) variable reads as `SHOP_CAPABILITIES` — every switch on,
+ * visits included (they hold nothing). `live` is the same today, and
  * `parallel` is the way back to the 2026-09-18 design should the shelf in
  * this database ever stop being the shop's real one (a half-finished
  * migration, a restore). Either way a switch the owner pressed wins.
@@ -199,6 +204,11 @@ export const HANDOFF_TOPICS = [
   "complaint",
   "media",
   "photos",
+  /**
+   * Ready to buy, wants a unit kept (a DP) or asks how to pay (2026-10-27):
+   * a person closes the sale. Its own task kind, CLOSING.
+   */
+  "closing",
   "human",
   "other",
 ] as const;
@@ -272,8 +282,22 @@ const BATTERY =
 const UNIT_DETAILS =
   /\b(foto(nya)?|video(nya)?|real\s*pic(t)?|gambar(nya)?|kondisi(nya)?|minus(nya)?|mulus|lecet|serial(nya)?|garansi\s*(resmi|apple|ibox)|ibox)\b/i;
 
-const RESERVATION =
-  /\b(booking|book|keep|tahan|hold|reserve|reservasi|simpan(in|kan)?|titip|dp)\b/i;
+const RESERVATION = /\b(booking|book|reserve|reservasi|janji\s*datang)\b/i;
+
+/**
+ * Asking the shop to put a unit aside — keep, hold, a DP (2026-10-27). The
+ * bot never holds stock and never quotes a DP, so this is a closing task for
+ * a person, whatever the switches say.
+ */
+const KEEP =
+  /\b(keep|di-?keep|kip|tahan(in|kan)?|ditahan|hold|amankan|diamankan|simpan(in|kan)?|disimpan|titip|dp|down\s*payment|uang\s*muka|tanda\s*jadi)\b/i;
+
+/**
+ * Ready to buy: taking it, ordering it, asking how to pay or where to
+ * transfer (2026-10-27). A person closes — the bot cannot take money.
+ */
+const BUY =
+  /\b(mau|jadi|saya|aku|sy|gw|gue|kami)\s+(ambil|beli|order|pesan|checkout)\b|\b(ambil|beli|order)\s+(yang|yg)\s+(ini|itu|pertama|kedua|ketiga|1|2|3)\b|\b(cara|gimana|bagaimana)\s+(bayar(nya)?|pembayaran(nya)?|order(nya)?|belinya|pesannya|checkoutnya)\b|\b(minta|kirim(in|kan)?|bagi)\s+(no(mor)?\.?\s*)?(rek|rekening)\b|\btransfer\s+ke\s+(mana|rek)\b|\b(checkout|ok\s+deal|oke\s+deal|deal\s+kak)\b|\b(i'?ll\s+take\s+it|i\s+want\s+to\s+buy|how\s+(do|can)\s+i\s+pay)\b/i;
 
 /** Letting a booking go, or moving it — both are the booking switch's. */
 const CANCEL_BOOKING =
@@ -352,6 +376,10 @@ export function routeMessage(
     return { topic: "negotiation", rule: "negotiation+product" };
   if (OFFER.test(t) && money && !BUDGET.test(t))
     return { topic: "negotiation", rule: "offer" };
+  // Keep it for me / a DP / I'll take it / how do I pay: the next step is a
+  // person closing the sale (2026-10-27). Not a booking — the bot never holds.
+  if (KEEP.test(t)) return { topic: "closing", rule: "keep" };
+  if (BUY.test(t)) return { topic: "closing", rule: "buy" };
   if (can.stock) {
     // The shelf is readable; each of the other switches still decides its
     // own kind of question (owner ask 2026-09-29).
@@ -384,6 +412,15 @@ export function routeMessage(
   // useful thing it does.
   if (!can.stock && money) return { topic: "recommendation", rule: "budget" };
   return null;
+}
+
+/**
+ * Ready to buy, wants a unit kept (a DP) or asks how to pay — the closing
+ * signal `routeMessage` hands to a person (2026-10-27).
+ */
+export function asksToBuy(text: string): boolean {
+  const t = text.toLowerCase();
+  return KEEP.test(t) || BUY.test(t);
 }
 
 /** Whether a message names a specific machine. Exported for the prompt hint. */
@@ -527,6 +564,12 @@ export interface StockFact {
   readonly available: boolean;
   /** Whole rupiah, digits only — the unit's price, or a model's range ends. */
   readonly prices: readonly string[];
+  /**
+   * How many sellable units of this variant the shelf holds, when the lookup
+   * counted them (`left`, 2026-10-27). The only thing that may say "tinggal
+   * 1 unit".
+   */
+  readonly count?: number;
 }
 
 export type ReplyProblem =
@@ -536,6 +579,21 @@ export type ReplyProblem =
   | "AMOUNT_NOT_IN_SOURCE"
   | "AVAILABILITY_NOT_IN_SOURCE"
   | "TOO_LONG";
+
+/**
+ * "Tinggal 1 unit", "sisa 2", "only one left": a count of what is left
+ * (2026-10-27, honest urgency). Captures the number.
+ */
+const SCARCITY =
+  /\b(?:tinggal|sisa|cuma|hanya|tersisa|only)\s+(\d+|satu|dua|tiga|one|two|three)\s*(?:unit|pcs|biji|lagi|left)?\b|\blast\s+one\b/gi;
+const NUMBER_WORD: Record<string, number> = {
+  satu: 1,
+  one: 1,
+  dua: 2,
+  two: 2,
+  tiga: 3,
+  three: 3,
+};
 
 /** Longest message the bot may send. A WhatsApp reply, not a brochure. */
 export const MAX_REPLY_CHARS = 1_500;
@@ -636,6 +694,36 @@ export function checkReply(input: {
     if (available.length === 0 || !tokens.every((t) => onShelf.has(t)))
       return "AVAILABILITY_NOT_IN_SOURCE";
   }
+
+  // "Tinggal 1 unit kak" — urgency, and only ever the shelf's own count
+  // (2026-10-27). The units the sentence names (all of this turn's when it
+  // names none) must ALL have exactly that many left; anything less certain
+  // is an invented scarcity, which is the one kind of urgency the owner
+  // ruled out.
+  for (const sentence of sentences(message)) {
+    for (const m of sentence.matchAll(SCARCITY)) {
+      const raw = (m[1] ?? "1").toLowerCase();
+      const n = NUMBER_WORD[raw] ?? Number(raw);
+      const tokens = modelTokens(sentence);
+      let named = tokens.length
+        ? available.filter((f) => covers(f, tokens))
+        : available;
+      // "Air M2 8/256 tinggal 1": the configuration narrows it further.
+      const specs = [
+        ...sentence.matchAll(/\b(\d{1,2})\s*\/\s*(\d{3,4})\b/g),
+      ].map((x) => `${x[1]}/${x[2]}`);
+      if (specs.length) {
+        const bySpec = named.filter((f) =>
+          specs.some((sp) =>
+            f.label.replace(/\s+/g, "").replace(/gb/gi, "").includes(sp),
+          ),
+        );
+        if (bySpec.length) named = bySpec;
+      }
+      if (named.length === 0 || !named.every((f) => f.count === n))
+        return "AVAILABILITY_NOT_IN_SOURCE";
+    }
+  }
   return null;
 }
 
@@ -659,7 +747,12 @@ export function checkHoldingMessage(message: string): ReplyProblem | null {
  * model is not reachable. In the owner's voice (docs/chatbot/knowledge-…md):
  * warm, "kak", one emoji or two, and a promise only of a reply.
  */
-export function holdingMessage(topic: HandoffTopic, open: boolean): string {
+export function holdingMessage(
+  topic: HandoffTopic,
+  open: boolean,
+  /** `routeMessage`'s rule, where the line depends on it (closing). */
+  rule?: string,
+): string {
   const when = open
     ? "Admin kami segera balas di chat ini ya kak 🙏"
     : "Admin kami akan balas saat jam operasional (10.00–20.00 WIB) ya kak 🙏";
@@ -684,6 +777,12 @@ export function holdingMessage(topic: HandoffTopic, open: boolean): string {
       return `Terima kasih kak, sudah kami terima 🙏 ${when}`;
     case "photos":
       return `Siap kak 😊 Foto unitnya kami siapkan dulu ya. ${when}`;
+    case "closing":
+      // The owner's own words for a keep (2026-10-27). Never an amount: a DP
+      // is a person's to name.
+      return rule === "keep"
+        ? `Untuk amankan unitnya bisa DP kak, nanti tim kami bantu ya 🙏 ${when}`
+        : `Siap kak 😊 Tim kami bantu proses pembeliannya ya. ${when}`;
     default:
       return `Baik kak, kami bantu teruskan ke admin ya 😊 ${when}`;
   }
@@ -693,7 +792,13 @@ export function holdingMessage(topic: HandoffTopic, open: boolean): string {
 
 /** `ChatActionKind` in the schema, spelled here so this file stays Prisma-free. */
 export type ChatActionKind =
-  "NEGOTIATION" | "PRICE" | "STOCK" | "RESERVATION" | "PHOTOS" | "OTHER";
+  | "NEGOTIATION"
+  | "PRICE"
+  | "STOCK"
+  | "RESERVATION"
+  | "PHOTOS"
+  | "OTHER"
+  | "CLOSING";
 
 /**
  * The action item a hand-over leaves behind (owner ask 2026-09-29). Coarser
@@ -714,6 +819,8 @@ export function actionKindOf(topic: HandoffTopic): ChatActionKind {
       return "RESERVATION";
     case "photos":
       return "PHOTOS";
+    case "closing":
+      return "CLOSING";
     default:
       return "OTHER";
   }

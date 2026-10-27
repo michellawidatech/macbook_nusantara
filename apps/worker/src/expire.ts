@@ -1,9 +1,12 @@
 /**
  * The expiry pass — letting go of a hold nobody came for.
  *
- * A booking made through chat takes a real unit out of stock: it stops showing
- * in `search_stock` for everybody, including the walk-in standing at the
- * counter. `Reservation` has no `expiresAt` column and nothing has ever swept
+ * A booking the bot made before 2026-10-27 took a real unit out of stock: it
+ * stopped showing in `search_stock` for everybody, including the walk-in
+ * standing at the counter. Since then a bot booking is a VISIT and holds
+ * nothing (`createVisit`) — and the same sweep closes one nobody came to:
+ * `releaseHold` finds no unit on it, writes no event, and reprojects the
+ * empty header to BATAL. A visit's expiry never touches a unit. `Reservation` has no `expiresAt` column and nothing has ever swept
  * it, so without this pass a hold created at 2am by an unauthenticated phone
  * number ends only when a human notices. That is the one genuine hazard in
  * letting a chat move inventory, and this is the answer to it.

@@ -1300,3 +1300,44 @@ describe("a machine's share of its invoice's shipping and tax", () => {
     ).toBeTruthy();
   });
 });
+
+describe("a visit the bot booked (2026-10-27)", () => {
+  const VISIT = "rsv-till-visit";
+  it("is offered among the reservations and loads only the customer", async () => {
+    mutate((d) => {
+      d.reservations = d.reservations.filter((r) => r.id !== VISIT);
+      d.reservations.push({
+        id: VISIT,
+        code: "RV-2026/10-000991",
+        customerId: d.customers[0]!.id,
+        when: "2026-10-31T07:00:00.000Z",
+        note: "",
+        items: [],
+        status: "ACTIVE",
+      });
+    });
+    try {
+      renderTill();
+      const before = screen.getAllByRole("button", {
+        name: /Reservations \(\d+\)/,
+      })[0]!;
+      await userEvent.click(before);
+      const picker = await dialog();
+      const row = (await picker.findByText("Visit")).closest(
+        "tr",
+      ) as HTMLElement;
+      await userEvent.click(
+        within(row).getByRole("button", { name: "Use this" }),
+      );
+      expect(
+        await screen.findByText(/from the visit RV-2026\/10-000991/),
+      ).toBeInTheDocument();
+      // No unit came with it: nothing was held.
+      expect(screen.queryByText(/Loaded \d+ unit/)).toBeNull();
+    } finally {
+      mutate((d) => {
+        d.reservations = d.reservations.filter((r) => r.id !== VISIT);
+      });
+    }
+  });
+});

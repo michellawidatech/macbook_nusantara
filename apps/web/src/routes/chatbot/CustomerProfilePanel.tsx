@@ -30,15 +30,17 @@ import {
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { MoneyInput } from "../../components/MoneyInput.js";
-import { fmtDateTime, fmtNone } from "../../lib/format.js";
+import { fmtDateTime, fmtNone, fmtRp } from "../../lib/format.js";
 import {
   addProfileFact,
+  closeStockWatch,
   patchProfile,
   removeProfileFact,
   type InboxConversation,
   type ProfileFact,
   type ProfileFactKind,
   type ProfilePatch,
+  type StockWatch,
 } from "../../lib/inboxApi.js";
 import { ActionKindTag, TaskSummaryText, budgetText } from "./ActionItems.js";
 
@@ -335,6 +337,15 @@ export function CustomerProfilePanel({
     }
   };
 
+  const closeWatch = async (w: StockWatch) => {
+    try {
+      await closeStockWatch(phone, w.id);
+      onChanged();
+    } catch (err) {
+      fail(err, t("chatProfile.saveFailed", "Could not save that."));
+    }
+  };
+
   const removeLabel = (f: ProfileFact) =>
     t("chatProfile.removeFact", "Remove {{value}}", { value: f.value });
 
@@ -369,6 +380,7 @@ export function CustomerProfilePanel({
     (a) => a.status === "OPEN",
   );
   const reservations = conversation.reservations ?? [];
+  const watches = conversation.watches ?? [];
 
   return (
     <Flex vertical gap={18}>
@@ -526,11 +538,89 @@ export function CustomerProfilePanel({
                     : fmtNone(),
                 })}
               </Typography.Text>
+              {r.units.length === 0 && (
+                <Tag
+                  color="cyan"
+                  style={{ marginInline: 0, width: "fit-content" }}
+                >
+                  {t("chatProfile.visitOnly", "Visit, nothing held")}
+                </Tag>
+              )}
               {r.units.map((u, i) => (
                 <Typography.Text key={`${u.serial ?? ""}:${i}`}>
                   {u.serial ? `${u.name} · ${u.serial}` : u.name}
                 </Typography.Text>
               ))}
+            </Flex>
+          ))
+        )}
+      </Section>
+
+      {/*
+       * "Tell me when it's in stock" (2026-10-27): the bot writes these when
+       * the customer says yes; a colleague closes one once it is dealt with.
+       */}
+      <Section title={t("chatProfile.watches", "Waiting for stock")}>
+        {watches.length === 0 ? (
+          <Typography.Text type="secondary">{fmtNone()}</Typography.Text>
+        ) : (
+          watches.map((w) => (
+            <Flex
+              key={w.id}
+              align="start"
+              justify="space-between"
+              gap={6}
+              aria-label={w.label ?? w.query}
+            >
+              <Flex vertical gap={2} style={{ minWidth: 0 }}>
+                <Typography.Text
+                  strong={w.closedAt === null}
+                  type={w.closedAt === null ? undefined : "secondary"}
+                >
+                  {w.label ?? w.query}
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {w.budget
+                    ? t(
+                        "chatProfile.watchAskedBudget",
+                        "Asked {{when}}, up to {{budget}}",
+                        {
+                          when: fmtDateTime(w.createdAt),
+                          budget: fmtRp(Number(w.budget)),
+                        },
+                      )
+                    : t("chatProfile.watchAsked", "Asked {{when}}", {
+                        when: fmtDateTime(w.createdAt),
+                      })}
+                </Typography.Text>
+                {w.closedAt !== null ? (
+                  <Tag style={{ marginInline: 0, width: "fit-content" }}>
+                    {t("chatProfile.watchClosed", "Closed")}
+                  </Tag>
+                ) : w.notifiedAt !== null ? (
+                  <Tag
+                    color="green"
+                    style={{ marginInline: 0, width: "fit-content" }}
+                  >
+                    {t("chatProfile.watchInStock", "In stock — tell them")}
+                  </Tag>
+                ) : null}
+              </Flex>
+              {w.closedAt === null && (
+                <Button
+                  size="small"
+                  onClick={() => void closeWatch(w)}
+                  aria-label={t(
+                    "chatProfile.closeWatchAria",
+                    "Close {{what}}",
+                    {
+                      what: w.label ?? w.query,
+                    },
+                  )}
+                >
+                  {t("chatProfile.closeWatch", "Close")}
+                </Button>
+              )}
             </Flex>
           ))
         )}
