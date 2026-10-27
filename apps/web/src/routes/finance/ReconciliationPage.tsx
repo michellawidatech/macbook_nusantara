@@ -13,6 +13,12 @@
  *   and refused unless it adds up, then matched line by line
  *   (`MonthlyReconciliation`).
  *
+ * Every row of either log can be DELETED (owner ask 2026-10-27): a day behind
+ * a Popconfirm, a month behind a dialog and the month typed back, because it
+ * holds the uploaded statement's lines and matches. `deleteReconciliation`
+ * takes the record and everything hanging off it; corrections already made to
+ * transactions stay, and the day or month reads as not reconciled again.
+ *
  * Finance access only (answer 4A): a `/finance/*` path, so `App.tsx` answers
  * `FinanceLocked` for anybody else, and the API sends both collections only
  * to an account with `canViewFinance`.
@@ -26,13 +32,19 @@ import {
   Card,
   Descriptions,
   Flex,
+  Input,
   Modal,
+  Popconfirm,
   Tabs,
   Tag,
   Typography,
   Upload,
 } from "antd";
-import { CheckSquareOutlined, UploadOutlined } from "@ant-design/icons";
+import {
+  CheckSquareOutlined,
+  DeleteOutlined,
+  UploadOutlined,
+} from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
@@ -56,6 +68,7 @@ import {
 import {
   changedSinceReconciled,
   dayBefore,
+  deleteReconciliation,
   linesOf,
   monthCounts,
   monthRange,
@@ -176,6 +189,10 @@ export function ReconciliationPage() {
   const [refused, setRefused] = useState<
     { file: string; problems: string[] } | undefined
   >();
+  const [deletingMonth, setDeletingMonth] = useState<
+    Reconciliation | undefined
+  >();
+  const [monthTyped, setMonthTyped] = useState("");
 
   const rows = useMemo(() => cashflowRows(db, t), [db, t]);
   const setParam = (patch: Record<string, string | undefined>) =>
@@ -264,6 +281,37 @@ export function ReconciliationPage() {
             })}
       </Button>
     );
+
+  const deleteDay = (r: DayRow) => {
+    const ids = [r.bank?.id, r.cash?.id].filter(
+      (x): x is string => x !== undefined,
+    );
+    mutate((d) => {
+      for (const id of ids) deleteReconciliation(d, id);
+    });
+    message.success(
+      t("recon.dayDeleted", "Reconciliation of {{day}} deleted.", {
+        day: fmtDate(r.day),
+      }),
+    );
+  };
+
+  const monthKey = (r: Reconciliation) => r.periodStart.slice(0, 7);
+
+  const confirmDeleteMonth = () => {
+    const doomed = deletingMonth;
+    if (doomed === undefined || monthTyped.trim() !== monthKey(doomed)) return;
+    mutate((d) => {
+      deleteReconciliation(d, doomed.id);
+    });
+    setDeletingMonth(undefined);
+    setMonthTyped("");
+    message.success(
+      t("recon.monthDeleted", "Reconciliation of {{month}} deleted.", {
+        month: fmtMonth(doomed.periodStart),
+      }),
+    );
+  };
 
   const latest = (r: DayRow) =>
     [r.bank, r.cash]
@@ -359,6 +407,25 @@ export function ReconciliationPage() {
               <Flex vertical gap={4} align="start">
                 {potButton(r.bank)}
                 {potButton(r.cash)}
+                <Popconfirm
+                  title={t(
+                    "recon.deleteDayTitle",
+                    "Delete the reconciliation of {{day}}?",
+                    { day: fmtDate(r.day) },
+                  )}
+                  description={t(
+                    "recon.deleteKeepsCorrections",
+                    "Corrections already made to transactions stay.",
+                  )}
+                  okText={t("recon.delete", "Delete")}
+                  okButtonProps={{ danger: true }}
+                  cancelText={t("common.cancel", "Cancel")}
+                  onConfirm={() => deleteDay(r)}
+                >
+                  <Button size="small" danger icon={<DeleteOutlined />}>
+                    {t("recon.delete", "Delete")}
+                  </Button>
+                </Popconfirm>
               </Flex>
             ),
           },
@@ -558,12 +625,25 @@ export function ReconciliationPage() {
             key: "actions",
             width: COLUMN.actionsPair,
             render: (_: unknown, r: Reconciliation) => (
-              <Button
-                size="small"
-                onClick={() => setParam({ month: r.periodStart.slice(0, 7) })}
-              >
-                {t("recon.openMonth", "Open")}
-              </Button>
+              <Flex vertical gap={4} align="start">
+                <Button
+                  size="small"
+                  onClick={() => setParam({ month: monthKey(r) })}
+                >
+                  {t("recon.openMonth", "Open")}
+                </Button>
+                <Button
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={() => {
+                    setMonthTyped("");
+                    setDeletingMonth(r);
+                  }}
+                >
+                  {t("recon.delete", "Delete")}
+                </Button>
+              </Flex>
             ),
           },
         ]}
@@ -645,6 +725,57 @@ export function ReconciliationPage() {
         count={queue[0]}
         onClose={() => setQueue((q) => q.slice(1))}
       />
+
+      <Modal
+        open={deletingMonth !== undefined}
+        title={t(
+          "recon.deleteMonthTitle",
+          "Delete the reconciliation of {{month}}?",
+          { month: deletingMonth ? fmtMonth(deletingMonth.periodStart) : "" },
+        )}
+        okText={t("recon.delete", "Delete")}
+        okButtonProps={{
+          danger: true,
+          disabled:
+            deletingMonth === undefined ||
+            monthTyped.trim() !== monthKey(deletingMonth),
+        }}
+        cancelText={t("common.cancel", "Cancel")}
+        onOk={confirmDeleteMonth}
+        onCancel={() => setDeletingMonth(undefined)}
+        destroyOnHidden
+      >
+        <Flex vertical gap={SPACE.sm}>
+          <Typography.Paragraph style={{ marginBottom: 0 }}>
+            {t(
+              "recon.deleteMonthBody",
+              "This removes the uploaded statement, its lines and matches, the notes set against it and its log.",
+            )}{" "}
+            {t(
+              "recon.deleteKeepsCorrections",
+              "Corrections already made to transactions stay.",
+            )}
+          </Typography.Paragraph>
+          <Typography.Text>
+            {t("recon.deleteTypeIt", "Type")}{" "}
+            <Typography.Text code>
+              {deletingMonth ? monthKey(deletingMonth) : ""}
+            </Typography.Text>{" "}
+            {t("recon.deleteToConfirm", "to confirm.")}
+          </Typography.Text>
+          <Input
+            value={monthTyped}
+            onChange={(e) => setMonthTyped(e.target.value)}
+            aria-label={t("recon.deleteTypeAria", "Type the month to confirm")}
+            placeholder={deletingMonth ? monthKey(deletingMonth) : ""}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            onPressEnter={confirmDeleteMonth}
+          />
+        </Flex>
+      </Modal>
 
       <Modal
         open={refused !== undefined}

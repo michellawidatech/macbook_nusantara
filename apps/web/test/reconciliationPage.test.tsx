@@ -451,3 +451,107 @@ describe("the monthly statement", () => {
     await vi.waitFor(() => expect(rec().status).toBe("RECONCILED"));
   });
 });
+
+describe("deleting a reconciliation (owner ask 2026-10-27)", () => {
+  const AT = "2026-09-30T10:00:00.000Z";
+  const rec = (
+    id: string,
+    kind: "DAILY" | "MONTHLY",
+    pot: "BANK" | "CASH",
+    start: string,
+    end: string,
+  ) => ({
+    id,
+    kind,
+    pot,
+    periodStart: start,
+    periodEnd: end,
+    posBalance: 1_000,
+    actualBalance: 1_000,
+    status: "MATCHED" as const,
+    staff: "Dina",
+    createdAt: AT,
+    updatedAt: AT,
+    edits: [
+      {
+        id: `${id}-e1`,
+        expenseId: "e-x",
+        action: "EDITED" as const,
+        before: 2_000,
+        after: 1_000,
+        staff: "Dina",
+        at: AT,
+      },
+    ],
+    asides: [],
+  });
+
+  it("deletes a day's two pots behind a confirm, and the day is not done again", async () => {
+    mutate((d) => {
+      d.reconciliations = [
+        rec("rc-b", "DAILY", "BANK", "2026-09-02", "2026-09-02"),
+        rec("rc-c", "DAILY", "CASH", "2026-09-02", "2026-09-02"),
+        rec("rc-b3", "DAILY", "BANK", "2026-09-03", "2026-09-03"),
+      ];
+    });
+    renderAt("/finance/reconciliation");
+    expect(await screen.findAllByText("Bank: Matched")).toHaveLength(2);
+    const deletes = screen.getAllByRole("button", { name: /Delete/ });
+    expect(deletes).toHaveLength(2);
+    // Newest first: 3 September, then 2 September.
+    await userEvent.click(deletes[1]!);
+    const pop = (
+      await screen.findByText(/Delete the reconciliation of/)
+    ).closest(".ant-popover") as HTMLElement;
+    expect(
+      within(pop).getByText("Corrections already made to transactions stay."),
+    ).toBeTruthy();
+    await userEvent.click(within(pop).getByRole("button", { name: "Delete" }));
+    await vi.waitFor(() =>
+      expect(getDb().reconciliations.map((r) => r.id)).toEqual(["rc-b3"]),
+    );
+    expect(screen.getAllByText("Bank: Matched")).toHaveLength(1);
+  });
+
+  it("deletes a month only once the month is typed back, with its statement lines", async () => {
+    mutate((d) => {
+      d.reconciliations = [
+        rec("rc-sep", "MONTHLY", "BANK", "2026-09-01", "2026-09-30"),
+      ];
+      d.statementLines = [
+        {
+          id: "sl-1",
+          reconciliationId: "rc-sep",
+          lineNo: 1,
+          date: "2026-09-02",
+          description: "TRSF CR",
+          amount: 1_000,
+          status: "MATCHED",
+          matches: [{ id: "sm-1", expenseId: "e-x", reason: "EXACT" }],
+        },
+      ];
+    });
+    renderAt("/finance/reconciliation?tab=monthly");
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Delete/ }),
+    );
+    const dialog = (
+      await screen.findByText(/Delete the reconciliation of/)
+    ).closest(".ant-modal") as HTMLElement;
+    expect(within(dialog).getByText(/Corrections already made/)).toBeTruthy();
+    const ok = () =>
+      within(dialog).getByRole("button", {
+        name: "Delete",
+      }) as HTMLButtonElement;
+    expect(ok().disabled).toBe(true);
+    const box = within(dialog).getByLabelText("Type the month to confirm");
+    await userEvent.type(box, "2026-08");
+    expect(ok().disabled).toBe(true);
+    await userEvent.clear(box);
+    await userEvent.type(box, "2026-09");
+    expect(ok().disabled).toBe(false);
+    await userEvent.click(ok());
+    await vi.waitFor(() => expect(getDb().reconciliations).toEqual([]));
+    expect(getDb().statementLines).toEqual([]);
+  });
+});

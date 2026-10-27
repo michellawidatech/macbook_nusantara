@@ -20,7 +20,9 @@ import {
   confirmLines,
   changedSinceReconciled,
   closedReconciliationNaming,
+  dailyOf,
   dailyStatus,
+  deleteReconciliation,
   editBlock,
   editRows,
   heldSuggestions,
@@ -29,6 +31,7 @@ import {
   matchedKeys,
   monthBlockers,
   monthCounts,
+  monthlyOf,
   pairManually,
   posBalanceAt,
   potMovements,
@@ -739,5 +742,83 @@ describe("POS entries the bank never saw (owner-approved 2026-10-27)", () => {
     ).toBeUndefined();
     expect(deleteAdjustment(db, { kind: "expense", id: "e-aside-2" })).toBe(1);
     expect(rec.asides).toEqual([]);
+  });
+});
+
+describe("deleting a reconciliation (owner ask 2026-10-27)", () => {
+  it("takes a day with its log; the correction it made stays, and the day is not done again", () => {
+    const db = shop();
+    db.expenses.push({
+      id: "e-del-1",
+      kind: "OPERATIONAL",
+      label: "Courier",
+      amount: 400_000,
+      date: "2026-09-02",
+      method: "TRANSFER",
+    });
+    const rec = upsertDaily(
+      db,
+      {
+        pot: "BANK",
+        day: "2026-09-02",
+        posBalance: 1,
+        actualBalance: 1,
+        status: "ADJUSTED",
+        edits: editRows(
+          [{ ref: { expenseId: "e-del-1" }, before: 500_000, after: 400_000 }],
+          [],
+          ctx,
+        ),
+      },
+      ctx,
+    );
+    expect(unreconciledPots(db, "2026-09-02")).not.toContain("BANK");
+    expect(deleteReconciliation(db, rec.id)).toBe(true);
+    expect(dailyOf(db, "BANK", "2026-09-02")).toBeUndefined();
+    expect(unreconciledPots(db, "2026-09-02")).toContain("BANK");
+    expect(db.expenses.find((e) => e.id === "e-del-1")!.amount).toBe(400_000);
+    expect(deleteReconciliation(db, rec.id)).toBe(false);
+  });
+
+  it("takes a month with its lines, matches and asides; another month is untouched", () => {
+    const db = shop();
+    sale(db, "s1", "2026-09-02", 2_000_000);
+    sale(db, "s2", "2026-09-05", 700_000);
+    const upload = (month: string, day: string) =>
+      uploadStatement(
+        db,
+        {
+          month,
+          file: `${month}.pdf`,
+          opening: 0,
+          closing: 2_000_000,
+          posOpening: 0,
+          posClosing: 0,
+          lines: [
+            { lineNo: 1, date: day, description: "TRSF CR", amount: 2_000_000 },
+          ],
+        },
+        ctx,
+      );
+    const sep = upload("2026-09", "2026-09-02");
+    const aug = upload("2026-08", "2026-08-02");
+    runMatching(
+      db,
+      sep,
+      potMovements(rowsOf(db), db.settings, "BANK", "2026-09-01", "2026-09-30")
+        .map(toPosMovement)
+        .filter((m) => m !== undefined),
+      ctx.nextId,
+    );
+    expect(linesOf(db, sep)[0]!.matches).toHaveLength(1);
+    setAside(db, sep, "p:s2-p1", "Paid to the owner", ctx);
+    expect(monthlyOf(db, "2026-09")!.asides).toHaveLength(1);
+
+    expect(deleteReconciliation(db, sep)).toBe(true);
+    expect(monthlyOf(db, "2026-09")).toBeUndefined();
+    expect(linesOf(db, sep)).toEqual([]);
+    expect(monthlyOf(db, "2026-08")!.id).toBe(aug);
+    expect(linesOf(db, aug)).toHaveLength(1);
+    expect(db.orders.find((o) => o.id === "s2")!.payments).toHaveLength(1);
   });
 });

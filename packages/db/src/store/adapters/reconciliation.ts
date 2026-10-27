@@ -18,12 +18,18 @@
  *   matches (the eighth sanctioned hard delete — do not generalise it), and
  *   is refused on a RECONCILED month, which is reopened first.
  *
+ * A reconciliation can be DELETED whole (owner ask 2026-10-27): the browser
+ * removes the row and the adapter calls `reconciliation_delete`
+ * (20261027230000), which takes its edits, lines, matches and asides with it
+ * — the ninth sanctioned hard delete, do not generalise it. What it corrected
+ * on real records stays.
+ *
  * A reconciliation also carries its `ReconciliationAside`s (owner-approved
  * 2026-10-27): a POS bank movement the statement never shows, set aside with
  * a note — a month is reconciled only once each is paired or explained. An
  * aside belongs to a MONTHLY reconciliation, is written once, and is taken
  * back by stamping `withdrawnAt` (the only column the app may UPDATE); a
- * client never removes one.
+ * client never removes one except with the whole reconciliation.
  *
  * `releaseReconciliationRefs` is the rule every deletion of an `Expense` or a
  * `ManualIncome` asks first: refused while a reconciliation that is not OPEN
@@ -44,7 +50,6 @@ import {
   isoOf,
   lockRows,
   refuseEdit,
-  refuseRemoval,
 } from "../context.js";
 import { deepEqual } from "@nusantara/store";
 
@@ -341,6 +346,54 @@ async function writeAsides(
   }
 }
 
+/**
+ * Delete a reconciliation whole (owner ask 2026-10-27: "I need to delete the
+ * monthly reconciliation history and the daily one") — the record, its edit
+ * log, its statement lines and their matches, and its asides, active or
+ * withdrawn, through `reconciliation_delete` (20261027230000), the one door.
+ * A correction it already wrote to a real record stays: that was a real fix.
+ * The day or month then reads as not reconciled. ONE activity line says what
+ * went and how many rows with it, in place of the generic line for the
+ * reconciliation and one per statement line the browser removed beside it.
+ * The ninth sanctioned hard delete — do not generalise it.
+ */
+async function deleteReconciliation(
+  ctx: WriteContext,
+  id: string,
+): Promise<void> {
+  const { tx } = ctx;
+  const rec = await tx.reconciliation.findUnique({
+    where: { id },
+    select: {
+      kind: true,
+      pot: true,
+      periodStart: true,
+      lines: { select: { id: true } },
+    },
+  });
+  if (rec === null) return;
+  const out = await tx.$queryRaw<{ removed: number }[]>`
+    SELECT reconciliation_delete(${id}) AS removed`;
+  const rows = Number(out[0]?.removed ?? 0);
+  ctx.touch("reconciliations", id);
+  ctx.quietActivity.add(`reconciliations\u0000${id}`);
+  for (const l of rec.lines) {
+    ctx.touch("statementLines", l.id);
+    ctx.quietActivity.add(`statementLines\u0000${l.id}`);
+  }
+  ctx.ownActivity.push({
+    entity: "Reconciliation",
+    entityId: id,
+    action: "DELETE",
+    before: JSON.stringify({
+      kind: rec.kind,
+      pot: rec.pot,
+      periodStart: rec.periodStart,
+      rows,
+    }),
+  });
+}
+
 export const reconciliations: Adapter<"reconciliations"> = {
   collection: "reconciliations",
   async project(tx, _ctx, keys) {
@@ -399,7 +452,10 @@ export const reconciliations: Adapter<"reconciliations"> = {
     const { tx } = ctx;
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("reconciliations", r.key);
+      if (n === undefined) {
+        await deleteReconciliation(ctx, r.key);
+        continue;
+      }
       const fields = {
         posBalance: n.posBalance,
         actualBalance: n.actualBalance,

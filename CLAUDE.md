@@ -3323,6 +3323,16 @@ Decisions that outlived those documents:
   hand-over line is labelled Bot (`botWroteReply`, `entities.handoff.reply`);
   `realName` (domain) refuses/hides "unknown"-type names. Evaluation shows
   *Handed over (last 7 days)* (`GET /api/chat/handovers`). No schema change.
+- **A reconciliation can be deleted — 2026-10-27** (migration
+  `20261027230000_reconciliation_delete`). A Daily row's *Delete* (Popconfirm)
+  takes both pots of that day; a Monthly row's needs the month typed back.
+  `deleteReconciliation` / `reconciliation_delete(text)` (SECURITY DEFINER,
+  EXECUTE to `nusantara_app` only) remove the record, its edits, statement
+  lines, matches and asides, active or withdrawn; corrections already made to
+  transactions STAY, and the period reads as not reconciled. ONE `AuditLog`
+  row (entity `Reconciliation`, `{kind, pot, periodStart, rows}`) replaces the
+  generic lines (`ctx.ownActivity` / `quietActivity`). ⚠️ The ninth
+  sanctioned hard delete; do not generalise it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

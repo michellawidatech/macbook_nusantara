@@ -1526,4 +1526,118 @@ describe("reconciliation (2026-10-27)", () => {
       await app.query(`DELETE FROM "Expense" WHERE id = $1`, [EXP]);
     });
   });
+
+  describe("a reconciliation deleted whole (20261027230000)", () => {
+    it("is EXECUTE for the app alone, and the tables stay undeletable", async () => {
+      const { rows } = await owner.query(
+        `SELECT has_function_privilege('nusantara_app','reconciliation_delete(text)','EXECUTE')   AS app_fn,
+                has_function_privilege('nusantara_agent','reconciliation_delete(text)','EXECUTE') AS agent_fn,
+                has_table_privilege('nusantara_app','"Reconciliation"','DELETE')                   AS rec_delete,
+                has_table_privilege('nusantara_app','"ReconciliationEdit"','DELETE')               AS edit_delete,
+                has_table_privilege('nusantara_app','"ReconciliationAside"','DELETE')              AS aside_delete`,
+      );
+      expect(rows[0]).toEqual({
+        app_fn: true,
+        agent_fn: false,
+        rec_delete: false,
+        edit_delete: false,
+        aside_delete: false,
+      });
+      await reconciliation("rc_d", "MATCHED");
+      await rejectsWith(
+        () => agent.query(`SELECT reconciliation_delete('rc_d')`),
+        INSUFFICIENT_PRIVILEGE,
+      );
+      await rejectsWith(
+        () => app.query(`DELETE FROM "Reconciliation" WHERE id = 'rc_d'`),
+        INSUFFICIENT_PRIVILEGE,
+      );
+    });
+
+    it("takes a day with its edits, and leaves the record it corrected", async () => {
+      await fixtures();
+      await reconciliation("rc_d", "ADJUSTED");
+      await app.query(
+        `INSERT INTO "ReconciliationEdit" (id, "reconciliationId", "expenseId", "paymentId", action, before, after, "staffId", at)
+         VALUES ('re_d1','rc_d',$1,NULL,'EDITED',70000,60000,$2,now()),
+                ('re_d2','rc_d',NULL,$3,'EDITED',12500000,12000000,$2,now())`,
+        [EXP, STAFF, PAY],
+      );
+      const { rows } = await app.query<{ n: number }>(
+        `SELECT reconciliation_delete('rc_d') AS n`,
+      );
+      expect(rows[0]!.n).toBe(3);
+      const left = await owner.query(
+        `SELECT (SELECT count(*) FROM "Reconciliation" WHERE id = 'rc_d')::int        AS rec,
+                (SELECT count(*) FROM "ReconciliationEdit" WHERE "reconciliationId" = 'rc_d')::int AS edits,
+                (SELECT amount FROM "Expense" WHERE id = $1)::int                       AS expense`,
+        [EXP],
+      );
+      expect(left.rows[0]).toEqual({ rec: 0, edits: 0, expense: 60000 });
+      // The day can be reconciled afresh.
+      await reconciliation("rc_d2", "OPEN");
+    });
+
+    it("takes a month with its lines, matches and asides, active or withdrawn — and only that month", async () => {
+      await fixtures();
+      await reconciliation("rc_m", "RECONCILED", "MONTHLY");
+      await app.query(
+        `INSERT INTO "Reconciliation" (id, kind, pot, "periodStart", "periodEnd", "posBalance",
+                                       "actualBalance", status, "staffId", "createdAt", "updatedAt")
+         VALUES ('rc_aug','MONTHLY','BANK','2026-08-01','2026-08-31',0,0,'OPEN',$1,now(),now())`,
+        [STAFF],
+      );
+      await app.query(
+        `INSERT INTO "BankStatementLine" (id, "reconciliationId", "lineNo", date, description, amount, status)
+         VALUES ('bl_s1','rc_m',1,'2026-09-01','TRSF CR',12000000,'MATCHED'),
+                ('bl_s2','rc_m',2,'2026-09-02','BIAYA ADM',-60000,'MATCHED'),
+                ('bl_a1','rc_aug',1,'2026-08-01','TRSF CR',12000000,'MATCHED')`,
+      );
+      await app.query(
+        `INSERT INTO "BankStatementMatch" (id, "lineId", "paymentId", "expenseId", reason)
+         VALUES ('bm_s1','bl_s1',$1,NULL,'EXACT'),
+                ('bm_s2','bl_s2',NULL,$2,'EXACT'),
+                ('bm_a1','bl_a1',$1,NULL,'EXACT')`,
+        [PAY, EXP],
+      );
+      await app.query(
+        `INSERT INTO "ReconciliationAside" (id, "reconciliationId", "expenseId", note, "staffId", at, "withdrawnAt")
+         VALUES ('ra_act','rc_m',$1,'Owner account',$2,now(),NULL),
+                ('ra_wd','rc_m',$1,'Earlier note',$2,now(),now())`,
+        [EXP, STAFF],
+      );
+      await app.query(
+        `INSERT INTO "ReconciliationEdit" (id, "reconciliationId", "expenseId", action, after, "staffId", at)
+         VALUES ('re_m1','rc_m',$1,'ADDED',60000,$2,now())`,
+        [EXP, STAFF],
+      );
+      const { rows } = await app.query<{ n: number }>(
+        `SELECT reconciliation_delete('rc_m') AS n`,
+      );
+      // 2 matches + 2 lines + 2 asides + 1 edit + the reconciliation.
+      expect(rows[0]!.n).toBe(8);
+      const left = await owner.query(
+        `SELECT (SELECT count(*) FROM "Reconciliation")::int        AS recs,
+                (SELECT count(*) FROM "BankStatementLine")::int     AS lines,
+                (SELECT count(*) FROM "BankStatementMatch")::int    AS matches,
+                (SELECT count(*) FROM "ReconciliationAside")::int   AS asides,
+                (SELECT count(*) FROM "ReconciliationEdit")::int    AS edits,
+                (SELECT count(*) FROM "Expense" WHERE id = $1)::int AS expense`,
+        [EXP],
+      );
+      expect(left.rows[0]).toEqual({
+        recs: 1,
+        lines: 1,
+        matches: 1,
+        asides: 0,
+        edits: 0,
+        expense: 1,
+      });
+      // Nothing to take is not an error.
+      const again = await app.query<{ n: number }>(
+        `SELECT reconciliation_delete('rc_m') AS n`,
+      );
+      expect(again.rows[0]!.n).toBe(0);
+    });
+  });
 });

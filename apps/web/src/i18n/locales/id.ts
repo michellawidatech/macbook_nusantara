@@ -4739,6 +4739,18 @@ export const id: Record<string, string> = {
   "recon.allMonths": "Semua bulan",
   "recon.monthTitle": "Rekening koran — {{month}}",
   "recon.statusReconciled": "Sudah direkonsiliasi",
+  "recon.delete": "Hapus",
+  "recon.dayDeleted": "Rekonsiliasi {{day}} dihapus.",
+  "recon.monthDeleted": "Rekonsiliasi {{month}} dihapus.",
+  "recon.deleteDayTitle": "Hapus rekonsiliasi {{day}}?",
+  "recon.deleteMonthTitle": "Hapus rekonsiliasi {{month}}?",
+  "recon.deleteKeepsCorrections":
+    "Koreksi yang sudah dibuat pada transaksi tetap ada.",
+  "recon.deleteMonthBody":
+    "Ini menghapus mutasi yang diunggah, baris dan pasangannya, catatan yang dibuat untuknya, serta lognya.",
+  "recon.deleteTypeIt": "Ketik",
+  "recon.deleteToConfirm": "untuk konfirmasi.",
+  "recon.deleteTypeAria": "Ketik bulannya untuk konfirmasi",
   "recon.statusOpen": "Terbuka",
   "recon.openingOff":
     "Rekening koran dibuka di {{statement}} dan POS di {{pos}} — selisih {{diff}}. Ada bulan sebelumnya yang tidak cocok; rekonsiliasi bulan itu dulu.",

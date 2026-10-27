@@ -141,6 +141,20 @@ export class WriteContext {
    * invoices come after deposits in the collection order.
    */
   readonly later: (() => Promise<void>)[] = [];
+  /**
+   * Activity lines an adapter wrote itself, in place of the generic ones for
+   * the rows in `quietActivity` (`collection\u0000key`). A deleted
+   * reconciliation (2026-10-27) is ONE line naming what it was and how many
+   * rows went with it — not one for it and one per statement line.
+   */
+  readonly ownActivity: {
+    entity: string;
+    entityId: string;
+    action: "CREATE" | "UPDATE" | "DELETE";
+    before?: string | null;
+    after?: string | null;
+  }[] = [];
+  readonly quietActivity = new Set<string>();
 
   private readonly methodIds = new Map<string, string>();
   private readonly categoryIds = new Map<string, string>();
