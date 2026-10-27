@@ -17,8 +17,17 @@ import { hashPassword } from "../src/auth/credentials.js";
 const URL =
   process.env["TEST_DATABASE_URL"] ??
   "postgresql://nusantara@localhost:5432/nusantara_pos_test";
-/** The same database as the API's own role, to prove the grants. */
-const APP_URL = URL.replace("//nusantara@", "//nusantara_app@");
+/**
+ * The same database as the API's own role, to prove the grants. Parsed, not
+ * string-replaced: CI's URL carries a password, and `//nusantara@` then never
+ * matches — the test ran as the owner and the refusal it expects never came.
+ */
+const APP_URL = (() => {
+  const u = new globalThis.URL(URL);
+  u.username = "nusantara_app";
+  u.password = "";
+  return u.toString();
+})();
 const PASSWORD = "rahasia-sekali";
 const PHONE = "628980095001";
 const OTHER = "628980095002";
