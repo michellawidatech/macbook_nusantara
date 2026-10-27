@@ -23,6 +23,16 @@
  * advisory lock inside one transaction, so two workers cannot both pass it.
  * The send pass delivers it like any reply; nothing here touches the network.
  *
+ * ## Never on top of a reply (2026-10-27)
+ *
+ * Nothing is queued while the customer has a line waiting (BARU): the draft
+ * pass is about to answer it — or is answering it right now, since the batch
+ * stays BARU until its reply commits — and a reminder or a nudge landing
+ * beside that reply is the double message the draft pass itself refuses to
+ * send. Checked inside the queueing transaction, so a line committed before
+ * the check holds the follow-up back to a later tick; one committed after it
+ * arrived after the follow-up was decided, and is an ordinary next turn.
+ *
  * ## The 24-hour window
  *
  * A free-form message reaches a customer only within 24 hours of their last
@@ -128,6 +138,11 @@ async function queueOnce(
 ): Promise<boolean> {
   return db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`followup:${input.to}`}))`;
+    // A line of theirs is waiting for the draft pass: answer that first.
+    const waiting = await tx.waMessage.count({
+      where: { from: input.to, direction: "IN", status: "BARU" },
+    });
+    if (waiting > 0) return false;
     const already = await tx.outbox.findFirst({
       where: {
         kind: "WA_REPLY",

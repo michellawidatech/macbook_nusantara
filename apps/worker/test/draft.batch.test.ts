@@ -26,7 +26,11 @@ import {
   type AgentClient,
   type CreateArgs,
 } from "@nusantara/agent";
-import { draftPass } from "../src/draft.js";
+import {
+  MAX_SUPERSEDES,
+  draftPass,
+  type SupersedeLedger,
+} from "../src/draft.js";
 
 /**
  * These tests are about the single AI agent (pipeline v1). The default is the
@@ -57,6 +61,8 @@ const NOW = new Date("2026-08-20T03:00:00.000Z");
 const ago = (ms: number) => new Date(NOW.getTime() - ms);
 
 let db: PrismaClient;
+/** Drafts dropped per thread — fresh per test, so no test inherits a count. */
+let ledger: SupersedeLedger;
 
 beforeAll(async () => {
   db = new PrismaClient({ datasources: { db: { url: URL } } });
@@ -69,6 +75,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  ledger = new Map();
   await pinPipelineV1(db);
   await db.outbox.deleteMany({});
   // WaThreadMemory.coveredThroughId is an FK to WaMessage with onDelete:
@@ -181,8 +188,15 @@ const pass = (client: AgentClient, over: Record<string, unknown> = {}) =>
     debounceMs: 8_000,
     maxDraftsPerTick: 5,
     now: () => NOW,
+    superseded: ledger,
     ...over,
   });
+
+/** The customer's turn the model was handed: the last user message's words. */
+const customerTurn = (args: CreateArgs): string => {
+  const last = args.messages[args.messages.length - 1]!;
+  return (last.content as Array<{ text: string }>)[0]!.text;
+};
 
 describe("batching a burst", () => {
   it("answers a burst of four messages with one reply and one outbox row", async () => {
@@ -392,6 +406,233 @@ describe("batching a burst", () => {
     expect(
       await db.waMessage.count({ where: { from: SENDER, status: "BARU" } }),
     ).toBe(2);
+  });
+});
+
+describe("a line that arrives while the reply is being written (2026-10-27)", () => {
+  // The owner's report: "Hmmm kemahalan", then "ada yg 15 jutaan gak ya" a
+  // few seconds later — and two replies, one per line.
+  it("drops the draft, queues nothing and leaves both lines waiting", async () => {
+    await inbound({
+      id: "k.1",
+      from: SENDER,
+      text: "Hmmm kemahalan",
+      ts: ago(30_000),
+    });
+    const first = scripted(["siap kak"]);
+    first.before(0, async () => {
+      await inbound({
+        id: "k.2",
+        from: SENDER,
+        text: "ada yg 15 jutaan gak ya",
+        ts: ago(20_000),
+      });
+    });
+
+    const result = await pass(first.client);
+
+    expect(first.calls).toHaveLength(1);
+    expect(result.drafted).toBe(0);
+    expect(await db.outbox.count()).toBe(0);
+    expect(await db.agentRun.count()).toBe(0);
+    const rows = await db.waMessage.findMany({ where: { from: SENDER } });
+    expect(rows.map((r) => r.status)).toEqual(["BARU", "BARU"]);
+    expect(rows.every((r) => r.replyText === null)).toBe(true);
+    expect(ledger.get(SENDER)?.count).toBe(1);
+  });
+
+  it("then answers the whole burst with ONE reply that read both lines", async () => {
+    await inbound({
+      id: "k.1",
+      from: SENDER,
+      text: "Hmmm kemahalan",
+      ts: ago(30_000),
+    });
+    const first = scripted(["siap kak"]);
+    first.before(0, async () => {
+      await inbound({
+        id: "k.2",
+        from: SENDER,
+        text: "ada yg 15 jutaan gak ya",
+        ts: ago(20_000),
+      });
+    });
+    await pass(first.client);
+
+    const second = scripted(["ada kak, mau saya carikan?"]);
+    const result = await pass(second.client);
+
+    expect(result.drafted).toBe(1);
+    expect(second.calls).toHaveLength(1);
+    expect(customerTurn(second.calls[0]!)).toBe(
+      "Hmmm kemahalan\nada yg 15 jutaan gak ya",
+    );
+    const sent = await db.outbox.findMany();
+    expect(sent).toHaveLength(1);
+    expect((sent[0]!.payload as { body: string }).body).toBe(
+      "ada kak, mau saya carikan?",
+    );
+    const rows = await db.waMessage.findMany({ where: { from: SENDER } });
+    expect(rows.every((r) => r.status === "DIJAWAB_AGEN")).toBe(true);
+    expect(rows.filter((r) => r.replyText !== null)).toHaveLength(1);
+    // A committed reply ends the run of drops.
+    expect(ledger.has(SENDER)).toBe(false);
+  });
+
+  it("drops it the same way when the rules bot answers (no model at all)", async () => {
+    await inbound({ id: "rb.1", from: SENDER, text: "halo", ts: ago(30_000) });
+    // Rules mode is no client: the line is raced in by the profile lookup
+    // instead, which every rules turn makes before its template.
+    let raced = false;
+    const spy = db.$extends({
+      query: {
+        customerProfile: {
+          async findUnique({ args, query }) {
+            if (!raced) {
+              raced = true;
+              await db.waMessage.create({
+                data: {
+                  waMessageId: "rb.2",
+                  from: SENDER,
+                  name: "Test",
+                  text: "ada air m2?",
+                  msgType: "text",
+                  ts: ago(20_000),
+                  direction: "IN",
+                  status: "BARU",
+                  entities: {},
+                  answeredByAgent: false,
+                },
+              });
+            }
+            return query(args);
+          },
+        },
+      },
+    }) as unknown as PrismaClient;
+
+    const result = await draftPass({
+      db: spy,
+      logger,
+      anthropic: {},
+      debounceMs: 8_000,
+      maxDraftsPerTick: 5,
+      now: () => NOW,
+      superseded: ledger,
+    });
+
+    expect(raced).toBe(true);
+    expect(result.drafted).toBe(0);
+    expect(await db.outbox.count()).toBe(0);
+    expect(
+      await db.waMessage.count({ where: { from: SENDER, status: "BARU" } }),
+    ).toBe(2);
+
+    const again = await draftPass({
+      db,
+      logger,
+      anthropic: {},
+      debounceMs: 8_000,
+      maxDraftsPerTick: 5,
+      now: () => NOW,
+      superseded: ledger,
+    });
+    expect(again.drafted).toBe(1);
+    expect(await db.outbox.count()).toBe(1);
+    expect(
+      await db.waMessage.count({ where: { from: SENDER, status: "BARU" } }),
+    ).toBe(0);
+  });
+
+  it(`commits anyway after ${MAX_SUPERSEDES} drops in a row, so a customer who keeps typing is answered`, async () => {
+    await inbound({ id: "st.0", from: SENDER, text: "halo", ts: ago(40_000) });
+    let line = 0;
+    const typing = () => {
+      const model = scripted(["siap kak"]);
+      model.before(0, async () => {
+        line += 1;
+        await inbound({
+          id: `st.${line}`,
+          from: SENDER,
+          text: `baris ${line}`,
+          ts: ago(30_000 - line * 1_000),
+        });
+      });
+      return model;
+    };
+
+    expect((await pass(typing().client)).drafted).toBe(0);
+    expect((await pass(typing().client)).drafted).toBe(0);
+    expect(ledger.get(SENDER)?.count).toBe(MAX_SUPERSEDES);
+    const third = typing();
+    expect((await pass(third.client)).drafted).toBe(1);
+
+    // The third reply covered everything but the line that arrived during it.
+    expect(customerTurn(third.calls[0]!)).toBe("halo\nbaris 1\nbaris 2");
+    expect(await db.outbox.count()).toBe(1);
+    const waiting = await db.waMessage.findMany({
+      where: { from: SENDER, status: "BARU" },
+    });
+    expect(waiting.map((m) => m.waMessageId)).toEqual(["st.3"]);
+    expect(ledger.has(SENDER)).toBe(false);
+  });
+
+  it("commits anyway once the burst's first line has waited a minute", async () => {
+    await inbound({
+      id: "old.1",
+      from: SENDER,
+      text: "mau tanya",
+      ts: ago(70_000),
+    });
+    const model = scripted(["silakan kak"]);
+    model.before(0, async () => {
+      await inbound({
+        id: "old.2",
+        from: SENDER,
+        text: "eh satu lagi",
+        ts: NOW,
+      });
+    });
+
+    expect((await pass(model.client)).drafted).toBe(1);
+    expect(await db.outbox.count()).toBe(1);
+    expect(
+      (await db.waMessage.findFirstOrThrow({ where: { waMessageId: "old.2" } }))
+        .status,
+    ).toBe("BARU");
+  });
+
+  it("changes nothing when no line arrived", async () => {
+    await inbound({ id: "q.1", from: SENDER, text: "halo", ts: ago(30_000) });
+    await inbound({
+      id: "q.2",
+      from: SENDER,
+      text: "ada m2 ga",
+      ts: ago(28_000),
+    });
+
+    const model = scripted(["siap kak"]);
+    expect((await pass(model.client)).drafted).toBe(1);
+    expect(model.calls).toHaveLength(1);
+    expect(await db.outbox.count()).toBe(1);
+    expect(ledger.size).toBe(0);
+  });
+
+  it("does not read a backlog's second half as the customer still typing", async () => {
+    // Six lines, a batch ceiling of four: the two left over were there at the
+    // freeze, so the first reply is sent and they wait for the second.
+    for (let i = 0; i < 6; i += 1) {
+      await inbound({
+        id: `bl.${i}`,
+        from: SENDER,
+        text: `baris ${i}`,
+        ts: ago(30_000 - i * 100),
+      });
+    }
+    const first = await pass(scripted(["oke kak"]).client, { maxBatch: 4 });
+    expect(first.drafted).toBe(1);
+    expect(await db.outbox.count()).toBe(1);
+    expect(ledger.size).toBe(0);
   });
 });
 

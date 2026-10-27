@@ -27,7 +27,46 @@
  * either. Silent, unrecoverable loss.
  *
  * Now the ids are captured before the call and every write is scoped to them.
- * Anything arriving mid-call stays BARU and is answered on the next tick.
+ * Anything arriving mid-call stays BARU — and, since 2026-10-27, the draft is
+ * DROPPED (see "Why a draft is dropped" below), so the next tick answers the
+ * old lines and the new one as one turn.
+ *
+ * ## Why a draft is dropped when the customer kept typing
+ *
+ * Owner report 2026-10-27: "Hmmm kemahalan", then "ada yg 15 jutaan gak ya"
+ * a few seconds later — and two replies a minute after, one per line. The
+ * second line landed while the model was writing the first reply, so the
+ * first reply answered half a thought and the second line got a reply of its
+ * own. So the commit now asks one more question, last thing before COMMIT:
+ * has a BARU line arrived from this customer since the batch was frozen? If
+ * so the transaction is rolled back — no claim, no Outbox row, every row still
+ * BARU — and the next pass, once the burst has settled again, answers it all.
+ *
+ * Race-safety: the check is a COUNT inside the commit transaction, issued
+ * after every other write. Under READ COMMITTED a statement sees every row
+ * committed before it starts, and the webhook commits each message in its own
+ * transaction. So a line is either committed before the count — seen, and the
+ * draft is dropped — or committed after it, in which case it reached the
+ * database after this reply was decided, exactly like a line sent a second
+ * after the reply went out, and the next tick answers it as its own turn. The
+ * window between the two is the COMMIT itself. Locking out the webhook (an
+ * advisory lock it would also have to take) would move that boundary, not
+ * remove it, and put a lock on the ingest path; the lease already keeps a
+ * second lane or worker off the thread meanwhile.
+ *
+ * "Arrived since the freeze" is by id, not by `ts`: the rows BARU when the
+ * batch was frozen (the batch, plus anything a full batch left over) are
+ * remembered, and any other BARU row is new. `ts` is the sender's phone
+ * clock, and a 60-message backlog split over two replies must not read its
+ * own second half as "the customer is still typing".
+ *
+ * A customer who never stops typing must still be answered: a thread's draft
+ * is dropped at most `MAX_SUPERSEDES` times in a row (an in-process count —
+ * a restart forgets it, which costs one more drop at worst), and never once
+ * the oldest line of the batch is `SUPERSEDE_MAX_AGE_MS` old. Nor is a draft
+ * dropped when its turn booked, moved or cancelled a visit or proposed one
+ * (`ANNOUNCED_WRITES`): that write has already committed on its own and the
+ * reply is the only thing that tells the customer.
  *
  * ## Why the claim is a compare-and-swap
  *
@@ -170,6 +209,11 @@ export interface DraftDeps {
   readonly reservationGraceMs?: number;
   /** How far a sender's clock may run ahead before we stop believing it. */
   readonly skewToleranceMs?: number;
+  /**
+   * Drafts dropped per thread because the customer kept typing. Absent is
+   * this process's own; a test passes a fresh one.
+   */
+  readonly superseded?: SupersedeLedger;
   /** Injectable so a test can drive the debounce without waiting. */
   readonly now?: () => Date;
   /**
@@ -220,6 +264,69 @@ class BatchRaceError extends Error {
     );
     this.name = "BatchRaceError";
   }
+}
+
+/**
+ * A line arrived while the reply was being written. Thrown inside the commit
+ * transaction so it rolls back; caught by the pass, never rethrown.
+ */
+class SupersededError extends Error {
+  constructor(
+    readonly from: string,
+    readonly arrived: number,
+  ) {
+    super(`${arrived} newer message(s) from ${from} arrived while drafting`);
+    this.name = "SupersededError";
+  }
+}
+
+/** Drafts dropped in a row before one is committed anyway. */
+export const MAX_SUPERSEDES = 2;
+
+/** Past this, the batch's oldest line has waited long enough: commit. */
+export const SUPERSEDE_MAX_AGE_MS = 60_000;
+
+/** A count of drops older than this is forgotten. */
+const SUPERSEDE_TTL_MS = 10 * 60_000;
+
+/**
+ * Tools whose write the reply announces. A turn that used one is committed
+ * even if a line arrived meanwhile: the booking is already in the database,
+ * and a dropped reply would leave the customer without its code or time.
+ */
+const ANNOUNCED_WRITES: ReadonlySet<string> = new Set([
+  "book_visit",
+  "reschedule_reservation",
+  "cancel_reservation",
+  "confirm_reservation",
+  "propose_reservation",
+]);
+
+/** Per thread: drafts dropped in a row, and when the last one was. */
+export type SupersedeLedger = Map<string, { count: number; at: number }>;
+
+const processLedger: SupersedeLedger = new Map();
+
+/** Drops this thread has had in a row, within the TTL. */
+function dropsSoFar(ledger: SupersedeLedger, from: string, now: Date): number {
+  const entry = ledger.get(from);
+  if (!entry) return 0;
+  if (now.getTime() - entry.at > SUPERSEDE_TTL_MS) {
+    ledger.delete(from);
+    return 0;
+  }
+  return entry.count;
+}
+
+function noteDrop(ledger: SupersedeLedger, from: string, now: Date): number {
+  const count = dropsSoFar(ledger, from, now) + 1;
+  ledger.set(from, { count, at: now.getTime() });
+  // Bounded: a long-running worker meets thousands of customers.
+  if (ledger.size > 5_000) {
+    for (const [k, v] of ledger)
+      if (now.getTime() - v.at > SUPERSEDE_TTL_MS) ledger.delete(k);
+  }
+  return count;
 }
 
 interface Candidate {
@@ -508,6 +615,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   // other's customer. `concurrency` is the number of lanes, each of which
   // holds at most one database connection at a time.
   const holder = deps.leaseHolder ?? leaseHolder();
+  const ledger = deps.superseded ?? processLedger;
   const concurrency = Math.max(1, deps.concurrency ?? 1);
 
   const answer = async (candidate: Candidate): Promise<void> => {
@@ -559,6 +667,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
     // Outside the try, so the race handler below can see what was booked.
     let outcome: ConverseResult | null = null;
     let anchorId: string | null = null;
+    let covered = 0;
     try {
       // The batch this reply will answer, frozen before the model call.
       // `id` breaks the tie because `ts` is Meta's SECONDS and a fast burst
@@ -578,6 +687,26 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       const batchIds = batch.map((m) => m.id);
       const anchor = batch[batch.length - 1]!;
       anchorId = anchor.id;
+      covered = batchIds.length;
+      // Every row BARU at the freeze, so the commit can tell a line that
+      // arrived while drafting from one a full batch left for the next reply.
+      const frozenIds =
+        batch.length < maxBatch
+          ? batchIds
+          : [
+              ...batchIds,
+              ...(
+                await db.waMessage.findMany({
+                  where: {
+                    from,
+                    direction: "IN",
+                    status: "BARU",
+                    id: { notIn: batchIds },
+                  },
+                  select: { id: true },
+                })
+              ).map((m) => m.id),
+            ];
 
       // Outside the window a free-form reply cannot be delivered (06 §11), so
       // drafting one would burn a model call to queue a send Graph will reject.
@@ -930,6 +1059,23 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       // or neither does (08 §5). No HTTP call happens inside it.
       const answeredAt = now();
       const status = result.handoff ? "PERLU_STAF" : "DIJAWAB_AGEN";
+      // May this draft still be dropped for a newer line? Not a third time
+      // in a row, not once the burst's first line has waited a minute, and
+      // not when the reply announces a booking already written.
+      const drops = dropsSoFar(ledger, from, answeredAt);
+      const announces =
+        (result.bookings?.length ?? 0) > 0 ||
+        result.toolsUsed.some((t) => ANNOUNCED_WRITES.has(t));
+      const keepAnyway: "drops" | "age" | "booking" | null =
+        drops >= MAX_SUPERSEDES
+          ? "drops"
+          : answeredAt.getTime() - batch[0]!.ts.getTime() >=
+              SUPERSEDE_MAX_AGE_MS
+            ? "age"
+            : announces
+              ? "booking"
+              : null;
+      let arrivedMeanwhile = 0;
       await db.$transaction(async (tx) => {
         // The claim, first, so its row locks are what the race is decided on.
         const { count } = await tx.waMessage.updateMany({
@@ -1056,7 +1202,38 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
               : {}),
           },
         });
+        // LAST, so the only moment a line can slip past it is the COMMIT
+        // (header, "Why a draft is dropped"). A rollback here leaves every
+        // row BARU and queues nothing.
+        arrivedMeanwhile = await tx.waMessage.count({
+          where: {
+            from,
+            direction: "IN",
+            status: "BARU",
+            id: { notIn: frozenIds },
+          },
+        });
+        if (arrivedMeanwhile > 0 && keepAnyway === null) {
+          throw new SupersededError(from, arrivedMeanwhile);
+        }
       }, TXN_TIMEOUTS);
+
+      ledger.delete(from);
+      if (arrivedMeanwhile > 0) {
+        logger.info(
+          {
+            evt: "worker.draft.superseded_kept",
+            ctx: {
+              from,
+              covered: batchIds.length,
+              arrived: arrivedMeanwhile,
+              drops,
+              why: keepAnyway,
+            },
+          },
+          "a newer line arrived while drafting, but this reply is sent anyway — the next tick answers it",
+        );
+      }
 
       drafted += 1;
       if (result.handoff) escalated += 1;
@@ -1084,6 +1261,24 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         "the agent drafted a reply and queued it for sending",
       );
     } catch (err) {
+      if (err instanceof SupersededError) {
+        // The customer kept typing. Nothing was written; the next pass
+        // answers the whole burst once it has settled.
+        const count = noteDrop(ledger, from, now());
+        logger.info(
+          {
+            evt: "worker.draft.superseded",
+            ctx: {
+              from,
+              covered,
+              arrived: err.arrived,
+              drops: count,
+            },
+          },
+          "the customer wrote again while the reply was being drafted — dropping it to answer the whole burst at once",
+        );
+        return;
+      }
       if (err instanceof BatchRaceError) {
         // Somebody else answered while the model was thinking — almost always a
         // staff member through the inbox. Their reply stands; ours is dropped

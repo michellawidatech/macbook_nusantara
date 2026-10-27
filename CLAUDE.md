@@ -3248,6 +3248,13 @@ Decisions that outlived those documents:
     contract and the settings singleton so a shop that closed a month still
     loads; nothing writes it any more. No migration, no data deleted.
     `endOfDay` / `endOfMonth` went with the dialog.
+- **A line sent while the bot is writing is not answered on its own —
+  2026-10-27.** ("Hmmm kemahalan" + "ada yg 15 jutaan gak ya" got two replies.)
+  The commit's LAST statement counts the thread's BARU rows not BARU at the
+  freeze (by id, not `ts`); any → rollback, nothing queued, the next pass
+  answers the whole burst. At most `MAX_SUPERSEDES` (2) drops in a row (an
+  in-process map), never past 60 s or when the turn wrote a booking.
+  `followUp.ts` queues nothing while a line is BARU. Debounce unchanged.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
