@@ -124,6 +124,47 @@ describe("the customer profile", () => {
     );
   });
 
+  it("shows an open task as an action item, an old one too (2026-10-27)", () => {
+    const task = (id: string, summary: string, topic: string) => ({
+      id,
+      kind: "PRICE" as const,
+      status: "OPEN" as const,
+      topic,
+      summary,
+      customerText: null,
+      unit: null,
+      listPrice: null,
+      cost: null,
+      askPrice: null,
+      staffPrice: null,
+      createdAt: "2026-10-27T03:00:00.000Z",
+      updatedAt: "2026-10-27T03:00:00.000Z",
+      resolvedAt: null,
+      resolvedBy: null,
+    });
+    draw({
+      ...CONVERSATION,
+      actions: [
+        task(
+          "a1",
+          'Perlu cek harga — Air 15" M2 8/256\n"air 15 m2 berapa?"',
+          "price",
+        ),
+        task(
+          "a2",
+          'Balasan bot ditahan (NO_SOURCE): "Bisa kak, cicilan 0%"',
+          "other",
+        ),
+      ],
+    });
+    const tasks = screen.getByRole("region", { name: "Open tasks" });
+    expect(tasks).toHaveTextContent('Need price check — Air 15" M2 8/256');
+    expect(tasks).toHaveTextContent("air 15 m2 berapa?");
+    expect(tasks).toHaveTextContent("Need reply — no source for the answer");
+    expect(tasks).not.toHaveTextContent("NO_SOURCE");
+    expect(tasks).not.toHaveTextContent("Balasan bot ditahan");
+  });
+
   it("draws every field as None for a customer the bot knows nothing about", () => {
     draw({ ...CONVERSATION, profile: null, reservations: [], summary: null });
     expect(screen.getByRole("region", { name: "Budget" })).toHaveTextContent(

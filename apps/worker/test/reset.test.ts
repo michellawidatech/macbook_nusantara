@@ -305,16 +305,21 @@ describe("/new from anybody else", () => {
     const { client, calls } = greeter();
     await pass(client);
 
-    // Still held for the colleague: the bot says nothing and the task stays.
-    expect(calls).toHaveLength(0);
-    expect(await row("c.new")).toMatchObject({ status: "BARU", intent: null });
+    // A hand-over no longer silences the chat (2026-10-27): "/new" is read
+    // as text and answered, and the colleague's task is untouched.
+    expect(calls).toHaveLength(1);
+    expect(JSON.stringify(calls[0]!.messages)).toContain("/new");
+    expect(await row("c.new")).toMatchObject({ status: "DIJAWAB_AGEN" });
+    expect((await row("c.new")).intent).not.toBe(RESET_INTENT);
+    expect(await row(`${CUSTOMER}.held`)).toMatchObject({
+      status: "PERLU_STAF",
+    });
     expect(
       await db.chatAction.count({ where: { from: CUSTOMER, status: "OPEN" } }),
     ).toBe(1);
-    expect(await db.outbox.count({})).toBe(0);
   });
 
-  it("is read by the model as text when the thread is not held", async () => {
+  it("is read by the model as text when nothing is waiting either", async () => {
     await inbound({
       id: "c.new",
       from: CUSTOMER,

@@ -176,15 +176,18 @@ export async function runDoctor(
 
   // --- 6. what the bot is allowed to do ------------------------------------
   const can = agentCapabilities(env);
+  const mode = env["AGENT_CAPABILITIES"]?.trim().toLowerCase();
   out.push({
     level: "ok",
-    title: can.stock
-      ? "AGENT_CAPABILITIES=live — the bot reads stock, sends unit photos and may book a hold"
-      : "AGENT_CAPABILITIES is not 'live' — the bot answers from the approved sheet and hands the rest over",
+    title: !can.stock
+      ? "AGENT_CAPABILITIES=parallel — the bot answers from the approved sheet and hands every unit question over"
+      : can.reserve
+        ? "AGENT_CAPABILITIES=live — unless a switch on /chat says otherwise, the bot reads stock and prices, sends unit photos and may book a hold"
+        : `${mode ? `AGENT_CAPABILITIES=${mode}` : "AGENT_CAPABILITIES unset"} — the POS is the source of truth: unless a switch on /chat says otherwise, the bot reads stock and prices and sends unit photos; bookings stay off`,
     ...(can.stock
       ? {}
       : {
-          fix: "Set AGENT_CAPABILITIES='live' in /opt/nusantara/etc/worker.env once this database holds the shop's real stock.",
+          fix: "Unset AGENT_CAPABILITIES in /opt/nusantara/etc/worker.env once this database holds the shop's real stock.",
         }),
   });
 

@@ -40,7 +40,21 @@ import type { AgentStep, PipelineResult } from "../pipeline.js";
 import { isStrongMatch } from "../retrieval.js";
 import { sanitiseReply } from "../sanitise.js";
 import { dispatchTool, storeOpenAt, type ToolContext } from "../tools.js";
-import { reply, type Lang, type ShownUnit } from "./replies.js";
+import {
+  reply,
+  unitLine,
+  type Lang,
+  type ShownAccessory,
+  type ShownUnit,
+} from "./replies.js";
+import {
+  TASK_REASON,
+  routedTask,
+  saidColleagueWillReply,
+  taskNote,
+  unitSubject,
+  type WaitingTask,
+} from "../tasks.js";
 import {
   understand,
   type RuleIntent,
@@ -70,6 +84,11 @@ export interface RulesInput {
   readonly proposalOpen: boolean;
   /** Serials the bot showed in its last reply, in the order it showed them. */
   readonly lastShown: readonly string[];
+  /**
+   * Questions already with a colleague (2026-10-27). The bot answers what is
+   * new, and a nudge is told once that the team is on the rest.
+   */
+  readonly waiting?: readonly WaitingTask[];
   readonly leadThreshold: number;
   /**
    * The AI fallback — only for what no rule covers. Absent (no credential,
@@ -117,16 +136,19 @@ export function leadScoreOf(u: Understanding): number {
   return Math.min(100, s);
 }
 
-const unitsIn = (o: unknown): ShownUnit[] => {
-  const list = (o as { units?: unknown } | null)?.units;
-  return Array.isArray(list)
-    ? list.filter(
-        (u): u is ShownUnit =>
-          typeof u === "object" &&
-          u !== null &&
-          typeof (u as ShownUnit).serial === "string",
-      )
-    : [];
+const isShownUnit = (u: unknown): u is ShownUnit =>
+  typeof u === "object" &&
+  u !== null &&
+  typeof (u as ShownUnit).serial === "string";
+
+const accessoryIn = (o: Record<string, unknown>): ShownAccessory | null => {
+  const a = o["accessory"] as ShownAccessory | undefined;
+  return a && typeof a.model === "string" ? a : null;
+};
+
+const unitsIn = (o: unknown, key = "units"): ShownUnit[] => {
+  const list = (o as Record<string, unknown> | null)?.[key];
+  return Array.isArray(list) ? list.filter(isShownUnit) : [];
 };
 
 export async function runRules(input: RulesInput): Promise<RulesResult> {
@@ -234,19 +256,39 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     };
   };
 
-  /** A person takes it: the shop's fixed line, the topic, a note for them. */
+  const waiting = input.waiting ?? [];
+  /** The customer has already been told a colleague will reply. */
+  const told = waiting.length > 0 && saidColleagueWillReply(input.lastReply);
+
+  /**
+   * A person takes it: the shop's fixed line, the topic, a note for them.
+   * When something is already with a colleague and the customer has just
+   * been told so, a short "passed that on too" instead of the same promise.
+   */
   const handOver = (topic: HandoffTopic, summary: string, line?: string) =>
-    done(line ?? holdingMessage(topic, open), {
-      handoff: { topic, summary, forcedBy: "route" },
-      escalate: topic,
-      sources: [],
-    });
+    done(
+      line ?? (told ? reply.passedOnToo(lang) : holdingMessage(topic, open)),
+      {
+        handoff: { topic, summary, forcedBy: "route" },
+        escalate: topic,
+        sources: [],
+      },
+    );
+
+  /** "Kak?" while a question is with a colleague: say once they are on it. */
+  const nudge = (): string | null =>
+    waiting.length > 0 && !told
+      ? reply.stillWaiting(
+          waiting.map((w) => w.topic),
+          lang,
+        )
+      : null;
 
   // --- 1. What the code already sends to a person --------------------------
   if (input.route)
     return handOver(
       input.route.topic,
-      `Dialihkan ke staf (${input.route.rule}): "${input.text.slice(0, 160)}"`,
+      routedTask(input.route.topic, input.text),
     );
 
   // --- 2. Remember what they said about themselves -------------------------
@@ -309,8 +351,26 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       sort: hasBudget ? "priciest" : "newest",
     });
     const units = unitsIn(out).slice(0, 3);
-    if (units.length === 0) return done(reply.noStock(lang));
+    // One option above the main pick, when the shelf has one (2026-10-27).
+    const stepUp = isShownUnit(out["stepUp"]) ? out["stepUp"] : null;
+    if (units.length === 0) {
+      // Out of stock: the closest units that are in, never a dead end.
+      const alternatives = unitsIn(out, "alternatives").slice(0, 3);
+      if (alternatives.length === 0) return done(reply.noStock(lang));
+      shown.push(...alternatives.map((x) => x.serial));
+      if (stepUp) shown.push(stepUp.serial);
+      const accessory = accessoryIn(out);
+      return done(
+        join(
+          reply.alternatives(alternatives, lang),
+          stepUp ? reply.stepUp(stepUp, lang) : null,
+          accessory ? reply.accessory(accessory, lang) : null,
+        ),
+        { sources: ["stock"] },
+      );
+    }
     shown.push(...units.map((x) => x.serial));
+    if (stepUp) shown.push(stepUp.serial);
     const matched =
       typeof out["matched"] === "number" ? out["matched"] : units.length;
     return done(
@@ -318,6 +378,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       // once there is nothing left to ask.
       join(
         reply.stockList(units, matched, lang),
+        stepUp ? reply.stepUp(stepUp, lang) : null,
         followUp() ? null : visitOffer(),
       ),
       {
@@ -329,17 +390,23 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
   // --- 3. The intents rules can answer -------------------------------------
   switch (u.intent) {
     case "greeting":
+      // Mid-conversation with something waiting, "halo kak?" is a nudge,
+      // not a new customer: no second welcome.
+      if (waiting.length > 0) return done(nudge() ?? reply.ack(lang));
       return done(reply.greeting(lang));
 
     case "thanks":
       return done(reply.thanks(lang));
 
-    case "ack":
+    case "ack": {
+      const waitingLine = nudge();
+      if (waitingLine) return done(waitingLine);
       return done(
         followUp()
           ? reply.ack(lang)
           : `${reply.ack(lang)} ${reply.offerSearch(lang)}`,
       );
+    }
 
     case "tell":
       return done(
@@ -370,7 +437,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       if (out["noProposal"] === true) break;
       return handOver(
         "reservation",
-        `Konfirmasi booking gagal: ${JSON.stringify(out).slice(0, 160)}`,
+        taskNote("booking", TASK_REASON.confirmFailed, input.text),
         reply.bookingFailed(lang),
       );
     }
@@ -395,7 +462,13 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       if (ids.length === 0)
         return handOver(
           "photos",
-          `Pelanggan minta foto ${serial ?? u.query ?? ""}, belum ada fotonya.`,
+          taskNote(
+            "photos",
+            [serial ?? unitSubject(input.text), TASK_REASON.noPhotos]
+              .filter(Boolean)
+              .join(", "),
+            input.text,
+          ),
           reply.noPhotos(lang),
         );
       const unit: ShownUnit | null =
@@ -443,7 +516,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       if (out["unavailable"]) return done(reply.noStock(lang));
       return handOver(
         "reservation",
-        `Booking belum bisa dibuat otomatis: ${JSON.stringify(out).slice(0, 160)}`,
+        taskNote("booking", TASK_REASON.notAutomatic, input.text),
       );
     }
 
@@ -455,7 +528,14 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
         if (out["found"] === true && out["available"] === true) {
           shown.push(serial);
           if (typeof out["price"] !== "string")
-            return handOver("price", `Harga ${serial} belum diisi di POS.`);
+            return handOver(
+              "price",
+              taskNote(
+                "price",
+                `${unitLine(out as unknown as ShownUnit, "id") || serial} (${serial}), ${TASK_REASON.noPrice}`,
+                input.text,
+              ),
+            );
           return done(
             join(reply.price(out as unknown as ShownUnit, lang), visitOffer()),
           );
@@ -505,8 +585,5 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       });
     }
   }
-  return handOver(
-    "other",
-    `Bot (aturan) tidak bisa menjawab: "${input.text.slice(0, 160)}"`,
-  );
+  return handOver("other", taskNote("reply", TASK_REASON.noAnswer, input.text));
 }

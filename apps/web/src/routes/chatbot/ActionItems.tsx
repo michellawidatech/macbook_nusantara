@@ -9,11 +9,12 @@
  * (ChatPage.tsx), Mark handled sits in the header, and a staff reply closes
  * the thread's open tasks (apps/api routes/inbox.ts).
  */
-import { Tag } from "antd";
+import { Flex, Tag, Typography } from "antd";
 import type { TFunction } from "../../i18n/translate.js";
 import { useTranslation } from "react-i18next";
 import { fmtNone, fmtRp } from "../../lib/format.js";
 import type { ChatActionKind } from "../../lib/inboxApi.js";
+import { taskSummaryLines } from "../../lib/taskSummary.js";
 
 /** "Rp a – Rp b", one figure, or None. */
 export function budgetText(min: string | null, max: string | null): string {
@@ -55,5 +56,40 @@ export function ActionKindTag({ kind }: { kind: ChatActionKind }) {
     <Tag color={KIND_COLOR[kind]} style={{ marginInline: 0 }}>
       {actionKindLabel(t, kind)}
     </Tag>
+  );
+}
+
+/**
+ * A hand-over's note as an action item (owner, 2026-10-27): "Need price check
+ * — Air 15" M2 8/256", with the customer's words or the held draft quoted
+ * under it. An old note that named a code reads the same way.
+ */
+export function TaskSummaryText({
+  summary,
+  topic,
+}: {
+  summary: string;
+  topic: string;
+}) {
+  const { t } = useTranslation();
+  const lines = taskSummaryLines(t, summary, topic);
+  return (
+    <Flex vertical gap={2} style={{ minWidth: 0 }}>
+      <Typography.Text>{lines.head}</Typography.Text>
+      {lines.quote && (
+        <Typography.Text
+          type="secondary"
+          style={{ fontSize: 12 }}
+          ellipsis={{ tooltip: lines.quote }}
+        >
+          “{lines.quote}”
+        </Typography.Text>
+      )}
+      {lines.rest.map((l, i) => (
+        <Typography.Text key={i} type="secondary" style={{ fontSize: 12 }}>
+          {l}
+        </Typography.Text>
+      ))}
+    </Flex>
   );
 }

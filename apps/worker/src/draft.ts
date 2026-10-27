@@ -60,8 +60,13 @@ import {
   renderStoreFacts,
   routeMessage,
   loadCapabilities,
-  PARALLEL_CAPABILITIES,
+  SHOP_CAPABILITIES,
+  TASK_REASON,
+  isHandoffTopic,
+  saidColleagueWillReply,
+  taskNote,
   type AgentCapabilities,
+  type WaitingTask,
   type AgentApiOptions,
   type AgentStep,
   type CallUsage,
@@ -138,19 +143,20 @@ export interface DraftDeps {
   readonly agentApi?: AgentApiOptions;
   /** This process's name on a thread lease. Injectable so a test can be two workers. */
   readonly leaseHolder?: string;
+  /**
+   * How long a staff reply by hand keeps the bot out of that thread.
+   * Defaults to `STAFF_ACTIVE_MS`.
+   */
+  readonly staffActiveMs?: number;
   /** Messages one reply may cover. A 60-message backlog becomes two replies. */
   readonly maxBatch?: number;
   /** The reserved agent Staff row, so a booking's UnitEvent is attributable. */
   readonly agentStaffId?: string;
   /**
-   * What the bot may do for itself (packages/agent `policy.ts`).
-   *
-   * Absent is the 2026-09-18 design: answers from the owner's approved sheet,
-   * everything about a particular unit to a person. `AGENT_CAPABILITIES=live`
-   * in the environment is the 2026-09-21 one — the bot reads the shelf, sends
-   * the shop's own photographs and may book a hold. One variable rather than a
-   * deploy, because which is right depends on whether the data in this
-   * database is the shop's data today.
+   * What the bot may do for itself when a switch on /chat was never pressed
+   * (packages/agent `policy.ts`). Absent is `SHOP_CAPABILITIES` since
+   * 2026-10-27 — the POS is the source of truth: stock, prices and photos on,
+   * bookings off until the owner switches them on.
    */
   readonly capabilities?: AgentCapabilities;
   /**
@@ -181,6 +187,14 @@ export interface DraftPassResult {
   /** True when there is no credential and the pass is dormant. */
   readonly dormant: boolean;
 }
+
+/**
+ * How long a staff member's own reply keeps the bot out of a thread
+ * (2026-10-27). Long enough for a colleague mid-conversation to read the
+ * customer's answer and type theirs; short enough that a customer whose
+ * colleague walked away is answered within a quarter of an hour.
+ */
+export const STAFF_ACTIVE_MS = 15 * 60_000;
 
 /** Answered turns shown verbatim. Older ones live in the rolling summary. */
 const HISTORY_TURNS = 8;
@@ -250,21 +264,31 @@ interface Candidate {
  * as somebody else's problem. The inbox counts BARU as pending, so a muted
  * thread still reads as waiting on a human — which it is.
  *
- * The second `NOT EXISTS` is the hand-over hold (2026-09-18). Once the bot has
- * given a thread to a person — a PERLU_STAF row — it says nothing more to that
- * customer until the person has answered: a staff reply marks every waiting
- * row DIJAWAB_STAF (routes/inbox.ts), and so does "handled" on the Chat page.
- * Without it the customer who asked for Air M1 stock and then wrote "kak?"
- * would get a second holding line from the bot while the colleague was still
- * looking. Derived from the rows rather than written onto the switch above,
- * because that switch is staff-owned and the agent's role cannot write it
- * (migration 20260827090000) — a bot that could turn itself off could also
- * turn itself on.
+ * There is NO hand-over hold any more (owner, 2026-10-27, reversing
+ * 2026-09-18): *"even if the user asks something and it should escalate, if
+ * the user asks something else that should not be escalated, the system
+ * should still answer it rather than stop immediately."* A message that needed
+ * a person stays PERLU_STAF — outlined on /chat, its task open — and is never
+ * drafted again, because this pass only reads BARU rows; but the customer's
+ * NEWER messages are answered as usual, with the waiting questions named in
+ * the prompt so the bot neither answers nor contradicts them
+ * (`waitingTasks`).
+ *
+ * The second `NOT EXISTS` is what replaced it: a person actively chatting.
+ * A staff reply by hand (`replyText` written by a Staff, routes/inbox.ts)
+ * within `staffActiveMs` keeps the bot out of the thread, so it does not talk
+ * over a colleague mid-conversation; their newer messages stay BARU, which
+ * the inbox shows as waiting. Mark handled writes no `replyText` and does not
+ * count — nobody is typing there. Once the colleague has been quiet for the
+ * window, the bot answers what is still waiting. Derived from the rows rather
+ * than written onto the switch above, because that switch is staff-owned and
+ * the agent's role cannot write it (migration 20260827090000).
  */
 async function quietCandidates(
   db: PrismaClient,
   floorCutoff: Date,
   skewCeiling: Date,
+  staffActiveSince: Date,
   limit: number,
 ): Promise<Candidate[]> {
   return db.$queryRaw<Candidate[]>(Prisma.sql`
@@ -284,10 +308,14 @@ async function quietCandidates(
            )
        AND NOT EXISTS (
              SELECT 1
-               FROM "WaMessage" h
-              WHERE h."from" = "WaMessage"."from"
-                AND h."direction" = 'IN'
-                AND h."status" = 'PERLU_STAF'
+               FROM "WaMessage" s
+              WHERE s."from" = "WaMessage"."from"
+                AND s."direction" = 'IN'
+                AND s."answeredById" IS NOT NULL
+                AND s."answeredByAgent" = false
+                AND s."replyText" IS NOT NULL
+                AND s."answeredAt"
+                      > (${staffActiveSince}::timestamptz AT TIME ZONE 'UTC')
            )
      GROUP BY "from"
     HAVING COUNT(*) FILTER (WHERE "status" = 'BARU') > 0
@@ -374,8 +402,8 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   const skewMs = deps.skewToleranceMs ?? DEFAULT_SKEW_MS;
 
   // A tester's `/new` (reset.ts), before anything reads the thread: it closes
-  // the tasks `refreshOffers` would otherwise refresh and lifts the hold the
-  // candidate query below would otherwise stop at.
+  // the tasks `refreshOffers` would otherwise refresh and that the draft
+  // would otherwise name as still waiting for a colleague.
   const { testers } = await resetPass({ db, logger, now });
 
   // Code only, no model, so it runs with or without a credential: a customer
@@ -398,6 +426,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
     db,
     new Date(at.getTime() - waits.minMs),
     new Date(at.getTime() + skewMs),
+    new Date(at.getTime() - (deps.staffActiveMs ?? STAFF_ACTIVE_MS)),
     deps.maxDraftsPerTick * 3,
   );
 
@@ -451,7 +480,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
     // The four switches on /chat (owner ask 2026-09-29), read each pass so a
     // switch pressed on the Chat page applies to the next message. The
     // environment's `AGENT_CAPABILITIES` answers for a switch never pressed.
-    loadCapabilities(db, deps.capabilities ?? PARALLEL_CAPABILITIES),
+    loadCapabilities(db, deps.capabilities ?? SHOP_CAPABILITIES),
     // Chatbot v2: which pipeline answers (Settings, v1 until the owner
     // switches), the lead threshold, and the three agents' personas.
     Promise.resolve(earlySettings),
@@ -576,7 +605,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       // Newest first, for "what did the bot just say".
       const newestFirst = [...history].reverse();
 
-      const [memory, profile, openProposal] = await Promise.all([
+      const [memory, profile, openProposal, waiting] = await Promise.all([
         db.waThreadMemory.findUnique({
           where: { from },
           select: { summary: true, coveredThroughAt: true, directive: true },
@@ -586,6 +615,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // (2026-10-22: only v2 read either before).
         profileLine(db, from),
         openProposalLine(db, from, at),
+        // What is waiting for a colleague (2026-10-27): the bot answers the
+        // newer messages and must neither answer nor contradict these.
+        waitingTasks(db, from),
       ]);
 
       // Turns older than the window, when the window is full: the few that
@@ -635,6 +667,12 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
             })
           : [];
 
+      // Whether the bot's last reply already told the customer a colleague
+      // will answer what is waiting, so a fixed hand-over line does not say
+      // it again (2026-10-27).
+      const alreadyTold =
+        waiting.length > 0 && saidColleagueWillReply(newestFirst[0]?.reply);
+
       const prompt = buildAgentPrompt({
         // The one agent's persona is the one Settings edits (the Advisor's
         // seat); unedited it is the active persona, and a fresh database with
@@ -659,6 +697,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // v2 hands the profile and the proposal to its own agents.
         ...(v2 ? {} : { profile, openProposal }),
         recall: recall.map((r) => ({ text: r.text, at: r.at })),
+        waiting,
       });
 
       // The two reads of the customer's message that do not ask the model:
@@ -739,6 +778,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           lastReply: newestFirst[0]?.reply ?? null,
           proposalOpen: openProposal !== null,
           lastShown,
+          waiting,
           leadThreshold: settings.leadThreshold,
           ...(client
             ? {
@@ -756,6 +796,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                     route: null,
                     hint,
                     capabilities,
+                    alreadyTold,
                     onError: (err) => {
                       failure = err;
                     },
@@ -806,6 +847,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           route,
           hint,
           capabilities,
+          alreadyTold,
           onError: (err) => {
             failure = err;
           },
@@ -1010,9 +1052,11 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
               upsertChatAction(tx, {
                 from,
                 topic: "reservation",
-                summary:
-                  `Bot membuat/mengubah booking ${codes}, tapi staf membalas lebih dulu ` +
-                  "sehingga pelanggan belum diberi tahu. Sampaikan kode bookingnya.",
+                // Staff replied first, so the customer never heard the code.
+                summary: taskNote(
+                  "tellBooking",
+                  `${codes}, ${TASK_REASON.notTold}`,
+                ),
                 customerText: "",
                 messageId: anchorId!,
                 now: now(),
@@ -1051,6 +1095,29 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   await inPool(due, concurrency, answer);
 
   return { drafted, escalated, dormant: false };
+}
+
+/**
+ * The questions this thread handed to a person that nobody has dealt with
+ * yet — its OPEN `ChatAction`s, one per kind, oldest first. A staff reply,
+ * Mark handled and Clear chat each close them (apps/api routes/inbox.ts), so
+ * an open one is exactly a question still waiting on a colleague.
+ */
+async function waitingTasks(
+  db: PrismaClient,
+  from: string,
+): Promise<WaitingTask[]> {
+  const rows = await db.chatAction.findMany({
+    where: { from, status: "OPEN" },
+    orderBy: { createdAt: "asc" },
+    select: { topic: true, customerText: true },
+    take: 6,
+  });
+  return rows.flatMap((r) =>
+    isHandoffTopic(r.topic)
+      ? [{ topic: r.topic, text: r.customerText?.trim() || null }]
+      : [],
+  );
 }
 
 /**
@@ -1151,9 +1218,9 @@ async function recordRun(
  * failure happens AFTER a network call, so the unbounded predicate would sweep
  * in a message that arrived meanwhile and hide it from everyone.
  *
- * PERLU_STAF is terminal for the agent — this pass only selects BARU rows, and
- * the hold in `quietCandidates` keeps it off the whole thread — so an
- * escalated thread is not retried in a loop. It shows in the inbox as waiting,
+ * PERLU_STAF is terminal for the agent — this pass only selects BARU rows —
+ * so an escalated batch is not retried in a loop; the customer's newer
+ * messages are answered as usual (2026-10-27). It shows in the inbox as waiting,
  * with the reason on the newest row so the colleague knows why.
  */
 async function escalate(
@@ -1162,12 +1229,13 @@ async function escalate(
   anchorId: string,
   why: "window_closed" | "nothing_to_read" | "no_reply",
 ): Promise<number> {
+  // One short action item (owner, 2026-10-27), like every hand-over's.
   const summary =
     why === "window_closed"
-      ? "Jendela 24 jam WhatsApp sudah tutup — balas dengan template."
+      ? taskNote("template", TASK_REASON.windowClosed)
       : why === "nothing_to_read"
-        ? "Pesan tanpa teks yang bisa dibaca bot."
-        : "Bot gagal membalas — cek log worker.";
+        ? taskNote("reply", TASK_REASON.noText)
+        : taskNote("reply", TASK_REASON.botFailed);
   return db.$transaction(async (tx) => {
     const { count } = await tx.waMessage.updateMany({
       where: { id: { in: batchIds }, status: "BARU" },

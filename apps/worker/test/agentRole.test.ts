@@ -370,6 +370,170 @@ describe("the worker as nusantara_agent", () => {
   });
 });
 
+describe("a hand-over, read as nusantara_agent (2026-10-27)", () => {
+  const pass = () =>
+    draftPass({
+      db: agent,
+      logger,
+      anthropic: { apiKey: "sk-ant-test" },
+      client: model(),
+      debounceMs: 8_000,
+      maxDraftsPerTick: 5,
+      now: () => NOW,
+    });
+
+  beforeEach(async () => {
+    // A question already with a colleague: its row and its open task.
+    const held = await owner.waMessage.create({
+      data: {
+        waMessageId: "h.1",
+        from: FROM,
+        name: "Test",
+        text: "air m1 bisa nego?",
+        msgType: "text",
+        ts: new Date(NOW.getTime() - 600_000),
+        direction: "IN",
+        status: "PERLU_STAF",
+        entities: {},
+        replyText: "Admin kami cek dulu ya kak 🙏",
+        answeredByAgent: false,
+        answeredAt: new Date(NOW.getTime() - 590_000),
+        intent: "staf:negotiation",
+      },
+    });
+    await owner.chatAction.create({
+      data: {
+        from: FROM,
+        kind: "NEGOTIATION",
+        topic: "negotiation",
+        summary: "Perlu jawab tawaran — Air M1",
+        customerText: "air m1 bisa nego?",
+        messageId: held.id,
+        createdAt: new Date(NOW.getTime() - 590_000),
+        updatedAt: new Date(NOW.getTime() - 590_000),
+      },
+    });
+  });
+
+  it("answers the newer message and leaves the colleague's task open", async () => {
+    await inbound("h.2", "halo kak", new Date(NOW.getTime() - 20_000));
+    expect((await pass()).drafted).toBe(1);
+    expect(
+      await owner.waMessage.findUniqueOrThrow({
+        where: { waMessageId: "h.2" },
+      }),
+    ).toMatchObject({ status: "DIJAWAB_AGEN" });
+    expect(
+      await owner.chatAction.count({ where: { from: FROM, status: "OPEN" } }),
+    ).toBe(1);
+  });
+
+  it("stays out while a colleague is chatting", async () => {
+    await owner.staff.create({
+      data: {
+        id: "staff_kasir",
+        username: "kasir",
+        name: "Kasir",
+        role: "STAFF",
+        canApprove: false,
+        active: true,
+        passwordHash: "unusable",
+        createdAt: NOW,
+      },
+    });
+    await owner.waMessage.update({
+      where: { waMessageId: "h.1" },
+      data: {
+        status: "DIJAWAB_STAF",
+        replyText: "Bisa kak, 7,8jt ya",
+        answeredById: "staff_kasir",
+        answeredAt: new Date(NOW.getTime() - 60_000),
+      },
+    });
+    await inbound("h.3", "oke kak", new Date(NOW.getTime() - 20_000));
+    expect((await pass()).drafted).toBe(0);
+    expect(await owner.outbox.count()).toBe(0);
+  });
+});
+
+describe("out of stock, read as nusantara_agent (2026-10-27)", () => {
+  it("offers what is in stock, and leaves out the accessory it may not read", async () => {
+    await seedUnit();
+    await owner.category.create({
+      data: {
+        id: "cat_acc",
+        name: "Accessories",
+        sortOrder: 2,
+        marginMode: "PCT",
+        marginMin: 5n,
+        marginMax: 30n,
+        createdAt: NOW,
+        tracksSerial: false,
+      },
+    });
+    await owner.catalogModel.create({
+      data: {
+        id: "mdl_acc",
+        categoryId: "cat_acc",
+        name: "Charger",
+        archived: false,
+        createdAt: NOW,
+      },
+    });
+    await owner.sku.create({
+      data: {
+        id: "sku_acc",
+        modelId: "mdl_acc",
+        code: "ACC-1",
+        name: "Charger MacBook Air 30W",
+        price: 450_000n,
+        landed: 1n,
+        archived: false,
+        createdAt: NOW,
+      },
+    });
+    await owner.stockMove.create({
+      data: {
+        skuId: "sku_acc",
+        locationId: "loc_t",
+        qty: 2,
+        unitCost: 1n,
+        type: "MASUK",
+        at: NOW,
+        staffId: AGENT_STAFF,
+      },
+    });
+    const ctx = { from: FROM, now: NOW, capabilities: LIVE };
+    const asAgent = (await dispatchTool(
+      agent,
+      "search_stock",
+      { query: "macbook air m3" },
+      ctx,
+    )) as Record<string, unknown>;
+    expect(asAgent["error"]).toBeUndefined();
+    expect(JSON.stringify(asAgent["alternatives"])).toContain("SERX");
+    // nusantara_agent holds no grant on StockMove: no accessory, no failure.
+    expect(asAgent["accessory"]).toBeUndefined();
+    // The POS's agent API runs it as nusantara_app, which may read the ledger.
+    const app = new PrismaClient({
+      datasources: { db: { url: asRole("nusantara_app") } },
+    });
+    try {
+      const asApp = (await dispatchTool(
+        app,
+        "search_stock",
+        { query: "macbook air m3" },
+        ctx,
+      )) as Record<string, unknown>;
+      expect(asApp["accessory"]).toMatchObject({
+        model: "Charger MacBook Air 30W",
+      });
+    } finally {
+      await app.$disconnect();
+    }
+  });
+});
+
 describe("a chat staff cleared, read as nusantara_agent (2026-10-27)", () => {
   const CLEARED = new Date(NOW.getTime() - 600_000);
 

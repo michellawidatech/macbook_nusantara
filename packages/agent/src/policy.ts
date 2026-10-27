@@ -95,6 +95,23 @@ export const LIVE_CAPABILITIES: AgentCapabilities = {
 };
 
 /**
+ * What an unpressed switch means since 2026-10-27 (owner: *"the stocks,
+ * prices, conditions are already synced with the POS so it should be fine for
+ * the chatbot to make the POS data as a source of truth"*). The parallel
+ * operation with B2Soft that made the cautious reading the right default is
+ * over: the shelf in this database is the shop's shelf. So the bot reads
+ * stock, quotes prices and sends the shop's photos unless the owner switched
+ * one off on /chat. Bookings stay off until somebody switches them on — a
+ * booking is a WRITE, and holding a unit for a stranger is the owner's call.
+ */
+export const SHOP_CAPABILITIES: AgentCapabilities = {
+  stock: true,
+  price: true,
+  reserve: false,
+  photos: true,
+};
+
+/**
  * What the switches actually allow once their dependency is applied: price,
  * bookings and photos are all about a unit on the shelf, so with Stock off
  * they are off whatever they say. Stored as set, read through this — so
@@ -114,17 +131,22 @@ export function effectiveCapabilities(c: AgentCapabilities): AgentCapabilities {
  *
  * Since 2026-09-29 this is the FALLBACK: the four switches on /chat are
  * `AppSetting` rows (`CAPABILITY_SETTING_KEYS`), and a switch nobody has ever
- * pressed falls back to this. The cautious reading is the default, and a
- * value nobody recognises reads as cautious too: the live design is right
- * only once the stock in this database is the shop's real stock, and a typo
- * in an environment file must not be what decides that.
+ * pressed falls back to this.
+ *
+ * Since 2026-10-27 the POS is the bot's source of truth, so an unset (or
+ * unrecognised) variable reads as `SHOP_CAPABILITIES` — stock, price and
+ * photos on, bookings off. `live` still turns bookings on as well, and
+ * `parallel` is the way back to the 2026-09-18 design should the shelf in
+ * this database ever stop being the shop's real one (a half-finished
+ * migration, a restore). Either way a switch the owner pressed wins.
  */
 export function agentCapabilities(
   env: Record<string, string | undefined>,
 ): AgentCapabilities {
-  return env["AGENT_CAPABILITIES"]?.trim().toLowerCase() === "live"
-    ? LIVE_CAPABILITIES
-    : PARALLEL_CAPABILITIES;
+  const v = env["AGENT_CAPABILITIES"]?.trim().toLowerCase();
+  if (v === "live") return LIVE_CAPABILITIES;
+  if (v === "parallel") return PARALLEL_CAPABILITIES;
+  return SHOP_CAPABILITIES;
 }
 
 /** The `AppSetting` key behind each switch on /chat. */
@@ -466,6 +488,34 @@ function claimsAvailability(sentence: string): boolean {
 }
 
 /**
+ * Words saying a unit is NOT there. A sentence that says what is gone and
+ * then what is ready — "Air M3-nya lagi kosong kak, yang ready Air M2" — is
+ * the out-of-stock reply the owner asked for (2026-10-27), and only the part
+ * from the availability word on is a claim about the shelf.
+ */
+const OUT_OF_STOCK =
+  /\b(kosong|habis|sold\s*out|out\s*of\s*stock|not\s*in\s*stock|tidak\s*ada|belum\s*ada|gak\s*ada|ga\s*ada|nggak\s*ada)\b/i;
+
+/**
+ * The words after the last "kosong" in a clause: "Air M3 kosong, yang ready
+ * Air M2 Rp11.000.000" prices the M2, not the M3.
+ */
+function afterOutOfStock(clause: string): string {
+  let end = -1;
+  for (const m of clause.matchAll(new RegExp(OUT_OF_STOCK.source, "gi")))
+    end = (m.index ?? 0) + m[0].length;
+  return end < 0 ? clause : clause.slice(end);
+}
+
+/** Where the availability claim in a sentence starts. */
+function claimStart(sentence: string): number {
+  const at = [AVAILABILITY.exec(sentence), ADA_ON_SHELF.exec(sentence)]
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => m.index);
+  return at.length ? Math.min(...at) : 0;
+}
+
+/**
  * One unit or one model a stock lookup returned THIS turn, as a fact rather
  * than as text (2026-09-29). The old check searched the lookup's JSON for the
  * word "available" — which `{"available": false}` contains.
@@ -559,7 +609,9 @@ export function checkReply(input: {
       clauseStart(message, a.start),
       i > 0 ? spans[i - 1]!.end : 0,
     );
-    let tokens = modelTokens(message.slice(sentenceStart, a.start));
+    let tokens = modelTokens(
+      afterOutOfStock(message.slice(sentenceStart, a.start)),
+    );
     if (tokens.length === 0) {
       const after = message.slice(a.end, spans[i + 1]?.start ?? message.length);
       tokens = modelTokens(after.split(/[.!?\n]/)[0] ?? "");
@@ -571,7 +623,11 @@ export function checkReply(input: {
   const onShelf = new Set(available.flatMap((f) => modelTokens(f.label)));
   for (const sentence of sentences(message)) {
     if (!claimsAvailability(sentence)) continue;
-    const tokens = modelTokens(sentence);
+    const tokens = modelTokens(
+      OUT_OF_STOCK.test(sentence)
+        ? sentence.slice(claimStart(sentence))
+        : sentence,
+    );
     if (tokens.length === 0) {
       if (vouched || available.length > 0) continue;
       return "AVAILABILITY_NOT_IN_SOURCE";

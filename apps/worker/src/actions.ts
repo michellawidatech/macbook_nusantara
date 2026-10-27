@@ -96,11 +96,11 @@ export async function upsertChatAction(
 /**
  * Carry a customer's newer offer onto an open negotiation.
  *
- * A thread the bot handed over is HELD (draft.ts `quietCandidates`): the bot
- * says nothing more until a person answers, so a customer writing "kalau 7jt
- * boleh?" and then "7,2 deh" is never read by the draft pass. This reads it —
- * code only, no model — so the colleague opening the task sees the latest
- * figure, not the first.
+ * Code only, no model, and run before the draft pass: a customer writing
+ * "kalau 7jt boleh?" and then "7,2 deh" moves the figure on the task the
+ * colleague has open, whether or not the bot gets to answer the newer line —
+ * it may not, while a colleague is chatting (draft.ts `quietCandidates`). A
+ * hand-over no longer holds the thread itself since 2026-10-27.
  */
 export async function refreshOffers(
   db: PrismaClient,

@@ -17,6 +17,12 @@ export interface ShownUnit {
   readonly price?: string | null;
 }
 
+/** A counted accessory as the stock lookup returns it — no serial. */
+export interface ShownAccessory {
+  readonly model: string;
+  readonly price?: string | null;
+}
+
 const GRADE: Record<string, { id: string; en: string }> = {
   NEW: { id: "baru (segel)", en: "new (sealed)" },
   A: { id: "grade A", en: "grade A" },
@@ -85,6 +91,33 @@ export const reply = {
     return lang === "en"
       ? "Sorry, we don't have that one right now 🙏 Would you like a similar unit instead?"
       : "Mohon maaf kak, untuk unit itu sedang kosong 🙏 Mau saya carikan alternatif yang mirip?";
+  },
+
+  /**
+   * Out of stock, and what is closest that is not (owner, 2026-10-27: "if
+   * the stock is 0, the system should upsell / cross sell items"). Only what
+   * the lookup returned, like every line here.
+   */
+  alternatives(units: readonly ShownUnit[], lang: Lang): string {
+    const lines = units.map((u, i) => unitLine(u, lang, i + 1)).join("\n");
+    return lang === "en"
+      ? `Sorry, that one isn't in stock right now 🙏 The closest we have ready:\n${lines}`
+      : `Mohon maaf kak, untuk unit itu sedang kosong 🙏 Yang paling mirip dan ready:\n${lines}`;
+  },
+
+  /** One option above the main pick — offered, never pushed. */
+  stepUp(u: ShownUnit, lang: Lang): string {
+    return lang === "en"
+      ? `If you'd like a bit more room, there's also ${unitLine(u, lang)} 😊`
+      : `Kalau mau lebih lega, ada juga ${unitLine(u, lang)} 😊`;
+  },
+
+  /** A fitting accessory on the shelf, mentioned once. */
+  accessory(a: ShownAccessory, lang: Lang): string {
+    const what = `${a.model}${a.price ? ` — ${a.price}` : ""}`;
+    return lang === "en"
+      ? `We also have ${what} if you need one.`
+      : `Kalau perlu, ada juga ${what} ya kak.`;
   },
 
   whichUnit(lang: Lang): string {
@@ -207,11 +240,56 @@ export const reply = {
     return lastReply?.includes(first) ? second : first;
   },
 
+  /**
+   * The customer nudges ("kak?") while a question of theirs is with a
+   * colleague (2026-10-27): say once what the team is still on, then carry
+   * on. Said only when the bot's previous reply did not already promise it.
+   */
+  stillWaiting(topics: readonly string[], lang: Lang): string {
+    const what = [
+      ...new Set(topics.map((t) => WAITING_ON[t] ?? WAITING_ON["other"]!)),
+    ]
+      .map((w) => w[lang])
+      .join(lang === "en" ? " and " : " dan ");
+    return lang === "en"
+      ? `Our team is still on ${what} — they'll reply right here 🙏`
+      : `Untuk ${what} tadi masih dicek tim kami ya kak, nanti dibalas di chat ini 🙏`;
+  },
+
+  /**
+   * Another question for a colleague while one is already waiting and the
+   * customer has been told so: a short line, not the same promise again.
+   */
+  passedOnToo(lang: Lang): string {
+    return lang === "en"
+      ? "Noted, I've passed that on to our team as well 🙏"
+      : "Siap kak, yang ini juga sudah kami teruskan ke tim kami ya 🙏";
+  },
+
   offerVisit(lang: Lang): string {
     return lang === "en"
       ? "If you'd like to see it in person, I can book a visit — just send your name and a time 😊"
       : "Kalau mau lihat langsung unitnya di toko, bisa saya bookingkan kak — cukup kabari nama dan jam datangnya ya 😊";
   },
+};
+
+/** What a colleague is still checking, by hand-over topic. */
+const WAITING_ON: Record<string, Record<Lang, string>> = {
+  price: { id: "harganya", en: "the price" },
+  stock: { id: "unitnya", en: "the unit" },
+  unit_details: { id: "kondisi unitnya", en: "the unit's condition" },
+  recommendation: { id: "pilihan unitnya", en: "the pick for you" },
+  negotiation: { id: "tawarannya", en: "your offer" },
+  reservation: { id: "bookingnya", en: "the booking" },
+  order_payment: { id: "pembayarannya", en: "your payment" },
+  trade_in: { id: "taksirannya", en: "the valuation" },
+  sell_to_shop: { id: "taksirannya", en: "the valuation" },
+  shipping_quote: { id: "ongkirnya", en: "the shipping cost" },
+  warranty_claim: { id: "kendalanya", en: "the issue" },
+  complaint: { id: "kendalanya", en: "the issue" },
+  media: { id: "kiriman kakak", en: "what you sent" },
+  photos: { id: "fotonya", en: "the photos" },
+  other: { id: "pertanyaan kakak", en: "your question" },
 };
 
 /** What the bot asks to learn a customer's needs, two ways each. */

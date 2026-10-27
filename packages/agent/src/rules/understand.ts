@@ -111,22 +111,85 @@ const SERIAL = /\b(s?[a-z0-9]{10,12})\b/gi;
 const looksLikeSerial = (t: string) =>
   /\d/.test(t) && /[a-z]/i.test(t) && !/^m[1-5]/i.test(t) && !/gb|tb/i.test(t);
 
-function productQuery(t: string): string | null {
-  const parts: string[] = [];
+interface ProductParts {
+  readonly family: string | null;
+  readonly chips: readonly string[];
+  readonly sizes: readonly string[];
+  readonly specs: readonly string[];
+  readonly years: readonly string[];
+}
+
+function productParts(t: string): ProductParts {
   let family = FAMILY.find(([re]) => re.test(t))?.[1] ?? null;
   if (!family) family = BARE_FAMILY.find(([re]) => re.test(t))?.[1] ?? null;
-  if (family) parts.push(family);
-  for (const m of t.matchAll(CHIP))
-    parts.push((m[1] ?? m[4]!) + (m[3] ? ` ${m[3]}` : ""));
+  const chips = [...t.matchAll(CHIP)].map(
+    (m) => (m[1] ?? m[4]!) + (m[3] ? ` ${m[3]}` : ""),
+  );
   // A size only means something next to a family; "16" alone is a RAM figure.
-  if (family) for (const m of t.matchAll(SIZE)) parts.push(m[1]!);
-  for (const m of t.matchAll(SPEC)) {
-    if (m[1] && m[2]) parts.push(`${m[1]}/${m[2].replace(/\s/g, "")}`);
-    else parts.push((m[3] ?? `${m[4]}tb`)!.replace(/\s/g, ""));
-  }
-  for (const m of t.matchAll(YEAR)) parts.push(m[1]!);
+  const sizes = family ? [...t.matchAll(SIZE)].map((m) => m[1]!) : [];
+  const specs = [...t.matchAll(SPEC)].map((m) =>
+    m[1] && m[2]
+      ? `${m[1]}/${m[2].replace(/\s/g, "")}`
+      : (m[3] ?? `${m[4]}tb`)!.replace(/\s/g, ""),
+  );
+  const years = [...t.matchAll(YEAR)].map((m) => m[1]!);
+  return { family, chips, sizes, specs, years };
+}
+
+function productQuery(t: string): string | null {
+  const p = productParts(t);
+  const parts = [
+    ...(p.family ? [p.family] : []),
+    ...p.chips,
+    ...p.sizes,
+    ...p.specs,
+    ...p.years,
+  ];
   const q = [...new Set(parts)].join(" ").trim();
   return q || null;
+}
+
+const FAMILY_LABEL: Record<string, string> = {
+  "macbook pro": "MacBook Pro",
+  "macbook air": "MacBook Air",
+  imac: "iMac",
+  "mac mini": "Mac mini",
+  "mac studio": "Mac Studio",
+  ipad: "iPad",
+  iphone: "iPhone",
+  watch: "Apple Watch",
+  airpods: "AirPods",
+  macbook: "MacBook",
+  air: "Air",
+  pro: "Pro",
+};
+
+/**
+ * The unit a message names, the way the shop writes one for a colleague —
+ * `Air 15" M2 8/256` — or null when it names none. For the one-line task a
+ * hand-over leaves (tasks.ts); nothing is searched with it.
+ */
+export function productLabelOf(text: string): string | null {
+  const p = productParts(norm(text));
+  const chip = (c: string) =>
+    c
+      .replace(/^m(\d)/, "M$1")
+      .replace(
+        / (pro|max|ultra)$/,
+        (_, w: string) => ` ${w[0]!.toUpperCase()}${w.slice(1)}`,
+      );
+  const spec = (s: string) =>
+    /^\d{3,4}$/.test(s)
+      ? `${s}GB`
+      : s.replace(/(gb|tb)$/, (u) => u.toUpperCase());
+  const parts = [
+    ...(p.family ? [FAMILY_LABEL[p.family] ?? p.family] : []),
+    ...[...new Set(p.sizes)].map((n) => `${n}"`),
+    ...[...new Set(p.chips)].map(chip),
+    ...[...new Set(p.specs)].map(spec),
+    ...[...new Set(p.years)],
+  ];
+  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 // --- budget ---------------------------------------------------------------------

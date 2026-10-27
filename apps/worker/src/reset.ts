@@ -5,10 +5,11 @@
  *
  * ## Why it is its own pass, ahead of the draft
  *
- * The draft pass never sees the two threads a reset matters most on: one the
- * bot handed to a person (the hold in `quietCandidates`) and one whose
- * `autoReply` staff switched off. A command read there would be a command
- * that works until the first hand-over. So this looks for the row itself,
+ * The draft pass never sees the threads a reset matters most on: one whose
+ * `autoReply` staff switched off, and one a colleague is chatting in (the
+ * staff-active window in `quietCandidates`). Nor would it close the tasks a
+ * hand-over left (a hand-over no longer holds the thread since 2026-10-27, but
+ * its task stays open, and a fresh start must not inherit it). So this looks for the row itself,
  * whatever state its thread is in, and needs no model — it runs with no
  * Anthropic credential, like `refreshOffers`.
  *
@@ -21,7 +22,7 @@
  *     claim is what a staff reply races against, exactly as a draft's is; if
  *     somebody answered first, nothing else here happens.
  *  2. Close what was waiting from BEFORE the command: messages nobody had
- *     answered, and the hand-over rows, which is what lifts the hold.
+ *     answered, and the hand-over rows, so nothing is outlined as waiting.
  *     Messages typed after `/new` are left at `BARU` — they are the new
  *     conversation's first words and the draft pass answers them next.
  *  3. Close the thread's open tasks. They describe a conversation that, for

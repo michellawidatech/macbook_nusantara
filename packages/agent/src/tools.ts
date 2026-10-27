@@ -498,7 +498,9 @@ const HANDOFF: Anthropic.Tool = {
         type: "string",
         maxLength: 240,
         description:
-          "For the colleague, in Indonesian: what the customer wants, naming the model or specification if they gave one.",
+          "For the colleague: ONE short action item in Indonesian that starts with what they " +
+          'must do, then the unit, like "Perlu cek harga — Air 15" M2 8/256" or "Perlu jawab ' +
+          'tawaran — Pro 14" M3 18/512, minta 21jt". No code names, no explanation of why.',
       },
       serial: {
         type: "string",
@@ -1233,6 +1235,35 @@ async function searchStock(
       : await db.unit.count({ where });
   const shown = units.slice(0, SEARCH_LIMIT);
 
+  // Out of stock is not the end of the conversation (owner, 2026-10-27: "if
+  // the stock is 0, the system should upsell / cross sell items"): the
+  // closest units that ARE on the shelf, and one gentle step up from the
+  // main pick either way. Both come from this same lookup, so the reply that
+  // quotes them can cite "stock" and `checkReply` vouches for their prices.
+  const budget =
+    minPrice !== undefined || maxPrice !== undefined
+      ? { min: minPrice, max: maxPrice }
+      : priced
+        ? await profileBudget(db, ctx)
+        : { min: undefined, max: undefined };
+  const alternatives =
+    shown.length === 0 && query
+      ? await outOfStockAlternatives(db, query, budget, ctx)
+      : null;
+  const main = shown[0] ?? alternatives?.units[0] ?? null;
+  const stepUp = main
+    ? await stepUpFrom(
+        db,
+        main,
+        new Set([
+          ...shown.map((u) => u.serial),
+          ...(alternatives?.units.map((u) => u.serial) ?? []),
+        ]),
+        budget,
+        ctx,
+      )
+    : null;
+
   return {
     matched: total,
     showing: shown.length,
@@ -1258,13 +1289,381 @@ async function searchStock(
             `price so the list means something. Then recommend from what comes back.`,
         }
       : {}),
-    units: shown.map((u) => ({
-      serial: u.serial,
-      ...label(u),
-      ...(u.grade ? { grade: u.grade } : {}),
-      ...quote(askingPrice(u), ctx),
-    })),
+    units: shown.map((u) => shelfUnit(u, ctx)),
+    ...(alternatives && alternatives.units.length > 0
+      ? {
+          alternatives: alternatives.units.map((u) => shelfUnit(u, ctx)),
+          alternativesNote: ALTERNATIVES_NOTE,
+        }
+      : {}),
+    ...(alternatives?.accessory
+      ? { accessory: alternatives.accessory, accessoryNote: ACCESSORY_NOTE }
+      : {}),
+    ...(stepUp
+      ? { stepUp: shelfUnit(stepUp, ctx), stepUpNote: STEP_UP_NOTE }
+      : {}),
   };
+}
+
+// --- out of stock, and one step up (owner, 2026-10-27) ---------------------
+
+/** How many in-stock units an empty search offers instead. */
+export const MAX_ALTERNATIVES = 3;
+
+/**
+ * How much dearer a step up may be than the main pick: a little more for a
+ * real difference, never a different budget. 13/10 is 30% — Air M2 8/256 at
+ * Rp11jt may be offered the 16/512 at Rp14jt, not a Pro at Rp25jt.
+ */
+const STEP_UP_CEILING = [13n, 10n] as const;
+/** Past a stated ceiling, a step up may go this much over it: 12/10 is 20%. */
+const STEP_UP_OVER_BUDGET = [12n, 10n] as const;
+
+const ALTERNATIVES_NOTE =
+  "Nothing matching what they asked for is in stock right now. These are the closest units that " +
+  "ARE in stock: the same line first, then the nearest price" +
+  ", within their budget when they gave one. Say plainly that the one they asked for is not in " +
+  "stock right now (never why), then offer these and say in one line why the first one suits " +
+  "them. They are real units, so cite stock.";
+const ACCESSORY_NOTE =
+  "One accessory in stock that fits what they asked about. Mention it at most once, in one line, " +
+  "after the units, and only if it fits the conversation.";
+const STEP_UP_NOTE =
+  "One unit a little above your main pick, in stock. You MAY offer it once, after your main " +
+  'pick, as an option ("kalau mau lebih lega, ada juga …") and say what the extra money buys. ' +
+  "Never push it, never lead with it, and if they declined a step up, do not offer it again.";
+
+/** The fields every shelf read needs, and the category the ranking groups by. */
+const SHELF_SELECT = {
+  serial: true,
+  grade: true,
+  price: true,
+  intakeAt: true,
+  skuId: true,
+  sku: {
+    select: {
+      name: true,
+      variantLabel: true,
+      price: true,
+      model: {
+        select: {
+          name: true,
+          categoryId: true,
+          category: { select: { name: true } },
+        },
+      },
+    },
+  },
+} as const;
+
+type ShelfRow = {
+  serial: string;
+  grade: string | null;
+  price: bigint | null;
+  intakeAt: Date;
+  skuId: string;
+  sku: {
+    name: string;
+    variantLabel: string | null;
+    price: bigint;
+    model: { name: string; categoryId: string; category: { name: string } };
+  };
+};
+
+/** A unit as every stock result shows it. */
+function shelfUnit(
+  u: {
+    serial: string;
+    grade: string | null;
+    price: bigint | null;
+    sku: {
+      name: string;
+      variantLabel: string | null;
+      price: bigint;
+      model: { name: string; category: { name: string } };
+    };
+  },
+  ctx: ToolContext,
+) {
+  return {
+    serial: u.serial,
+    ...label(u),
+    ...(u.grade ? { grade: u.grade } : {}),
+    ...quote(askingPrice(u), ctx),
+  };
+}
+
+interface Budget {
+  readonly min: bigint | undefined;
+  readonly max: bigint | undefined;
+}
+
+/**
+ * The budget this customer told the shop, when the search named none —
+ * `CustomerProfile` is keyed by the token's wa_id (`ctx.from`), never by
+ * anything the model wrote, so this reads THIS customer's and nobody's else.
+ */
+async function profileBudget(
+  db: PrismaClient,
+  ctx: ToolContext,
+): Promise<Budget> {
+  if (!ctx.from) return { min: undefined, max: undefined };
+  try {
+    const p = await db.customerProfile.findUnique({
+      where: { from: ctx.from },
+      select: { budgetMin: true, budgetMax: true },
+    });
+    const pos = (v: bigint | null | undefined) =>
+      v !== null && v !== undefined && v > 0n ? v : undefined;
+    return { min: pos(p?.budgetMin), max: pos(p?.budgetMax) };
+  } catch {
+    return { min: undefined, max: undefined };
+  }
+}
+
+/** The words that name a LINE — "macbook", "air", "ipad" — not a chip or a size. */
+const lineWords = (query: string): string[] =>
+  tokens(query).filter((t) => /^[a-z]{3,}$/.test(t));
+
+const abs = (v: bigint) => (v < 0n ? -v : v);
+
+/**
+ * The closest units on the shelf to something that is not on it.
+ *
+ * Ranked by, in order: the same category as the variant they asked for (a
+ * catalogue SKU matching every word, sold out or retired — that is still the
+ * line they want); then a category whose name or model shares a line word
+ * with the question ("air" → MacBook Air); then the nearest price to their
+ * budget, or failing that to what the variant they asked for asks; then the
+ * newest. Nothing from an unrelated line: an Apple Watch is not an
+ * alternative to a MacBook. Inside a stated budget only, priced units only
+ * (a unit with no price is never quoted), one per variant and grade, at most
+ * three. Plus one counted accessory that names the same line, when there is
+ * one on the shelf.
+ */
+async function outOfStockAlternatives(
+  db: PrismaClient,
+  query: string,
+  budget: Budget,
+  ctx: ToolContext,
+): Promise<{
+  units: ShelfRow[];
+  accessory: { model: string; price?: string | null } | null;
+}> {
+  const priced = pricesOn(ctx);
+  const words = tokens(query);
+  const lines = lineWords(query);
+  if (words.length === 0) return { units: [], accessory: null };
+
+  // What they asked for, in the catalogue — on the shelf or not.
+  const asked = await db.sku.findMany({
+    where: {
+      AND: words.map((t) => ({
+        OR: [
+          { name: { contains: t, mode: "insensitive" as const } },
+          { variantLabel: { contains: t, mode: "insensitive" as const } },
+          { model: { name: { contains: t, mode: "insensitive" as const } } },
+          {
+            model: {
+              category: {
+                name: { contains: t, mode: "insensitive" as const },
+              },
+            },
+          },
+        ],
+      })),
+    },
+    select: { price: true, model: { select: { categoryId: true } } },
+    take: 50,
+  });
+  const exact = new Set(asked.map((a) => a.model.categoryId));
+  const askedPrices = asked
+    .map((a) => a.price)
+    .filter((p) => p > 0n)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const near = lines.length
+    ? await db.category.findMany({
+        where: {
+          OR: lines.flatMap((t) => [
+            { name: { contains: t, mode: "insensitive" as const } },
+            {
+              models: {
+                some: { name: { contains: t, mode: "insensitive" as const } },
+              },
+            },
+          ]),
+        },
+        select: { id: true },
+      })
+    : [];
+  const loose = new Set(near.map((c) => c.id));
+  const categories = [...new Set([...exact, ...loose])];
+  if (categories.length === 0) return { units: [], accessory: null };
+
+  const rows: ShelfRow[] = await db.unit.findMany({
+    where: {
+      status: "TERSEDIA",
+      archivedAt: null,
+      sku: {
+        archived: false,
+        model: { archived: false, categoryId: { in: categories } },
+      },
+    },
+    select: SHELF_SELECT,
+    orderBy: { intakeAt: "desc" },
+    take: PRICE_SCAN_LIMIT,
+  });
+
+  // The figure "nearest" is measured from: their budget, else the price of
+  // what they asked for (the middle one when the catalogue has several).
+  const reference = !priced
+    ? null
+    : (budget.max ??
+      budget.min ??
+      askedPrices[Math.floor(askedPrices.length / 2)] ??
+      null);
+  const tier = (r: ShelfRow) => (exact.has(r.sku.model.categoryId) ? 0 : 1);
+  const candidates = rows.filter((r) => {
+    if (!priced) return true;
+    const p = askingPrice(r);
+    if (p === null) return false;
+    return (
+      (budget.min === undefined || p >= budget.min) &&
+      (budget.max === undefined || p <= budget.max)
+    );
+  });
+  candidates.sort((a, b) => {
+    const t = tier(a) - tier(b);
+    if (t !== 0) return t;
+    if (reference !== null) {
+      const da = abs(askingPrice(a)! - reference);
+      const db_ = abs(askingPrice(b)! - reference);
+      if (da !== db_) return da < db_ ? -1 : 1;
+    }
+    return b.intakeAt.getTime() - a.intakeAt.getTime();
+  });
+  const seen = new Set<string>();
+  const units: ShelfRow[] = [];
+  for (const r of candidates) {
+    const key = `${r.skuId}:${r.grade ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    units.push(r);
+    if (units.length >= MAX_ALTERNATIVES) break;
+  }
+
+  return {
+    units,
+    accessory: units.length > 0 ? await fittingAccessory(db, lines, ctx) : null,
+  };
+}
+
+/**
+ * One counted accessory on the shelf whose name shares a line word with the
+ * question ("charger macbook air" for an Air), or null. Counted stock is a
+ * ledger (`StockMove`), and on-hand is its sum.
+ *
+ * ⚠️ Read through the POS's agent API it runs as `nusantara_app`, which may
+ * read `StockMove`; run in the worker it runs as `nusantara_agent`, which
+ * holds no grant on it — so a refusal here means "no accessory", never a
+ * failed lookup.
+ */
+async function fittingAccessory(
+  db: PrismaClient,
+  lines: readonly string[],
+  ctx: ToolContext,
+): Promise<{ model: string; price?: string | null } | null> {
+  if (lines.length === 0) return null;
+  try {
+    const skus = await db.sku.findMany({
+      where: {
+        archived: false,
+        price: { gt: 0n },
+        model: { archived: false, category: { tracksSerial: false } },
+        OR: lines.flatMap((t) => [
+          { name: { contains: t, mode: "insensitive" as const } },
+          { model: { name: { contains: t, mode: "insensitive" as const } } },
+        ]),
+      },
+      select: { id: true, name: true, price: true },
+      take: 50,
+    });
+    if (skus.length === 0) return null;
+    const onHand = await db.stockMove.groupBy({
+      by: ["skuId"],
+      where: { skuId: { in: skus.map((x) => x.id) } },
+      _sum: { qty: true },
+    });
+    const stocked = new Set(
+      onHand.filter((m) => (m._sum.qty ?? 0) > 0).map((m) => m.skuId),
+    );
+    const fits = (name: string) =>
+      lines.filter((t) => name.toLowerCase().includes(t)).length;
+    const best = skus
+      .filter((x) => stocked.has(x.id))
+      .sort(
+        (a, b) =>
+          fits(b.name) - fits(a.name) ||
+          (a.price < b.price ? -1 : a.price > b.price ? 1 : 0),
+      )[0];
+    return best ? { model: best.name, ...quote(best.price, ctx) } : null;
+  } catch (err) {
+    ctx.onError?.("search_stock.accessory", err);
+    return null;
+  }
+}
+
+/**
+ * One unit a little above the main pick, or null: same category, in stock,
+ * priced above it and at most 30% above it (and, past a stated ceiling, at
+ * most 20% over that), not already shown — the cheapest such, because the
+ * smallest step is the easiest yes. Never with the price switch off: a step
+ * up is about money.
+ */
+async function stepUpFrom(
+  db: PrismaClient,
+  main: {
+    serial: string;
+    price: bigint | null;
+    sku: { price: bigint; model: { name: string; category: { name: string } } };
+  },
+  exclude: ReadonlySet<string>,
+  budget: Budget,
+  ctx: ToolContext,
+): Promise<ShelfRow | null> {
+  if (!pricesOn(ctx)) return null;
+  const base = askingPrice(main);
+  if (base === null) return null;
+  let ceiling = (base * STEP_UP_CEILING[0]) / STEP_UP_CEILING[1];
+  if (budget.max !== undefined) {
+    const over = (budget.max * STEP_UP_OVER_BUDGET[0]) / STEP_UP_OVER_BUDGET[1];
+    if (over < ceiling) ceiling = over;
+  }
+  if (ceiling <= base) return null;
+  const rows: ShelfRow[] = await db.unit.findMany({
+    where: {
+      status: "TERSEDIA",
+      archivedAt: null,
+      serial: { notIn: [...exclude, main.serial] },
+      sku: {
+        archived: false,
+        model: {
+          archived: false,
+          category: { name: main.sku.model.category.name },
+        },
+      },
+    },
+    select: SHELF_SELECT,
+    orderBy: { intakeAt: "desc" },
+    take: PRICE_SCAN_LIMIT,
+  });
+  let best: ShelfRow | null = null;
+  for (const r of rows) {
+    const p = askingPrice(r);
+    if (p === null || p <= base || p > ceiling) continue;
+    if (best === null || p < askingPrice(best)!) best = r;
+  }
+  return best;
 }
 
 async function checkSerial(

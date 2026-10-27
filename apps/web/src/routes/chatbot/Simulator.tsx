@@ -35,6 +35,7 @@ import {
 } from "../../lib/chatApi.js";
 import { handoffTopicLabel } from "../../lib/handoffTopics.js";
 import { agentLabel } from "./labels.js";
+import { TaskSummaryText } from "./ActionItems.js";
 
 type Line =
   | { role: "user"; text: string }
@@ -283,7 +284,10 @@ export function Simulator() {
                         topic: handoffTopicLabel(t, l.result.handoff.topic),
                       })}
                     </Tag>
-                    {l.result.handoff.summary}
+                    <TaskSummaryText
+                      summary={l.result.handoff.summary}
+                      topic={l.result.handoff.topic}
+                    />
                   </div>
                 )}
                 {l.result.photos.length > 0 && (

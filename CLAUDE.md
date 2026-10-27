@@ -3168,6 +3168,20 @@ Decisions that outlived those documents:
   says "Edited by / Unsent by {name}" from the `Outbox` audit rows. A 👍/👎 is
   taken back by pressing it again (`DELETE /api/chat/evaluations/:id`, author
   or owner, OPEN only); `nusantara_app` gained DELETE on `AgentEvaluation`.
+- **The POS is the bot's source of truth; a hand-over no longer silences the
+  chat — 2026-10-27.** An UNSET switch now reads stock, price and photos ON
+  (`SHOP_CAPABILITIES`, bookings off; `AGENT_CAPABILITIES=parallel` is the old
+  default). ⚠️ This REVERSES 2026-09-18's "the worker HOLDS the thread": the
+  message needing a person stays PERLU_STAF with its task, newer ones are
+  drafted with the OPEN tasks named (`waitingTasks`) so the bot neither answers
+  nor contradicts them; only a staff reply by hand in the last 15 min
+  (`STAFF_ACTIVE_MS`) or `autoReply` off holds a thread. An empty
+  `search_stock` returns ≤3 in-stock `alternatives` (same category, nearest
+  price, within budget) plus a fitting `accessory`, and any pick may carry ONE
+  `stepUp` (≤30% dearer) — all `StockFact`s. ⚠️ As `nusantara_agent` (no agent
+  API) `StockMove` is unreadable, so no accessory. Tasks read
+  `Perlu cek harga — Air 15" M2 8/256` + a quote (`tasks.ts`); /chat maps old
+  `Balasan bot ditahan (CODE)` notes the same way (`lib/taskSummary.ts`).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
