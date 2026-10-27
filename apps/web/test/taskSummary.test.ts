@@ -118,3 +118,42 @@ describe("a note the worker writes now", () => {
     });
   });
 });
+
+describe("the sales tasks (2026-10-27)", () => {
+  it("reads closing, a visit to welcome and a restock to pass on", () => {
+    expect(
+      taskSummaryLines(
+        en,
+        'Perlu closing — Budi siap ambil Air M2 8/256 Rp 9,5jt, mau COD Sabtu\n"oke kak saya ambil"',
+        "closing",
+      ),
+    ).toEqual({
+      head: "Need to close the sale — Budi siap ambil Air M2 8/256 Rp 9,5jt, mau COD Sabtu",
+      quote: "oke kak saya ambil",
+      rest: [],
+    });
+    expect(
+      taskSummaryLines(
+        en,
+        "Perlu sambut — Budi datang Sabtu 14.00 lihat Air M2",
+        "visit",
+      ).head,
+    ).toBe("Need to welcome a visit — Budi datang Sabtu 14.00 lihat Air M2");
+    expect(
+      taskSummaryLines(
+        en,
+        "Perlu kabari — Air M3 16/512 sudah ready, Budi minta dikabari",
+        "restock",
+      ).head,
+    ).toBe(
+      "Need to tell them it's in stock — Air M3 16/512 sudah ready, Budi minta dikabari",
+    );
+    // "Perlu kabari booking" is still its own job, matched whole.
+    expect(
+      taskSummaryLines(en, "Perlu kabari booking", "reservation").head,
+    ).toBe("Need booking passed on");
+    expect(taskSummaryLines(id, "Perlu closing — Budi", "closing").head).toBe(
+      "Perlu closing — Budi",
+    );
+  });
+});

@@ -364,3 +364,20 @@ export const simulate = (turns: AgentTurn[], lastShown: string[] = []) =>
     method: "POST",
     body: { turns, ...(lastShown.length ? { lastShown } : {}) },
   });
+
+/**
+ * The chatbot's funnel for one window (2026-10-27): chats → leads → visits
+ * booked → closing tasks → sales. Counts only; any staff may read it.
+ */
+export interface FunnelWindow {
+  days: number;
+  since: string;
+  chats: number;
+  leads: number;
+  visits: number;
+  closing: number;
+  sales: number;
+}
+
+export const getFunnel = () =>
+  api<{ windows: FunnelWindow[] }>("/api/chat/funnel");

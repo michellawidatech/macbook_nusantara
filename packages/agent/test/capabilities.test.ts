@@ -46,10 +46,16 @@ describe("what the bot may answer once it can read the shelf", () => {
     }
   });
 
-  it("books a hold itself", () => {
-    expect(live("bisa di keep dulu ga kak?")).toBeNull();
+  it("books a visit itself, and never a hold (2026-10-27)", () => {
+    expect(live("mau booking datang besok jam 3 kak")).toBeNull();
+    // Keeping a unit is a DP, and a DP is a person's: a closing task,
+    // whatever the switches say.
+    expect(live("bisa di keep dulu ga kak?")).toMatchObject({
+      topic: "closing",
+      rule: "keep",
+    });
     expect(parallel("bisa di keep dulu ga kak?")).toMatchObject({
-      topic: "reservation",
+      topic: "closing",
     });
   });
 });
@@ -94,8 +100,8 @@ describe("agentCapabilities", () => {
 
   it("makes the POS the source of truth when unset (2026-10-27)", () => {
     // The shelf in this database is the shop's real shelf now: stock, price
-    // and photos are on unless the owner switched one off. Bookings are a
-    // write, so they wait for the owner's switch.
+    // and photos are on unless the owner switched one off — and bookings,
+    // since a bot booking is a visit that holds nothing (2026-10-27).
     for (const env of [
       {},
       { AGENT_CAPABILITIES: "" },
@@ -106,7 +112,7 @@ describe("agentCapabilities", () => {
     expect(SHOP_CAPABILITIES).toEqual({
       stock: true,
       price: true,
-      reserve: false,
+      reserve: true,
       photos: true,
     });
   });
@@ -147,8 +153,15 @@ describe("the prompt follows the capability", () => {
     });
     expect(stable).toContain('cite "stock"');
     expect(stable).toContain("Look before you speak");
-    expect(stable).toContain("Get to know them first");
+    expect(stable).toContain("Get to know them");
     expect(stable).toContain("Offer ONE step up");
+    // The sales strategy (2026-10-27): three, honest urgency, a next step,
+    // a visit that holds nothing, and a person for the close.
+    expect(stable).toContain("Recommend THREE, never a list");
+    expect(stable).toContain('"tinggal 1 unit kak"');
+    expect(stable).toContain("Mau lihat");
+    expect(stable).toContain("It holds NOTHING");
+    expect(stable).toContain("topic closing");
     // The booking lifecycle, said in the rules as well as enforced in `toolsFor`.
     expect(stable).toContain(
       "make, check, move and cancel THIS customer's own booking",

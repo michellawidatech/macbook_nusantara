@@ -64,6 +64,7 @@ import {
   profileJson,
   registerInboxV2,
   reservationsFor,
+  stockWatchesFor,
 } from "./inboxV2.js";
 import {
   registerInboxSent,
@@ -535,17 +536,20 @@ export function inboxRouter(
         // and what a colleague added — the v2 profile (inboxV2.ts).
         profileJson(db, phone.data),
       ]);
-      const [lead, reservations, evaluations, sentItems] = await Promise.all([
-        leadJson(db, phone.data),
-        reservationsFor(db, phone.data),
-        evaluationsFor(
-          db,
-          messages.filter((m) => m.replyText).map((m) => m.id),
-        ),
-        // What the shop sent, photos included, each with whether it can
-        // still be edited or unsent (inboxSent.ts, 2026-10-23).
-        sentItemsFor(db, phone.data, { baileys, after: cleared }),
-      ]);
+      const [lead, reservations, watches, evaluations, sentItems] =
+        await Promise.all([
+          leadJson(db, phone.data),
+          reservationsFor(db, phone.data),
+          // "Tell me when it's in stock" (2026-10-27), open ones first.
+          stockWatchesFor(db, phone.data),
+          evaluationsFor(
+            db,
+            messages.filter((m) => m.replyText).map((m) => m.id),
+          ),
+          // What the shop sent, photos included, each with whether it can
+          // still be edited or unsent (inboxSent.ts, 2026-10-23).
+          sentItemsFor(db, phone.data, { baileys, after: cleared }),
+        ]);
       const outboxOfReply = replyOutboxIds(messages, sentItems);
 
       // Counts rather than rows: the panel says "3 pesanan", and shipping the
@@ -658,6 +662,8 @@ export function inboxRouter(
         lead,
         /** Open holds under this number, by the bot or at the counter. */
         reservations,
+        /** What this customer asked to be told about when it is back in stock. */
+        watches,
         /**
          * Every text and photo sent to this number (the newest 100, oldest
          * first). A reply bubble names its own by `reply.outboxId`; the rest

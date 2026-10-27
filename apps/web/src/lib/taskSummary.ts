@@ -36,7 +36,11 @@ export type TaskNeed =
   | "photos"
   | "reply"
   | "template"
-  | "tellBooking";
+  | "tellBooking"
+  /** Sales, 2026-10-27. */
+  | "closing"
+  | "welcome"
+  | "notify";
 
 export type TaskReason =
   | "noSource"
@@ -74,6 +78,11 @@ const NEED_OF_HEAD: Record<string, TaskNeed> = {
   "Perlu dibalas": "reply",
   "Perlu dibalas dengan template": "template",
   "Perlu kabari booking": "tellBooking",
+  // The sales strategy (2026-10-27). "Perlu kabari" is its own exact head,
+  // not a prefix of the booking one above: heads are matched whole.
+  "Perlu closing": "closing",
+  "Perlu sambut": "welcome",
+  "Perlu kabari": "notify",
 };
 
 /** The stored Indonesian reason, back to its key. */
@@ -129,6 +138,12 @@ export function taskNeedLabel(t: TFunction, need: TaskNeed): string {
       return t("task.need.template", "Need reply with a template");
     case "tellBooking":
       return t("task.need.tellBooking", "Need booking passed on");
+    case "closing":
+      return t("task.need.closing", "Need to close the sale");
+    case "welcome":
+      return t("task.need.welcome", "Need to welcome a visit");
+    case "notify":
+      return t("task.need.notify", "Need to tell them it's in stock");
     default:
       return t("task.need.reply", "Need reply");
   }
@@ -206,6 +221,12 @@ export function needOfTopic(topic: string): TaskNeed {
       return "media";
     case "photos":
       return "photos";
+    case "closing":
+      return "closing";
+    case "visit":
+      return "welcome";
+    case "restock":
+      return "notify";
     default:
       return "reply";
   }

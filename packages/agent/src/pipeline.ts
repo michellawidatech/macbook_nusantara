@@ -182,7 +182,8 @@ const OPS_RULES = [
   "- Search before you name anything. Pass budgets as rupiah integers (15 juta = 15000000).",
   "- For photos, use unit_photos with a serial from a search, or find_unit_photos.",
   "- propose_reservation ONLY when the brief says the customer wants to visit AND gives the",
-  "  date, the time and the name. Use serials a search returned. It books nothing.",
+  "  date, the time and the name. Use serials a search returned, if any. It books and holds",
+  "  nothing.",
   "- You never write to the customer.",
 ].join("\n");
 
@@ -200,7 +201,8 @@ const DONE_TOOL: Anthropic.Tool = {
 /** The tools Operations may call: the POS's, minus writes that are not its own. */
 const OPS_EXCLUDED = new Set([
   "remember_customer",
-  "create_reservation",
+  "book_visit",
+  "watch_stock",
   "confirm_reservation",
 ]);
 
@@ -396,7 +398,7 @@ export async function runPipeline(
       });
       if (out["ok"] === true && typeof out["code"] === "string") {
         bookings.push({
-          tool: "create_reservation",
+          tool: "book_visit",
           code: out["code"],
           ...(typeof out["when"] === "string" ? { when: out["when"] } : {}),
         });

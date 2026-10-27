@@ -50,6 +50,19 @@ export function itemState(db: MockDb, item: ReservationItem): HoldState {
   return "RELEASED";
 }
 
+/**
+ * A visit: a reservation that holds nothing — the bot's "janji datang"
+ * (2026-10-27). It has a time and a customer and no units.
+ */
+export function isVisit(r: Pick<Reservation, "items">): boolean {
+  return r.items.length === 0;
+}
+
+/** Every visit still open — the customer has not come, nor cancelled. */
+export function openVisits(db: MockDb): Reservation[] {
+  return db.reservations.filter((r) => isVisit(r) && r.status === "ACTIVE");
+}
+
 /** The items still waiting to be collected. */
 export function heldItems(
   db: MockDb,
@@ -66,10 +79,17 @@ export function heldItems(
  * least one machine reads as bought — the customer came and collected, and
  * that is the outcome — and one that sold none reads as cancelled.
  *
- * An empty hold is `CANCELLED`: every machine has been taken off it, which is
- * what cancelling one looks like from the item side.
+ * A hold whose items have all been taken off is `CANCELLED`, which is what
+ * cancelling one looks like from the item side.
+ *
+ * ⚠️ A reservation with NO items at all is a VISIT (2026-10-27: the bot books
+ * "janji datang" and holds nothing) — its status is a decision somebody made
+ * (came, cancelled) and not a fact about any unit, so it is returned as it
+ * stands. Without this, `reprojectHolds(d)` with no serials — Inventory's
+ * write-off does exactly that — cancelled every visit in the shop.
  */
 export function headerState(db: MockDb, r: Reservation): Reservation["status"] {
+  if (isVisit(r)) return r.status;
   const states = r.items.map((i) => itemState(db, i));
   if (states.includes("HELD")) return "ACTIVE";
   if (states.includes("BOUGHT")) return "DONE";

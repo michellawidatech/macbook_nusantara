@@ -58,8 +58,32 @@ const dismissEvaluation = vi.fn(async (id: string) => ({
 }));
 const deleteEvaluation = vi.fn(async (id: string) => ({ withdrawn: id }));
 
+const getFunnel = vi.fn(async () => ({
+  windows: [
+    {
+      days: 7,
+      since: "2026-10-20T00:00:00.000Z",
+      chats: 40,
+      leads: 12,
+      visits: 5,
+      closing: 3,
+      sales: 2,
+    },
+    {
+      days: 30,
+      since: "2026-09-27T00:00:00.000Z",
+      chats: 160,
+      leads: 40,
+      visits: 18,
+      closing: 11,
+      sales: 9,
+    },
+  ],
+}));
+
 vi.mock("../src/lib/chatApi.js", async (original) => ({
   ...(await original<typeof import("../src/lib/chatApi.js")>()),
+  getFunnel: () => getFunnel(),
   listEvaluations: (...a: unknown[]) => listEvaluations(...(a as [])),
   applyEvaluation: (...a: unknown[]) => applyEvaluation(...(a as [string])),
   dismissEvaluation: (id: string) => dismissEvaluation(id),
@@ -148,5 +172,25 @@ describe("the Evaluation tab", () => {
     await user.click(within(confirm).getByRole("button", { name: /Delete/ }));
     await waitFor(() => expect(deleteEvaluation).toHaveBeenCalledWith("e1"));
     expect(listEvaluations).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the funnel (2026-10-27)", () => {
+  it("shows chats to sales for 7 and 30 days, each against the chats", async () => {
+    draw();
+    const card = (await screen.findByText("Funnel")).closest(
+      ".ant-card",
+    ) as HTMLElement;
+    const row = async (label: string) =>
+      (await within(card).findByText(label)).closest("tr") as HTMLElement;
+    expect(within(await row("Chats")).getByText("40")).toBeInTheDocument();
+    expect(within(await row("Chats")).getByText("160")).toBeInTheDocument();
+    const leads = await row("Leads");
+    expect(leads).toHaveTextContent("12 (30%)");
+    expect(leads).toHaveTextContent("40 (25%)");
+    expect(await row("Visits booked")).toHaveTextContent("5 (13%)");
+    expect(await row("Closing tasks")).toHaveTextContent("11 (7%)");
+    expect(await row("Sales")).toHaveTextContent("9 (6%)");
+    expect(getFunnel).toHaveBeenCalled();
   });
 });

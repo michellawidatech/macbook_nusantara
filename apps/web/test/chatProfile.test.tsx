@@ -12,12 +12,14 @@ import type { InboxConversation } from "../src/lib/inboxApi.js";
 const patchProfile = vi.fn(async () => ({}));
 const addProfileFact = vi.fn(async () => ({}));
 const removeProfileFact = vi.fn(async () => ({ ok: true as const }));
+const closeStockWatch = vi.fn(async () => ({ watches: [] }));
 
 vi.mock("../src/lib/inboxApi.js", async (original) => ({
   ...(await original<typeof import("../src/lib/inboxApi.js")>()),
   patchProfile: (...a: unknown[]) => patchProfile(...(a as [])),
   addProfileFact: (...a: unknown[]) => addProfileFact(...(a as [])),
   removeProfileFact: (...a: unknown[]) => removeProfileFact(...(a as [])),
+  closeStockWatch: (...a: unknown[]) => closeStockWatch(...(a as [])),
 }));
 
 const { CustomerProfilePanel } =
@@ -234,5 +236,65 @@ describe("the customer profile", () => {
     draw();
     expect(screen.getByText("Bot score 72")).toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+});
+
+describe("waiting for stock (2026-10-27)", () => {
+  it("lists the watches and closes an open one", async () => {
+    const user = userEvent.setup();
+    const onChanged = vi.fn();
+    draw(
+      {
+        ...CONVERSATION,
+        reservations: [
+          {
+            code: "RV-2026/10-0009",
+            scheduledFor: "2026-10-30T07:00:00.000Z",
+            status: "TERJADWAL",
+            units: [],
+          },
+        ],
+        watches: [
+          {
+            id: "sw1",
+            query: "macbook air m3 16/512",
+            label: "Air M3 16/512",
+            budget: "20000000",
+            createdAt: "2026-10-26T03:00:00.000Z",
+            notifiedAt: "2026-10-27T03:00:00.000Z",
+            closedAt: null,
+          },
+          {
+            id: "sw2",
+            query: "ipad pro m4",
+            label: null,
+            budget: null,
+            createdAt: "2026-10-20T03:00:00.000Z",
+            notifiedAt: null,
+            closedAt: "2026-10-21T03:00:00.000Z",
+          },
+        ],
+      },
+      onChanged,
+    );
+    const section = screen.getByRole("region", { name: "Waiting for stock" });
+    expect(within(section).getByText("Air M3 16/512")).toBeInTheDocument();
+    expect(within(section).getByText(/up to Rp/)).toBeInTheDocument();
+    expect(
+      within(section).getByText("In stock — tell them"),
+    ).toBeInTheDocument();
+    expect(within(section).getByText("ipad pro m4")).toBeInTheDocument();
+    expect(within(section).getByText("Closed")).toBeInTheDocument();
+    // Only the open one can be closed.
+    expect(within(section).getAllByRole("button")).toHaveLength(1);
+    await user.click(
+      within(section).getByRole("button", { name: "Close Air M3 16/512" }),
+    );
+    await waitFor(() =>
+      expect(closeStockWatch).toHaveBeenCalledWith(PHONE, "sw1"),
+    );
+    expect(onChanged).toHaveBeenCalled();
+    // A bot visit holds nothing, and says so.
+    expect(screen.getByText("Visit, nothing held")).toBeInTheDocument();
   });
 });

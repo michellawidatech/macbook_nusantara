@@ -45,7 +45,7 @@ describe("each switch decides its own kind of question", () => {
 
   it("sends booking, moving and cancelling to a person when Reservations is off", () => {
     for (const text of [
-      "bisa di keep dulu ga kak?",
+      "mau booking datang besok kak",
       "kak booking saya batalin aja",
       "bisa reschedule jadi besok?",
     ]) {

@@ -9,7 +9,10 @@
  * ## The three tiers
  *
  * **Safe reads** are the shop's public facts and the sender's own history.
- * **Two guarded writes** book a visit holding a unit, and cancel it again.
+ * **Guarded writes** book a VISIT — which holds nothing since 2026-10-27
+ * (owner: *"if reservation makes the stock decrease and reduce sale, it is
+ * bad"*) — move or cancel it, remember what the customer said about
+ * themselves, and remember what they want back in stock.
  * **Everything else is forbidden**: orders, payments, prices, discounts,
  * returns, warranty resolutions, any unit transition other than the reservation
  * hold, and any other customer's data.
@@ -45,7 +48,7 @@
 import {
   TXN_TIMEOUTS,
   assertSchedule,
-  createHold,
+  createVisit,
   releaseHold,
   rescheduleHold,
   recordStoreChanges,
@@ -56,8 +59,6 @@ import {
   HoldAlreadySettledError,
   HoldNotFoundError,
   OutsideStoreHoursError,
-  UnitNotAvailableError,
-  UnknownSerialError,
   type PrismaClient,
 } from "@nusantara/db";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -482,10 +483,11 @@ const HANDOFF: Anthropic.Tool = {
   name: "handoff_to_staff",
   description:
     "Hand the conversation to a colleague. Use it for the stock, price or condition of a " +
-    "particular machine, negotiation, picking a machine from today's shelf, bookings, payments " +
-    "already made, trade-in or buy-back quotes, shipping costs, complaints and warranty claims, " +
-    "when the customer asks for a person, and for ANYTHING the approved answers and the shop " +
-    "facts do not cover. Never guess instead of using this.",
+    "particular unit you cannot look up, negotiation, payments already made, trade-in or " +
+    "buy-back quotes, shipping costs, complaints and warranty claims, when the customer asks for " +
+    "a person, and for ANYTHING the approved answers and the shop facts do not cover. When they " +
+    "are ready to buy, want a unit kept (a DP) or ask how to pay, use topic closing — a colleague " +
+    "closes the sale. Never guess instead of using this.",
   input_schema: {
     type: "object",
     properties: {
@@ -500,7 +502,8 @@ const HANDOFF: Anthropic.Tool = {
         description:
           "For the colleague: ONE short action item in Indonesian that starts with what they " +
           'must do, then the unit, like "Perlu cek harga — Air 15" M2 8/256" or "Perlu jawab ' +
-          'tawaran — Pro 14" M3 18/512, minta 21jt". No code names, no explanation of why.',
+          'tawaran — Pro 14" M3 18/512, minta 21jt" or "Perlu closing — Budi siap ambil Air M2 ' +
+          '8/256 Rp 9,5jt, mau COD Sabtu". No code names, no explanation of why.',
       },
       serial: {
         type: "string",
@@ -543,14 +546,21 @@ const CHECK_ORDER: Anthropic.Tool = {
   },
 };
 
-const CREATE_RESERVATION: Anthropic.Tool = {
-  name: "create_reservation",
+/**
+ * A visit to the shop — "janji datang" — and NOTHING held (owner, 2026-10-27:
+ * *"previously they don't do reservations at all, so if reservation makes the
+ * stock decrease and reduce sale, it is bad"*). It replaces
+ * `create_reservation`, which put a unit aside for a stranger and is no
+ * longer offered to any model or rule.
+ */
+const BOOK_VISIT: Anthropic.Tool = {
+  name: "book_visit",
   description:
-    "Book a visit and hold a unit for this customer. Call this only once the customer has agreed " +
-    "and you have both a day and a time. This really does reserve the unit, so nobody else can buy " +
-    "it until the booking is cancelled. The phone number comes from WhatsApp automatically, so " +
-    "never ask for it. If the result says unavailable, follow its guidance exactly and offer the " +
-    "alternatives. Do not invent a reason.",
+    "Book a time for this customer to come to the shop and see units in person. It holds " +
+    "NOTHING: every unit stays on sale to everyone, so never say a unit is kept, held or " +
+    "reserved for them. Call it only once the customer has agreed to come and given a day and a " +
+    "time. The phone number comes from WhatsApp automatically, so never ask for it. To keep a " +
+    "unit for them they need a DP, which a colleague handles: hand over with topic closing.",
   input_schema: {
     type: "object",
     properties: {
@@ -559,18 +569,19 @@ const CREATE_RESERVATION: Anthropic.Tool = {
         maxLength: 20,
         description:
           "Jakarta local date and time as YYYY-MM-DDTHH:MM, for example 2026-08-21T15:00. Work out " +
-          "the real date from store_info first. Never send a word like besok.",
-      },
-      serial: {
-        type: "string",
-        maxLength: 40,
-        description:
-          "Serial of the exact unit the customer chose, from search_stock or check_serial.",
+          "the real date from the shop facts first. Never send a word like besok.",
       },
       custName: {
         type: "string",
         maxLength: 80,
         description: "The customer's name, if they gave one.",
+      },
+      serials: {
+        type: "string",
+        maxLength: 120,
+        description:
+          "Serials of the units they want to see, from search_stock, comma-separated, at most " +
+          "three. Leave it out when they are coming to look around.",
       },
       note: {
         type: "string",
@@ -578,7 +589,38 @@ const CREATE_RESERVATION: Anthropic.Tool = {
         description: "What the customer wants, in one short sentence.",
       },
     },
-    required: ["when", "serial"],
+    required: ["when"],
+    additionalProperties: false,
+  },
+};
+
+/**
+ * "Tell me when it's in stock" (owner-approved 2026-10-27). Written only on
+ * the customer's yes to the offer; a worker pass leaves a colleague a task
+ * when a matching unit is sellable — nothing is sent by itself.
+ */
+const WATCH_STOCK: Anthropic.Tool = {
+  name: "watch_stock",
+  description:
+    "Remember that this customer wants to be told when something that is not in stock arrives. " +
+    "Call it only after they said yes to 'Mau saya kabari kalau sudah ready kak?'. A colleague " +
+    "will tell them; do not promise a date.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        maxLength: 120,
+        description:
+          "What they want, in a few words, as you searched for it: 'macbook air m3 16/512'.",
+      },
+      budget: {
+        type: "integer",
+        minimum: 1,
+        description: "Their ceiling in whole rupiah, if they gave one.",
+      },
+    },
+    required: ["query"],
     additionalProperties: false,
   },
 };
@@ -586,8 +628,8 @@ const CREATE_RESERVATION: Anthropic.Tool = {
 const CANCEL_RESERVATION: Anthropic.Tool = {
   name: "cancel_reservation",
   description:
-    "Cancel a booking this customer made, and release the unit that was held for it. Only ever " +
-    "touches this customer's own booking.",
+    "Cancel a visit (or an older booking) this customer made. Only ever touches this customer's " +
+    "own booking.",
   input_schema: {
     type: "object",
     properties: {
@@ -634,8 +676,9 @@ const FIND_UNIT_PHOTOS: Anthropic.Tool = {
 const CHECK_RESERVATION: Anthropic.Tool = {
   name: "check_reservation",
   description:
-    "This customer's own open bookings: the code, the day and time, and the unit held. Takes no " +
-    "arguments, it is always about this conversation.",
+    "This customer's own open bookings: the code, the day and time, and for an older booking " +
+    "the unit held. A visit holds nothing (visit: true). Takes no arguments, it is always about " +
+    "this conversation.",
   input_schema: {
     type: "object",
     properties: {},
@@ -647,8 +690,8 @@ const CHECK_RESERVATION: Anthropic.Tool = {
 const RESCHEDULE_RESERVATION: Anthropic.Tool = {
   name: "reschedule_reservation",
   description:
-    "Move this customer's own booking to another day or time. The unit stays held. Only ever " +
-    "touches this customer's own booking. Call it only once they have given the new day and time.",
+    "Move this customer's own visit to another day or time. Only ever touches this customer's " +
+    "own booking. Call it only once they have given the new day and time.",
   input_schema: {
     type: "object",
     properties: {
@@ -772,8 +815,8 @@ const REMEMBER_CUSTOMER: Anthropic.Tool = {
 const PROPOSE_RESERVATION: Anthropic.Tool = {
   name: "propose_reservation",
   description:
-    "Prepare a visit to the shop to see one or more units in person. This does NOT book " +
-    "anything: it returns the units and the time for the advisor to read back to the customer " +
+    "Prepare a visit to the shop. This does NOT book anything and holds nothing: it returns the " +
+    "units they want to see (if any) and the time, for the advisor to read back to the customer " +
     "for confirmation. Use the serials search_stock returned. A new proposal replaces the last.",
   input_schema: {
     type: "object",
@@ -782,7 +825,8 @@ const PROPOSE_RESERVATION: Anthropic.Tool = {
         type: "string",
         maxLength: 120,
         description:
-          "The serials of the units the customer wants to see, comma-separated, at most three.",
+          "The serials of the units the customer wants to see, comma-separated, at most three. " +
+          "Leave it out when they are coming to look around.",
       },
       when: {
         type: "string",
@@ -794,7 +838,7 @@ const PROPOSE_RESERVATION: Anthropic.Tool = {
         description: "The name the customer gave for the booking.",
       },
     },
-    required: ["serials", "when", "custName"],
+    required: ["when", "custName"],
     additionalProperties: false,
   },
 };
@@ -862,7 +906,7 @@ export const PHOTO_TOOLS = ["unit_photos", "find_unit_photos"] as const;
  * phone from the WhatsApp envelope, never an argument.
  */
 export const RESERVATION_TOOLS = [
-  "create_reservation",
+  "book_visit",
   "check_reservation",
   "reschedule_reservation",
   "cancel_reservation",
@@ -870,6 +914,14 @@ export const RESERVATION_TOOLS = [
 
 /** Offered whenever the caller can record a profile, whatever the switches. */
 export const PROFILE_TOOLS = ["remember_customer"] as const;
+
+/**
+ * "Tell me when it's in stock": a write, so it needs the caller's profile
+ * capability (the worker), and it is about the shelf, so it needs Stock.
+ * Runs in the worker as `nusantara_agent` — the API's role may only close
+ * one (migration 20261027150000) — so it has no agent-API route.
+ */
+export const WATCH_TOOLS = ["watch_stock"] as const;
 
 /**
  * Chatbot v2's booking door: propose, then the CODE confirms. Offered only to
@@ -892,9 +944,10 @@ export const CODE_ONLY_TOOLS = ["confirm_reservation"] as const;
  * is also where somebody can ask them why.
  */
 export const WRITE_TOOLS = [
-  "create_reservation",
+  "book_visit",
   "reschedule_reservation",
   "cancel_reservation",
+  "watch_stock",
 ] as const;
 
 /** The complete surface. Changing this array is a policy decision. */
@@ -911,12 +964,13 @@ export const ANTHROPIC_TOOLS: Anthropic.Tool[] = [
   LOOKUP_CATALOG,
   HANDOFF,
   REPLY,
-  CREATE_RESERVATION,
+  BOOK_VISIT,
   CHECK_RESERVATION,
   RESCHEDULE_RESERVATION,
   CANCEL_RESERVATION,
   REMEMBER_CUSTOMER,
   PROPOSE_RESERVATION,
+  WATCH_STOCK,
 ];
 
 /**
@@ -945,6 +999,8 @@ export function toolsFor(
   const names = new Set<string>(CUSTOMER_TOOLS);
   if (ctx.profile !== undefined) for (const n of PROFILE_TOOLS) names.add(n);
   if (can.stock) for (const n of STOCK_TOOLS) names.add(n);
+  if (can.stock && ctx.profile !== undefined)
+    for (const n of WATCH_TOOLS) names.add(n);
   // The photo tools are their own switch: a shop may want the bot quoting
   // stock without it sending pictures nobody has looked at.
   if (can.photos) for (const n of PHOTO_TOOLS) names.add(n);
@@ -1163,9 +1219,40 @@ function quote(
 const pricesOn = (ctx: ToolContext) =>
   effectiveCapabilities(ctx.capabilities ?? PARALLEL_CAPABILITIES).price;
 
+/**
+ * The battery reading a unit carries — a `UnitAttribute`, not a column: the
+ * health percentage (`baterai`) on a 2021-or-later unit, the cycle count
+ * (`siklus`) on an older one (CLAUDE.md 2026-09-08). Read for the
+ * recommendation, which names it beside the grade (2026-10-27).
+ */
+const BATTERY_KEYS = ["baterai", "siklus"];
+const BATTERY_SELECT = {
+  where: { attribute: { key: { in: BATTERY_KEYS } } },
+  select: { value: true, attribute: { select: { key: true } } },
+} as const;
+
+/** `{ batteryHealth: 91 }` or `{ cycleCount: 312 }`, from a unit's attributes. */
+function batteryOf(
+  attrs:
+    ReadonlyArray<{ value: string; attribute: { key: string } }> | undefined,
+): { batteryHealth?: number; cycleCount?: number } {
+  const num = (key: string) => {
+    const v = attrs?.find((a) => a.attribute.key === key)?.value;
+    const n = v === undefined ? NaN : Number(String(v).replace(/[^\d.]/g, ""));
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : undefined;
+  };
+  const health = num("baterai");
+  const cycles = num("siklus");
+  return {
+    ...(health !== undefined && health <= 100 ? { batteryHealth: health } : {}),
+    ...(cycles !== undefined ? { cycleCount: cycles } : {}),
+  };
+}
+
 const UNIT_SELECT = {
   serial: true,
   grade: true,
+  attributes: BATTERY_SELECT,
   // What THIS unit asks (2026-09-08). Null falls back to the variant's.
   price: true,
   sku: {
@@ -1204,7 +1291,7 @@ async function searchStock(
 
   const rows = await db.unit.findMany({
     where,
-    select: { ...UNIT_SELECT, intakeAt: true },
+    select: { ...UNIT_SELECT, intakeAt: true, skuId: true },
     orderBy: { intakeAt: "desc" },
     take: PRICE_SCAN_LIMIT,
   });
@@ -1264,6 +1351,12 @@ async function searchStock(
       )
     : null;
 
+  const left = await leftOf(db, [
+    ...shown.map((u) => u.skuId),
+    ...(alternatives?.units.map((u) => u.skuId) ?? []),
+    ...(stepUp ? [stepUp.skuId] : []),
+  ]);
+
   return {
     matched: total,
     showing: shown.length,
@@ -1289,10 +1382,11 @@ async function searchStock(
             `price so the list means something. Then recommend from what comes back.`,
         }
       : {}),
-    units: shown.map((u) => shelfUnit(u, ctx)),
+    units: shown.map((u) => shelfUnit(u, ctx, left)),
+    leftNote: LEFT_NOTE,
     ...(alternatives && alternatives.units.length > 0
       ? {
-          alternatives: alternatives.units.map((u) => shelfUnit(u, ctx)),
+          alternatives: alternatives.units.map((u) => shelfUnit(u, ctx, left)),
           alternativesNote: ALTERNATIVES_NOTE,
         }
       : {}),
@@ -1300,7 +1394,10 @@ async function searchStock(
       ? { accessory: alternatives.accessory, accessoryNote: ACCESSORY_NOTE }
       : {}),
     ...(stepUp
-      ? { stepUp: shelfUnit(stepUp, ctx), stepUpNote: STEP_UP_NOTE }
+      ? { stepUp: shelfUnit(stepUp, ctx, left), stepUpNote: STEP_UP_NOTE }
+      : {}),
+    ...(shown.length === 0 && query && ctx.profile !== undefined
+      ? { watchNote: WATCH_NOTE }
       : {}),
   };
 }
@@ -1325,6 +1422,14 @@ const ALTERNATIVES_NOTE =
   ", within their budget when they gave one. Say plainly that the one they asked for is not in " +
   "stock right now (never why), then offer these and say in one line why the first one suits " +
   "them. They are real units, so cite stock.";
+const LEFT_NOTE =
+  "left is how many units of that exact variant are on the shelf. Only when left is 1 may you " +
+  'say so ("tinggal 1 unit kak"), once, beside that unit. Never say a unit is the last one, ' +
+  "or that stock is running out, unless left says so.";
+const WATCH_NOTE =
+  "Nothing they asked for is on the shelf. After any alternatives, offer to tell them when it " +
+  'is in: "Mau saya kabari kalau sudah ready kak?". If they say yes, call watch_stock with ' +
+  "what they asked for.";
 const ACCESSORY_NOTE =
   "One accessory in stock that fits what they asked about. Mention it at most once, in one line, " +
   "after the units, and only if it fits the conversation.";
@@ -1340,6 +1445,7 @@ const SHELF_SELECT = {
   price: true,
   intakeAt: true,
   skuId: true,
+  attributes: BATTERY_SELECT,
   sku: {
     select: {
       name: true,
@@ -1362,6 +1468,7 @@ type ShelfRow = {
   price: bigint | null;
   intakeAt: Date;
   skuId: string;
+  attributes: Array<{ value: string; attribute: { key: string } }>;
   sku: {
     name: string;
     variantLabel: string | null;
@@ -1376,6 +1483,8 @@ function shelfUnit(
     serial: string;
     grade: string | null;
     price: bigint | null;
+    skuId?: string;
+    attributes?: Array<{ value: string; attribute: { key: string } }>;
     sku: {
       name: string;
       variantLabel: string | null;
@@ -1384,13 +1493,34 @@ function shelfUnit(
     };
   },
   ctx: ToolContext,
+  left?: ReadonlyMap<string, number>,
 ) {
+  const count = u.skuId !== undefined ? left?.get(u.skuId) : undefined;
   return {
     serial: u.serial,
     ...label(u),
     ...(u.grade ? { grade: u.grade } : {}),
+    ...batteryOf(u.attributes),
     ...quote(askingPrice(u), ctx),
+    // How many of this variant are on the shelf — the ONLY source of "tinggal
+    // 1 unit" (2026-10-27, honest urgency; `checkReply` holds a reply to it).
+    ...(count !== undefined ? { left: count } : {}),
   };
+}
+
+/** Sellable units per variant, for `left`. One grouped read. */
+async function leftOf(
+  db: PrismaClient,
+  skuIds: readonly string[],
+): Promise<Map<string, number>> {
+  const ids = [...new Set(skuIds)];
+  if (ids.length === 0) return new Map();
+  const rows = await db.unit.groupBy({
+    by: ["skuId"],
+    where: { skuId: { in: ids }, status: "TERSEDIA", archivedAt: null },
+    _count: { _all: true },
+  });
+  return new Map(rows.map((r) => [r.skuId, r._count._all]));
 }
 
 interface Budget {
@@ -1563,10 +1693,10 @@ async function outOfStockAlternatives(
  * question ("charger macbook air" for an Air), or null. Counted stock is a
  * ledger (`StockMove`), and on-hand is its sum.
  *
- * ⚠️ Read through the POS's agent API it runs as `nusantara_app`, which may
- * read `StockMove`; run in the worker it runs as `nusantara_agent`, which
- * holds no grant on it — so a refusal here means "no accessory", never a
- * failed lookup.
+ * Read through the POS's agent API it runs as `nusantara_app`; run in the
+ * worker it runs as `nusantara_agent`, which may read `StockMove` since
+ * migration 20261027150000. A refusal here still means "no accessory", never
+ * a failed lookup.
  */
 async function fittingAccessory(
   db: PrismaClient,
@@ -1681,6 +1811,7 @@ async function checkSerial(
       status: true,
       archivedAt: true,
       price: true,
+      skuId: true,
       // Spelled out rather than spread, because this select REPLACES the one
       // in UNIT_SELECT rather than merging with it — `price` has to be named
       // again here or the quote falls off the answer.
@@ -1713,12 +1844,19 @@ async function checkSerial(
   // The raw status is deliberately NOT returned. Telling a stranger who guessed
   // a serial that a device is HILANG or KLAIM_GARANSI is an invitation, and it
   // is a fact about the shop's problems rather than about their purchase.
+  const left = available
+    ? await leftOf(db, [unit.skuId]).catch(() => new Map<string, number>())
+    : new Map<string, number>();
   return {
     found: true,
     serial: unit.serial,
     ...label(unit),
     ...(unit.grade ? { grade: unit.grade } : {}),
+    ...batteryOf(unit.attributes),
     available,
+    ...(available && left.has(unit.skuId)
+      ? { left: left.get(unit.skuId)! }
+      : {}),
     ...(available
       ? quote(askingPrice(unit), ctx)
       : {
@@ -2207,150 +2345,141 @@ export function parseJakarta(when: string): Date | null {
   return jakartaDate(at) === `${m[1]}-${m[2]}-${m[3]}` ? at : null;
 }
 
-async function alternativesFor(
-  db: PrismaClient,
-  skuId: string | null,
-  ctx: ToolContext,
-): Promise<Array<Record<string, unknown>>> {
-  if (!skuId) return [];
-  const units = await db.unit.findMany({
-    where: { ...stockWhere({}), skuId },
-    select: UNIT_SELECT,
-    orderBy: { intakeAt: "desc" },
-    take: 3,
-  });
-  return units.map((u) => ({
-    serial: u.serial,
-    ...label(u),
-    ...quote(askingPrice(u), ctx),
-  }));
-}
+/** The policy every bot booking is held to: future, within 60 days, open hours. */
+const BOT_SCHEDULE = {
+  requireFuture: true,
+  maxBookingDays: MAX_BOOKING_DAYS,
+  storeHours: STORE_HOURS,
+} as const;
+
+/** "MacBook Air M2 8/256, MacBook Pro 14 M3" — what a visit is to see. */
+const visitSubject = (
+  units: ReadonlyArray<{
+    sku: {
+      name: string;
+      variantLabel: string | null;
+      model: { name: string; category: { name: string } };
+    };
+  }>,
+): string =>
+  units
+    .map((u) => {
+      const l = label(u);
+      return [l.model, l.variant].filter(Boolean).join(" ");
+    })
+    .join(", ");
+
+/** The header note a bot visit carries: what they come to see. */
+const visitNote = (subject: string): string =>
+  subject ? `Janji datang — lihat ${subject}` : "Janji datang";
 
 /**
- * Book a visit and hold a machine.
+ * Book a visit — and hold nothing (2026-10-27).
  *
- * The hold itself lives in `packages/db`'s `createHold`, which the POS and the
- * expiry sweep also call — one implementation, so a rule cannot be true at the
- * counter and false in a conversation. What stays here is everything that is
- * about talking to a customer rather than about holding stock: the capability
- * gate, the per-turn write guard, reading a date out of ordinary words, and
- * every sentence the model is handed.
+ * `createVisit` in `packages/db` writes the `Reservation` with no items, so
+ * no unit leaves the shelf, under the same schedule policy and per-sender
+ * guard a hold had. The units the customer wants to see are recorded on a
+ * CONFIRMED `ReservationProposal` linked to it, in the same transaction:
+ * that is the structural answer to "which unit is the reminder about", and
+ * a proposal is exactly a visit's details once the customer has agreed.
  */
-async function createReservation(
-  args: Record<string, unknown>,
-  ctx: ToolContext,
-) {
+async function bookVisit(args: Record<string, unknown>, ctx: ToolContext) {
   if (!ctx.reserve)
     return { error: "Booking is not available on this channel." };
 
   // Claimed synchronously, before the first await: `converse` runs a step's
-  // tool calls through Promise.all, so two create_reservation blocks in one
-  // step would both pass an awaited check.
+  // tool calls through Promise.all, so two book_visit blocks in one step
+  // would both pass an awaited check.
   const guard = ctx.writesUsed;
   if (guard) {
-    if (guard.has("create_reservation"))
+    if (guard.has("book_visit"))
       return {
         alreadyBooked: true,
         guidance:
-          "You have already booked for this customer in this reply. Repeat the code you were " +
-          "given, do not make a second booking.",
+          "You have already booked this visit in this reply. Repeat the code you were given, " +
+          "do not make a second booking.",
       };
-    guard.add("create_reservation");
+    guard.add("book_visit");
   }
 
   const when = String(args["when"] ?? "").trim();
-  if (!when) return { needWhen: true };
-  const at = parseJakarta(when);
-  if (!at)
+  const at = when ? parseJakarta(when) : null;
+  if (!at) {
+    guard?.delete("book_visit");
     return {
       needWhen: true,
       note: "The date was not understood. Send it as YYYY-MM-DDTHH:MM in Jakarta time.",
     };
+  }
+  const serials = [
+    ...new Set(
+      String(args["serials"] ?? "")
+        .split(/[\s,;]+/)
+        .map((x) => x.trim())
+        .filter(Boolean),
+    ),
+  ].slice(0, 3);
 
-  const serial = String(args["serial"] ?? "").trim();
-  if (!serial) return { needSerial: true };
-
-  const { write, staffId } = ctx.reserve;
+  const { write } = ctx.reserve;
   const e164 = toE164(ctx.from);
-  const name =
-    String(args["custName"] ?? "").trim() || ctx.profileName?.trim() || e164;
-  const rawNote = String(args["note"] ?? "").trim();
+  const name = clip(args["custName"], 80) || ctx.profileName?.trim() || e164;
+  const customerNote = clip(args["note"], 280) ?? null;
 
   try {
-    const hold = await write.$transaction(
-      (tx) =>
-        createHold(tx, {
-          serials: [serial],
-          staffId,
-          customer: { phone: e164, name },
-          scheduledFor: at,
-          // The customer's own words. `createHold` marks them `[agen]`, because
-          // they render in a staff-facing POS and must read as quoted input.
-          note: rawNote || null,
-          // The ledger's note is attribution the shop composed. Never the
-          // customer's text: `UnitEvent` is append-only.
-          eventNote: `Reservasi agen untuk ${e164}`,
-          source: "AGEN",
-          at: ctx.now,
-          // Idempotency across ticks, scoped to this sender's own bookings. A
-          // staff booking does not block a bot one, and never has.
-          duplicateScope: { phone: e164, source: "AGEN" },
-          // What a bot may promise unattended. The POS opts into none of this:
-          // a staff member can see the customer, and has never been asked to
-          // justify a collection outside opening hours.
-          policy: {
-            requireFuture: true,
-            maxBookingDays: MAX_BOOKING_DAYS,
-            storeHours: STORE_HOURS,
-          },
-        }),
-      TXN_TIMEOUTS,
+    // What they want to see, if it is on the shelf. A unit that is not is
+    // simply not named — the visit is to look, and nothing is promised.
+    const units = serials.length
+      ? await write.unit.findMany({
+          where: { ...stockWhere({}), serial: { in: serials } },
+          select: { ...UNIT_SELECT, id: true },
+        })
+      : [];
+    const ordered = serials.flatMap((sn) =>
+      units.filter((u) => u.serial === sn),
     );
-
-    const graceMs = ctx.reserve.graceMs;
-    const until =
-      graceMs !== undefined ? new Date(at.getTime() + graceMs) : null;
+    const subject = visitSubject(ordered);
+    const visit = await write.$transaction(async (tx) => {
+      const made = await createVisit(tx, {
+        customer: { phone: e164, name },
+        scheduledFor: at,
+        note: visitNote(subject),
+        customerNote,
+        source: "AGEN",
+        at: ctx.now,
+        duplicateScope: { phone: e164, source: "AGEN" },
+        policy: BOT_SCHEDULE,
+      });
+      await tx.reservationProposal.create({
+        data: {
+          from: ctx.from,
+          custName: name,
+          scheduledFor: at,
+          createdAt: ctx.now,
+          // Agreed in the same breath it was made; the window is a formality
+          // the CHECK requires (expiresAt > createdAt).
+          expiresAt: new Date(ctx.now.getTime() + PROPOSAL_TTL_MS),
+          confirmedAt: ctx.now,
+          reservationId: made.id,
+          items: {
+            create: ordered.map((u, i) => ({ unitId: u.id, sortOrder: i })),
+          },
+        },
+      });
+      return made;
+    }, TXN_TIMEOUTS);
     return toolJson({
       ok: true,
-      code: hold.code,
+      visit: true,
+      code: visit.code,
       when: `${jakartaDate(at)} ${jakartaTime(at)}`,
-      serial,
-      // Stated so the model has a real answer to "until when", instead of
-      // one it would otherwise make up.
-      ...(until
-        ? { heldUntil: `${jakartaDate(until)} ${jakartaTime(until)}` }
-        : {}),
+      ...(subject ? { toSee: subject } : {}),
       guidance:
-        "Give the customer the booking code and the appointment, and confirm the unit is now " +
-        "held for them" +
-        (until ? " until heldUntil." : ". Do not state until when."),
+        "Give the customer the booking code and the day and time of their visit. Nothing is held: " +
+        "do not say the unit is kept or reserved for them.",
     });
   } catch (err) {
-    // Ordinary answers, not failures. These are converted before anything else,
-    // and NEITHER releases the turn guard through the failure path nor calls
-    // ctx.onError — which is wired to logger.error("a grounding tool failed").
-    // A customer asking for a machine somebody else holds is not a failed tool.
-    if (
-      err instanceof UnitNotAvailableError ||
-      err instanceof UnknownSerialError
-    ) {
-      // Nothing was held, so a later step may legitimately try another serial.
-      guard?.delete("create_reservation");
-      const skuId =
-        err instanceof UnitNotAvailableError
-          ? (err.units[0]?.skuId ?? null)
-          : null;
-      const alternatives = await alternativesFor(write, skuId, ctx);
-      return toolJson({
-        unavailable: true,
-        serial,
-        guidance: NEVER_INVENT_REASON,
-        ...(alternatives.length ? { alternatives } : {}),
-      });
-    }
     if (err instanceof DuplicateHoldError) {
-      // The guard STAYS claimed: this result carries the real code, so
-      // "repeat the code you were given" is a true instruction.
+      // The guard STAYS claimed: this result carries the real code.
       return toolJson({
         alreadyBooked: true,
         code: err.code,
@@ -2360,40 +2489,113 @@ async function createReservation(
             }
           : {}),
         guidance:
-          "This customer already has an open booking. Give them that code rather than making a " +
-          "second one. To move it, cancel the old one first.",
+          "This customer already has a visit booked. Give them that code rather than booking a " +
+          "second; to move it, use reschedule_reservation.",
       });
     }
-    // The turn guard is deliberately NOT released for a schedule refusal, which
-    // is what this tool has always done: the model asked for an impossible time
-    // and gets one correction per turn, not an unbounded retry loop against the
-    // clock. Releasing it would arguably be kinder — that is an owner's call,
-    // not a refactor's.
-    if (err instanceof BookingInPastError) {
-      return { pastDate: true };
-    }
-    if (err instanceof BookingTooFarAheadError) {
+    guard?.delete("book_visit");
+    if (err instanceof BookingInPastError) return { pastDate: true };
+    if (err instanceof BookingTooFarAheadError)
       return { tooFarAhead: true, maxDays: err.maxDays };
-    }
-    if (err instanceof OutsideStoreHoursError) {
+    if (err instanceof OutsideStoreHoursError)
       return {
         closedThen: true,
         hours: `${err.openHour}:00 to ${err.closeHour}:00`,
         guidance:
           "The shop is shut at that time. Offer a time inside opening hours instead.",
       };
-    }
-
-    // A genuine failure: nothing was committed, so release the guard and say so
-    // somewhere a person will see it.
-    guard?.delete("create_reservation");
-    ctx.onError?.("create_reservation", err);
+    ctx.onError?.("book_visit", err);
     return {
       error:
-        "Could not save the booking. Tell the customer a colleague will follow up, and do not " +
+        "Could not save the visit. Tell the customer a colleague will confirm it, and do not " +
         "claim it was booked.",
     };
   }
+}
+
+/**
+ * Remember that this customer wants a model back in stock (2026-10-27).
+ *
+ * Keyed by the token's wa_id, never by anything the model wrote. A second
+ * yes for the same words is the first watch, not two. The words resolve to
+ * the variant when they name exactly one, else to the product when every
+ * match is one product — so the notifier can match on the catalogue rather
+ * than on text when it can.
+ */
+async function watchStock(args: Record<string, unknown>, ctx: ToolContext) {
+  if (!ctx.profile) return { error: "Not available here." };
+  const query = clip(args["query"], 120);
+  if (!query)
+    return { error: "Say what they want, for example 'air m3 16/512'." };
+  const budget =
+    typeof args["budget"] === "number" &&
+    Number.isFinite(args["budget"]) &&
+    args["budget"] >= 1
+      ? BigInt(Math.floor(args["budget"]))
+      : null;
+  const db = ctx.profile.write;
+  const words = tokens(query);
+  const skus = words.length
+    ? await db.sku.findMany({
+        where: {
+          archived: false,
+          mergedIntoId: null,
+          model: { archived: false },
+          AND: words.map((t) => ({
+            OR: [
+              { name: { contains: t, mode: "insensitive" as const } },
+              { variantLabel: { contains: t, mode: "insensitive" as const } },
+              {
+                model: { name: { contains: t, mode: "insensitive" as const } },
+              },
+              {
+                model: {
+                  category: {
+                    name: { contains: t, mode: "insensitive" as const },
+                  },
+                },
+              },
+            ],
+          })),
+        },
+        select: { id: true, modelId: true },
+        take: 50,
+      })
+    : [];
+  const models = [...new Set(skus.map((x) => x.modelId))];
+  const skuId = skus.length === 1 ? skus[0]!.id : null;
+  const modelId = models.length === 1 ? models[0]! : null;
+
+  const open = await db.stockWatch.findFirst({
+    where: {
+      from: ctx.from,
+      closedAt: null,
+      notifiedAt: null,
+      query: { equals: query, mode: "insensitive" },
+    },
+    select: { id: true },
+  });
+  if (open) return { saved: true, already: true };
+  const customer = await db.customer.findFirst({
+    where: { phone: { in: phoneForms(ctx.from) } },
+    select: { id: true },
+  });
+  await db.stockWatch.create({
+    data: {
+      from: ctx.from,
+      query,
+      ...(customer ? { customerId: customer.id } : {}),
+      ...(modelId ? { modelId } : {}),
+      ...(skuId ? { skuId } : {}),
+      ...(budget !== null ? { budget } : {}),
+      createdAt: ctx.now,
+    },
+  });
+  return {
+    saved: true,
+    guidance:
+      "Saved. Tell them a colleague will message them here once it is in. Promise no date.",
+  };
 }
 
 /**
@@ -2547,6 +2749,7 @@ async function checkReservation(db: PrismaClient, ctx: ToolContext) {
     select: {
       code: true,
       scheduledFor: true,
+      note: true,
       items: {
         select: {
           sku: { select: { name: true, variantLabel: true } },
@@ -2568,10 +2771,22 @@ async function checkReservation(db: PrismaClient, ctx: ToolContext) {
             when: `${jakartaDate(r.scheduledFor)} ${jakartaTime(r.scheduledFor)}`,
           }
         : {}),
-      units: r.items.map((i) => ({
-        name: [i.sku?.name, i.sku?.variantLabel].filter(Boolean).join(" "),
-        ...(i.unit?.serial ? { serial: i.unit.serial } : {}),
-      })),
+      // A visit holds nothing (2026-10-27); an older bot booking still does.
+      ...(r.items.length === 0
+        ? {
+            visit: true,
+            ...(r.note?.startsWith("Janji datang — lihat ")
+              ? { toSee: r.note.slice(21).split(" · ")[0] }
+              : {}),
+          }
+        : {
+            units: r.items.map((i) => ({
+              name: [i.sku?.name, i.sku?.variantLabel]
+                .filter(Boolean)
+                .join(" "),
+              ...(i.unit?.serial ? { serial: i.unit.serial } : {}),
+            })),
+          }),
     })),
   };
 }
@@ -2596,11 +2811,7 @@ async function rescheduleReservation(
           target: { phone: toE164(ctx.from), ...(code ? { code } : {}) },
           scheduledFor: at,
           at: ctx.now,
-          policy: {
-            requireFuture: true,
-            maxBookingDays: MAX_BOOKING_DAYS,
-            storeHours: STORE_HOURS,
-          },
+          policy: BOT_SCHEDULE,
         }),
       TXN_TIMEOUTS,
     );
@@ -2817,7 +3028,6 @@ async function proposeReservation(
         .filter(Boolean),
     ),
   ].slice(0, 3);
-  if (serials.length === 0) return { needSerial: true };
   const custName = clip(args["custName"], 80);
   if (!custName)
     return {
@@ -2848,10 +3058,12 @@ async function proposeReservation(
     throw err;
   }
 
-  const units = await write.unit.findMany({
-    where: { ...stockWhere({}), serial: { in: serials } },
-    select: { ...UNIT_SELECT, id: true },
-  });
+  const units = serials.length
+    ? await write.unit.findMany({
+        where: { ...stockWhere({}), serial: { in: serials } },
+        select: { ...UNIT_SELECT, id: true },
+      })
+    : [];
   const missing = serials.filter((s) => !units.some((u) => u.serial === s));
   if (missing.length > 0)
     return toolJson({
@@ -2899,21 +3111,22 @@ async function proposeReservation(
       };
     }),
     guidance:
-      "NOT booked yet. Read every unit (name, grade, price) and the date and time back to the " +
-      "customer and ask them to confirm. Do not say it is booked or held.",
+      "NOT booked yet. Read the visit back — the day and time and any unit they want to see — " +
+      "and ask them to confirm. Nothing will be held for them; do not say it is booked or held.",
   });
 }
 
 /**
- * Turn the customer's open proposal into a hold. Called by CODE when the
- * router reads the customer's reply as a yes — never offered to a model.
+ * Turn the customer's open proposal into a VISIT (2026-10-27 — it used to be
+ * a hold). Called by CODE when the customer's reply reads as a yes — never
+ * offered to a model.
  */
 async function confirmReservation(ctx: ToolContext) {
   if (!ctx.reserve)
     return { error: "Booking is not available on this channel." };
   const guard = ctx.writesUsed;
-  if (guard?.has("create_reservation")) return { alreadyBooked: true };
-  const { write, staffId } = ctx.reserve;
+  if (guard?.has("book_visit")) return { alreadyBooked: true };
+  const { write } = ctx.reserve;
   const proposal = await write.reservationProposal.findFirst({
     where: {
       from: ctx.from,
@@ -2928,33 +3141,45 @@ async function confirmReservation(ctx: ToolContext) {
       scheduledFor: true,
       items: {
         orderBy: { sortOrder: "asc" },
-        select: { unit: { select: { serial: true } } },
+        select: {
+          unit: {
+            select: {
+              serial: true,
+              sku: {
+                select: {
+                  name: true,
+                  variantLabel: true,
+                  model: {
+                    select: {
+                      name: true,
+                      category: { select: { name: true } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     },
   });
   if (!proposal) return { noProposal: true };
-  guard?.add("create_reservation");
+  guard?.add("book_visit");
   const e164 = toE164(ctx.from);
   const serials = proposal.items.map((i) => i.unit.serial);
+  const subject = visitSubject(proposal.items.map((i) => i.unit));
   try {
-    const hold = await write.$transaction(async (tx) => {
-      const made = await createHold(tx, {
-        serials,
-        staffId,
+    const visit = await write.$transaction(async (tx) => {
+      const made = await createVisit(tx, {
         customer: { phone: e164, name: proposal.custName },
         scheduledFor: proposal.scheduledFor,
-        note: null,
-        eventNote: `Reservasi agen untuk ${e164}`,
+        note: visitNote(subject),
         source: "AGEN",
         at: ctx.now,
         duplicateScope: { phone: e164, source: "AGEN" },
-        policy: {
-          requireFuture: true,
-          maxBookingDays: MAX_BOOKING_DAYS,
-          storeHours: STORE_HOURS,
-        },
+        policy: BOT_SCHEDULE,
       });
-      // Only while still open: two confirms racing are one hold, not two.
+      // Only while still open: two confirms racing are one visit, not two.
       const { count } = await tx.reservationProposal.updateMany({
         where: { id: proposal.id, confirmedAt: null, cancelledAt: null },
         data: { confirmedAt: ctx.now, reservationId: made.id },
@@ -2963,30 +3188,17 @@ async function confirmReservation(ctx: ToolContext) {
       return made;
     }, TXN_TIMEOUTS);
     const at = proposal.scheduledFor;
-    const graceMs = ctx.reserve.graceMs;
-    const until =
-      graceMs !== undefined ? new Date(at.getTime() + graceMs) : null;
     return toolJson({
       ok: true,
-      code: hold.code,
+      visit: true,
+      code: visit.code,
       when: `${jakartaDate(at)} ${jakartaTime(at)}`,
       serials,
+      ...(subject ? { toSee: subject } : {}),
       custName: proposal.custName,
-      ...(until
-        ? { heldUntil: `${jakartaDate(until)} ${jakartaTime(until)}` }
-        : {}),
     });
   } catch (err) {
-    guard?.delete("create_reservation");
-    if (
-      err instanceof UnitNotAvailableError ||
-      err instanceof UnknownSerialError
-    )
-      return toolJson({
-        unavailable: true,
-        serials,
-        guidance: NEVER_INVENT_REASON,
-      });
+    guard?.delete("book_visit");
     if (err instanceof DuplicateHoldError)
       return toolJson({ alreadyBooked: true, code: err.code });
     if (
@@ -2998,7 +3210,7 @@ async function confirmReservation(ctx: ToolContext) {
     ctx.onError?.("confirm_reservation", err);
     return {
       error:
-        "Could not save the booking. Tell the customer a colleague will follow up, and do not " +
+        "Could not save the visit. Tell the customer a colleague will confirm it, and do not " +
         "claim it was booked.",
     };
   }
@@ -3044,8 +3256,8 @@ export async function dispatchTool(
       out = await searchKnowledge(db, args, ctx);
     else if (name === "lookup_catalog") out = await lookupCatalog(db, args);
     else if (name === "handoff_to_staff") out = handoff(args, ctx);
-    else if (name === "create_reservation")
-      out = await createReservation(args, ctx);
+    else if (name === "book_visit") out = await bookVisit(args, ctx);
+    else if (name === "watch_stock") out = await watchStock(args, ctx);
     else if (name === "cancel_reservation")
       out = await cancelReservation(args, ctx);
     else if (name === "check_reservation")

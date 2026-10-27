@@ -14,7 +14,7 @@
  * reader the reply checks and the negotiation offer use.
  */
 
-import { moneyAmounts } from "../policy.js";
+import { asksToBuy, moneyAmounts } from "../policy.js";
 import { STORE_HOURS } from "../hours.js";
 
 export type RuleIntent =
@@ -51,6 +51,11 @@ export interface Understanding {
   readonly apps: readonly string[];
   readonly preferences: readonly string[];
   readonly occupation: string | null;
+  /**
+   * Ready to buy, asking to keep a unit (a DP) or how to pay (2026-10-27):
+   * the strongest lead signal there is. `routeMessage` sends it to a person.
+   */
+  readonly buying: boolean;
 }
 
 const norm = (text: string) =>
@@ -72,8 +77,10 @@ const DECLINE =
   /\b(ga jadi|gak jadi|nggak jadi|enggak jadi|tidak jadi|batal|cancel|nanti dulu|ga dulu|gak dulu|no thanks|tidak usah|ga usah|gak usah)\b|^\s*(tidak|nggak|enggak|ngga|gak|ga|no)\b/i;
 const PHOTO =
   /\b(foto|fotonya|poto|gambar|pict|pic|pics|picture|photo|video|vidio|liat (unit|barang)nya)\b/i;
+// A VISIT, never a hold (2026-10-27): "tahan" and "keep" ask the shop to put
+// a unit aside, which is a DP and a person's job (policy.ts KEEP).
 const RESERVE =
-  /\b(booking|book|booked|tahan|tahanin|keep|reservasi|reserve|ke toko|ketoko|datang|dateng|mampir|lihat langsung|liat langsung|cek langsung|cek unit|visit|ambil di toko|ambil ke toko)\b/i;
+  /\b(booking|book|booked|janji ?datang|janjian|reservasi|reserve|ke toko|ketoko|datang|dateng|mampir|lihat langsung|liat langsung|cek langsung|cek unit|visit|ambil di toko|ambil ke toko)\b/i;
 const PRICE = /\b(harga|harganya|berapa|brp|brapa|price|how much|biaya)\b/i;
 const STOCK =
   /\b(ada|ready|redi|stok|stock|stoknya|tersedia|available|jual|unit apa|masih ada)\b/i;
@@ -101,7 +108,8 @@ const BARE_FAMILY: ReadonlyArray<[RegExp, string]> = [
   [/\bpro\b/, "pro"],
 ];
 const CHIP = /\b(m[1-5])( ?(pro|max|ultra))?\b|\b(i[3579])\b/g;
-const SIZE = /\b(11|12|13|14|15|16|24|27)( ?(inch|inci|in|"))?\b/g;
+// Not the RAM of "16/512" — a size is never followed by a slash.
+const SIZE = /\b(11|12|13|14|15|16|24|27)( ?(inch|inci|in|"))?\b(?!\s*\/)/g;
 const SPEC =
   /\b(\d{1,2}) ?\/ ?(\d{3,4}|[12] ?tb)\b|\b(\d{3,4}) ?gb\b|\b([12]) ?tb\b/g;
 const YEAR = /\b(20(1[5-9]|2[0-6]))\b/g;
@@ -462,6 +470,20 @@ const EN =
 const ID =
   /\b(ada|berapa|kak|min|mau|ya|yg|yang|gak|ga|nggak|bisa|dong|nya|kah|apa|aku|saya)\b/i;
 
+/** A plain yes: "iya", "boleh", "mau kak", "ok" (2026-10-27). */
+export function saysYes(text: string): boolean {
+  const t = norm(text);
+  return (
+    (CONFIRM.test(t) || /^\s*(mau|boleh|bisa|please|sure)\b/i.test(t)) &&
+    !DECLINE.test(t.replace(CONFIRM, ""))
+  );
+}
+
+/** A plain no: "ga usah", "nanti dulu", "tidak jadi" (2026-10-27). */
+export function saysNo(text: string): boolean {
+  return DECLINE.test(norm(text));
+}
+
 export function understand(
   text: string,
   now: Date,
@@ -548,5 +570,6 @@ export function understand(
     apps,
     preferences,
     occupation,
+    buying: asksToBuy(text),
   };
 }

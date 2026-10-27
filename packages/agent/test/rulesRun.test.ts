@@ -9,6 +9,7 @@ import type { PrismaClient } from "@nusantara/db";
 import {
   routeMessage,
   runRules,
+  visitReplyTurn,
   type AgentCapabilities,
   type ConverseResult,
   type RulesInput,
@@ -105,19 +106,20 @@ describe("answered by rules, with no AI at all", () => {
     expect(out.costMicros).toBe(0);
   });
 
-  it("lists what is on the shelf, with prices, and remembers what was shown", async () => {
+  it("recommends what is on the shelf, with prices, and remembers what was shown", async () => {
     const p = pos({ search_stock: { matched: 1, units: [MBP] } });
     const out = await run("kak ada macbook pro 16 m3?", p);
     expect(p.asked.find((a) => a.name === "search_stock")?.args).toMatchObject({
       query: "macbook pro m3 16",
     });
     expect(out.reply).toContain(
-      "MacBook Pro 16 M3 18/512, grade A — Rp 32.500.000",
+      "Yang paling pas buat kakak:\nMacBook Pro 16 M3 18/512, grade A — Rp 32.500.000",
     );
     expect(out.shown).toEqual([MBP.serial]);
     expect(out.handoff).toBeUndefined();
-    // And asks what it is for — the profile does not say.
-    expect(out.reply).toContain("dipakai untuk apa");
+    // A recommendation ends on one small yes-question, not a form to fill.
+    expect(out.reply.endsWith("Mau lihat fotonya kak?")).toBe(true);
+    expect(out.reply).not.toContain("dipakai untuk apa");
   });
 
   it("searches a budget as a ceiling and saves it as a range", async () => {
@@ -309,19 +311,24 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
     }
   });
 
-  it("asks about preferences next, then budget, then apps", async () => {
+  it("asks briefly — the use, then the budget, and nothing else (2026-10-27)", async () => {
     const out1 = await run("halo kak", pos({}), {
       known: { ...nothingKnown, usage: true },
     });
-    expect(out1.reply).toContain("mau yang baru atau second");
+    expect(out1.reply).toContain("Budgetnya kira-kira");
     const out2 = await run("halo kak", pos({}), {
-      known: { ...nothingKnown, usage: true, preferences: true },
+      known: { ...nothingKnown, usage: true, budget: true },
     });
-    expect(out2.reply).toContain("Budgetnya kira-kira");
-    const out3 = await run("halo kak", pos({}), {
-      known: { ...nothingKnown, usage: true, preferences: true, budget: true },
+    expect(out2.reply).not.toContain("aplikasi khusus");
+    expect(out2.reply).not.toContain("mau yang baru atau second");
+  });
+
+  it("stops asking once it can recommend: a use or a budget, and a unit in mind", async () => {
+    const out = await run("ok kak", pos({}), {
+      known: { ...nothingKnown, usage: true },
+      lastShown: [AIR.serial],
     });
-    expect(out3.reply).toContain("aplikasi khusus");
+    expect(out.reply).not.toContain("Budgetnya");
   });
 
   it("stops asking once it knows", async () => {
@@ -343,7 +350,7 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
   it("counts what the customer says in the same message", async () => {
     const out = await run("halo kak, buat kuliah desain");
     expect(out.reply).not.toContain("dipakai untuk apa");
-    expect(out.reply).toContain("mau yang baru atau second");
+    expect(out.reply).toContain("Budgetnya kira-kira");
   });
 
   it("asks a skipped question a second way rather than repeating it", async () => {
@@ -414,10 +421,12 @@ describe("out of stock, and one step up (owner, 2026-10-27)", () => {
     expect(out.handoff).toBeUndefined();
   });
 
-  it("still says so plainly when nothing close is in stock", async () => {
+  it("says so plainly when nothing close is in stock, and offers to tell them", async () => {
     const p = pos({ search_stock: { matched: 0, units: [] } });
     const out = await run("air m3 16/512 ready kak?", p);
     expect(out.reply).toContain("sedang kosong");
+    expect(out.reply).toContain("Mau saya kabari kalau sudah ready kak?");
+    expect(out.watch).toEqual({ query: "air m3 16/512" });
   });
 
   it("offers one step up after the main pick, as an option", async () => {
@@ -427,7 +436,7 @@ describe("out of stock, and one step up (owner, 2026-10-27)", () => {
     const out = await run("air m2 8/256 ada kak?", p);
     const list = out.reply.indexOf("MacBook Air M2 8/256");
     const up = out.reply.indexOf(
-      "Kalau mau lebih lega, ada juga MacBook Air M2 16/512, grade A — Rp 14.000.000",
+      "Kalau mau lebih lega: MacBook Air M2 16/512, grade A — Rp 14.000.000",
     );
     expect(list).toBeGreaterThanOrEqual(0);
     expect(up).toBeGreaterThan(list);
@@ -503,5 +512,205 @@ describe("a hand-over no longer silences the chat (owner, 2026-10-27)", () => {
     expect(out.handoff?.summary).toBe(
       'Perlu jawab tawaran — Air M2\n"air m2 bisa nego ga kak?"',
     );
+  });
+});
+
+describe("selling, not holding (owner, 2026-10-27)", () => {
+  const M1 = {
+    serial: "C02AIRM1XX",
+    model: "MacBook Air M1",
+    variant: "8/256",
+    grade: "A",
+    price: "Rp 8.000.000",
+    batteryHealth: 88,
+    left: 3,
+  };
+  const BEST = { ...AIR, batteryHealth: 91, left: 1 };
+  const UP = {
+    serial: "C02AIRM216",
+    model: "MacBook Air M2",
+    variant: "16/512",
+    grade: "A",
+    price: "Rp 14.000.000",
+    cycleCount: 120,
+  };
+  const budi = {
+    name: "Budi",
+    usage: true,
+    preferences: false,
+    budget: true,
+    apps: false,
+  };
+
+  it("recommends three — best fit, a cheaper one, one step up — with battery and the shelf's own 'tinggal 1'", async () => {
+    const p = pos({
+      search_stock: { matched: 2, units: [BEST, M1], stepUp: UP },
+    });
+    const out = await run("budget 12jt ada macbook air?", p, { known: budi });
+    expect(out.reply).toContain(
+      "Yang paling pas buat kakak:\nMacBook Air M2 8/256, grade B, baterai 91% — Rp 11.900.000 (tinggal 1 unit kak)",
+    );
+    expect(out.reply).toContain(
+      "Kalau mau lebih hemat: MacBook Air M1 8/256, grade A, baterai 88% — Rp 8.000.000",
+    );
+    expect(out.reply).toContain(
+      "Kalau mau lebih lega: MacBook Air M2 16/512, grade A, baterai 120 siklus — Rp 14.000.000",
+    );
+    // Three left, so the cheaper one is never "the last one".
+    expect(out.reply.match(/tinggal 1 unit/g)).toHaveLength(1);
+    expect(out.shown).toEqual([BEST.serial, M1.serial, UP.serial]);
+    expect(out.reply.endsWith("Mau lihat fotonya kak?")).toBe(true);
+  });
+
+  it("moves the next step on rather than asking the same yes-question twice", async () => {
+    const p = pos({ search_stock: { matched: 1, units: [AIR] } });
+    const out = await run("air m2 ada kak?", p, {
+      known: budi,
+      lastReply: "… Mau lihat fotonya kak?",
+    });
+    expect(
+      out.reply.endsWith("Mau datang lihat langsung, kapan enaknya kak?"),
+    ).toBe(true);
+    // With a visit already booked, the step after photos is getting it done.
+    const booked = await run("air m2 ada kak?", p, {
+      known: budi,
+      lastReply: "… Mau lihat fotonya kak?",
+      visitBooked: true,
+    });
+    expect(booked.reply.endsWith("Mau saya bantu proses kak?")).toBe(true);
+  });
+
+  it("hands a buyer to a person as a closing task naming who, which unit and its price", async () => {
+    const p = pos({
+      check_serial: { found: true, available: true, ...AIR },
+    });
+    const out = await run("oke kak saya ambil yang pertama, mau COD", p, {
+      known: budi,
+      lastShown: [AIR.serial],
+    });
+    expect(out.handoff).toMatchObject({ topic: "closing", serial: AIR.serial });
+    expect(out.handoff?.summary.split("\n")[0]).toBe(
+      "Perlu closing — Budi siap ambil MacBook Air M2 8/256 Rp 11,9jt, mau COD",
+    );
+    expect(out.reply).toContain("Tim kami bantu proses pembeliannya");
+  });
+
+  it("answers a keep with the DP line and never an amount", async () => {
+    const out = await run("bisa di keep dulu ga kak?", pos({}), {
+      known: budi,
+      lastShown: [AIR.serial],
+    });
+    expect(out.handoff?.topic).toBe("closing");
+    expect(out.reply).toMatch(
+      /^Untuk amankan unitnya bisa DP kak, nanti tim kami bantu ya 🙏/,
+    );
+    expect(out.reply).not.toMatch(/\d/);
+    expect(out.handoff?.summary).toContain("minta unit di-keep (DP)");
+  });
+
+  it("books a visit with no unit to hold — only a name and a time", async () => {
+    const p = pos({
+      propose_reservation: {
+        ok: true,
+        proposed: true,
+        when: "2026-10-16 14:00",
+        custName: "Budi",
+        units: [],
+      },
+    });
+    const out = await run(
+      "besok jam 2 saya mau datang ke toko, atas nama Budi",
+      p,
+    );
+    const asked = p.asked.find((a) => a.name === "propose_reservation");
+    expect(asked?.args).toEqual({ when: "2026-10-16T14:00", custName: "Budi" });
+    expect(out.reply).toContain("Jadwal datang: 2026-10-16 jam 14:00 WIB");
+    expect(out.reply).not.toMatch(/tahan/i);
+  });
+
+  it("asks for what a visit still needs without promising to hold anything", async () => {
+    const out = await run("mau datang ke toko kak");
+    expect(out.reply).toContain("silakan datang lihat langsung");
+    expect(out.reply).not.toMatch(/tahan/i);
+  });
+
+  it("writes a stock watch on a yes to 'Mau saya kabari?', and nothing on a no", async () => {
+    const p = pos({ watch_stock: { saved: true } });
+    const yes = await run("iya boleh kak", p, {
+      watchOffer: { query: "air m3 16/512", budget: 20_000_000 },
+    });
+    expect(p.asked.find((a) => a.name === "watch_stock")?.args).toEqual({
+      query: "air m3 16/512",
+      budget: 20_000_000,
+    });
+    expect(yes.reply).toContain("Nanti kami kabari di chat ini");
+
+    const q = pos({});
+    const no = await run("ga usah kak", q, {
+      watchOffer: { query: "air m3 16/512" },
+    });
+    expect(q.asked.map((a) => a.name)).not.toContain("watch_stock");
+    expect(no.reply).toContain("gak apa-apa");
+  });
+});
+
+describe("the reply to a visit reminder (2026-10-27)", () => {
+  const reminded = {
+    code: "RV-2026/10-000004",
+    // Saturday 17 October 2026, 14:00 Jakarta.
+    scheduledFor: new Date("2026-10-17T07:00:00.000Z"),
+    unit: "MacBook Air M2 8/256",
+  };
+  const turn = (text: string, p: ReturnType<typeof pos>) =>
+    visitReplyTurn({
+      db: {} as PrismaClient,
+      ctx: input(text, p).ctx,
+      text,
+      capabilities: LIVE,
+      dispatch: p.dispatch,
+      reminded,
+      name: "Budi",
+    });
+
+  it("keeps the visit on a yes and leaves a colleague 'Perlu sambut'", async () => {
+    const out = await turn("iya jadi kak", pos({}));
+    expect(out?.reply).toContain("Kami tunggu kedatangannya Sabtu 14.00");
+    expect(out?.task).toEqual({
+      topic: "visit",
+      kind: "RESERVATION",
+      summary:
+        "Perlu sambut — Budi datang Sabtu 14.00 lihat MacBook Air M2 8/256",
+    });
+    expect(out?.handoff).toBeUndefined();
+  });
+
+  it("closes the visit on a no and asks gently about another day", async () => {
+    const p = pos({ cancel_reservation: { ok: true, code: reminded.code } });
+    const out = await turn("maaf kak ga jadi", p);
+    expect(p.asked[0]).toEqual({
+      name: "cancel_reservation",
+      args: { code: reminded.code },
+    });
+    expect(out?.reply).toContain("enaknya hari apa kak?");
+  });
+
+  it("moves the visit when they name a new time", async () => {
+    const p = pos({
+      reschedule_reservation: {
+        ok: true,
+        code: reminded.code,
+        when: "2026-10-18 11:00",
+      },
+    });
+    const out = await turn("bisa minggu jam 11 aja kak?", p);
+    expect(p.asked[0]?.args).toEqual({
+      when: "2026-10-18T11:00",
+      code: reminded.code,
+    });
+    expect(out?.reply).toContain("Minggu 11.00");
+  });
+
+  it("leaves anything else to the ordinary turn", async () => {
+    expect(await turn("garansinya berapa lama kak?", pos({}))).toBeNull();
   });
 });

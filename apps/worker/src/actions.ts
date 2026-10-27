@@ -20,6 +20,7 @@ import {
   askingPrice,
   parseAskPrice,
   phoneForms,
+  type ChatActionKind,
   type HandoffTopic,
 } from "@nusantara/agent";
 import type { Prisma, PrismaClient } from "@nusantara/db";
@@ -29,14 +30,22 @@ type Tx = Prisma.TransactionClient;
 
 export interface ActionInput {
   readonly from: string;
-  readonly topic: HandoffTopic;
+  /**
+   * A hand-over topic — or, for a job that is not a hand-over (2026-10-27),
+   * its own word with an explicit `kind`: `visit` ("Perlu sambut") and
+   * `restock` ("Perlu kabari"). Those are not hand-over topics on purpose, so
+   * `waitingTasks` does not tell the bot to stop answering while they are open.
+   */
+  readonly topic: HandoffTopic | "visit" | "restock";
+  /** Overrides the kind the topic implies — required for a non-hand-over topic. */
+  readonly kind?: ChatActionKind;
   readonly summary: string;
   /** The customer's words that raised it. */
   readonly customerText: string;
   /** The unit it is about, when the bot named one. */
   readonly serial?: string;
-  /** The newest inbound message it has read. */
-  readonly messageId: string;
+  /** The newest inbound message it has read, when there is one. */
+  readonly messageId?: string;
   readonly now: Date;
 }
 
@@ -45,7 +54,13 @@ export async function upsertChatAction(
   tx: Tx,
   input: ActionInput,
 ): Promise<{ id: string; created: boolean }> {
-  const kind = actionKindOf(input.topic);
+  const kind =
+    input.kind ??
+    (input.topic === "visit"
+      ? "RESERVATION"
+      : input.topic === "restock"
+        ? "STOCK"
+        : actionKindOf(input.topic));
   const [unit, customer] = await Promise.all([
     input.serial
       ? tx.unit.findUnique({
@@ -71,7 +86,7 @@ export async function upsertChatAction(
     topic: input.topic,
     summary: input.summary.slice(0, 1_000),
     customerText: input.customerText.slice(0, 2_000),
-    messageId: input.messageId,
+    ...(input.messageId ? { messageId: input.messageId } : {}),
     updatedAt: input.now,
     ...(customer ? { customerId: customer.id } : {}),
     ...unitFields,

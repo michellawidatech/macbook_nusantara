@@ -74,8 +74,12 @@ import {
   type RulesResult,
   agentApiDispatch,
   lastShownUnits,
+  lastWatchOffer,
+  phoneForms,
   profileKnown,
   runRules,
+  visitReplyTurn,
+  type RemindedVisit,
   costMicros,
   dispatchTool,
   isLead,
@@ -155,8 +159,8 @@ export interface DraftDeps {
   /**
    * What the bot may do for itself when a switch on /chat was never pressed
    * (packages/agent `policy.ts`). Absent is `SHOP_CAPABILITIES` since
-   * 2026-10-27 — the POS is the source of truth: stock, prices and photos on,
-   * bookings off until the owner switches them on.
+   * 2026-10-27 — the POS is the source of truth: stock, prices, photos and
+   * visits on (a bot booking holds no unit since the same day's sales work).
    */
   readonly capabilities?: AgentCapabilities;
   /**
@@ -605,7 +609,15 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       // Newest first, for "what did the bot just say".
       const newestFirst = [...history].reverse();
 
-      const [memory, profile, openProposal, waiting] = await Promise.all([
+      const [
+        memory,
+        profile,
+        openProposal,
+        waiting,
+        known,
+        reminded,
+        visitBooked,
+      ] = await Promise.all([
         db.waThreadMemory.findUnique({
           where: { from },
           select: { summary: true, coveredThroughAt: true, directive: true },
@@ -618,6 +630,10 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // What is waiting for a colleague (2026-10-27): the bot answers the
         // newer messages and must neither answer nor contradict these.
         waitingTasks(db, from),
+        profileKnown(db, from),
+        // A visit the worker reminded them of, not answered since (followUp.ts).
+        remindedVisitFor(db, from),
+        hasOpenVisit(db, from),
       ]);
 
       // Turns older than the window, when the window is full: the few that
@@ -757,13 +773,28 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       const agentModel = anthropic.model;
       const v1Calls: CallUsage[] = [];
       const turnStarted = Date.now();
-      let result: ConverseResult | PipelineResult | RulesResult | null;
-      if (settings.pipeline === "rules") {
+      let result: ConverseResult | PipelineResult | RulesResult | null = null;
+      // The customer's answer to a visit reminder is read by code first,
+      // whichever bot answers (2026-10-27): yes keeps it, no closes it, a new
+      // time moves it. Anything else falls through to the ordinary turn.
+      if (reminded && !route)
+        result = await visitReplyTurn({
+          db,
+          ctx,
+          text: current,
+          capabilities,
+          ...(dispatch ? { dispatch } : {}),
+          reminded,
+          name: known.name,
+        });
+      if (result) {
+        // Answered above.
+      } else if (settings.pipeline === "rules") {
         // Rules and templates first; the single agent only for what no rule
         // answers, and only when there is a credential (rules/run.ts).
-        const [known, lastShown] = await Promise.all([
-          profileKnown(db, from),
+        const [lastShown, watchOffer] = await Promise.all([
           lastShownUnits(db, from, resetAt),
+          lastWatchOffer(db, from, resetAt),
         ]);
         result = await runRules({
           db,
@@ -774,6 +805,8 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           ...(dispatch ? { dispatch } : {}),
           route,
           known,
+          watchOffer,
+          visitBooked,
           // Newest first out of the database: the bot's previous reply.
           lastReply: newestFirst[0]?.reply ?? null,
           proposalOpen: openProposal !== null,
@@ -936,8 +969,16 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                     sources: result.sources,
                     // What this reply showed, for the next message's "yang
                     // kedua" (rules/run.ts, v2context `lastShownUnits`).
-                    ...("shown" in result && result.shown.length > 0
+                    ...("shown" in result &&
+                    result.shown &&
+                    result.shown.length > 0
                       ? { units: [...result.shown] }
+                      : {}),
+                    // "Mau saya kabari kalau sudah ready?" — what the
+                    // customer's yes will watch for (v2context
+                    // `lastWatchOffer`).
+                    ...("watch" in result && result.watch
+                      ? { watch: { ...result.watch } }
                       : {}),
                   },
                 }),
@@ -956,6 +997,19 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
             summary: result.handoff.summary,
             customerText: current,
             ...(result.handoff.serial ? { serial: result.handoff.serial } : {}),
+            messageId: anchor.id,
+            now: answeredAt,
+          });
+        }
+        // A job for a colleague that is not a hand-over — the bot answered,
+        // and somebody still has to be at the door ("Perlu sambut").
+        if ("task" in result && result.task) {
+          await upsertChatAction(tx, {
+            from,
+            topic: result.task.topic,
+            kind: result.task.kind,
+            summary: result.task.summary,
+            customerText: current,
             messageId: anchor.id,
             now: answeredAt,
           });
@@ -1118,6 +1172,79 @@ async function waitingTasks(
       ? [{ topic: r.topic, text: r.customerText?.trim() || null }]
       : [],
   );
+}
+
+/**
+ * The visit the worker reminded this customer of (followUp.ts), when nothing
+ * of theirs has been answered since the reminder — so their next words are
+ * read as the answer to it. Null otherwise, and for a visit no longer open.
+ */
+async function remindedVisitFor(
+  db: PrismaClient,
+  from: string,
+): Promise<RemindedVisit | null> {
+  const sent = await db.outbox.findFirst({
+    where: {
+      kind: "WA_REPLY",
+      AND: [
+        { payload: { path: ["to"], equals: from } },
+        { payload: { path: ["followUp"], equals: "visit_reminder" } },
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true, payload: true },
+  });
+  if (!sent) return null;
+  const reservationId = (sent.payload as { reservationId?: unknown })
+    .reservationId;
+  if (typeof reservationId !== "string") return null;
+  const answered = await db.waMessage.findFirst({
+    where: { from, direction: "IN", answeredAt: { gt: sent.createdAt } },
+    select: { id: true },
+  });
+  if (answered) return null;
+  const visit = await db.reservation.findUnique({
+    where: { id: reservationId },
+    select: {
+      code: true,
+      status: true,
+      scheduledFor: true,
+      custName: true,
+      proposal: {
+        select: {
+          items: {
+            orderBy: { sortOrder: "asc" },
+            take: 1,
+            select: {
+              unit: {
+                select: { sku: { select: { name: true, variantLabel: true } } },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (!visit || visit.status !== "TERJADWAL" || !visit.scheduledFor)
+    return null;
+  const sku = visit.proposal?.items[0]?.unit.sku;
+  return {
+    code: visit.code,
+    scheduledFor: visit.scheduledFor,
+    unit: sku ? [sku.name, sku.variantLabel].filter(Boolean).join(" ") : null,
+    // A visit booked with no name carries the phone; that is not a name.
+    custName:
+      visit.custName && !visit.custName.startsWith("+") ? visit.custName : null,
+  };
+}
+
+/** Whether this customer already has a visit (or an older booking) open. */
+async function hasOpenVisit(db: PrismaClient, from: string): Promise<boolean> {
+  const open = await db.reservation.findFirst({
+    where: { phone: { in: phoneForms(from) }, status: "TERJADWAL" },
+    select: { id: true },
+  });
+  return open !== null;
 }
 
 /**

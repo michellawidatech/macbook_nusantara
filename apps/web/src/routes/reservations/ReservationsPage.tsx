@@ -60,6 +60,7 @@ import {
   Typography,
 } from "antd";
 import {
+  CheckOutlined,
   PlusOutlined,
   ShoppingCartOutlined,
   StopOutlined,
@@ -88,6 +89,13 @@ import { COLUMN } from "../../theme/tokens";
 /** Machines still waiting to be collected on this hold. */
 const heldOf = (r: Hold): readonly HoldItem[] =>
   r.items.filter((i) => i.state === "HELD");
+
+/**
+ * A visit — the bot's "janji datang" (2026-10-27): a time and a customer and
+ * no units, because the bot holds nothing. Its status is somebody's decision
+ * (came, cancelled), not a fact about a unit.
+ */
+const isVisitRow = (r: Hold) => r.items.length === 0;
 
 /** How far along a hold is, for the one line a table cell can afford. */
 const holdProgress = (r: Hold) => ({
@@ -429,6 +437,36 @@ export function ReservationsPage() {
     );
   };
 
+  /**
+   * Close a visit: the customer came, or is not coming. One `mutate` on the
+   * header alone — a visit holds no unit, so there is no ledger row to write.
+   */
+  const closeVisit = (r: Hold, status: "DONE" | "CANCELLED") => {
+    mutate((d) => {
+      const visit = d.reservations.find((x) => x.id === r.id);
+      if (visit && visit.items.length === 0) visit.status = status;
+    });
+    message.success(
+      status === "DONE"
+        ? t("reservations.visitCame", "Visit marked as came.")
+        : t("reservations.visitCancelled", "Visit cancelled."),
+    );
+  };
+
+  const cancelVisit = (r: Hold) =>
+    modal.confirm({
+      title: t("reservations.cancelVisit", "Cancel this visit?"),
+      content: t(
+        "reservations.cancelVisitBody",
+        "{{name}} is no longer expected. Nothing was held, so no unit moves.",
+        { name: r.customerName },
+      ),
+      okText: t("reservations.cancelVisitOk", "Cancel the visit"),
+      okButtonProps: { danger: true },
+      cancelText: t("reservations.keepVisit", "Keep it"),
+      onOk: () => closeVisit(r, "CANCELLED"),
+    });
+
   /** Open the units dialog for one hold, with nothing assumed about it. */
   const manage = (r: Hold) => {
     setPicked((p) => ({ ...p, [r.id]: [] }));
@@ -606,13 +644,18 @@ export function ReservationsPage() {
                 searchable: true,
                 searchValue: (r) => r.items.map((i) => i.productName).join(" "),
                 sortValue: (r) => r.items[0]?.productName ?? "",
-                render: (_, r) => (
-                  <Flex vertical gap={2}>
-                    {r.items.map((i) => (
-                      <span key={i.id}>{i.productName}</span>
-                    ))}
-                  </Flex>
-                ),
+                render: (_, r) =>
+                  isVisitRow(r) ? (
+                    <Tag color="cyan" style={{ marginInline: 0 }}>
+                      {t("reservations.visit", "Visit")}
+                    </Tag>
+                  ) : (
+                    <Flex vertical gap={2}>
+                      {r.items.map((i) => (
+                        <span key={i.id}>{i.productName}</span>
+                      ))}
+                    </Flex>
+                  ),
               },
               {
                 // Deliberately a second column rather than a line under the
@@ -690,6 +733,38 @@ export function ReservationsPage() {
                 // One small button, "Units" (2026-09-28: the least it needs).
                 width: 112,
                 render: (_, r) => {
+                  // A visit has nothing to sell from and nothing to release:
+                  // the customer came, or is not coming (2026-10-27).
+                  if (isVisitRow(r))
+                    return r.status === "TERJADWAL" ? (
+                      <Flex gap={8} wrap>
+                        <Button
+                          type="primary"
+                          size="small"
+                          icon={<CheckOutlined />}
+                          aria-label={t(
+                            "reservations.cameAria",
+                            "{{name}} came for {{code}}",
+                            { name: r.customerName, code: r.code },
+                          )}
+                          onClick={() => closeVisit(r, "DONE")}
+                        >
+                          {t("reservations.came", "Came")}
+                        </Button>
+                        <Button
+                          size="small"
+                          danger
+                          aria-label={t(
+                            "reservations.cancelVisitAria",
+                            "Cancel the visit {{code}}",
+                            { code: r.code },
+                          )}
+                          onClick={() => cancelVisit(r)}
+                        >
+                          {t("reservations.cancel", "Cancel")}
+                        </Button>
+                      </Flex>
+                    ) : null;
                   const held = heldOf(r).flatMap((i) =>
                     i.serial ? [i.serial] : [],
                   );

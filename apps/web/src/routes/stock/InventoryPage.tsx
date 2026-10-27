@@ -634,6 +634,10 @@ export function InventoryPage() {
               const mine = rsv.items.filter((it) => it.serial === serial);
               if (mine.length === 0) continue;
               rsv.items = rsv.items.filter((it) => it.serial !== serial);
+              // A hold with nothing left on it is cancelled here, by name:
+              // an item-less reservation is otherwise a VISIT (2026-10-27),
+              // whose status `reprojectHolds` leaves alone.
+              if (rsv.items.length === 0) rsv.status = "CANCELLED";
               released += mine.length;
             }
             reprojectHolds(d);

@@ -98,10 +98,11 @@ export function BotSwitches() {
     },
     {
       key: "reserve",
-      label: t("chatSwitch.reservations", "Reservations"),
+      // A bot booking is a visit and holds no unit (2026-10-27).
+      label: t("chatSwitch.reservations", "Visits"),
       hint: t(
         "chatSwitch.reservationsHint",
-        "Make, check, move and cancel the customer's own booking.",
+        "Book, check, move and cancel the customer's own visit. No unit is held.",
       ),
     },
     {

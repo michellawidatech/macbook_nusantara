@@ -120,6 +120,11 @@ export interface SentItem {
   sentBy?: string | null;
   /** The message it answered. */
   inReplyTo: string | null;
+  /**
+   * The worker's one polite follow-up (2026-10-27) — a visit reminder or a
+   * quiet lead's nudge. Absent on everything else.
+   */
+  followUp?: "visit_reminder" | "lead_nudge";
   /** Unsent for everyone. */
   retractedAt: string | null;
   editedAt: string | null;
@@ -180,6 +185,8 @@ export interface InboxConversation {
   lead: LeadState;
   /** The customer's open holds. */
   reservations: InboxReservation[];
+  /** What they asked to hear about when it is back in stock (2026-10-27). */
+  watches?: StockWatch[];
   /** Every text and photo sent to this number, oldest first. */
   sent?: SentItem[];
 }
@@ -200,7 +207,32 @@ export interface InboxReservation {
 }
 
 export type ChatActionKind =
-  "NEGOTIATION" | "PRICE" | "STOCK" | "RESERVATION" | "PHOTOS" | "OTHER";
+  | "NEGOTIATION"
+  | "PRICE"
+  | "STOCK"
+  | "RESERVATION"
+  | "PHOTOS"
+  | "OTHER"
+  /** Ready to buy, wants a unit kept or asks how to pay (2026-10-27). */
+  | "CLOSING";
+
+/**
+ * "Tell me when it's in stock" (2026-10-27). The bot writes one when the
+ * customer says yes to being told; staff only close it. Money is whole
+ * rupiah as a string.
+ */
+export interface StockWatch {
+  id: string;
+  /** What they asked for, in the shop's words. */
+  query: string;
+  /** The product or variant the words named, when exactly one. */
+  label: string | null;
+  budget: string | null;
+  createdAt: string;
+  /** When the worker left a colleague the task to tell them. */
+  notifiedAt: string | null;
+  closedAt: string | null;
+}
 
 /**
  * The task a hand-over left for a person (owner ask 2026-09-29) — enough to
@@ -446,4 +478,11 @@ export const editSent = (phone: string, outboxId: string, text: string) =>
   api<SentItem>(
     `/api/inbox/${encodeURIComponent(phone)}/sent/${encodeURIComponent(outboxId)}/edit`,
     { method: "POST", body: { text } },
+  );
+
+/** Close a stock watch — the customer was told, or bought elsewhere. */
+export const closeStockWatch = (phone: string, id: string) =>
+  api<{ watches: StockWatch[] }>(
+    `/api/inbox/${encodeURIComponent(phone)}/watches/${encodeURIComponent(id)}/close`,
+    { method: "POST" },
   );

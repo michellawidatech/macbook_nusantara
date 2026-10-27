@@ -120,11 +120,12 @@ describe("the chatbot's switches", () => {
       .get("/api/chat/capabilities")
       .set("Cookie", staffCookie);
     expect(res.status).toBe(200);
-    // Stock, prices and photos on; bookings wait for the owner's switch.
+    // Everything on: a bot booking is a visit that holds nothing, so
+    // bookings no longer wait for the owner's switch (2026-10-27).
     expect(res.body.set).toEqual({
       stock: true,
       price: true,
-      reserve: false,
+      reserve: true,
       photos: true,
     });
   });

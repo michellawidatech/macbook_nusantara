@@ -38,6 +38,7 @@ import {
   listEvaluations,
   type Evaluation,
 } from "../../lib/chatApi.js";
+import { FunnelCard } from "./FunnelCard.js";
 import {
   EVAL_STATUS_COLOR,
   agentLabel,
@@ -305,61 +306,65 @@ export function EvaluationPanel({ onOpenChat }: EvaluationPanelProps) {
   ];
 
   return (
-    <Card>
-      <ProTable<Evaluation>
-        rowKey="id"
-        loading={loading}
-        dataSource={rows}
-        columns={columns}
-        defaultFilters={{
-          rating: [ratingLabel(t, "BAD")],
-          status: [evalStatusLabel(t, "OPEN")],
-        }}
-        searchPlaceholder={t(
-          "chatEval.search",
-          "Search a number, a message or a note",
-        )}
-        extra={
-          <Button icon={<ReloadOutlined />} onClick={() => void load()}>
-            {t("chatEval.reload", "Reload")}
-          </Button>
-        }
-      />
+    <Flex vertical gap={16}>
+      {/* Where the chats go, before what the bot said in them (2026-10-27). */}
+      <FunnelCard />
+      <Card>
+        <ProTable<Evaluation>
+          rowKey="id"
+          loading={loading}
+          dataSource={rows}
+          columns={columns}
+          defaultFilters={{
+            rating: [ratingLabel(t, "BAD")],
+            status: [evalStatusLabel(t, "OPEN")],
+          }}
+          searchPlaceholder={t(
+            "chatEval.search",
+            "Search a number, a message or a note",
+          )}
+          extra={
+            <Button icon={<ReloadOutlined />} onClick={() => void load()}>
+              {t("chatEval.reload", "Reload")}
+            </Button>
+          }
+        />
 
-      <Modal
-        open={applying !== null}
-        title={t("chatEval.applyTitle", "Apply the better answer")}
-        okText={t("chatEval.apply", "Apply")}
-        okButtonProps={{
-          loading: busy !== null,
-          disabled: !corrected.trim(),
-        }}
-        onOk={() => void apply()}
-        onCancel={() => setApplying(null)}
-        destroyOnHidden
-      >
-        <Flex vertical gap={10}>
-          <div>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {t("chatEval.whatTheBotSaid", "What the bot said")}
-            </Typography.Text>
-            <div style={{ whiteSpace: "pre-wrap" }}>
-              {applying?.reply ?? fmtNone()}
+        <Modal
+          open={applying !== null}
+          title={t("chatEval.applyTitle", "Apply the better answer")}
+          okText={t("chatEval.apply", "Apply")}
+          okButtonProps={{
+            loading: busy !== null,
+            disabled: !corrected.trim(),
+          }}
+          onOk={() => void apply()}
+          onCancel={() => setApplying(null)}
+          destroyOnHidden
+        >
+          <Flex vertical gap={10}>
+            <div>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {t("chatEval.whatTheBotSaid", "What the bot said")}
+              </Typography.Text>
+              <div style={{ whiteSpace: "pre-wrap" }}>
+                {applying?.reply ?? fmtNone()}
+              </div>
             </div>
-          </div>
-          <div>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {t("chatEval.betterAnswerLabel", "Better answer")}
-            </Typography.Text>
-            <Input.TextArea
-              aria-label={t("chatEval.betterAnswerLabel", "Better answer")}
-              autoSize={{ minRows: 3, maxRows: 10 }}
-              value={corrected}
-              onChange={(e) => setCorrected(e.target.value)}
-            />
-          </div>
-        </Flex>
-      </Modal>
-    </Card>
+            <div>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {t("chatEval.betterAnswerLabel", "Better answer")}
+              </Typography.Text>
+              <Input.TextArea
+                aria-label={t("chatEval.betterAnswerLabel", "Better answer")}
+                autoSize={{ minRows: 3, maxRows: 10 }}
+                value={corrected}
+                onChange={(e) => setCorrected(e.target.value)}
+              />
+            </div>
+          </Flex>
+        </Modal>
+      </Card>
+    </Flex>
   );
 }

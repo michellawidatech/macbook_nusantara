@@ -215,10 +215,9 @@ export interface WorkerConfig {
    * — `AGENT_CAPABILITIES`.
    *
    * Since 2026-10-27 the POS is the bot's source of truth: unset reads as
-   * stock, price and photos on and bookings off (`SHOP_CAPABILITIES`). `live`
-   * turns bookings on too; `parallel` is the 2026-09-18 design, for a
-   * database whose shelf is not the shop's. A switch the owner pressed wins
-   * over all three.
+   * every switch on (`SHOP_CAPABILITIES`) — a bot booking is a visit that
+   * holds no unit. `parallel` is the 2026-09-18 design, for a database whose
+   * shelf is not the shop's. A switch the owner pressed wins over all three.
    */
   readonly capabilities: AgentCapabilities;
   /**

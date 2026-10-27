@@ -42,6 +42,12 @@ export const TASK_NEED = {
   reply: "Perlu dibalas",
   template: "Perlu dibalas dengan template",
   tellBooking: "Perlu kabari booking",
+  /** Ready to buy, a keep/DP, how to pay (2026-10-27). */
+  closing: "Perlu closing",
+  /** A reminded visit the customer confirmed: be there to meet them. */
+  welcome: "Perlu sambut",
+  /** A unit somebody asked to be told about is on the shelf. */
+  notify: "Perlu kabari",
 } as const;
 export type TaskNeed = keyof typeof TASK_NEED;
 
@@ -95,6 +101,8 @@ export function needOfTopic(topic: HandoffTopic): TaskNeed {
       return "media";
     case "photos":
       return "photos";
+    case "closing":
+      return "closing";
     default:
       return "reply";
   }
@@ -207,4 +215,83 @@ export function saidColleagueWillReply(
   return /\b(admin|tim)\s+kami\b|\bcolleague\b|\bour team\b/i.test(
     lastReply ?? "",
   );
+}
+
+/** "Rp9.500.000" → "Rp 9,5jt": how the shop writes a price on a task line. */
+export function shortRupiah(value: string | number | bigint | null): string {
+  const n =
+    typeof value === "string"
+      ? Number(value.replace(/\D/g, ""))
+      : Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (n >= 1_000_000) {
+    const jt = Math.round(n / 100_000) / 10;
+    return `Rp ${String(jt).replace(".", ",")}jt`;
+  }
+  return `Rp ${Math.round(n / 1_000)}rb`;
+}
+
+/**
+ * The closing task (owner, 2026-10-27): who, what they want to do, the unit
+ * and its price, and when — `Perlu closing — Budi siap ambil Air M2 8/256
+ * Rp 9,5jt, mau COD Sabtu` — with the customer's words under it.
+ */
+export function closingTask(c: {
+  readonly name: string | null;
+  /** `keep` asked to put it aside / a DP; `buy` is ready to take it. */
+  readonly wants: "keep" | "buy";
+  readonly unit: string | null;
+  readonly price?: string | number | bigint | null;
+  /** "mau COD Sabtu" — what else they said about how, already short. */
+  readonly how?: string | null;
+  readonly text: string;
+}): string {
+  const who = c.name?.trim() || "Pelanggan";
+  const verb = c.wants === "keep" ? "minta unit di-keep (DP)" : "siap ambil";
+  const price = c.price != null ? shortRupiah(c.price) : "";
+  const detail = [
+    `${who} ${verb}`,
+    c.unit?.trim() ? c.unit.trim() : null,
+    price || null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return taskNote(
+    "closing",
+    c.how?.trim() ? `${detail}, ${c.how.trim()}` : detail,
+    c.text,
+  );
+}
+
+/** `Perlu sambut — Budi datang Sabtu 14.00 lihat Air M2`. */
+export function welcomeTask(c: {
+  readonly name: string | null;
+  /** "Sabtu 14.00" */
+  readonly when: string;
+  readonly unit: string | null;
+}): string {
+  const who = c.name?.trim() || "Pelanggan";
+  return taskNote(
+    "welcome",
+    `${who} datang ${c.when}${c.unit?.trim() ? ` lihat ${c.unit.trim()}` : ""}`,
+  );
+}
+
+/** `Perlu kabari — Air M3 16/512 sudah ready, Budi minta dikabari`. */
+export function notifyTask(c: {
+  readonly name: string | null;
+  readonly unit: string;
+}): string {
+  const who = c.name?.trim() || "pelanggan";
+  return taskNote("notify", `${c.unit} sudah ready, ${who} minta dikabari`);
+}
+
+const HARI = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+
+/** A visit as the shop writes it — "Sabtu 14.00", Jakarta time. */
+export function jakartaVisitLabel(at: Date): string {
+  const local = new Date(at.getTime() + 7 * 3_600_000);
+  const hh = String(local.getUTCHours()).padStart(2, "0");
+  const mm = String(local.getUTCMinutes()).padStart(2, "0");
+  return `${HARI[local.getUTCDay()]} ${hh}.${mm}`;
 }

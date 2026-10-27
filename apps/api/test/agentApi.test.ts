@@ -267,11 +267,17 @@ describe("reading the POS", () => {
 });
 
 describe("a customer's own data, and only theirs", () => {
+  // A visit since 2026-10-27: it holds nothing.
   async function book(who: string, serial: string, body: object = {}) {
     return request(agentApp)
-      .post("/api/agent/v1/me/reservations")
+      .post("/api/agent/v1/me/visits")
       .set("authorization", token(who))
-      .send({ when: TOMORROW_3PM, serial, custName: "Alice", ...body });
+      .send({
+        when: TOMORROW_3PM,
+        serials: serial,
+        custName: "Alice",
+        ...body,
+      });
   }
 
   it("books under the token's customer, whatever the body says", async () => {
@@ -318,9 +324,9 @@ describe("a customer's own data, and only theirs", () => {
 
   it("refuses a booking from a caller that may not write", async () => {
     await request(agentApp)
-      .post("/api/agent/v1/me/reservations")
+      .post("/api/agent/v1/me/visits")
       .set("authorization", token(ALICE, { writes: false }))
-      .send({ when: TOMORROW_3PM, serial: "SERA" })
+      .send({ when: TOMORROW_3PM, serials: "SERA" })
       .expect(403);
     expect(await holdsFor(ALICE)).toHaveLength(0);
   });
@@ -328,8 +334,10 @@ describe("a customer's own data, and only theirs", () => {
   it("books once per turn, however often the call is retried", async () => {
     const first = await book(ALICE, "SERA");
     const again = await book(ALICE, "SERB");
-    expect(first.body).toMatchObject({ ok: true });
+    expect(first.body).toMatchObject({ ok: true, visit: true });
     expect(again.body).not.toMatchObject({ ok: true });
     expect(await holdsFor(ALICE)).toHaveLength(1);
+    // A visit: neither unit left the shelf.
+    expect(await db.unit.count({ where: { status: "DIRESERVASI" } })).toBe(0);
   });
 });

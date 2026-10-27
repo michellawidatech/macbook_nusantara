@@ -15,6 +15,12 @@ export interface ShownUnit {
   readonly variant?: string;
   readonly grade?: string;
   readonly price?: string | null;
+  /** Battery health %, on a 2021-or-later unit. */
+  readonly batteryHealth?: number;
+  /** Cycle count, on an older unit. */
+  readonly cycleCount?: number;
+  /** Sellable units of this variant — the only source of "tinggal 1". */
+  readonly left?: number;
 }
 
 /** A counted accessory as the stock lookup returns it — no serial. */
@@ -30,12 +36,40 @@ const GRADE: Record<string, { id: string; en: string }> = {
   C: { id: "grade C", en: "grade C" },
 };
 
+/** "baterai 91%" / "312 siklus" — whichever the unit's era records. */
+function batteryText(u: ShownUnit, lang: Lang): string | null {
+  if (typeof u.batteryHealth === "number")
+    return lang === "en"
+      ? `battery ${u.batteryHealth}%`
+      : `baterai ${u.batteryHealth}%`;
+  if (typeof u.cycleCount === "number")
+    return lang === "en"
+      ? `battery ${u.cycleCount} cycles`
+      : `baterai ${u.cycleCount} siklus`;
+  return null;
+}
+
+/**
+ * One unit, the way the shop says it: name, grade, battery, price — and,
+ * only when the shelf's own count says so, that it is the last one (owner,
+ * 2026-10-27: honest urgency, never invented).
+ */
 export function unitLine(u: ShownUnit, lang: Lang, n?: number): string {
   const name = [u.model, u.variant].filter(Boolean).join(" ");
   const grade = u.grade ? (GRADE[u.grade]?.[lang] ?? `grade ${u.grade}`) : null;
+  const battery = batteryText(u, lang);
   const price = u.price ? u.price : null;
-  return `${n !== undefined ? `${n}. ` : ""}${name}${grade ? `, ${grade}` : ""}${price ? ` — ${price}` : ""}`;
+  const last =
+    u.left === 1
+      ? lang === "en"
+        ? " (only 1 left)"
+        : " (tinggal 1 unit kak)"
+      : "";
+  return `${n !== undefined ? `${n}. ` : ""}${name}${grade ? `, ${grade}` : ""}${battery ? `, ${battery}` : ""}${price ? ` — ${price}` : ""}${last}`;
 }
+
+/** The next step a reply ends on — one small yes-question (2026-10-27). */
+export type NextStep = "photos" | "visit" | "process";
 
 export const reply = {
   greeting(lang: Lang): string {
@@ -85,6 +119,101 @@ export const reply = {
         ? `\nMasih ada ${more} unit lain ya kak, bisa saya pilihkan sesuai kebutuhan.`
         : "")
     );
+  },
+
+  /**
+   * Three, not a list (owner, 2026-10-27): the best fit, a cheaper one and
+   * ONE step up — each a unit the lookup returned, with its price, grade and
+   * battery. Any of the last two may be absent.
+   */
+  recommend(
+    r: {
+      readonly best: ShownUnit;
+      readonly cheaper: ShownUnit | null;
+      readonly stepUp: ShownUnit | null;
+    },
+    lang: Lang,
+  ): string {
+    const lines =
+      lang === "en"
+        ? [
+            `Yes 😊 The best fit for you:\n${unitLine(r.best, lang)}`,
+            r.cheaper ? `To spend less: ${unitLine(r.cheaper, lang)}` : null,
+            r.stepUp
+              ? `For a bit more room: ${unitLine(r.stepUp, lang)}`
+              : null,
+          ]
+        : [
+            `Ada kak 😊 Yang paling pas buat kakak:\n${unitLine(r.best, lang)}`,
+            r.cheaper
+              ? `Kalau mau lebih hemat: ${unitLine(r.cheaper, lang)}`
+              : null,
+            r.stepUp
+              ? `Kalau mau lebih lega: ${unitLine(r.stepUp, lang)}`
+              : null,
+          ];
+    return lines.filter(Boolean).join("\n");
+  },
+
+  /**
+   * The one small yes-question every recommendation ends on (2026-10-27):
+   * see it, come and see it, or let us get it moving.
+   */
+  nextStep(step: NextStep, lang: Lang): string {
+    switch (step) {
+      case "photos":
+        return lang === "en"
+          ? "Would you like to see photos?"
+          : "Mau lihat fotonya kak?";
+      case "visit":
+        return lang === "en"
+          ? "Would you like to come and see it in person? When suits you?"
+          : "Mau datang lihat langsung, kapan enaknya kak?";
+      default:
+        return lang === "en"
+          ? "Shall I help you get it processed?"
+          : "Mau saya bantu proses kak?";
+    }
+  },
+
+  /** Out of stock: offer to tell them when it is in (2026-10-27). */
+  offerWatch(lang: Lang): string {
+    return lang === "en"
+      ? "Shall I let you know when it's in?"
+      : "Mau saya kabari kalau sudah ready kak?";
+  },
+
+  watchSaved(lang: Lang): string {
+    return lang === "en"
+      ? "Will do 😊 We'll message you right here once it's in."
+      : "Siap kak 😊 Nanti kami kabari di chat ini kalau sudah ready ya.";
+  },
+
+  /** They said yes to the reminder: the visit stands. */
+  visitKept(when: string, lang: Lang): string {
+    return lang === "en"
+      ? `Great 😊 See you ${when}!`
+      : `Siap kak 😊 Kami tunggu kedatangannya ${when} ya 🙏`;
+  },
+
+  /** They cannot come: the visit is closed, and another day is asked for. */
+  visitCancelled(lang: Lang): string {
+    return lang === "en"
+      ? "No problem 😊 Would another day suit you better?"
+      : "Siap kak, gak apa-apa 😊 Kalau mau datang di hari lain, enaknya hari apa kak?";
+  },
+
+  visitMoved(when: string, lang: Lang): string {
+    return lang === "en"
+      ? `Done 😊 Your visit is moved to ${when}. See you then!`
+      : `Siap kak 😊 Jadwal datangnya kami pindah ke ${when} ya. Kami tunggu 🙏`;
+  },
+
+  /** Out of stock, said plainly, with no question after it. */
+  outOfStock(lang: Lang): string {
+    return lang === "en"
+      ? "Sorry, we don't have that one right now 🙏"
+      : "Mohon maaf kak, untuk unit itu sedang kosong 🙏";
   },
 
   noStock(lang: Lang): string {
@@ -155,13 +284,13 @@ export const reply = {
       if (missing.name) need.push("the name for the booking");
       if (missing.when)
         need.push("the day and time you'll come (we're open 10.00–20.00)");
-      return `Sure, we can hold it for your visit 😊 Please tell me ${need.join(", ")}.`;
+      return `Sure, you're welcome to come and see it 😊 Please tell me ${need.join(", ")}.`;
     }
     if (missing.unit) need.push("unit yang mau dilihat");
     if (missing.name) need.push("nama untuk bookingnya");
     if (missing.when)
       need.push("hari dan jam datangnya (toko buka 10.00–20.00 WIB)");
-    return `Bisa kak, kami tahankan unitnya untuk kakak lihat langsung 😊 Boleh info ${need.join(", ")}?`;
+    return `Bisa kak, silakan datang lihat langsung ke toko 😊 Boleh info ${need.join(", ")}?`;
   },
 
   proposal(
@@ -176,14 +305,15 @@ export const reply = {
       unitLine(u, lang, p.units.length > 1 ? i + 1 : undefined),
     );
     const [date, time] = p.when.split(" ");
+    const see = units.length ? `${units.join("\n")}\n` : "";
     if (lang === "en")
       return (
-        `Let me confirm 😊\n${units.join("\n")}\nVisit: ${date} at ${time}\nName: ${p.custName}\n` +
+        `Let me confirm 😊\n${see}Visit: ${date} at ${time}\nName: ${p.custName}\n` +
         "Is that right? Reply yes and I'll book it."
       );
     return (
-      `Saya konfirmasi dulu ya kak 😊\n${units.join("\n")}\nJadwal datang: ${date} jam ${time} WIB\n` +
-      `Atas nama: ${p.custName}\nSudah betul kak? Balas "iya" nanti langsung saya bookingkan.`
+      `Saya konfirmasi dulu ya kak 😊\n${see}Jadwal datang: ${date} jam ${time} WIB\n` +
+      `Atas nama: ${p.custName}\nSudah betul kak? Balas "iya" nanti langsung saya catat.`
     );
   },
 
@@ -196,9 +326,9 @@ export const reply = {
     lang: Lang,
   ): string {
     return lang === "en"
-      ? `Booked 😊 Your booking code is ${b.code}${b.when ? ` for ${b.when}` : ""}. ` +
+      ? `Booked 😊 Your visit code is ${b.code}${b.when ? ` for ${b.when}` : ""}. ` +
           `See you at the shop!`
-      : `Sudah kami bookingkan ya kak 😊 Kode booking: ${b.code}${b.when ? `, jadwal ${b.when} WIB` : ""}. ` +
+      : `Sudah kami catat ya kak 😊 Kode booking: ${b.code}${b.when ? `, jadwal datang ${b.when} WIB` : ""}. ` +
           "Sampai ketemu di toko ya kak 🙏";
   },
 
@@ -232,9 +362,9 @@ export const reply = {
     lang: Lang,
     lastReply: string | null = null,
   ): string | null {
-    const key = (["usage", "preferences", "budget", "apps"] as const).find(
-      (k) => lacks[k],
-    );
+    // Briefly (owner, 2026-10-27): usage, then budget — and nothing once
+    // there is enough to recommend, which the caller decides.
+    const key = (["usage", "budget"] as const).find((k) => lacks[k]);
     if (!key) return null;
     const [first, second] = QUESTIONS[key][lang];
     return lastReply?.includes(first) ? second : first;
@@ -270,6 +400,23 @@ export const reply = {
     return lang === "en"
       ? "If you'd like to see it in person, I can book a visit — just send your name and a time 😊"
       : "Kalau mau lihat langsung unitnya di toko, bisa saya bookingkan kak — cukup kabari nama dan jam datangnya ya 😊";
+  },
+};
+
+/**
+ * The two follow-ups the worker sends by itself, once (owner's wording,
+ * 2026-10-27). `{unit}` is the unit or model discussed, "unitnya" if none.
+ */
+export const followUps = {
+  visitReminder(unit: string | null): string {
+    return `Halo kak 😊 apakah kakak jadi datang ke toko kami untuk lihat ${unit?.trim() || "unitnya"}? Kami tunggu ya kedatangannya 🙏`;
+  },
+  leadNudge(unit: string): string {
+    return `Halo kak 😊 ${unit} yang kemarin kakak tanyakan masih ready ya. Kalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak 🙏`;
+  },
+  /** The unit they asked about is gone (never why); the closest in stock, once. */
+  leadNudgeAlternative(unit: string, alternative: string): string {
+    return `Halo kak 😊 ${unit} yang kemarin kakak tanyakan sedang kosong, tapi ada ${alternative} yang mirip dan ready ya. Kalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak 🙏`;
   },
 };
 

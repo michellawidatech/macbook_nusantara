@@ -36,6 +36,8 @@ export function actionKindLabel(t: TFunction, kind: ChatActionKind): string {
       return t("chatAction.reservation", "Booking");
     case "PHOTOS":
       return t("chatAction.photos", "Photos");
+    case "CLOSING":
+      return t("chatAction.closing", "Closing");
     default:
       return t("chatAction.other", "Needs you");
   }
@@ -48,6 +50,7 @@ const KIND_COLOR: Record<ChatActionKind, string> = {
   RESERVATION: "cyan",
   PHOTOS: "purple",
   OTHER: "volcano",
+  CLOSING: "green",
 };
 
 export function ActionKindTag({ kind }: { kind: ChatActionKind }) {

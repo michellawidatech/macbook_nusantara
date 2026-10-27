@@ -46,7 +46,9 @@ export const AGENT_API_ROUTES: readonly AgentRoute[] = [
   { tool: "remember_customer", method: "PATCH", path: "/me/profile" },
   { tool: "check_order", method: "GET", path: "/me/orders/:code" },
   { tool: "check_reservation", method: "GET", path: "/me/reservations" },
-  { tool: "create_reservation", method: "POST", path: "/me/reservations" },
+  // A visit, which holds nothing (2026-10-27). The hold this route used to
+  // make — create_reservation — is offered to nobody any more.
+  { tool: "book_visit", method: "POST", path: "/me/visits" },
   { tool: "reschedule_reservation", method: "PATCH", path: "/me/reservations" },
   { tool: "cancel_reservation", method: "DELETE", path: "/me/reservations" },
   // Chatbot v2 step 5. A proposal holds nothing; the confirm is called by

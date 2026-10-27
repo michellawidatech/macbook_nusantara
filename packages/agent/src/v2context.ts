@@ -183,6 +183,8 @@ export async function profileKnown(
   preferences: boolean;
   budget: boolean;
   apps: boolean;
+  budgetMin: number | null;
+  budgetMax: number | null;
 }> {
   const p = await db.customerProfile.findUnique({
     where: { from },
@@ -203,7 +205,13 @@ export async function profileKnown(
       preferences: false,
       budget: false,
       apps: false,
+      budgetMin: null,
+      budgetMax: null,
     };
+  const money = (v: bigint | null) =>
+    v !== null && v > 0n && v < BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number(v)
+      : null;
   return {
     name: p.name?.trim() || null,
     usage: Boolean(p.useCase) || p.facts.some((f) => f.kind === "USAGE"),
@@ -211,6 +219,40 @@ export async function profileKnown(
       Boolean(p.preference) || p.facts.some((f) => f.kind === "PREFERENCE"),
     budget: p.budget !== null || p.budgetMin !== null || p.budgetMax !== null,
     apps: p.facts.some((f) => f.kind === "APP"),
+    budgetMin: money(p.budgetMin),
+    budgetMax: money(p.budgetMax ?? p.budget),
+  };
+}
+
+/**
+ * What the bot's last reply offered to watch for — "Mau saya kabari kalau
+ * sudah ready kak?" (`entities.watch` on the answered row, 2026-10-27) — so
+ * the customer's yes can write it. Null when the last reply offered nothing.
+ */
+export async function lastWatchOffer(
+  db: PrismaClient,
+  from: string,
+  after: Date | null,
+): Promise<{ query: string; budget?: number } | null> {
+  const row = await db.waMessage.findFirst({
+    where: {
+      from,
+      direction: "IN",
+      replyText: { not: null },
+      ...(after ? { answeredAt: { gt: after } } : {}),
+    },
+    orderBy: [{ answeredAt: "desc" }, { ts: "desc" }],
+    select: { entities: true, answeredByAgent: true },
+  });
+  if (!row?.answeredByAgent) return null;
+  const w = (row.entities as { watch?: unknown } | null)?.watch as
+    { query?: unknown; budget?: unknown } | undefined;
+  if (!w || typeof w.query !== "string" || !w.query.trim()) return null;
+  return {
+    query: w.query.slice(0, 120),
+    ...(typeof w.budget === "number" && w.budget > 0
+      ? { budget: w.budget }
+      : {}),
   };
 }
 

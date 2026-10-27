@@ -17,6 +17,16 @@
  *
  * Returns a `PipelineResult`, so the worker commits it, traces it and reads
  * the lead off it exactly as it does the three-agent pipeline's.
+ *
+ * ## Selling, not holding (owner, 2026-10-27)
+ *
+ * *"The goal of this chatbot is to convert the casual chatter to a lead and
+ * even customer."* So the bot asks briefly (usage, then budget, and stops once
+ * it can recommend), recommends three — the best fit, a cheaper one and one
+ * step up — with the shelf's own "tinggal 1 unit" when it is true, ends every
+ * recommendation on one small yes-question (photos → a visit → "mau saya bantu
+ * proses?"), books a VISIT rather than holding stock, offers to say when an
+ * out-of-stock model is back, and hands a buyer to a person as a CLOSING task.
  */
 
 import type { PrismaClient } from "@nusantara/db";
@@ -44,18 +54,24 @@ import {
   reply,
   unitLine,
   type Lang,
+  type NextStep,
   type ShownAccessory,
   type ShownUnit,
 } from "./replies.js";
 import {
   TASK_REASON,
+  closingTask,
+  jakartaVisitLabel,
   routedTask,
   saidColleagueWillReply,
   taskNote,
   unitSubject,
+  welcomeTask,
   type WaitingTask,
 } from "../tasks.js";
 import {
+  saysNo,
+  saysYes,
   understand,
   type RuleIntent,
   type Understanding,
@@ -78,7 +94,17 @@ export interface RulesInput {
     readonly preferences: boolean;
     readonly budget: boolean;
     readonly apps: boolean;
+    /** The budget itself, whole rupiah, when the profile has one. */
+    readonly budgetMin?: number | null;
+    readonly budgetMax?: number | null;
   };
+  /**
+   * What the bot's previous reply offered to watch for ("Mau saya kabari
+   * kalau sudah ready kak?") — the customer's yes writes it (2026-10-27).
+   */
+  readonly watchOffer?: WatchOffer | null;
+  /** This customer already has a visit booked: no "kapan mau datang?". */
+  readonly visitBooked?: boolean;
   /** The bot's previous reply, so its follow-up question is not repeated word for word. */
   readonly lastReply?: string | null;
   readonly proposalOpen: boolean;
@@ -100,11 +126,42 @@ export interface RulesInput {
   }>;
 }
 
+/** What an out-of-stock reply offered to watch for. */
+export interface WatchOffer {
+  readonly query: string;
+  readonly budget?: number;
+}
+
+/**
+ * A job for a person that is NOT a hand-over — the bot answered, and a
+ * colleague still has something to do ("Perlu sambut — …"). `topic` is the
+ * task's own word, not a hand-over topic, so the bot is not told to stop
+ * answering anything while it is open.
+ */
+export interface RulesTask {
+  readonly topic: "visit" | "restock";
+  readonly kind: "RESERVATION" | "STOCK";
+  readonly summary: string;
+}
+
 export interface RulesResult extends PipelineResult {
   /** Serials this reply showed, for the next message's "yang kedua". */
   readonly shown: readonly string[];
   /** Whether the AI fallback answered this turn. */
   readonly usedAi: boolean;
+  /** Set when this reply offered "Mau saya kabari kalau sudah ready?". */
+  readonly watch?: WatchOffer;
+  readonly task?: RulesTask;
+}
+
+/** A visit the worker reminded the customer of, and nothing answered since. */
+export interface RemindedVisit {
+  readonly code: string;
+  readonly scheduledFor: Date;
+  /** The unit or model it is about, or null for "unitnya". */
+  readonly unit: string | null;
+  /** The name the visit was booked under, when it is a name. */
+  readonly custName?: string | null;
 }
 
 const INTENT_OF: Record<RuleIntent, Intent> = {
@@ -133,6 +190,7 @@ export function leadScoreOf(u: Understanding): number {
   if (u.intent === "confirm") s += 60;
   if (u.usage.length || u.apps.length) s += 10;
   if (u.when) s += 15;
+  if (u.buying) s += 60;
   return Math.min(100, s);
 }
 
@@ -151,35 +209,32 @@ const unitsIn = (o: unknown, key = "units"): ShownUnit[] => {
   return Array.isArray(list) ? list.filter(isShownUnit) : [];
 };
 
-export async function runRules(input: RulesInput): Promise<RulesResult> {
-  const started = Date.now();
-  const { ctx, capabilities } = input;
-  const caps = effectiveCapabilities(capabilities);
+/** The pieces every rules turn shares: the trace, the POS calls, the result. */
+function turnKit(opts: {
+  readonly db: PrismaClient;
+  readonly ctx: ToolContext;
+  readonly capabilities: AgentCapabilities;
+  readonly dispatch?: ToolDispatch | undefined;
+  readonly u: Understanding;
+  readonly started: number;
+}) {
+  const { ctx, capabilities, u } = opts;
   const dispatch: ToolDispatch =
-    input.dispatch ?? ((n, a, c) => dispatchTool(input.db, n, a, c));
-  const open = storeOpenAt(ctx.now);
+    opts.dispatch ?? ((n, a, c) => dispatchTool(opts.db, n, a, c));
   const trace: AgentStep[] = [];
   const toolsUsed: string[] = [];
   const shown: string[] = [];
   const bookings: BookingWrite[] = [];
-  let cost = 0;
-
-  const u = understand(input.text, ctx.now, {
-    proposalOpen: input.proposalOpen,
-    lastShown: input.lastShown,
-  });
-  const lang: Lang = u.language;
   trace.push({
     agent: "ROUTER",
     model: "rules",
     tool: null,
     ok: u.intent !== "other",
-    ms: Date.now() - started,
+    ms: Date.now() - opts.started,
     inputTokens: 0,
     cachedTokens: 0,
     outputTokens: 0,
   });
-
   const call = async (name: string, args: Record<string, unknown>) => {
     const t = Date.now();
     toolsUsed.push(name);
@@ -199,6 +254,149 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     });
     return out ?? {};
   };
+  return { trace, toolsUsed, shown, bookings, call };
+}
+
+/**
+ * The customer's first answer after the worker reminded them of a visit
+ * (2026-10-27) — read by code, for the rules bot and the AI agent alike:
+ *
+ *  - a new time → the visit moves (`reschedule_reservation`);
+ *  - a no → the visit closes (`cancel_reservation`, which holds nothing to
+ *    release) and they are asked, gently, whether another day suits;
+ *  - a yes → the visit stands, and a colleague gets "Perlu sambut — …".
+ *
+ * Anything else is not about the reminder: null, and the turn is answered as
+ * usual.
+ */
+export async function visitReplyTurn(input: {
+  readonly db: PrismaClient;
+  readonly ctx: ToolContext;
+  readonly text: string;
+  readonly capabilities: AgentCapabilities;
+  readonly dispatch?: ToolDispatch;
+  readonly reminded: RemindedVisit;
+  readonly name: string | null;
+}): Promise<RulesResult | null> {
+  const started = Date.now();
+  const u = understand(input.text, input.ctx.now, {
+    proposalOpen: false,
+    lastShown: [],
+  });
+  const lang: Lang = u.language;
+  const no = saysNo(input.text);
+  const yes = !no && saysYes(input.text);
+  if (!u.when && !no && !yes) return null;
+  const kit = turnKit({
+    db: input.db,
+    ctx: input.ctx,
+    capabilities: input.capabilities,
+    dispatch: input.dispatch,
+    u,
+    started,
+  });
+  const result = (
+    text: string,
+    extra: { task?: RulesTask; bookings?: BookingWrite[] } = {},
+  ): RulesResult => {
+    const message = sanitiseReply(text);
+    kit.trace.push({
+      agent: "ADVISOR",
+      model: "template",
+      tool: null,
+      ok: true,
+      ms: 0,
+      inputTokens: 0,
+      cachedTokens: 0,
+      outputTokens: 0,
+    });
+    return {
+      reply: message,
+      rawReply: text,
+      toolsUsed: kit.toolsUsed,
+      steps: 1,
+      sources: ["rules"],
+      ...(extra.bookings?.length ? { bookings: extra.bookings } : {}),
+      ...(extra.task ? { task: extra.task } : {}),
+      verdict: {
+        language: lang,
+        tone: "casual",
+        intent: yes ? "confirm" : no ? "decline" : "reserve",
+        leadScore: leadScoreOf(u),
+        needsOperations: kit.toolsUsed.length > 0,
+        operationsBrief: "",
+        escalate: null,
+      },
+      trace: kit.trace,
+      costMicros: 0,
+      latencyMs: Date.now() - started,
+      shown: [],
+      usedAi: false,
+    };
+  };
+  const code = input.reminded.code;
+
+  if (u.when) {
+    const out = await kit.call("reschedule_reservation", {
+      when: u.when,
+      code,
+    });
+    if (out["ok"] === true && typeof out["when"] === "string") {
+      const at = new Date(`${String(out["when"]).replace(" ", "T")}:00+07:00`);
+      return result(reply.visitMoved(jakartaVisitLabel(at), lang), {
+        bookings: [
+          { tool: "reschedule_reservation", code, when: String(out["when"]) },
+        ],
+      });
+    }
+    if (out["closedThen"] || out["pastDate"] || out["tooFarAhead"])
+      return result(
+        reply.askForVisit({ unit: false, name: false, when: true }, lang),
+      );
+    return null;
+  }
+  if (no) {
+    const out = await kit.call("cancel_reservation", { code });
+    return result(reply.visitCancelled(lang), {
+      ...(out["ok"] === true
+        ? { bookings: [{ tool: "cancel_reservation", code }] }
+        : {}),
+    });
+  }
+  const when = jakartaVisitLabel(input.reminded.scheduledFor);
+  return result(reply.visitKept(when, lang), {
+    task: {
+      topic: "visit",
+      kind: "RESERVATION",
+      summary: welcomeTask({
+        name: input.name ?? input.reminded.custName ?? null,
+        when,
+        unit: input.reminded.unit,
+      }),
+    },
+  });
+}
+
+export async function runRules(input: RulesInput): Promise<RulesResult> {
+  const started = Date.now();
+  const { ctx, capabilities } = input;
+  const caps = effectiveCapabilities(capabilities);
+  const open = storeOpenAt(ctx.now);
+  let cost = 0;
+
+  const u = understand(input.text, ctx.now, {
+    proposalOpen: input.proposalOpen,
+    lastShown: input.lastShown,
+  });
+  const lang: Lang = u.language;
+  const { trace, toolsUsed, shown, bookings, call } = turnKit({
+    db: input.db,
+    ctx,
+    capabilities,
+    dispatch: input.dispatch,
+    u,
+    started,
+  });
 
   const verdict = (escalate: string | null, ops: boolean): RouterVerdict => ({
     language: lang,
@@ -217,11 +415,19 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       escalate?: string | null;
       /** False for a reply that already asks the one thing that matters now. */
       ask?: boolean;
+      watch?: WatchOffer;
     } = {},
   ): RulesResult => {
-    const { usedAi = false, escalate = null, ask = true, ...rest } = extra;
-    // Every reply that is not a hand-over ends asking what the customer
-    // still has not told us (owner, 2026-10-15). An AI reply that already
+    const {
+      usedAi = false,
+      escalate = null,
+      ask = true,
+      watch,
+      ...rest
+    } = extra;
+    // A reply that is not a hand-over ends asking what the customer still
+    // has not told us — briefly, and only until there is enough to recommend
+    // (owner, 2026-10-15, narrowed 2026-10-27). An AI reply that already
     // asks something is left alone: two questions in a row reads as a form.
     let body = text;
     if (ask && !rest.handoff && !(usedAi && text.includes("?"))) {
@@ -253,6 +459,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       latencyMs: Date.now() - started,
       shown,
       usedAi,
+      ...(watch ? { watch } : {}),
     };
   };
 
@@ -265,11 +472,21 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
    * When something is already with a colleague and the customer has just
    * been told so, a short "passed that on too" instead of the same promise.
    */
-  const handOver = (topic: HandoffTopic, summary: string, line?: string) =>
+  const handOver = (
+    topic: HandoffTopic,
+    summary: string,
+    line?: string,
+    serial?: string | null,
+  ) =>
     done(
       line ?? (told ? reply.passedOnToo(lang) : holdingMessage(topic, open)),
       {
-        handoff: { topic, summary, forcedBy: "route" },
+        handoff: {
+          topic,
+          summary,
+          forcedBy: "route",
+          ...(serial ? { serial } : {}),
+        },
         escalate: topic,
         sources: [],
       },
@@ -284,12 +501,58 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
         )
       : null;
 
+  const pickSerial = (): string | null =>
+    u.serial ??
+    (u.pick !== null ? (input.lastShown[u.pick] ?? null) : null) ??
+    (input.lastShown.length === 1 ? input.lastShown[0]! : null);
+
   // --- 1. What the code already sends to a person --------------------------
-  if (input.route)
+  if (input.route) {
+    if (input.route.topic === "closing") {
+      // Ready to buy, a keep / DP, how to pay (2026-10-27): a person closes,
+      // and the task says who, what, which unit and at what price.
+      const serial = pickSerial() ?? input.lastShown[0] ?? null;
+      let unit = unitSubject(input.text);
+      let price: string | null = null;
+      if (serial && caps.stock) {
+        const out = await call("check_serial", { serial });
+        if (out["found"] === true) {
+          const name = [out["model"], out["variant"]]
+            .filter((x) => typeof x === "string" && x)
+            .join(" ");
+          if (name) unit = name;
+          if (typeof out["price"] === "string") price = out["price"];
+        }
+      }
+      const how = [
+        /\bcod\b/i.test(input.text) ? "mau COD" : null,
+        u.when
+          ? `datang ${jakartaVisitLabel(new Date(`${u.when}:00+07:00`))}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return handOver(
+        "closing",
+        closingTask({
+          name: u.name ?? input.known.name,
+          wants: input.route.rule === "keep" ? "keep" : "buy",
+          unit,
+          price,
+          how: how || null,
+          text: input.text,
+        }),
+        told
+          ? reply.passedOnToo(lang)
+          : holdingMessage("closing", open, input.route.rule),
+        serial,
+      );
+    }
     return handOver(
       input.route.topic,
       routedTask(input.route.topic, input.text),
     );
+  }
 
   // --- 2. Remember what they said about themselves -------------------------
   if (ctx.profile) {
@@ -316,47 +579,89 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     budget: !input.known.budget && u.budgetMin === null && u.budgetMax === null,
     apps: !input.known.apps && u.apps.length === 0,
   };
+  /**
+   * Enough to recommend (owner, 2026-10-27): what it is for OR what they
+   * want to spend, and something they are interested in. Past this the bot
+   * stops asking and recommends.
+   */
+  const enough =
+    (!lacks.usage || !lacks.budget) &&
+    (u.query !== null || input.lastShown.length > 0);
   const followUp = () =>
-    reply.nextQuestion(lacks, lang, input.lastReply ?? null);
-  const visitOffer = () =>
-    caps.reserve && !input.proposalOpen && leadScoreOf(u) >= input.leadThreshold
-      ? reply.offerVisit(lang)
-      : null;
+    enough ? null : reply.nextQuestion(lacks, lang, input.lastReply ?? null);
+
+  /**
+   * The one small yes-question a recommendation ends on (2026-10-27), and
+   * never the same one twice running: see it → come and see it → let us get
+   * it moving.
+   */
+  const nextStep = (after: "recommend" | "photos" | "price"): string => {
+    const ladder: NextStep[] = [];
+    if (after !== "photos" && caps.photos) ladder.push("photos");
+    if (caps.reserve && !input.visitBooked) ladder.push("visit");
+    ladder.push("process");
+    const last = input.lastReply ?? "";
+    const step =
+      ladder.find((s) => !last.includes(reply.nextStep(s, lang))) ??
+      ladder[ladder.length - 1]!;
+    return reply.nextStep(step, lang);
+  };
   const join = (...parts: Array<string | null>) =>
     parts.filter((p): p is string => Boolean(p)).join("\n\n");
 
-  const pickSerial = (): string | null =>
-    u.serial ??
-    (u.pick !== null ? (input.lastShown[u.pick] ?? null) : null) ??
-    (input.lastShown.length === 1 ? input.lastShown[0]! : null);
+  const priceOf = (x: ShownUnit): bigint | null => {
+    const d = typeof x.price === "string" ? x.price.replace(/\D/g, "") : "";
+    return d ? BigInt(d) : null;
+  };
 
-  /** A shelf search and its list — stock, browse, and a price by model. */
-  const search = async (): Promise<RulesResult> => {
-    const hasBudget = u.budgetMin !== null || u.budgetMax !== null;
-    if (!u.query && !hasBudget) return done(reply.whichUnit(lang));
+  /**
+   * A shelf search, answered as three: the best fit, a cheaper one and one
+   * step up (2026-10-27). Out of stock, the closest units that are in, and
+   * an offer to say when it is back.
+   */
+  const search = async (
+    over: {
+      readonly query?: string | null;
+      readonly min?: number | null;
+      readonly max?: number | null;
+    } = {},
+  ): Promise<RulesResult> => {
+    const query = over.query ?? u.query;
+    const min = over.min !== undefined ? over.min : u.budgetMin;
+    const max = over.max !== undefined ? over.max : u.budgetMax;
+    const hasBudget = min !== null || max !== null;
+    if (!query && !hasBudget) return done(reply.whichUnit(lang));
     const out = await call("search_stock", {
-      query: u.query ?? "macbook",
-      ...(u.budgetMin !== null && u.budgetMin !== u.budgetMax
-        ? { minPrice: u.budgetMin }
-        : {}),
+      query: query ?? "macbook",
+      ...(min !== null && min !== max ? { minPrice: min } : {}),
       // "about 15jt" means up to a little over it.
-      ...(u.budgetMax !== null
-        ? {
-            maxPrice:
-              u.budgetMin === u.budgetMax
-                ? Math.round(u.budgetMax * 1.1)
-                : u.budgetMax,
-          }
+      ...(max !== null
+        ? { maxPrice: min === max ? Math.round(max * 1.1) : max }
         : {}),
       sort: hasBudget ? "priciest" : "newest",
     });
-    const units = unitsIn(out).slice(0, 3);
+    const units = unitsIn(out);
     // One option above the main pick, when the shelf has one (2026-10-27).
     const stepUp = isShownUnit(out["stepUp"]) ? out["stepUp"] : null;
     if (units.length === 0) {
-      // Out of stock: the closest units that are in, never a dead end.
+      // Out of stock: the closest units that are in, never a dead end — and
+      // the offer to tell them when what they asked for arrives.
       const alternatives = unitsIn(out, "alternatives").slice(0, 3);
-      if (alternatives.length === 0) return done(reply.noStock(lang));
+      const watch: WatchOffer | undefined =
+        query && ctx.profile !== undefined
+          ? {
+              query,
+              ...(max !== null ? { budget: max } : {}),
+            }
+          : undefined;
+      const watchLine = watch ? reply.offerWatch(lang) : null;
+      if (alternatives.length === 0)
+        return done(
+          watchLine
+            ? join(reply.outOfStock(lang), watchLine)
+            : reply.noStock(lang),
+          { ask: !watch, ...(watch ? { watch } : {}) },
+        );
       shown.push(...alternatives.map((x) => x.serial));
       if (stepUp) shown.push(stepUp.serial);
       const accessory = accessoryIn(out);
@@ -365,27 +670,59 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
           reply.alternatives(alternatives, lang),
           stepUp ? reply.stepUp(stepUp, lang) : null,
           accessory ? reply.accessory(accessory, lang) : null,
+          watchLine ?? nextStep("recommend"),
         ),
-        { sources: ["stock"] },
+        { sources: ["stock"], ask: false, ...(watch ? { watch } : {}) },
       );
     }
-    shown.push(...units.map((x) => x.serial));
+    const best = units[0]!;
+    const bestPrice = priceOf(best);
+    // Cheaper: the dearest unit below the best fit that is a different
+    // variant or grade — a real alternative, not the same unit for less.
+    const cheaper =
+      bestPrice === null
+        ? null
+        : (units
+            .filter((x) => {
+              const p = priceOf(x);
+              return (
+                p !== null &&
+                p < bestPrice &&
+                `${x.model} ${x.variant} ${x.grade}` !==
+                  `${best.model} ${best.variant} ${best.grade}`
+              );
+            })
+            .sort((a, b) => {
+              const pa = priceOf(a)!;
+              const pb = priceOf(b)!;
+              return pa === pb ? 0 : pa > pb ? -1 : 1;
+            })[0] ?? null);
+    shown.push(best.serial);
+    if (cheaper) shown.push(cheaper.serial);
     if (stepUp) shown.push(stepUp.serial);
-    const matched =
-      typeof out["matched"] === "number" ? out["matched"] : units.length;
     return done(
-      // The follow-up question comes from done(); the visit is offered only
-      // once there is nothing left to ask.
       join(
-        reply.stockList(units, matched, lang),
-        stepUp ? reply.stepUp(stepUp, lang) : null,
-        followUp() ? null : visitOffer(),
+        reply.recommend({ best, cheaper, stepUp }, lang),
+        nextStep("recommend"),
       ),
-      {
-        sources: ["stock"],
-      },
+      { sources: ["stock"], ask: false },
     );
   };
+
+  // --- 2b. Their answer to "Mau saya kabari kalau sudah ready?" -------------
+  if (input.watchOffer && caps.stock && u.intent !== "ask_stock") {
+    if (saysNo(input.text)) return done(reply.declined(lang), { ask: false });
+    if (
+      saysYes(input.text) &&
+      (u.intent === "ack" || u.intent === "confirm" || u.intent === "other")
+    ) {
+      const out = await call("watch_stock", {
+        query: input.watchOffer.query,
+        ...(input.watchOffer.budget ? { budget: input.watchOffer.budget } : {}),
+      });
+      if (out["saved"] === true) return done(reply.watchSaved(lang));
+    }
+  }
 
   // --- 3. The intents rules can answer -------------------------------------
   switch (u.intent) {
@@ -401,6 +738,18 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     case "ack": {
       const waitingLine = nudge();
       if (waitingLine) return done(waitingLine);
+      // A yes to "Mau saya carikan unit yang paling cocok?": do it, from
+      // what the profile already says.
+      if (
+        caps.stock &&
+        (input.lastReply ?? "").includes(reply.offerSearch(lang)) &&
+        (input.known.budgetMax || input.known.budgetMin)
+      )
+        return search({
+          query: null,
+          min: input.known.budgetMin ?? null,
+          max: input.known.budgetMax ?? null,
+        });
       return done(
         followUp()
           ? reply.ack(lang)
@@ -420,7 +769,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       const out = await call("confirm_reservation", {});
       if (out["ok"] === true && typeof out["code"] === "string") {
         bookings.push({
-          tool: "create_reservation",
+          tool: "book_visit",
           code: out["code"],
           ...(typeof out["when"] === "string" ? { when: out["when"] } : {}),
         });
@@ -432,6 +781,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
             },
             lang,
           ),
+          { ask: false },
         );
       }
       if (out["noProposal"] === true) break;
@@ -452,7 +802,9 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
         ? await call("unit_photos", { serial })
         : u.query
           ? await call("find_unit_photos", { query: u.query })
-          : null;
+          : input.lastShown[0]
+            ? await call("unit_photos", { serial: input.lastShown[0] })
+            : null;
       if (!out) return done(reply.whichUnit(lang));
       const ids = Array.isArray(out["photoIds"])
         ? (out["photoIds"] as unknown[]).filter(
@@ -476,20 +828,23 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
           ? (out as unknown as ShownUnit)
           : null;
       if (unit) shown.push(unit.serial);
-      return done(join(reply.photos(unit, lang), visitOffer()), {
+      return done(join(reply.photos(unit, lang), nextStep("photos")), {
         photos: ids,
+        ask: false,
       });
     }
 
     case "reserve": {
       if (!caps.reserve || !ctx.reserve) break;
-      const serial = pickSerial();
+      // A VISIT (2026-10-27): the units are what they come to see, if any —
+      // nothing is held — so only a name and a time are needed.
+      const serial = pickSerial() ?? input.lastShown[0] ?? null;
       const name = u.name ?? input.known.name;
-      const missing = { unit: !serial, name: !name, when: !u.when };
-      if (missing.unit || missing.name || missing.when)
+      const missing = { unit: false, name: !name, when: !u.when };
+      if (missing.name || missing.when)
         return done(reply.askForVisit(missing, lang), { ask: false });
       const out = await call("propose_reservation", {
-        serials: serial!,
+        ...(serial ? { serials: serial } : {}),
         when: u.when!,
         custName: name!,
       });
@@ -512,8 +867,27 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       if (out["closedThen"] || out["pastDate"] || out["tooFarAhead"])
         return done(
           reply.askForVisit({ unit: false, name: false, when: true }, lang),
+          { ask: false },
         );
-      if (out["unavailable"]) return done(reply.noStock(lang));
+      if (out["unavailable"]) {
+        // The unit they named has gone; the visit can still be to look.
+        const again = await call("propose_reservation", {
+          when: u.when!,
+          custName: name!,
+        });
+        if (again["ok"] === true)
+          return done(
+            reply.proposal(
+              {
+                units: [],
+                when: String(again["when"] ?? ""),
+                custName: String(again["custName"] ?? name),
+              },
+              lang,
+            ),
+            { ask: false },
+          );
+      }
       return handOver(
         "reservation",
         taskNote("booking", TASK_REASON.notAutomatic, input.text),
@@ -537,7 +911,11 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
               ),
             );
           return done(
-            join(reply.price(out as unknown as ShownUnit, lang), visitOffer()),
+            join(
+              reply.price(out as unknown as ShownUnit, lang),
+              nextStep("price"),
+            ),
+            { ask: false },
           );
         }
         return done(reply.noStock(lang));
@@ -556,6 +934,8 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
   }
 
   // --- 4. The owner's own answer, word for word -----------------------------
+  // Objections — warranty, condition, COD, payment, trade-in — are answered
+  // from here and nowhere else (2026-10-27).
   const [best] = matchesFor(input.knowledge, input.text);
   if (best && isStrongMatch(best))
     return done(best.doc.answer, { sources: [best.doc.handle] });

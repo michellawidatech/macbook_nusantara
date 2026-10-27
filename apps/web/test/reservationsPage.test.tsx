@@ -30,6 +30,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ReservationsPage } from "../src/routes/reservations/ReservationsPage.js";
 import { getDb, mutate } from "../src/mock/store.js";
+import { reprojectHolds } from "../src/lib/reservations.js";
 import type { MockDb } from "../src/mock/seed.js";
 
 // Same budget and the same reason as inboundQcPage: this renders a whole page
@@ -41,6 +42,26 @@ vi.setConfig({ testTimeout: 60_000 });
 const HOLD = "rsv-tst-1";
 const CODE = "RV-2026/09-000771";
 const SERIALS = ["SC02RS1111111", "SC02RS2222222"] as const;
+
+/** A visit the bot booked (2026-10-27): a time, a customer, no units. */
+const VISIT = "rsv-tst-visit";
+const VISIT_CODE = "RV-2026/10-000881";
+
+function makeVisit() {
+  mutate((d) => {
+    d.reservations.push({
+      id: VISIT,
+      code: VISIT_CODE,
+      customerId: d.customers[0]!.id,
+      when: "2026-10-31T07:00:00.000Z",
+      note: "Janji datang — lihat MacBook Air M2 8/256",
+      items: [],
+      status: "ACTIVE",
+    });
+  });
+}
+
+const visitRow = () => getDb().reservations.find((r) => r.id === VISIT);
 
 /** The store, read through the one door it has. */
 function snapshot(): MockDb {
@@ -155,7 +176,9 @@ beforeEach(() => {
     const mine = new Set<string>(SERIALS);
     d.units = d.units.filter((u) => !mine.has(u.serial));
     d.events = d.events.filter((e) => !mine.has(e.serial));
-    d.reservations = d.reservations.filter((r) => r.id !== HOLD);
+    d.reservations = d.reservations.filter(
+      (r) => r.id !== HOLD && r.id !== VISIT,
+    );
   });
   makeHold();
 });
@@ -371,5 +394,47 @@ describe("cancelling a whole hold", () => {
     // The header is a PROJECTION of its machines, written in the same mutation
     // — never a column somebody remembered to set.
     expect(holdRow()?.status).toBe("CANCELLED");
+  });
+});
+
+describe("a visit the bot booked (2026-10-27)", () => {
+  it("reads as a Visit with its time, and the customer can be marked as came", async () => {
+    makeVisit();
+    renderPage();
+    await settle();
+    expect(screen.getAllByText("Visit").length).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("button", { name: `Open the units on ${VISIT_CODE}` }),
+    ).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: new RegExp(`came for ${VISIT_CODE}`),
+      }),
+    );
+    await settle();
+    expect(visitRow()?.status).toBe("DONE");
+  });
+
+  it("can be cancelled, behind a confirm, moving no unit", async () => {
+    makeVisit();
+    const before = getDb().units.map((u) => `${u.serial}:${u.status}`);
+    renderPage();
+    await settle();
+    await userEvent.click(
+      screen.getByRole("button", { name: `Cancel the visit ${VISIT_CODE}` }),
+    );
+    await settle();
+    await userEvent.click(
+      screen.getByRole("button", { name: /Cancel the visit$/ }),
+    );
+    await settle();
+    expect(visitRow()?.status).toBe("CANCELLED");
+    expect(getDb().units.map((u) => `${u.serial}:${u.status}`)).toEqual(before);
+  });
+
+  it("is never cancelled by a projection that walks every hold", () => {
+    makeVisit();
+    mutate((d) => reprojectHolds(d));
+    expect(visitRow()?.status).toBe("ACTIVE");
   });
 });

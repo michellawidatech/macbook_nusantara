@@ -65,6 +65,7 @@ import {
   checkReply,
   holdingMessage,
   isHandoffTopic,
+  modelTokens,
   PARALLEL_CAPABILITIES,
   type AgentCapabilities,
   type HandoffTopic,
@@ -316,6 +317,13 @@ export interface ConverseResult {
   /** Set when the turn ended with a person. The caller stamps PERLU_STAF. */
   readonly handoff?: ConverseHandoff;
   /**
+   * Serials of the units this reply named, in order (2026-10-27) — what
+   * "yang kedua", the visit reminder and the lead nudge read back
+   * (`lastShownUnits`). A unit counts when its price, or failing that its
+   * model, is in the words sent.
+   */
+  readonly shown?: readonly string[];
+  /**
    * The bookings this turn committed, whatever became of the reply. A hold is
    * its own transaction, so it stands even when the words that would have
    * announced it are refused — and the caller must be able to see it.
@@ -325,8 +333,8 @@ export interface ConverseResult {
 
 /** A booking write that succeeded this turn. */
 export interface BookingWrite {
-  readonly tool:
-    "create_reservation" | "reschedule_reservation" | "cancel_reservation";
+  /** `book_visit` since 2026-10-27: a visit, which holds nothing. */
+  readonly tool: "book_visit" | "reschedule_reservation" | "cancel_reservation";
   readonly code: string;
   readonly when?: string;
 }
@@ -347,8 +355,17 @@ export function stockFactsOf(tool: string, output: unknown): StockFact[] {
     if (u === null || typeof u !== "object") return [];
     const r = u as Record<string, unknown>;
     const name = [r["model"], r["variant"]].filter(str).join(" ");
+    const left = r["left"];
     return name
-      ? [{ label: name, available, prices: digitsOf(r["price"]) }]
+      ? [
+          {
+            label: name,
+            available,
+            prices: digitsOf(r["price"]),
+            // "Tinggal 1 unit" may rest on this and on nothing else.
+            ...(typeof left === "number" ? { count: left } : {}),
+          },
+        ]
       : [];
   };
   const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
@@ -367,8 +384,6 @@ export function stockFactsOf(tool: string, output: unknown): StockFact[] {
       return o["found"] === true ? unit(o, o["available"] === true) : [];
     case "find_unit_photos":
       return str(o["serial"]) ? unit(o, true) : [];
-    case "create_reservation":
-      return list(o["alternatives"]).flatMap((u) => unit(u, true));
     case "browse_catalog":
       return list(o["categories"]).flatMap((c) => {
         const cat = (c ?? {}) as Record<string, unknown>;
@@ -398,10 +413,68 @@ function bookingLine(b: BookingWrite): string {
   const when = b.when ? ` untuk ${b.when} WIB` : "";
   return b.tool === "reschedule_reservation"
     ? `Booking ${b.code} sudah kami pindahkan${when} ya kak.`
-    : `Unitnya sudah kami tahan dengan kode booking ${b.code}${when} ya kak.`;
+    : // A visit holds nothing (2026-10-27): never "unitnya kami tahan".
+      `Jadwal datangnya sudah kami catat dengan kode booking ${b.code}${when} ya kak.`;
 }
 
 const TERMINAL = new Set(["reply", "handoff_to_staff"]);
+
+/** A unit a stock lookup returned this turn: its serial, name and price digits. */
+interface SeenUnit {
+  readonly serial: string;
+  readonly label: string;
+  readonly price: string | null;
+}
+
+/** Every unit a stock tool's output names, in the order it names them. */
+function unitsSeen(tool: string, output: unknown): SeenUnit[] {
+  if (output === null || typeof output !== "object") return [];
+  const o = output as Record<string, unknown>;
+  const one = (u: unknown): SeenUnit[] => {
+    if (u === null || typeof u !== "object") return [];
+    const r = u as Record<string, unknown>;
+    if (!str(r["serial"])) return [];
+    return [
+      {
+        serial: r["serial"],
+        label: [r["model"], r["variant"]].filter(str).join(" "),
+        price: digitsOf(r["price"])[0] ?? null,
+      },
+    ];
+  };
+  const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+  if (tool === "search_stock")
+    return [
+      ...list(o["units"]),
+      ...list(o["alternatives"]),
+      ...(o["stepUp"] ? [o["stepUp"]] : []),
+    ].flatMap(one);
+  if (tool === "check_serial" || tool === "find_unit_photos") return one(o);
+  return [];
+}
+
+/** The units a reply actually names, out of those the lookups returned. */
+function shownIn(message: string, seen: readonly SeenUnit[]): string[] {
+  const digits = amountSpansDigits(message);
+  const words = new Set(modelTokens(message));
+  const out: string[] = [];
+  for (const u of seen) {
+    if (out.includes(u.serial)) continue;
+    const byPrice = u.price !== null && digits.has(u.price);
+    const own = modelTokens(u.label);
+    const byName =
+      u.price === null && own.length > 0 && own.every((t) => words.has(t));
+    if (byPrice || byName) out.push(u.serial);
+  }
+  return out.slice(0, 6);
+}
+
+/** Every run of digits in a text, separators removed — "Rp11.900.000" → 11900000. */
+function amountSpansDigits(text: string): Set<string> {
+  return new Set(
+    [...text.matchAll(/\d[\d.,]*/g)].map((m) => m[0].replace(/[.,]/g, "")),
+  );
+}
 
 /** The handles a `unit_photos` result offered, read back defensively. */
 export function photoIdsIn(output: unknown): string[] {
@@ -441,7 +514,15 @@ export async function converse(
   const routedNote = route
     ? `This message must go to a colleague (${route.topic.replace("_", " ")}). ` +
       "Do not answer it with reply. Use handoff_to_staff: first answer anything an approved " +
-      "answer covers, then say warmly that a colleague will check and reply in this chat."
+      "answer covers, then say warmly that a colleague will check and reply in this chat." +
+      (route.topic === "closing"
+        ? ' They are ready to buy: write the summary as "Perlu closing — <name> siap ambil ' +
+          '<unit> <price>, <how>".' +
+          (route.rule === "keep"
+            ? ' To keep a unit they need a DP: say "untuk amankan unit bisa DP, nanti tim kami ' +
+              'bantu ya" and never name an amount.'
+            : "")
+        : "")
     : "";
   const shopNote = [routedNote, input.preloaded?.note ?? "", input.hint ?? ""]
     .filter(Boolean)
@@ -476,6 +557,8 @@ export async function converse(
    * capability would be on in name only.
    */
   const stockFacts: StockFact[] = [...(input.preloaded?.stockFacts ?? [])];
+  /** Every unit the lookups named this turn, for `shown`. */
+  const seen: SeenUnit[] = [];
   let stockLooked = input.preloaded?.stockLooked ?? false;
   const bookings: BookingWrite[] = [...(input.preloaded?.bookings ?? [])];
   /** The photo handles `unit_photos` offered, so `reply` cannot invent one. */
@@ -485,7 +568,11 @@ export async function converse(
   const fixedLine = (topic: HandoffTopic) =>
     input.alreadyTold
       ? ruleReply.passedOnToo("id")
-      : holdingMessage(topic, open);
+      : holdingMessage(
+          topic,
+          open,
+          route?.topic === topic ? route.rule : undefined,
+        );
 
   /** The code handing over, in the shop's fixed words. */
   const forced = (
@@ -631,6 +718,7 @@ export async function converse(
     const told = bookings
       .filter((b) => !message.includes(b.code))
       .map(bookingLine);
+    const shown = sources.includes("stock") ? shownIn(message, seen) : [];
     return {
       reply: [...told, message].join("\n"),
       rawReply: raw,
@@ -639,6 +727,7 @@ export async function converse(
       sources,
       ...(photos.length > 0 ? { photos } : {}),
       ...(bookings.length ? { bookings } : {}),
+      ...(shown.length > 0 ? { shown } : {}),
     };
   };
 
@@ -739,11 +828,12 @@ export async function converse(
             stockLooked = true;
           }
           stockFacts.push(...stockFactsOf(use.name, output));
+          seen.push(...unitsSeen(use.name, output));
           if (use.name === "unit_photos" || use.name === "find_unit_photos") {
             for (const id of photoIdsIn(output)) offeredPhotos.add(id);
           }
           if (
-            (use.name === "create_reservation" ||
+            (use.name === "book_visit" ||
               use.name === "reschedule_reservation" ||
               use.name === "cancel_reservation") &&
             output !== null &&

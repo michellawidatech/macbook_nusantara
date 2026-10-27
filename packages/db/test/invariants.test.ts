@@ -973,6 +973,116 @@ describe("a picture staff sent from their own device (2026-10-27)", () => {
   });
 });
 
+describe("sell, don't hold — stock watches and the closing task (2026-10-27)", () => {
+  const FROM = "628111000881";
+
+  it("lets the agent write and close a watch, and staff only close one", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_agent','"StockWatch"','SELECT')  AS agent_select,
+              has_table_privilege('nusantara_agent','"StockWatch"','INSERT')  AS agent_insert,
+              has_table_privilege('nusantara_agent','"StockWatch"','UPDATE')  AS agent_update,
+              has_table_privilege('nusantara_agent','"StockWatch"','DELETE')  AS agent_delete,
+              has_table_privilege('nusantara_app','"StockWatch"','SELECT')    AS app_select,
+              has_table_privilege('nusantara_app','"StockWatch"','INSERT')    AS app_insert,
+              has_column_privilege('nusantara_app','"StockWatch"','closedAt','UPDATE') AS app_close,
+              has_column_privilege('nusantara_app','"StockWatch"','query','UPDATE')    AS app_rewrite,
+              has_table_privilege('nusantara_app','"StockWatch"','DELETE')    AS app_delete,
+              has_table_privilege('nusantara_agent','"StockMove"','SELECT')   AS agent_reads_moves,
+              has_table_privilege('nusantara_agent','"StockMove"','INSERT')   AS agent_writes_moves`,
+    );
+    expect(rows[0]).toEqual({
+      agent_select: true,
+      agent_insert: true,
+      agent_update: true,
+      agent_delete: false,
+      app_select: true,
+      app_insert: false,
+      app_close: true,
+      app_rewrite: false,
+      app_delete: false,
+      agent_reads_moves: true,
+      agent_writes_moves: false,
+    });
+
+    await agent.query(
+      `INSERT INTO "StockWatch" (id, "from", query, "skuId", budget, "createdAt")
+       VALUES ('sw_1', $1, 'air m1 8/256', $2, 13000000, now())`,
+      [FROM, SKU],
+    );
+    await app.query(
+      `UPDATE "StockWatch" SET "closedAt" = now() WHERE id = 'sw_1'`,
+    );
+    await rejectsWith(
+      () => app.query(`UPDATE "StockWatch" SET query = 'x' WHERE id = 'sw_1'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    await rejectsWith(
+      () => agent.query(`DELETE FROM "StockWatch" WHERE id = 'sw_1'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+  });
+
+  it("holds a watch to words, a thread and money", async () => {
+    const insert = (query: string, budget: number | null) =>
+      agent.query(
+        `INSERT INTO "StockWatch" (id, "from", query, budget, "createdAt")
+         VALUES ('sw_' || md5(random()::text), $1, $2, $3, now())`,
+        [FROM, query, budget],
+      );
+    await rejectsWith(() => insert("  ", null), CHECK_VIOLATION);
+    await rejectsWith(() => insert("air m1", 0), CHECK_VIOLATION);
+    await rejectsWith(
+      () =>
+        agent.query(
+          `INSERT INTO "StockWatch" (id, "from", query, "skuId", "createdAt")
+           VALUES ('sw_x', $1, 'air', 'no_such_sku', now())`,
+          [FROM],
+        ),
+      FOREIGN_KEY_VIOLATION,
+    );
+    await insert("air m1", null);
+  });
+
+  it("goes with a deleted conversation, and only that one's", async () => {
+    await owner.query(
+      `INSERT INTO "WaMessage" (id, "waMessageId", "from", "msgType", ts, direction, status, entities, "answeredByAgent")
+       VALUES ('wm_w1','wamid.w1',$1,'text',now(),'IN','BARU','{}',false)`,
+      [FROM],
+    );
+    await owner.query(
+      `INSERT INTO "StockWatch" (id, "from", query, "createdAt")
+       VALUES ('sw_mine', $1, 'air m3', now()), ('sw_theirs', $2, 'air m3', now())`,
+      [FROM, "628111000882"],
+    );
+    const { rows: n } = await app.query<{ n: number }>(
+      `SELECT wa_thread_delete($1, $2, now()::timestamp) AS n`,
+      [FROM, STAFF],
+    );
+    expect(n[0]!.n).toBe(2);
+    const { rows: left } = await owner.query(
+      `SELECT id FROM "StockWatch" WHERE id IN ('sw_mine','sw_theirs')`,
+    );
+    expect(left).toEqual([{ id: "sw_theirs" }]);
+  });
+
+  it("knows a CLOSING task, one open per thread like every kind", async () => {
+    await agent.query(
+      `INSERT INTO "ChatAction" (id, "from", kind, topic, summary, "createdAt", "updatedAt")
+       VALUES ('ca_c1', $1, 'CLOSING', 'closing', 'Perlu closing — Budi siap ambil', now(), now())`,
+      [FROM],
+    );
+    await rejectsWith(
+      () =>
+        agent.query(
+          `INSERT INTO "ChatAction" (id, "from", kind, topic, summary, "createdAt", "updatedAt")
+           VALUES ('ca_c2', $1, 'CLOSING', 'closing', 'Perlu closing — lagi', now(), now())`,
+          [FROM],
+        ),
+      UNIQUE_VIOLATION,
+    );
+  });
+});
+
 describe("the stock movement history (2026-09-24)", () => {
   it("is correctable per column and never as a ledger", async () => {
     // What a person can get wrong is granted; what the row IS is not. Column
