@@ -252,6 +252,60 @@ describe("the funnel", () => {
     expect(JSON.stringify(res.body)).not.toMatch(/10000000/);
   });
 
+  it("leaves out tester numbers and what came before a clear", async () => {
+    const TESTER = "628980095009";
+    await db.appSetting.upsert({
+      where: { key: "chatbot.testers" },
+      update: { value: TESTER, updatedAt: new Date() },
+      create: { key: "chatbot.testers", value: TESTER, updatedAt: new Date() },
+    });
+    await inbound(TESTER, 1 * DAY);
+    await db.chatAction.create({
+      data: {
+        from: TESTER,
+        kind: "CLOSING",
+        topic: "closing",
+        summary: "Perlu closing — tester",
+        createdAt: new Date(Date.now() - DAY),
+        updatedAt: new Date(),
+      },
+    });
+    // A cleared chat: its lead and closing task came before the clear, and
+    // nothing has been written since.
+    await inbound(PHONE, 3 * DAY);
+    await db.waThreadMemory.create({
+      data: {
+        from: PHONE,
+        summaryTurns: 0,
+        clarifyCount: 0,
+        updatedAt: new Date(),
+        leadScore: 80,
+        leadAt: new Date(Date.now() - 3 * DAY),
+        clearedAt: new Date(Date.now() - 2 * DAY),
+        clearedById: staffId,
+      },
+    });
+    await db.chatAction.create({
+      data: {
+        from: PHONE,
+        kind: "CLOSING",
+        topic: "closing",
+        summary: "Perlu closing — before the clear",
+        createdAt: new Date(Date.now() - 3 * DAY),
+        updatedAt: new Date(),
+      },
+    });
+    const res = await request(app)
+      .get("/api/chat/funnel")
+      .set("Cookie", cookie)
+      .expect(200);
+    expect(res.body.windows[0]).toMatchObject({
+      chats: 0,
+      leads: 0,
+      closing: 0,
+    });
+  });
+
   it("needs a signed-in member of staff", async () => {
     await request(app).get("/api/chat/funnel").expect(401);
   });

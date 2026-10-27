@@ -38,27 +38,59 @@ export function FunnelCard() {
   }, []);
 
   const stageLabel = (s: Stage): ReactNode => {
-    switch (s) {
-      case "chats":
-        return t("chatFunnel.chats", "Chats");
-      case "leads":
-        return t("chatFunnel.leads", "Leads");
-      case "visits":
-        return t("chatFunnel.visits", "Visits booked");
-      case "closing":
-        return t("chatFunnel.closing", "Closing tasks");
-      default:
-        return (
-          <Tooltip
-            title={t(
+    const [label, hint] = ((): [string, string] => {
+      switch (s) {
+        case "chats":
+          return [
+            t("chatFunnel.chats", "Chats"),
+            t(
+              "chatFunnel.chatsHint",
+              "Customers who wrote in. Tester numbers and cleared chats are left out.",
+            ),
+          ];
+        case "leads":
+          return [
+            t("chatFunnel.leads", "Leads"),
+            t(
+              "chatFunnel.leadsHint",
+              "Chats the bot judged as serious buyers (🔥).",
+            ),
+          ];
+        case "visits":
+          return [
+            t("chatFunnel.visits", "Visits booked"),
+            t(
+              "chatFunnel.visitsHint",
+              "Customers who booked a time to come to the shop.",
+            ),
+          ];
+        case "closing":
+          return [
+            t("chatFunnel.closing", "Ready to buy"),
+            t(
+              "chatFunnel.closingHint",
+              "Customers who said they want to buy, or asked how to pay, about a DP or for a better price — handed to staff to close the sale.",
+            ),
+          ];
+        default:
+          return [
+            t("chatFunnel.sales", "Sales"),
+            t(
               "chatFunnel.salesHint",
               "Bought from this number within 30 days of their first message.",
-            )}
-          >
-            <span>{t("chatFunnel.sales", "Sales")}</span>
-          </Tooltip>
-        );
-    }
+            ),
+          ];
+      }
+    })();
+    return (
+      <Tooltip title={hint}>
+        <span
+          style={{ borderBottom: "1px dotted currentColor", cursor: "help" }}
+        >
+          {label}
+        </span>
+      </Tooltip>
+    );
   };
 
   const cell = (w: FunnelWindow | undefined, s: Stage) => {

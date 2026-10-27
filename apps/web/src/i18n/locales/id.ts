@@ -4592,7 +4592,14 @@ export const id: Record<string, string> = {
   "chatFunnel.chats": "Chat",
   "chatFunnel.leads": "Lead",
   "chatFunnel.visits": "Kunjungan dibooking",
-  "chatFunnel.closing": "Tugas closing",
+  "chatFunnel.closing": "Siap beli",
+  "chatFunnel.chatsHint":
+    "Pelanggan yang menghubungi. Nomor tester dan chat yang sudah dibersihkan tidak dihitung.",
+  "chatFunnel.leadsHint":
+    "Chat yang dinilai bot sebagai calon pembeli serius (🔥).",
+  "chatFunnel.visitsHint": "Pelanggan yang membuat janji datang ke toko.",
+  "chatFunnel.closingHint":
+    "Pelanggan yang bilang mau beli, atau bertanya cara bayar, DP, atau nego harga — diteruskan ke staf untuk menyelesaikan penjualan.",
   "chatFunnel.sales": "Penjualan",
   "chatFunnel.salesHint":
     "Membeli dari nomor ini dalam 30 hari sejak pesan pertamanya.",

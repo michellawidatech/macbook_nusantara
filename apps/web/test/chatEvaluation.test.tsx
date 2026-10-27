@@ -189,7 +189,7 @@ describe("the funnel (2026-10-27)", () => {
     expect(leads).toHaveTextContent("12 (30%)");
     expect(leads).toHaveTextContent("40 (25%)");
     expect(await row("Visits booked")).toHaveTextContent("5 (13%)");
-    expect(await row("Closing tasks")).toHaveTextContent("11 (7%)");
+    expect(await row("Ready to buy")).toHaveTextContent("11 (7%)");
     expect(await row("Sales")).toHaveTextContent("9 (6%)");
     expect(getFunnel).toHaveBeenCalled();
   });

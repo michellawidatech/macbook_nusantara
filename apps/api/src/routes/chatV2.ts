@@ -25,6 +25,7 @@ import {
   leadScoreOf,
   loadKnowledgeBase,
   loadStoreFacts,
+  loadTesters,
   matchesFor,
   matchesNote,
   personaFor,
@@ -253,19 +254,29 @@ export interface FunnelStage {
  * tasks → sales (owner, 2026-10-27: "convert the casual chatter to a lead and
  * even customer"). Read-only, counts only.
  *
+ * Every stage counts only the threads in the Chats row (`threads` below), so
+ * the stages are one funnel rather than five unrelated counts. Two kinds of
+ * thread are left out (owner, 2026-10-27: *"if it is a test number can we not
+ * include it … if I remove the chat, it will get removed as well"*):
+ * - a tester's number (`chatbot.testers`), passed in as `exclude`;
+ * - what came before a *Clear chat* (`WaThreadMemory.clearedAt`) — a deleted
+ *   conversation has no messages left, so it drops out by itself.
+ *
  * A thread is a wa_id (`62812…`) and a customer is an E.164 number
- * (`+62812…`), so a sale matches either form, on the customer or on the
- * order's own phone. Dates are bound as timestamptz and converted to UTC
- * before comparing with the `timestamp` columns (CLAUDE.md).
+ * (`+62812…`), so a sale or a visit matches either form. Dates are bound as
+ * timestamptz and converted to UTC before comparing with the `timestamp`
+ * columns (CLAUDE.md).
  */
 export async function funnelFor(
   db: PrismaClient,
   days: number,
   now: Date,
+  exclude: readonly string[] = [],
 ): Promise<FunnelStage> {
   const since = new Date(now.getTime() - days * 86_400_000);
   const at = Prisma.sql`(${since}::timestamptz AT TIME ZONE 'UTC')`;
   const saleMs = FUNNEL_SALE_DAYS * 86_400_000;
+  const testers = [...exclude];
   const [row] = await db.$queryRaw<
     Array<{
       chats: number;
@@ -275,23 +286,36 @@ export async function funnelFor(
       sales: number;
     }>
   >(Prisma.sql`
-    WITH first_in AS (
-      SELECT m."from", MIN(m."ts") AS first_at
+    WITH threads AS (
+      SELECT m."from",
+             MIN(m."ts") AS first_at,
+             MAX(t."clearedAt") AS cleared_at
         FROM "WaMessage" m
-       WHERE m."direction" = 'IN' AND m."ts" >= ${at}
+        LEFT JOIN "WaThreadMemory" t ON t."from" = m."from"
+       WHERE m."direction" = 'IN'
+         AND m."ts" >= ${at}
+         AND m."from" <> ALL(${testers}::text[])
+         AND (t."clearedAt" IS NULL OR m."ts" > t."clearedAt")
        GROUP BY m."from"
     )
     SELECT
-      (SELECT COUNT(*) FROM first_in)::int AS chats,
+      (SELECT COUNT(*) FROM threads)::int AS chats,
       (SELECT COUNT(*) FROM "WaThreadMemory" t
-        WHERE t."leadAt" >= ${at})::int AS leads,
-      (SELECT COUNT(*) FROM "Reservation" r
+         JOIN threads f ON f."from" = t."from"
+        WHERE t."leadAt" >= ${at}
+          AND (f.cleared_at IS NULL OR t."leadAt" > f.cleared_at))::int AS leads,
+      (SELECT COUNT(DISTINCT r."id") FROM "Reservation" r
+         JOIN threads f ON r."phone" IN (f."from", '+' || f."from")
         WHERE r."source" = 'AGEN' AND r."createdAt" >= ${at}
+          AND (f.cleared_at IS NULL OR r."createdAt" > f.cleared_at)
           AND NOT EXISTS (SELECT 1 FROM "ReservationItem" i
                            WHERE i."reservationId" = r."id"))::int AS visits,
       (SELECT COUNT(*) FROM "ChatAction" a
-        WHERE a."kind" = 'CLOSING' AND a."createdAt" >= ${at})::int AS closing,
-      (SELECT COUNT(DISTINCT o."id") FROM first_in f
+         JOIN threads f ON f."from" = a."from"
+        WHERE a."kind" = 'CLOSING' AND a."createdAt" >= ${at}
+          AND (f.cleared_at IS NULL OR a."createdAt" > f.cleared_at))::int
+        AS closing,
+      (SELECT COUNT(DISTINCT o."id") FROM threads f
          JOIN "Order" o
            ON o."ts" >= f.first_at
           AND o."ts" <= f.first_at + (${saleMs}::bigint * interval '1 millisecond')
@@ -323,8 +347,9 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
   router.get("/funnel", async (_req, res, next) => {
     try {
       const now = new Date();
+      const testers = await loadTesters(db);
       const windows = await Promise.all(
-        FUNNEL_WINDOWS.map((d) => funnelFor(db, d, now)),
+        FUNNEL_WINDOWS.map((d) => funnelFor(db, d, now, testers)),
       );
       res.json({ windows });
     } catch (err) {
