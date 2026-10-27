@@ -43,6 +43,21 @@ export interface StoreFacts {
  * marketplace's own escrow, the import's placeholder. Offering "Tempo" to a
  * stranger on WhatsApp would be offering credit.
  */
+/**
+ * The shop's own name (owner, 2026-10-27: *"ofc it is macbook nusantara"*).
+ * A customer asking "benar ini Macbook Nusantara?" was handed to a person
+ * because the bot could not vouch for a name it was never given. Settings'
+ * `shop.name` wins when it names the shop; empty — or demo text that does not
+ * mention Nusantara — falls back to the shop's real name, the way the faktur's
+ * address does (`SHOP_ADDRESS`).
+ */
+export const SHOP_NAME = "Macbook Nusantara";
+
+export function shopName(setting: string | null | undefined): string {
+  const v = setting?.trim() ?? "";
+  return /nusantara/i.test(v) ? v : SHOP_NAME;
+}
+
 const NOT_CUSTOMER_FACING = new Set(["TEMPO", "MARKETPLACE", "B2SOFT"]);
 
 /** The shop's own words for a method, by code. Unknown codes keep their label. */
@@ -86,7 +101,7 @@ export async function loadStoreFacts(db: PrismaClient): Promise<StoreFacts> {
   const setting = (key: string) =>
     settings.find((s) => s.key === key)?.value.trim() || null;
   return {
-    name: setting("shop.name"),
+    name: shopName(setting("shop.name")),
     contact: setting("shop.contact"),
     stores,
     paymentMethods: methods
