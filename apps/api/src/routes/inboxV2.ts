@@ -12,7 +12,14 @@ import { type Router } from "express";
 import { z } from "zod";
 import { enqueueOutbox, Prisma, type PrismaClient } from "@nusantara/db";
 import { isWithinWindow } from "@nusantara/whatsapp";
-import { dispatchTool, isLead, phoneForms } from "@nusantara/agent";
+import {
+  dispatchTool,
+  isLead,
+  phoneForms,
+  resetPointFor,
+  resetPointsFor,
+  visibleProfile,
+} from "@nusantara/agent";
 import { ApiError, notFound } from "../errors.js";
 
 /** How many units one "attach media" may carry. */
@@ -99,27 +106,70 @@ export async function profileJson(
       currentDevice: true,
       preference: true,
       updatedAt: true,
+      customer: { select: { name: true } },
       facts: {
         where: { removedAt: null },
-        select: { id: true, kind: true, value: true, source: true },
+        select: {
+          id: true,
+          kind: true,
+          value: true,
+          source: true,
+          createdAt: true,
+        },
         orderBy: { createdAt: "asc" },
       },
     },
   });
   if (!p) return null;
+  // What the bot learned before a Clear chat or a tester's /new is not shown
+  // (2026-10-27) — the same reading the bot itself makes. The name stays:
+  // it is how staff know who this is, so a cleared profile falls back to the
+  // POS customer's own.
+  const seen = visibleProfile(p, await resetPointFor(db, phone));
+  const f = seen.fields;
   return {
-    name: p.name,
-    ageEstimate: p.ageEstimate,
-    occupation: p.occupation,
+    name: (f ? p.name : null) ?? p.customer?.name ?? null,
+    ageEstimate: f ? p.ageEstimate : null,
+    occupation: f ? p.occupation : null,
     // A profile written before the range existed has only `budget`.
-    budgetMin: (p.budgetMin ?? p.budget)?.toString() ?? null,
-    budgetMax: (p.budgetMax ?? p.budget)?.toString() ?? null,
-    useCase: p.useCase,
-    currentDevice: p.currentDevice,
-    preference: p.preference,
-    facts: p.facts,
+    budgetMin: f ? ((p.budgetMin ?? p.budget)?.toString() ?? null) : null,
+    budgetMax: f ? ((p.budgetMax ?? p.budget)?.toString() ?? null) : null,
+    useCase: f ? p.useCase : null,
+    currentDevice: f ? p.currentDevice : null,
+    preference: f ? p.preference : null,
+    facts: seen.facts.map(({ id, kind, value, source }) => ({
+      id,
+      kind,
+      value,
+      source,
+    })),
     updatedAt: p.updatedAt.toISOString(),
   };
+}
+
+/**
+ * The threads whose bot has answered (a live `AgentRun`) since their reset
+ * point — so their `leadScore` is this conversation's. A thread never reset
+ * counts whenever it has a score at all.
+ */
+async function scoredSince(
+  db: PrismaClient,
+  phones: readonly string[],
+  resets: ReadonlyMap<string, Date | null>,
+): Promise<Set<string>> {
+  const reset = phones.filter((p) => resets.get(p));
+  const out = new Set(phones.filter((p) => !resets.get(p)));
+  if (reset.length === 0) return out;
+  const runs = await db.agentRun.groupBy({
+    by: ["from"],
+    where: { from: { in: reset }, dryRun: false },
+    _max: { createdAt: true },
+  });
+  for (const r of runs) {
+    const at = resets.get(r.from);
+    if (at && r._max.createdAt && r._max.createdAt > at) out.add(r.from);
+  }
+  return out;
 }
 
 /** The 🔥 tag on one thread. */
@@ -133,11 +183,14 @@ export async function leadJson(db: PrismaClient, phone: string) {
       leadScore: true,
     },
   });
-  const on = isLead(m);
+  const resetAt = await resetPointFor(db, phone);
+  const on = isLead(m, resetAt);
+  // The score is the bot's last turn's; one from before a Clear chat or a
+  // /new is the old conversation's (2026-10-27), so none until it answers.
+  const fresh = await scoredSince(db, [phone], new Map([[phone, resetAt]]));
   return {
     on,
-    score: m?.leadScore ?? null,
-    // Only the bot marks a lead now (2026-10-21); kept in the answer's shape.
+    score: fresh.has(phone) ? (m?.leadScore ?? null) : null,
     by: on ? ("BOT" as const) : null,
   };
 }
@@ -278,6 +331,10 @@ export async function listExtras(db: PrismaClient, phones: readonly string[]) {
       select: { from: true, name: true },
     }),
   ]);
+  // A lead and a score from before the thread's reset point (Clear chat, a
+  // tester's /new) belong to the conversation left behind (2026-10-27).
+  const resets = await resetPointsFor(db, phones);
+  const scored = await scoredSince(db, phones, resets);
   const digits = (s: string | null) => (s ?? "").replace(/\D/g, "");
   const held = new Set(holds.map((h) => digits(h.phone)));
   const out = new Map<string, ListExtra>();
@@ -287,8 +344,8 @@ export async function listExtras(db: PrismaClient, phones: readonly string[]) {
     const profile = profiles.find((p) => p.from === phone);
     out.set(phone, {
       unread: unread.find((u) => u.from === phone)?.unread ?? 0,
-      lead: isLead(m),
-      leadScore: m?.leadScore ?? null,
+      lead: isLead(m, resets.get(phone) ?? null),
+      leadScore: scored.has(phone) ? (m?.leadScore ?? null) : null,
       reservation: held.has(phone),
       displayName: customer?.name?.trim() || profile?.name?.trim() || null,
     });

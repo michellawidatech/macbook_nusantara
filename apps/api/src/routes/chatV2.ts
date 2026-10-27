@@ -748,7 +748,10 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
       });
       let failure: unknown;
       const ctx = { from: "simulator", now, capabilities };
-      const route = routeMessage(customerText, { capabilities });
+      const route = routeMessage(customerText, {
+        capabilities,
+        shown: (body.data.lastShown ?? []).length > 0,
+      });
       const hint = matchesNote(knowledge, matchesFor(knowledge, customerText));
       const singleAgent = async () => {
         const calls: CallUsage[] = [];

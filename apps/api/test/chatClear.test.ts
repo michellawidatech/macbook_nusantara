@@ -355,6 +355,155 @@ describe("Clear chat", () => {
     expect(list).toMatchObject({ pending: 1, unread: 1 });
   });
 
+  it("forgets the lead, its score and what the bot learned — keeps a colleague's note (2026-10-27)", async () => {
+    await message(PHONE, "buat coding, budget 15jt", {
+      reply: "siap kak",
+      agoMs: 30 * MIN,
+    });
+    const before = new Date(Date.now() - 20 * MIN);
+    await owner.waThreadMemory.create({
+      data: {
+        from: PHONE,
+        summaryTurns: 0,
+        clarifyCount: 0,
+        leadAt: before,
+        leadScore: 85,
+        updatedAt: before,
+      },
+    });
+    await owner.agentRun.create({
+      data: {
+        from: PHONE,
+        pipeline: "v1",
+        outcome: "REPLIED",
+        leadScore: 85,
+        createdAt: before,
+      },
+    });
+    const customer = await owner.customer.create({
+      data: { name: "Michella", phone: `+${PHONE}`, createdAt: before },
+    });
+    await owner.customerProfile.create({
+      data: {
+        from: PHONE,
+        customerId: customer.id,
+        name: "Michella",
+        useCase: "coding",
+        budgetMin: 15_000_000n,
+        budgetMax: 15_000_000n,
+        occupation: "programmer",
+        ageEstimate: "20-25",
+        preference: "ringan",
+        updatedAt: before,
+        facts: {
+          create: [
+            {
+              kind: "USAGE",
+              value: "coding",
+              source: "BOT",
+              createdAt: before,
+            },
+            { kind: "APP", value: "VS Code", source: "BOT", createdAt: before },
+            {
+              kind: "ABOUT",
+              value: "Teman owner",
+              source: "STAFF",
+              createdById: ids["clear-staff"]!,
+              createdAt: before,
+            },
+          ],
+        },
+      },
+    });
+    // The 🔥 is on before the clear.
+    const lead = async () => {
+      const list = (
+        await request(app).get("/api/inbox").set("Cookie", staffCookie)
+      ).body.threads.find((t: { phone: string }) => t.phone === PHONE);
+      const conv = await request(app)
+        .get(`/api/inbox/${PHONE}`)
+        .set("Cookie", staffCookie)
+        .expect(200);
+      return { list, conv: conv.body };
+    };
+    const on = await lead();
+    expect(on.conv.lead).toMatchObject({ on: true, score: 85 });
+    expect(on.list).toMatchObject({ tags: { lead: true }, leadScore: 85 });
+
+    const res = await request(app)
+      .post(`/api/inbox/${PHONE}/clear`)
+      .set("Cookie", staffCookie)
+      .expect(200);
+
+    // In the database: the learned columns are null, the bot's facts are
+    // taken back (never deleted), a colleague's stays, the link stays.
+    const profile = await owner.customerProfile.findUniqueOrThrow({
+      where: { from: PHONE },
+      include: { facts: true },
+    });
+    expect(profile).toMatchObject({
+      customerId: customer.id,
+      name: null,
+      useCase: null,
+      budgetMin: null,
+      budgetMax: null,
+      occupation: null,
+      ageEstimate: null,
+      preference: null,
+    });
+    expect(profile.facts).toHaveLength(3);
+    for (const f of profile.facts)
+      expect(f.removedAt === null).toBe(f.source === "STAFF");
+    expect((await resetPointFor(owner, PHONE))?.toISOString()).toBe(
+      res.body.clearedAt,
+    );
+
+    // The customer writes again: no 🔥, no score, nothing learned on /chat.
+    await message(PHONE, "halo kak", { agoMs: 0 });
+    const off = await lead();
+    expect(off.conv.lead).toEqual({ on: false, score: null, by: null });
+    expect(off.list).toMatchObject({ tags: { lead: false }, leadScore: null });
+    expect(off.conv.profile).toMatchObject({
+      name: "Michella",
+      useCase: null,
+      budgetMin: null,
+      occupation: null,
+    });
+    expect(
+      off.conv.profile.facts.map((f: { value: string }) => f.value),
+    ).toEqual(["Teman owner"]);
+
+    // Once the bot answers again, its score and a new lead count.
+    const after = new Date(Date.now() + 1_000);
+    await owner.agentRun.create({
+      data: {
+        from: PHONE,
+        pipeline: "v1",
+        outcome: "REPLIED",
+        leadScore: 40,
+        createdAt: after,
+      },
+    });
+    await owner.waThreadMemory.update({
+      where: { from: PHONE },
+      data: { leadScore: 40 },
+    });
+    expect((await lead()).conv.lead).toEqual({
+      on: false,
+      score: 40,
+      by: null,
+    });
+    await owner.waThreadMemory.update({
+      where: { from: PHONE },
+      data: { leadAt: after, leadScore: 70 },
+    });
+    expect((await lead()).conv.lead).toEqual({
+      on: true,
+      score: 70,
+      by: "BOT",
+    });
+  });
+
   it("refuses a number that never wrote", async () => {
     await request(app)
       .post(`/api/inbox/${OTHER}/clear`)
@@ -557,6 +706,13 @@ describe("Delete conversation", () => {
       1,
     );
     expect(await owner.customerProfileFact.count()).toBe(1);
+    // …but not what the bot learned from the chat that went (2026-10-27).
+    expect(
+      await owner.customerProfile.findUniqueOrThrow({
+        where: { from: PHONE },
+        include: { facts: true },
+      }),
+    ).toMatchObject({ name: null, facts: [{ removedAt: expect.any(Date) }] });
     expect(await owner.customer.count()).toBe(1);
     expect(await owner.unit.count({ where: { id: "u_c" } })).toBe(1);
 

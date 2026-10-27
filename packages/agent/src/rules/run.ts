@@ -655,7 +655,9 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     if (units.length === 0) {
       // Out of stock: the closest units that are in, never a dead end — and
       // the offer to tell them when what they asked for arrives.
-      const alternatives = unitsIn(out, "alternatives").slice(0, 3);
+      // One first and one more at most (2026-10-27): a list reads like a
+      // catalogue, and the template names only these two.
+      const alternatives = unitsIn(out, "alternatives").slice(0, 2);
       const watch: WatchOffer | undefined =
         query && ctx.profile !== undefined
           ? {
@@ -739,7 +741,12 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       // Mid-conversation with something waiting, "halo kak?" is a nudge,
       // not a new customer: no second welcome.
       if (waiting.length > 0) return done(nudge() ?? reply.ack(lang));
-      return done(reply.greeting(lang));
+      // A welcome, then one question — the follow-up, or an offer to pick.
+      return done(
+        followUp()
+          ? reply.greeting(lang)
+          : `${reply.greeting(lang)} ${reply.offerSearch(lang)}`,
+      );
 
     case "thanks":
       return done(reply.thanks(lang));

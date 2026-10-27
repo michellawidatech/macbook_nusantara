@@ -16,6 +16,9 @@ import { PrismaClient, appendUnitEvent, truncateAll } from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
 import {
   dispatchTool,
+  isLead,
+  profileKnown,
+  profileLine,
   resetPointFor,
   TESTERS_SETTING_KEY,
   type AgentCapabilities,
@@ -407,8 +410,58 @@ describe("the worker as nusantara_agent", () => {
       data: { key: TESTERS_SETTING_KEY, value: FROM, updatedAt: NOW },
     });
     await inbound("x.1", "/new", new Date(NOW.getTime() - 5_000));
+    const old = new Date(NOW.getTime() - 3_600_000);
+    await owner.waThreadMemory.create({
+      data: {
+        from: FROM,
+        summaryTurns: 0,
+        clarifyCount: 0,
+        leadAt: old,
+        leadScore: 88,
+        updatedAt: old,
+      },
+    });
+    await owner.customerProfile.create({
+      data: {
+        from: FROM,
+        name: "Michella",
+        useCase: "coding",
+        occupation: "programmer",
+        updatedAt: old,
+        facts: {
+          create: [
+            { kind: "USAGE", value: "coding", source: "BOT", createdAt: old },
+            {
+              kind: "ABOUT",
+              value: "Teman owner",
+              source: "STAFF",
+              createdById: AGENT_STAFF,
+              createdAt: old,
+            },
+          ],
+        },
+      },
+    });
     const result = await resetPass({ db: agent, logger, now: () => NOW });
     expect(result.reset).toBe(1);
+    // It forgets the lead and what the bot learned, as Clear chat does
+    // (2026-10-27) — every write within the agent's own grants.
+    expect(
+      await owner.waThreadMemory.findUniqueOrThrow({ where: { from: FROM } }),
+    ).toMatchObject({ leadAt: null, leadScore: null });
+    const profile = await owner.customerProfile.findUniqueOrThrow({
+      where: { from: FROM },
+      include: { facts: { orderBy: { kind: "asc" } } },
+    });
+    expect(profile).toMatchObject({
+      name: null,
+      useCase: null,
+      occupation: null,
+    });
+    expect(profile.facts.map((f) => [f.source, f.removedAt !== null])).toEqual([
+      ["BOT", true],
+      ["STAFF", false],
+    ]);
   });
 });
 
@@ -697,6 +750,62 @@ describe("a chat staff cleared, read as nusantara_agent (2026-10-27)", () => {
       select: { text: true },
     });
     expect(rows.map((r) => r.text).join()).not.toContain("SATU-BULAN");
+  });
+
+  it("does not see the lead or the profile learned before it (2026-10-27)", async () => {
+    await clearedThread();
+    const before = new Date(CLEARED.getTime() - 60_000);
+    await owner.waThreadMemory.update({
+      where: { from: FROM },
+      data: { leadAt: before, leadScore: 90 },
+    });
+    // A clear from before forgetProfile existed: the learned columns are
+    // still there, so the bot must skip them by the reset point alone.
+    await owner.customerProfile.create({
+      data: {
+        from: FROM,
+        name: "Michella",
+        useCase: "coding",
+        budgetMax: 25_000_000n,
+        updatedAt: before,
+        facts: {
+          create: [
+            {
+              kind: "USAGE",
+              value: "CODINGNEEDLE",
+              source: "BOT",
+              createdAt: before,
+            },
+          ],
+        },
+      },
+    });
+    expect(await profileLine(agent, FROM, CLEARED)).toBeNull();
+    expect(await profileKnown(agent, FROM, CLEARED)).toMatchObject({
+      name: null,
+      usage: false,
+      budget: false,
+      budgetMax: null,
+    });
+    const memory = await agent.waThreadMemory.findUniqueOrThrow({
+      where: { from: FROM },
+    });
+    expect(isLead(memory, CLEARED)).toBe(false);
+    expect(isLead(memory, null)).toBe(true);
+
+    const { shown, client } = recorder();
+    await draftPass({
+      db: agent,
+      logger,
+      anthropic: { apiKey: "sk-ant-test" },
+      client,
+      debounceMs: 8_000,
+      maxDraftsPerTick: 5,
+      now: () => NOW,
+    });
+    const all = shown.join("\n");
+    expect(all).not.toContain("Michella");
+    expect(all).not.toContain("CODINGNEEDLE");
   });
 
   it("may read the clear and never write it", async () => {

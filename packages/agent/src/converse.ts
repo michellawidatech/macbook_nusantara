@@ -497,6 +497,26 @@ const note = (v: unknown, fallback: string): string => {
   return (s || fallback).slice(0, 240);
 };
 
+/**
+ * What the model may cite for a reply that rests on the conversation itself —
+ * small talk, a thank-you, what the customer told us in this chat — rather
+ * than on a source with facts in it (2026-10-27). The owner's "masih ingat gk
+ * aku siapa" was handed to a person because no source fitted. `chat` is the
+ * word the prompt teaches; the rest are what a model reaches for instead.
+ */
+const CHAT_SOURCES = new Set([
+  "chat",
+  "conversation",
+  "percakapan",
+  "smalltalk",
+  "small_talk",
+  "profile",
+  "customer",
+  "memory",
+  "history",
+  "none",
+]);
+
 export async function converse(
   input: ConverseInput,
 ): Promise<ConverseResult | null> {
@@ -521,7 +541,9 @@ export async function converse(
   const routedNote = route
     ? `This message must go to a colleague (${route.topic.replace("_", " ")}). ` +
       "Do not answer it with reply. Use handoff_to_staff: first answer anything an approved " +
-      "answer covers, then say warmly that a colleague will check and reply in this chat." +
+      "answer covers, then say in one short line what you are checking and with whom, as " +
+      '"aku" (for an offer: "Untuk nego harganya aku tanyain ke owner dulu ya kak 🙏"). ' +
+      'Never a generic "admin kami akan membalas".' +
       (route.topic === "closing"
         ? ' They are ready to buy: write the summary as "Perlu closing — <name> siap ambil ' +
           '<unit> <price>, <how>".' +
@@ -700,10 +722,19 @@ export async function converse(
         sources.push("stock");
       } else if (c.toLowerCase() === "greeting") {
         sources.push("greeting");
+      } else if (CHAT_SOURCES.has(c.toLowerCase())) {
+        // Small talk, or what the customer said in this chat ("masih ingat
+        // aku siapa?"). Brings no text, like a greeting: a figure, a "ready"
+        // or a "tinggal 1" in it is still refused by `checkReply`.
+        sources.push("chat");
       } else {
         unknown += 1;
       }
     }
+    // A reply citing nothing is read as resting on the chat itself
+    // (2026-10-27): "wkwk", "masih ingat aku siapa?" were held as hand-overs.
+    // It may then claim nothing — the same checks as `chat`.
+    if (cited.length === 0) sources.push("chat");
     const problem = checkReply({
       message,
       sourceCount: sources.length,

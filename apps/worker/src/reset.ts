@@ -28,7 +28,9 @@
  *  3. Close the thread's open tasks. They describe a conversation that, for
  *     this tester, is over.
  *  4. Drop the summary and move its cursor to now, so the summary pass does
- *     not rebuild the note from the turns that were just left behind.
+ *     not rebuild the note from the turns that were just left behind — and,
+ *     since 2026-10-27, the bot's 🔥 lead and what it learned about them
+ *     (`forgetProfile`), exactly as *Clear chat* does.
  *  5. Queue the confirmation.
  *
  * Nothing is deleted and no earlier message's words change: the inbox still
@@ -37,6 +39,7 @@
 import {
   RESET_INTENT,
   RESET_REPLY,
+  forgetProfile,
   isResetCommand,
   loadTesters,
 } from "@nusantara/agent";
@@ -130,10 +133,18 @@ export async function resetPass(deps: ResetDeps): Promise<ResetPassResult> {
           data: { status: "DONE", resolvedAt: at, updatedAt: at },
         });
 
-        // Only columns the agent's role is granted (memory.ts `saveSummary`).
+        // What the bot learned in the conversation left behind (owner,
+        // 2026-10-27: after /new it still greeted the tester by name and
+        // knew they code). Both tables are the agent's to UPDATE.
+        await forgetProfile(tx, from, at);
+
+        // Only columns the agent's role is granted (memory.ts `saveSummary`)
+        // — the lead's two are the bot's own half (invariant 13).
         await tx.waThreadMemory.upsert({
           where: { from },
           update: {
+            leadAt: null,
+            leadScore: null,
             summary: null,
             summaryAt: at,
             summaryTurns: 0,

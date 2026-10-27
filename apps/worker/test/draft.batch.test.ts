@@ -1290,7 +1290,8 @@ describe("handing a customer to a person", () => {
       (await db.outbox.findFirstOrThrow()).payload as { body: string }
     ).body;
     expect(body).not.toMatch(/7\.500\.000/);
-    expect(body).toMatch(/admin kami/i);
+    // The admin's own short line for a price (2026-10-27), not "admin kami".
+    expect(body).toMatch(/^Untuk harganya aku tanyain dulu ya kak 🙏/);
   });
 
   it("says why when the model itself fails", async () => {

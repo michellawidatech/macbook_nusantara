@@ -144,8 +144,8 @@ describe("an answer", () => {
     const r = await run([replies("Bisa kak", "K99")], "bisa cicil?").result;
     expect(r?.handoff).toMatchObject({ forcedBy: "UNKNOWN_SOURCE" });
     // The customer gets the shop's fixed words, not the refused ones.
-    expect(r?.reply).toMatch(/admin kami/i);
-    expect(r?.reply).not.toBe("Bisa kak");
+    expect(r?.reply).toBe("Bentar ya kak, aku cek dulu 🙏");
+    expect(r?.reply).not.toMatch(/admin kami/i);
   });
 
   it("becomes a hand-over when it carries a figure the source does not", async () => {
@@ -244,9 +244,7 @@ describe("a message the code has already given to a person", () => {
       alreadyTold: true,
     }).result;
     expect(r?.handoff).toMatchObject({ topic: "stock", forcedBy: "route" });
-    expect(r?.reply).toBe(
-      "Siap kak, yang ini juga sudah kami teruskan ke tim kami ya 🙏",
-    );
+    expect(r?.reply).toBe("Siap kak, yang ini sekalian aku tanyain ya 🙏");
   });
 
   it("is handed over even if a reply comes back anyway", async () => {
@@ -269,7 +267,9 @@ describe("a message the code has already given to a person", () => {
     ).result;
     expect(r?.reply).not.toMatch(/8\.500\.000/);
     // Shut: the fixed line says when somebody will answer.
-    expect(r?.reply).toMatch(/jam operasional/);
+    expect(r?.reply).toMatch(
+      /Toko lagi tutup, nanti aku kabari pas buka jam 10\.00/,
+    );
     expect(r?.handoff?.topic).toBe("price");
   });
 });
@@ -351,5 +351,44 @@ describe("failure", () => {
 
   it("returns null for a thread with no turns", async () => {
     expect(await run([], "x", { turns: [] }).result).toBeNull();
+  });
+});
+
+describe("a reply that rests on the chat itself (2026-10-27)", () => {
+  // The owner's "masih ingat gk aku siapa" was held as a hand-over: the
+  // model answered from the conversation and no source fitted. Small talk
+  // cites `chat` — or nothing — and may still claim nothing.
+  it.each([
+    [
+      "masih ingat aku siapa?",
+      "Ingat dong kak, kak Rina yang cari Air buat kuliah kan 😊",
+      "chat",
+    ],
+    ["wkwk", "Hehe iya kak 😄", "chat"],
+    ["makasih kak", "Sama-sama kak 😊", "chat"],
+    ["kok tau?", "Tadi kakak sempat cerita di chat ini kak 😊", "conversation"],
+    ["masih ingat gk aku siapa", "Ingat kak, kak Michella 😊", ""],
+  ])("%s → answered, not held", async (text, message, sources) => {
+    const r = await run([replies(message, sources)], text).result;
+    expect(r?.handoff).toBeUndefined();
+    expect(r?.reply).toBe(message);
+    expect(r?.sources).toEqual(["chat"]);
+  });
+
+  it("still holds a price or a 'ready' that only the chat vouches for", async () => {
+    const price = await run(
+      [replies("Air M1 nya 7,5jt kak", "chat")],
+      "masih ingat yang kemarin?",
+    ).result;
+    expect(price?.handoff).toMatchObject({
+      forcedBy: "AMOUNT_NOT_IN_SOURCE",
+    });
+    const ready = await run(
+      [replies("Air M2 nya masih ready kak", "")],
+      "yang kemarin gimana?",
+    ).result;
+    expect(ready?.handoff).toMatchObject({
+      forcedBy: "AVAILABILITY_NOT_IN_SOURCE",
+    });
   });
 });

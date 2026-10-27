@@ -237,15 +237,16 @@ export interface WaitingTask {
 
 /**
  * Has the bot's previous reply already told the customer a colleague will
- * answer? Every holding line says "admin kami" (policy.ts `holdingMessage`)
- * and the still-waiting line says "tim kami" (rules/replies.ts) — the prompt
- * asks the model for the same two words. So the second nudge is not answered
+ * answer? Every holding line says what "aku" is checking ("aku cekin dulu",
+ * "aku tanyain ke owner dulu" — policy.ts `holdingMessage`, 2026-10-27) and
+ * the still-waiting line says "tim kami" (rules/replies.ts); older replies
+ * said "admin kami", which is still read. So the second nudge is not answered
  * with the same promise again.
  */
 export function saidColleagueWillReply(
   lastReply: string | null | undefined,
 ): boolean {
-  return /\b(admin|tim)\s+kami\b|\bcolleague\b|\bour team\b/i.test(
+  return /\b(admin|tim)\s+kami\b|\bcolleague\b|\bour team\b|\baku\s+(cek(in)?|cari(in)?|tanya(in|kan)|pastikan|siap(in|kan)|lihat|bantu\s+(cek|atur|proses))\b[^.?!\n]*\bdulu\b|\baku\s+teruskan\b|\baku\s+kabari\b|\baku\s+bantu\s+(cek|atur)\s+langsung\b|\bI'?ll\s+(check|ask)\b/i.test(
     lastReply ?? "",
   );
 }

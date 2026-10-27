@@ -749,6 +749,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         known,
         reminded,
         visitBooked,
+        lastShown,
       ] = await Promise.all([
         db.waThreadMemory.findUnique({
           where: { from },
@@ -757,15 +758,18 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // What the customer has told the shop, and a booking proposal still
         // open — so the single agent stops asking what the profile says
         // (2026-10-22: only v2 read either before).
-        profileLine(db, from),
+        profileLine(db, from, resetAt),
         openProposalLine(db, from, at),
         // What is waiting for a colleague (2026-10-27): the bot answers the
         // newer messages and must neither answer nor contradict these.
         waitingTasks(db, from),
-        profileKnown(db, from),
+        profileKnown(db, from, resetAt),
         // A visit the worker reminded them of, not answered since (followUp.ts).
         remindedVisitFor(db, from),
         hasOpenVisit(db, from),
+        // The units the bot's last reply showed: "bisa nego?" and "mau ambil
+        // yang M2" are about those, and go to a person (routeMessage).
+        lastShownUnits(db, from, resetAt),
       ]);
 
       // Turns older than the window, when the window is full: the few that
@@ -854,6 +858,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       const route = routeMessage(current, {
         hasMedia: batch.some((m) => m.msgType !== "text"),
         capabilities,
+        shown: lastShown.length > 0,
       });
       const hint = matchesNote(knowledge, matchesFor(knowledge, current));
 
@@ -924,10 +929,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       } else if (settings.pipeline === "rules") {
         // Rules and templates first; the single agent only for what no rule
         // answers, and only when there is a credential (rules/run.ts).
-        const [lastShown, watchOffer] = await Promise.all([
-          lastShownUnits(db, from, resetAt),
-          lastWatchOffer(db, from, resetAt),
-        ]);
+        const watchOffer = await lastWatchOffer(db, from, resetAt);
         result = await runRules({
           db,
           ctx,
@@ -1203,7 +1205,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           where: { from },
           data: {
             leadScore,
-            ...(leadScore >= settings.leadThreshold && !isLead(mem)
+            // A lead marked before a /new or a Clear chat belongs to the
+            // conversation left behind (2026-10-27): mark it again.
+            ...(leadScore >= settings.leadThreshold && !isLead(mem, resetAt)
               ? { leadAt: answeredAt }
               : {}),
           },

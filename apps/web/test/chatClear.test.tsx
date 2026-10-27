@@ -136,7 +136,9 @@ describe("Clear chat", () => {
     await user.click(await screen.findByText("Clear chat"));
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("Clear this chat?");
-    expect(dialog).toHaveTextContent("the bot forgets the conversation");
+    expect(dialog).toHaveTextContent(
+      "it forgets the conversation, the lead and what it learned",
+    );
     expect(clearConversation).not.toHaveBeenCalled();
     await user.click(
       within(dialog).getByRole("button", { name: "Clear chat" }),

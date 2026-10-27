@@ -50,6 +50,7 @@ import { Prisma, enqueueOutbox, type PrismaClient } from "@nusantara/db";
 import { currentRequestId } from "@nusantara/logging";
 import { isWithinWindow, windowClosesAt } from "@nusantara/whatsapp";
 import {
+  forgetProfile,
   RESET_INTENT,
   askingPrice,
   isResetCommand,
@@ -1117,8 +1118,10 @@ export function inboxRouter(
    *  4. ONE `AuditLog` row says who (entity `WaThread`, ARCHIVE).
    *
    * The thread leaves the list until the customer writes again, and then
-   * shows only what came after. The profile, ratings and corrections are
-   * untouched. Any signed-in staff (owner answer).
+   * shows only what came after. Since 2026-10-27 the bot also forgets what it
+   * LEARNED (`forgetProfile`) and the 🔥 lead stops counting; ratings,
+   * corrections and a colleague's own profile facts are untouched. Any
+   * signed-in staff (owner answer).
    */
   router.post("/:phone/clear", async (req, res, next) => {
     try {
@@ -1158,6 +1161,13 @@ export function inboxRouter(
             updatedAt: at,
           },
         });
+        // What the bot learned in that conversation goes with it (owner,
+        // 2026-10-27: "it still retains the score and the memory of like the
+        // usage and all"): the profile's learned columns are nulled and the
+        // bot's facts taken back. The 🔥 lead and its score are agent-owned
+        // columns this role cannot write; every reader ignores a lead marked
+        // before the clear instead (`isLead(m, resetAt)`).
+        await forgetProfile(tx, phone.data, at);
         // Only the app's columns on update; the create branch initialises
         // the two NOT NULL counters on a row that did not exist (auto-reply's
         // reasoning, above).
@@ -1248,6 +1258,9 @@ export function inboxRouter(
                    (${at}::timestamptz AT TIME ZONE 'UTC')
                  ) AS n`);
         const n = Number(rows[0]?.n ?? 0);
+        // The profile is kept (its link to the customer, a colleague's
+        // facts); what the bot learned from the deleted chat is not.
+        await forgetProfile(tx, phone.data, at);
         await tx.auditLog.create({
           data: {
             at,

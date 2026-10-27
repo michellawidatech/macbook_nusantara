@@ -7,6 +7,7 @@
 import type { PrismaClient } from "@nusantara/db";
 import { formatRupiah } from "@nusantara/domain";
 import type { AgentRole } from "./agents.js";
+import { visibleProfile } from "./reset.js";
 import { jakartaDate, jakartaTime } from "./tools.js";
 
 /**
@@ -60,10 +61,20 @@ export function isLead(
     readonly leadStaffAt: Date | null;
     readonly leadClearedAt: Date | null;
   } | null,
+  /**
+   * The thread's reset point (`resetPointFor`: the later of a tester's `/new`
+   * and *Clear chat*). A lead the bot marked before it belongs to the
+   * conversation that was left behind (owner, 2026-10-27).
+   */
+  resetAt: Date | null,
 ): boolean {
   if (!m) return false;
   const set = m.leadAt?.getTime() ?? 0;
-  return set > 0 && set > (m.leadClearedAt?.getTime() ?? 0);
+  return (
+    set > 0 &&
+    set > (m.leadClearedAt?.getTime() ?? 0) &&
+    set > (resetAt?.getTime() ?? 0)
+  );
 }
 
 /** The persona rows that belong to an agent. */
@@ -83,6 +94,8 @@ export async function loadAgentPersonas(
 export async function profileLine(
   db: PrismaClient,
   from: string,
+  /** The thread's reset point: what was learned before it is not read. */
+  resetAt: Date | null,
 ): Promise<string | null> {
   const p = await db.customerProfile.findUnique({
     where: { from },
@@ -95,14 +108,28 @@ export async function profileLine(
       occupation: true,
       budgetMin: true,
       budgetMax: true,
+      updatedAt: true,
       facts: {
         where: { removedAt: null },
-        select: { kind: true, value: true },
+        select: { kind: true, value: true, source: true, createdAt: true },
         orderBy: { createdAt: "asc" },
       },
     },
   });
   if (!p) return null;
+  const seen = visibleProfile(p, resetAt);
+  if (!seen.fields)
+    Object.assign(p, {
+      name: null,
+      useCase: null,
+      currentDevice: null,
+      preference: null,
+      ageEstimate: null,
+      occupation: null,
+      budgetMin: null,
+      budgetMax: null,
+    });
+  p.facts = seen.facts;
   const budget =
     p.budgetMin !== null && p.budgetMax !== null && p.budgetMin !== p.budgetMax
       ? `${formatRupiah(p.budgetMin)}–${formatRupiah(p.budgetMax)}`
@@ -177,6 +204,8 @@ export async function openProposalLine(
 export async function profileKnown(
   db: PrismaClient,
   from: string,
+  /** The thread's reset point: what was learned before it is not read. */
+  resetAt: Date | null,
 ): Promise<{
   name: string | null;
   usage: boolean;
@@ -195,10 +224,15 @@ export async function profileKnown(
       budget: true,
       budgetMin: true,
       budgetMax: true,
-      facts: { where: { removedAt: null }, select: { kind: true } },
+      updatedAt: true,
+      facts: {
+        where: { removedAt: null },
+        select: { kind: true, source: true, createdAt: true },
+      },
     },
   });
-  if (!p)
+  const seen = p ? visibleProfile(p, resetAt) : null;
+  if (!p || !seen)
     return {
       name: null,
       usage: false,
@@ -212,15 +246,19 @@ export async function profileKnown(
     v !== null && v > 0n && v < BigInt(Number.MAX_SAFE_INTEGER)
       ? Number(v)
       : null;
+  const facts = seen.facts;
+  const f = seen.fields;
   return {
-    name: p.name?.trim() || null,
-    usage: Boolean(p.useCase) || p.facts.some((f) => f.kind === "USAGE"),
+    name: (f && p.name?.trim()) || null,
+    usage: (f && Boolean(p.useCase)) || facts.some((x) => x.kind === "USAGE"),
     preferences:
-      Boolean(p.preference) || p.facts.some((f) => f.kind === "PREFERENCE"),
-    budget: p.budget !== null || p.budgetMin !== null || p.budgetMax !== null,
-    apps: p.facts.some((f) => f.kind === "APP"),
-    budgetMin: money(p.budgetMin),
-    budgetMax: money(p.budgetMax ?? p.budget),
+      (f && Boolean(p.preference)) ||
+      facts.some((x) => x.kind === "PREFERENCE"),
+    budget:
+      f && (p.budget !== null || p.budgetMin !== null || p.budgetMax !== null),
+    apps: facts.some((x) => x.kind === "APP"),
+    budgetMin: f ? money(p.budgetMin) : null,
+    budgetMax: f ? money(p.budgetMax ?? p.budget) : null,
   };
 }
 

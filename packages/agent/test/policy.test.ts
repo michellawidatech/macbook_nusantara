@@ -11,6 +11,7 @@ import {
   holdingMessage,
   isHandoffTopic,
   mentionsProduct,
+  moneyAmounts,
   routeMessage,
   actionKindOf,
   saysDpPaid,
@@ -52,7 +53,6 @@ describe("routeMessage — always a person, machine or not", () => {
     ["bisa di keep dulu ga kak", "closing"],
     ["dp dulu boleh?", "closing"],
     ["oke kak saya ambil yang kedua", "closing"],
-    ["cara bayarnya gimana kak?", "closing"],
     ["minta no rek nya kak", "closing"],
     ["budget 10jt dapet apa ya", "recommendation"],
     ["dana 8 juta cukup?", "recommendation"],
@@ -71,6 +71,8 @@ describe("routeMessage — the generic questions the owner answered stay with th
     "Apakah unitnya ready?",
     "Ada price list nya ga kak?",
     "Untuk harga udah net atau masih bisa nego kak?",
+    // How to pay is in the approved answers (2026-10-27): not a hand-over.
+    "cara bayarnya gimana kak?",
     "Kenapa harga di shopee/tokped lebih mahal ka?",
     "Cod bisa ga kak?",
     "bisa ganti baterai di toko?",
@@ -185,6 +187,43 @@ describe("the holding line", () => {
     expect(holdingMessage("stock", false)).toMatch(/10\.00/);
   });
 
+  it("fits the topic and sounds like the admin, never 'admin kami segera balas' (2026-10-27)", () => {
+    expect(holdingMessage("price", true)).toBe(
+      "Untuk harganya aku tanyain dulu ya kak 🙏",
+    );
+    expect(holdingMessage("negotiation", true)).toBe(
+      "Untuk nego harganya aku tanyain ke owner dulu ya kak 🙏",
+    );
+    expect(holdingMessage("order_payment", true)).toBe(
+      "Makasih kak, buktinya aku cek dulu ya 🙏",
+    );
+    expect(holdingMessage("order_payment", true, "dp_proof")).toBe(
+      "Makasih kak, bukti DP-nya aku cek dulu ya 🙏",
+    );
+    expect(holdingMessage("closing", true, "buy")).toBe(
+      "Siap kak, aku bantu prosesnya ya 🙏",
+    );
+    expect(holdingMessage("other", true)).toBe(
+      "Bentar ya kak, aku cek dulu 🙏",
+    );
+    expect(holdingMessage("complaint", true)).toMatch(/^Waduh, maaf ya kak/);
+    expect(holdingMessage("photos", true)).toBe(
+      "Fotonya aku siapin dulu ya kak 🙏",
+    );
+    for (const t of HANDOFF_TOPICS) {
+      const line = holdingMessage(t, true);
+      expect(line, t).not.toMatch(
+        /admin kami|segera balas|stok, harga, dan kondisi/i,
+      );
+      // Short: one breath on WhatsApp.
+      expect(line.length, t).toBeLessThan(70);
+    }
+    // Shut, the same line says when.
+    expect(holdingMessage("price", false)).toBe(
+      "Untuk harganya aku tanyain dulu ya kak 🙏 Toko lagi tutup, nanti aku kabari pas buka jam 10.00 ya.",
+    );
+  });
+
   it("refuses a model's line that quotes a price", () => {
     expect(
       checkHoldingMessage("Siap kak, harganya 8jt, admin kami cek dulu ya"),
@@ -195,6 +234,58 @@ describe("the holding line", () => {
     expect(isHandoffTopic("stock")).toBe(true);
     expect(isHandoffTopic("price_negotiation")).toBe(false);
     expect(isHandoffTopic(3)).toBe(false);
+  });
+});
+
+describe("a price written the way people text it (2026-10-27)", () => {
+  const facts: StockFact[] = [
+    {
+      label: "MacBook Air M2 8/256",
+      available: true,
+      prices: ["11900000"],
+    },
+    {
+      label: "MacBook Pro 14 M3 8/512",
+      available: true,
+      prices: ["21925000"],
+    },
+  ];
+  const check = (message: string) =>
+    checkReply({
+      message,
+      sourceCount: 1,
+      unknownSources: 0,
+      sourceTexts: [],
+      stockFacts: facts,
+    });
+
+  it.each([
+    "Air M2 mulus, 11,9jt kak 😊",
+    "Air M2 mulus 11.9jt kak",
+    "Air M2 nya 11,9 juta kak",
+    "Air M2 Rp11.900.000 kak",
+    "Air M2 Rp 11.900.000 kak",
+    "Air M2 11.900.000 kak",
+    "Pro 14 M3 21,925jt kak",
+    "Pro 14 M3 Rp21.925.000 kak",
+  ])("accepts %s", (message) => {
+    expect(check(message)).toBeNull();
+  });
+
+  it.each([
+    // Rounded is a different price.
+    "Air M2 mulus 12jt kak",
+    "Pro 14 M3 21,9jt kak",
+    // The right figure on the wrong unit.
+    "Pro 14 M3 11,9jt kak",
+  ])("refuses %s", (message) => {
+    expect(check(message)).toBe("AMOUNT_NOT_IN_SOURCE");
+  });
+
+  it("reads thousands written with a k or rb as thousands", () => {
+    expect(moneyAmounts("ongkir 1.500rb, charger 450k")).toEqual([
+      1_500_000, 450_000,
+    ]);
   });
 });
 
@@ -264,7 +355,7 @@ describe("the closing task (2026-10-27)", () => {
       "Untuk amankan unitnya bisa DP Rp 1jt kak, unit kami tahan 3 hari. Setelah transfer, kirim buktinya ya, tim kami cek dulu 🙏",
     );
     expect(holdingMessage("closing", false, "buy")).toContain(
-      "Tim kami bantu proses pembeliannya",
+      "Siap kak, aku bantu prosesnya ya 🙏",
     );
   });
 });
@@ -305,7 +396,7 @@ describe("the DP (2026-10-27)", () => {
     expect(routeMessage("mau dp, transfer ke mana kak?")?.rule).toBe("keep");
     expect(saysDpPaid("bisa dp ga?")).toBe(false);
     expect(holdingMessage("order_payment", true, "dp_proof")).toContain(
-      "Bukti DP-nya kami cek dulu",
+      "bukti DP-nya aku cek dulu",
     );
   });
 });

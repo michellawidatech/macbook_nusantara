@@ -237,6 +237,35 @@ describe("the customer profile", () => {
     expect(screen.getByText("Bot score 72")).toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
+
+  it("after a Clear chat shows no lead, no score and nothing the bot learned (2026-10-27)", () => {
+    // What GET /api/inbox/:phone answers once the chat was cleared: the
+    // server drops the old lead, its score and the bot's facts; the name is
+    // the POS customer's, and a colleague's own note stays.
+    draw({
+      ...CONVERSATION,
+      lead: { on: false, score: null, by: null },
+      profile: {
+        ...CONVERSATION.profile!,
+        ageEstimate: null,
+        occupation: null,
+        budgetMin: null,
+        budgetMax: null,
+        currentDevice: null,
+        facts: CONVERSATION.profile!.facts.filter((f) => f.source === "STAFF"),
+      },
+    });
+    expect(screen.queryByText(/Bot score/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Lead", { selector: ".ant-tag" })).toBeNull();
+    expect(screen.queryByText("Deep learning")).not.toBeInTheDocument();
+    expect(screen.queryByText("VSCode")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Budget" }),
+    ).not.toHaveTextContent("Rp");
+    expect(screen.getByRole("region", { name: "Other" })).toHaveTextContent(
+      "Kuliah di Bandung",
+    );
+  });
 });
 
 describe("waiting for stock (2026-10-27)", () => {

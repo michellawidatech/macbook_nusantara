@@ -45,6 +45,7 @@
  *   through the context window.
  */
 
+import { resetPointFor } from "./reset.js";
 import {
   TXN_TIMEOUTS,
   assertSchedule,
@@ -449,8 +450,9 @@ const REPLY: Anthropic.Tool = {
     "Send your answer to the customer. Everything it tells them must come from an approved " +
     "answer (cite its handle, like K7), the shop facts ('store'), a catalogue lookup " +
     "('catalog') or a stock lookup ('stock'). A greeting or a thank-you that states no fact " +
-    "cites 'greeting'. If you cannot name a source for what they asked, use handoff_to_staff " +
-    "instead.",
+    "cites 'greeting'; small talk, or what the customer told you in this chat (their name, what " +
+    "they need), cites 'chat' and may carry no price and no stock claim. If you cannot name a " +
+    "source for a fact they asked about, use handoff_to_staff instead.",
   input_schema: {
     type: "object",
     properties: {
@@ -464,7 +466,7 @@ const REPLY: Anthropic.Tool = {
         type: "string",
         maxLength: 120,
         description:
-          "Comma-separated: the handles of the approved answers used (K3, K12), and/or store, catalog, stock or greeting.",
+          "Comma-separated: the handles of the approved answers used (K3, K12), and/or store, catalog, stock, greeting or chat.",
       },
       photos: {
         type: "string",
@@ -482,12 +484,14 @@ const REPLY: Anthropic.Tool = {
 const HANDOFF: Anthropic.Tool = {
   name: "handoff_to_staff",
   description:
-    "Hand the conversation to a colleague. Use it for the stock, price or condition of a " +
-    "particular unit you cannot look up, negotiation, payments already made, trade-in or " +
-    "buy-back quotes, shipping costs, complaints and warranty claims, when the customer asks for " +
-    "a person, and for ANYTHING the approved answers and the shop facts do not cover. When they " +
-    "are ready to buy, want a unit kept (a DP) or ask how to pay, use topic closing — a colleague " +
-    "closes the sale. Never guess instead of using this.",
+    "Hand ONE question to a colleague. Use it for the stock, price or condition of a " +
+    "particular unit you cannot look up, a real price offer or bargain on a unit, payments " +
+    "already made, trade-in or buy-back quotes, shipping costs, complaints and warranty claims, " +
+    "when the customer asks for a person, and for a question about how the shop works that the " +
+    "approved answers and the shop facts do not cover. When they COMMIT — take a unit you showed, " +
+    "say deal, ask for the account number, or want a unit kept (a DP) — use topic closing. " +
+    "Wanting to buy, asking how to pay, or asking for something cheaper is NOT a hand-over: " +
+    "answer it. Never guess instead of using this.",
   input_schema: {
     type: "object",
     properties: {
@@ -516,9 +520,11 @@ const HANDOFF: Anthropic.Tool = {
         type: "string",
         maxLength: 600,
         description:
-          "What the customer reads now: a short, warm line in the shop's voice saying the admin " +
-          '("admin kami") will follow up in this chat. If an approved answer covers part of the ' +
-          "question, answer that part first. No price, no stock, no promised time.",
+          "What the customer reads now, as WhatsApp from the shop admin (you): one or two short " +
+          "lines saying plainly what you are checking and with whom, like " +
+          '"Untuk nego harganya aku tanyain ke owner dulu ya kak 🙏". Never a generic "admin kami ' +
+          'akan membalas/menghubungi". If an approved answer covers part of the question, answer ' +
+          "that part first. No price, no stock, no promised time.",
       },
     },
     required: ["topic", "summary", "customer_message"],
@@ -2140,7 +2146,23 @@ async function lookupCustomer(db: PrismaClient, ctx: ToolContext) {
     }),
   ]);
 
-  if (!customer && orders.length === 0 && reservations.length === 0) {
+  /*
+   * A name and nothing else is what the bot itself filed when the customer
+   * said it (remember_customer). After *Clear chat* or a tester's `/new` that
+   * belongs to the conversation left behind (2026-10-27), so it is not read
+   * back as "the shop knows you"; somebody who bought from us still is.
+   */
+  const forgotten =
+    customer !== null &&
+    orders.length === 0 &&
+    reservations.length === 0 &&
+    (await resetPointFor(db, ctx.from).then(
+      (at) => at !== null && customer.createdAt.getTime() <= at.getTime(),
+    ));
+  if (
+    forgotten ||
+    (!customer && orders.length === 0 && reservations.length === 0)
+  ) {
     return {
       known: false,
       note:
@@ -2971,8 +2993,19 @@ async function rememberCustomer(
     if (facts.length > 0) {
       // A fact already on the profile — the bot's or a colleague's, in any
       // letter case — is not written twice.
+      // Not one from before the thread's reset point (2026-10-27): that
+      // conversation is forgotten, and a fact said again is learned again.
+      const resetAt = await resetPointFor(tx as PrismaClient, ctx.from);
       const have = await tx.customerProfileFact.findMany({
-        where: { profileId: profile.id, removedAt: null },
+        where: {
+          profileId: profile.id,
+          removedAt: null,
+          ...(resetAt
+            ? {
+                OR: [{ source: "STAFF" }, { createdAt: { gt: resetAt } }],
+              }
+            : {}),
+        },
         select: { kind: true, value: true },
       });
       const seen = new Set(

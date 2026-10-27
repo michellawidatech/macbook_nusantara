@@ -493,8 +493,11 @@ async function nudgeLeads(
   let queued = 0;
   for (const m of leads) {
     if (queued >= max) break;
-    if (!isLead(m)) continue;
+    // Only a lead marked since the thread last started over (Clear chat or
+    // a tester's /new, 2026-10-27) is nudged.
+    if (!isLead(m, m.clearedAt)) continue;
     const from = m.from;
+    if (!isLead(m, await resetPointFor(db, from))) continue;
     const last = await lastInbound(db, from);
     // Their last message was answered by the bot, and nothing since.
     if (

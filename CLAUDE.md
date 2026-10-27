@@ -3297,6 +3297,18 @@ Decisions that outlived those documents:
   DP`. Holds made before this release stay firm. A unit a DP is holding is
   OFF the till for anyone else (`dpHeldSerials`): only a sale loaded from its
   own reservation can take it — the release had left "Sell anyway" on it.
+- **Hand over only what needs a person; a clear forgets — 2026-10-27.**
+  `routeMessage` hands over a payment/DP proof, a real offer or bargain, a
+  commitment to a unit (`CLOSE`; `COMMIT_SHOWN` when `shown`), a hold (`KEEP`,
+  hold intent only) and a customer's photo — "mau beli", "cara bayarnya?",
+  "lebih murah?", "12 jutaan?", "tahan berapa jam?" are the bot's
+  (`test/routing.realchat.test.ts`). Replies are short WhatsApp lines as "aku":
+  condition words, "11,9jt" only when exact (`shortPrice`), one pick + one
+  cheaper + one step up; `holdingMessage` is one line per topic, never "admin
+  kami segera balas"; small talk cites `chat`. *Clear chat*, *Delete* and
+  `/new` call `forgetProfile` (learned columns incl. name nulled, BOT facts
+  `removedAt`; staff facts and the POS customer stay) and every reader ignores
+  a lead, score or fact older than `resetPointFor`. No schema change.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

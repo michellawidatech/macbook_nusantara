@@ -18,9 +18,11 @@
  *    The list is an `AppSetting` row the owner edits on /chat. From anybody
  *    else `/new` is an ordinary message.
  *  - **The conversation only.** What is left behind is what the chat itself
- *    produced: earlier turns, the summary, open hand-over tasks. A customer
- *    record the POS holds under that phone — a name, purchases, a booking —
- *    is still found, exactly as it is for any number writing in again.
+ *    produced: earlier turns, the summary, open hand-over tasks — and, since
+ *    2026-10-27, what the bot LEARNED from it (`forgetProfile`: the profile's
+ *    name, use, budget and the rest, the bot's facts, the 🔥 lead). A
+ *    customer the POS knows by their purchases is still found, exactly as it
+ *    is for any number writing in again.
  *  - **Nothing is deleted.** The inbox keeps every message. The reset is a
  *    MARK: the `/new` row itself, stamped `RESET_INTENT`, and everything that
  *    reads a thread's past reads only what was answered after it
@@ -118,6 +120,112 @@ export async function resetPointFor(
     }),
   ]);
   return laterOf(row?.answeredAt ?? null, memory?.clearedAt ?? null);
+}
+
+/**
+ * `resetPointFor` for many threads at once — two queries, for the /chat list.
+ */
+export async function resetPointsFor(
+  db: PrismaClient,
+  froms: readonly string[],
+): Promise<Map<string, Date | null>> {
+  const out = new Map<string, Date | null>();
+  if (froms.length === 0) return out;
+  const [rows, memories] = await Promise.all([
+    db.waMessage.groupBy({
+      by: ["from"],
+      where: {
+        from: { in: [...froms] },
+        direction: "IN",
+        intent: RESET_INTENT,
+        answeredAt: { not: null },
+      },
+      _max: { answeredAt: true },
+    }),
+    db.waThreadMemory.findMany({
+      where: { from: { in: [...froms] } },
+      select: { from: true, clearedAt: true },
+    }),
+  ]);
+  for (const from of froms)
+    out.set(
+      from,
+      laterOf(
+        rows.find((r) => r.from === from)?._max.answeredAt ?? null,
+        memories.find((m) => m.from === from)?.clearedAt ?? null,
+      ),
+    );
+  return out;
+}
+
+/**
+ * Forget what the bot learned about a customer, in the caller's transaction
+ * (owner, 2026-10-27: *"when I clear this chat … it still retains the score
+ * and the memory of like the usage and all"*). Run by *Clear chat*, *Delete
+ * conversation* and a tester's `/new`.
+ *
+ * Nulls the profile's learned columns — the name the chat gave, use, budget,
+ * age and occupation guesses, current device, preference — and takes back
+ * every fact the BOT wrote (`removedAt`, never a DELETE). A fact a colleague
+ * typed on /chat stays: that is the shop's knowledge, not the conversation's.
+ * The profile row and its link to the POS customer stay, so staff still see
+ * who it is (the panel and the list fall back to the customer's own name).
+ * Both roles hold UPDATE on these two tables and nothing more is needed.
+ *
+ * Readers ALSO ignore what predates the reset point (`visibleProfile`), so a
+ * thread cleared before this existed reads the same.
+ */
+export async function forgetProfile(
+  tx: Pick<PrismaClient, "customerProfile" | "customerProfileFact">,
+  from: string,
+  at: Date,
+): Promise<void> {
+  await tx.customerProfile.updateMany({
+    where: { from },
+    data: {
+      name: null,
+      useCase: null,
+      budget: null,
+      budgetMin: null,
+      budgetMax: null,
+      ageEstimate: null,
+      occupation: null,
+      currentDevice: null,
+      preference: null,
+      updatedAt: at,
+    },
+  });
+  await tx.customerProfileFact.updateMany({
+    where: { profile: { from }, source: "BOT", removedAt: null },
+    data: { removedAt: at },
+  });
+}
+
+/**
+ * What of a profile the bot (and /chat) may still read after the thread's
+ * reset point. The learned columns count only when the profile was written
+ * after it; a fact counts when a colleague typed it or the bot wrote it after
+ * it. Pure, so the rule is one place.
+ */
+export function visibleProfile<
+  P extends {
+    readonly updatedAt: Date;
+    readonly facts: ReadonlyArray<{
+      readonly source?: string;
+      readonly createdAt?: Date;
+    }>;
+  },
+>(p: P, resetAt: Date | null): { fields: boolean; facts: P["facts"] } {
+  if (!resetAt) return { fields: true, facts: p.facts };
+  const t = resetAt.getTime();
+  return {
+    fields: p.updatedAt.getTime() > t,
+    facts: p.facts.filter(
+      (f) =>
+        f.source === "STAFF" ||
+        (f.createdAt !== undefined && f.createdAt.getTime() > t),
+    ),
+  };
 }
 
 /** The later of two instants, either of which may be absent. */

@@ -3968,7 +3968,7 @@ export const id: Record<string, string> = {
   "chat.clearChat": "Bersihkan chat",
   "chat.clearTitle": "Bersihkan chat ini?",
   "chat.clearBody":
-    "Chat hilang dari daftar dan bot melupakan percakapannya, seperti mulai dari awal. Tidak ada yang dihapus: basis pengetahuan dan profil pelanggan tetap ada. Kalau pelanggan menulis lagi, chat muncul kembali dengan pesan barunya saja.",
+    "Chat hilang dari daftar dan bot mulai dari awal: percakapan, status lead, dan yang dipelajari bot tentang pelanggan (nama, kebutuhan, budget, preferensi) dilupakan. Tidak ada yang dihapus: basis pengetahuan, data pelanggan, dan catatan dari tim tetap ada. Kalau pelanggan menulis lagi, chat muncul kembali dengan pesan barunya saja.",
   "chat.clearOk": "Bersihkan chat",
   "chat.cleared": "Chat dibersihkan.",
   "chat.clearFailed": "Chat tidak bisa dibersihkan.",
@@ -3976,7 +3976,7 @@ export const id: Record<string, string> = {
   "chat.deleteTitle": "Hapus percakapan ini untuk selamanya?",
   "chat.deleteOk": "Hapus percakapan",
   "chat.deleteBody":
-    "Semua pesan, yang sudah dikirim, dan ingatan bot tentang chat ini dihapus dan tidak bisa dikembalikan. Profil pelanggan, penilaian 👍/👎 dan koreksi basis pengetahuan tetap ada.",
+    "Semua pesan, yang sudah dikirim, dan ingatan bot tentang chat ini, termasuk yang dipelajari tentang pelanggan, dihapus dan tidak bisa dikembalikan. Data pelanggan, penilaian 👍/👎 dan koreksi basis pengetahuan tetap ada.",
   "chat.deleteTypeIt": "Ketik nomor",
   "chat.deleteToConfirm": "untuk konfirmasi.",
   "chat.deleteTypeAria": "Ketik nomor pelanggan untuk konfirmasi",

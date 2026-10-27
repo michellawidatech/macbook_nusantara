@@ -459,7 +459,7 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
       title: t("chat.clearTitle", "Clear this chat?"),
       content: t(
         "chat.clearBody",
-        "The chat leaves the list and the bot forgets the conversation, as if it started over. Nothing is deleted: the knowledge base and the customer's profile stay. If the customer writes again, the chat comes back with only the new messages.",
+        "The chat leaves the list and the bot starts over: it forgets the conversation, the lead and what it learned about the customer (name, use, budget, preferences). Nothing is deleted: the knowledge base, the customer record and notes a colleague added stay. If the customer writes again, the chat comes back with only the new messages.",
       ),
       okText: t("chat.clearOk", "Clear chat"),
       cancelText: t("common.cancel", "Cancel"),
@@ -1083,7 +1083,7 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             {t(
               "chat.deleteBody",
-              "Every message, what was sent and the bot's memory of this chat are removed and cannot be recovered. The customer's profile, the 👍/👎 ratings and the knowledge-base corrections stay.",
+              "Every message, what was sent and the bot's memory of this chat, including what it learned about the customer, are removed and cannot be recovered. The customer record, the 👍/👎 ratings and the knowledge-base corrections stay.",
             )}
           </Typography.Paragraph>
           <Typography.Text>

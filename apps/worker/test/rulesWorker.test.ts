@@ -182,18 +182,18 @@ describe("the rules bot, with no AI credential at all", () => {
     expect(await turn("r1", "halo kak", 0)).toMatch(/^Halo kak/);
 
     const list = await turn("r2", "kak ada macbook pro 16 m3?", 1);
-    expect(list).toContain("MacBook Pro 16 M3");
-    expect(list).toContain("32.500.000");
+    expect(list).toContain("Pro 16 M3");
+    expect(list).toContain("32,5jt");
 
     const price = await turn("r3", "yang pertama berapa kak?", 2);
-    expect(price).toContain("32.500.000");
+    expect(price).toContain("32,5jt");
 
     const proposal = await turn(
       "r4",
       "besok jam 2 saya ke toko, atas nama Budi",
       3,
     );
-    expect(proposal).toContain("Sudah betul kak?");
+    expect(proposal).toContain("Sudah betul?");
     expect(await owner.reservation.count()).toBe(0);
 
     const booked = await turn("r5", "iya betul kak", 4);
@@ -220,7 +220,7 @@ describe("the rules bot, with no AI credential at all", () => {
       "kak bisa kirim ke luar kota pakai kurir apa aja?",
       0,
     );
-    expect(reply).toContain("admin");
+    expect(reply).toBe("Bentar ya kak, aku cek dulu 🙏");
     const row = await owner.waMessage.findFirstOrThrow({
       where: { waMessageId: "o1" },
     });

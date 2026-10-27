@@ -61,9 +61,10 @@ describe("the built-in persona", () => {
     // hand-over rules beside it.
     expect(DEFAULT_PERSONA).not.toMatch(/recommend one/i);
     expect(DEFAULT_PERSONA).not.toMatch(/pegangin|holding it for them/i);
-    expect(DEFAULT_PERSONA).toMatch(
-      /admin kami will check and reply in this same chat/i,
-    );
+    // 2026-10-27: the bot IS the admin, so it never promises that "the
+    // admin" will answer; it says what it is checking and with whom.
+    expect(DEFAULT_PERSONA).toMatch(/Never write a generic line/);
+    expect(DEFAULT_PERSONA).toMatch(/aku tanyain ke owner dulu/);
   });
 
   it("never asks for something the customer has already said, and asks one thing at a time", () => {

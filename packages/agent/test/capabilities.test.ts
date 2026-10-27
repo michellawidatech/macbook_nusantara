@@ -154,10 +154,15 @@ describe("the prompt follows the capability", () => {
     expect(stable).toContain('cite "stock"');
     expect(stable).toContain("Look before you speak");
     expect(stable).toContain("Get to know them");
-    expect(stable).toContain("Offer ONE step up");
-    // The sales strategy (2026-10-27): three, honest urgency, a next step,
-    // a visit that holds nothing, and a person for the close.
-    expect(stable).toContain("Recommend THREE, never a list");
+    expect(stable).toContain("ONE step up");
+    expect(stable).toContain("Recommend ONE first");
+    // The sales strategy (2026-10-27): one first, honest urgency, a next
+    // step, a visit that holds nothing, and a person for the close — and it
+    // reads like WhatsApp, not a spec sheet.
+    expect(stable).toContain("Never a list");
+    expect(stable).toContain('Never "8GB · 256GB grade A"');
+    expect(stable).toContain("Wanting to buy is NOT closing");
+    expect(stable).toContain('cites "greeting". Small talk');
     expect(stable).toContain('"tinggal 1 unit kak"');
     expect(stable).toContain("Mau lihat");
     expect(stable).toContain("It holds NOTHING");

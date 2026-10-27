@@ -124,6 +124,9 @@ export {
   loadTesters,
   parseTesters,
   resetPointFor,
+  resetPointsFor,
+  forgetProfile,
+  visibleProfile,
   summarySince,
   toWaId,
 } from "./reset.js";

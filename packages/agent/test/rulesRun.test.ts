@@ -113,13 +113,13 @@ describe("answered by rules, with no AI at all", () => {
       query: "macbook pro m3 16",
     });
     expect(out.reply).toContain(
-      "Yang paling pas buat kakak:\nMacBook Pro 16 M3 18/512, grade A — Rp 32.500.000",
+      "Paling pas buat kakak Pro 16 M3 mulus, 32,5jt 😊",
     );
     expect(out.shown).toEqual([MBP.serial]);
     expect(out.handoff).toBeUndefined();
     // A recommendation ends on one small yes-question, not a form to fill.
     expect(out.reply.endsWith("Mau lihat fotonya kak?")).toBe(true);
-    expect(out.reply).not.toContain("dipakai untuk apa");
+    expect(out.reply).not.toContain("buat apa kak");
   });
 
   it("searches a budget as a ceiling and saves it as a range", async () => {
@@ -153,7 +153,9 @@ describe("answered by rules, with no AI at all", () => {
       name: "check_serial",
       args: { serial: AIR.serial },
     });
-    expect(out.reply).toContain("Rp 11.900.000");
+    expect(out.reply).toBe(
+      "Yang ini Air M2 8/256 ada lecet tipis, 11,9jt kak 😊\n\nMau lihat fotonya kak?",
+    );
   });
 
   it("sends the photos of the unit just shown", async () => {
@@ -172,8 +174,8 @@ describe("answered by rules, with no AI at all", () => {
     const out = await run("mau booking dong kak", pos({}), {
       lastShown: [MBP.serial],
     });
-    expect(out.reply).toContain("nama untuk bookingnya");
-    expect(out.reply).toContain("jam datangnya");
+    expect(out.reply).toContain("atas nama siapa");
+    expect(out.reply).toContain("hari apa jam berapa");
     expect(out.reply).not.toContain("unit yang mau dilihat");
   });
 
@@ -198,7 +200,7 @@ describe("answered by rules, with no AI at all", () => {
         custName: "Budi",
       },
     );
-    expect(out.reply).toContain("Sudah betul kak?");
+    expect(out.reply).toContain('Sudah betul? Balas "iya"');
     expect(out.bookings ?? []).toHaveLength(0);
   });
 
@@ -224,7 +226,7 @@ describe("answered by rules, with no AI at all", () => {
 
   it("answers in English when the customer writes English", async () => {
     const out = await run("hello");
-    expect(out.reply).toMatch(/^Hi!/);
+    expect(out.reply).toMatch(/^Hi 😊/);
   });
 });
 
@@ -307,7 +309,7 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
       "kak garansinya berapa lama ya?",
     ]) {
       const out = await run(text);
-      expect(out.reply).toContain("rencananya dipakai untuk apa kak?");
+      expect(out.reply).toContain("Rencananya buat apa kak?");
     }
   });
 
@@ -343,26 +345,26 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
     });
     expect(out.reply).not.toContain("?\n");
     expect(out.reply).toBe(
-      "Halo kak 😊 Selamat datang di Macbook Nusantara. Lagi cari unit apa kak?",
+      "Halo kak 😊 Selamat datang di Macbook Nusantara. Mau aku cariin yang paling pas kak?",
     );
   });
 
   it("counts what the customer says in the same message", async () => {
     const out = await run("halo kak, buat kuliah desain");
-    expect(out.reply).not.toContain("dipakai untuk apa");
+    expect(out.reply).not.toContain("buat apa kak");
     expect(out.reply).toContain("Budgetnya kira-kira");
   });
 
   it("asks a skipped question a second way rather than repeating it", async () => {
     const first = await run("halo kak");
     const again = await run("ok kak", pos({}), { lastReply: first.reply });
-    expect(again.reply).not.toContain("rencananya dipakai untuk apa kak?");
-    expect(again.reply).toContain("kebutuhannya lebih ke apa kak");
+    expect(again.reply).not.toContain("Rencananya buat apa kak?");
+    expect(again.reply).toContain("lebih sering dipakai buat apa kak?");
   });
 
   it("asks nothing extra on a hand-over or a booking read-back", async () => {
     const handed = await run("kalau macbook air m2 11jt boleh?");
-    expect(handed.reply).not.toContain("dipakai untuk apa");
+    expect(handed.reply).not.toContain("buat apa kak");
     const proposal = await run(
       "besok jam 2 saya ke toko, atas nama Budi",
       pos({
@@ -377,7 +379,7 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
       }),
       { lastShown: [MBP.serial] },
     );
-    expect(proposal.reply).not.toContain("dipakai untuk apa");
+    expect(proposal.reply).not.toContain("buat apa kak");
   });
 });
 
@@ -407,15 +409,13 @@ describe("out of stock, and one step up (owner, 2026-10-27)", () => {
       },
     });
     const out = await run("air m3 16/512 ready kak?", p);
-    expect(out.reply).toContain("sedang kosong");
-    expect(out.reply).toContain("Yang paling mirip dan ready");
     expect(out.reply).toContain(
-      "1. MacBook Air M2 8/256, grade B — Rp 11.900.000",
+      "Yang itu lagi kosong kak 🙏 Yang paling mirip ada Air M2 ada lecet tipis, 11,9jt.\nAtau Air M1 mulus, 8jt.",
     );
     expect(out.reply).toContain(
-      "2. MacBook Air M1 8/256, grade A — Rp 8.000.000",
+      "Kalau perlu, ada Charger MacBook Air 30W 450rb juga kak.",
     );
-    expect(out.reply).toContain("Charger MacBook Air 30W — Rp 450.000");
+    expect(out.reply).not.toMatch(/grade|Rp /);
     expect(out.sources).toEqual(["stock"]);
     expect(out.shown).toEqual([AIR.serial, M1.serial]);
     expect(out.handoff).toBeUndefined();
@@ -424,8 +424,8 @@ describe("out of stock, and one step up (owner, 2026-10-27)", () => {
   it("says so plainly when nothing close is in stock, and offers to tell them", async () => {
     const p = pos({ search_stock: { matched: 0, units: [] } });
     const out = await run("air m3 16/512 ready kak?", p);
-    expect(out.reply).toContain("sedang kosong");
-    expect(out.reply).toContain("Mau saya kabari kalau sudah ready kak?");
+    expect(out.reply).toContain("lagi kosong");
+    expect(out.reply).toContain("Mau aku kabarin kalau sudah ready kak?");
     expect(out.watch).toEqual({ query: "air m3 16/512" });
   });
 
@@ -434,9 +434,9 @@ describe("out of stock, and one step up (owner, 2026-10-27)", () => {
       search_stock: { matched: 1, units: [AIR], stepUp: AIR16 },
     });
     const out = await run("air m2 8/256 ada kak?", p);
-    const list = out.reply.indexOf("MacBook Air M2 8/256");
+    const list = out.reply.indexOf("Air M2 8/256");
     const up = out.reply.indexOf(
-      "Kalau mau lebih lega: MacBook Air M2 16/512, grade A — Rp 14.000.000",
+      "Kalau mau lebih lega, ada juga Air M2 16/512 mulus, 14jt.",
     );
     expect(list).toBeGreaterThanOrEqual(0);
     expect(up).toBeGreaterThan(list);
@@ -470,7 +470,7 @@ describe("a hand-over no longer silences the chat (owner, 2026-10-27)", () => {
       lastReply: holding,
     });
     expect(out.handoff).toBeUndefined();
-    expect(out.reply).toContain("MacBook Air M2 8/256");
+    expect(out.reply).toContain("Air M2 ada lecet tipis, 11,9jt");
   });
 
   it("tells a nudge once that the team is on it — and not twice", async () => {
@@ -479,12 +479,12 @@ describe("a hand-over no longer silences the chat (owner, 2026-10-27)", () => {
       lastReply: "Ada kak 😊 Ini yang ready: …",
     });
     expect(first.reply).toContain(
-      "Untuk tawarannya tadi masih dicek tim kami ya kak",
+      "Soal tawarannya masih aku cekin ya kak, nanti aku kabari di sini 🙏",
     );
     expect(first.handoff).toBeUndefined();
     // The bot's previous reply already promised it: carry on instead.
     const again = await run("kak?", pos({}), { waiting, lastReply: holding });
-    expect(again.reply).not.toContain("masih dicek");
+    expect(again.reply).not.toContain("masih aku cekin");
     expect(again.reply).not.toContain("Selamat datang");
   });
 
@@ -502,9 +502,7 @@ describe("a hand-over no longer silences the chat (owner, 2026-10-27)", () => {
       lastReply: holding,
     });
     expect(out.handoff?.topic).toBe("negotiation");
-    expect(out.reply).toBe(
-      "Siap kak, yang ini juga sudah kami teruskan ke tim kami ya 🙏",
-    );
+    expect(out.reply).toBe("Siap kak, yang ini sekalian aku tanyain ya 🙏");
   });
 
   it("leaves a short action item, not a code", async () => {
@@ -547,14 +545,16 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
       search_stock: { matched: 2, units: [BEST, M1], stepUp: UP },
     });
     const out = await run("budget 12jt ada macbook air?", p, { known: budi });
-    expect(out.reply).toContain(
-      "Yang paling pas buat kakak:\nMacBook Air M2 8/256, grade B, baterai 91% — Rp 11.900.000 (tinggal 1 unit kak)",
-    );
-    expect(out.reply).toContain(
-      "Kalau mau lebih hemat: MacBook Air M1 8/256, grade A, baterai 88% — Rp 8.000.000",
-    );
-    expect(out.reply).toContain(
-      "Kalau mau lebih lega: MacBook Air M2 16/512, grade A, baterai 120 siklus — Rp 14.000.000",
+    // One first, then the cheaper one and the step up — as a person texts
+    // it: short names, condition words, "11,9jt" (2026-10-27).
+    expect(out.reply).toBe(
+      [
+        "Paling pas buat kakak Air M2 8/256 ada lecet tipis, baterai 91%, 11,9jt (tinggal 1 unit kak) 😊",
+        "Kalau mau lebih hemat, ada Air M1 8/256 mulus, baterai 88%, 8jt.",
+        "Kalau mau lebih lega, ada juga Air M2 16/512 mulus, baterai 120 siklus, 14jt.",
+        "",
+        "Mau lihat fotonya kak?",
+      ].join("\n"),
     );
     // Three left, so the cheaper one is never "the last one".
     expect(out.reply.match(/tinggal 1 unit/g)).toHaveLength(1);
@@ -577,7 +577,7 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
       lastReply: "… Mau lihat fotonya kak?",
       visitBooked: true,
     });
-    expect(booked.reply.endsWith("Mau saya bantu proses kak?")).toBe(true);
+    expect(booked.reply.endsWith("Mau aku bantu proses kak?")).toBe(true);
   });
 
   it("hands a buyer to a person as a closing task naming who, which unit and its price", async () => {
@@ -592,7 +592,7 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
     expect(out.handoff?.summary.split("\n")[0]).toBe(
       "Perlu closing — Budi siap ambil MacBook Air M2 8/256 Rp 11,9jt, mau COD",
     );
-    expect(out.reply).toContain("Tim kami bantu proses pembeliannya");
+    expect(out.reply).toContain("Siap kak, aku bantu prosesnya ya");
   });
 
   it("answers a keep with the DP rule from the settings (2026-10-27)", async () => {
@@ -623,7 +623,7 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
     expect(out.handoff?.summary).toMatch(
       /^Perlu verifikasi DP — Budi kirim bukti transfer Rp 500rb/,
     );
-    expect(out.reply).toContain("Bukti DP-nya kami cek dulu");
+    expect(out.reply).toContain("bukti DP-nya aku cek dulu");
     // Nothing was written: the bot holds nothing and records no money.
     expect(p.asked.map((a) => a.name)).not.toContain("propose_reservation");
   });
@@ -644,13 +644,13 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
     );
     const asked = p.asked.find((a) => a.name === "propose_reservation");
     expect(asked?.args).toEqual({ when: "2026-10-16T14:00", custName: "Budi" });
-    expect(out.reply).toContain("Jadwal datang: 2026-10-16 jam 14:00 WIB");
+    expect(out.reply).toContain("2026-10-16 jam 14:00 WIB, atas nama Budi");
     expect(out.reply).not.toMatch(/tahan/i);
   });
 
   it("asks for what a visit still needs without promising to hold anything", async () => {
     const out = await run("mau datang ke toko kak");
-    expect(out.reply).toContain("silakan datang lihat langsung");
+    expect(out.reply).toContain("Boleh banget kak");
     expect(out.reply).not.toMatch(/tahan/i);
   });
 
@@ -663,7 +663,7 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
       query: "air m3 16/512",
       budget: 20_000_000,
     });
-    expect(yes.reply).toContain("Nanti kami kabari di chat ini");
+    expect(yes.reply).toContain("Nanti aku kabarin di sini");
 
     const q = pos({});
     const no = await run("ga usah kak", q, {
@@ -694,7 +694,7 @@ describe("the reply to a visit reminder (2026-10-27)", () => {
 
   it("keeps the visit on a yes and leaves a colleague 'Perlu sambut'", async () => {
     const out = await turn("iya jadi kak", pos({}));
-    expect(out?.reply).toContain("Kami tunggu kedatangannya Sabtu 14.00");
+    expect(out?.reply).toContain("Ditunggu Sabtu 14.00 ya");
     expect(out?.task).toEqual({
       topic: "visit",
       kind: "RESERVATION",
@@ -711,7 +711,7 @@ describe("the reply to a visit reminder (2026-10-27)", () => {
       name: "cancel_reservation",
       args: { code: reminded.code },
     });
-    expect(out?.reply).toContain("enaknya hari apa kak?");
+    expect(out?.reply).toContain("Enaknya hari apa kak?");
   });
 
   it("moves the visit when they name a new time", async () => {
