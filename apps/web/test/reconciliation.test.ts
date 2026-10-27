@@ -247,15 +247,16 @@ describe("correcting a record's amount", () => {
       ...db.settings,
       booksClosedAt: dayjs("2026-09-30").endOf("day").toISOString(),
     };
-    expect(editBlock(db, { kind: "expense", id: "old" })).toBe("BOOKS_CLOSED");
+    // The book close is retired (2026-10-27): a stored close locks nothing,
+    // so a row inside it is editable and a finished sale is not locked.
+    expect(editBlock(db, { kind: "expense", id: "old" })).toBeUndefined();
     expect(editBlock(db, { kind: "expense", id: "old" }, 0)).toBe(
       "NOT_POSITIVE",
     );
-    // A finished sale inside the closed month.
     sale(db, "s1", "2026-09-02", 2_000_000);
     expect(
       editBlock(db, { kind: "salePayment", orderId: "s1", paymentId: "s1-p1" }),
-    ).toBe("SALE_LOCKED");
+    ).toBeUndefined();
     // A deposit below what was allocated out of it.
     const seeded = buildSeed().deposits[0]!;
     db.deposits = [{ ...seeded, at: at("2026-10-05") }];
