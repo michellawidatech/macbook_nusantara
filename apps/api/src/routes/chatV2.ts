@@ -165,7 +165,18 @@ async function withdrawEvaluation(
   tx: Tx,
   id: string,
   staff: { id: string; role: "OWNER" | "STAFF" },
-  meta: { requestId: string | null; ip: string | null; messageId?: string },
+  meta: {
+    requestId: string | null;
+    ip: string | null;
+    messageId?: string;
+    /**
+     * Deleting a row from the Evaluation list (owner ask 2026-10-27), not
+     * taking a thumb back: any status goes. An APPLIED one's Knowledge Base
+     * answer is a separate row (`AgentCorrection`) and stays — only the
+     * review record leaves.
+     */
+    anyStatus?: boolean;
+  },
 ): Promise<void> {
   const e = await tx.agentEvaluation.findUnique({
     where: { id },
@@ -173,13 +184,13 @@ async function withdrawEvaluation(
   });
   if (!e || (meta.messageId !== undefined && e.messageId !== meta.messageId))
     throw notFound("Penilaian");
-  if (e.status === "APPLIED")
+  if (!meta.anyStatus && e.status === "APPLIED")
     throw new ApiError(
       409,
       "KONFLIK",
       "Penilaian ini sudah menjadi jawaban di Knowledge Base — hapus di sana.",
     );
-  if (e.status !== "OPEN")
+  if (!meta.anyStatus && e.status !== "OPEN")
     throw new ApiError(409, "KONFLIK", "Penilaian ini sudah diproses.");
   if (e.createdById !== staff.id && staff.role !== "OWNER")
     throw new ApiError(
@@ -188,7 +199,7 @@ async function withdrawEvaluation(
       "Hanya yang memberi penilaian ini, atau pemilik, yang bisa menariknya.",
     );
   const { count } = await tx.agentEvaluation.deleteMany({
-    where: { id, status: "OPEN" },
+    where: meta.anyStatus ? { id, status: e.status } : { id, status: "OPEN" },
   });
   if (count !== 1)
     throw new ApiError(409, "KONFLIK", "Penilaian ini sudah diproses.");
@@ -200,7 +211,11 @@ async function withdrawEvaluation(
       entityId: id,
       action: "DELETE",
       field: null,
-      before: JSON.stringify({ messageId: e.messageId, rating: e.rating }),
+      before: JSON.stringify({
+        messageId: e.messageId,
+        rating: e.rating,
+        status: e.status,
+      }),
       after: null,
       requestId: meta.requestId,
       ip: meta.ip,
@@ -359,10 +374,12 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
       const staff = req.staff;
       if (!staff) throw new ApiError(401, "TIDAK_LOGIN", "Sesi tidak valid.");
       const id = String(req.params["id"]);
+      const anyStatus = req.query["any"] === "1";
       await db.$transaction((tx) =>
         withdrawEvaluation(tx, id, staff, {
           requestId: req.get("x-request-id") ?? null,
           ip: req.ip ?? null,
+          anyStatus,
         }),
       );
       res.json({ withdrawn: id });

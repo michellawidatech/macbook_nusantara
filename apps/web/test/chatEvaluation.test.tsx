@@ -56,12 +56,14 @@ const applyEvaluation = vi.fn(async (id: string) => ({
 const dismissEvaluation = vi.fn(async (id: string) => ({
   evaluation: { ...base, id, status: "DISMISSED" },
 }));
+const deleteEvaluation = vi.fn(async (id: string) => ({ withdrawn: id }));
 
 vi.mock("../src/lib/chatApi.js", async (original) => ({
   ...(await original<typeof import("../src/lib/chatApi.js")>()),
   listEvaluations: (...a: unknown[]) => listEvaluations(...(a as [])),
   applyEvaluation: (...a: unknown[]) => applyEvaluation(...(a as [string])),
   dismissEvaluation: (id: string) => dismissEvaluation(id),
+  deleteEvaluation: (id: string) => deleteEvaluation(id),
 }));
 
 const { EvaluationPanel } =
@@ -82,6 +84,7 @@ beforeEach(() => {
   listEvaluations.mockClear();
   applyEvaluation.mockClear();
   dismissEvaluation.mockClear();
+  deleteEvaluation.mockClear();
 });
 
 describe("the Evaluation tab", () => {
@@ -134,5 +137,16 @@ describe("the Evaluation tab", () => {
 
     await user.click(screen.getByRole("button", { name: /Open chat/ }));
     expect(onOpenChat).toHaveBeenCalledWith("628980092978");
+  });
+
+  it("deletes a row after a confirm", async () => {
+    const user = userEvent.setup();
+    draw();
+    await screen.findByText("Ada kak, Air M2 siap");
+    await user.click(screen.getByRole("button", { name: /Delete/ }));
+    const confirm = await screen.findByRole("tooltip");
+    await user.click(within(confirm).getByRole("button", { name: /Delete/ }));
+    await waitFor(() => expect(deleteEvaluation).toHaveBeenCalledWith("e1"));
+    expect(listEvaluations).toHaveBeenCalledTimes(2);
   });
 });

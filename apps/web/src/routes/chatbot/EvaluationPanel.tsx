@@ -8,10 +8,21 @@
  * jumps to the conversation it came from.
  */
 import { useCallback, useEffect, useState } from "react";
-import { App, Button, Card, Flex, Input, Modal, Tag, Typography } from "antd";
+import {
+  App,
+  Button,
+  Card,
+  Flex,
+  Input,
+  Modal,
+  Popconfirm,
+  Tag,
+  Typography,
+} from "antd";
 import {
   CheckOutlined,
   CloseOutlined,
+  DeleteOutlined,
   MessageOutlined,
   ReloadOutlined,
 } from "@ant-design/icons";
@@ -22,6 +33,7 @@ import { COLUMN } from "../../theme/tokens";
 import { fmtDateTime, fmtNone } from "../../lib/format.js";
 import {
   applyEvaluation,
+  deleteEvaluation,
   dismissEvaluation,
   listEvaluations,
   type Evaluation,
@@ -107,6 +119,23 @@ export function EvaluationPanel({ onOpenChat }: EvaluationPanelProps) {
         err instanceof Error
           ? err.message
           : t("chatEval.dismissFailed", "Could not dismiss it."),
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const remove = async (e: Evaluation) => {
+    setBusy(e.id);
+    try {
+      await deleteEvaluation(e.id);
+      message.success(t("chatEval.deleted", "Rating deleted."));
+      await load();
+    } catch (err) {
+      message.error(
+        err instanceof Error
+          ? err.message
+          : t("chatEval.deleteFailed", "Could not delete it."),
       );
     } finally {
       setBusy(null);
@@ -244,6 +273,32 @@ export function EvaluationPanel({ onOpenChat }: EvaluationPanelProps) {
           >
             {t("chatEval.openChat", "Open chat")}
           </Button>
+          <Popconfirm
+            title={t("chatEval.deleteTitle", "Delete this rating?")}
+            description={
+              e.status === "APPLIED"
+                ? t(
+                    "chatEval.deleteAppliedBody",
+                    "The answer it added to the Knowledge Base stays.",
+                  )
+                : undefined
+            }
+            okText={t("chatEval.deleteOk", "Delete")}
+            okButtonProps={{ danger: true }}
+            cancelText={t("common.cancel", "Cancel")}
+            onConfirm={() => void remove(e)}
+          >
+            <Button
+              size="small"
+              type="link"
+              danger
+              icon={<DeleteOutlined />}
+              style={{ paddingInline: 0 }}
+              disabled={busy === e.id}
+            >
+              {t("chatEval.delete", "Delete")}
+            </Button>
+          </Popconfirm>
         </Flex>
       ),
     },

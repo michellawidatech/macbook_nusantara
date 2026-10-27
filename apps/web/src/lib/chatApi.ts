@@ -253,6 +253,16 @@ export const withdrawEvaluation = (id: string) =>
     { method: "DELETE" },
   );
 
+/**
+ * Delete a row from the Evaluation list, whatever its status — the author or
+ * an owner. An applied rating's Knowledge Base answer stays.
+ */
+export const deleteEvaluation = (id: string) =>
+  api<{ withdrawn: string }>(
+    `/api/chat/evaluations/${encodeURIComponent(id)}?any=1`,
+    { method: "DELETE" },
+  );
+
 /** Writes an AgentCorrection the bot reads. 400 without a corrected text. */
 export const applyEvaluation = (id: string, corrected?: string) =>
   api<{ evaluation: Evaluation }>(

@@ -4094,6 +4094,13 @@ export const id: Record<string, string> = {
   "chatEval.colActions": "Aksi",
   "chatEval.apply": "Terapkan",
   "chatEval.dismiss": "Abaikan",
+  "chatEval.delete": "Hapus",
+  "chatEval.deleteTitle": "Hapus penilaian ini?",
+  "chatEval.deleteAppliedBody":
+    "Jawaban yang sudah masuk ke Knowledge Base tetap ada.",
+  "chatEval.deleteOk": "Hapus",
+  "chatEval.deleted": "Penilaian dihapus.",
+  "chatEval.deleteFailed": "Tidak bisa menghapusnya.",
   "chatEval.openChat": "Buka chat",
   "chatEval.search": "Cari nomor, pesan, atau catatan",
   "chatEval.reload": "Muat ulang",

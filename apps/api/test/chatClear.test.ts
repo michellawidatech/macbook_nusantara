@@ -713,6 +713,25 @@ describe("taking a 👍/👎 back", () => {
     expect(await owner.agentEvaluation.count()).toBe(1);
   });
 
+  it("deletes any row from the Evaluation list, and keeps the KB answer", async () => {
+    const { evaluation } = await rated("clear-staff", "APPLIED");
+    await request(app)
+      .delete(`/api/chat/evaluations/${evaluation.id}?any=1`)
+      .set("Cookie", otherCookie)
+      .expect(403);
+    await request(app)
+      .delete(`/api/chat/evaluations/${evaluation.id}?any=1`)
+      .set("Cookie", staffCookie)
+      .expect(200);
+    expect(await owner.agentEvaluation.count()).toBe(0);
+    const audit = await owner.auditLog.findFirstOrThrow({
+      where: { entity: "AgentEvaluation", entityId: evaluation.id },
+    });
+    expect(JSON.parse(audit.before ?? "{}")).toMatchObject({
+      status: "APPLIED",
+    });
+  });
+
   it("replaces 👎 with 👍 in one go", async () => {
     const { message: m, evaluation } = await rated("clear-staff");
     const res = await request(app)
