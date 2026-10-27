@@ -595,17 +595,37 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
     expect(out.reply).toContain("Tim kami bantu proses pembeliannya");
   });
 
-  it("answers a keep with the DP line and never an amount", async () => {
+  it("answers a keep with the DP rule from the settings (2026-10-27)", async () => {
     const out = await run("bisa di keep dulu ga kak?", pos({}), {
       known: budi,
       lastShown: [AIR.serial],
     });
     expect(out.handoff?.topic).toBe("closing");
-    expect(out.reply).toMatch(
-      /^Untuk amankan unitnya bisa DP kak, nanti tim kami bantu ya 🙏/,
+    expect(out.reply).toBe(
+      "Untuk amankan unitnya bisa DP Rp 500rb kak, unit kami tahan 7 hari. Setelah transfer, kirim buktinya ya, tim kami cek dulu 🙏",
     );
-    expect(out.reply).not.toMatch(/\d/);
     expect(out.handoff?.summary).toContain("minta unit di-keep (DP)");
+    const custom = await run("bisa di keep dulu ga kak?", pos({}), {
+      known: budi,
+      lastShown: [AIR.serial],
+      dp: { amount: 1_000_000, days: 5 },
+    });
+    expect(custom.reply).toContain("DP Rp 1jt kak, unit kami tahan 5 hari");
+  });
+
+  it("hands a DP the customer says they paid to staff to verify — never records it", async () => {
+    const p = pos({});
+    const out = await run("kak sudah saya transfer dp 500rb ya", p, {
+      known: budi,
+      lastShown: [AIR.serial],
+    });
+    expect(out.handoff?.topic).toBe("order_payment");
+    expect(out.handoff?.summary).toMatch(
+      /^Perlu verifikasi DP — Budi kirim bukti transfer Rp 500rb/,
+    );
+    expect(out.reply).toContain("Bukti DP-nya kami cek dulu");
+    // Nothing was written: the bot holds nothing and records no money.
+    expect(p.asked.map((a) => a.name)).not.toContain("propose_reservation");
   });
 
   it("books a visit with no unit to hold — only a name and a time", async () => {

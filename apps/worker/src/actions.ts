@@ -32,11 +32,12 @@ export interface ActionInput {
   readonly from: string;
   /**
    * A hand-over topic — or, for a job that is not a hand-over (2026-10-27),
-   * its own word with an explicit `kind`: `visit` ("Perlu sambut") and
-   * `restock` ("Perlu kabari"). Those are not hand-over topics on purpose, so
-   * `waitingTasks` does not tell the bot to stop answering while they are open.
+   * its own word with an explicit `kind`: `visit` ("Perlu sambut"),
+   * `restock` ("Perlu kabari") and `dp` ("Perlu putuskan DP", 2026-10-27).
+   * Those are not hand-over topics on purpose, so `waitingTasks` does not
+   * tell the bot to stop answering while they are open.
    */
-  readonly topic: HandoffTopic | "visit" | "restock";
+  readonly topic: HandoffTopic | "visit" | "restock" | "dp";
   /** Overrides the kind the topic implies — required for a non-hand-over topic. */
   readonly kind?: ChatActionKind;
   readonly summary: string;
@@ -56,7 +57,7 @@ export async function upsertChatAction(
 ): Promise<{ id: string; created: boolean }> {
   const kind =
     input.kind ??
-    (input.topic === "visit"
+    (input.topic === "visit" || input.topic === "dp"
       ? "RESERVATION"
       : input.topic === "restock"
         ? "STOCK"

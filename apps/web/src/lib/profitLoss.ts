@@ -33,6 +33,8 @@
  * Pure: no React, no store — a test reads the arithmetic.
  */
 import type { MockDb } from "../mock/seed.js";
+import { customerLabel } from "./customers.js";
+import { keptDps } from "./dp.js";
 import { costIndex } from "./service.js";
 import { lineCost } from "./stock.js";
 
@@ -332,9 +334,28 @@ export function profitLoss(db: MockDb, p: Period): ProfitLoss {
         });
     return b.line(key);
   };
+  /*
+   * A DP the customer forfeited (owner, 2026-10-27) is other income, on the
+   * day the hold ended. An unapplied DP is NOT revenue — it is the customer's
+   * money until a sale takes it, and the sale's revenue then comes off the
+   * order as it always has; the DP is only how part of that bill was paid.
+   */
+  const forfeited = new LineBuilder();
+  for (const k of keptDps(db))
+    if (within(k.at, p))
+      forfeited.add({
+        date: k.at,
+        ref: k.reservation.code,
+        description: (() => {
+          const c = db.customers.find((x) => x.id === k.reservation.customerId);
+          return c ? customerLabel(c) : "";
+        })(),
+        amount: k.amount,
+      });
   const otherIncome: PnlLine[] = [
     incomeLine("BUNGA", "interestIn"),
     incomeLine("SELISIH", "mismatchIn"),
+    forfeited.line("dpForfeited"),
   ];
   const otherExpense: PnlLine[] = [
     { ...expenseLine("BUNGA"), key: "interestOut" },

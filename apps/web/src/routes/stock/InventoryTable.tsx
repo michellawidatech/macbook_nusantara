@@ -119,6 +119,8 @@ import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
 import type { StockMove, Unit } from "../../mock/seed.js";
 import { warehouseLabelOf } from "../../lib/warehouses.js";
+import { softHolds } from "../../lib/reservations.js";
+import { customerLabel } from "../../lib/customers.js";
 
 /** A quantity cell: the number, or a muted zero that does not shout. */
 function Qty({ n, strong }: { n: number; strong?: boolean }) {
@@ -164,6 +166,7 @@ export interface InventoryTableProps {
 
 export function InventoryTable({ extra }: InventoryTableProps) {
   const db = useDb();
+  const softHeld = useMemo(() => softHolds(db), [db]);
   const { message } = App.useApp();
   const { t } = useTranslation();
   const { compact } = useLayoutMode();
@@ -612,7 +615,23 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       dataIndex: "status",
       key: "status",
       width: COLUMN.tag,
-      render: (v: string) => <EnumTag map={UNIT_STATUS} value={v} />,
+      render: (v: string, u: Unit) => {
+        // Reserved for somebody who paid no DP (2026-10-27): still on sale.
+        const r = softHeld.get(u.serial);
+        const who = r && db.customers.find((c) => c.id === r.customerId);
+        return (
+          <Flex vertical gap={2} align="flex-start">
+            <EnumTag map={UNIT_STATUS} value={v} />
+            {r && (
+              <Typography.Text type="warning" style={{ fontSize: TYPE.sm }}>
+                {t("pos.reservedNotPaid", "Reserved for {{name}}, not paid", {
+                  name: who ? customerLabel(who) : r.code,
+                })}
+              </Typography.Text>
+            )}
+          </Flex>
+        );
+      },
     },
     {
       title: t("inventory.rack", "Rack"),

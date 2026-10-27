@@ -1007,6 +1007,15 @@ model Payment {
   /// `inBalance: false` — the debt shrinks and no money moved. Undoing the
   /// return voids exactly this payment rather than guessing which one.
   unitReturnId  String?
+  /// The reservation this payment is the DP of, or the refund of one (owner
+  /// 2026-10-27, "yes to DP"). A DP is customer money MASUK that belongs to a
+  /// hold before there is any sale, so before the sale the reservation is the
+  /// payment's ONE parent (invariant 7). At the sale the SAME row gains
+  /// `orderId` and keeps this as history: the money arrived once, and one row
+  /// is what keeps every reader from counting it twice. A refund of a DP is a
+  /// KELUAR naming the reservation alone; a kept DP ("hangus") is this row and
+  /// a cancelled reservation — no second row.
+  reservationId String?
 
   order       Order?            @relation(fields: [orderId], references: [id], onDelete: Restrict)
   po          PurchaseOrder?    @relation(fields: [poId], references: [id], onDelete: Restrict)
@@ -1017,6 +1026,7 @@ model Payment {
   fromDeposit SupplierDeposit?  @relation(fields: [fromDepositId], references: [id], onDelete: Restrict)
   poFee       PurchaseOrderFee? @relation(fields: [poFeeId], references: [id], onDelete: Restrict)
   unitReturn  UnitReturn?       @relation(fields: [unitReturnId], references: [id], onDelete: Restrict)
+  reservation Reservation?      @relation(fields: [reservationId], references: [id], onDelete: Restrict)
 
   logs                 PaymentLog[]
   settlements          Settlement[]
@@ -1032,6 +1042,7 @@ model Payment {
   @@index([poFeeId])
   @@index([customerId])
   @@index([unitReturnId])
+  @@index([reservationId])
 }
 
 /// How money moved. A lookup table rather than an enum for the same reason
@@ -1284,11 +1295,18 @@ model Reservation {
   reservationSourceId String?
   note                String?
   createdAt           DateTime
+  /// The end of a FIRM hold — the DP's date plus `sales.dpDays` (owner
+  /// 2026-10-27). Null on a hold nobody has paid a DP for, which holds
+  /// nothing: its units stay TERSEDIA and sellable. Past it the worker's
+  /// expiry pass puts the units back on sale and staff decide the DP.
+  heldUntil           DateTime?
 
   customer          Customer?          @relation(fields: [customerId], references: [id], onDelete: Restrict)
   reservationSource ReservationSource? @relation(fields: [reservationSourceId], references: [id], onDelete: Restrict)
 
   items      ReservationItem[]
+  /// The DP and, if it was handed back, its refund (`Payment.reservationId`).
+  payments   Payment[]
   unitEvents UnitEvent[]
   orders     Order[]
   /// The chatbot's confirmed proposal, when the bot made this booking.

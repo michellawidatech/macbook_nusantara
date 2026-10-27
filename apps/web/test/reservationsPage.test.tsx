@@ -438,3 +438,191 @@ describe("a visit the bot booked (2026-10-27)", () => {
     expect(visitRow()?.status).toBe("ACTIVE");
   });
 });
+
+describe("a DP holds a unit (2026-10-27)", () => {
+  const SOFT = "rsv-tst-soft";
+  const SOFT_CODE = "RV-2026/10-000991";
+  const SOFT_SERIAL = "SC02RSSOFT001";
+
+  /** A hold nobody paid for: its unit stays TERSEDIA, with no ledger row. */
+  function makeSoft() {
+    mutate((d) => {
+      d.units = d.units.filter((u) => u.serial !== SOFT_SERIAL);
+      d.events = d.events.filter((e) => e.serial !== SOFT_SERIAL);
+      d.reservations = d.reservations.filter((r) => r.id !== SOFT);
+      d.units.push({
+        serial: SOFT_SERIAL,
+        skuId: d.skus[0]!.id,
+        status: "TERSEDIA",
+        locationId: "wh-1",
+        buy: 9_000_000,
+        description: "Mulus",
+        poId: null,
+        grade: "A",
+      });
+      d.reservations.push({
+        id: SOFT,
+        code: SOFT_CODE,
+        customerId: d.customers[0]!.id,
+        when: "2026-10-30T08:00:00.000Z",
+        note: "",
+        items: [{ id: "rs-soft-1", serial: SOFT_SERIAL }],
+        status: "ACTIVE",
+      });
+    });
+  }
+  const soft = () => getDb().reservations.find((r) => r.id === SOFT)!;
+
+  it("says a hold without a DP holds nothing, and recording one holds the unit", async () => {
+    makeSoft();
+    try {
+      renderPage();
+      await settle();
+      expect(screen.getByText("No DP — still on sale")).toBeInTheDocument();
+      expect(unitOf(SOFT_SERIAL)?.status).toBe("TERSEDIA");
+
+      await userEvent.click(
+        screen.getByRole("button", { name: `Record a DP on ${SOFT_CODE}` }),
+      );
+      await settle();
+      const dialog = screen
+        .getAllByRole("dialog")
+        .find((d) => within(d).queryByText(`Record DP — ${SOFT_CODE}`))!;
+      // The owner's rule is the default amount.
+      expect(
+        within(dialog).getByRole("spinbutton", { name: /DP amount/ }),
+      ).toHaveValue("500.000");
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: /Record DP and hold/ }),
+      );
+      await settle();
+
+      expect(unitOf(SOFT_SERIAL)?.status).toBe("DIRESERVASI");
+      const r = soft();
+      expect(r.dp).toMatchObject({ amount: 500_000, method: "TRANSFER" });
+      const days =
+        (new Date(r.heldUntil!).getTime() - new Date(r.dp!.at).getTime()) /
+        86_400_000;
+      expect(days).toBe(7);
+      expect(
+        getDb().events.filter(
+          (e) => e.serial === SOFT_SERIAL && e.type === "DIRESERVASI",
+        ),
+      ).toHaveLength(1);
+      expect(
+        await screen.findByText(/DP Rp\s?500\.000 · held until/),
+      ).toBeInTheDocument();
+    } finally {
+      mutate((d) => {
+        d.reservations = d.reservations.filter((x) => x.id !== SOFT);
+      });
+    }
+  });
+
+  it("asks staff to refund or keep a DP whose hold is over — and refunds it", async () => {
+    makeSoft();
+    try {
+      mutate((d) => {
+        const r = d.reservations.find((x) => x.id === SOFT)!;
+        // Paid a week and a day ago; the worker has let the unit go since.
+        r.dp = {
+          id: "pay-soft-dp",
+          method: "TUNAI",
+          amount: 500_000,
+          at: "2026-10-01T03:00:00.000Z",
+        };
+        r.heldUntil = "2026-10-08T03:00:00.000Z";
+        d.events.push({
+          id: "rs-soft-ev1",
+          serial: SOFT_SERIAL,
+          seq: 1,
+          type: "DIRESERVASI",
+          at: "2026-10-01T03:00:00.000Z",
+          fromStatus: "TERSEDIA",
+          toStatus: "DIRESERVASI",
+          locationId: "wh-1",
+          refCode: SOFT_CODE,
+          staff: "Michella",
+        });
+        d.events.push({
+          id: "rs-soft-ev2",
+          serial: SOFT_SERIAL,
+          seq: 2,
+          type: "RESERVASI_BATAL",
+          at: "2026-10-08T03:00:00.000Z",
+          fromStatus: "DIRESERVASI",
+          toStatus: "TERSEDIA",
+          locationId: "wh-1",
+          refCode: SOFT_CODE,
+          staff: "Agen WhatsApp",
+        });
+      });
+      renderPage();
+      await settle();
+      expect(
+        screen.getByText(/DP Rp\s?500\.000 · hold over, decide/),
+      ).toBeInTheDocument();
+      await userEvent.click(
+        screen.getByRole("button", { name: `Decide the DP on ${SOFT_CODE}` }),
+      );
+      await settle();
+      const dialog = screen
+        .getAllByRole("dialog")
+        .find((d) => within(d).queryByText(`Decide the DP — ${SOFT_CODE}`))!;
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: /Refund Rp/ }),
+      );
+      await settle();
+      const r = soft();
+      expect(r.status).toBe("CANCELLED");
+      // Out of the pot it came into, by default.
+      expect(r.dp!.refund).toMatchObject({ amount: 500_000, method: "TUNAI" });
+      expect(
+        await screen.findByText(/DP Rp\s?500\.000 · refunded/),
+      ).toBeInTheDocument();
+    } finally {
+      mutate((d) => {
+        d.reservations = d.reservations.filter((x) => x.id !== SOFT);
+      });
+    }
+  });
+
+  it("keeps a DP (hangus) without writing any money", async () => {
+    makeSoft();
+    try {
+      mutate((d) => {
+        const r = d.reservations.find((x) => x.id === SOFT)!;
+        r.dp = {
+          id: "pay-soft-dp2",
+          method: "TRANSFER",
+          amount: 500_000,
+          at: "2026-10-01T03:00:00.000Z",
+        };
+        r.heldUntil = "2026-10-08T03:00:00.000Z";
+      });
+      renderPage();
+      await settle();
+      await userEvent.click(
+        screen.getByRole("button", { name: `Decide the DP on ${SOFT_CODE}` }),
+      );
+      await settle();
+      const dialog = screen
+        .getAllByRole("dialog")
+        .find((d) => within(d).queryByText(`Decide the DP — ${SOFT_CODE}`))!;
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: /Keep \(hangus\)/ }),
+      );
+      await settle();
+      const r = soft();
+      expect(r.status).toBe("CANCELLED");
+      expect(r.dp!.refund).toBeUndefined();
+      expect(
+        await screen.findByText(/DP Rp\s?500\.000 · kept \(hangus\)/),
+      ).toBeInTheDocument();
+    } finally {
+      mutate((d) => {
+        d.reservations = d.reservations.filter((x) => x.id !== SOFT);
+      });
+    }
+  });
+});

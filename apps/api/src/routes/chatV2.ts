@@ -702,7 +702,7 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
 
       const [
         knowledge,
-        storeFacts,
+        facts,
         active,
         corrections,
         capabilities,
@@ -710,7 +710,7 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
         personas,
       ] = await Promise.all([
         loadKnowledgeBase(db),
-        loadStoreFacts(db).then(renderStoreFacts),
+        loadStoreFacts(db),
         db.persona.findFirst({
           where: { active: true },
           select: { prompt: true },
@@ -727,6 +727,9 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
         loadAgentPersonas(db),
       ]);
       const v1 = active?.prompt ?? DEFAULT_PERSONA;
+      const storeFacts = renderStoreFacts(facts);
+      // The DP rule from Settings (2026-10-27), as the live bot says it.
+      const dp = facts.dp;
       const now = new Date();
       const customerText = turns[turns.length - 1]!.text;
       const prompt = buildAgentPrompt({
@@ -759,6 +762,7 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
           turns,
           knowledge,
           storeFacts,
+          dp,
           route,
           hint,
           capabilities,
@@ -805,6 +809,7 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
           proposalOpen: false,
           lastShown: body.data.lastShown ?? [],
           leadThreshold: settings.leadThreshold,
+          dp,
           ...(client ? { ai: singleAgent } : {}),
         });
       } else if (settings.pipeline === "v1") {

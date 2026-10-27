@@ -7,11 +7,13 @@ import {
   HANDOFF_TOPICS,
   checkHoldingMessage,
   checkReply,
+  dpKeepLine,
   holdingMessage,
   isHandoffTopic,
   mentionsProduct,
   routeMessage,
   actionKindOf,
+  saysDpPaid,
   type StockFact,
 } from "../src/policy.js";
 
@@ -249,14 +251,61 @@ describe("honest urgency (2026-10-27)", () => {
 });
 
 describe("the closing task (2026-10-27)", () => {
-  it("is its own kind of task, and its line never names a DP amount", () => {
+  it("is its own kind of task, and a keep is told the DP rule (2026-10-27)", () => {
     expect(actionKindOf("closing")).toBe("CLOSING");
-    expect(holdingMessage("closing", true, "keep")).toMatch(
-      /^Untuk amankan unitnya bisa DP kak/,
+    // The owner's line, with the shop's own default rule.
+    expect(holdingMessage("closing", true, "keep")).toBe(
+      "Untuk amankan unitnya bisa DP Rp 500rb kak, unit kami tahan 7 hari. Setelah transfer, kirim buktinya ya, tim kami cek dulu 🙏",
     );
-    expect(holdingMessage("closing", true, "keep")).not.toMatch(/\d/);
+    // And whatever Settings says instead.
+    expect(
+      holdingMessage("closing", true, "keep", { amount: 1_000_000, days: 3 }),
+    ).toBe(
+      "Untuk amankan unitnya bisa DP Rp 1jt kak, unit kami tahan 3 hari. Setelah transfer, kirim buktinya ya, tim kami cek dulu 🙏",
+    );
     expect(holdingMessage("closing", false, "buy")).toContain(
       "Tim kami bantu proses pembeliannya",
+    );
+  });
+});
+
+describe("the DP (2026-10-27)", () => {
+  it("states the rule from the settings, and never says a unit is held", () => {
+    expect(dpKeepLine()).toContain("DP Rp 500rb");
+    expect(dpKeepLine({ amount: 750_000, days: 7 })).toContain("DP Rp 750rb");
+    expect(dpKeepLine({ amount: 1_500_000, days: 14 })).toContain(
+      "DP Rp 1,5jt kak, unit kami tahan 14 hari",
+    );
+    expect(dpKeepLine()).not.toMatch(/sudah kami tahan|sudah di-?keep/i);
+  });
+
+  it("lets a hand-over line repeat the DP figure — the settings vouch for it", () => {
+    const line = dpKeepLine({ amount: 500_000, days: 7 });
+    expect(checkHoldingMessage(line)).toBe("AMOUNT_NOT_IN_SOURCE");
+    expect(checkHoldingMessage(line, [line])).toBeNull();
+    // Only that figure: any other amount is still refused.
+    expect(checkHoldingMessage("Bisa DP Rp 300rb kak 🙏", [line])).toBe(
+      "AMOUNT_NOT_IN_SOURCE",
+    );
+  });
+
+  it("hands a customer who says they paid a DP to a person to verify", () => {
+    for (const text of [
+      "kak sudah saya transfer DP nya ya",
+      "ini bukti dp 500rb kak",
+      "udah tf dp barusan",
+    ])
+      expect(routeMessage(text)).toEqual({
+        topic: "order_payment",
+        rule: "dp_proof",
+      });
+    // A photo captioned so is the same thing.
+    expect(routeMessage("bukti DP", { hasMedia: true })?.rule).toBe("dp_proof");
+    // Asking how to pay one is still a keep.
+    expect(routeMessage("mau dp, transfer ke mana kak?")?.rule).toBe("keep");
+    expect(saysDpPaid("bisa dp ga?")).toBe(false);
+    expect(holdingMessage("order_payment", true, "dp_proof")).toContain(
+      "Bukti DP-nya kami cek dulu",
     );
   });
 });

@@ -40,7 +40,7 @@ import { newestRowOwnedByDocument } from "@nusantara/domain";
 import { reprojectHolds } from "./reservations.js";
 
 export type SaleDeletionBlock =
-  "RETURNED" | "TRADE_IN" | "UNIT_MOVED" | "LINKED_MONEY";
+  "RETURNED" | "TRADE_IN" | "UNIT_MOVED" | "LINKED_MONEY" | "DP";
 
 /** Why `order` cannot be deleted, or undefined when it can. */
 export function saleDeletionBlock(
@@ -65,6 +65,10 @@ export function saleDeletionBlock(
   )
     return "RETURNED";
   if ((order.tradeIns?.length ?? 0) > 0) return "TRADE_IN";
+  // A reservation's DP paid part of it (2026-10-27): deleting the sale would
+  // make the DP vanish from the reservation it came in on.
+  if ((order.payments ?? []).some((p) => p.reservationId !== undefined))
+    return "DP";
   for (const serial of order.serials) {
     if (saleRowsOf(db.events, serial, order.code) === null) return "UNIT_MOVED";
   }

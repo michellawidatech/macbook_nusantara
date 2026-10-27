@@ -33,21 +33,85 @@
  */
 import type { MockDb, Reservation, ReservationItem } from "../mock/seed.js";
 
-/** Where one machine on a hold has got to. */
-export type HoldState = "HELD" | "BOUGHT" | "RELEASED";
+/**
+ * Where one machine on a hold has got to.
+ *
+ * `SOFT` (owner, 2026-10-27): reserved for a customer who has paid no DP.
+ * Only a DP holds a unit — *"if reservation makes the stock decrease and
+ * reduce sale, it is bad"* — so the unit stays `TERSEDIA` and on sale, tagged
+ * *Reserved for Budi, not paid*, and the till asks before selling it.
+ */
+export type HoldState = "HELD" | "SOFT" | "BOUGHT" | "RELEASED";
+
+/** Nobody has paid a DP on this hold, so it holds nothing (2026-10-27). */
+export function isUnpaidHold(
+  r: Pick<Reservation, "dp" | "heldUntil">,
+): boolean {
+  return r.dp === undefined && r.heldUntil === undefined;
+}
 
 /**
- * The state of one item, read off its unit.
+ * Has the ledger ever put this serial on hold for this reservation? A unit
+ * RELEASED from a firm hold (every hold made before 2026-10-27 was one) is
+ * back at `TERSEDIA` with its item still on the row, and must not read as
+ * softly reserved again.
+ */
+function heldByLedger(db: MockDb, r: Reservation, serial: string): boolean {
+  return db.events.some(
+    (e) =>
+      e.serial === serial && e.type === "DIRESERVASI" && e.refCode === r.code,
+  );
+}
+
+/**
+ * The state of one item, read off its unit — and, for a unit still on sale,
+ * off the hold it is on (`SOFT`).
  *
  * A serial with no unit behind it answers `RELEASED`: whatever happened to the
  * machine, it is certainly not being held for anybody now.
  */
-export function itemState(db: MockDb, item: ReservationItem): HoldState {
+export function itemState(
+  db: MockDb,
+  item: ReservationItem,
+  r: Reservation,
+): HoldState {
   const unit = db.units.find((u) => u.serial === item.serial);
   if (!unit) return "RELEASED";
   if (unit.status === "DIRESERVASI") return "HELD";
   if (unit.status === "TERJUAL") return "BOUGHT";
+  if (
+    unit.status === "TERSEDIA" &&
+    r.status === "ACTIVE" &&
+    isUnpaidHold(r) &&
+    !heldByLedger(db, r, item.serial)
+  )
+    return "SOFT";
   return "RELEASED";
+}
+
+/**
+ * Every unit on sale that a hold nobody paid for names — the till's and
+ * Inventory's *Reserved for {name}, not paid* tag (2026-10-27). One pass, so
+ * a catalogue of a thousand rows asks a map rather than every hold.
+ */
+export function softHolds(db: MockDb): Map<string, Reservation> {
+  const out = new Map<string, Reservation>();
+  for (const r of db.reservations) {
+    if (r.status !== "ACTIVE" || !isUnpaidHold(r)) continue;
+    for (const i of r.items)
+      if (!out.has(i.serial) && itemState(db, i, r) === "SOFT")
+        out.set(i.serial, r);
+  }
+  return out;
+}
+
+/** Whether a DP on this hold is neither on a sale nor handed back. */
+export function dpOpen(r: Pick<Reservation, "dp">): boolean {
+  return (
+    r.dp !== undefined &&
+    r.dp.orderId === undefined &&
+    r.dp.refund === undefined
+  );
 }
 
 /**
@@ -68,7 +132,10 @@ export function heldItems(
   db: MockDb,
   r: Reservation,
 ): readonly ReservationItem[] {
-  return r.items.filter((i) => itemState(db, i) === "HELD");
+  return r.items.filter((i) => {
+    const state = itemState(db, i, r);
+    return state === "HELD" || state === "SOFT";
+  });
 }
 
 /**
@@ -90,8 +157,14 @@ export function heldItems(
  */
 export function headerState(db: MockDb, r: Reservation): Reservation["status"] {
   if (isVisit(r)) return r.status;
-  const states = r.items.map((i) => itemState(db, i));
-  if (states.includes("HELD")) return "ACTIVE";
+  // A DP refunded or kept (2026-10-27) closed the hold by a person's
+  // decision; no projection reopens it.
+  if (r.status === "CANCELLED" && r.dp !== undefined) return r.status;
+  const states = r.items.map((i) => itemState(db, i, r));
+  if (states.includes("HELD") || states.includes("SOFT")) return "ACTIVE";
+  // An open DP waits for staff to refund or keep it (2026-10-27): closing the
+  // hold IS that decision, and a CANCELLED written here would read as "kept".
+  if (dpOpen(r)) return "ACTIVE";
   if (states.includes("BOUGHT")) return "DONE";
   return "CANCELLED";
 }
@@ -131,9 +204,9 @@ export interface HoldProgress {
 }
 
 export function holdProgress(db: MockDb, r: Reservation): HoldProgress {
-  const states = r.items.map((i) => itemState(db, i));
+  const states = r.items.map((i) => itemState(db, i, r));
   return {
-    held: states.filter((s) => s === "HELD").length,
+    held: states.filter((s) => s === "HELD" || s === "SOFT").length,
     bought: states.filter((s) => s === "BOUGHT").length,
     released: states.filter((s) => s === "RELEASED").length,
     total: states.length,

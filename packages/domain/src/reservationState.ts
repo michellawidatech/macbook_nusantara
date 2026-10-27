@@ -46,8 +46,15 @@ export function isReservationStatus(v: string): v is ReservationStatus {
   return (RESERVATION_STATUSES as readonly string[]).includes(v);
 }
 
-/** Where one machine on a hold has got to. */
-export type HoldState = "HELD" | "BOUGHT" | "RELEASED";
+/**
+ * Where one machine on a hold has got to.
+ *
+ * `SOFT` (2026-10-27): reserved for somebody who has paid no DP. Only a DP
+ * holds a unit — *"if reservation makes the stock decrease and reduce sale,
+ * it is bad"* — so a hold without one leaves the unit `TERSEDIA` and on sale,
+ * tagged for that customer. It still counts as the hold wanting something.
+ */
+export type HoldState = "HELD" | "SOFT" | "BOUGHT" | "RELEASED";
 
 /**
  * The state of one item, read off its unit's status.
@@ -62,10 +69,20 @@ export type HoldState = "HELD" | "BOUGHT" | "RELEASED";
  * read AFTER whatever it just wrote — a stale array reads a machine that was
  * released a moment ago as still held.
  */
-export function itemState(unitStatus: UnitStatus | null): HoldState {
+export function itemState(
+  unitStatus: UnitStatus | null,
+  /**
+   * The item is on a hold nobody has paid a DP for, and the ledger has never
+   * put this unit on hold for it (2026-10-27). Without the second half a unit
+   * RELEASED from an old firm hold — back at `TERSEDIA` with its item still on
+   * the row — would read as softly reserved again.
+   */
+  soft = false,
+): HoldState {
   if (unitStatus === null) return "RELEASED";
   if (unitStatus === "DIRESERVASI") return "HELD";
   if (unitStatus === "TERJUAL") return "BOUGHT";
+  if (unitStatus === "TERSEDIA" && soft) return "SOFT";
   return "RELEASED";
 }
 
@@ -96,15 +113,25 @@ export function itemState(unitStatus: UnitStatus | null): HoldState {
 export function headerState(
   current: ReservationStatus,
   items: readonly HoldState[],
+  /**
+   * A DP is recorded on this hold and is neither on a sale nor refunded
+   * (2026-10-27). Such a hold never closes by itself: when its units go back
+   * on sale it stays open, waiting for staff to refund or keep the money —
+   * closing it is that decision, and a `BATAL` written by a projection would
+   * read as "kept".
+   */
+  options: { readonly dpOpen?: boolean } = {},
 ): ReservationStatus {
   if (current !== "TERJADWAL") return current;
-  if (items.includes("HELD")) return "TERJADWAL";
+  if (items.includes("HELD") || items.includes("SOFT")) return "TERJADWAL";
+  if (options.dpOpen === true) return "TERJADWAL";
   if (items.includes("BOUGHT")) return "SELESAI";
   return "BATAL";
 }
 
 /** How far along a hold is, for the one line a table cell can afford. */
 export interface HoldProgress {
+  /** Still wanted — firmly held (`HELD`) or reserved unpaid (`SOFT`). */
   readonly held: number;
   readonly bought: number;
   readonly released: number;
@@ -113,9 +140,57 @@ export interface HoldProgress {
 
 export function holdProgress(items: readonly HoldState[]): HoldProgress {
   return {
-    held: items.filter((s) => s === "HELD").length,
+    held: items.filter((s) => s === "HELD" || s === "SOFT").length,
     bought: items.filter((s) => s === "BOUGHT").length,
     released: items.filter((s) => s === "RELEASED").length,
     total: items.length,
   };
+}
+
+// --- the DP rule -------------------------------------------------------------
+
+/**
+ * What a DP is and how long it holds (owner, 2026-10-27: *"they will have to
+ * DP 500k for 1 week"*). Owner-editable in Settings; these are the answers
+ * while nobody has typed one.
+ */
+export const DP_DEFAULT_AMOUNT = 500_000;
+export const DP_DEFAULT_DAYS = 7;
+
+/** The `AppSetting` keys the two live in — key/value, so no column. */
+export const DP_SETTING_KEYS = {
+  amount: "sales.dpAmount",
+  days: "sales.dpDays",
+} as const;
+
+export interface DpRule {
+  /** Whole rupiah. */
+  readonly amount: number;
+  readonly days: number;
+}
+
+/**
+ * The rule from the stored text, each half falling back to its default when
+ * absent, blank, not a whole number, or not above zero — a DP of nothing, or
+ * a hold of no days, is a typo rather than a policy.
+ */
+export function dpRuleOf(stored: {
+  readonly amount?: string | null;
+  readonly days?: string | null;
+}): DpRule {
+  const whole = (v: string | null | undefined, fallback: number) => {
+    const n = Number((v ?? "").trim());
+    return (v ?? "").trim() !== "" && Number.isInteger(n) && n > 0
+      ? n
+      : fallback;
+  };
+  return {
+    amount: whole(stored.amount, DP_DEFAULT_AMOUNT),
+    days: whole(stored.days, DP_DEFAULT_DAYS),
+  };
+}
+
+/** When a firm hold ends: the DP's moment plus the rule's days. */
+export function heldUntilOf(paidAt: Date, days: number): Date {
+  return new Date(paidAt.getTime() + days * 86_400_000);
 }

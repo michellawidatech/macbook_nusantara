@@ -63,11 +63,13 @@ import type { ToolDispatch } from "./agentApi.js";
 import {
   checkHoldingMessage,
   checkReply,
+  dpKeepLine,
   holdingMessage,
   isHandoffTopic,
   modelTokens,
   PARALLEL_CAPABILITIES,
   type AgentCapabilities,
+  type DpTerms,
   type HandoffTopic,
   type ReplyProblem,
   type Route,
@@ -87,7 +89,7 @@ import {
   clipQuote,
   heldReplyTask,
   needOfTopic,
-  routedTask,
+  routeSummary,
   taskNote,
   unitSubject,
 } from "./tasks.js";
@@ -227,6 +229,11 @@ export interface ConverseInput {
   readonly knowledge: KnowledgeBase;
   /** The shop facts text the prompt carries, so a `store` citation is checked. */
   readonly storeFacts: string;
+  /**
+   * The DP rule from the shop's settings (2026-10-27) — what a keep is told,
+   * and the one figure a hand-over line may name without a source.
+   */
+  readonly dp?: DpTerms;
   /** Set when policy.ts routed this message to a person before the model saw it. */
   readonly route?: Route | null;
   /** A note for the model beside the customer's latest message — the likeliest answers. */
@@ -519,10 +526,14 @@ export async function converse(
         ? ' They are ready to buy: write the summary as "Perlu closing — <name> siap ambil ' +
           '<unit> <price>, <how>".' +
           (route.rule === "keep"
-            ? ' To keep a unit they need a DP: say "untuk amankan unit bisa DP, nanti tim kami ' +
-              'bantu ya" and never name an amount.'
+            ? ` To keep a unit they need a DP; tell them exactly: "${dpKeepLine(input.dp)}". Never ` +
+              "name any other amount, and never say a unit is held: staff check the transfer first."
             : "")
-        : "")
+        : route.rule === "dp_proof"
+          ? ' They say they paid a DP: write the summary as "Perlu verifikasi DP — <name> kirim ' +
+            'bukti transfer <amount> untuk <unit>", and say a colleague is checking it. Never ' +
+            "confirm it was received or that the unit is held."
+          : "")
     : "";
   const shopNote = [routedNote, input.preloaded?.note ?? "", input.hint ?? ""]
     .filter(Boolean)
@@ -572,6 +583,7 @@ export async function converse(
           topic,
           open,
           route?.topic === topic ? route.rule : undefined,
+          input.dp,
         );
 
   /** The code handing over, in the shop's fixed words. */
@@ -627,7 +639,8 @@ export async function converse(
         ? args["customer_message"]
         : "";
     const message = sanitiseReply(raw);
-    if (checkHoldingMessage(message) !== null) {
+    // The DP rule is the shop's own setting: a vouched figure (2026-10-27).
+    if (checkHoldingMessage(message, [dpKeepLine(input.dp)]) !== null) {
       // An empty line, or one carrying a figure or a stock promise: the
       // customer gets the shop's fixed words instead of the model's.
       const line = [...bookings.map(bookingLine), fixedLine(topic)].join("\n");
@@ -768,7 +781,7 @@ export async function converse(
           if (route)
             return forced(
               route.topic,
-              routedTask(route.topic, customerText),
+              routeSummary(route, customerText),
               "route",
               step,
             );
@@ -794,7 +807,7 @@ export async function converse(
         if (route)
           return forced(
             route.topic,
-            routedTask(route.topic, customerText),
+            routeSummary(route, customerText),
             "route",
             step,
           );
@@ -862,7 +875,7 @@ export async function converse(
     return forced(
       route?.topic ?? "other",
       route
-        ? routedTask(route.topic, customerText)
+        ? routeSummary(route, customerText)
         : taskNote("reply", TASK_REASON.noAnswer, customerText),
       "no_terminal_tool",
       MAX_STEPS,

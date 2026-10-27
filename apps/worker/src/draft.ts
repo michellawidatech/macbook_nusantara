@@ -570,7 +570,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   // thread in the pass.
   const [
     knowledge,
-    storeFacts,
+    facts,
     persona,
     corrections,
     capabilities,
@@ -578,7 +578,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
     agentPersonas,
   ] = await Promise.all([
     loadKnowledgeBase(db),
-    loadStoreFacts(db).then(renderStoreFacts),
+    loadStoreFacts(db),
     db.persona.findFirst({
       where: { active: true },
       select: { prompt: true },
@@ -598,6 +598,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
     loadAgentPersonas(db),
   ]);
   const knowledgeText = knowledgeBlock(knowledge);
+  const storeFacts = renderStoreFacts(facts);
+  // The DP rule from Settings (2026-10-27): what a keep is told.
+  const dp = facts.dp;
   const v2 = settings.pipeline === "v2";
   // The v1 voice is the Advisor's until somebody edits the Advisor.
   const v1Persona = persona?.prompt ?? DEFAULT_PERSONA;
@@ -942,6 +945,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           lastShown,
           waiting,
           leadThreshold: settings.leadThreshold,
+          dp,
           ...(client
             ? {
                 ai: async () => {
@@ -955,6 +959,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                     turns,
                     knowledge,
                     storeFacts,
+                    dp,
                     route: null,
                     hint,
                     capabilities,
@@ -1006,6 +1011,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           turns,
           knowledge,
           storeFacts,
+          dp,
           route,
           hint,
           capabilities,

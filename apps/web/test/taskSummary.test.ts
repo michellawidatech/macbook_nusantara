@@ -146,7 +146,7 @@ describe("the sales tasks (2026-10-27)", () => {
         "restock",
       ).head,
     ).toBe(
-      "Need to tell them it's in stock — Air M3 16/512 sudah ready, Budi minta dikabari",
+      "Need to tell the customer — Air M3 16/512 sudah ready, Budi minta dikabari",
     );
     // "Perlu kabari booking" is still its own job, matched whole.
     expect(

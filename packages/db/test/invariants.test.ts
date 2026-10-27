@@ -347,6 +347,121 @@ describe("08 §2 — the fifteen invariants", () => {
     expect(rows.map((r) => r.inBalance)).toEqual([true]);
   });
 
+  it("7c. a DP's one parent is its reservation, and the sale takes the SAME row (2026-10-27)", async () => {
+    await owner.query(
+      `INSERT INTO "Customer" (id, name, "createdAt") VALUES ('cus1','Pelanggan A',now())`,
+    );
+    await owner.query(
+      `INSERT INTO "Supplier" (id, name, active, "createdAt") VALUES ('sup1','Supplier A',true,now())`,
+    );
+    await owner.query(
+      `INSERT INTO "PurchaseOrder" (id, "supplierId", "noInvoice", status, "orderedAt", subtotal,
+                                    "feesTaxPct", "feesTotal", total, "locationId", "staffId", "createdAt")
+       VALUES ('po1','sup1',false,'DRAF',now(),0,0,0,0,$1,$2,now())`,
+      [LOC, STAFF],
+    );
+    await owner.query(
+      `INSERT INTO "Reservation" (id, status, source, "createdAt", "heldUntil")
+       VALUES ('rv1','TERJADWAL','STAF',now(), now() + interval '7 days')`,
+    );
+    const pay = (
+      id: string,
+      parents: {
+        reservationId?: string;
+        orderId?: string;
+        poId?: string;
+        customerId?: string;
+      },
+      direction: "MASUK" | "KELUAR" = "MASUK",
+    ) =>
+      app.query(
+        `INSERT INTO "Payment" (id, "reservationId", "orderId", "poId", "customerId", direction, "methodId", amount, status, "staffId")
+         VALUES ($1,$2,$3,$4,$5,$6,'pm_tunai',500000,'LUNAS',$7)`,
+        [
+          id,
+          parents.reservationId ?? null,
+          parents.orderId ?? null,
+          parents.poId ?? null,
+          parents.customerId ?? null,
+          direction,
+          STAFF,
+        ],
+      );
+
+    // Before the sale the reservation alone is the parent — as the app role.
+    await pay("dp1", { reservationId: "rv1" });
+    // Its refund names the reservation alone too.
+    await pay("dp1r", { reservationId: "rv1" }, "KELUAR");
+    // The sale takes the same row: the reservation stays as history.
+    await app.query(`UPDATE "Payment" SET "orderId" = $1 WHERE id = 'dp1'`, [
+      ORDER,
+    ]);
+    // Never a supplier's invoice or an old debt beside a reservation.
+    await rejectsWith(
+      () => pay("dp2", { reservationId: "rv1", poId: "po1" }),
+      CHECK_VIOLATION,
+    );
+    await rejectsWith(
+      () => pay("dp3", { reservationId: "rv1", customerId: "cus1" }),
+      CHECK_VIOLATION,
+    );
+    // Without a reservation the old rule stands: exactly one parent.
+    await rejectsWith(() => pay("dp4", {}), CHECK_VIOLATION);
+    await rejectsWith(
+      () => pay("dp5", { orderId: ORDER, poId: "po1" }),
+      CHECK_VIOLATION,
+    );
+    // A reservation that does not exist is a foreign key failing.
+    await rejectsWith(
+      () => pay("dp6", { reservationId: "nobody" }),
+      FOREIGN_KEY_VIOLATION,
+    );
+    const { rows } = await owner.query<{
+      orderId: string | null;
+      reservationId: string | null;
+    }>(`SELECT "orderId", "reservationId" FROM "Payment" WHERE id = 'dp1'`);
+    expect(rows).toEqual([{ orderId: ORDER, reservationId: "rv1" }]);
+  });
+
+  it("7d. the worker reads a firm hold and its DP, and can never write money (2026-10-27)", async () => {
+    await owner.query(
+      `INSERT INTO "Reservation" (id, status, source, "createdAt", "heldUntil")
+       VALUES ('rv1','TERJADWAL','STAF',now(), now())`,
+    );
+    await owner.query(
+      `INSERT INTO "Payment" (id, "reservationId", direction, "methodId", amount, status, "staffId")
+       VALUES ('dp1','rv1','MASUK','pm_tunai',500000,'LUNAS',$1)`,
+      [STAFF],
+    );
+    const { rows } = await agent.query<{
+      heldUntil: Date;
+      reservationId: string;
+    }>(
+      `SELECT r."heldUntil", p."reservationId"
+         FROM "Reservation" r JOIN "Payment" p ON p."reservationId" = r.id`,
+    );
+    expect(rows).toHaveLength(1);
+    // The refund / keep decision is staff's.
+    await rejectsWith(
+      () =>
+        agent.query(
+          `INSERT INTO "Payment" (id, "reservationId", direction, "methodId", amount, status, "staffId")
+           VALUES ('dp2','rv1','KELUAR','pm_tunai',500000,'LUNAS',$1)`,
+          [STAFF],
+        ),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    await rejectsWith(
+      () =>
+        agent.query(`UPDATE "Payment" SET "orderId" = NULL WHERE id = 'dp1'`),
+      INSUFFICIENT_PRIVILEGE,
+    );
+    // It may end a hold: the release writes the reservation.
+    await agent.query(
+      `UPDATE "Reservation" SET "heldUntil" = now() WHERE id = 'rv1'`,
+    );
+  });
+
   it("8. money is never negative where it cannot be, and quantities are positive", async () => {
     const line = (id: string, qty: number, price: number) =>
       owner.query(

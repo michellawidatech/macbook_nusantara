@@ -502,16 +502,27 @@ async function itemsOf(
   tx: Tx,
   reservationId: string,
 ): Promise<
-  { unitId: string | null; serial: string | null; status: UnitStatus | null }[]
+  {
+    unitId: string | null;
+    serial: string | null;
+    status: UnitStatus | null;
+    /** Taken off the hold (`removedAt`) — sold over a soft hold, say. */
+    removed: boolean;
+  }[]
 > {
   const rows = await tx.reservationItem.findMany({
     where: { reservationId },
-    select: { unitId: true, unit: { select: { serial: true, status: true } } },
+    select: {
+      unitId: true,
+      removedAt: true,
+      unit: { select: { serial: true, status: true } },
+    },
   });
   return rows.map((r) => ({
     unitId: r.unitId,
     serial: r.unit?.serial ?? null,
     status: (r.unit?.status ?? null) as UnitStatus | null,
+    removed: r.removedAt !== null,
   }));
 }
 
@@ -709,13 +720,54 @@ export async function reprojectHold(
 ): Promise<ReservationStatus> {
   const hold = await tx.reservation.findUnique({
     where: { id: reservationId },
-    select: { status: true },
+    select: {
+      status: true,
+      source: true,
+      heldUntil: true,
+      // The DP and its refund (2026-10-27).
+      payments: {
+        where: { voidedAt: null },
+        select: { direction: true, orderId: true },
+      },
+    },
   });
   if (!hold) throw new HoldNotFoundError(reservationId);
 
-  const items = await itemsOf(tx, reservationId);
-  const states: HoldState[] = items.map((i) => itemState(i.status));
-  const next = headerState(hold.status, states);
+  const dp = hold.payments.find((p) => p.direction === "MASUK");
+  const refunded = hold.payments.some((p) => p.direction === "KELUAR");
+  // A DP neither on a sale nor refunded waits for staff: the hold must not
+  // close itself, or a projection's BATAL would read as "kept".
+  const dpOpen = dp !== undefined && dp.orderId === null && !refunded;
+  // Nobody paid: a TERSEDIA unit the ledger never held for this hold is
+  // reserved softly, and still wanted. A unit RELEASED from a firm hold has
+  // its DIRESERVASI row naming this reservation, and reads released.
+  // Staff holds only: the bot has not held anything since 2026-10-27, and
+  // every booking it made before that was a firm one.
+  const unpaid =
+    hold.source === "STAF" && dp === undefined && hold.heldUntil === null;
+  const items = (await itemsOf(tx, reservationId)).filter((i) => !i.removed);
+  const everHeld = unpaid
+    ? new Set(
+        (
+          await tx.unitEvent.findMany({
+            where: {
+              // A row from before `UnitEvent.reservationId` names no hold;
+              // like `heldByThisHold`, it is read as this one's.
+              OR: [{ reservationId }, { reservationId: null }],
+              type: "DIRESERVASI",
+              unitId: {
+                in: items.flatMap((i) => (i.unitId === null ? [] : [i.unitId])),
+              },
+            },
+            select: { unitId: true },
+          })
+        ).map((e) => e.unitId),
+      )
+    : new Set<string>();
+  const states: HoldState[] = items.map((i) =>
+    itemState(i.status, unpaid && i.unitId !== null && !everHeld.has(i.unitId)),
+  );
+  const next = headerState(hold.status, states, { dpOpen });
 
   if (next !== hold.status) {
     await tx.reservation.update({

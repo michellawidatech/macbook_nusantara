@@ -143,6 +143,8 @@ export function ProfitLossPage() {
         return t("pnl.interestIn", "Interest received");
       case "mismatchIn":
         return t("pnl.mismatchIn", "Balance above the books");
+      case "dpForfeited":
+        return t("pnl.dpForfeited", "DP hangus (kept DPs)");
       case "interestOut":
         return t("pnl.interestOut", "Interest and bank charges");
       case "mismatchOut":

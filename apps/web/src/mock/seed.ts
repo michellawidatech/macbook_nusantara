@@ -1017,6 +1017,35 @@ export interface Reservation {
   sourceId?: string;
   items: ReservationItem[];
   status: "ACTIVE" | "DONE" | "CANCELLED";
+  /**
+   * The end of a FIRM hold — `Reservation.heldUntil`, the DP's moment plus
+   * the rule's days (owner, 2026-10-27). Absent: nobody paid a DP, and the
+   * hold holds nothing — its units stay on sale, tagged for the customer.
+   */
+  heldUntil?: string;
+  /** The DP, once staff have checked the transfer and recorded it. */
+  dp?: ReservationDp;
+}
+
+/**
+ * A reservation's DP (owner, 2026-10-27, "yes to DP"): a `Payment` MASUK
+ * naming the reservation. ONE row for its whole life — a sale that takes it
+ * adopts the same payment (`orderId`), so the money is counted once, on the
+ * day it came in. `lib/dp.ts` reads what became of it.
+ */
+export interface ReservationDp {
+  /** `Payment.id` — the same id the sale's payment carries once applied. */
+  id: string;
+  /** A `PaymentMethod` code: TUNAI or TRANSFER. */
+  method: string;
+  amount: number;
+  /** When the money came in. */
+  at: string;
+  note?: string;
+  /** The sale it went towards — DERIVED by the server (`Payment.orderId`). */
+  orderId?: string;
+  /** Handed back: a `Payment` KELUAR naming the reservation. */
+  refund?: { id: string; method: string; amount: number; at: string };
 }
 /**
  * A discount, in one of three shapes.
@@ -1640,6 +1669,13 @@ export interface AppSettings {
   shopTagline?: string;
   shopAddress?: string;
   shopContact?: string;
+  /**
+   * The DP rule (owner, 2026-10-27): what a DP is and how many days it holds
+   * a unit. `AppSetting` `sales.dpAmount` / `sales.dpDays`; absent reads as
+   * Rp500.000 for 7 days (`dpRuleOf`, packages/domain).
+   */
+  dpAmount?: number;
+  dpDays?: number;
 }
 
 /**

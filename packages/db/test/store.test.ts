@@ -4240,3 +4240,468 @@ describe("reconciliation, as nusantara_app (2026-10-27)", () => {
     }
   }, 180_000);
 });
+
+/*
+ * A DP holds a unit (owner, 2026-10-27, "yes to DP"). The DP is ONE Payment
+ * for its whole life: the reservation is its parent before the sale, and the
+ * sale adopts the same row — so the money is counted once. As nusantara_app.
+ */
+describe("a DP on a reservation, as nusantara_app (2026-10-27)", () => {
+  const asApp = (): string => {
+    const u = new globalThis.URL(URL);
+    u.username = "nusantara_app";
+    u.password = "";
+    return u.toString();
+  };
+
+  /** One commit as the app role; returns the result. */
+  async function commitAs(
+    app: PrismaClient,
+    before: Record<string, Row[]>,
+    after: Record<string, Row[]>,
+  ) {
+    return commitStore(app, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(before as StoreShape, after as StoreShape),
+      ),
+    });
+  }
+
+  /** The browser's next ledger row for a unit. */
+  function eventFor(
+    shop: Record<string, unknown>,
+    unit: Row,
+    id: string,
+    type: string,
+    from: string,
+    to: string,
+    refCode: string,
+    extra = 0,
+  ): Row {
+    const seq = (shop["events"] as Row[]).filter(
+      (e) => e["serial"] === unit["serial"],
+    ).length;
+    return {
+      id,
+      serial: unit["serial"],
+      seq: seq + 1 + extra,
+      type,
+      at: NOW.toISOString(),
+      fromStatus: from,
+      toStatus: to,
+      locationId: unit["locationId"],
+      refCode,
+      staff: "Michella",
+    };
+  }
+
+  async function soft(
+    app: PrismaClient,
+    shop: Record<string, unknown>,
+    tag: string,
+  ) {
+    const unit = (shop["units"] as Row[]).filter(
+      (u) => u["status"] === "TERSEDIA",
+    )[tag === "b" ? 1 : tag === "c" ? 2 : 0]!;
+    const customer = (shop["customers"] as Row[]).find(
+      (c) => typeof c["phone"] === "string" && c["phone"] !== "",
+    )!;
+    const hold: Row = {
+      id: `rv_dp_${tag}`,
+      code: `RV-2026/09-Tdp${tag}1234`,
+      customerId: customer["id"],
+      when: NOW.toISOString(),
+      note: "",
+      items: [{ id: `rvi_dp_${tag}`, serial: unit["serial"] }],
+      status: "ACTIVE",
+    };
+    const made = await commitAs(
+      app,
+      { reservations: [] },
+      { reservations: [hold] },
+    );
+    const code = made.codes[hold["code"] as string]!;
+    const saved: Row = { ...hold, code };
+    // Nobody paid: the unit is still on sale.
+    expect(
+      (
+        await db.unit.findUniqueOrThrow({
+          where: { serial: unit["serial"] as string },
+        })
+      ).status,
+    ).toBe("TERSEDIA");
+    return { unit, customer, hold: saved };
+  }
+
+  async function recordDp(
+    app: PrismaClient,
+    shop: Record<string, unknown>,
+    s: { unit: Row; hold: Row },
+    dpId: string,
+  ) {
+    const at = "2026-09-13T04:00:00.000Z";
+    const dp = { id: dpId, method: "TRANSFER", amount: 500_000, at };
+    const firm = {
+      ...s.hold,
+      heldUntil: "2026-09-20T04:00:00.000Z",
+      dp,
+    };
+    await commitAs(
+      app,
+      { reservations: [s.hold], units: [s.unit], events: [] },
+      {
+        reservations: [firm],
+        units: [{ ...s.unit, status: "DIRESERVASI" }],
+        events: [
+          eventFor(
+            shop,
+            s.unit,
+            `ev_${dpId}`,
+            "DIRESERVASI",
+            "TERSEDIA",
+            "DIRESERVASI",
+            s.hold["code"] as string,
+          ),
+        ],
+      },
+    );
+    return { firm, dp };
+  }
+
+  it("is written against the reservation alone, holds the unit, and the sale takes the same payment", async () => {
+    const shop = await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    try {
+      const s = await soft(app, shop, "a");
+      const { firm, dp } = await recordDp(app, shop, s, "dp_store_a");
+      const row = await db.payment.findUniqueOrThrow({ where: { id: dp.id } });
+      expect(row).toMatchObject({
+        reservationId: s.hold["id"],
+        orderId: null,
+        direction: "MASUK",
+        amount: 500_000n,
+        status: "LUNAS",
+      });
+      const rv = await db.reservation.findUniqueOrThrow({
+        where: { id: s.hold["id"] as string },
+      });
+      expect(rv.heldUntil?.toISOString()).toBe("2026-09-20T04:00:00.000Z");
+      const held = await db.unit.findUniqueOrThrow({
+        where: { serial: s.unit["serial"] as string },
+      });
+      expect(held.status).toBe("DIRESERVASI");
+
+      // The sale: the DP counts toward the bill, only the rest is collected.
+      const serial = s.unit["serial"] as string;
+      const code = "SI-2026/09-Tdpsale1";
+      const sale = {
+        id: "o_dp_a",
+        code,
+        ts: NOW.toISOString(),
+        customerId: s.customer["id"],
+        serials: [serial],
+        prices: { [serial]: 5_000_000 },
+        discount: 0,
+        source: "OFFLINE",
+        payMethod: "TUNAI",
+        settled: true,
+        payments: [
+          { ...dp, state: "SETTLED", reservationId: s.hold["id"] },
+          {
+            id: "p_dp_rest",
+            method: "TUNAI",
+            amount: 4_500_000,
+            state: "SETTLED",
+            at: NOW.toISOString(),
+          },
+        ],
+        total: 5_000_000,
+        reservationId: s.hold["id"],
+      };
+      const done = {
+        ...firm,
+        status: "DONE",
+        dp: { ...firm.dp, orderId: "o_dp_a" },
+      };
+      const result = await commitAs(
+        app,
+        {
+          orders: [],
+          reservations: [firm],
+          units: [{ ...s.unit, status: "DIRESERVASI" }],
+          events: [],
+        },
+        {
+          orders: [sale],
+          reservations: [done],
+          units: [{ ...s.unit, status: "TERJUAL" }],
+          events: [
+            eventFor(
+              shop,
+              s.unit,
+              "ev_dp_sold",
+              "TERJUAL",
+              "DIRESERVASI",
+              "TERJUAL",
+              code,
+              1,
+            ),
+          ],
+        },
+      );
+      // ONE row for the DP, now with both parents.
+      const rows = await db.payment.findMany({
+        where: { OR: [{ id: dp.id }, { orderId: "o_dp_a" }] },
+        orderBy: { id: "asc" },
+      });
+      expect(rows.map((p) => [p.id, p.orderId, p.reservationId])).toEqual([
+        ["dp_store_a", "o_dp_a", s.hold["id"]],
+        ["p_dp_rest", "o_dp_a", null],
+      ]);
+      // Never counted twice: what the sale was paid is its total.
+      expect(rows.reduce((n, p) => n + p.amount, 0n)).toBe(5_000_000n);
+      const order = (result.rows.orders as Row[]).find(
+        (o) => o["id"] === "o_dp_a",
+      )!;
+      expect(
+        (order["payments"] as Row[]).find((p) => p["id"] === dp.id)?.[
+          "reservationId"
+        ],
+      ).toBe(s.hold["id"]);
+      const back = (
+        decodeStore((await snapshotStore(db, { staffId: ACTOR })).db) as {
+          reservations: Row[];
+        }
+      ).reservations.find((r) => r["id"] === s.hold["id"])!;
+      expect(back["dp"]).toMatchObject({ id: dp.id, orderId: "o_dp_a" });
+      expect(back["status"]).toBe("DONE");
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
+  it("refunds a DP as money out naming the reservation, and keeps one as nothing new", async () => {
+    const shop = await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    try {
+      const a = await soft(app, shop, "b");
+      const { firm } = await recordDp(app, shop, a, "dp_store_b");
+      const refunded = {
+        ...firm,
+        status: "CANCELLED",
+        heldUntil: NOW.toISOString(),
+        dp: {
+          ...firm.dp,
+          refund: {
+            id: "dp_store_b_back",
+            method: "TUNAI",
+            amount: 500_000,
+            at: NOW.toISOString(),
+          },
+        },
+      };
+      await commitAs(
+        app,
+        {
+          reservations: [firm],
+          units: [{ ...a.unit, status: "DIRESERVASI" }],
+          events: [],
+        },
+        {
+          reservations: [refunded],
+          units: [{ ...a.unit, status: "TERSEDIA" }],
+          events: [
+            eventFor(
+              shop,
+              a.unit,
+              "ev_dp_b_back",
+              "RESERVASI_BATAL",
+              "DIRESERVASI",
+              "TERSEDIA",
+              a.hold["code"] as string,
+              1,
+            ),
+          ],
+        },
+      );
+      const money = await db.payment.findMany({
+        where: { reservationId: a.hold["id"] as string },
+        orderBy: { direction: "asc" },
+        include: { method: { select: { code: true } } },
+      });
+      expect(
+        money.map((p) => [p.direction, p.amount, p.method.code, p.orderId]),
+      ).toEqual([
+        ["MASUK", 500_000n, "TRANSFER", null],
+        ["KELUAR", 500_000n, "TUNAI", null],
+      ]);
+
+      // Kept: the reservation closes with the DP still on it — no new row.
+      const c = await soft(app, shop, "c");
+      const kept = await recordDp(app, shop, c, "dp_store_c");
+      const before = await db.payment.count();
+      await commitAs(
+        app,
+        {
+          reservations: [kept.firm],
+          units: [{ ...c.unit, status: "DIRESERVASI" }],
+          events: [],
+        },
+        {
+          reservations: [{ ...kept.firm, status: "CANCELLED" }],
+          units: [{ ...c.unit, status: "TERSEDIA" }],
+          events: [
+            eventFor(
+              shop,
+              c.unit,
+              "ev_dp_c_keep",
+              "RESERVASI_BATAL",
+              "DIRESERVASI",
+              "TERSEDIA",
+              c.hold["code"] as string,
+              1,
+            ),
+          ],
+        },
+      );
+      expect(await db.payment.count()).toBe(before);
+      const rv = await db.reservation.findUniqueOrThrow({
+        where: { id: c.hold["id"] as string },
+      });
+      expect(rv.status).toBe("BATAL");
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
+  it("keeps the DP rule in AppSetting, defaulting when unset", async () => {
+    const before = (await snapshotStore(db, { staffId: ACTOR })).db as {
+      settings: Record<string, unknown>;
+    };
+    const settings = decodeStore(
+      before as unknown as StoreShape,
+    ) as unknown as {
+      settings: Record<string, unknown>;
+    };
+    expect(settings.settings["dpAmount"]).toBeUndefined();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    try {
+      await commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(
+            { settings: settings.settings } as unknown as StoreShape,
+            {
+              settings: { ...settings.settings, dpAmount: 750_000, dpDays: 5 },
+            } as unknown as StoreShape,
+          ),
+        ),
+      });
+    } finally {
+      await app.$disconnect();
+    }
+    const rows = await db.appSetting.findMany({
+      where: { key: { in: ["sales.dpAmount", "sales.dpDays"] } },
+      orderBy: { key: "asc" },
+    });
+    expect(rows.map((r) => [r.key, r.value])).toEqual([
+      ["sales.dpAmount", "750000"],
+      ["sales.dpDays", "5"],
+    ]);
+  }, 180_000);
+
+  it("leaves a colleague the task when a unit reserved unpaid is sold to somebody else", async () => {
+    const shop = await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    try {
+      const s = await soft(app, shop, "a");
+      const phone = String(s.customer["phone"]);
+      const from = phone.replace(/^\+/, "");
+      await db.waMessage.create({
+        data: {
+          id: "wa_dp_store",
+          waMessageId: "wamid.dp_store",
+          from,
+          direction: "IN",
+          ts: NOW,
+          text: "kak tolong keep ya",
+          msgType: "text",
+          status: "DIJAWAB_AGEN",
+          entities: {},
+          answeredByAgent: true,
+        },
+      });
+      const serial = s.unit["serial"] as string;
+      const code = "SI-2026/09-Tsoldovr";
+      const sale = {
+        id: "o_soldover",
+        code,
+        ts: NOW.toISOString(),
+        customerId: null,
+        serials: [serial],
+        prices: { [serial]: 5_000_000 },
+        discount: 0,
+        source: "OFFLINE",
+        payMethod: "TUNAI",
+        settled: true,
+        payments: [
+          {
+            id: "p_soldover",
+            method: "TUNAI",
+            amount: 5_000_000,
+            state: "SETTLED",
+            at: NOW.toISOString(),
+          },
+        ],
+        total: 5_000_000,
+      };
+      await commitAs(
+        app,
+        {
+          orders: [],
+          reservations: [s.hold],
+          units: [s.unit],
+          events: [],
+        },
+        {
+          orders: [sale],
+          reservations: [
+            {
+              ...s.hold,
+              items: [],
+              status: "CANCELLED",
+              note: `${serial} was sold to another buyer on ${code}.`,
+            },
+          ],
+          units: [{ ...s.unit, status: "TERJUAL" }],
+          events: [
+            eventFor(
+              shop,
+              s.unit,
+              "ev_soldover",
+              "TERJUAL",
+              "TERSEDIA",
+              "TERJUAL",
+              code,
+            ),
+          ],
+        },
+      );
+      const tasks = await db.chatAction.findMany({ where: { from } });
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]).toMatchObject({
+        kind: "RESERVATION",
+        status: "OPEN",
+        topic: "hold",
+      });
+      expect(tasks[0]!.summary).toMatch(
+        /^Perlu kabari — .+ sudah terjual ke pembeli lain$/,
+      );
+      await db.chatAction.deleteMany({ where: { from } });
+      await db.waMessage.deleteMany({ where: { from } });
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+});

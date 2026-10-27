@@ -20,7 +20,12 @@
  * Pure: no database, no clock.
  */
 
-import type { HandoffTopic, ReplyProblem } from "./policy.js";
+import {
+  parseAskPrice,
+  type HandoffTopic,
+  type ReplyProblem,
+  type Route,
+} from "./policy.js";
 import { productLabelOf } from "./rules/understand.js";
 
 /** The job, in the shop's words. Each is a head the web can translate. */
@@ -48,6 +53,14 @@ export const TASK_NEED = {
   welcome: "Perlu sambut",
   /** A unit somebody asked to be told about is on the shelf. */
   notify: "Perlu kabari",
+  /**
+   * A customer says they paid a DP or sent the transfer proof (2026-10-27):
+   * staff check the bank and record it on the reservation. The bot never
+   * records a DP.
+   */
+  verifyDp: "Perlu verifikasi DP",
+  /** A DP hold ran out unpaid: refund the DP or keep it (hangus). */
+  decideDp: "Perlu putuskan DP",
 } as const;
 export type TaskNeed = keyof typeof TASK_NEED;
 
@@ -143,6 +156,26 @@ export const unitSubject = (text: string | null | undefined): string | null =>
  */
 export function routedTask(topic: HandoffTopic, customerText: string): string {
   return taskNote(needOfTopic(topic), unitSubject(customerText), customerText);
+}
+
+/**
+ * The task a ROUTED message leaves: `routedTask`, except a DP the customer
+ * says they paid (2026-10-27), which is `Perlu verifikasi DP — …` with the
+ * amount and unit their words name.
+ */
+export function routeSummary(
+  route: Pick<Route, "topic" | "rule">,
+  customerText: string,
+  name: string | null = null,
+): string {
+  if (route.rule === "dp_proof")
+    return dpVerifyTask({
+      name,
+      amount: parseAskPrice(customerText),
+      unit: unitSubject(customerText),
+      text: customerText,
+    });
+  return routedTask(route.topic, customerText);
 }
 
 /**
@@ -286,7 +319,67 @@ export function notifyTask(c: {
   return taskNote("notify", `${c.unit} sudah ready, ${who} minta dikabari`);
 }
 
+/**
+ * `Perlu verifikasi DP — Budi kirim bukti transfer Rp 500rb untuk Air M2
+ * 8/256` (2026-10-27). The amount and unit are what the conversation said;
+ * either may be missing.
+ */
+export function dpVerifyTask(c: {
+  readonly name: string | null;
+  readonly amount?: string | number | bigint | null;
+  readonly unit: string | null;
+  readonly text: string;
+}): string {
+  const who = c.name?.trim() || "Pelanggan";
+  const amount = c.amount != null ? shortRupiah(c.amount) : "";
+  const detail = [
+    `${who} kirim bukti transfer`,
+    amount || null,
+    c.unit?.trim() ? `untuk ${c.unit.trim()}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return taskNote("verifyDp", detail, c.text);
+}
+
+/**
+ * `Perlu putuskan DP — Budi tidak melunasi Air M2, DP Rp 500rb: kembalikan
+ * atau hangus?` (2026-10-27) — left when a DP hold runs out unpaid.
+ */
+export function dpDecisionTask(c: {
+  readonly name: string | null;
+  readonly unit: string | null;
+  readonly amount: string | number | bigint;
+}): string {
+  const who = c.name?.trim() || "Pelanggan";
+  return taskNote(
+    "decideDp",
+    `${who} tidak melunasi ${c.unit?.trim() || "unitnya"}, DP ${shortRupiah(c.amount)}: kembalikan atau hangus?`,
+  );
+}
+
 const HARI = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+
+const BULAN = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "Mei",
+  "Jun",
+  "Jul",
+  "Agu",
+  "Sep",
+  "Okt",
+  "Nov",
+  "Des",
+];
+
+/** A day as the shop writes it — "Senin, 3 Nov", Jakarta time. */
+export function jakartaDayLabel(at: Date): string {
+  const local = new Date(at.getTime() + 7 * 3_600_000);
+  return `${HARI[local.getUTCDay()]}, ${local.getUTCDate()} ${BULAN[local.getUTCMonth()]}`;
+}
 
 /** A visit as the shop writes it — "Sabtu 14.00", Jakarta time. */
 export function jakartaVisitLabel(at: Date): string {

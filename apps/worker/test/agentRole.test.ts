@@ -397,7 +397,7 @@ describe("the worker as nusantara_agent", () => {
       maxPerTick: 5,
       now: () => new Date(NOW.getTime() + 3 * 86_400_000),
     });
-    expect(result).toEqual({ expired: 1, released: 0 });
+    expect(result).toEqual({ expired: 1, released: 0, dpExpired: 0 });
     expect((await owner.reservation.findFirstOrThrow()).status).toBe("BATAL");
     expect(await owner.unitEvent.count()).toBe(2);
   });
@@ -1127,6 +1127,171 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
       kind: "CLOSING",
       topic: "closing",
     });
+  });
+});
+
+describe("a DP hold, as nusantara_agent (2026-10-27)", () => {
+  const HELD_UNTIL = new Date(NOW.getTime() + 7 * 86_400_000);
+
+  /**
+   * A hold staff made firm with a DP — written by the owner, as the till
+   * would through the store: the reservation with `heldUntil`, its item, the
+   * DP payment naming it, and the unit DIRESERVASI on the ledger.
+   */
+  async function firmHold() {
+    await seedUnit();
+    await owner.paymentMethod.create({
+      data: {
+        id: "pm_tf",
+        code: "TRANSFER",
+        label: "Transfer",
+        builtIn: true,
+        forPo: true,
+        forSale: true,
+        active: true,
+        sortOrder: 1,
+        createdAt: NOW,
+      },
+    });
+    await owner.customer.create({
+      data: { id: "cus_dp", name: "Budi", phone: `+${FROM}`, createdAt: NOW },
+    });
+    await owner.reservation.create({
+      data: {
+        id: "rv_dp",
+        customerId: "cus_dp",
+        custName: "Budi",
+        phone: `+${FROM}`,
+        status: "TERJADWAL",
+        source: "STAF",
+        createdAt: NOW,
+        heldUntil: HELD_UNTIL,
+        items: { create: { unitId: "u_x", skuId: "sku_t", qty: 1 } },
+      },
+    });
+    await owner.payment.create({
+      data: {
+        id: "dp_x",
+        reservationId: "rv_dp",
+        direction: "MASUK",
+        methodId: "pm_tf",
+        amount: 500_000n,
+        status: "LUNAS",
+        paidAt: NOW,
+        recordedAt: NOW,
+        staffId: AGENT_STAFF,
+      },
+    });
+    await owner.$transaction((tx) =>
+      appendUnitEvent(tx, {
+        serial: "SERX",
+        type: "DIRESERVASI",
+        staffId: AGENT_STAFF,
+        at: NOW,
+        reservationId: "rv_dp",
+      }),
+    );
+  }
+
+  const expire = (now: Date) =>
+    expirePass({
+      db: agent,
+      logger,
+      agentStaffId: AGENT_STAFF,
+      graceMs: 3_600_000,
+      ttlMs: 48 * 3_600_000,
+      maxPerTick: 5,
+      now: () => now,
+    });
+
+  it("reminds the customer once, a day before the hold runs out", async () => {
+    await firmHold();
+    const dayBefore = new Date(HELD_UNTIL.getTime() - 12 * 3_600_000);
+    await owner.waMessage.create({
+      data: {
+        waMessageId: "dp.1",
+        from: FROM,
+        name: "Budi",
+        text: "sudah transfer dp ya kak",
+        msgType: "text",
+        ts: new Date(dayBefore.getTime() - 3_600_000),
+        direction: "IN",
+        status: "DIJAWAB_AGEN",
+        entities: {},
+        answeredByAgent: false,
+      },
+    });
+    const pass = (now: Date) =>
+      followUpPass({ db: agent, logger, transport: "cloud", now: () => now });
+
+    // Two days before: not yet.
+    expect(
+      await pass(new Date(HELD_UNTIL.getTime() - 48 * 3_600_000)),
+    ).toMatchObject({ dpReminded: 0 });
+    expect(await pass(dayBefore)).toMatchObject({ dpReminded: 1 });
+    expect(await pass(dayBefore)).toMatchObject({ dpReminded: 0 });
+    const rows = await owner.outbox.findMany();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.payload).toMatchObject({
+      to: FROM,
+      followUp: "dp_reminder",
+      reservationId: "rv_dp",
+      body: "Halo kak 😊 unit MacBook Air M2 256GB 8/256 masih kami tahan sampai Kamis, 27 Agu ya. Kalau mau dilunasi atau datang ambil, kabari kami aja kak 🙏",
+    });
+  });
+
+  it("puts the unit back on sale when the hold runs out, leaves the DP to staff, and says so once", async () => {
+    await firmHold();
+    await owner.waMessage.create({
+      data: {
+        waMessageId: "dp.2",
+        from: FROM,
+        name: "Budi",
+        text: "kak tolong keep ya",
+        msgType: "text",
+        ts: NOW,
+        direction: "IN",
+        status: "DIJAWAB_AGEN",
+        entities: {},
+        answeredByAgent: true,
+      },
+    });
+    // Still inside the hold: nothing moves.
+    expect(
+      await expire(new Date(HELD_UNTIL.getTime() - 3_600_000)),
+    ).toMatchObject({ dpExpired: 0 });
+    const after = new Date(HELD_UNTIL.getTime() + 3_600_000);
+    expect(await expire(after)).toMatchObject({ dpExpired: 1, released: 1 });
+    expect(
+      (await owner.unit.findUniqueOrThrow({ where: { serial: "SERX" } }))
+        .status,
+    ).toBe("TERSEDIA");
+    // The hold stays open, waiting on the refund / keep decision…
+    expect(
+      (await owner.reservation.findUniqueOrThrow({ where: { id: "rv_dp" } }))
+        .status,
+    ).toBe("TERJADWAL");
+    // …and the money is untouched: the worker cannot write a payment.
+    const money = await owner.payment.findMany();
+    expect(money.map((p) => [p.id, p.orderId, p.voidedAt])).toEqual([
+      ["dp_x", null, null],
+    ]);
+    const tasks = await owner.chatAction.findMany();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({
+      from: FROM,
+      kind: "RESERVATION",
+      topic: "dp",
+      status: "OPEN",
+      summary:
+        "Perlu putuskan DP — Budi tidak melunasi MacBook Air M2 256GB 8/256, DP Rp 500rb: kembalikan atau hangus?",
+    });
+    // Once: the next pass finds nothing still held.
+    expect(await expire(after)).toMatchObject({ dpExpired: 0 });
+    expect(await owner.chatAction.count()).toBe(1);
+    expect(
+      await owner.unitEvent.count({ where: { type: "RESERVASI_BATAL" } }),
+    ).toBe(1);
   });
 });
 

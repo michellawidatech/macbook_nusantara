@@ -5,6 +5,9 @@
 import { describe, expect, it } from "vitest";
 import {
   TASK_NEED,
+  dpDecisionTask,
+  dpVerifyTask,
+  routeSummary,
   closingTask,
   heldReplyTask,
   jakartaVisitLabel,
@@ -160,6 +163,49 @@ describe("the sales tasks (2026-10-27)", () => {
     expect(TASK_NEED.closing).toBe("Perlu closing");
     expect(routedTask("closing", "cara bayarnya gimana?")).toBe(
       'Perlu closing\n"cara bayarnya gimana?"',
+    );
+  });
+});
+
+describe("the DP tasks (2026-10-27)", () => {
+  it("asks a person to verify a DP the customer says they paid", () => {
+    expect(
+      dpVerifyTask({
+        name: "Budi",
+        amount: 500_000,
+        unit: "Air M2 8/256",
+        text: "sudah tf dp ya kak",
+      }),
+    ).toBe(
+      'Perlu verifikasi DP — Budi kirim bukti transfer Rp 500rb untuk Air M2 8/256\n"sudah tf dp ya kak"',
+    );
+    expect(
+      dpVerifyTask({ name: null, amount: null, unit: null, text: "" }),
+    ).toBe("Perlu verifikasi DP — Pelanggan kirim bukti transfer");
+    expect(
+      routeSummary(
+        { topic: "order_payment", rule: "dp_proof" },
+        "bukti dp 500rb",
+        "Rina",
+      ),
+    ).toMatch(/^Perlu verifikasi DP — Rina kirim bukti transfer Rp 500rb/);
+    // Any other route is the ordinary routed task.
+    expect(
+      routeSummary(
+        { topic: "order_payment", rule: "order_payment" },
+        "sudah transfer",
+      ),
+    ).toMatch(/^Perlu cek pembayaran/);
+  });
+
+  it("asks a person to refund or keep a DP whose hold ran out", () => {
+    expect(
+      dpDecisionTask({ name: "Budi", unit: "Air M2", amount: 500_000n }),
+    ).toBe(
+      "Perlu putuskan DP — Budi tidak melunasi Air M2, DP Rp 500rb: kembalikan atau hangus?",
+    );
+    expect(dpDecisionTask({ name: null, unit: null, amount: "500000" })).toBe(
+      "Perlu putuskan DP — Pelanggan tidak melunasi unitnya, DP Rp 500rb: kembalikan atau hangus?",
     );
   });
 });
