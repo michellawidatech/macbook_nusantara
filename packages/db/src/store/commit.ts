@@ -553,12 +553,16 @@ export async function commitStore(
           const activity = activityRows(
             [
               ...plans.flatMap((p) =>
-                p.rows.map((r) => ({
-                  collection: p.name,
-                  key: r.key,
-                  base: r.wireBase,
-                  next: r.next === undefined ? undefined : r.wireNext,
-                })),
+                p.rows
+                  .filter(
+                    (r) => !ctx.quietActivity.has(`${p.name}\u0000${r.key}`),
+                  )
+                  .map((r) => ({
+                    collection: p.name,
+                    key: r.key,
+                    base: r.wireBase,
+                    next: r.next === undefined ? undefined : r.wireNext,
+                  })),
               ),
               ...singletons.map((s) => ({
                 collection: s.name,
@@ -574,6 +578,15 @@ export async function commitStore(
               ip: input.ip ?? null,
             },
           );
+          for (const own of ctx.ownActivity) {
+            activity.push({
+              at: ctx.now,
+              staffId: ctx.staffId,
+              requestId: input.requestId ?? null,
+              ip: input.ip ?? null,
+              ...own,
+            });
+          }
           if (activity.length > 0)
             await tx.auditLog.createMany({ data: activity });
         }

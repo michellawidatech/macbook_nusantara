@@ -97,4 +97,29 @@ describe("finance scope — reconciliation (2026-10-27)", () => {
     );
     expect(() => assertFinanceWritable(withAccess, withdraw)).not.toThrow();
   });
+
+  it("refuses deleting a reconciliation — with its statement lines — from an account without access (2026-10-27)", () => {
+    const deletion = {
+      collections: {
+        reconciliations: {
+          rows: [{ key: "r", base: { id: "r", kind: "MONTHLY" } }],
+        },
+        statementLines: {
+          rows: [{ key: "l", base: { id: "l", reconciliationId: "r" } }],
+        },
+      },
+    };
+    expect(() => assertFinanceWritable(without, deletion)).toThrow(
+      /akses keuangan/,
+    );
+    const dayOnly = {
+      collections: {
+        reconciliations: { rows: [{ key: "d", base: { id: "d" } }] },
+      },
+    };
+    expect(() => assertFinanceWritable(without, dayOnly)).toThrow(
+      /akses keuangan/,
+    );
+    expect(() => assertFinanceWritable(withAccess, deletion)).not.toThrow();
+  });
 });

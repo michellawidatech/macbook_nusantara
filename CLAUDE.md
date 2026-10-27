@@ -3331,6 +3331,16 @@ Decisions that outlived those documents:
   The summary is `Mau: …` / `Selanjutnya: …`, blank line, the bot's memory — in
   Indonesian, never the shop's own facts; /chat shows only the two lines
   (`staffSummary`, packages/domain), an old note its first 160 chars.
+- **A reconciliation can be deleted — 2026-10-27** (migration
+  `20261027230000_reconciliation_delete`). A Daily row's *Delete* (Popconfirm)
+  takes both pots of that day; a Monthly row's needs the month typed back.
+  `deleteReconciliation` / `reconciliation_delete(text)` (SECURITY DEFINER,
+  EXECUTE to `nusantara_app` only) remove the record, its edits, statement
+  lines, matches and asides, active or withdrawn; corrections already made to
+  transactions STAY, and the period reads as not reconciled. ONE `AuditLog`
+  row (entity `Reconciliation`, `{kind, pot, periodStart, rows}`) replaces the
+  generic lines (`ctx.ownActivity` / `quietActivity`). ⚠️ The ninth
+  sanctioned hard delete; do not generalise it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

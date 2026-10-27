@@ -1305,7 +1305,8 @@ export interface Reconciliation {
   /**
    * POS bank movements the statement never shows, explained instead of
    * paired (MONTHLY only; owner-approved 2026-10-27). Withdrawn, never
-   * removed — except with the adjustment it names (`forgetRecord`).
+   * removed — except with the adjustment it names (`forgetRecord`), or with
+   * the whole reconciliation (`deleteReconciliation`, 2026-10-27).
    */
   asides: ReconciliationAside[];
 }

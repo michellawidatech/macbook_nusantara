@@ -441,4 +441,30 @@ describe("a POS entry set aside on a month (owner-approved 2026-10-27)", () => {
       encodeRow("reconciliations", month([aside({ paymentId: undefined })])),
     ).toThrow();
   });
+
+  it("diffs a deleted month as the reconciliation and its lines removed (2026-10-27)", () => {
+    const rec = month([aside()]);
+    const line = {
+      id: "sl-1",
+      reconciliationId: "rc-1",
+      lineNo: 1,
+      date: "2026-09-02",
+      description: "TRSF CR",
+      amount: 1_000_000,
+      status: "MATCHED",
+      matches: [{ id: "sm-1", paymentId: "pay-1", reason: "EXACT" }],
+    };
+    const gone = encodeChangeset(
+      diffStore(
+        { reconciliations: [rec], statementLines: [line] },
+        { reconciliations: [], statementLines: [] },
+      ),
+    );
+    expect(gone.collections.reconciliations!.rows).toEqual([
+      { key: "rc-1", base: encodeRow("reconciliations", rec) },
+    ]);
+    expect(gone.collections.statementLines!.rows).toEqual([
+      { key: "sl-1", base: encodeRow("statementLines", line) },
+    ]);
+  });
 });

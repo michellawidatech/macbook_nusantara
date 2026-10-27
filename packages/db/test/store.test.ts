@@ -4239,6 +4239,211 @@ describe("reconciliation, as nusantara_app (2026-10-27)", () => {
       await app.$disconnect();
     }
   }, 180_000);
+
+  it("deletes a day or a month whole — log, lines, matches, asides — keeps the corrections, and writes ONE activity line (2026-10-27)", async () => {
+    await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    const commit = (before: Partial<StoreShape>, after: Partial<StoreShape>) =>
+      commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(before as StoreShape, after as StoreShape),
+        ),
+      });
+    const read = async (): Promise<Record<string, Row[]>> =>
+      decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+    try {
+      const exp = expense("exp-recdel-1", 60_200);
+      const day: Row = {
+        id: "rc-gone-day",
+        kind: "DAILY",
+        pot: "BANK",
+        periodStart: "2026-10-26",
+        periodEnd: "2026-10-26",
+        posBalance: 0,
+        actualBalance: 0,
+        status: "ADJUSTED",
+        staff: "Store Test",
+        createdAt: AT,
+        updatedAt: AT,
+        asides: [],
+        edits: [
+          {
+            id: "re-gone-1",
+            expenseId: "exp-recdel-1",
+            action: "ADDED",
+            after: 60_200,
+            staff: "Store Test",
+            at: AT,
+          },
+        ],
+      };
+      const month: Row = {
+        ...day,
+        id: "rc-gone-month",
+        kind: "MONTHLY",
+        periodStart: "2026-07-01",
+        periodEnd: "2026-07-31",
+        status: "OPEN",
+        edits: [],
+        asides: [
+          {
+            id: "ra-gone-1",
+            expenseId: "exp-recdel-1",
+            note: "Owner's account",
+            staff: "Store Test",
+            at: AT,
+          },
+        ],
+      };
+      const line = (id: string, lineNo: number, matches: Row[]): Row => ({
+        id,
+        reconciliationId: "rc-gone-month",
+        lineNo,
+        date: "2026-07-02",
+        description: `ZZ GONE ${lineNo}`,
+        amount: -60_200,
+        status: matches.length > 0 ? "MATCHED" : "UNMATCHED",
+        matches,
+      });
+      const lines = [
+        line("bl-gone-1", 1, [
+          { id: "bm-gone-1", expenseId: "exp-recdel-1", reason: "EXACT" },
+        ]),
+        line("bl-gone-2", 2, []),
+      ];
+      await commit(
+        { reconciliations: [], statementLines: [], expenses: [] },
+        {
+          reconciliations: [day, month],
+          statementLines: lines,
+          expenses: [exp],
+        },
+      );
+      let snap = await read();
+      const dayRow = snap["reconciliations"]!.find(
+        (r) => r["id"] === "rc-gone-day",
+      )!;
+      const monthRow = snap["reconciliations"]!.find(
+        (r) => r["id"] === "rc-gone-month",
+      )!;
+      // A RECONCILED month is deleted as readily as an open one: the
+      // re-upload's "reopen it first" does not apply to a deletion.
+      await commit(
+        { reconciliations: [monthRow] },
+        { reconciliations: [{ ...monthRow, status: "RECONCILED" }] },
+      );
+      snap = await read();
+      const closedMonth = snap["reconciliations"]!.find(
+        (r) => r["id"] === "rc-gone-month",
+      )!;
+      const lineRows = snap["statementLines"]!.filter(
+        (l) => l["reconciliationId"] === "rc-gone-month",
+      );
+      expect(lineRows).toHaveLength(2);
+
+      const before = await db.storeChange.aggregate({ _max: { id: true } });
+
+      // The day: the browser removes the row.
+      const dayDelta = await commit(
+        { reconciliations: [dayRow] },
+        { reconciliations: [] },
+      );
+      expect(dayDelta.removed["reconciliations"]).toEqual(["rc-gone-day"]);
+      // The month: the browser removes the row AND its lines in one commit.
+      const monthDelta = await commit(
+        { reconciliations: [closedMonth], statementLines: lineRows },
+        { reconciliations: [], statementLines: [] },
+      );
+      expect(monthDelta.removed["reconciliations"]).toEqual(["rc-gone-month"]);
+      expect([...(monthDelta.removed["statementLines"] ?? [])].sort()).toEqual([
+        "bl-gone-1",
+        "bl-gone-2",
+      ]);
+
+      snap = await read();
+      expect(
+        snap["reconciliations"]!.some((r) =>
+          ["rc-gone-day", "rc-gone-month"].includes(r["id"] as string),
+        ),
+      ).toBe(false);
+      expect(
+        await db.reconciliationEdit.count({
+          where: { reconciliationId: "rc-gone-day" },
+        }),
+      ).toBe(0);
+      expect(
+        await db.bankStatementLine.count({
+          where: { reconciliationId: "rc-gone-month" },
+        }),
+      ).toBe(0);
+      expect(
+        await db.bankStatementMatch.count({ where: { id: "bm-gone-1" } }),
+      ).toBe(0);
+      expect(
+        await db.reconciliationAside.count({ where: { id: "ra-gone-1" } }),
+      ).toBe(0);
+      // What was corrected stays: the expense the day added is still there.
+      expect(
+        snap["expenses"]!.find((e) => e["id"] === "exp-recdel-1"),
+      ).toMatchObject({ amount: 60_200 });
+      // The day can be reconciled afresh.
+      await commit(
+        { reconciliations: [] },
+        { reconciliations: [{ ...day, id: "rc-again", edits: [] }] },
+      );
+
+      // ONE activity line per reconciliation, and none per statement line.
+      const audit = await db.auditLog.findMany({
+        where: {
+          OR: [
+            { entity: "Reconciliation" },
+            {
+              entity: { in: ["reconciliations", "statementLines"] },
+              action: "DELETE",
+            },
+          ],
+        },
+        orderBy: { entityId: "asc" },
+      });
+      expect(
+        audit.map((a) => [a.entity, a.entityId, a.action, a.staffId]),
+      ).toEqual([
+        ["Reconciliation", "rc-gone-day", "DELETE", ACTOR],
+        ["Reconciliation", "rc-gone-month", "DELETE", ACTOR],
+      ]);
+      expect(JSON.parse(audit[0]!.before!)).toEqual({
+        kind: "DAILY",
+        pot: "BANK",
+        periodStart: "2026-10-26",
+        rows: 2,
+      });
+      expect(JSON.parse(audit[1]!.before!)).toEqual({
+        kind: "MONTHLY",
+        pot: "BANK",
+        periodStart: "2026-07-01",
+        rows: 5,
+      });
+
+      // Other tills hear about it.
+      const changes = await db.storeChange.findMany({
+        where: { id: { gt: before._max.id ?? 0n } },
+        select: { collection: true, rowKey: true },
+      });
+      const keys = changes.map((c) => `${c.collection}:${c.rowKey}`);
+      for (const k of [
+        "reconciliations:rc-gone-day",
+        "reconciliations:rc-gone-month",
+        "statementLines:bl-gone-1",
+        "statementLines:bl-gone-2",
+      ])
+        expect(keys).toContain(k);
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
 });
 
 /*

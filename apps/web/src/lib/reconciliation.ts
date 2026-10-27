@@ -528,6 +528,24 @@ export function reopen(d: MockDb, id: string, ctx: EditContext): void {
 }
 
 /**
+ * Delete a reconciliation whole (owner ask 2026-10-27): the record with its
+ * edit log and asides, and its statement lines with their matches. A
+ * correction it already wrote to a real record STAYS — that was a real fix —
+ * and the day or month reads as not reconciled again. The server does the
+ * same through `reconciliation_delete`. Call inside `mutate`. Answers whether
+ * there was anything to delete.
+ */
+export function deleteReconciliation(
+  d: Pick<MockDb, "reconciliations" | "statementLines">,
+  id: string,
+): boolean {
+  if (!d.reconciliations.some((r) => r.id === id)) return false;
+  d.reconciliations = d.reconciliations.filter((r) => r.id !== id);
+  d.statementLines = d.statementLines.filter((l) => l.reconciliationId !== id);
+  return true;
+}
+
+/**
  * Has the POS balance of that day moved since it was reconciled? (owner
  * answer 2B: derived, nothing stored.) Only a closed count can have
  * "changed since" — an OPEN one is still being worked on.
