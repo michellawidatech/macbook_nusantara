@@ -3368,6 +3368,46 @@ Decisions that outlived those documents:
   closed, a WA_REPLY if the window or Baileys allows, an audit row (a reject's
   reason lives there). Requests tab on /reservations + nav badge, a strip in
   /chat, one dialog component. No migration (20261014 grants suffice).
+- **Unit details, cheapest-first offers, listing links — 2026-10-28** (spec
+  `docs/superpowers/specs/2026-10-28-unit-details-offers-links-design.md`,
+  owner-approved; migrations `20261028090000` + data `20261028090100`).
+  - **`Unit.neverServiced`** (null = not answered) is asked at QC — inbound
+    unit popup, waiting-for-QC card, Edit unit (`NeverServicedField`).
+    `servicedState` (packages/domain): a `ServiceVisit` says serviced whatever
+    QC said; blank is unknown and the bot says nothing.
+  - **The bot sees the QC description**, split by `splitCondition`: faults
+    (`UNIT_FAULT_PHRASES` — Layar ada garis, Keyboard aus, Engsel longgar,
+    Baterai lemah, Tanpa charger, Unit only) are said upfront; marks only when
+    asked (owner accepted). "belum pernah servis" whenever it is true.
+  - **Cheapest first** (`offerLadder`): `search_stock` leads with the lowest
+    grade, cheapest unit of the variant that fits, returns `otherGrades`, then
+    the one `stepUp`. ⚠️ REVERSES 2026-09-29: `find_unit_photos` now picks the
+    lowest grade, cheapest pictured unit, not the most expensive.
+  - **Not pushy**: photos are SENT with a recommendation (no "Mau lihat
+    fotonya?"), closed by "Gimana kakk? Kakak juga bisa lihat unitnya langsung
+    di toko kita 😊"; needs are asked only before the first recommendation;
+    filler openers (Okayy, Okee, Siapp…). Keep → "rencananya mau ke toko
+    kapan kak?" → request filed + DP rule → "Mau DP sekarang kak?".
+  - **Listing links per VARIANT**: `Sku.shopeeUrl/tokopediaUrl/instagramUrl`
+    (https only, CHECK + contract), edited on an Inventory line's *Listing
+    links*. Sent only on a buy-online question (`asksBuyOnline`, checked
+    BEFORE `CLOSE`, which reads "checkout" as committing). `checkReply`
+    refuses a link no lookup returned (`LINK_INVENTED`) and reads prices with
+    links stripped — a Shopee URL's digits are not an amount. The owner's
+    scrape is loaded by the data migration (58 variants, matched on
+    `Sku.name` + variant label exactly as *Export stock* writes them; the M1
+    Pro 16" row the scrape matched to a 2019 Intel listing is left out).
+    ⚠️ The planned *Import listing links* button was NOT built.
+  - **The approval line is the owner's template** (`approvalMessage`): "Okeyy
+    kak noted, kak {name} nanti akan kita siapkan {unit} nya yaa untuk {day}
+    jam {time}." + the address only when no earlier line in the chat carried
+    it (`placeForApproval`). The DP line is gone. `SHOP_ADDRESS` moved to
+    packages/domain.
+  - **Every staff bubble is named**: each staff send writes an `Outbox` CREATE
+    audit line (`recordSender`); a row with none and no `requestId` is the
+    worker's and draws as Bot (`fromBot`).
+  - Chip & spec guide for the Knowledge Base:
+    `docs/chatbot/chip-guide-2026-10-28.xlsx` (16 rows) — the owner imports it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
