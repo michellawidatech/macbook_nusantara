@@ -262,7 +262,8 @@ describe("approving a request", () => {
     expect(out.kind).toBe("WA_REPLY");
     // The owner's template (2026-10-28), with the name the request is under.
     expect((out.payload as { body: string }).body).toMatch(
-      /^Okeyy kak noted, kak Budi nanti akan kita siapkan MacBook Air M2 8\/256 nya yaa untuk .+ jam \d\d\.\d\d\.$/,
+      // No shop address recorded here: the owner's own (SHOP_ADDRESS) is said.
+      /^Okeyy kak noted, kak Budi nanti akan kita siapkan MacBook Air M2 8\/256 nya yaa untuk .+ jam \d\d\.\d\d\. Toko kita ada di Ruko Sorrento Place, .+, buka setiap hari 10\.00–20\.00 WIB\.$/,
     );
     expect(
       await owner.auditLog.count({
