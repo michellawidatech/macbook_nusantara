@@ -219,6 +219,14 @@ export interface Sku {
    * invoices name it; offered by no picker or list — see `isLiveSku`.
    */
   mergedIntoId?: string;
+  /**
+   * The variant's marketplace listings (2026-10-28), `https://` only — what
+   * the bot sends a customer who asks to buy online. One listing often
+   * sells several variants, so two variants may hold the same link.
+   */
+  shopeeUrl?: string;
+  tokopediaUrl?: string;
+  instagramUrl?: string;
 }
 /** A product category — see `MockDb.categories`. */
 export interface ProductCategory {
@@ -341,6 +349,12 @@ export interface Unit {
    * ⚠️ Schema gap, as `cycleCount`.
    */
   fcc?: number;
+  /**
+   * Asked at QC (2026-10-28): true = never serviced or opened, false = it has
+   * been, absent = not answered. A service visit says "serviced" whatever
+   * this holds (`servicedState`, packages/domain).
+   */
+  neverServiced?: boolean;
 }
 /**
  * A photograph attached to a note about one machine. Mirrors `UnitNotePhoto`.

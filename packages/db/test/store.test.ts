@@ -235,6 +235,50 @@ describe("a till's commit", () => {
     );
   }, 180_000);
 
+  it("keeps QC's never-serviced answer and a variant's listing links (2026-10-28)", async () => {
+    const shop = await loadDemo();
+    const unit = (shop["units"] as Row[]).find(
+      (u) => u["status"] === "TERSEDIA",
+    )!;
+    const sku = (shop["skus"] as Row[]).find((s) => s["id"] === unit["skuId"])!;
+    const links = {
+      shopeeUrl: "https://shopee.co.id/x",
+      tokopediaUrl: "https://www.tokopedia.com/y",
+      instagramUrl: "https://www.instagram.com/p/z",
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { units: [unit], skus: [sku] },
+          {
+            units: [{ ...unit, neverServiced: true }],
+            skus: [{ ...sku, ...links }],
+          },
+        ),
+      ),
+    });
+    const back = decodeStore(
+      (await snapshotStore(db, { staffId: ACTOR })).db,
+    ) as unknown as Record<string, Row[]>;
+    expect(
+      back["units"]!.find((u) => u["serial"] === unit["serial"])!["neverServiced"],
+    ).toBe(true);
+    expect(back["skus"]!.find((s) => s["id"] === sku["id"])).toMatchObject(
+      links,
+    );
+
+    // A link that is not https is refused by the contract before it is sent.
+    expect(() =>
+      encodeChangeset(
+        diffStore(
+          { skus: [{ ...sku, ...links }] },
+          { skus: [{ ...sku, ...links, shopeeUrl: "http://x" }] },
+        ),
+      ),
+    ).toThrow(/https/);
+  }, 180_000);
+
   it("numbers a new document and rewrites the provisional code everywhere", async () => {
     const shop = await loadDemo();
     const unit = (shop["units"] as Row[]).find(

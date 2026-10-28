@@ -551,6 +551,9 @@ export const skus: Adapter<"skus"> = {
           : Object.fromEntries(s.axisValues.map((v) => [v.axis, v.value])),
       price: s.price,
       ...(s.mergedIntoId === null ? {} : { mergedIntoId: s.mergedIntoId }),
+      ...(s.shopeeUrl === null ? {} : { shopeeUrl: s.shopeeUrl }),
+      ...(s.tokopediaUrl === null ? {} : { tokopediaUrl: s.tokopediaUrl }),
+      ...(s.instagramUrl === null ? {} : { instagramUrl: s.instagramUrl }),
     }));
   },
   lock: (tx, keys) => lockRows(tx, "Sku", "id", keys),
@@ -657,6 +660,9 @@ export const skus: Adapter<"skus"> = {
         variantLabel: n.variantLabel,
         price: n.price,
         mergedIntoId: merged,
+        shopeeUrl: n.shopeeUrl ?? null,
+        tokopediaUrl: n.tokopediaUrl ?? null,
+        instagramUrl: n.instagramUrl ?? null,
         variantKey:
           merged === null
             ? await freeVariantKey(

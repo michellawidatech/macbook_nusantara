@@ -372,6 +372,7 @@ export const units: Adapter<"units"> = {
         marketPrice: u.marketPrice ?? undefined,
         cycleCount: reading("siklus"),
         fcc: reading("kapasitas"),
+        ...(u.neverServiced === null ? {} : { neverServiced: u.neverServiced }),
       };
     });
   },
@@ -412,6 +413,7 @@ export const units: Adapter<"units"> = {
         description: blankToNull(n.description),
         price: n.price ?? null,
         marketPrice: n.marketPrice ?? null,
+        neverServiced: n.neverServiced ?? null,
         purchaseOrderId: n.poId,
       };
       let unitId: string;

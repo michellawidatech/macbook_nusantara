@@ -439,6 +439,13 @@ model Sku {
   /// `variantKeyOf` the label. Unique per live product (partial index
   /// `Sku_variantKey_live`, hand-written); null on an existing duplicate.
   variantKey   String?
+  /// The variant's own marketplace listings (2026-10-28) — what the bot sends
+  /// a customer who asks to buy online. Per variant, not per unit: one listing
+  /// sells every unit of it. `https://` only, at most 500 characters (CHECK
+  /// `Sku_*Url_https`); null means the shop has no listing there.
+  shopeeUrl    String?
+  tokopediaUrl String?
+  instagramUrl String?
 
   model      CatalogModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
   mergedInto Sku?         @relation("SkuMerge", fields: [mergedIntoId], references: [id], onDelete: Restrict)
@@ -496,6 +503,10 @@ model Unit {
   /// acceptance, and that rule lives in `lib/inboundQc.ts`, not in a NOT NULL —
   /// the column also has to hold the pre-2026-09-02 units, which have none.
   description     String?
+  /// Asked at QC (2026-10-28): true = never serviced or opened, false = it
+  /// has been. NULL = not answered — never read as either. A service visit
+  /// recorded in this app says "serviced" whatever this holds.
+  neverServiced   Boolean?
   /// Which shelf, once QC accepts it into stock.
   rackId          String?
   /// What THIS machine asks over the counter (owner revision 2026-09-08,

@@ -267,6 +267,11 @@ const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Tanggal tidak valid.");
 const id = z.string().min(1);
 const text = z.string();
 const count = z.number().int();
+/** A marketplace listing (2026-10-28): https only, as the column's CHECK says. */
+const listingUrl = z
+  .string()
+  .max(500)
+  .regex(/^https:\/\//, "Link harus diawali https://.");
 
 // ---------------------------------------------------------------------------
 // The rows
@@ -446,6 +451,13 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     price: money,
     /** Merged into another variant (2026-10-21): kept for history, offered nowhere. */
     mergedIntoId: id.optional(),
+    /**
+     * The variant's marketplace listings (2026-10-28) — what the bot sends a
+     * customer who asks to buy online. Absent = no listing there.
+     */
+    shopeeUrl: listingUrl.optional(),
+    tokopediaUrl: listingUrl.optional(),
+    instagramUrl: listingUrl.optional(),
   });
 
   const unit = z.strictObject({
@@ -463,6 +475,11 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     marketPrice: z.optional(money),
     cycleCount: z.number().optional(),
     fcc: z.number().optional(),
+    /**
+     * Asked at QC (2026-10-28): true = never serviced or opened, false = it
+     * has been. Absent = not answered, which is never read as either.
+     */
+    neverServiced: z.boolean().optional(),
   });
 
   const unitNote = z.strictObject({
