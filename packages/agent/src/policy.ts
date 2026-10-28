@@ -721,6 +721,11 @@ export interface StockFact {
    */
   readonly count?: number;
   /**
+   * The variant's own marketplace listings, when the lookup returned them
+   * (2026-10-28). A reply may send these links and no others.
+   */
+  readonly links?: readonly string[];
+  /**
    * How many of the shop's own photos the unit has, when the lookup counted
    * them (2026-10-27). "Mau lihat fotonya?" may be offered only where one of
    * the units has some (`offersPhotos`, converse.ts).
@@ -779,6 +784,7 @@ export type ReplyProblem =
   | "AMOUNT_NOT_IN_SOURCE"
   | "AVAILABILITY_NOT_IN_SOURCE"
   | "DISCOUNT_OFFERED"
+  | "LINK_INVENTED"
   | "TOO_LONG";
 
 /**
@@ -869,6 +875,33 @@ const covers = (fact: StockFact, tokens: readonly string[]) => {
  *    nothing in particular, as the owner's generic answers do, but never
  *    about a model — only the shelf can.
  */
+/** A web address in a reply, without the punctuation that ends its sentence. */
+const LINK_RE = /https?:\/\/\S+/gi;
+
+export function linksIn(message: string): string[] {
+  return (message.match(LINK_RE) ?? []).map((u) =>
+    u.replace(/[.,!?;:)\]}'"]+$/, ""),
+  );
+}
+
+/**
+ * A link the reply sends that no lookup returned and no source quotes
+ * (owner, 2026-10-28). A made-up Shopee address is a customer paying a
+ * stranger, so it is refused like an invented price.
+ */
+function inventsLink(
+  message: string,
+  input: {
+    readonly sourceTexts: readonly string[];
+    readonly stockFacts?: readonly StockFact[];
+  },
+): boolean {
+  const known = new Set((input.stockFacts ?? []).flatMap((f) => f.links ?? []));
+  return linksIn(message).some(
+    (url) => !known.has(url) && !input.sourceTexts.some((t) => t.includes(url)),
+  );
+}
+
 export function checkReply(input: {
   readonly message: string;
   readonly sourceCount: number;
@@ -876,12 +909,16 @@ export function checkReply(input: {
   readonly sourceTexts: readonly string[];
   readonly stockFacts?: readonly StockFact[];
 }): ReplyProblem | null {
-  const message = input.message.trim();
-  if (message === "") return "EMPTY";
-  if (message.length > MAX_REPLY_CHARS) return "TOO_LONG";
+  const raw = input.message.trim();
+  if (raw === "") return "EMPTY";
+  if (raw.length > MAX_REPLY_CHARS) return "TOO_LONG";
   if (input.unknownSources > 0) return "UNKNOWN_SOURCE";
   if (input.sourceCount === 0) return "NO_SOURCE";
-  if (offersDiscount(message)) return "DISCOUNT_OFFERED";
+  if (offersDiscount(raw)) return "DISCOUNT_OFFERED";
+  if (inventsLink(raw, input)) return "LINK_INVENTED";
+  // A link is vouched for above; its digits (".../976133661/…") are not a
+  // price and its words are not a claim, so the rest reads the reply without it.
+  const message = raw.replace(LINK_RE, " ");
 
   const available = (input.stockFacts ?? []).filter((f) => f.available);
   const allowed = new Set(input.sourceTexts.flatMap(amounts));

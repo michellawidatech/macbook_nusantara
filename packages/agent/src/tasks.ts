@@ -74,6 +74,8 @@ export const TASK_REASON = {
   availability: "stok di draf tidak ada sumbernya",
   /** A draft offered a discount or a bargain (2026-10-27): the owner's call. */
   discount: "draf menawarkan diskon",
+  /** A draft sent a link no lookup returned (2026-10-28). */
+  link: "link di draf tidak ada sumbernya",
   noAnswer: "bot tidak punya jawabannya",
   windowClosed: "jendela 24 jam sudah tutup",
   noText: "pesan tanpa teks",
@@ -208,6 +210,11 @@ export function heldReplyTask(
       return {
         topic: "negotiation",
         summary: taskNote("offer", unit ?? TASK_REASON.discount, draft),
+      };
+    case "LINK_INVENTED":
+      return {
+        topic: "other",
+        summary: taskNote("reply", TASK_REASON.link, draft),
       };
     case "TOO_LONG":
       return {

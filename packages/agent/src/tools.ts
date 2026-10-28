@@ -63,7 +63,14 @@ import {
   type PrismaClient,
 } from "@nusantara/db";
 import type Anthropic from "@anthropic-ai/sdk";
-import { formatRupiah, realName, REQUEST_TTL_MS } from "@nusantara/domain";
+import {
+  formatRupiah,
+  offerLadder,
+  realName,
+  REQUEST_TTL_MS,
+  servicedState,
+  splitCondition,
+} from "@nusantara/domain";
 import { loadKnowledgeBase, type KnowledgeBase } from "./knowledge.js";
 import { isStrongMatch } from "./retrieval.js";
 import {
@@ -1282,16 +1289,75 @@ function batteryOf(
   };
 }
 
+/**
+ * What a unit result says beyond grade, battery and price (owner, 2026-10-28):
+ * its QC description split into faults (said upfront) and marks (said when
+ * asked), whether it has been serviced, and the variant's listing links.
+ */
+const FACT_SELECT = {
+  description: true,
+  neverServiced: true,
+  _count: { select: { serviceVisits: true } },
+} as const;
+const LINK_SELECT = {
+  shopeeUrl: true,
+  tokopediaUrl: true,
+  instagramUrl: true,
+} as const;
+
+interface FactRow {
+  readonly description?: string | null;
+  readonly neverServiced?: boolean | null;
+  readonly _count?: { readonly serviceVisits: number };
+  readonly sku: {
+    readonly shopeeUrl?: string | null;
+    readonly tokopediaUrl?: string | null;
+    readonly instagramUrl?: string | null;
+  };
+}
+
+/** The variant's listings, only those it has. */
+export function linksOf(sku: FactRow["sku"]): {
+  shopee?: string;
+  tokopedia?: string;
+  instagram?: string;
+} {
+  return {
+    ...(sku.shopeeUrl ? { shopee: sku.shopeeUrl } : {}),
+    ...(sku.tokopediaUrl ? { tokopedia: sku.tokopediaUrl } : {}),
+    ...(sku.instagramUrl ? { instagram: sku.instagramUrl } : {}),
+  };
+}
+
+/** `condition`, `serviced` and `links`, each left out when there is nothing to say. */
+export function unitFacts(u: FactRow) {
+  const condition = splitCondition(u.description);
+  const serviced = servicedState({
+    neverServiced: u.neverServiced,
+    visits: u._count?.serviceVisits ?? 0,
+  });
+  const links = linksOf(u.sku);
+  return {
+    ...(condition.faults.length > 0 || condition.marks.length > 0
+      ? { condition }
+      : {}),
+    ...(serviced ? { serviced } : {}),
+    ...(Object.keys(links).length > 0 ? { links } : {}),
+  };
+}
+
 const UNIT_SELECT = {
   serial: true,
   grade: true,
   attributes: BATTERY_SELECT,
   // What THIS unit asks (2026-09-08). Null falls back to the variant's.
   price: true,
+  ...FACT_SELECT,
   sku: {
     select: {
       name: true,
       variantLabel: true,
+      ...LINK_SELECT,
       // The price, since 2026-08-27. It is a property of the variant, so two
       // units of one SKU quote the same money whatever their grade — and the
       // bot must never be the thing that says otherwise.
@@ -1353,7 +1419,37 @@ async function searchStock(
     maxPrice !== undefined
       ? units.length
       : await db.unit.count({ where });
-  const shown = units.slice(0, SEARCH_LIMIT);
+  let shown = units.slice(0, SEARCH_LIMIT);
+
+  /*
+   * The offer for the variant that fits (owner, 2026-10-28: "start from the
+   * lowest grade / cheapest price, but offer other grades as well"): the
+   * variant is the first result's — the search's own order decides which
+   * variant suits — and within it the cheapest unit of the lowest grade
+   * leads, with one line per other grade on the shelf. Worked out here so
+   * the model reads the order instead of sorting.
+   */
+  const ladder =
+    shown.length > 0
+      ? offerLadder(
+          units.map((row) => ({
+            serial: row.serial,
+            grade: row.grade,
+            price: askingPrice(row),
+            skuId: row.skuId,
+            row,
+          })),
+          shown[0]!.skuId,
+        )
+      : null;
+  if (ladder?.lead) {
+    const lead = ladder.lead.row;
+    shown = [lead, ...shown.filter((u) => u.serial !== lead.serial)].slice(
+      0,
+      SEARCH_LIMIT,
+    );
+  }
+  const gradeRows = ladder?.grades.map((g) => g.unit.row) ?? [];
 
   // Out of stock is not the end of the conversation (owner, 2026-10-27: "if
   // the stock is 0, the system should upsell / cross sell items"): the
@@ -1386,6 +1482,7 @@ async function searchStock(
 
   const left = await leftOf(db, [
     ...shown.map((u) => u.skuId),
+    ...gradeRows.map((u) => u.skuId),
     ...(alternatives?.units.map((u) => u.skuId) ?? []),
     ...(stepUp ? [stepUp.skuId] : []),
   ]);
@@ -1393,6 +1490,7 @@ async function searchStock(
   // is offered only where there is something to show (2026-10-27).
   const photos = await photoCountsOf(db, [
     ...shown.map((u) => u.serial),
+    ...gradeRows.map((u) => u.serial),
     ...(alternatives?.units.map((u) => u.serial) ?? []),
     ...(stepUp ? [stepUp.serial] : []),
   ]);
@@ -1423,6 +1521,16 @@ async function searchStock(
         }
       : {}),
     units: shown.map((u) => shelfUnit(u, ctx, left, photos)),
+    ...(ladder && ladder.grades.length > 0
+      ? {
+          otherGrades: ladder.grades.map((g) => ({
+            ...shelfUnit(g.unit.row, ctx, left, photos),
+            count: g.count,
+          })),
+          otherGradesNote: OTHER_GRADES_NOTE,
+        }
+      : {}),
+    unitNote: UNIT_FACTS_NOTE,
     leftNote: LEFT_NOTE,
     ...(photosOn(ctx) ? { photosNote: PHOTOS_NOTE } : {}),
     ...(alternatives && alternatives.units.length > 0
@@ -1462,6 +1570,25 @@ const STEP_UP_CEILING = [13n, 10n] as const;
 /** Past a stated ceiling, a step up may go this much over it: 12/10 is 20%. */
 const STEP_UP_OVER_BUDGET = [12n, 10n] as const;
 
+const OTHER_GRADES_NOTE =
+  "units[0] is the cheapest unit of the lowest grade of this variant: recommend it first. " +
+  "otherGrades lists the other grades of the SAME variant on the shelf, each with its cheapest " +
+  "unit and how many there are. After the first pick, offer them in one short line (for example " +
+  '"kalau mau yang lebih mulus ada grade A juga, 12,5jt"), never as a list.';
+
+/**
+ * How to speak about a unit's facts (owner, 2026-10-28). The words are the
+ * prompt's to choose; which facts may be said, and when, is fixed here.
+ */
+const UNIT_FACTS_NOTE =
+  "condition.faults (a functional fault or a missing item) are said whenever you describe that " +
+  "unit. condition.marks (scratches, dents, what is in the box) only when the customer asks about " +
+  'the condition, minus, dents or completeness. serviced "never" means say "belum pernah servis" ' +
+  'when you describe it; serviced "yes" only when they ask about servicing; no serviced means ' +
+  "say nothing about it. links are the variant's own marketplace listings: send one only when the " +
+  "customer asks how to order it, about checking out on Shopee or Tokopedia, or about ordering " +
+  "online.";
+
 const ALTERNATIVES_NOTE =
   "Nothing matching what they asked for is in stock right now. These are the closest units that " +
   "ARE in stock: the same line first, then the nearest price" +
@@ -1497,11 +1624,13 @@ const SHELF_SELECT = {
   intakeAt: true,
   skuId: true,
   attributes: BATTERY_SELECT,
+  ...FACT_SELECT,
   sku: {
     select: {
       name: true,
       variantLabel: true,
       price: true,
+      ...LINK_SELECT,
       model: {
         select: {
           name: true,
@@ -1513,14 +1642,14 @@ const SHELF_SELECT = {
   },
 } as const;
 
-type ShelfRow = {
+type ShelfRow = FactRow & {
   serial: string;
   grade: string | null;
   price: bigint | null;
   intakeAt: Date;
   skuId: string;
   attributes: Array<{ value: string; attribute: { key: string } }>;
-  sku: {
+  sku: FactRow["sku"] & {
     name: string;
     variantLabel: string | null;
     price: bigint;
@@ -1530,13 +1659,13 @@ type ShelfRow = {
 
 /** A unit as every stock result shows it. */
 function shelfUnit(
-  u: {
+  u: FactRow & {
     serial: string;
     grade: string | null;
     price: bigint | null;
     skuId?: string;
     attributes?: Array<{ value: string; attribute: { key: string } }>;
-    sku: {
+    sku: FactRow["sku"] & {
       name: string;
       variantLabel: string | null;
       price: bigint;
@@ -1554,6 +1683,7 @@ function shelfUnit(
     ...label(u),
     ...(u.grade ? { grade: u.grade } : {}),
     ...batteryOf(u.attributes),
+    ...unitFacts(u),
     ...quote(askingPrice(u), ctx),
     // How many of this variant are on the shelf — the ONLY source of "tinggal
     // 1 unit" (2026-10-27, honest urgency; `checkReply` holds a reply to it).
@@ -1905,6 +2035,7 @@ async function checkSerial(
           name: true,
           variantLabel: true,
           price: true,
+          ...LINK_SELECT,
           archived: true,
           model: {
             select: {
@@ -1941,6 +2072,7 @@ async function checkSerial(
     ...label(unit),
     ...(unit.grade ? { grade: unit.grade } : {}),
     ...batteryOf(unit.attributes),
+    ...unitFacts(unit),
     available,
     ...(available && left.has(unit.skuId)
       ? { left: left.get(unit.skuId)! }
@@ -2781,12 +2913,10 @@ async function cancelReservation(
 // --- photos by model ---------------------------------------------------------
 
 /**
- * The best unit to show for a model, and its photos (owner ask 2026-09-29).
- *
- * "Best" is the owner's word, and the owner's reading of it: the most
- * expensive of the matching units that have photos — the grade and the
- * configuration are what the price already reflects. Units nobody has priced
- * rank last, since the shop cannot yet say what they are worth.
+ * The unit to show for a model, and its photos (owner ask 2026-09-29,
+ * revised 2026-10-28): the lowest grade and then the cheapest of the
+ * matching units that have photos, so the photos start where the offer
+ * does. Units nobody has priced rank last within their grade.
  */
 async function findUnitPhotos(
   db: PrismaClient,
@@ -2812,17 +2942,23 @@ async function findUnitPhotos(
   if (units.length === 0)
     return { found: false, note: "No unit on sale matches this." };
 
-  const withPhotos = units
+  const pictured = units
     .map((u) => ({ u, ids: u.notes.flatMap((n) => n.photos).map((p) => p.id) }))
-    .filter((x) => x.ids.length > 0)
-    .sort((a, b) => {
-      const pa = askingPrice(a.u);
-      const pb = askingPrice(b.u);
-      if (pa === pb) return 0;
-      if (pa === null) return 1;
-      if (pb === null) return -1;
-      return pa > pb ? -1 : 1;
-    });
+    .filter((x) => x.ids.length > 0);
+  // Cheapest first (owner, 2026-10-28 — REVERSES 2026-09-29's "the most
+  // expensive"): the lowest grade, then the lowest price, among the matching
+  // units that have photos — the same order search_stock offers in.
+  const first = offerLadder(
+    pictured.map((x) => ({
+      serial: x.u.serial,
+      grade: x.u.grade,
+      price: askingPrice(x.u),
+      skuId: "",
+      x,
+    })),
+    "",
+  ).lead?.x;
+  const withPhotos = first ? [first] : [];
   if (withPhotos.length === 0) {
     return {
       found: true,
@@ -2841,6 +2977,8 @@ async function findUnitPhotos(
     serial: best.u.serial,
     ...label(best.u),
     ...(best.u.grade ? { grade: best.u.grade } : {}),
+    ...batteryOf(best.u.attributes),
+    ...unitFacts(best.u),
     ...quote(askingPrice(best.u), ctx),
     photos: best.ids.length,
     photoIds: best.ids.slice(0, MAX_UNIT_PHOTOS),
@@ -2852,7 +2990,7 @@ async function findUnitPhotos(
       "." +
       (others > 0
         ? ` There are ${others} other matching unit(s): ask whether they would like to see ` +
-          "another one, with better specs or a better price."
+          "another one in a better grade or with better specs."
         : " It is the only matching unit."),
   };
 }
