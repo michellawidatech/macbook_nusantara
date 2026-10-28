@@ -10,7 +10,8 @@ import { checkChatHealth, healthTick } from "../src/chatHealth.js";
 const URL =
   process.env["TEST_DATABASE_URL"] ??
   "postgresql://nusantara@localhost:5432/nusantara_pos_test";
-const logger = createLogger({ app: "test", env: "test", level: "silent" });
+const sink = { write: () => true } as unknown as NodeJS.WritableStream;
+const logger = createLogger({ app: "api", env: "test", destination: sink });
 const gateway = { url: "http://gateway.test", secret: "s" };
 let db: PrismaClient;
 
