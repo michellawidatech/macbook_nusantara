@@ -41,11 +41,16 @@ beforeAll(async () => {
 
   await db.staff.upsert({
     where: { username: "persona-test" },
-    update: { passwordHash: await hashPassword(PASSWORD), active: true },
+    // The owner's: prompt writes are owner-only since 2026-10-28.
+    update: {
+      passwordHash: await hashPassword(PASSWORD),
+      active: true,
+      role: "OWNER",
+    },
     create: {
       username: "persona-test",
       name: "Persona Tester",
-      role: "STAFF",
+      role: "OWNER",
       passwordHash: await hashPassword(PASSWORD),
       active: true,
       canApprove: false,
