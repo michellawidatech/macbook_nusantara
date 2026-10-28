@@ -88,7 +88,14 @@ beforeEach(async () => {
   await truncateAll(db);
   n = 0;
   await db.location.create({
-    data: { id: "loc_a", code: "01", name: "Toko", kind: "TOKO", active: true, sortOrder: 1 },
+    data: {
+      id: "loc_a",
+      code: "01",
+      name: "Toko",
+      kind: "TOKO",
+      active: true,
+      sortOrder: 1,
+    },
   });
   await db.staff.create({
     data: {
@@ -178,7 +185,11 @@ describe("search_stock — cheapest grade first, with what to say about each uni
   });
 
   it("says serviced once the unit has been to the bench, whatever QC said", async () => {
-    const serial = await unit({ grade: "A", price: 12_000_000n, neverServiced: true });
+    const serial = await unit({
+      grade: "A",
+      price: 12_000_000n,
+      neverServiced: true,
+    });
     await db.serviceVisit.create({
       data: {
         unitId: `u_${serial}`,
@@ -218,9 +229,17 @@ describe("checkReply — no link a lookup did not return", () => {
       "search_stock",
       await run("search_stock", { query: "air m2" }),
     );
-    const base = { sourceCount: 1, unknownSources: 0, sourceTexts: [], stockFacts: facts };
+    const base = {
+      sourceCount: 1,
+      unknownSources: 0,
+      sourceTexts: [],
+      stockFacts: facts,
+    };
     expect(
-      checkReply({ ...base, message: `Bisa checkout di sini ya kak: ${SHOPEE}.` }),
+      checkReply({
+        ...base,
+        message: `Bisa checkout di sini ya kak: ${SHOPEE}.`,
+      }),
     ).toBeNull();
     expect(
       checkReply({

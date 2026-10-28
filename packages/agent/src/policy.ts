@@ -371,6 +371,34 @@ const COMMIT_SHOWN =
 const BUY_INTENT =
   /\b(mau|jadi|saya|aku|sy|gw|gue|kami|pengen|pingin|ingin)\s+(ambil|beli|order|pesan|checkout)\b|\b(cara|gimana|bagaimana)\s+(bayar(nya)?|pembayaran(nya)?|order(nya)?|belinya|pesannya|checkoutnya)\b|\b(i\s+want\s+to\s+buy|how\s+(do|can)\s+i\s+pay)\b/i;
 
+/**
+ * Asking how to buy, or to buy online (owner, 2026-10-28): "cara belinya
+ * gimana?", "bisa checkout di shopee?", "ada link tokpednya?", "beli online
+ * bisa?", "order dari luar kota". The bot answers with the variant's listing
+ * link (its `links`) — never a hand-over, though "checkout" is also a word
+ * `CLOSE` reads. Not "cara bayarnya?" (how to pay, an approved answer) and not
+ * a keep or "saya ambil".
+ */
+const BUY_ONLINE = new RegExp(
+  [
+    String.raw`\b(cara|gimana|bagaimana|gmn)\s+(cara\s+)?(beli|order|pesan|checkout|co)(nya)?\b`,
+    String.raw`\b(beli|order|pesan|checkout|co)(nya)?\s+(secara\s+)?(online|lewat\s+online|via\s+online)\b`,
+    String.raw`\b(beli|order|pesan|checkout|co)(nya)?\s+(di|lewat|via|ke)\s+(shopee|tokped|tokopedia|marketplace|ig|instagram)\b`,
+    String.raw`\b(beli|order|pesan)\s+(dari|di)\s+luar\s+kota\b`,
+    String.raw`\b(ada|minta|kirim(in|kan)?|share|bagi)\s+(link|linknya|tautan)\b`,
+    String.raw`\blink\s*(nya\s+)?(shopee|tokped|tokopedia|ig|instagram|produk|beli|checkout)\b`,
+    String.raw`\b(shopee|tokped|tokopedia)(nya)?\s+(ada|ada\s+gak|ada\s+ga|bisa)\b`,
+    String.raw`\b(ada|jual)\s+di\s+(shopee|tokped|tokopedia)\b`,
+    String.raw`\b(buy|order|purchase)\s+(it\s+)?online\b|\b(shopee|tokopedia)\s+link\b`,
+  ].join("|"),
+  "i",
+);
+
+/** Does this message ask how to buy, or to buy online? */
+export function asksBuyOnline(text: string): boolean {
+  return BUY_ONLINE.test(text);
+}
+
 /** Letting a booking go, or moving it — both are the booking switch's. */
 const CANCEL_BOOKING =
   /\b(batal(in|kan)?|cancel|gak\s*jadi|ga\s*jadi|nggak\s*jadi|ngga\s*jadi|reschedule|ganti\s*(jadwal|jam|hari)|undur|majuin|mundurin)\b/i;
@@ -519,6 +547,9 @@ export function routeMessage(
   // Keep it for me / a DP / I'll take it / send the account: the next step
   // is a person closing the sale (2026-10-27). Not a booking — the bot never
   // holds — and not "mau beli macbook" or "cara bayarnya?", which it answers.
+  // How to buy, or buying online: the bot sends the listing (2026-10-28).
+  // Ahead of KEEP and CLOSE, which read "checkout" as committing.
+  if (asksBuyOnline(t) && !KEEP.test(t.replace(NOT_A_KEEP, " "))) return null;
   if (KEEP.test(t.replace(NOT_A_KEEP, " ")))
     return { topic: "closing", rule: "keep" };
   if (CLOSE.test(t) || (shown && COMMIT_SHOWN.test(t)))

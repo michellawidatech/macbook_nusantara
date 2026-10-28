@@ -32,6 +32,12 @@ describe("the bot answers these itself (the 2026-10-27 false hand-overs)", () =>
     ["pengen beli macbook air kak", null],
     ["saya mau beli laptop buat kerja, ada rekomendasi?", null],
     ["i want to buy a macbook for college", null],
+    // How to buy, or buying online: the bot sends the listing (2026-10-28).
+    ["cara belinya gimana kak?", null],
+    ["bisa checkout di shopee kak?", null, true],
+    ["ada link tokpednya kak?", null, true],
+    ["beli online bisa kak?", null],
+    ["aku mau order dari luar kota", null],
     // How to pay is in the owner's approved answers.
     ["cara bayarnya gimana kak?", null],
     ["bisa transfer?", null],

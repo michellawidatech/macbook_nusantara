@@ -154,8 +154,14 @@ describe("the prompt follows the capability", () => {
     expect(stable).toContain('cite "stock"');
     expect(stable).toContain("Look before you speak");
     expect(stable).toContain("Get to know them");
-    expect(stable).toContain("ONE step up");
-    expect(stable).toContain("Recommend ONE first");
+    // The offer order (2026-10-28): cheapest grade first, other grades in
+    // one line, one upgrade only for a reason.
+    expect(stable).toContain(
+      "units[0] is the cheapest unit of the lowest grade",
+    );
+    expect(stable).toContain("at most ONE upgrade");
+    expect(stable).toContain('"belum pernah servis"');
+    expect(stable).toContain("condition.faults");
     // The sales strategy (2026-10-27): one first, honest urgency, a next
     // step, a visit that holds nothing, and a person for the close — and it
     // reads like WhatsApp, not a spec sheet.
@@ -164,7 +170,16 @@ describe("the prompt follows the capability", () => {
     expect(stable).toContain("Wanting to buy is NOT closing");
     expect(stable).toContain('cites "greeting". Small talk');
     expect(stable).toContain('"tinggal 1 unit kak"');
-    expect(stable).toContain("Mau lihat");
+    // Photos go with the recommendation; no photo question, no visit
+    // time pushed, a link only when asked (2026-10-28).
+    expect(stable).toContain(
+      "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita 😊",
+    );
+    expect(stable).toContain('Never ask "Mau lihat fotonya?"');
+    expect(stable).toContain("rencananya mau ke toko kapan kak?");
+    expect(stable).toContain("Mau DP sekarang kak?");
+    expect(stable).toContain("Bisa order langsung lewat WA ini aja kak");
+    expect(stable).toContain("Never write a link from memory");
     expect(stable).toContain("It books and holds NOTHING");
     expect(stable).toContain("a REQUEST a colleague approves");
     expect(stable).toContain("topic closing");
