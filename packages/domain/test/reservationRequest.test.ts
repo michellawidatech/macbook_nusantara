@@ -80,23 +80,43 @@ describe("compareRequests", () => {
 describe("what the customer is told", () => {
   const when = new Date("2026-10-28T07:00:00Z"); // 14.00 in Jakarta
   it("names the unit and the time, and the DP when one came in", () => {
-    expect(approvalMessage({ unit: "MacBook Air M2", when })).toBe(
-      "Reservasi kakak untuk MacBook Air M2 tanggal 28 Oktober 2026 jam 14.00 sudah kami catat ✅",
-    );
     expect(
-      approvalMessage({
-        unit: "MacBook Air M2",
-        when,
-        dp: { amount: 500_000, heldUntil: new Date("2026-11-03T07:00:00Z") },
-      }),
-    ).toContain(
-      "DP Rp500rb sudah kami terima, unit kami tahan sampai 3 November 2026.",
+      approvalMessage({ unit: "MacBook Air M2", when, name: "Budi" }),
+    ).toBe(
+      "Okeyy kak noted, kak Budi nanti akan kita siapkan MacBook Air M2 nya yaa untuk 28 Oktober 2026 jam 14.00.",
     );
   });
-  it("says visit when no unit is to be kept", () => {
-    expect(approvalMessage({ unit: null, when })).toBe(
-      "Jadwal kunjungan kakak tanggal 28 Oktober 2026 jam 14.00 sudah kami catat ✅",
+  it("leaves the name out cleanly when there is none", () => {
+    for (const name of [null, undefined, "  "])
+      expect(approvalMessage({ unit: "MacBook Air M2", when, name })).toBe(
+        "Okeyy kak noted, nanti akan kita siapkan MacBook Air M2 nya yaa untuk 28 Oktober 2026 jam 14.00.",
+      );
+  });
+  it("waits for a visit when no unit is to be kept", () => {
+    expect(approvalMessage({ unit: null, when, name: "Budi" })).toBe(
+      "Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa di 28 Oktober 2026 jam 14.00.",
     );
+  });
+  it("says where the shop is when the chat does not have it yet", () => {
+    const text = approvalMessage({
+      unit: "MacBook Air M2",
+      when,
+      place: {
+        address: "Jl. Mangga Dua 12",
+        hours: "setiap hari 10.00–20.00 WIB",
+      },
+    });
+    expect(text).toBe(
+      "Okeyy kak noted, nanti akan kita siapkan MacBook Air M2 nya yaa untuk 28 Oktober 2026 jam 14.00. Toko kita ada di Jl. Mangga Dua 12, buka setiap hari 10.00–20.00 WIB.",
+    );
+    expect(text).not.toMatch(/ {2}/);
+    expect(
+      approvalMessage({
+        unit: null,
+        when,
+        place: { address: "Jl. Mangga Dua 12", hours: null },
+      }),
+    ).toMatch(/Toko kita ada di Jl\. Mangga Dua 12\.$/);
   });
   it("says the DP in millions past a million", () => {
     expect(chatRupiah(1_500_000)).toBe("Rp1,5jt");

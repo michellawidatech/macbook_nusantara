@@ -4933,6 +4933,8 @@ export const id: Record<string, string> = {
   // Reservation requests the bot files from a chat (2026-10-27).
   "nav.reservationRequests": "{{count}} permintaan reservasi menunggu",
   "requests.approve": "Setujui",
+  "requests.placeNote":
+    "Alamat tidak disertakan kalau sudah pernah dikirim di chat ini.",
   "requests.approveFailed": "Gagal menyetujui.",
   "requests.approveTitle": "Setujui reservasi — {{name}}",
   "requests.approved": "Disetujui",

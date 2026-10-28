@@ -44,6 +44,7 @@
  * price can be edited after the sale, and a receipt that changes retroactively
  * is not a receipt.
  */
+import { SHOP_ADDRESS, SHOP_PHONE } from "@nusantara/domain";
 import type { CSSProperties } from "react";
 import { Button, Modal, Typography } from "antd";
 import { PrinterOutlined } from "@ant-design/icons";
@@ -75,9 +76,7 @@ const SHOP_FALLBACK_NAME = "MACBOOK NUSANTARA";
  * number), and a customer who rings the number on their receipt must reach
  * the shop.
  */
-export const SHOP_ADDRESS =
-  "Ruko Sorrento Place, Grande West Blok B No.32, Curug Sangereng, Kelapa Dua, Tangerang Regency, Banten 15811";
-export const SHOP_PHONE = "0858-8842-9991";
+export { SHOP_ADDRESS, SHOP_PHONE };
 
 /** The header block. */
 function shopOf(db: MockDb) {

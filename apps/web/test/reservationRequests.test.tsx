@@ -215,8 +215,9 @@ describe("the Requests tab", () => {
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("Approve reservation — Budi");
     expect(dialog).toHaveTextContent(serial);
+    // The owner's template (2026-10-28), with the name and where the shop is.
     expect(within(dialog).getByTestId("request-preview")).toHaveTextContent(
-      /^Reservasi kakak untuk .+ sudah kami catat ✅$/,
+      /^Okeyy kak noted, kak Budi nanti akan kita siapkan .+ nya yaa untuk .+\. Toko kita ada di Ruko Sorrento Place/,
     );
     await user.click(within(dialog).getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(approveRequest).toHaveBeenCalledTimes(1));
@@ -233,8 +234,9 @@ describe("the Requests tab", () => {
     await user.click(
       within(dialog).getByRole("checkbox", { name: "DP received" }),
     );
-    expect(within(dialog).getByTestId("request-preview")).toHaveTextContent(
-      "DP Rp500rb sudah kami terima, unit kami tahan sampai",
+    // The template is the whole message: no DP line (owner, 2026-10-28).
+    expect(within(dialog).getByTestId("request-preview")).not.toHaveTextContent(
+      "DP",
     );
     await user.click(within(dialog).getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(approveRequest).toHaveBeenCalledTimes(1));

@@ -28,9 +28,11 @@ import {
   approvalMessage,
   DP_SETTING_KEYS,
   dpRuleOf,
-  heldUntilOf,
+  realName,
   rejectionMessage,
+  SHOP_ADDRESS,
 } from "@nusantara/domain";
+import { loadStoreFacts, STORE_HOURS } from "@nusantara/agent";
 import { currentRequestId } from "@nusantara/logging";
 import { isWithinWindow } from "@nusantara/whatsapp";
 import { ApiError, unauthenticated } from "../errors.js";
@@ -68,6 +70,52 @@ export interface RequestsRouterDeps {
   readonly db: PrismaClient;
   /** True when the worker sends through the linked device (Baileys). */
   readonly linkedDevice: boolean;
+}
+
+/** "where is the shop?" — the one reason to say the address twice. */
+const ASKS_WHERE = /\b(di ?mana|dimana|alamat(nya)?|lokasi(nya)?)\b/i;
+
+/**
+ * Where the shop is, for the approval line (owner, 2026-10-28: "address,
+ * opening hours, if not explained before, or if the user asked"). Null when
+ * a line already sent to this chat carries the address and the customer's
+ * latest message does not ask where.
+ */
+export async function placeForApproval(
+  db: PrismaClient,
+  from: string,
+): Promise<{ address: string; hours: string } | null> {
+  // The shop's recorded address, else the one the owner gave (the faktur's).
+  const facts = await loadStoreFacts(db);
+  const address = facts.stores.find((s) => s.address)?.address ?? SHOP_ADDRESS;
+  const hours = `setiap hari ${String(STORE_HOURS.openHour).padStart(2, "0")}.00–${STORE_HOURS.closeHour}.00 WIB`;
+  const [sent, latest] = await Promise.all([
+    db.outbox.findMany({
+      where: {
+        kind: { in: ["WA_REPLY", "WA_IMAGE"] },
+        payload: { path: ["to"], equals: from },
+      },
+      select: { payload: true },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    }),
+    db.waMessage.findFirst({
+      where: { from, direction: "IN" },
+      orderBy: { ts: "desc" },
+      select: { text: true },
+    }),
+  ]);
+  const said = sent.some((r) => {
+    const p = (r.payload ?? {}) as { body?: unknown; caption?: unknown };
+    return [p.body, p.caption].some(
+      (t) =>
+        typeof t === "string" &&
+        (t.includes(address) || t.includes(SHOP_ADDRESS)),
+    );
+  });
+  return said && !ASKS_WHERE.test(latest?.text ?? "")
+    ? null
+    : { address, hours };
 }
 
 export function reservationRequestsRouter(deps: RequestsRouterDeps): Router {
@@ -143,12 +191,8 @@ export function reservationRequestsRouter(deps: RequestsRouterDeps): Router {
             approvalMessage({
               unit,
               when: body.scheduledFor,
-              dp: dp
-                ? {
-                    amount: Number(dp.amount),
-                    heldUntil: heldUntilOf(dp.paidAt, rule.days),
-                  }
-                : null,
+              name: realName(request.custName),
+              place: await placeForApproval(db, request.from),
             }),
           inReplyTo: line.inReplyTo,
         };

@@ -126,22 +126,34 @@ export function chatRupiah(amount: number): string {
 }
 
 /**
- * The WhatsApp line an approval sends (owner wording, 2026-10-27): the unit
- * and the time, and — when a DP was received — how long the unit is held.
+ * The WhatsApp line an approval sends — the owner's template, 2026-10-28:
+ * *"Okeyy kak noted, kak [Name, if any] nanti akan kita siapkan [Unit name]
+ * nya yaa untuk/di [time of appointment]. Toko kita ada di [Address, opening
+ * hours, if not explained before, or if the user asked]"*. The 2026-10-27
+ * "DP … sudah kami terima, unit kami tahan sampai …" line is dropped (owner
+ * accepted): the template is the whole message.
  */
 export function approvalMessage(input: {
   /** "MacBook Air 13" M2 8/256", or null for a visit with no unit. */
   readonly unit: string | null;
   readonly when: Date;
-  readonly dp?: { readonly amount: number; readonly heldUntil: Date } | null;
+  /** The name the request is under, or null when there is no real one. */
+  readonly name?: string | null;
+  /** Where the shop is, or null when the chat already has it. */
+  readonly place?: {
+    readonly address: string;
+    readonly hours: string | null;
+  } | null;
 }): string {
-  const at = `tanggal ${jakartaDay(input.when)} jam ${jakartaClock(input.when)}`;
+  const at = `${jakartaDay(input.when)} jam ${jakartaClock(input.when)}`;
+  const name = input.name?.trim();
+  const who = name ? `kak ${name} ` : "";
   const head = input.unit
-    ? `Reservasi kakak untuk ${input.unit} ${at} sudah kami catat ✅`
-    : `Jadwal kunjungan kakak ${at} sudah kami catat ✅`;
-  return input.dp
-    ? `${head}\nDP ${chatRupiah(input.dp.amount)} sudah kami terima, unit kami tahan sampai ${jakartaDay(input.dp.heldUntil)}.`
-    : head;
+    ? `Okeyy kak noted, ${who}nanti akan kita siapkan ${input.unit} nya yaa untuk ${at}.`
+    : `Okeyy kak noted, ${who}nanti kita tunggu kedatangannya yaa di ${at}.`;
+  if (!input.place) return head;
+  const hours = input.place.hours ? `, buka ${input.place.hours}` : "";
+  return `${head} Toko kita ada di ${input.place.address}${hours}.`;
 }
 
 /** The line a rejection sends, with the reason staff gave. */

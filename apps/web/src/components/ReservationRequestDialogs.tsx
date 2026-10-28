@@ -35,9 +35,13 @@ import {
 } from "antd";
 import {
   approvalMessage,
-  heldUntilOf,
+  realName,
   rejectionMessage,
+  SHOP_ADDRESS,
 } from "@nusantara/domain";
+
+/** The opening hours as the approval line says them (`STORE_HOURS`, packages/agent). */
+const SHOP_HOURS = "setiap hari 10.00–20.00 WIB";
 import { MoneyInput } from "./MoneyInput";
 import { fmtDateTime } from "../lib/format.js";
 import { ApiRequestError } from "../lib/api.js";
@@ -149,23 +153,19 @@ export function ApproveRequestModal({
   const serials = Form.useWatch("serials", form) ?? [];
   const when = Form.useWatch("when", form);
   const dpReceived = Form.useWatch("dpReceived", form) ?? false;
-  const dpAmount = Form.useWatch("dpAmount", form);
-  const dpDay = Form.useWatch("dpDay", form);
   const tell = Form.useWatch("tell", form) ?? true;
   const withDp = dpReceived && serials.length > 0;
 
+  // What the customer will read (owner's template, 2026-10-28). The
+  // address goes only when the chat does not have it yet — the server
+  // decides, so the preview shows it and says so.
   const preview = when
     ? approvalMessage({
         unit:
           serials.map((s: string) => unitName(db, s).name).join(", ") || null,
         when: when.toDate(),
-        dp:
-          withDp && dpAmount && dpDay
-            ? {
-                amount: dpAmount,
-                heldUntil: heldUntilOf(dpDay.toDate(), rule.days),
-              }
-            : null,
+        name: realName(row?.request.custName),
+        place: { address: SHOP_ADDRESS, hours: SHOP_HOURS },
       })
     : "";
 
@@ -344,6 +344,14 @@ export function ApproveRequestModal({
           >
             {preview}
           </Typography.Paragraph>
+        )}
+        {tell && preview && (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {t(
+              "requests.placeNote",
+              "The address is left out if the chat already has it.",
+            )}
+          </Typography.Text>
         )}
       </Form>
     </Modal>

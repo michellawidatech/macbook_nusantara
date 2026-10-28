@@ -260,8 +260,9 @@ describe("approving a request", () => {
     expect((await owner.chatAction.findFirstOrThrow()).status).toBe("DONE");
     const out = await owner.outbox.findFirstOrThrow();
     expect(out.kind).toBe("WA_REPLY");
+    // The owner's template (2026-10-28), with the name the request is under.
     expect((out.payload as { body: string }).body).toMatch(
-      /^Reservasi kakak untuk MacBook Air M2 8\/256 tanggal .+ sudah kami catat ✅$/,
+      /^Okeyy kak noted, kak Budi nanti akan kita siapkan MacBook Air M2 8\/256 nya yaa untuk .+ jam \d\d\.\d\d\.$/,
     );
     expect(
       await owner.auditLog.count({
@@ -323,9 +324,37 @@ describe("approving a request", () => {
     ).toBe(1);
     expect((await owner.chatAction.findFirstOrThrow()).status).toBe("DONE");
     const out = await owner.outbox.findFirstOrThrow();
-    expect((out.payload as { body: string }).body).toContain(
-      "DP Rp500rb sudah kami terima, unit kami tahan sampai",
+    // The template is the whole message: no DP line (owner, 2026-10-28).
+    expect((out.payload as { body: string }).body).toMatch(/^Okeyy kak noted/);
+    expect((out.payload as { body: string }).body).not.toContain("DP");
+  });
+
+  it("says where the shop is once, and not again when the chat already has it (2026-10-28)", async () => {
+    await owner.location.update({
+      where: { id: "loc_r" },
+      data: { address: "Jl. Mangga Dua Raya 12" },
+    });
+    await inbound();
+    const first = await filed();
+    await approve(first.id, {
+      serials: [],
+      scheduledFor: new Date(Date.now() + DAY).toISOString(),
+      tell: true,
+    }).expect(201);
+    const bodies = async () =>
+      (await owner.outbox.findMany({ orderBy: { createdAt: "asc" } })).map(
+        (o) => (o.payload as { body: string }).body,
+      );
+    expect((await bodies())[0]).toContain(
+      "Toko kita ada di Jl. Mangga Dua Raya 12, buka setiap hari 10.00–20.00 WIB.",
     );
+    const second = await filed({ serials: ["SREQ2"] });
+    await approve(second.id, {
+      serials: [],
+      scheduledFor: new Date(Date.now() + 2 * DAY).toISOString(),
+      tell: true,
+    }).expect(201);
+    expect((await bodies())[1]).not.toContain("Toko kita ada di");
   });
 
   it("approves once — a second press is refused", async () => {
@@ -379,7 +408,7 @@ describe("approving a request", () => {
     expect(r.status).toBe("TERJADWAL");
     const out = await owner.outbox.findFirstOrThrow();
     expect((out.payload as { body: string }).body).toMatch(
-      /^Jadwal kunjungan kakak tanggal/,
+      /^Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa di /,
     );
   });
 
