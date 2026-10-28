@@ -418,6 +418,60 @@ describe("a hello is welcomed once, and offered help (owner, 2026-10-28)", () =>
   });
 });
 
+describe("a price question is answered, never taken for an answer (owner's chat, 2026-10-28)", () => {
+  const CHEAP = {
+    serial: "C02AIR2017",
+    model: 'MacBook Air 13" 2017',
+    variant: "8/128",
+    grade: "C",
+    price: "Rp 3.500.000",
+  };
+  const DEAR = {
+    serial: "C02PRO16M4",
+    model: 'MacBook Pro 16" M4 Pro',
+    variant: "24/512",
+    grade: "A",
+    price: "Rp 38.000.000",
+  };
+
+  it("'rata rata harga brpan si kak' gets the shelf's range, not 'noted'", async () => {
+    const p = pos({
+      search_stock: { matched: 2, units: [CHEAP, DEAR] },
+    });
+    const out = await run("rata rata harga brpan si kak", p, {
+      lastReply: "Okee kak, noted 😊\n\nBudgetnya kira-kira berapa kak?",
+      known: {
+        name: null,
+        usage: true,
+        preferences: false,
+        budget: false,
+        apps: false,
+      },
+    });
+    expect(out.handoff).toBeUndefined();
+    expect(out.reply).not.toContain("noted");
+    expect(out.reply).toContain(
+      'Harganya mulai dari 3,5jt (Air 13" 2017) sampai 38jt (Pro 16" M4 Pro) kak, tergantung tipe dan kondisinya 😊',
+    );
+  });
+
+  it.each([
+    "harga macbook berapaan kak",
+    "kisaran harganya brp kak",
+    "rata-rata harganya brapaan?",
+  ])("reads %j as a question", async (text) => {
+    const out = await run(
+      text,
+      pos({ search_stock: { matched: 2, units: [CHEAP, DEAR] } }),
+      {
+        lastReply: "Budgetnya kira-kira berapa kak?",
+      },
+    );
+    expect(out.reply).not.toContain("noted");
+    expect(out.handoff).toBeUndefined();
+  });
+});
+
 describe("out of stock, and one step up (owner, 2026-10-27)", () => {
   const M1 = {
     serial: "C02AIRM1XX",

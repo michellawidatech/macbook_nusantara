@@ -4596,6 +4596,13 @@ export const id: Record<string, string> = {
   // The sales strategy (2026-10-27): the funnel, the bot's visits, the
   // closing / welcome / restock tasks and "tell me when it's in stock".
   "chatAction.closing": "Closing",
+  "chatFunnel.lastMessage": "Pesan terakhir",
+  "chatFunnel.openChat": "Buka chat",
+  "chatFunnel.showWho": "Lihat siapa — {{n}}",
+  "chatFunnel.when": "Kapan",
+  "chatFunnel.who": "Pelanggan",
+  "chatFunnel.whoFailed": "Daftarnya gagal dimuat.",
+  "chatFunnel.whoTitle": "{{stage}} — {{days}} hari terakhir",
   "chatFunnel.title": "Corong penjualan",
   "chatFunnel.stage": "Tahap",
   "chatFunnel.last7": "7 hari terakhir",
@@ -4605,7 +4612,7 @@ export const id: Record<string, string> = {
   "chatFunnel.visits": "Kunjungan dibooking",
   "chatFunnel.closing": "Siap beli",
   "chatFunnel.chatsHint":
-    "Pelanggan yang menghubungi. Nomor tester dan chat yang sudah dibersihkan tidak dihitung.",
+    "Pelanggan yang mengirim pesan, termasuk nomor tester. Chat yang dibersihkan tidak dihitung.",
   "chatFunnel.leadsHint":
     "Chat yang dinilai bot sebagai calon pembeli serius (🔥).",
   "chatFunnel.visitsHint": "Pelanggan yang membuat janji datang ke toko.",

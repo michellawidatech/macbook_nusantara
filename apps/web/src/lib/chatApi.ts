@@ -382,6 +382,22 @@ export interface FunnelWindow {
 export const getFunnel = () =>
   api<{ windows: FunnelWindow[] }>("/api/chat/funnel");
 
+export type FunnelStageKey = "chats" | "leads" | "visits" | "closing" | "sales";
+
+/** One account behind a funnel number (2026-10-28). */
+export interface FunnelPerson {
+  /** The thread's wa_id — what the Chat tab opens. */
+  phone: string;
+  name: string | null;
+  /** When it reached the stage. */
+  at: string;
+  lastText: string | null;
+}
+
+/** Who is behind one stage of the funnel, newest first. */
+export const getFunnelPeople = (stage: FunnelStageKey, days: number) =>
+  api<{ people: FunnelPerson[] }>(`/api/chat/funnel/${stage}?days=${days}`);
+
 /**
  * Why the bot handed over in the last 7 days (2026-10-27, owner: *"it
  * escalates too much"*): per topic and per what forced it, with the newest

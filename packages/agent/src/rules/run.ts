@@ -1033,7 +1033,30 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
         }
         return done(reply.noStock(lang));
       }
-      if (!u.query) return done(reply.whichUnit(lang));
+      if (!u.query) {
+        // No model named (owner's chat, 2026-10-28: "rata rata harga brpan
+        // si kak"): the shelf's own range, cheapest and dearest, then the
+        // one question that narrows it.
+        const out = await call("search_stock", {
+          query: "macbook",
+          sort: "cheapest",
+        });
+        const priced = [...unitsIn(out), ...unitsIn(out, "otherGrades")].filter(
+          (x) => typeof x.price === "string" && x.price !== "",
+        );
+        const value = (x: ShownUnit) =>
+          Number(String(x.price).replace(/\D/g, ""));
+        if (priced.length === 0) return done(reply.whichUnit(lang));
+        const cheapest = priced.reduce((a, b) => (value(b) < value(a) ? b : a));
+        const dearest = unitsIn(
+          await call("search_stock", { query: "macbook", sort: "priciest" }),
+        )
+          .filter((x) => typeof x.price === "string" && x.price !== "")
+          .reduce<ShownUnit>((a, b) => (value(b) > value(a) ? b : a), cheapest);
+        return done(reply.priceRange(cheapest, dearest, lang), {
+          sources: ["stock"],
+        });
+      }
       return search();
     }
 

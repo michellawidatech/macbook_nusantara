@@ -25,7 +25,6 @@ import {
   leadScoreOf,
   loadKnowledgeBase,
   loadStoreFacts,
-  loadTesters,
   matchesFor,
   matchesNote,
   personaFor,
@@ -256,12 +255,12 @@ export interface FunnelStage {
  * even customer"). Read-only, counts only.
  *
  * Every stage counts only the threads in the Chats row (`threads` below), so
- * the stages are one funnel rather than five unrelated counts. Two kinds of
- * thread are left out (owner, 2026-10-27: *"if it is a test number can we not
- * include it … if I remove the chat, it will get removed as well"*):
- * - a tester's number (`chatbot.testers`), passed in as `exclude`;
- * - what came before a *Clear chat* (`WaThreadMemory.clearedAt`) — a deleted
- *   conversation has no messages left, so it drops out by itself.
+ * the stages are one funnel rather than five unrelated counts. What came
+ * before a *Clear chat* (`WaThreadMemory.clearedAt`) is left out, and a
+ * deleted conversation has no messages left, so it drops out by itself.
+ * Tester numbers COUNT since 2026-10-28 (owner: *"testers should count in
+ * the funnel"*, reversing 2026-10-27) — `exclude` stays for a caller that
+ * wants them out, and the route passes none.
  *
  * A thread is a wa_id (`62812…`) and a customer is an E.164 number
  * (`+62812…`), so a sale or a visit matches either form. Dates are bound as
@@ -334,6 +333,118 @@ export async function funnelFor(
     closing: row?.closing ?? 0,
     sales: row?.sales ?? 0,
   };
+}
+
+/** The funnel's stages, in order. */
+export const FUNNEL_STAGES = [
+  "chats",
+  "leads",
+  "visits",
+  "closing",
+  "sales",
+] as const;
+export type FunnelStageKey = (typeof FUNNEL_STAGES)[number];
+
+/** One account behind a funnel number. */
+export interface FunnelPerson {
+  /** The thread's wa_id — what /chat opens. */
+  readonly phone: string;
+  /** The name WhatsApp gave, when there was one. */
+  readonly name: string | null;
+  /** When it reached this stage (the first message, for Chats). */
+  readonly at: string;
+  /** The customer's latest message. */
+  readonly lastText: string | null;
+}
+
+/** How many accounts one list shows: a funnel stage, not an export. */
+export const FUNNEL_PEOPLE_LIMIT = 200;
+
+/**
+ * The accounts behind one stage of `funnelFor` — the SAME threads and the
+ * same rules per stage, so the list and the number agree. Newest first.
+ */
+export async function funnelPeople(
+  db: PrismaClient,
+  stage: FunnelStageKey,
+  days: number,
+  now: Date,
+): Promise<FunnelPerson[]> {
+  const since = new Date(now.getTime() - days * 86_400_000);
+  const at = Prisma.sql`(${since}::timestamptz AT TIME ZONE 'UTC')`;
+  const saleMs = FUNNEL_SALE_DAYS * 86_400_000;
+  const reached = ((): Prisma.Sql => {
+    switch (stage) {
+      case "chats":
+        return Prisma.sql`SELECT f."from", f.first_at AS at FROM threads f`;
+      case "leads":
+        return Prisma.sql`
+          SELECT t."from", t."leadAt" AS at FROM "WaThreadMemory" t
+            JOIN threads f ON f."from" = t."from"
+           WHERE t."leadAt" >= ${at}
+             AND (f.cleared_at IS NULL OR t."leadAt" > f.cleared_at)`;
+      case "visits":
+        return Prisma.sql`
+          SELECT f."from", r."createdAt" AS at FROM "Reservation" r
+            JOIN threads f ON r."phone" IN (f."from", '+' || f."from")
+           WHERE r."source" = 'AGEN' AND r."createdAt" >= ${at}
+             AND (f.cleared_at IS NULL OR r."createdAt" > f.cleared_at)
+             AND NOT EXISTS (SELECT 1 FROM "ReservationItem" i
+                              WHERE i."reservationId" = r."id")`;
+      case "closing":
+        return Prisma.sql`
+          SELECT a."from", a."createdAt" AS at FROM "ChatAction" a
+            JOIN threads f ON f."from" = a."from"
+           WHERE a."kind" = 'CLOSING' AND a."createdAt" >= ${at}
+             AND (f.cleared_at IS NULL OR a."createdAt" > f.cleared_at)`;
+      default:
+        return Prisma.sql`
+          SELECT f."from", o."ts" AS at FROM threads f
+            JOIN "Order" o
+              ON o."ts" >= f.first_at
+             AND o."ts" <= f.first_at + (${saleMs}::bigint * interval '1 millisecond')
+             AND o."status" <> 'BATAL'
+            LEFT JOIN "Customer" c ON c."id" = o."customerId"
+           WHERE c."phone" IN (f."from", '+' || f."from")
+              OR o."phone" IN (f."from", '+' || f."from")`;
+    }
+  })();
+  const rows = await db.$queryRaw<
+    Array<{ from: string; at: Date; name: string | null; last: string | null }>
+  >(Prisma.sql`
+    WITH threads AS (
+      SELECT m."from",
+             MIN(m."ts") AS first_at,
+             MAX(t."clearedAt") AS cleared_at
+        FROM "WaMessage" m
+        LEFT JOIN "WaThreadMemory" t ON t."from" = m."from"
+       WHERE m."direction" = 'IN'
+         AND m."ts" >= ${at}
+         AND (t."clearedAt" IS NULL OR m."ts" > t."clearedAt")
+       GROUP BY m."from"
+    ),
+    reached AS (${reached}),
+    latest AS (
+      SELECT "from", MAX(at) AS at FROM reached GROUP BY "from"
+    )
+    SELECT l."from", l.at,
+           (SELECT m."name" FROM "WaMessage" m
+             WHERE m."from" = l."from" AND m."direction" = 'IN'
+               AND m."name" IS NOT NULL AND m."name" <> ''
+             ORDER BY m."ts" DESC LIMIT 1) AS name,
+           (SELECT m."text" FROM "WaMessage" m
+             WHERE m."from" = l."from" AND m."direction" = 'IN'
+             ORDER BY m."ts" DESC LIMIT 1) AS last
+      FROM latest l
+     ORDER BY l.at DESC
+     LIMIT ${FUNNEL_PEOPLE_LIMIT}
+  `);
+  return rows.map((r) => ({
+    phone: r.from,
+    name: r.name,
+    at: r.at.toISOString(),
+    lastText: r.last,
+  }));
 }
 
 /** One reason the bot handed over, counted, with the newest examples. */
@@ -457,11 +568,29 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
   router.get("/funnel", async (_req, res, next) => {
     try {
       const now = new Date();
-      const testers = await loadTesters(db);
+      // Testers count (owner, 2026-10-28).
       const windows = await Promise.all(
-        FUNNEL_WINDOWS.map((d) => funnelFor(db, d, now, testers)),
+        FUNNEL_WINDOWS.map((d) => funnelFor(db, d, now)),
       );
       res.json({ windows });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * GET /api/chat/funnel/:stage?days=7|30 — WHO is behind one number of the
+   * funnel (owner, 2026-10-28: *"we can click it to see which accounts and
+   * they can chat it"*): each thread with its name, when it reached the stage
+   * and its last message. Any signed-in staff, like the counts.
+   */
+  router.get("/funnel/:stage", async (req, res, next) => {
+    try {
+      const stage = FUNNEL_STAGES.find((s) => s === req.params["stage"]);
+      const days = FUNNEL_WINDOWS.find((d) => String(d) === req.query["days"]);
+      if (!stage || !days)
+        throw new ApiError(400, "VALIDASI", "Tahap atau periode tidak valid.");
+      res.json({ people: await funnelPeople(db, stage, days, new Date()) });
     } catch (err) {
       next(err);
     }

@@ -250,9 +250,37 @@ describe("the funnel", () => {
     });
     // Counts only: nothing on the funnel is money.
     expect(JSON.stringify(res.body)).not.toMatch(/10000000/);
+
+    // Behind each number, the accounts — the same ones (2026-10-28).
+    const people = async (stage: string, days: number) =>
+      (
+        await request(app)
+          .get(`/api/chat/funnel/${stage}?days=${days}`)
+          .set("Cookie", cookie)
+          .expect(200)
+      ).body.people as Array<{ phone: string; at: string }>;
+    expect((await people("chats", 7)).map((p) => p.phone).sort()).toEqual(
+      [OTHER, PHONE].sort(),
+    );
+    expect((await people("leads", 30)).map((p) => p.phone).sort()).toEqual(
+      ["628980095003", PHONE].sort(),
+    );
+    expect((await people("visits", 7)).map((p) => p.phone)).toEqual([PHONE]);
+    expect((await people("closing", 7)).map((p) => p.phone)).toEqual([PHONE]);
+    expect((await people("sales", 7)).map((p) => p.phone).sort()).toEqual(
+      [OTHER, PHONE].sort(),
+    );
+    await request(app)
+      .get("/api/chat/funnel/nope?days=7")
+      .set("Cookie", cookie)
+      .expect(400);
+    await request(app)
+      .get("/api/chat/funnel/chats?days=9")
+      .set("Cookie", cookie)
+      .expect(400);
   });
 
-  it("leaves out tester numbers and what came before a clear", async () => {
+  it("counts tester numbers (2026-10-28) and leaves out what came before a clear", async () => {
     const TESTER = "628980095009";
     await db.appSetting.upsert({
       where: { key: "chatbot.testers" },
@@ -299,10 +327,11 @@ describe("the funnel", () => {
       .get("/api/chat/funnel")
       .set("Cookie", cookie)
       .expect(200);
+    // The tester counts now; the cleared chat's lead and task do not.
     expect(res.body.windows[0]).toMatchObject({
-      chats: 0,
+      chats: 1,
       leads: 0,
-      closing: 0,
+      closing: 1,
     });
   });
 

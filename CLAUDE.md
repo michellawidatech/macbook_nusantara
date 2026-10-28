@@ -3414,6 +3414,18 @@ Decisions that outlived those documents:
     start only once they show interest (`interested` in rules/run.ts: a
     model, a budget, a stock/price question, wanting to buy, telling about
     themselves, or answering the bot's own needs question).
+  - **A price question is answered, never taken for an answer** (owner's
+    chat, same day: "rata rata harga brpan si kak" got "Okee kak, noted" and
+    the budget question again). Slang question words (`brpan`, `berapaan`,
+    `brapaan`, `kisaran`) are in `QUESTION`/`PRICE`; a price question naming
+    no model (`PRICE_WORD` + a question) is `ask_price` and gets the shelf's
+    range, cheapest to dearest. Not "berapa lama" — that is warranty.
+  - **Evaluation: the funnel counts testers and shows who** (owner, same
+    day, REVERSING 2026-10-27's tester exclusion). The hand-over table is
+    gone (`HandoversCard` deleted; `GET /api/chat/handovers` dormant). Each
+    funnel number opens the accounts behind it (`GET
+    /api/chat/funnel/:stage?days=7|30`, `funnelPeople` — the same threads
+    as `funnelFor`) with *Open chat*.
   - Chip & spec guide for the Knowledge Base:
     `docs/chatbot/chip-guide-2026-10-28.xlsx` (16 rows) — the owner imports it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React

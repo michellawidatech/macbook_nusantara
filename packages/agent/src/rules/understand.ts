@@ -81,7 +81,11 @@ const PHOTO =
 // a unit aside, which is a DP and a person's job (policy.ts KEEP).
 const RESERVE =
   /\b(booking|book|booked|janji ?datang|janjian|reservasi|reserve|ke toko|ketoko|datang|dateng|mampir|lihat langsung|liat langsung|cek langsung|cek unit|visit|ambil di toko|ambil ke toko)\b/i;
-const PRICE = /\b(harga|harganya|berapa|brp|brapa|price|how much|biaya)\b/i;
+/** A word about price itself — not "berapa", which also asks how long. */
+const PRICE_WORD = /\b(harga|harganya|kisaran|price|how much|biaya)\b/i;
+// Texting slang too (owner's chat 2026-10-28: "rata rata harga brpan si kak").
+const PRICE =
+  /\b(harga|harganya|berapa(an)?|brp(an)?|brapa(an)?|brpa|kisaran|price|how much|biaya)\b/i;
 const STOCK =
   /\b(ada|ready|redi|stok|stock|stoknya|tersedia|available|jual|unit apa|masih ada)\b/i;
 const BROWSE =
@@ -472,7 +476,7 @@ const PICK_WORDS: Record<string, number> = {
 };
 
 const QUESTION =
-  /\?|\b(berapa|brp|apa|apakah|bisa|gimana|bagaimana|kapan|dimana|di mana|kenapa|mengapa|how|what|when|where|why|can|does|do you|is it)\b/i;
+  /\?|\b(berapa(an)?|brp(an)?|brapa(an)?|brpa|kisaran|apa|apakah|bisa|gimana|gmn|bagaimana|kapan|dimana|di mana|kenapa|mengapa|how|what|when|where|why|can|does|do you|is it)\b/i;
 
 const EN =
   /\b(do you|is there|how much|i want|i need|please|price|available|can i|what|which|hello|hi there|thanks|thank you)\b/i;
@@ -550,6 +554,10 @@ export function understand(
     intent = "ask_price";
   else if (BROWSE.test(t) || min !== null || max !== null)
     intent = query ? "ask_stock" : "browse";
+  // "rata-rata harganya berapa?" — a price question about nothing in
+  // particular (2026-10-28): answered with the shelf's range, never read as
+  // an answer to the bot's own question.
+  else if (PRICE_WORD.test(t) && QUESTION.test(t)) intent = "ask_price";
   else if (
     (STOCK.test(t) && (query || serial)) ||
     (query && t.trim().split(" ").length <= 6)

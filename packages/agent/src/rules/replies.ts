@@ -483,6 +483,20 @@ export const reply = {
       : `Kalau perlu, ada ${what} juga kak.`;
   },
 
+  /** "How much are they?" with no model named: the shelf's range (2026-10-28). */
+  priceRange(cheapest: ShownUnit, dearest: ShownUnit, lang: Lang): string {
+    const name = (u: ShownUnit) => shortName(u.model) || u.model || "";
+    const low = shortPrice(cheapest.price ?? "");
+    const high = shortPrice(dearest.price ?? "");
+    if (cheapest.serial === dearest.serial || low === high)
+      return lang === "en"
+        ? `Right now it's around ${low} (${name(cheapest)}) 😊`
+        : `Sekarang kisarannya ${low} kak (${name(cheapest)}) 😊`;
+    return lang === "en"
+      ? `Our MacBooks run from ${low} (${name(cheapest)}) up to ${high} (${name(dearest)}), depending on the model and condition 😊`
+      : `Harganya mulai dari ${low} (${name(cheapest)}) sampai ${high} (${name(dearest)}) kak, tergantung tipe dan kondisinya 😊`;
+  },
+
   whichUnit(lang: Lang): string {
     return lang === "en"
       ? "Which one do you mean? Just send the model, like Air M2 😊"

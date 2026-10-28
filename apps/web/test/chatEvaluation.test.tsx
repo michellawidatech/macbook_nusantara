@@ -81,31 +81,22 @@ const getFunnel = vi.fn(async () => ({
   ],
 }));
 
-const getHandovers = vi.fn(async () => ({
-  days: 7,
-  total: 3,
-  reasons: [
+const getFunnelPeople = vi.fn(async (_stage: string, _days: number) => ({
+  people: [
     {
-      topic: "other",
-      reason: "no_terminal_tool",
-      count: 2,
-      examples: [
-        {
-          phone: "628980092978",
-          text: "Buat nyatet aja sih",
-          summary: "Perlu dibalas",
-          at: "2026-10-27T03:00:00.000Z",
-        },
-      ],
+      phone: "628980092978",
+      name: "Michella",
+      at: "2026-10-27T03:00:00.000Z",
+      lastText: "aku mau keep barang ini kak",
     },
-    { topic: "negotiation", reason: "route", count: 1, examples: [] },
   ],
 }));
 
 vi.mock("../src/lib/chatApi.js", async (original) => ({
   ...(await original<typeof import("../src/lib/chatApi.js")>()),
   getFunnel: () => getFunnel(),
-  getHandovers: () => getHandovers(),
+  getFunnelPeople: (stage: string, days: number) =>
+    getFunnelPeople(stage, days),
   listEvaluations: (...a: unknown[]) => listEvaluations(...(a as [])),
   applyEvaluation: (...a: unknown[]) => applyEvaluation(...(a as [string])),
   dismissEvaluation: (id: string) => dismissEvaluation(id),
@@ -217,20 +208,31 @@ describe("the funnel (2026-10-27)", () => {
   });
 });
 
-describe("why the bot hands over (2026-10-27)", () => {
-  it("counts the last 7 days by topic and reason, and shows the messages behind one on click", async () => {
+describe("who is behind a number (2026-10-28)", () => {
+  it("lists the accounts behind a stage and opens one's chat", async () => {
     const user = userEvent.setup();
+    const onOpenChat = draw();
+    const card = (await screen.findByText("Funnel")).closest(
+      ".ant-card",
+    ) as HTMLElement;
+    const leads = (await within(card).findByText("Leads")).closest(
+      "tr",
+    ) as HTMLElement;
+    await user.click(within(leads).getByRole("button", { name: /12/ }));
+    expect(getFunnelPeople).toHaveBeenCalledWith("leads", 7);
+    expect(await screen.findByText("Michella")).toBeInTheDocument();
+    expect(screen.getByText("aku mau keep barang ini kak")).toBeInTheDocument();
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: /Open chat/,
+      }),
+    );
+    expect(onOpenChat).toHaveBeenCalledWith("628980092978");
+  });
+
+  it("no longer shows the hand-over table", async () => {
     draw();
-    expect(
-      await screen.findByText("Handed over (last 7 days)"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("3 in total")).toBeInTheDocument();
-    expect(
-      screen.getByText("The bot never finished its answer"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("The message itself (a rule)")).toBeInTheDocument();
-    expect(screen.getByText("Negotiation")).toBeInTheDocument();
-    await user.click(screen.getByText("The bot never finished its answer"));
-    expect(await screen.findByText("Buat nyatet aja sih")).toBeInTheDocument();
+    await screen.findByText("Funnel");
+    expect(screen.queryByText("Handed over (last 7 days)")).toBeNull();
   });
 });
