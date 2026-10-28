@@ -262,7 +262,9 @@ describe("a till's commit", () => {
       (await snapshotStore(db, { staffId: ACTOR })).db,
     ) as unknown as Record<string, Row[]>;
     expect(
-      back["units"]!.find((u) => u["serial"] === unit["serial"])!["neverServiced"],
+      back["units"]!.find((u) => u["serial"] === unit["serial"])![
+        "neverServiced"
+      ],
     ).toBe(true);
     expect(back["skus"]!.find((s) => s["id"] === sku["id"])).toMatchObject(
       links,
