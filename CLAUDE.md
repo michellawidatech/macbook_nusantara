@@ -3406,6 +3406,14 @@ Decisions that outlived those documents:
   - **Every staff bubble is named**: each staff send writes an `Outbox` CREATE
     audit line (`recordSender`); a row with none and no `requestId` is the
     worker's and draws as Bot (`fromBot`).
+  - **A hello is offered help, not questioned** (owner, same day: *"always
+    asks what can they help with, not this, too demanding"*). A greeting
+    gets "Halo kak 😊 Selamat datang di Macbook Nusantara. Ada yang bisa aku
+    bantu kak?"; a second one in the chat gets "Iya kak 😊 Ada yang bisa aku
+    bantu?" (never a second welcome). The needs questions (`nextQuestion`)
+    start only once they show interest (`interested` in rules/run.ts: a
+    model, a budget, a stock/price question, wanting to buy, telling about
+    themselves, or answering the bot's own needs question).
   - Chip & spec guide for the Knowledge Base:
     `docs/chatbot/chip-guide-2026-10-28.xlsx` (16 rows) — the owner imports it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React

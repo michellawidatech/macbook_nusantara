@@ -168,6 +168,30 @@ export const reply = {
       : "Halo kak 😊 Selamat datang di Macbook Nusantara.";
   },
 
+  /**
+   * After a welcome, the one question a hello gets (owner, 2026-10-28: *"always
+   * asks what can they help with, not this, too demanding"*) — never what the
+   * laptop is for before they have said they want one.
+   */
+  offerHelp(lang: Lang): string {
+    return lang === "en"
+      ? "How can I help? 😊"
+      : "Ada yang bisa aku bantu kak?";
+  },
+
+  /** A second "hi" in the same chat: no second welcome, a different line. */
+  helloAgain(lang: Lang, lastReply: string | null): string {
+    const first =
+      lang === "en"
+        ? "Yes 😊 How can I help?"
+        : "Iya kak 😊 Ada yang bisa aku bantu?";
+    const second =
+      lang === "en"
+        ? "Hi again 😊 Anything I can help you find?"
+        : "Iya kak, ada yang mau ditanyain? 😊";
+    return (lastReply ?? "").includes(first) ? second : first;
+  },
+
   thanks(lang: Lang): string {
     return lang === "en" ? "You're welcome 😊" : "Sama-sama kak 😊";
   },
@@ -753,3 +777,14 @@ const QUESTIONS: Record<
     ],
   },
 };
+
+/**
+ * Did this reply ask about the customer's needs? Then their next "ok" or
+ * "hmm" is part of that conversation, and the next question may follow it.
+ */
+export function askedAboutNeeds(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return Object.values(QUESTIONS).some((byLang) =>
+    Object.values(byLang).some((ways) => ways.some((q) => text.includes(q))),
+  );
+}

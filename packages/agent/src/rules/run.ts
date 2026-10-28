@@ -41,6 +41,7 @@ import { costMicros } from "../agents.js";
 import { matchesFor, type KnowledgeBase } from "../knowledge.js";
 import {
   asksBuyOnline,
+  asksToBuy,
   dpKeepLine,
   effectiveCapabilities,
   holdingMessage,
@@ -54,6 +55,7 @@ import { isStrongMatch } from "../retrieval.js";
 import { sanitiseReply } from "../sanitise.js";
 import { dispatchTool, storeOpenAt, type ToolContext } from "../tools.js";
 import {
+  askedAboutNeeds,
   reply,
   unitLine,
   type Lang,
@@ -698,6 +700,33 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     u.intent === "other" &&
     answersOwnQuestion(input.text, ctx.now, input.lastReply ?? null);
 
+  /**
+   * Have they said what they are after (owner, 2026-10-28)? A model, a
+   * budget, a question about stock or price, wanting to buy, or something
+   * about themselves. Until then a "hi", "ok" or "hmmm" is offered help,
+   * never asked what the laptop is for — that read as demanding.
+   */
+  const interested =
+    u.query !== null ||
+    u.budgetMin !== null ||
+    u.budgetMax !== null ||
+    (
+      [
+        "ask_stock",
+        "browse",
+        "ask_price",
+        "ask_photo",
+        "reserve",
+        "tell",
+      ] as const
+    ).some((i) => i === u.intent) ||
+    selfAnswer ||
+    asksToBuy(input.text) ||
+    input.known.usage ||
+    input.known.budget ||
+    input.lastShown.length > 0 ||
+    askedAboutNeeds(input.lastReply);
+
   const lacks = {
     usage: !input.known.usage && u.usage.length === 0,
     preferences: !input.known.preferences && u.preferences.length === 0,
@@ -715,7 +744,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
   // Needs are asked BEFORE the first recommendation and never tacked onto
   // one after it (owner, 2026-10-28: "too forcing").
   const followUp = () =>
-    enough || input.lastShown.length > 0
+    enough || input.lastShown.length > 0 || !interested
       ? null
       : reply.nextQuestion(lacks, lang, input.lastReply ?? null);
 
@@ -865,11 +894,13 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       // Mid-conversation with something waiting, "halo kak?" is a nudge,
       // not a new customer: no second welcome.
       if (waiting.length > 0) return done(nudge() ?? reply.ack(lang));
-      // A welcome, then one question — the follow-up, or an offer to pick.
+      // A welcome and an offer to help — nothing asked about their needs
+      // yet (owner, 2026-10-28). Never a second welcome in one chat.
       return done(
-        followUp()
-          ? reply.greeting(lang)
-          : `${reply.greeting(lang)} ${reply.offerSearch(lang)}`,
+        input.lastReply
+          ? reply.helloAgain(lang, input.lastReply)
+          : `${reply.greeting(lang)} ${reply.offerHelp(lang)}`,
+        { ask: false },
       );
 
     case "thanks":
@@ -889,6 +920,10 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
           query: null,
           min: input.known.budgetMin ?? null,
           max: input.known.budgetMax ?? null,
+        });
+      if (!interested)
+        return done(`${reply.ack(lang)} ${reply.offerHelp(lang)}`, {
+          ask: false,
         });
       return done(
         followUp()

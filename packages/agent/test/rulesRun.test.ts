@@ -317,23 +317,24 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
     apps: false,
   };
 
-  it("ends every reply with a question while the use is unknown", async () => {
-    for (const text of [
-      "halo kak",
-      "makasih kak",
-      "kak garansinya berapa lama ya?",
-    ]) {
+  it("offers a hello help, and asks what it is for only once they want a laptop (2026-10-28)", async () => {
+    for (const text of ["halo kak", "makasih kak", "ok kak"]) {
       const out = await run(text);
-      expect(out.reply).toContain("Rencananya buat apa kak?");
+      expect(out.reply).not.toContain("buat apa kak");
     }
+    expect((await run("halo kak")).reply).toBe(
+      "Halo kak 😊 Selamat datang di Macbook Nusantara. Ada yang bisa aku bantu kak?",
+    );
+    const buying = await run("halo kak, aku mau beli");
+    expect(buying.reply).toContain("Rencananya buat apa kak?");
   });
 
   it("asks briefly — the use, then the budget, and nothing else (2026-10-27)", async () => {
-    const out1 = await run("halo kak", pos({}), {
+    const out1 = await run("halo kak, aku mau beli", pos({}), {
       known: { ...nothingKnown, usage: true },
     });
     expect(out1.reply).toContain("Budgetnya kira-kira");
-    const out2 = await run("halo kak", pos({}), {
+    const out2 = await run("halo kak, aku mau beli", pos({}), {
       known: { ...nothingKnown, usage: true, budget: true },
     });
     expect(out2.reply).not.toContain("aplikasi khusus");
@@ -360,7 +361,7 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
     });
     expect(out.reply).not.toContain("?\n");
     expect(out.reply).toBe(
-      "Halo kak 😊 Selamat datang di Macbook Nusantara. Mau aku cariin yang paling pas kak?",
+      "Halo kak 😊 Selamat datang di Macbook Nusantara. Ada yang bisa aku bantu kak?",
     );
   });
 
@@ -371,7 +372,8 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
   });
 
   it("asks a skipped question a second way rather than repeating it", async () => {
-    const first = await run("halo kak");
+    const first = await run("halo kak, aku mau beli");
+    expect(first.reply).toContain("Rencananya buat apa kak?");
     const again = await run("ok kak", pos({}), { lastReply: first.reply });
     expect(again.reply).not.toContain("Rencananya buat apa kak?");
     expect(again.reply).toContain("lebih sering dipakai buat apa kak?");
@@ -396,6 +398,23 @@ describe("always asking what the customer needs (owner, 2026-10-15)", () => {
       { lastShown: [MBP.serial] },
     );
     expect(proposal.reply).not.toContain("buat apa kak");
+  });
+});
+
+describe("a hello is welcomed once, and offered help (owner, 2026-10-28)", () => {
+  it("answers the owner's screenshot: hi, hi again, hmmm", async () => {
+    const first = await run("Hii");
+    expect(first.reply).toBe(
+      "Halo kak 😊 Selamat datang di Macbook Nusantara. Ada yang bisa aku bantu kak?",
+    );
+    const again = await run("hi", pos({}), { lastReply: first.reply });
+    expect(again.reply).toBe("Iya kak 😊 Ada yang bisa aku bantu?");
+    const third = await run("hi", pos({}), { lastReply: again.reply });
+    expect(third.reply).toBe("Iya kak, ada yang mau ditanyain? 😊");
+    for (const out of [first, again, third]) {
+      expect(out.reply).not.toMatch(/buat apa|dipakai/);
+      expect(out.handoff).toBeUndefined();
+    }
   });
 });
 
