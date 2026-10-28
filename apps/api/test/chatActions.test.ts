@@ -190,6 +190,97 @@ describe("the staff alert numbers (2026-10-28)", () => {
   });
 });
 
+describe("Chatbot → Settings (2026-10-28)", () => {
+  it("keeps a name beside each number", async () => {
+    const res = await request(app)
+      .put("/api/chat/notify-numbers")
+      .set("Cookie", ownerCookie)
+      .send({
+        entries: [
+          { number: "0812-3456-789", name: "Dina" },
+          { number: "628111000999", name: "" },
+        ],
+      })
+      .expect(200);
+    expect(res.body.entries).toEqual([
+      { waId: "628123456789", name: "Dina" },
+      { waId: "628111000999", name: "" },
+    ]);
+    expect(res.body.numbers).toEqual(["628123456789", "628111000999"]);
+  });
+
+  it("sets the model from the list only, and the owner alone", async () => {
+    await request(app)
+      .put("/api/chat/model")
+      .set("Cookie", staffCookie)
+      .send({ model: "claude-haiku-4-5" })
+      .expect(403);
+    await request(app)
+      .put("/api/chat/model")
+      .set("Cookie", ownerCookie)
+      .send({ model: "gpt-9" })
+      .expect(400);
+    const res = await request(app)
+      .put("/api/chat/model")
+      .set("Cookie", ownerCookie)
+      .send({ model: "claude-haiku-4-5" })
+      .expect(200);
+    expect(res.body.model).toBe("claude-haiku-4-5");
+    const read = await request(app)
+      .get("/api/chat/model")
+      .set("Cookie", staffCookie)
+      .expect(200);
+    expect(read.body.model).toBe("claude-haiku-4-5");
+    expect(read.body.models.map((m: { id: string }) => m.id)).toContain(
+      "claude-sonnet-5-5",
+    );
+  });
+
+  it("deletes a prompt nobody uses, never the one in use", async () => {
+    const make = async (name: string) =>
+      (
+        await request(app)
+          .post("/api/chat/personas")
+          .set("Cookie", ownerCookie)
+          .send({
+            name: `${name} ${Math.random().toString(36).slice(2, 8)}`,
+            prompt: `Kamu admin ${name}.`,
+          })
+          .expect(201)
+      ).body.persona.id as string;
+    const used = await make("Dipakai");
+    const spare = await make("Cadangan");
+    await request(app)
+      .post(`/api/chat/personas/${used}/activate`)
+      .set("Cookie", ownerCookie)
+      .expect(200);
+    await request(app)
+      .delete(`/api/chat/personas/${used}`)
+      .set("Cookie", ownerCookie)
+      .expect(409);
+    await request(app)
+      .delete(`/api/chat/personas/${spare}`)
+      .set("Cookie", staffCookie)
+      .expect(403);
+    await request(app)
+      .delete(`/api/chat/personas/${spare}`)
+      .set("Cookie", ownerCookie)
+      .expect(200);
+    expect(await db.persona.count({ where: { id: spare } })).toBe(0);
+  });
+
+  it("reports usage for 7 and 30 days", async () => {
+    const res = await request(app)
+      .get("/api/chat/usage")
+      .set("Cookie", staffCookie)
+      .expect(200);
+    expect(res.body.windows.map((w: { days: number }) => w.days)).toEqual([
+      7, 30,
+    ]);
+    expect(res.body.windows[0]).toMatchObject({ replies: 0, costUsd: 0 });
+  });
+});
+
 describe("the chats waiting for a person (2026-10-28)", () => {
   it("counts a hand-over not dealt with and names the oldest", async () => {
     const at = (ago: number) => new Date(Date.now() - ago);
@@ -225,7 +316,7 @@ describe("the tester numbers", () => {
       .get("/api/chat/testers")
       .set("Cookie", staffCookie);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ numbers: [] });
+    expect(res.body).toEqual({ numbers: [], entries: [] });
   });
 
   it("are the owner's to change", async () => {

@@ -993,7 +993,8 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
       const now = new Date();
       const customerText = turns[turns.length - 1]!.text;
       const prompt = buildAgentPrompt({
-        persona: personaFor("ADVISOR", personas, v1),
+        // The prompt in use IS the voice (2026-10-28).
+        persona: v1,
         storeFacts,
         knowledge: knowledgeBlock(knowledge),
         corrections: [...corrections].reverse().map((c) => ({

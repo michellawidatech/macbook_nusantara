@@ -126,30 +126,49 @@ export async function upsertChatAction(
   });
   if (open) {
     await tx.chatAction.update({ where: { id: open.id }, data: common });
+    // A hand-over onto a task already open still needs a person NOW
+    // (owner report 2026-10-28: "I did not get the notif" — the test chat
+    // had a task open from earlier, so a new-task-only alert never fired).
+    if (isHandoffTopic(input.topic)) await queueStaffAlerts(tx, input);
     return { id: open.id, created: false };
   }
   const made = await tx.chatAction.create({
     data: { from: input.from, kind, createdAt: input.now, ...common },
     select: { id: true },
   });
-  // A NEW hand-over — not a refreshed one — tells staff on WhatsApp.
   if (isHandoffTopic(input.topic)) await queueStaffAlerts(tx, input);
   return { id: made.id, created: true };
 }
+
+/** One alert per chat in this long, however many lines they send meanwhile. */
+export const STAFF_ALERT_QUIET_MS = 15 * 60_000;
 
 /**
  * One WhatsApp line to each staff alert number (owner, 2026-10-28: *"notify
  * the staff through WA if there are any chat they need to answer"*), queued
  * in the hand-over's own transaction — the send pass delivers it, so no
- * network I/O happens here. Once per new task: a customer typing five lines
- * while they wait refreshes the task and sends nothing more.
+ * network I/O happens here. On every hand-over, but at most once per chat
+ * per `STAFF_ALERT_QUIET_MS`: a customer typing five lines while they wait
+ * is one alert. The alert goes to every number on the list — a staff member
+ * testing from their own phone gets it too, which is how they see it work.
  */
 export async function queueStaffAlerts(
   tx: Tx,
-  input: Pick<ActionInput, "from" | "summary" | "customerText">,
+  input: Pick<ActionInput, "from" | "summary" | "customerText"> & {
+    readonly now?: Date;
+  },
 ): Promise<number> {
-  const numbers = (await loadNotifyNumbers(tx)).filter((n) => n !== input.from);
+  const numbers = await loadNotifyNumbers(tx);
   if (numbers.length === 0) return 0;
+  const now = input.now ?? new Date();
+  const recent = await tx.outbox.count({
+    where: {
+      kind: "WA_REPLY",
+      createdAt: { gt: new Date(now.getTime() - STAFF_ALERT_QUIET_MS) },
+      payload: { path: ["alertFor"], equals: input.from },
+    },
+  });
+  if (recent > 0) return 0;
   const named = await tx.waMessage.findFirst({
     where: { from: input.from, direction: "IN", name: { not: null } },
     orderBy: { ts: "desc" },
@@ -167,7 +186,7 @@ export async function queueStaffAlerts(
   for (const to of numbers)
     await enqueueOutbox(tx, {
       kind: "WA_REPLY",
-      payload: { to, body, staffAlert: true },
+      payload: { to, body, staffAlert: true, alertFor: input.from },
     });
   return numbers.length;
 }

@@ -36,10 +36,13 @@ import {
   CAPABILITY_SETTING_KEYS,
   MAX_TESTERS,
   TESTERS_SETTING_KEY,
+  CHATBOT_MODELS,
+  MODEL_SETTING_KEY,
+  chatbotModelOf,
+  loadChatbotModel,
+  parseNumberEntries,
+  formatNumberEntries,
   agentCapabilities,
-  formatTesters,
-  loadTesters,
-  loadNotifyNumbers,
   NOTIFY_SETTING_KEY,
   toWaId,
   effectiveCapabilities,
@@ -104,7 +107,7 @@ const personaSchema = z.object({
   blurb: z.string().trim().max(200).optional(),
   // Free text a staff member wrote. Length-capped rather than validated:
   // there is no such thing as a wrong voice, only a long one.
-  prompt: z.string().trim().min(1).max(4_000),
+  prompt: z.string().trim().min(1).max(8_000),
 });
 
 const correctionSaveSchema = z.object({
@@ -143,8 +146,21 @@ const capabilitiesBody = z
  * is refused rather than dropped — a tester who was silently left off the
  * list would type `/new` and get an answer to it.
  */
-const testersBody = z
-  .object({ numbers: z.array(z.string().max(40)).max(MAX_TESTERS) })
+const numberListBody = z
+  .object({
+    numbers: z.array(z.string().max(40)).max(MAX_TESTERS).optional(),
+    entries: z
+      .array(
+        z
+          .object({
+            number: z.string().max(40),
+            name: z.string().max(60).optional(),
+          })
+          .strict(),
+      )
+      .max(MAX_TESTERS)
+      .optional(),
+  })
   .strict();
 
 /** What the page shows: as set, and what that actually allows. */
@@ -181,98 +197,167 @@ export function chatRouter({
   });
 
   /**
-   * GET /api/chat/testers — the numbers that may type `/new` to start their
-   * conversation over (packages/agent/src/reset.ts). Staff may read it: who
-   * can make the bot forget a thread is worth knowing at the desk.
+   * The two number lists on Chatbot → Settings (owner, 2026-10-28: "CRUD
+   * list of testers, CRUD list of alert numbers", "name as well"):
+   * `chatbot.testers` — the numbers that may type `/new` to start their chat
+   * over — and `chatbot.notifyNumbers` — the staff numbers that get a
+   * WhatsApp alert when a chat needs a person (the bot never answers an alert
+   * number that is not also a tester). Read by any staff; changed by the
+   * owner. Stored as `number:name`, comma-joined (`formatNumberEntries`). A
+   * number that is not one is refused rather than dropped — a tester silently
+   * left off the list would type `/new` and get an answer to it.
    */
-  router.get("/testers", async (_req, res, next) => {
+  const numberList = (path: string, key: string, evt: string) => {
+    router.get(path, async (_req, res, next) => {
+      try {
+        const row = await db.appSetting.findUnique({
+          where: { key },
+          select: { value: true },
+        });
+        const entries = parseNumberEntries(row?.value);
+        res.json({ numbers: entries.map((e) => e.waId), entries });
+      } catch (err) {
+        next(err);
+      }
+    });
+    router.put(path, ownerOnly, async (req, res, next) => {
+      try {
+        const parsed = numberListBody.safeParse(req.body);
+        if (!parsed.success)
+          throw new ApiError(400, "VALIDASI", "Daftar nomor tidak valid.");
+        const raw =
+          parsed.data.entries ??
+          (parsed.data.numbers ?? []).map((number) => ({ number, name: "" }));
+        const entries = raw.map((e) => ({
+          waId: toWaId(e.number),
+          name: e.name ?? "",
+        }));
+        if (entries.some((e) => e.waId === null))
+          throw new ApiError(
+            400,
+            "VALIDASI",
+            "Ada nomor yang bukan nomor WhatsApp.",
+          );
+        const value = formatNumberEntries(
+          entries as Array<{ waId: string; name: string }>,
+        );
+        const now = new Date();
+        await db.appSetting.upsert({
+          where: { key },
+          update: { value, updatedAt: now },
+          create: { key, value, updatedAt: now },
+        });
+        const saved = parseNumberEntries(value);
+        logger.info(
+          { evt, ctx: { staffId: req.staff?.id, count: saved.length } },
+          "a chatbot number list changed",
+        );
+        res.json({ numbers: saved.map((e) => e.waId), entries: saved });
+      } catch (err) {
+        next(err);
+      }
+    });
+  };
+  numberList("/testers", TESTERS_SETTING_KEY, "chat.testers.changed");
+  numberList(
+    "/notify-numbers",
+    NOTIFY_SETTING_KEY,
+    "chat.notify_numbers.changed",
+  );
+
+  /**
+   * GET / PUT /api/chat/model — which model the bot runs on (owner,
+   * 2026-10-28). Read by any staff; set by the owner, from the list only.
+   */
+  router.get("/model", async (_req, res, next) => {
     try {
-      res.json({ numbers: await loadTesters(db) });
+      res.json({
+        model: await loadChatbotModel(db),
+        envModel: anthropic.model ?? null,
+        models: CHATBOT_MODELS,
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+  router.put("/model", ownerOnly, async (req, res, next) => {
+    try {
+      const body = z
+        .object({ model: z.string().trim().max(60).nullable() })
+        .strict()
+        .safeParse(req.body);
+      const model = body.success ? chatbotModelOf(body.data.model) : null;
+      if (!body.success || (body.data.model !== null && model === null))
+        throw new ApiError(400, "VALIDASI", "Model tidak dikenal.");
+      const now = new Date();
+      await db.appSetting.upsert({
+        where: { key: MODEL_SETTING_KEY },
+        update: { value: model ?? "", updatedAt: now },
+        create: { key: MODEL_SETTING_KEY, value: model ?? "", updatedAt: now },
+      });
+      logger.info(
+        { evt: "chat.model.changed", ctx: { staffId: req.staff?.id, model } },
+        "the chatbot's model changed",
+      );
+      res.json({
+        model,
+        envModel: anthropic.model ?? null,
+        models: CHATBOT_MODELS,
+      });
     } catch (err) {
       next(err);
     }
   });
 
   /**
-   * PUT /api/chat/testers — replace the list. The owner's call, like the
-   * switches: a reset closes a colleague's open tasks, so who may type one
-   * is a decision about which chats can leave a colleague's desk by themselves.
+   * GET /api/chat/usage — what the bot did and cost, last 7 and 30 days
+   * (owner, 2026-10-28). Replies, how many the AI wrote and how many came
+   * from templates, hand-overs, tokens, and the AI's own cost in US dollars
+   * (`AgentRun.costMicros`, millionths of a dollar). Any staff: it is the
+   * cost of a tool, not the shop's money.
    */
-  router.put("/testers", ownerOnly, async (req, res, next) => {
+  router.get("/usage", async (_req, res, next) => {
     try {
-      const parsed = testersBody.safeParse(req.body);
-      if (!parsed.success)
-        throw new ApiError(400, "VALIDASI", "Daftar nomor tidak valid.");
-      const ids = parsed.data.numbers.map((n) => toWaId(n));
-      if (ids.some((id) => id === null))
-        throw new ApiError(
-          400,
-          "VALIDASI",
-          "Ada nomor yang bukan nomor WhatsApp.",
-        );
-      const value = formatTesters(ids as string[]);
-      const now = new Date();
-      await db.appSetting.upsert({
-        where: { key: TESTERS_SETTING_KEY },
-        update: { value, updatedAt: now },
-        create: { key: TESTERS_SETTING_KEY, value, updatedAt: now },
-      });
-      const numbers = await loadTesters(db);
-      logger.info(
-        {
-          evt: "chat.testers.changed",
-          ctx: { staffId: req.staff?.id, count: numbers.length },
-        },
-        "the chatbot's tester numbers changed",
+      const now = Date.now();
+      const windows = await Promise.all(
+        [7, 30].map(async (days) => {
+          const since = new Date(now - days * 86_400_000);
+          const where = { dryRun: false, createdAt: { gte: since } };
+          const [sum, total, byAi, handovers] = await Promise.all([
+            db.agentRun.aggregate({
+              where,
+              _sum: {
+                inputTokens: true,
+                cachedTokens: true,
+                outputTokens: true,
+                costMicros: true,
+              },
+            }),
+            db.agentRun.count({ where }),
+            db.agentRun.count({
+              where: {
+                ...where,
+                steps: {
+                  some: { model: { notIn: ["template", "rules", "ai"] } },
+                },
+              },
+            }),
+            db.agentRun.count({ where: { ...where, outcome: "HANDOFF" } }),
+          ]);
+          return {
+            days,
+            replies: total,
+            byAi,
+            byTemplates: total - byAi,
+            handovers,
+            inputTokens: sum._sum.inputTokens ?? 0,
+            cachedTokens: sum._sum.cachedTokens ?? 0,
+            outputTokens: sum._sum.outputTokens ?? 0,
+            costUsd: Number(sum._sum.costMicros ?? 0n) / 1_000_000,
+          };
+        }),
       );
-      res.json({ numbers });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  /**
-   * GET / PUT /api/chat/notify-numbers — the staff numbers that get a
-   * WhatsApp alert when a chat needs a person (owner, 2026-10-28). Read by
-   * any staff; changed by the owner, like the testers — and the bot never
-   * answers these numbers.
-   */
-  router.get("/notify-numbers", async (_req, res, next) => {
-    try {
-      res.json({ numbers: await loadNotifyNumbers(db) });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  router.put("/notify-numbers", ownerOnly, async (req, res, next) => {
-    try {
-      const parsed = testersBody.safeParse(req.body);
-      if (!parsed.success)
-        throw new ApiError(400, "VALIDASI", "Daftar nomor tidak valid.");
-      const ids = parsed.data.numbers.map((n) => toWaId(n));
-      if (ids.some((id) => id === null))
-        throw new ApiError(
-          400,
-          "VALIDASI",
-          "Ada nomor yang bukan nomor WhatsApp.",
-        );
-      const value = formatTesters(ids as string[]);
-      const now = new Date();
-      await db.appSetting.upsert({
-        where: { key: NOTIFY_SETTING_KEY },
-        update: { value, updatedAt: now },
-        create: { key: NOTIFY_SETTING_KEY, value, updatedAt: now },
-      });
-      const numbers = await loadNotifyNumbers(db);
-      logger.info(
-        {
-          evt: "chat.notify_numbers.changed",
-          ctx: { staffId: req.staff?.id, count: numbers.length },
-        },
-        "the chatbot's staff alert numbers changed",
-      );
-      res.json({ numbers });
+      res.json({ windows });
     } catch (err) {
       next(err);
     }
@@ -401,10 +486,11 @@ export function chatRouter({
       });
 
       let failure: unknown;
+      const draftModel = (await loadChatbotModel(db)) ?? anthropic.model;
       const result = await converse({
         client,
-        // CHATBOT_MODEL: Draft writes with the model the worker runs.
-        ...(anthropic.model ? { model: anthropic.model } : {}),
+        // Draft writes with the model the bot runs: Settings', else the env's.
+        ...(draftModel ? { model: draftModel } : {}),
         db,
         // No `reserve` capability, deliberately. Pressing Draft should propose
         // a sentence for a staff member to send, not book a reservation and
@@ -501,7 +587,7 @@ export function chatRouter({
     }
   });
 
-  router.post("/personas", async (req, res, next) => {
+  router.post("/personas", ownerOnly, async (req, res, next) => {
     try {
       const parsed = personaSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -533,7 +619,7 @@ export function chatRouter({
     }
   });
 
-  router.put("/personas/:id", async (req, res, next) => {
+  router.put("/personas/:id", ownerOnly, async (req, res, next) => {
     try {
       const parsed = personaSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -585,7 +671,42 @@ export function chatRouter({
    * then activate, and the constraint is what guarantees the shop can never
    * end up with two voices and no way to say which is real.
    */
-  router.post("/personas/:id/activate", async (req, res, next) => {
+  /**
+   * DELETE /api/chat/personas/:id — the owner removes a prompt nobody uses
+   * (2026-10-28: "CRUD"). Never the one in use, never the built-in default.
+   * ⚠️ The tenth sanctioned hard delete: a prompt is a draft of words, no
+   * row points at it, and migration 20261028140000 grants DELETE on
+   * `Persona` and nothing else. Do not generalise it.
+   */
+  router.delete("/personas/:id", ownerOnly, async (req, res, next) => {
+    try {
+      const id = String(req.params["id"]);
+      const row = await db.persona.findUnique({
+        where: { id },
+        select: { active: true, builtIn: true },
+      });
+      if (!row)
+        throw new ApiError(404, "TIDAK_DITEMUKAN", "Prompt tidak ditemukan.");
+      if (row.active || row.builtIn)
+        throw new ApiError(
+          409,
+          "KONFLIK",
+          row.active
+            ? "Prompt yang sedang dipakai tidak bisa dihapus. Pakai prompt lain dulu."
+            : "Prompt bawaan tidak bisa dihapus.",
+        );
+      await db.persona.delete({ where: { id } });
+      logger.info(
+        { evt: "chat.persona.deleted", ctx: { staffId: req.staff?.id, id } },
+        "a chatbot prompt was deleted",
+      );
+      res.json({ deleted: id });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post("/personas/:id/activate", ownerOnly, async (req, res, next) => {
     try {
       const id = String(req.params["id"]);
       const target = await db.persona.findUnique({

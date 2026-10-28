@@ -201,6 +201,47 @@ export async function runDoctor(
         },
   );
 
+  // Staff WhatsApp alerts (2026-10-28): are any numbers set, and did the
+  // alerts of the last day go out?
+  const alertSetting = await prisma.appSetting.findUnique({
+    where: { key: "chatbot.notifyNumbers" },
+    select: { value: true },
+  });
+  const alertNumbers = (alertSetting?.value ?? "")
+    .split(",")
+    .filter((v) => v.trim() !== "").length;
+  const alertRows = await prisma.outbox.groupBy({
+    by: ["status"],
+    where: {
+      kind: "WA_REPLY",
+      createdAt: { gte: new Date(now.getTime() - DAY_MS) },
+      payload: { path: ["staffAlert"], equals: true },
+    },
+    _count: { _all: true },
+  });
+  const alertsBy = Object.fromEntries(
+    alertRows.map((r) => [r.status, r._count._all]),
+  ) as Record<string, number>;
+  out.push(
+    alertNumbers === 0
+      ? {
+          level: "warn",
+          title:
+            "No staff alert numbers — nobody is told on WhatsApp when a chat needs a person",
+          fix: "Add them in the POS: Chatbot → Settings → WhatsApp alerts.",
+        }
+      : (alertsBy["FAILED"] ?? 0) > 0
+        ? {
+            level: "fail",
+            title: `${alertsBy["FAILED"]} staff alert(s) failed to send in the last 24 hours`,
+            fix: "Check the WhatsApp connection (Chatbot → Settings) and the worker log.",
+          }
+        : {
+            level: "ok",
+            title: `${alertNumbers} alert number(s); in the last 24 hours ${alertsBy["SENT"] ?? 0} alert(s) sent, ${(alertsBy["PENDING"] ?? 0) + (alertsBy["SENDING"] ?? 0)} waiting`,
+          },
+  );
+
   // Who actually answered (owner, 2026-10-28: "how do I know the AI is
   // running?"): of the last 24 hours' replies, how many the AI wrote and how
   // many came from the fixed templates. A step whose model is a real model

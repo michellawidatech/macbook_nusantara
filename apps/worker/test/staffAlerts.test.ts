@@ -60,7 +60,35 @@ const handOver = () =>
   );
 
 describe("staff alerts on WhatsApp", () => {
-  it("queue one line per alert number for a NEW hand-over, and nothing for a refresh", async () => {
+  it("alert on a hand-over onto a task already open (owner report 2026-10-28), once per 15 minutes, and to the customer's own number too", async () => {
+    await owner.appSetting.create({
+      data: {
+        key: "chatbot.notifyNumbers",
+        value: `${CUSTOMER}:Tester`,
+        updatedAt: new Date(),
+      },
+    });
+    // A task left open from earlier in the day, with no alert behind it.
+    await owner.chatAction.create({
+      data: {
+        from: CUSTOMER,
+        kind: "OTHER",
+        topic: "other",
+        summary: "Perlu dibalas — earlier",
+        createdAt: new Date(Date.now() - 3 * 3_600_000),
+        updatedAt: new Date(Date.now() - 3 * 3_600_000),
+      },
+    });
+    await handOver();
+    expect(await owner.outbox.count()).toBe(1);
+    const row = await owner.outbox.findFirstOrThrow();
+    expect(row.payload).toMatchObject({ to: CUSTOMER, alertFor: CUSTOMER });
+    // Same chat, minutes later: still one.
+    await handOver();
+    expect(await owner.outbox.count()).toBe(1);
+  });
+
+  it("queue one line per alert number for a hand-over, and nothing more within 15 minutes", async () => {
     await owner.appSetting.create({
       data: {
         key: "chatbot.notifyNumbers",

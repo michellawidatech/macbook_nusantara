@@ -10,6 +10,7 @@ import { db as prisma, disconnect } from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
+import { startChatHealthMonitor } from "./chatHealth.js";
 import { readAnthropicEnv, hasCredential } from "@nusantara/agent";
 import { defaultSecretsFile, loadApiSecrets } from "./secretsFile.js";
 
@@ -66,6 +67,12 @@ export function main(): void {
       void disconnect().then(() => process.exit(0));
     });
   };
+
+  // Is the chatbot working? Checked every 2 minutes on the shop's own API
+  // only — staging holds a copy of the shop and must never message staff.
+  if (process.env["APP_ENV"] === "prod" && config.waGateway) {
+    startChatHealthMonitor(client, { gateway: config.waGateway, logger });
+  }
 
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));

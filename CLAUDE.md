@@ -3447,6 +3447,33 @@ Decisions that outlived those documents:
     WhatsApp alerts, owner-only, `/api/chat/notify-numbers`); the bot never
     answers those numbers (`quietCandidates`). Link base is
     `POS_PUBLIC_URL` (env) or `https://pos.macbooknusantara.com`.
+  - **Chatbot → Settings is prompts, model & usage, and two number lists**
+    (owner, same day). The Agent card and the simulator are gone
+    (`Simulator.tsx`, `/api/chat/simulate` stay, unused). **The prompt in use
+    is the ACTIVE `Persona`** — several prompts, *Use this* switches;
+    migration `20261028140000` made the ADVISOR-seat row the active one so the
+    voice did not change, and grants DELETE on `Persona` (the tenth
+    sanctioned hard delete: never the active or built-in one). The worker and
+    the Draft button no longer read the ADVISOR seat. **The model** is
+    `AppSetting chatbot.model` (`CHATBOT_MODELS`), which outranks
+    `CHATBOT_MODEL` in the env. **Usage** is `GET /api/chat/usage`. Testers
+    and alert numbers carry a name: stored `number:name`, comma-joined
+    (`parseNumberEntries`); persona/model/number writes are owner-only.
+  - **Staff alerts fire on every hand-over**, at most once per chat per 15
+    minutes (`STAFF_ALERT_QUIET_MS`, `payload.alertFor`), not only on a new
+    task — the owner's test chat had a task open, so none came. An alert
+    number that is also a tester is answered by the bot.
+  - **The chatbot's health is checked every 2 minutes** (`chatHealth.ts`,
+    started in the API only when `APP_ENV=prod` and a gateway is set):
+    BOT_STALE (a customer waited 5+ min, not counting bot-off chats, a
+    colleague typing in the last 15 min, or alert-only numbers),
+    OUTBOX_STUCK, WA_DISCONNECTED. On a CHANGE it messages the alert numbers
+    straight through the gateway (not the Outbox — the worker may be what is
+    down); `chatbot.health.state` remembers the last state, and the first
+    check says nothing. The POS shows "Chatbot has a problem" in the sidebar
+    (`ChatHealthNotice`, `GET /api/inbox/health`, cached a minute). With
+    WhatsApp itself down nothing is sent. ⚠️ No heartbeat: a dead worker on a
+    quiet night is noticed when the next customer writes.
   - Chip & spec guide for the Knowledge Base:
     `docs/chatbot/chip-guide-2026-10-28.xlsx` (16 rows) — the owner imports it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React

@@ -94,3 +94,23 @@ describe("where a thread starts over — /new or a staff Clear chat", () => {
     expect(summarySince(null, null)).toBeNull();
   });
 });
+
+describe("numbers with names (2026-10-28)", () => {
+  it("reads number:name entries, and a bare number as before", async () => {
+    const { parseNumberEntries, formatNumberEntries, parseTesters } =
+      await import("../src/reset.js");
+    const stored = "628123456789:Dina,0812-0000-111,628123456789:Dupe";
+    expect(parseNumberEntries(stored)).toEqual([
+      { waId: "628123456789", name: "Dina" },
+      { waId: "628120000111", name: "" },
+    ]);
+    // A name with digits never leaks into the number.
+    expect(parseTesters("628123456789:Staff 2")).toEqual(["628123456789"]);
+    expect(
+      formatNumberEntries([
+        { waId: "628123456789", name: "Dina, owner: HP" },
+        { waId: "628120000111", name: "" },
+      ]),
+    ).toBe("628123456789:Dina owner HP,628120000111");
+  });
+});

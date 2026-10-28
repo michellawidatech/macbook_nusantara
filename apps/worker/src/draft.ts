@@ -161,7 +161,21 @@ import {
 } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import { isWithinWindow } from "@nusantara/whatsapp";
-import { DEFAULT_PERSONA, loadNotifyNumbers } from "@nusantara/agent";
+import {
+  DEFAULT_PERSONA,
+  loadChatbotModel,
+  loadNotifyNumbers,
+  loadTesters,
+} from "@nusantara/agent";
+
+/** Alert numbers that are not testers: the bot leaves those chats alone. */
+async function alertOnlyNumbers(db: PrismaClient): Promise<string[]> {
+  const [alerts, testers] = await Promise.all([
+    loadNotifyNumbers(db),
+    loadTesters(db),
+  ]);
+  return alerts.filter((n) => !testers.includes(n));
+}
 import { refreshOffers, upsertChatAction } from "./actions.js";
 import { resetPass } from "./reset.js";
 import { claimThread, inPool, leaseHolder, releaseThread } from "./lease.js";
@@ -463,8 +477,9 @@ async function quietCandidates(
   const paused = [
     ...(await staffActiveThreads(db, staffActiveSince)).keys(),
     // Staff alert numbers (2026-10-28): a colleague answering an alert with
-    // "ok" is not a customer, and the bot never answers them.
-    ...(await loadNotifyNumbers(db)),
+    // "ok" is not a customer, and the bot never answers them — unless the
+    // number is a tester too, whose chats ARE the bot's to answer.
+    ...(await alertOnlyNumbers(db)),
   ];
   return db.$queryRaw<Candidate[]>(Prisma.sql`
     SELECT "from",
@@ -715,9 +730,12 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
   // The DP rule from Settings (2026-10-27): what a keep is told.
   const dp = facts.dp;
   const v2 = settings.pipeline === "v2";
-  // The v1 voice is the Advisor's until somebody edits the Advisor.
+  // The prompt marked "in use" in Settings IS the bot's voice (owner,
+  // 2026-10-28: several prompts, one used). The built-in default otherwise.
   const v1Persona = persona?.prompt ?? DEFAULT_PERSONA;
-  const advisorPersona = personaFor("ADVISOR", agentPersonas, v1Persona);
+  const advisorPersona = v1Persona;
+  // The model chosen in Settings, else the environment's (2026-10-28).
+  const chosenModel = await loadChatbotModel(db);
 
   let drafted = 0;
   let escalated = 0;
@@ -1132,7 +1150,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         : undefined;
       const turns = toTurns(history, current);
       // CHATBOT_MODEL, when the owner moved the bot without a release.
-      const agentModel = anthropic.model;
+      const agentModel = chosenModel ?? anthropic.model;
       const v1Calls: CallUsage[] = [];
       let result: ConverseResult | PipelineResult | RulesResult | null = null;
       /**

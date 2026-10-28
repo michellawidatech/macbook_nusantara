@@ -64,13 +64,50 @@ export function toWaId(raw: string): string | null {
   return id.length >= 8 && id.length <= 15 ? id : null;
 }
 
-/** The stored list, read forgivingly: a bad entry is dropped, not fatal. */
+/**
+ * One stored number and the name beside it (owner, 2026-10-28: "name as
+ * well"). Stored as `628123456789:Dina`, comma-joined; an entry written
+ * before names existed is the number alone.
+ */
+export interface NumberEntry {
+  readonly waId: string;
+  readonly name: string;
+}
+
+/** A name as it may sit in the list: no separators, trimmed, short. */
+const cleanName = (name: string) =>
+  name.replace(/[,:]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
+
+/** The stored list with its names, read forgivingly: a bad entry is dropped. */
+export function parseNumberEntries(
+  value: string | null | undefined,
+): NumberEntry[] {
+  const seen = new Set<string>();
+  const out: NumberEntry[] = [];
+  for (const raw of (value ?? "").split(",")) {
+    const [number = "", ...rest] = raw.split(":");
+    const waId = toWaId(number);
+    if (waId === null || seen.has(waId)) continue;
+    seen.add(waId);
+    out.push({ waId, name: cleanName(rest.join(" ")) });
+  }
+  return out.slice(0, MAX_TESTERS);
+}
+
+/** The list as stored: `number:name`, comma-joined. */
+export function formatNumberEntries(entries: readonly NumberEntry[]): string {
+  return parseNumberEntries(
+    entries
+      .map((e) => (e.name ? `${e.waId}:${cleanName(e.name)}` : e.waId))
+      .join(","),
+  )
+    .map((e) => (e.name ? `${e.waId}:${e.name}` : e.waId))
+    .join(",");
+}
+
+/** The stored list's numbers alone. */
 export function parseTesters(value: string | null | undefined): string[] {
-  const ids = (value ?? "")
-    .split(",")
-    .map((v) => toWaId(v))
-    .filter((v): v is string => v !== null);
-  return [...new Set(ids)].slice(0, MAX_TESTERS);
+  return parseNumberEntries(value).map((e) => e.waId);
 }
 
 export const formatTesters = (ids: readonly string[]): string =>

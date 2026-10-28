@@ -62,6 +62,16 @@ import {
   staffTypedReply,
 } from "@nusantara/agent";
 import { realName } from "@nusantara/domain";
+import type { Logger } from "@nusantara/logging";
+import { checkChatHealth, type ChatHealth } from "../chatHealth.js";
+
+/** For a router built without a logger (tests): the health check stays quiet. */
+const silentLogger = {
+  info() {},
+  warn() {},
+  error() {},
+  debug() {},
+} as unknown as Logger;
 import { ApiError, forbidden, notFound } from "../errors.js";
 import {
   evaluationsFor,
@@ -350,6 +360,29 @@ export function inboxRouter(
    * answer"*). A hand-over not dealt with (PERLU_STAF), or a message in a
    * chat whose bot is switched off. Cheap: the bell on every page polls it.
    */
+  /**
+   * GET /api/inbox/health — is the chatbot working (2026-10-28)? The
+   * `chatHealth.ts` checks, cached for a minute: every open page polls it.
+   */
+  let healthCache: { at: number; value: ChatHealth } | null = null;
+  router.get("/health", async (_req, res, next) => {
+    try {
+      const nowMs = Date.now();
+      if (!healthCache || nowMs - healthCache.at > 60_000) {
+        healthCache = {
+          at: nowMs,
+          value: await checkChatHealth(db, {
+            gateway: sent?.gateway ?? null,
+            logger: sent?.logger ?? silentLogger,
+          }),
+        };
+      }
+      res.json(healthCache.value);
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.get("/waiting", async (_req, res, next) => {
     try {
       const rows = await db.$queryRaw<Array<{ from: string }>>(Prisma.sql`

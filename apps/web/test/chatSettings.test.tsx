@@ -1,106 +1,88 @@
 /**
- * The chatbot's Settings tab (2026-10-15): the agent with its persona and the
- * simulator — which sends the whole conversation so far and prints what each
- * answer cost. ONE agent and nothing to choose since 2026-10-21: no pipeline
- * picker, no lead threshold.
+ * Chatbot → Settings, reworked 2026-10-28 (owner: "set the prompt (can choose
+ * & have multiple but 1 is used) and the model used, the usage, CRUD list of
+ * testers, CRUD list of alert numbers", and a name beside each number).
  */
 import { App as AntdApp } from "antd";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiRequestError } from "../src/lib/api.js";
-import type { AgentPersona, SimulationResult } from "../src/lib/chatApi.js";
+import type { Persona } from "../src/lib/chatApi.js";
 
 const OFF = { stock: false, price: false, reserve: false, photos: false };
-const AGENTS: AgentPersona[] = [
-  {
-    agent: "ROUTER",
-    name: "Router / Guard",
-    task: "Reads each message and decides who answers.",
-    model: "claude-sonnet-5-5",
-    prompt: "You are the router.",
-    isDefault: true,
-    updatedAt: null,
-    inRules: "Rules, no AI: reads the intent from keywords.",
-  },
-  {
-    agent: "ADVISOR",
-    name: "Sales Advisor",
-    task: "Writes every reply to the customer.",
-    model: "claude-sonnet-5-5",
-    prompt: "You are the shop's advisor.",
-    isDefault: false,
-    updatedAt: "2026-10-14T00:00:00.000Z",
-    inRules: "Templates; AI only for what no rule covers.",
-  },
-  {
-    agent: "OPERATIONS",
-    name: "Operations",
-    task: "Reads stock, prices and bookings from the POS.",
-    model: "claude-haiku-4-5",
-    prompt: "You call the POS.",
-    isDefault: true,
-    updatedAt: null,
-    inRules: "No AI: direct POS lookups.",
-  },
-];
 
-const RESULT: SimulationResult = {
-  reply: "Halo kak! Ada yang bisa dibantu? 😊",
-  handoff: null,
-  photos: ["ph-1"],
-  router: {
-    language: "id",
-    tone: "casual",
-    intent: "greeting",
-    leadScore: 10,
-    escalate: null,
-  },
-  steps: [
-    {
-      agent: "ROUTER",
-      model: "claude-sonnet-5-5",
-      tool: null,
-      ok: true,
-      ms: 900,
-      inputTokens: 1000,
-      outputTokens: 50,
-    },
-    {
-      agent: "OPERATIONS",
-      model: "claude-haiku-4-5",
-      tool: "find_units",
-      ok: true,
-      ms: 400,
-      inputTokens: 500,
-      outputTokens: 20,
-    },
-  ],
-  costMicros: 4200,
-  latencyMs: 2300,
-  pipeline: "v2",
-  shown: [],
-  usedAi: true,
-};
-
-const saveAgentPrompt = vi.fn(async (agent: string, prompt: string) => ({
-  agent: { ...AGENTS[0]!, agent, prompt, isDefault: false },
+let personas: Persona[] = [];
+const activatePersona = vi.fn(async (id: string) => {
+  personas = personas.map((p) => ({ ...p, active: p.id === id }));
+  return { status: "ACTIVE", id };
+});
+const deletePersona = vi.fn(async (id: string) => {
+  personas = personas.filter((p) => p.id !== id);
+  return { deleted: id };
+});
+const setChatModel = vi.fn(async (model: string | null) => ({
+  model,
+  envModel: "claude-haiku-4-5",
+  models: MODELS,
 }));
-const simulate = vi.fn(
-  async (_turns: unknown, _lastShown?: unknown): Promise<SimulationResult> =>
-    RESULT,
+const setNumberList = vi.fn(
+  async (_path: string, entries: Array<{ number: string; name: string }>) => ({
+    numbers: entries.map((e) => e.number),
+    entries: entries.map((e) => ({ waId: e.number, name: e.name })),
+  }),
 );
-let pipeline: "rules" | "v1" | "v2" = "v1";
+const MODELS = [
+  { id: "claude-haiku-4-5", label: "Haiku 4.5", worksWithSetupToken: true },
+  { id: "claude-haiku-5-5", label: "Haiku 5.5", worksWithSetupToken: false },
+];
 
 vi.mock("../src/lib/chatApi.js", async (original) => ({
   ...(await original<typeof import("../src/lib/chatApi.js")>()),
   getCapabilities: async () => ({ set: OFF, effective: OFF }),
-  getTesters: async () => ({ numbers: [] }),
-  getChatSettings: async () => ({ pipeline, leadThreshold: 60 }),
-  listAgents: async () => ({ agents: AGENTS }),
-  saveAgentPrompt: (a: string, p: string) => saveAgentPrompt(a, p),
-  resetAgentPrompt: async () => ({ agent: AGENTS[1] }),
-  simulate: (turns: unknown, lastShown?: unknown) => simulate(turns, lastShown),
+  listPersonas: async () => ({ personas }),
+  activatePersona: (id: string) => activatePersona(id),
+  deletePersona: (id: string) => deletePersona(id),
+  getChatModel: async () => ({
+    model: null,
+    envModel: "claude-haiku-4-5",
+    models: MODELS,
+  }),
+  setChatModel: (m: string | null) => setChatModel(m),
+  getChatUsage: async () => ({
+    windows: [
+      {
+        days: 7,
+        replies: 40,
+        byAi: 30,
+        byTemplates: 10,
+        handovers: 4,
+        inputTokens: 1000,
+        cachedTokens: 500,
+        outputTokens: 200,
+        costUsd: 0.42,
+      },
+      {
+        days: 30,
+        replies: 100,
+        byAi: 70,
+        byTemplates: 30,
+        handovers: 9,
+        inputTokens: 5000,
+        cachedTokens: 0,
+        outputTokens: 900,
+        costUsd: 1.5,
+      },
+    ],
+  }),
+  getNumberList: async (path: string) =>
+    path.endsWith("notify-numbers")
+      ? {
+          numbers: ["628123456789"],
+          entries: [{ waId: "628123456789", name: "Dina" }],
+        }
+      : { numbers: [], entries: [] },
+  setNumberList: (path: string, e: Array<{ number: string; name: string }>) =>
+    setNumberList(path, e),
 }));
 // The owner's WhatsApp connection card sits on this tab (2026-10-22); its
 // own behaviour is whatsappConnection.test.tsx.
@@ -125,162 +107,114 @@ function draw() {
   );
 }
 
+const card = async (title: string) =>
+  (await screen.findByText(title)).closest(".ant-card") as HTMLElement;
+
 beforeEach(() => {
-  pipeline = "v1";
-  saveAgentPrompt.mockClear();
-  simulate.mockClear();
+  personas = [
+    {
+      id: "p1",
+      name: "Sales Advisor",
+      blurb: null,
+      prompt: "Kamu admin toko.",
+      active: true,
+      builtIn: false,
+      updatedAt: "2026-10-28T03:00:00.000Z",
+    },
+    {
+      id: "p2",
+      name: "Lebih santai",
+      blurb: null,
+      prompt: "Santai aja.",
+      active: false,
+      builtIn: false,
+      updatedAt: "2026-10-28T03:00:00.000Z",
+    },
+  ] as Persona[];
+  activatePersona.mockClear();
+  deletePersona.mockClear();
+  setChatModel.mockClear();
+  setNumberList.mockClear();
 });
 
 describe("the WhatsApp connection (2026-10-22)", () => {
   it("is on the owner's Settings tab", async () => {
     draw();
     expect(await screen.findByText("WhatsApp connection")).toBeInTheDocument();
-    expect(
-      await screen.findByText(/there is no device to link/),
-    ).toBeInTheDocument();
   });
 });
 
-describe("the agent", () => {
-  it("lists the one agent, and offers nothing to choose", async () => {
+describe("the Agent card and the test chat are gone (2026-10-28)", () => {
+  it("draws neither", async () => {
     draw();
-    expect(
-      await screen.findByText("Writes every reply to the customer."),
-    ).toBeInTheDocument();
-    // Router and Operations belong to the dormant three-agent bot.
-    expect(
-      screen.queryByText("Reads each message and decides who answers."),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getAllByRole("button", { name: /^Persona of / }),
-    ).toHaveLength(1);
-    // No pipeline picker and no lead threshold (owner, 2026-10-21).
-    expect(screen.queryByText("Single agent (v1)")).not.toBeInTheDocument();
-    expect(screen.queryByText("Three agents (v2)")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Lead threshold")).not.toBeInTheDocument();
+    await screen.findByText("Prompts");
+    expect(screen.queryByText("Agent")).toBeNull();
+    expect(screen.queryByPlaceholderText("Type your message...")).toBeNull();
   });
+});
 
-  it("opens the persona in a dialog and saves an edit", async () => {
+describe("prompts: several, one in use", () => {
+  it("switches the prompt in use, and deletes only one nobody uses", async () => {
     const user = userEvent.setup();
     draw();
+    const prompts = await card("Prompts");
+    const row = (name: string) =>
+      within(prompts).getByText(name).closest("tr") as HTMLElement;
+    await within(prompts).findByText("Sales Advisor");
+    expect(
+      within(row("Sales Advisor")).getByText("In use"),
+    ).toBeInTheDocument();
+    expect(
+      within(row("Sales Advisor")).getByRole("button", { name: "Delete" }),
+    ).toBeDisabled();
     await user.click(
-      await screen.findByRole("button", { name: "Persona of Sales Advisor" }),
+      within(row("Lebih santai")).getByRole("button", { name: "Use this" }),
     );
-    const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveTextContent("Edited");
-    const box = within(dialog).getByRole("textbox", { name: "Persona prompt" });
-    expect(box).toHaveValue("You are the shop's advisor.");
-
-    await user.type(box, " Be brief.");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
-    await waitFor(() =>
-      expect(saveAgentPrompt).toHaveBeenCalledWith(
-        "ADVISOR",
-        "You are the shop's advisor. Be brief.",
-      ),
-    );
-  });
-});
-
-describe("the simulator", () => {
-  it("sends the conversation and shows what the answer cost", async () => {
-    const user = userEvent.setup();
-    draw();
-    const box = await screen.findByRole("textbox", { name: "Your message" });
-    await user.type(box, "Halo");
-    await user.click(screen.getByRole("button", { name: "Send" }));
-
-    expect(
-      await screen.findByText("Halo kak! Ada yang bisa dibantu? 😊"),
-    ).toBeInTheDocument();
-    expect(simulate).toHaveBeenCalledWith([{ role: "user", text: "Halo" }], []);
-    const bubble = screen.getByTestId("sim-bot-bubble");
-    expect(bubble).toHaveTextContent("AI cost: $0.0042");
-    expect(bubble).toHaveTextContent("2.3 s");
-    expect(bubble).toHaveTextContent("Would attach photos: ph-1");
-
-    // The steps are folded shut until asked for.
-    expect(bubble).not.toHaveTextContent("find_units");
-    await user.click(within(bubble).getByRole("button", { name: /2 steps/ }));
-    expect(bubble).toHaveTextContent(
-      "Operations · claude-haiku-4-5 · find_units · 400 ms",
-    );
-
-    // The second message carries the first exchange with it.
-    await user.type(box, "Air M2 ada?{Enter}");
-    await waitFor(() =>
-      expect(simulate).toHaveBeenLastCalledWith(
-        [
-          { role: "user", text: "Halo" },
-          { role: "assistant", text: RESULT.reply },
-          { role: "user", text: "Air M2 ada?" },
-        ],
-        [],
-      ),
-    );
-
-    // Start over clears it.
-    await user.click(screen.getByRole("button", { name: "Start over" }));
-    await waitFor(() =>
-      expect(screen.queryByTestId("sim-bot-bubble")).not.toBeInTheDocument(),
-    );
-  });
-
-  it("says the bot has no credential on a 503", async () => {
-    simulate.mockRejectedValueOnce(
-      new ApiRequestError(503, {
-        code: "AGEN_NONAKTIF",
-        message: "Agen tidak aktif.",
-      }),
-    );
-    const user = userEvent.setup();
-    draw();
-    await user.type(
-      await screen.findByRole("textbox", { name: "Your message" }),
-      "Halo{Enter}",
-    );
-    // Not the only alert on the tab: the WhatsApp card's warning is one too.
+    expect(activatePersona).toHaveBeenCalledWith("p2");
     await waitFor(() =>
       expect(
-        screen
-          .getAllByRole("alert")
-          .some((a) => /no Claude credential/.test(a.textContent ?? "")),
-      ).toBe(true),
+        within(row("Lebih santai")).getByText("In use"),
+      ).toBeInTheDocument(),
     );
+    await user.click(
+      within(row("Sales Advisor")).getByRole("button", { name: "Delete" }),
+    );
+    // The confirm's own Delete is the last one on the page.
+    const confirm = await screen.findByText("Delete this prompt?");
+    expect(confirm).toBeInTheDocument();
+    const deletes = screen.getAllByRole("button", { name: "Delete" });
+    await user.click(deletes[deletes.length - 1]!);
+    await waitFor(() => expect(deletePersona).toHaveBeenCalledWith("p1"));
   });
 });
 
-describe("without a credential the rules answer (2026-10-21)", () => {
-  it("shows the agent's rules job, and when no AI was used", async () => {
-    pipeline = "rules";
-    simulate.mockImplementation(async () => ({
-      ...RESULT,
-      reply:
-        "Ada kak 😊 Ini yang ready:\n1. MacBook Air M2 8/256, grade A — Rp 11.900.000",
-      photos: [],
-      costMicros: 0,
-      pipeline: "rules",
-      shown: ["SER1"],
-      usedAi: false,
-    }));
+describe("model and usage", () => {
+  it("shows what the bot runs on and what it did, and changes the model", async () => {
+    draw();
+    const c = await card("Model & usage");
+    expect(await within(c).findByText("Last 7 days")).toBeInTheDocument();
+    expect(within(c).getByText("US$ 0.42")).toBeInTheDocument();
+    expect(within(c).getByText("Haiku 4.5")).toBeInTheDocument();
+  });
+});
+
+describe("numbers with names", () => {
+  it("lists an alert number with its name and adds a tester with one", async () => {
     const user = userEvent.setup();
     draw();
-
-    expect(
-      await screen.findByText("Templates; AI only for what no rule covers."),
-    ).toBeInTheDocument();
-
-    const box = await screen.findByRole("textbox", { name: "Your message" });
-    await user.type(box, "ada air m2?{Enter}");
-    const bubble = await screen.findByTestId("sim-bot-bubble");
-    expect(bubble).toHaveTextContent("No AI used");
-    expect(bubble).not.toHaveTextContent("AI cost");
-
-    // The next message carries what the bot showed, so "yang pertama" works.
-    await user.type(box, "yang pertama berapa?{Enter}");
+    const alerts = await card("WhatsApp alerts to staff");
+    expect(await within(alerts).findByText("Dina")).toBeInTheDocument();
+    expect(within(alerts).getByText("628123456789")).toBeInTheDocument();
+    const testers = await card("Tester numbers");
+    await user.click(within(testers).getByRole("button", { name: "Add" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText("Name"), "Rina");
+    await user.type(within(dialog).getByLabelText("Number"), "081299998888");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() =>
-      expect(simulate).toHaveBeenLastCalledWith(expect.any(Array), ["SER1"]),
+      expect(setNumberList).toHaveBeenCalledWith("/api/chat/testers", [
+        { number: "081299998888", name: "Rina" },
+      ]),
     );
-    simulate.mockImplementation(async () => RESULT);
   });
 });

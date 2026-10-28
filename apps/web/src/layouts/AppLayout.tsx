@@ -50,6 +50,7 @@ import { useTranslation } from "react-i18next";
 import { matchLeaf, navSectionsFor } from "./navigation.js";
 import { NavBadge } from "./NavBadge.js";
 import { ChatWaitingBell } from "./ChatWaitingBell.js";
+import { ChatHealthNotice } from "./ChatHealthNotice.js";
 import { useLayoutMode } from "./useLayoutMode.js";
 import { ScannerChip } from "../components/ScannerChip.js";
 import { BrandMark } from "../components/BrandMark.js";
@@ -706,6 +707,7 @@ export function AppLayout({ staff }: { staff: Staff }) {
                 somebody presses in a hurry, so it sits where the hand already
                 is rather than at the end of a scrolling list. */}
             {/* Chats waiting for a person, on every page (2026-10-28). */}
+            <ChatHealthNotice rail={railed} />
             <ChatWaitingBell rail={railed} />
             {newTransactionButton(railed)}
             {/* The chip is a phrase — "Scanner ready" — and a rail has no
@@ -813,6 +815,7 @@ export function AppLayout({ staff }: { staff: Staff }) {
               />
               {brand}
               <ScannerChip />
+              <ChatHealthNotice rail />
               <ChatWaitingBell rail />
             </Flex>
           </Layout.Header>

@@ -126,6 +126,9 @@ export {
   loadNotifyNumbers,
   NOTIFY_SETTING_KEY,
   parseTesters,
+  parseNumberEntries,
+  formatNumberEntries,
+  type NumberEntry,
   resetPointFor,
   resetPointsFor,
   forgetProfile,
@@ -348,3 +351,10 @@ export {
   type ReplyRow,
 } from "./liveness.js";
 export { POS_PUBLIC_URL, staffAlertText } from "./staffAlert.js";
+export {
+  CHATBOT_MODELS,
+  MODEL_SETTING_KEY,
+  chatbotModelOf,
+  loadChatbotModel,
+  type ChatbotModel,
+} from "./chatModel.js";

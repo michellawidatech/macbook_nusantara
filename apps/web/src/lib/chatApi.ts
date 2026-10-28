@@ -102,6 +102,70 @@ export const activatePersona = (id: string) =>
     { method: "POST", body: {} },
   );
 
+/** Delete a prompt nobody uses (owner, 2026-10-28). */
+export const deletePersona = (id: string) =>
+  api<{ deleted: string }>(`/api/chat/personas/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+
+/** A number on the testers or alert list, with the name beside it. */
+export interface NumberEntry {
+  waId: string;
+  name: string;
+}
+export type NumberListPath = "/api/chat/testers" | "/api/chat/notify-numbers";
+export const getNumberList = (path: NumberListPath) =>
+  api<{ numbers: string[]; entries: NumberEntry[] }>(path);
+export const setNumberList = (
+  path: NumberListPath,
+  entries: ReadonlyArray<{ number: string; name: string }>,
+) =>
+  api<{ numbers: string[]; entries: NumberEntry[] }>(path, {
+    method: "PUT",
+    body: { entries },
+  });
+
+/** The models the bot may run on, and which one it does (2026-10-28). */
+export interface ChatbotModelOption {
+  id: string;
+  label: string;
+  worksWithSetupToken: boolean;
+}
+export interface ChatModelState {
+  model: string | null;
+  envModel: string | null;
+  models: ChatbotModelOption[];
+}
+export const getChatModel = () => api<ChatModelState>("/api/chat/model");
+export const setChatModel = (model: string | null) =>
+  api<ChatModelState>("/api/chat/model", { method: "PUT", body: { model } });
+
+/** What the bot did and cost, last 7 and 30 days. */
+export interface ChatUsageWindow {
+  days: number;
+  replies: number;
+  byAi: number;
+  byTemplates: number;
+  handovers: number;
+  inputTokens: number;
+  cachedTokens: number;
+  outputTokens: number;
+  costUsd: number;
+}
+export const getChatUsage = () =>
+  api<{ windows: ChatUsageWindow[] }>("/api/chat/usage");
+
+/** Is the chatbot working? (2026-10-28) */
+export interface ChatHealth {
+  ok: boolean;
+  problems: Array<{
+    code: "BOT_STALE" | "OUTBOX_STUCK" | "WA_DISCONNECTED";
+    minutes?: number;
+  }>;
+  checkedAt: string;
+}
+export const getChatHealth = () => api<ChatHealth>("/api/inbox/health");
+
 export const listCorrections = () =>
   api<{ corrections: StoredCorrection[] }>("/api/chat/corrections");
 
