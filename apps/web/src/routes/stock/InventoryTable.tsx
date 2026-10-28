@@ -51,6 +51,7 @@
  * because a listing is one price.
  */
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { ListingLinksModal } from "./ListingLinksModal";
 import { SerialLink } from "../../components/SerialLink";
 import {
   App,
@@ -70,6 +71,7 @@ import {
   QuestionCircleOutlined,
   RollbackOutlined,
   TagsOutlined,
+  LinkOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
@@ -186,6 +188,11 @@ export function InventoryTable({ extra }: InventoryTableProps) {
   } | null>(null);
   /** The unit being corrected, or null (owner ask 2026-09-23). */
   const [editingUnit, setEditingUnit] = useState<Unit | null>(null);
+  /** The variant whose marketplace links are being edited (2026-10-28). */
+  const [linking, setLinking] = useState<{
+    readonly skuId: string;
+    readonly title: string;
+  } | null>(null);
   /** The unit the Send-to-service dialog is open on (2026-10-26). */
   const [servicing, setServicing] = useState<string | null>(null);
   /** The unit the Return-to-supplier dialog is open on (2026-10-26). */
@@ -1090,6 +1097,21 @@ export function InventoryTable({ extra }: InventoryTableProps) {
                   >
                     {t("inventory.printBarcode", "Print barcode")}
                   </Button>
+                  <Button
+                    size="small"
+                    icon={<LinkOutlined />}
+                    aria-label={t(
+                      "inventory.listingLinksFor",
+                      "Listing links for {{what}}",
+                      { what: lineTitle(l) },
+                    )}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setLinking({ skuId: l.skuId, title: lineTitle(l) });
+                    }}
+                  >
+                    {t("inventory.listingLinks", "Listing links")}
+                  </Button>
                 </Flex>
               ),
             },
@@ -1106,6 +1128,12 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       <SupplierReturnModal
         serial={returning}
         onClose={() => setReturning(null)}
+      />
+
+      <ListingLinksModal
+        skuId={linking?.skuId ?? null}
+        title={linking?.title ?? ""}
+        onClose={() => setLinking(null)}
       />
 
       <UnitEditModal

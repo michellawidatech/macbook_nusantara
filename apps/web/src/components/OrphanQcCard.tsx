@@ -51,6 +51,7 @@ import { EditableTable } from "./EditableTable";
 import { CheckOutlined, StopOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { GradeTag } from "./GradeTag";
+import { NeverServicedField } from "./NeverServicedField";
 import { GRADES } from "../lib/grading.js";
 import { fmtNone } from "../lib/format.js";
 import { joinDescription, splitDescription } from "../lib/inboundQc.js";
@@ -119,6 +120,15 @@ export function OrphanQcCard() {
         type: "DICATAT",
         note: grade === undefined ? "Marked second-hand" : `Graded ${grade}`,
       });
+    });
+
+  /** "Never serviced / opened" (2026-10-28), written as it is answered. */
+  const setServiced = (serial: string, next: boolean | undefined) =>
+    mutate((d) => {
+      const u = d.units.find((x) => x.serial === serial);
+      if (!u) return;
+      if (next === undefined) delete u.neverServiced;
+      else u.neverServiced = next;
     });
 
   /**
@@ -311,6 +321,16 @@ export function OrphanQcCard() {
                 />
               );
             },
+          },
+          {
+            title: t("qc.neverServiced", "Never serviced / opened"),
+            width: 236,
+            render: (_, u) => (
+              <NeverServicedField
+                value={u.neverServiced}
+                onChange={(next) => setServiced(u.serial, next)}
+              />
+            ),
           },
           {
             title: t("orphanQc.grade", "Grade"),

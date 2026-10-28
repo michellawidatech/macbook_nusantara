@@ -4932,6 +4932,21 @@ export const id: Record<string, string> = {
     "Sebagian penjualan ini dibayar dengan DP reservasi.",
   // Reservation requests the bot files from a chat (2026-10-27).
   "nav.reservationRequests": "{{count}} permintaan reservasi menunggu",
+  "qc.neverServiced": "Belum pernah servis / dibongkar",
+  "qc.neverServicedYes": "Belum pernah",
+  "qc.neverServicedNo": "Pernah servis",
+  "qc.neverServicedUnknown": "Belum dicek",
+  "listing.shopee": "Shopee",
+  "listing.placeholder": "https://…",
+  "listing.tokopedia": "Tokopedia",
+  "listing.instagram": "Instagram",
+  "listing.title": "Link marketplace — {{what}}",
+  "listing.appliesToVariant":
+    "Link ini milik varian, jadi semua grade dan gudang varian ini memakainya.",
+  "listing.needsHttps": "Link harus diawali https://",
+  "listing.tooLong": "Link maksimal 500 karakter.",
+  "inventory.listingLinks": "Link marketplace",
+  "inventory.listingLinksFor": "Link marketplace untuk {{what}}",
   "requests.approve": "Setujui",
   "requests.placeNote":
     "Alamat tidak disertakan kalau sudah pernah dikirim di chat ini.",

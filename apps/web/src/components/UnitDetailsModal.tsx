@@ -63,6 +63,8 @@ export interface UnitDetailsModalProps<R extends UnitDetailRow> {
   readonly grade: (row: R) => ReactNode;
   readonly battery: (row: R) => ReactNode;
   readonly description: (row: R) => ReactNode;
+  /** "Never serviced / opened" (2026-10-28). Omitted where it is not asked. */
+  readonly serviced?: (row: R) => ReactNode;
   readonly sellPrice: (row: R) => ReactNode;
   /** The row's own buttons — decisions, photos. Omitted where there are none. */
   readonly actions?: (row: R) => ReactNode;
@@ -88,6 +90,7 @@ export function UnitDetailsModal<R extends UnitDetailRow>({
   grade,
   battery,
   description,
+  serviced,
   sellPrice,
   actions,
   actionsWidth = COLUMN.actionsPair,
@@ -138,6 +141,16 @@ export function UnitDetailsModal<R extends UnitDetailRow>({
       width: 240,
       render: (_: unknown, r: R) => description(r),
     },
+    ...(serviced
+      ? [
+          {
+            title: t("qc.neverServiced", "Never serviced / opened"),
+            key: "serviced",
+            width: 236,
+            render: (_: unknown, r: R) => serviced(r),
+          },
+        ]
+      : []),
     {
       title: t("inbound.sellPrice", "Sell price"),
       key: "sell",

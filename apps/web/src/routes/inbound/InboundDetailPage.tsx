@@ -44,6 +44,10 @@
  * The first serial read against the order marks it arrived.
  */
 import {
+  NeverServicedField,
+  NeverServicedText,
+} from "../../components/NeverServicedField";
+import {
   useEffect,
   useMemo,
   useRef,
@@ -317,6 +321,8 @@ interface QcDraft {
   readonly grade?: string;
   readonly battery?: BatteryDraft;
   readonly description?: readonly string[];
+  /** "Never serviced / opened" (2026-10-28); absent = not answered. */
+  readonly neverServiced?: boolean;
   readonly photos?: readonly { readonly id: string; readonly url: string }[];
 }
 
@@ -759,6 +765,7 @@ export function InboundDetailPage() {
         qc.description.map((p) => ensureQcDescription(d, p)).filter(Boolean),
       );
     }
+    if (qc.neverServiced !== undefined) u.neverServiced = qc.neverServiced;
     for (const photo of qc.photos ?? []) addQcPhoto(d, serial, photo.url);
     if (qc.grade !== undefined) {
       u.grade = qc.grade;
@@ -1390,6 +1397,18 @@ export function InboundDetailPage() {
       u.description = joinDescription(
         parts.map((p) => ensureQcDescription(d, p)).filter(Boolean),
       );
+    });
+  };
+
+  /** "Never serviced / opened" — on the unit, or held for the row. */
+  const commitServiced = (r: ReceivingRow, next: boolean | undefined) => {
+    if (!r.unit) return holdQc(r.key, { neverServiced: next });
+    const serial = r.unit.serial;
+    mutate((d) => {
+      const u = d.units.find((x) => x.serial === serial);
+      if (!u) return;
+      if (next === undefined) delete u.neverServiced;
+      else u.neverServiced = next;
     });
   };
 
@@ -2800,6 +2819,20 @@ export function InboundDetailPage() {
     );
   };
 
+  const servicedCell = (r: ReceivingRow) => {
+    if (r.notArrived) return none;
+    const value = r.unit
+      ? r.unit.neverServiced
+      : qcDrafts[r.key]?.neverServiced;
+    if (!rowOpen(r)) return <NeverServicedText value={value} />;
+    return (
+      <NeverServicedField
+        value={value}
+        onChange={(next) => commitServiced(r, next)}
+      />
+    );
+  };
+
   /**
    * The grade, picked by hand (owner brief 2026-09-19: *"Grade (manual drop
    * down)"*) — and the condition with it: *New* is sealed stock, a letter is
@@ -3211,6 +3244,7 @@ export function InboundDetailPage() {
       grade={({ row }) => gradeCell(row)}
       battery={({ row }) => batteryCell(row)}
       description={({ row }) => descriptionCell(row)}
+      serviced={({ row }) => servicedCell(row)}
       sellPrice={({ row }) => sellCell(row)}
       actions={({ row }) => actionsCell(row)}
       actionsWidth={UNIT_ACTIONS_WIDTH}

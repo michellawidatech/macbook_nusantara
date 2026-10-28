@@ -14,6 +14,7 @@
  * belong to the same unit — and refuses every other change to a ledger row.
  */
 import { useEffect, useState } from "react";
+import { NeverServicedField } from "../../components/NeverServicedField";
 import { App, Flex, Form, Input, Modal, Select } from "antd";
 import { useTranslation } from "react-i18next";
 import { BatteryFields } from "../../components/BatteryFields";
@@ -48,6 +49,9 @@ export function UnitEditModal({ open, unit, onClose }: UnitEditModalProps) {
   const [rackId, setRackId] = useState<string | undefined>(undefined);
   const [description, setDescription] = useState("");
   const [buy, setBuy] = useState<number>(0);
+  const [neverServiced, setNeverServiced] = useState<boolean | undefined>(
+    undefined,
+  );
 
   useEffect(() => {
     if (!open || unit === null) return;
@@ -58,6 +62,7 @@ export function UnitEditModal({ open, unit, onClose }: UnitEditModalProps) {
     setRackId(unit.rackId);
     setDescription(unit.description ?? "");
     setBuy(unit.buy ?? 0);
+    setNeverServiced(unit.neverServiced);
   }, [open, unit?.serial]);
 
   const mode =
@@ -100,6 +105,8 @@ export function UnitEditModal({ open, unit, onClose }: UnitEditModalProps) {
       u.cycleCount = battery.cycleCount ?? undefined;
       u.fcc = battery.fcc ?? undefined;
       u.description = description.trim();
+      if (neverServiced === undefined) delete u.neverServiced;
+      else u.neverServiced = neverServiced;
       u.buy = buy;
       u.rackId = rackId;
       if (where !== "" && where !== u.locationId) {
@@ -216,6 +223,13 @@ export function UnitEditModal({ open, unit, onClose }: UnitEditModalProps) {
             rows={2}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
+          />
+        </Form.Item>
+
+        <Form.Item label={t("qc.neverServiced", "Never serviced / opened")}>
+          <NeverServicedField
+            value={neverServiced}
+            onChange={setNeverServiced}
           />
         </Form.Item>
 
