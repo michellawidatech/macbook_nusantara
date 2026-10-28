@@ -45,19 +45,17 @@ describe("a unit, said the way the counter says it", () => {
   it("never prints a grade letter or a spec dump in a recommendation", () => {
     const text = reply.recommend(
       {
-        best: AIR,
-        cheaper: {
-          ...AIR,
-          model: "MacBook Air M1",
-          grade: "B",
-          price: "Rp 8.000.000",
-        },
+        best: { ...AIR, grade: "C", price: "Rp 9.500.000" },
+        otherGrades: [
+          { ...AIR, grade: "B", price: "Rp 10.500.000" },
+          { ...AIR, grade: "A", price: "Rp 11.900.000" },
+        ],
         stepUp: null,
       },
       "id",
     );
     expect(text).toBe(
-      "Paling pas buat kakak Air M2 mulus, baterai 92%, 11,9jt 😊\nKalau mau lebih hemat, ada Air M1 ada lecet tipis, baterai 92%, 8jt.",
+      "Yang paling pas buat kakak Air M2 ada bekas pemakaian, baterai 92%, 9,5jt 😊\nKalau mau kondisi lain, ada juga yang ada lecet tipis 10,5jt dan yang mulus 11,9jt kak.",
     );
     expect(text).not.toMatch(/grade|·|GB|Rp /);
   });

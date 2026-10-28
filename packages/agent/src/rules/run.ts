@@ -40,6 +40,7 @@ import {
 import { costMicros } from "../agents.js";
 import { matchesFor, type KnowledgeBase } from "../knowledge.js";
 import {
+  asksBuyOnline,
   dpKeepLine,
   effectiveCapabilities,
   holdingMessage,
@@ -56,7 +57,7 @@ import {
   reply,
   unitLine,
   type Lang,
-  type NextStep,
+  type Platform,
   type ShownAccessory,
   type ShownUnit,
 } from "./replies.js";
@@ -213,6 +214,24 @@ const accessoryIn = (o: Record<string, unknown>): ShownAccessory | null => {
   const a = o["accessory"] as ShownAccessory | undefined;
   return a && typeof a.model === "string" ? a : null;
 };
+
+/** The marketplace a message names, for "bisa checkout di shopee?". */
+function platformIn(text: string): Platform | null {
+  if (/\bshopee\b/i.test(text)) return "shopee";
+  if (/\b(tokped|tokopedia)\b/i.test(text)) return "tokopedia";
+  if (/\b(ig|instagram)\b/i.test(text)) return "instagram";
+  return null;
+}
+
+/**
+ * Asking about a unit's condition — minus, dents, scratches, what is in the
+ * box, servicing (2026-10-28). The marks QC wrote are said only then.
+ */
+function asksCondition(text: string): boolean {
+  return /\b(minus(nya)?|kondisi(nya)?|lecet|dent|penyok|mulus\s*(gak|ga|nggak|ngga|kah)?\s*\?|kelengkapan(nya)?|lengkap\s*(gak|ga|nggak|kah)|fullset|pernah\s*(servis|service|bongkar|dibongkar)|(udah|sudah)\s*(pernah\s*)?(servis|service))\b/i.test(
+    text,
+  );
+}
 
 const unitsIn = (o: unknown, key = "units"): ShownUnit[] => {
   const list = (o as Record<string, unknown> | null)?.[key];
@@ -551,7 +570,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       );
       return done(
         r.keep && units.length > 0
-          ? `${noted}\n\n${dpKeepLine(input.dp)}`
+          ? `${noted}\n\n${dpKeepLine(input.dp)}\n${reply.dpAsk(lang)}`
           : noted,
         // The line asks the one thing that matters now: nothing more.
         { ask: false },
@@ -576,7 +595,12 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     );
   };
   /** The bot's last line was the DP rule: a time now completes a keep. */
-  const keepAsked = (input.lastReply ?? "").includes("amankan unitnya");
+  const keepAsked =
+    (input.lastReply ?? "").includes("amankan unitnya") ||
+    (input.lastReply ?? "").includes(
+      reply.keepWhen({ name: false, unit: false }, lang),
+    ) ||
+    (input.lastReply ?? "").includes("rencananya mau ke toko kapan");
 
   // --- 1. What the code already sends to a person --------------------------
   if (input.route) {
@@ -588,8 +612,15 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       if (!serial || !name || !u.when) {
         // Carried as "shown", so "besok jam 2" next files it for this unit.
         if (serial) shown.push(serial);
+        // The time first (owner, 2026-10-28: keep → when → DP → verify);
+        // the DP rule comes once the request is filed.
         return done(
-          `${reply.askForKeep({ unit: !serial, name: !name, when: !u.when }, lang)}\n\n${dpKeepLine(input.dp)}`,
+          u.when
+            ? reply.askForKeep(
+                { unit: !serial, name: !name, when: false },
+                lang,
+              )
+            : reply.keepWhen({ unit: !serial, name: !name }, lang),
           { ask: false },
         );
       }
@@ -681,41 +712,29 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
   const enough =
     (!lacks.usage || !lacks.budget) &&
     (u.query !== null || input.lastShown.length > 0);
+  // Needs are asked BEFORE the first recommendation and never tacked onto
+  // one after it (owner, 2026-10-28: "too forcing").
   const followUp = () =>
-    enough ? null : reply.nextQuestion(lacks, lang, input.lastReply ?? null);
+    enough || input.lastShown.length > 0
+      ? null
+      : reply.nextQuestion(lacks, lang, input.lastReply ?? null);
 
   /**
-   * The one small yes-question a recommendation ends on (2026-10-27), and
-   * never the same one twice running: see it → come and see it → let us get
-   * it moving.
+   * The photos of the unit a reply leads with, when the shop has some and
+   * the switch allows (owner, 2026-10-28: send them, never ask "mau lihat
+   * fotonya?"). Empty when there are none.
    */
-  const nextStep = (
-    after: "recommend" | "photos" | "price",
-    /**
-     * The units this reply names. "Mau lihat fotonya?" only when one of them
-     * has photos (owner's chat, 2026-10-27: offered for an iPad nobody had
-     * photographed) — otherwise the ladder starts at the visit.
-     */
-    units: ReadonlyArray<ShownUnit | null> = [],
-  ): string => {
-    const ladder: NextStep[] = [];
-    const pictured = units.some((x) => (x?.photos ?? 0) > 0);
-    if (after !== "photos" && caps.photos && pictured) ladder.push("photos");
-    if (caps.reserve && !input.visitBooked) ladder.push("visit");
-    ladder.push("process");
-    const last = input.lastReply ?? "";
-    const step =
-      ladder.find((s) => !last.includes(reply.nextStep(s, lang))) ??
-      ladder[ladder.length - 1]!;
-    return reply.nextStep(step, lang);
+  const photosOf = async (u: ShownUnit | null): Promise<string[]> => {
+    if (!u || !caps.photos || (u.photos ?? 0) === 0) return [];
+    const out = await call("unit_photos", { serial: u.serial });
+    return Array.isArray(out["photoIds"])
+      ? (out["photoIds"] as unknown[]).filter(
+          (x): x is string => typeof x === "string",
+        )
+      : [];
   };
   const join = (...parts: Array<string | null>) =>
     parts.filter((p): p is string => Boolean(p)).join("\n\n");
-
-  const priceOf = (x: ShownUnit): bigint | null => {
-    const d = typeof x.price === "string" ? x.price.replace(/\D/g, "") : "";
-    return d ? BigInt(d) : null;
-  };
 
   /**
    * A shelf search, answered as three: the best fit, a cheaper one and one
@@ -775,42 +794,29 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
           reply.alternatives(alternatives, lang),
           stepUp ? reply.stepUp(stepUp, lang) : null,
           accessory ? reply.accessory(accessory, lang) : null,
-          watchLine ?? nextStep("recommend", [...alternatives, stepUp]),
+          watchLine ?? reply.afterOffer(lang),
         ),
         { sources: ["stock"], ask: false, ...(watch ? { watch } : {}) },
       );
     }
+    // units[0] is the cheapest unit of the lowest grade of the variant that
+    // fits, and otherGrades the rest of that variant (owner, 2026-10-28).
     const best = units[0]!;
-    const bestPrice = priceOf(best);
-    // Cheaper: the dearest unit below the best fit that is a different
-    // variant or grade — a real alternative, not the same unit for less.
-    const cheaper =
-      bestPrice === null
-        ? null
-        : (units
-            .filter((x) => {
-              const p = priceOf(x);
-              return (
-                p !== null &&
-                p < bestPrice &&
-                `${x.model} ${x.variant} ${x.grade}` !==
-                  `${best.model} ${best.variant} ${best.grade}`
-              );
-            })
-            .sort((a, b) => {
-              const pa = priceOf(a)!;
-              const pb = priceOf(b)!;
-              return pa === pb ? 0 : pa > pb ? -1 : 1;
-            })[0] ?? null);
+    const otherGrades = unitsIn(out, "otherGrades");
     shown.push(best.serial);
-    if (cheaper) shown.push(cheaper.serial);
+    shown.push(...otherGrades.map((x) => x.serial));
     if (stepUp) shown.push(stepUp.serial);
+    const photos = await photosOf(best);
     return done(
       join(
-        reply.recommend({ best, cheaper, stepUp }, lang),
-        nextStep("recommend", [best, cheaper, stepUp]),
+        reply.recommend({ best, otherGrades, stepUp }, lang),
+        reply.afterOffer(lang),
       ),
-      { sources: ["stock"], ask: false },
+      {
+        sources: ["stock"],
+        ask: false,
+        ...(photos.length > 0 ? { photos } : {}),
+      },
     );
   };
 
@@ -830,6 +836,30 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
   }
 
   // --- 3. The intents rules can answer -------------------------------------
+  // --- 2c. How to buy / buy online, and the condition asked about ------------
+  // (owner, 2026-10-28) The variant's listing, and what QC wrote.
+  if (caps.stock && (asksBuyOnline(input.text) || asksCondition(input.text))) {
+    const serial = pickSerial() ?? input.lastShown[0] ?? null;
+    let unit: ShownUnit | null = null;
+    if (serial) {
+      const out = await call("check_serial", { serial });
+      if (out["found"] === true) unit = out as unknown as ShownUnit;
+    } else if (u.query) {
+      unit = unitsIn(await call("search_stock", { query: u.query }))[0] ?? null;
+    }
+    if (unit) shown.push(unit.serial);
+    if (asksBuyOnline(input.text))
+      return done(reply.buyOnline(unit?.links, platformIn(input.text), lang), {
+        ask: false,
+        ...(unit ? { sources: ["stock"] } : {}),
+      });
+    if (unit)
+      return done(reply.conditionDetail(unit, lang), {
+        ask: false,
+        sources: ["stock"],
+      });
+  }
+
   switch (u.intent) {
     case "greeting":
       // Mid-conversation with something waiting, "halo kak?" is a nudge,
@@ -919,7 +949,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
           ? (out as unknown as ShownUnit)
           : null;
       if (unit) shown.push(unit.serial);
-      return done(join(reply.photos(unit, lang), nextStep("photos")), {
+      return done(join(reply.photos(unit, lang), reply.afterOffer(lang)), {
         photos: ids,
         ask: false,
       });
@@ -961,7 +991,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
           return done(
             join(
               reply.price(out as unknown as ShownUnit, lang),
-              nextStep("price", [out as unknown as ShownUnit]),
+              reply.afterOffer(lang),
             ),
             { ask: false },
           );

@@ -180,7 +180,7 @@ describe("an answer to the bot's own question (owner's chat, 2026-10-27)", () =>
     ).result;
     expect(r?.handoff).toBeUndefined();
     expect(r?.reply).toBe(
-      "Oke kak, noted 😊 Mau aku cariin yang paling pas kak?",
+      "Okee kak, noted 😊 Mau aku cariin yang paling pas kak?",
     );
     expect(r?.sources).toEqual(["chat"]);
     expect(r?.reply).not.toBe(holdingMessage("other", true));
@@ -195,7 +195,7 @@ describe("an answer to the bot's own question (owner's chat, 2026-10-27)", () =>
     );
     const r = await t.result;
     expect(r?.handoff).toBeUndefined();
-    expect(r?.reply).toMatch(/^Oke kak, noted/);
+    expect(r?.reply).toMatch(/^Okee kak, noted/);
     expect(JSON.stringify(t.calls[3]!.messages)).toContain(
       "This is your last step",
     );
@@ -339,7 +339,11 @@ describe("photos are offered only where there are some (owner's chat, 2026-10-27
       openNow: true,
       capabilities: SHOP_CAPABILITIES,
     });
-    expect(stable).toContain("Offer photos ONLY for a unit whose");
+    // Since 2026-10-28 photos are SENT with a recommendation, never offered,
+    // and only for a unit whose photos is above 0.
+    expect(stable).toContain(
+      "(photos above 0), call unit_photos for it and SEND them",
+    );
     expect(stable).toContain("is never a hand-over");
   });
 });
@@ -384,7 +388,7 @@ describe("the rules bot (no credential)", () => {
       const p = pos({});
       const out = await runRules(base(text, p));
       expect(out.handoff).toBeUndefined();
-      expect(out.reply).toMatch(/^Oke kak, noted 😊/);
+      expect(out.reply).toMatch(/^Okee kak, noted 😊/);
       expect(p.asked[0]?.name).toBe("remember_customer");
     },
   );
@@ -405,18 +409,22 @@ describe("the rules bot (no credential)", () => {
     expect(out.handoff?.topic).toBe("other");
   });
 
-  it("ends a recommendation on the visit, not the photos, when the units have none", async () => {
+  it("sends the photos with a recommendation when there are some, and never asks (2026-10-28)", async () => {
+    const after =
+      "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita 😊";
     const p = pos({ search_stock: { matched: 1, units: [IPAD] } });
     const out = await runRules(base("ada ipad mini 2021?", p));
     expect(out.reply).not.toMatch(/foto/i);
-    expect(
-      out.reply.endsWith("Mau datang lihat langsung, kapan enaknya kak?"),
-    ).toBe(true);
+    expect(out.photos ?? []).toEqual([]);
+    expect(out.reply.endsWith(after)).toBe(true);
     const pictured = pos({
       search_stock: { matched: 1, units: [{ ...IPAD, photos: 2 }] },
+      unit_photos: { found: true, ...IPAD, photoIds: ["q1", "q2"] },
     });
     const out2 = await runRules(base("ada ipad mini 2021?", pictured));
-    expect(out2.reply.endsWith("Mau lihat fotonya kak?")).toBe(true);
+    expect(out2.photos).toEqual(["q1", "q2"]);
+    expect(out2.reply).not.toMatch(/mau lihat foto/i);
+    expect(out2.reply.endsWith(after)).toBe(true);
   });
 });
 

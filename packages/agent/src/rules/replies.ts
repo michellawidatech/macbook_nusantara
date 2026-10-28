@@ -21,9 +21,30 @@ export interface ShownUnit {
   readonly cycleCount?: number;
   /** Sellable units of this variant — the only source of "tinggal 1". */
   readonly left?: number;
-  /** The shop's own photos of it — the only reason to offer "Mau lihat fotonya?". */
+  /** The shop's own photos of it — sent with a recommendation when there are some. */
   readonly photos?: number;
+  /**
+   * QC's description, split (2026-10-28): faults are said upfront, marks only
+   * when the customer asks about the condition.
+   */
+  readonly condition?: {
+    readonly faults: readonly string[];
+    readonly marks: readonly string[];
+  };
+  /** "never" → "belum pernah servis"; "yes" is said only when asked. */
+  readonly serviced?: "never" | "yes";
+  /** The variant's listings — sent only when they ask how to buy online. */
+  readonly links?: {
+    readonly shopee?: string;
+    readonly tokopedia?: string;
+    readonly instagram?: string;
+  };
+  /** How many of this grade, on an `otherGrades` row. */
+  readonly count?: number;
 }
+
+/** Which marketplace a message names, if any. */
+export type Platform = "shopee" | "tokopedia" | "instagram";
 
 /** A counted accessory as the stock lookup returns it — no serial. */
 export interface ShownAccessory {
@@ -88,7 +109,7 @@ export function unitLine(
   u: ShownUnit,
   lang: Lang,
   n?: number,
-  opts: { readonly variant?: boolean } = {},
+  opts: { readonly variant?: boolean; readonly facts?: boolean } = {},
 ): string {
   const name = [
     shortName(u.model) || u.model,
@@ -107,7 +128,20 @@ export function unitLine(
         ? " (only 1 left)"
         : " (tinggal 1 unit kak)"
       : "";
-  return `${n !== undefined ? `${n}. ` : ""}${name}${condition ? ` ${condition}` : ""}${battery ? `, ${battery}` : ""}${price ? `, ${price}` : ""}${last}`;
+  // What QC wrote that the customer must hear before buying (2026-10-28):
+  // a fault, and that it has never been serviced. Only on a recommendation
+  // or a price — a booking read-back is not the place.
+  const facts = opts.facts
+    ? [
+        ...(u.condition?.faults ?? []).map((f) => f.toLowerCase()),
+        u.serviced === "never"
+          ? lang === "en"
+            ? "never serviced"
+            : "belum pernah servis"
+          : null,
+      ].filter(Boolean)
+    : [];
+  return `${n !== undefined ? `${n}. ` : ""}${name}${condition ? ` ${condition}` : ""}${battery ? `, ${battery}` : ""}${facts.length ? `, ${facts.join(", ")}` : ""}${price ? `, ${price}` : ""}${last}`;
 }
 
 /** Whether units shown together need their RAM/SSD to tell them apart. */
@@ -145,7 +179,7 @@ export const reply = {
 
   /** They told us about themselves; the next question follows. */
   noted(lang: Lang): string {
-    return lang === "en" ? "Got it, thanks 😊" : "Oke kak, noted 😊";
+    return lang === "en" ? "Got it, thanks 😊" : "Okee kak, noted 😊";
   },
 
   /** Nothing left to ask: offer to pick something out. */
@@ -177,36 +211,154 @@ export const reply = {
    * and ONE step up — each a unit the lookup returned. Any of the last two
    * may be absent.
    */
+  /**
+   * The offer (owner, 2026-10-28): the cheapest unit of the lowest grade
+   * first, the other grades of it in one line, then one step up — never a
+   * list, never a push.
+   */
   recommend(
     r: {
       readonly best: ShownUnit;
-      readonly cheaper: ShownUnit | null;
+      readonly otherGrades: readonly ShownUnit[];
       readonly stepUp: ShownUnit | null;
     },
     lang: Lang,
   ): string {
-    const v = { variant: variantsMatter([r.best, r.cheaper, r.stepUp]) };
+    const v = { variant: variantsMatter([r.best, r.stepUp]), facts: true };
+    const others = r.otherGrades
+      .map((g) => {
+        const words = g.grade
+          ? (CONDITION[g.grade]?.[lang] ?? `grade ${g.grade}`)
+          : null;
+        const price = g.price ? shortPrice(g.price) : null;
+        return [words, price].filter(Boolean).join(" ");
+      })
+      .filter(Boolean);
+    const list = (xs: readonly string[], and: string) =>
+      xs.length <= 1
+        ? (xs[0] ?? "")
+        : `${xs.slice(0, -1).join(", ")} ${and} ${xs[xs.length - 1]}`;
     const lines =
       lang === "en"
         ? [
-            `The best fit for you is the ${unitLine(r.best, lang, undefined, v)} 😊`,
-            r.cheaper
-              ? `To spend less: ${unitLine(r.cheaper, lang, undefined, v)}.`
+            `The most affordable fit is the ${unitLine(r.best, lang, undefined, v)} 😊`,
+            others.length
+              ? `In other conditions there's also ${list(others, "and")}.`
               : null,
             r.stepUp
               ? `For a bit more room: ${unitLine(r.stepUp, lang, undefined, v)}.`
               : null,
           ]
         : [
-            `Paling pas buat kakak ${unitLine(r.best, lang, undefined, v)} 😊`,
-            r.cheaper
-              ? `Kalau mau lebih hemat, ada ${unitLine(r.cheaper, lang, undefined, v)}.`
+            `Yang paling pas buat kakak ${unitLine(r.best, lang, undefined, v)} 😊`,
+            others.length
+              ? `Kalau mau kondisi lain, ada juga yang ${list(others, "dan yang")} kak.`
               : null,
             r.stepUp
               ? `Kalau mau lebih lega, ada juga ${unitLine(r.stepUp, lang, undefined, v)}.`
               : null,
           ];
     return lines.filter(Boolean).join("\n");
+  },
+
+  /**
+   * After a recommendation or its photos (owner, 2026-10-28): no "mau lihat
+   * fotonya?", no "kapan mau datang?" — leave room, and say the door is open.
+   */
+  afterOffer(lang: Lang): string {
+    return lang === "en"
+      ? "What do you think? You're also welcome to see it at our shop 😊"
+      : "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita 😊";
+  },
+
+  /** "Mau keep unit ini dong kak": first, when they plan to come. */
+  keepWhen(missing: { name: boolean; unit: boolean }, lang: Lang): string {
+    if (lang === "en")
+      return (
+        "Sure 😊 When are you planning to come by?" +
+        (missing.unit ? " And which unit is it?" : "") +
+        (missing.name ? " And whose name shall I put it under?" : "")
+      );
+    return (
+      "Siapp kak 😊 rencananya mau ke toko kapan kak?" +
+      (missing.unit ? " Sekalian unit yang mana ya." : "") +
+      (missing.name ? " Sekalian atas nama siapa ya." : "")
+    );
+  },
+
+  /** After the DP rule: the one question that moves a keep on. */
+  dpAsk(lang: Lang): string {
+    return lang === "en"
+      ? "Would you like to pay the DP now?"
+      : "Mau DP sekarang kak?";
+  },
+
+  /**
+   * How to buy, or to buy online (2026-10-28): the shop's own ways, and the
+   * variant's listing — the platform they named, else every one it has.
+   */
+  buyOnline(
+    links: ShownUnit["links"],
+    asked: Platform | null,
+    lang: Lang,
+  ): string {
+    const NAMES: Record<Platform, string> = {
+      shopee: "Shopee",
+      tokopedia: "Tokopedia",
+      instagram: "Instagram",
+    };
+    const all = (Object.keys(NAMES) as Platform[]).filter((p) => links?.[p]);
+    const pick = asked && links?.[asked] ? [asked] : all;
+    if (pick.length === 0)
+      return lang === "en"
+        ? "You can order it straight through this WhatsApp chat 😊"
+        : "Bisa order langsung lewat WA ini aja kak 😊";
+    const lines = pick.map((p) =>
+      pick.length === 1 ? links![p]! : `${NAMES[p]}: ${links![p]!}`,
+    );
+    const head =
+      pick.length === 1
+        ? lang === "en"
+          ? `Sure 😊 Here's the ${NAMES[pick[0]!]} link:`
+          : `Bisa kak 😊 Ini link ${NAMES[pick[0]!]}-nya:`
+        : lang === "en"
+          ? "Sure 😊 Here are the links:"
+          : "Bisa kak 😊 Ini linknya:";
+    const tail =
+      lang === "en"
+        ? "Or order it straight through this chat, or come to the shop 😊"
+        : "Bisa juga order lewat WA ini atau datang langsung ke toko ya kak 😊";
+    return `${head}\n${lines.join("\n")}\n${tail}`;
+  },
+
+  /**
+   * Asked about the condition (2026-10-28): everything QC wrote — marks and
+   * what is in the box included — and the servicing either way.
+   */
+  conditionDetail(u: ShownUnit, lang: Lang): string {
+    const words = [
+      ...(u.condition?.faults ?? []),
+      ...(u.condition?.marks ?? []),
+    ].map((w) => w.toLowerCase());
+    const serviced =
+      u.serviced === "never"
+        ? lang === "en"
+          ? "never serviced"
+          : "belum pernah servis"
+        : u.serviced === "yes"
+          ? lang === "en"
+            ? "it has been serviced"
+            : "sudah pernah servis"
+          : null;
+    const all = [...words, ...(serviced ? [serviced] : [])];
+    const name = unitLine(u, lang, undefined, { variant: false });
+    if (all.length === 0)
+      return lang === "en"
+        ? `The ${name} 😊 Nothing else was noted at QC.`
+        : `${name} kak 😊 Gak ada catatan lain dari QC.`;
+    return lang === "en"
+      ? `The ${name}: ${all.join(", ")} 😊`
+      : `${name}: ${all.join(", ")} kak 😊`;
   },
 
   /**
@@ -315,12 +467,12 @@ export const reply = {
 
   price(u: ShownUnit, lang: Lang): string {
     return lang === "en"
-      ? `That's the ${unitLine(u, lang)} 😊`
-      : `Yang ini ${unitLine(u, lang)} kak 😊`;
+      ? `That's the ${unitLine(u, lang, undefined, { facts: true })} 😊`
+      : `Yang ini ${unitLine(u, lang, undefined, { facts: true })} kak 😊`;
   },
 
   photos(u: ShownUnit | null, lang: Lang): string {
-    const what = u ? unitLine(u, lang) : null;
+    const what = u ? unitLine(u, lang, undefined, { facts: true }) : null;
     return lang === "en"
       ? `Here are the photos${what ? `, ${what}` : ""} 😊`
       : `Ini fotonya kak${what ? `, ${what}` : ""} 😊`;
