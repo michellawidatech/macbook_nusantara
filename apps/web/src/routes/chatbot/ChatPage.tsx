@@ -396,7 +396,9 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
         side: "out",
         text: x.body ?? "",
         at: x.sentAt ?? x.createdAt,
-        byAgent: false,
+        // A line the worker sent that a later reply took off its message's
+        // row is still the bot's (2026-10-28).
+        byAgent: x.fromBot === true,
         by: null,
         evaluation: null,
         waiting: false,

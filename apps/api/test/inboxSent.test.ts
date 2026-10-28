@@ -332,6 +332,40 @@ describe("the conversation carries what was sent", () => {
   });
 });
 
+describe("every bubble names who sent it (2026-10-28)", () => {
+  it("keeps the name on a staff reply a later one replaced, and marks the worker's as the bot's", async () => {
+    const worker = await sent({ body: "Halo kak 😊" });
+    for (const text of ["Bentar ya kak", "Ada kak, 15,5jt"])
+      await request(app)
+        .post(`/api/inbox/${PHONE}/reply`)
+        .set("Cookie", cookie)
+        .send({ text })
+        .expect(201);
+    const res = await request(app)
+      .get(`/api/inbox/${PHONE}`)
+      .set("Cookie", cookie)
+      .expect(200);
+    const items = res.body.sent as Array<Record<string, unknown>>;
+    const byBody = new Map(items.map((i) => [i["body"], i]));
+    const staffName = (
+      await db.staff.findFirstOrThrow({ where: { username: "sent-test" } })
+    ).name;
+    // The first reply is no longer the message's replyText, and still says who.
+    expect(byBody.get("Bentar ya kak")).toMatchObject({
+      sentBy: staffName,
+      fromBot: false,
+    });
+    expect(byBody.get("Ada kak, 15,5jt")).toMatchObject({
+      sentBy: staffName,
+      fromBot: false,
+    });
+    expect(items.find((i) => i["id"] === worker)).toMatchObject({
+      sentBy: null,
+      fromBot: true,
+    });
+  });
+});
+
 describe("unsend", () => {
   it("needs a session", async () => {
     const id = await sent({});

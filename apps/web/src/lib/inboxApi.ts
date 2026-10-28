@@ -118,8 +118,10 @@ export interface SentItem {
   chatMediaId?: string;
   /** The line sent under a picture, when there was one. */
   caption?: string;
-  /** Who sent a picture from their own device. */
+  /** Who sent it — the staff member's name (2026-10-28). */
   sentBy?: string | null;
+  /** Queued by the worker, not by a person: drawn as the Bot. */
+  fromBot?: boolean;
   /** The message it answered. */
   inReplyTo: string | null;
   /**

@@ -173,6 +173,7 @@ interface SentRow {
   providerMessageId: string | null;
   retractedAt: Date | null;
   editedAt: Date | null;
+  requestId: string | null;
 }
 
 const SENT_SELECT = {
@@ -185,6 +186,7 @@ const SENT_SELECT = {
   providerMessageId: true,
   retractedAt: true,
   editedAt: true,
+  requestId: true,
 } as const;
 
 /** The payload's fields, read rather than cast — it is a JSON column. */
@@ -258,8 +260,10 @@ export interface SentItemJson {
   chatMediaId?: string;
   /** WA_IMAGE: the line sent under it, when there was one. */
   caption?: string;
-  /** Who sent a picture from their own device — the `ChatMedia` uploader. */
+  /** Who sent it: the `ChatMedia` uploader, or the staff on its audit line. */
   sentBy?: string | null;
+  /** Queued by the worker (no staff, no request) — drawn as the Bot. */
+  fromBot: boolean;
   /** The `WaMessage.id` it answered, when the writer recorded one. */
   inReplyTo: string | null;
   /**
@@ -289,8 +293,11 @@ export interface SentAttribution {
 }
 
 /**
- * Who uploaded each picture the rows name, by outbox id — read off
- * `ChatMedia.uploadedBy`, never the bytes.
+ * Who sent each row, by outbox id (2026-10-28: *"in each message that are
+ * sent to user by admin in POS we should give it a name in each bubble"*).
+ * A picture from staff's own device names its `ChatMedia` uploader; anything
+ * else names the staff member on its `Outbox` CREATE audit line, which every
+ * staff send writes (`recordSender`). A row with neither stays unnamed.
  */
 export async function uploadersFor(
   db: PrismaClient,
@@ -302,13 +309,56 @@ export async function uploadersFor(
     if (id) byMedia.set(id, r.id);
   }
   const out = new Map<string, string>();
-  if (byMedia.size === 0) return out;
-  const media = await db.chatMedia.findMany({
-    where: { id: { in: [...byMedia.keys()] } },
-    select: { id: true, uploadedBy: { select: { name: true } } },
-  });
+  if (rows.length === 0) return out;
+  const [media, created] = await Promise.all([
+    byMedia.size === 0
+      ? Promise.resolve([])
+      : db.chatMedia.findMany({
+          where: { id: { in: [...byMedia.keys()] } },
+          select: { id: true, uploadedBy: { select: { name: true } } },
+        }),
+    db.auditLog.findMany({
+      where: {
+        entity: "Outbox",
+        action: "CREATE",
+        entityId: { in: rows.map((r) => r.id) },
+      },
+      select: { entityId: true, staff: { select: { name: true } } },
+    }),
+  ]);
+  for (const a of created) if (a.staff?.name) out.set(a.entityId, a.staff.name);
   for (const m of media) out.set(byMedia.get(m.id)!, m.uploadedBy.name);
   return out;
+}
+
+/**
+ * The audit line that names who sent an outbox row (2026-10-28), written in
+ * the same transaction as the row — the picture route's pattern.
+ */
+export async function recordSender(
+  tx: Prisma.TransactionClient,
+  input: {
+    readonly staffId: string;
+    readonly outboxId: string;
+    readonly after: Record<string, unknown>;
+    readonly requestId: string | null;
+    readonly ip: string | null;
+  },
+): Promise<void> {
+  await tx.auditLog.create({
+    data: {
+      at: new Date(),
+      staffId: input.staffId,
+      entity: "Outbox",
+      entityId: input.outboxId,
+      action: "CREATE",
+      field: null,
+      before: null,
+      after: JSON.stringify(input.after),
+      requestId: input.requestId,
+      ip: input.ip,
+    },
+  });
 }
 
 /**
@@ -365,8 +415,12 @@ function sentJson(
       ? { photoId: p.photoId }
       : {}),
     ...(row.kind === "WA_IMAGE" && p.chatMediaId !== null
-      ? { chatMediaId: p.chatMediaId, sentBy: who?.sentBy ?? null }
+      ? { chatMediaId: p.chatMediaId }
       : {}),
+    // Every bubble names its sender (2026-10-28). A row nobody signed for
+    // and that no request queued is the worker's — the bot's.
+    sentBy: who?.sentBy ?? null,
+    fromBot: !who?.sentBy && row.requestId === null,
     ...(row.kind === "WA_IMAGE" && p.caption ? { caption: p.caption } : {}),
     inReplyTo: p.inReplyTo,
     ...(p.followUp ? { followUp: p.followUp } : {}),

@@ -281,3 +281,32 @@ describe("the ⋯ menu on a sent bubble", () => {
     expect(line.parentElement).toHaveTextContent(/Edited by Budi · /);
   });
 });
+
+describe("every bubble names who sent it (2026-10-28)", () => {
+  it("names the staff member on an earlier reply, and draws the worker's as the bot", async () => {
+    conversation = baseConversation([
+      sentItem({ body: BOT_TEXT }),
+      sentItem({
+        id: "ob4",
+        body: "Bentar ya kak, aku cek dulu",
+        sentAt: "2026-10-23T03:30:40.000Z",
+        sentBy: "Dina",
+        fromBot: false,
+      }),
+      sentItem({
+        id: "ob5",
+        body: "Halo lagi kak 😊",
+        sentAt: "2026-10-23T03:30:50.000Z",
+        sentBy: null,
+        fromBot: true,
+      }),
+    ]);
+    draw();
+    const staffLine = await screen.findByText("Bentar ya kak, aku cek dulu");
+    expect(staffLine.closest("div")?.parentElement).toHaveTextContent(
+      /Sent by Dina/,
+    );
+    const botLine = await screen.findByText("Halo lagi kak 😊");
+    expect(botLine.closest("[data-testid='bot-bubble']")).not.toBeNull();
+  });
+});

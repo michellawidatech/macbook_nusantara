@@ -73,6 +73,7 @@ import {
   stockWatchesFor,
 } from "./inboxV2.js";
 import {
+  recordSender,
   registerInboxSent,
   replyOutboxIds,
   sentItemsFor,
@@ -875,7 +876,7 @@ export function inboxRouter(
           },
         });
 
-        await enqueueOutbox(tx, {
+        const queued = await enqueueOutbox(tx, {
           kind: "WA_REPLY",
           payload: {
             to: phone.data,
@@ -885,6 +886,15 @@ export function inboxRouter(
           // 05 §3: the same rid the request logged under, so a disputed
           // send can be traced back to the person who pressed Send.
           requestId: currentRequestId() ?? null,
+        });
+        // Who sent it, so its bubble keeps the name after a later reply
+        // to the same message takes the row's `replyText` (2026-10-28).
+        await recordSender(tx, {
+          staffId: staff.id,
+          outboxId: queued.id,
+          after: { to: phone.data, text: parsed.data.text },
+          requestId: currentRequestId() ?? null,
+          ip: req.ip ?? null,
         });
 
         return updated;
@@ -1042,7 +1052,7 @@ export function inboxRouter(
             answeredAt: now,
           },
         });
-        await enqueueOutbox(tx, {
+        const queued = await enqueueOutbox(tx, {
           kind: "WA_REPLY",
           payload: {
             to: phone.data,
@@ -1050,6 +1060,13 @@ export function inboxRouter(
             inReplyTo: latest.id,
           },
           requestId: currentRequestId() ?? null,
+        });
+        await recordSender(tx, {
+          staffId: staff.id,
+          outboxId: queued.id,
+          after: { to: phone.data, text: parsed.data.text },
+          requestId: currentRequestId() ?? null,
+          ip: req.ip ?? null,
         });
       });
       res.status(201).json({ id: action.id, status: "QUEUED" });

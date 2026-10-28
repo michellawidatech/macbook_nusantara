@@ -21,6 +21,8 @@ import {
   visibleProfile,
 } from "@nusantara/agent";
 import { realName } from "@nusantara/domain";
+import { currentRequestId } from "@nusantara/logging";
+import { recordSender } from "./inboxSent.js";
 import { ApiError, notFound } from "../errors.js";
 
 /** How many units one "attach media" may carry. */
@@ -630,21 +632,42 @@ export function registerInboxV2(router: Router, db: PrismaClient): void {
           "TIDAK_DITEMUKAN",
           "Unit itu tidak ada, tidak tersedia, atau belum punya foto.",
         );
+      const staffId = req.staff?.id ?? null;
+      const requestId = currentRequestId() ?? null;
       await db.$transaction(async (tx) => {
-        for (const unit of found) {
-          await enqueueOutbox(tx, {
-            kind: "WA_REPLY",
-            payload: {
-              to: phone,
-              body: photoCaption(unit.caption),
-              inReplyTo: last.id,
-            },
-          });
-          for (const photoId of unit.ids)
-            await enqueueOutbox(tx, {
-              kind: "WA_IMAGE",
-              payload: { to: phone, photoId, inReplyTo: last.id },
+        // Each row names who sent it, so its bubble does too (2026-10-28).
+        const signed = async (
+          q: { id: string },
+          after: Record<string, unknown>,
+        ) => {
+          if (staffId)
+            await recordSender(tx, {
+              staffId,
+              outboxId: q.id,
+              after,
+              requestId,
+              ip: req.ip ?? null,
             });
+        };
+        for (const unit of found) {
+          const caption = photoCaption(unit.caption);
+          await signed(
+            await enqueueOutbox(tx, {
+              kind: "WA_REPLY",
+              payload: { to: phone, body: caption, inReplyTo: last.id },
+              requestId,
+            }),
+            { to: phone, text: caption },
+          );
+          for (const photoId of unit.ids)
+            await signed(
+              await enqueueOutbox(tx, {
+                kind: "WA_IMAGE",
+                payload: { to: phone, photoId, inReplyTo: last.id },
+                requestId,
+              }),
+              { to: phone, photo: photoId },
+            );
         }
       });
       res.json({
