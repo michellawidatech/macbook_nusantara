@@ -3426,6 +3426,27 @@ Decisions that outlived those documents:
     funnel number opens the accounts behind it (`GET
     /api/chat/funnel/:stage?days=7|30`, `funnelPeople` — the same threads
     as `funnelFor`) with *Open chat*.
+  - **The template bot is strict, and says when it is the one answering**
+    (owner, same day: *"how do I know the AI is running?"*). It answers
+    battery questions from the unit's own reading (`asksBattery`,
+    `unitAskedAbout`, `batteryDetail`; none recorded → a person), sends an
+    approved answer word for word only when it is the SAME question
+    (`sameQuestion`, retrieval.ts — a strong match alone pasted the
+    spare-parts answer under a battery question), and hands "mau chat sama
+    admin" to a person (`asksForPerson` → topic `human`, "Siap kak, aku
+    sambungin ke admin ya 🙏"). `ops/run chatbot` exited silently in a
+    release (its guard only knew `chatbot-doctor`) and now also reports how
+    many of the last day's replies the AI wrote vs the templates.
+  - **Chats waiting for a person are announced** — a red notice in the
+    sidebar foot (phone: the top bar) and a count on the Chatbot leaf, both
+    from `GET /api/inbox/waiting` (PERLU_STAF, or BARU with the bot off),
+    one 30 s poll for the app (`useChatWaiting`); a press opens
+    `/chat?phone=` (ChatbotPage reads it). **Staff get a WhatsApp alert**
+    per NEW hand-over (`queueStaffAlerts`, apps/worker actions.ts, queued in
+    the task's transaction) to `chatbot.notifyNumbers` (Chatbot → Settings →
+    WhatsApp alerts, owner-only, `/api/chat/notify-numbers`); the bot never
+    answers those numbers (`quietCandidates`). Link base is
+    `POS_PUBLIC_URL` (env) or `https://pos.macbooknusantara.com`.
   - Chip & spec guide for the Knowledge Base:
     `docs/chatbot/chip-guide-2026-10-28.xlsx` (16 rows) — the owner imports it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React

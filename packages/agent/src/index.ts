@@ -123,6 +123,8 @@ export {
   isResetCommand,
   laterOf,
   loadTesters,
+  loadNotifyNumbers,
+  NOTIFY_SETTING_KEY,
   parseTesters,
   resetPointFor,
   resetPointsFor,
@@ -148,6 +150,8 @@ export {
   SHOP_CAPABILITIES,
   checkHoldingMessage,
   asksBuyOnline,
+  asksBattery,
+  asksForPerson,
   checkReply,
   linksIn,
   dpKeepLine,
@@ -343,3 +347,4 @@ export {
   type CallGuard,
   type ReplyRow,
 } from "./liveness.js";
+export { POS_PUBLIC_URL, staffAlertText } from "./staffAlert.js";

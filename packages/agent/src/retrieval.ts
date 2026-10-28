@@ -356,6 +356,21 @@ export function searchWords(text: string): string[] {
   return out;
 }
 
+/**
+ * Is this message the SAME question as an approved answer's (2026-10-28)?
+ * The template bot sends an answer word for word only then: a strong match
+ * alone pasted the spare-parts answer under a battery question, because
+ * "unit … kondisi" was enough. Most of what the customer asked must be in the
+ * entry's question, and most of the question must be in what they asked.
+ */
+export function sameQuestion(question: string, text: string): boolean {
+  const asked = new Set(searchWords(text));
+  const entry = new Set(searchWords(question));
+  if (asked.size === 0 || entry.size === 0) return false;
+  const shared = [...asked].filter((w) => entry.has(w)).length;
+  return shared / asked.size >= 0.6 && shared / entry.size >= 0.5;
+}
+
 /** One-letter-off, for "oprasional"-shaped typos the table did not list. */
 function withinOne(a: string, b: string): boolean {
   if (a === b) return true;

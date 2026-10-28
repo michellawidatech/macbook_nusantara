@@ -17,10 +17,35 @@ import { useTranslation } from "react-i18next";
 import { useDb } from "../mock/store.js";
 import { qcWaitingCount } from "../lib/qcWaiting.js";
 import { pendingRequestCount } from "../lib/reservationRequests.js";
+import { useChatWaiting } from "../hooks/useChatWaiting.js";
 import { NAV } from "../theme/tokens";
 import type { NavBadgeKind } from "./navigation.js";
 
 export function NavBadge({ kind }: { readonly kind: NavBadgeKind }) {
+  return kind === "chatWaiting" ? <ChatBadge /> : <StoreBadge kind={kind} />;
+}
+
+/** Chats waiting for a person — from the server, not the store (2026-10-28). */
+function ChatBadge() {
+  const { t } = useTranslation();
+  const { count } = useChatWaiting();
+  if (count === 0) return null;
+  return (
+    <Count
+      kind="chatWaiting"
+      count={count}
+      label={t("chatWaiting.label", "{{count}} chat(s) need a reply", {
+        count,
+      })}
+    />
+  );
+}
+
+function StoreBadge({
+  kind,
+}: {
+  readonly kind: "qcWaiting" | "reservationRequests";
+}) {
   const { t } = useTranslation();
   const db = useDb();
   const count = useMemo(
@@ -39,6 +64,18 @@ export function NavBadge({ kind }: { readonly kind: NavBadgeKind }) {
           "{{count}} reservation request(s) waiting",
           { count },
         );
+  return <Count kind={kind} count={count} label={label} />;
+}
+
+function Count({
+  kind,
+  count,
+  label,
+}: {
+  readonly kind: NavBadgeKind;
+  readonly count: number;
+  readonly label: string;
+}) {
   return (
     <Badge
       count={count}

@@ -343,6 +343,32 @@ export function inboxRouter(
    * then serialise a plain tally as a string. Money is the thing that must
    * cross as a string (CLAUDE.md), not a row count.
    */
+  /**
+   * GET /api/inbox/waiting — how many chats are waiting for a PERSON, and
+   * the one waiting longest (owner, 2026-10-28: *"give notification
+   * persisting in the entire app if there is anything that they need to
+   * answer"*). A hand-over not dealt with (PERLU_STAF), or a message in a
+   * chat whose bot is switched off. Cheap: the bell on every page polls it.
+   */
+  router.get("/waiting", async (_req, res, next) => {
+    try {
+      const rows = await db.$queryRaw<Array<{ from: string }>>(Prisma.sql`
+        SELECT m."from"
+          FROM "WaMessage" m
+          LEFT JOIN "WaThreadMemory" t ON t."from" = m."from"
+         WHERE m."direction" = 'IN'
+           AND (m."status" = 'PERLU_STAF'
+                OR (m."status" = 'BARU' AND t."autoReply" = false))
+           AND (t."clearedAt" IS NULL OR m."ts" > t."clearedAt")
+         GROUP BY m."from"
+         ORDER BY MIN(m."ts") ASC
+      `);
+      res.json({ count: rows.length, oldest: rows[0]?.from ?? null });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   router.get("/", async (_req, res, next) => {
     try {
       const rows = await db.$queryRaw<ThreadRow[]>(Prisma.sql`

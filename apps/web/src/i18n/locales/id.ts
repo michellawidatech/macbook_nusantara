@@ -4597,6 +4597,12 @@ export const id: Record<string, string> = {
   // closing / welcome / restock tasks and "tell me when it's in stock".
   "chatAction.closing": "Closing",
   "chatFunnel.lastMessage": "Pesan terakhir",
+  "chatNotify.button": "Notif WhatsApp ({{n}})",
+  "chatNotify.title": "Notifikasi WhatsApp ke staf",
+  "chatNotify.hint":
+    "Kalau sebuah chat diteruskan ke orang, WhatsApp toko mengirim satu pesan ke setiap nomor ini berisi pesan pelanggan dan link ke chatnya. Bot tidak pernah membalas nomor-nomor ini. Pakai nomor staf, bukan nomor toko.",
+  "chatNotify.saveFailed": "Nomor notifikasi gagal disimpan.",
+  "chatWaiting.label": "{{count}} chat perlu dibalas",
   "chatFunnel.openChat": "Buka chat",
   "chatFunnel.showWho": "Lihat siapa — {{n}}",
   "chatFunnel.when": "Kapan",

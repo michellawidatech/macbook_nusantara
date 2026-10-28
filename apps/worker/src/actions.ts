@@ -18,13 +18,17 @@
 import {
   actionKindOf,
   askingPrice,
+  isHandoffTopic,
+  loadNotifyNumbers,
   parseAskPrice,
   phoneForms,
+  staffAlertText,
   type ChatActionKind,
   type HandoffTopic,
 } from "@nusantara/agent";
 import {
   DP_PROOF_PREFIX,
+  enqueueOutbox,
   recordStoreChanges,
   type Prisma,
   type PrismaClient,
@@ -128,7 +132,44 @@ export async function upsertChatAction(
     data: { from: input.from, kind, createdAt: input.now, ...common },
     select: { id: true },
   });
+  // A NEW hand-over — not a refreshed one — tells staff on WhatsApp.
+  if (isHandoffTopic(input.topic)) await queueStaffAlerts(tx, input);
   return { id: made.id, created: true };
+}
+
+/**
+ * One WhatsApp line to each staff alert number (owner, 2026-10-28: *"notify
+ * the staff through WA if there are any chat they need to answer"*), queued
+ * in the hand-over's own transaction — the send pass delivers it, so no
+ * network I/O happens here. Once per new task: a customer typing five lines
+ * while they wait refreshes the task and sends nothing more.
+ */
+export async function queueStaffAlerts(
+  tx: Tx,
+  input: Pick<ActionInput, "from" | "summary" | "customerText">,
+): Promise<number> {
+  const numbers = (await loadNotifyNumbers(tx)).filter((n) => n !== input.from);
+  if (numbers.length === 0) return 0;
+  const named = await tx.waMessage.findFirst({
+    where: { from: input.from, direction: "IN", name: { not: null } },
+    orderBy: { ts: "desc" },
+    select: { name: true },
+  });
+  const body = staffAlertText({
+    phone: input.from,
+    name: named?.name?.trim() || null,
+    customerText: input.customerText,
+    summary: input.summary,
+    ...(process.env["POS_PUBLIC_URL"]
+      ? { baseUrl: process.env["POS_PUBLIC_URL"] }
+      : {}),
+  });
+  for (const to of numbers)
+    await enqueueOutbox(tx, {
+      kind: "WA_REPLY",
+      payload: { to, body, staffAlert: true },
+    });
+  return numbers.length;
 }
 
 /**

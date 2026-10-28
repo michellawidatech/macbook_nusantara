@@ -472,6 +472,64 @@ describe("a price question is answered, never taken for an answer (owner's chat,
   });
 });
 
+describe("the battery of a unit, and asking for a person (owner's chats, 2026-10-28)", () => {
+  const M1 = {
+    serial: "C02AIRM1BB",
+    model: 'MacBook Air 13" M1',
+    variant: "8/256",
+    grade: "A",
+    price: "Rp 8.500.000",
+    batteryHealth: 91,
+  };
+  const PRO = { ...MBP, batteryHealth: 99 };
+
+  it("answers 'cc battery health untuk unit air m1 yg diatas' from that unit's own reading", async () => {
+    const p = pos({
+      check_serial: async () => ({}),
+    });
+    p.dispatch = async (name: string, args: unknown) => {
+      p.asked.push({ name, args: args as Record<string, unknown> });
+      const serial = (args as { serial?: string }).serial;
+      if (name === "check_serial")
+        return serial === M1.serial
+          ? { found: true, available: true, ...M1 }
+          : { found: true, available: true, ...PRO };
+      return { error: "not scripted" };
+    };
+    const out = await run(
+      "Boleh minta cc battery health untuk unit air m1 yg diatas?",
+      p,
+      { lastShown: [PRO.serial, M1.serial] },
+    );
+    expect(out.handoff).toBeUndefined();
+    expect(out.reply).toBe('Air 13" M1 baterainya masih 91% kak 😊');
+    expect(out.reply).not.toContain("sparepart");
+  });
+
+  it("hands a unit with no reading to a person instead of guessing", async () => {
+    const { batteryHealth: _none, ...bare } = M1;
+    const out = await run(
+      "battery healthnya berapa kak?",
+      pos({ check_serial: { found: true, available: true, ...bare } }),
+      { lastShown: [M1.serial] },
+    );
+    expect(out.handoff?.topic).toBe("unit_details");
+    expect(out.reply).toBe("Battery health-nya aku cekin dulu ya kak 🙏");
+  });
+
+  it.each([
+    "mau chat sama admin dong",
+    "bisa ngobrol sama cs?",
+    "sama orang aja kak",
+    "ini bot ya?",
+    "can I talk to a human",
+  ])("hands %j to a person", async (text) => {
+    const out = await run(text);
+    expect(out.handoff?.topic).toBe("human");
+    expect(out.reply).toBe("Siap kak, aku sambungin ke admin ya 🙏");
+  });
+});
+
 describe("out of stock, and one step up (owner, 2026-10-27)", () => {
   const M1 = {
     serial: "C02AIRM1XX",

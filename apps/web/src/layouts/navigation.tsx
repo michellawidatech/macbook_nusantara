@@ -46,13 +46,15 @@ export interface NavLeaf {
   readonly badge?: NavBadgeKind;
 }
 /** What a leaf's count counts. */
-export type NavBadgeKind = "qcWaiting" | "reservationRequests";
+export type NavBadgeKind = "qcWaiting" | "reservationRequests" | "chatWaiting";
 export interface NavSection {
   readonly key: string;
   readonly label: string;
   readonly icon: ReactNode;
   /** Sections without children are themselves a leaf at `path`. */
   readonly path?: string;
+  /** A count beside a section that is itself a leaf (the Chatbot, 2026-10-28). */
+  readonly badge?: NavBadgeKind;
   readonly children?: readonly NavLeaf[];
 }
 
@@ -139,6 +141,7 @@ export const NAV_SECTIONS: readonly NavSection[] = [
     label: "Chatbot",
     icon: <CommentOutlined />,
     path: "/chat",
+    badge: "chatWaiting",
   },
   {
     key: "customers",

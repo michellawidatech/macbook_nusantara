@@ -194,10 +194,46 @@ export async function runDoctor(
     hasModel
       ? { level: "ok", title: "An Anthropic credential is set" }
       : {
-          level: "fail",
-          title: "No Anthropic credential — the draft pass is dormant",
-          fix: "Set ANTHROPIC_API_KEY in /opt/nusantara/etc/worker.env.",
+          level: "warn",
+          title:
+            "No Anthropic credential in the env — the AI is OFF unless a Console login (ant auth login) is set up; replies come from the templates",
+          fix: "Set ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) in /opt/nusantara/etc/worker.env and restart the worker.",
         },
+  );
+
+  // Who actually answered (owner, 2026-10-28: "how do I know the AI is
+  // running?"): of the last 24 hours' replies, how many the AI wrote and how
+  // many came from the fixed templates. A step whose model is a real model
+  // name is the AI; "template" and "rules" are not.
+  const day = new Date(now.getTime() - DAY_MS);
+  const [byAi, total] = await Promise.all([
+    prisma.agentRun.count({
+      where: {
+        dryRun: false,
+        createdAt: { gte: day },
+        steps: { some: { model: { notIn: ["template", "rules", "ai"] } } },
+      },
+    }),
+    prisma.agentRun.count({
+      where: { dryRun: false, createdAt: { gte: day } },
+    }),
+  ]);
+  out.push(
+    total === 0
+      ? {
+          level: "warn",
+          title: "The bot answered nothing in the last 24 hours",
+        }
+      : byAi === 0
+        ? {
+            level: "fail",
+            title: `The AI wrote 0 of the last 24 hours' ${total} replies — every one was a template`,
+            fix: "The AI is not answering. Check the credential above, then the worker log: sudo tail -n 200 /opt/nusantara/logs/worker.log | grep -i -E 'anthropic|401|429|model'",
+          }
+        : {
+            level: "ok",
+            title: `The AI wrote ${byAi} of the last 24 hours' ${total} replies (${total - byAi} from templates)`,
+          },
   );
 
   const answers = await prisma.agentKnowledge.count({
@@ -325,7 +361,12 @@ async function main(): Promise<number> {
   return bad === 0 ? 0 : 1;
 }
 
-if (process.argv[1]?.includes("chatbot-doctor")) {
+// The release bundles this as app/chatbot.mjs (build-release.mjs ENTRIES):
+// without the second test, `ops/run chatbot` exited silently (2026-10-28).
+if (
+  process.argv[1]?.includes("chatbot-doctor") ||
+  process.argv[1]?.endsWith("chatbot.mjs")
+) {
   main()
     .then(async (code) => {
       await disconnect();

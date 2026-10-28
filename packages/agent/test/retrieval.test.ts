@@ -164,3 +164,18 @@ describe("searchWords", () => {
     expect(indexKnowledge([]).rank("garansi")).toEqual([]);
   });
 });
+
+describe("sameQuestion (2026-10-28)", () => {
+  it("is the same question asked another way, and not a different one that shares words", async () => {
+    const { sameQuestion } = await import("../src/retrieval.js");
+    expect(
+      sameQuestion("Garansi berapa lama?", "kak garansinya berapa lama ya?"),
+    ).toBe(true);
+    expect(
+      sameQuestion(
+        "Apakah pernah ganti sparepart kak?",
+        "Boleh minta cc battery health untuk unit air m1 yg diatas?",
+      ),
+    ).toBe(false);
+  });
+});

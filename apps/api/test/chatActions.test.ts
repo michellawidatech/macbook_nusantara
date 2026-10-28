@@ -164,6 +164,61 @@ describe("the chatbot's switches", () => {
   });
 });
 
+describe("the staff alert numbers (2026-10-28)", () => {
+  it("are read by staff, changed by the owner, stored as wa_ids", async () => {
+    await request(app)
+      .put("/api/chat/notify-numbers")
+      .set("Cookie", staffCookie)
+      .send({ numbers: ["08123456789"] })
+      .expect(403);
+    const res = await request(app)
+      .put("/api/chat/notify-numbers")
+      .set("Cookie", ownerCookie)
+      .send({ numbers: ["0812-3456-789", "+62 812 3456 789"] })
+      .expect(200);
+    expect(res.body.numbers).toEqual(["628123456789"]);
+    const read = await request(app)
+      .get("/api/chat/notify-numbers")
+      .set("Cookie", staffCookie)
+      .expect(200);
+    expect(read.body.numbers).toEqual(["628123456789"]);
+    await request(app)
+      .put("/api/chat/notify-numbers")
+      .set("Cookie", ownerCookie)
+      .send({ numbers: ["ersen"] })
+      .expect(400);
+  });
+});
+
+describe("the chats waiting for a person (2026-10-28)", () => {
+  it("counts a hand-over not dealt with and names the oldest", async () => {
+    const at = (ago: number) => new Date(Date.now() - ago);
+    for (const [id, from, status, ago] of [
+      ["wamid.W1", "628111000001", "PERLU_STAF", 600_000],
+      ["wamid.W2", "628111000002", "PERLU_STAF", 60_000],
+      ["wamid.W3", "628111000003", "DIJAWAB_AGEN", 900_000],
+    ] as const)
+      await db.waMessage.create({
+        data: {
+          waMessageId: id,
+          from,
+          text: "mau chat sama admin",
+          msgType: "text",
+          ts: at(ago),
+          direction: "IN",
+          status,
+          entities: {},
+          answeredByAgent: false,
+        },
+      });
+    const res = await request(app)
+      .get("/api/inbox/waiting")
+      .set("Cookie", staffCookie)
+      .expect(200);
+    expect(res.body).toEqual({ count: 2, oldest: "628111000001" });
+  });
+});
+
 describe("the tester numbers", () => {
   it("start empty, and staff may read them", async () => {
     const res = await request(app)

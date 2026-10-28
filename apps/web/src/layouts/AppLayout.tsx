@@ -49,6 +49,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { matchLeaf, navSectionsFor } from "./navigation.js";
 import { NavBadge } from "./NavBadge.js";
+import { ChatWaitingBell } from "./ChatWaitingBell.js";
 import { useLayoutMode } from "./useLayoutMode.js";
 import { ScannerChip } from "../components/ScannerChip.js";
 import { BrandMark } from "../components/BrandMark.js";
@@ -209,7 +210,14 @@ export function AppLayout({ staff }: { staff: Staff }) {
       navSectionsFor(staff).map((s) => ({
         key: s.children ? s.key : (s.path ?? s.key),
         icon: s.icon,
-        label: s.path ? <Link to={s.path}>{t(s.label)}</Link> : t(s.label),
+        label: s.path ? (
+          <Link to={s.path}>
+            {t(s.label)}
+            {s.badge !== undefined && <NavBadge kind={s.badge} />}
+          </Link>
+        ) : (
+          t(s.label)
+        ),
         children: s.children?.map((c) => ({
           key: c.path,
           label: (
@@ -697,6 +705,8 @@ export function AppLayout({ staff }: { staff: Staff }) {
                 and also the right one: it is the only thing in this column
                 somebody presses in a hurry, so it sits where the hand already
                 is rather than at the end of a scrolling list. */}
+            {/* Chats waiting for a person, on every page (2026-10-28). */}
+            <ChatWaitingBell rail={railed} />
             {newTransactionButton(railed)}
             {/* The chip is a phrase — "Scanner ready" — and a rail has no
                 room for one. It is the account menu's own line in that state:
@@ -803,6 +813,7 @@ export function AppLayout({ staff }: { staff: Staff }) {
               />
               {brand}
               <ScannerChip />
+              <ChatWaitingBell rail />
             </Flex>
           </Layout.Header>
         )}

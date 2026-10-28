@@ -28,7 +28,7 @@
 import { useState, type ReactNode } from "react";
 import { Tabs } from "antd";
 import { useTranslation } from "react-i18next";
-import { useLocation } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { PageContainer } from "../../components/PageContainer";
 import { ChatInbox } from "./ChatPage";
 import { KnowledgePanel } from "./KnowledgePage";
@@ -55,9 +55,26 @@ export function ChatbotPage() {
   // "Open chat" on a reservation request (2026-10-27) arrives with the
   // number in the navigation STATE — nothing navigates from an effect.
   const location = useLocation();
+  // Or in the address — the sidebar's "chats need a reply" and a staff
+  // WhatsApp alert both link to /chat?phone=… (2026-10-28).
+  const [params] = useSearchParams();
+  const linked = params.get("phone");
   const [picked, setPicked] = useState<string | null>(
-    () => (location.state as { openPhone?: string } | null)?.openPhone ?? null,
+    () =>
+      linked ??
+      (location.state as { openPhone?: string } | null)?.openPhone ??
+      null,
   );
+  // A second press while already here: open that chat on the Chat tab. Set
+  // from the address the render it changed in, not from an effect.
+  const [lastLinked, setLastLinked] = useState(linked);
+  if (linked !== lastLinked) {
+    setLastLinked(linked);
+    if (linked) {
+      setPicked(linked);
+      setTab("chat");
+    }
+  }
   // Delete conversation is offered to the owner; the server checks again.
   const isOwner = useSession().data?.role === "OWNER";
 

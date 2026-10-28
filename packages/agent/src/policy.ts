@@ -399,6 +399,36 @@ export function asksBuyOnline(text: string): boolean {
   return BUY_ONLINE.test(text);
 }
 
+/**
+ * Asking to talk to a person (owner, 2026-10-28): "mau chat sama admin",
+ * "bisa ngobrol sama CS?", "sama orang aja", "bukan bot kan?", "can I talk
+ * to a human". Not "admin" in passing ("adminnya ramah ya").
+ */
+const ASKS_PERSON = new RegExp(
+  [
+    String.raw`\b(mau|pengen|pingin|ingin|boleh|bisa|minta|tolong)\s+(chat|ngechat|ngobrol|bicara|ngomong|telpon|telepon|call|dihubungi|hubungi|dibantu|langsung)\s+(sama|dengan|dgn|ke|sm|ama)?\s*(admin|cs|customer\s*service|orang|manusia|staff|staf|owner|pemilik|mimin|kakak\s*admin)\b`,
+    String.raw`\b(sama|dengan|dgn|ama|sm)\s+(admin|cs|orang|manusia|staff|staf|owner)\s+(aja|saja|langsung|dong|please)\b`,
+    String.raw`\b(admin|cs|mimin)(nya)?\s+(dong|please|tolong|mana|ada\s*(gak|ga|nggak)?|bisa\s+bales|online)\b`,
+    String.raw`\b(orang|manusia)\s+(beneran|asli)\b|\bbukan\s+(bot|robot)\b|\b(ini|kamu)\s+(bot|robot)\s*(ya|kah|bukan)?\b`,
+    String.raw`\b(talk|speak|chat)\s+(to|with)\s+(a\s+)?(human|person|admin|staff|someone|real\s+person)\b`,
+  ].join("|"),
+  "i",
+);
+
+/** Does the customer ask to talk to a person? */
+export function asksForPerson(text: string): boolean {
+  return ASKS_PERSON.test(text);
+}
+
+/**
+ * A battery question — health, cycle count ("cc"), "baterainya berapa?"
+ * (owner's chat, 2026-10-28: "Boleh minta cc battery health untuk unit air
+ * m1 yg diatas?"). With stock readable, the unit's own reading answers it.
+ */
+export function asksBattery(text: string): boolean {
+  return BATTERY.test(text) || /\bcc\b/i.test(text);
+}
+
 /** Letting a booking go, or moving it — both are the booking switch's. */
 const CANCEL_BOOKING =
   /\b(batal(in|kan)?|cancel|gak\s*jadi|ga\s*jadi|nggak\s*jadi|ngga\s*jadi|reschedule|ganti\s*(jadwal|jam|hari)|undur|majuin|mundurin)\b/i;
@@ -517,6 +547,9 @@ export function routeMessage(
   const t = text.toLowerCase();
   // A DP proof, as words or as a photo captioned with them (2026-10-27).
   if (saysDpPaid(t)) return { topic: "order_payment", rule: "dp_proof" };
+  // Asking for a person (owner, 2026-10-28): always a person, whatever the
+  // bot could answer — and an alert to staff on WhatsApp with it.
+  if (asksForPerson(t)) return { topic: "human", rule: "person" };
   if (opts.hasMedia) return { topic: "media", rule: "media" };
 
   const product = PRODUCT.test(t);
@@ -1122,7 +1155,7 @@ const HOLDING_LINE: Readonly<Record<HandoffTopic, string>> = {
   media: "Sudah aku terima ya kak, aku lihat dulu 🙏",
   photos: "Fotonya aku siapin dulu ya kak 🙏",
   closing: "Siap kak, aku bantu prosesnya ya 🙏",
-  human: "Siap kak, aku teruskan ke owner ya 🙏",
+  human: "Siap kak, aku sambungin ke admin ya 🙏",
   other: "Bentar ya kak, aku cek dulu 🙏",
 };
 

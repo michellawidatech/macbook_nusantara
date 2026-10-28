@@ -197,3 +197,38 @@ describe("the doctor", () => {
     ).toBeUndefined();
   });
 });
+
+describe("the doctor says who answered (2026-10-28)", () => {
+  const run = (model: string, ago: number) =>
+    owner.agentRun.create({
+      data: {
+        from: PHONE,
+        pipeline: "rules",
+        outcome: "REPLIED",
+        createdAt: new Date(Date.now() - ago),
+        steps: {
+          create: [
+            { sortOrder: 0, agent: "ROUTER", model: "rules", ok: true, ms: 0 },
+            { sortOrder: 1, agent: "ADVISOR", model, ok: true, ms: 0 },
+          ],
+        },
+      },
+    });
+
+  it("fails when every reply in the last day was a template, and counts the AI's", async () => {
+    await owner.agentRunStep.deleteMany({});
+    await owner.agentEvaluation.deleteMany({});
+    await owner.agentRun.deleteMany({});
+    await run("template", 60_000);
+    await run("template", 120_000);
+    let checks = await runDoctor(owner, {}, new Date());
+    expect(
+      checks.find((c) => /every one was a template/i.test(c.title)),
+    ).toMatchObject({ level: "fail" });
+    await run("claude-haiku-4-5", 30_000);
+    checks = await runDoctor(owner, {}, new Date());
+    expect(
+      checks.find((c) => /The AI wrote 1 of/i.test(c.title)),
+    ).toMatchObject({ level: "ok" });
+  });
+});

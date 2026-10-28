@@ -39,6 +39,8 @@ import {
   agentCapabilities,
   formatTesters,
   loadTesters,
+  loadNotifyNumbers,
+  NOTIFY_SETTING_KEY,
   toWaId,
   effectiveCapabilities,
   loadCapabilities,
@@ -222,6 +224,53 @@ export function chatRouter({
           ctx: { staffId: req.staff?.id, count: numbers.length },
         },
         "the chatbot's tester numbers changed",
+      );
+      res.json({ numbers });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * GET / PUT /api/chat/notify-numbers — the staff numbers that get a
+   * WhatsApp alert when a chat needs a person (owner, 2026-10-28). Read by
+   * any staff; changed by the owner, like the testers — and the bot never
+   * answers these numbers.
+   */
+  router.get("/notify-numbers", async (_req, res, next) => {
+    try {
+      res.json({ numbers: await loadNotifyNumbers(db) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.put("/notify-numbers", ownerOnly, async (req, res, next) => {
+    try {
+      const parsed = testersBody.safeParse(req.body);
+      if (!parsed.success)
+        throw new ApiError(400, "VALIDASI", "Daftar nomor tidak valid.");
+      const ids = parsed.data.numbers.map((n) => toWaId(n));
+      if (ids.some((id) => id === null))
+        throw new ApiError(
+          400,
+          "VALIDASI",
+          "Ada nomor yang bukan nomor WhatsApp.",
+        );
+      const value = formatTesters(ids as string[]);
+      const now = new Date();
+      await db.appSetting.upsert({
+        where: { key: NOTIFY_SETTING_KEY },
+        update: { value, updatedAt: now },
+        create: { key: NOTIFY_SETTING_KEY, value, updatedAt: now },
+      });
+      const numbers = await loadNotifyNumbers(db);
+      logger.info(
+        {
+          evt: "chat.notify_numbers.changed",
+          ctx: { staffId: req.staff?.id, count: numbers.length },
+        },
+        "the chatbot's staff alert numbers changed",
       );
       res.json({ numbers });
     } catch (err) {

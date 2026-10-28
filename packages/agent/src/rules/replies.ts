@@ -497,6 +497,31 @@ export const reply = {
       : `Harganya mulai dari ${low} (${name(cheapest)}) sampai ${high} (${name(dearest)}) kak, tergantung tipe dan kondisinya 😊`;
   },
 
+  /**
+   * The battery of one unit, from its own reading (2026-10-28) — health on
+   * Apple silicon and 2021+, cycles on an older Mac. Null when QC recorded
+   * neither, so the caller hands it to a person instead of guessing.
+   */
+  batteryDetail(u: ShownUnit, lang: Lang): string | null {
+    const name = shortName(u.model) || u.model || "Unitnya";
+    if (typeof u.batteryHealth === "number")
+      return lang === "en"
+        ? `The ${name}: battery health ${u.batteryHealth}% 😊`
+        : `${name} baterainya masih ${u.batteryHealth}% kak 😊`;
+    if (typeof u.cycleCount === "number")
+      return lang === "en"
+        ? `The ${name}: ${u.cycleCount} battery cycles 😊`
+        : `${name} cycle count baterainya ${u.cycleCount} kak 😊`;
+    return null;
+  },
+
+  /** No reading on record: a person checks it. */
+  batteryCheck(lang: Lang): string {
+    return lang === "en"
+      ? "Let me check that battery for you 🙏"
+      : "Battery health-nya aku cekin dulu ya kak 🙏";
+  },
+
   whichUnit(lang: Lang): string {
     return lang === "en"
       ? "Which one do you mean? Just send the model, like Air M2 😊"

@@ -76,6 +76,22 @@ export function parseTesters(value: string | null | undefined): string[] {
 export const formatTesters = (ids: readonly string[]): string =>
   parseTesters(ids.join(",")).join(",");
 
+/**
+ * Staff numbers that get a WhatsApp alert when a chat needs a person (owner,
+ * 2026-10-28). Read like the testers; the bot never answers these numbers.
+ */
+export const NOTIFY_SETTING_KEY = "chatbot.notifyNumbers";
+
+export async function loadNotifyNumbers(
+  db: Pick<PrismaClient, "appSetting">,
+): Promise<string[]> {
+  const row = await db.appSetting.findUnique({
+    where: { key: NOTIFY_SETTING_KEY },
+    select: { value: true },
+  });
+  return parseTesters(row?.value);
+}
+
 export async function loadTesters(db: PrismaClient): Promise<string[]> {
   const row = await db.appSetting.findUnique({
     where: { key: TESTERS_SETTING_KEY },

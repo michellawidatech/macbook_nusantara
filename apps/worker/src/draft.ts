@@ -161,7 +161,7 @@ import {
 } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import { isWithinWindow } from "@nusantara/whatsapp";
-import { DEFAULT_PERSONA } from "@nusantara/agent";
+import { DEFAULT_PERSONA, loadNotifyNumbers } from "@nusantara/agent";
 import { refreshOffers, upsertChatAction } from "./actions.js";
 import { resetPass } from "./reset.js";
 import { claimThread, inPool, leaseHolder, releaseThread } from "./lease.js";
@@ -460,7 +460,12 @@ async function quietCandidates(
   staffActiveSince: Date,
   limit: number,
 ): Promise<Candidate[]> {
-  const paused = [...(await staffActiveThreads(db, staffActiveSince)).keys()];
+  const paused = [
+    ...(await staffActiveThreads(db, staffActiveSince)).keys(),
+    // Staff alert numbers (2026-10-28): a colleague answering an alert with
+    // "ok" is not a customer, and the bot never answers them.
+    ...(await loadNotifyNumbers(db)),
+  ];
   return db.$queryRaw<Candidate[]>(Prisma.sql`
     SELECT "from",
            COUNT(*) FILTER (WHERE "status" = 'BARU')::int AS "pending",

@@ -40,6 +40,7 @@ import {
 import { costMicros } from "../agents.js";
 import { matchesFor, type KnowledgeBase } from "../knowledge.js";
 import {
+  asksBattery,
   asksBuyOnline,
   asksToBuy,
   dpKeepLine,
@@ -51,7 +52,7 @@ import {
   type Route,
 } from "../policy.js";
 import type { AgentStep, PipelineResult } from "../pipeline.js";
-import { isStrongMatch } from "../retrieval.js";
+import { isStrongMatch, sameQuestion } from "../retrieval.js";
 import { sanitiseReply } from "../sanitise.js";
 import { dispatchTool, storeOpenAt, type ToolContext } from "../tools.js";
 import {
@@ -865,17 +866,63 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
   }
 
   // --- 3. The intents rules can answer -------------------------------------
+  /**
+   * The unit a question is about (2026-10-28): the one picked or named by
+   * serial; else, of the units just shown, the one whose name the message
+   * mentions ("air m1 yg diatas"), or the only one; else the shelf's first
+   * for the model named. Null when it cannot tell which.
+   */
+  const unitAskedAbout = async (): Promise<ShownUnit | null> => {
+    const lookup = async (serial: string) => {
+      const out = await call("check_serial", { serial });
+      return out["found"] === true ? (out as unknown as ShownUnit) : null;
+    };
+    const picked = pickSerial();
+    if (picked) return lookup(picked);
+    if (input.lastShown.length > 0) {
+      const words = (u.query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+      const seen: ShownUnit[] = [];
+      for (const serial of input.lastShown.slice(0, 6)) {
+        const unit = await lookup(serial);
+        if (unit) seen.push(unit);
+      }
+      const named = seen.find((x) => {
+        const name = `${x.model ?? ""} ${x.variant ?? ""}`.toLowerCase();
+        return words.length > 0 && words.every((w) => name.includes(w));
+      });
+      if (named) return named;
+      if (words.length === 0 && seen.length > 0) return seen[0]!;
+    }
+    if (u.query)
+      return unitsIn(await call("search_stock", { query: u.query }))[0] ?? null;
+    return null;
+  };
+
+  // --- 2b'. The battery of a unit (owner's chat, 2026-10-28) -----------------
+  // "Boleh minta cc battery health untuk unit air m1 yg diatas?" — its own
+  // reading, never an approved answer about something else.
+  if (caps.stock && asksBattery(input.text)) {
+    const unit = await unitAskedAbout();
+    if (!unit) return done(reply.whichUnit(lang), { ask: false });
+    shown.push(unit.serial);
+    const line = reply.batteryDetail(unit, lang);
+    if (line) return done(line, { ask: false, sources: ["stock"] });
+    return handOver(
+      "unit_details",
+      taskNote(
+        "unit",
+        `${unitLine(unit, "id", undefined, { variant: true })} (${unit.serial}), battery health belum dicatat`,
+        input.text,
+      ),
+      reply.batteryCheck(lang),
+      unit.serial,
+    );
+  }
+
   // --- 2c. How to buy / buy online, and the condition asked about ------------
   // (owner, 2026-10-28) The variant's listing, and what QC wrote.
   if (caps.stock && (asksBuyOnline(input.text) || asksCondition(input.text))) {
-    const serial = pickSerial() ?? input.lastShown[0] ?? null;
-    let unit: ShownUnit | null = null;
-    if (serial) {
-      const out = await call("check_serial", { serial });
-      if (out["found"] === true) unit = out as unknown as ShownUnit;
-    } else if (u.query) {
-      unit = unitsIn(await call("search_stock", { query: u.query }))[0] ?? null;
-    }
+    const unit = await unitAskedAbout();
     if (unit) shown.push(unit.serial);
     if (asksBuyOnline(input.text))
       return done(reply.buyOnline(unit?.links, platformIn(input.text), lang), {
@@ -1072,8 +1119,14 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
   // --- 4. The owner's own answer, word for word -----------------------------
   // Objections — warranty, condition, COD, payment, trade-in — are answered
   // from here and nowhere else (2026-10-27).
+  // Only when it is the SAME question (2026-10-28): a strong match alone
+  // pasted the spare-parts answer under a battery question.
   const [best] = matchesFor(input.knowledge, input.text);
-  if (best && isStrongMatch(best))
+  if (
+    best &&
+    isStrongMatch(best) &&
+    sameQuestion(best.doc.question, input.text)
+  )
     return done(best.doc.answer, { sources: [best.doc.handle] });
 
   // --- 5. What no rule covers: AI if configured, else a person --------------

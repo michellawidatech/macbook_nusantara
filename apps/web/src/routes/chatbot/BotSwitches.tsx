@@ -30,7 +30,9 @@ import {
 import { useTranslation } from "react-i18next";
 import {
   getCapabilities,
+  getNotifyNumbers,
   getTesters,
+  setNotifyNumbers,
   setCapabilities,
   setTesters,
   type BotCapabilities,
@@ -52,6 +54,13 @@ export function BotSwitches() {
   /** The list as being edited in the dialog, or null while it is shut. */
   const [editing, setEditing] = useState<string[] | null>(null);
   const [savingTesters, setSavingTesters] = useState(false);
+  /**
+   * Staff numbers that get a WhatsApp alert when a chat needs a person
+   * (owner, 2026-10-28); null until the server has answered.
+   */
+  const [notify, setNotifyList] = useState<string[] | null>(null);
+  const [editingNotify, setEditingNotify] = useState<string[] | null>(null);
+  const [savingNotify, setSavingNotify] = useState(false);
 
   useEffect(() => {
     getCapabilities()
@@ -60,7 +69,27 @@ export function BotSwitches() {
     getTesters()
       .then((r) => setTesterList(r.numbers))
       .catch(() => setTesterList(null));
+    getNotifyNumbers()
+      .then((r) => setNotifyList(r.numbers))
+      .catch(() => setNotifyList(null));
   }, []);
+
+  const saveNotify = async () => {
+    if (editingNotify === null) return;
+    setSavingNotify(true);
+    try {
+      setNotifyList((await setNotifyNumbers(editingNotify)).numbers);
+      setEditingNotify(null);
+    } catch (err) {
+      message.error(
+        err instanceof Error
+          ? err.message
+          : t("chatNotify.saveFailed", "Could not save the alert numbers."),
+      );
+    } finally {
+      setSavingNotify(false);
+    }
+  };
 
   const saveTesters = async () => {
     if (editing === null) return;
@@ -185,16 +214,66 @@ export function BotSwitches() {
             </Tooltip>
           );
         })}
-        {testers !== null && (
+        {notify !== null && (
           <Button
             size="small"
             style={{ marginInlineStart: "auto" }}
+            onClick={() => setEditingNotify(notify)}
+          >
+            {t("chatNotify.button", "WhatsApp alerts ({{n}})", {
+              n: notify.length,
+            })}
+          </Button>
+        )}
+        {testers !== null && (
+          <Button
+            size="small"
+            style={notify === null ? { marginInlineStart: "auto" } : undefined}
             onClick={() => setEditing(testers)}
           >
             {t("chatTesters.button", "Testers ({{n}})", { n: testers.length })}
           </Button>
         )}
       </Flex>
+
+      <Modal
+        open={editingNotify !== null}
+        title={t("chatNotify.title", "WhatsApp alerts to staff")}
+        okText={t("chatTesters.save", "Save")}
+        okButtonProps={{ disabled: !isOwner, loading: savingNotify }}
+        onOk={() => void saveNotify()}
+        onCancel={() => setEditingNotify(null)}
+        destroyOnHidden
+      >
+        <Flex vertical gap={12}>
+          <Typography.Text type="secondary">
+            {t(
+              "chatNotify.hint",
+              "When a chat is handed to a person, the shop's WhatsApp sends each of these numbers one message with the customer's words and a link to the chat. The bot never answers these numbers. Use staff numbers, not the shop's own.",
+            )}
+          </Typography.Text>
+          <Select
+            mode="tags"
+            open={false}
+            suffixIcon={null}
+            disabled={!isOwner}
+            value={editingNotify ?? []}
+            onChange={(v: string[]) => setEditingNotify(v)}
+            tokenSeparators={[",", " ", ";"]}
+            placeholder={t(
+              "chatTesters.placeholder",
+              "0812… or 62812…, then Enter",
+            )}
+            aria-label={t("chatNotify.title", "WhatsApp alerts to staff")}
+            style={{ width: "100%" }}
+          />
+          {!isOwner && (
+            <Typography.Text type="secondary">
+              {t("chatSwitch.ownerOnly", "Only the owner can change this.")}
+            </Typography.Text>
+          )}
+        </Flex>
+      </Modal>
 
       <Modal
         open={editing !== null}

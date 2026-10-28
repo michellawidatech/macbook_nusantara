@@ -156,6 +156,22 @@ export const setCapabilities = (body: Partial<BotCapabilities>) =>
  */
 export const getTesters = () => api<{ numbers: string[] }>("/api/chat/testers");
 
+/**
+ * Staff numbers that get a WhatsApp alert when a chat needs a person
+ * (2026-10-28). Read by any staff; the owner changes them.
+ */
+export const getNotifyNumbers = () =>
+  api<{ numbers: string[] }>("/api/chat/notify-numbers");
+export const setNotifyNumbers = (numbers: string[]) =>
+  api<{ numbers: string[] }>("/api/chat/notify-numbers", {
+    method: "PUT",
+    body: { numbers },
+  });
+
+/** How many chats wait for a person, and the one waiting longest. */
+export const getWaitingChats = () =>
+  api<{ count: number; oldest: string | null }>("/api/inbox/waiting");
+
 /** The owner's call — the server answers 403 to anybody else. */
 export const setTesters = (numbers: string[]) =>
   api<{ numbers: string[] }>("/api/chat/testers", {
