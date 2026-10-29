@@ -108,6 +108,7 @@ import { HELD_STATUSES } from "../../lib/inventory.js";
 import { reprojectHolds } from "../../lib/reservations.js";
 import {
   batchProblems,
+  IN_STOCK,
   normaliseSerial as normalise,
 } from "../../lib/adjustmentBatch.js";
 import { rendered } from "../../lib/rendered.js";
@@ -137,7 +138,7 @@ import type {
   MockDb,
   UnitStatus,
 } from "../../mock/seed.js";
-import { warehouseLabel } from "../../lib/warehouses.js";
+import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
 /** Rows the modal opens with — the owner's "typically three or four". */
 const BLANK_ROWS = 1;
@@ -458,9 +459,11 @@ export function InventoryPage() {
         reason,
         lines: rows.filter(touched).map(asWritten),
         counted: countedInput(),
+        ...(kind === "IN" ? { locationId } : {}),
       },
       unitOf,
       statusLabel,
+      (id) => warehouseLabelOf(db.warehouses, id) ?? id,
     );
 
   const submitBatch = () => {
@@ -609,12 +612,23 @@ export function InventoryPage() {
            * out is write-offs only, and a repair goes through *Send to
            * service* on the unit's row (`components/SendToServiceModal`).
            */
+          // A unit already on a shelf is being TRANSFERRED, and keeps its
+          // status: a reserved unit moved to another warehouse is still the
+          // customer's.
+          const transfer = kind === "IN" && IN_STOCK.includes(existing.status);
           appendEvent(d, serial, {
             type: "KOREKSI",
-            toStatus: kind === "IN" ? "TERSEDIA" : outStatus,
+            toStatus:
+              kind === "IN"
+                ? transfer
+                  ? existing.status
+                  : "TERSEDIA"
+                : outStatus,
             toLocationId: kind === "IN" ? locationId : undefined,
             note: [
-              `${kind === "IN" ? "Adjusted in" : "Adjusted out"} — ${label}`,
+              transfer
+                ? `Moved ${warehouseLabelOf(d.warehouses, existing.locationId) ?? existing.locationId} → ${warehouseLabelOf(d.warehouses, locationId) ?? locationId} — ${label}`
+                : `${kind === "IN" ? "Adjusted in" : "Adjusted out"} — ${label}`,
               kind === "OUT" ? statusLabel(outStatus) : undefined,
               description,
               reading.grade === null ? undefined : reading.text,
@@ -1145,8 +1159,10 @@ export function InventoryPage() {
                               // is simply that a unit still being graded
                               // belongs to Stock In, which owns that stage.
                               u.status !== "QC" &&
-                              (kind === "IN" ||
-                                HELD_STATUSES.includes(u.status)),
+                              u.status !== "SERVIS" &&
+                              (kind === "IN"
+                                ? u.status !== "TERJUAL"
+                                : HELD_STATUSES.includes(u.status)),
                           )
                           .map((u) => ({
                             value: u.serial,

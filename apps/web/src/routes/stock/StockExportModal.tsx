@@ -108,6 +108,10 @@ export function StockExportModal({
     },
     { value: "qty", label: t("stockExport.colQty", "Qty") },
     { value: "warehouse", label: t("stockExport.colWarehouse", "Warehouse") },
+    {
+      value: "serial",
+      label: t("stockExport.colSerial", "Serial (one row per unit)"),
+    },
     { value: "unitPrice", label: t("stockExport.colUnitPrice", "Unit price") },
     { value: "sellPrice", label: t("stockExport.colSellPrice", "Sell price") },
     { value: "sku", label: t("stockExport.colSku", "SKU code") },
@@ -262,7 +266,7 @@ export function StockExportModal({
           label={t("stockExport.columns", "Columns")}
           extra={t(
             "stockExport.columnsHint",
-            "With Warehouse, the sheet is grouped by warehouse with a total for each; without it, each product is one row across every warehouse. Grade gives each grade its own row.",
+            "With Warehouse, the sheet is grouped by warehouse with a total for each; without it, each product is one row across every warehouse. Grade gives each grade its own row; Serial gives each unit its own row.",
           )}
         >
           <Checkbox.Group

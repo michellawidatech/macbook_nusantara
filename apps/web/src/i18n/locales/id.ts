@@ -3612,10 +3612,11 @@ export const id: Record<string, string> = {
   "stockExport.products": "Produk",
   "stockExport.columns": "Kolom",
   "stockExport.columnsHint":
-    "Kalau Gudang dicentang, sheet dikelompokkan per gudang lengkap dengan totalnya; kalau tidak, tiap produk jadi satu baris untuk semua gudang. Grade bikin tiap grade punya baris sendiri.",
+    "Kalau Gudang dicentang, sheet dikelompokkan per gudang lengkap dengan totalnya; kalau tidak, tiap produk jadi satu baris untuk semua gudang. Grade bikin tiap grade punya baris sendiri; Serial bikin tiap unit punya baris sendiri.",
   "stockExport.colUnit": "Unit (produk & varian)",
   "stockExport.colQty": "Jml",
   "stockExport.colWarehouse": "Gudang",
+  "stockExport.colSerial": "Serial (satu baris per unit)",
   "stockExport.colUnitPrice": "Harga satuan",
   "stockExport.colSellPrice": "Harga jual",
   "stockExport.colSku": "Kode SKU",

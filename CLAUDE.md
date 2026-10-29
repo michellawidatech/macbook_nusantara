@@ -3476,6 +3476,16 @@ Decisions that outlived those documents:
     quiet night is noticed when the next customer writes.
   - Chip & spec guide for the Knowledge Base:
     `docs/chatbot/chip-guide-2026-10-28.xlsx` (16 rows) — the owner imports it.
+- **Stock in transfers, and the export can go per serial — 2026-10-29.**
+  Owner report: C02CK4Y2ML7J in 03 could not be stocked into 05. The dialog
+  said "transfer or bring units into a warehouse" and the write already moved
+  a unit, but `batchProblems` refused every TERSEDIA/DIRESERVASI unit as
+  "already in stock". It now takes the IN batch's `locationId`: a unit on a
+  shelf ELSEWHERE is moved (status kept — a reserved unit stays reserved,
+  note "Moved 03 → 05"); only one already in that warehouse is refused. Also
+  refused now, both directions: a unit on SERVIS (Back in stock on the
+  Service page closes its visit); on IN, a TERJUAL unit (that is a customer
+  return). Export stock has a **Serial** column: one row per unit, Qty 1.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

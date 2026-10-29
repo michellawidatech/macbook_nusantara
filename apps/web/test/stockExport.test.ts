@@ -155,6 +155,28 @@ describe("stockReport — which units, and how they are grouped", () => {
     }
   });
 
+  it("prints one row per serial when the Serial column is on (owner ask 2026-10-29)", () => {
+    const columns: StockExportColumn[] = ["unit", "serial", "qty", "warehouse"];
+    const r = stockReportFor(db, EVERYTHING, columns);
+    const lines = r.groups.flatMap((g) => g.lines);
+    expect(r.lineCount).toBe(held.length);
+    expect(r.qty).toBe(held.length);
+    expect(lines.every((l) => l.qty === 1)).toBe(true);
+    expect(new Set(lines.map((l) => l.serial)).size).toBe(held.length);
+    const sheet = stockReportSheet(r, { columns, warehouseNames: [], now });
+    const header = sheet.rows[sheet.freezeRows! - 1]!;
+    const h = STOCK_REPORT_TEXT.heading;
+    expect(texts(header)).toEqual([h.unit, h.serial, h.qty, h.warehouse]);
+    const first = r.groups[0]!;
+    const row = sheet.rows[sheet.freezeRows! + 1]!;
+    expect(texts(row)).toEqual([
+      first.lines[0]!.unit,
+      first.lines[0]!.serial,
+      1,
+      first.warehouse,
+    ]);
+  });
+
   it("names a row by product and variant, and prices it from its own units", () => {
     const r = stockReport(db, EVERYTHING, { byWarehouse: true, byGrade: true });
     for (const g of r.groups) {
@@ -288,6 +310,7 @@ describe("stockReportSheet — the B2Soft layout", () => {
     expect(texts(head)).toEqual([
       h.sku,
       h.unit,
+      h.serial,
       h.grade,
       h.qty,
       h.unitPriceMin,
@@ -299,18 +322,21 @@ describe("stockReportSheet — the B2Soft layout", () => {
     expect(s.columnWidths).toHaveLength(head.length);
     const line = r.groups[0]!.lines[0]!;
     const row = s.rows[s.freezeRows! + 1]!;
-    expect(valueOf(row[4]!)).toBe(line.unitPrice.min);
-    expect(valueOf(row[5]!)).toBe(line.unitPrice.max);
-    expect(styleOf(row[4]!)).toBe("num");
+    expect(valueOf(row[5]!)).toBe(line.unitPrice.min);
+    expect(valueOf(row[6]!)).toBe(line.unitPrice.max);
+    expect(styleOf(row[5]!)).toBe("num");
     // A row with nothing sellable has no sell price — empty, not zero.
     const qcOnly = r.groups
       .flatMap((g) => g.lines)
       .find((l) => l.sellPrice.count === 0);
     expect(qcOnly, "the seed should hold a unit in QC").toBeDefined();
     const qcRow = s.rows.find(
-      (x) => valueOf(x[1]!) === qcOnly!.unit && valueOf(x[0]!) === qcOnly!.code,
+      (x) =>
+        valueOf(x[1]!) === qcOnly!.unit &&
+        valueOf(x[0]!) === qcOnly!.code &&
+        valueOf(x[2]!) === qcOnly!.serial,
     )!;
-    expect(valueOf(qcRow[6]!)).toBeUndefined();
+    expect(valueOf(qcRow[7]!)).toBeUndefined();
   });
 
   it("keeps Unit even when it is left out — a row is a product", () => {

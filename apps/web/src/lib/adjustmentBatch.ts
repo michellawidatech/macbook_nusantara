@@ -65,10 +65,17 @@ export interface BatchInput {
   lines: readonly BatchLine[];
   /** Counted products on the batch, if any. */
   counted?: readonly CountedBatchLine[];
+  /**
+   * The warehouse an IN batch puts its units in. A unit already on the shelf
+   * somewhere else is a TRANSFER (2026-10-29: C02CK4Y2ML7J in 03 could not be
+   * moved to 05, because every in-stock unit was refused); only one already
+   * in this warehouse is a no-op.
+   */
+  locationId?: string;
 }
 
-/** In stock right now, in the sense an IN adjustment would be a no-op. */
-const IN_STOCK = ["TERSEDIA", "DIRESERVASI"];
+/** On the shelf: an IN of one of these moves it, keeping its status. */
+export const IN_STOCK: readonly string[] = ["TERSEDIA", "DIRESERVASI"];
 
 /**
  * Everything wrong with the batch, in the order a reader would fix it. Empty
@@ -78,9 +85,10 @@ const IN_STOCK = ["TERSEDIA", "DIRESERVASI"];
  * the enum maps nor a `t` — the caller already has both.
  */
 export function batchProblems(
-  { kind, reason, lines, counted = [] }: BatchInput,
+  { kind, reason, lines, counted = [], locationId }: BatchInput,
   unitBySerial: (serial: string) => Unit | undefined,
   statusLabel: (status: string) => string,
+  warehouseLabel: (locationId: string) => string = (id) => id,
 ): string[] {
   const out: string[] = [];
   if (!reason.trim()) out.push("Pick or type a reason for this batch.");
@@ -156,8 +164,30 @@ export function batchProblems(
       );
       continue;
     }
-    if (kind === "IN" && IN_STOCK.includes(unit.status)) {
-      out.push(`${serial} is already in stock (${statusLabel(unit.status)}).`);
+    // On the bench, a unit comes back through the service screen's *Back in
+    // stock*, which closes the visit; adjusting it here would leave the bench
+    // waiting for a unit that is already on a shelf (or written off).
+    if (unit.status === "SERVIS") {
+      out.push(
+        `${serial} is on service — bring it back with Back in stock on the Service page.`,
+      );
+      continue;
+    }
+    // A sold unit is still on its receipt. Putting it back here would leave
+    // the sale carrying a unit the shelf also offers; that is a customer
+    // return, which credits the sale in the same write.
+    if (kind === "IN" && unit.status === "TERJUAL") {
+      out.push(`${serial} is sold — take it back through Returns.`);
+      continue;
+    }
+    if (
+      kind === "IN" &&
+      IN_STOCK.includes(unit.status) &&
+      (locationId === undefined || unit.locationId === locationId)
+    ) {
+      out.push(
+        `${serial} is already in ${warehouseLabel(unit.locationId)} (${statusLabel(unit.status)}).`,
+      );
     }
     if (kind === "OUT" && !HELD_STATUSES.includes(unit.status)) {
       out.push(

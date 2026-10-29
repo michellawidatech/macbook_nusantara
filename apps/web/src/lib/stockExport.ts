@@ -29,6 +29,9 @@
  *   question a stock report gets asked ("how many do we have, anywhere?").
  * - **Grade** on splits a product's row by grade; off, the grades are added
  *   together. A grade column over rows that mixed grades would be a lie.
+ * - **Serial** on (owner ask 2026-10-29: *"1 row 1 serial 1 product name"*)
+ *   gives every unit its own row, its serial beside the product's name, so
+ *   each Qty is 1 and the warehouse groups and totals still add up.
  * - **Unit** cannot be switched off: a row is a product, and a quantity with
  *   no name beside it is a number about nothing.
  *
@@ -73,7 +76,14 @@ import { warehouseLabelOf } from "./warehouses.js";
 
 /** What the export dialog offers to print. */
 export type StockExportColumn =
-  "sku" | "unit" | "grade" | "warehouse" | "qty" | "unitPrice" | "sellPrice";
+  | "sku"
+  | "unit"
+  | "serial"
+  | "grade"
+  | "warehouse"
+  | "qty"
+  | "unitPrice"
+  | "sellPrice";
 
 /**
  * Every column, in the order the SHEET prints them: what the row is, how many,
@@ -84,6 +94,7 @@ export type StockExportColumn =
 export const STOCK_EXPORT_COLUMNS: readonly StockExportColumn[] = [
   "sku",
   "unit",
+  "serial",
   "grade",
   "qty",
   "unitPrice",
@@ -135,6 +146,8 @@ export interface StockReportLine {
   readonly code: string;
   /** The product and its variant, as one cell: "MacBook Air 13 2015 i5 / 8GB / 256GB". */
   readonly unit: string;
+  /** Present only when the report is one row per serial. */
+  readonly serial?: string;
   /** Present only when the report is split by grade; absent means ungraded there. */
   readonly grade?: string;
   /** How many units the shop holds of it. */
@@ -159,6 +172,7 @@ export interface StockReport {
   /** True when grouped by warehouse (the B2Soft layout). */
   readonly byWarehouse: boolean;
   readonly byGrade: boolean;
+  readonly bySerial?: boolean;
   readonly groups: readonly StockReportGroup[];
   /** Every unit on the report. */
   readonly qty: number;
@@ -204,7 +218,11 @@ export function inStockExport(
 export function stockReport(
   src: StockExportSources,
   filter: StockExportFilter,
-  opts: { readonly byWarehouse: boolean; readonly byGrade: boolean },
+  opts: {
+    readonly byWarehouse: boolean;
+    readonly byGrade: boolean;
+    readonly bySerial?: boolean;
+  },
 ): StockReport {
   const skuById = new Map(src.skus.map((s) => [s.id, s]));
   const modelById = new Map(src.models.map((m) => [m.id, m]));
@@ -219,7 +237,7 @@ export function stockReport(
   for (const u of src.units) {
     if (!inStockExport(u, filter, modelOf)) continue;
     const group = opts.byWarehouse ? u.locationId : "";
-    const row = `${u.skuId}|${opts.byGrade ? (u.grade ?? "") : ""}`;
+    const row = `${u.skuId}|${opts.byGrade ? (u.grade ?? "") : ""}|${opts.bySerial ? u.serial : ""}`;
     let rows = groups.get(group);
     if (!rows) groups.set(group, (rows = new Map()));
     const list = rows.get(row);
@@ -242,6 +260,7 @@ export function stockReport(
             unit: sku
               ? [sku.name, sku.variantLabel].filter(Boolean).join(" ")
               : first.skuId,
+            ...(opts.bySerial ? { serial: first.serial } : {}),
             ...(opts.byGrade && first.grade ? { grade: first.grade } : {}),
             qty: units.length,
             unitPrice: priceRange(units.map((u) => u.buy)),
@@ -254,7 +273,8 @@ export function stockReport(
           (a, b) =>
             (skuIndex.get(a.skuId) ?? Number.MAX_SAFE_INTEGER) -
               (skuIndex.get(b.skuId) ?? Number.MAX_SAFE_INTEGER) ||
-            gradeRank(a.grade) - gradeRank(b.grade),
+            gradeRank(a.grade) - gradeRank(b.grade) ||
+            (a.serial ?? "").localeCompare(b.serial ?? ""),
         );
       return {
         locationId,
@@ -269,6 +289,7 @@ export function stockReport(
   return {
     byWarehouse: opts.byWarehouse,
     byGrade: opts.byGrade,
+    bySerial: opts.bySerial === true,
     groups: out,
     qty: out.reduce((n, g) => n + g.qty, 0),
     lineCount: out.reduce((n, g) => n + g.lines.length, 0),
@@ -284,6 +305,7 @@ export function stockReportFor(
   return stockReport(src, filter, {
     byWarehouse: columns.includes("warehouse"),
     byGrade: columns.includes("grade"),
+    bySerial: columns.includes("serial"),
   });
 }
 
@@ -305,6 +327,7 @@ export const STOCK_REPORT_TEXT = {
   heading: {
     sku: "Kode SKU",
     unit: "Unit",
+    serial: "Serial",
     grade: "Grade",
     warehouse: "Gudang",
     qty: "Qty",
@@ -402,6 +425,15 @@ function sheetColumns(chosen: readonly StockExportColumn[]): SheetColumn[] {
         width: 46,
         numeric: false,
         cell: (l) => l.unit,
+      },
+    ],
+    serial: [
+      {
+        key: "serial",
+        heading: h.serial,
+        width: 18,
+        numeric: false,
+        cell: (l) => l.serial ?? "",
       },
     ],
     grade: [

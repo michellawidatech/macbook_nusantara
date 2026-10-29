@@ -73,19 +73,53 @@ describe("batchProblems", () => {
     }
   });
 
-  it("will not put in what is already in stock, or take out what is gone", () => {
-    expect(check("IN", [{ serial: pick("TERSEDIA") }])[0]).toMatch(
-      /already in stock/,
-    );
-    expect(check("IN", [{ serial: pick("DIRESERVASI") }])[0]).toMatch(
-      /already in stock/,
-    );
+  it("will not put a unit into the warehouse it is already in, or take out what is gone", () => {
+    const here = unitOf(pick("TERSEDIA"))!;
+    const into = (serial: string, locationId: string) =>
+      batchProblems(
+        { kind: "IN", reason: "Pindah", lines: [{ serial }], locationId },
+        unitOf,
+        label,
+      );
+    expect(into(here.serial, here.locationId)[0]).toMatch(/already in/);
+    const held = unitOf(pick("DIRESERVASI"))!;
+    expect(into(held.serial, held.locationId)[0]).toMatch(/already in/);
     expect(check("OUT", [{ serial: pick("TERJUAL") }])[0]).toMatch(
       /nothing to take out/,
     );
   });
 
-  it("lets a sold or lost unit come back in", () => {
+  it("moves a unit on the shelf into another warehouse (owner report 2026-10-29)", () => {
+    // C02CK4Y2ML7J sat in 03 and Stock in to 05 refused it as "already in
+    // stock" — the dialog says transfer, and the write already moved it.
+    const u = unitOf(pick("TERSEDIA"))!;
+    const other = db.warehouses.find((w) => w.id !== u.locationId)!.id;
+    expect(
+      batchProblems(
+        {
+          kind: "IN",
+          reason: "Pindah gudang",
+          lines: [{ serial: u.serial }],
+          locationId: other,
+        },
+        unitOf,
+        label,
+      ),
+    ).toEqual([]);
+  });
+
+  it("leaves a unit on service and a sold unit to their own screens", () => {
+    const sold = pick("TERJUAL");
+    expect(check("IN", [{ serial: sold }])[0]).toMatch(/through Returns/);
+    const svc = db.units.find((u) => u.status === "SERVIS");
+    if (svc) {
+      for (const kind of ["IN", "OUT"] as const) {
+        expect(check(kind, [{ serial: svc.serial }])[0]).toMatch(/on service/);
+      }
+    }
+  });
+
+  it("lets a returned or lost unit come back in", () => {
     // The mirror of the rule above, and the case it exists for: a unit written
     // off and then found is exactly what an IN adjustment is for.
     expect(check("IN", [{ serial: pick("RETUR_SUPPLIER") }])).toEqual([]);
