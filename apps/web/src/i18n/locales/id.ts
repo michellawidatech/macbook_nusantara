@@ -1144,6 +1144,22 @@ export const id: Record<string, string> = {
   "stock.tabHistory": "Riwayat Pergerakan Stok",
   "stock.tabStock": "Stok",
   "stock.editMovement": "Ubah",
+  "stock.undoMovement": "Batalkan",
+  "stock.undoMovementTitle": "Batalkan pergerakan ini?",
+  "stock.undoMovementBody":
+    "Pergerakan ini dibatalkan seolah tidak pernah terjadi, dan hilang dari riwayat.",
+  "stock.undoMovementOk": "Batalkan",
+  "stock.undoMovementAria": "Batalkan pergerakan {{what}}",
+  "stock.undoMovedOn":
+    "Unit ini sudah berpindah lagi. Batalkan dulu pergerakan yang lebih baru.",
+  "stock.undoCreatedUnit":
+    "Penyesuaian ini yang memasukkan serial ke sistem. Keluarkan dengan Stok keluar saja.",
+  "stock.undoReleasedHold":
+    "Penyesuaian ini mengeluarkan unit yang direservasi dan melepas reservasinya, jadi tidak bisa dikembalikan.",
+  "stock.undoShelfShort":
+    "Barang tersebut sudah terjual atau dipindah; stok di rak akan jadi minus.",
+  "stock.undoNotFound": "Pergerakan ini sudah tidak tercatat.",
+  "stock.undone": "Pergerakan dibatalkan.",
   "stock.editMovementAria": "Ubah pergerakan {{what}}",
   "stock.thisSerialWasNotIn":
     "Serial ini belum ada di sistem; penyesuaian ini yang membuatnya",

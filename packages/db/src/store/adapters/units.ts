@@ -1321,7 +1321,18 @@ export const adjustments: Adapter<"adjustments"> = {
   async write(ctx, rows) {
     for (const r of rows) {
       const n = r.next;
-      if (n === undefined) throw refuseRemoval("adjustments", r.key);
+      if (n === undefined) {
+        // Undone (owner ask 2026-10-29: "undo the stock movement and it will
+        // be erased from the history"). The row is a record OF the unit's
+        // KOREKSI event; that event goes through the events adapter, which
+        // judges the ledger, and nothing points at this row.
+        const gone = await ctx.tx.stockAdjustment.deleteMany({
+          where: { id: r.key },
+        });
+        if (gone.count === 0) throw refuseRemoval("adjustments", r.key);
+        ctx.touch("adjustments", r.key);
+        continue;
+      }
       if (r.base !== undefined) {
         await correctAdjustment(ctx, r.base, n);
         continue;

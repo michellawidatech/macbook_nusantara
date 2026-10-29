@@ -59,4 +59,41 @@ describe("Stock in", () => {
       expect(from).not.toBe(into);
     },
   );
+
+  it("undoes the move from Stock Movement History, and the row leaves it", async () => {
+    const db = getDb();
+    const into = db.myWarehouseId;
+    const unit = db.units.find(
+      (u) => u.status === "TERSEDIA" && u.locationId !== into,
+    )!;
+    const from = unit.locationId;
+    const dialog = await openStockIn();
+    const [reason, , serial] = within(dialog).getAllByRole("combobox");
+    fireEvent.change(reason!, { target: { value: "Pindah gudang" } });
+    fireEvent.change(serial!, { target: { value: unit.serial } });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Log 1/ }));
+    await vi.waitFor(() =>
+      expect(
+        getDb().units.find((u) => u.serial === unit.serial)!.locationId,
+      ).toBe(into),
+    );
+    const adj = getDb().adjustments.find((a) => a.serial === unit.serial)!;
+
+    fireEvent.click(
+      screen.getByRole("tab", { name: /Stock Movement History/ }),
+    );
+    const undo = await screen.findByRole("button", {
+      name: new RegExp(`Undo the movement of .*${unit.serial}`),
+    });
+    expect(undo).toBeEnabled();
+    fireEvent.click(undo);
+    fireEvent.click(await screen.findByRole("button", { name: /^Undo$/ }));
+
+    await vi.waitFor(() => {
+      const after = getDb().units.find((u) => u.serial === unit.serial)!;
+      expect(after.locationId).toBe(from);
+      expect(after.status).toBe("TERSEDIA");
+    });
+    expect(getDb().adjustments.some((a) => a.id === adj.id)).toBe(false);
+  });
 });

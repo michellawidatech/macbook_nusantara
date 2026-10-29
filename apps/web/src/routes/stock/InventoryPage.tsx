@@ -57,7 +57,9 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Select,
+  Space,
   Tabs,
   Tag,
   Tooltip,
@@ -66,6 +68,7 @@ import {
 import {
   DeleteOutlined,
   DownloadOutlined,
+  UndoOutlined,
   UploadOutlined,
   EditOutlined,
   LoginOutlined,
@@ -83,6 +86,11 @@ import {
   stockHistorySkuId,
   type StockHistoryRow,
 } from "../../lib/stockHistory.js";
+import {
+  undoBlock,
+  undoStockMovement,
+  type UndoBlock,
+} from "../../lib/stockUndo.js";
 import { skuTracksSerial } from "../../lib/serialTracking.js";
 import {
   averageCost,
@@ -127,8 +135,10 @@ import {
   mutate,
   appendEvent,
   ensureReason,
+  getDb,
   nextId,
   currentStaffName,
+  removeLastEvent,
 } from "../../mock/store.js";
 import { tagOf, UNIT_STATUS } from "../../i18n/enumLabels.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
@@ -618,6 +628,8 @@ export function InventoryPage() {
           const transfer = kind === "IN" && IN_STOCK.includes(existing.status);
           appendEvent(d, serial, {
             type: "KOREKSI",
+            // The adjustment's own instant, so an undo finds this row again.
+            at,
             toStatus:
               kind === "IN"
                 ? transfer
@@ -767,6 +779,46 @@ export function InventoryPage() {
   const logSubject = (a: StockHistoryRow) =>
     a.counted ? logProduct(a) : a.serial;
 
+  /** What the Undo button's tooltip says: the action, or why it is refused. */
+  const undoBlockText = (block: UndoBlock | null): string => {
+    switch (block) {
+      case null:
+        return t("stock.undoMovement", "Undo");
+      case "MOVED_ON":
+        return t(
+          "stock.undoMovedOn",
+          "The unit has moved since. Undo its newer movement first.",
+        );
+      case "CREATED_UNIT":
+        return t(
+          "stock.undoCreatedUnit",
+          "This adjustment brought the serial into the system. Write it off with Stock out instead.",
+        );
+      case "RELEASED_HOLD":
+        return t(
+          "stock.undoReleasedHold",
+          "This took a reserved unit out and released its reservation, so it cannot be put back.",
+        );
+      case "SHELF_SHORT":
+        return t(
+          "stock.undoShelfShort",
+          "Those pieces have since been sold or moved; the shelf would go below zero.",
+        );
+      default:
+        return t("stock.undoNotFound", "This movement is no longer recorded.");
+    }
+  };
+
+  /** Take one history row back (owner ask 2026-10-29). */
+  const undoRow = (row: StockHistoryRow) => {
+    let done = false;
+    mutate((d: MockDb) => {
+      done = undoStockMovement(d, row, removeLastEvent);
+    });
+    if (done) message.success(t("stock.undone", "Movement undone."));
+    else message.error(undoBlockText(undoBlock(getDb(), row)));
+  };
+
   const logTab = (
     <Card>
       <ProTable<StockHistoryRow>
@@ -879,20 +931,49 @@ export function InventoryPage() {
             title: "",
             key: "actions",
             width: COLUMN.actions,
-            render: (_, a) => (
-              <Tooltip title={t("stock.editMovement", "Edit")}>
-                <Button
-                  size="small"
-                  aria-label={t(
-                    "stock.editMovementAria",
-                    "Edit the movement of {{what}}",
-                    { what: logSubject(a) },
-                  )}
-                  icon={<EditOutlined />}
-                  onClick={() => setEditing(a)}
-                />
-              </Tooltip>
-            ),
+            render: (_, a) => {
+              const block = undoBlock(db, a);
+              return (
+                <Space size={SPACE.xs}>
+                  <Tooltip title={t("stock.editMovement", "Edit")}>
+                    <Button
+                      size="small"
+                      aria-label={t(
+                        "stock.editMovementAria",
+                        "Edit the movement of {{what}}",
+                        { what: logSubject(a) },
+                      )}
+                      icon={<EditOutlined />}
+                      onClick={() => setEditing(a)}
+                    />
+                  </Tooltip>
+                  <Popconfirm
+                    title={t("stock.undoMovementTitle", "Undo this movement?")}
+                    description={t(
+                      "stock.undoMovementBody",
+                      "It is taken back as if it never happened, and leaves the history.",
+                    )}
+                    okText={t("stock.undoMovementOk", "Undo")}
+                    cancelText={t("common.cancel", "Cancel")}
+                    disabled={block !== null}
+                    onConfirm={() => undoRow(a)}
+                  >
+                    <Tooltip title={undoBlockText(block)}>
+                      <Button
+                        size="small"
+                        aria-label={t(
+                          "stock.undoMovementAria",
+                          "Undo the movement of {{what}}",
+                          { what: logSubject(a) },
+                        )}
+                        icon={<UndoOutlined />}
+                        disabled={block !== null}
+                      />
+                    </Tooltip>
+                  </Popconfirm>
+                </Space>
+              );
+            },
           },
         ]}
       />

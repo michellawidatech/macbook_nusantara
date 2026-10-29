@@ -1212,7 +1212,9 @@ describe("the stock movement history (2026-09-24)", () => {
               has_column_privilege('nusantara_app','"StockMove"','qty','UPDATE')               AS move_qty,
               has_table_privilege('nusantara_app','"StockMove"','UPDATE')                      AS move_table,
               has_table_privilege('nusantara_app','"StockAdjustment"','UPDATE')                AS adj_table,
-              has_table_privilege('nusantara_app','"StockMove"','DELETE')                      AS move_delete`,
+              has_table_privilege('nusantara_app','"StockMove"','DELETE')                      AS move_delete,
+              has_table_privilege('nusantara_app','"StockAdjustment"','DELETE')                AS adj_delete,
+              has_function_privilege('nusantara_app','stock_move_drop_adjustment(text[])','EXECUTE') AS move_undo`,
     );
     expect(rows[0]).toEqual({
       adj_description: true,
@@ -1223,7 +1225,11 @@ describe("the stock movement history (2026-09-24)", () => {
       move_qty: false,
       move_table: false,
       adj_table: false,
+      // An undo (2026-10-29): the adjustment row by DELETE, a counted move
+      // only through the definer function.
       move_delete: false,
+      adj_delete: true,
+      move_undo: true,
     });
   });
 });

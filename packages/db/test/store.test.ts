@@ -630,8 +630,8 @@ describe("a till's commit", () => {
       staff: adj["staff"],
     });
 
-    // What the row IS does not move: its unit, its direction — and nothing
-    // removes one.
+    // What the row IS does not move: its unit, its direction. An undo
+    // (2026-10-29) removes it outright — see the next test.
     const otherUnit = (shop["units"] as Row[]).find(
       (u) => u["serial"] !== adj["serial"],
     )!;
@@ -644,11 +644,159 @@ describe("a till's commit", () => {
         kind: back["kind"] === "IN" ? "OUT" : "IN",
       }),
     ).rejects.toBeInstanceOf(StoreValidationError);
+  }, 180_000);
+
+  it("undoes a unit's stock adjustment (2026-10-29): the row and its event go, the unit is back where it was", async () => {
+    const shop = await loadDemo();
+    const unit = (shop["units"] as Row[]).find(
+      (u) => u["status"] === "TERSEDIA",
+    )!;
+    const serial = unit["serial"] as string;
+    const from = unit["locationId"] as string;
+    const to = (shop["warehouses"] as Row[]).find((w) => w["id"] !== from)![
+      "id"
+    ] as string;
+    const events = (shop["events"] as Row[]).filter(
+      (e) => e["serial"] === serial,
+    );
+    const seq = Math.max(...events.map((e) => e["seq"] as number));
+    const reason = (shop["reasons"] as Row[]).find(
+      (r) => r["activity"] === "ADJUSTMENT",
+    )!;
+    const at = NOW.toISOString();
+    const ev: Row = {
+      id: "ev_undo_test",
+      serial,
+      seq: seq + 1,
+      type: "KOREKSI",
+      at,
+      fromStatus: "TERSEDIA",
+      toStatus: "TERSEDIA",
+      locationId: to,
+      note: "Moved",
+      staff: "Michella",
+    };
+    const adj: Row = {
+      id: "adj_undo_test",
+      serial,
+      description: "",
+      reasonId: reason["id"],
+      at,
+      staff: "Michella",
+      kind: "IN",
+      batchId: "adjb_undo_test",
+    };
+    const moved = { ...unit, locationId: to };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { units: [unit], events: [], adjustments: [] },
+          { units: [moved], events: [ev], adjustments: [adj] },
+        ),
+      ),
+    });
+    const wroteEv = await stored("events", "ev_undo_test");
+    const wroteAdj = await stored("adjustments", "adj_undo_test");
+    expect(wroteAdj["serial"]).toBe(serial);
+
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { units: [moved], events: [wroteEv], adjustments: [wroteAdj] },
+          { units: [unit], events: [], adjustments: [] },
+        ),
+      ),
+    });
+    const after = await snapshotStore(db, { staffId: ACTOR });
+    expect(
+      (after.db["adjustments"] as Row[]).some(
+        (a) => a["id"] === "adj_undo_test",
+      ),
+    ).toBe(false);
+    expect(
+      (after.db["events"] as Row[]).some((e) => e["id"] === "ev_undo_test"),
+    ).toBe(false);
+    expect(
+      (after.db["units"] as Row[]).find((u) => u["serial"] === serial)![
+        "locationId"
+      ],
+    ).toBe(from);
+  }, 180_000);
+
+  it("undoes a counted adjustment (2026-10-29), never another kind of move, never below zero", async () => {
+    const shop = await loadDemo();
+    const reason = (shop["reasons"] as Row[]).find(
+      (r) => r["activity"] === "ADJUSTMENT",
+    )!;
+    const sample = (shop["stockMoves"] as Row[])[0]!;
+    const move: Row = {
+      id: "sm_undo_test",
+      skuId: sample["skuId"],
+      locationId: sample["locationId"],
+      qty: 2,
+      cost: sample["cost"],
+      type: "KOREKSI",
+      at: NOW.toISOString(),
+      reasonId: reason["id"],
+      note: "Adjusted in",
+      staff: "Michella",
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore({ stockMoves: [] }, { stockMoves: [move] }),
+      ),
+    });
+    const written = await stored("stockMoves", "sm_undo_test");
+    // An arrival, a sale or a stock take is not an adjustment.
     await expect(
       commitStore(db, {
         staffId: ACTOR,
         changes: encodeChangeset(
-          diffStore({ adjustments: [back] }, { adjustments: [] }),
+          diffStore({ stockMoves: [sample] }, { stockMoves: [] }),
+        ),
+      }),
+    ).rejects.toBeInstanceOf(StoreValidationError);
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore({ stockMoves: [written] }, { stockMoves: [] }),
+      ),
+    });
+    const after = await snapshotStore(db, { staffId: ACTOR });
+    expect(
+      (after.db["stockMoves"] as Row[]).some((m) => m["id"] === "sm_undo_test"),
+    ).toBe(false);
+
+    // Undoing an IN whose pieces have since gone would leave the shelf short.
+    const onShelf = (after.db["stockMoves"] as Row[])
+      .filter(
+        (m) =>
+          m["skuId"] === sample["skuId"] &&
+          m["locationId"] === sample["locationId"],
+      )
+      .reduce((n, m) => n + (m["qty"] as number), 0);
+    const big: Row = { ...move, id: "sm_undo_big", qty: 1 };
+    const out: Row = {
+      ...move,
+      id: "sm_undo_out",
+      qty: -(onShelf + 1),
+      note: "Adjusted out",
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore({ stockMoves: [] }, { stockMoves: [big, out] }),
+      ),
+    });
+    const wroteBig = await stored("stockMoves", "sm_undo_big");
+    await expect(
+      commitStore(db, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore({ stockMoves: [wroteBig] }, { stockMoves: [] }),
         ),
       }),
     ).rejects.toBeInstanceOf(StoreValidationError);

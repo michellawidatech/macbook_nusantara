@@ -381,7 +381,9 @@ export async function commitStore(
     if (!APPEND_ONLY.has(p.name) && !correctable) continue;
     for (const r of p.rows) {
       if (r.base === undefined) continue;
-      if (correctable && r.next !== undefined) continue;
+      // A correction, or an undo (2026-10-29: an adjustment taken back
+      // leaves no row) — each adapter judges which rows may go.
+      if (correctable) continue;
       if (
         p.name === "events" &&
         (r.next === undefined || onlySerialDiffers(r.base, r.next))

@@ -3486,6 +3486,24 @@ Decisions that outlived those documents:
   refused now, both directions: a unit on SERVIS (Back in stock on the
   Service page closes its visit); on IN, a TERJUAL unit (that is a customer
   return). Export stock has a **Serial** column: one row per unit, Qty 1.
+- **A stock movement can be undone, and leaves the history — 2026-10-29.**
+  *"They should be able to undo the stock movement and it will be erased from
+  the history."* Stock Movement History has an *Undo* beside *Edit*, behind a
+  Popconfirm (`lib/stockUndo.ts`, `test/stockUndo.test.ts`). A unit's row
+  removes the `Adjustment` and its `KOREKSI` event (`removeLastEvent`), so the
+  unit goes back to the row before; a counted row removes its `KOREKSI` move.
+  Refused, with the reason on the button: `MOVED_ON` (a newer row exists —
+  undo that first), `CREATED_UNIT` (it brought the serial in; Stock out
+  instead), `RELEASED_HOLD` (an OUT that released a reservation),
+  `SHELF_SHORT` (the pieces have since gone). The batch now stamps the event
+  with the adjustment's own instant so the undo can pair them; older rows
+  pair within 5 s. On Postgres (migration
+  `20261029090000_stock_adjustment_undo`): `commit.ts` lets a CORRECTABLE
+  removal reach its adapter; `nusantara_app` gets DELETE on `StockAdjustment`
+  only, and a counted move goes through `stock_move_drop_adjustment(text[])`
+  (SECURITY DEFINER: KOREKSI with a reason and no order/invoice/opname link),
+  with the below-zero check run after. ⚠️ The eleventh sanctioned hard
+  delete; do not generalise it.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
