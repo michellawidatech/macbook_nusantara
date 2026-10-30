@@ -100,6 +100,8 @@ import { labelOf, ORDER_SOURCE } from "../../i18n/enumLabels.js";
 import { deleteSale, saleDeletionBlock } from "../../lib/saleDeletion.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
+import { draftKey } from "../../hooks/usePersistentState";
 
 /**
  * One product on one sale, and the unit it was.
@@ -147,6 +149,32 @@ interface SaleRow {
   readonly status: SaleReturnStatus;
   readonly payStatus: SalePaymentStatus;
   readonly balance: SaleBalance;
+  /**
+   * What a marketplace kept of this sale's payouts, by channel — an expense
+   * on Income & Expense, shown here under Received so the gap between "of
+   * total" and the bank is explained on the row (owner 2026-10-30).
+   */
+  readonly kept: readonly {
+    readonly channel: string;
+    readonly amount: number;
+  }[];
+}
+
+/**
+ * Open Income & Expense searched for one sale's number, with the list's own
+ * filters cleared so nothing hides the row. Written to the keys `ProTable`
+ * keeps that list's state under (`persistKey="cashflow.unified"`), which it
+ * reads when the page mounts.
+ */
+function showExpensesOf(code: string): void {
+  const key = (part: string) => draftKey(`list.cashflow.unified.${part}`);
+  try {
+    localStorage.setItem(key("search"), JSON.stringify(code));
+    localStorage.removeItem(key("filters"));
+    localStorage.removeItem(key("ranges"));
+  } catch {
+    // Storage refused (Safari private mode): the page opens unsearched.
+  }
 }
 
 /**
@@ -326,6 +354,12 @@ export function TransactionsPage() {
     const back = returnedSerials(db.orders, db.events);
     // What a return cancelled of each sale's debt — "Unpaid, returned".
     const debts = returnedDebts(db.orders, db.events, db.stockMoves);
+    const settlementsOf = new Map<string, (typeof db.settlements)[number][]>();
+    for (const st of db.settlements)
+      settlementsOf.set(st.orderId, [
+        ...(settlementsOf.get(st.orderId) ?? []),
+        st,
+      ]);
     // Maps rather than a `find` per sale: the B2Soft history is thousands of
     // receipts against thousands of customers.
     const units = new Map(db.units.map((u) => [u.serial, u]));
@@ -362,6 +396,12 @@ export function TransactionsPage() {
         ];
         const payments = paymentsOf(o);
         const balance = orderBalance(o);
+        const keptBy = new Map<string, number>();
+        for (const st of settlementsOf.get(o.id) ?? [])
+          keptBy.set(
+            st.channel,
+            (keptBy.get(st.channel) ?? 0) + st.gross - st.received,
+          );
         const ref = paymentRefOf(payments);
         return {
           key: o.id,
@@ -387,6 +427,9 @@ export function TransactionsPage() {
           status: saleReturnStatus(o.serials, returned, o.lines),
           payStatus: salePaymentStatus(balance, debts.get(o.id)),
           balance,
+          kept: [...keptBy]
+            .filter(([, amount]) => amount !== 0)
+            .map(([channel, amount]) => ({ channel, amount })),
         };
       })
       .sort((a, b) => b.at.localeCompare(a.at));
@@ -398,6 +441,7 @@ export function TransactionsPage() {
     db.units,
     db.skus,
     db.salesmen,
+    db.settlements,
     t,
   ]);
 
@@ -767,6 +811,26 @@ export function TransactionsPage() {
                         total: fmtRp(r.balance.total),
                       })}
                     </Typography.Text>
+                    {r.kept.map((k) => (
+                      // The deduction is an expense on Income & Expense, under
+                      // this sale's number; the link opens that list already
+                      // searched for it (owner 2026-10-30).
+                      <Link
+                        key={k.channel}
+                        to="/finance/cashflow"
+                        onClick={() => showExpensesOf(r.code)}
+                        style={{ fontSize: TYPE.sm, textAlign: "right" }}
+                      >
+                        {t(
+                          "transactions.keptAsExpense",
+                          "{{amount}} kept by {{channel}} · recorded as an expense",
+                          {
+                            amount: fmtRp(k.amount),
+                            channel: k.channel,
+                          },
+                        )}
+                      </Link>
+                    ))}
                   </Flex>
                 ),
               },

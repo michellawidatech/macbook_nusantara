@@ -3541,6 +3541,28 @@ Decisions that outlived those documents:
     `BIAYA_ADMIN`; the separate `marketplaceFees` line is gone.
   - ⚠️ Settings → reasons still lists `ADJUSTMENT` reasons: stock opname's
     *Add to inventory* still offers that typable list.
+- **What a marketplace kept is an expense, not a smaller sale — 2026-10-30.**
+  *"Why the Shopee deduction is not deducted?"* — a payout's deductions were
+  saved (`Settlement`) and read only by Profit & Loss, so Income & Expense put
+  the WHOLE payment in the bank and the Bank card ran ahead of the statement
+  by every Shopee cut. Owner answer: keep the sale at what the customer paid
+  and the deduction as an expense.
+  - `cashflowRows` gives a marketplace payment `deducted` (its settlement's
+    `gross − received`) and emits a derived row beside it — `feeOf` = the
+    payment row's key, `BIAYA_ADMIN`, "Kept by Shopee · {typed names}", same
+    instant, method, state and `inBalance` — so the balance moves by what
+    landed; a payout ABOVE the fees nets to an INCOME row (`SELISIH`). No
+    record behind it: corrected in Edit transaction, never deletable.
+  - **Reconciliation matches the payout NET**: `signedAmount` subtracts
+    `deducted`, and Monthly leaves `feeOf` rows out of its movements, so a
+    Shopee credit pairs EXACT rather than as a DEDUCTION suggestion whose
+    Accept would write the fee a second time. Daily lists the fee row,
+    read-only.
+  - Transaction History's Received keeps "of {total}" and adds "{amount} kept
+    by Shopee · recorded as an expense" under it — a link that opens Income &
+    Expense searched for the sale's number (it seeds that list's `ProTable`
+    keys and clears its filters). P&L is unchanged — it already counted the
+    fees.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

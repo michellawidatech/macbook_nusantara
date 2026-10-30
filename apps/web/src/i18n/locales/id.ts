@@ -1748,6 +1748,11 @@ export const id: Record<string, string> = {
   "cashflow.kindRefundIn": "Pengembalian diterima",
   "cashflow.refundOnSale": "Pengembalian atas transaksi {{code}}",
   "cashflow.saleDescription": "Penjualan lewat {{channel}}",
+  "cashflow.keptByMarketplace": "Dipotong {{channel}}",
+  "recon.feeEditedOnSale":
+    "Koreksi potongan ini di Ubah transaksi pada penjualannya.",
+  "transactions.keptAsExpense":
+    "{{amount}} dipotong {{channel}} · dicatat sebagai pengeluaran",
   "cashflow.searchOrderOrDescription":
     "Cari transaksi, keterangan, atau metode pembayaran",
 

@@ -120,9 +120,13 @@ export function monthRange(month: string): { start: string; end: string } {
 export const potOf = (r: CashflowRow): Pot | undefined =>
   accountOfMethod(r.methodCode);
 
-/** A row's amount with its sign: money in positive, out negative. */
+/**
+ * A row's amount with its sign: money in positive, out negative — and a
+ * marketplace payout net of what the platform kept, because that is the one
+ * credit the bank statement shows for it (its `feeOf` row is never paired).
+ */
 export const signedAmount = (r: CashflowRow): number =>
-  r.direction === "INCOME" ? r.amount : -r.amount;
+  (r.direction === "INCOME" ? r.amount : -r.amount) - (r.deducted ?? 0);
 
 /** The POS balance of a pot at the END of a local day. */
 export function posBalanceAt(

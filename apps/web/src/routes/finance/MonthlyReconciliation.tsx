@@ -243,7 +243,10 @@ export function MonthlyReconciliation({
   const closed = rec.status === "RECONCILED";
   const posOpening = posBalanceAt(rows, db.settings, "BANK", dayBefore(start));
   const posClosing = posBalanceAt(rows, db.settings, "BANK", end);
-  const movements = potMovements(rows, db.settings, "BANK", start, end);
+  // A deduction's row is folded into its payment, which matches net.
+  const movements = potMovements(rows, db.settings, "BANK", start, end).filter(
+    (r) => r.feeOf === undefined,
+  );
   const byKey = new Map<string, CashflowRow>();
   for (const r of rows) {
     const k = rowRefKey(r);
@@ -284,7 +287,7 @@ export function MonthlyReconciliation({
     "BANK",
     dayBefore(dayBefore(dayBefore(start))),
     end,
-  );
+  ).filter((r) => r.feeOf === undefined);
 
   const describe = (r: CashflowRow | undefined) =>
     r === undefined

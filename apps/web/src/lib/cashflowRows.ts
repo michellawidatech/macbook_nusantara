@@ -107,6 +107,18 @@ export interface CashflowRow {
   readonly adjustment?: AdjustmentRef & { readonly date: string };
   /** The record behind the row. Absent on a voided debt, which is no record. */
   readonly source?: MovementSource;
+  /**
+   * On a marketplace payment: what the platform kept of it (its settlement's
+   * deductions; below zero when it paid more). The payment stays at what the
+   * customer paid and the deduction is its own row (`feeOf`), so the sale is
+   * the sale and the bank still gets only what landed (owner 2026-10-30).
+   */
+  readonly deducted?: number;
+  /**
+   * On that deduction's own row: the key of the payment row it came off.
+   * Derived from the settlement — corrected in Edit transaction, never here.
+   */
+  readonly feeOf?: string;
 }
 
 /** A debt a return cancelled: listed in Accrual, never counted anywhere. */
@@ -177,7 +189,7 @@ type CashflowDb = Pick<
   | "customers"
   | "paymentMethods"
 > &
-  Partial<Pick<MockDb, "reservations">>;
+  Partial<Pick<MockDb, "reservations" | "settlements">>;
 
 /** Every movement, newest first in the one total order (`chronological`). */
 export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
@@ -214,6 +226,9 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
       });
     }
     for (const p of paymentsOf(o)) {
+      const settlement = db.settlements?.find((s) => s.paymentId === p.id);
+      const kept =
+        settlement === undefined ? 0 : settlement.gross - settlement.received;
       out.push({
         key: `p-${o.id}-${p.id}`,
         at: p.at,
@@ -230,7 +245,41 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
         status: p.state,
         tie: "",
         source: { kind: "salePayment", orderId: o.id, paymentId: p.id },
+        ...(kept !== 0 ? { deducted: kept } : {}),
       });
+      /*
+       * What the marketplace kept, as an expense beside the sale rather than
+       * netted into it (owner 2026-10-30): the same instant, pot and state as
+       * the payment, so the balance moves by exactly what landed. Shopee
+       * paying MORE than the published fees nets below zero — that is money
+       * in, filed as a balance mismatch.
+       */
+      if (settlement !== undefined && kept !== 0) {
+        // The names the deductions were typed with; the kind codes have no
+        // translated label, and an English one would be invisible in English.
+        const names = settlement.fees
+          .filter((f) => f.amount !== 0 && f.label)
+          .map((f) => f.label)
+          .join(", ");
+        out.push({
+          key: `fee-${o.id}-${p.id}`,
+          at: p.at,
+          direction: kept > 0 ? "EXPENSE" : "INCOME",
+          category: kept > 0 ? "BIAYA_ADMIN" : "SELISIH",
+          method: methodLabel(p.method),
+          methodCode: p.method,
+          inBalance: p.inBalance !== false,
+          description:
+            t("cashflow.keptByMarketplace", "Kept by {{channel}}", {
+              channel: settlement.channel,
+            }) + (names ? ` · ${names}` : ""),
+          orderCode: o.code,
+          amount: Math.abs(kept),
+          status: p.state,
+          tie: "",
+          feeOf: `p-${o.id}-${p.id}`,
+        });
+      }
     }
     for (const r of o.refunds ?? []) {
       out.push({

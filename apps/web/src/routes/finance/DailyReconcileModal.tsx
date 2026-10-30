@@ -511,6 +511,19 @@ function PotDialog({
               const block =
                 r.source === undefined ? "NOT_FOUND" : editBlock(db, r.source);
               const value = amounts[r.key] ?? r.amount;
+              // What a marketplace kept is read off the sale's payout and
+              // corrected where the payout is: Edit transaction.
+              if (r.feeOf !== undefined)
+                return (
+                  <Tooltip
+                    title={t(
+                      "recon.feeEditedOnSale",
+                      "Correct this deduction in the sale's Edit transaction.",
+                    )}
+                  >
+                    <span>{fmtRp(r.amount)}</span>
+                  </Tooltip>
+                );
               if (block !== undefined)
                 return (
                   <Tooltip title={editBlockText(block, t)}>

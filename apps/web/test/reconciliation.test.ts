@@ -115,6 +115,80 @@ function sale(
 
 const rowsOf = (db: MockDb) => cashflowRows(db, t);
 
+describe("what a marketplace kept (owner 2026-10-30: keep it as an expense)", () => {
+  function shopeeSale(db: MockDb) {
+    const o = sale(db, "sp", "2026-09-04", 10_000_000, "MARKETPLACE");
+    db.settlements = [
+      {
+        id: "stl-1",
+        paymentId: "sp-p1",
+        orderId: "sp",
+        channel: "Shopee",
+        gross: 10_000_000,
+        fees: [
+          { id: "f1", kind: "COMMISSION", label: "Komisi", amount: 1_000_000 },
+          { id: "f2", kind: "OTHER", label: "Biaya layanan", amount: 150_000 },
+        ],
+        received: 8_850_000,
+        at: at("2026-09-04"),
+        staff: "Dina",
+      },
+    ];
+    return o;
+  }
+
+  it("keeps the sale at what the customer paid and lists the deduction as a fee expense", () => {
+    const db = shop();
+    shopeeSale(db);
+    const rows = rowsOf(db);
+    const payment = rows.find((r) => r.key === "p-sp-sp-p1")!;
+    expect(payment.amount).toBe(10_000_000);
+    expect(payment.deducted).toBe(1_150_000);
+    const fee = rows.find((r) => r.feeOf === "p-sp-sp-p1")!;
+    expect(fee).toMatchObject({
+      direction: "EXPENSE",
+      category: "BIAYA_ADMIN",
+      amount: 1_150_000,
+      status: "SETTLED",
+      orderCode: "SI-sp",
+    });
+    expect(fee.description).toBe("Kept by Shopee · Komisi, Biaya layanan");
+  });
+
+  it("moves the bank by what landed, and matches the statement's net credit exactly", () => {
+    const db = shop();
+    shopeeSale(db);
+    const rows = rowsOf(db);
+    expect(posBalanceAt(rows, db.settings, "BANK", "2026-09-04")).toBe(
+      18_850_000,
+    );
+    const moves = potMovements(
+      rows,
+      db.settings,
+      "BANK",
+      "2026-09-04",
+      "2026-09-04",
+    )
+      .filter((r) => r.feeOf === undefined)
+      .map(toPosMovement);
+    expect(moves).toEqual([
+      { key: "p:sp-p1", date: "2026-09-04", amount: 8_850_000 },
+    ]);
+  });
+
+  it("files a payout above the fees as money in", () => {
+    const db = shop();
+    shopeeSale(db);
+    db.settlements[0] = {
+      ...db.settlements[0]!,
+      fees: [],
+      received: 10_050_000,
+    };
+    const fee = rowsOf(db).find((r) => r.feeOf !== undefined)!;
+    expect(fee).toMatchObject({ direction: "INCOME", amount: 50_000 });
+  });
+});
+
 describe("the POS balance per pot per day", () => {
   it("is the opening plus the settled movements of that pot up to the end of the day", () => {
     const db = shop();
