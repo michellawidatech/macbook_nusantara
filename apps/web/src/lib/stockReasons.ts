@@ -25,11 +25,7 @@
 import type { AdjustmentKind } from "../mock/seed.js";
 
 export type StockReason =
-  | "INTERNAL"
-  | "TRANSFER"
-  | "SERVICE"
-  | "SUPPLIER_RETURN"
-  | "CUSTOMER_RETURN";
+  "INTERNAL" | "TRANSFER" | "SERVICE" | "SUPPLIER_RETURN" | "CUSTOMER_RETURN";
 
 /** The reasons each button offers, in the order they are drawn. */
 export function reasonsFor(kind: AdjustmentKind): readonly StockReason[] {
@@ -39,9 +35,7 @@ export function reasonsFor(kind: AdjustmentKind): readonly StockReason[] {
 }
 
 /** Written by the adjustment batch, rather than handed to another dialog. */
-export function isBatchReason(
-  r: StockReason,
-): r is "INTERNAL" | "TRANSFER" {
+export function isBatchReason(r: StockReason): r is "INTERNAL" | "TRANSFER" {
   return r === "INTERNAL" || r === "TRANSFER";
 }
 

@@ -32,8 +32,9 @@ async function openStock(direction: "IN" | "OUT") {
     </AntdApp>,
   );
   const title = direction === "IN" ? "Stock in" : "Stock out";
-  return (await screen.findByText(title, { selector: ".ant-modal-title" }))
-    .closest(".ant-modal") as HTMLElement;
+  return (
+    await screen.findByText(title, { selector: ".ant-modal-title" })
+  ).closest(".ant-modal") as HTMLElement;
 }
 
 /** Press a reason, then the serial box is the last combobox on the grid. */
@@ -43,18 +44,16 @@ function pickReason(dialog: HTMLElement, name: string) {
 
 /** The first row's serial box — the grid's one AutoComplete. */
 function serialBox(dialog: HTMLElement) {
-  return dialog.querySelector<HTMLElement>(
-    ".ant-select-auto-complete input",
-  )!;
+  return dialog.querySelector<HTMLElement>(".ant-select-auto-complete input")!;
 }
 
 /** Wait for a serial to be a row of the batch dialog's table. */
 async function inTable(batch: HTMLElement, serial: string) {
   await vi.waitFor(() =>
     expect(
-      within(batch.querySelector(".ant-table-tbody") as HTMLElement).getAllByText(
-        serial,
-      ).length,
+      within(
+        batch.querySelector(".ant-table-tbody") as HTMLElement,
+      ).getAllByText(serial).length,
     ).toBeGreaterThan(0),
   );
 }
@@ -110,7 +109,9 @@ describe("Stock transfer", () => {
       expect(from).not.toBe(into);
       const adj = getDb().adjustments.find((a) => a.serial === unit.serial)!;
       expect(
-        getDb().reasons.find((r) => r.id === adj.reasonId)?.label.toLowerCase(),
+        getDb()
+          .reasons.find((r) => r.id === adj.reasonId)
+          ?.label.toLowerCase(),
       ).toBe("stock transfer");
     },
   );
@@ -228,8 +229,8 @@ describe("an unknown serial", () => {
    */
   async function bringIn(serial: string, grade: string | undefined) {
     const db = getDb();
-    const sku = db.skus.find(
-      (s) => db.units.some((u) => u.skuId === s.id && u.status === "TERSEDIA"),
+    const sku = db.skus.find((s) =>
+      db.units.some((u) => u.skuId === s.id && u.status === "TERSEDIA"),
     )!;
     const model = db.models.find((m) => m.id === sku.modelId)!;
     const dialog = await openStock("IN");
@@ -240,7 +241,8 @@ describe("an unknown serial", () => {
       within(dialog).getAllByRole("combobox")[3]!,
       sku.variantLabel,
     );
-    if (grade) await pickOption(within(dialog).getAllByRole("combobox")[4]!, grade);
+    if (grade)
+      await pickOption(within(dialog).getAllByRole("combobox")[4]!, grade);
     fireEvent.change(
       within(dialog).getByRole("spinbutton", { name: "Sell price" }),
       { target: { value: "9000000" } },
@@ -269,9 +271,7 @@ describe("an unknown serial", () => {
     const serial = "ZZUNKNOWN02";
     await bringIn(serial, undefined);
     await vi.waitFor(() =>
-      expect(getDb().units.find((u) => u.serial === serial)?.status).toBe(
-        "QC",
-      ),
+      expect(getDb().units.find((u) => u.serial === serial)?.status).toBe("QC"),
     );
     expect(getDb().units.find((u) => u.serial === serial)!.poId).toBeNull();
   });
@@ -289,16 +289,20 @@ describe("Service", () => {
     const dialog = await openStock("OUT");
     // Reason first, then scan — the batch dialog takes over.
     pickReason(dialog, "Service");
-    const batch = (await screen.findByText("Send units to service", {
-      selector: ".ant-modal-title",
-    })).closest(".ant-modal") as HTMLElement;
+    const batch = (
+      await screen.findByText("Send units to service", {
+        selector: ".ant-modal-title",
+      })
+    ).closest(".ant-modal") as HTMLElement;
     for (const u of [a!, b!]) {
       const add = within(batch).getByRole("combobox", { name: "Add a unit" });
       fireEvent.change(add, { target: { value: u.serial } });
       await inTable(batch, u.serial);
     }
     fireEvent.change(
-      within(batch).getByRole("textbox", { name: `Description of ${a!.serial}` }),
+      within(batch).getByRole("textbox", {
+        name: `Description of ${a!.serial}`,
+      }),
       { target: { value: "Ganti baterai" } },
     );
     fireEvent.click(within(batch).getByRole("button", { name: "Fill down" }));
@@ -313,19 +317,25 @@ describe("Service", () => {
       }),
       { target: { value: "100001" } },
     );
-    fireEvent.click(within(batch).getByRole("button", { name: "Send to service" }));
+    fireEvent.click(
+      within(batch).getByRole("button", { name: "Send to service" }),
+    );
 
     await vi.waitFor(() =>
       expect(
         getDb().units.filter(
-          (u) => [a!.serial, b!.serial].includes(u.serial) && u.status === "SERVIS",
+          (u) =>
+            [a!.serial, b!.serial].includes(u.serial) && u.status === "SERVIS",
         ),
       ).toHaveLength(2),
     );
     const visits = getDb().services.filter((v) =>
       [a!.serial, b!.serial].includes(v.serial),
     );
-    expect(visits.map((v) => v.note)).toEqual(["Ganti baterai", "Ganti baterai"]);
+    expect(visits.map((v) => v.note)).toEqual([
+      "Ganti baterai",
+      "Ganti baterai",
+    ]);
     // One courier, split evenly; the rupiah that does not divide goes first.
     expect(
       visits.map((v) => v.fees.map((f) => [f.kind, f.amount])).flat(),
@@ -334,9 +344,9 @@ describe("Service", () => {
       ["SHIPPING", 50_000],
     ]);
     // No repair price is asked.
-    expect(visits.every((v) => v.fees.every((f) => f.kind === "SHIPPING"))).toBe(
-      true,
-    );
+    expect(
+      visits.every((v) => v.fees.every((f) => f.kind === "SHIPPING")),
+    ).toBe(true);
   });
 
   it("keeps the courier as one shop expense when the split is off", async () => {
@@ -349,9 +359,11 @@ describe("Service", () => {
     );
     const dialog = await openStock("OUT");
     pickReason(dialog, "Service");
-    const batch = (await screen.findByText("Send units to service", {
-      selector: ".ant-modal-title",
-    })).closest(".ant-modal") as HTMLElement;
+    const batch = (
+      await screen.findByText("Send units to service", {
+        selector: ".ant-modal-title",
+      })
+    ).closest(".ant-modal") as HTMLElement;
     for (const u of [a!, b!]) {
       const add = within(batch).getByRole("combobox", { name: "Add a unit" });
       fireEvent.change(add, { target: { value: u.serial } });
@@ -373,7 +385,9 @@ describe("Service", () => {
         name: "Split the courier fee into each unit's cost",
       }),
     );
-    fireEvent.click(within(batch).getByRole("button", { name: "Send to service" }));
+    fireEvent.click(
+      within(batch).getByRole("button", { name: "Send to service" }),
+    );
 
     await vi.waitFor(() =>
       expect(getDb().expenses.some((e) => e.kind === "ONGKIR")).toBe(true),

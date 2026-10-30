@@ -216,13 +216,21 @@ export function batchProblems(
       }
       continue;
     }
-    if (mode === "INTERNAL" && kind === "IN" && IN_STOCK.includes(unit.status)) {
+    if (
+      mode === "INTERNAL" &&
+      kind === "IN" &&
+      IN_STOCK.includes(unit.status)
+    ) {
       out.push(
         `${serial} is already in stock in ${warehouseLabel(unit.locationId)} — moving it is a Stock transfer.`,
       );
       continue;
     }
-    if (mode === "INTERNAL" && kind === "IN" && !WRITTEN_OFF.includes(unit.status)) {
+    if (
+      mode === "INTERNAL" &&
+      kind === "IN" &&
+      !WRITTEN_OFF.includes(unit.status)
+    ) {
       out.push(
         `${serial} is ${statusLabel(unit.status)} — Internal use brings back only a unit that was written off.`,
       );

@@ -447,7 +447,6 @@ export function InventoryPage() {
     }
   };
 
-
   const setRow = (key: string, patch: Partial<BatchRow>) =>
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
@@ -688,7 +687,9 @@ export function InventoryPage() {
             toStatus: status,
             locationId,
             note: [
-              ready ? `Adjusted into stock — ${label}` : `Adjusted in to QC — ${label}`,
+              ready
+                ? `Adjusted into stock — ${label}`
+                : `Adjusted in to QC — ${label}`,
               description,
             ]
               .filter(Boolean)
@@ -1282,520 +1283,542 @@ export function InventoryPage() {
             </Typography.Text>
           ) : (
             <>
-          {(kind === "IN" || mode === "TRANSFER") && (
-            <Form.Item
-              label={
-                mode === "TRANSFER"
-                  ? t("stock.toWarehouse", "To warehouse")
-                  : t("stock.intoWarehouse", "Into warehouse")
-              }
-              required
-              style={{ marginBottom: SPACE.md, maxWidth: 320 }}
-            >
-              <Select
-                aria-label={
-                  mode === "TRANSFER"
-                    ? t("stock.toWarehouse", "To warehouse")
-                    : t("stock.intoWarehouse", "Into warehouse")
-                }
-                value={locationId}
-                onChange={setLocationId}
-                options={db.warehouses
-                  .filter((w) => w.active)
-                  .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
-                style={{ width: "100%" }}
-              />
-            </Form.Item>
-          )}
+              {(kind === "IN" || mode === "TRANSFER") && (
+                <Form.Item
+                  label={
+                    mode === "TRANSFER"
+                      ? t("stock.toWarehouse", "To warehouse")
+                      : t("stock.intoWarehouse", "Into warehouse")
+                  }
+                  required
+                  style={{ marginBottom: SPACE.md, maxWidth: 320 }}
+                >
+                  <Select
+                    aria-label={
+                      mode === "TRANSFER"
+                        ? t("stock.toWarehouse", "To warehouse")
+                        : t("stock.intoWarehouse", "Into warehouse")
+                    }
+                    value={locationId}
+                    onChange={setLocationId}
+                    options={db.warehouses
+                      .filter((w) => w.active)
+                      .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
+                    style={{ width: "100%" }}
+                  />
+                </Form.Item>
+              )}
 
-          {/* A heading, not a paragraph (owner ask 2026-09-23). The sentence
+              {/* A heading, not a paragraph (owner ask 2026-09-23). The sentence
               that was here explained what "stock in" means to somebody who had
               just pressed Stock in. */}
-          <Typography.Text strong style={{ display: "block" }}>
-            {t("stock.serialisedProducts", "Serialised products")}
-          </Typography.Text>
+              <Typography.Text strong style={{ display: "block" }}>
+                {t("stock.serialisedProducts", "Serialised products")}
+              </Typography.Text>
 
-          <EditableTable<BatchRow>
-            rowKey="key"
-            dataSource={rows}
-            size="small"
-            /*
-             * A line-item editor: these columns ARE the form. It kept a grid
-             * on a phone behind a sideways scroll until 2026-09-01, when the
-             * owner asked for rows instead — `EditableTable` stacks each line
-             * into a card of labelled full-width fields below `md`, adds a
-             * line on ⌘⏎ from inside any cell, and lands the caret in the new
-             * line's serial box.
-             */
-            onAdd={() => setRows((rs) => [...rs, blankRow()])}
-            addLabel={t("stock.addLine", "Add line")}
-            rowTitle={(r, i) =>
-              normalise(r.serial) ||
-              t("editableTable.line", "Line {{n}}", { n: i + 1 })
-            }
-            columns={[
-              {
-                // A real element, not a fragment: this table sets `scroll.x`,
-                // and rc-table hangs a resize observer off the header cell's
-                // child — which React 19 refuses to attach to a Fragment,
-                // warning on every render.
-                title: (
-                  <span>
-                    Product <Typography.Text type="danger">*</Typography.Text>
-                  </span>
-                ),
-                key: "product",
-                width: 420,
-                render: (_, r) => {
-                  const serial = normalise(r.serial);
-                  const unit = serial ? unitOf(serial) : undefined;
-                  const sku = unit && skuOf(unit.skuId);
-                  return (
-                    <Flex vertical gap={SPACE.xs}>
-                      <AutoComplete
-                        value={r.serial}
-                        onChange={(v: string) => setRow(r.key, { serial: v })}
-                        // Selecting from the list also prefills what the unit
-                        // already says about itself, exactly as a scan does.
-                        onSelect={(v: string) => {
-                          const picked = unitOf(v);
-                          setRow(r.key, {
-                            serial: v,
-                            description: picked?.description ?? "",
-                            batteryHealth: picked?.batteryHealth,
-                            cycleCount: picked?.cycleCount,
-                            fcc: picked?.fcc,
-                          });
-                        }}
-                        // `label` is the serial and only the serial, because
-                        // AutoComplete paints the label into the box once a
-                        // row is picked and antd 6 drops `optionLabelProp`,
-                        // which is the usual way out. The product staff are
-                        // actually scanning for goes in `optionRender`, which
-                        // decorates the LIST and not the field — and in the
-                        // filter, so typing "Pro 14" still finds the serial.
-                        options={db.units
-                          .filter(
-                            (u) =>
-                              // Never a unit in QC. The reason used to be the
-                              // schema's price CHECK, which went with the
-                              // per-unit price on 2026-08-27; the reason now
-                              // is simply that a unit still being graded
-                              // belongs to Stock In, which owns that stage.
-                              offerable(u.status),
-                          )
-                          .map((u) => ({
-                            value: u.serial,
-                            label: u.serial,
-                            product: `${skuOf(u.skuId)?.name} · ${skuOf(u.skuId)?.variantLabel}`,
-                          }))}
-                        optionRender={(opt) => (
-                          <Flex vertical>
-                            <span>{String(opt.value)}</span>
-                            <Typography.Text
-                              type="secondary"
-                              style={{ fontSize: TYPE.sm }}
-                            >
-                              {String(opt.data.product ?? "")}
-                            </Typography.Text>
-                          </Flex>
-                        )}
-                        filterOption={(input, opt) =>
-                          `${opt?.value ?? ""} ${opt?.product ?? ""}`
-                            .toLowerCase()
-                            .includes(input.toLowerCase())
-                        }
-                        placeholder={t(
-                          "stock.scanOrTypeASerial",
-                          "Scan or type a serial number",
-                        )}
-                        style={{ width: "100%" }}
-                      />
-                      {serial === "" ? null : unit ? (
-                        <Flex align="center" gap={SPACE.xs} wrap>
-                          <Typography.Text
-                            type="secondary"
-                            style={{ fontSize: TYPE.sm }}
-                          >
-                            {sku?.name} · {sku?.variantLabel}
-                          </Typography.Text>
-                          <EnumTag map={UNIT_STATUS} value={unit.status} />
-                        </Flex>
-                      ) : (
+              <EditableTable<BatchRow>
+                rowKey="key"
+                dataSource={rows}
+                size="small"
+                /*
+                 * A line-item editor: these columns ARE the form. It kept a grid
+                 * on a phone behind a sideways scroll until 2026-09-01, when the
+                 * owner asked for rows instead — `EditableTable` stacks each line
+                 * into a card of labelled full-width fields below `md`, adds a
+                 * line on ⌘⏎ from inside any cell, and lands the caret in the new
+                 * line's serial box.
+                 */
+                onAdd={() => setRows((rs) => [...rs, blankRow()])}
+                addLabel={t("stock.addLine", "Add line")}
+                rowTitle={(r, i) =>
+                  normalise(r.serial) ||
+                  t("editableTable.line", "Line {{n}}", { n: i + 1 })
+                }
+                columns={[
+                  {
+                    // A real element, not a fragment: this table sets `scroll.x`,
+                    // and rc-table hangs a resize observer off the header cell's
+                    // child — which React 19 refuses to attach to a Fragment,
+                    // warning on every render.
+                    title: (
+                      <span>
+                        Product{" "}
+                        <Typography.Text type="danger">*</Typography.Text>
+                      </span>
+                    ),
+                    key: "product",
+                    width: 420,
+                    render: (_, r) => {
+                      const serial = normalise(r.serial);
+                      const unit = serial ? unitOf(serial) : undefined;
+                      const sku = unit && skuOf(unit.skuId);
+                      return (
                         <Flex vertical gap={SPACE.xs}>
-                          <Flex align="center" gap={SPACE.xs}>
-                            <Tag color="orange">Unknown</Tag>
-                            <Typography.Text
-                              type="secondary"
-                              style={{ fontSize: TYPE.sm }}
-                            >
-                              {canCreate
-                                ? t(
-                                    "stock.unknownSayWhat",
-                                    "not in the system — say what it is",
-                                  )
-                                : t(
-                                    "stock.unknownNotInSystem",
-                                    "not in the system",
-                                  )}
-                            </Typography.Text>
-                          </Flex>
-                          {canCreate && (
-                            <Flex gap={SPACE.xs} wrap>
-                              <Select
-                                showSearch
-                                value={r.modelId}
-                                optionFilterProp="label"
-                                placeholder={t("stock.product", "Product")}
-                                // Choosing another product invalidates the
-                                // variant under it, so the specs go with it.
-                                onChange={(v: string) =>
-                                  setRow(r.key, {
-                                    modelId: v,
-                                    skuId: undefined,
-                                  })
-                                }
-                                // Only what is identified by serial: a
-                                // counted product is added below, by
-                                // quantity (2026-09-19).
-                                options={db.models
-                                  .filter(
-                                    (m) =>
-                                      !countedSkus.some(
-                                        (s) => s.modelId === m.id,
-                                      ),
-                                  )
-                                  .map((m) => ({
-                                    value: m.id,
-                                    label: m.name,
-                                  }))}
-                                style={{ minWidth: 180, flex: 1 }}
-                              />
-                              <Select
-                                showSearch
-                                value={r.skuId}
-                                optionFilterProp="label"
-                                disabled={!r.modelId}
-                                placeholder={t("stock.specs", "Specs")}
-                                onChange={(v: string) =>
-                                  setRow(r.key, { skuId: v })
-                                }
-                                options={db.skus
-                                  .filter((s) => s.modelId === r.modelId)
-                                  .map((s) => ({
-                                    value: s.id,
-                                    label: s.variantLabel,
-                                  }))}
-                                style={{ minWidth: 150, flex: 1 }}
-                              />
-                            </Flex>
-                          )}
-                          {canCreate && (
-                            <Flex gap={SPACE.xs} wrap>
-                              <Select
-                                value={r.grade}
-                                aria-label={t("stock.unknownGrade", "Grade")}
-                                placeholder={t("stock.unknownGrade", "Grade")}
-                                onChange={(v: string) =>
-                                  setRow(r.key, { grade: v })
-                                }
-                                options={GRADE_CHOICES.map((g) => ({
-                                  value: g,
-                                  label:
-                                    g === "NEW" ? t("condition.new", "New") : g,
-                                }))}
-                                style={{ width: 96 }}
-                              />
-                              <InputNumber
-                                min={0}
-                                precision={0}
-                                prefix={RP_SYMBOL}
-                                formatter={moneyFormatter}
-                                parser={moneyParser}
-                                value={r.price}
-                                aria-label={t("stock.unknownPrice", "Sell price")}
-                                placeholder={t("stock.unknownPrice", "Sell price")}
-                                onChange={(v) =>
-                                  setRow(r.key, { price: v ?? undefined })
-                                }
-                                style={{ minWidth: 140, flex: 1 }}
-                              />
-                              <InputNumber
-                                min={0}
-                                precision={0}
-                                prefix={RP_SYMBOL}
-                                formatter={moneyFormatter}
-                                parser={moneyParser}
-                                value={r.buy}
-                                aria-label={t("stock.unknownCost", "Cost")}
-                                placeholder={t("stock.unknownCost", "Cost")}
-                                onChange={(v) =>
-                                  setRow(r.key, { buy: v ?? undefined })
-                                }
-                                style={{ minWidth: 140, flex: 1 }}
-                              />
+                          <AutoComplete
+                            value={r.serial}
+                            onChange={(v: string) =>
+                              setRow(r.key, { serial: v })
+                            }
+                            // Selecting from the list also prefills what the unit
+                            // already says about itself, exactly as a scan does.
+                            onSelect={(v: string) => {
+                              const picked = unitOf(v);
+                              setRow(r.key, {
+                                serial: v,
+                                description: picked?.description ?? "",
+                                batteryHealth: picked?.batteryHealth,
+                                cycleCount: picked?.cycleCount,
+                                fcc: picked?.fcc,
+                              });
+                            }}
+                            // `label` is the serial and only the serial, because
+                            // AutoComplete paints the label into the box once a
+                            // row is picked and antd 6 drops `optionLabelProp`,
+                            // which is the usual way out. The product staff are
+                            // actually scanning for goes in `optionRender`, which
+                            // decorates the LIST and not the field — and in the
+                            // filter, so typing "Pro 14" still finds the serial.
+                            options={db.units
+                              .filter((u) =>
+                                // Never a unit in QC. The reason used to be the
+                                // schema's price CHECK, which went with the
+                                // per-unit price on 2026-08-27; the reason now
+                                // is simply that a unit still being graded
+                                // belongs to Stock In, which owns that stage.
+                                offerable(u.status),
+                              )
+                              .map((u) => ({
+                                value: u.serial,
+                                label: u.serial,
+                                product: `${skuOf(u.skuId)?.name} · ${skuOf(u.skuId)?.variantLabel}`,
+                              }))}
+                            optionRender={(opt) => (
+                              <Flex vertical>
+                                <span>{String(opt.value)}</span>
+                                <Typography.Text
+                                  type="secondary"
+                                  style={{ fontSize: TYPE.sm }}
+                                >
+                                  {String(opt.data.product ?? "")}
+                                </Typography.Text>
+                              </Flex>
+                            )}
+                            filterOption={(input, opt) =>
+                              `${opt?.value ?? ""} ${opt?.product ?? ""}`
+                                .toLowerCase()
+                                .includes(input.toLowerCase())
+                            }
+                            placeholder={t(
+                              "stock.scanOrTypeASerial",
+                              "Scan or type a serial number",
+                            )}
+                            style={{ width: "100%" }}
+                          />
+                          {serial === "" ? null : unit ? (
+                            <Flex align="center" gap={SPACE.xs} wrap>
                               <Typography.Text
                                 type="secondary"
-                                style={{ fontSize: TYPE.sm, width: "100%" }}
+                                style={{ fontSize: TYPE.sm }}
                               >
-                                {t(
-                                  "stock.unknownQcHint",
-                                  "Grade, sell price and description (not needed for New) put it on the shelf. Anything missing and it goes to QC.",
-                                )}
+                                {sku?.name} · {sku?.variantLabel}
                               </Typography.Text>
+                              <EnumTag map={UNIT_STATUS} value={unit.status} />
+                            </Flex>
+                          ) : (
+                            <Flex vertical gap={SPACE.xs}>
+                              <Flex align="center" gap={SPACE.xs}>
+                                <Tag color="orange">Unknown</Tag>
+                                <Typography.Text
+                                  type="secondary"
+                                  style={{ fontSize: TYPE.sm }}
+                                >
+                                  {canCreate
+                                    ? t(
+                                        "stock.unknownSayWhat",
+                                        "not in the system — say what it is",
+                                      )
+                                    : t(
+                                        "stock.unknownNotInSystem",
+                                        "not in the system",
+                                      )}
+                                </Typography.Text>
+                              </Flex>
+                              {canCreate && (
+                                <Flex gap={SPACE.xs} wrap>
+                                  <Select
+                                    showSearch
+                                    value={r.modelId}
+                                    optionFilterProp="label"
+                                    placeholder={t("stock.product", "Product")}
+                                    // Choosing another product invalidates the
+                                    // variant under it, so the specs go with it.
+                                    onChange={(v: string) =>
+                                      setRow(r.key, {
+                                        modelId: v,
+                                        skuId: undefined,
+                                      })
+                                    }
+                                    // Only what is identified by serial: a
+                                    // counted product is added below, by
+                                    // quantity (2026-09-19).
+                                    options={db.models
+                                      .filter(
+                                        (m) =>
+                                          !countedSkus.some(
+                                            (s) => s.modelId === m.id,
+                                          ),
+                                      )
+                                      .map((m) => ({
+                                        value: m.id,
+                                        label: m.name,
+                                      }))}
+                                    style={{ minWidth: 180, flex: 1 }}
+                                  />
+                                  <Select
+                                    showSearch
+                                    value={r.skuId}
+                                    optionFilterProp="label"
+                                    disabled={!r.modelId}
+                                    placeholder={t("stock.specs", "Specs")}
+                                    onChange={(v: string) =>
+                                      setRow(r.key, { skuId: v })
+                                    }
+                                    options={db.skus
+                                      .filter((s) => s.modelId === r.modelId)
+                                      .map((s) => ({
+                                        value: s.id,
+                                        label: s.variantLabel,
+                                      }))}
+                                    style={{ minWidth: 150, flex: 1 }}
+                                  />
+                                </Flex>
+                              )}
+                              {canCreate && (
+                                <Flex gap={SPACE.xs} wrap>
+                                  <Select
+                                    value={r.grade}
+                                    aria-label={t(
+                                      "stock.unknownGrade",
+                                      "Grade",
+                                    )}
+                                    placeholder={t(
+                                      "stock.unknownGrade",
+                                      "Grade",
+                                    )}
+                                    onChange={(v: string) =>
+                                      setRow(r.key, { grade: v })
+                                    }
+                                    options={GRADE_CHOICES.map((g) => ({
+                                      value: g,
+                                      label:
+                                        g === "NEW"
+                                          ? t("condition.new", "New")
+                                          : g,
+                                    }))}
+                                    style={{ width: 96 }}
+                                  />
+                                  <InputNumber
+                                    min={0}
+                                    precision={0}
+                                    prefix={RP_SYMBOL}
+                                    formatter={moneyFormatter}
+                                    parser={moneyParser}
+                                    value={r.price}
+                                    aria-label={t(
+                                      "stock.unknownPrice",
+                                      "Sell price",
+                                    )}
+                                    placeholder={t(
+                                      "stock.unknownPrice",
+                                      "Sell price",
+                                    )}
+                                    onChange={(v) =>
+                                      setRow(r.key, { price: v ?? undefined })
+                                    }
+                                    style={{ minWidth: 140, flex: 1 }}
+                                  />
+                                  <InputNumber
+                                    min={0}
+                                    precision={0}
+                                    prefix={RP_SYMBOL}
+                                    formatter={moneyFormatter}
+                                    parser={moneyParser}
+                                    value={r.buy}
+                                    aria-label={t("stock.unknownCost", "Cost")}
+                                    placeholder={t("stock.unknownCost", "Cost")}
+                                    onChange={(v) =>
+                                      setRow(r.key, { buy: v ?? undefined })
+                                    }
+                                    style={{ minWidth: 140, flex: 1 }}
+                                  />
+                                  <Typography.Text
+                                    type="secondary"
+                                    style={{ fontSize: TYPE.sm, width: "100%" }}
+                                  >
+                                    {t(
+                                      "stock.unknownQcHint",
+                                      "Grade, sell price and description (not needed for New) put it on the shelf. Anything missing and it goes to QC.",
+                                    )}
+                                  </Typography.Text>
+                                </Flex>
+                              )}
                             </Flex>
                           )}
                         </Flex>
-                      )}
-                    </Flex>
-                  );
-                },
-              },
-              {
-                /*
-                 * The battery, in whichever units the row's machine reports
-                 * (2026-09-08).
-                 *
-                 * A row for a serial the shop already carries takes its era
-                 * from that unit; a row for an unknown serial takes it from
-                 * the product being chosen two columns to the left, and starts
-                 * on the health box until one is picked. Nothing is lost by
-                 * that default — a reading typed against the wrong era is
-                 * dropped by `batchProblems`, not filed.
-                 */
-                // Neutral, unlike the QC grid's: that page groups by product
-                // so a block starts on one reading, while this grid is
-                // whatever four machines somebody happens to be adjusting at
-                // once — and each row's model decides its own reading.
-                title: t("stock.battery", "Battery"),
-                key: "battery",
-                // The cycle reading is two boxes on ONE row since 2026-09-20
-                // (owner ask); this is the width they need side by side.
-                width: 230,
-                render: (_, r) =>
-                  // An accessory's row has nothing to read (2026-09-19): the
-                  // box is replaced by a "None" that says so, and whatever the
-                  // row's hidden boxes last held is dropped by `asWritten`.
-                  !hasBattery(batchSkuOf(r)) ? (
-                    <Tooltip
-                      title={t(
-                        "stock.noBatteryCounted",
-                        "Counted, not identified — no battery to record",
-                      )}
-                    >
-                      <Typography.Text type="secondary">
-                        {fmtNone()}
-                      </Typography.Text>
-                    </Tooltip>
-                  ) : (
-                    <BatteryFields
-                      fallback={batchModeOf(r)}
-                      idPrefix={`batch-battery-${r.key}`}
-                      value={{
-                        health: r.batteryHealth ?? null,
-                        cycleCount: r.cycleCount ?? null,
-                        fcc: r.fcc ?? null,
-                      }}
-                      // No `onCommit`: the grid validates every row at OK
-                      // (`batchProblems`), so there is nothing to do per box.
-                      onChange={(next) =>
-                        setRow(r.key, {
-                          batteryHealth: next.health ?? undefined,
-                          cycleCount: next.cycleCount ?? undefined,
-                          fcc: next.fcc ?? undefined,
-                        })
-                      }
-                    />
-                  ),
-              },
-              {
-                title: t(
-                  "stock.descriptionCondition",
-                  "Description / condition",
-                ),
-                key: "description",
-                // Declared, like every column here, so `EditableTable` can sum
-                // them into the grid's own width — one column leaving it open
-                // sends the whole grid back to `max-content`, where a long
-                // product name would bid for room the counted columns need.
-                width: 260,
-                render: (_, r) => (
-                  <Input
-                    aria-label={t(
-                      "stock.descriptionCondition",
-                      "Description / condition",
-                    )}
-                    value={r.description}
-                    placeholder={t(
-                      "stock.conditionBatteryHealthCompleteness",
-                      "Condition, battery health, completeness…",
-                    )}
-                    onChange={(e) =>
-                      setRow(r.key, { description: e.target.value })
-                    }
-                  />
-                ),
-              },
-              {
-                title: "",
-                key: "remove",
-                width: COLUMN.action,
-                render: (_, r) => (
-                  <Tooltip
-                    title={t("stock.removeThisLine", "Remove this line")}
-                  >
-                    <Button
-                      type="text"
-                      aria-label={t("stock.removeThisLine", "Remove this line")}
-                      icon={<DeleteOutlined />}
-                      disabled={rows.length === 1}
-                      onClick={() =>
-                        setRows((rs) => rs.filter((x) => x.key !== r.key))
-                      }
-                    />
-                  </Tooltip>
-                ),
-              },
-            ]}
-          />
-
-          {/*
-           * Counted products — accessories — by quantity (2026-09-19), drawn
-           * as the same kind of grid as the serials above (owner ask
-           * 2026-09-23). It was a bare row of controls with no headers, so two
-           * lists doing the same job on one dialog read as two different
-           * things.
-           */}
-          <Typography.Text
-            strong
-            style={{ display: "block", marginTop: SPACE.md }}
-          >
-            {t("stock.countedProducts", "Counted products")}
-          </Typography.Text>
-          <EditableTable<CountedRow>
-            rowKey="key"
-            dataSource={countedRows}
-            onAdd={() =>
-              setCountedRows((rs) => [
-                ...rs,
-                { key: `cnt-${++rowSeq}`, qty: 1 },
-              ])
-            }
-            addLabel={t("stock.addLine", "Add line")}
-            emptyText={t(
-              "stock.noCounted",
-              "No counted products on this batch.",
-            )}
-            columns={[
-              {
-                title: t("stock.product", "Product"),
-                key: "sku",
-                render: (_, c) => (
-                  <Select
-                    showSearch
-                    optionFilterProp="label"
-                    style={{ width: "100%" }}
-                    value={c.skuId}
-                    placeholder={t("stock.pickCountedProduct", "Product")}
-                    aria-label={t(
-                      "stock.countedProductAria",
-                      "Counted product",
-                    )}
-                    options={pickableCounted.map((s) => ({
-                      value: s.id,
-                      label: `${s.name} ${s.variantLabel} · ${onHand(db.stockMoves, s.id)}`,
-                    }))}
-                    onChange={(v: string) =>
-                      setCountedRows((rs) =>
-                        rs.map((x) =>
-                          x.key === c.key
-                            ? { ...x, skuId: v, fromId: defaultFrom(v) }
-                            : x,
-                        ),
-                      )
-                    }
-                  />
-                ),
-              },
-              ...(mode === "TRANSFER"
-                ? [
-                    {
-                      title: t("stock.fromWarehouse", "From"),
-                      key: "from",
-                      width: 200,
-                      render: (_: unknown, c: CountedRow) => (
-                        <Select
-                          aria-label={t("stock.fromWarehouse", "From")}
-                          style={{ width: "100%" }}
-                          value={c.fromId}
-                          disabled={!c.skuId}
-                          options={db.warehouses
-                            .filter((w) => w.id !== locationId)
-                            .filter(
-                              (w) =>
-                                c.skuId !== undefined &&
-                                onHand(db.stockMoves, c.skuId, w.id) > 0,
-                            )
-                            .map((w) => ({
-                              value: w.id,
-                              label: `${warehouseLabel(w)} · ${c.skuId ? onHand(db.stockMoves, c.skuId, w.id) : 0}`,
-                            }))}
-                          onChange={(v: string) =>
-                            setCountedRows((rs) =>
-                              rs.map((x) =>
-                                x.key === c.key ? { ...x, fromId: v } : x,
-                              ),
-                            )
+                      );
+                    },
+                  },
+                  {
+                    /*
+                     * The battery, in whichever units the row's machine reports
+                     * (2026-09-08).
+                     *
+                     * A row for a serial the shop already carries takes its era
+                     * from that unit; a row for an unknown serial takes it from
+                     * the product being chosen two columns to the left, and starts
+                     * on the health box until one is picked. Nothing is lost by
+                     * that default — a reading typed against the wrong era is
+                     * dropped by `batchProblems`, not filed.
+                     */
+                    // Neutral, unlike the QC grid's: that page groups by product
+                    // so a block starts on one reading, while this grid is
+                    // whatever four machines somebody happens to be adjusting at
+                    // once — and each row's model decides its own reading.
+                    title: t("stock.battery", "Battery"),
+                    key: "battery",
+                    // The cycle reading is two boxes on ONE row since 2026-09-20
+                    // (owner ask); this is the width they need side by side.
+                    width: 230,
+                    render: (_, r) =>
+                      // An accessory's row has nothing to read (2026-09-19): the
+                      // box is replaced by a "None" that says so, and whatever the
+                      // row's hidden boxes last held is dropped by `asWritten`.
+                      !hasBattery(batchSkuOf(r)) ? (
+                        <Tooltip
+                          title={t(
+                            "stock.noBatteryCounted",
+                            "Counted, not identified — no battery to record",
+                          )}
+                        >
+                          <Typography.Text type="secondary">
+                            {fmtNone()}
+                          </Typography.Text>
+                        </Tooltip>
+                      ) : (
+                        <BatteryFields
+                          fallback={batchModeOf(r)}
+                          idPrefix={`batch-battery-${r.key}`}
+                          value={{
+                            health: r.batteryHealth ?? null,
+                            cycleCount: r.cycleCount ?? null,
+                            fcc: r.fcc ?? null,
+                          }}
+                          // No `onCommit`: the grid validates every row at OK
+                          // (`batchProblems`), so there is nothing to do per box.
+                          onChange={(next) =>
+                            setRow(r.key, {
+                              batteryHealth: next.health ?? undefined,
+                              cycleCount: next.cycleCount ?? undefined,
+                              fcc: next.fcc ?? undefined,
+                            })
                           }
                         />
                       ),
-                    },
-                  ]
-                : []),
-              {
-                title: t("stock.qty", "Qty"),
-                key: "qty",
-                width: COLUMN.qty,
-                render: (_, c) => (
-                  <InputNumber
-                    min={1}
-                    precision={0}
-                    style={{ width: "100%" }}
-                    value={c.qty}
-                    aria-label={t("stock.countedQtyAria", "How many")}
-                    onChange={(v) =>
-                      setCountedRows((rs) =>
-                        rs.map((x) =>
-                          x.key === c.key ? { ...x, qty: v ?? null } : x,
-                        ),
-                      )
-                    }
-                  />
-                ),
-              },
-              {
-                title: "",
-                key: "remove",
-                width: COLUMN.action,
-                render: (_, c) => (
-                  <Tooltip
-                    title={t("stock.removeThisLine", "Remove this line")}
-                  >
-                    <Button
-                      type="text"
-                      aria-label={t("stock.removeThisLine", "Remove this line")}
-                      icon={<DeleteOutlined />}
-                      onClick={() =>
-                        setCountedRows((rs) =>
-                          rs.filter((x) => x.key !== c.key),
-                        )
-                      }
-                    />
-                  </Tooltip>
-                ),
-              },
-            ]}
-          />
+                  },
+                  {
+                    title: t(
+                      "stock.descriptionCondition",
+                      "Description / condition",
+                    ),
+                    key: "description",
+                    // Declared, like every column here, so `EditableTable` can sum
+                    // them into the grid's own width — one column leaving it open
+                    // sends the whole grid back to `max-content`, where a long
+                    // product name would bid for room the counted columns need.
+                    width: 260,
+                    render: (_, r) => (
+                      <Input
+                        aria-label={t(
+                          "stock.descriptionCondition",
+                          "Description / condition",
+                        )}
+                        value={r.description}
+                        placeholder={t(
+                          "stock.conditionBatteryHealthCompleteness",
+                          "Condition, battery health, completeness…",
+                        )}
+                        onChange={(e) =>
+                          setRow(r.key, { description: e.target.value })
+                        }
+                      />
+                    ),
+                  },
+                  {
+                    title: "",
+                    key: "remove",
+                    width: COLUMN.action,
+                    render: (_, r) => (
+                      <Tooltip
+                        title={t("stock.removeThisLine", "Remove this line")}
+                      >
+                        <Button
+                          type="text"
+                          aria-label={t(
+                            "stock.removeThisLine",
+                            "Remove this line",
+                          )}
+                          icon={<DeleteOutlined />}
+                          disabled={rows.length === 1}
+                          onClick={() =>
+                            setRows((rs) => rs.filter((x) => x.key !== r.key))
+                          }
+                        />
+                      </Tooltip>
+                    ),
+                  },
+                ]}
+              />
+
+              {/*
+               * Counted products — accessories — by quantity (2026-09-19), drawn
+               * as the same kind of grid as the serials above (owner ask
+               * 2026-09-23). It was a bare row of controls with no headers, so two
+               * lists doing the same job on one dialog read as two different
+               * things.
+               */}
+              <Typography.Text
+                strong
+                style={{ display: "block", marginTop: SPACE.md }}
+              >
+                {t("stock.countedProducts", "Counted products")}
+              </Typography.Text>
+              <EditableTable<CountedRow>
+                rowKey="key"
+                dataSource={countedRows}
+                onAdd={() =>
+                  setCountedRows((rs) => [
+                    ...rs,
+                    { key: `cnt-${++rowSeq}`, qty: 1 },
+                  ])
+                }
+                addLabel={t("stock.addLine", "Add line")}
+                emptyText={t(
+                  "stock.noCounted",
+                  "No counted products on this batch.",
+                )}
+                columns={[
+                  {
+                    title: t("stock.product", "Product"),
+                    key: "sku",
+                    render: (_, c) => (
+                      <Select
+                        showSearch
+                        optionFilterProp="label"
+                        style={{ width: "100%" }}
+                        value={c.skuId}
+                        placeholder={t("stock.pickCountedProduct", "Product")}
+                        aria-label={t(
+                          "stock.countedProductAria",
+                          "Counted product",
+                        )}
+                        options={pickableCounted.map((s) => ({
+                          value: s.id,
+                          label: `${s.name} ${s.variantLabel} · ${onHand(db.stockMoves, s.id)}`,
+                        }))}
+                        onChange={(v: string) =>
+                          setCountedRows((rs) =>
+                            rs.map((x) =>
+                              x.key === c.key
+                                ? { ...x, skuId: v, fromId: defaultFrom(v) }
+                                : x,
+                            ),
+                          )
+                        }
+                      />
+                    ),
+                  },
+                  ...(mode === "TRANSFER"
+                    ? [
+                        {
+                          title: t("stock.fromWarehouse", "From"),
+                          key: "from",
+                          width: 200,
+                          render: (_: unknown, c: CountedRow) => (
+                            <Select
+                              aria-label={t("stock.fromWarehouse", "From")}
+                              style={{ width: "100%" }}
+                              value={c.fromId}
+                              disabled={!c.skuId}
+                              options={db.warehouses
+                                .filter((w) => w.id !== locationId)
+                                .filter(
+                                  (w) =>
+                                    c.skuId !== undefined &&
+                                    onHand(db.stockMoves, c.skuId, w.id) > 0,
+                                )
+                                .map((w) => ({
+                                  value: w.id,
+                                  label: `${warehouseLabel(w)} · ${c.skuId ? onHand(db.stockMoves, c.skuId, w.id) : 0}`,
+                                }))}
+                              onChange={(v: string) =>
+                                setCountedRows((rs) =>
+                                  rs.map((x) =>
+                                    x.key === c.key ? { ...x, fromId: v } : x,
+                                  ),
+                                )
+                              }
+                            />
+                          ),
+                        },
+                      ]
+                    : []),
+                  {
+                    title: t("stock.qty", "Qty"),
+                    key: "qty",
+                    width: COLUMN.qty,
+                    render: (_, c) => (
+                      <InputNumber
+                        min={1}
+                        precision={0}
+                        style={{ width: "100%" }}
+                        value={c.qty}
+                        aria-label={t("stock.countedQtyAria", "How many")}
+                        onChange={(v) =>
+                          setCountedRows((rs) =>
+                            rs.map((x) =>
+                              x.key === c.key ? { ...x, qty: v ?? null } : x,
+                            ),
+                          )
+                        }
+                      />
+                    ),
+                  },
+                  {
+                    title: "",
+                    key: "remove",
+                    width: COLUMN.action,
+                    render: (_, c) => (
+                      <Tooltip
+                        title={t("stock.removeThisLine", "Remove this line")}
+                      >
+                        <Button
+                          type="text"
+                          aria-label={t(
+                            "stock.removeThisLine",
+                            "Remove this line",
+                          )}
+                          icon={<DeleteOutlined />}
+                          onClick={() =>
+                            setCountedRows((rs) =>
+                              rs.filter((x) => x.key !== c.key),
+                            )
+                          }
+                        />
+                      </Tooltip>
+                    ),
+                  },
+                ]}
+              />
             </>
           )}
         </Form>

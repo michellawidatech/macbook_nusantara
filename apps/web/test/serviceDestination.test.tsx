@@ -105,7 +105,9 @@ describe("Stock out", () => {
       expect(stocked.length).toBeLessThan(counted.length);
 
       const dialog = await openBatch("OUT");
-      fireEvent.click(within(dialog).getByRole("radio", { name: "Internal use" }));
+      fireEvent.click(
+        within(dialog).getByRole("radio", { name: "Internal use" }),
+      );
       expect(await countedOffered(dialog)).toHaveLength(stocked.length);
     } finally {
       mutate((d) => {
@@ -122,7 +124,9 @@ describe("Stock out", () => {
       (s) => isLiveSku(s) && !skuTracksSerial(db, s.id),
     );
     const dialog = await openBatch("IN");
-    fireEvent.click(within(dialog).getByRole("radio", { name: "Internal use" }));
+    fireEvent.click(
+      within(dialog).getByRole("radio", { name: "Internal use" }),
+    );
     expect(await countedOffered(dialog)).toHaveLength(counted.length);
   });
 });

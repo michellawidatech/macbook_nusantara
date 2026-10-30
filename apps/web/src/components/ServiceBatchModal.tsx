@@ -143,9 +143,7 @@ export function ServiceBatchModal({
     setFee(null);
     setPaid("UNPAID");
     setSplit(true);
-    const first = ok[0]
-      ? db.units.find((u) => u.serial === ok[0])
-      : undefined;
+    const first = ok[0] ? db.units.find((u) => u.serial === ok[0]) : undefined;
     setDest(
       mode === "SEND"
         ? (first?.locationId ?? db.myWarehouseId)
@@ -206,7 +204,8 @@ export function ServiceBatchModal({
   const candidates = db.units
     .filter(
       (u) =>
-        eligible(db, mode, u.serial) && !rows.some((r) => r.serial === u.serial),
+        eligible(db, mode, u.serial) &&
+        !rows.some((r) => r.serial === u.serial),
     )
     .map((u) => ({
       value: u.serial,
@@ -244,9 +243,7 @@ export function ServiceBatchModal({
     const courier = hasFee ? (fee ?? 0) : 0;
     void mutate((d) => {
       const going = rows.filter((r) => eligible(d, mode, r.serial));
-      out.refused = rows
-        .filter((r) => !going.includes(r))
-        .map((r) => r.serial);
+      out.refused = rows.filter((r) => !going.includes(r)).map((r) => r.serial);
       const moving = going.filter(
         (r) => d.units.find((u) => u.serial === r.serial)?.locationId !== dest,
       );
@@ -376,7 +373,7 @@ export function ServiceBatchModal({
   const destOptions = db.warehouses
     .filter((w) => w.active || w.id === dest)
     .map((w) => ({ value: w.id, label: warehouseLabel(w) }));
-  const oneSerial = single ? rows[0]?.serial ?? serials?.[0] ?? "" : "";
+  const oneSerial = single ? (rows[0]?.serial ?? serials?.[0] ?? "") : "";
 
   const title =
     mode === "SEND"
@@ -493,7 +490,9 @@ export function ServiceBatchModal({
                   key: "unit",
                   render: (_, r) => (
                     <Flex vertical>
-                      <span style={{ fontFamily: "monospace" }}>{r.serial}</span>
+                      <span style={{ fontFamily: "monospace" }}>
+                        {r.serial}
+                      </span>
                       <Typography.Text
                         type="secondary"
                         style={{ fontSize: TYPE.sm }}
@@ -524,9 +523,7 @@ export function ServiceBatchModal({
                         { serial: r.serial },
                       )}
                       value={r.description}
-                      onChange={(e) =>
-                        setDescription(r.serial, e.target.value)
-                      }
+                      onChange={(e) => setDescription(r.serial, e.target.value)}
                     />
                   ),
                 },
@@ -540,7 +537,10 @@ export function ServiceBatchModal({
                     >
                       <Button
                         type="text"
-                        aria-label={t("stock.removeThisLine", "Remove this line")}
+                        aria-label={t(
+                          "stock.removeThisLine",
+                          "Remove this line",
+                        )}
                         icon={<DeleteOutlined />}
                         onClick={() =>
                           setRows((rs) =>
@@ -603,7 +603,10 @@ export function ServiceBatchModal({
                 {...MONEY_INPUT}
                 aria-label={
                   mode === "SEND"
-                    ? t("inbound.serviceShippingFee", "Cost of getting it there")
+                    ? t(
+                        "inbound.serviceShippingFee",
+                        "Cost of getting it there",
+                      )
                     : t("service.transferFee", "Cost of moving it back")
                 }
                 value={fee}
@@ -653,7 +656,10 @@ export function ServiceBatchModal({
                   label={t("service.courierPaidWith", "Courier paid with")}
                 >
                   <Radio.Group
-                    aria-label={t("service.courierPaidWith", "Courier paid with")}
+                    aria-label={t(
+                      "service.courierPaidWith",
+                      "Courier paid with",
+                    )}
                     optionType="button"
                     size="small"
                     value={paid}
