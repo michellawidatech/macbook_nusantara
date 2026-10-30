@@ -505,7 +505,14 @@ export function SupplierReturnForm({
 
 export interface SupplierReturnModalProps {
   /** The unit being returned, or null while the dialog is shut. */
-  readonly serial: string | null;
+  readonly serial?: string | null;
+  /**
+   * Several units, one after another (2026-10-30: Stock out → Return to
+   * supplier hands over what was scanned). Each is its own return with its
+   * own credit — two units of one box can sit on two invoices. An empty list
+   * opens the form with its unit picker.
+   */
+  readonly serials?: readonly string[] | null;
   readonly defaultReason?: string;
   readonly onClose: () => void;
   /** Stacked above another dialog when it is opened from inside one. */
@@ -514,31 +521,57 @@ export interface SupplierReturnModalProps {
 
 export function SupplierReturnModal({
   serial,
+  serials,
   defaultReason,
   onClose,
   zIndex,
 }: SupplierReturnModalProps) {
   const { t } = useTranslation();
+  const queue: readonly string[] | null =
+    serials !== undefined && serials !== null
+      ? serials
+      : serial !== undefined && serial !== null
+        ? [serial]
+        : null;
+  const [at, setAt] = useState(0);
+  useEffect(() => setAt(0), [serials, serial]);
+  const current = queue === null ? undefined : queue[at];
+  const next = () => {
+    if (queue !== null && at + 1 < queue.length) setAt(at + 1);
+    else onClose();
+  };
   return (
     <Modal
-      open={serial !== null}
+      open={queue !== null}
       centered
       zIndex={zIndex}
       width={720}
-      title={t("supplierReturn.title", "Return {{serial}} to the supplier", {
-        serial: serial ?? "",
-      })}
+      title={
+        current === undefined
+          ? t("returns.toSupplier", "To supplier")
+          : queue !== null && queue.length > 1
+            ? t(
+                "supplierReturn.titleOf",
+                "Return {{serial}} to the supplier ({{n}} of {{count}})",
+                { serial: current, n: at + 1, count: queue.length },
+              )
+            : t("supplierReturn.title", "Return {{serial}} to the supplier", {
+                serial: current,
+              })
+      }
       onCancel={onClose}
       destroyOnHidden
       // The form owns its submit, at the foot of its fields — the same
       // button the Returns page's dialog shows.
       footer={null}
     >
-      {serial !== null && (
+      {queue !== null && (
         <SupplierReturnForm
-          serial={serial}
+          // A fresh form per unit, so the next one does not inherit a credit.
+          key={current ?? "pick"}
+          serial={current}
           defaultReason={defaultReason}
-          onDone={onClose}
+          onDone={next}
         />
       )}
     </Modal>

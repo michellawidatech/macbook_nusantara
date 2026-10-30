@@ -1189,6 +1189,16 @@ export const EXPENSE_CATEGORIES = [
     guide: "Admin charges, transfer fees and what a marketplace kept.",
   },
   {
+    /*
+     * A courier fee the shop keeps as its own cost (owner 2026-10-30) — a
+     * service batch's ongkir with "split into each unit's cost" switched off.
+     * An operating cost, its own Profit & Loss line.
+     */
+    value: "ONGKIR",
+    label: "Shipping / ongkir",
+    guide: "Courier fees the shop pays that are not part of a unit's cost.",
+  },
+  {
     value: "PROFESSIONAL",
     label: "Professional Services",
     guide: "Legal, accounting and contractors.",

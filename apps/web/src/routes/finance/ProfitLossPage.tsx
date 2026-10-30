@@ -137,8 +137,8 @@ export function ProfitLossPage() {
         return t("pnl.software", "Software & technology");
       case "BIAYA_ADMIN":
         return t("pnl.bankFees", "Bank & marketplace fees");
-      case "marketplaceFees":
-        return t("pnl.marketplaceFees", "Marketplace fees");
+      case "ONGKIR":
+        return t("pnl.shipping", "Shipping / ongkir");
       case "interestIn":
         return t("pnl.interestIn", "Interest received");
       case "mismatchIn":

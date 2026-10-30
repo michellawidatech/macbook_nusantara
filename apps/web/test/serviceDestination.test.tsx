@@ -1,5 +1,6 @@
 /**
- * Stock out keeps only write-offs (owner ask 2026-10-26). "On service" and its
+ * Stock out is by reason since 2026-10-30 (Internal use writes off; Service
+ * is the batch dialog). Before that it kept only write-offs (2026-10-26). "On service" and its
  * *Send to* left the batch editor: a unit goes to a repairer through *Send to
  * service* on its row, the one dialog every door opens (inventoryPage.test.tsx
  * and inboundQcPage.test.tsx cover it). And Stock out's counted-products
@@ -51,10 +52,18 @@ async function optionsOf(control: HTMLElement): Promise<string[]> {
 }
 
 describe("Stock out", () => {
-  it("writes units off and sends nothing to service", async () => {
+  it("asks for a reason from a fixed list (2026-10-30)", async () => {
     const dialog = await openBatch("OUT");
-    const [, unitsBecome] = within(dialog).getAllByRole("combobox");
-    expect(await optionsOf(unitsBecome!)).toEqual(["Lost / written off"]);
+    expect(
+      within(dialog)
+        .getAllByRole("radio")
+        .map((r) => r.closest("label")?.textContent),
+    ).toEqual([
+      "Internal use",
+      "Stock transfer",
+      "Service",
+      "Return to supplier",
+    ]);
     expect(within(dialog).queryByLabelText("Send to")).toBeNull();
   });
 
@@ -96,6 +105,7 @@ describe("Stock out", () => {
       expect(stocked.length).toBeLessThan(counted.length);
 
       const dialog = await openBatch("OUT");
+      fireEvent.click(within(dialog).getByRole("radio", { name: "Internal use" }));
       expect(await countedOffered(dialog)).toHaveLength(stocked.length);
     } finally {
       mutate((d) => {
@@ -112,6 +122,7 @@ describe("Stock out", () => {
       (s) => isLiveSku(s) && !skuTracksSerial(db, s.id),
     );
     const dialog = await openBatch("IN");
+    fireEvent.click(within(dialog).getByRole("radio", { name: "Internal use" }));
     expect(await countedOffered(dialog)).toHaveLength(counted.length);
   });
 });

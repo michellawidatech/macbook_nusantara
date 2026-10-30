@@ -72,7 +72,24 @@ export interface BatchInput {
    * in this warehouse is a no-op.
    */
   locationId?: string;
+  /**
+   * Which fixed reason the batch is (2026-10-30). Absent is the old reading,
+   * by direction alone — kept for the callers that predate the reasons.
+   *
+   * - `INTERNAL` OUT writes units off; IN brings a written-off unit back. A
+   *   unit already on a shelf is refused IN — moving it is a transfer.
+   * - `TRANSFER`, from either button, moves units on a shelf to `locationId`
+   *   and keeps their status. A written-off unit is refused — that comes back
+   *   with Internal use.
+   *
+   * An unknown serial is allowed under both on the way IN and under a
+   * transfer either way: it is created where the batch puts it.
+   */
+  mode?: "INTERNAL" | "TRANSFER";
 }
+
+/** Written off: what Internal use takes a unit to, and brings it back from. */
+export const WRITTEN_OFF: readonly string[] = ["HILANG", "KOREKSI_KELUAR"];
 
 /** On the shelf: an IN of one of these moves it, keeping its status. */
 export const IN_STOCK: readonly string[] = ["TERSEDIA", "DIRESERVASI"];
@@ -85,7 +102,7 @@ export const IN_STOCK: readonly string[] = ["TERSEDIA", "DIRESERVASI"];
  * the enum maps nor a `t` — the caller already has both.
  */
 export function batchProblems(
-  { kind, reason, lines, counted = [], locationId }: BatchInput,
+  { kind, reason, lines, counted = [], locationId, mode }: BatchInput,
   unitBySerial: (serial: string) => Unit | undefined,
   statusLabel: (status: string) => string,
   warehouseLabel: (locationId: string) => string = (id) => id,
@@ -94,6 +111,8 @@ export function batchProblems(
   if (!reason.trim()) out.push("Pick or type a reason for this batch.");
   if (lines.length === 0 && counted.length === 0)
     out.push("Add at least one unit.");
+  if (mode === "TRANSFER" && !locationId)
+    out.push("Pick the warehouse the units go to.");
   const seenSku = new Set<string>();
   for (const c of counted) {
     if (!c.skuId) {
@@ -106,7 +125,7 @@ export function batchProblems(
       out.push(`${c.label} needs a quantity of at least 1.`);
       continue;
     }
-    if (kind === "OUT" && c.qty > c.onHand) {
+    if ((kind === "OUT" || mode === "TRANSFER") && c.qty > c.onHand) {
       out.push(
         `${c.label}: only ${c.onHand} in stock — ${c.qty} cannot be taken out.`,
       );
@@ -148,8 +167,9 @@ export function batchProblems(
     const unit = unitBySerial(serial);
     if (!unit) {
       // An unknown serial is a unit the shop has and the system does not. That
-      // is a thing you can put IN; there is nothing to take out.
-      if (kind === "OUT") {
+      // is a thing you can put IN — or transfer, which puts it somewhere;
+      // there is nothing to write off.
+      if (kind === "OUT" && mode !== "TRANSFER") {
         out.push(
           `${serial} is not in the system — an unknown serial can only be adjusted in.`,
         );
@@ -178,6 +198,34 @@ export function batchProblems(
     // return, which credits the sale in the same write.
     if (kind === "IN" && unit.status === "TERJUAL") {
       out.push(`${serial} is sold — take it back through Returns.`);
+      continue;
+    }
+    if (mode === "TRANSFER") {
+      if (unit.status === "TERJUAL") {
+        out.push(`${serial} is sold — there is nothing to transfer.`);
+      } else if (WRITTEN_OFF.includes(unit.status)) {
+        out.push(
+          `${serial} is written off — bring it back with Stock in → Internal use.`,
+        );
+      } else if (!IN_STOCK.includes(unit.status)) {
+        out.push(
+          `${serial} is ${statusLabel(unit.status)} — only a unit on a shelf can be transferred.`,
+        );
+      } else if (unit.locationId === locationId) {
+        out.push(`${serial} is already in ${warehouseLabel(unit.locationId)}.`);
+      }
+      continue;
+    }
+    if (mode === "INTERNAL" && kind === "IN" && IN_STOCK.includes(unit.status)) {
+      out.push(
+        `${serial} is already in stock in ${warehouseLabel(unit.locationId)} — moving it is a Stock transfer.`,
+      );
+      continue;
+    }
+    if (mode === "INTERNAL" && kind === "IN" && !WRITTEN_OFF.includes(unit.status)) {
+      out.push(
+        `${serial} is ${statusLabel(unit.status)} — Internal use brings back only a unit that was written off.`,
+      );
       continue;
     }
     if (

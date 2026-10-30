@@ -51,6 +51,7 @@ import {
   App,
   AutoComplete,
   Button,
+  Radio,
   Card,
   Flex,
   Form,
@@ -117,8 +118,21 @@ import { reprojectHolds } from "../../lib/reservations.js";
 import {
   batchProblems,
   IN_STOCK,
+  WRITTEN_OFF,
   normaliseSerial as normalise,
 } from "../../lib/adjustmentBatch.js";
+import {
+  STORED_REASON,
+  fixedReasonOf,
+  isBatchReason,
+  reasonsFor,
+  type StockReason,
+} from "../../lib/stockReasons.js";
+import { qcReady } from "../../lib/inboundQc.js";
+import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
+import { ServiceBatchModal } from "../../components/ServiceBatchModal";
+import { SupplierReturnModal } from "../../components/SupplierReturnModal";
+import { CustomerReturnPanel } from "../returns/CustomerReturnPage";
 import { rendered } from "../../lib/rendered.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
@@ -162,14 +176,10 @@ const BLANK_ROWS = 1;
  * neither, so the two doors disagreed about what a visit is.
  */
 type OutStatus = Extract<UnitStatus, "HILANG">;
+const outStatus: OutStatus = "HILANG";
 
-const OUT_STATUSES: { value: OutStatus; label: string; hint: string }[] = [
-  {
-    value: "HILANG",
-    label: "Lost / written off",
-    hint: "the unit is gone: shrinkage, damaged beyond sale, taken for internal use",
-  },
-];
+/** What a unit picked for an unknown serial can be graded (2026-10-30). */
+const GRADE_CHOICES: readonly string[] = ["NEW", "A", "B", "C"];
 
 interface BatchRow {
   key: string;
@@ -184,6 +194,17 @@ interface BatchRow {
   /** …and its capacity in mAh. */
   fcc?: number;
   description: string;
+  /*
+   * An unknown serial is asked what QC would ask (owner 2026-10-30: "it has to
+   * go through QC or filling in info like they were in QC"). All three given,
+   * and a description where the grade needs one, and it goes on the shelf;
+   * anything short and it lands in QC, where the Waiting-for-QC card finds it.
+   */
+  grade?: string;
+  /** The sell price — `Unit.price`. */
+  price?: number;
+  /** What it cost the shop — `Unit.buy`. Nobody bought it on an invoice. */
+  buy?: number;
 }
 
 let rowSeq = 0;
@@ -216,16 +237,22 @@ const isBatchRow = (v: unknown): v is BatchRow =>
     batteryHealth: FIELD.optNumber,
     cycleCount: FIELD.optNumber,
     fcc: FIELD.optNumber,
+    grade: FIELD.optString,
+    price: FIELD.optNumber,
+    buy: FIELD.optNumber,
   });
 interface CountedRow {
   key: string;
   skuId?: string;
   qty: number | null;
+  /** A transfer's source warehouse — a counted piece has no unit to say. */
+  fromId?: string;
 }
 const isCountedRow = (v: unknown): v is CountedRow =>
   hasShape(v, {
     key: FIELD.string,
     skuId: FIELD.optString,
+    fromId: FIELD.optString,
     qty: (q) => q === null || (typeof q === "number" && Number.isFinite(q)),
   });
 const parseBatchRows = (v: unknown): BatchRow[] | undefined => {
@@ -240,7 +267,10 @@ const touched = (r: BatchRow) =>
   r.batteryHealth != null ||
   r.cycleCount != null ||
   r.fcc != null ||
-  r.skuId !== undefined;
+  r.skuId !== undefined ||
+  r.grade !== undefined ||
+  r.price != null ||
+  r.buy != null;
 
 export function InventoryPage() {
   const db = useDb();
@@ -268,16 +298,21 @@ export function InventoryPage() {
     "OUT",
     asOneOf<AdjustmentKind>(["IN", "OUT"]),
   );
-  const [reason, setReason] = usePersistentState<string>(
-    BATCH_DRAFT("reason"),
-    "",
-    asString,
-  );
-  const [outStatus, setOutStatus] = usePersistentState<OutStatus>(
-    BATCH_DRAFT("outStatus"),
-    "HILANG",
-    asOneOf<OutStatus>(["HILANG"]),
-  );
+  /**
+   * The batch's reason — one of a fixed list since 2026-10-30, and what the
+   * dialog asks next depends on it. Only Internal use and Stock transfer are
+   * written here; the other reasons hand the serials to their own dialog.
+   */
+  const [reasonCode, setReasonCode] = usePersistentState<
+    "INTERNAL" | "TRANSFER" | ""
+  >(BATCH_DRAFT("reasonCode"), "", asOneOf(["INTERNAL", "TRANSFER", ""]));
+  const mode = reasonCode === "" ? undefined : reasonCode;
+  const reason = mode ? STORED_REASON[mode] : "";
+  /** Where the serials typed so far go, when the reason is another dialog's. */
+  const [serviceSend, setServiceSend] = useState<string[] | null>(null);
+  const [serviceBack, setServiceBack] = useState<string[] | null>(null);
+  const [supplierQueue, setSupplierQueue] = useState<string[] | null>(null);
+  const [customerLookup, setCustomerLookup] = useState<string | null>(null);
   const [locationId, setLocationId] = usePersistentState<string>(
     BATCH_DRAFT("location"),
     db.myWarehouseId,
@@ -308,7 +343,19 @@ export function InventoryPage() {
    * takes from this desk first and then wherever else holds the product.
    */
   const pickableCounted =
-    kind === "OUT" ? withStockOnHand(countedSkus, db.stockMoves) : countedSkus;
+    kind === "OUT" || mode === "TRANSFER"
+      ? withStockOnHand(countedSkus, db.stockMoves)
+      : countedSkus;
+  /** Where a transfer takes a counted product from: the fullest other shelf. */
+  const defaultFrom = (skuId: string): string | undefined => {
+    let best: { id: string; n: number } | undefined;
+    for (const w of db.warehouses) {
+      if (w.id === locationId) continue;
+      const n = onHand(db.stockMoves, skuId, w.id);
+      if (n > 0 && (best === undefined || n > best.n)) best = { id: w.id, n };
+    }
+    return best?.id;
+  };
   /**
    * One batch, once — a ref rather than state, because that is the only kind
    * of latch that closes in time.
@@ -382,10 +429,24 @@ export function InventoryPage() {
         };
   const unitOf = (serial: string) =>
     db.units.find((u) => u.serial === normalise(serial));
-  const adjustmentReasons = db.reasons.filter(
-    (r) => r.activity === "ADJUSTMENT" && r.active,
-  );
   const statusLabel = (s: string) => tagOf(UNIT_STATUS, s, t).label;
+
+  /** A reason's words, as literal `t()` calls — the i18n test reads them. */
+  const reasonWord = (r: StockReason): string => {
+    switch (r) {
+      case "INTERNAL":
+        return t("stockReason.internal", "Internal use");
+      case "TRANSFER":
+        return t("stockReason.transfer", "Stock transfer");
+      case "SERVICE":
+        return t("stockReason.service", "Service");
+      case "SUPPLIER_RETURN":
+        return t("stockReason.supplierReturn", "Return to supplier");
+      case "CUSTOMER_RETURN":
+        return t("stockReason.customerReturn", "Return from customer");
+    }
+  };
+
 
   const setRow = (key: string, patch: Partial<BatchRow>) =>
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -393,8 +454,7 @@ export function InventoryPage() {
   const openAdd = (direction: AdjustmentKind = "OUT") => {
     submitted.current = false;
     setKind(direction);
-    setReason("");
-    setOutStatus("HILANG");
+    setReasonCode("");
     setLocationId(db.myWarehouseId);
     setRows(blankRows());
     setCountedRows([]);
@@ -459,7 +519,13 @@ export function InventoryPage() {
         ? `${skuOf(c.skuId)?.name ?? ""} ${skuOf(c.skuId)?.variantLabel ?? ""}`.trim()
         : "",
       qty: c.qty,
-      onHand: c.skuId ? onHand(db.stockMoves, c.skuId) : 0,
+      onHand: c.skuId
+        ? mode === "TRANSFER"
+          ? c.fromId
+            ? onHand(db.stockMoves, c.skuId, c.fromId)
+            : 0
+          : onHand(db.stockMoves, c.skuId)
+        : 0,
     }));
 
   const problems = (): string[] =>
@@ -469,7 +535,8 @@ export function InventoryPage() {
         reason,
         lines: rows.filter(touched).map(asWritten),
         counted: countedInput(),
-        ...(kind === "IN" ? { locationId } : {}),
+        ...(kind === "IN" || mode === "TRANSFER" ? { locationId } : {}),
+        ...(mode ? { mode } : {}),
       },
       unitOf,
       statusLabel,
@@ -505,10 +572,9 @@ export function InventoryPage() {
 
     const active = rows.filter(touched).map(asWritten);
     const typed = reason.trim();
-    const isNewReason = !adjustmentReasons.some(
-      (r) => r.label.toLowerCase() === typed.toLowerCase(),
-    );
+    const transferring = mode === "TRANSFER";
     let created = 0;
+    let toQc = 0;
     let released = 0;
 
     mutate((d: MockDb) => {
@@ -527,6 +593,29 @@ export function InventoryPage() {
       for (const c of countedRows) {
         if (!c.skuId || !c.qty) continue;
         const cost = averageCost(d, c.skuId);
+        if (transferring) {
+          // A transfer is a pair: off the source shelf, onto the destination.
+          const from = c.fromId ?? defaultFrom(c.skuId);
+          if (!from) continue;
+          const moved = `Moved ${warehouseLabelOf(d.warehouses, from) ?? from} → ${warehouseLabelOf(d.warehouses, locationId) ?? locationId} — ${label}`;
+          for (const [where, qty] of [
+            [from, -c.qty],
+            [locationId, c.qty],
+          ] as const)
+            d.stockMoves.push({
+              id: nextId("sm"),
+              skuId: c.skuId,
+              locationId: where,
+              qty,
+              cost,
+              type: "KOREKSI",
+              at,
+              reasonId,
+              note: moved,
+              staff: currentStaffName(),
+            });
+          continue;
+        }
         const parts =
           kind === "IN"
             ? [{ locationId, qty: c.qty }]
@@ -555,14 +644,26 @@ export function InventoryPage() {
 
         if (isNew) {
           const sku = d.skus.find((s) => s.id === r.skuId)!;
+          // On the shelf only once it has what QC would have given it.
+          const ready =
+            r.grade !== undefined &&
+            (r.price ?? 0) > 0 &&
+            qcReady({ grade: r.grade, description } as Parameters<
+              typeof qcReady
+            >[0]);
+          const status = ready ? "TERSEDIA" : "QC";
+          if (!ready) toQc += 1;
           d.units.push({
             serial,
             skuId: sku.id,
-            status: "TERSEDIA",
+            status,
             locationId,
-            // No cost: nobody bought this through a PO, and writing the
-            // asking price in as `buy` would invent a margin out of nothing.
-            buy: 0,
+            // What staff say it cost, or nothing: nobody bought this through
+            // a PO, and writing the asking price in as `buy` would invent a
+            // margin out of nothing.
+            buy: r.buy ?? 0,
+            ...(r.grade !== undefined ? { grade: r.grade } : {}),
+            ...(r.price != null && r.price > 0 ? { price: r.price } : {}),
             description,
             poId: null,
             ...batteryPatch(
@@ -584,9 +685,12 @@ export function InventoryPage() {
             type: "KOREKSI",
             at,
             fromStatus: "-",
-            toStatus: "TERSEDIA",
+            toStatus: status,
             locationId,
-            note: [`Adjusted into stock — ${label}`, description]
+            note: [
+              ready ? `Adjusted into stock — ${label}` : `Adjusted in to QC — ${label}`,
+              description,
+            ]
               .filter(Boolean)
               .join(" — "),
             staff: currentStaffName(),
@@ -612,7 +716,10 @@ export function InventoryPage() {
           if (typed.fcc != null) existing.fcc = typed.fcc;
           // What the note will say about the battery, if anything was typed.
           const reading = readBattery(typed, mode, batterySettings);
-          if (kind === "IN" && existing.locationId !== locationId) {
+          if (
+            (kind === "IN" || transferring) &&
+            existing.locationId !== locationId
+          ) {
             // Same reasoning as the single-unit move above: the rack it was
             // filed on belongs to the warehouse it is leaving.
             existing.rackId = undefined;
@@ -625,23 +732,26 @@ export function InventoryPage() {
           // A unit already on a shelf is being TRANSFERRED, and keeps its
           // status: a reserved unit moved to another warehouse is still the
           // customer's.
-          const transfer = kind === "IN" && IN_STOCK.includes(existing.status);
+          const transfer =
+            transferring ||
+            (mode === undefined &&
+              kind === "IN" &&
+              IN_STOCK.includes(existing.status));
           appendEvent(d, serial, {
             type: "KOREKSI",
             // The adjustment's own instant, so an undo finds this row again.
             at,
-            toStatus:
-              kind === "IN"
-                ? transfer
-                  ? existing.status
-                  : "TERSEDIA"
+            toStatus: transfer
+              ? existing.status
+              : kind === "IN"
+                ? "TERSEDIA"
                 : outStatus,
-            toLocationId: kind === "IN" ? locationId : undefined,
+            toLocationId: kind === "IN" || transfer ? locationId : undefined,
             note: [
               transfer
                 ? `Moved ${warehouseLabelOf(d.warehouses, existing.locationId) ?? existing.locationId} → ${warehouseLabelOf(d.warehouses, locationId) ?? locationId} — ${label}`
                 : `${kind === "IN" ? "Adjusted in" : "Adjusted out"} — ${label}`,
-              kind === "OUT" ? statusLabel(outStatus) : undefined,
+              kind === "OUT" && !transfer ? statusLabel(outStatus) : undefined,
               description,
               reading.grade === null ? undefined : reading.text,
             ]
@@ -651,7 +761,7 @@ export function InventoryPage() {
           // A unit that has left stock cannot stay on hold for a customer. The
           // reservation is closed in the same transaction as the event, or the
           // Reservation page goes on offering a machine that is not there.
-          if (kind === "OUT") {
+          if (kind === "OUT" && !transfer) {
             // Only the ITEM for this machine goes. A hold covering three
             // machines does not collapse because one of them was written off
             // — the customer is still owed the other two, and the header's
@@ -691,14 +801,31 @@ export function InventoryPage() {
     message.success(
       [
         active.length > 0 &&
-          `${active.length} unit${active.length === 1 ? "" : "s"} adjusted ${kind === "IN" ? "in" : "out"}.`,
+          (transferring
+            ? t("stock.doneTransferred", "{{count}} unit(s) transferred.", {
+                count: active.length,
+              })
+            : t("stock.doneUnits", "{{count}} unit(s) recorded.", {
+                count: active.length,
+              })),
         pieces > 0 &&
-          `${pieces} counted piece${pieces === 1 ? "" : "s"} adjusted ${kind === "IN" ? "in" : "out"}.`,
+          t("stock.donePieces", "{{count}} counted piece(s) recorded.", {
+            count: pieces,
+          }),
         created > 0 &&
-          `${created} new serial${created === 1 ? " was" : "s were"} created in stock.`,
+          t("stock.doneCreated", "{{count}} new serial(s) created.", {
+            count: created,
+          }),
+        toQc > 0 &&
+          t(
+            "stock.doneToQc",
+            "{{count}} of them went to QC — finish them in Inbound → Waiting for QC.",
+            { count: toQc },
+          ),
         released > 0 &&
-          `${released} reservation${released === 1 ? " was" : "s were"} released.`,
-        isNewReason && `"${typed}" was added to the reason list in Settings.`,
+          t("stock.doneReleased", "{{count}} reservation(s) released.", {
+            count: released,
+          }),
       ]
         .filter(Boolean)
         .join(" "),
@@ -774,6 +901,12 @@ export function InventoryPage() {
     const skuId = stockHistorySkuId(db, a);
     const k = skuId ? skuOf(skuId) : undefined;
     return k ? `${k.name} ${k.variantLabel}` : fmtNone();
+  };
+  /** A row's reason, the fixed ones in the desk's language. */
+  const logReason = (a: StockHistoryRow): string => {
+    const label = db.reasons.find((r) => r.id === a.reasonId)?.label;
+    const fixed = fixedReasonOf(label);
+    return fixed ? reasonWord(fixed) : (label ?? a.reasonId);
   };
   /** What a row is about, for the edit button's name: the serial, or the product. */
   const logSubject = (a: StockHistoryRow) =>
@@ -915,14 +1048,9 @@ export function InventoryPage() {
             key: "reason",
             facet: true,
             searchable: true,
-            sortValue: (a) =>
-              db.reasons.find((r) => r.id === a.reasonId)?.label ?? a.reasonId,
-            render: (_, a) => (
-              <Tag>
-                {db.reasons.find((r) => r.id === a.reasonId)?.label ??
-                  a.reasonId}
-              </Tag>
-            ),
+            sortValue: (a) => logReason(a),
+            facetValue: (a) => logReason(a),
+            render: (_, a) => <Tag>{logReason(a)}</Tag>,
           },
           { title: t("stock.by", "By"), dataIndex: "staff", facet: true },
           {
@@ -1009,6 +1137,39 @@ export function InventoryPage() {
 
   const activeRows = rows.filter(touched).length;
 
+  /**
+   * Picking a reason. Internal use and Stock transfer are this dialog's; the
+   * other three are a dialog of their own, which takes the serials typed so
+   * far — nothing already scanned is asked for twice.
+   */
+  const pickReason = (r: StockReason) => {
+    if (isBatchReason(r)) {
+      setReasonCode(r);
+      return;
+    }
+    const serials = rows
+      .filter(touched)
+      .map((x) => normalise(x.serial))
+      .filter((x) => x !== "");
+    setAdding(false);
+    if (r === "SERVICE") {
+      if (kind === "OUT") setServiceSend(serials);
+      else setServiceBack(serials);
+    } else if (r === "SUPPLIER_RETURN") setSupplierQueue(serials);
+    else setCustomerLookup(serials[0] ?? "");
+  };
+
+  /** The serials a row's box offers, by what the reason can take. */
+  const offerable = (status: UnitStatus): boolean => {
+    if (mode === "TRANSFER") return IN_STOCK.includes(status);
+    if (kind === "IN") return WRITTEN_OFF.includes(status);
+    return (
+      status !== "QC" && status !== "SERVIS" && HELD_STATUSES.includes(status)
+    );
+  };
+  /** May an unknown serial be created on this batch? */
+  const canCreate = kind === "IN" || mode === "TRANSFER";
+
   return (
     <PageContainer
       title={t("stock.inventory", "Inventory")}
@@ -1068,15 +1229,13 @@ export function InventoryPage() {
       <Modal
         title={
           kind === "IN"
-            ? t(
-                "stock.stockInTitle",
-                "Stock in — transfer or bring units into a warehouse",
-              )
-            : t("stock.stockOutWriteOffTitle", "Stock out — write units off")
+            ? t("stock.stockIn", "Stock in")
+            : t("stock.stockOut", "Stock out")
         }
         open={adding}
         onCancel={() => setAdding(false)}
         onOk={submitBatch}
+        okButtonProps={{ disabled: mode === undefined }}
         okText={
           activeRows === 0
             ? t("stock.logAdjustments", "Log adjustments")
@@ -1098,72 +1257,56 @@ export function InventoryPage() {
            * toggle that repeats the button somebody just pressed is a second
            * chance to get it wrong. The title says which one this is.
            */}
-          <Flex wrap gap={SPACE.md} align="flex-start">
+          <Form.Item
+            label={t("stock.reason", "Reason")}
+            required
+            style={{ marginBottom: SPACE.md }}
+          >
+            <Radio.Group
+              aria-label={t("stock.reason", "Reason")}
+              optionType="button"
+              buttonStyle="solid"
+              size="large"
+              value={reasonCode === "" ? undefined : reasonCode}
+              onChange={(e) => pickReason(e.target.value as StockReason)}
+              options={reasonsFor(kind).map((r) => ({
+                value: r,
+                label: reasonWord(r),
+              }))}
+            />
+          </Form.Item>
+
+          {mode === undefined ? (
+            <Typography.Text type="secondary">
+              {t("stock.pickAReasonFirst", "Pick a reason to start.")}
+            </Typography.Text>
+          ) : (
+            <>
+          {(kind === "IN" || mode === "TRANSFER") && (
             <Form.Item
-              label={t("stock.reason", "Reason")}
+              label={
+                mode === "TRANSFER"
+                  ? t("stock.toWarehouse", "To warehouse")
+                  : t("stock.intoWarehouse", "Into warehouse")
+              }
               required
-              tooltip={t(
-                "stock.pickOneOrTypeA",
-                "Pick one, or type a new reason — a new one is added to Settings automatically",
-              )}
-              style={{ marginBottom: SPACE.md, minWidth: 280, flex: 1 }}
+              style={{ marginBottom: SPACE.md, maxWidth: 320 }}
             >
-              <AutoComplete
-                value={reason}
-                onChange={(v: string) => setReason(v)}
-                options={adjustmentReasons.map((r) => ({ value: r.label }))}
-                filterOption={(input, opt) =>
-                  String(opt?.value ?? "")
-                    .toLowerCase()
-                    .includes(input.toLowerCase())
+              <Select
+                aria-label={
+                  mode === "TRANSFER"
+                    ? t("stock.toWarehouse", "To warehouse")
+                    : t("stock.intoWarehouse", "Into warehouse")
                 }
-                placeholder={t(
-                  "stock.searchAReasonOrType",
-                  "Search a reason, or type a new one",
-                )}
+                value={locationId}
+                onChange={setLocationId}
+                options={db.warehouses
+                  .filter((w) => w.active)
+                  .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
                 style={{ width: "100%" }}
               />
             </Form.Item>
-
-            {kind === "IN" ? (
-              <Form.Item
-                label={t("stock.intoWarehouse", "Into warehouse")}
-                required
-                style={{ marginBottom: SPACE.md, minWidth: 220 }}
-              >
-                <Select
-                  value={locationId}
-                  onChange={setLocationId}
-                  options={db.warehouses
-                    .filter((w) => w.active)
-                    .map((w) => ({ value: w.id, label: warehouseLabel(w) }))}
-                  style={{ width: "100%" }}
-                />
-              </Form.Item>
-            ) : (
-              <Form.Item
-                label={t("stock.unitsBecome", "Units become")}
-                required
-                tooltip={t(
-                  "stock.whatTheUnitSStatus",
-                  "What the unit's status becomes. The log and the status have to agree.",
-                )}
-                style={{ marginBottom: SPACE.md, minWidth: 220 }}
-              >
-                <Select<OutStatus>
-                  value={outStatus}
-                  onChange={setOutStatus}
-                  // Translated here rather than in the constant — see
-                  // SettingsPage's REASON_ACTIVITIES for why.
-                  options={OUT_STATUSES.map((o) => ({
-                    value: o.value,
-                    label: t(o.label),
-                  }))}
-                  style={{ width: "100%" }}
-                />
-              </Form.Item>
-            )}
-          </Flex>
+          )}
 
           {/* A heading, not a paragraph (owner ask 2026-09-23). The sentence
               that was here explained what "stock in" means to somebody who had
@@ -1239,11 +1382,7 @@ export function InventoryPage() {
                               // per-unit price on 2026-08-27; the reason now
                               // is simply that a unit still being graded
                               // belongs to Stock In, which owns that stage.
-                              u.status !== "QC" &&
-                              u.status !== "SERVIS" &&
-                              (kind === "IN"
-                                ? u.status !== "TERJUAL"
-                                : HELD_STATUSES.includes(u.status)),
+                              offerable(u.status),
                           )
                           .map((u) => ({
                             value: u.serial,
@@ -1290,12 +1429,18 @@ export function InventoryPage() {
                               type="secondary"
                               style={{ fontSize: TYPE.sm }}
                             >
-                              {kind === "IN"
-                                ? "not in stock — say what it is"
-                                : "not in the system"}
+                              {canCreate
+                                ? t(
+                                    "stock.unknownSayWhat",
+                                    "not in the system — say what it is",
+                                  )
+                                : t(
+                                    "stock.unknownNotInSystem",
+                                    "not in the system",
+                                  )}
                             </Typography.Text>
                           </Flex>
-                          {kind === "IN" && (
+                          {canCreate && (
                             <Flex gap={SPACE.xs} wrap>
                               <Select
                                 showSearch
@@ -1343,6 +1488,61 @@ export function InventoryPage() {
                                   }))}
                                 style={{ minWidth: 150, flex: 1 }}
                               />
+                            </Flex>
+                          )}
+                          {canCreate && (
+                            <Flex gap={SPACE.xs} wrap>
+                              <Select
+                                value={r.grade}
+                                aria-label={t("stock.unknownGrade", "Grade")}
+                                placeholder={t("stock.unknownGrade", "Grade")}
+                                onChange={(v: string) =>
+                                  setRow(r.key, { grade: v })
+                                }
+                                options={GRADE_CHOICES.map((g) => ({
+                                  value: g,
+                                  label:
+                                    g === "NEW" ? t("condition.new", "New") : g,
+                                }))}
+                                style={{ width: 96 }}
+                              />
+                              <InputNumber
+                                min={0}
+                                precision={0}
+                                prefix={RP_SYMBOL}
+                                formatter={moneyFormatter}
+                                parser={moneyParser}
+                                value={r.price}
+                                aria-label={t("stock.unknownPrice", "Sell price")}
+                                placeholder={t("stock.unknownPrice", "Sell price")}
+                                onChange={(v) =>
+                                  setRow(r.key, { price: v ?? undefined })
+                                }
+                                style={{ minWidth: 140, flex: 1 }}
+                              />
+                              <InputNumber
+                                min={0}
+                                precision={0}
+                                prefix={RP_SYMBOL}
+                                formatter={moneyFormatter}
+                                parser={moneyParser}
+                                value={r.buy}
+                                aria-label={t("stock.unknownCost", "Cost")}
+                                placeholder={t("stock.unknownCost", "Cost")}
+                                onChange={(v) =>
+                                  setRow(r.key, { buy: v ?? undefined })
+                                }
+                                style={{ minWidth: 140, flex: 1 }}
+                              />
+                              <Typography.Text
+                                type="secondary"
+                                style={{ fontSize: TYPE.sm, width: "100%" }}
+                              >
+                                {t(
+                                  "stock.unknownQcHint",
+                                  "Grade, sell price and description (not needed for New) put it on the shelf. Anything missing and it goes to QC.",
+                                )}
+                              </Typography.Text>
                             </Flex>
                           )}
                         </Flex>
@@ -1508,13 +1708,50 @@ export function InventoryPage() {
                     onChange={(v: string) =>
                       setCountedRows((rs) =>
                         rs.map((x) =>
-                          x.key === c.key ? { ...x, skuId: v } : x,
+                          x.key === c.key
+                            ? { ...x, skuId: v, fromId: defaultFrom(v) }
+                            : x,
                         ),
                       )
                     }
                   />
                 ),
               },
+              ...(mode === "TRANSFER"
+                ? [
+                    {
+                      title: t("stock.fromWarehouse", "From"),
+                      key: "from",
+                      width: 200,
+                      render: (_: unknown, c: CountedRow) => (
+                        <Select
+                          aria-label={t("stock.fromWarehouse", "From")}
+                          style={{ width: "100%" }}
+                          value={c.fromId}
+                          disabled={!c.skuId}
+                          options={db.warehouses
+                            .filter((w) => w.id !== locationId)
+                            .filter(
+                              (w) =>
+                                c.skuId !== undefined &&
+                                onHand(db.stockMoves, c.skuId, w.id) > 0,
+                            )
+                            .map((w) => ({
+                              value: w.id,
+                              label: `${warehouseLabel(w)} · ${c.skuId ? onHand(db.stockMoves, c.skuId, w.id) : 0}`,
+                            }))}
+                          onChange={(v: string) =>
+                            setCountedRows((rs) =>
+                              rs.map((x) =>
+                                x.key === c.key ? { ...x, fromId: v } : x,
+                              ),
+                            )
+                          }
+                        />
+                      ),
+                    },
+                  ]
+                : []),
               {
                 title: t("stock.qty", "Qty"),
                 key: "qty",
@@ -1559,8 +1796,32 @@ export function InventoryPage() {
               },
             ]}
           />
+            </>
+          )}
         </Form>
       </Modal>
+
+      <ServiceBatchModal
+        mode="SEND"
+        serials={serviceSend}
+        raisedBy="ADJUSTMENT"
+        onClose={() => setServiceSend(null)}
+      />
+      <ServiceBatchModal
+        mode="BACK"
+        serials={serviceBack}
+        onClose={() => setServiceBack(null)}
+      />
+      <SupplierReturnModal
+        serials={supplierQueue}
+        onClose={() => setSupplierQueue(null)}
+      />
+      <CustomerReturnPanel
+        addOpen={customerLookup !== null}
+        prefillLookup={customerLookup ?? undefined}
+        onCloseAdd={() => setCustomerLookup(null)}
+        onOpenAdd={() => setCustomerLookup((v) => v ?? "")}
+      />
 
       <StockExportModal open={exporting} onClose={() => setExporting(false)} />
       <PriceImportModal

@@ -5065,4 +5065,58 @@ export const id: Record<string, string> = {
   "requests.waitingForDp": "Menunggu DP",
   "requests.windowClosed":
     "Jendela WhatsApp 24 jam sudah tutup, jadi tidak ada yang terkirim — kabari pelanggan lewat cara lain.",
+  // Stock in / out by reason, and service in batch (2026-10-30).
+  "condition.new": "Baru",
+  "pnl.shipping": "Ongkir",
+  "Shipping / ongkir": "Ongkir",
+  "Courier fees the shop pays that are not part of a unit's cost.":
+    "Ongkir yang dibayar toko dan tidak masuk ke modal unit.",
+  "serviceBatch.addSerial": "Tambah unit",
+  "serviceBatch.addSerialHint": "Scan atau ketik serial, lalu Enter",
+  "serviceBatch.back": "{{count}} unit kembali ke stok.",
+  "serviceBatch.backTitle": "Kembalikan unit dari servis",
+  "serviceBatch.cannotBack": "{{serial}} tidak sedang di servis.",
+  "serviceBatch.cannotSend":
+    "{{serial}} tidak bisa diservis — unit tidak sedang di QC atau di rak.",
+  "serviceBatch.description": "Deskripsi",
+  "serviceBatch.descriptionOf": "Deskripsi {{serial}}",
+  "serviceBatch.fillDown": "Isi ke bawah",
+  "serviceBatch.noUnits": "Belum ada unit.",
+  "serviceBatch.refused":
+    "Tidak tercatat — sudah berubah sementara itu: {{serials}}",
+  "serviceBatch.sendTitle": "Kirim unit ke servis",
+  "serviceBatch.sent": "{{count}} unit dikirim ke servis.",
+  "serviceBatch.skippedBack":
+    "Tidak dimasukkan — tidak sedang di servis: {{serials}}",
+  "serviceBatch.skippedSend":
+    "Tidak dimasukkan — tidak di QC atau di rak: {{serials}}",
+  "serviceBatch.splitFee": "Bagi ongkir ke modal tiap unit",
+  "serviceBatch.splitOff":
+    "Dicatat sekali sebagai biaya toko (Ongkir). Modal unit tidak berubah.",
+  "serviceBatch.splitOn": "{{amount}} per unit, masuk ke HPP tiap unit.",
+  "serviceBatch.unit": "Unit",
+  "stock.doneCreated": "{{count}} serial baru dibuat.",
+  "stock.donePieces": "{{count}} pcs produk hitungan tercatat.",
+  "stock.doneReleased": "{{count}} reservasi dilepas.",
+  "stock.doneToQc":
+    "{{count}} di antaranya masuk QC — selesaikan di Inbound → Menunggu QC.",
+  "stock.doneTransferred": "{{count}} unit dipindahkan.",
+  "stock.doneUnits": "{{count}} unit tercatat.",
+  "stock.fromWarehouse": "Dari",
+  "stock.pickAReasonFirst": "Pilih alasan dulu untuk mulai.",
+  "stock.toWarehouse": "Ke gudang",
+  "stock.unknownCost": "Modal",
+  "stock.unknownGrade": "Grade",
+  "stock.unknownNotInSystem": "belum ada di sistem",
+  "stock.unknownPrice": "Harga jual",
+  "stock.unknownQcHint":
+    "Grade, harga jual dan deskripsi (tidak perlu untuk Baru) langsung menaruhnya di rak. Kalau ada yang kosong, unit masuk QC.",
+  "stock.unknownSayWhat": "belum ada di sistem — isi unit apa ini",
+  "stockReason.customerReturn": "Retur dari pelanggan",
+  "stockReason.internal": "Pemakaian internal",
+  "stockReason.service": "Servis",
+  "stockReason.supplierReturn": "Retur ke supplier",
+  "stockReason.transfer": "Transfer stok",
+  "supplierReturn.titleOf":
+    "Retur {{serial}} ke supplier ({{n}} dari {{count}})",
 };

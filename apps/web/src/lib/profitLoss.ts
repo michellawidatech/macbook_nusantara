@@ -90,6 +90,8 @@ export const OPERATING_KINDS = [
   // What a bank or a marketplace kept (owner 2026-10-27): a cost of running
   // the shop, on its own line beside the itemised marketplace payouts.
   "BIAYA_ADMIN",
+  // A courier fee kept as the shop's own cost (owner 2026-10-30).
+  "ONGKIR",
 ] as const;
 
 /** The two categories no longer offered; listed only while something uses them. */
@@ -285,6 +287,23 @@ export function profitLoss(db: MockDb, p: Period): ProfitLoss {
   const grossProfit = totalRevenue - totalCogs;
 
   // ── Biaya operasional ─────────────────────────────────────────────────
+  // What a marketplace kept, on the sales of this period. Only where somebody
+  // itemised the payout — an unitemised one is still inside the sale. Since
+  // 2026-10-30 it is on the SAME line as a bank's fees (owner: "why have
+  // double?"): both are what somebody kept on the way to the shop's account.
+  const saleOf = new Map(salesInPeriod.map((o) => [o.id, o]));
+  const marketplaceFees: PnlItem[] = [];
+  for (const s of db.settlements) {
+    const o = saleOf.get(s.orderId);
+    if (o === undefined) continue;
+    for (const f of s.fees)
+      marketplaceFees.push({
+        date: o.ts,
+        ref: o.code,
+        description: `${s.channel} · ${f.label ?? f.kind}`,
+        amount: f.amount,
+      });
+  }
   const expenseLine = (kind: string): PnlLine => {
     const b = new LineBuilder();
     for (const e of db.expenses)
@@ -295,29 +314,12 @@ export function profitLoss(db: MockDb, p: Period): ProfitLoss {
           description: [e.label, e.note].filter(Boolean).join(" · "),
           amount: e.amount,
         });
+    if (kind === "BIAYA_ADMIN") for (const f of marketplaceFees) b.add(f);
     return b.line(kind);
   };
-  // What a marketplace kept, on the sales of this period. Only where somebody
-  // itemised the payout — an unitemised one is still inside the sale.
-  const saleOf = new Map(salesInPeriod.map((o) => [o.id, o]));
-  const fees = new LineBuilder();
-  for (const s of db.settlements) {
-    const o = saleOf.get(s.orderId);
-    if (o === undefined) continue;
-    for (const f of s.fees)
-      fees.add({
-        date: o.ts,
-        ref: o.code,
-        description: `${s.channel} · ${f.label ?? f.kind}`,
-        amount: f.amount,
-      });
-  }
-  const operating: PnlLine[] = [
-    ...OPERATING_KINDS.map(expenseLine).filter(
-      (l) => l.amount !== 0 || !RETIRED.has(l.key),
-    ),
-    fees.line("marketplaceFees"),
-  ];
+  const operating: PnlLine[] = OPERATING_KINDS.map(expenseLine).filter(
+    (l) => l.amount !== 0 || !RETIRED.has(l.key),
+  );
   const totalOperating = sum(operating);
   const operatingProfit = grossProfit - totalOperating;
 

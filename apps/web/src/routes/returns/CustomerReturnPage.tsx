@@ -88,7 +88,7 @@
  * The reason list is Settings' (`db.reasons`, activity `RETURN_CUSTOMER`);
  * "Other" asks for a sentence.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { warehouseLabel } from "../../lib/warehouses";
 import {
   Alert,
@@ -368,6 +368,7 @@ export function CustomerReturnPanel({
   onOpenAdd,
   checkOpen = false,
   onCloseCheck,
+  prefillLookup,
 }: {
   addOpen: boolean;
   onCloseAdd: () => void;
@@ -382,6 +383,12 @@ export function CustomerReturnPanel({
    */
   checkOpen?: boolean;
   onCloseCheck?: () => void;
+  /**
+   * A serial (or number) to look up the moment the form opens — what
+   * Stock in → Return from customer hands over (2026-10-30), so a unit
+   * already scanned there is not scanned twice.
+   */
+  prefillLookup?: string;
 }) {
   const { t } = useTranslation();
   const db = useDb();
@@ -820,8 +827,8 @@ export function CustomerReturnPanel({
    * question — *which sale is this?* — and the bench has whichever of the two
    * is in front of it.
    */
-  const find = () => {
-    const text = lookup.trim();
+  const find = (raw: string = lookup) => {
+    const text = raw.trim();
     if (text === "") return;
     const wanted = text.toUpperCase();
     const byCode = db.orders.find(
@@ -840,7 +847,7 @@ export function CustomerReturnPanel({
       openPicker(byCode);
       return;
     }
-    const serial = resolveSerialQuery(lookup, allSerials, supplierCodes);
+    const serial = resolveSerialQuery(text, allSerials, supplierCodes);
     const order = serial ? saleOfSerial(db.orders, serial) : undefined;
     if (!order || statusOf(serial) !== "TERJUAL" || pendingBack.has(serial)) {
       setLookupMiss(text);
@@ -849,6 +856,14 @@ export function CustomerReturnPanel({
     setLookup("");
     openPicker(order);
   };
+
+  // The hand-over from Stock in: look the serial up once, as Enter would.
+  useEffect(() => {
+    if (!addOpen || !prefillLookup) return;
+    setLookup(prefillLookup);
+    find(prefillLookup);
+    // Once per opening; `find` reads the store as it is now.
+  }, [addOpen, prefillLookup]);
 
   /** *Select n units*: what was ticked becomes the return's rows. */
   const confirmPick = () => {
@@ -2077,7 +2092,7 @@ export function CustomerReturnPanel({
               </Form.Item>
               <Button
                 icon={<SearchOutlined />}
-                onClick={find}
+                onClick={() => find()}
                 style={{ marginTop: 30 }}
               >
                 {t("returnCustomer.findSale", "Find the sale")}

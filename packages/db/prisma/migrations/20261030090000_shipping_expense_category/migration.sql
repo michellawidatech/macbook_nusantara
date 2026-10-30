@@ -1,0 +1,11 @@
+-- A courier fee the shop keeps as its own cost is its own expense category
+-- (owner 2026-10-30).
+--
+-- A batch sent to service (or brought back) pays one courier for several
+-- units. By default the fee is split into each unit's cost; with the split
+-- switched off it is the shop's expense instead, and the owner wants that read
+-- as shipping — "Shipping / ongkir", its own Profit & Loss line — rather than
+-- lost inside Operational.
+--
+-- Additive: one enum value, nothing backfilled.
+ALTER TYPE "ExpenseKind" ADD VALUE IF NOT EXISTS 'ONGKIR';

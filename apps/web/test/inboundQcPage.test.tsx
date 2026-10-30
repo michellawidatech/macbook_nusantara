@@ -1351,7 +1351,9 @@ describe("sending a unit to service", () => {
     expect(visit.fromLocationId).toBe(from);
   });
 
-  it("puts the courier and the quote on the visit, and pays the one paid", async () => {
+  // No repair price is asked when a unit is sent (owner 2026-10-30): the
+  // bill is a charge added later on the Service page.
+  it("puts the courier on the visit and pays it", async () => {
     const serial = await described();
     await userEvent.click(screen.getByLabelText(`Send ${serial} to service`));
     const dialog = await lastDialog();
@@ -1372,22 +1374,16 @@ describe("sending a unit to service", () => {
         }),
       ).getByText("Cash"),
     );
-    await userEvent.type(
-      within(dialog).getByLabelText(/Repair quote/),
-      "800000",
-    );
+    expect(within(dialog).queryByLabelText(/Repair quote/)).toBeNull();
     await userEvent.click(await okButton("Send to service"));
 
     const db = snapshot();
     const visit = db.services.find((r) => r.serial === serial)!;
-    expect(visit.fees.map((f) => [f.kind, f.amount]).sort()).toEqual([
-      ["LABOUR", 800_000],
+    expect(visit.fees.map((f) => [f.kind, f.amount])).toEqual([
       ["SHIPPING", 150_000],
     ]);
     const ship = visit.fees.find((f) => f.kind === "SHIPPING")!;
-    const quote = visit.fees.find((f) => f.kind === "LABOUR")!;
     expect(ship.paid).toBe(true);
-    expect(quote.paid).toBeUndefined();
     const paid = db.expenses.filter((e) =>
       visit.fees.some((f) => f.id === e.serviceFeeId),
     );

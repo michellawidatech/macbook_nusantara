@@ -3154,6 +3154,9 @@ enum ExpenseKind {
   // fee, a payout deduction (owner 2026-10-27). An operating cost, its own
   // Profit & Loss line.
   BIAYA_ADMIN
+  // A courier fee kept as the shop's own cost rather than split into the
+  // units it carried (owner 2026-10-30). An operating cost, its own line.
+  ONGKIR
 }
 
 enum IncomeReason {

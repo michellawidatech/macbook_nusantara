@@ -3504,6 +3504,43 @@ Decisions that outlived those documents:
   (SECURITY DEFINER: KOREKSI with a reason and no order/invoice/opname link),
   with the below-zero check run after. ⚠️ The eleventh sanctioned hard
   delete; do not generalise it.
+- **Stock in / out by reason, and service in batch — 2026-10-30.** *"The
+  reason should be predefined … and each of that will have the corresponding
+  behavior."* The typed reason is gone from the batch dialog; a row of reason
+  buttons comes first and decides what is asked (`lib/stockReasons.ts`).
+  - **Out:** Internal use (written off, `HILANG`) · Stock transfer · Service ·
+    Return to supplier. **In:** Internal use (a written-off unit back on the
+    shelf) · Stock transfer · Service (back from service) · Return from
+    customer. Internal use and Stock transfer are written by the batch under
+    an `ADJUSTMENT` reason of that name (`STORED_REASON`, English and frozen;
+    the history reads it back translated via `fixedReasonOf`). A transfer
+    keeps the unit's status and releases no hold; a counted product transfers
+    as a −/+ `KOREKSI` pair with a *From* warehouse per line.
+    `batchProblems` takes `mode` and refuses what the reason cannot take.
+  - **Service and the returns HAND OFF**: picking one closes the batch and
+    opens `ServiceBatchModal` (send / back), `SupplierReturnModal` (now a
+    queue: `serials`, one return per unit, each its own credit) or
+    `CustomerReturnPanel` (mounted on Inventory, `prefillLookup`).
+  - **An unknown serial** may be created under Internal use (in) or a
+    transfer: the row asks product, specs, grade, sell price, cost. Grade +
+    price + a description where the grade needs one (`qcReady`) → `TERSEDIA`;
+    anything short → `QC`, found by the Waiting-for-QC card (poId null).
+  - **`ServiceBatchModal`** is the ONE service dialog: Stock out/in → Service
+    open it with a list; `SendToServiceModal` and the Service page's *Back in
+    stock* are it with `single`. A whole serial typed or scanned into its box
+    is added at once (the till's rule). One courier fee for the box: *Split
+    the courier fee into each unit's cost* (on) gives each travelling unit a
+    SHIPPING charge of `splitEvenly` (leftover rupiah to the first) — its
+    COGS; off writes ONE `Expense` of the new kind **`ONGKIR`** ("Shipping /
+    ongkir", migration `20261030090000_shipping_expense_category`, its own
+    P&L line) and "Not paid yet" is not offered. **No repair quote is asked
+    on any send** — the bill is *+ Charge* on the Service page. "What is
+    wrong with it" became *Description* (the visit's note).
+  - **Profit & Loss has one fee line**: what a marketplace kept (itemised
+    settlement fees) now sits inside "Bank & marketplace fees" with
+    `BIAYA_ADMIN`; the separate `marketplaceFees` line is gone.
+  - ⚠️ Settings → reasons still lists `ADJUSTMENT` reasons: stock opname's
+    *Add to inventory* still offers that typable list.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

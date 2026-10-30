@@ -86,6 +86,8 @@ describe("profit & loss", () => {
     exp("BUNGA", 20_000);
     // A bank's fee is an operating cost on its own line (2026-10-27).
     exp("BIAYA_ADMIN", 6_500);
+    // A courier kept as the shop's own cost (2026-10-30).
+    exp("ONGKIR", 40_000);
     // Not costs: stock bought, money moved, a refund the RETUR already counts.
     exp("SUPPLIER", 50_000_000);
     exp("TRANSFER", 2_000_000);
@@ -114,17 +116,54 @@ describe("profit & loss", () => {
     } as MockDb["expenses"][number]);
 
     const r = profitLoss(db, MONTH);
-    expect(r.totalOperating).toBe(4_006_500);
+    expect(r.totalOperating).toBe(4_046_500);
     expect(line(r, "BIAYA_ADMIN")).toBe(6_500);
-    // Listed after the running costs, beside the itemised marketplace payouts.
+    expect(line(r, "ONGKIR")).toBe(40_000);
+    // Listed after the running costs. The marketplace payouts no longer have a
+    // line of their own (2026-10-30) — see the next test.
     expect(r.operating.map((l) => l.key).slice(-2)).toEqual([
       "BIAYA_ADMIN",
-      "marketplaceFees",
+      "ONGKIR",
     ]);
+    expect(r.operating.some((l) => l.key === "marketplaceFees")).toBe(false);
     expect(line(r, "interestIn")).toBe(5_000);
     expect(line(r, "interestOut")).toBe(20_000);
     expect(r.totalOther).toBe(5_000 - 20_000);
-    expect(r.netProfit).toBe(-4_006_500 + 5_000 - 20_000);
+    expect(r.netProfit).toBe(-4_046_500 + 5_000 - 20_000);
+  });
+
+  it("puts what a marketplace kept on the same line as a bank's fees (2026-10-30)", () => {
+    const db = empty();
+    const unit = db.units[0]!;
+    db.orders.push({
+      id: "o-shopee",
+      code: "SI-2030/01-000009",
+      ts: IN,
+      customerId: null,
+      serials: [unit.serial],
+      prices: { [unit.serial]: 5_000_000 },
+      listPrices: { [unit.serial]: 5_000_000 },
+      discount: 0,
+      source: "SHOPEE" as never,
+      payMethod: "MARKETPLACE",
+      settled: true,
+      extra: 0,
+      total: 5_000_000,
+    } as MockDb["orders"][number]);
+    db.settlements.push({
+      orderId: "o-shopee",
+      channel: "Shopee",
+      fees: [{ id: "f1", kind: "COMMISSION", amount: 300_000 }],
+    } as unknown as MockDb["settlements"][number]);
+    db.expenses.push({
+      id: "e-adm",
+      kind: "BIAYA_ADMIN",
+      amount: 6_500,
+      date: "2030-01-20",
+      method: "TRANSFER",
+    } as MockDb["expenses"][number]);
+    const r = profitLoss(db, MONTH);
+    expect(line(r, "BIAYA_ADMIN")).toBe(306_500);
   });
 
   it("counts a paid service charge once — in the unit's cost, never as operating (2026-10-26)", () => {

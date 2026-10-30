@@ -75,6 +75,7 @@
  *   unit set out from. Excluding "the bench" while defaulting to it is what
  *   drew a raw `wh-04` in the box.
  */
+import { ServiceBatchModal } from "../../components/ServiceBatchModal";
 import { useMemo, useState } from "react";
 import {
   App,
@@ -138,7 +139,7 @@ import {
   currentStaffName,
 } from "../../mock/store.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
-import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
+import { warehouseLabelOf } from "../../lib/warehouses.js";
 import type { MockDb } from "../../mock/seed.js";
 
 /** Out of the draft, so a rule reads the store as the mutation sees it. */
@@ -185,13 +186,6 @@ export function ServicePage() {
     method: Exclude<PaidWith, "UNPAID">;
     day: Dayjs;
   }>();
-  const [backForm] = Form.useForm<{
-    locationId: string;
-    transferFee?: number;
-    transferPaid: PaidWith;
-    note?: string;
-  }>();
-
   /**
    * Finished visits, listed too (owner ask 2026-10-26: any visit can be
    * deleted). Per visit to the page, never remembered: the bench is about
@@ -492,90 +486,6 @@ export function ServicePage() {
       ),
     );
   };
-
-  /**
-   * Send a unit back into stock.
-   *
-   * One `mutate`: the visit closes, the last fee is recorded, the unit's
-   * status and location move and the event is appended — all together, for
-   * the same reason every other movement in this app is one transaction. The
-   * event carries the closing instant, which is how deleting the visit finds
-   * it again.
-   */
-  const sendBack = () =>
-    backForm.validateFields().then((v) => {
-      const row = returning!;
-      const at = new Date().toISOString();
-      let closed = row.rec;
-      void mutate((d) => {
-        const i = d.services.findIndex((r) => r.id === row.rec.id);
-        if (i >= 0) {
-          const rec = d.services[i]!;
-          const paid = v.transferPaid !== "UNPAID";
-          const transfer =
-            v.transferFee && v.transferFee > 0
-              ? {
-                  id: nextId("svcf"),
-                  kind: "SHIPPING" as const,
-                  label: t("service.transferLabel", "Transfer out"),
-                  amount: v.transferFee,
-                  at,
-                  staff: currentStaffName(),
-                  ...(paid ? { paid: true as const } : {}),
-                }
-              : undefined;
-          closed = {
-            ...rec,
-            fees: transfer ? [...rec.fees, transfer] : rec.fees,
-            closedAt: at,
-            toLocationId: v.locationId,
-          };
-          d.services[i] = closed;
-          if (transfer && v.transferPaid !== "UNPAID") {
-            d.expenses.unshift(
-              chargeExpense({
-                id: nextId("exp"),
-                serial: row.serial,
-                fee: transfer,
-                method: v.transferPaid,
-                day: localDay(at),
-                createdAt: at,
-              }),
-            );
-          }
-        }
-        appendEvent(d, row.serial, {
-          type: "DICATAT",
-          toStatus: "TERSEDIA",
-          toLocationId: v.locationId,
-          at,
-          note: [
-            `Back from service — ${warehouseName(v.locationId)}`,
-            v.note,
-            `repair cost ${fmtRp(visitCost(closed))}`,
-          ]
-            .filter(Boolean)
-            .join(" · "),
-        });
-        const u = d.units.find((x) => x.serial === row.serial);
-        // The rack belongs to whichever warehouse it left; a unit coming back
-        // has to be put on a shelf again.
-        if (u) u.rackId = undefined;
-      });
-      setReturning(null);
-      backForm.resetFields();
-      message.success(
-        t("service.backInStock", "{{serial}} is back in stock.", {
-          serial: row.serial,
-        }),
-      );
-    });
-
-  /** Where a unit can come back to: every active warehouse, and the one it left. */
-  const backOptions = (r: BenchRow | null) =>
-    db.warehouses
-      .filter((w) => w.active || w.id === r?.rec.fromLocationId)
-      .map((w) => ({ value: w.id, label: warehouseLabel(w) }));
 
   const feeCells = (r: BenchRow) => [
     {
@@ -897,10 +807,6 @@ export function ServicePage() {
                         )}
                         onClick={() => {
                           setReturning(r);
-                          backForm.setFieldsValue({
-                            locationId: r.rec.fromLocationId,
-                            transferPaid: "UNPAID",
-                          });
                         }}
                       >
                         {t("service.backInStockShort", "Back in stock")}
@@ -1059,64 +965,15 @@ export function ServicePage() {
         </Form>
       </Modal>
 
-      <Modal
-        open={returning !== null}
-        title={t("service.backTitle", "Put {{serial}} back in stock", {
-          serial: returning?.serial ?? "",
-        })}
-        okText={t("service.backOk", "Back in stock")}
-        onCancel={() => setReturning(null)}
-        onOk={sendBack}
-      >
-        <Form form={backForm} layout="vertical">
-          <Form.Item
-            name="locationId"
-            label={t("service.backTo", "Which warehouse")}
-            rules={[{ required: true }]}
-          >
-            <Select
-              aria-label={t("service.backTo", "Which warehouse")}
-              // Every active warehouse, and the one it left even if that has
-              // since been switched off: a default missing from its own list is
-              // what drew a raw `wh-04` in this box (owner report 2026-10-26).
-              options={backOptions(returning)}
-            />
-          </Form.Item>
-          <Form.Item
-            name="transferFee"
-            label={t("service.transferFee", "Cost of moving it back")}
-            tooltip={t(
-              "service.transferFeeHint",
-              "The courier back, if there was one. It joins the repair cost on this unit.",
-            )}
-          >
-            <InputNumber
-              min={0}
-              precision={0}
-              prefix={RP_SYMBOL}
-              formatter={moneyFormatter}
-              parser={moneyParser}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-          <Form.Item
-            noStyle
-            shouldUpdate={(a, b) => a.transferFee !== b.transferFee}
-          >
-            {({ getFieldValue }) =>
-              (getFieldValue("transferFee") ?? 0) > 0 ? (
-                <PaidWithField
-                  name="transferPaid"
-                  label={t("service.courierPaidWith", "Courier paid with")}
-                />
-              ) : null
-            }
-          </Form.Item>
-          <Form.Item name="note" label={t("service.backNote", "What was done")}>
-            <Input.TextArea rows={2} />
-          </Form.Item>
-        </Form>
-      </Modal>
+      {/* The same dialog Stock in → Service opens, with one unit
+          (2026-10-30): the courier back, split into the unit's cost or kept
+          as the shop's, and what was done. */}
+      <ServiceBatchModal
+        mode="BACK"
+        single
+        serials={returning === null ? null : [returning.serial]}
+        onClose={() => setReturning(null)}
+      />
 
       {/*
        * Deleting a visit, behind two layers (the draft-opname pattern): this
