@@ -375,11 +375,9 @@ describe("the additional charge (owner, 2026-09-26)", () => {
     expect(o.adjustments).toMatchObject([{ type: "RETUR", amount: 4_750_000 }]);
     expect(o.refunds).toMatchObject([{ method: "TUNAI", amount: 4_750_000 }]);
     expect(orderBalance(o)).toMatchObject({ total: 250_000, customerOwes: 0 });
-    // Handed back, so the Refund expense says the same figure.
-    expect(getDb().expenses[0]).toMatchObject({
-      kind: "REFUND",
-      amount: 4_750_000,
-    });
+    // The refund on the sale IS the money handed back; no Refund expense is
+    // written beside it any more (2026-10-30), or it would count twice.
+    expect(getDb().expenses.some((e) => e.amount === 4_750_000)).toBe(false);
   });
 
   it("charges it per exchange unit instead, and leaves the price read-only", async () => {
@@ -420,10 +418,8 @@ describe("the additional charge (owner, 2026-09-26)", () => {
       total: 6_500_000,
       customerOwes: 0,
     });
-    expect(getDb().incomes[0]).toMatchObject({
-      reason: "REFUND",
-      amount: 1_500_000,
-    });
+    // The top-up payment IS the money taken; no Refund income beside it.
+    expect(getDb().incomes.some((i) => i.amount === 1_500_000)).toBe(false);
   });
 });
 

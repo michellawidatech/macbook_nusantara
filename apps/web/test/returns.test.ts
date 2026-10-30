@@ -287,6 +287,14 @@ describe("an exchange (owner, 2026-09-21)", () => {
     expect(after(b, s2!)).toMatchObject({ total: 0, fullySettled: true });
   });
 
+  it("keeps money paid outside the balance out of it when it moves (audit 2026-10-30)", () => {
+    const a = sale("si-1", 10, [pay({ amount: 10 })]);
+    const b = sale("si-2", 8, [pay({ amount: 8, inBalance: false })]);
+    const [s1] = plan([a, b], { total: 18, into: "si-1" }).sales;
+    expect(s1!.payments[1]).toMatchObject({ amount: 8, inBalance: false });
+    expect(s1!.payments[0]!.inBalance).toBeUndefined();
+  });
+
   it("moves nothing when the sale taking the replacements covers them itself", () => {
     const a = sale("si-1", 10, [pay({ amount: 10 })]);
     const b = sale("si-2", 8, [pay({ amount: 8 })]);

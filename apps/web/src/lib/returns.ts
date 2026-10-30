@@ -240,6 +240,8 @@ export function planReturn(input: {
   readonly method: string;
   /** When: a top-up's `at`. */
   readonly at: string;
+  /** The transfer's reference, kept on the top-up part. */
+  readonly ref?: string;
   /** The return's code, for the notes on the parts it writes. */
   readonly code: string;
   readonly newId: () => string;
@@ -330,6 +332,9 @@ export function planReturn(input: {
           ...(p.channel === undefined ? {} : { channel: p.channel }),
           at: p.at,
           ...(p.ref === undefined ? {} : { ref: p.ref }),
+          // Money the owner paid from his own account stays out of the
+          // balance on the sale it moves to (audit 2026-10-30).
+          ...(p.inBalance === false ? { inBalance: false } : {}),
           note: `Moved from ${o.s.code} — exchange ${code}`,
         });
       });
@@ -366,6 +371,7 @@ export function planReturn(input: {
       amount: topUp,
       state: "SETTLED",
       at: input.at,
+      ...(input.ref ? { ref: input.ref } : {}),
       note: `Exchange top-up (${code})`,
     });
   }

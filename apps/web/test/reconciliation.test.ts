@@ -118,6 +118,7 @@ const rowsOf = (db: MockDb) => cashflowRows(db, t);
 describe("what a marketplace kept (owner 2026-10-30: keep it as an expense)", () => {
   function shopeeSale(db: MockDb) {
     const o = sale(db, "sp", "2026-09-04", 10_000_000, "MARKETPLACE");
+    o.payments = o.payments!.map((p) => ({ ...p, channel: "SHOPEE" }));
     db.settlements = [
       {
         id: "stl-1",
@@ -176,6 +177,23 @@ describe("what a marketplace kept (owner 2026-10-30: keep it as an expense)", ()
     ]);
   });
 
+  it("drops the deduction once the payment is corrected off the marketplace", () => {
+    const db = shop();
+    const o = shopeeSale(db);
+    o.payments = [
+      {
+        id: "sp-p1",
+        method: "TUNAI",
+        amount: 10_000_000,
+        state: "SETTLED",
+        at: at("2026-09-04"),
+      },
+    ];
+    const rows = rowsOf(db);
+    expect(rows.some((r) => r.feeOf !== undefined)).toBe(false);
+    expect(rows.find((r) => r.key === "p-sp-sp-p1")!.deducted).toBeUndefined();
+  });
+
   it("files a payout above the fees as money in", () => {
     const db = shop();
     shopeeSale(db);
@@ -186,6 +204,71 @@ describe("what a marketplace kept (owner 2026-10-30: keep it as an expense)", ()
     };
     const fee = rowsOf(db).find((r) => r.feeOf !== undefined)!;
     expect(fee).toMatchObject({ direction: "INCOME", amount: 50_000 });
+  });
+});
+
+describe("a return's money is counted once (audit 2026-10-30)", () => {
+  it("leaves out the Refund expense an older return desk wrote beside the sale's refund", () => {
+    const db = shop();
+    const o = sale(db, "rt", "2026-09-05", 5_000_000, "TUNAI");
+    const when = at("2026-09-06", 11);
+    o.refunds = [{ id: "rf1", method: "TUNAI", amount: 5_000_000, at: when }];
+    db.expenses.push(
+      // What the desk wrote in the same save — a duplicate.
+      {
+        id: "dup",
+        kind: "REFUND",
+        amount: 5_000_000,
+        date: "2026-09-06",
+        method: "TUNAI",
+        note: "Return SG-1",
+        createdAt: when,
+      },
+      // A refund somebody typed against a sale — real, and kept.
+      {
+        id: "typed",
+        kind: "REFUND",
+        amount: 5_000_000,
+        date: "2026-09-06",
+        method: "TUNAI",
+        orderId: "rt",
+        createdAt: when,
+      },
+    );
+    const keys = rowsOf(db).map((r) => r.key);
+    expect(keys).toContain("rf-rt-rf1");
+    expect(keys).not.toContain("e-dup");
+    expect(keys).toContain("e-typed");
+  });
+
+  it("leaves out the Refund income beside an exchange's top-up payment", () => {
+    const db = shop();
+    const o = sale(db, "ex", "2026-09-05", 5_000_000, "TRANSFER");
+    const when = at("2026-09-06", 11);
+    o.payments = [
+      ...o.payments!,
+      {
+        id: "top",
+        method: "TRANSFER",
+        amount: 1_500_000,
+        state: "SETTLED",
+        at: when,
+        note: "Exchange top-up (SG-2)",
+      },
+    ];
+    db.incomes.push({
+      id: "dup",
+      reason: "REFUND",
+      amount: 1_500_000,
+      date: "2026-09-06",
+      method: "TRANSFER",
+      createdAt: when,
+    });
+    const rows = rowsOf(db);
+    expect(rows.map((r) => r.key)).not.toContain("i-dup");
+    expect(posBalanceAt(rows, db.settings, "BANK", "2026-09-06")).toBe(
+      16_500_000,
+    );
   });
 });
 

@@ -1133,6 +1133,7 @@ export function CustomerReturnPanel({
           : { exchange: { total: replacementTotal, into: intoId } }),
         method: refundMethod,
         at: now,
+        ...(paymentRef.trim() ? { ref: paymentRef.trim() } : {}),
         code: firstCode,
         newId: () => nextId("pay"),
       });
@@ -1283,9 +1284,11 @@ export function CustomerReturnPanel({
               method: refundMethod,
               amount: sp.refund,
               at: now,
-              note: `Returned ${here.map(labelOf).join(", ")} (${here
-                .map((b) => codeOf.get(b)!)
-                .join(", ")})`,
+              note:
+                `Returned ${here.map(labelOf).join(", ")} (${here
+                  .map((b) => codeOf.get(b)!)
+                  .join(", ")})` +
+                (paymentRef.trim() ? ` · ${paymentRef.trim()}` : ""),
             },
           ];
         }
@@ -1398,39 +1401,12 @@ export function CustomerReturnPanel({
       }
 
       /*
-       * The cash side of the return, as an adjustment (owner ask 2026-09-21).
-       *
-       * *"The money will go to income adjustment with the income under the
-       * category 'Refund', then the description is the payment reference."* A
-       * plain return, or a cheaper exchange, hands money BACK — an EXPENSE
-       * with kind REFUND. A dearer exchange takes money IN — a ManualIncome
-       * with reason REFUND. Either way the RETUR adjustment on the sale is
-       * untouched, so the sale's ledger still says a unit came back and this
-       * row only records where the rupiah went.
+       * The cash side of the return is the sale's own refund (a Refund row on
+       * Income & Expense) or the exchange sale's top-up payment, each carrying
+       * the payment reference. Until 2026-10-30 a REFUND Expense / ManualIncome
+       * was written beside them, and the money counted twice; `cashflowRows`
+       * hides the ones already written (`isReturnDuplicate`).
        */
-      const description = paymentRef.trim() || `Return ${allCodes.join(", ")}`;
-      if (outcome.refund > 0) {
-        d.expenses.unshift({
-          id: nextId("e"),
-          kind: "REFUND",
-          amount: outcome.refund,
-          date: day,
-          createdAt: new Date().toISOString(),
-          method: refundMethod,
-          note: description,
-        });
-      }
-      if (outcome.topUp > 0) {
-        d.incomes.unshift({
-          id: nextId("mi"),
-          reason: "REFUND",
-          amount: outcome.topUp,
-          date: day,
-          createdAt: new Date().toISOString(),
-          method: refundMethod,
-          note: description,
-        });
-      }
     };
 
     try {

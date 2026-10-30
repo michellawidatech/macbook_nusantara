@@ -191,6 +191,52 @@ type CashflowDb = Pick<
 > &
   Partial<Pick<MockDb, "reservations" | "settlements">>;
 
+/** How far apart one save's two writes can be stamped. */
+const SAME_SAVE_MS = 2 * 60_000;
+
+/**
+ * The REFUND adjustments the customer return desk wrote beside the money it
+ * had already recorded on the sale, until 2026-10-30 (audit): an `Expense`
+ * repeating the sale's refunds and a `ManualIncome` repeating an exchange's
+ * top-up payment — the same rupiah twice on Income & Expense and against the
+ * statement. Recognised by what that save wrote and nothing a person types:
+ * no order and no supplier return named, the same method, and an amount equal
+ * to what the sale recorded in the SAME save (stamped within a couple of
+ * minutes). Returns the row keys to leave out.
+ */
+export function returnDuplicates(
+  db: Pick<MockDb, "orders" | "incomes" | "expenses">,
+): Set<string> {
+  const near = (a: string, b: string | undefined) =>
+    b !== undefined &&
+    Math.abs(new Date(a).getTime() - new Date(b).getTime()) <= SAME_SAVE_MS;
+  const out = new Set<string>();
+  for (const e of db.expenses) {
+    if (e.kind !== "REFUND" || e.orderId !== undefined) continue;
+    if (e.createdAt === undefined) continue;
+    const handed = db.orders
+      .flatMap((o) => o.refunds ?? [])
+      .filter((r) => r.method === e.method && near(r.at, e.createdAt))
+      .reduce((n, r) => n + r.amount, 0);
+    if (handed === e.amount) out.add(`e-${e.id}`);
+  }
+  for (const i of db.incomes) {
+    if (i.reason !== "REFUND" || i.orderId !== undefined) continue;
+    if (i.returnId !== undefined || i.createdAt === undefined) continue;
+    const taken = db.orders.some((o) =>
+      (o.payments ?? []).some(
+        (p) =>
+          p.method === i.method &&
+          p.amount === i.amount &&
+          p.note?.startsWith("Exchange top-up") === true &&
+          near(p.at, i.createdAt),
+      ),
+    );
+    if (taken) out.add(`i-${i.id}`);
+  }
+  return out;
+}
+
 /** Every movement, newest first in the one total order (`chronological`). */
 export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
   /** Method-code → the human label from `PaymentMethod.label`. */
@@ -226,7 +272,12 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
       });
     }
     for (const p of paymentsOf(o)) {
-      const settlement = db.settlements?.find((s) => s.paymentId === p.id);
+      // Only while the part is still a marketplace's: a payment corrected to
+      // cash keeps its id, and its old settlement must not keep a fee on it.
+      const settlement =
+        p.channel === undefined
+          ? undefined
+          : db.settlements?.find((s) => s.paymentId === p.id);
       const kept =
         settlement === undefined ? 0 : settlement.gross - settlement.received;
       out.push({
@@ -303,7 +354,9 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
       });
     }
   }
+  const duplicate = returnDuplicates(db);
   for (const i of db.incomes) {
+    if (duplicate.has(`i-${i.id}`)) continue;
     // A supplier's refund names its return (2026-10-26): the SP code is
     // what anybody checking it against the bank statement asks for.
     const sp =
@@ -330,6 +383,7 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
     });
   }
   for (const e of db.expenses) {
+    if (duplicate.has(`e-${e.id}`)) continue;
     const code = orderCodeOf(e.orderId);
     out.push({
       key: `e-${e.id}`,

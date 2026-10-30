@@ -3563,6 +3563,23 @@ Decisions that outlived those documents:
     Expense searched for the sale's number (it seeds that list's `ProTable`
     keys and clears its filters). P&L is unchanged — it already counted the
     fees.
+  - A deduction counts only while its payment is still a MARKETPLACE part
+    (`p.channel` set): a part corrected to cash keeps its id, and its old
+    settlement used to keep a fee on it.
+  - **A return's money was counted twice, fixed the same day (audit).** The
+    return desk recorded a refund on the sale (`Order.refunds`) or an
+    exchange's top-up payment AND, since 2026-09-21, a REFUND `Expense` /
+    `ManualIncome` beside it — the same rupiah twice in the drawer or the
+    bank. The desk writes only the sale's own records now, the payment
+    reference on the refund's note or the top-up's `ref`; `returnDuplicates`
+    (cashflowRows.ts) hides the ones already written — no order, no supplier
+    return, same method, and an amount equal to what that same save put on
+    the sale. A Refund adjustment a person types against a sale is untouched.
+  - An exchange that moves a payment keeps its `inBalance: false`.
+  - ⚠️ Still open (owner decisions): a Shopee payout is dated when it is
+    recorded and counted as BANK, though it sits in the Shopee seller balance
+    until a withdrawal — so one withdrawal on the statement faces many POS
+    payouts the matcher cannot pair (SPLIT stops at 6 within a day).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
