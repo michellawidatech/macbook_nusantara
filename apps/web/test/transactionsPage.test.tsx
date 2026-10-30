@@ -384,7 +384,7 @@ describe("what came back", () => {
 });
 
 describe("what a marketplace kept (owner 2026-10-30)", () => {
-  it("says the deduction is recorded as an expense, and opens Income & Expense searched for the sale", async () => {
+  it("shows what landed, and says what Shopee deducted", async () => {
     mutate((d) => {
       d.settlements = d.settlements.filter((x) => x.id !== "stl-tx-1");
     });
@@ -409,7 +409,7 @@ describe("what a marketplace kept (owner 2026-10-30)", () => {
         id: "stl-tx-1",
         paymentId: "o-tx-kept-p1",
         orderId: "o-tx-kept",
-        channel: "Shopee",
+        channel: "SHOPEE",
         gross: 2_000_000,
         fees: [{ id: "f1", kind: "OTHER", label: "Komisi", amount: 230_000 }],
         received: 1_770_000,
@@ -420,15 +420,11 @@ describe("what a marketplace kept (owner 2026-10-30)", () => {
     renderPage();
     await settle();
 
-    const link = within(saleCard("SI-TX-KEPT")).getByRole("link", {
-      name: `${fmtRp(230_000)} kept by Shopee · recorded as an expense`,
-    });
-    link.click();
+    const card = saleCard("SI-TX-KEPT");
+    expect(within(card).getByText(fmtRp(1_770_000))).toBeInTheDocument();
     expect(
-      JSON.parse(
-        localStorage.getItem("nusantara.draft.list.cashflow.unified.search")!,
-      ),
-    ).toBe("SI-TX-KEPT");
+      within(card).getByText(`Deducted ${fmtRp(230_000)} by Shopee`),
+    ).toBeInTheDocument();
     mutate((d) => {
       d.settlements = d.settlements.filter((x) => x.id !== "stl-tx-1");
     });

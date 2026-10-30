@@ -100,8 +100,7 @@ import { labelOf, ORDER_SOURCE } from "../../i18n/enumLabels.js";
 import { deleteSale, saleDeletionBlock } from "../../lib/saleDeletion.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
-import { draftKey } from "../../hooks/usePersistentState";
+import { channelOf } from "../../lib/channels.js";
 
 /**
  * One product on one sale, and the unit it was.
@@ -151,8 +150,8 @@ interface SaleRow {
   readonly balance: SaleBalance;
   /**
    * What a marketplace kept of this sale's payouts, by channel — an expense
-   * on Income & Expense, shown here under Received so the gap between "of
-   * total" and the bank is explained on the row (owner 2026-10-30).
+   * on Income & Expense. Received shows what landed, with one plain line per
+   * channel saying what was deducted (owner 2026-10-30).
    */
   readonly kept: readonly {
     readonly channel: string;
@@ -160,22 +159,9 @@ interface SaleRow {
   }[];
 }
 
-/**
- * Open Income & Expense searched for one sale's number, with the list's own
- * filters cleared so nothing hides the row. Written to the keys `ProTable`
- * keeps that list's state under (`persistKey="cashflow.unified"`), which it
- * reads when the page mounts.
- */
-function showExpensesOf(code: string): void {
-  const key = (part: string) => draftKey(`list.cashflow.unified.${part}`);
-  try {
-    localStorage.setItem(key("search"), JSON.stringify(code));
-    localStorage.removeItem(key("filters"));
-    localStorage.removeItem(key("ranges"));
-  } catch {
-    // Storage refused (Safari private mode): the page opens unsearched.
-  }
-}
+/** What reached the shop: what was settled, less what a marketplace kept. */
+const netReceived = (r: SaleRow): number =>
+  r.balance.settled - r.kept.reduce((n, k) => n + k.amount, 0);
 
 /**
  * Amber for money a marketplace is holding, red for money a customer owes —
@@ -797,40 +783,39 @@ export function TransactionsPage() {
                 key: "received",
                 align: "right",
                 width: COLUMN.money,
-                sortValue: (r) => r.balance.settled,
+                sortValue: (r) => netReceived(r),
                 render: (_, r) => (
                   <Flex vertical align="flex-end" gap={0}>
                     <Typography.Text strong>
-                      {fmtRp(r.balance.settled)}
+                      {fmtRp(netReceived(r))}
                     </Typography.Text>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: TYPE.sm }}
-                    >
-                      {t("transactions.ofTotal", "of {{total}}", {
-                        total: fmtRp(r.balance.total),
-                      })}
-                    </Typography.Text>
-                    {r.kept.map((k) => (
-                      // The deduction is an expense on Income & Expense, under
-                      // this sale's number; the link opens that list already
-                      // searched for it (owner 2026-10-30).
-                      <Link
-                        key={k.channel}
-                        to="/finance/cashflow"
-                        onClick={() => showExpensesOf(r.code)}
-                        style={{ fontSize: TYPE.sm, textAlign: "right" }}
+                    {r.kept.length === 0 ? (
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: TYPE.sm }}
                       >
-                        {t(
-                          "transactions.keptAsExpense",
-                          "{{amount}} kept by {{channel}} · recorded as an expense",
-                          {
-                            amount: fmtRp(k.amount),
-                            channel: k.channel,
-                          },
-                        )}
-                      </Link>
-                    ))}
+                        {t("transactions.ofTotal", "of {{total}}", {
+                          total: fmtRp(r.balance.total),
+                        })}
+                      </Typography.Text>
+                    ) : (
+                      r.kept.map((k) => (
+                        <Typography.Text
+                          key={k.channel}
+                          type="secondary"
+                          style={{ fontSize: TYPE.sm }}
+                        >
+                          {t(
+                            "transactions.deductedBy",
+                            "Deducted {{amount}} by {{channel}}",
+                            {
+                              amount: fmtRp(k.amount),
+                              channel: channelOf(k.channel)?.label ?? k.channel,
+                            },
+                          )}
+                        </Typography.Text>
+                      ))
+                    )}
                   </Flex>
                 ),
               },

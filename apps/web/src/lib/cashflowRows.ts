@@ -24,6 +24,7 @@ import { labelOf } from "../i18n/enumLabels.js";
 import { balancesOf, type Balances } from "./accounts.js";
 import { customerLabel } from "./customers.js";
 import { fmtNone } from "./format.js";
+import { channelOf } from "./channels.js";
 import { paymentsOf } from "./salePayments.js";
 import { returnedDebts } from "./saleStatus.js";
 import type { AdjustmentRef } from "./adjustmentDeletion.js";
@@ -322,7 +323,8 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
           inBalance: p.inBalance !== false,
           description:
             t("cashflow.keptByMarketplace", "Kept by {{channel}}", {
-              channel: settlement.channel,
+              channel:
+                channelOf(settlement.channel)?.label ?? settlement.channel,
             }) + (names ? ` · ${names}` : ""),
           orderCode: o.code,
           amount: Math.abs(kept),

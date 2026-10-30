@@ -1751,8 +1751,7 @@ export const id: Record<string, string> = {
   "cashflow.keptByMarketplace": "Dipotong {{channel}}",
   "recon.feeEditedOnSale":
     "Koreksi potongan ini di Ubah transaksi pada penjualannya.",
-  "transactions.keptAsExpense":
-    "{{amount}} dipotong {{channel}} · dicatat sebagai pengeluaran",
+  "transactions.deductedBy": "Dipotong {{amount}} oleh {{channel}}",
   "cashflow.searchOrderOrDescription":
     "Cari transaksi, keterangan, atau metode pembayaran",
 

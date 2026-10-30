@@ -3558,10 +3558,9 @@ Decisions that outlived those documents:
     Shopee credit pairs EXACT rather than as a DEDUCTION suggestion whose
     Accept would write the fee a second time. Daily lists the fee row,
     read-only.
-  - Transaction History's Received keeps "of {total}" and adds "{amount} kept
-    by Shopee · recorded as an expense" under it — a link that opens Income &
-    Expense searched for the sale's number (it seeds that list's `ProTable`
-    keys and clears its filters). P&L is unchanged — it already counted the
+  - Transaction History's Received shows what LANDED (settled − kept) in bold
+    and, under it, "Deducted {amount} by Shopee" in place of "of {total}"
+    (owner, same day: *"simpler"*). P&L is unchanged — it already counted the
     fees.
   - A deduction counts only while its payment is still a MARKETPLACE part
     (`p.channel` set): a part corrected to cash keeps its id, and its old
