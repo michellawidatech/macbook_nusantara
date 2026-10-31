@@ -663,6 +663,7 @@ export function MonthlyReconciliation({
 
       <Card size="small" title={t("recon.statementLines", "Statement lines")}>
         <ProTable<StatementLineRec>
+          lazy
           rowKey="id"
           dataSource={lines}
           searchPlaceholder={t(

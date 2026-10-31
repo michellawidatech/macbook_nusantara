@@ -18,6 +18,15 @@
  *    the card layout below has no Table to keep them in and the two modes must
  *    not disagree about which page you are on when a tablet rotates.
  *
+ *    ⚠️ **`lazy` brings the scroll back, for the lists that asked** (owner
+ *    2026-10-31: *"for almost all table in finance, inbound, income expense,
+ *    transaction history, use 1 page scroll only, but implement lazy loading,
+ *    so the user don't have to pick the pages"*). One page; the first
+ *    `LAZY_BATCH` rows, then the next batch each time the foot of the list
+ *    scrolls near the screen. What the old window lacked is kept: a count
+ *    line ("50 of 312") under the rows, and a *Show more* button for a
+ *    browser with no IntersectionObserver. Every other list keeps its pager.
+ *
  * 2. **Columns on a 375px screen.** A seven-column stock table on a phone can
  *    either scroll sideways — which hides the columns that matter behind a
  *    gesture nobody discovers — or stop being a grid. Below `md` this renders
@@ -46,7 +55,16 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { Card, Empty, Flex, Pagination, Table, Typography, theme } from "antd";
+import {
+  Button,
+  Card,
+  Empty,
+  Flex,
+  Pagination,
+  Table,
+  Typography,
+  theme,
+} from "antd";
 import type { TableProps } from "antd";
 import { COLUMN, SPACE, TYPE, WEIGHT } from "../theme/tokens";
 import { useLayoutMode } from "../layouts/useLayoutMode";
@@ -77,6 +95,9 @@ import {
  */
 export const PAGE_SIZES = [10, 20, 50, 100] as const;
 
+/** Rows a `lazy` list draws at a time. */
+export const LAZY_BATCH = 50;
+
 export interface DataTableProps<T> extends Omit<
   TableProps<T>,
   "pagination" | "dataSource" | "columns"
@@ -90,6 +111,11 @@ export interface DataTableProps<T> extends Omit<
   pageSize?: number;
   /** Hide the pager entirely — for a table that is a form, not a list. */
   paginated?: boolean;
+  /**
+   * One scrolling page that loads more rows as its foot comes into view,
+   * instead of a pager (owner 2026-10-31). See this file's docblock.
+   */
+  lazy?: boolean;
   /**
    * Change this to send the pager back to page one — a search string, a filter
    * value. Without it, narrowing a list while on page 7 leaves you on a page
@@ -132,6 +158,7 @@ export function DataTable<T extends object>({
   columns,
   pageSize: initialPageSize = 20,
   paginated = true,
+  lazy = false,
   resetKey,
   cards = true,
   rowKey,
@@ -149,9 +176,32 @@ export function DataTable<T extends object>({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(initialPageSize);
 
+  /** How many rows a `lazy` list draws now. */
+  const [shown, setShown] = useState(LAZY_BATCH);
+  /** The element under the rows a `lazy` list watches. */
+  const [sentinel, setSentinel] = useState<HTMLElement | null>(null);
+
   useEffect(() => {
     setPage(1);
+    setShown(LAZY_BATCH);
   }, [resetKey]);
+
+  const more = lazy && shown < dataSource.length;
+  useEffect(() => {
+    if (!more || sentinel === null) return;
+    if (typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting))
+          setShown((n) => n + LAZY_BATCH);
+      },
+      // A screen early, so the next rows are drawn before anybody reaches the
+      // end of the ones they have.
+      { rootMargin: "600px 0px" },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [more, sentinel, shown]);
 
   // A page that no longer exists — the list shrank under a filter while the
   // user was on page 7 — shows nothing at all, with a pager that offers no way
@@ -162,10 +212,12 @@ export function DataTable<T extends object>({
 
   const rows = useMemo(
     () =>
-      paginated
-        ? dataSource.slice((current - 1) * pageSize, current * pageSize)
-        : dataSource.slice(),
-    [dataSource, current, pageSize, paginated],
+      lazy
+        ? dataSource.slice(0, shown)
+        : paginated
+          ? dataSource.slice((current - 1) * pageSize, current * pageSize)
+          : dataSource.slice(),
+    [dataSource, current, pageSize, paginated, lazy, shown],
   );
 
   const leaves = useMemo(() => leafColumns(columns), [columns]);
@@ -192,7 +244,27 @@ export function DataTable<T extends object>({
    * missed: the count is on screen at all times instead of only once the list
    * has been scrolled to its end.
    */
-  const pager = paginated ? (
+  const pager = lazy ? (
+    <Flex
+      ref={setSentinel}
+      justify="center"
+      align="center"
+      gap={SPACE.sm}
+      style={{ marginTop: SPACE.md }}
+    >
+      <Typography.Text style={{ fontSize: TYPE.sm, color: colorTextSecondary }}>
+        {t("dataTable.lazyCount", "{{shown}} of {{total}}", {
+          shown: rows.length,
+          total: dataSource.length,
+        })}
+      </Typography.Text>
+      {more && (
+        <Button size="small" onClick={() => setShown((n) => n + LAZY_BATCH)}>
+          {t("dataTable.showMore", "Show more")}
+        </Button>
+      )}
+    </Flex>
+  ) : paginated ? (
     <Flex
       justify="flex-end"
       style={{ marginTop: SPACE.md }}
@@ -371,7 +443,7 @@ export function DataTable<T extends object>({
           ),
         }
       }
-      footer={paginated ? () => pager : undefined}
+      footer={paginated || lazy ? () => pager : undefined}
     />
   );
 }

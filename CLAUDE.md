@@ -3665,6 +3665,16 @@ Decisions that outlived those documents:
     onto the replacement sale copies a TUKAR_TAMBAH payment with no offset row
     there (balance unaffected — it is out of the balance); a counted trade-in's
     value cannot be edited (its stock move is append-only).
+- **Finance and inbound lists scroll instead of paging — 2026-10-31.** *"For
+  almost all table in finance, inbound, income expense, transaction history,
+  use 1 page scroll only, but implement lazy loading."* `DataTable`'s `lazy`
+  (through `ProTable`): `LAZY_BATCH` (50) rows, the next batch when the foot
+  comes within 600px of the screen (IntersectionObserver), a "50 of 312" line
+  and a *Show more* button where nothing can watch the scroll. Set on every
+  `/finance/*` list, Inbound's invoices, Waiting for QC and the Trade-in tab.
+  This partly reverses 2026-08-26's pager decision; every other list keeps
+  its pager. ⚠️ A row past the drawn batch is not in the DOM — a test hunting
+  an old row presses *Show more* (jsdom has no IntersectionObserver).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

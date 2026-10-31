@@ -211,6 +211,7 @@ export function InboundPage() {
   const invoicesCard = (
     <Card>
       <ProTable<Row>
+        lazy
         persistKey="inbound"
         rowKey="id"
         dataSource={rows}

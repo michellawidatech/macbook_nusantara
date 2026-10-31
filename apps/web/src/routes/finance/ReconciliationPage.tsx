@@ -321,6 +321,7 @@ export function ReconciliationPage() {
   const dailyTab = (
     <Card>
       <ProTable<DayRow>
+        lazy
         persistKey="reconciliation.daily"
         rowKey="day"
         dataSource={days}
@@ -547,6 +548,7 @@ export function ReconciliationPage() {
   ) : (
     <Card>
       <ProTable<Reconciliation>
+        lazy
         persistKey="reconciliation.monthly"
         rowKey="id"
         dataSource={months}

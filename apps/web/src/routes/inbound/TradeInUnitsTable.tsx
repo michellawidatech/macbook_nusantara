@@ -107,6 +107,7 @@ export function TradeInUnitsTable({ db }: { readonly db: MockDb }) {
 
   return (
     <ProTable<TradeInUnitRow>
+      lazy
       persistKey="inbound.tradeIns"
       rowKey="key"
       dataSource={rows}

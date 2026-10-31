@@ -401,6 +401,7 @@ function PayableTable({
 
   return (
     <ProTable<DebtNode>
+      lazy
       persistKey="payable.bySupplier"
       rowKey="key"
       treeData
@@ -656,6 +657,7 @@ function ReceivableTable({
 
   return (
     <ProTable<DebtNode>
+      lazy
       persistKey="receivable.byCustomer"
       rowKey="key"
       treeData

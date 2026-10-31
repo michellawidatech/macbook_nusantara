@@ -583,6 +583,7 @@ export function TransactionsPage() {
 
         <Card>
           <ProTable<SaleRow>
+            lazy
             persistKey="transactions"
             rowKey="key"
             dataSource={sales}

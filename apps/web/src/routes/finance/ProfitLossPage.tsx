@@ -383,6 +383,7 @@ export function ProfitLossPage() {
 
   const unitsTab = (
     <ProTable<UnitProfitRow>
+      lazy
       persistKey="pnl.perUnit"
       rowKey="skuId"
       dataSource={perUnit}

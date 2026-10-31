@@ -440,6 +440,7 @@ export function IncomeExpensePage() {
       </Flex>
       <Card>
         <ProTable<Row>
+          lazy
           persistKey="cashflow.unified"
           rowKey="key"
           dataSource={shown}

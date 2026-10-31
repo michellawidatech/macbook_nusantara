@@ -4988,6 +4988,8 @@ export const id: Record<string, string> = {
   "pos.dp": "DP",
   "pos.dpAlreadyPaid": "DP sudah dibayar ({{code}})",
   "pos.payoutUpper": "BAYAR KE PELANGGAN",
+  "dataTable.lazyCount": "{{shown}} dari {{total}}",
+  "dataTable.showMore": "Tampilkan lebih banyak",
   "buyFromCustomer.addUnit": "Tambah unit",
   "buyFromCustomer.date": "Tanggal",
   "buyFromCustomer.findCustomer": "Cari pelanggan yang sudah ada (opsional)",

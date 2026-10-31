@@ -447,6 +447,7 @@ export function AdjustmentPanel({
       {showHistory && (
         <Card title={t("adjust.history", "Adjustment history")}>
           <ProTable
+            lazy
             persistKey="adjustments"
             rowKey="key"
             dataSource={rows}

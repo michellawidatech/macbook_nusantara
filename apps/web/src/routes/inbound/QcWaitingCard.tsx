@@ -129,6 +129,7 @@ export function QcWaitingCard({ rows }: { readonly rows: QcWaitingRow[] }) {
       style={{ marginBottom: 16 }}
     >
       <ProTable<QcGroupRow>
+        lazy
         persistKey="inbound.qcWaiting"
         rowKey="key"
         dataSource={groups}
