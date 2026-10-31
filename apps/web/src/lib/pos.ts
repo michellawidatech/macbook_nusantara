@@ -564,6 +564,7 @@ export function orderBill(order: {
  * lists it as an expense beside the sale (`cashflowRows`).
  */
 export function tradeInPurchase(order: {
+  readonly total: number;
   readonly serials: readonly string[];
   readonly prices: Readonly<Record<string, number>>;
   readonly lines?: readonly { readonly qty: number; readonly price: number }[];
@@ -575,7 +576,10 @@ export function tradeInPurchase(order: {
     (n, x) => n + Math.max(0, x.value),
     0,
   );
-  return credit > orderBill(order) ? credit : 0;
+  const bill = orderBill(order);
+  // Recorded at its full bill. A sale from before 2026-10-31 netted a bigger
+  // trade-in to a total of 0 and moved no money; it bought nothing here.
+  return credit > bill && order.total === bill ? credit : 0;
 }
 
 /**

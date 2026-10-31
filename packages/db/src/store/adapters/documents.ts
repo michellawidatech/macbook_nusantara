@@ -1690,9 +1690,15 @@ export const orders: Adapter<"orders"> = {
       const counted = o.items.filter((i) => i.unitId === null);
       // `Order.total` holds the bill; the store's is what was collected — the
       // bill less the trade-in, or the whole bill when the trade-in was worth
-      // more and was bought outright (2026-10-31).
+      // more and was bought outright (2026-10-31). A sale recorded BEFORE that
+      // with a trade-in worth more collected nothing and paid nothing, so it
+      // still reads 0 — the bill would make it a debt nobody owes.
       const afterTrade =
-        o.tradeCredit > o.total ? o.total : o.total - o.tradeCredit;
+        o.tradeCredit > o.total
+          ? o.paidTotal > 0n
+            ? o.total
+            : 0n
+          : o.total - o.tradeCredit;
       // What the customer paid, and what was handed back — one table, told
       // apart by direction.
       const paidIn = o.payments.filter((p) => p.direction === "MASUK");
@@ -1856,7 +1862,9 @@ export const orders: Adapter<"orders"> = {
       // shop hands the customer the difference. One worth less comes off it.
       // `totalAfterTradeIn` in apps/web lib/pos.ts is the same rule.
       const afterTrade = tradeCredit > bill ? bill : bill - tradeCredit;
-      if (n.total !== afterTrade) {
+      // …or 0, a sale from before 2026-10-31 that netted it away.
+      const legacyZero = tradeCredit > bill && n.total === 0n;
+      if (n.total !== afterTrade && !legacyZero) {
         throw new StoreValidationError(
           `Total ${n.code} tidak cocok: ${n.total}, seharusnya ${afterTrade}.`,
           "orders",

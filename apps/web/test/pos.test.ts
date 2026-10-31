@@ -492,6 +492,7 @@ describe("a trade-in worth more than the bill (owner ask 2026-10-31)", () => {
     serials: ["S1"],
     prices: { S1: 12_500_000 },
     discount: 0,
+    total: 12_500_000,
   };
 
   it("is recorded at the full bill, and the trade-in as a purchase", () => {
@@ -511,6 +512,17 @@ describe("a trade-in worth more than the bill (owner ask 2026-10-31)", () => {
       0,
     );
     expect(tradeInPurchase(sale)).toBe(0);
+  });
+
+  it("bought nothing on a sale from before, which netted it to 0", () => {
+    // Recorded before 2026-10-31: total 0, no payment, nothing moved.
+    expect(
+      tradeInPurchase({
+        ...sale,
+        total: 0,
+        tradeIns: [{ value: 27_000_000 }],
+      }),
+    ).toBe(0);
   });
 
   it("reads the bill off the lines, the discount and the extra", () => {

@@ -370,7 +370,15 @@ export function EditTransactionModal({
     const extra = fees.reduce((n, f) => n + f.amount, 0);
     const trade = (o.tradeIns ?? []).reduce((n, x) => n + x.value, 0);
     const bill = unitsSum + countedSum - o.discount + extra;
-    return { bill, total: Math.max(0, totalAfterTradeIn(bill, trade)) };
+    // A sale from before 2026-10-31 that netted a bigger trade-in to 0 stays
+    // netted: it collected nothing, and the bill would make it a debt.
+    const legacyNet = trade > 0 && o.total === 0;
+    return {
+      bill,
+      total: legacyNet
+        ? Math.max(0, bill - trade)
+        : Math.max(0, totalAfterTradeIn(bill, trade)),
+    };
   };
   const bill = order
     ? billAfterReturns({ ...order, total: draftTotals(order).total })
