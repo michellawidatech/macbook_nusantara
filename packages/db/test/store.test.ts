@@ -5104,3 +5104,275 @@ describe("a DP on a reservation, as nusantara_app (2026-10-27)", () => {
     }
   }, 180_000);
 });
+
+describe("a trade-in recorded gross, as nusantara_app (2026-10-31)", () => {
+  const asApp = (): string => {
+    const u = new globalThis.URL(URL);
+    u.username = "nusantara_app";
+    u.password = "";
+    return u.toString();
+  };
+
+  /** A unit minted by a trade-in, and its two ledger rows. */
+  function minted(
+    shop: Record<string, unknown>,
+    serial: string,
+    buy: number,
+    refCode: string,
+  ) {
+    const like = (shop["units"] as Row[]).find(
+      (u) => u["status"] === "TERSEDIA",
+    )!;
+    const unit: Row = {
+      serial,
+      skuId: like["skuId"],
+      status: "TERSEDIA",
+      locationId: like["locationId"],
+      buy,
+      description: "Fullset",
+      grade: "A",
+      poId: null,
+    };
+    const at = NOW.toISOString();
+    const events: Row[] = [
+      {
+        id: `ev_${serial}_1`,
+        serial,
+        seq: 1,
+        type: "DITERIMA",
+        at,
+        fromStatus: "-",
+        toStatus: "QC",
+        locationId: like["locationId"],
+        refCode,
+        staff: "Michella",
+      },
+      {
+        id: `ev_${serial}_2`,
+        serial,
+        seq: 2,
+        type: "QC_SELESAI",
+        at,
+        fromStatus: "QC",
+        toStatus: "TERSEDIA",
+        locationId: like["locationId"],
+        refCode,
+        staff: "Michella",
+      },
+    ];
+    return { unit, events };
+  }
+
+  it("commits the sale at its whole bill, the trade-in's payment out of the balance, and the payout with its reference", async () => {
+    const shop = await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    const commit = (before: Partial<StoreShape>, after: Partial<StoreShape>) =>
+      commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(before as StoreShape, after as StoreShape),
+        ),
+      });
+    try {
+      const sold = (shop["units"] as Row[]).find(
+        (u) => u["status"] === "TERSEDIA",
+      )!;
+      const serial = sold["serial"] as string;
+      const price = 12_500_000;
+      const credit = 27_000_000;
+      const code = "SI-2026/09-Ttrdin01";
+      const traded = minted(shop, "C6YMFXL6QW", credit, code);
+      const seq = (shop["events"] as Row[]).filter(
+        (e) => e["serial"] === serial,
+      ).length;
+      const at = NOW.toISOString();
+      const sale: Row = {
+        id: "o_trade_gross",
+        code,
+        ts: at,
+        customerId: null,
+        serials: [serial],
+        prices: { [serial]: price },
+        discount: 0,
+        source: "OFFLINE",
+        payMethod: "TRANSFER",
+        settled: true,
+        payments: [
+          {
+            id: "pay_tt_1",
+            method: "TUKAR_TAMBAH",
+            amount: price,
+            state: "SETTLED",
+            at,
+            inBalance: false,
+          },
+        ],
+        tradeIns: [
+          {
+            id: "ti_1",
+            label: "Pro 14 M5",
+            serial: "C6YMFXL6QW",
+            value: credit,
+            skuId: sold["skuId"],
+            condition: "SECOND",
+            grade: "A",
+          },
+        ],
+        total: price,
+        tradeInGross: true,
+      };
+      const payout: Row = {
+        id: "e_payout_1",
+        kind: "TUKAR_TAMBAH",
+        amount: credit - price,
+        date: "2026-09-13",
+        method: "TRANSFER",
+        orderId: "o_trade_gross",
+        note: "BCA 0671705342 · Abdul Basid",
+        ref: "TRF-778812",
+        createdAt: at,
+      };
+      await commit(
+        { units: [sold], orders: [], events: [], expenses: [] },
+        {
+          units: [{ ...sold, status: "TERJUAL" }, traded.unit],
+          orders: [sale],
+          events: [
+            {
+              id: "ev_sold_1",
+              serial,
+              seq: seq + 1,
+              type: "TERJUAL",
+              at,
+              fromStatus: "TERSEDIA",
+              toStatus: "TERJUAL",
+              locationId: sold["locationId"],
+              refCode: code,
+              staff: "Michella",
+            },
+            ...traded.events,
+          ],
+          expenses: [payout],
+        },
+      );
+
+      const row = await db.order.findUniqueOrThrow({
+        where: { id: "o_trade_gross" },
+        include: { payments: { include: { method: true } } },
+      });
+      expect(row).toMatchObject({
+        total: 12_500_000n,
+        tradeCredit: 27_000_000n,
+        tradeInGross: true,
+      });
+      expect(
+        row.payments.map((p) => [p.method.code, p.amount, p.inBalance]),
+      ).toEqual([["TUKAR_TAMBAH", 12_500_000n, false]]);
+      const e = await db.expense.findUniqueOrThrow({
+        where: { id: "e_payout_1" },
+      });
+      expect(e).toMatchObject({
+        kind: "TUKAR_TAMBAH",
+        amount: 14_500_000n,
+        ref: "TRF-778812",
+      });
+
+      // Read back, the store's total is the whole bill — not the bill less
+      // the trade-in, which a sale before the gross rule would read as.
+      const back = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      const o = back["orders"]!.find((x) => x["id"] === "o_trade_gross")!;
+      expect(o["total"]).toBe(12_500_000);
+      expect(o["tradeInGross"]).toBe(true);
+      expect(
+        back["expenses"]!.find((x) => x["id"] === "e_payout_1")!["ref"],
+      ).toBe("TRF-778812");
+
+      // A gross sale whose total is not its bill is refused.
+      await expect(
+        commit({ orders: [o] }, { orders: [{ ...o, total: 0 }] }),
+      ).rejects.toThrow(StoreValidationError);
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
+  it("buys a unit from a customer: the BP document, its unit and the one expense that paid", async () => {
+    const shop = await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    const commit = (before: Partial<StoreShape>, after: Partial<StoreShape>) =>
+      commitStore(app, {
+        staffId: ACTOR,
+        changes: encodeChangeset(
+          diffStore(before as StoreShape, after as StoreShape),
+        ),
+      });
+    try {
+      const customer = (shop["customers"] as Row[])[0]!;
+      const code = "BP-2026/09-Tbuy0001";
+      const traded = minted(shop, "C6YMBUY0001", 27_000_000, code);
+      const purchase: Row = {
+        id: "bp_1",
+        code,
+        at: NOW.toISOString(),
+        customerId: customer["id"],
+        items: [
+          {
+            id: "bpi_1",
+            skuId: traded.unit["skuId"],
+            serial: "C6YMBUY0001",
+            label: "Pro 14 M5",
+            value: 27_000_000,
+            qty: 1,
+          },
+        ],
+        createdAt: NOW.toISOString(),
+      };
+      const paid: Row = {
+        id: "e_bp_1",
+        kind: "TUKAR_TAMBAH",
+        amount: 27_000_000,
+        date: "2026-09-13",
+        method: "TRANSFER",
+        customerPurchaseId: "bp_1",
+        ref: "TRF-99",
+        createdAt: NOW.toISOString(),
+      };
+      const done = await commit(
+        { units: [], events: [], customerPurchases: [], expenses: [] },
+        {
+          units: [traded.unit],
+          events: traded.events,
+          customerPurchases: [purchase],
+          expenses: [paid],
+        },
+      );
+      const real = done.codes[code]!;
+      expect(real).toMatch(/^BP-\d{4}\/\d{2}-\d{6}$/);
+      const row = await db.customerPurchase.findUniqueOrThrow({
+        where: { id: "bp_1" },
+        include: { items: { include: { unit: true } }, expenses: true },
+      });
+      expect(row.code).toBe(real);
+      expect(row.items.map((i) => [i.unit?.serial, i.value])).toEqual([
+        ["C6YMBUY0001", 27_000_000n],
+      ]);
+      expect(row.expenses.map((e) => [e.amount, e.ref])).toEqual([
+        [27_000_000n, "TRF-99"],
+      ]);
+
+      const back = decodeStore(
+        (await snapshotStore(db, { staffId: ACTOR })).db,
+      ) as unknown as Record<string, Row[]>;
+      const p = back["customerPurchases"]!.find((x) => x["id"] === "bp_1")!;
+      expect(p["code"]).toBe(real);
+      // Which unit it bought is fixed; a removal is refused.
+      await expect(
+        commit({ customerPurchases: [p] }, { customerPurchases: [] }),
+      ).rejects.toThrow(StoreValidationError);
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+});

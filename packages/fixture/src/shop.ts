@@ -330,6 +330,8 @@ export const PAYMENT_METHOD_CODES = [
   // A supplier return's credit against its invoice (owner 2026-10-26); no
   // pot, offered by no picker.
   "RETUR_SUPPLIER",
+  // What a trade-in paid of a bill (owner 2026-10-31); no pot, no picker.
+  "TUKAR_TAMBAH",
 ] as const;
 
 export interface FixtureCustomer {

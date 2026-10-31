@@ -926,6 +926,39 @@ export interface Order {
   netReceived?: number;
   /** Which reservation this sale came out of, if any. */
   reservationId?: string;
+  /**
+   * The trade-in is recorded GROSS (owner 2026-10-31, `Order.tradeInGross`):
+   * `total` is the whole bill, a TUKAR_TAMBAH payment is what the trade-in
+   * paid of it, and money handed back to the customer is an `Expense` of
+   * kind TUKAR_TAMBAH naming the sale. Absent on every sale before, which
+   * netted the trade-in off `total`. See `lib/tradeIn.ts`.
+   */
+  tradeInGross?: boolean;
+}
+
+/**
+ * Units bought from a customer with no sale (owner 2026-10-31) — Inbound →
+ * Trade-in's "+ Trade-in". `CustomerPurchase` and its items; its money is ONE
+ * `Expense` of kind TUKAR_TAMBAH naming it (`customerPurchaseId`).
+ */
+export interface CustomerPurchaseRec {
+  id: string;
+  /** `BP-2026/10-000001`. */
+  code: string;
+  at: string;
+  customerId: string;
+  note?: string;
+  items: {
+    id: string;
+    skuId: string;
+    /** The unit minted for it; absent for a counted product. */
+    serial?: string;
+    label: string;
+    /** What the shop paid, for all `qty` pieces. */
+    value: number;
+    qty: number;
+  }[];
+  createdAt?: string;
 }
 export interface ReturnRec {
   id: string;
@@ -1223,6 +1256,20 @@ export const EXPENSE_CATEGORIES = [
     needsTransaction: false,
     automatic: true,
   },
+  {
+    /*
+     * Buying a customer's unit (owner 2026-10-31): a trade-in on a sale, and
+     * the money handed back when it was worth more than the bill, or a unit
+     * bought from a customer with no sale. Written only by the till and by
+     * Inbound → Trade-in, never from Add adjustment. The unit is stock at
+     * that cost, so Profit & Loss keeps it out of OPERATING_KINDS.
+     */
+    value: "TUKAR_TAMBAH",
+    label: "Trade-in purchase",
+    guide: "A unit the shop bought from a customer.",
+    needsTransaction: false,
+    automatic: true,
+  },
 ] as const;
 export type ExpenseKind = (typeof EXPENSE_CATEGORIES)[number]["value"];
 
@@ -1438,6 +1485,10 @@ export interface Expense {
    * finance account's browser does the same in its own copy.
    */
   serviceFeeId?: string;
+  /** The transfer's reference number (2026-10-31) — a trade-in's payout. */
+  ref?: string;
+  /** The purchase from a customer this paid for (2026-10-31). */
+  customerPurchaseId?: string;
   /** When it was typed — see `ManualIncome.createdAt`. */
   createdAt?: string;
 }
@@ -1860,6 +1911,8 @@ export interface MockDb {
    * to, and nothing records an allocation.
    */
   deposits: SupplierDeposit[];
+  /** Units bought from a customer with no sale (2026-10-31). */
+  customerPurchases: CustomerPurchaseRec[];
   chats: ChatThread[];
   knowledge: Knowledge[];
   corrections: Correction[];
@@ -2499,6 +2552,21 @@ export function buildSeed(): MockDb {
       active: true,
     },
     {
+      /*
+       * What a trade-in paid of a bill (owner 2026-10-31): a sale with a
+       * trade-in is recorded GROSS, and this is the part the customer's unit
+       * covered. No money moved, so no pot BY NAME (`lib/accounts.ts`), and
+       * no picker offers it — the till writes it.
+       */
+      id: "pm_tukar_tambah",
+      code: "TUKAR_TAMBAH",
+      label: "Trade-in",
+      builtIn: true,
+      forPo: false,
+      forSale: false,
+      active: true,
+    },
+    {
       // `forPo` since 2026-09-09: the owner's three for money going out are
       // cash, transfer and card, and a supplier deposit is a transfer nine
       // times in ten. The deposit dialog defaulted to TRANSFER while this said
@@ -3016,6 +3084,7 @@ export function buildSeed(): MockDb {
     statementLines: [],
     services: [],
     deposits,
+    customerPurchases: [],
     chats,
     knowledge,
     corrections,

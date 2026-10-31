@@ -146,6 +146,19 @@ const PAYMENT_METHODS = [
     forSale: false,
   },
   {
+    /*
+     * What a trade-in paid of a bill (owner 2026-10-31): no money moved, so
+     * no pot (`lib/accounts.ts`), and no picker offers it — the till writes
+     * it. Migration `20261031120000_trade_in_gross_and_customer_purchase`
+     * inserts the same row into a database that already exists.
+     */
+    id: "pm_tukar_tambah",
+    code: "TUKAR_TAMBAH",
+    label: "Trade-in",
+    forPo: false,
+    forSale: false,
+  },
+  {
     // `forPo`, because a supplier deposit is nearly always a transfer.
     id: "pm_transfer",
     code: "TRANSFER",

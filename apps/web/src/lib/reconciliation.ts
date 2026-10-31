@@ -217,6 +217,12 @@ export type EditBlock =
   | "BOOKS_CLOSED"
   /** A paid service charge: its amount follows the charge. */
   | "SERVICE_CHARGE"
+  /**
+   * Money handed back for a trade-in (2026-10-31): the sale's trade-in
+   * payment is kept equal to the trade-in less it, so it is corrected in the
+   * sale's Edit transaction, which moves both together.
+   */
+  | "TRADE_IN"
   /** A closed supplier invoice is read-only until reopened. */
   | "INVOICE_CLOSED"
   /** A deposit cannot drop below what has been allocated out of it. */
@@ -284,6 +290,7 @@ export function editBlock(
       const e = db.expenses.find((x) => x.id === source.id);
       if (e === undefined) return "NOT_FOUND";
       if (e.serviceFeeId !== undefined) return "SERVICE_CHARGE";
+      if (e.kind === "TUKAR_TAMBAH") return "TRADE_IN";
       return dayClosed(e.date) ? "BOOKS_CLOSED" : undefined;
     }
     case "income": {

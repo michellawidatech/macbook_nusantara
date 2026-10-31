@@ -146,13 +146,19 @@ import {
   ensureQcDescription,
   purgeQcPhotos,
 } from "../../mock/store.js";
-import { qcReady, splitDescription } from "../../lib/inboundQc.js";
+import {
+  bookTradeIn,
+  newTradeInPayment,
+  TRADE_IN_EXPENSE,
+  TRADE_IN_METHOD,
+  tradeInSplit,
+} from "../../lib/tradeIn.js";
 import {
   SALE_CHANNELS,
   channelOf,
   type SaleSource,
 } from "../../lib/channels.js";
-import { gradeForCondition, gradeText } from "../../lib/condition.js";
+import { gradeText } from "../../lib/condition.js";
 import {
   resolveSerialQuery,
   serialMatchesQuery,
@@ -160,7 +166,6 @@ import {
 } from "../../lib/serialInput.js";
 import { EnumTag } from "../../components/EnumTag";
 import { UNIT_STATUS } from "../../i18n/enumLabels.js";
-import { skuTracksSerial } from "../../lib/serialTracking.js";
 import { averageCost, onHand, takeFrom } from "../../lib/stock.js";
 import { priceOf as unitListPrice } from "../../lib/unitPrice.js";
 import { isSettled } from "../../lib/salePayments.js";
@@ -580,6 +585,12 @@ export function StockOutPage() {
    */
   const [payoutTo, setPayoutTo] = usePersistentState<string>(
     TILL_DRAFT("payoutTo"),
+    "",
+    asString,
+  );
+  /** The payout transfer's reference number (owner 2026-10-31). */
+  const [payoutRef, setPayoutRef] = usePersistentState<string>(
+    TILL_DRAFT("payoutRef"),
     "",
     asString,
   );
@@ -1127,25 +1138,27 @@ export function StockOutPage() {
   );
   const dpTotal = dpPaid.reduce((n, d) => n + d.payment.amount, 0);
   /**
-   * A trade-in worth more than the bill (owner ask 2026-10-31): the sale is
-   * recorded at its full bill and paid in full, the trade-in is a purchase of
-   * its own, and the customer is handed the difference — `payout` — in cash
-   * or by transfer. Nothing is collected. See `totalAfterTradeIn`.
+   * Every trade-in recorded the same way (owner 2026-10-31, `lib/tradeIn.ts`):
+   * the sale is its whole bill, the trade-in pays as much of it as it covers,
+   * the customer hands over the rest — and a trade-in worth more leaves the
+   * shop paying the customer the difference (`payout`), in cash or by
+   * transfer.
    */
-  const tradeOver = totals.payout > 0;
   /** The part of the bill not already covered by a DP. */
   const billLeft = Math.max(0, totals.order.total - dpTotal);
+  const split = tradeInSplit({ billLeft, credit: totals.tradeCredit });
+  const tradeOver = split.payout > 0;
   /** What the shop hands the customer: the trade-in less what they owed. */
-  const payout = tradeOver ? totals.tradeCredit - billLeft : 0;
+  const payout = split.payout;
   /** How the payout leaves the shop — cash or a transfer, nothing else. */
   const payoutMethod: TillMethod =
     payParts[0] !== undefined && canPayInPart(payParts[0].method)
       ? payParts[0].method
       : "TUNAI";
-  /** What the sale is recorded at — `Order.total`. */
-  const recordedTotal = tradeOver ? totals.order.total : total;
-  /** What is still to collect at the counter, after any DP. */
-  const collect = tradeOver ? 0 : Math.max(0, total - dpTotal);
+  /** What the sale is recorded at — `Order.total`: the whole bill. */
+  const recordedTotal = totals.order.total;
+  /** What is still to collect at the counter, after any DP and trade-in. */
+  const collect = split.collect;
   /**
    * Units on this sale reserved for SOMEBODY ELSE who paid no DP (2026-10-27)
    * — on sale all along, so sellable; the confirmation names them, and
@@ -1399,21 +1412,23 @@ export function StockOutPage() {
     const parts = [
       // The DP first: it was paid first, and it is the reservation's own row.
       ...dpPaid.map((d) => d.payment),
-      // A trade-in worth more than the bill pays the bill in full, through the
-      // pot the payout leaves from: the bill in and the trade-in out are the
-      // same drawer, and what moves is the difference.
+      // What the trade-in paid of the bill: not money, not in the balance.
+      ...(split.paid > 0
+        ? [
+            {
+              ...newTradeInPayment(nextId("pay"), new Date().toISOString()),
+              amount: split.paid,
+            },
+          ]
+        : []),
       ...tillPayments({
-        total: tradeOver ? billLeft : collect,
-        parts: tradeOver ? [{ method: payoutMethod }] : payParts,
+        total: collect,
+        parts: payParts,
         at: new Date().toISOString(),
         ...(payDueAt ? { dueAt: payDueAt } : {}),
         ...(saleRef.trim() ? { ref: saleRef } : {}),
         newId: () => nextId("pay"),
-      }).map((p) =>
-        tradeOver && payoutTo.trim() !== ""
-          ? { ...p, note: payoutTo.trim() }
-          : p,
-      ),
+      }),
     ];
     const order: Order = {
       id: nextId("o"),
@@ -1443,9 +1458,12 @@ export function StockOutPage() {
       shippingAddress: shipped ? composeAddress(address) : undefined,
       // The headline method: the first one picked. Each part carries its
       // own on `payments`; a marketplace is the MARKETPLACE code.
-      payMethod: tillMethod(
-        tradeOver ? payoutMethod : (payParts[0]?.method ?? "TUNAI"),
-      ).code,
+      payMethod:
+        collect === 0 && !tradeOver && split.paid > 0
+          ? TRADE_IN_METHOD
+          : tillMethod(
+              tradeOver ? payoutMethod : (payParts[0]?.method ?? "TUNAI"),
+            ).code,
       /*
        * The bill in parts, and `settled` as a projection over them (owner ask
        * 2026-09-08). A trade-in that covers the whole bill leaves nothing to
@@ -1486,6 +1504,7 @@ export function StockOutPage() {
           : undefined,
       total: recordedTotal,
       reservationId: fromReservations[0],
+      ...(tradeIns.length > 0 ? { tradeInGross: true } : {}),
     };
 
     let closed = 0;
@@ -1646,89 +1665,41 @@ export function StockOutPage() {
        * confirming at the bench.
        */
       for (const x of tradeIns) {
-        const serial = (x.serial ?? "").trim().toUpperCase();
-        // An accessory is a quantity, not a unit (2026-09-19): the piece goes
-        // onto the stock ledger at what the shop allowed for it, and nothing
-        // is minted.
-        if (x.skuId && !skuTracksSerial(d, x.skuId)) {
-          d.stockMoves.push({
-            id: nextId("sm"),
-            skuId: x.skuId,
-            locationId: d.myWarehouseId,
-            qty: 1,
-            cost: x.value,
-            type: "TUKAR_TAMBAH",
-            at,
-            refCode: code,
-            orderId: order.id,
-            note: x.label,
-            staff: currentStaffName(),
-          });
-          continue;
-        }
-        if (serial === "") continue;
-        if (d.units.some((u) => u.serial === serial)) continue;
-        d.units.push({
-          serial,
-          // The variant when the dialog recognised one, and "" when it did
-          // not. An unrecognised machine is assigned its product at QC, which
-          // is what QC is for — inventing a SKU at the till to hold it would
-          // put a product in the catalogue nobody chose to sell.
-          skuId: x.skuId ?? "",
-          status: "QC",
-          locationId: d.myWarehouseId,
-          buy: x.value,
-          // The phrases the dialog's QC chose (2026-10-31); an older draft
-          // without one still files its label, as it always did.
-          description: x.qc
-            ? splitDescription(x.qc.description ?? "")
-                .map((phrase) => ensureQcDescription(d, phrase))
-                .filter(Boolean)
-                .join(", ")
-            : x.label,
-          poId: null,
-          ...(gradeForCondition(x.condition ?? "SECOND", x.grade)
-            ? { grade: gradeForCondition(x.condition ?? "SECOND", x.grade)! }
-            : {}),
-          ...(x.qc?.batteryHealth !== undefined
-            ? { batteryHealth: x.qc.batteryHealth }
-            : {}),
-          ...(x.qc?.cycleCount !== undefined
-            ? { cycleCount: x.qc.cycleCount }
-            : {}),
-          ...(x.qc?.fcc !== undefined ? { fcc: x.qc.fcc } : {}),
-          ...(x.qc?.neverServiced !== undefined
-            ? { neverServiced: x.qc.neverServiced }
-            : {}),
-          ...(x.qc?.price ? { price: x.qc.price } : {}),
-        });
-        appendEvent(d, serial, {
-          type: "DITERIMA",
-          toStatus: "QC",
-          refCode: code,
-          note: t("pos.ledgerTradeIn", "Trade-in on {{code}}: {{label}}", {
+        bookTradeIn(d, x, {
+          code,
+          orderId: order.id,
+          at,
+          staff: currentStaffName(),
+          nextId,
+          appendEvent,
+          ensureQcDescription,
+          receivedNote: t(
+            "pos.ledgerTradeIn",
+            "Trade-in on {{code}}: {{label}}",
+            { code, label: x.label },
+          ),
+          qcNote: t("pos.ledgerTradeInQc", "QC at the till on {{code}}", {
             code,
-            label: x.label,
           }),
         });
-        /*
-         * QC was done in the dialog (owner ask 2026-10-31: *"they will only
-         * do 1 QC … we don't need to put it in pending QC"*), so a unit that
-         * passes the bench's own gate goes straight onto the shelf. One that
-         * does not — an older draft with no description — waits in QC, where
-         * `OrphanQcCard` finds it.
-         */
-        const minted = d.units.find((u) => u.serial === serial)!;
-        if (x.qc && qcReady(minted)) {
-          appendEvent(d, serial, {
-            type: "QC_SELESAI",
-            toStatus: "TERSEDIA",
-            refCode: code,
-            note: t("pos.ledgerTradeInQc", "QC at the till on {{code}}", {
-              code,
-            }),
-          });
-        }
+      }
+      /*
+       * The money handed back for a trade-in worth more than the bill — a
+       * real expense, reconciled against the bank like any other, carrying
+       * who it went to and the transfer's reference (owner 2026-10-31).
+       */
+      if (tradeOver) {
+        d.expenses.unshift({
+          id: nextId("e"),
+          kind: TRADE_IN_EXPENSE,
+          amount: payout,
+          date: dayjs(at).format("YYYY-MM-DD"),
+          method: tillMethod(payoutMethod).code,
+          orderId: order.id,
+          ...(payoutTo.trim() ? { note: payoutTo.trim() } : {}),
+          ...(payoutRef.trim() ? { ref: payoutRef.trim() } : {}),
+          createdAt: at,
+        });
       }
 
       /*
@@ -1796,6 +1767,7 @@ export function StockOutPage() {
     setPayParts((parts) => [{ method: parts[0]?.method ?? "TUNAI" }]);
     setPayRef("");
     setPayoutTo("");
+    setPayoutRef("");
     setPayDueAt(undefined);
     setPayChecked(false);
   };
@@ -3227,6 +3199,17 @@ export function StockOutPage() {
                   "Paid to — e.g. BCA 0671705342 · Abdul Basid",
                 )}
               />
+              {payoutMethod === "TRANSFER" && (
+                <Input
+                  value={payoutRef}
+                  onChange={(e) => setPayoutRef(e.target.value)}
+                  aria-label={t("pos.payoutRef", "Transfer reference")}
+                  placeholder={t(
+                    "pos.payoutRefPlaceholder",
+                    "Transfer reference number",
+                  )}
+                />
+              )}
             </Flex>
           ) : (
             <Flex vertical gap={6}>
@@ -4413,6 +4396,9 @@ export function StockOutPage() {
                         <Typography.Text strong>
                           {methodLabel(payoutMethod)} · {fmtRp(payout)}
                           {payoutTo.trim() ? ` · ${payoutTo.trim()}` : ""}
+                          {payoutRef.trim()
+                            ? ` · ${t("pos.refShort", "Ref {{ref}}", { ref: payoutRef.trim() })}`
+                            : ""}
                         </Typography.Text>
                       ),
                     },

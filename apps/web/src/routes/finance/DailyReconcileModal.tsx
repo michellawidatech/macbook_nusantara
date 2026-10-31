@@ -87,6 +87,11 @@ export function editBlockText(block: EditBlock, t: TFunction): string {
         "recon.blockServiceCharge",
         "This pays a service charge — correct the charge on the service bench and this follows.",
       );
+    case "TRADE_IN":
+      return t(
+        "recon.blockTradeIn",
+        "This pays for a trade-in — correct it in the sale's Edit transaction.",
+      );
     case "INVOICE_CLOSED":
       return t(
         "recon.blockInvoiceClosed",
@@ -517,7 +522,7 @@ function PotDialog({
                 return (
                   <Tooltip
                     title={
-                      r.category === "TRADE_IN"
+                      r.category === "TUKAR_TAMBAH"
                         ? t(
                             "recon.tradeInOnSale",
                             "This is the sale's trade-in — it follows the sale.",

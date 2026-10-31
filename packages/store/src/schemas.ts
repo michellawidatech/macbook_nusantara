@@ -144,6 +144,9 @@ export const EXPENSE_KINDS = [
   // a deduction under (owner 2026-10-27).
   "BIAYA_ADMIN",
   "ONGKIR",
+  // Buying a customer's unit (2026-10-31): a trade-in's payout, or a purchase
+  // from a customer with no sale. The unit is stock at that cost.
+  "TUKAR_TAMBAH",
 ] as const;
 export const INCOME_REASONS = [
   "SALES",
@@ -777,6 +780,39 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     grossTotal: z.optional(money),
     netReceived: z.optional(money),
     reservationId: id.optional(),
+    /**
+     * `Order.tradeInGross` (2026-10-31): the trade-in is recorded gross —
+     * `total` is the whole bill and a TUKAR_TAMBAH payment is what the
+     * trade-in paid of it. Absent on every sale before, which netted it.
+     */
+    tradeInGross: z.boolean().optional(),
+  });
+
+  /**
+   * Units bought from a customer with no sale (2026-10-31) —
+   * `CustomerPurchase` and its items. Its money is an `expenses` row naming
+   * it (`customerPurchaseId`).
+   */
+  const customerPurchase = z.strictObject({
+    id,
+    code: z.string().min(1),
+    at: instant,
+    customerId: id,
+    note: text.optional(),
+    items: z
+      .array(
+        z.strictObject({
+          id,
+          skuId: id,
+          /** The unit minted for it; absent for a counted product. */
+          serial: text.optional(),
+          label: text,
+          value: money,
+          qty: count.min(1),
+        }),
+      )
+      .min(1),
+    createdAt: instant.optional(),
   });
 
   const unitReturn = z.strictObject({
@@ -902,6 +938,10 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
      * expense per charge.
      */
     serviceFeeId: id.optional(),
+    /** The transfer's reference number (2026-10-31) — `Expense.ref`. */
+    ref: text.optional(),
+    /** The purchase from a customer this paid for (2026-10-31). */
+    customerPurchaseId: id.optional(),
     /** When it was typed — `Expense.createdAt`; see `income`. */
     createdAt: instant.optional(),
   });
@@ -1265,6 +1305,7 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     reservations: reservation,
     reservationRequests: reservationRequest,
     orders: order,
+    customerPurchases: customerPurchase,
     returns: unitReturn,
     opnames: opname,
     services: service,
@@ -1315,6 +1356,7 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     stockIns: z.array(stockIn),
     customers: z.array(customer),
     orders: z.array(order),
+    customerPurchases: z.array(customerPurchase),
     returns: z.array(unitReturn),
     reservations: z.array(reservation),
     reservationRequests: z.array(reservationRequest),

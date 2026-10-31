@@ -70,6 +70,9 @@ export const COLLECTIONS = {
   units: spec("serial"),
   reservations: spec("id"),
   orders: spec("id"),
+  // A purchase from a customer (2026-10-31): after the units it minted, before
+  // the expense that paid for it and the ledger rows that name its code.
+  customerPurchases: spec("id"),
   returns: spec("id"),
   opnames: spec("id"),
   services: spec("id"),

@@ -27,6 +27,13 @@ import { fmtNone } from "./format.js";
 import { channelOf } from "./channels.js";
 import { paymentsOf } from "./salePayments.js";
 import { tradeInPurchase } from "./pos.js";
+import {
+  isGross,
+  isTradeInPayment,
+  TRADE_IN_EXPENSE,
+  TRADE_IN_METHOD,
+  tradeInPaid,
+} from "./tradeIn.js";
 import { returnedDebts } from "./saleStatus.js";
 import type { AdjustmentRef } from "./adjustmentDeletion.js";
 
@@ -41,9 +48,6 @@ export const INCOME_REASON_LABEL: Record<string, string> = {
 };
 export const EXPENSE_KIND_LABEL: Record<string, string> = {
   ...Object.fromEntries(EXPENSE_CATEGORIES.map((c) => [c.value, c.label])),
-  // A trade-in worth more than its sale's bill (2026-10-31) — a derived row
-  // only, never typed: the shop buying the customer's unit (`tradeInPurchase`).
-  TRADE_IN: "Trade-in purchase",
 };
 
 export type Direction = "INCOME" | "EXPENSE";
@@ -360,7 +364,7 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
         key: `ti-${o.id}`,
         at: boughtWith?.at ?? o.ts,
         direction: "EXPENSE",
-        category: "TRADE_IN",
+        category: TRADE_IN_EXPENSE,
         method: methodLabel(via),
         methodCode: via,
         inBalance: boughtWith?.inBalance !== false,
@@ -374,6 +378,33 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
         status: "SETTLED",
         tie: "",
         ...(boughtWith ? { feeOf: `p-${o.id}-${boughtWith.id}` } : {}),
+      });
+    }
+    /*
+     * A sale recorded gross (2026-10-31, `lib/tradeIn.ts`): the trade-in's
+     * payment is income that moved no money, and this is its other half —
+     * the shop buying the customer's unit for that much, out of no pot. Any
+     * money handed back is a real `Expense` of the same kind, listed below
+     * with the typed rows, so the two together are the trade-in's value.
+     */
+    const offset = isGross(o) ? tradeInPaid(o) : 0;
+    if (offset > 0) {
+      const tt = paymentsOf(o).find(isTradeInPayment);
+      out.push({
+        key: `ti-${o.id}`,
+        at: tt?.at ?? o.ts,
+        direction: "EXPENSE",
+        category: TRADE_IN_EXPENSE,
+        method: methodLabel(TRADE_IN_METHOD),
+        methodCode: TRADE_IN_METHOD,
+        inBalance: false,
+        description: t("cashflow.tradeInBought", "Trade-in · {{units}}", {
+          units: (o.tradeIns ?? []).map((x) => x.label).join(", "),
+        }),
+        orderCode: o.code,
+        amount: offset,
+        status: "SETTLED",
+        tie: "",
       });
     }
     for (const r of o.refunds ?? []) {
@@ -438,12 +469,31 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
       methodCode: e.method,
       inBalance: true,
       description:
-        e.label ?? e.note?.trim() ?? labelOf(EXPENSE_KIND_LABEL, e.kind, t),
+        e.kind === TRADE_IN_EXPENSE
+          ? [
+              t(
+                "cashflow.tradeInPayout",
+                "Paid to the customer for a trade-in",
+              ),
+              e.note?.trim(),
+              e.ref?.trim()
+                ? t("cashflow.refShort", "Ref {{ref}}", { ref: e.ref.trim() })
+                : undefined,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : (e.label ??
+            e.note?.trim() ??
+            labelOf(EXPENSE_KIND_LABEL, e.kind, t)),
       ...(code ? { orderCode: code } : {}),
       amount: e.amount,
       status: "SETTLED",
       tie: e.createdAt ?? "",
-      adjustment: { kind: "expense", id: e.id, date: e.date },
+      // A trade-in's payout (2026-10-31) belongs to its sale or purchase: it
+      // is not an adjustment anybody may delete from here.
+      ...(e.kind === TRADE_IN_EXPENSE
+        ? {}
+        : { adjustment: { kind: "expense" as const, id: e.id, date: e.date } }),
       source: { kind: "expense", id: e.id },
     });
   }

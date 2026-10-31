@@ -123,6 +123,7 @@ function emptyDb(): MockDb {
     statementLines: [],
     services: [],
     deposits: [],
+    customerPurchases: [],
     chats: [],
     knowledge: [],
     corrections: [],

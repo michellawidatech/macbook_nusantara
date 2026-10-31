@@ -9,6 +9,7 @@ import {
   skus,
 } from "./catalogue.js";
 import {
+  customerPurchases,
   deposits,
   opnames,
   orders,
@@ -65,6 +66,7 @@ export const ADAPTERS: { readonly [C in CollectionName]: Adapter<C> } = {
   units,
   reservations,
   orders,
+  customerPurchases,
   returns,
   opnames,
   services,

@@ -451,21 +451,22 @@ model Sku {
   mergedInto Sku?         @relation("SkuMerge", fields: [mergedIntoId], references: [id], onDelete: Restrict)
   mergedFrom Sku[]        @relation("SkuMerge")
 
-  units            Unit[]
-  poItems          PurchaseOrderItem[]
-  orderItems       OrderItem[]
-  reservationItems ReservationItem[]
-  discountSkus     DiscountSku[]
-  priceLogs        PriceLog[]
-  priceReqs        PriceReq[]
-  axisValues       SkuAxisValue[]
-  stockIns         StockIn[]
-  tradeIns         TradeIn[]
-  opnameSurplus    OpnameSurplus[]
-  opnameCounts     OpnameCount[]
-  stockMoves       StockMove[]
-  chatActions      ChatAction[]
-  stockWatches     StockWatch[]
+  units                 Unit[]
+  poItems               PurchaseOrderItem[]
+  orderItems            OrderItem[]
+  reservationItems      ReservationItem[]
+  discountSkus          DiscountSku[]
+  priceLogs             PriceLog[]
+  priceReqs             PriceReq[]
+  axisValues            SkuAxisValue[]
+  stockIns              StockIn[]
+  tradeIns              TradeIn[]
+  opnameSurplus         OpnameSurplus[]
+  opnameCounts          OpnameCount[]
+  stockMoves            StockMove[]
+  chatActions           ChatAction[]
+  stockWatches          StockWatch[]
+  customerPurchaseItems CustomerPurchaseItem[]
 }
 
 // ============================================================================
@@ -530,23 +531,24 @@ model Unit {
   rack          Rack?              @relation(fields: [rackId], references: [id], onDelete: Restrict)
   purchaseOrder PurchaseOrder?     @relation("UnitPurchaseOrder", fields: [purchaseOrderId], references: [id], onDelete: Restrict)
 
-  attributes          UnitAttribute[]
-  events              UnitEvent[]
-  notes               UnitNote[]
-  poItemSerials       PurchaseOrderItemSerial[]
-  supplierReturnItems SupplierReturnItem[]
-  opnameScans         OpnameScan[]
-  orderItems          OrderItem[]               @relation("OrderItemUnit")
-  tradeIns            TradeIn[]
-  reservationItems    ReservationItem[]
-  proposalItems       ReservationProposalItem[]
-  warrantyClaims      WarrantyClaim[]
-  stockIns            StockIn[]
-  adjustments         StockAdjustment[]
-  returns             UnitReturn[]              @relation("UnitReturnUnit")
-  exchanges           UnitReturn[]              @relation("UnitReturnExchange")
-  serviceVisits       ServiceVisit[]
-  chatActions         ChatAction[]
+  attributes            UnitAttribute[]
+  events                UnitEvent[]
+  notes                 UnitNote[]
+  poItemSerials         PurchaseOrderItemSerial[]
+  supplierReturnItems   SupplierReturnItem[]
+  opnameScans           OpnameScan[]
+  orderItems            OrderItem[]               @relation("OrderItemUnit")
+  tradeIns              TradeIn[]
+  reservationItems      ReservationItem[]
+  proposalItems         ReservationProposalItem[]
+  warrantyClaims        WarrantyClaim[]
+  stockIns              StockIn[]
+  adjustments           StockAdjustment[]
+  returns               UnitReturn[]              @relation("UnitReturnUnit")
+  exchanges             UnitReturn[]              @relation("UnitReturnExchange")
+  serviceVisits         ServiceVisit[]
+  chatActions           ChatAction[]
+  customerPurchaseItems CustomerPurchaseItem[]
 }
 
 model UnitAttribute {
@@ -565,28 +567,28 @@ model UnitAttribute {
 /// transaction as the projection it updates (08 §1, §4). Never updated,
 /// never deleted — the app DB role has INSERT only (08 §9).
 model UnitEvent {
-  id              String        @id @default(cuid())
-  unitId          String
+  id                 String        @id @default(cuid())
+  unitId             String
   /// immutable copy — history reads correctly even if Unit is archived (08 §4)
-  serial          String
+  serial             String
   /// Document number, e.g. TX-2026/08-000001. Only a DIPINDAH event carries
   /// one: a stock transfer is the one movement the shop numbers by hand, and
   /// the ERD gives it no document of its own. Filled by the application from
   /// next_doc_code('TX'), not by a column default, because a default cannot be
   /// conditional on the event type. Added in S9 follow-up with the owner's
   /// approval; docs/erd-pos-chatbot.drawio updated in the same commit.
-  code            String?       @unique
-  seq             Int
-  type            UnitEventType
-  at              DateTime
-  fromStatus      UnitStatus?
-  toStatus        UnitStatus
-  fromLocationId  String?
-  toLocationId    String?
-  orderId         String?
-  purchaseOrderId String?
-  claimId         String?
-  opnameSessionId String?
+  code               String?       @unique
+  seq                Int
+  type               UnitEventType
+  at                 DateTime
+  fromStatus         UnitStatus?
+  toStatus           UnitStatus
+  fromLocationId     String?
+  toLocationId       String?
+  orderId            String?
+  purchaseOrderId    String?
+  claimId            String?
+  opnameSessionId    String?
   /// Which hold this event belongs to, on DIRESERVASI and RESERVASI_BATAL.
   ///
   /// Without it the S/N timeline re-joins a hold to an event by serial and
@@ -594,24 +596,27 @@ model UnitEvent {
   /// different customer narrates the wrong person on both events. It is also
   /// what makes "which hold is holding this unit" answerable from the ledger
   /// rather than from a second copy on ReservationItem that would go stale.
-  reservationId   String?
+  reservationId      String?
   /// The customer or supplier return this event belongs to.
-  unitReturnId    String?
-  costDelta       BigInt
-  staffId         String
-  requestId       String?
-  note            String?
+  unitReturnId       String?
+  /// The purchase from a customer that brought the unit in (2026-10-31).
+  customerPurchaseId String?
+  costDelta          BigInt
+  staffId            String
+  requestId          String?
+  note               String?
 
-  unit          Unit           @relation(fields: [unitId], references: [id], onDelete: Restrict)
-  fromLocation  Location?      @relation("UnitEventFromLocation", fields: [fromLocationId], references: [id], onDelete: Restrict)
-  toLocation    Location?      @relation("UnitEventToLocation", fields: [toLocationId], references: [id], onDelete: Restrict)
-  order         Order?         @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
-  claim         WarrantyClaim? @relation(fields: [claimId], references: [id], onDelete: Restrict)
-  opnameSession OpnameSession? @relation(fields: [opnameSessionId], references: [id], onDelete: Restrict)
-  reservation   Reservation?   @relation(fields: [reservationId], references: [id], onDelete: Restrict)
-  unitReturn    UnitReturn?    @relation(fields: [unitReturnId], references: [id], onDelete: Restrict)
-  staff         Staff          @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  unit             Unit              @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  fromLocation     Location?         @relation("UnitEventFromLocation", fields: [fromLocationId], references: [id], onDelete: Restrict)
+  toLocation       Location?         @relation("UnitEventToLocation", fields: [toLocationId], references: [id], onDelete: Restrict)
+  order            Order?            @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  purchaseOrder    PurchaseOrder?    @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  claim            WarrantyClaim?    @relation(fields: [claimId], references: [id], onDelete: Restrict)
+  opnameSession    OpnameSession?    @relation(fields: [opnameSessionId], references: [id], onDelete: Restrict)
+  reservation      Reservation?      @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  unitReturn       UnitReturn?       @relation(fields: [unitReturnId], references: [id], onDelete: Restrict)
+  customerPurchase CustomerPurchase? @relation(fields: [customerPurchaseId], references: [id], onDelete: Restrict)
+  staff            Staff             @relation(fields: [staffId], references: [id], onDelete: Restrict)
 
   @@unique([unitId, seq])
   @@index([reservationId])
@@ -838,6 +843,8 @@ model Customer {
   chatActions      ChatAction[]
   chatProfiles     CustomerProfile[]
   stockWatches     StockWatch[]
+  /// Units the shop bought from this person with no sale (2026-10-31).
+  purchases        CustomerPurchase[]
 }
 
 model Order {
@@ -878,6 +885,12 @@ model Order {
   netReceived      BigInt?
   /// The hold this sale came out of, if any.
   reservationId    String?
+  /// A trade-in on this sale is recorded GROSS (owner 2026-10-31): `total` is
+  /// the whole bill, a `Payment` of method TUKAR_TAMBAH (not in the balance)
+  /// is what the trade-in paid of it, and money the shop handed the customer
+  /// back is an `Expense` of kind TUKAR_TAMBAH. False on every sale before —
+  /// those netted the trade-in off `total`.
+  tradeInGross     Boolean     @default(false)
 
   customer       Customer?       @relation(fields: [customerId], references: [id], onDelete: Restrict)
   // Relation field is `discountRef` because the scalar column `discount`
@@ -1234,6 +1247,7 @@ model Staff {
   reconciliations          Reconciliation[]
   reconciliationEdits      ReconciliationEdit[]
   reconciliationAsides     ReconciliationAside[]
+  customerPurchases        CustomerPurchase[]
 }
 
 model StaffSession {
@@ -2788,36 +2802,86 @@ model UnitReturn {
 
 /// Money out, entered by hand (owner ask 2026-09-01).
 model Expense {
-  id               String      @id @default(cuid())
-  label            String?
-  kind             ExpenseKind
-  amount           BigInt
+  id                 String      @id @default(cuid())
+  label              String?
+  kind               ExpenseKind
+  amount             BigInt
   /// YYYY-MM-DD.
-  date             String
-  note             String?
-  referralSourceId String?
-  methodId         String
-  staffId          String
+  date               String
+  note               String?
+  referralSourceId   String?
+  methodId           String
+  staffId            String
   /// The sale this is about, where the category needs one — a customer
   /// compensation, a refund (owner ask 2026-09-23).
-  orderId          String?
+  orderId            String?
   /// The service charge this expense paid (owner 2026-10-26), kind UNIT. One
   /// expense per charge at most; deleting the charge takes this row with it,
   /// and the store refuses a charge removed while its expense stays.
-  serviceFeeId     String?     @unique
-  createdAt        DateTime
+  serviceFeeId       String?     @unique
+  /// The bank transfer's reference number, where the money went by one
+  /// (owner 2026-10-31 — a trade-in's payout).
+  ref                String?
+  /// The purchase from a customer this paid for (2026-10-31), kind
+  /// TUKAR_TAMBAH.
+  customerPurchaseId String?
+  createdAt          DateTime
 
-  referralSource ReferralSource? @relation(fields: [referralSourceId], references: [id], onDelete: Restrict)
-  method         PaymentMethod   @relation(fields: [methodId], references: [id], onDelete: Restrict)
-  staff          Staff           @relation(fields: [staffId], references: [id], onDelete: Restrict)
-  order          Order?          @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  serviceFee     ServiceFee?     @relation(fields: [serviceFeeId], references: [id], onDelete: Restrict)
+  referralSource   ReferralSource?   @relation(fields: [referralSourceId], references: [id], onDelete: Restrict)
+  method           PaymentMethod     @relation(fields: [methodId], references: [id], onDelete: Restrict)
+  staff            Staff             @relation(fields: [staffId], references: [id], onDelete: Restrict)
+  order            Order?            @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  serviceFee       ServiceFee?       @relation(fields: [serviceFeeId], references: [id], onDelete: Restrict)
+  customerPurchase CustomerPurchase? @relation(fields: [customerPurchaseId], references: [id], onDelete: Restrict)
 
   /// A reconciliation that corrected, added or matched it (2026-10-27). While
   /// one that is not OPEN names the row, deleting it is refused.
   reconciliationEdits  ReconciliationEdit[]
   statementMatches     BankStatementMatch[]
   reconciliationAsides ReconciliationAside[]
+}
+
+/// A unit bought from a customer with no sale (owner 2026-10-31) — the
+/// trade-in's "+ Trade-in" on Inbound. Paid in full on the spot; its money is
+/// ONE `Expense` of kind TUKAR_TAMBAH naming it. The person is required (a
+/// name or a phone — `Customer` holds either): a unit bought from a stranger
+/// is the one somebody may come looking for.
+model CustomerPurchase {
+  id         String   @id @default(cuid())
+  code       String   @unique @default(dbgenerated("next_doc_code('BP'::text)"))
+  at         DateTime
+  customerId String
+  staffId    String
+  note       String?
+  createdAt  DateTime
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  staff    Staff    @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  items      CustomerPurchaseItem[]
+  expenses   Expense[]
+  unitEvents UnitEvent[]
+}
+
+/// One unit (or a counted product's pieces) of a `CustomerPurchase`.
+/// CHECK (value > 0 AND qty > 0) is hand-written in the migration.
+model CustomerPurchaseItem {
+  id         String  @id @default(cuid())
+  purchaseId String
+  skuId      String
+  /// The unit minted for it; null for a counted product (a `StockMove`).
+  unitId     String?
+  label      String
+  /// What the shop paid, for all `qty` pieces.
+  value      BigInt
+  qty        Int     @default(1)
+  sortOrder  Int     @default(0)
+
+  purchase CustomerPurchase @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
+  sku      Sku              @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  unit     Unit?            @relation(fields: [unitId], references: [id], onDelete: Restrict)
+
+  @@index([purchaseId])
 }
 
 /// Money in that no sale accounts for (owner ask 2026-09-01).
@@ -3157,6 +3221,10 @@ enum ExpenseKind {
   // A courier fee kept as the shop's own cost rather than split into the
   // units it carried (owner 2026-10-30). An operating cost, its own line.
   ONGKIR
+  // Buying a customer's unit — a trade-in's payout, or a purchase with no
+  // sale (owner 2026-10-31). The unit is stock at that cost, so Profit & Loss
+  // never counts it as operating.
+  TUKAR_TAMBAH
 }
 
 enum IncomeReason {

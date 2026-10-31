@@ -4,8 +4,9 @@
  * they can see the units that are from trade-ins"*).
  *
  * A trade-in is not a purchase order — it is bought across the counter on a
- * sale, and its QC is taken in the till's dialog — so it is on no invoice and
- * never in Waiting for QC. This is where it can still be found as intake: one
+ * sale, or from a customer with no sale ("+ Trade-in", a BP document), and
+ * its QC is taken in the trade-in dialog — so it is on no invoice and never
+ * in Waiting for QC. This is where it can still be found as intake: one
  * row per unit, with the columns Inbound's unit popup asks (serial, grade,
  * battery, description, never serviced, sell price) beside what the shop paid
  * and the sale it came in on. Read-only: the unit is corrected where units
@@ -62,6 +63,32 @@ export function tradeInUnitRows(db: MockDb): TradeInUnitRow[] {
         skuCode: sku?.code ?? "",
         serial,
         grade: unit?.grade ?? x.grade,
+        battery: unit ? readUnitBattery(unit, db).text : "",
+        description: unit?.description ?? "",
+        neverServiced: unit?.neverServiced,
+        bought: x.value,
+        sellPrice: unit?.price,
+        status: unit?.status,
+      });
+    }
+  }
+  // Bought from a customer with no sale (2026-10-31): the BP document.
+  for (const p of db.customerPurchases) {
+    const c = db.customers.find((x) => x.id === p.customerId);
+    for (const x of p.items) {
+      const unit = x.serial
+        ? db.units.find((u) => u.serial === x.serial)
+        : undefined;
+      const sku = db.skus.find((s) => s.id === x.skuId);
+      out.push({
+        key: `${p.id}:${x.id}`,
+        at: p.at,
+        orderCode: p.code,
+        customer: c ? customerLabel(c) : "",
+        product: sku ? `${sku.name} ${sku.variantLabel}`.trim() : x.label,
+        skuCode: sku?.code ?? "",
+        serial: x.serial ?? "",
+        grade: unit?.grade,
         battery: unit ? readUnitBattery(unit, db).text : "",
         description: unit?.description ?? "",
         neverServiced: unit?.neverServiced,

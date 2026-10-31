@@ -316,6 +316,7 @@ const LOCKABLE = new Set([
   "SupplierDeposit",
   "Reservation",
   "Order",
+  "CustomerPurchase",
   "UnitReturn",
   "OpnameSession",
   "ServiceVisit",

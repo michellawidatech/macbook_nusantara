@@ -46,6 +46,7 @@ import { ProTable } from "../../components/ProTable";
 import { OrphanQcCard } from "../../components/OrphanQcCard";
 import { QcWaitingCard } from "./QcWaitingCard";
 import { TradeInUnitsTable, tradeInUnitRows } from "./TradeInUnitsTable";
+import { BuyFromCustomerModal } from "./BuyFromCustomerModal";
 import { qcWaitingByPo, qcWaitingRows } from "../../lib/qcWaiting.js";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import { mutate, useDb } from "../../mock/store.js";
@@ -202,6 +203,8 @@ export function InboundPage() {
     [db, t, toQcByPo],
   );
 
+  /** "+ Trade-in": units bought from a customer with no sale (2026-10-31). */
+  const [buying, setBuying] = useState(false);
   /** Units bought across the counter on a sale — the Trade-in tab's count. */
   const tradeInCount = useMemo(() => tradeInUnitRows(db).length, [db]);
 
@@ -511,8 +514,22 @@ export function InboundPage() {
               count: tradeInCount,
             }),
             children: (
-              <Card>
+              <Card
+                extra={
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    onClick={() => setBuying(true)}
+                  >
+                    {t("inboundList.addTradeIn", "Trade-in")}
+                  </Button>
+                }
+              >
                 <TradeInUnitsTable db={db} />
+                <BuyFromCustomerModal
+                  open={buying}
+                  onClose={() => setBuying(false)}
+                />
               </Card>
             ),
           },

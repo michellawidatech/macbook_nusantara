@@ -518,6 +518,13 @@ async function documentLink(
       select: { id: true },
     });
     if (row !== null) link = { unitReturnId: row.id };
+  } else if (prefix === "BP") {
+    // A unit bought from a customer with no sale (2026-10-31).
+    const row = await tx.customerPurchase.findUnique({
+      where: { code },
+      select: { id: true },
+    });
+    if (row !== null) link = { customerPurchaseId: row.id };
   }
   if (link === undefined) {
     throw new StoreValidationError(
@@ -555,6 +562,7 @@ export const events: Adapter<"events"> = {
         unitReturn: { select: { code: true } },
         opnameSession: { select: { code: true } },
         purchaseOrder: { select: { code: true } },
+        customerPurchase: { select: { code: true } },
       },
     });
     const wanted = keys === undefined ? undefined : new Set(keys);
@@ -585,6 +593,7 @@ export const events: Adapter<"events"> = {
           e.unitReturn?.code ??
           e.opnameSession?.code ??
           e.purchaseOrder?.code ??
+          e.customerPurchase?.code ??
           undefined,
         staff: e.staff.name,
       });

@@ -43,6 +43,7 @@
  */
 import { useMemo, useState } from "react";
 import { tradeInPurchase } from "../../lib/pos.js";
+import { isGross, payoutsOf, tradeInPaid } from "../../lib/tradeIn.js";
 import {
   App,
   Button,
@@ -163,10 +164,14 @@ interface SaleRow {
   /** Σ the sale's trade-ins — what the customer was allowed for them. */
   readonly tradeCredit: number;
   /**
-   * The trade-in the sale bought outright — worth more than the bill — and 0
-   * when it only came off the bill (`tradeInPurchase`, 2026-10-31).
+   * Money the shop handed the customer for a trade-in worth more than the
+   * bill — the payouts of a sale recorded gross (`lib/tradeIn.ts`), or the
+   * whole trade-in of a 2026-10-31 sale that bought it outright
+   * (`tradeInPurchase`). 0 when the trade-in only paid part of the bill.
    */
   readonly tradeBought: number;
+  /** What a gross sale's trade-in paid of the bill — settled, but no money. */
+  readonly tradePaid: number;
 }
 
 /**
@@ -175,7 +180,10 @@ interface SaleRow {
  * paid out more than it took (owner ask 2026-10-31).
  */
 const netReceived = (r: SaleRow): number =>
-  r.balance.settled - r.kept.reduce((n, k) => n + k.amount, 0) - r.tradeBought;
+  r.balance.settled -
+  r.kept.reduce((n, k) => n + k.amount, 0) -
+  r.tradePaid -
+  r.tradeBought;
 
 /** A signed amount, the minus in front of the currency: −Rp 14.500.000. */
 const fmtSigned = (n: number): string => (n < 0 ? `−${fmtRp(-n)}` : fmtRp(n));
@@ -437,7 +445,10 @@ export function TransactionsPage() {
             (n, x) => n + Math.max(0, x.value),
             0,
           ),
-          tradeBought: tradeInPurchase(o),
+          tradeBought: isGross(o)
+            ? payoutsOf(db, o.id).reduce((n, e) => n + e.amount, 0)
+            : tradeInPurchase(o),
+          tradePaid: isGross(o) ? tradeInPaid(o) : 0,
         };
       })
       .sort((a, b) => b.at.localeCompare(a.at));
@@ -450,6 +461,7 @@ export function TransactionsPage() {
     db.skus,
     db.salesmen,
     db.settlements,
+    db.expenses,
     t,
   ]);
 
@@ -825,7 +837,7 @@ export function TransactionsPage() {
                               "{{bill}} sale − {{tradeIn}} trade-in",
                               {
                                 bill: fmtRp(r.balance.total),
-                                tradeIn: fmtRp(r.tradeBought),
+                                tradeIn: fmtRp(r.tradeCredit),
                               },
                             )
                           : t(

@@ -849,7 +849,17 @@ describe("taking a machine in part-exchange", () => {
 
     const db = snapshot();
     const order = db.orders[0]!;
-    expect(order.total).toBe(8_000_000);
+    // Recorded gross (2026-10-31): the sale is its whole bill, the trade-in
+    // paid 2jt of it and the customer the other 8jt.
+    expect(order.total).toBe(10_000_000);
+    expect(order.tradeInGross).toBe(true);
+    expect(order.settled).toBe(true);
+    expect(
+      order.payments!.map((p) => [p.method, p.amount, p.inBalance]),
+    ).toEqual([
+      ["TUKAR_TAMBAH", 2_000_000, false],
+      ["TUNAI", 8_000_000, undefined],
+    ]);
     expect(order.tradeIns).toHaveLength(1);
     // The QC is the unit's, not the order's: the TradeIn row has no column.
     expect(order.tradeIns![0]).not.toHaveProperty("qc");
@@ -915,16 +925,34 @@ describe("taking a machine in part-exchange", () => {
       screen.getByLabelText("Paid to"),
       "BCA 0671705342 · Abdul Basid",
     );
+    await userEvent.type(
+      screen.getByLabelText("Transfer reference"),
+      "TRF-778812",
+    );
 
     await payAndFinish();
 
-    const order = snapshot().orders[0]!;
+    const db = snapshot();
+    const order = db.orders[0]!;
+    // The whole bill is income, paid by the trade-in…
     expect(order.total).toBe(10_000_000);
     expect(order.settled).toBe(true);
+    expect(order.payments!.map((p) => [p.method, p.amount, p.state])).toEqual([
+      ["TUKAR_TAMBAH", 10_000_000, "SETTLED"],
+    ]);
+    // …and the 17jt handed back is a real expense, with where it went.
     expect(
-      order.payments!.map((p) => [p.method, p.amount, p.state, p.note]),
+      db.expenses
+        .filter((e) => e.orderId === order.id)
+        .map((e) => [e.kind, e.amount, e.method, e.note, e.ref]),
     ).toEqual([
-      ["TRANSFER", 10_000_000, "SETTLED", "BCA 0671705342 · Abdul Basid"],
+      [
+        "TUKAR_TAMBAH",
+        17_000_000,
+        "TRANSFER",
+        "BCA 0671705342 · Abdul Basid",
+        "TRF-778812",
+      ],
     ]);
     expect(snapshot().units.find((u) => u.serial === "C02TRADE002")!.buy).toBe(
       27_000_000,
@@ -967,7 +995,7 @@ describe("taking a machine in part-exchange", () => {
     // Replaced, not added beside the old one.
     expect(order.tradeIns).toHaveLength(1);
     expect(order.tradeIns![0]!.value).toBe(1_500_000);
-    expect(order.total).toBe(8_500_000);
+    expect(order.total).toBe(10_000_000);
     const taken = snapshot().units.find((u) => u.serial === filed)!;
     expect(taken.buy).toBe(1_500_000);
     expect(taken.description).toBe("Fullset");

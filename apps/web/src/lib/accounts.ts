@@ -87,6 +87,12 @@ export function accountOfMethod(code: string): AccountKind | undefined {
        * pot, by name, for the reason TRANSFER_LUAR has none.
        */
       return undefined;
+    case "TUKAR_TAMBAH":
+      /*
+       * What a trade-in paid of a bill (owner 2026-10-31): the customer's
+       * unit, not money. No pot, by name.
+       */
+      return undefined;
     default:
       return undefined;
   }
@@ -116,6 +122,8 @@ export const ADJUSTMENT_METHOD_CODES = [
  */
 export const UNPICKABLE_METHOD_CODES: ReadonlySet<string> = new Set([
   "RETUR_SUPPLIER",
+  // What a trade-in paid of a bill (2026-10-31) — the till writes it.
+  "TUKAR_TAMBAH",
 ]);
 
 /** May a person pick this method in a payment dialog? */

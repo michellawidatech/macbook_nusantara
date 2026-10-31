@@ -525,6 +525,125 @@ export const pos: Adapter<"pos"> = {
 };
 
 // ---------------------------------------------------------------------------
+// Purchases from a customer (2026-10-31)
+// ---------------------------------------------------------------------------
+
+/**
+ * Units bought from a person with no sale — Inbound → Trade-in's
+ * "+ Trade-in". Written once with its units, paid by ONE `Expense` naming it
+ * (written after, in the same commit). Never removed: the units it minted
+ * carry its cost. A correction rewrites the header's note and its items'
+ * labels and values; which units it bought is fixed.
+ */
+export const customerPurchases: Adapter<"customerPurchases"> = {
+  collection: "customerPurchases",
+  async project(tx, _ctx, keys) {
+    const rows = await tx.customerPurchase.findMany({
+      where: byId(keys),
+      orderBy: [{ at: "desc" }, { id: "asc" }],
+      include: {
+        items: {
+          orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+          include: { unit: { select: { serial: true } } },
+        },
+      },
+    });
+    return rows.map((p) => ({
+      id: p.id,
+      code: p.code,
+      at: isoOf(p.at),
+      customerId: p.customerId,
+      note: p.note ?? undefined,
+      items: p.items.map((i) => ({
+        id: i.id,
+        skuId: i.skuId,
+        serial: i.unit?.serial ?? undefined,
+        label: i.label,
+        value: i.value,
+        qty: i.qty,
+      })),
+      createdAt: isoOf(p.createdAt),
+    }));
+  },
+  lock: (tx, keys) => lockRows(tx, "CustomerPurchase", "id", keys),
+  async write(ctx, rows) {
+    const { tx } = ctx;
+    for (const r of rows) {
+      const n = r.next;
+      if (n === undefined) throw refuseRemoval("customerPurchases", r.key);
+      if (r.base === undefined) {
+        await tx.customerPurchase.create({
+          data: {
+            id: n.id,
+            code: n.code,
+            at: instantOf(n.at),
+            customerId: n.customerId,
+            staffId: ctx.staffId,
+            note: blankToNull(n.note),
+            createdAt: n.createdAt ? new Date(n.createdAt) : ctx.now,
+          },
+        });
+        for (const [sortOrder, i] of n.items.entries()) {
+          const serial = blankToNull(i.serial);
+          const unitId =
+            serial === null ? null : ((await ctx.findUnitId(serial)) ?? null);
+          if (serial !== null && unitId === null) {
+            throw new StoreValidationError(
+              `Unit ${serial} pada ${n.code} tidak ada.`,
+              "customerPurchases",
+              n.id,
+            );
+          }
+          await tx.customerPurchaseItem.create({
+            data: {
+              id: i.id,
+              purchaseId: n.id,
+              skuId: i.skuId,
+              unitId,
+              label: i.label,
+              value: i.value,
+              qty: i.qty,
+              sortOrder,
+            },
+          });
+        }
+      } else {
+        const before = new Map(r.base.items.map((i) => [i.id, i]));
+        if (
+          n.items.length !== r.base.items.length ||
+          n.items.some((i) => {
+            const b = before.get(i.id);
+            return (
+              b === undefined ||
+              b.skuId !== i.skuId ||
+              (b.serial ?? "") !== (i.serial ?? "") ||
+              b.qty !== i.qty
+            );
+          })
+        ) {
+          throw new StoreValidationError(
+            `Unit yang dibeli pada ${n.code} tidak bisa diganti.`,
+            "customerPurchases",
+            n.id,
+          );
+        }
+        await tx.customerPurchase.update({
+          where: { id: n.id },
+          data: { note: blankToNull(n.note), at: instantOf(n.at) },
+        });
+        for (const i of n.items) {
+          await tx.customerPurchaseItem.update({
+            where: { id: i.id },
+            data: { label: i.label, value: i.value },
+          });
+        }
+      }
+      ctx.touch("customerPurchases", n.id);
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Supplier deposits
 // ---------------------------------------------------------------------------
 
@@ -1693,8 +1812,11 @@ export const orders: Adapter<"orders"> = {
       // more and was bought outright (2026-10-31). A sale recorded BEFORE that
       // with a trade-in worth more collected nothing and paid nothing, so it
       // still reads 0 — the bill would make it a debt nobody owes.
-      const afterTrade =
-        o.tradeCredit > o.total
+      // Recorded gross (2026-10-31, `tradeInGross`): the store's total IS the
+      // bill.
+      const afterTrade = o.tradeInGross
+        ? o.total
+        : o.tradeCredit > o.total
           ? o.paidTotal > 0n
             ? o.total
             : 0n
@@ -1802,6 +1924,7 @@ export const orders: Adapter<"orders"> = {
         grossTotal: o.grossTotal ?? undefined,
         netReceived: o.netReceived ?? undefined,
         reservationId: o.reservationId ?? undefined,
+        tradeInGross: o.tradeInGross || undefined,
       };
     });
   },
@@ -1864,9 +1987,11 @@ export const orders: Adapter<"orders"> = {
       const afterTrade = tradeCredit > bill ? bill : bill - tradeCredit;
       // …or 0, a sale from before 2026-10-31 that netted it away.
       const legacyZero = tradeCredit > bill && n.total === 0n;
-      if (n.total !== afterTrade && !legacyZero) {
+      // Recorded gross (`tradeInGross`, later on 2026-10-31): the whole bill.
+      const expected = n.tradeInGross ? bill : afterTrade;
+      if (n.total !== expected && (n.tradeInGross || !legacyZero)) {
         throw new StoreValidationError(
-          `Total ${n.code} tidak cocok: ${n.total}, seharusnya ${afterTrade}.`,
+          `Total ${n.code} tidak cocok: ${n.total}, seharusnya ${expected}.`,
           "orders",
           n.id,
         );
@@ -1915,6 +2040,7 @@ export const orders: Adapter<"orders"> = {
         grossTotal: n.grossTotal ?? null,
         netReceived: n.netReceived ?? null,
         reservationId: n.reservationId ?? null,
+        tradeInGross: n.tradeInGross === true,
       };
       if (r.base === undefined) {
         await tx.order.create({

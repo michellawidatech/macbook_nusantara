@@ -565,6 +565,7 @@ export function orderBill(order: {
  */
 export function tradeInPurchase(order: {
   readonly total: number;
+  readonly tradeInGross?: boolean;
   readonly serials: readonly string[];
   readonly prices: Readonly<Record<string, number>>;
   readonly lines?: readonly { readonly qty: number; readonly price: number }[];
@@ -576,6 +577,9 @@ export function tradeInPurchase(order: {
     (n, x) => n + Math.max(0, x.value),
     0,
   );
+  // Recorded gross (later on 2026-10-31): the trade-in is a payment and its
+  // payouts are expenses of their own — `lib/tradeIn.ts`, not this.
+  if (order.tradeInGross) return 0;
   const bill = orderBill(order);
   // Recorded at its full bill. A sale from before 2026-10-31 netted a bigger
   // trade-in to a total of 0 and moved no money; it bought nothing here.

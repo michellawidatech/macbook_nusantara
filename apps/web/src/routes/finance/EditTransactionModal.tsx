@@ -47,6 +47,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Segmented,
   Select,
   Table,
   Typography,
@@ -89,8 +90,44 @@ import {
   useDb,
 } from "../../mock/store.js";
 import type { Order, OrderFee } from "../../mock/seed.js";
-import { totalAfterTradeIn } from "../../lib/pos.js";
+import { totalAfterTradeIn, type TradeInLine } from "../../lib/pos.js";
+import {
+  bookTradeIn,
+  isGross,
+  isTradeInPayment,
+  newTradeInPayment,
+  payoutsOf,
+  TRADE_IN_EXPENSE,
+  tradeInCredit,
+  tradeInPaid,
+  tradeInUnitMovedOn,
+  withTradeInPaid,
+} from "../../lib/tradeIn.js";
+import { ensureQcDescription } from "../../mock/store.js";
+import { TradeInDialog } from "../stock/TradeInDialog.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
+
+/** A trade-in on the sale, while it is being edited (2026-10-31). */
+interface TradeEdit {
+  readonly key: string;
+  readonly line: TradeInLine;
+  /** Its value when the dialog opened; undefined for one added here. */
+  readonly wasValue: number | undefined;
+  readonly removed: boolean;
+}
+
+/** Money the shop handed the customer for the trade-in, while edited. */
+interface PayoutEdit {
+  readonly key: string;
+  /** The `Expense` behind it; undefined for one added here. */
+  readonly id: string | undefined;
+  readonly amount: number;
+  readonly method: "TUNAI" | "TRANSFER";
+  readonly note: string;
+  readonly ref: string;
+  readonly wasAmount: number;
+  readonly removed: boolean;
+}
 
 /** One unit line on the sale, while it is being edited. */
 interface UnitLine {
@@ -170,6 +207,10 @@ export function EditTransactionModal({
   const [deductions, setDeductions] = useState<Record<string, SettlementFee[]>>(
     {},
   );
+  /** The trade-ins and their payouts (owner 2026-10-31, `lib/tradeIn.ts`). */
+  const [trades, setTrades] = useState<TradeEdit[]>([]);
+  const [payouts, setPayouts] = useState<PayoutEdit[]>([]);
+  const [tradeOpen, setTradeOpen] = useState(false);
 
   useEffect(() => {
     if (!open || order === null) return;
@@ -199,7 +240,31 @@ export function EditTransactionModal({
         ...(l.returnedQty !== undefined ? { returnedQty: l.returnedQty } : {}),
       })),
     );
-    setPayments(paid.map((p) => ({ ...p })));
+    // The trade-in's own payment is not money and is not typed: it is kept
+    // at the trade-in less its payouts, on save.
+    setPayments(
+      paid.filter((p) => !isTradeInPayment(p)).map((p) => ({ ...p })),
+    );
+    setTrades(
+      (order.tradeIns ?? []).map((x) => ({
+        key: x.id,
+        line: { ...x },
+        wasValue: x.value,
+        removed: false,
+      })),
+    );
+    setPayouts(
+      payoutsOf(db, order.id).map((e) => ({
+        key: e.id,
+        id: e.id,
+        amount: e.amount,
+        method: e.method === "TRANSFER" ? "TRANSFER" : "TUNAI",
+        note: e.note ?? "",
+        ref: e.ref ?? "",
+        wasAmount: e.amount,
+        removed: false,
+      })),
+    );
     setFresh([]);
     setFees(
       order.fees?.map((f) => ({ ...f })) ??
@@ -359,6 +424,36 @@ export function EditTransactionModal({
   const pickSku = (line: UnitLine, skuId: string) =>
     setLine(line.key, { skuId, serial: "" });
 
+  /**
+   * The trade-in can be edited on a sale recorded gross, or one that has
+   * none yet (which becomes gross). One recorded before 2026-10-31 netted it
+   * off its total, and is left as it was written.
+   */
+  const tradeEditable =
+    order !== null && (isGross(order) || (order.tradeIns ?? []).length === 0);
+  const liveTrades = trades.filter((x) => !x.removed);
+  const livePayouts = payouts.filter((x) => !x.removed);
+  const creditNow = liveTrades.reduce(
+    (n, x) => n + Math.max(0, x.line.value),
+    0,
+  );
+  const payoutNow = livePayouts.reduce((n, x) => n + Math.max(0, x.amount), 0);
+  /**
+   * What the trade-in pays of the bill after the edit: what it paid, moved by
+   * exactly the change of the trade-in and of the money handed back — the
+   * invariant `lib/tradeIn.ts` names.
+   */
+  const tradePaidNow =
+    order === null
+      ? 0
+      : Math.max(
+          0,
+          tradeInPaid(order) +
+            (creditNow - tradeInCredit(order)) -
+            (payoutNow -
+              payouts.reduce((n, x) => n + (x.id ? x.wasAmount : 0), 0)),
+        );
+
   /** The subtotal and total the lines on screen add up to. */
   const draftTotals = (o: Order) => {
     const unitsSum = lines
@@ -370,6 +465,9 @@ export function EditTransactionModal({
     const extra = fees.reduce((n, f) => n + f.amount, 0);
     const trade = (o.tradeIns ?? []).reduce((n, x) => n + x.value, 0);
     const bill = unitsSum + countedSum - o.discount + extra;
+    // Recorded gross (2026-10-31): the total is the whole bill.
+    if (tradeEditable && (isGross(o) || liveTrades.length > 0))
+      return { bill, total: bill };
     // A sale from before 2026-10-31 that netted a bigger trade-in to 0 stays
     // netted: it collected nothing, and the bill would make it a debt.
     const legacyNet = trade > 0 && o.total === 0;
@@ -383,6 +481,17 @@ export function EditTransactionModal({
   const bill = order
     ? billAfterReturns({ ...order, total: draftTotals(order).total })
     : 0;
+  const gross =
+    order !== null &&
+    tradeEditable &&
+    (isGross(order) || liveTrades.length > 0);
+  /** What money still has to cover, once the trade-in has paid its part. */
+  const moneyBill = gross ? Math.max(0, bill - tradePaidNow) : bill;
+  /** The trade-in and the money already in, past the bill: owed back. */
+  const settledMoney = payments
+    .filter((p) => p.state === "SETTLED")
+    .reduce((n, p) => n + p.amount, 0);
+  const shopOwes = gross ? Math.max(0, tradePaidNow + settledMoney - bill) : 0;
 
   const save = () => {
     if (order === null) return;
@@ -520,6 +629,23 @@ export function EditTransactionModal({
       }
     }
     const { total: newTotal } = draftTotals(order);
+    // A trade-in whose unit has moved on is a fact other documents stand on.
+    const stuck = trades.find(
+      (x) =>
+        x.wasValue !== undefined &&
+        (x.removed || x.line.value !== x.wasValue) &&
+        tradeInUnitMovedOn(db, x.line.serial),
+    );
+    if (stuck !== undefined) {
+      message.error(
+        t(
+          "editSale.tradeInMovedOn",
+          "{{serial}} has moved on since it was traded in, so its trade-in cannot change here.",
+          { serial: stuck.line.serial ?? stuck.line.label },
+        ),
+      );
+      return;
+    }
 
     const before = paymentsOf(order);
     const refText = ref.trim();
@@ -652,6 +778,97 @@ export function EditTransactionModal({
       }
       o.total = newTotal;
 
+      /*
+       * The trade-ins (2026-10-31). A unit removed goes with its rows — the
+       * shop never bought it — and a counted piece goes back off the shelf;
+       * a value changed is what the unit cost; one added here is booked as
+       * the till books one.
+       */
+      if (gross) {
+        for (const x of trades) {
+          if (x.wasValue === undefined) continue;
+          const serial = (x.line.serial ?? "").trim().toUpperCase();
+          const unit = d.units.find((u) => u.serial === serial);
+          if (x.removed) {
+            if (unit !== undefined) {
+              d.units = d.units.filter((u) => u.serial !== serial);
+              d.events = d.events.filter((e) => e.serial !== serial);
+            } else if (x.line.skuId && !skuTracksSerial(d, x.line.skuId)) {
+              d.stockMoves.push({
+                id: nextId("sm"),
+                skuId: x.line.skuId,
+                locationId: d.myWarehouseId,
+                qty: -1,
+                cost: x.wasValue,
+                type: "KOREKSI",
+                at: stamp,
+                refCode: o.code,
+                orderId: o.id,
+                note: `Trade-in removed from ${o.code} — ${staff}`,
+                staff,
+              });
+            }
+          } else if (unit !== undefined && x.line.value !== x.wasValue) {
+            unit.buy = x.line.value;
+          }
+        }
+        for (const x of trades) {
+          if (x.wasValue !== undefined || x.removed) continue;
+          bookTradeIn(d, x.line, {
+            code: o.code,
+            orderId: o.id,
+            at: stamp,
+            staff,
+            nextId,
+            appendEvent,
+            ensureQcDescription,
+            receivedNote: t(
+              "pos.ledgerTradeIn",
+              "Trade-in on {{code}}: {{label}}",
+              { code: o.code, label: x.line.label },
+            ),
+            qcNote: t("editSale.ledgerTradeInQc", "QC on {{code}}", {
+              code: o.code,
+            }),
+          });
+        }
+        const kept = trades
+          .filter((x) => !x.removed)
+          .map(({ line: { qc: _qc, ...rest } }) => ({ ...rest }));
+        if (kept.length > 0) o.tradeIns = kept;
+        else delete o.tradeIns;
+        o.tradeInGross = true;
+        // The money handed back: each payout is a real expense.
+        for (const x of payouts) {
+          if (x.id !== undefined && x.removed) {
+            d.expenses = d.expenses.filter((e) => e.id !== x.id);
+            continue;
+          }
+          if (x.removed || x.amount <= 0) continue;
+          const fields = {
+            amount: x.amount,
+            method: x.method,
+            ...(x.note.trim() ? { note: x.note.trim() } : {}),
+            ...(x.ref.trim() ? { ref: x.ref.trim() } : {}),
+          };
+          const e = x.id ? d.expenses.find((y) => y.id === x.id) : undefined;
+          if (e !== undefined) {
+            delete e.note;
+            delete e.ref;
+            Object.assign(e, fields);
+          } else {
+            d.expenses.unshift({
+              id: nextId("e"),
+              kind: TRADE_IN_EXPENSE,
+              date: dayjs(stamp).format("YYYY-MM-DD"),
+              orderId: o.id,
+              createdAt: stamp,
+              ...fields,
+            });
+          }
+        }
+      }
+
       // A marketplace part keeps its own number (typed under its method). The
       // sale-level box writes onto the parts only when it is shown; a sale
       // moved off a marketplace (Shopee → Instagram, paid by transfer) keeps
@@ -663,8 +880,13 @@ export function EditTransactionModal({
           ? { ...rest, ref: refText }
           : rest;
       });
-      o.payments = next;
-      o.settled = isSettled(billAfterReturns(o), next, refundedOf(o));
+      const withTrade = gross
+        ? withTradeInPaid(next, tradePaidNow, () =>
+            newTradeInPayment(nextId("pay"), stamp),
+          )
+        : next;
+      o.payments = withTrade;
+      o.settled = isSettled(billAfterReturns(o), withTrade, refundedOf(o));
       // The deductions under each marketplace payment, into its settlement.
       for (const p of next) {
         if (p.channel === undefined) continue;
@@ -684,7 +906,7 @@ export function EditTransactionModal({
           { staff: currentStaffName(), nextId },
         );
       }
-      for (const row of diffPayments(before, next, {
+      for (const row of diffPayments(before, withTrade, {
         at: stamp,
         staff: currentStaffName(),
       })) {
@@ -973,11 +1195,252 @@ export function EditTransactionModal({
         </Typography.Text>
       )}
 
+      {tradeEditable ? (
+        <>
+          <Divider>{t("editSale.tradeIns", "Trade-in")}</Divider>
+          {trades
+            .filter((x) => !x.removed)
+            .map((x) => {
+              const moved =
+                x.wasValue !== undefined &&
+                tradeInUnitMovedOn(db, x.line.serial);
+              const counted =
+                !!x.line.skuId && !skuTracksSerial(db, x.line.skuId);
+              return (
+                <Flex
+                  key={x.key}
+                  gap={SPACE.sm}
+                  align="center"
+                  style={{ marginBottom: SPACE.xs }}
+                >
+                  <Typography.Text style={{ flex: 1 }}>
+                    {x.line.label}
+                    {x.line.serial ? ` · ${x.line.serial}` : ""}
+                  </Typography.Text>
+                  <MoneyInput
+                    value={x.line.value}
+                    disabled={moved || (counted && x.wasValue !== undefined)}
+                    aria-label={t("editSale.tradeInValue", "Trade-in value")}
+                    style={{ width: COLUMN.moneyInput }}
+                    onChange={(v) =>
+                      setTrades((rows) =>
+                        rows.map((y) =>
+                          y.key === x.key
+                            ? { ...y, line: { ...y.line, value: v ?? 0 } }
+                            : y,
+                        ),
+                      )
+                    }
+                  />
+                  <Button
+                    size="small"
+                    danger
+                    icon={<DeleteOutlined />}
+                    disabled={moved}
+                    aria-label={t(
+                      "editSale.removeTradeIn",
+                      "Remove trade-in {{label}}",
+                      { label: x.line.label },
+                    )}
+                    onClick={() =>
+                      setTrades((rows) =>
+                        x.wasValue === undefined
+                          ? rows.filter((y) => y.key !== x.key)
+                          : rows.map((y) =>
+                              y.key === x.key ? { ...y, removed: true } : y,
+                            ),
+                      )
+                    }
+                  />
+                </Flex>
+              );
+            })}
+          <Button
+            size="small"
+            icon={<PlusOutlined />}
+            onClick={() => setTradeOpen(true)}
+          >
+            {t("editSale.addTradeIn", "Add a trade-in")}
+          </Button>
+          {gross && (
+            <>
+              <Typography.Text
+                strong
+                style={{ display: "block", marginTop: SPACE.md }}
+              >
+                {t("editSale.payouts", "Paid to the customer")}
+              </Typography.Text>
+              {payouts
+                .filter((x) => !x.removed)
+                .map((x) => (
+                  <Flex
+                    key={x.key}
+                    gap={SPACE.sm}
+                    align="center"
+                    wrap
+                    style={{ marginTop: SPACE.xs }}
+                  >
+                    <Segmented<"TUNAI" | "TRANSFER">
+                      size="small"
+                      value={x.method}
+                      options={[
+                        { value: "TUNAI", label: t("pos.methodCash", "Cash") },
+                        {
+                          value: "TRANSFER",
+                          label: t("pos.methodTransfer", "Transfer"),
+                        },
+                      ]}
+                      onChange={(m) =>
+                        setPayouts((rows) =>
+                          rows.map((y) =>
+                            y.key === x.key ? { ...y, method: m } : y,
+                          ),
+                        )
+                      }
+                    />
+                    <MoneyInput
+                      value={x.amount}
+                      aria-label={t("editSale.payoutAmount", "Amount paid")}
+                      style={{ width: COLUMN.moneyInput }}
+                      onChange={(v) =>
+                        setPayouts((rows) =>
+                          rows.map((y) =>
+                            y.key === x.key ? { ...y, amount: v ?? 0 } : y,
+                          ),
+                        )
+                      }
+                    />
+                    <Input
+                      value={x.note}
+                      aria-label={t("pos.payoutTo", "Paid to")}
+                      placeholder={t("pos.payoutTo", "Paid to")}
+                      style={{ flex: "1 1 160px" }}
+                      onChange={(e) =>
+                        setPayouts((rows) =>
+                          rows.map((y) =>
+                            y.key === x.key
+                              ? { ...y, note: e.target.value }
+                              : y,
+                          ),
+                        )
+                      }
+                    />
+                    <Input
+                      value={x.ref}
+                      aria-label={t("pos.payoutRef", "Transfer reference")}
+                      placeholder={t("pos.payoutRef", "Transfer reference")}
+                      style={{ flex: "1 1 140px" }}
+                      onChange={(e) =>
+                        setPayouts((rows) =>
+                          rows.map((y) =>
+                            y.key === x.key ? { ...y, ref: e.target.value } : y,
+                          ),
+                        )
+                      }
+                    />
+                    <Button
+                      size="small"
+                      danger
+                      icon={<DeleteOutlined />}
+                      aria-label={t("editSale.removePayout", "Remove payout")}
+                      onClick={() =>
+                        setPayouts((rows) =>
+                          x.id === undefined
+                            ? rows.filter((y) => y.key !== x.key)
+                            : rows.map((y) =>
+                                y.key === x.key ? { ...y, removed: true } : y,
+                              ),
+                        )
+                      }
+                    />
+                  </Flex>
+                ))}
+              <Button
+                size="small"
+                icon={<PlusOutlined />}
+                style={{ marginTop: SPACE.xs }}
+                onClick={() =>
+                  setPayouts((rows) => [
+                    ...rows,
+                    {
+                      key: nextId("po"),
+                      id: undefined,
+                      amount: shopOwes,
+                      method: "TRANSFER",
+                      note: "",
+                      ref: "",
+                      wasAmount: 0,
+                      removed: false,
+                    },
+                  ])
+                }
+              >
+                {t("editSale.addPayout", "Add money paid to the customer")}
+              </Button>
+              <Typography.Text
+                type="secondary"
+                style={{
+                  display: "block",
+                  marginTop: SPACE.sm,
+                  fontSize: TYPE.sm,
+                }}
+              >
+                {t(
+                  "editSale.tradeInPays",
+                  "The trade-in pays {{paid}} of the bill.",
+                  { paid: fmtRp(tradePaidNow) },
+                )}
+              </Typography.Text>
+              {shopOwes > 0 && (
+                <Typography.Text
+                  type="warning"
+                  style={{ display: "block", fontSize: TYPE.sm }}
+                >
+                  {t(
+                    "editSale.shopOwes",
+                    "The shop still owes the customer {{amount}} — record it above.",
+                    { amount: fmtRp(shopOwes) },
+                  )}
+                </Typography.Text>
+              )}
+            </>
+          )}
+          <TradeInDialog
+            open={tradeOpen}
+            db={db}
+            onCancel={() => setTradeOpen(false)}
+            onAdd={(draft) => {
+              const id = nextId("ti");
+              setTrades((rows) => [
+                ...rows,
+                {
+                  key: id,
+                  line: { id, ...draft },
+                  wasValue: undefined,
+                  removed: false,
+                },
+              ]);
+              setTradeOpen(false);
+            }}
+          />
+        </>
+      ) : (order?.tradeIns ?? []).length > 0 ? (
+        <Typography.Text
+          type="secondary"
+          style={{ display: "block", marginTop: SPACE.sm, fontSize: TYPE.sm }}
+        >
+          {t(
+            "editSale.tradeInLegacy",
+            "This sale's trade-in was recorded before 31 Oct 2026 and is left as it was written.",
+          )}
+        </Typography.Text>
+      ) : null}
+
       <Divider>{t("editSale.payment", "Payment")}</Divider>
 
       <PaymentsPanel
         orderId={order?.id ?? ""}
-        total={bill}
+        total={moneyBill}
         value={payments}
         onChange={setPayments}
         deductions={deductions}

@@ -1058,6 +1058,8 @@ export const expenses: Adapter<"expenses"> = {
       method: e.method.code,
       orderId: e.orderId ?? undefined,
       serviceFeeId: e.serviceFeeId ?? undefined,
+      ref: e.ref ?? undefined,
+      customerPurchaseId: e.customerPurchaseId ?? undefined,
       createdAt: isoOf(e.createdAt),
     }));
   },
@@ -1080,6 +1082,9 @@ export const expenses: Adapter<"expenses"> = {
         methodId: await ctx.paymentMethodId(n.method),
         orderId: n.orderId ?? null,
         serviceFeeId: n.serviceFeeId ?? null,
+        ref: blankToNull(n.ref),
+        // A `customerPurchases` row's id; purchases are written before expenses.
+        customerPurchaseId: n.customerPurchaseId ?? null,
       };
       if (n.serviceFeeId !== undefined) {
         // One expense per charge (`Expense.serviceFeeId` is unique): say so

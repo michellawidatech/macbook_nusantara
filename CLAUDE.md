@@ -3622,6 +3622,49 @@ Decisions that outlived those documents:
     photo / service / return dialogs), unlocked, rows filtered to the targets
     across the invoice's lines — so the bench's rules cannot drift. A unit on
     no line gets a dialog pointing at the invoice.
+- **Every trade-in is recorded GROSS, and a unit can be bought with no sale —
+  2026-10-31 (evening).** This REVISES the two trade-in entries above (the
+  net "comes off the bill" rule for a smaller trade-in is gone for new sales).
+  Owner answers: *"every trade-in should be recorded the same way"*; buying
+  from a customer is "+ Trade-in" on Inbound → Trade-in, its own document,
+  name AND phone required, no KTP, paid in full on the spot; Edit transaction
+  edits a trade-in's value, adds and removes one; a return credits the full
+  sale price as money (the shop keeps the traded unit), restocking fee
+  applies; and the payout keeps its TRANSFER REFERENCE. `lib/tradeIn.ts` is
+  the rule. Migration `20261031120000_trade_in_gross_and_customer_purchase`
+  (owner-approved, additive).
+  - **A gross sale** (`Order.tradeInGross`): `total` is the whole bill; one
+    payment of method **TUKAR_TAMBAH** ("Trade-in", `inBalance: false`, no
+    pot, no picker) is what the trade-in paid of it; money handed back is a
+    real **`Expense` of kind TUKAR_TAMBAH** naming the sale, with `note` (paid
+    to) and **`Expense.ref`** (the transfer reference) — reconciled like any
+    expense, not deletable on Income & Expense, its reconciliation edit
+    blocked (`TRADE_IN`). Income & Expense derives the offset expense (the
+    trade-in payment's amount, out of no pot), so income = bill and expense =
+    trade-in, and the pot moves by money in less the payout.
+  - ⚠️ **The invariant: trade-in payment = credit − payouts**, kept
+    INCREMENTALLY (a change of credit or payout moves the payment by the same
+    amount), never re-derived from expenses — a till without finance access is
+    sent none. `withTradeInPaid` writes it.
+  - **Legacy sales read as written**: `tradeInGross` false. A net sale (total
+    = bill − credit) is unchanged; one from v2026.10.31 (total = bill, paid by
+    transfer, no flag) keeps `tradeInPurchase`'s derived row; one from before
+    that netted a bigger trade-in to 0 still reads 0 (v2026.10.31.2 hotfix:
+    the projection reads `paidTotal`). Edit transaction shows a legacy sale's
+    trade-in read-only.
+  - **`CustomerPurchase` (BP-…)** + `CustomerPurchaseItem` (unit or counted
+    sku, value, qty) — `BuyFromCustomerModal`. Its units go through
+    `bookTradeIn` (QC from the dialog → TERSEDIA), its money is ONE
+    TUKAR_TAMBAH `Expense` with `customerPurchaseId`, and the unit's ledger
+    rows name it (`UnitEvent.customerPurchaseId`, resolved from refCode BP-).
+    Never removed; the units it bought are fixed. `nusantara_app` has SELECT,
+    INSERT, UPDATE, no DELETE. The Trade-in tab lists both kinds.
+  - Received on Transaction History for a gross sale = settled − the trade-in
+    payment − kept − payouts.
+  - ⚠️ Not handled: an exchange that moves a gross sale's trade-in payment
+    onto the replacement sale copies a TUKAR_TAMBAH payment with no offset row
+    there (balance unaffected — it is out of the balance); a counted trade-in's
+    value cannot be edited (its stock move is append-only).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
