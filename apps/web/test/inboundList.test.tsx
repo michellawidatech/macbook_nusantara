@@ -137,15 +137,17 @@ describe("Waiting for QC", () => {
       .getByText(/^Waiting for QC \(\d+\)$/)
       .closest(".ant-card") as HTMLElement;
 
-  it("lists the unit in QC and the slot nobody has scanned, with the invoice", () => {
+  /** The group row's button: one product of one invoice (2026-10-31). */
+  const groupName = () => new RegExp(`^QC .* on ${code()}$`);
+
+  it("lists one row per product of an invoice, with its Qty", () => {
     renderList();
     const card = waitingCard();
-    const rows = within(card).getAllByRole("button", {
-      name: new RegExp(`^Open ${code()} for `),
-    });
-    expect(rows).toHaveLength(2);
-    expect(within(card).getByText(SERIAL)).toBeInTheDocument();
-    expect(within(card).getByText("No serial yet")).toBeInTheDocument();
+    // The unit in QC and the slot nobody has scanned are one product.
+    const rows = within(card).getAllByRole("button", { name: groupName() });
+    expect(rows).toHaveLength(1);
+    expect(within(rows[0]!).getByText("2")).toBeInTheDocument();
+    expect(within(rows[0]!).getByText("1 no serial")).toBeInTheDocument();
     expect(within(card).getAllByText(INVOICE).length).toBeGreaterThan(0);
   });
 
@@ -159,17 +161,14 @@ describe("Waiting for QC", () => {
       INVOICE,
     );
     expect(
-      await within(card).findAllByRole("button", {
-        name: new RegExp(`^Open ${code()} for `),
-      }),
-    ).toHaveLength(2);
-    // Every row left is that invoice's.
+      await within(card).findAllByRole("button", { name: groupName() }),
+    ).toHaveLength(1);
     expect(
-      within(card).queryAllByRole("button", { name: /^Open .* for / }),
-    ).toHaveLength(2);
+      within(card).queryAllByRole("button", { name: /^QC .* on / }),
+    ).toHaveLength(1);
   });
 
-  it("finds a unit's invoice by its serial, and opens it", async () => {
+  it("finds a unit by its serial, and opens its units for QC in place", async () => {
     renderList();
     const card = waitingCard();
     await userEvent.type(
@@ -178,18 +177,22 @@ describe("Waiting for QC", () => {
       ),
       SERIAL,
     );
-    const row = await within(card).findByRole("button", {
-      name: `Open ${code()} for ${SERIAL}`,
-    });
-    expect(
-      within(card).queryAllByRole("button", { name: /^Open .* for / }),
-    ).toHaveLength(1);
-    await userEvent.click(row);
-    // The order's own page, in place of the list.
     await waitFor(() =>
-      expect(screen.queryByText(/^Waiting for QC/)).toBeNull(),
+      expect(
+        within(card).queryAllByRole("button", { name: /^QC .* on / }),
+      ).toHaveLength(1),
     );
-    expect(screen.getAllByText(code()).length).toBeGreaterThan(0);
+    await userEvent.click(
+      within(card).getByRole("button", { name: /^QC 2 × / }),
+    );
+    // The two units' popup, over the list — not the invoice page.
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByDisplayValue(SERIAL)).toBeInTheDocument();
+    // Both of the product's waiting units: the scanned one and the slot.
+    expect(
+      within(dialog).getByText("2 unit(s) · " + code()),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/^Waiting for QC/)).toBeInTheDocument();
   });
 
   it("counts each invoice's units to QC, and searches the invoice number", async () => {
@@ -220,5 +223,65 @@ describe("Waiting for QC", () => {
     });
     renderList();
     expect(screen.queryByText(/^Waiting for QC/)).toBeNull();
+  });
+});
+
+/**
+ * Inbound → Trade-in (owner ask 2026-10-31): the units bought across the
+ * counter on a sale, which are on no invoice and never in Waiting for QC.
+ */
+describe("the Trade-in tab", () => {
+  it("lists a unit a sale took in, with its QC and what the shop paid", async () => {
+    mutate((d) => {
+      d.units.push({
+        serial: "C6YMFXL6QW",
+        skuId: "m-pro13-2016-v1",
+        status: "TERSEDIA",
+        locationId: d.myWarehouseId,
+        buy: 27_000_000,
+        price: 30_000_000,
+        grade: "A",
+        description: "Fullset",
+        poId: null,
+      });
+      d.orders.unshift({
+        id: "o-tradein-tab",
+        code: "SI-TRADEIN-TAB",
+        ts: new Date().toISOString(),
+        customerId: null,
+        serials: [],
+        prices: {},
+        discount: 0,
+        source: "OFFLINE",
+        payMethod: "TRANSFER",
+        payments: [],
+        settled: true,
+        tradeIns: [
+          {
+            id: "t-tab",
+            label: "Pro 14",
+            serial: "C6YMFXL6QW",
+            value: 27_000_000,
+            skuId: "m-pro13-2016-v1",
+          },
+        ],
+        total: 0,
+      });
+    });
+    renderList();
+    await userEvent.click(
+      screen.getByRole("tab", { name: /^Trade-in \(\d+\)$/ }),
+    );
+    const panel = await screen.findByRole("tabpanel");
+    expect(
+      await within(panel).findByText("SI-TRADEIN-TAB"),
+    ).toBeInTheDocument();
+    expect(within(panel).getByText("C6YMFXL6QW")).toBeInTheDocument();
+    expect(within(panel).getByText("Fullset")).toBeInTheDocument();
+    expect(within(panel).getByText("Rp 27.000.000")).toBeInTheDocument();
+    // Not an invoice, so not on the bench's list either.
+    expect(
+      screen.queryByText("C6YMFXL6QW", { selector: ".ant-card-head *" }),
+    ).toBeNull();
   });
 });

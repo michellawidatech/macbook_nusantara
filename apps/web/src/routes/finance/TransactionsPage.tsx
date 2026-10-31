@@ -32,7 +32,9 @@
  *   party still has money outstanding. The old status checked "is anything
  *   owed?" first, so a half-collected bill read exactly like an unpaid one.
  * - **Received** — the SETTLED money, the only money that is the shop's, with
- *   the bill under it.
+ *   the bill under it. Net of a trade-in the sale BOUGHT (one worth more than
+ *   the bill, 2026-10-31): 12,5jt in and a 27jt trade-in out reads
+ *   −Rp 14.500.000, in red, because that is what left the drawer.
  *
  * Selection exists for a reason beyond ticking boxes: the selected rows get
  * totalled, and can be exported. Reconciling a bank statement against a shop's
@@ -40,6 +42,7 @@
  * screen is how the numbers end up wrong.
  */
 import { useMemo, useState } from "react";
+import { tradeInPurchase } from "../../lib/pos.js";
 import {
   App,
   Button,
@@ -157,11 +160,25 @@ interface SaleRow {
     readonly channel: string;
     readonly amount: number;
   }[];
+  /** Σ the sale's trade-ins — what the customer was allowed for them. */
+  readonly tradeCredit: number;
+  /**
+   * The trade-in the sale bought outright — worth more than the bill — and 0
+   * when it only came off the bill (`tradeInPurchase`, 2026-10-31).
+   */
+  readonly tradeBought: number;
 }
 
-/** What reached the shop: what was settled, less what a marketplace kept. */
+/**
+ * What reached the shop: what was settled, less what a marketplace kept,
+ * less a trade-in the shop paid the customer for. Below zero when the shop
+ * paid out more than it took (owner ask 2026-10-31).
+ */
 const netReceived = (r: SaleRow): number =>
-  r.balance.settled - r.kept.reduce((n, k) => n + k.amount, 0);
+  r.balance.settled - r.kept.reduce((n, k) => n + k.amount, 0) - r.tradeBought;
+
+/** A signed amount, the minus in front of the currency: −Rp 14.500.000. */
+const fmtSigned = (n: number): string => (n < 0 ? `−${fmtRp(-n)}` : fmtRp(n));
 
 /**
  * Amber for money a marketplace is holding, red for money a customer owes —
@@ -416,6 +433,11 @@ export function TransactionsPage() {
           kept: [...keptBy]
             .filter(([, amount]) => amount !== 0)
             .map(([channel, amount]) => ({ channel, amount })),
+          tradeCredit: (o.tradeIns ?? []).reduce(
+            (n, x) => n + Math.max(0, x.value),
+            0,
+          ),
+          tradeBought: tradeInPurchase(o),
         };
       })
       .sort((a, b) => b.at.localeCompare(a.at));
@@ -485,7 +507,7 @@ export function TransactionsPage() {
           .join("; "),
         statusLabel(r.status),
         payLabel(r.payStatus),
-        r.balance.settled,
+        netReceived(r),
         r.balance.total,
       ]),
     );
@@ -574,10 +596,7 @@ export function TransactionsPage() {
               </Flex>
             }
             bulkActions={(selected, clear) => {
-              const received = selected.reduce(
-                (n, r) => n + r.balance.settled,
-                0,
-              );
+              const received = selected.reduce((n, r) => n + netReceived(r), 0);
               const billed = selected.reduce((n, r) => n + r.balance.total, 0);
               return (
                 <>
@@ -585,7 +604,7 @@ export function TransactionsPage() {
                     {t(
                       "transactions.selectedSum",
                       "Received {{received}} of {{total}}",
-                      { received: fmtRp(received), total: fmtRp(billed) },
+                      { received: fmtSigned(received), total: fmtRp(billed) },
                     )}
                   </Typography.Text>
                   <Button
@@ -786,10 +805,37 @@ export function TransactionsPage() {
                 sortValue: (r) => netReceived(r),
                 render: (_, r) => (
                   <Flex vertical align="flex-end" gap={0}>
-                    <Typography.Text strong>
-                      {fmtRp(netReceived(r))}
+                    <Typography.Text
+                      strong
+                      {...(netReceived(r) < 0 ? { type: "danger" } : {})}
+                    >
+                      {fmtSigned(netReceived(r))}
                     </Typography.Text>
-                    {r.kept.length === 0 ? (
+                    {/* A trade-in, said under the figure: bought outright it
+                        is why the figure is below zero; off the bill it is
+                        why the bill is smaller than the units. */}
+                    {r.tradeCredit > 0 && (
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: TYPE.sm }}
+                      >
+                        {r.tradeBought > 0
+                          ? t(
+                              "transactions.tradeInBought",
+                              "{{bill}} sale − {{tradeIn}} trade-in",
+                              {
+                                bill: fmtRp(r.balance.total),
+                                tradeIn: fmtRp(r.tradeBought),
+                              },
+                            )
+                          : t(
+                              "transactions.tradeInOff",
+                              "After a {{tradeIn}} trade-in",
+                              { tradeIn: fmtRp(r.tradeCredit) },
+                            )}
+                      </Typography.Text>
+                    )}
+                    {r.tradeBought > 0 ? null : r.kept.length === 0 ? (
                       <Typography.Text
                         type="secondary"
                         style={{ fontSize: TYPE.sm }}

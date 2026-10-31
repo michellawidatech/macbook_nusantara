@@ -1688,7 +1688,11 @@ export const orders: Adapter<"orders"> = {
       const listed = lines.filter((l) => l.listPrice !== null);
       // A counted product's line — an accessory, no unit (2026-09-19).
       const counted = o.items.filter((i) => i.unitId === null);
-      const afterTrade = o.total - o.tradeCredit;
+      // `Order.total` holds the bill; the store's is what was collected — the
+      // bill less the trade-in, or the whole bill when the trade-in was worth
+      // more and was bought outright (2026-10-31).
+      const afterTrade =
+        o.tradeCredit > o.total ? o.total : o.total - o.tradeCredit;
       // What the customer paid, and what was handed back — one table, told
       // apart by direction.
       const paidIn = o.payments.filter((p) => p.direction === "MASUK");
@@ -1788,7 +1792,7 @@ export const orders: Adapter<"orders"> = {
                 condition: x.condition ?? undefined,
                 grade: x.grade ?? undefined,
               })),
-        total: afterTrade > 0n ? afterTrade : 0n,
+        total: afterTrade,
         grossTotal: o.grossTotal ?? undefined,
         netReceived: o.netReceived ?? undefined,
         reservationId: o.reservationId ?? undefined,
@@ -1847,7 +1851,11 @@ export const orders: Adapter<"orders"> = {
           n.id,
         );
       }
-      const afterTrade = bill - tradeCredit > 0n ? bill - tradeCredit : 0n;
+      // A trade-in worth more than the bill (2026-10-31) leaves the sale at its
+      // full bill, paid in full, and the trade-in a purchase of its own — the
+      // shop hands the customer the difference. One worth less comes off it.
+      // `totalAfterTradeIn` in apps/web lib/pos.ts is the same rule.
+      const afterTrade = tradeCredit > bill ? bill : bill - tradeCredit;
       if (n.total !== afterTrade) {
         throw new StoreValidationError(
           `Total ${n.code} tidak cocok: ${n.total}, seharusnya ${afterTrade}.`,

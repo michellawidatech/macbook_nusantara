@@ -26,6 +26,7 @@ import { customerLabel } from "./customers.js";
 import { fmtNone } from "./format.js";
 import { channelOf } from "./channels.js";
 import { paymentsOf } from "./salePayments.js";
+import { tradeInPurchase } from "./pos.js";
 import { returnedDebts } from "./saleStatus.js";
 import type { AdjustmentRef } from "./adjustmentDeletion.js";
 
@@ -38,9 +39,12 @@ export const INCOME_REASON_LABEL: Record<string, string> = {
   DP: "DP received",
   DP_HANGUS: "DP hangus",
 };
-export const EXPENSE_KIND_LABEL: Record<string, string> = Object.fromEntries(
-  EXPENSE_CATEGORIES.map((c) => [c.value, c.label]),
-);
+export const EXPENSE_KIND_LABEL: Record<string, string> = {
+  ...Object.fromEntries(EXPENSE_CATEGORIES.map((c) => [c.value, c.label])),
+  // A trade-in worth more than its sale's bill (2026-10-31) — a derived row
+  // only, never typed: the shop buying the customer's unit (`tradeInPurchase`).
+  TRADE_IN: "Trade-in purchase",
+};
 
 export type Direction = "INCOME" | "EXPENSE";
 
@@ -272,6 +276,21 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
         tie: "",
       });
     }
+    /*
+     * A trade-in worth more than the bill (owner ask 2026-10-31): the sale is
+     * recorded at its full bill and paid in full, and the trade-in is the
+     * shop BUYING the customer's unit — its whole value, out of the pot the
+     * bill was paid into, so the pot moves by exactly the difference handed
+     * over. Derived from the sale; corrected there, never deletable here.
+     * Like a marketplace's deduction it rides on the payment it came out of
+     * (`deducted` / `feeOf`), so a reconciliation pairs the one figure the
+     * bank shows — the difference — and never the two halves.
+     */
+    const bought = tradeInPurchase(o);
+    const boughtWith =
+      bought > 0
+        ? paymentsOf(o).find((p) => p.reservationId === undefined)
+        : undefined;
     for (const p of paymentsOf(o)) {
       // Only while the part is still a marketplace's: a payment corrected to
       // cash keeps its id, and its old settlement must not keep a fee on it.
@@ -281,6 +300,7 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
           : db.settlements?.find((s) => s.paymentId === p.id);
       const kept =
         settlement === undefined ? 0 : settlement.gross - settlement.received;
+      const off = kept + (p.id === boughtWith?.id ? bought : 0);
       out.push({
         key: `p-${o.id}-${p.id}`,
         at: p.at,
@@ -297,7 +317,7 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
         status: p.state,
         tie: "",
         source: { kind: "salePayment", orderId: o.id, paymentId: p.id },
-        ...(kept !== 0 ? { deducted: kept } : {}),
+        ...(off !== 0 ? { deducted: off } : {}),
       });
       /*
        * What the marketplace kept, as an expense beside the sale rather than
@@ -333,6 +353,28 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
           feeOf: `p-${o.id}-${p.id}`,
         });
       }
+    }
+    if (bought > 0) {
+      const via = boughtWith?.method ?? "TUNAI";
+      out.push({
+        key: `ti-${o.id}`,
+        at: boughtWith?.at ?? o.ts,
+        direction: "EXPENSE",
+        category: "TRADE_IN",
+        method: methodLabel(via),
+        methodCode: via,
+        inBalance: boughtWith?.inBalance !== false,
+        // Where the difference went, when the till said (2026-10-31).
+        description:
+          t("cashflow.tradeInBought", "Trade-in · {{units}}", {
+            units: (o.tradeIns ?? []).map((x) => x.label).join(", "),
+          }) + (boughtWith?.note?.trim() ? ` · ${boughtWith.note.trim()}` : ""),
+        orderCode: o.code,
+        amount: bought,
+        status: "SETTLED",
+        tie: "",
+        ...(boughtWith ? { feeOf: `p-${o.id}-${boughtWith.id}` } : {}),
+      });
     }
     for (const r of o.refunds ?? []) {
       out.push({

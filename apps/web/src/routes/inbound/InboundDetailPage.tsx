@@ -361,8 +361,27 @@ function gradeNote(grade: string | undefined): string {
   return `Graded ${grade}`;
 }
 
-export function InboundDetailPage() {
-  const { poId = "" } = useParams();
+/**
+ * One unit of one invoice, opened from somewhere else (owner ask 2026-10-31:
+ * *"for the Waiting for QC, when we click one of them we should immediately
+ * open the specific unit, so not through the QC page"*). The page then draws
+ * nothing but that unit's popup — the same cells, the same rules, the same
+ * row decisions — unlocked, as if *Edit invoice* had been pressed.
+ */
+export interface InboundUnitTarget {
+  readonly poId: string;
+  /** Receiving-row keys, for slots nobody has scanned yet. */
+  readonly rowKeys: readonly string[];
+  /** Serials, for units already in hand. */
+  readonly serials: readonly string[];
+  readonly onClose: () => void;
+}
+
+export function InboundDetailPage({
+  embedded,
+}: { readonly embedded?: InboundUnitTarget } = {}) {
+  const params = useParams();
+  const poId = embedded?.poId ?? params.poId ?? "";
   const db = useDb();
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -1473,6 +1492,7 @@ export function InboundDetailPage() {
   };
 
   if (!po) {
+    if (embedded) return null;
     return (
       <PageContainer title={t("inbound.inboundOrder", "Inbound order")}>
         <Result
@@ -1521,7 +1541,7 @@ export function InboundDetailPage() {
    * A CLOSED invoice cannot be unlocked at all; reopening it is the way in,
    * which is the whole point of closing it.
    */
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(embedded !== undefined);
   const locked = closed || !editing;
 
   /** An expense's name as the page shows it: its label, else its kind. */
@@ -3209,27 +3229,51 @@ export function InboundDetailPage() {
    * revision — the scanner still aims at the serial box, a refusal is still
    * outlined in red, and the row's decisions still sit on the right.
    */
-  const openLine = lines.find((l) => l.key === detailsKey);
+  /** Is this the one row an embedded popup is about? */
+  const isTarget = (row: ReceivingRow) =>
+    embedded !== undefined &&
+    (embedded.rowKeys.includes(row.key) ||
+      (row.unit !== null && embedded.serials.includes(row.unit.serial)));
+  const openLine = embedded
+    ? lines.find((l) => l.units.some(({ row }) => isTarget(row)))
+    : lines.find((l) => l.key === detailsKey);
+  // Every waiting unit asked for, whichever line it is on: one product at two
+  // prices is two lines.
+  const targetRows = lines
+    .flatMap((l) => l.units)
+    .filter(({ row }) => isTarget(row))
+    .map(({ row }, i) => ({ key: row.key, n: i + 1, row }));
   const detailsModal = openLine !== undefined && (
     <UnitDetailsModal<{ key: string; n: number; row: ReceivingRow }>
       open
-      onClose={() => setDetailsKey(null)}
+      onClose={() => (embedded ? embedded.onClose() : setDetailsKey(null))}
       product={
         openLine.skuId === ""
           ? t("inbound.noProductYet", "the unpicked lines")
           : `${skuCode(openLine.skuId)} — ${skuLabel(openLine.skuId)}`
       }
-      subtitle={t(
-        "inbound.detailsSubtitle",
-        "{{count}} unit(s) · {{price}} each · {{cogs}} COGS for the line",
-        {
-          count: openLine.qty,
-          price: fmtRp(openLine.unitCost),
-          cogs: fmtRp(lineCogs(openLine)),
-        },
-      )}
-      rows={openLine.units.map(({ row, n }) => ({ key: row.key, n, row }))}
-      {...(locked
+      subtitle={
+        embedded
+          ? t("inbound.waitingSubtitle", "{{count}} unit(s) · {{code}}", {
+              count: targetRows.length,
+              code: po.code,
+            })
+          : t(
+              "inbound.detailsSubtitle",
+              "{{count}} unit(s) · {{price}} each · {{cogs}} COGS for the line",
+              {
+                count: openLine.qty,
+                price: fmtRp(openLine.unitCost),
+                cogs: fmtRp(lineCogs(openLine)),
+              },
+            )
+      }
+      rows={
+        embedded
+          ? targetRows
+          : openLine.units.map(({ row, n }) => ({ key: row.key, n, row }))
+      }
+      {...(locked || embedded
         ? {}
         : {
             /*
@@ -4067,107 +4111,9 @@ export function InboundDetailPage() {
     ? rows.find((r) => r.key === photosRow)
     : undefined;
 
-  return (
-    <PageContainer
-      title={po.code}
-      backTo="/inbound"
-      /*
-       * While the invoice is unlocked the code and its two decisions stay on
-       * screen (owner ask 2026-09-25): Serials & QC is a long grid, and the
-       * bench works down it — the moment *Save invoice* scrolls away is the
-       * moment somebody leaves the page open and editable behind them.
-       */
-      stickyHeader={editing}
-      banner={
-        editing ? (
-          <Alert
-            type="warning"
-            showIcon
-            title={t("inbound.editingBanner", "You're editing this invoice")}
-          />
-        ) : undefined
-      }
-      actions={
-        closed
-          ? undefined
-          : [
-              /*
-               * Edit invoice, beside Close invoice (owner ask 2026-09-24).
-               * The page arrives read-only; this is the one thing on it that
-               * is not, and pressing it again puts the page back — nothing is
-               * saved by leaving edit, because every field writes on change.
-               */
-              {
-                key: "edit",
-                // "Save invoice" is the owner's word for it (2026-09-25).
-                // Nothing is saved BY it — every field on the page writes on
-                // change — but the button that ends an edit is the one staff
-                // look for to save, and calling it anything else is a page
-                // people leave unlocked.
-                label: editing
-                  ? t("inbound.saveInvoice", "Save invoice")
-                  : t("inbound.editInvoice", "Edit invoice"),
-                icon: editing ? <CheckOutlined /> : <EditOutlined />,
-                // The page's one call to action, so it is the green one and
-                // *Close invoice* beside it is not (owner ask 2026-09-25).
-                type: "primary",
-                onClick: () => setEditing((v) => !v),
-              },
-              {
-                key: "close",
-                label: t("inbound.closeInvoice", "Close invoice"),
-                icon: <LockOutlined />,
-                onClick: closeInvoice,
-              },
-            ]
-      }
-    >
-      <Flex vertical gap={16}>
-        {closed && (
-          /*
-           * The banner IS the way back, and it is deliberately one click: a
-           * closed order that took three steps to reopen would be an order
-           * staff work around by raising a second one.
-           */
-          <Alert
-            type="info"
-            showIcon
-            title={t("inbound.closedTitle", "This invoice is closed")}
-            description={t(
-              "inbound.closedBody",
-              "Closed {{when}}. Nothing on the order can be changed — reopen it to record a payment, edit a line or grade a unit.",
-              { when: fmtDate(po.closedAt!) },
-            )}
-            action={
-              <Button
-                size="small"
-                icon={<UnlockOutlined />}
-                onClick={reopenInvoice}
-              >
-                {t("inbound.reopenInvoice", "Reopen")}
-              </Button>
-            }
-          />
-        )}
-        {/*
-         * No banner while the page is merely read-only (owner ask
-         * 2026-09-25). *Edit invoice* is in the header, beside *Close
-         * invoice*, which is where the page's other decisions are and where
-         * somebody looks for one; a paragraph under the title saying the page
-         * is a page was a line to scroll past on every visit. A CLOSED
-         * invoice still gets its banner above — that one reports a state
-         * somebody chose and has to undo, and so, since later the same day,
-         * does an invoice being EDITED: that one is `banner` on the header,
-         * pinned with the code and the two buttons rather than left here to
-         * scroll away.
-         */}
-        {header}
-        {unitsCard}
-        {money}
-      </Flex>
-
-      {detailsModal}
-
+  /** The dialogs a unit's row opens — the page's, and an embedded popup's. */
+  const rowDialogs = (
+    <>
       {/*
        * A row's photos. Before the serial they are held against the row and
        * written onto the unit with it (`applyQcDraft`); a photo taken after
@@ -4275,6 +4221,136 @@ export function InboundDetailPage() {
         }
         onClose={() => setReturningSerial(null)}
       />
+    </>
+  );
+
+  // Opened on one unit from elsewhere: its popup, and the dialogs its row
+  // opens, and nothing of the page. A unit no line accounts for has no popup
+  // to open on, so it says where it is instead.
+  if (embedded) {
+    return (
+      <>
+        {detailsModal || (
+          <Modal
+            open
+            onCancel={embedded.onClose}
+            title={po.code}
+            okText={t("inbound.openInvoice", "Open the invoice")}
+            onOk={() => navigate(`/inbound/${po.id}`)}
+          >
+            {t(
+              "inbound.unitNotOnALine",
+              "This unit is on no line of the invoice. Open the invoice to grade it.",
+            )}
+          </Modal>
+        )}
+        {rowDialogs}
+      </>
+    );
+  }
+
+  return (
+    <PageContainer
+      title={po.code}
+      backTo="/inbound"
+      /*
+       * While the invoice is unlocked the code and its two decisions stay on
+       * screen (owner ask 2026-09-25): Serials & QC is a long grid, and the
+       * bench works down it — the moment *Save invoice* scrolls away is the
+       * moment somebody leaves the page open and editable behind them.
+       */
+      stickyHeader={editing}
+      banner={
+        editing ? (
+          <Alert
+            type="warning"
+            showIcon
+            title={t("inbound.editingBanner", "You're editing this invoice")}
+          />
+        ) : undefined
+      }
+      actions={
+        closed
+          ? undefined
+          : [
+              /*
+               * Edit invoice, beside Close invoice (owner ask 2026-09-24).
+               * The page arrives read-only; this is the one thing on it that
+               * is not, and pressing it again puts the page back — nothing is
+               * saved by leaving edit, because every field writes on change.
+               */
+              {
+                key: "edit",
+                // "Save invoice" is the owner's word for it (2026-09-25).
+                // Nothing is saved BY it — every field on the page writes on
+                // change — but the button that ends an edit is the one staff
+                // look for to save, and calling it anything else is a page
+                // people leave unlocked.
+                label: editing
+                  ? t("inbound.saveInvoice", "Save invoice")
+                  : t("inbound.editInvoice", "Edit invoice"),
+                icon: editing ? <CheckOutlined /> : <EditOutlined />,
+                // The page's one call to action, so it is the green one and
+                // *Close invoice* beside it is not (owner ask 2026-09-25).
+                type: "primary",
+                onClick: () => setEditing((v) => !v),
+              },
+              {
+                key: "close",
+                label: t("inbound.closeInvoice", "Close invoice"),
+                icon: <LockOutlined />,
+                onClick: closeInvoice,
+              },
+            ]
+      }
+    >
+      <Flex vertical gap={16}>
+        {closed && (
+          /*
+           * The banner IS the way back, and it is deliberately one click: a
+           * closed order that took three steps to reopen would be an order
+           * staff work around by raising a second one.
+           */
+          <Alert
+            type="info"
+            showIcon
+            title={t("inbound.closedTitle", "This invoice is closed")}
+            description={t(
+              "inbound.closedBody",
+              "Closed {{when}}. Nothing on the order can be changed — reopen it to record a payment, edit a line or grade a unit.",
+              { when: fmtDate(po.closedAt!) },
+            )}
+            action={
+              <Button
+                size="small"
+                icon={<UnlockOutlined />}
+                onClick={reopenInvoice}
+              >
+                {t("inbound.reopenInvoice", "Reopen")}
+              </Button>
+            }
+          />
+        )}
+        {/*
+         * No banner while the page is merely read-only (owner ask
+         * 2026-09-25). *Edit invoice* is in the header, beside *Close
+         * invoice*, which is where the page's other decisions are and where
+         * somebody looks for one; a paragraph under the title saying the page
+         * is a page was a line to scroll past on every visit. A CLOSED
+         * invoice still gets its banner above — that one reports a state
+         * somebody chose and has to undo, and so, since later the same day,
+         * does an invoice being EDITED: that one is `banner` on the header,
+         * pinned with the code and the two buttons rather than left here to
+         * scroll away.
+         */}
+        {header}
+        {unitsCard}
+        {money}
+      </Flex>
+
+      {detailsModal}
+
+      {rowDialogs}
 
       <Modal
         open={paying !== null}

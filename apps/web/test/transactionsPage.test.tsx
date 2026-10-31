@@ -430,3 +430,52 @@ describe("what a marketplace kept (owner 2026-10-30)", () => {
     });
   });
 });
+
+/**
+ * Received is what the shop ended up with (owner ask 2026-10-31): a trade-in
+ * worth more than the bill is money paid OUT, so the figure goes below zero.
+ */
+describe("received, after a trade-in", () => {
+  const sale = (id: string, code: string, tradeIn: number, total: number) =>
+    addSale({
+      id,
+      code,
+      prices: { [getDb().units[0]!.serial]: 12_500_000 },
+      total,
+      settled: true,
+      payments: [
+        {
+          id: `${id}-p`,
+          method: "TRANSFER",
+          amount: total,
+          state: "SETTLED",
+          at: "2026-09-18T03:00:00.000Z",
+        },
+      ],
+      tradeIns: [{ id: `${id}-t`, label: "Pro 14", value: tradeIn }],
+    });
+
+  it("goes below zero when the shop paid the customer the difference", async () => {
+    sale("o-tx-ti-over", "SI-TEST-TIOVER", 27_000_000, 12_500_000);
+    renderPage();
+    await settle();
+    const card = saleCard("SI-TEST-TIOVER");
+    expect(within(card).getByText("−Rp 14.500.000")).toBeInTheDocument();
+    expect(
+      within(card).getByText("Rp 12.500.000 sale − Rp 27.000.000 trade-in"),
+    ).toBeInTheDocument();
+  });
+
+  it("is what was paid when the trade-in only came off the bill", async () => {
+    sale("o-tx-ti-under", "SI-TEST-TIUNDER", 2_000_000, 10_500_000);
+    renderPage();
+    await settle();
+    const card = saleCard("SI-TEST-TIUNDER");
+    expect(within(card).getAllByText("Rp 10.500.000").length).toBeGreaterThan(
+      0,
+    );
+    expect(
+      within(card).getByText("After a Rp 2.000.000 trade-in"),
+    ).toBeInTheDocument();
+  });
+});

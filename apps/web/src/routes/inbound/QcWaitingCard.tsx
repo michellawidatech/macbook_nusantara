@@ -8,29 +8,109 @@
  *
  * Both searches are this one box: type a product (or its SKU code, or a
  * serial) and the rows say which invoice each unit is on; type an order or a
- * supplier's invoice number and the rows are that invoice's units. A row
- * opens the invoice, where the grading happens.
+ * supplier's invoice number and the rows are that invoice's units.
+ *
+ * ## One row per product of an invoice, with its Qty (owner ask 2026-10-31)
+ *
+ * > *"Add the QTY, when they want to QC that, they can click a button and open
+ * > and grade it, they can do it multiple unit if the qty is more than 1 …
+ * > without opening the actual QC page."*
+ *
+ * A delivery of six of one Air was six identical rows. Now it is one, and its
+ * *QC* button (or a click on the row) opens those six units' popup right here
+ * — the invoice page's own popup drawn alone (`InboundDetailPage`'s
+ * `embedded`), so the serial rules, the battery, the description, the grade
+ * and the Accept / Service / Return decisions are the bench's, unchanged.
  *
  * Above the invoice list because it is work outstanding and the list is a
  * record — `OrphanQcCard`'s reason. Renders nothing when nothing is waiting.
  * `lib/qcWaiting.ts` decides what waits.
  */
-import { Card, Typography } from "antd";
-import { useNavigate } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { Button, Card, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { ProTable } from "../../components/ProTable";
 import { fmtDate, fmtNone } from "../../lib/format.js";
 import type { QcWaitingRow } from "../../lib/qcWaiting.js";
 import { COLUMN } from "../../theme/tokens";
+import { InboundDetailPage } from "./InboundDetailPage";
 
 /** Fits `PI-2026/10-000004` in bold on one line, with the cell's padding. */
 const INVOICE_CODE_WIDTH = 200;
 /** A product name and its variant line wrap; this is a floor, not a cap. */
 const PRODUCT_WIDTH = 240;
+
+/** One product of one invoice, and every unit of it still waiting. */
+interface QcGroupRow {
+  readonly key: string;
+  readonly poId: string;
+  readonly poCode: string;
+  readonly invoice: string | null;
+  readonly supplier: string;
+  readonly product: string;
+  readonly variant: string;
+  readonly skuCode: string;
+  /** Units in hand, waiting for a grade. */
+  readonly serials: readonly string[];
+  /** Slots nobody has scanned a serial into yet. */
+  readonly rowKeys: readonly string[];
+  readonly qty: number;
+  /** The earliest arrival in the group. */
+  readonly arrivedAt: string;
+  /** The longest wait in the group. */
+  readonly days: number;
+}
+
+/** Folds the unit-by-unit list into one row per invoice × product. */
+export function groupQcWaiting(rows: readonly QcWaitingRow[]): QcGroupRow[] {
+  const groups = new Map<string, QcGroupRow>();
+  for (const r of rows) {
+    const key = `${r.poId}|${r.skuId}`;
+    const g = groups.get(key);
+    const serials = r.serial === null ? [] : [r.serial];
+    const rowKeys = r.serial === null && r.rowKey ? [r.rowKey] : [];
+    if (g === undefined) {
+      groups.set(key, {
+        key,
+        poId: r.poId,
+        poCode: r.poCode,
+        invoice: r.invoice,
+        supplier: r.supplier,
+        product: r.product,
+        variant: r.variant,
+        skuCode: r.skuCode,
+        serials,
+        rowKeys,
+        qty: 1,
+        arrivedAt: r.arrivedAt,
+        days: r.days,
+      });
+      continue;
+    }
+    groups.set(key, {
+      ...g,
+      serials: [...g.serials, ...serials],
+      rowKeys: [...g.rowKeys, ...rowKeys],
+      qty: g.qty + 1,
+      arrivedAt:
+        g.arrivedAt === "" || (r.arrivedAt !== "" && r.arrivedAt < g.arrivedAt)
+          ? r.arrivedAt
+          : g.arrivedAt,
+      days: Math.max(g.days, r.days),
+    });
+  }
+  return [...groups.values()];
+}
+
 export function QcWaitingCard({ rows }: { readonly rows: QcWaitingRow[] }) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
-  if (rows.length === 0) return null;
+  const groups = useMemo(() => groupQcWaiting(rows), [rows]);
+  /**
+   * The group whose units are open, or null. Held as a snapshot: a unit
+   * accepted in the popup leaves the list, and must not leave the popup.
+   */
+  const [opened, setOpened] = useState<QcGroupRow | null>(null);
+  if (rows.length === 0 && opened === null) return null;
 
   const secondary = (text: string) => (
     <Typography.Text
@@ -48,25 +128,23 @@ export function QcWaitingCard({ rows }: { readonly rows: QcWaitingRow[] }) {
       })}
       style={{ marginBottom: 16 }}
     >
-      <ProTable<QcWaitingRow>
+      <ProTable<QcGroupRow>
         persistKey="inbound.qcWaiting"
         rowKey="key"
-        dataSource={rows}
+        dataSource={groups}
         searchPlaceholder={t(
           "qcWaiting.search",
           "Search product, SKU code, serial, order or invoice number",
         )}
-        // Named by the unit as well as the order: one invoice can have a
-        // dozen rows here, and the invoice list below names the order alone.
         keyboardRows={(r) =>
-          t("qcWaiting.openRow", "Open {{code}} for {{unit}}", {
+          t("qcWaiting.openGroup", "QC {{product}} on {{code}}", {
             code: r.poCode,
-            unit: r.serial ?? (r.product || fmtNone()),
+            product: r.product || fmtNone(),
           })
         }
         onRow={(r) => ({
           style: { cursor: "pointer" },
-          onClick: () => navigate(`/inbound/${r.poId}`),
+          onClick: () => setOpened(r),
         })}
         columns={[
           {
@@ -76,7 +154,9 @@ export function QcWaitingCard({ rows }: { readonly rows: QcWaitingRow[] }) {
             searchable: true,
             facet: true,
             facetValue: (r) => r.product || fmtNone(),
-            searchValue: (r) => `${r.product} ${r.variant} ${r.skuCode}`,
+            // A serial finds the row it is on.
+            searchValue: (r) =>
+              `${r.product} ${r.variant} ${r.skuCode} ${r.serials.join(" ")}`,
             sortValue: (r) => r.product,
             render: (_: unknown, r) => (
               <>
@@ -88,19 +168,22 @@ export function QcWaitingCard({ rows }: { readonly rows: QcWaitingRow[] }) {
             ),
           },
           {
-            title: t("qcWaiting.serial", "Serial"),
-            dataIndex: "serial",
-            width: COLUMN.serial,
-            searchable: true,
-            searchValue: (r) => r.serial ?? "",
-            render: (_: unknown, r) =>
-              r.serial === null ? (
-                <Typography.Text type="secondary">
-                  {t("qcWaiting.noSerialYet", "No serial yet")}
-                </Typography.Text>
-              ) : (
-                <Typography.Text code>{r.serial}</Typography.Text>
-              ),
+            title: t("qcWaiting.qty", "Qty"),
+            dataIndex: "qty",
+            width: COLUMN.qty,
+            align: "right",
+            sortValue: (r) => r.qty,
+            render: (_: unknown, r) => (
+              <>
+                <Typography.Text strong>{r.qty}</Typography.Text>
+                {r.rowKeys.length > 0 &&
+                  secondary(
+                    t("qcWaiting.noSerialCount", "{{count}} no serial", {
+                      count: r.rowKeys.length,
+                    }),
+                  )}
+              </>
+            ),
           },
           {
             title: t("qcWaiting.invoice", "Invoice"),
@@ -146,8 +229,47 @@ export function QcWaitingCard({ rows }: { readonly rows: QcWaitingRow[] }) {
             sortValue: (r) => r.days,
             defaultSortOrder: "descend",
           },
+          {
+            title: "",
+            key: "qc",
+            width: COLUMN.status,
+            align: "right",
+            render: (_: unknown, r) => (
+              <Button
+                type="primary"
+                size="small"
+                aria-label={t(
+                  "qcWaiting.qcAria",
+                  "QC {{count}} × {{product}}",
+                  {
+                    count: r.qty,
+                    product: r.product || fmtNone(),
+                  },
+                )}
+                onClick={(e) => {
+                  // The row opens the same thing; once is enough.
+                  e.stopPropagation();
+                  setOpened(r);
+                }}
+              >
+                {t("qcWaiting.qcButton", "QC ({{count}})", { count: r.qty })}
+              </Button>
+            ),
+          },
         ]}
       />
+      {opened !== null && (
+        <InboundDetailPage
+          // A fresh popup per group: its drafts and dialogs are its own.
+          key={opened.key}
+          embedded={{
+            poId: opened.poId,
+            rowKeys: opened.rowKeys,
+            serials: opened.serials,
+            onClose: () => setOpened(null),
+          }}
+        />
+      )}
     </Card>
   );
 }

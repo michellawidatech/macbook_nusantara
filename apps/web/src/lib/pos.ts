@@ -298,6 +298,25 @@ export interface TradeInLine {
   readonly condition?: "NEW" | "SECOND";
   /** What the grading checklist concluded, where one was run. */
   readonly grade?: string;
+  /**
+   * The QC the trade-in dialog took (owner ask 2026-10-31: *"they will only do
+   * 1 QC, input just like in inbound"*). Written onto the UNIT the sale mints
+   * and nowhere else — the order's `TradeIn` row has no column for any of it,
+   * so the till strips it before the order is written.
+   */
+  readonly qc?: TradeInQc;
+}
+
+/** What Inbound's unit popup asks, asked at the till for a trade-in. */
+export interface TradeInQc {
+  readonly batteryHealth?: number;
+  readonly cycleCount?: number;
+  readonly fcc?: number;
+  /** The phrases, comma-joined as `Unit.description` stores them. */
+  readonly description?: string;
+  readonly neverServiced?: boolean;
+  /** What the unit asks over the counter — `Unit.price`. */
+  readonly price?: number;
 }
 
 /** What a basket costs the customer once everything is counted. */
@@ -345,6 +364,13 @@ export interface SaleTotals {
   readonly tradeCredit: number;
   /** What the customer pays in money, after the trade-in. Never negative. */
   readonly total: number;
+  /**
+   * What the SHOP pays the customer when the trade-in is worth more than the
+   * bill (owner ask 2026-10-31) — zero otherwise. Such a sale is recorded in
+   * full: the bill as income, the trade-in as a purchase, and this is the
+   * difference that leaves the drawer. See `totalAfterTradeIn`.
+   */
+  readonly payout: number;
   /**
    * The same sale as the five columns an `Order` row actually has.
    *
@@ -401,8 +427,8 @@ export interface SaleTotals {
  * Order matters and is the shop's, not the arithmetic's: the discount comes off
  * the goods, the extra is a charge the shop adds on top of them, and the
  * trade-in is the customer handing over value rather than money. A trade-in
- * worth more than the bill leaves a total of zero rather than a negative —
- * the shop owing the customer cash is a refund, which is a different document.
+ * worth more than the bill leaves a total of zero rather than a negative, and
+ * what the shop owes the customer is `payout` — see `totalAfterTradeIn`.
  *
  * `margin` deliberately ignores the extra and the trade-in. Delivery is a
  * pass-through the shop does not mark up, and a traded machine is stock coming
@@ -486,6 +512,7 @@ export function saleTotals(input: {
     // What is left to collect. The trade-in comes off here and not off the
     // bill — see `order.tradeCredit`.
     total: Math.max(0, billTotal - tradeCredit),
+    payout: Math.max(0, tradeCredit - billTotal),
     order: {
       subtotal: charged,
       discount,
@@ -499,6 +526,56 @@ export function saleTotals(input: {
     // of computing the total from `charged` rather than from the subtotal.
     margin: marginPct(charged - discount, cogs),
   };
+}
+
+/**
+ * The `Order.total` a sale is recorded at, given its bill and its trade-in.
+ *
+ * A trade-in worth less than the bill comes off it, and the total is what the
+ * customer still hands over — unchanged since the till began. One worth MORE
+ * (owner ask 2026-10-31: *"1 person buying 1 unit 12,5, but trade in 27 … record
+ * the 12,5 as income and 27 as expense"*) is two transactions, both counted:
+ * the sale at its full bill, paid in full, and the trade-in as a purchase from
+ * the customer (`tradeInPurchase`). Netting it to zero lost the Rp14,5jt the
+ * shop handed back — it moved out of the drawer and no row said so.
+ *
+ * `packages/db`'s orders adapter checks `Order.total` by the same rule.
+ */
+export function totalAfterTradeIn(bill: number, tradeCredit: number): number {
+  return tradeCredit > bill ? bill : bill - tradeCredit;
+}
+
+/** A recorded sale's bill before the trade-in: lines − discount + extra. */
+export function orderBill(order: {
+  readonly serials: readonly string[];
+  readonly prices: Readonly<Record<string, number>>;
+  readonly lines?: readonly { readonly qty: number; readonly price: number }[];
+  readonly discount: number;
+  readonly extra?: number;
+}): number {
+  const units = order.serials.reduce((n, s) => n + (order.prices[s] ?? 0), 0);
+  const counted = (order.lines ?? []).reduce((n, l) => n + l.price * l.qty, 0);
+  return units + counted - order.discount + (order.extra ?? 0);
+}
+
+/**
+ * The trade-in a sale BOUGHT outright — its whole value, when it was worth
+ * more than the bill — and 0 when it only came off the bill. Income & Expense
+ * lists it as an expense beside the sale (`cashflowRows`).
+ */
+export function tradeInPurchase(order: {
+  readonly serials: readonly string[];
+  readonly prices: Readonly<Record<string, number>>;
+  readonly lines?: readonly { readonly qty: number; readonly price: number }[];
+  readonly discount: number;
+  readonly extra?: number;
+  readonly tradeIns?: readonly { readonly value: number }[];
+}): number {
+  const credit = (order.tradeIns ?? []).reduce(
+    (n, x) => n + Math.max(0, x.value),
+    0,
+  );
+  return credit > orderBill(order) ? credit : 0;
 }
 
 /**

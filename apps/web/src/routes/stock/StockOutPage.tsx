@@ -143,8 +143,10 @@ import {
   currentStaffName,
   docCode,
   appendEvent,
+  ensureQcDescription,
   purgeQcPhotos,
 } from "../../mock/store.js";
+import { qcReady, splitDescription } from "../../lib/inboundQc.js";
 import {
   SALE_CHANNELS,
   channelOf,
@@ -169,6 +171,7 @@ import {
 } from "../../lib/customers.js";
 import {
   TILL_METHODS,
+  canPayInPart,
   isMarketplaceMethod,
   partsForChannel,
   refMissing,
@@ -567,6 +570,16 @@ export function StockOutPage() {
    */
   const [payRef, setPayRef] = usePersistentState<string>(
     TILL_DRAFT("payRef"),
+    "",
+    asString,
+  );
+  /**
+   * Where the money a trade-in worth more than the bill went (owner ask
+   * 2026-10-31: *"0671705342 BCA // ABDUL BASID"*) — written on the sale's
+   * payment, and read by the Trade-in purchase row on Income & Expense.
+   */
+  const [payoutTo, setPayoutTo] = usePersistentState<string>(
+    TILL_DRAFT("payoutTo"),
     "",
     asString,
   );
@@ -1113,8 +1126,26 @@ export function StockOutPage() {
     [fromReservations, db.reservations],
   );
   const dpTotal = dpPaid.reduce((n, d) => n + d.payment.amount, 0);
+  /**
+   * A trade-in worth more than the bill (owner ask 2026-10-31): the sale is
+   * recorded at its full bill and paid in full, the trade-in is a purchase of
+   * its own, and the customer is handed the difference — `payout` — in cash
+   * or by transfer. Nothing is collected. See `totalAfterTradeIn`.
+   */
+  const tradeOver = totals.payout > 0;
+  /** The part of the bill not already covered by a DP. */
+  const billLeft = Math.max(0, totals.order.total - dpTotal);
+  /** What the shop hands the customer: the trade-in less what they owed. */
+  const payout = tradeOver ? totals.tradeCredit - billLeft : 0;
+  /** How the payout leaves the shop — cash or a transfer, nothing else. */
+  const payoutMethod: TillMethod =
+    payParts[0] !== undefined && canPayInPart(payParts[0].method)
+      ? payParts[0].method
+      : "TUNAI";
+  /** What the sale is recorded at — `Order.total`. */
+  const recordedTotal = tradeOver ? totals.order.total : total;
   /** What is still to collect at the counter, after any DP. */
-  const collect = Math.max(0, total - dpTotal);
+  const collect = tradeOver ? 0 : Math.max(0, total - dpTotal);
   /**
    * Units on this sale reserved for SOMEBODY ELSE who paid no DP (2026-10-27)
    * — on sale all along, so sellable; the confirmation names them, and
@@ -1368,14 +1399,21 @@ export function StockOutPage() {
     const parts = [
       // The DP first: it was paid first, and it is the reservation's own row.
       ...dpPaid.map((d) => d.payment),
+      // A trade-in worth more than the bill pays the bill in full, through the
+      // pot the payout leaves from: the bill in and the trade-in out are the
+      // same drawer, and what moves is the difference.
       ...tillPayments({
-        total: collect,
-        parts: payParts,
+        total: tradeOver ? billLeft : collect,
+        parts: tradeOver ? [{ method: payoutMethod }] : payParts,
         at: new Date().toISOString(),
         ...(payDueAt ? { dueAt: payDueAt } : {}),
         ...(saleRef.trim() ? { ref: saleRef } : {}),
         newId: () => nextId("pay"),
-      }),
+      }).map((p) =>
+        tradeOver && payoutTo.trim() !== ""
+          ? { ...p, note: payoutTo.trim() }
+          : p,
+      ),
     ];
     const order: Order = {
       id: nextId("o"),
@@ -1405,14 +1443,16 @@ export function StockOutPage() {
       shippingAddress: shipped ? composeAddress(address) : undefined,
       // The headline method: the first one picked. Each part carries its
       // own on `payments`; a marketplace is the MARKETPLACE code.
-      payMethod: tillMethod(payParts[0]?.method ?? "TUNAI").code,
+      payMethod: tillMethod(
+        tradeOver ? payoutMethod : (payParts[0]?.method ?? "TUNAI"),
+      ).code,
       /*
        * The bill in parts, and `settled` as a projection over them (owner ask
        * 2026-09-08). A trade-in that covers the whole bill leaves nothing to
        * pay, which is settled rather than forever "unpaid".
        */
       payments: parts,
-      settled: total === 0 || isSettled(total, parts),
+      settled: recordedTotal === 0 || isSettled(recordedTotal, parts),
       extra: totals.extra || undefined,
       /*
        * `extra` above is the TOTAL and this is its label; `fees` below is the
@@ -1438,9 +1478,13 @@ export function StockOutPage() {
                 : t("pos.extra", "Extra")
           : undefined,
       fees: namedFees.length > 0 ? namedFees.map((f) => ({ ...f })) : undefined,
+      // The QC taken in the dialog goes onto the unit below; the order's
+      // `TradeIn` row has no column for it.
       tradeIns:
-        tradeIns.length > 0 ? tradeIns.map((x) => ({ ...x })) : undefined,
-      total,
+        tradeIns.length > 0
+          ? tradeIns.map(({ qc: _qc, ...x }) => ({ ...x }))
+          : undefined,
+      total: recordedTotal,
       reservationId: fromReservations[0],
     };
 
@@ -1634,11 +1678,29 @@ export function StockOutPage() {
           status: "QC",
           locationId: d.myWarehouseId,
           buy: x.value,
-          description: x.label,
+          // The phrases the dialog's QC chose (2026-10-31); an older draft
+          // without one still files its label, as it always did.
+          description: x.qc
+            ? splitDescription(x.qc.description ?? "")
+                .map((phrase) => ensureQcDescription(d, phrase))
+                .filter(Boolean)
+                .join(", ")
+            : x.label,
           poId: null,
           ...(gradeForCondition(x.condition ?? "SECOND", x.grade)
             ? { grade: gradeForCondition(x.condition ?? "SECOND", x.grade)! }
             : {}),
+          ...(x.qc?.batteryHealth !== undefined
+            ? { batteryHealth: x.qc.batteryHealth }
+            : {}),
+          ...(x.qc?.cycleCount !== undefined
+            ? { cycleCount: x.qc.cycleCount }
+            : {}),
+          ...(x.qc?.fcc !== undefined ? { fcc: x.qc.fcc } : {}),
+          ...(x.qc?.neverServiced !== undefined
+            ? { neverServiced: x.qc.neverServiced }
+            : {}),
+          ...(x.qc?.price ? { price: x.qc.price } : {}),
         });
         appendEvent(d, serial, {
           type: "DITERIMA",
@@ -1649,6 +1711,24 @@ export function StockOutPage() {
             label: x.label,
           }),
         });
+        /*
+         * QC was done in the dialog (owner ask 2026-10-31: *"they will only
+         * do 1 QC … we don't need to put it in pending QC"*), so a unit that
+         * passes the bench's own gate goes straight onto the shelf. One that
+         * does not — an older draft with no description — waits in QC, where
+         * `OrphanQcCard` finds it.
+         */
+        const minted = d.units.find((u) => u.serial === serial)!;
+        if (x.qc && qcReady(minted)) {
+          appendEvent(d, serial, {
+            type: "QC_SELESAI",
+            toStatus: "TERSEDIA",
+            refCode: code,
+            note: t("pos.ledgerTradeInQc", "QC at the till on {{code}}", {
+              code,
+            }),
+          });
+        }
       }
 
       /*
@@ -1715,6 +1795,7 @@ export function StockOutPage() {
     // sale starts on the first method alone, with nothing typed.
     setPayParts((parts) => [{ method: parts[0]?.method ?? "TUNAI" }]);
     setPayRef("");
+    setPayoutTo("");
     setPayDueAt(undefined);
     setPayChecked(false);
   };
@@ -2502,6 +2583,12 @@ export function StockOutPage() {
             {fmtRp(totals.total)}
           </Typography.Text>
         </Flex>
+        {tradeOver && (
+          <Flex justify="space-between">
+            <strong>{t("pos.payCustomer", "Pay the customer")}</strong>
+            <strong>{fmtRp(payout)}</strong>
+          </Flex>
+        )}
         {/* The DP the reservation already took (2026-10-27): counted toward
             the bill, so the payment below asks only for what is left. */}
         {dpPaid.map((d) => (
@@ -3089,41 +3176,95 @@ export function StockOutPage() {
            * of them. One is the whole bill; several are a split, listed below
            * with the amounts. `lib/tillPayments.ts` has the arithmetic.
            */}
-          <Flex vertical gap={6}>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {t("pos.paymentUpper", "PAYMENT")}
-            </Typography.Text>
-            <Flex gap={6} wrap>
-              {TILL_METHODS.map((m) => {
-                const on = payParts.some((p) => p.method === m.key);
-                return (
+          {tradeOver ? (
+            /*
+             * The trade-in is worth more than the bill (owner ask 2026-10-31):
+             * the customer pays nothing and the shop hands them the rest, so
+             * the question is how that money leaves — cash or a transfer.
+             */
+            <Flex vertical gap={6}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {t("pos.payoutUpper", "PAY THE CUSTOMER")}
+              </Typography.Text>
+              <Flex gap={6} wrap>
+                {TILL_METHODS.filter((m) => canPayInPart(m.key)).map((m) => (
                   <Button
                     key={m.key}
                     size="small"
                     shape="round"
-                    type={on ? "primary" : "default"}
-                    aria-pressed={on}
-                    // "Shopee" is a channel chip as well; this one is paying.
-                    aria-label={t("pos.payBy", "Pay by {{method}}", {
-                      method: methodLabel(m.key),
-                    })}
-                    onClick={() =>
-                      setPayParts((parts) =>
-                        toggleTillMethod(total, parts, m.key),
-                      )
-                    }
+                    type={payoutMethod === m.key ? "primary" : "default"}
+                    aria-pressed={payoutMethod === m.key}
+                    aria-label={t(
+                      "pos.payoutBy",
+                      "Pay the customer by {{method}}",
+                      {
+                        method: methodLabel(m.key),
+                      },
+                    )}
+                    onClick={() => setPayParts([{ method: m.key }])}
                   >
                     {methodLabel(m.key)}
                   </Button>
-                );
-              })}
-            </Flex>
-            {payChecked && payProblems.includes("NO_METHOD") && (
-              <Typography.Text type="danger" style={{ fontSize: 12 }}>
-                {payProblemText("NO_METHOD")}
+                ))}
+              </Flex>
+              <Typography.Text style={{ fontSize: 12 }}>
+                {t(
+                  "pos.payoutExplained",
+                  "The trade-in is worth more than the bill. The sale is recorded as {{bill}} income and the trade-in as a {{credit}} purchase; hand the customer {{payout}}.",
+                  {
+                    bill: fmtRp(totals.order.total),
+                    credit: fmtRp(totals.tradeCredit),
+                    payout: fmtRp(payout),
+                  },
+                )}
               </Typography.Text>
-            )}
-          </Flex>
+              <Input
+                value={payoutTo}
+                onChange={(e) => setPayoutTo(e.target.value)}
+                aria-label={t("pos.payoutTo", "Paid to")}
+                placeholder={t(
+                  "pos.payoutToPlaceholder",
+                  "Paid to — e.g. BCA 0671705342 · Abdul Basid",
+                )}
+              />
+            </Flex>
+          ) : (
+            <Flex vertical gap={6}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {t("pos.paymentUpper", "PAYMENT")}
+              </Typography.Text>
+              <Flex gap={6} wrap>
+                {TILL_METHODS.map((m) => {
+                  const on = payParts.some((p) => p.method === m.key);
+                  return (
+                    <Button
+                      key={m.key}
+                      size="small"
+                      shape="round"
+                      type={on ? "primary" : "default"}
+                      aria-pressed={on}
+                      // "Shopee" is a channel chip as well; this one is paying.
+                      aria-label={t("pos.payBy", "Pay by {{method}}", {
+                        method: methodLabel(m.key),
+                      })}
+                      onClick={() =>
+                        setPayParts((parts) =>
+                          toggleTillMethod(total, parts, m.key),
+                        )
+                      }
+                    >
+                      {methodLabel(m.key)}
+                    </Button>
+                  );
+                })}
+              </Flex>
+              {payChecked && payProblems.includes("NO_METHOD") && (
+                <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                  {payProblemText("NO_METHOD")}
+                </Typography.Text>
+              )}
+            </Flex>
+          )}
 
           {payRows.rows.length > 0 && total > 0 && (
             <Flex vertical gap={8}>
@@ -4263,6 +4404,20 @@ export function StockOutPage() {
                 label: t("pos.channel", "CHANNEL"),
                 children: channelOf(source)?.label ?? source,
               },
+              ...(tradeOver
+                ? [
+                    {
+                      key: "payout",
+                      label: t("pos.payCustomer", "Pay the customer"),
+                      children: (
+                        <Typography.Text strong>
+                          {methodLabel(payoutMethod)} · {fmtRp(payout)}
+                          {payoutTo.trim() ? ` · ${payoutTo.trim()}` : ""}
+                        </Typography.Text>
+                      ),
+                    },
+                  ]
+                : []),
               {
                 key: "p",
                 label: t("pos.paymentUpper", "PAYMENT"),

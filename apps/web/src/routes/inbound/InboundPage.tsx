@@ -31,6 +31,7 @@ import {
   Card,
   Dropdown,
   Flex,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -44,6 +45,7 @@ import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { OrphanQcCard } from "../../components/OrphanQcCard";
 import { QcWaitingCard } from "./QcWaitingCard";
+import { TradeInUnitsTable, tradeInUnitRows } from "./TradeInUnitsTable";
 import { qcWaitingByPo, qcWaitingRows } from "../../lib/qcWaiting.js";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import { mutate, useDb } from "../../mock/store.js";
@@ -200,6 +202,238 @@ export function InboundPage() {
     [db, t, toQcByPo],
   );
 
+  /** Units bought across the counter on a sale — the Trade-in tab's count. */
+  const tradeInCount = useMemo(() => tradeInUnitRows(db).length, [db]);
+
+  const invoicesCard = (
+    <Card>
+      <ProTable<Row>
+        persistKey="inbound"
+        rowKey="id"
+        dataSource={rows}
+        searchPlaceholder={t(
+          "inboundList.searchOrderSupplierOrInvoice",
+          "Search order, supplier or invoice number",
+        )}
+        // No row selection (owner decision 2026-08-26). It only ever produced
+        // a running total, and it fought the row click below: every attempt
+        // to tick an order opened it instead, because the checkbox is a 16px
+        // target inside a row whose whole job is to navigate. A list where
+        // clicking anywhere goes somewhere cannot also be a list you select
+        // from.
+        //
+        // The whole row opens the order. A purchase order's code is the thing
+        // you would click, and making one cell clickable is a target people
+        // miss.
+        // The row is a control, so it is reachable from the keyboard
+        // (owner ask 2026-09-15): Tab lands on it, ↑ ↓ walk the list, Enter
+        // opens it. The label is what a screen reader reads instead of the
+        // row's cells run together.
+        keyboardRows={(r) =>
+          t("inboundList.openOrder", "Open {{code}}", { code: r.code })
+        }
+        onRow={(r) => ({
+          style: { cursor: "pointer" },
+          onClick: () => navigate(`/inbound/${r.id}`),
+          onContextMenu: (e) => {
+            e.preventDefault();
+            setMenu({ id: r.id, x: e.clientX, y: e.clientY });
+          },
+        })}
+        columns={[
+          {
+            title: t("inboundList.order", "Order"),
+            dataIndex: "code",
+            searchable: true,
+            // The supplier's invoice number is searched too, as the box's
+            // placeholder has always promised (2026-10-26) — it is the
+            // number quoted on the telephone.
+            searchValue: (r) => `${r.code} ${r.invoice}`,
+            sortValue: (r) => r.code,
+            defaultSortOrder: "descend",
+            render: (v: string, r) => (
+              <>
+                <Typography.Text strong>{v}</Typography.Text>
+                <Typography.Text
+                  type="secondary"
+                  style={{ display: "block", fontSize: 12 }}
+                >
+                  {r.invoice}
+                </Typography.Text>
+              </>
+            ),
+          },
+          {
+            title: t("inboundList.supplier", "Supplier"),
+            dataIndex: "supplier",
+            facet: true,
+            searchable: true,
+          },
+          {
+            title: t("inboundList.date", "Date"),
+            dataIndex: "date",
+            sortValue: (r) => r.date,
+            render: (v: string) => fmtDate(v),
+          },
+          {
+            // How many of its units the bench still owes a grade
+            // (2026-10-26). 0 prints as 0: a finished invoice says so.
+            title: t("inboundList.toQc", "To QC"),
+            dataIndex: "toQc",
+            align: "right",
+            width: COLUMN.qty,
+            sortValue: (r) => r.toQc,
+            render: (v: number) =>
+              v === 0 ? (
+                <Typography.Text type="secondary">0</Typography.Text>
+              ) : (
+                <Typography.Text strong>{v}</Typography.Text>
+              ),
+          },
+          {
+            /*
+             * Where the money stands (owner revision 2026-09-15), with what
+             * is still unpaid under a partly paid invoice (owner brief
+             * 2026-09-19). An open invoice owes its whole total, which the
+             * column beside it already says.
+             */
+            title: t("inboundList.paymentStatus", "Payment status"),
+            dataIndex: "paymentLabel",
+            facet: true,
+            // The filter lists what the cell says. Without this the facet
+            // falls back to `sortValue`, which is an index, not a word.
+            facetValue: (r) => r.paymentLabel,
+            sortValue: (r) => PO_PAYMENT_STATUSES.indexOf(r.payment),
+            render: (_: unknown, r) => (
+              <Flex vertical align="start" gap={2}>
+                <Tag color={PO_PAYMENT_STATUS_COLOR[r.payment]}>
+                  {r.paymentLabel}
+                </Tag>
+                {r.payment === "PARTIALLY_PAID" && r.outstanding > 0 && (
+                  <Typography.Text
+                    type="danger"
+                    style={{ fontSize: 12, whiteSpace: "nowrap" }}
+                  >
+                    {t("inboundList.unpaidAmount", "{{amount}} unpaid", {
+                      amount: fmtRp(r.outstanding),
+                    })}
+                  </Typography.Text>
+                )}
+              </Flex>
+            ),
+          },
+          {
+            title: t("inboundList.totalPrice", "Total price"),
+            dataIndex: "total",
+            align: "right",
+            sortValue: (r) => r.total,
+            // Muted, with a tooltip saying why it is zero: an order with no
+            // lines yet is the owner's paid-first case, and a bare zero
+            // reads as a mistake.
+            render: (v: number) =>
+              v === 0 ? (
+                <Tooltip
+                  title={t(
+                    "inboundList.productsNotEnteredYetAdd",
+                    "Products not entered yet — add them when the goods arrive",
+                  )}
+                >
+                  <Typography.Text type="secondary">{fmtRp(0)}</Typography.Text>
+                </Tooltip>
+              ) : (
+                fmtRp(v)
+              ),
+          },
+          {
+            title: t("inboundList.totalPaid", "Total paid"),
+            dataIndex: "paid",
+            align: "right",
+            sortValue: (r) => r.paid,
+            render: (v: number, r) => (
+              <Flex vertical align="end">
+                <span>{fmtRp(v)}</span>
+                {v > 0 && r.total === 0 && (
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: 12, whiteSpace: "nowrap" }}
+                  >
+                    {t(
+                      "inboundList.nothingInvoicedYet",
+                      "nothing invoiced yet",
+                    )}
+                  </Typography.Text>
+                )}
+              </Flex>
+            ),
+          },
+          {
+            // The row's two errands as buttons (owner brief 2026-09-19);
+            // the right-click menu still offers Delete. Clicks stop here so
+            // the row behind them does not open the order as well.
+            title: "",
+            key: "actions",
+            align: "right",
+            width: COLUMN.actionsPair,
+            render: (_: unknown, r) => (
+              <Flex
+                gap={4}
+                justify="end"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+              >
+                <Tooltip
+                  title={
+                    r.closed
+                      ? t(
+                          "inboundList.addPaymentClosed",
+                          "Closed — reopen the invoice to record a payment.",
+                        )
+                      : undefined
+                  }
+                >
+                  <span>
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<WalletOutlined aria-hidden />}
+                      disabled={r.closed}
+                      aria-label={t(
+                        "inboundList.addPaymentAria",
+                        "Add a payment to {{code}}",
+                        { code: r.code },
+                      )}
+                      onClick={() =>
+                        navigate(`/inbound/${r.id}`, {
+                          state: { pay: true },
+                        })
+                      }
+                    >
+                      {t("inboundList.addPayment", "Add payment")}
+                    </Button>
+                  </span>
+                </Tooltip>
+                <Tooltip
+                  title={t("inboundList.deleteOrder", "Delete this order")}
+                >
+                  <Button
+                    size="small"
+                    danger
+                    type="text"
+                    icon={<DeleteOutlined aria-hidden />}
+                    aria-label={t("inboundList.deleteAria", "Delete {{code}}", {
+                      code: r.code,
+                    })}
+                    onClick={() => askDelete(r.id)}
+                  />
+                </Tooltip>
+              </Flex>
+            ),
+          },
+        ]}
+      />
+    </Card>
+  );
+
   return (
     <PageContainer
       title={t("inboundList.inbound", "Inbound")}
@@ -259,238 +493,31 @@ export function InboundPage() {
           }}
         />
       </Dropdown>
-      <Card>
-        <ProTable<Row>
-          persistKey="inbound"
-          rowKey="id"
-          dataSource={rows}
-          searchPlaceholder={t(
-            "inboundList.searchOrderSupplierOrInvoice",
-            "Search order, supplier or invoice number",
-          )}
-          // No row selection (owner decision 2026-08-26). It only ever produced
-          // a running total, and it fought the row click below: every attempt
-          // to tick an order opened it instead, because the checkbox is a 16px
-          // target inside a row whose whole job is to navigate. A list where
-          // clicking anywhere goes somewhere cannot also be a list you select
-          // from.
-          //
-          // The whole row opens the order. A purchase order's code is the thing
-          // you would click, and making one cell clickable is a target people
-          // miss.
-          // The row is a control, so it is reachable from the keyboard
-          // (owner ask 2026-09-15): Tab lands on it, ↑ ↓ walk the list, Enter
-          // opens it. The label is what a screen reader reads instead of the
-          // row's cells run together.
-          keyboardRows={(r) =>
-            t("inboundList.openOrder", "Open {{code}}", { code: r.code })
-          }
-          onRow={(r) => ({
-            style: { cursor: "pointer" },
-            onClick: () => navigate(`/inbound/${r.id}`),
-            onContextMenu: (e) => {
-              e.preventDefault();
-              setMenu({ id: r.id, x: e.clientX, y: e.clientY });
-            },
-          })}
-          columns={[
-            {
-              title: t("inboundList.order", "Order"),
-              dataIndex: "code",
-              searchable: true,
-              // The supplier's invoice number is searched too, as the box's
-              // placeholder has always promised (2026-10-26) — it is the
-              // number quoted on the telephone.
-              searchValue: (r) => `${r.code} ${r.invoice}`,
-              sortValue: (r) => r.code,
-              defaultSortOrder: "descend",
-              render: (v: string, r) => (
-                <>
-                  <Typography.Text strong>{v}</Typography.Text>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ display: "block", fontSize: 12 }}
-                  >
-                    {r.invoice}
-                  </Typography.Text>
-                </>
-              ),
-            },
-            {
-              title: t("inboundList.supplier", "Supplier"),
-              dataIndex: "supplier",
-              facet: true,
-              searchable: true,
-            },
-            {
-              title: t("inboundList.date", "Date"),
-              dataIndex: "date",
-              sortValue: (r) => r.date,
-              render: (v: string) => fmtDate(v),
-            },
-            {
-              // How many of its units the bench still owes a grade
-              // (2026-10-26). 0 prints as 0: a finished invoice says so.
-              title: t("inboundList.toQc", "To QC"),
-              dataIndex: "toQc",
-              align: "right",
-              width: COLUMN.qty,
-              sortValue: (r) => r.toQc,
-              render: (v: number) =>
-                v === 0 ? (
-                  <Typography.Text type="secondary">0</Typography.Text>
-                ) : (
-                  <Typography.Text strong>{v}</Typography.Text>
-                ),
-            },
-            {
-              /*
-               * Where the money stands (owner revision 2026-09-15), with what
-               * is still unpaid under a partly paid invoice (owner brief
-               * 2026-09-19). An open invoice owes its whole total, which the
-               * column beside it already says.
-               */
-              title: t("inboundList.paymentStatus", "Payment status"),
-              dataIndex: "paymentLabel",
-              facet: true,
-              // The filter lists what the cell says. Without this the facet
-              // falls back to `sortValue`, which is an index, not a word.
-              facetValue: (r) => r.paymentLabel,
-              sortValue: (r) => PO_PAYMENT_STATUSES.indexOf(r.payment),
-              render: (_: unknown, r) => (
-                <Flex vertical align="start" gap={2}>
-                  <Tag color={PO_PAYMENT_STATUS_COLOR[r.payment]}>
-                    {r.paymentLabel}
-                  </Tag>
-                  {r.payment === "PARTIALLY_PAID" && r.outstanding > 0 && (
-                    <Typography.Text
-                      type="danger"
-                      style={{ fontSize: 12, whiteSpace: "nowrap" }}
-                    >
-                      {t("inboundList.unpaidAmount", "{{amount}} unpaid", {
-                        amount: fmtRp(r.outstanding),
-                      })}
-                    </Typography.Text>
-                  )}
-                </Flex>
-              ),
-            },
-            {
-              title: t("inboundList.totalPrice", "Total price"),
-              dataIndex: "total",
-              align: "right",
-              sortValue: (r) => r.total,
-              // Muted, with a tooltip saying why it is zero: an order with no
-              // lines yet is the owner's paid-first case, and a bare zero
-              // reads as a mistake.
-              render: (v: number) =>
-                v === 0 ? (
-                  <Tooltip
-                    title={t(
-                      "inboundList.productsNotEnteredYetAdd",
-                      "Products not entered yet — add them when the goods arrive",
-                    )}
-                  >
-                    <Typography.Text type="secondary">
-                      {fmtRp(0)}
-                    </Typography.Text>
-                  </Tooltip>
-                ) : (
-                  fmtRp(v)
-                ),
-            },
-            {
-              title: t("inboundList.totalPaid", "Total paid"),
-              dataIndex: "paid",
-              align: "right",
-              sortValue: (r) => r.paid,
-              render: (v: number, r) => (
-                <Flex vertical align="end">
-                  <span>{fmtRp(v)}</span>
-                  {v > 0 && r.total === 0 && (
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: 12, whiteSpace: "nowrap" }}
-                    >
-                      {t(
-                        "inboundList.nothingInvoicedYet",
-                        "nothing invoiced yet",
-                      )}
-                    </Typography.Text>
-                  )}
-                </Flex>
-              ),
-            },
-            {
-              // The row's two errands as buttons (owner brief 2026-09-19);
-              // the right-click menu still offers Delete. Clicks stop here so
-              // the row behind them does not open the order as well.
-              title: "",
-              key: "actions",
-              align: "right",
-              width: COLUMN.actionsPair,
-              render: (_: unknown, r) => (
-                <Flex
-                  gap={4}
-                  justify="end"
-                  onClick={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => e.stopPropagation()}
-                >
-                  <Tooltip
-                    title={
-                      r.closed
-                        ? t(
-                            "inboundList.addPaymentClosed",
-                            "Closed — reopen the invoice to record a payment.",
-                          )
-                        : undefined
-                    }
-                  >
-                    <span>
-                      <Button
-                        size="small"
-                        type="primary"
-                        icon={<WalletOutlined aria-hidden />}
-                        disabled={r.closed}
-                        aria-label={t(
-                          "inboundList.addPaymentAria",
-                          "Add a payment to {{code}}",
-                          { code: r.code },
-                        )}
-                        onClick={() =>
-                          navigate(`/inbound/${r.id}`, {
-                            state: { pay: true },
-                          })
-                        }
-                      >
-                        {t("inboundList.addPayment", "Add payment")}
-                      </Button>
-                    </span>
-                  </Tooltip>
-                  <Tooltip
-                    title={t("inboundList.deleteOrder", "Delete this order")}
-                  >
-                    <Button
-                      size="small"
-                      danger
-                      type="text"
-                      icon={<DeleteOutlined aria-hidden />}
-                      aria-label={t(
-                        "inboundList.deleteAria",
-                        "Delete {{code}}",
-                        {
-                          code: r.code,
-                        },
-                      )}
-                      onClick={() => askDelete(r.id)}
-                    />
-                  </Tooltip>
-                </Flex>
-              ),
-            },
-          ]}
-        />
-      </Card>
+      {/*
+       * Invoices, and the units bought across the counter on a sale (owner
+       * ask 2026-10-31). A trade-in is on no invoice and its QC is taken at
+       * the till, so it has a tab of its own rather than a row here.
+       */}
+      <Tabs
+        items={[
+          {
+            key: "invoices",
+            label: t("inboundList.tabInvoices", "Invoices"),
+            children: invoicesCard,
+          },
+          {
+            key: "tradeIns",
+            label: t("inboundList.tabTradeIns", "Trade-in ({{count}})", {
+              count: tradeInCount,
+            }),
+            children: (
+              <Card>
+                <TradeInUnitsTable db={db} />
+              </Card>
+            ),
+          },
+        ]}
+      />
     </PageContainer>
   );
 }

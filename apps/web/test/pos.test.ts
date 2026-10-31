@@ -9,7 +9,10 @@
 import { describe, expect, it } from "vitest";
 import {
   marginPct,
+  orderBill,
   saleTotals,
+  totalAfterTradeIn,
+  tradeInPurchase,
   shelfCategories,
   shelfRows,
 } from "../src/lib/pos.js";
@@ -321,13 +324,15 @@ describe("saleTotals", () => {
   });
 
   it("never asks the customer for less than nothing", () => {
-    // A trade-in worth more than the bill leaves zero. The shop owing the
-    // customer cash is a refund, which is a different document.
+    // A trade-in worth more than the bill leaves zero to collect, and what
+    // the shop owes the customer is the payout (owner ask 2026-10-31).
     const t = saleTotals({
       ...base,
       tradeIns: [{ id: "t1", label: "Pro 16", value: 30_000_000 }],
     });
     expect(t.total).toBe(0);
+    expect(t.payout).toBe(20_000_000);
+    expect(saleTotals(base).payout).toBe(0);
   });
 
   it("never lets a discount exceed the goods it is against", () => {
@@ -477,5 +482,45 @@ describe("saleTotals — the order row", () => {
     expect(t.total).toBe(0);
     expect(t.order.total).toBe(10_000_000);
     expect(t.order.tradeCredit).toBe(30_000_000);
+  });
+});
+
+describe("a trade-in worth more than the bill (owner ask 2026-10-31)", () => {
+  // "1 person buying 1 unit 12,5, but trade in 27 … record the 12,5 as income
+  // and 27 as expense."
+  const sale = {
+    serials: ["S1"],
+    prices: { S1: 12_500_000 },
+    discount: 0,
+  };
+
+  it("is recorded at the full bill, and the trade-in as a purchase", () => {
+    expect(totalAfterTradeIn(12_500_000, 27_000_000)).toBe(12_500_000);
+    expect(
+      tradeInPurchase({
+        ...sale,
+        tradeIns: [{ value: 27_000_000 }],
+      }),
+    ).toBe(27_000_000);
+  });
+
+  it("still comes off the bill when it is worth less", () => {
+    expect(totalAfterTradeIn(12_500_000, 2_000_000)).toBe(10_500_000);
+    expect(totalAfterTradeIn(12_500_000, 12_500_000)).toBe(0);
+    expect(tradeInPurchase({ ...sale, tradeIns: [{ value: 2_000_000 }] })).toBe(
+      0,
+    );
+    expect(tradeInPurchase(sale)).toBe(0);
+  });
+
+  it("reads the bill off the lines, the discount and the extra", () => {
+    expect(
+      orderBill({
+        ...sale,
+        lines: [{ qty: 2, price: 250_000 }],
+        discount: 100_000,
+        extra: 50_000,
+      }),
+    ).toBe(12_950_000);
   });
 });

@@ -516,10 +516,17 @@ function PotDialog({
               if (r.feeOf !== undefined)
                 return (
                   <Tooltip
-                    title={t(
-                      "recon.feeEditedOnSale",
-                      "Correct this deduction in the sale's Edit transaction.",
-                    )}
+                    title={
+                      r.category === "TRADE_IN"
+                        ? t(
+                            "recon.tradeInOnSale",
+                            "This is the sale's trade-in — it follows the sale.",
+                          )
+                        : t(
+                            "recon.feeEditedOnSale",
+                            "Correct this deduction in the sale's Edit transaction.",
+                          )
+                    }
                   >
                     <span>{fmtRp(r.amount)}</span>
                   </Tooltip>

@@ -793,24 +793,56 @@ describe("taking a machine in part-exchange", () => {
   const TRADED_BARCODE = "SC02TRADE001";
   const TRADED = "C02TRADE001";
 
-  it("credits the bill and books the machine into QC", async () => {
+  type Dialog = Awaited<ReturnType<typeof dialog>>;
+
+  /** One phrase into the description's tag box, as a person adds it. */
+  async function describeUnit(d: Dialog, phrase: string) {
+    await userEvent.type(d.getByLabelText(/Description/), `${phrase}{enter}`);
+  }
+
+  /**
+   * The dialog's QC, as the bench fills it (owner ask 2026-10-31: the same
+   * questions Inbound's unit popup asks). The product is the caller's.
+   */
+  async function fillTradeIn(
+    d: Dialog,
+    f: {
+      serial?: string;
+      price: string;
+      grade?: string;
+      description?: string;
+      sell?: string;
+    },
+  ) {
+    await chooseOption(d.getByLabelText("Grade"), f.grade ?? "New");
+    if (f.serial !== undefined)
+      await userEvent.type(d.getByLabelText(/Serial/), f.serial);
+    if (f.description !== undefined) await describeUnit(d, f.description);
+    await userEvent.click(d.getByLabelText(/Price/));
+    await userEvent.paste(f.price);
+    if (f.sell !== undefined) {
+      await userEvent.click(d.getByLabelText("Sell price"));
+      await userEvent.paste(f.sell);
+    }
+  }
+
+  async function openTradeIn() {
+    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
+    return dialog();
+  }
+
+  it("credits the bill and puts the unit on the shelf — QC taken in the dialog", async () => {
     renderTill();
     await pickFirstMachine();
 
     await goToPayment();
-    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
-    const d = await dialog();
+    const d = await openTradeIn();
     await chooseOption(d.getByLabelText(/^Product/), TILL_PRODUCT);
-    await userEvent.type(d.getByLabelText(/Description/), "Air 2017");
-    await userEvent.type(d.getByLabelText(/Serial/), TRADED_BARCODE);
-    await userEvent.click(d.getByLabelText(/Price/));
-    await userEvent.paste("2000000");
-    // New, so no grading checklist is owed — `lib/condition.ts` is explicit
-    // that there is nothing to inspect in a sealed box, and the dialog draws
-    // no star on the grade for one.
-    // antd's Segmented puts `pointer-events: none` on the radio itself and
-    // takes the click on the label wrapping it.
-    await userEvent.click(d.getByText("New"));
+    await fillTradeIn(d, {
+      serial: TRADED_BARCODE,
+      price: "2000000",
+      sell: "3500000",
+    });
     await userEvent.click(d.getByRole("button", { name: "Add it" }));
 
     await payAndFinish();
@@ -819,16 +851,84 @@ describe("taking a machine in part-exchange", () => {
     const order = db.orders[0]!;
     expect(order.total).toBe(8_000_000);
     expect(order.tradeIns).toHaveLength(1);
+    // The QC is the unit's, not the order's: the TradeIn row has no column.
+    expect(order.tradeIns![0]).not.toHaveProperty("qc");
 
-    // The shop has BOUGHT the machine, so it enters exactly as a machine off a
-    // purchase order does — at QC, with the price as its cost, and an arrival
-    // on its timeline.
+    // Bought, and QC'd at the till: on the shelf at once, with the price as
+    // its cost and what it asks, never in Waiting for QC (owner ask
+    // 2026-10-31: "they will only do 1 QC").
     const taken = db.units.find((u) => u.serial === TRADED)!;
-    expect(taken.status).toBe("QC");
+    expect(taken.status).toBe("TERSEDIA");
     expect(taken.buy).toBe(2_000_000);
+    expect(taken.price).toBe(3_500_000);
+    expect(taken.grade).toBe("NEW");
     expect(
       db.events.filter((e) => e.serial === TRADED).map((e) => e.type),
-    ).toEqual(["DITERIMA"]);
+    ).toEqual(["DITERIMA", "QC_SELESAI"]);
+  });
+
+  it("asks a second-hand unit for its description, as Inbound does", async () => {
+    renderTill();
+    await pickFirstMachine();
+    await goToPayment();
+    const d = await openTradeIn();
+    await chooseOption(d.getByLabelText(/^Product/), TILL_PRODUCT);
+    await fillTradeIn(d, {
+      serial: "STRADEIN0002",
+      price: "2000000",
+      grade: "B",
+    });
+    await userEvent.click(d.getByRole("button", { name: "Add it" }));
+    expect(
+      await d.findByText(/Describe the unit — its marks and its age/),
+    ).toBeInTheDocument();
+
+    await describeUnit(d, "Lecet pemakaian");
+    await userEvent.click(d.getByRole("button", { name: "Add it" }));
+    await payAndFinish();
+
+    const taken = snapshot().units.find((u) => u.serial === "STRADEIN0002")!;
+    expect(taken.skuId).toBe(SKU);
+    expect(taken.grade).toBe("B");
+    expect(taken.description).toBe("Lecet pemakaian");
+    expect(taken.status).toBe("TERSEDIA");
+  });
+
+  it("buys a trade-in worth more than the bill, and pays the customer the rest", async () => {
+    // Owner ask 2026-10-31: the sale is income at its full bill, the trade-in
+    // a purchase, and the difference leaves the drawer.
+    renderTill();
+    await pickFirstMachine();
+
+    await goToPayment();
+    const d = await openTradeIn();
+    await chooseOption(d.getByLabelText(/^Product/), TILL_PRODUCT);
+    await fillTradeIn(d, { serial: "SC02TRADE002", price: "27000000" });
+    await userEvent.click(d.getByRole("button", { name: "Add it" }));
+
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: "Pay the customer by Transfer",
+      }),
+    );
+    await userEvent.type(
+      screen.getByLabelText("Paid to"),
+      "BCA 0671705342 · Abdul Basid",
+    );
+
+    await payAndFinish();
+
+    const order = snapshot().orders[0]!;
+    expect(order.total).toBe(10_000_000);
+    expect(order.settled).toBe(true);
+    expect(
+      order.payments!.map((p) => [p.method, p.amount, p.state, p.note]),
+    ).toEqual([
+      ["TRANSFER", 10_000_000, "SETTLED", "BCA 0671705342 · Abdul Basid"],
+    ]);
+    expect(snapshot().units.find((u) => u.serial === "C02TRADE002")!.buy).toBe(
+      27_000_000,
+    );
   });
 
   it("corrects a trade-in already on the sale, in place", async () => {
@@ -840,25 +940,21 @@ describe("taking a machine in part-exchange", () => {
     await pickFirstMachine();
 
     await goToPayment();
-    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
-    let d = await dialog();
+    let d = await openTradeIn();
     await chooseOption(d.getByLabelText(/^Product/), TILL_PRODUCT);
-    await userEvent.type(d.getByLabelText(/Description/), "Air 2017");
-    await userEvent.type(d.getByLabelText(/Serial/), barcode);
-    await userEvent.click(d.getByLabelText(/Price/));
-    await userEvent.paste("2000000");
-    await userEvent.click(d.getByText("New"));
+    await fillTradeIn(d, {
+      serial: barcode,
+      price: "2000000",
+      description: "Fullset",
+    });
     await userEvent.click(d.getByRole("button", { name: "Add it" }));
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "Edit trade-in Air 2017" }),
+      await screen.findByRole("button", { name: /^Edit trade-in / }),
     );
     d = await dialog();
     // It opens on what it said.
-    expect(d.getByLabelText(/Description/)).toHaveValue("Air 2017");
-    const desc = d.getByLabelText(/Description/);
-    await userEvent.clear(desc);
-    await userEvent.type(desc, "Air 2017, dent on lid");
+    expect(d.getByText("Fullset")).toBeInTheDocument();
     const price = d.getByLabelText(/Price/);
     await userEvent.clear(price);
     await userEvent.click(price);
@@ -870,12 +966,11 @@ describe("taking a machine in part-exchange", () => {
     const order = snapshot().orders[0]!;
     // Replaced, not added beside the old one.
     expect(order.tradeIns).toHaveLength(1);
-    expect(order.tradeIns![0]!.label).toBe("Air 2017, dent on lid");
     expect(order.tradeIns![0]!.value).toBe(1_500_000);
     expect(order.total).toBe(8_500_000);
-    expect(snapshot().units.find((u) => u.serial === filed)!.buy).toBe(
-      1_500_000,
-    );
+    const taken = snapshot().units.find((u) => u.serial === filed)!;
+    expect(taken.buy).toBe(1_500_000);
+    expect(taken.description).toBe("Fullset");
   });
 
   it("will not take a trade-in whose serial is not a real barcode", async () => {
@@ -886,19 +981,12 @@ describe("taking a machine in part-exchange", () => {
     await pickFirstMachine();
 
     await goToPayment();
-    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
-    const d = await dialog();
+    const d = await openTradeIn();
     await chooseOption(d.getByLabelText(/^Product/), TILL_PRODUCT);
-    await userEvent.type(d.getByLabelText(/Description/), "Air 2017");
     // Fourteen characters: too long for the app to put a marker in front of
     // (10–12 is a bare serial), and carrying none of its own. Neither form,
     // so nothing rescues it.
-    await userEvent.type(d.getByLabelText(/Serial/), "TRADEIN0000123");
-    await userEvent.click(d.getByLabelText(/Price/));
-    await userEvent.paste("2000000");
-    // antd's Segmented puts `pointer-events: none` on the radio itself and
-    // takes the click on the label wrapping it.
-    await userEvent.click(d.getByText("New"));
+    await fillTradeIn(d, { serial: "TRADEIN0000123", price: "2000000" });
     await userEvent.click(d.getByRole("button", { name: "Add it" }));
 
     // Refused, and the dialog stays open with the reason on it.
@@ -924,17 +1012,11 @@ describe("taking a machine in part-exchange", () => {
     await pickFirstMachine();
 
     await goToPayment();
-    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
-    const d = await dialog();
+    const d = await openTradeIn();
     await chooseOption(d.getByLabelText(/^Product/), TILL_PRODUCT);
-    await userEvent.type(d.getByLabelText(/Description/), "Air 2017");
-    await userEvent.type(d.getByLabelText(/Serial/), "c02dqxfpxwck");
-    await userEvent.click(d.getByLabelText(/Price/));
-    await userEvent.paste("2000000");
-    await userEvent.click(d.getByText("New"));
+    await fillTradeIn(d, { serial: "c02dqxfpxwck", price: "2000000" });
     await userEvent.click(d.getByRole("button", { name: "Add it" }));
 
-    // The machine is minted with the sale, exactly as the test above shows.
     await payAndFinish();
 
     // Filed as it is on the case, upper-cased on the way.
@@ -947,15 +1029,13 @@ describe("taking a machine in part-exchange", () => {
   });
 
   /*
-   * Owner revision 2026-09-19: "Trade-Ins", one star, nothing drawn for a
-   * sealed machine, no price cards — and no field waits for another.
+   * Owner revision 2026-09-19: "Trade-Ins", one star, no price cards.
    */
   it("is titled Trade-Ins and adds no star of its own", async () => {
     renderTill();
     await pickFirstMachine();
     await goToPayment();
-    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
-    const d = await dialog();
+    const d = await openTradeIn();
 
     expect(d.getByText("Trade-Ins")).toBeInTheDocument();
     // The star is the app-wide required mark's (theme/requiredMark.tsx — not
@@ -966,46 +1046,6 @@ describe("taking a machine in part-exchange", () => {
     );
     expect(d.queryByText(/We list it at/)).toBeNull();
     expect(d.queryByText(/We have paid/)).toBeNull();
-  });
-
-  it("draws nothing to grade on a new machine", async () => {
-    renderTill();
-    await pickFirstMachine();
-    await goToPayment();
-    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
-    const d = await dialog();
-
-    expect(d.getByLabelText("Grade")).toBeInTheDocument();
-    await userEvent.click(d.getByText("New"));
-    expect(d.queryByLabelText("Grade")).toBeNull();
-  });
-
-  it("grades a unit before its product is found", async () => {
-    // The category is its own box, and the product can be found afterwards.
-    renderTill();
-    await pickFirstMachine();
-    await goToPayment();
-    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
-    const d = await dialog();
-
-    const category = snapshot().models.find(
-      (m) => m.id === snapshot().skus.find((s) => s.id === SKU)!.modelId,
-    )!.category;
-    await chooseOption(d.getByLabelText(/^Category/), category);
-    await chooseOption(d.getByLabelText("Grade"), "B");
-
-    // …and the product last, which keeps the category it agrees with.
-    await chooseOption(d.getByLabelText(/^Product/), TILL_PRODUCT);
-    await userEvent.type(d.getByLabelText(/Description/), "Air 2017");
-    await userEvent.type(d.getByLabelText(/Serial/), "STRADEIN0002");
-    await userEvent.click(d.getByLabelText(/Price/));
-    await userEvent.paste("2000000");
-    await userEvent.click(d.getByRole("button", { name: "Add it" }));
-    await payAndFinish();
-
-    const taken = snapshot().units.find((u) => u.serial === "STRADEIN0002")!;
-    expect(taken.skuId).toBe(SKU);
-    expect(taken.grade).toBe("B");
   });
 
   it("takes an accessory in without a serial, as a quantity", async () => {
@@ -1020,15 +1060,11 @@ describe("taking a machine in part-exchange", () => {
     renderTill();
     await pickFirstMachine();
     await goToPayment();
-    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
-    const d = await dialog();
+    const d = await openTradeIn();
     await chooseOption(d.getByLabelText(/^Product/), sleeve.code);
     // No box for a number nobody reads off an accessory.
     await vi.waitFor(() => expect(d.queryByLabelText(/Serial/)).toBeNull());
-    await userEvent.type(d.getByLabelText(/Description/), "Sleeve bekas");
-    await userEvent.click(d.getByLabelText(/Price/));
-    await userEvent.paste("100000");
-    await userEvent.click(d.getByText("New"));
+    await fillTradeIn(d, { price: "100000" });
     await userEvent.click(d.getByRole("button", { name: "Add it" }));
     await payAndFinish();
 
@@ -1049,14 +1085,9 @@ describe("taking a machine in part-exchange", () => {
     renderTill();
     await pickFirstMachine();
     await goToPayment();
-    await userEvent.click(screen.getByRole("button", { name: /Trade-in/ }));
-    const d = await dialog();
+    const d = await openTradeIn();
 
-    await userEvent.type(d.getByLabelText(/Description/), "Air 2017");
-    await userEvent.type(d.getByLabelText(/Serial/), "STRADEIN0003");
-    await userEvent.click(d.getByLabelText(/Price/));
-    await userEvent.paste("2000000");
-    await userEvent.click(d.getByText("New"));
+    await fillTradeIn(d, { serial: "STRADEIN0003", price: "2000000" });
     await userEvent.click(d.getByRole("button", { name: "Add it" }));
 
     expect(await d.findByText(/Pick the product/)).toBeInTheDocument();

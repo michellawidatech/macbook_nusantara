@@ -41,6 +41,18 @@
  * - The *We list it at* / *We have paid* cards, and the table behind them,
  *   are gone (owner: *"it is making it very complicated"*).
  *
+ * ## One QC, at the till (owner ask 2026-10-31)
+ *
+ * *"They will only do 1 QC (input just like in inbound), but no need to put it
+ * in inbound list … they always QC without making the transaction so we don't
+ * need to put it in pending QC."* The dialog now asks what Inbound's unit
+ * popup asks — serial, grade, battery, description, never serviced / opened,
+ * sell price — plus what the shop is paying, and the unit the sale mints goes
+ * straight onto the shelf (`QC_SELESAI`), never into Waiting for QC. The
+ * category box, the condition switch (the grade IS the condition — New, A, B
+ * or C, as at Inbound) and the free-text note are gone; the invoice's label
+ * is the product's name.
+ *
  * ## Everything the unit needs is required
  *
  * Product, serial, condition, grade (second-hand only), description and
@@ -51,11 +63,13 @@
  * variant, and the store refuses a unit with none (`skuId` is required in
  * `packages/store`) — which would have refused the whole sale with it.
  */
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { isLiveSku } from "../../lib/skuCode.js";
-import { Flex, Form, Input, Modal, Segmented, Select } from "antd";
+import { Flex, Form, Input, Modal, Select } from "antd";
 import { useTranslation } from "react-i18next";
+import { BatteryFields } from "../../components/BatteryFields";
 import { MoneyInput } from "../../components/MoneyInput";
+import { NeverServicedField } from "../../components/NeverServicedField";
 import { SkuPicker } from "../../components/SkuPicker";
 import {
   BASE_MAX_LENGTH,
@@ -67,15 +81,25 @@ import { readSerialInput } from "../../lib/serialInput.js";
 import { skuTracksSerial } from "../../lib/serialTracking.js";
 import { wasScannedText } from "../../lib/scanner.js";
 import {
-  canGrade,
-  gradeForCondition,
+  conditionOf,
+  NEW_GRADE,
+  needsDescription,
   type UnitCondition,
 } from "../../lib/condition.js";
 import { GRADES, type GradingSelection } from "../../lib/grading.js";
+import {
+  batteryDraftOf,
+  batteryPatch,
+  defaultBatteryModeOfSku,
+  isBatteryDraftInRange,
+  type BatteryDraft,
+} from "../../lib/battery.js";
+import { joinDescription, splitDescription } from "../../lib/inboundQc.js";
+import type { TradeInQc } from "../../lib/pos.js";
 import type { MockDb } from "../../mock/seed.js";
 import { SPACE } from "../../theme/tokens";
 
-/** What the dialog hands back. Mirrors `TradeInRec` minus its id. */
+/** What the dialog hands back. Mirrors `TradeInLine` minus its id. */
 export interface TradeInDraft {
   /** The unit in words — what prints on the invoice. */
   label: string;
@@ -85,6 +109,8 @@ export interface TradeInDraft {
   skuId?: string;
   condition?: UnitCondition;
   grade?: string;
+  /** The QC taken here, for the unit the sale mints. */
+  qc?: TradeInQc;
   /**
    * ⚠️ Nothing sets this since 2026-09-20 — the grading checklist is hidden
    * (owner ask). Kept on the type because the trade-in record carries it and
@@ -97,14 +123,17 @@ export interface TradeInDraft {
 /** The form's own fields. */
 interface TradeInFields {
   skuId?: string;
-  category?: string;
   serial?: string;
-  condition: UnitCondition;
+  /** `NEW`, `A`, `B` or `C` — the condition and the letter in one box. */
   grade?: string;
-  label?: string;
+  description?: string[];
+  neverServiced?: boolean;
   value?: number;
-  note?: string;
+  price?: number;
 }
+
+/** The grade box's choices: sealed first, then the letters. */
+const GRADE_CHOICES = [NEW_GRADE, ...GRADES] as const;
 
 export function TradeInDialog({
   open,
@@ -128,40 +157,35 @@ export function TradeInDialog({
   const { t } = useTranslation();
   const [form] = Form.useForm<TradeInFields>();
   const skuId = Form.useWatch("skuId", form);
-  const category = Form.useWatch("category", form);
+  const grade = Form.useWatch("grade", form);
+  /** The battery boxes, outside the form: `BatteryFields` owns its draft. */
+  const [battery, setBattery] = useState<BatteryDraft>({});
+  const [batteryBad, setBatteryBad] = useState(false);
   /** A counted product — an accessory — carries no serial to ask for. */
   const counted = !!skuId && !skuTracksSerial(db, skuId);
-  const condition = Form.useWatch("condition", form) ?? "SECOND";
-
-  const categoryOfSku = (id: string | undefined) => {
-    const sku = db.skus.find((s) => s.id === id);
-    return db.models.find((m) => m.id === sku?.modelId)?.category;
-  };
+  const condition: UnitCondition = conditionOf(grade);
+  const batteryMode = defaultBatteryModeOfSku(db, skuId ?? "");
 
   const reset = () => {
     form.resetFields();
+    setBattery({});
+    setBatteryBad(false);
   };
 
-  // Opening on an existing trade-in fills the form with what it said. The
-  // grade box holds a LETTER; a sealed unit's stored grade is `NEW`, which is
-  // the condition, not a letter, so it stays empty.
+  // Opening on an existing trade-in fills the form with what it said.
   useEffect(() => {
     if (!open || initial === undefined) return;
     form.setFieldsValue({
       skuId: initial.skuId,
-      category: categoryOfSku(initial.skuId),
       serial: initial.serial,
-      condition: initial.condition ?? "SECOND",
       grade:
-        initial.condition === "NEW" || initial.grade === "NEW"
-          ? undefined
-          : initial.grade,
-      label: initial.label,
+        initial.condition === "NEW" ? NEW_GRADE : (initial.grade ?? undefined),
+      description: splitDescription(initial.qc?.description ?? ""),
+      neverServiced: initial.qc?.neverServiced,
       value: initial.value,
-      note: initial.note,
+      price: initial.qc?.price,
     });
-    // `categoryOfSku` reads `db`, which changes on every store write; the
-    // form is filled once per opening, not again under somebody typing.
+    setBattery(batteryDraftOf(initial.qc ?? {}));
   }, [open, initial, form]);
 
   const close = () => {
@@ -183,7 +207,7 @@ export function TradeInDialog({
       typed,
       read: readSerialInput(typed, {
         scanned: wasScannedText(typed),
-        condition: condition === "NEW" ? "NEW" : "SECOND",
+        condition,
       }),
     };
   };
@@ -192,51 +216,46 @@ export function TradeInDialog({
     return read.ok ? read.serial : typed;
   };
 
-  /**
-   * Keeps the product and the category agreeing, whichever was picked first.
-   *
-   * A product fills its category in. A category that the chosen product is
-   * not in clears the product rather than keeping a pair that contradicts
-   * itself — the list under it now offers that category's products.
-   */
-  const onValuesChange = (changed: Partial<TradeInFields>) => {
-    if ("skuId" in changed) {
-      const cat = categoryOfSku(changed.skuId);
-      if (cat !== undefined && cat !== form.getFieldValue("category")) {
-        form.setFieldValue("category", cat);
-      }
-    }
-    if ("category" in changed) {
-      const current = form.getFieldValue("skuId") as string | undefined;
-      if (
-        current !== undefined &&
-        categoryOfSku(current) !== changed.category
-      ) {
-        form.setFieldValue("skuId", undefined);
-      }
-    }
-    if ("condition" in changed && changed.condition === "NEW") {
-      // A sealed unit has no letter to keep — `gradeForCondition`.
-      form.setFieldValue("grade", undefined);
-    }
+  const skuName = (id: string | undefined) => {
+    const sku = db.skus.find((s) => s.id === id);
+    return sku ? `${sku.name} ${sku.variantLabel}`.trim() : "";
   };
 
-  const submit = () =>
-    form
+  const submit = () => {
+    const batteryOk = counted || isBatteryDraftInRange(battery, batteryMode);
+    setBatteryBad(!batteryOk);
+    return form
       .validateFields()
       .then((v) => {
-        const grade = gradeForCondition(v.condition, v.grade);
+        if (!batteryOk) return;
+        const isNewUnit = v.grade === NEW_GRADE;
+        const reading = counted ? {} : batteryPatch(battery, batteryMode);
+        const description = joinDescription(
+          (v.description ?? []).map((p) => p.trim()).filter(Boolean),
+        );
+        const qc: TradeInQc = {
+          ...(reading.batteryHealth !== undefined
+            ? { batteryHealth: reading.batteryHealth }
+            : {}),
+          ...(reading.cycleCount !== undefined
+            ? { cycleCount: reading.cycleCount }
+            : {}),
+          ...(reading.fcc !== undefined ? { fcc: reading.fcc } : {}),
+          ...(description !== "" ? { description } : {}),
+          ...(v.neverServiced !== undefined
+            ? { neverServiced: v.neverServiced }
+            : {}),
+          ...(v.price ? { price: v.price } : {}),
+        };
         onAdd({
-          // The typed description always wins. It is what prints on the
-          // invoice, and the customer's unit is often not quite the variant
-          // it resembles.
-          label: (v.label ?? "").trim(),
+          // The product's own name is what prints on the invoice.
+          label: skuName(v.skuId),
           ...(counted ? {} : { serial: serialOf(v.serial) }),
           value: v.value ?? 0,
-          ...(v.note?.trim() ? { note: v.note.trim() } : {}),
           ...(v.skuId ? { skuId: v.skuId } : {}),
-          condition: v.condition,
-          ...(grade ? { grade } : {}),
+          condition: isNewUnit ? "NEW" : "SECOND",
+          ...(v.grade ? { grade: v.grade } : {}),
+          qc,
         });
         reset();
       })
@@ -244,10 +263,9 @@ export function TradeInDialog({
         // The fields say it themselves — `validateFields` rejects with the
         // messages the form has already painted under the boxes that failed.
       });
+  };
 
-  const pickable = db.skus.filter(
-    (k) => isLiveSku(k) && (!category || categoryOfSku(k.id) === category),
-  );
+  const pickable = db.skus.filter((k) => isLiveSku(k));
 
   return (
     <Modal
@@ -260,19 +278,14 @@ export function TradeInDialog({
       okText={initial ? t("trade.save", "Save") : t("trade.add", "Add it")}
       onCancel={close}
       onOk={submit}
-      width={640}
+      width={720}
     >
-      <Form<TradeInFields>
-        form={form}
-        layout="vertical"
-        initialValues={{ condition: "SECOND" }}
-        onValuesChange={onValuesChange}
-      >
+      <Form<TradeInFields> form={form} layout="vertical">
         <Flex gap={SPACE.md} wrap>
           <Form.Item
             name="skuId"
             label={t("trade.product", "Product")}
-            style={{ flex: "2 1 260px" }}
+            style={{ flex: "2 1 300px" }}
             rules={[
               {
                 required: true,
@@ -294,25 +307,35 @@ export function TradeInDialog({
             />
           </Form.Item>
           <Form.Item
-            name="category"
-            label={t("trade.category", "Category")}
-            required
-            style={{ flex: "1 1 180px" }}
+            name="grade"
+            label={t("trade.gradeLabel", "Grade")}
+            style={{ flex: "1 1 140px" }}
+            rules={[
+              {
+                required: true,
+                message: t(
+                  "trade.gradeRequiredNew",
+                  "Pick a grade — New, A, B or C.",
+                ),
+              },
+            ]}
           >
-            <Select
+            <Select<string>
               showSearch
               allowClear
-              placeholder={t("trade.pickCategory", "Pick a category")}
-              options={db.categories.map((c) => ({
-                value: c.name,
-                label: c.name,
+              optionFilterProp="label"
+              placeholder={t("trade.gradePlaceholderNew", "New, A, B or C")}
+              aria-label={t("trade.gradeLabel", "Grade")}
+              options={GRADE_CHOICES.map((g) => ({
+                value: g,
+                label: g === NEW_GRADE ? t("inbound.gradeNew", "New") : g,
               }))}
             />
           </Form.Item>
         </Flex>
 
-        <Flex gap={SPACE.md} wrap>
-          {!counted && (
+        {!counted && (
+          <Flex gap={SPACE.md} wrap>
             <Form.Item
               name="serial"
               label={t("trade.serial", "Serial")}
@@ -324,8 +347,8 @@ export function TradeInDialog({
                */
               validateTrigger={["onBlur"]}
               // New and second-hand are held to different rules, so a change of
-              // condition judges the serial again.
-              dependencies={["condition"]}
+              // grade judges the serial again.
+              dependencies={["grade"]}
               // Capitals whatever the keyboard is doing (owner ask 2026-09-01).
               normalize={(v: string) => v.toUpperCase()}
               rules={[
@@ -378,11 +401,6 @@ export function TradeInDialog({
                   },
                 },
               ]}
-              tooltip={t(
-                "trade.serialHint",
-                "The number printed on the unit. A new unit's is {{min}}–{{max}} characters; a second-hand unit's is taken as read. It enters QC under this serial, exactly as a unit off a purchase order would.",
-                { min: BASE_MIN_LENGTH, max: BASE_MAX_LENGTH },
-              )}
             >
               <Input
                 maxLength={SERIAL_FIELD_MAX_LENGTH}
@@ -390,77 +408,82 @@ export function TradeInDialog({
                 style={{ fontFamily: "monospace", textTransform: "uppercase" }}
               />
             </Form.Item>
-          )}
-          <Form.Item
-            name="condition"
-            label={t("trade.condition", "Condition")}
-            required
-            style={{ flex: "0 0 auto" }}
-          >
-            <Segmented
-              options={[
-                { value: "SECOND", label: t("trade.second", "Second") },
-                { value: "NEW", label: t("trade.new", "New") },
-              ]}
-            />
-          </Form.Item>
-        </Flex>
-
-        {/* Nothing at all for a sealed unit (owner ask 2026-09-19). */}
-        {canGrade(condition) && (
-          <Form.Item
-            label={t("trade.gradeLabel", "Grade")}
-            required
-            style={{ marginBottom: SPACE.lg }}
-          >
-            {/* Picked by hand: the grading checklist is hidden (owner ask
-                2026-09-20). `GradingChecklist` is untouched on disk. */}
             <Form.Item
-              name="grade"
-              noStyle
-              rules={[
-                {
-                  required: true,
-                  message: t(
-                    "trade.gradeRequired",
-                    "Pick a grade — A, B or C.",
-                  ),
-                },
-              ]}
+              label={t("inbound.battery", "Battery Health")}
+              style={{ flex: "1 1 260px" }}
+              {...(batteryBad
+                ? {
+                    validateStatus: "error" as const,
+                    help: t(
+                      "trade.batteryOutOfRange",
+                      "That is not a reading the battery boxes take.",
+                    ),
+                  }
+                : {})}
             >
-              <Select
-                showSearch
-                allowClear
-                style={{ width: "100%" }}
-                placeholder={t("trade.gradePlaceholder", "A, B or C")}
-                aria-label={t("trade.gradeLabel", "Grade")}
-                options={GRADES.map((g) => ({ value: g, label: g }))}
+              <BatteryFields
+                fallback={batteryMode}
+                value={battery}
+                onChange={(next) => {
+                  setBattery(next);
+                  setBatteryBad(false);
+                }}
+                size="middle"
+                idPrefix="trade-battery"
               />
             </Form.Item>
-          </Form.Item>
+          </Flex>
         )}
 
         <Form.Item
-          name="label"
+          name="description"
           label={t("trade.description", "Description")}
           rules={[
             {
-              required: true,
-              whitespace: true,
-              message: t(
-                "trade.descriptionRequired",
-                "Describe the unit — its marks and its age.",
-              ),
+              // A second-hand unit cannot go on the shelf without one —
+              // `qcReady`, the gate Inbound's Accept uses.
+              validator: (_, value: string[] | undefined) =>
+                !needsDescription(condition) || (value ?? []).length > 0
+                  ? Promise.resolve()
+                  : Promise.reject(
+                      new Error(
+                        t(
+                          "trade.descriptionRequired",
+                          "Describe the unit — its marks and its age.",
+                        ),
+                      ),
+                    ),
             },
           ]}
+          dependencies={["grade"]}
+          required={needsDescription(condition)}
         >
-          <Input
+          {/* The same phrase list Inbound's description box offers. */}
+          <Select<string[]>
+            mode="tags"
+            tokenSeparators={[","]}
+            aria-label={t("trade.description", "Description")}
             placeholder={t(
-              "trade.descriptionPlaceholder",
-              "e.g. MacBook Air 2017 8/128, lecet di lid",
+              "inbound.conditionPlaceholder",
+              "Condition, marks, what is in the box…",
             )}
+            options={db.qcDescriptions
+              .filter((d) => d.active)
+              .map((d) => ({ value: d.label }))}
           />
         </Form.Item>
+
+        {!counted && (
+          <Form.Item
+            name="neverServiced"
+            label={t("qc.neverServiced", "Never serviced / opened")}
+          >
+            <NeverServicedField
+              value={form.getFieldValue("neverServiced")}
+              onChange={(next) => form.setFieldValue("neverServiced", next)}
+            />
+          </Form.Item>
+        )}
 
         <Flex gap={SPACE.md} wrap>
           <Form.Item
@@ -484,15 +507,13 @@ export function TradeInDialog({
             <MoneyInput style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item
-            name="note"
-            label={t("trade.note", "Note")}
-            style={{ flex: "1 1 260px", marginBottom: 0 }}
+            name="price"
+            label={t("inbound.sellPrice", "Sell price")}
+            style={{ flex: "1 1 220px", marginBottom: 0 }}
           >
-            <Input
-              placeholder={t(
-                "trade.notePlaceholder",
-                "Anything QC should know",
-              )}
+            <MoneyInput
+              style={{ width: "100%" }}
+              aria-label={t("inbound.sellPrice", "Sell price")}
             />
           </Form.Item>
         </Flex>

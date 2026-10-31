@@ -3579,6 +3579,49 @@ Decisions that outlived those documents:
     recorded and counted as BANK, though it sits in the Shopee seller balance
     until a withdrawal — so one withdrawal on the statement faces many POS
     payouts the matcher cannot pair (SPLIT stops at 6 within a day).
+- **A trade-in worth more than the bill is bought, not netted — 2026-10-31.**
+  *"1 person buying 1 unit 12,5, but trade in 27 … record the 12,5 as income
+  and 27 as expense."* The till clamped the total to 0, recorded no payment,
+  and the Rp14,5jt handed back left the drawer with no row. Now
+  (`totalAfterTradeIn`, `tradeInPurchase` in lib/pos.ts): `Order.total` is
+  the FULL bill, paid in full by one SETTLED payment through the payout's pot,
+  and Income & Expense derives a `TRADE_IN` expense ("Trade-in purchase") for
+  the whole trade-in from that pot — so the pot moves by the difference. The
+  till's payment chips become *Pay the customer* (Cash / Transfer only). The
+  expense rides on its payment the way a marketplace deduction does
+  (`deducted` / `feeOf`), so a reconciliation pairs the one figure the bank
+  shows; it is not a P&L operating cost (the unit is stock at that cost). A
+  trade-in worth less than the bill still comes off it, unchanged. The orders
+  adapter checks and projects `Order.total` by the same rule. No migration.
+  Transaction History's **Received** is net of it too (2026-10-31, later):
+  settled − what a marketplace kept − a trade-in bought outright, so that
+  sale reads **−Rp 14.500.000** in red with "Rp 12.500.000 sale −
+  Rp 27.000.000 trade-in" under it; a trade-in that only came off the bill
+  says "After a Rp X trade-in". The selection total and the CSV follow.
+- **A trade-in is QC'd once, at the till; Waiting for QC opens units in
+  place — 2026-10-31 (later).**
+  - **The Trade-in dialog asks Inbound's unit questions**: product, grade
+    (New / A / B / C — the grade IS the condition), serial, battery, the
+    description phrases, never serviced / opened, what the shop pays and the
+    sell price. Category, the condition switch and the note are gone; the
+    invoice label is the product's name. The answers ride on the till's line
+    as `TradeInLine.qc` and are STRIPPED before the order is written (the
+    `TradeIn` row has no column for them); the minted unit gets them, and
+    passing `qcReady` it goes `DITERIMA` → `QC_SELESAI` → TERSEDIA in the
+    sale's mutation — never into Waiting for QC or `OrphanQcCard`.
+  - **The payout says where it went**: *Paid to* under *Pay the customer*,
+    written as the sale payment's `note` and appended to the Trade-in
+    purchase row's description.
+  - **Inbound has two tabs**: Invoices and **Trade-in (n)**
+    (`TradeInUnitsTable`) — one row per unit a sale took in, with the popup's
+    columns plus Bought for and Status. Read-only.
+  - **Waiting for QC is one row per invoice × product with a Qty**
+    (`groupQcWaiting`), and its *QC (n)* button or a row click opens those
+    units' popup over the list. It is `InboundDetailPage` itself with
+    `embedded` (`InboundUnitTarget`): the page renders only the popup (and the
+    photo / service / return dialogs), unlocked, rows filtered to the targets
+    across the invoice's lines — so the bench's rules cannot drift. A unit on
+    no line gets a dialog pointing at the invoice.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

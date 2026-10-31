@@ -61,6 +61,8 @@ export interface QcWaitingRow {
   readonly kind: "UNIT" | "SLOT";
   /** null for a slot — there is no serial until somebody reads one. */
   readonly serial: string | null;
+  /** A slot's receiving-row key on its invoice (`receivingRows`). */
+  readonly rowKey?: string;
   readonly skuId: string;
   /** The product's name; "" when the variant is unknown to the catalogue. */
   readonly product: string;
@@ -189,6 +191,7 @@ export function qcWaitingRows(
       key: `slot:${slot.po.id}:${slot.key}`,
       kind: "SLOT",
       serial: null,
+      rowKey: slot.key,
       ...describe(slot.skuId, slot.po, slot.po.id),
       arrivedAt: slot.po.date,
       days: daysSince(slot.po.date, now),

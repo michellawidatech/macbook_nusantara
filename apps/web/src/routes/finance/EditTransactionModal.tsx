@@ -89,6 +89,7 @@ import {
   useDb,
 } from "../../mock/store.js";
 import type { Order, OrderFee } from "../../mock/seed.js";
+import { totalAfterTradeIn } from "../../lib/pos.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 
 /** One unit line on the sale, while it is being edited. */
@@ -369,7 +370,7 @@ export function EditTransactionModal({
     const extra = fees.reduce((n, f) => n + f.amount, 0);
     const trade = (o.tradeIns ?? []).reduce((n, x) => n + x.value, 0);
     const bill = unitsSum + countedSum - o.discount + extra;
-    return { bill, total: Math.max(0, bill - trade) };
+    return { bill, total: Math.max(0, totalAfterTradeIn(bill, trade)) };
   };
   const bill = order
     ? billAfterReturns({ ...order, total: draftTotals(order).total })
