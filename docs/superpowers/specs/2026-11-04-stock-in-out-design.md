@@ -1,4 +1,4 @@
-# Stock in / stock out, reworked (2026-11-04) — DRAFT, three designs
+# Stock in / stock out, reworked (2026-11-04) — Design C chosen
 
 Phase 3 of the owner's 2026-11-03 list: *"the stock in and stock out UI is
 confusing especially when we switch between modals. Please fix. And then make
@@ -121,31 +121,44 @@ focused dialog directly. Nothing hands off to anything else.
 
 ---
 
-## Recommendation
+## Decision (owner, 2026-11-04)
 
-**Design B.** The complaint is about switching dialogs and losing work, and B
-removes both: one dialog, the units kept, and a Back button. A is the cheaper
-build if the owner prefers to keep the reason on top.
+**Design C.** Stock in / Stock out become menus; each entry opens its own
+dialog directly, and nothing hands off to anything else.
 
-## Open questions for the owner
+| Menu | Entry | Dialog (today's, reused) |
+|---|---|---|
+| Stock in | Back from service | `ServiceBatchModal mode="BACK"` |
+| Stock in | Return from customer (kept, owner) | `CustomerReturnPanel` |
+| Stock in | Written-off unit found | the batch dialog, Internal use IN, no reason row |
+| Stock in | Transfer in | the batch dialog, Stock transfer, no reason row |
+| Stock out | Transfer to another warehouse | the batch dialog, Stock transfer |
+| Stock out | Send to service | `ServiceBatchModal mode="SEND"` |
+| Stock out | Return to supplier | `SupplierReturnModal`, reworked (below) |
+| Stock out | Write off (internal use) | the batch dialog, Internal use OUT |
 
-1. Which design: A, B or C?
-2. In B, may one list hold units headed for **different** actions (send two to
-   service and write one off in one go)? Default: **no**. One action per
-   list; units that do not fit the action are flagged and must be removed.
-3. Should the supplier return keep one credit **per unit** (today), or one
-   credit for the list with a per-unit split? Default: **per unit**, as a
-   column in the step-2 table.
-4. Should the customer return still be reachable from Stock in, or only from
-   Returns? It is the one movement that starts from a **sale**, not a unit.
-   Default: keep it, with the sale looked up from the first serial, as today.
+- The batch dialog loses its reason buttons: the menu entry IS the reason, so
+  the serial table is there from the first moment and its title names the act
+  ("Transfer to another warehouse").
+- `pickReason`'s hand-off (close one dialog, open another, pass serials) is
+  removed; `?adjust=IN|OUT` opens the menu's first entry for its direction.
+- **One mixed list is not possible** (owner: no) — each dialog takes one
+  movement.
+- **Return to supplier is ONE return for the list** (owner): supplier, reason,
+  date, received-into once; a **total credit** with a **per-unit split** table
+  (each unit starts at its `Unit.buy` + its service charges; editing the total
+  spreads it in proportion, largest remainder; editing a row moves the total).
+  Rule C (credit first off what that unit's invoice GOODS still owe, the rest a
+  refund) is applied per unit inside the one save. Units from two suppliers
+  cannot share one return — the list refuses the second supplier on its row.
+  The "(2 of 5)" queue goes.
 
-## Testing (once a design is chosen)
+## Testing
 
-- Every movement keeps its existing tests (stockTransfer, serviceBatchMany,
-  supplierReturnModal, customerReturn).
-- New tests:
-  - Back keeps the list.
-  - Switching the action keeps the list.
-  - An action that the list blocks says why.
-  - A mixed list cannot be logged.
+- Each menu entry opens its dialog with no reason row and the right title.
+- The supplier return: one dialog for three units, total ↔ split both ways,
+  the split always sums to the total, a second supplier refused on its row,
+  rule C per unit (credit vs refund) in one mutation.
+- Existing movement tests keep passing (stockTransfer, serviceBatchMany,
+  supplierReturnModal, customerReturn); the hand-off tests are rewritten to
+  the menu.

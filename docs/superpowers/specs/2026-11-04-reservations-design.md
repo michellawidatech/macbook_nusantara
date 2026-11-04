@@ -1,4 +1,4 @@
-# Reservations, one list (2026-11-04) — DRAFT for owner review
+# Reservations, one list (2026-11-04) — owner answers in
 
 Phase 4 of the owner's 2026-11-03 list: *"Why is there a requests,
 reservation and requests should be the same no?"*, *"Cannot delete
@@ -41,6 +41,7 @@ says where it stands. The filter chips are status facets.
 
 | Status | How it gets there | Units | Row actions |
 |---|---|---|---|
+| **Waiting for DP** | the bot filed a request, no DP proof yet | not held | Record DP, Reject, Open chat |
 | **Waiting for verification** | the bot saw a DP proof | not held | **Verify**, Reject, Open chat |
 | **Not paid yet** | staff made it, *Not paid yet* | soft (on sale, tagged) | Record DP, Cancel |
 | **Held** | staff made it *Paid*, or a DP was verified or recorded | held (`DIRESERVASI`) | Sell, Cancel, ⋯ Undo verification |
@@ -48,9 +49,8 @@ says where it stands. The filter chips are status facets.
 | **Done** | sold | — | — |
 | **Cancelled** / **Expired** / **Rejected** | — | released | Delete (when allowed) |
 
-- A chatbot request with **no** DP proof is not listed: it waits in the chat,
-  where the bot keeps asking. Owner: *"for the appointment, maybe we don't
-  have to record it first"*.
+- A chatbot request with **no** DP proof is listed as **Waiting for DP**
+  (owner, 2026-11-04): no hold, Open chat / Record DP / Reject.
 - *Show finished* becomes tabs, as on the Service page: **Active**
   (Waiting, Not paid yet, Held, DP to decide) and **History** (the rest).
 - The nav badge counts **Waiting for verification** + **DP to decide**.
@@ -85,31 +85,30 @@ today). Not paid yet is today's soft hold. No verification step.
 Keep is today's `keepDp` (*DP hangus*); refund is `refundDp`. Either way the
 units are released. A row with no DP just cancels.
 
-### 5. Delete
+### 5. Delete (owner, 2026-11-04)
 
-- A bin on **Cancelled / Expired / Rejected** rows, behind a confirm.
-- **Refused** while a DP is kept (the money stays, and so does its record).
-- **Allowed** when no DP was ever paid, or the DP was **refunded**.
-- It takes the reservation, its items and the DP's two payment rows (in and
-  refund, which net to zero) together.
+- A bin on **Cancelled / Expired / Rejected** rows (and any row with no DP).
+- The confirm asks **"Was the DP refunded?"** — **No** by default — when the
+  reservation holds a DP.
+  - **No**: the DP stays the shop's money.
+  - **Yes**: the refund is recorded as its own **expense line** (method +
+    day), the ordinary kind Income & Expense lets a person delete.
+- Either way the DP's money moves OFF the reservation before it goes, so
+  Income & Expense keeps its lines: the DP-in becomes a `ManualIncome`
+  ("DP received — {customer}", same amount, day, method) and its `Payment`
+  row leaves with the reservation. Nothing about the money disappears.
+- ⚠️ A **new sanctioned hard delete** and a migration: `nusantara_app` DELETE
+  on `Reservation` + `ReservationItem`, and a SECURITY DEFINER
+  `reservation_delete(id)` that moves the DP to a `ManualIncome`, removes its
+  `Payment`, and refuses a row on a **reconciled** period or one a sale has
+  adopted (the DP is part of a receipt).
 
-⚠️ This is a **new sanctioned hard delete** and needs a migration:
-`nusantara_app` DELETE on `Reservation` + `ReservationItem`, and a SECURITY
-DEFINER function for the netted-to-zero payment pair (the
-`reconciliation_delete` pattern), refused when the payment is on a
-**reconciled** period.
+## Settled questions (owner, 2026-11-04)
 
-## Open questions for the owner
-
-1. **Deleting a refunded reservation removes its DP-in and refund-out rows
-   from Income & Expense.** They add up to Rp 0, but the history of that day
-   loses two lines. OK? The alternative is to keep refunded rows undeletable
-   and delete only the never-paid ones.
-2. A chatbot request **without** a DP proof: hide it as above, or list it as
-   **Waiting for DP** so staff can see who promised? Default: hide it.
-3. Should *Undo verification* also be possible after the customer was sent
-   the "noted" WhatsApp message? Default: **yes**. Staff are told the
-   customer already got the message.
+1. Deleting asks whether the DP was refunded (default No); a refund is a
+   separate, deletable expense line. The DP-in stays on Income & Expense.
+2. A chatbot request without a DP proof is listed as **Waiting for DP**.
+3. Undo verification stays allowed after the "noted" message (default kept).
 
 ## Testing
 
@@ -121,7 +120,7 @@ DEFINER function for the netted-to-zero payment pair (the
 - **Chatbot:** Verify records the payment; Undo voids it and releases; Undo
   is refused after a sale.
 - **Cancel:** keep vs refund; a reservation with no DP just cancels.
-- **Delete:** refused with a kept DP or on a reconciled period; allowed for
-  never-paid and refunded rows. The db suite runs the function as
-  `nusantara_app`.
+- **Delete:** asks about the refund (default No); Yes writes one expense line;
+  the DP-in survives as a `ManualIncome`; refused on a reconciled period or
+  an adopted DP. The db suite runs `reservation_delete` as `nusantara_app`.
 - **Page:** one list, the Active / History tabs, and the badge.
