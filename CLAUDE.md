@@ -3729,6 +3729,13 @@ Decisions that outlived those documents:
     (hooks/useUnchanged.ts) on Edit unit, Edit stock movement, Set price,
     Listing links, Edit transaction and the payments dialog. ⚠️ Settings forms
     not yet.
+- **Stock and service batches, 2026-11-04 (v2026.11.04.2).** A serial already
+  on a Stock in/out batch is flagged on its own row and offered to no other
+  row (a duplicate used to refuse the whole batch at Log). **Send to service
+  from one unit grows into a batch**: `ServiceBatchModal` always draws its add
+  box, and `single` only means "one unit's layout while it holds one"
+  (`asOne`) — Inventory's unit ⋯, an accepted row's ⋯ and the QC row could
+  send only that unit before.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

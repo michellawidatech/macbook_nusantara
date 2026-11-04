@@ -375,16 +375,23 @@ export function ServiceBatchModal({
   const destOptions = db.warehouses
     .filter((w) => w.active || w.id === dest)
     .map((w) => ({ value: w.id, label: warehouseLabel(w) }));
-  const oneSerial = single ? (rows[0]?.serial ?? serials?.[0] ?? "") : "";
+  /*
+   * The single-unit door stays one unit's dialog only while it holds one
+   * unit (2026-11-04: "when they want to add multiple unit to service we
+   * cannot"). Its add box is always drawn; a second unit turns it into the
+   * batch dialog, with the table of units and one description each.
+   */
+  const asOne = single && rows.length <= 1;
+  const oneSerial = asOne ? (rows[0]?.serial ?? serials?.[0] ?? "") : "";
 
   const title =
     mode === "SEND"
-      ? single
+      ? asOne
         ? t("service.sendTitle", "Send {{serial}} to service", {
             serial: oneSerial,
           })
         : t("serviceBatch.sendTitle", "Send units to service")
-      : single
+      : asOne
         ? t("service.backTitle", "Put {{serial}} back in stock", {
             serial: oneSerial,
           })
@@ -400,7 +407,7 @@ export function ServiceBatchModal({
       open={open}
       centered
       zIndex={zIndex}
-      width={single ? 520 : 860}
+      width={asOne ? 520 : 860}
       title={title}
       okText={
         mode === "SEND"
@@ -413,7 +420,7 @@ export function ServiceBatchModal({
       destroyOnHidden
     >
       <Form layout="vertical">
-        {!single && (
+        {
           <Flex vertical gap={SPACE.xs} style={{ marginBottom: SPACE.md }}>
             <AutoComplete
               value={adding}
@@ -478,85 +485,89 @@ export function ServiceBatchModal({
                     )}
               </Typography.Text>
             )}
-            <Table<Row>
-              size="small"
-              rowKey="serial"
-              pagination={false}
-              dataSource={rows}
-              locale={{
-                emptyText: t("serviceBatch.noUnits", "No units yet."),
-              }}
-              columns={[
-                {
-                  title: t("serviceBatch.unit", "Unit"),
-                  key: "unit",
-                  render: (_, r) => (
-                    <Flex vertical>
-                      <span style={{ fontFamily: "monospace" }}>
-                        {r.serial}
-                      </span>
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: TYPE.sm }}
-                      >
-                        {skuName(r.serial)}
-                      </Typography.Text>
-                    </Flex>
-                  ),
-                },
-                {
-                  title: (
-                    <Flex align="center" gap={SPACE.xs}>
-                      <span>{descriptionLabel}</span>
-                      {rows.length > 1 && (
-                        <Button size="small" type="link" onClick={fillDown}>
-                          {t("serviceBatch.fillDown", "Fill down")}
-                        </Button>
-                      )}
-                    </Flex>
-                  ),
-                  key: "description",
-                  width: 360,
-                  render: (_, r) => (
-                    <Input
-                      aria-label={t(
-                        "serviceBatch.descriptionOf",
-                        "Description of {{serial}}",
-                        { serial: r.serial },
-                      )}
-                      value={r.description}
-                      onChange={(e) => setDescription(r.serial, e.target.value)}
-                    />
-                  ),
-                },
-                {
-                  title: "",
-                  key: "remove",
-                  width: COLUMN.action,
-                  render: (_, r) => (
-                    <Tooltip
-                      title={t("stock.removeThisLine", "Remove this line")}
-                    >
-                      <Button
-                        type="text"
-                        aria-label={t(
-                          "stock.removeThisLine",
-                          "Remove this line",
+            {!asOne && (
+              <Table<Row>
+                size="small"
+                rowKey="serial"
+                pagination={false}
+                dataSource={rows}
+                locale={{
+                  emptyText: t("serviceBatch.noUnits", "No units yet."),
+                }}
+                columns={[
+                  {
+                    title: t("serviceBatch.unit", "Unit"),
+                    key: "unit",
+                    render: (_, r) => (
+                      <Flex vertical>
+                        <span style={{ fontFamily: "monospace" }}>
+                          {r.serial}
+                        </span>
+                        <Typography.Text
+                          type="secondary"
+                          style={{ fontSize: TYPE.sm }}
+                        >
+                          {skuName(r.serial)}
+                        </Typography.Text>
+                      </Flex>
+                    ),
+                  },
+                  {
+                    title: (
+                      <Flex align="center" gap={SPACE.xs}>
+                        <span>{descriptionLabel}</span>
+                        {rows.length > 1 && (
+                          <Button size="small" type="link" onClick={fillDown}>
+                            {t("serviceBatch.fillDown", "Fill down")}
+                          </Button>
                         )}
-                        icon={<DeleteOutlined />}
-                        onClick={() =>
-                          setRows((rs) =>
-                            rs.filter((x) => x.serial !== r.serial),
-                          )
+                      </Flex>
+                    ),
+                    key: "description",
+                    width: 360,
+                    render: (_, r) => (
+                      <Input
+                        aria-label={t(
+                          "serviceBatch.descriptionOf",
+                          "Description of {{serial}}",
+                          { serial: r.serial },
+                        )}
+                        value={r.description}
+                        onChange={(e) =>
+                          setDescription(r.serial, e.target.value)
                         }
                       />
-                    </Tooltip>
-                  ),
-                },
-              ]}
-            />
+                    ),
+                  },
+                  {
+                    title: "",
+                    key: "remove",
+                    width: COLUMN.action,
+                    render: (_, r) => (
+                      <Tooltip
+                        title={t("stock.removeThisLine", "Remove this line")}
+                      >
+                        <Button
+                          type="text"
+                          aria-label={t(
+                            "stock.removeThisLine",
+                            "Remove this line",
+                          )}
+                          icon={<DeleteOutlined />}
+                          onClick={() =>
+                            setRows((rs) =>
+                              rs.filter((x) => x.serial !== r.serial),
+                            )
+                          }
+                        />
+                      </Tooltip>
+                    ),
+                  },
+                ]}
+              />
+            )}
           </Flex>
-        )}
+        }
 
         <Form.Item
           label={
@@ -576,7 +587,7 @@ export function ServiceBatchModal({
             value={dest}
             options={destOptions.map((o) =>
               mode === "SEND" &&
-              single &&
+              asOne &&
               o.value === unitOf(oneSerial)?.locationId
                 ? {
                     ...o,
@@ -676,7 +687,7 @@ export function ServiceBatchModal({
           </>
         )}
 
-        {single && rows[0] && (
+        {asOne && rows[0] && (
           <Form.Item label={descriptionLabel}>
             <Input.TextArea
               rows={2}

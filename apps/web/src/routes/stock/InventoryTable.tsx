@@ -1086,7 +1086,8 @@ export function InventoryTable({ extra }: InventoryTableProps) {
                         domEvent.stopPropagation();
                         if (key === "print")
                           setPrinting(labelsFor(l.units, db.skus, db.models));
-                        else setLinking({ skuId: l.skuId, title: lineTitle(l) });
+                        else
+                          setLinking({ skuId: l.skuId, title: lineTitle(l) });
                       },
                     }}
                   >
