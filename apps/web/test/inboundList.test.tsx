@@ -246,11 +246,25 @@ describe("the Inbound tabs", () => {
   });
 
   it("lists a unit with no photo under Add photo, with one Add photo button", async () => {
+    // Every other unit gets a photo, so the tab lists one card — the seed
+    // has none, and fifty cards of role queries are minutes on CI.
     mutate((d) => {
-      d.unitNotes = d.unitNotes.filter((n) => n.serial !== SERIAL);
+      d.unitNotes = d.units
+        .filter((u) => u.serial !== SERIAL)
+        .map((u, i) => ({
+          id: `n-${i}`,
+          serial: u.serial,
+          body: "",
+          tag: "QC",
+          staff: "ersen",
+          at: "2026-11-01T00:00:00.000Z",
+          photos: [{ id: `p-${i}`, url: "x.jpg", sortOrder: 0 }],
+        }));
     });
     renderList();
-    await userEvent.click(screen.getByRole("tab", { name: /^Add photo/ }));
+    await userEvent.click(
+      screen.getByRole("tab", { name: /^Add photo \(1\)/ }),
+    );
     // Phone layout in tests: each serial is a card with its one button.
     expect(within(panel()).getAllByText(SERIAL).length).toBeGreaterThan(0);
     const buttons = within(panel()).getAllByRole("button", {
