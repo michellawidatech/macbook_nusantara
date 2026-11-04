@@ -245,6 +245,22 @@ describe("the Inbound tabs", () => {
     );
   });
 
+  it("lists a unit with no photo under Add photo, with one Add photo button", async () => {
+    mutate((d) => {
+      d.unitNotes = d.unitNotes.filter((n) => n.serial !== SERIAL);
+    });
+    renderList();
+    await userEvent.click(screen.getByRole("tab", { name: /^Add photo/ }));
+    // Phone layout in tests: each serial is a card with its one button.
+    expect(within(panel()).getAllByText(SERIAL).length).toBeGreaterThan(0);
+    const buttons = within(panel()).getAllByRole("button", {
+      name: /Add photo/,
+    });
+    expect(buttons.length).toBe(
+      within(panel()).getAllByRole("button", { name: /^QC|Add photo/ }).length,
+    );
+  });
+
   it("lists a closed invoice under Closed, and remembers the tab", async () => {
     mutate((d) => {
       d.pos.find((p) => p.id === ORDER)!.closedAt = "2026-11-02T00:00:00.000Z";

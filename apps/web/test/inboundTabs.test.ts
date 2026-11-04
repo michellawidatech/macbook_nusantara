@@ -116,3 +116,26 @@ describe("inboundTabs", () => {
     expect(inboundTabs(d, NOW).UNPAID).toContain(po.id);
   });
 });
+
+describe("the Add photo tab", () => {
+  it("lists every unit the shop holds with a serial and no photo, and drops it once it has one", () => {
+    const d = fresh();
+    const held = d.units.find((u) => u.status === "TERSEDIA")!;
+    d.unitNotes = d.unitNotes.filter((n) => n.serial !== held.serial);
+    const sold = d.units.find((u) => u.status === "TERJUAL")!;
+    let tabs = inboundTabs(d, NOW);
+    expect(tabs.NO_PHOTO.map((r) => r.serial)).toContain(held.serial);
+    expect(tabs.NO_PHOTO.map((r) => r.serial)).not.toContain(sold.serial);
+    d.unitNotes.push({
+      id: "n-photo",
+      serial: held.serial,
+      tag: "QC",
+      text: "",
+      at: "2026-11-04T00:00:00.000Z",
+      staff: "x",
+      photos: [{ id: "p1", url: "/x.jpg", sortOrder: 0 }],
+    } as never);
+    tabs = inboundTabs(d, NOW);
+    expect(tabs.NO_PHOTO.map((r) => r.serial)).not.toContain(held.serial);
+  });
+});

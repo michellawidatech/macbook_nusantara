@@ -23,7 +23,13 @@ import { batterySettingsFrom, readUnitBattery } from "./battery.js";
 import type { MockDb, Unit } from "../mock/seed.js";
 
 export type InboundTab =
-  "NEEDS_QC" | "BACK_FROM_SERVICE" | "READY" | "UNPAID" | "ALL" | "CLOSED";
+  | "NEEDS_QC"
+  | "BACK_FROM_SERVICE"
+  | "READY"
+  | "UNPAID"
+  | "ALL"
+  | "CLOSED"
+  | "NO_PHOTO";
 
 /** One serial on Back from service or Ready to accept. */
 export interface SerialTabRow {
@@ -51,9 +57,14 @@ export interface InboundTabs {
   readonly UNPAID: string[];
   readonly ALL: string[];
   readonly CLOSED: string[];
+  /** Every unit the shop holds, with a serial, that has no QC photo yet. */
+  readonly NO_PHOTO: SerialTabRow[];
   /** Per invoice: units in QC not yet ready, plus slots waiting. */
   readonly toQc: ReadonlyMap<string, number>;
 }
+
+/** The statuses of a unit the shop still has in hand. */
+const HELD: readonly string[] = ["QC", "TERSEDIA", "DIRESERVASI", "SERVIS"];
 
 export function inboundTabs(store: MockDb, now: number): InboundTabs {
   const battery = batterySettingsFrom(store.settings);
@@ -105,6 +116,22 @@ export function inboundTabs(store: MockDb, now: number): InboundTabs {
     }
   }
 
+  // Add photo (owner ask 2026-11-04): per serial, one button. Only units the
+  // shop still holds — a sold unit's photos are purged by design.
+  const photographed = new Set(
+    store.unitNotes
+      .filter((n) => n.tag === "QC" && n.photos.length > 0)
+      .map((n) => n.serial),
+  );
+  const NO_PHOTO = store.units
+    .filter(
+      (u) =>
+        HELD.includes(u.status) &&
+        u.serial.trim() !== "" &&
+        !photographed.has(u.serial),
+    )
+    .map(serialRow);
+
   const UNPAID: string[] = [];
   const CLOSED: string[] = [];
   for (const po of store.pos) {
@@ -120,6 +147,7 @@ export function inboundTabs(store: MockDb, now: number): InboundTabs {
     UNPAID,
     ALL: store.pos.map((p) => p.id),
     CLOSED,
+    NO_PHOTO,
     toQc,
   };
 }

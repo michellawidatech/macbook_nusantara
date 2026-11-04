@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 import { ProTable } from "../../components/ProTable";
 import { SerialLink } from "../../components/SerialLink";
 import { GradeTag } from "../../components/GradeTag";
+import { UnitPhotos } from "../../components/UnitPhotos";
 import { fmtNone, fmtRp } from "../../lib/format.js";
 import type { SerialTabRow } from "../../lib/inboundTabs.js";
 import { appendEvent, mutate } from "../../mock/store.js";
@@ -22,7 +23,7 @@ export function SerialTabTable({
   onQc,
   onCharge,
 }: {
-  readonly kind: "BACK" | "READY";
+  readonly kind: "BACK" | "READY" | "PHOTO";
   readonly rows: readonly SerialTabRow[];
   /** Open the unit's QC popup. Absent for a unit on no invoice. */
   readonly onQc: (row: SerialTabRow) => void;
@@ -62,7 +63,13 @@ export function SerialTabTable({
   return (
     <ProTable<SerialTabRow>
       lazy
-      persistKey={kind === "BACK" ? "inbound.backFromService" : "inbound.ready"}
+      persistKey={
+        kind === "BACK"
+          ? "inbound.backFromService"
+          : kind === "READY"
+            ? "inbound.ready"
+            : "inbound.noPhoto"
+      }
       rowKey="serial"
       dataSource={[...rows]}
       searchPlaceholder={t(
@@ -116,27 +123,29 @@ export function SerialTabTable({
                   fmtRp(r.visit?.charges ?? 0),
               },
             ]
-          : [
-              {
-                title: t("inbound.tab.grade", "Grade"),
-                dataIndex: "grade",
-                width: COLUMN.grade,
-                render: (_: unknown, r: SerialTabRow) =>
-                  r.grade ? <GradeTag grade={r.grade} /> : fmtNone(),
-              },
-              {
-                title: t("inbound.tab.battery", "Battery"),
-                dataIndex: "battery",
-                width: COLUMN.tag,
-              },
-              {
-                title: t("inbound.tab.sellPrice", "Sell price"),
-                dataIndex: "sellPrice",
-                align: "right" as const,
-                width: COLUMN.money,
-                render: (v?: number) => fmtRp(v ?? 0),
-              },
-            ]),
+          : kind === "PHOTO"
+            ? []
+            : [
+                {
+                  title: t("inbound.tab.grade", "Grade"),
+                  dataIndex: "grade",
+                  width: COLUMN.grade,
+                  render: (_: unknown, r: SerialTabRow) =>
+                    r.grade ? <GradeTag grade={r.grade} /> : fmtNone(),
+                },
+                {
+                  title: t("inbound.tab.battery", "Battery"),
+                  dataIndex: "battery",
+                  width: COLUMN.tag,
+                },
+                {
+                  title: t("inbound.tab.sellPrice", "Sell price"),
+                  dataIndex: "sellPrice",
+                  align: "right" as const,
+                  width: COLUMN.money,
+                  render: (v?: number) => fmtRp(v ?? 0),
+                },
+              ]),
         {
           title: "",
           key: "actions",
@@ -144,7 +153,11 @@ export function SerialTabTable({
           width: COLUMN.actionsWide,
           render: (_: unknown, r: SerialTabRow) => (
             <Flex gap={4} justify="end">
-              {r.poId ? (
+              {kind === "PHOTO" ? (
+                // One button per serial (owner ask 2026-11-04); the row leaves
+                // the list once the unit has a photo.
+                <UnitPhotos serial={r.serial} editable size={32} max={1} />
+              ) : r.poId ? (
                 <Button
                   size="small"
                   aria-label={t("inbound.tab.qcAria", "QC {{serial}}", {

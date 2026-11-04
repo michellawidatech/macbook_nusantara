@@ -630,6 +630,21 @@ export function InboundPage() {
             ),
           },
           {
+            key: "NO_PHOTO",
+            label: t("inbound.tab.addPhoto", "Add photo ({{n}})", {
+              n: tabs.NO_PHOTO.length,
+            }),
+            children: (
+              <Card>
+                <SerialTabTable
+                  kind="PHOTO"
+                  rows={tabs.NO_PHOTO}
+                  onQc={openSerialQc}
+                />
+              </Card>
+            ),
+          },
+          {
             key: "UNPAID",
             label: t("inbound.tab.unpaid", "Arrived, not paid ({{n}})", {
               n: tabs.UNPAID.length,

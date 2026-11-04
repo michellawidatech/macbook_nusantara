@@ -924,6 +924,7 @@ export const id: Record<string, string> = {
   "inbound.listedAt": "Dijual {{price}}",
   "inbound.markArrived": "Tandai sudah datang",
   "inbound.tab.acceptAria": "Terima {{serial}}",
+  "inbound.tab.addPhoto": "Tambah foto ({{n}})",
   "inbound.tab.all": "Semua invoice",
   "inbound.tab.backFromService": "Kembali dari servis ({{n}})",
   "inbound.tab.battery": "Baterai",
