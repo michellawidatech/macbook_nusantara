@@ -60,7 +60,6 @@ import {
   Flex,
   Segmented,
   Select,
-  theme,
   Tooltip,
   Typography,
 } from "antd";
@@ -68,7 +67,6 @@ import {
   EditOutlined,
   MoreOutlined,
   PrinterOutlined,
-  QuestionCircleOutlined,
   RollbackOutlined,
   TagsOutlined,
   LinkOutlined,
@@ -95,7 +93,6 @@ import {
   BATTERY_BAND_LABEL,
   BATTERY_UNKNOWN,
   batteryBandOf,
-  batteryEraGuide,
   batterySettingsFrom,
   fmtFcc,
   readUnitBattery,
@@ -172,9 +169,6 @@ export function InventoryTable({ extra }: InventoryTableProps) {
   const { message } = App.useApp();
   const { t } = useTranslation();
   const { compact } = useLayoutMode();
-  const {
-    token: { colorTextSecondary },
-  } = theme.useToken();
 
   const [categories, setCategories] = useState<string[]>([]);
   const [bands, setBands] = useState<string[]>([]);
@@ -395,46 +389,33 @@ export function InventoryTable({ extra }: InventoryTableProps) {
         value={categories}
         onChange={setCategories}
         options={categoryNames.map((c) => ({ value: c, label: c }))}
-        style={{ minWidth: 200 }}
+        style={{ width: 160 }}
       />
-      <Flex align="center" gap={SPACE.xs}>
-        <Select
-          mode="multiple"
-          allowClear
-          maxTagCount="responsive"
-          placeholder={t("inventory.anyBattery", "Any battery")}
-          aria-label={t("inventory.anyBattery", "Any battery")}
-          value={bands}
-          onChange={setBands}
-          /*
-           * The band NAME, not its numbers (2026-09-08).
-           *
-           * One filter over a shelf that holds both eras: a "Good (80%+)"
-           * option beside a "Good (400 cycles or fewer)" one would split every
-           * search over a shop that sells 2017 Airs and M2s alike. The numbers
-           * are in the `?` beside it, and in Settings where they are set.
-           */
-          options={[
-            ...(["good", "fair", "bad"] as const).map((g) => ({
-              value: BATTERY_BAND_LABEL[g],
-              label: BATTERY_BAND_LABEL[g],
-            })),
-            { value: BATTERY_UNKNOWN, label: BATTERY_UNKNOWN },
-          ]}
-          style={{ minWidth: 200, flex: 1 }}
-        />
-        {/* What the bands mean, with the shop's own thresholds — the only
-            honest way to label a filter Settings can move underneath it. */}
-        <Tooltip title={batteryEraGuide(batterySettings, t)}>
-          <QuestionCircleOutlined
-            style={{ color: colorTextSecondary, cursor: "help" }}
-            aria-label={t(
-              "inventory.batteryBandsAria",
-              "What the battery bands mean",
-            )}
-          />
-        </Tooltip>
-      </Flex>
+      <Select
+        mode="multiple"
+        allowClear
+        maxTagCount="responsive"
+        placeholder={t("inventory.anyBattery", "Any battery")}
+        aria-label={t("inventory.anyBattery", "Any battery")}
+        value={bands}
+        onChange={setBands}
+        /*
+         * The band NAME, not its numbers (2026-09-08).
+         *
+         * One filter over a shelf that holds both eras: a "Good (80%+)"
+         * option beside a "Good (400 cycles or fewer)" one would split every
+         * search over a shop that sells 2017 Airs and M2s alike. The numbers
+         * are in Settings, where they are set (the `?` beside it went 2026-11-03).
+         */
+        options={[
+          ...(["good", "fair", "bad"] as const).map((g) => ({
+            value: BATTERY_BAND_LABEL[g],
+            label: BATTERY_BAND_LABEL[g],
+          })),
+          { value: BATTERY_UNKNOWN, label: BATTERY_UNKNOWN },
+        ]}
+        style={{ width: 160 }}
+      />
       <Segmented
         value={scope}
         onChange={(v) => setScope(v as "STOCKED" | "ALL")}
@@ -577,6 +558,9 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       title: t("inventory.serial", "Serial"),
       dataIndex: "serial",
       key: "serial",
+      // A fixed width (2026-11-03): left to absorb the slack, the serial sat
+      // at the far left and pushed everything else into a heap on the right.
+      width: COLUMN.serial,
       render: (v: string) => <SerialLink serial={v} />,
     },
     // No Grade and no warehouse here (2026-10-02): the units sit under their
@@ -597,11 +581,10 @@ export function InventoryTable({ extra }: InventoryTableProps) {
             title: t("inventory.battery", "Battery"),
             key: "battery",
             width: COLUMN.tag,
-            align: "right" as const,
             render: (_: unknown, u: Unit) => {
               const read = readUnitBattery(u, db, batterySettings);
               return (
-                <Flex vertical align="flex-end" gap={0}>
+                <Flex vertical gap={0}>
                   <Typography.Text>{read.text}</Typography.Text>
                   {read.fcc !== undefined && (
                     <Typography.Text
@@ -666,13 +649,15 @@ export function InventoryTable({ extra }: InventoryTableProps) {
           {
             title: t("inventory.photos", "Photos"),
             key: "photos",
-            // Three 32px thumbnails and their gaps.
-            width: COLUMN.tag,
+            // ONE thumbnail and a "+n" (2026-11-03): three wrapped onto a
+            // second line and made every row twice as tall. The lightbox
+            // still walks all of them.
+            width: COLUMN.qty,
             render: (_: unknown, u: Unit) =>
               qcPhotosOf(db, u.serial).length === 0 ? (
                 fmtNone()
               ) : (
-                <UnitPhotos serial={u.serial} size={32} max={3} />
+                <UnitPhotos serial={u.serial} size={32} max={1} />
               ),
           },
         ]
@@ -791,6 +776,18 @@ export function InventoryTable({ extra }: InventoryTableProps) {
       {/* `inventory-lines` gives the units nested under a line the width
           antd's padding would otherwise take (global.css). */}
       <div className="inventory-lines">
+        {/* Under the toolbar rather than in it (2026-11-03): beside the
+            buttons it pushed them onto a second row. */}
+        <Typography.Text
+          type="secondary"
+          style={{ display: "block", marginBottom: SPACE.sm }}
+        >
+          {t(
+            "inventory.summary",
+            "{{products}} products · {{units}} units held · value {{value}}",
+            { products, units: totalHeld, value: fmtRp(totalValue) },
+          )}
+        </Typography.Text>
         <ProTable<InventoryLine>
           persistKey="inventory"
           rowKey="key"
@@ -843,31 +840,16 @@ export function InventoryTable({ extra }: InventoryTableProps) {
             "Search product, specs, code or a serial number",
           )}
           toolbar={filters}
-          extra={
-            <Flex align="center" gap={SPACE.md} wrap>
-              <Typography.Text type="secondary">
-                {t(
-                  "inventory.summary",
-                  "{{products}} products · {{units}} units held · value {{value}}",
-                  {
-                    products,
-                    units: totalHeld,
-                    value: fmtRp(totalValue),
-                  },
-                )}
-              </Typography.Text>
-              {extra}
-            </Flex>
-          }
+          extra={extra}
           columns={[
             {
               title: t("inventory.unitAndSku", "Unit & SKU"),
               key: "unit",
-              // The seven widths and the expand chevron add up to a 1440px
-              // laptop screen with the nav open: past that, Unit price and Sell
-              // price slide under the pinned Action column. 216 until the
-              // chevron arrived (2026-10-02).
-              width: 180,
+              // The one column with no fixed width (2026-11-04): it takes the
+              // slack, so a name sits on one line. When every column had a
+              // width, antd spread the spare room over all of them — a wide
+              // Qty, a wide Warehouse and a gap after Action.
+              minWidth: 220,
               facet: true,
               facetLabel: t("inventory.anyProduct", "Any product"),
               searchable: true,
@@ -1057,7 +1039,8 @@ export function InventoryTable({ extra }: InventoryTableProps) {
               // where its two buttons read best anyway.
               title: t("inventory.action", "Action"),
               key: "actions",
-              width: COLUMN.actionsWide,
+              // Set price and a ⋯ since 2026-11-03.
+              width: COLUMN.actionsPair,
               fixed: compact ? undefined : "right",
               render: (_, l) => (
                 <Flex gap={SPACE.xs} wrap>
@@ -1081,37 +1064,43 @@ export function InventoryTable({ extra }: InventoryTableProps) {
                   >
                     {t("inventory.setPrice", "Set price")}
                   </Button>
-                  <Button
-                    size="small"
-                    icon={<PrinterOutlined />}
-                    disabled={l.units.length === 0}
-                    aria-label={t(
-                      "inventory.printBarcodeFor",
-                      "Print barcode for {{what}}",
-                      { what: lineTitle(l) },
-                    )}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setPrinting(labelsFor(l.units, db.skus, db.models));
+                  {/* Print barcode and Listing links fold into one ⋯
+                      (2026-11-03: three labelled buttons read cluttered). */}
+                  <Dropdown
+                    trigger={["click"]}
+                    menu={{
+                      items: [
+                        {
+                          key: "print",
+                          icon: <PrinterOutlined />,
+                          label: t("inventory.printBarcode", "Print barcode"),
+                          disabled: l.units.length === 0,
+                        },
+                        {
+                          key: "links",
+                          icon: <LinkOutlined />,
+                          label: t("inventory.listingLinks", "Listing links"),
+                        },
+                      ],
+                      onClick: ({ key, domEvent }) => {
+                        domEvent.stopPropagation();
+                        if (key === "print")
+                          setPrinting(labelsFor(l.units, db.skus, db.models));
+                        else setLinking({ skuId: l.skuId, title: lineTitle(l) });
+                      },
                     }}
                   >
-                    {t("inventory.printBarcode", "Print barcode")}
-                  </Button>
-                  <Button
-                    size="small"
-                    icon={<LinkOutlined />}
-                    aria-label={t(
-                      "inventory.listingLinksFor",
-                      "Listing links for {{what}}",
-                      { what: lineTitle(l) },
-                    )}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setLinking({ skuId: l.skuId, title: lineTitle(l) });
-                    }}
-                  >
-                    {t("inventory.listingLinks", "Listing links")}
-                  </Button>
+                    <Button
+                      size="small"
+                      icon={<MoreOutlined />}
+                      aria-label={t(
+                        "inventory.moreActionsFor",
+                        "More actions for {{what}}",
+                        { what: lineTitle(l) },
+                      )}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </Dropdown>
                 </Flex>
               ),
             },
