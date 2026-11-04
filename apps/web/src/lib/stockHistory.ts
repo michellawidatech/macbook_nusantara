@@ -57,6 +57,7 @@ export type LedgerMovement =
   | "TRADE_IN"
   | "STOCK_TAKE"
   | "ARRIVAL_UNDONE"
+  | "SALE_CORRECTED"
   | "CORRECTION";
 
 /** The three readings an adjustment can carry, as the unit carries them. */
@@ -269,7 +270,12 @@ export function ledgerMovementRows(
   }
   for (const s of db.stockMoves) {
     if (s.type === "KOREKSI" && s.reasonId !== undefined) continue;
-    const movement = COUNTED_MOVEMENT[s.type];
+    // Pieces put back because a sale was edited or deleted say so; the
+    // history reads "Correction" only for what names no sale.
+    const movement =
+      s.type === "KOREKSI" && s.orderId
+        ? "SALE_CORRECTED"
+        : COUNTED_MOVEMENT[s.type];
     if (!movement) continue;
     out.push({
       id: `sm:${s.id}`,

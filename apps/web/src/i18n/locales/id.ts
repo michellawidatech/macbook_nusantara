@@ -5167,6 +5167,7 @@ export const id: Record<string, string> = {
   "stock.mv.stockTake": "Stock opname",
   "stock.mv.arrivalUndone": "Kedatangan dibatalkan",
   "stock.mv.correction": "Koreksi",
+  "stock.mv.saleCorrected": "Koreksi penjualan",
   "requests.approve": "Setujui",
   "requests.placeNote":
     "Alamat tidak disertakan kalau sudah pernah dikirim di chat ini.",

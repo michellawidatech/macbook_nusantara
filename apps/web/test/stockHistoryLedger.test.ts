@@ -153,3 +153,39 @@ describe("ledgerMovementRows", () => {
     ]);
   });
 });
+
+describe("one word for one movement (owner, 2026-11-04)", () => {
+  it("names an accessory put back by a sale's correction as a sale correction", () => {
+    const rows = ledgerMovementRows(
+      store([], {
+        stockMoves: [
+          {
+            id: "m3",
+            skuId: "k",
+            locationId: "wh-1",
+            qty: 1,
+            cost: 1,
+            type: "KOREKSI",
+            orderId: "o-1",
+            at: "2026-11-02T00:00:00.000Z",
+            staff: "x",
+          },
+          {
+            id: "m4",
+            skuId: "k",
+            locationId: "wh-1",
+            qty: 1,
+            cost: 1,
+            type: "KOREKSI",
+            at: "2026-11-02T00:00:00.000Z",
+            staff: "x",
+          },
+        ],
+      } as never),
+    );
+    expect(rows.map((r) => r.movement)).toEqual([
+      "SALE_CORRECTED",
+      "CORRECTION",
+    ]);
+  });
+});

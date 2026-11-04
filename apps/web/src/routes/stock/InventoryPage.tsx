@@ -942,8 +942,13 @@ export function InventoryPage() {
         return t("stock.mv.toService", "Sent to service");
       case "FROM_SERVICE":
         return t("stock.mv.fromService", "Back from service");
+      // A move between warehouses made by another door (Edit unit's
+      // warehouse, a merge) IS a stock transfer, and reads as one (owner,
+      // 2026-11-04: "it should be same").
       case "MOVED":
-        return t("stock.mv.moved", "Moved");
+        return reasonWord("TRANSFER");
+      case "SALE_CORRECTED":
+        return t("stock.mv.saleCorrected", "Sale corrected");
       case "WRITTEN_OFF":
         return t("stock.mv.writtenOff", "Written off");
       case "FOUND":
