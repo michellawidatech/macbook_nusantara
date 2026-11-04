@@ -28,12 +28,36 @@
  * The unit's `KOREKSI` event is left as written: the ledger is the record of
  * what was recorded at the time, and this row is the corrected one.
  */
-import type { Adjustment, MockDb } from "../mock/seed.js";
+import type { Adjustment, MockDb, StockMove, UnitEvent } from "../mock/seed.js";
 
 export interface StockHistoryRow extends Adjustment {
   /** Set on a counted product's row: the variant, and how many pieces moved. */
   counted?: { skuId: string; qty: number };
+  /**
+   * Set on a row read off the ledger rather than an adjustment (2026-11-04):
+   * what kind of movement it was. Such a row is read-only — it is corrected
+   * where it was made (the service bench, the till, the return desk).
+   */
+  movement?: LedgerMovement;
+  fromLocationId?: string;
+  toLocationId?: string;
 }
+
+/** The movements the history recaps beside the adjustments. */
+export type LedgerMovement =
+  | "RECEIVED"
+  | "SOLD"
+  | "CUSTOMER_RETURN"
+  | "SUPPLIER_RETURN"
+  | "TO_SERVICE"
+  | "FROM_SERVICE"
+  | "MOVED"
+  | "WRITTEN_OFF"
+  | "FOUND"
+  | "TRADE_IN"
+  | "STOCK_TAKE"
+  | "ARRIVAL_UNDONE"
+  | "CORRECTION";
 
 /** The three readings an adjustment can carry, as the unit carries them. */
 const READINGS = ["batteryHealth", "cycleCount", "fcc"] as const;
@@ -147,4 +171,121 @@ export function applyStockHistoryEdit(
     else unit[field] = now;
   }
   return true;
+}
+
+/** Within this of an adjustment, a unit's event IS that adjustment's. */
+const PAIR_MS = 5_000;
+
+/**
+ * What a unit event was as a movement, or null when it moved nothing — a QC
+ * acceptance, a hold, a note. `prev` is the unit's event before it.
+ */
+function unitMovement(
+  e: UnitEvent,
+  prev: UnitEvent | undefined,
+): { movement: LedgerMovement; kind: "IN" | "OUT" } | null {
+  const from = prev?.locationId;
+  const moved = from !== undefined && from !== e.locationId;
+  if (e.type === "DITERIMA") return { movement: "RECEIVED", kind: "IN" };
+  if (e.type === "TERJUAL") return { movement: "SOLD", kind: "OUT" };
+  if (e.type === "TUKAR_TAMBAH") return { movement: "TRADE_IN", kind: "IN" };
+  if (e.type === "RETUR_PELANGGAN")
+    return { movement: "CUSTOMER_RETURN", kind: "IN" };
+  if (e.type === "OPNAME_DITEMUKAN") return { movement: "FOUND", kind: "IN" };
+  if (e.toStatus === "RETUR_SUPPLIER" && e.fromStatus !== "RETUR_SUPPLIER")
+    return { movement: "SUPPLIER_RETURN", kind: "OUT" };
+  if (e.toStatus === "SERVIS" && e.fromStatus !== "SERVIS")
+    return { movement: "TO_SERVICE", kind: "OUT" };
+  if (e.fromStatus === "SERVIS" && e.toStatus !== "SERVIS")
+    return { movement: "FROM_SERVICE", kind: "IN" };
+  if (e.toStatus === "HILANG" && e.fromStatus !== "HILANG")
+    return { movement: "WRITTEN_OFF", kind: "OUT" };
+  if (e.fromStatus === "HILANG" && e.toStatus !== "HILANG")
+    return { movement: "FOUND", kind: "IN" };
+  if (moved) return { movement: "MOVED", kind: "IN" };
+  return null;
+}
+
+const COUNTED_MOVEMENT: Partial<Record<StockMove["type"], LedgerMovement>> = {
+  MASUK: "RECEIVED",
+  MASUK_BATAL: "ARRIVAL_UNDONE",
+  TERJUAL: "SOLD",
+  RETUR_PELANGGAN: "CUSTOMER_RETURN",
+  RETUR_SUPPLIER: "SUPPLIER_RETURN",
+  TUKAR_TAMBAH: "TRADE_IN",
+  OPNAME: "STOCK_TAKE",
+  KOREKSI: "CORRECTION",
+};
+
+/**
+ * Every movement the adjustments do not already list (owner report
+ * 2026-11-04: a unit sent to service in another warehouse was in no
+ * history): a unit's received, sold, returned, serviced, moved, written off
+ * or found — read off its ledger — and a counted product's every stock move
+ * that is not an adjustment's. Read-only rows; `stockHistoryRows` keeps the
+ * editable ones.
+ */
+export function ledgerMovementRows(
+  db: Pick<MockDb, "events" | "adjustments" | "stockMoves">,
+): StockHistoryRow[] {
+  const adjusted = new Map<string, number[]>();
+  for (const a of db.adjustments) {
+    const list = adjusted.get(a.serial) ?? [];
+    list.push(Date.parse(a.at));
+    adjusted.set(a.serial, list);
+  }
+  const bySerial = new Map<string, UnitEvent[]>();
+  for (const e of db.events) {
+    const list = bySerial.get(e.serial) ?? [];
+    list.push(e);
+    bySerial.set(e.serial, list);
+  }
+  const out: StockHistoryRow[] = [];
+  for (const [serial, events] of bySerial) {
+    events.sort((a, b) => a.seq - b.seq);
+    const stamps = adjusted.get(serial) ?? [];
+    events.forEach((e, i) => {
+      const prev = events[i - 1];
+      const m = unitMovement(e, prev);
+      if (!m) return;
+      const t = Date.parse(e.at);
+      if (stamps.some((s) => Math.abs(s - t) <= PAIR_MS)) return;
+      out.push({
+        id: `ev:${e.id}`,
+        serial,
+        description: e.note ?? "",
+        reasonId: "",
+        at: e.at,
+        staff: e.staff,
+        kind: m.kind,
+        batchId: e.id,
+        movement: m.movement,
+        ...(prev && prev.locationId !== e.locationId
+          ? { fromLocationId: prev.locationId }
+          : {}),
+        toLocationId: e.locationId,
+      });
+    });
+  }
+  for (const s of db.stockMoves) {
+    if (s.type === "KOREKSI" && s.reasonId !== undefined) continue;
+    const movement = COUNTED_MOVEMENT[s.type];
+    if (!movement) continue;
+    out.push({
+      id: `sm:${s.id}`,
+      serial: "",
+      description: s.note ?? "",
+      reasonId: "",
+      at: s.at,
+      staff: s.staff,
+      kind: s.qty > 0 ? "IN" : "OUT",
+      batchId: s.id,
+      counted: { skuId: s.skuId, qty: Math.abs(s.qty) },
+      movement,
+      ...(s.qty > 0
+        ? { toLocationId: s.locationId }
+        : { fromLocationId: s.locationId }),
+    });
+  }
+  return out;
 }

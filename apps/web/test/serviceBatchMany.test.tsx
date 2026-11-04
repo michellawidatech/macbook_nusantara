@@ -69,3 +69,26 @@ describe("sending several units to service", () => {
     });
   });
 });
+
+describe("Stock Movement History", () => {
+  it("lists a unit sent to service, not only stock adjustments", async () => {
+    const { InventoryPage } =
+      await import("../src/routes/stock/InventoryPage.js");
+    const { MemoryRouter } = await import("react-router-dom");
+    const sent = getDb().units.find((u) => u.status === "SERVIS")!;
+    expect(sent).toBeDefined();
+    render(
+      <AntdApp>
+        <MemoryRouter initialEntries={["/stock/inventory"]}>
+          <InventoryPage />
+        </MemoryRouter>
+      </AntdApp>,
+    );
+    fireEvent.click(
+      await screen.findByRole("tab", { name: /Stock Movement History/ }),
+    );
+    expect(
+      (await screen.findAllByText("Sent to service")).length,
+    ).toBeGreaterThan(0);
+  });
+});

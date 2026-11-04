@@ -3736,6 +3736,15 @@ Decisions that outlived those documents:
   box, and `single` only means "one unit's layout while it holds one"
   (`asOne`) — Inventory's unit ⋯, an accepted row's ⋯ and the QC row could
   send only that unit before.
+- **Stock Movement History recaps every movement — 2026-11-04 (v2026.11.04.3).**
+  Owner: a service trip to another warehouse was in no history. Beside the
+  editable adjustments, `ledgerMovementRows` (lib/stockHistory.ts) reads the
+  unit ledger — received, sold, customer/supplier return, sent to / back from
+  service, moved, written off, found — and every counted stock move that is
+  not an adjustment's. Those rows are READ-ONLY (no Edit/Undo; corrected where
+  they were made) and carry a *Where* (from → to). An event within 5 s of the
+  unit's adjustment is that adjustment's and is not listed twice. QC
+  acceptance and holds are not movements and stay out.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

@@ -81,7 +81,9 @@ import { InventoryTable } from "./InventoryTable";
 import { StockExportModal } from "./StockExportModal";
 import { StockMovementEditModal } from "./StockMovementEditModal";
 import {
+  ledgerMovementRows,
   stockHistoryRows,
+  type LedgerMovement,
   stockHistorySkuId,
   type StockHistoryRow,
 } from "../../lib/stockHistory.js";
@@ -919,7 +921,51 @@ export function InventoryPage() {
    * `KOREKSI` stock move, and it belongs in the same history as a unit's.
    * `lib/stockHistory.ts` builds them, and applies the edit behind each row.
    */
-  const logRows: StockHistoryRow[] = stockHistoryRows(db);
+  // Every movement (2026-11-04): the adjustments, editable, and what the
+  // ledger records elsewhere — service trips, sales, returns, arrivals.
+  const logRows: StockHistoryRow[] = [
+    ...stockHistoryRows(db),
+    ...ledgerMovementRows(db),
+  ];
+  /** A ledger row's movement, in words. Literal `t` calls for the i18n test. */
+  const movementWord = (m: LedgerMovement): string => {
+    switch (m) {
+      case "RECEIVED":
+        return t("stock.mv.received", "Received");
+      case "SOLD":
+        return t("stock.mv.sold", "Sold");
+      case "CUSTOMER_RETURN":
+        return t("stock.mv.customerReturn", "Customer return");
+      case "SUPPLIER_RETURN":
+        return t("stock.mv.supplierReturn", "Returned to supplier");
+      case "TO_SERVICE":
+        return t("stock.mv.toService", "Sent to service");
+      case "FROM_SERVICE":
+        return t("stock.mv.fromService", "Back from service");
+      case "MOVED":
+        return t("stock.mv.moved", "Moved");
+      case "WRITTEN_OFF":
+        return t("stock.mv.writtenOff", "Written off");
+      case "FOUND":
+        return t("stock.mv.found", "Found");
+      case "TRADE_IN":
+        return t("stock.mv.tradeIn", "Trade-in");
+      case "STOCK_TAKE":
+        return t("stock.mv.stockTake", "Stock take");
+      case "ARRIVAL_UNDONE":
+        return t("stock.mv.arrivalUndone", "Arrival undone");
+      case "CORRECTION":
+        return t("stock.mv.correction", "Correction");
+    }
+  };
+  const whereOf = (a: StockHistoryRow): string => {
+    const name = (id?: string) =>
+      id ? (warehouseLabelOf(db.warehouses, id) ?? id) : undefined;
+    const from = name(a.fromLocationId);
+    const to = name(a.toLocationId);
+    if (from && to) return `${from} → ${to}`;
+    return from ?? to ?? fmtNone();
+  };
   const logProduct = (a: StockHistoryRow) => {
     const skuId = stockHistorySkuId(db, a);
     const k = skuId ? skuOf(skuId) : undefined;
@@ -927,6 +973,7 @@ export function InventoryPage() {
   };
   /** A row's reason, the fixed ones in the desk's language. */
   const logReason = (a: StockHistoryRow): string => {
+    if (a.movement) return movementWord(a.movement);
     const label = db.reasons.find((r) => r.id === a.reasonId)?.label;
     const fixed = fixedReasonOf(label);
     return fixed ? reasonWord(fixed) : (label ?? a.reasonId);
@@ -1008,6 +1055,14 @@ export function InventoryPage() {
             ),
           },
           {
+            title: t("stock.where", "Where"),
+            key: "where",
+            width: COLUMN.choice,
+            facet: true,
+            sortValue: (a) => whereOf(a),
+            render: (_, a) => whereOf(a),
+          },
+          {
             title: t("stock.serial", "Serial"),
             dataIndex: "serial",
             searchable: true,
@@ -1083,6 +1138,8 @@ export function InventoryPage() {
             key: "actions",
             width: COLUMN.actions,
             render: (_, a) => {
+              // Read off the ledger: corrected where it was made.
+              if (a.movement) return null;
               const block = undoBlock(db, a);
               return (
                 <Space size={SPACE.xs}>
