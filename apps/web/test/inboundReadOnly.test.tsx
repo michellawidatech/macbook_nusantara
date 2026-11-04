@@ -48,11 +48,11 @@ function desktop() {
   });
 }
 
-function renderOrder() {
+function renderOrder(id = ORDER) {
   desktop();
   return render(
     <AntdApp>
-      <MemoryRouter initialEntries={[`/inbound/${ORDER}`]}>
+      <MemoryRouter initialEntries={[`/inbound/${id}`]}>
         <Routes>
           <Route path="/inbound/:poId" element={<InboundDetailPage />} />
         </Routes>
@@ -115,20 +115,23 @@ describe("an inbound opens read-only", () => {
   });
 });
 
+/*
+ * Paying in full nudges ARRIVAL, not closing (2026-11-04). Close is offered
+ * only once the invoice is paid AND every unit is accepted, with no slot
+ * waiting for a serial. po-5 is ordered with two slots waiting; po-2 has
+ * arrived and holds nothing in QC.
+ */
 describe("paying an invoice off", () => {
+  const ARRIVED = "po-2";
   beforeEach(async () => {
-    /*
-     * One bucket owing money and nothing paid yet, so one payment settles the
-     * whole invoice. The demo order's shipping expense would otherwise leave
-     * Rp 150.000 behind — which is the point of `offerToClose` reading the
-     * STORE rather than a render, but not what these two pin — and the store
-     * carries the previous test's payment into the next one.
-     */
     await mutate((d) => {
-      const po = d.pos.find((p) => p.id === ORDER)!;
-      po.fees = [];
-      po.payments = [];
-      delete po.closedAt;
+      for (const id of [ORDER, ARRIVED]) {
+        const po = d.pos.find((p) => p.id === id)!;
+        po.fees = [];
+        po.payments = [];
+        delete po.closedAt;
+      }
+      d.pos.find((p) => p.id === ORDER)!.status = "ORDERED";
     });
   });
 
@@ -147,11 +150,25 @@ describe("paying an invoice off", () => {
     );
   }
 
-  it("asks whether to close the invoice, and closes it on yes", async () => {
+  it("asks to mark the units arrived when they have not, and never offers Close", async () => {
     renderOrder();
-    const owed = poTotals(getDb().pos.find((p) => p.id === ORDER)!).outstanding;
-    expect(owed).toBeGreaterThan(0);
+    await payItOff();
+    expect(
+      (await screen.findAllByText(/^Mark all \d+ units as arrived\?$/)).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText("This invoice is paid in full")).toBeNull();
+    const confirm = document.querySelector(".ant-modal-confirm") as HTMLElement;
+    await userEvent.click(
+      within(confirm).getByRole("button", { name: "Mark arrived" }),
+    );
+    await waitFor(() =>
+      expect(getDb().pos.find((p) => p.id === ORDER)!.status).toBe("RECEIVED"),
+    );
+    expect(screen.queryByText("This invoice is paid in full")).toBeNull();
+  });
 
+  it("offers to close once paid and every unit is accepted, and closes it on yes", async () => {
+    renderOrder(ARRIVED);
     await payItOff();
     // antd's confirm renders its title twice (the heading and its label).
     expect(
@@ -161,22 +178,61 @@ describe("paying an invoice off", () => {
       screen.getByRole("button", { name: /^Close invoice$/ }),
     );
     await waitFor(() =>
-      expect(getDb().pos.find((p) => p.id === ORDER)!.closedAt).toBeDefined(),
+      expect(getDb().pos.find((p) => p.id === ARRIVED)!.closedAt).toBeDefined(),
     );
   });
 
-  it("leaves it open on no — an invoice can be settled and still in QC", async () => {
-    renderOrder();
+  it("offers nothing while a unit of it is still in QC", async () => {
+    await mutate((d) => {
+      const po = d.pos.find((p) => p.id === "po-3")!;
+      po.fees = [];
+      po.payments = [];
+      delete po.closedAt;
+    });
+    renderOrder("po-3");
+    await payItOff();
+    await waitFor(() =>
+      expect(
+        poTotals(getDb().pos.find((p) => p.id === "po-3")!).fullyPaid,
+      ).toBe(true),
+    );
+    expect(screen.queryByText("This invoice is paid in full")).toBeNull();
+    expect(screen.queryByText(/^Mark all \d+ units as arrived\?$/)).toBeNull();
+  });
+
+  it("leaves it open on no", async () => {
+    renderOrder(ARRIVED);
     await payItOff();
     await screen.findAllByText("This invoice is paid in full");
     await userEvent.click(
       screen.getByRole("button", { name: "Leave it open" }),
     );
     await waitFor(() =>
-      expect(poTotals(getDb().pos.find((p) => p.id === ORDER)!).fullyPaid).toBe(
-        true,
-      ),
+      expect(
+        poTotals(getDb().pos.find((p) => p.id === ARRIVED)!).fullyPaid,
+      ).toBe(true),
     );
-    expect(getDb().pos.find((p) => p.id === ORDER)!.closedAt).toBeUndefined();
+    expect(getDb().pos.find((p) => p.id === ARRIVED)!.closedAt).toBeUndefined();
+  });
+});
+
+/*
+ * A closed invoice freezes its money and lines, not its QC (2026-11-04): Edit
+ * invoice still opens the bench on it.
+ */
+describe("a closed invoice", () => {
+  beforeEach(async () => {
+    await mutate((d) => {
+      d.pos.find((p) => p.id === "po-3")!.closedAt = new Date().toISOString();
+    });
+  });
+
+  it("keeps QC open behind Edit invoice while its facts stay read-only", async () => {
+    renderOrder("po-3");
+    await userEvent.click(editInvoice());
+    expect(
+      await screen.findByRole("button", { name: /Accept all/ }),
+    ).toBeTruthy();
+    expect(await screen.findByLabelText("Supplier")).toBeDisabled();
   });
 });

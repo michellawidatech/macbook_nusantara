@@ -494,9 +494,11 @@ describe("the service bench's finished visits", () => {
     expect(
       screen.queryByLabelText(`Delete the service visit of ${unit.serial}`),
     ).toBeNull();
-    await userEvent.click(
-      screen.getByRole("switch", { name: "Show finished" }),
-    );
+    // The finished visits are their own tab since 2026-11-03.
+    await userEvent.click(screen.getByRole("tab", { name: "Service history" }));
+    expect(
+      screen.queryByLabelText(`Add a charge to ${unit.serial}`),
+    ).toBeNull();
     const del = await screen.findByLabelText(
       `Delete the service visit of ${unit.serial}`,
     );

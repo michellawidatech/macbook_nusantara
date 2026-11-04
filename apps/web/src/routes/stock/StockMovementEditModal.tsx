@@ -5,14 +5,15 @@
  * The top of the dialog restates what the row IS and cannot become — the
  * direction, the unit or the counted product and its quantity, whose hand —
  * and the form below it holds what a correction may change: when, why, the
- * sentence, and on a unit's row the battery reading in the fields its era
- * reports. The rule, and what the unit does with the correction, is
+ * sentence. The battery reading left the form on 2026-11-03 (owner list) —
+ * `applyStockHistoryEdit` still takes one. The rule, and what the unit does with the correction, is
  * `lib/stockHistory.ts`.
  *
  * A wrong quantity on a counted row is not corrected here, and the dialog
  * says so: the pieces are on the stock ledger, and the ledger takes another
  * adjustment rather than a rewrite.
  */
+import { useOpenedWith } from "../../hooks/useUnchanged";
 import { useEffect, useState } from "react";
 import {
   App,
@@ -29,16 +30,6 @@ import {
 } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import { useTranslation } from "react-i18next";
-import { BatteryFields } from "../../components/BatteryFields";
-import {
-  batteryDraftOf,
-  batteryPatch,
-  defaultBatteryModeOfSku,
-  isBatteryFieldInRange,
-  type BatteryDraft,
-  type BatteryField,
-  type BatteryMode,
-} from "../../lib/battery.js";
 import { fmtNone } from "../../lib/format.js";
 import {
   applyStockHistoryEdit,
@@ -54,8 +45,6 @@ export interface StockMovementEditModalProps {
   readonly onClose: () => void;
 }
 
-const FIELDS: readonly BatteryField[] = ["health", "cycleCount", "fcc"];
-
 export function StockMovementEditModal({
   open,
   row,
@@ -68,23 +57,24 @@ export function StockMovementEditModal({
   const [day, setDay] = useState<Dayjs>(dayjs());
   const [reason, setReason] = useState("");
   const [description, setDescription] = useState("");
-  const [battery, setBattery] = useState<BatteryDraft>({});
 
   useEffect(() => {
     if (!open || row === null) return;
     setDay(dayjs(row.at));
     setReason(reasonLabel(db, row.reasonId));
     setDescription(row.description);
-    setBattery(batteryDraftOf(row));
   }, [open, row?.id]);
+  /** Grey until something changes (2026-11-04). */
+  const unchanged = useOpenedWith(
+    { day: day.valueOf(), reason, description },
+    open ? (row?.id ?? null) : null,
+  );
 
   const skuId = row === null ? undefined : stockHistorySkuId(db, row);
   const sku =
     skuId === undefined ? undefined : db.skus.find((s) => s.id === skuId);
   const product = sku ? `${sku.name} ${sku.variantLabel}` : fmtNone();
   const counted = row?.counted;
-  const mode: BatteryMode =
-    skuId === undefined ? "HEALTH" : defaultBatteryModeOfSku(db, skuId);
   const adjustmentReasons = db.reasons.filter(
     (r) => r.activity === "ADJUSTMENT" && r.active,
   );
@@ -98,21 +88,6 @@ export function StockMovementEditModal({
       );
       return;
     }
-    if (
-      counted === undefined &&
-      FIELDS.some(
-        (f) => battery[f] != null && !isBatteryFieldInRange(f, battery[f]),
-      )
-    ) {
-      message.error(
-        t(
-          "stockHistoryEdit.batteryOutOfRange",
-          "A battery reading is out of range.",
-        ),
-      );
-      return;
-    }
-    const reading = counted === undefined ? batteryPatch(battery, mode) : {};
     let applied = false;
     mutate((d) => {
       const reasonId = ensureReason(d, "ADJUSTMENT", typed);
@@ -120,7 +95,6 @@ export function StockMovementEditModal({
         at: day.toISOString(),
         reasonId,
         description,
-        ...reading,
       });
     });
     if (!applied) {
@@ -151,6 +125,7 @@ export function StockMovementEditModal({
       width={600}
       title={t("stockHistoryEdit.title", "Edit stock movement")}
       okText={t("stockHistoryEdit.save", "Save")}
+      okButtonProps={{ disabled: unchanged }}
       onOk={save}
       destroyOnHidden
     >
@@ -253,24 +228,6 @@ export function StockMovementEditModal({
               aria-label={t("stockHistoryEdit.description", "Description")}
             />
           </Form.Item>
-
-          {counted === undefined && (
-            <Form.Item
-              label={t("stockHistoryEdit.battery", "Battery")}
-              extra={t(
-                "stockHistoryEdit.unitFollows",
-                "The unit's own description and battery follow this correction while they still say what this movement recorded.",
-              )}
-            >
-              <BatteryFields
-                fallback={mode}
-                value={battery}
-                onChange={setBattery}
-                size="middle"
-                idPrefix={`stock-history-${row?.id ?? ""}`}
-              />
-            </Form.Item>
-          )}
         </Form>
       </Flex>
     </Modal>

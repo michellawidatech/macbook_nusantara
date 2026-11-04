@@ -7,6 +7,7 @@
  * warehouse line of this variant shares what is set here — the dialog says
  * so. `https://` only, as the column's CHECK and the store contract say.
  */
+import { sameValue } from "../../hooks/useUnchanged";
 import { useEffect } from "react";
 import { Alert, Form, Input, Modal } from "antd";
 import { useTranslation } from "react-i18next";
@@ -46,6 +47,22 @@ export function ListingLinksModal({
       instagramUrl: sku.instagramUrl ?? "",
     });
   }, [skuId]);
+  /** Grey until something changes (2026-11-04). */
+  const watched = Form.useWatch((v: Record<Field, string>) => v, form);
+  const unchanged =
+    watched === undefined ||
+    sameValue(
+      {
+        shopeeUrl: watched.shopeeUrl ?? "",
+        tokopediaUrl: watched.tokopediaUrl ?? "",
+        instagramUrl: watched.instagramUrl ?? "",
+      },
+      {
+        shopeeUrl: sku?.shopeeUrl ?? "",
+        tokopediaUrl: sku?.tokopediaUrl ?? "",
+        instagramUrl: sku?.instagramUrl ?? "",
+      },
+    );
 
   const label: Record<Field, string> = {
     shopeeUrl: t("listing.shopee", "Shopee"),
@@ -74,6 +91,7 @@ export function ListingLinksModal({
       open={skuId !== null}
       title={t("listing.title", "Listing links — {{what}}", { what: title })}
       okText={t("common.save", "Save")}
+      okButtonProps={{ disabled: unchanged }}
       onOk={() => void save()}
       onCancel={onClose}
       destroyOnHidden

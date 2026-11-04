@@ -25,22 +25,29 @@ const cells = (c: HTMLElement) =>
 const pageCss = (c: HTMLElement) => c.querySelector("style")?.textContent ?? "";
 
 /**
- * The owner's sticker (2026-10-22): always 50 × 30 mm, a square QR on the
- * left, the product name and the SKU code on the right, and no serial text.
+ * The owner's sticker (2026-10-22, serial back under the QR 2026-11-03):
+ * always 50 × 30 mm, a square QR on the left with the serial under it, the
+ * product name and the SKU code on the right.
  */
 describe("LabelSheet", () => {
-  it("prints a 50 × 30 mm page with the product name and SKU code and no serial text", async () => {
+  it("prints a 50 × 30 mm page with the serial under the QR and the name and SKU code beside it", async () => {
     const { container } = render(
       <LabelSheet labels={[label("C02740137JKM")]} />,
     );
+    // An UNNAMED page rule: the sheet prints in a frame of its own, so the
+    // browser sizes its paper from it (2026-11-03: it printed on A4).
     expect(pageCss(container)).toMatch(
-      /@page label-sheet \{ size: 50mm 30mm; margin: 0; \}/,
+      /@page \{ size: 50mm 30mm; margin: 0; \}/,
     );
     const [cell] = cells(container);
     expect(cell!.style.width).toBe("50mm");
     expect(cell!.style.height).toBe("30mm");
-    expect(cell!.textContent).toBe('MacBook Air 13" 2020AIR 13" 2020 I5 8/256');
-    expect(cell!.textContent).not.toContain("C02740137JKM");
+    expect(cell!.querySelector(".label-serial")?.textContent).toBe(
+      "C02740137JKM",
+    );
+    expect(cell!.textContent).toBe(
+      'C02740137JKMMacBook Air 13" 2020AIR 13" 2020 I5 8/256',
+    );
     // The serial is in the QR, which arrives asynchronously.
     await waitFor(() => {
       expect(cell!.querySelector(".label-qr svg")).not.toBeNull();
@@ -56,7 +63,7 @@ describe("LabelSheet", () => {
     expect(qr.style.height).toBe(`${QR_MM}mm`);
     expect(qr.style.left).toBe("2mm");
     expect(QR_MM).toBeLessThan(LABEL_HEIGHT_MM);
-    expect(QR_MM).toBeGreaterThanOrEqual(24);
+    expect(QR_MM).toBeGreaterThanOrEqual(20);
     expect(LABEL_WIDTH_MM).toBe(50);
   });
 
@@ -204,5 +211,15 @@ describe("PrintLabelsModal validation", () => {
         0,
       );
     });
+  });
+});
+
+describe("labelPrintDocument", () => {
+  it("is a page of its own sized to the sticker, holding only the stickers", async () => {
+    const { labelPrintDocument } = await import("../src/lib/labelPrint.js");
+    const html = labelPrintDocument('<div class="label-cell">x</div>');
+    expect(html).toMatch(/@page \{ size: 50mm 30mm; margin: 0; \}/);
+    expect(html).not.toMatch(/label-sheet/);
+    expect(html).toContain('<div class="label-cell">x</div>');
   });
 });

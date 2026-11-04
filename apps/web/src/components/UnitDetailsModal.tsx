@@ -78,6 +78,12 @@ export interface UnitDetailsModalProps<R extends UnitDetailRow> {
   readonly onAddUnit?: () => void;
   /** Anything the caller wants under the table. */
   readonly footer?: ReactNode;
+  /** The Done button's own action; `onClose` when absent. */
+  readonly onDone?: () => void;
+  /** "Done & accept 2 units" when some are ready (2026-11-04). */
+  readonly doneLabel?: string;
+  /** Grey while nothing has changed and nothing is ready. */
+  readonly doneDisabled?: boolean;
 }
 
 export function UnitDetailsModal<R extends UnitDetailRow>({
@@ -96,6 +102,9 @@ export function UnitDetailsModal<R extends UnitDetailRow>({
   actionsWidth = COLUMN.actionsPair,
   onAddUnit,
   footer,
+  onDone,
+  doneLabel,
+  doneDisabled,
 }: UnitDetailsModalProps<R>) {
   const { t } = useTranslation();
 
@@ -194,8 +203,12 @@ export function UnitDetailsModal<R extends UnitDetailRow>({
         </Flex>
       }
       footer={
-        <Button type="primary" onClick={onClose}>
-          {t("common.done", "Done")}
+        <Button
+          type="primary"
+          disabled={doneDisabled}
+          onClick={onDone ?? onClose}
+        >
+          {doneLabel ?? t("common.done", "Done")}
         </Button>
       }
       destroyOnHidden

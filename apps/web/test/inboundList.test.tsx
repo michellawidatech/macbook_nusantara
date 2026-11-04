@@ -32,6 +32,8 @@ function renderList() {
 const code = () => getDb().pos.find((p) => p.id === ORDER)!.code;
 
 beforeEach(() => {
+  // The list tests read the All invoices tab; the tab tests clear this.
+  localStorage.setItem("nusantara.draft.inbound.tab", JSON.stringify("ALL"));
   // One invoice of Rp4.100.000 × 2, half of it paid, open for payments.
   mutate((d) => {
     const po = d.pos.find((p) => p.id === ORDER)!;
@@ -104,22 +106,26 @@ describe("the Inbound list", () => {
 });
 
 /**
- * Waiting for QC (owner ask 2026-10-26): every unit the bench still owes a
- * grade, across every invoice, above the list — search a product to find its
- * invoices, an invoice to find its units.
+ * The six tabs (owner revision 2026-11-04): Needs QC, Arrived not paid, All
+ * and Closed list invoices; Back from service and Ready to accept list serials.
+ * Needs QC is the default.
  */
-describe("Waiting for QC", () => {
+describe("the Inbound tabs", () => {
   const SERIAL = "C02QCWAIT01";
   const INVOICE = "INV-QCFIND-77";
 
   /** po-5 arrived: one line scanned and still in QC, one not scanned yet. */
   beforeEach(() => {
+    localStorage.clear();
     mutate((d) => {
       const po = d.pos.find((p) => p.id === ORDER)!;
       po.status = "RECEIVED";
       po.invoice = INVOICE;
       delete po.noInvoice;
       po.items[0]!.serial = SERIAL;
+      d.units = d.units.filter((u) => u.serial !== SERIAL);
+      d.events = d.events.filter((e) => e.serial !== SERIAL);
+      d.services = d.services.filter((v) => v.serial !== SERIAL);
       d.units.push({
         serial: SERIAL,
         skuId: "m-pro13-2016-v1",
@@ -132,97 +138,126 @@ describe("Waiting for QC", () => {
     });
   });
 
-  const waitingCard = () =>
-    screen
-      .getByText(/^Waiting for QC \(\d+\)$/)
-      .closest(".ant-card") as HTMLElement;
+  const panel = () => screen.getByRole("tabpanel");
 
-  /** The group row's button: one product of one invoice (2026-10-31). */
-  const groupName = () => new RegExp(`^QC .* on ${code()}$`);
-
-  it("lists one row per product of an invoice, with its Qty", () => {
+  it("opens on Needs QC, one row per invoice with its To QC count", async () => {
     renderList();
-    const card = waitingCard();
-    // The unit in QC and the slot nobody has scanned are one product.
-    const rows = within(card).getAllByRole("button", { name: groupName() });
-    expect(rows).toHaveLength(1);
-    expect(within(rows[0]!).getByText("2")).toBeInTheDocument();
-    expect(within(rows[0]!).getByText("1 no serial")).toBeInTheDocument();
-    expect(within(card).getAllByText(INVOICE).length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("tab", { name: /^Needs QC \(\d+\)$/ }),
+    ).toHaveAttribute("aria-selected", "true");
+    const rows = within(panel()).getAllByRole("button", { name: /^Open PI-/ });
+    const mine = rows.find((r) => within(r).queryByText(code()))!;
+    expect(within(mine).getByText("2")).toBeInTheDocument();
   });
 
-  it("finds an invoice's units by the supplier's invoice number", async () => {
+  it("opens an invoice's waiting units for QC in place", async () => {
     renderList();
-    const card = waitingCard();
-    await userEvent.type(
-      within(card).getByPlaceholderText(
-        "Search product, SKU code, serial, order or invoice number",
-      ),
-      INVOICE,
-    );
-    expect(
-      await within(card).findAllByRole("button", { name: groupName() }),
-    ).toHaveLength(1);
-    expect(
-      within(card).queryAllByRole("button", { name: /^QC .* on / }),
-    ).toHaveLength(1);
-  });
-
-  it("finds a unit by its serial, and opens its units for QC in place", async () => {
-    renderList();
-    const card = waitingCard();
-    await userEvent.type(
-      within(card).getByPlaceholderText(
-        "Search product, SKU code, serial, order or invoice number",
-      ),
-      SERIAL,
-    );
-    await waitFor(() =>
-      expect(
-        within(card).queryAllByRole("button", { name: /^QC .* on / }),
-      ).toHaveLength(1),
-    );
     await userEvent.click(
-      within(card).getByRole("button", { name: /^QC 2 × / }),
+      within(panel()).getByRole("button", {
+        name: `QC the units of ${code()}`,
+      }),
     );
-    // The two units' popup, over the list — not the invoice page.
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByDisplayValue(SERIAL)).toBeInTheDocument();
-    // Both of the product's waiting units: the scanned one and the slot.
-    expect(
-      within(dialog).getByText("2 unit(s) · " + code()),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/^Waiting for QC/)).toBeInTheDocument();
   });
 
-  it("counts each invoice's units to QC, and searches the invoice number", async () => {
+  it("finds an invoice by the supplier's number", async () => {
     renderList();
-    const list = screen
-      .getByPlaceholderText("Search order, supplier or invoice number")
-      .closest(".ant-card") as HTMLElement;
     await userEvent.type(
-      within(list).getByPlaceholderText(
+      within(panel()).getByPlaceholderText(
         "Search order, supplier or invoice number",
       ),
       INVOICE,
     );
-    const rows = await within(list).findAllByRole("button", {
-      name: /^Open PI-/,
-    });
-    expect(rows).toHaveLength(1);
-    expect(within(rows[0]!).getByText("To QC")).toBeInTheDocument();
-    expect(within(rows[0]!).getByText("2")).toBeInTheDocument();
+    expect(
+      await within(panel()).findAllByRole("button", { name: /^Open PI-/ }),
+    ).toHaveLength(1);
   });
 
-  it("is not drawn when nothing waits", () => {
+  it("lists a complete unit on Ready to accept, and Accept all shelves it", async () => {
     mutate((d) => {
-      d.units = d.units.filter((u) => u.status !== "QC" || u.poId === null);
-      for (const po of d.pos) {
-        if (po.status === "RECEIVED") po.status = "ORDERED";
-      }
+      const u = d.units.find((x) => x.serial === SERIAL)!;
+      u.grade = "A";
+      u.description = "Mulus";
     });
     renderList();
-    expect(screen.queryByText(/^Waiting for QC/)).toBeNull();
+    await userEvent.click(
+      screen.getByRole("tab", { name: /^Ready to accept/ }),
+    );
+    expect(within(panel()).getByText(SERIAL)).toBeInTheDocument();
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Accept all \(1\)/ }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Accept them" }),
+    );
+    await waitFor(() =>
+      expect(getDb().units.find((u) => u.serial === SERIAL)!.status).toBe(
+        "TERSEDIA",
+      ),
+    );
+  });
+
+  it("lists a unit back from service with its charges, and takes one more", async () => {
+    const at = "2026-11-03T03:00:00.000Z";
+    mutate((d) => {
+      d.services.push({
+        id: "v-back",
+        serial: SERIAL,
+        fromLocationId: "wh-1",
+        openedAt: "2026-11-01T03:00:00.000Z",
+        closedAt: at,
+        toLocationId: "wh-1",
+        fees: [{ id: "f1", kind: "LABOUR", amount: 250_000, at, staff: "x" }],
+        note: "Ganti keyboard",
+        raisedBy: "QC",
+        staff: "x",
+      });
+      d.events.push({
+        serial: SERIAL,
+        seq: 99,
+        type: "DICATAT",
+        at,
+        toStatus: "QC",
+      } as never);
+    });
+    renderList();
+    await userEvent.click(
+      screen.getByRole("tab", { name: /^Back from service/ }),
+    );
+    expect(within(panel()).getByText("Ganti keyboard")).toBeInTheDocument();
+    await userEvent.click(
+      within(panel()).getByRole("button", {
+        name: `Add a charge to ${SERIAL}`,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Amount"), "50000");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Record it" }),
+    );
+    await waitFor(() =>
+      expect(
+        getDb()
+          .services.find((v) => v.id === "v-back")!
+          .fees.map((f) => f.amount),
+      ).toEqual([250_000, 50_000]),
+    );
+  });
+
+  it("lists a closed invoice under Closed, and remembers the tab", async () => {
+    mutate((d) => {
+      d.pos.find((p) => p.id === ORDER)!.closedAt = "2026-11-02T00:00:00.000Z";
+    });
+    const { unmount } = renderList();
+    await userEvent.click(screen.getByRole("tab", { name: /^Closed/ }));
+    expect(within(panel()).getByText(code())).toBeInTheDocument();
+    unmount();
+    renderList();
+    expect(screen.getByRole("tab", { name: /^Closed/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 });
 

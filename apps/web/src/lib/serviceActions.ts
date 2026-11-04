@@ -507,3 +507,18 @@ export function planVisitDeletion(
     expenseIds: expenses.map((e) => e.id),
   };
 }
+
+/**
+ * Whether a charge may be added to a visit (2026-11-04): while it is open, or
+ * — once closed — while the unit is in QC having just come back from it
+ * (`backFrom`, from `backFromService`). The re-check is when the last bill
+ * usually turns up.
+ */
+export function canAddCharge(
+  rec: Pick<ServiceRec, "id" | "closedAt">,
+  unit: { readonly status: string } | undefined,
+  backFrom: Pick<ServiceRec, "id"> | undefined,
+): boolean {
+  if (rec.closedAt === undefined) return true;
+  return unit?.status === "QC" && backFrom?.id === rec.id;
+}

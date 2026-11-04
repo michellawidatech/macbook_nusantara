@@ -358,6 +358,7 @@ describe("the service bench", () => {
     );
     await settle();
     const unit = getDb().units.find((u) => u.serial === serial)!;
-    expect(unit).toMatchObject({ status: "TERSEDIA", locationId: bench.id });
+    // Back to QC for a re-check, not onto the shelf (2026-11-04).
+    expect(unit).toMatchObject({ status: "QC", locationId: bench.id });
   });
 });

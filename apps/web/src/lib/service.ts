@@ -438,3 +438,51 @@ export function editFee(
     ),
   };
 }
+
+/**
+ * The visit a unit in QC has just come back from (2026-11-04: every unit
+ * back from service is re-QC'd). A unit's newest event must be the
+ * `DICATAT` to QC that *Back in stock* wrote at the visit's `closedAt` —
+ * once QC accepts it, or anything else happens to it, it is no longer
+ * "back from service". Works for a unit on no invoice too.
+ */
+export function backFromService(
+  store: {
+    readonly services: readonly ServiceRec[];
+    readonly events: readonly {
+      readonly serial: string;
+      readonly seq?: number;
+      readonly type: string;
+      readonly at: string;
+      readonly toStatus: string;
+    }[];
+    readonly units: readonly {
+      readonly serial: string;
+      readonly status: string;
+    }[];
+  },
+  serial: string,
+): ServiceRec | undefined {
+  const unit = store.units.find((u) => u.serial === serial);
+  if (unit?.status !== "QC") return undefined;
+  let newest: (typeof store.events)[number] | undefined;
+  for (const e of store.events)
+    if (
+      e.serial === serial &&
+      (newest === undefined ||
+        e.at > newest.at ||
+        (e.at === newest.at && (e.seq ?? 0) > (newest.seq ?? 0)))
+    )
+      newest = e;
+  if (!newest || newest.type !== "DICATAT" || newest.toStatus !== "QC")
+    return undefined;
+  let visit: ServiceRec | undefined;
+  for (const r of store.services)
+    if (
+      r.serial === serial &&
+      r.closedAt !== undefined &&
+      (visit === undefined || r.closedAt > visit.closedAt!)
+    )
+      visit = r;
+  return visit && visit.closedAt === newest.at ? visit : undefined;
+}

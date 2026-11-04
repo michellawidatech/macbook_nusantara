@@ -98,3 +98,47 @@ describe("batchProblems by reason", () => {
     expect(run("OUT", "INTERNAL", "NEWONE")[0]).toMatch(/not in the system/);
   });
 });
+
+describe("a counted transfer", () => {
+  const counted = (fromId: string, locationId: string) =>
+    batchProblems(
+      {
+        kind: "OUT",
+        reason: "Stock transfer",
+        lines: [],
+        counted: [
+          { skuId: "sku-c", label: "MagSafe 3", qty: 1, onHand: 4, fromId },
+        ],
+        locationId,
+        mode: "TRANSFER",
+      },
+      () => undefined,
+      (s) => s,
+    );
+
+  it("refuses to move pieces into the warehouse they come from", () => {
+    expect(counted("wh-1", "wh-2")).toEqual([]);
+    expect(counted("wh-2", "wh-2")[0]).toMatch(/already in wh-2/);
+  });
+});
+
+describe("lineProblems", () => {
+  it("names a transfer into the unit's own warehouse on the row itself", async () => {
+    const { lineProblems } = await import("../src/lib/adjustmentBatch.js");
+    const unit = {
+      serial: "FV1298736914",
+      status: "TERSEDIA",
+      locationId: "wh-2",
+    } as Unit;
+    const ctx = { kind: "OUT" as const, mode: "TRANSFER" as const };
+    const at = (locationId: string) =>
+      lineProblems(
+        { serial: unit.serial },
+        { ...ctx, locationId },
+        () => unit,
+        (s) => s,
+      );
+    expect(at("wh-1")).toEqual([]);
+    expect(at("wh-2")[0]).toMatch(/already in wh-2/);
+  });
+});

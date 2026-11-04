@@ -320,9 +320,11 @@ export function ServiceBatchModal({
                 }),
               );
           }
+          // Back to QC for a re-check, never straight onto the shelf
+          // (owner, 2026-11-04: "every serviced unit will go to QC").
           appendEvent(d, r.serial, {
             type: "DICATAT",
-            toStatus: "TERSEDIA",
+            toStatus: "QC",
             toLocationId: dest,
             at,
             note: [

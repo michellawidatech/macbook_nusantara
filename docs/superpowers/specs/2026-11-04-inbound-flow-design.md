@@ -71,14 +71,16 @@ activity log reads "grade None → A", then "A → None".
 
 They replace the *Waiting for QC* card. *Trade-in* stays as the seventh tab.
 
-| Tab | Rows | Grouping | Actions |
+Four tabs list **invoices** and two list **serials** (owner, 2026-11-04).
+
+| Tab | Rows | One row per | Actions |
 |---|---|---|---|
-| **Needs QC** (default) | units in QC on an arrived invoice, not yet `qcReady`, plus serial-less slots | invoice × product, with Qty | QC (opens the popup in place), Add payment |
-| **Back from service** | units in QC whose newest event is the *Back in stock* `DICATAT` of a closed visit (`backFromService`) | one row per unit: serial, product, the visit's description (`note`) and charges | QC |
-| **Ready to accept** | units in QC that pass `qcReady` (serial, grade, a description when second-hand) | invoice × product | Accept (per group), **Accept all (n)** |
-| **Arrived, not paid** | invoices RECEIVED with a balance owed (`poTotals`) | one row per invoice | QC, Add payment |
-| **All invoices** | today's Invoices list, unchanged | per invoice | as today |
-| **Closed** | invoices with `closedAt` | per invoice: payment status, units QC'd / total | open |
+| **Needs QC** (default) | invoices that have arrived and still have units in QC that are not `qcReady`, or serial-less slots | invoice: supplier, number, date, *To QC* count | QC (opens that invoice's popup in place), Add payment |
+| **Back from service** | units in QC whose newest event is the *Back in stock* `DICATAT` of a closed visit (`backFromService`) | serial: product, the visit's description (`note`), its charges and their total | QC, **+ Charge** (the Service page's charge dialog, adding to the closed visit) |
+| **Ready to accept** | units in QC that pass `qcReady` (serial, grade, a description when second-hand) | serial: product, invoice, grade, battery, sell price | Accept, **Accept all (n)** |
+| **Arrived, not paid** | invoices RECEIVED with a balance owed (`poTotals`) | invoice | QC, Add payment |
+| **All invoices** | today's Invoices list, unchanged | invoice | as today |
+| **Closed** | invoices with `closedAt` | invoice: payment status, units QC'd / total | open |
 
 - A unit counts once: *Ready to accept* takes it out of *Needs QC*, and *Back
   from service* takes it out of both.
@@ -88,10 +90,17 @@ They replace the *Waiting for QC* card. *Trade-in* stays as the seventh tab.
   card does now, so the bench's rules exist once.
 - The tab is remembered per device (`usePersistentState`), and the default
   is *Needs QC*.
+- **A charge on a closed visit** (owner, 2026-11-04: *"for service we can
+  also add service fee"*). The re-QC tab offers the same *+ Charge* as the
+  Service page, writing a `ServiceFee` (and its `UNIT` expense when paid) on
+  the visit the unit came back from. It reaches `costOfUnit` like any repair.
+  The rule for when a charge may be added is written down in
+  `lib/serviceActions.ts`: an open visit, or the closed visit a unit still in
+  QC came back from. The plan checks what the Service page allows today.
 - Code: `lib/inboundTabs.ts` holds the six row builders, pure and tested,
   reusing `qcWaitingRows`, `qcReady`, `poTotals` and `poClosed`.
-  `InboundPage.tsx` renders them. `QcWaitingCard` becomes the *Needs QC* tab's
-  body.
+  `InboundPage.tsx` renders them. `QcWaitingCard`'s grouping is retired: the
+  *Needs QC* rows are invoices now.
 
 ### 4. The unit popup saves on Done
 

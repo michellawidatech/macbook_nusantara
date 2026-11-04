@@ -3675,6 +3675,60 @@ Decisions that outlived those documents:
   This partly reverses 2026-08-26's pager decision; every other list keeps
   its pager. ⚠️ A row past the drawn batch is not in the DOM — a test hunting
   an old row presses *Show more* (jsdom has no IntersectionObserver).
+- **The 2026-11-03 fixes list, phase 1 — 2026-11-04.** The owner's PDF
+  (`.context/fixes-2026-11-03.md` has the phases and answers).
+  - **Labels print from a frame of their own** (`lib/labelPrint.ts`). The
+    named `@page label-sheet` sat on an ABSOLUTELY positioned root, and CSS
+    ignores `page:` on an out-of-flow box — so Chrome printed on A4 and the
+    thermal driver shrank it (small QR, text sideways). The frame's document
+    holds only the stickers and an unnamed `@page { size: 50mm 30mm }`. The
+    **serial is printed under the QR again** (owner sketch; QR 22 mm),
+    reversing 2026-10-22's "no serial text". `docs/label-printer-windows.md`
+    is the shop's one-time driver setup and the `--kiosk-printing` shortcut.
+  - **A service charge is COGS, never the invoice** — already true, now pinned
+    in `test/serviceActions.test.ts`, including a unit sent at arrival.
+  - Inventory: one toolbar row, no *Import sell prices* (`PriceImportModal`
+    and `lib/priceImport.ts` dormant), no battery-band `?`; a line is *Set
+    price* + ⋯ (Print barcode, Listing links); unit rows show one photo and
+    "+n". Edit stock movement asks no battery. Service is two tabs, *In
+    service* and *Service history* (was a Show-finished switch). *Never
+    serviced* is a dropdown; battery suffixes are grey. A counted transfer
+    into the warehouse it comes from is refused.
+- **Inbound flow, phase 2 — 2026-11-04** (spec
+  `docs/superpowers/specs/2026-11-04-inbound-flow-design.md`, plan
+  `docs/superpowers/plans/2026-11-04-inbound-flow.md`). No schema change.
+  - **Paying in full nudges arrival** (`notArrivedCount`): "Mark all n units as
+    arrived?". **Close is offered only** when `readyToClose` — arrived, paid in
+    full, nothing in QC, no slot waiting — after a payment or the last Accept.
+    The Close button still never refuses.
+  - **Close freezes the money, not the bench.** `moneyLocked = closed ||
+    !editing` gates facts, lines, expenses, payments; `qcLocked = !editing`
+    gates QC, Accept, arrival and the scanner. A closed invoice shows *Edit
+    invoice* only.
+  - **Back in stock goes to QC** (`DICATAT` → QC), every visit. `backFromService`
+    (lib/service.ts) finds the visit; `canAddCharge` lets a charge land on it
+    while the unit is in QC; `components/ServiceChargeModal` is the Service
+    page's charge dialog, shared.
+  - **Inbound is six tabs + Trade-in** (`lib/inboundTabs.ts`): Needs QC (default,
+    per invoice, with `OrphanQcCard`), Back from service and Ready to accept (per
+    serial, `routes/inbound/SerialTabTable.tsx`), Arrived not paid, All, Closed.
+    The tab is kept on the device (`inbound.tab`). `QcWaitingCard` is unmounted
+    and dormant. The nav badge adds back-from-service units.
+  - **The unit popup holds its QC answers until Done** (`lib/popupEdits.ts`):
+    grade, description, never serviced, battery and sell price of a unit that
+    already has a serial, kept per field as plain data on this device
+    (`inbound.popup.<po>`). The page reads the store with them laid on top
+    (`withEdits`), so the cells, Accept and *Done & accept n units* see them;
+    Done (and a row's Accept, and *Accept all*) writes them in ONE mutation onto
+    the store as it is then, with one "Graded X" line only if the grade
+    changed. × with changes asks *Discard changes?*. **Scans, serials and row
+    decisions commit at once**, as before. ⚠️ A store-wide commit hold was
+    built first and REMOVED after review: carrying held edits as whole rows
+    over another till's change would have deleted that change on the server.
+  - **A Save is grey until something changed**: `useUnchanged` / `useOpenedWith`
+    (hooks/useUnchanged.ts) on Edit unit, Edit stock movement, Set price,
+    Listing links, Edit transaction and the payments dialog. ⚠️ Settings forms
+    not yet.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

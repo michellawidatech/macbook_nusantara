@@ -13,6 +13,7 @@
  * permits exactly that one edit — the denormalised serial, on rows that still
  * belong to the same unit — and refuses every other change to a ledger row.
  */
+import { useOpenedWith } from "../../hooks/useUnchanged";
 import { useEffect, useState } from "react";
 import { NeverServicedField } from "../../components/NeverServicedField";
 import { App, Flex, Form, Input, Modal, Select } from "antd";
@@ -64,6 +65,20 @@ export function UnitEditModal({ open, unit, onClose }: UnitEditModalProps) {
     setBuy(unit.buy ?? 0);
     setNeverServiced(unit.neverServiced);
   }, [open, unit?.serial]);
+  /** Grey until something changes (2026-11-04). */
+  const unchanged = useOpenedWith(
+    {
+      serial,
+      grade,
+      battery,
+      locationId,
+      rackId,
+      description,
+      buy,
+      neverServiced,
+    },
+    open ? (unit?.serial ?? null) : null,
+  );
 
   const mode =
     unit === null
@@ -137,6 +152,7 @@ export function UnitEditModal({ open, unit, onClose }: UnitEditModalProps) {
       zIndex={1100}
       title={t("unitEdit.title", "Edit unit")}
       okText={t("unitEdit.save", "Save")}
+      okButtonProps={{ disabled: unchanged }}
       onOk={save}
       destroyOnHidden
     >

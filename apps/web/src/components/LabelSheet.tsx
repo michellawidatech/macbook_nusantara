@@ -10,10 +10,10 @@
  * miss it. A label is a page: `@page { size: 50mm 30mm; margin: 0 }`, each
  * sticker exactly that size with a page break after it.
  *
- * Landscape. On the LEFT a square QR of the serial as stored, 26 mm, which
- * leaves a 2 mm margin above and below. On the RIGHT two blocks of text: the
- * product's name and, under it, the SKU code (`Sku.code`). **No serial text**
- * (owner answer) — the serial is in the QR and on the unit already.
+ * Landscape. On the LEFT a square QR of the serial as stored, 22 mm, with the
+ * serial printed under it (owner sketch 2026-11-03, reversing 2026-10-22's
+ * "no serial text"). On the RIGHT two blocks of text: the product's name and,
+ * under it, the SKU code (`Sku.code`).
  *
  * Everything is in absolute millimetres, positioned rather than flowed, and
  * each text block is clamped to three lines and clipped: a long product name
@@ -31,17 +31,19 @@
  * `1` belongs, a dash — is named and printed anyway. See that function for why
  * the two get different answers.
  *
- * Printing reuses the visibility switch in global.css rather than opening a
- * second window, the same mechanism `Invoice` uses, on a NAMED page
- * (`label-sheet`) so the invoice's 12 mm margin and the sticker's zero do not
- * overwrite each other.
+ * Printing goes through a frame of its own (`lib/labelPrint.ts`, 2026-11-03).
+ * Until then it reused the app page's visibility switch on a NAMED page,
+ * which the browser ignored on an absolutely positioned root — so the
+ * stickers printed on A4 and the thermal driver shrank them.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, App, Button, Flex, Modal, Tag, Typography } from "antd";
 import { PrinterOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import QRCode from "qrcode";
 import type { LabelDatum } from "../lib/labels.js";
+import { printLabels } from "../lib/labelPrint.js";
+import { LABEL_HEIGHT_MM, LABEL_WIDTH_MM } from "../lib/labelSize.js";
 import {
   inspectStoredSerial,
   isPrintableSerial,
@@ -51,13 +53,13 @@ import {
 
 export type { LabelDatum };
 
-/** The one sticker the shop prints. */
-export const LABEL_WIDTH_MM = 50;
-export const LABEL_HEIGHT_MM = 30;
+export { LABEL_HEIGHT_MM, LABEL_WIDTH_MM };
 /** Ink stays this far off the die-cut edge. */
 const PAD_MM = 2;
-/** The QR's side: the sticker's height less a margin above and below. */
-export const QR_MM = LABEL_HEIGHT_MM - PAD_MM * 2;
+/** The serial's line under the QR (2026-11-03: the serial is back). */
+const SERIAL_LINE_MM = 4;
+/** The QR's side: the sticker's height less the margins and the serial line. */
+export const QR_MM = LABEL_HEIGHT_MM - PAD_MM * 2 - SERIAL_LINE_MM;
 /** Between the QR and the text. */
 const GUTTER_MM = 1.5;
 
@@ -66,7 +68,7 @@ const GUTTER_MM = 1.5;
  * the size is stated where the sticker is drawn; `@page` has no selector, so
  * the later of the two wins and they say the same thing.
  */
-export const LABEL_PAGE_RULE = `@page label-sheet { size: ${LABEL_WIDTH_MM}mm ${LABEL_HEIGHT_MM}mm; margin: 0; }`;
+export const LABEL_PAGE_RULE = `@page { size: ${LABEL_WIDTH_MM}mm ${LABEL_HEIGHT_MM}mm; margin: 0; }`;
 
 /** `qrcode`'s SVG carries a viewBox and no size; it fills its box. */
 const QR_SVG_RULE =
@@ -174,6 +176,26 @@ function Label({
         // Locally generated markup from `qrcode`, never user HTML.
         dangerouslySetInnerHTML={{ __html: qrSvg ?? "" }}
       />
+      <div
+        className="label-serial"
+        style={{
+          position: "absolute",
+          left: `${PAD_MM}mm`,
+          top: `${PAD_MM + QR_MM}mm`,
+          width: `${QR_MM}mm`,
+          height: `${SERIAL_LINE_MM}mm`,
+          lineHeight: `${SERIAL_LINE_MM}mm`,
+          textAlign: "center",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          fontFamily: "Arial, Helvetica, sans-serif",
+          fontWeight: 700,
+          // Smaller for a long second-hand serial, so it stays under the QR.
+          fontSize: `${Math.min(2.6, QR_MM / Math.max(1, datum.serial.length * 0.62))}mm`,
+        }}
+      >
+        {datum.serial}
+      </div>
       <div
         style={{
           position: "absolute",
@@ -371,6 +393,8 @@ export function PrintLabelsModal({
 }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
+  /** The plain copy of the stickers, which is what the print frame gets. */
+  const printable = useRef<HTMLDivElement>(null);
   /**
    * A serial with nothing printable in it stops the whole run, rather than
    * being quietly dropped: skipping it would print 35 stickers where 36 were
@@ -413,7 +437,8 @@ export function PrintLabelsModal({
               );
               return;
             }
-            window.print();
+            // A frame of its own, sized to the sticker (lib/labelPrint.ts).
+            printLabels(printable.current?.innerHTML ?? "");
           }}
         >
           {t("labels.print", "Print")}
@@ -442,7 +467,7 @@ export function PrintLabelsModal({
         <LabelSheet labels={labels} preview />
       </div>
       {/* The copy that prints: no outline, no spacing between stickers. */}
-      <div className="label-print-only">
+      <div className="label-print-only" ref={printable}>
         <LabelSheet labels={labels} />
       </div>
     </Modal>

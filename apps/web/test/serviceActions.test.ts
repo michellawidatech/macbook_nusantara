@@ -422,3 +422,51 @@ describe("withStockOnHand", () => {
     ]);
   });
 });
+
+/*
+ * Owner check 2026-11-03: "make sure the service didn't count as invoice /
+ * change the value of the invoice — even if the service came when the unit
+ * arrived. The service should be counted in COGS, not the invoice."
+ */
+describe("a service charge and the invoice", () => {
+  it("adds to the unit's COGS and leaves its invoice's total alone", async () => {
+    const { getDb } = await import("../src/mock/store.js");
+    const { poTotals } = await import("../src/lib/inbound.js");
+    const { costOfUnit } = await import("../src/lib/service.js");
+    const db = structuredClone(getDb());
+    // A unit straight off an invoice, still in QC: sent the moment it arrived.
+    const unit = db.units.find((u) => u.status === "QC" && u.poId)!;
+    const po = db.pos.find((p) => p.id === unit.poId)!;
+    const before = poTotals(po);
+    const costBefore = costOfUnit(unit, db);
+
+    const plan = planSendToService(
+      send({
+        unit: { serial: unit.serial, locationId: unit.locationId },
+        dest: db.warehouses.find((w) => w.id !== unit.locationId)!.id,
+        shippingFee: 40_000,
+        shippingPaid: "TRANSFER",
+        quote: 300_000,
+        poId: po.id,
+        raisedBy: "QC",
+      }),
+    );
+    db.services.push(plan.visit);
+    db.expenses.push(...plan.expenses);
+
+    expect(poTotals(db.pos.find((p) => p.id === po.id)!)).toEqual(before);
+    expect(costOfUnit(unit, db)).toBe(costBefore + 340_000);
+  });
+});
+
+describe("canAddCharge", () => {
+  it("takes a charge on an open visit, or the closed one a unit in QC came back from", async () => {
+    const { canAddCharge } = await import("../src/lib/serviceActions.js");
+    const open = visit();
+    const closed = visit({ id: "v2", closedAt: "2026-10-22T00:00:00.000Z" });
+    expect(canAddCharge(open, { status: "SERVIS" }, undefined)).toBe(true);
+    expect(canAddCharge(closed, { status: "QC" }, closed)).toBe(true);
+    expect(canAddCharge(closed, { status: "TERSEDIA" }, undefined)).toBe(false);
+    expect(canAddCharge(closed, { status: "QC" }, undefined)).toBe(false);
+  });
+});

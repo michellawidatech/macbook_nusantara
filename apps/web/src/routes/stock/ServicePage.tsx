@@ -76,6 +76,7 @@
  *   drew a raw `wh-04` in the box.
  */
 import { ServiceBatchModal } from "../../components/ServiceBatchModal";
+import { ServiceChargeModal } from "../../components/ServiceChargeModal";
 import { useMemo, useState } from "react";
 import {
   App,
@@ -85,12 +86,10 @@ import {
   Flex,
   Form,
   Input,
-  InputNumber,
   Modal,
   Popconfirm,
   Select,
   Statistic,
-  Switch,
   Table,
   Tag,
   Tooltip,
@@ -106,38 +105,24 @@ import dayjs, { type Dayjs } from "dayjs";
 import { SerialLink } from "../../components/SerialLink";
 import { useTranslation } from "react-i18next";
 import { PageContainer } from "../../components/PageContainer";
-import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
-import {
-  PaidWithField,
-  usePaidWithLabel,
-} from "../../components/SendToServiceModal";
+import { usePaidWithLabel } from "../../components/SendToServiceModal";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import {
   SERVICE_FEE_KINDS,
   benchRows,
-  editFee,
   visitCost,
   type BenchRow,
   type ServiceFee,
-  type ServiceFeeKind,
 } from "../../lib/service.js";
 import {
   chargeExpense,
   feePayment,
   instantClosed,
-  localDay,
   planChargeDeletion,
   planVisitDeletion,
   type PaidWith,
 } from "../../lib/serviceActions.js";
-import {
-  appendEvent,
-  mutate,
-  nextId,
-  removeEvent,
-  useDb,
-  currentStaffName,
-} from "../../mock/store.js";
+import { mutate, nextId, removeEvent, useDb } from "../../mock/store.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import { warehouseLabelOf } from "../../lib/warehouses.js";
 import type { MockDb } from "../../mock/seed.js";
@@ -176,12 +161,6 @@ export function ServicePage() {
   /** The visit whose deletion is being confirmed, and what has been typed. */
   const [deleting, setDeleting] = useState<BenchRow | null>(null);
   const [deleteTyped, setDeleteTyped] = useState("");
-  const [feeForm] = Form.useForm<{
-    kind: ServiceFeeKind;
-    label?: string;
-    amount: number;
-    paidWith?: PaidWith;
-  }>();
   const [payForm] = Form.useForm<{
     method: Exclude<PaidWith, "UNPAID">;
     day: Dayjs;
@@ -192,13 +171,16 @@ export function ServicePage() {
    * what is away NOW, and a list that reopens full of finished work is a list
    * that hides it.
    */
-  const [showFinished, setShowFinished] = useState(false);
+  // Two tabs since 2026-11-03 (owner list): "In service" and "Service
+  // history", where a switch used to fold the finished visits into one list.
+  const [tab, setTab] = useState<"OPEN" | "HISTORY">("OPEN");
   const allRows = useMemo(
-    () => benchRows(db, Date.now(), { includeClosed: showFinished }),
-    [db.services, db.units, db.pos, db.events, showFinished],
+    () => benchRows(db, Date.now(), { includeClosed: true }),
+    [db.services, db.units, db.pos, db.events],
   );
   /** What is away now — what the cards count. */
   const rows = allRows.filter((r) => !r.closed);
+  const listed = tab === "OPEN" ? rows : allRows.filter((r) => r.closed);
 
   const unitOf = (serial: string) => db.units.find((u) => u.serial === serial);
   const skuOf = (serial: string) => {
@@ -216,127 +198,6 @@ export function ServicePage() {
    * transaction that promises it to a repairer — `SendToServiceModal` writes
    * it — so there is nothing left to confirm.
    */
-
-  /**
-   * Record a charge, or correct one already recorded.
-   *
-   * One handler for both because they are one form. What differs is only
-   * whether an id already exists: `editFee` rewrites that row, and a new
-   * charge is appended. Either way the unit's own timeline gets a line —
-   * somebody chasing a serial should not have to know this screen exists to
-   * find out what it cost. A new charge's line carries the charge's own
-   * instant, which is how deleting the charge finds it again.
-   *
-   * Paid with: a charge paid now writes its UNIT expense in the same
-   * mutation. Correcting a paid charge's amount moves its expense with it —
-   * here when this browser holds the expense, and on the server either way
-   * (the charge owns its expense; an account without finance access is sent
-   * none). Switching a paid charge to *Not paid yet* removes the expense, and
-   * is offered only where the expense can be seen.
-   */
-  const saveFee = () =>
-    feeForm.validateFields().then((v) => {
-      const target = editingFee ?? { row: addingTo!, fee: undefined };
-      const row = target.row;
-      const before = target.fee;
-      const at = new Date().toISOString();
-      void mutate((d) => {
-        const i = d.services.findIndex((r) => r.id === row.rec.id);
-        if (i < 0) return;
-        // Replaced rather than mutated in place: `ServiceRec` is a readonly
-        // shape, the same discipline `Order.payments` follows, and the store
-        // is replace-on-write anyway.
-        const rec = d.services[i]!;
-        const feeId = before?.id ?? nextId("svcf");
-        const paidWith = v.paidWith;
-        const existing = d.expenses.find((e) => e.serviceFeeId === feeId);
-        const paidNow =
-          paidWith !== undefined &&
-          paidWith !== "UNPAID" &&
-          !existing &&
-          !(before?.paid === true);
-        let next = before
-          ? editFee(rec, before.id, {
-              kind: v.kind,
-              label: v.label ?? "",
-              amount: v.amount,
-            })
-          : {
-              ...rec,
-              fees: [
-                ...rec.fees,
-                {
-                  id: feeId,
-                  kind: v.kind,
-                  ...(v.label ? { label: v.label } : {}),
-                  amount: v.amount,
-                  at,
-                  staff: currentStaffName(),
-                },
-              ],
-            };
-        const fee = next.fees.find((f) => f.id === feeId)!;
-        if (paidNow) {
-          d.expenses.unshift(
-            chargeExpense({
-              id: nextId("exp"),
-              serial: row.serial,
-              fee,
-              method: paidWith,
-              day: localDay(at),
-              createdAt: at,
-            }),
-          );
-        } else if (existing) {
-          if (paidWith === "UNPAID") {
-            d.expenses = d.expenses.filter((e) => e.id !== existing.id);
-          } else {
-            existing.amount = fee.amount;
-            if (paidWith !== undefined) existing.method = paidWith;
-          }
-        }
-        const paid =
-          paidNow || (existing !== undefined && paidWith !== "UNPAID")
-            ? true
-            : existing !== undefined
-              ? false
-              : before?.paid === true;
-        next = {
-          ...next,
-          fees: next.fees.map((f) => {
-            if (f.id !== feeId) return f;
-            const { paid: _was, ...rest } = f;
-            return paid ? { ...rest, paid: true as const } : rest;
-          }),
-        };
-        d.services[i] = next;
-        appendEvent(d, row.serial, {
-          type: "DICATAT",
-          ...(before ? {} : { at }),
-          note: before
-            ? // Both figures, because the point of allowing the correction is
-              // that somebody has to be able to see what it replaced.
-              `Service charge corrected ${fmtRp(before.amount)} → ${fmtRp(
-                v.amount,
-              )} — ${v.label || v.kind}`
-            : `Service charge ${fmtRp(v.amount)} — ${v.label || v.kind}`,
-        });
-      });
-      setAddingTo(null);
-      setEditingFee(null);
-      feeForm.resetFields();
-      message.success(
-        before
-          ? t("service.feeEdited", "{{serial}}'s charge is now {{amount}}.", {
-              amount: fmtRp(v.amount),
-              serial: row.serial,
-            })
-          : t("service.feeAdded", "{{amount}} recorded against {{serial}}.", {
-              amount: fmtRp(v.amount),
-              serial: row.serial,
-            }),
-      );
-    });
 
   /** *Mark paid* on an owed charge: its expense, on the day it was paid. */
   const markPaid = () =>
@@ -581,17 +442,6 @@ export function ServicePage() {
                 )}
                 onClick={() => {
                   setEditingFee({ row: r, fee: f });
-                  const pay = feePayment(f, db.expenses);
-                  feeForm.setFieldsValue({
-                    kind: f.kind,
-                    label: f.label ?? "",
-                    amount: f.amount,
-                    paidWith: pay.expense
-                      ? (pay.expense.method as PaidWith)
-                      : pay.paid
-                        ? undefined
-                        : "UNPAID",
-                  });
                 }}
               />
             </Tooltip>
@@ -636,12 +486,6 @@ export function ServicePage() {
     },
   ];
 
-  /** Is the charge being edited paid by an expense this browser cannot see? */
-  const editingPaidUnseen =
-    editingFee !== null &&
-    feePayment(editingFee.fee, db.expenses).paid &&
-    feePayment(editingFee.fee, db.expenses).expense === undefined;
-
   return (
     <PageContainer title={t("service.title", "Service bench")}>
       <Flex vertical gap={SPACE.md}>
@@ -672,33 +516,28 @@ export function ServicePage() {
          * repairer is MOVED in the same transaction when it travels.
          */}
         <Card
-          title={t("service.atService", "At service")}
-          extra={
-            <Flex gap={SPACE.xs} align="center">
-              <Switch
-                size="small"
-                checked={showFinished}
-                onChange={setShowFinished}
-                aria-label={t("service.showFinished", "Show finished")}
-              />
-              <Typography.Text style={{ fontSize: TYPE.sm }}>
-                {t("service.showFinished", "Show finished")}
-              </Typography.Text>
-            </Flex>
-          }
+          activeTabKey={tab}
+          onTabChange={(k) => setTab(k as "OPEN" | "HISTORY")}
+          tabList={[
+            { key: "OPEN", label: t("service.inService", "In service") },
+            {
+              key: "HISTORY",
+              label: t("service.history", "Service history"),
+            },
+          ]}
         >
           <Table<BenchRow>
             size="small"
             rowKey={(r) => r.rec.id}
-            dataSource={allRows}
+            dataSource={listed}
             // A finished visit is listed to be deleted, and reads as history.
             onRow={(r) => (r.closed ? { style: { opacity: 0.55 } } : {})}
             pagination={false}
             locale={{
-              emptyText: t(
-                "service.nothingAway",
-                "Nothing is away at a repairer.",
-              ),
+              emptyText:
+                tab === "OPEN"
+                  ? t("service.nothingAway", "Nothing is away at a repairer.")
+                  : t("service.noHistory", "No finished service visits yet."),
             }}
             expandable={{
               rowExpandable: (r) => r.rec.fees.length > 0,
@@ -786,10 +625,6 @@ export function ServicePage() {
                         )}
                         onClick={() => {
                           setAddingTo(r);
-                          feeForm.setFieldsValue({
-                            kind: "LABOUR",
-                            paidWith: "UNPAID",
-                          });
                         }}
                       >
                         {t("service.charge", "Charge")}
@@ -838,91 +673,23 @@ export function ServicePage() {
         </Card>
       </Flex>
 
-      <Modal
-        open={addingTo !== null || editingFee !== null}
-        title={
+      <ServiceChargeModal
+        target={
           editingFee
-            ? t("service.editChargeOn", "Change a charge on {{serial}}", {
+            ? {
+                visitId: editingFee.row.rec.id,
                 serial: editingFee.row.serial,
-              })
-            : t("service.addChargeTo", "Charge on {{serial}}", {
-                serial: addingTo?.serial ?? "",
-              })
+                fee: editingFee.fee,
+              }
+            : addingTo
+              ? { visitId: addingTo.rec.id, serial: addingTo.serial }
+              : null
         }
-        okText={
-          editingFee
-            ? t("service.saveCharge", "Save the change")
-            : t("service.record", "Record it")
-        }
-        onCancel={() => {
+        onClose={() => {
           setAddingTo(null);
           setEditingFee(null);
-          feeForm.resetFields();
         }}
-        onOk={saveFee}
-      >
-        {editingFee && (
-          <Typography.Paragraph type="secondary">
-            {t(
-              "service.editChargeHint",
-              "It was {{amount}}. The old figure stays on the unit's timeline.",
-              { amount: fmtRp(editingFee.fee.amount) },
-            )}
-          </Typography.Paragraph>
-        )}
-        <Form form={feeForm} layout="vertical">
-          <Form.Item
-            name="kind"
-            label={t("service.feeKind", "Charge")}
-            rules={[{ required: true }]}
-          >
-            <Select
-              options={SERVICE_FEE_KINDS.map((k) => ({
-                value: k.value,
-                label: k.label,
-                title: k.guide,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item name="label" label={t("service.feeLabel", "What for")}>
-            <Input
-              placeholder={t(
-                "service.feeLabelPlaceholder",
-                "Ganti keyboard, ongkir ke Bandung…",
-              )}
-            />
-          </Form.Item>
-          <Form.Item
-            name="amount"
-            label={t("service.feeAmount", "Amount")}
-            rules={[{ required: true }]}
-          >
-            <InputNumber
-              min={0}
-              precision={0}
-              prefix={RP_SYMBOL}
-              formatter={moneyFormatter}
-              parser={moneyParser}
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
-          {editingPaidUnseen ? (
-            // Paid, by an expense this account is not sent: it stays paid,
-            // and its amount follows the charge on the server.
-            <Typography.Paragraph type="secondary">
-              {t(
-                "service.paidElsewhere",
-                "Paid. A change to the amount changes its payment too.",
-              )}
-            </Typography.Paragraph>
-          ) : (
-            <PaidWithField
-              name="paidWith"
-              label={t("service.paidWith", "Paid with")}
-            />
-          )}
-        </Form>
-      </Modal>
+      />
 
       <Modal
         open={payingFee !== null}

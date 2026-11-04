@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  backFromService,
   benchRows,
   costBreakdown,
   costIndex,
@@ -384,5 +385,49 @@ describe("editFee", () => {
   it("does nothing at all when the id is not on the visit", () => {
     const rec = visit({ fees: [fee(900_000)] });
     expect(editFee(rec, "nope", { amount: 1 }).fees).toEqual(rec.fees);
+  });
+});
+
+describe("backFromService", () => {
+  const CLOSED = "2026-09-05T03:00:00.000Z";
+  const ev = (type: string, at: string, toStatus: string, seq: number) =>
+    ({ serial: SERIAL, seq, type, at, toStatus }) as never;
+  const store = (status: string, events: never[], services: ServiceRec[]) => ({
+    units: [{ serial: SERIAL, status }] as never[],
+    events,
+    services,
+  });
+  const closed = visit({ closedAt: CLOSED, toLocationId: "wh-1" });
+
+  it("is the visit a unit in QC just came back from", () => {
+    const s = store("QC", [ev("DICATAT", CLOSED, "QC", 2)], [closed]);
+    expect(backFromService(s as never, SERIAL)?.id).toBe("v1");
+  });
+  it("is nothing once the unit has been accepted again", () => {
+    const s = store(
+      "TERSEDIA",
+      [
+        ev("DICATAT", CLOSED, "QC", 2),
+        ev("QC_SELESAI", "2026-09-06T00:00:00.000Z", "TERSEDIA", 3),
+      ],
+      [closed],
+    );
+    expect(backFromService(s as never, SERIAL)).toBeUndefined();
+  });
+  it("is nothing while the visit is still open", () => {
+    const s = store(
+      "SERVIS",
+      [ev("DICATAT", CLOSED, "SERVIS", 2)],
+      [visit({})],
+    );
+    expect(backFromService(s as never, SERIAL)).toBeUndefined();
+  });
+  it("holds for a unit on no invoice", () => {
+    const s = store(
+      "QC",
+      [ev("DICATAT", CLOSED, "QC", 2)],
+      [{ ...closed, poId: undefined } as ServiceRec],
+    );
+    expect(backFromService(s as never, SERIAL)?.id).toBe("v1");
   });
 });

@@ -23,6 +23,17 @@
  * right-click. The warehouse and the product count left the list; both are
  * on the order's own page.
  */
+import {
+  inboundTabs,
+  type InboundTab,
+  type SerialTabRow,
+} from "../../lib/inboundTabs.js";
+import { SerialTabTable } from "./SerialTabTable";
+import {
+  ServiceChargeModal,
+  type ChargeTarget,
+} from "../../components/ServiceChargeModal";
+import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -44,7 +55,7 @@ import {
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { OrphanQcCard } from "../../components/OrphanQcCard";
-import { QcWaitingCard } from "./QcWaitingCard";
+import { InboundDetailPage } from "./InboundDetailPage";
 import { TradeInUnitsTable, tradeInUnitRows } from "./TradeInUnitsTable";
 import { BuyFromCustomerModal } from "./BuyFromCustomerModal";
 import { qcWaitingByPo, qcWaitingRows } from "../../lib/qcWaiting.js";
@@ -203,18 +214,60 @@ export function InboundPage() {
     [db, t, toQcByPo],
   );
 
+  /** The six tabs (2026-11-04), and which one is open — kept on this device. */
+  const tabs = useMemo(() => inboundTabs(db, Date.now()), [db]);
+  const [tab, setTab] = usePersistentState<InboundTab | "tradeIns">(
+    draftKey("inbound.tab"),
+    "NEEDS_QC",
+  );
+  /** The units whose QC popup is open over the list. */
+  const [qcOpen, setQcOpen] = useState<{
+    key: string;
+    poId: string;
+    rowKeys: string[];
+    serials: string[];
+  } | null>(null);
+  /** The visit a *+ Charge* on Back from service is adding to. */
+  const [charging, setCharging] = useState<ChargeTarget | null>(null);
+  const openInvoiceQc = (poId: string) => {
+    const mine = qcRows.filter((r) => r.poId === poId);
+    setQcOpen({
+      key: `po:${poId}`,
+      poId,
+      rowKeys: mine.flatMap((r) => (r.rowKey ? [r.rowKey] : [])),
+      serials: mine.flatMap((r) => (r.serial ? [r.serial] : [])),
+    });
+  };
+  const openSerialQc = (r: SerialTabRow) => {
+    if (!r.poId) return;
+    setQcOpen({
+      key: `unit:${r.serial}`,
+      poId: r.poId,
+      rowKeys: [],
+      serials: [r.serial],
+    });
+  };
+
   /** "+ Trade-in": units bought from a customer with no sale (2026-10-31). */
   const [buying, setBuying] = useState(false);
   /** Units bought across the counter on a sale — the Trade-in tab's count. */
   const tradeInCount = useMemo(() => tradeInUnitRows(db).length, [db]);
 
+  /**
+   * An invoice list: every invoice (the All tab), or those of one tab. `qc`
+   * adds the row's QC button, which opens its waiting units in place.
+   */
   const invoicesCard = (
+    only: readonly string[] | null,
+    key: string,
+    qc = false,
+  ) => (
     <Card>
       <ProTable<Row>
         lazy
-        persistKey="inbound"
+        persistKey={key === "all" ? "inbound" : `inbound.${key}`}
         rowKey="id"
-        dataSource={rows}
+        dataSource={only ? rows.filter((r) => only.includes(r.id)) : rows}
         searchPlaceholder={t(
           "inboundList.searchOrderSupplierOrInvoice",
           "Search order, supplier or invoice number",
@@ -377,7 +430,7 @@ export function InboundPage() {
             title: "",
             key: "actions",
             align: "right",
-            width: COLUMN.actionsPair,
+            width: qc ? COLUMN.actionsWide : COLUMN.actionsPair,
             render: (_: unknown, r) => (
               <Flex
                 gap={4}
@@ -385,6 +438,23 @@ export function InboundPage() {
                 onClick={(e) => e.stopPropagation()}
                 onKeyDown={(e) => e.stopPropagation()}
               >
+                {qc && r.toQc > 0 && (
+                  <Button
+                    size="small"
+                    aria-label={t(
+                      "inbound.tab.qcInvoiceAria",
+                      "QC the units of {{code}}",
+                      {
+                        code: r.code,
+                      },
+                    )}
+                    onClick={() => openInvoiceQc(r.id)}
+                  >
+                    {t("inbound.tab.qcCount", "QC ({{count}})", {
+                      count: r.toQc,
+                    })}
+                  </Button>
+                )}
                 <Tooltip
                   title={
                     r.closed
@@ -457,8 +527,6 @@ export function InboundPage() {
        * Above the list because it is work outstanding, and the list behind it
        * is a record. See `components/OrphanQcCard.tsx`.
        */}
-      <QcWaitingCard rows={qcRows} />
-      <OrphanQcCard />
       {/*
        * Anchored to the pointer by a zero-size element, which is how antd
        * positions a menu somewhere that is not a child of anything. It is
@@ -503,11 +571,82 @@ export function InboundPage() {
        * the till, so it has a tab of its own rather than a row here.
        */}
       <Tabs
+        activeKey={tab}
+        onChange={(k) => setTab(k as InboundTab | "tradeIns")}
         items={[
           {
-            key: "invoices",
-            label: t("inboundList.tabInvoices", "Invoices"),
-            children: invoicesCard,
+            key: "NEEDS_QC",
+            label: t("inbound.tab.needsQc", "Needs QC ({{n}})", {
+              n: tabs.NEEDS_QC.length,
+            }),
+            children: (
+              <>
+                {invoicesCard(tabs.NEEDS_QC, "needsQc", true)}
+                <OrphanQcCard />
+              </>
+            ),
+          },
+          {
+            key: "BACK_FROM_SERVICE",
+            label: t(
+              "inbound.tab.backFromService",
+              "Back from service ({{n}})",
+              {
+                n: tabs.BACK_FROM_SERVICE.length,
+              },
+            ),
+            children: (
+              <Card>
+                <SerialTabTable
+                  kind="BACK"
+                  rows={tabs.BACK_FROM_SERVICE}
+                  onQc={openSerialQc}
+                  onCharge={(r) =>
+                    r.visit &&
+                    setCharging({ visitId: r.visit.id, serial: r.serial })
+                  }
+                />
+                <OrphanQcCard
+                  serials={tabs.BACK_FROM_SERVICE.filter((r) => !r.poId).map(
+                    (r) => r.serial,
+                  )}
+                />
+              </Card>
+            ),
+          },
+          {
+            key: "READY",
+            label: t("inbound.tab.ready", "Ready to accept ({{n}})", {
+              n: tabs.READY.length,
+            }),
+            children: (
+              <Card>
+                <SerialTabTable
+                  kind="READY"
+                  rows={tabs.READY}
+                  onQc={openSerialQc}
+                />
+              </Card>
+            ),
+          },
+          {
+            key: "UNPAID",
+            label: t("inbound.tab.unpaid", "Arrived, not paid ({{n}})", {
+              n: tabs.UNPAID.length,
+            }),
+            children: invoicesCard(tabs.UNPAID, "unpaid", true),
+          },
+          {
+            key: "ALL",
+            label: t("inbound.tab.all", "All invoices"),
+            children: invoicesCard(null, "all"),
+          },
+          {
+            key: "CLOSED",
+            label: t("inbound.tab.closed", "Closed ({{n}})", {
+              n: tabs.CLOSED.length,
+            }),
+            children: invoicesCard(tabs.CLOSED, "closed"),
           },
           {
             key: "tradeIns",
@@ -536,6 +675,18 @@ export function InboundPage() {
           },
         ]}
       />
+      {qcOpen !== null && (
+        <InboundDetailPage
+          key={qcOpen.key}
+          embedded={{
+            poId: qcOpen.poId,
+            rowKeys: qcOpen.rowKeys,
+            serials: qcOpen.serials,
+            onClose: () => setQcOpen(null),
+          }}
+        />
+      )}
+      <ServiceChargeModal target={charging} onClose={() => setCharging(null)} />
     </PageContainer>
   );
 }

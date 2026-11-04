@@ -9,6 +9,8 @@ import {
   poStage,
   poStageFromCounts,
   poTotals,
+  notArrivedCount,
+  readyToClose,
   unitStage,
 } from "../src/lib/inbound.js";
 
@@ -600,5 +602,44 @@ describe("poDeletion", () => {
       ],
     });
     expect(poDeletion(paid, []).allowed).toBe(true);
+  });
+});
+
+describe("readyToClose", () => {
+  const paid = po({
+    status: "RECEIVED",
+    items: [line("l1", 1_000_000)],
+    payments: [{ id: "p1", method: "TUNAI", amount: 1_000_000, at: "x" }],
+  });
+  it("is true once paid in full and every unit is accepted", () => {
+    expect(readyToClose(paid, [unit({ status: "TERSEDIA" })], 0)).toBe(true);
+  });
+  it("is false while a unit is still in QC", () => {
+    expect(readyToClose(paid, [unit({ status: "QC" })], 0)).toBe(false);
+  });
+  it("is false while money is owed", () => {
+    expect(
+      readyToClose(
+        po({ status: "RECEIVED", items: [line("l1", 1_000_000)] }),
+        [unit({ status: "TERSEDIA" })],
+        0,
+      ),
+    ).toBe(false);
+  });
+  it("is false before the invoice has arrived", () => {
+    expect(readyToClose({ ...paid, status: "ORDERED" }, [], 0)).toBe(false);
+  });
+  it("is false while a slot waits for a serial", () => {
+    expect(readyToClose(paid, [unit({ status: "TERSEDIA" })], 1)).toBe(false);
+  });
+});
+
+describe("notArrivedCount", () => {
+  it("counts the waiting slots of an invoice not yet arrived, else 0", () => {
+    const lines = [line("a", 1), line("b", 1), line("c", 1, true)];
+    // Every line the supplier is meant to send — counted or tracked — and
+    // not the one marked never sent.
+    expect(notArrivedCount(po({ status: "ORDERED", items: lines }))).toBe(2);
+    expect(notArrivedCount(po({ status: "RECEIVED", items: lines }))).toBe(0);
   });
 });

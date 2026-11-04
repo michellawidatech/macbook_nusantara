@@ -11,6 +11,7 @@
  * folded shut at the foot of the dialog rather than filling half of it, and it
  * no longer demands a sentence before saving.
  */
+import { useOpenedWith } from "../hooks/useUnchanged";
 import { useEffect, useState } from "react";
 import {
   Alert,
@@ -69,6 +70,8 @@ export function PaymentsModal({
     // replace-on-write, so a dependency on the array would reset the draft
     // whenever anything else in the shop moved.
   }, [open, code]);
+  /** Grey until something changes (2026-11-04). */
+  const unchanged = useOpenedWith(draft, open ? code : null);
 
   return (
     <Modal
@@ -83,7 +86,7 @@ export function PaymentsModal({
             okButtonProps: { style: { display: "none" } },
             cancelText: t("common.close", "Close"),
           }
-        : {})}
+        : { okButtonProps: { disabled: unchanged } })}
     >
       <Flex vertical gap={SPACE.md}>
         {locked && (

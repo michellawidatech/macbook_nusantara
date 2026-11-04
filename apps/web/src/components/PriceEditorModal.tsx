@@ -47,6 +47,7 @@
  * have meant. The draft lives here and one mutation writes the lot, which is
  * also what lets the ledger record a repricing as one act.
  */
+import { useOpenedWith } from "../hooks/useUnchanged";
 import { useEffect, useMemo, useState } from "react";
 import {
   Button,
@@ -150,6 +151,8 @@ export function PriceEditorModal({
     // This project's eslint config has no exhaustive-deps rule to disable, so
     // the reason is stated rather than suppressed.
   }, [open, key]);
+  /** Grey until something changes (2026-11-04). */
+  const unchanged = useOpenedWith({ draft, grades }, open ? key : null);
 
   const current = (u: PriceEditorUnit) => priceOf(u, skuPrice(u.skuId));
   /** What the box holds: the draft, or — before it is seeded — the stored price. */
@@ -240,7 +243,7 @@ export function PriceEditorModal({
       zIndex={1100}
       title={t("price.editTitle", "Prices — {{what}}", { what: title })}
       okText={t("price.saveAll", "Save")}
-      okButtonProps={{ disabled: bad > 0 }}
+      okButtonProps={{ disabled: bad > 0 || unchanged }}
       onOk={save}
     >
       {bad > 0 && (

@@ -37,6 +37,7 @@
  *
  * Money is `PaymentsPanel`, the same grid the till and the payment dialog use.
  */
+import { useOpenedWith } from "../../hooks/useUnchanged";
 import { useEffect, useMemo, useState } from "react";
 import {
   App,
@@ -286,6 +287,23 @@ export function EditTransactionModal({
       ),
     );
   }, [open, order?.id]);
+  /** Grey until something changes (2026-11-04). */
+  const unchanged = useOpenedWith(
+    {
+      ref,
+      at: at.valueOf(),
+      source,
+      customerId,
+      lines,
+      counted,
+      fees,
+      payments,
+      deductions,
+      trades,
+      payouts,
+    },
+    open ? (order?.id ?? null) : null,
+  );
 
   /**
    * A sale-level reference box only where nothing else carries one: a
@@ -295,6 +313,11 @@ export function EditTransactionModal({
    */
   const saleRefShown =
     holdsFunds(source) && !payments.some((p) => p.channel !== undefined);
+
+  /** A reference Save would strip: on a part, while the sale-level box is not shown. */
+  const staleRef =
+    !saleRefShown &&
+    payments.some((p) => p.channel === undefined && p.ref !== undefined);
 
   const setDeductionsOf = (paymentId: string, list: SettlementFee[]) =>
     setDeductions((all) => ({ ...all, [paymentId]: list }));
@@ -926,6 +949,9 @@ export function EditTransactionModal({
         code: order?.code ?? "",
       })}
       okText={t("editSale.save", "Save")}
+      // A leftover reference on a sale that no longer shows the box is one
+      // thing Save corrects by itself, so it stays pressable.
+      okButtonProps={{ disabled: unchanged && !staleRef }}
       onOk={save}
       destroyOnHidden
     >

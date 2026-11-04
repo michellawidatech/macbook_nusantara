@@ -32,6 +32,7 @@
  *
  * Pure: no React, no store. `test/qcWaiting.test.ts` is the spec.
  */
+import { backFromService, type ServiceRec } from "./service.js";
 import type { Po, Unit, UnitEvent } from "../mock/seed.js";
 import { receivingRows, receivingState } from "./inboundRows.js";
 import { skuTracksSerial, type TrackingCatalogue } from "./serialTracking.js";
@@ -52,6 +53,8 @@ export interface QcWaitingStore extends TrackingCatalogue {
     readonly variantLabel: string;
   }[];
   readonly suppliers: readonly { readonly id: string; readonly name: string }[];
+  /** Service visits — a unit back from one is the Back-from-service tab's. */
+  readonly services?: readonly ServiceRec[];
 }
 
 export interface QcWaitingRow {
@@ -106,7 +109,29 @@ function daysSince(at: string, now: number): number {
 
 /** Units in QC that came on an invoice. */
 function waitingUnits(store: QcWaitingStore): Unit[] {
-  return store.units.filter((u) => u.status === "QC" && u.poId !== null);
+  return store.units.filter(
+    (u) =>
+      u.status === "QC" &&
+      u.poId !== null &&
+      !isBackFromService(store, u.serial),
+  );
+}
+
+/** A unit back from service is listed on its own tab, not here (2026-11-04). */
+export function isBackFromService(
+  store: Pick<QcWaitingStore, "units" | "events" | "services">,
+  serial: string,
+): boolean {
+  return (
+    backFromService(
+      {
+        units: store.units,
+        events: store.events,
+        services: store.services ?? [],
+      },
+      serial,
+    ) !== undefined
+  );
 }
 
 /** Each invoice's slots still waiting for a serial, without dates. */
@@ -220,5 +245,9 @@ export function qcWaitingByPo(
  * every store change, so it skips the walk over the event ledger.
  */
 export function qcWaitingCount(store: QcWaitingStore): number {
-  return waitingUnits(store).length + waitingSlots(store).length;
+  // Units back from service wait for QC too, on their own tab (2026-11-04).
+  const back = store.units.filter(
+    (u) => u.status === "QC" && isBackFromService(store, u.serial),
+  ).length;
+  return waitingUnits(store).length + waitingSlots(store).length + back;
 }

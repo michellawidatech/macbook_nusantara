@@ -211,10 +211,14 @@ describe("Internal use", () => {
     const dialog = await openStock("IN");
     pickReason(dialog, "Internal use");
     fireEvent.change(serialBox(dialog), { target: { value: unit.serial } });
+    // Said on the row the moment the serial is in (2026-11-04), before Log.
+    expect(
+      await within(dialog).findByText(/moving it is a Stock transfer/),
+    ).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: /Log 1/ }));
     expect(
-      await screen.findByText(/moving it is a Stock transfer/),
-    ).toBeInTheDocument();
+      (await screen.findAllByText(/moving it is a Stock transfer/)).length,
+    ).toBe(2);
     expect(getDb().units.find((u) => u.serial === unit.serial)!.status).toBe(
       "TERSEDIA",
     );
@@ -410,6 +414,71 @@ describe("Return to supplier", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Record supplier return" }),
+    ).toBeInTheDocument();
+  });
+});
+
+/*
+ * Owner report 2026-11-04: "the stock in stock out for multiple item did not
+ * work", and the same serial appeared twice on one batch.
+ */
+describe("a batch of several units", () => {
+  const serialBoxes = (dialog: HTMLElement) =>
+    Array.from(
+      dialog.querySelectorAll<HTMLElement>(".ant-select-auto-complete input"),
+    );
+
+  it("transfers two units in one batch", async () => {
+    const db = getDb();
+    const to = db.warehouses.find((w) => w.active)!;
+    const units = db.units
+      .filter((u) => u.status === "TERSEDIA" && u.locationId !== to.id)
+      .slice(0, 2);
+    expect(units).toHaveLength(2);
+    const dialog = await openStock("OUT");
+    pickReason(dialog, "Stock transfer");
+    await pickOption(
+      within(dialog).getByRole("combobox", { name: "To warehouse" }),
+      to.code ? `${to.code} · ${to.name}` : to.name,
+    );
+    fireEvent.change(serialBoxes(dialog)[0]!, {
+      target: { value: units[0]!.serial },
+    });
+    fireEvent.click(
+      within(dialog).getAllByRole("button", { name: /Add line/ })[0]!,
+    );
+    await vi.waitFor(() => expect(serialBoxes(dialog)).toHaveLength(2));
+    fireEvent.change(serialBoxes(dialog)[1]!, {
+      target: { value: units[1]!.serial },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: /Log 2/ }));
+    await vi.waitFor(() => {
+      for (const u of units)
+        expect(
+          getDb().units.find((x) => x.serial === u.serial)!.locationId,
+        ).toBe(to.id);
+    });
+  });
+
+  it("says a serial already on the batch on its own row, before Log", async () => {
+    const db = getDb();
+    const unit = db.units.find((u) => u.status === "TERSEDIA")!;
+    const dialog = await openStock("OUT");
+    pickReason(dialog, "Internal use");
+    fireEvent.change(serialBoxes(dialog)[0]!, {
+      target: { value: unit.serial },
+    });
+    fireEvent.click(
+      within(dialog).getAllByRole("button", { name: /Add line/ })[0]!,
+    );
+    await vi.waitFor(() => expect(serialBoxes(dialog)).toHaveLength(2));
+    fireEvent.change(serialBoxes(dialog)[1]!, {
+      target: { value: unit.serial },
+    });
+    expect(
+      await within(dialog).findByText(
+        `${unit.serial} is already on this batch.`,
+      ),
     ).toBeInTheDocument();
   });
 });

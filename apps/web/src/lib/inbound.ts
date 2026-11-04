@@ -558,3 +558,33 @@ export function unitsOfPo(db: MockDb, poId: string): Unit[] {
     .filter((u) => u.poId === poId)
     .sort((a, b) => a.serial.localeCompare(b.serial));
 }
+
+/**
+ * Whether an invoice is ready to be closed (2026-11-04): paid in full, no
+ * unit of it still in QC, and no slot still waiting for a serial. Closing is
+ * OFFERED then; the Close button itself never refuses.
+ */
+export function readyToClose(
+  po: Po,
+  units: readonly Unit[],
+  slotsWaiting: number,
+): boolean {
+  return (
+    po.status === "RECEIVED" &&
+    poTotals(po).fullyPaid &&
+    slotsWaiting === 0 &&
+    !units.some((u) => u.poId === po.id && u.status === "QC")
+  );
+}
+
+/**
+ * How many units a "Mark all as arrived?" prompt is about: every line the
+ * supplier is meant to send (counted or tracked, not one marked never sent)
+ * while the invoice has not been marked arrived. 0 once it has.
+ */
+export function notArrivedCount(po: Po): number {
+  if (po.status === "RECEIVED") return 0;
+  return po.items
+    .filter((i) => !i.notReceived)
+    .reduce((n, i) => n + (i.qty ?? 1), 0);
+}

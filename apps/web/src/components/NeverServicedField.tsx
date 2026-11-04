@@ -8,7 +8,7 @@
  * A visit to the Service bench says "serviced" whatever this holds
  * (`servicedState`, packages/domain).
  */
-import { Segmented, Typography } from "antd";
+import { Select, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { fmtNone } from "../lib/format.js";
 
@@ -30,11 +30,13 @@ export function NeverServicedField({
 }) {
   const { t } = useTranslation();
   return (
-    <Segmented<Answer>
-      size="small"
+    // A dropdown (owner list 2026-11-03): the three-way switch was the widest
+    // thing on a QC row and read as three buttons.
+    <Select<Answer>
       value={toAnswer(value)}
       disabled={disabled}
       aria-label={t("qc.neverServiced", "Never serviced / opened")}
+      style={{ width: "100%", minWidth: 120 }}
       options={[
         { value: "never", label: t("qc.neverServicedYes", "Never") },
         { value: "serviced", label: t("qc.neverServicedNo", "Serviced") },

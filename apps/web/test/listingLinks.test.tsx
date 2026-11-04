@@ -36,6 +36,8 @@ describe("the Listing links dialog", () => {
       </AntdApp>,
     );
     const shopee = await screen.findByLabelText("Shopee");
+    // Grey until something changes (2026-11-04).
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     await userEvent.clear(shopee);
     await userEvent.type(shopee, "shopee.co.id/x");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -62,7 +64,17 @@ describe("Edit unit", () => {
         <UnitEditModal open unit={unit} onClose={() => undefined} />
       </AntdApp>,
     );
-    await userEvent.click(await screen.findByText("Never"));
+    // Grey until something changes (2026-11-04).
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    // A dropdown since 2026-11-03, not a three-way switch.
+    await userEvent.click(
+      await screen.findByRole("combobox", { name: "Never serviced / opened" }),
+    );
+    await userEvent.click(
+      (await screen.findAllByText("Never")).find((n) =>
+        n.closest(".ant-select-item-option"),
+      )!,
+    );
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(

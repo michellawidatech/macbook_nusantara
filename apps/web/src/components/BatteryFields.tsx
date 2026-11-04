@@ -40,7 +40,7 @@
  *
  * @see lib/battery.ts — `defaultBatteryMode`, `BatteryDraft`, `batteryPatch`
  */
-import { Flex, InputNumber, Typography } from "antd";
+import { Flex, InputNumber, Typography, theme } from "antd";
 import { useTranslation } from "react-i18next";
 import {
   BATTERY_FIELD_RANGE,
@@ -92,6 +92,7 @@ export function BatteryFields({
   idPrefix,
 }: BatteryFieldsProps) {
   const { t } = useTranslation();
+  const { token } = theme.useToken();
   const mode = batteryDraftMode(value, fallback);
 
   const box = (field: BatteryField, label: string, suffix: string) => {
@@ -126,7 +127,10 @@ export function BatteryFields({
           // placeholder, so an empty box shows the suffix alone — not a dash
           // (owner 2026-09-21), and not a 0, which would read as a dead
           // battery rather than an unmeasured one.
-          suffix={suffix}
+          // Grey (2026-11-03): the unit is a label, the number is the reading.
+          suffix={
+            <span style={{ color: token.colorTextTertiary }}>{suffix}</span>
+          }
           status={bad ? "error" : undefined}
           aria-invalid={bad || undefined}
           aria-describedby={bad ? rangeId : undefined}

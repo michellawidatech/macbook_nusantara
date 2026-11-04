@@ -35,6 +35,7 @@
  * written off with `KOREKSI` — the same arrow the stock adjustment editor uses
  * — rather than sent back to nobody.
  */
+import { isBackFromService } from "../lib/qcWaiting.js";
 import { useState } from "react";
 import {
   App,
@@ -72,14 +73,30 @@ import {
 import { COLUMN } from "../theme/tokens";
 import { warehouseLabelOf } from "../lib/warehouses.js";
 
-export function OrphanQcCard() {
+export function OrphanQcCard({
+  serials,
+}: {
+  /**
+   * Only these serials (2026-11-04: Back from service lists its no-invoice
+   * units here). Absent: every unit in QC on no invoice that did not come
+   * back from service.
+   */
+  readonly serials?: readonly string[];
+} = {}) {
   const { t } = useTranslation();
   const db = useDb();
   const { message, modal } = App.useApp();
   /** serial → the phrases typed into its description box, before committing. */
   const [describing, setDescribing] = useState<Record<string, string[]>>({});
 
-  const waiting = db.units.filter((u) => u.status === "QC" && u.poId === null);
+  // A unit back from service has its own tab on Inbound (2026-11-04).
+  const waiting = db.units.filter((u) =>
+    serials
+      ? u.status === "QC" && serials.includes(u.serial)
+      : u.status === "QC" &&
+        u.poId === null &&
+        !isBackFromService(db, u.serial),
+  );
   // The whole card, including its heading, disappears when the shop has none.
   if (waiting.length === 0) return null;
 

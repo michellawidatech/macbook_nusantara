@@ -56,6 +56,8 @@ export interface CountedBatchLine {
   label: string;
   qty: number | null;
   onHand: number;
+  /** Where a transfer takes the pieces from. */
+  fromId?: string;
 }
 
 export interface BatchInput {
@@ -125,6 +127,10 @@ export function batchProblems(
       out.push(`${c.label} needs a quantity of at least 1.`);
       continue;
     }
+    if (mode === "TRANSFER" && c.fromId && c.fromId === locationId) {
+      out.push(`${c.label} is already in ${warehouseLabel(c.fromId)}.`);
+      continue;
+    }
     if ((kind === "OUT" || mode === "TRANSFER") && c.qty > c.onHand) {
       out.push(
         `${c.label}: only ${c.onHand} in stock — ${c.qty} cannot be taken out.`,
@@ -141,115 +147,144 @@ export function batchProblems(
     }
     if (seen.has(serial)) out.push(`${serial} is on this batch twice.`);
     seen.add(serial);
+    out.push(
+      ...lineProblems(
+        line,
+        {
+          kind,
+          ...(locationId ? { locationId } : {}),
+          ...(mode ? { mode } : {}),
+        },
+        unitBySerial,
+        statusLabel,
+        warehouseLabel,
+      ),
+    );
+  }
+  return out;
+}
 
-    // Checked here rather than left to the input's own `max`, and checked
-    // before the unit is looked at so that a line with something else wrong
-    // with it still reports this too. antd's bound does not refuse an
-    // out-of-range number, it snaps it when the box is left — so a stray digit
-    // becomes a reading of a machine nobody measured, and the batch writes it
-    // onto the unit, the adjustment and the timeline note in one go.
-    if (!isBatteryHealthInRange(line.batteryHealth)) {
-      out.push(
-        `${serial} has a battery health of ${line.batteryHealth}% — a reading is 0 to 100.`,
-      );
-    }
-    if (!isCycleCountInRange(line.cycleCount)) {
-      out.push(
-        `${serial} has a cycle count of ${line.cycleCount} — a count is ${CYCLE_COUNT_MIN} to ${CYCLE_COUNT_MAX}.`,
-      );
-    }
-    if (!isFccInRange(line.fcc)) {
-      out.push(
-        `${serial} has a capacity of ${line.fcc} mAh — a capacity is ${FCC_MIN} to ${FCC_MAX}.`,
-      );
-    }
+/**
+ * What is wrong with ONE line, on its own — what the row says the moment its
+ * serial is in (2026-11-04: *"it should surface the issue early … not after
+ * the user wants to press done"*). `batchProblems` asks it of every line, so
+ * the row and the final check cannot disagree. Being on the batch twice is
+ * the batch's question, not the line's.
+ */
+export function lineProblems(
+  line: BatchLine,
+  { kind, locationId, mode }: Pick<BatchInput, "kind" | "locationId" | "mode">,
+  unitBySerial: (serial: string) => Unit | undefined,
+  statusLabel: (status: string) => string,
+  warehouseLabel: (locationId: string) => string = (id) => id,
+): string[] {
+  const out: string[] = [];
+  const serial = normaliseSerial(line.serial);
+  if (!serial) return out;
 
-    const unit = unitBySerial(serial);
-    if (!unit) {
-      // An unknown serial is a unit the shop has and the system does not. That
-      // is a thing you can put IN — or transfer, which puts it somewhere;
-      // there is nothing to write off.
-      if (kind === "OUT" && mode !== "TRANSFER") {
-        out.push(
-          `${serial} is not in the system — an unknown serial can only be adjusted in.`,
-        );
-      } else if (!line.skuId) {
-        out.push(`${serial} is unknown — choose its product and specs.`);
-      }
-      continue;
-    }
-    if (unit.status === "QC") {
+  // Checked here rather than left to the input's own `max`, and checked
+  // before the unit is looked at so that a line with something else wrong
+  // with it still reports this too. antd's bound does not refuse an
+  // out-of-range number, it snaps it when the box is left — so a stray digit
+  // becomes a reading of a machine nobody measured, and the batch writes it
+  // onto the unit, the adjustment and the timeline note in one go.
+  if (!isBatteryHealthInRange(line.batteryHealth)) {
+    out.push(
+      `${serial} has a battery health of ${line.batteryHealth}% — a reading is 0 to 100.`,
+    );
+  }
+  if (!isCycleCountInRange(line.cycleCount)) {
+    out.push(
+      `${serial} has a cycle count of ${line.cycleCount} — a count is ${CYCLE_COUNT_MIN} to ${CYCLE_COUNT_MAX}.`,
+    );
+  }
+  if (!isFccInRange(line.fcc)) {
+    out.push(
+      `${serial} has a capacity of ${line.fcc} mAh — a capacity is ${FCC_MIN} to ${FCC_MAX}.`,
+    );
+  }
+
+  const unit = unitBySerial(serial);
+  if (!unit) {
+    // An unknown serial is a unit the shop has and the system does not. That
+    // is a thing you can put IN — or transfer, which puts it somewhere;
+    // there is nothing to write off.
+    if (kind === "OUT" && mode !== "TRANSFER") {
       out.push(
-        `${serial} is still in QC — accept or reject it in Stock In, which is where it gets its price.`,
+        `${serial} is not in the system — an unknown serial can only be adjusted in.`,
       );
-      continue;
+    } else if (!line.skuId) {
+      out.push(`${serial} is unknown — choose its product and specs.`);
     }
-    // On the bench, a unit comes back through the service screen's *Back in
-    // stock*, which closes the visit; adjusting it here would leave the bench
-    // waiting for a unit that is already on a shelf (or written off).
-    if (unit.status === "SERVIS") {
+    return out;
+  }
+  if (unit.status === "QC") {
+    out.push(
+      `${serial} is still in QC — accept or reject it in Stock In, which is where it gets its price.`,
+    );
+    return out;
+  }
+  // On the bench, a unit comes back through the service screen's *Back in
+  // stock*, which closes the visit; adjusting it here would leave the bench
+  // waiting for a unit that is already on a shelf (or written off).
+  if (unit.status === "SERVIS") {
+    out.push(
+      `${serial} is on service — bring it back with Back in stock on the Service page.`,
+    );
+    return out;
+  }
+  // A sold unit is still on its receipt. Putting it back here would leave
+  // the sale carrying a unit the shelf also offers; that is a customer
+  // return, which credits the sale in the same write.
+  if (kind === "IN" && unit.status === "TERJUAL") {
+    out.push(`${serial} is sold — take it back through Returns.`);
+    return out;
+  }
+  if (mode === "TRANSFER") {
+    if (unit.status === "TERJUAL") {
+      out.push(`${serial} is sold — there is nothing to transfer.`);
+    } else if (WRITTEN_OFF.includes(unit.status)) {
       out.push(
-        `${serial} is on service — bring it back with Back in stock on the Service page.`,
+        `${serial} is written off — bring it back with Stock in → Internal use.`,
       );
-      continue;
-    }
-    // A sold unit is still on its receipt. Putting it back here would leave
-    // the sale carrying a unit the shelf also offers; that is a customer
-    // return, which credits the sale in the same write.
-    if (kind === "IN" && unit.status === "TERJUAL") {
-      out.push(`${serial} is sold — take it back through Returns.`);
-      continue;
-    }
-    if (mode === "TRANSFER") {
-      if (unit.status === "TERJUAL") {
-        out.push(`${serial} is sold — there is nothing to transfer.`);
-      } else if (WRITTEN_OFF.includes(unit.status)) {
-        out.push(
-          `${serial} is written off — bring it back with Stock in → Internal use.`,
-        );
-      } else if (!IN_STOCK.includes(unit.status)) {
-        out.push(
-          `${serial} is ${statusLabel(unit.status)} — only a unit on a shelf can be transferred.`,
-        );
-      } else if (unit.locationId === locationId) {
-        out.push(`${serial} is already in ${warehouseLabel(unit.locationId)}.`);
-      }
-      continue;
-    }
-    if (
-      mode === "INTERNAL" &&
-      kind === "IN" &&
-      IN_STOCK.includes(unit.status)
-    ) {
+    } else if (!IN_STOCK.includes(unit.status)) {
       out.push(
-        `${serial} is already in stock in ${warehouseLabel(unit.locationId)} — moving it is a Stock transfer.`,
+        `${serial} is ${statusLabel(unit.status)} — only a unit on a shelf can be transferred.`,
       );
-      continue;
+    } else if (unit.locationId === locationId) {
+      out.push(`${serial} is already in ${warehouseLabel(unit.locationId)}.`);
     }
-    if (
-      mode === "INTERNAL" &&
-      kind === "IN" &&
-      !WRITTEN_OFF.includes(unit.status)
-    ) {
-      out.push(
-        `${serial} is ${statusLabel(unit.status)} — Internal use brings back only a unit that was written off.`,
-      );
-      continue;
-    }
-    if (
-      kind === "IN" &&
-      IN_STOCK.includes(unit.status) &&
-      (locationId === undefined || unit.locationId === locationId)
-    ) {
-      out.push(
-        `${serial} is already in ${warehouseLabel(unit.locationId)} (${statusLabel(unit.status)}).`,
-      );
-    }
-    if (kind === "OUT" && !HELD_STATUSES.includes(unit.status)) {
-      out.push(
-        `${serial} is ${statusLabel(unit.status)} — there is nothing to take out.`,
-      );
-    }
+    return out;
+  }
+  if (mode === "INTERNAL" && kind === "IN" && IN_STOCK.includes(unit.status)) {
+    out.push(
+      `${serial} is already in stock in ${warehouseLabel(unit.locationId)} — moving it is a Stock transfer.`,
+    );
+    return out;
+  }
+  if (
+    mode === "INTERNAL" &&
+    kind === "IN" &&
+    !WRITTEN_OFF.includes(unit.status)
+  ) {
+    out.push(
+      `${serial} is ${statusLabel(unit.status)} — Internal use brings back only a unit that was written off.`,
+    );
+    return out;
+  }
+  if (
+    kind === "IN" &&
+    IN_STOCK.includes(unit.status) &&
+    (locationId === undefined || unit.locationId === locationId)
+  ) {
+    out.push(
+      `${serial} is already in ${warehouseLabel(unit.locationId)} (${statusLabel(unit.status)}).`,
+    );
+  }
+  if (kind === "OUT" && !HELD_STATUSES.includes(unit.status)) {
+    out.push(
+      `${serial} is ${statusLabel(unit.status)} — there is nothing to take out.`,
+    );
   }
   return out;
 }

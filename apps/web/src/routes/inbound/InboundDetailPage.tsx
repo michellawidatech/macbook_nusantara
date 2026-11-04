@@ -44,6 +44,14 @@
  * The first serial read against the order marks it arrived.
  */
 import {
+  applyUnitEdit,
+  changedSerials,
+  parsePopupEdits,
+  withEdits,
+  type PopupEdits,
+  type UnitEdit,
+} from "../../lib/popupEdits.js";
+import {
   NeverServicedField,
   NeverServicedText,
 } from "../../components/NeverServicedField";
@@ -116,7 +124,9 @@ import {
   canReopenQc,
   payTargetOfFee,
   paymentFor,
+  notArrivedCount,
   poClosed,
+  readyToClose,
   poPaymentStatus,
   poTotals,
   unitStage,
@@ -382,7 +392,22 @@ export function InboundDetailPage({
 }: { readonly embedded?: InboundUnitTarget } = {}) {
   const params = useParams();
   const poId = embedded?.poId ?? params.poId ?? "";
-  const db = useDb();
+  const storeDb = useDb();
+  /*
+   * The popup's held answers (2026-11-04): grade, description, never
+   * serviced, battery and sell price of units that already have a serial,
+   * kept per field on this device until Done (lib/popupEdits.ts). The page
+   * reads the store with them laid on top, so the cells, Accept and *Done &
+   * accept n* all see them; nothing else is held.
+   */
+  const [edits, setEdits] = usePersistentState<PopupEdits>(
+    (embedded?.poId ?? params.poId)
+      ? draftKey(`inbound.popup.${embedded?.poId ?? params.poId}`)
+      : null,
+    {},
+    (raw) => parsePopupEdits(raw, getDb().units),
+  );
+  const db = useMemo(() => withEdits(storeDb, edits), [storeDb, edits]);
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { message, modal } = App.useApp();
@@ -467,6 +492,37 @@ export function InboundDetailPage({
   >(INBOUND_DRAFT(poId, "battery"), {}, mapOf<BatteryDraft>(isRecord));
   /** Which line's units are open, or null. */
   const [detailsKey, setDetailsKey] = useState<string | null>(null);
+  /** The unit popup is open: its answers are held until Done. */
+  const popupOpen = embedded !== undefined || detailsKey !== null;
+  /** Hold one unit's answers while the popup is open; write them otherwise. */
+  const editUnit = (serial: string, e: UnitEdit, write: () => void) => {
+    if (!popupOpen) return write();
+    setEdits((m) => ({ ...m, [serial]: { ...m[serial], ...e } }));
+  };
+  /** Write the held answers of `serials` (all when absent) onto the units. */
+  const saveEdits = (d: MockDb, serials?: readonly string[]) => {
+    for (const [serial, e] of Object.entries(edits)) {
+      if (serials && !serials.includes(serial)) continue;
+      const u = d.units.find((x) => x.serial === serial);
+      if (!u) continue;
+      const before = u.grade;
+      applyUnitEdit(u, e, (p) => ensureQcDescription(d, p));
+      if (u.grade !== before)
+        appendEvent(d, serial, {
+          type: "DICATAT",
+          refCode: po?.code,
+          note: gradeNote(u.grade),
+        });
+    }
+  };
+  const dropEdits = (serials?: readonly string[]) =>
+    setEdits((m) =>
+      serials
+        ? Object.fromEntries(
+            Object.entries(m).filter(([s]) => !serials.includes(s)),
+          )
+        : {},
+    );
   /** The row whose photos are open, or null. */
   const [photosRow, setPhotosRow] = useState<string | null>(null);
   /*
@@ -567,6 +623,7 @@ export function InboundDetailPage({
       cancelText: t("inbound.cancel", "Cancel"),
       onOk: () => {
         mutate((d) => {
+          saveEdits(d, serials);
           for (const serial of serials) {
             appendEvent(d, serial, {
               type: "QC_SELESAI",
@@ -576,11 +633,13 @@ export function InboundDetailPage({
             });
           }
         });
+        dropEdits(serials);
         message.success(
           t("inbound.acceptAllDone", "{{count}} unit(s) accepted into stock.", {
             count: serials.length,
           }),
         );
+        offerToClose();
       },
     });
   };
@@ -960,18 +1019,9 @@ export function InboundDetailPage({
    */
   const scanSerial = async (raw: string) => {
     if (raw.trim() === "") return;
-    // A locked order takes nothing, and the scanner is the one input on this
+    // A read-only order takes nothing, and the scanner is the one input on this
     // page that no `disabled` prop can reach — it listens at the document.
     const target = getDb().pos.find((p) => p.id === poId);
-    if (target && poClosed(target)) {
-      message.info(
-        t(
-          "inbound.scanClosed",
-          "This invoice is closed. Reopen it before recording anything.",
-        ),
-      );
-      return;
-    }
     // Read-only means read-only for the scanner too (2026-09-24). It is the
     // one input a `disabled` prop cannot reach, so a bench that scanned onto a
     // page nobody had put into edit would mint units invisibly.
@@ -1161,14 +1211,16 @@ export function InboundDetailPage({
     const serial = row.unit.serial;
     const next = value ?? undefined;
     if (next === row.unit.price) return;
-    mutate((d) => {
-      const u = d.units.find((x) => x.serial === serial)!;
-      // An empty box takes the unit's own price away, and the unit quotes
-      // what its variant asks (`priceOf`) — the hint the box shows. Writing
-      // that figure in instead made a Rp 0 variant's box impossible to empty.
-      if (next === undefined) delete u.price;
-      else u.price = next;
-    });
+    editUnit(serial, { price: next ?? null }, () =>
+      mutate((d) => {
+        const u = d.units.find((x) => x.serial === serial)!;
+        // An empty box takes the unit's own price away, and the unit quotes
+        // what its variant asks (`priceOf`) — the hint the box shows. Writing
+        // that figure in instead made a Rp 0 variant's box impossible to empty.
+        if (next === undefined) delete u.price;
+        else u.price = next;
+      }),
+    );
   };
 
   const commitSerial = (
@@ -1369,16 +1421,18 @@ export function InboundDetailPage({
     }
     const serial = r.unit.serial;
     if (grade === r.unit.grade) return;
-    mutate((d) => {
-      const u = d.units.find((x) => x.serial === serial);
-      if (!u) return;
-      u.grade = grade;
-      appendEvent(d, serial, {
-        type: "DICATAT",
-        refCode: po?.code,
-        note: gradeNote(grade),
-      });
-    });
+    editUnit(serial, { grade: grade ?? null }, () =>
+      mutate((d) => {
+        const u = d.units.find((x) => x.serial === serial);
+        if (!u) return;
+        u.grade = grade;
+        appendEvent(d, serial, {
+          type: "DICATAT",
+          refCode: po?.code,
+          note: gradeNote(grade),
+        });
+      }),
+    );
     /*
      * Graded New AFTER its serial was filed, so the serial was taken as a
      * second-hand one and never held to a new unit's shape. It is said, not
@@ -1410,25 +1464,29 @@ export function InboundDetailPage({
   const commitDescription = (r: ReceivingRow, parts: readonly string[]) => {
     if (!r.unit) return holdQc(r.key, { description: parts });
     const serial = r.unit.serial;
-    mutate((d) => {
-      const u = d.units.find((x) => x.serial === serial);
-      if (!u) return;
-      u.description = joinDescription(
-        parts.map((p) => ensureQcDescription(d, p)).filter(Boolean),
-      );
-    });
+    editUnit(serial, { description: parts }, () =>
+      mutate((d) => {
+        const u = d.units.find((x) => x.serial === serial);
+        if (!u) return;
+        u.description = joinDescription(
+          parts.map((p) => ensureQcDescription(d, p)).filter(Boolean),
+        );
+      }),
+    );
   };
 
   /** "Never serviced / opened" — on the unit, or held for the row. */
   const commitServiced = (r: ReceivingRow, next: boolean | undefined) => {
     if (!r.unit) return holdQc(r.key, { neverServiced: next });
     const serial = r.unit.serial;
-    mutate((d) => {
-      const u = d.units.find((x) => x.serial === serial);
-      if (!u) return;
-      if (next === undefined) delete u.neverServiced;
-      else u.neverServiced = next;
-    });
+    editUnit(serial, { neverServiced: next ?? null }, () =>
+      mutate((d) => {
+        const u = d.units.find((x) => x.serial === serial);
+        if (!u) return;
+        if (next === undefined) delete u.neverServiced;
+        else u.neverServiced = next;
+      }),
+    );
   };
 
   /** Which battery reading a row starts on — from its product's chip and year. */
@@ -1482,13 +1540,22 @@ export function InboundDetailPage({
     ) {
       return;
     }
-    mutate((d) => {
-      const u = d.units.find((x) => x.serial === serial);
-      if (!u) return;
-      u.batteryHealth = next.batteryHealth;
-      u.cycleCount = next.cycleCount;
-      u.fcc = next.fcc;
-    });
+    editUnit(
+      serial,
+      {
+        batteryHealth: next.batteryHealth ?? null,
+        cycleCount: next.cycleCount ?? null,
+        fcc: next.fcc ?? null,
+      },
+      () =>
+        mutate((d) => {
+          const u = d.units.find((x) => x.serial === serial);
+          if (!u) return;
+          u.batteryHealth = next.batteryHealth;
+          u.cycleCount = next.cycleCount;
+          u.fcc = next.fcc;
+        }),
+    );
   };
 
   if (!po) {
@@ -1542,7 +1609,14 @@ export function InboundDetailPage({
    * which is the whole point of closing it.
    */
   const [editing, setEditing] = useState(embedded !== undefined);
-  const locked = closed || !editing;
+  /*
+   * Two locks since 2026-11-04 (owner: *"close invoice just for finance,
+   * product that is not QCed yet will still be open"*). Closing freezes the
+   * invoice's facts, lines, expenses and money; the bench — QC, accept,
+   * arrival, the scanner — needs only Edit invoice.
+   */
+  const moneyLocked = closed || !editing;
+  const qcLocked = !editing;
 
   /** An expense's name as the page shows it: its label, else its kind. */
   const feeName = (fee: PoFee) =>
@@ -1637,6 +1711,8 @@ export function InboundDetailPage({
   /** QC passed: into sellable stock. `qcReady` is the gate, on the button. */
   const acceptUnit = async (serial: string) => {
     await mutate((d) => {
+      // Its held answers go with it — they are what made it ready.
+      saveEdits(d, [serial]);
       appendEvent(d, serial, {
         type: "QC_SELESAI",
         toStatus: "TERSEDIA",
@@ -1644,11 +1720,13 @@ export function InboundDetailPage({
         note: "QC passed",
       });
     });
+    dropEdits([serial]);
     message.success(
       t("inbound.qcAccepted", "{{serial}} passed QC and is in stock.", {
         serial,
       }),
     );
+    offerToClose();
   };
 
   /*
@@ -1982,7 +2060,7 @@ export function InboundDetailPage({
    * the next thing anybody types.
    */
   const addLines = (skuId: string, qty: number, outside = false) => {
-    if (locked) return;
+    if (moneyLocked) return;
     if (isCounted(skuId)) {
       addCounted(skuId, qty, outside);
       return;
@@ -2411,7 +2489,7 @@ export function InboundDetailPage({
                 showSearch
                 optionFilterProp="label"
                 style={{ width: "100%" }}
-                disabled={locked}
+                disabled={moneyLocked}
                 aria-label={t("inbound.supplier", "Supplier")}
                 value={supplier?.id}
                 placeholder={t("inbound.pickSupplier", "Pick a supplier")}
@@ -2434,7 +2512,7 @@ export function InboundDetailPage({
               <Flex vertical gap={4}>
                 <Input
                   style={{ width: "100%" }}
-                  disabled={locked || po.noInvoice}
+                  disabled={moneyLocked || po.noInvoice}
                   aria-label={t("inbound.invoice", "Invoice")}
                   placeholder={
                     po.noInvoice
@@ -2459,7 +2537,7 @@ export function InboundDetailPage({
                  * which state the invoice was in.
                  */}
                 <Checkbox
-                  disabled={locked}
+                  disabled={moneyLocked}
                   checked={po.noInvoice === true}
                   onChange={(e) => {
                     const on = e.target.checked;
@@ -2485,7 +2563,7 @@ export function InboundDetailPage({
             children: (
               <DatePicker
                 style={{ width: "100%" }}
-                disabled={locked}
+                disabled={moneyLocked}
                 allowClear={false}
                 aria-label={t("inbound.ordered", "Ordered")}
                 // A named month cannot be read the American way round.
@@ -2507,7 +2585,7 @@ export function InboundDetailPage({
             children: (
               <Select
                 style={{ width: "100%" }}
-                disabled={locked}
+                disabled={moneyLocked}
                 aria-label={t("inbound.warehouse", "Warehouse")}
                 value={po.locationId}
                 options={db.warehouses.map((w) => ({
@@ -2528,7 +2606,7 @@ export function InboundDetailPage({
             children: (
               <Select
                 style={{ width: "100%" }}
-                disabled={locked}
+                disabled={moneyLocked}
                 aria-label={t("inbound.orderStatus", "Order status")}
                 value={po.status}
                 options={PO_STATUSES.map((code) => ({
@@ -2585,11 +2663,11 @@ export function InboundDetailPage({
 
   /** A row's product and serial are the bench's while it waits or sits in QC. */
   const rowOpen = (r: ReceivingRow) =>
-    !locked && (r.unit === null ? !r.notArrived : r.unit.status === "QC");
+    !qcLocked && (r.unit === null ? !r.notArrived : r.unit.status === "QC");
 
   /** A row's money is editable a little longer — see `MONEY_EDITABLE`. */
   const moneyOpen = (r: ReceivingRow) =>
-    !locked &&
+    !moneyLocked &&
     (r.unit === null ? !r.notArrived : MONEY_EDITABLE.includes(r.unit.status));
 
   const serialCell = (r: ReceivingRow) => {
@@ -2632,7 +2710,7 @@ export function InboundDetailPage({
           // Tells the scanner this box is where a scan was aimed, so a burst
           // typed into it lands natively instead of being reported as a stray.
           data-scan-target=""
-          disabled={locked}
+          disabled={qcLocked}
           // Generous on purpose: a second-hand serial is taken as read and
           // held to no length, and a box that stopped short would swallow the
           // end of one without a word.
@@ -3060,7 +3138,7 @@ export function InboundDetailPage({
         onClick: () => deleteUnitRow(r2),
       });
 
-    if (!locked) {
+    if (!qcLocked) {
       if (state === "WAITING" || state === "NO_PRODUCT") {
         shown.push(accept(null, false), service(null), giveBack(null));
         if (r.itemId !== null) shown.push(notArrived(r), deleteRow(r));
@@ -3243,10 +3321,65 @@ export function InboundDetailPage({
     .flatMap((l) => l.units)
     .filter(({ row }) => isTarget(row))
     .map(({ row }, i) => ({ key: row.key, n: i + 1, row }));
+  const closePopup = () =>
+    embedded ? embedded.onClose() : setDetailsKey(null);
+  /** The popup's units that pass QC and are still in it: Done accepts them. */
+  const readySerials = (
+    embedded
+      ? targetRows.map((r) => r.row)
+      : (openLine?.units.map(({ row }) => row) ?? [])
+  ).flatMap((row) =>
+    row.unit && row.unit.status === "QC" && qcReady(row.unit)
+      ? [row.unit.serial]
+      : [],
+  );
   const detailsModal = openLine !== undefined && (
     <UnitDetailsModal<{ key: string; n: number; row: ReceivingRow }>
       open
-      onClose={() => (embedded ? embedded.onClose() : setDetailsKey(null))}
+      onClose={() => {
+        if (changedSerials(storeDb, edits).length === 0) {
+          dropEdits();
+          return closePopup();
+        }
+        modal.confirm({
+          title: t("inbound.discardTitle", "Discard changes?"),
+          okText: t("inbound.discard", "Discard"),
+          cancelText: t("inbound.keepEditing", "Keep editing"),
+          onOk: () => {
+            dropEdits();
+            closePopup();
+          },
+        });
+      }}
+      onDone={() => {
+        const accept = readySerials;
+        void mutate((d) => {
+          saveEdits(d);
+          for (const serial of accept)
+            appendEvent(d, serial, {
+              type: "QC_SELESAI",
+              toStatus: "TERSEDIA",
+              refCode: po.code,
+              note: "QC passed",
+            });
+        }).then((ok) => {
+          // Refused: the answers stay held and the popup stays open.
+          if (!ok) return;
+          dropEdits();
+          closePopup();
+          if (accept.length > 0) offerToClose();
+        });
+      }}
+      doneLabel={
+        readySerials.length > 0
+          ? t("inbound.doneAccept", "Done & accept {{n}} units", {
+              n: readySerials.length,
+            })
+          : t("common.done", "Done")
+      }
+      doneDisabled={
+        readySerials.length === 0 && changedSerials(storeDb, edits).length === 0
+      }
       product={
         openLine.skuId === ""
           ? t("inbound.noProductYet", "the unpicked lines")
@@ -3273,7 +3406,7 @@ export function InboundDetailPage({
           ? targetRows
           : openLine.units.map(({ row, n }) => ({ key: row.key, n, row }))
       }
-      {...(locked || embedded
+      {...(moneyLocked || embedded
         ? {}
         : {
             /*
@@ -3371,7 +3504,7 @@ export function InboundDetailPage({
 
   /** A counted line's arrival, which is the one thing it has instead of units. */
   const countedActions = (l: PurchaseLine) => {
-    if (!l.counted || locked || l.notArrived > 0) return null;
+    if (!l.counted || qcLocked || l.notArrived > 0) return null;
     const missing = l.qty - l.received;
     // Every row of the group, not just its first: a line imported as two rows
     // of one product at one price is one row on screen and two on the ledger.
@@ -3428,7 +3561,7 @@ export function InboundDetailPage({
       title={t("inbound.unitsSection", "Units")}
       extra={
         <Flex gap={8} wrap justify="end">
-          {!locked && !arrived && summary.waiting > 0 && (
+          {!qcLocked && !arrived && summary.waiting > 0 && (
             <Button
               type="primary"
               icon={<InboxOutlined aria-hidden />}
@@ -3442,7 +3575,7 @@ export function InboundDetailPage({
            * each unit's Accept N times, not a different decision: same gate,
            * same event. Disabled rather than hidden when none is ready.
            */}
-          {!locked && units.length > 0 && (
+          {!qcLocked && units.length > 0 && (
             <Tooltip
               title={
                 readyToAccept.length === 0
@@ -3486,7 +3619,7 @@ export function InboundDetailPage({
         <PurchaseLinesTable
           lines={lines}
           skus={db.skus}
-          closed={locked}
+          closed={moneyLocked}
           cogsOf={lineCogs}
           onSetProduct={setLineProduct}
           onSetQty={setLineQty}
@@ -3525,7 +3658,7 @@ export function InboundDetailPage({
           // (2026-09-28).
           actionsWidth={COLUMN.actionsWide}
           actions={
-            locked || !lines.some((l) => l.counted)
+            moneyLocked || !lines.some((l) => l.counted)
               ? undefined
               : (l) =>
                   !l.counted ? null : (
@@ -3595,7 +3728,7 @@ export function InboundDetailPage({
          * A product added from here is a line on the invoice (owner ask
          * 2026-09-19, kept), of a quantity — never a row per unit.
          */}
-        {!locked && (
+        {!moneyLocked && (
           <AddLineBar
             skus={db.skus}
             onAdd={addLines}
@@ -3662,7 +3795,7 @@ export function InboundDetailPage({
         <Typography.Text style={{ whiteSpace: "nowrap" }}>
           {fmtRp(s.due)}
         </Typography.Text>
-        {!locked && (
+        {!moneyLocked && (
           <Button
             size="small"
             type="text"
@@ -3696,7 +3829,7 @@ export function InboundDetailPage({
           <Button
             type="primary"
             icon={<PlusOutlined aria-hidden />}
-            disabled={locked}
+            disabled={moneyLocked}
             onClick={() => setExpense("new")}
           >
             {t("inbound.addExpense", "Add expense")}
@@ -3704,7 +3837,7 @@ export function InboundDetailPage({
           <Button
             type="primary"
             icon={<PlusOutlined aria-hidden />}
-            disabled={locked}
+            disabled={moneyLocked}
             onClick={() => {
               setPaying({});
               setPayMethod("TUNAI");
@@ -3891,7 +4024,7 @@ export function InboundDetailPage({
                       <Button
                         size="small"
                         type="text"
-                        disabled={locked || lockedWhy !== undefined}
+                        disabled={moneyLocked || lockedWhy !== undefined}
                         aria-label={t(
                           "inbound.editPaymentAria",
                           "Edit the payment of {{amount}}",
@@ -3917,7 +4050,7 @@ export function InboundDetailPage({
                         size="small"
                         type="text"
                         danger
-                        disabled={locked || lockedWhy !== undefined}
+                        disabled={moneyLocked || lockedWhy !== undefined}
                         aria-label={t(
                           "inbound.deletePaymentAria",
                           "Delete the payment of {{amount}}",
@@ -4075,7 +4208,7 @@ export function InboundDetailPage({
             },
           ),
     );
-    offerToClose();
+    offerAfterPayment();
   };
 
   /**
@@ -4089,8 +4222,15 @@ export function InboundDetailPage({
    * the render before this payment.
    */
   const offerToClose = () => {
-    const after = getDb().pos.find((p) => p.id === po.id);
-    if (!after || poClosed(after) || !poTotals(after).fullyPaid) return;
+    const d = getDb();
+    const after = d.pos.find((p) => p.id === po.id);
+    if (!after || poClosed(after)) return;
+    // Only once it is paid AND every unit is accepted (2026-11-04). The slots
+    // are read from the store, not this render: it may be gone by now.
+    const waiting = receivingSummary(
+      receivingRows(after, d.units, countedIn(d)),
+    ).waiting;
+    if (!readyToClose(after, d.units, waiting)) return;
     modal.confirm({
       title: t("inbound.paidInFullTitle", "This invoice is paid in full"),
       content: t(
@@ -4105,6 +4245,36 @@ export function InboundDetailPage({
             new Date().toISOString();
         }),
     });
+  };
+
+  /**
+   * After a payment (2026-11-04, owner: *"when we pay in full, suggest to mark
+   * all as arrived, instead of closing the invoice"*). A paid invoice whose
+   * units have not arrived is asked about arrival; one that has, and whose
+   * units are all accepted, is offered closing.
+   */
+  const offerAfterPayment = () => {
+    const d = getDb();
+    const after = d.pos.find((p) => p.id === po.id);
+    if (!after || poClosed(after) || !poTotals(after).fullyPaid) return;
+    const n = notArrivedCount(after);
+    if (n > 0) {
+      modal.confirm({
+        title: t(
+          "inbound.markAllArrivedTitle",
+          "Mark all {{n}} units as arrived?",
+          { n },
+        ),
+        okText: t("inbound.markArrived", "Mark arrived"),
+        cancelText: t("inbound.notYet", "Not yet"),
+        onOk: () =>
+          mutate((dd) => {
+            dd.pos.find((p) => p.id === po.id)!.status = "RECEIVED";
+          }),
+      });
+      return;
+    }
+    offerToClose();
   };
 
   const photosRowData = photosRow
@@ -4271,7 +4441,17 @@ export function InboundDetailPage({
       }
       actions={
         closed
-          ? undefined
+          ? [
+              {
+                key: "edit",
+                label: editing
+                  ? t("inbound.saveInvoice", "Save invoice")
+                  : t("inbound.editInvoice", "Edit invoice"),
+                icon: editing ? <CheckOutlined /> : <EditOutlined />,
+                type: "primary",
+                onClick: () => setEditing((v) => !v),
+              },
+            ]
           : [
               /*
                * Edit invoice, beside Close invoice (owner ask 2026-09-24).
@@ -4317,7 +4497,7 @@ export function InboundDetailPage({
             title={t("inbound.closedTitle", "This invoice is closed")}
             description={t(
               "inbound.closedBody",
-              "Closed {{when}}. Nothing on the order can be changed — reopen it to record a payment, edit a line or grade a unit.",
+              "Closed {{when}}. Its money and lines are read-only — reopen it to record a payment or edit a line. QC still works behind Edit invoice.",
               { when: fmtDate(po.closedAt!) },
             )}
             action={

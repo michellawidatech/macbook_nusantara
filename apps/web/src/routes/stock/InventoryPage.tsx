@@ -70,7 +70,6 @@ import {
   DeleteOutlined,
   DownloadOutlined,
   UndoOutlined,
-  UploadOutlined,
   EditOutlined,
   LoginOutlined,
   LogoutOutlined,
@@ -80,7 +79,6 @@ import { ProTable } from "../../components/ProTable";
 import { EditableTable } from "../../components/EditableTable";
 import { InventoryTable } from "./InventoryTable";
 import { StockExportModal } from "./StockExportModal";
-import { PriceImportModal } from "./PriceImportModal";
 import { StockMovementEditModal } from "./StockMovementEditModal";
 import {
   stockHistoryRows,
@@ -117,6 +115,7 @@ import { HELD_STATUSES } from "../../lib/inventory.js";
 import { reprojectHolds } from "../../lib/reservations.js";
 import {
   batchProblems,
+  lineProblems,
   IN_STOCK,
   WRITTEN_OFF,
   normaliseSerial as normalise,
@@ -280,7 +279,6 @@ export function InventoryPage() {
   const { compact } = useLayoutMode();
   /** The stock export dialog (owner ask 2026-09-19). */
   const [exporting, setExporting] = useState(false);
-  const [importingPrices, setImportingPrices] = useState(false);
   /** The history row being corrected (owner ask 2026-09-24). */
   const [editing, setEditing] = useState<StockHistoryRow | null>(null);
   // ── The batch, held as plain state rather than in a Form ──────────────────
@@ -518,6 +516,7 @@ export function InventoryPage() {
         ? `${skuOf(c.skuId)?.name ?? ""} ${skuOf(c.skuId)?.variantLabel ?? ""}`.trim()
         : "",
       qty: c.qty,
+      ...(mode === "TRANSFER" && c.fromId ? { fromId: c.fromId } : {}),
       onHand: c.skuId
         ? mode === "TRANSFER"
           ? c.fromId
@@ -541,6 +540,34 @@ export function InventoryPage() {
       statusLabel,
       (id) => warehouseLabelOf(db.warehouses, id) ?? id,
     );
+
+  /**
+   * What is wrong with one row, shown under it as soon as its serial is in
+   * (2026-11-04) — the same rule the final check runs, so the dialog at the
+   * end only ever repeats what the rows already said.
+   */
+  const rowProblems = (r: BatchRow): string[] => {
+    // A serial already on an EARLIER row of this batch (2026-11-04: the same
+    // serial was typed into two rows and the whole batch was refused at Log).
+    const serial = normalise(r.serial);
+    const earlier = rows.slice(
+      0,
+      rows.findIndex((x) => x.key === r.key),
+    );
+    if (serial && earlier.some((x) => normalise(x.serial) === serial))
+      return [`${serial} is already on this batch.`];
+    return lineProblems(
+      asWritten(r),
+      {
+        kind,
+        ...(kind === "IN" || mode === "TRANSFER" ? { locationId } : {}),
+        ...(mode ? { mode } : {}),
+      },
+      unitOf,
+      statusLabel,
+      (id) => warehouseLabelOf(db.warehouses, id) ?? id,
+    );
+  };
 
   const submitBatch = () => {
     if (submitted.current) return;
@@ -702,21 +729,22 @@ export function InventoryPage() {
           // Only the fields somebody actually typed. An untouched box must
           // not clear a reading the machine already carries — a batch that
           // records where four machines went is a reason and four scans.
-          const mode = defaultBatteryModeOfSku(d, existing.skuId);
+          // Named `battery`, not `mode`: `mode` is the batch's reason.
+          const battery = defaultBatteryModeOfSku(d, existing.skuId);
           const typed = batteryPatch(
             {
               health: r.batteryHealth,
               cycleCount: r.cycleCount,
               fcc: r.fcc,
             },
-            mode,
+            battery,
           );
           if (typed.batteryHealth != null)
             existing.batteryHealth = typed.batteryHealth;
           if (typed.cycleCount != null) existing.cycleCount = typed.cycleCount;
           if (typed.fcc != null) existing.fcc = typed.fcc;
           // What the note will say about the battery, if anything was typed.
-          const reading = readBattery(typed, mode, batterySettings);
+          const reading = readBattery(typed, battery, batterySettings);
           if (
             (kind === "IN" || transferring) &&
             existing.locationId !== locationId
@@ -862,12 +890,6 @@ export function InventoryPage() {
     <Flex gap={SPACE.sm} wrap>
       <Button icon={<DownloadOutlined />} onClick={() => setExporting(true)}>
         {t("stockExport.button", "Export stock")}
-      </Button>
-      <Button
-        icon={<UploadOutlined />}
-        onClick={() => setImportingPrices(true)}
-      >
-        {t("priceImport.button", "Import sell prices")}
       </Button>
       {addAction}
     </Flex>
@@ -1186,12 +1208,6 @@ export function InventoryPage() {
                 onClick: () => setExporting(true),
               },
               {
-                key: "import-prices",
-                label: t("priceImport.button", "Import sell prices"),
-                icon: <UploadOutlined />,
-                onClick: () => setImportingPrices(true),
-              },
-              {
                 key: "in",
                 label: t("stock.stockIn", "Stock in"),
                 icon: <LoginOutlined />,
@@ -1355,6 +1371,11 @@ export function InventoryPage() {
                       return (
                         <Flex vertical gap={SPACE.xs}>
                           <AutoComplete
+                            status={
+                              unit && rowProblems(r).length > 0
+                                ? "error"
+                                : undefined
+                            }
                             value={r.serial}
                             onChange={(v: string) =>
                               setRow(r.key, { serial: v })
@@ -1379,6 +1400,15 @@ export function InventoryPage() {
                             // decorates the LIST and not the field — and in the
                             // filter, so typing "Pro 14" still finds the serial.
                             options={db.units
+                              // Not a serial another row already holds.
+                              .filter(
+                                (u) =>
+                                  !rows.some(
+                                    (x) =>
+                                      x.key !== r.key &&
+                                      normalise(x.serial) === u.serial,
+                                  ),
+                              )
                               .filter((u) =>
                                 // Never a unit in QC. The reason used to be the
                                 // schema's price CHECK, which went with the
@@ -1415,14 +1445,40 @@ export function InventoryPage() {
                             style={{ width: "100%" }}
                           />
                           {serial === "" ? null : unit ? (
-                            <Flex align="center" gap={SPACE.xs} wrap>
-                              <Typography.Text
-                                type="secondary"
-                                style={{ fontSize: TYPE.sm }}
-                              >
-                                {sku?.name} · {sku?.variantLabel}
-                              </Typography.Text>
-                              <EnumTag map={UNIT_STATUS} value={unit.status} />
+                            <Flex vertical gap={2}>
+                              <Flex align="center" gap={SPACE.xs} wrap>
+                                <Typography.Text
+                                  type="secondary"
+                                  style={{ fontSize: TYPE.sm }}
+                                >
+                                  {sku?.name} · {sku?.variantLabel}
+                                </Typography.Text>
+                                <EnumTag
+                                  map={UNIT_STATUS}
+                                  value={unit.status}
+                                />
+                                {/* Where it is now (2026-11-04), so a
+                                    transfer to the same place is seen
+                                    before anything is pressed. */}
+                                <Typography.Text style={{ fontSize: TYPE.sm }}>
+                                  {t("stock.unitIsIn", "in {{where}}", {
+                                    where:
+                                      warehouseLabelOf(
+                                        db.warehouses,
+                                        unit.locationId,
+                                      ) ?? unit.locationId,
+                                  })}
+                                </Typography.Text>
+                              </Flex>
+                              {rowProblems(r).map((p) => (
+                                <Typography.Text
+                                  key={p}
+                                  type="danger"
+                                  style={{ fontSize: TYPE.sm }}
+                                >
+                                  {p}
+                                </Typography.Text>
+                              ))}
                             </Flex>
                           ) : (
                             <Flex vertical gap={SPACE.xs}>
@@ -1747,6 +1803,14 @@ export function InventoryPage() {
                             <Select
                               aria-label={t("stock.fromWarehouse", "From")}
                               style={{ width: "100%" }}
+                              // Red the moment From and To are the same
+                              // warehouse (2026-11-04), not at Done.
+                              status={
+                                c.fromId !== undefined &&
+                                c.fromId === locationId
+                                  ? "error"
+                                  : undefined
+                              }
                               value={c.fromId}
                               disabled={!c.skuId}
                               options={db.warehouses
@@ -1847,10 +1911,6 @@ export function InventoryPage() {
       />
 
       <StockExportModal open={exporting} onClose={() => setExporting(false)} />
-      <PriceImportModal
-        open={importingPrices}
-        onClose={() => setImportingPrices(false)}
-      />
       <StockMovementEditModal
         open={editing !== null}
         row={editing}

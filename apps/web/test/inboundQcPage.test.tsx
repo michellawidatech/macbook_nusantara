@@ -284,6 +284,18 @@ async function addProduct(code: string, qty = 1) {
 /** The popup, which is where a unit's own boxes and decisions are. */
 const unitsDialog = () => screen.getByRole("dialog");
 
+/**
+ * Press the popup's Done — its answers are held until then (2026-11-04) —
+ * and open the units again so the test can carry on.
+ */
+async function saveUnits(line = 0) {
+  await userEvent.click(
+    within(unitsDialog()).getByRole("button", { name: /^Done/ }),
+  );
+  await settle();
+  await openUnits(line);
+}
+
 beforeEach(() => {
   __resetScanner();
   now = 0;
@@ -734,6 +746,7 @@ describe("QC on the row", () => {
     await userEvent.keyboard("312");
     await userEvent.tab();
 
+    await saveUnits();
     expect(stored()).toMatchObject({ cycleCount: 312, fcc: 4800 });
     expect(stored().batteryHealth).toBeUndefined();
     expect(
@@ -764,6 +777,7 @@ describe("QC on the row", () => {
     await userEvent.click(inRow("Cycle count"));
     await userEvent.keyboard("0");
     await userEvent.tab();
+    await saveUnits();
     expect(stored().cycleCount).toBe(0);
   });
 
@@ -790,10 +804,11 @@ describe("QC on the row", () => {
 
     // Two phrases, not a sentence: the comma is the separator in the column.
     await describe_(0, "Mulus, Fullset dus");
-    expect(stored().description).toBe("Mulus, Fullset dus");
 
+    // Accept saves the unit's held answers with it (2026-11-04).
     await userEvent.click(screen.getByLabelText(`Accept ${SERIAL}`));
     expect(stored().status).toBe("TERSEDIA");
+    expect(stored().description).toBe("Mulus, Fullset dus");
     // QC passed is what Accept always wrote.
     expect(
       snapshot()
@@ -829,6 +844,7 @@ describe("QC on the row", () => {
     await chooseIn(inRow("Grade"), "B");
     expect(stored().grade).toBe("B");
     await chooseIn(inRow("Grade"), "A");
+    await saveUnits();
     expect(stored().grade).toBe("A");
 
     const graded = snapshot().events.filter(
@@ -854,6 +870,7 @@ describe("QC on the row", () => {
     await renderUnits();
     await scanGraded();
     await describe_(0, "Retak");
+    await saveUnits();
     expect(snapshot().qcDescriptions.some((d) => d.label === "Retak")).toBe(
       true,
     );
@@ -1262,38 +1279,37 @@ describe("a closed invoice", () => {
       });
     });
 
-  it("takes no input at all, and says how to get it back", async () => {
+  // 2026-11-04: closing freezes the money and the lines, not the bench.
+  it("freezes its money but keeps QC open, and says how to reopen it", async () => {
     await renderUnits();
     scan(BARCODE);
     await settle();
     close();
 
     for (const el of screen.getAllByLabelText("Serial")) {
-      expect(el).toBeDisabled();
+      expect(el).toBeEnabled();
     }
     expect(
       screen.getByRole("button", { name: /Record payment/ }),
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: /Add expense/ })).toBeDisabled();
-    // And no row offers a decision while it is closed.
-    expect(screen.queryByLabelText(`Send ${SERIAL} to service`)).toBeNull();
-    expect(
-      screen.queryByLabelText(`Return ${SERIAL} to the supplier`),
-    ).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: /Reopen/ }));
     expect(
       snapshot().pos.find((p) => p.id === ORDER)!.closedAt,
     ).toBeUndefined();
-    expect(screen.getAllByLabelText("Serial")[0]!).toBeEnabled();
   });
 
-  it("refuses a scan rather than silently swallowing it", async () => {
+  it("still takes a scan onto its rows", async () => {
     await renderUnits();
     close();
     scan(BARCODE);
     await settle();
-    expect(snapshot().units.filter((u) => u.poId === ORDER)).toHaveLength(0);
+    expect(
+      screen.queryByText(
+        "This invoice is closed. Reopen it before recording anything.",
+      ),
+    ).toBeNull();
   });
 });
 
@@ -1504,12 +1520,82 @@ describe("a unit's sell price", () => {
       await userEvent.type(box, "8750000");
       await userEvent.tab();
       await settle();
+      await saveUnits();
       expect(stored().price).toBe(8_750_000);
 
       await userEvent.clear(inRow("Sell price"));
       await userEvent.tab();
       await settle();
+      await saveUnits();
       expect(stored().price).toBeUndefined();
       expect((inRow("Sell price") as HTMLInputElement).value).toBe("");
     }));
+});
+
+/*
+ * The popup saves on Done (2026-11-04, rebuilt after review): a scan commits
+ * at once; the QC answers of a unit that has its serial are held until Done.
+ */
+describe("the unit popup saves on Done", () => {
+  const doneButton = () =>
+    within(unitsDialog()).getByRole("button", { name: /^Done/ });
+  const stored = () => snapshot().units.find((u) => u.serial === SERIAL)!;
+
+  it("is grey while nothing changed", async () => {
+    await renderUnits();
+    expect(doneButton()).toBeDisabled();
+  });
+
+  it("keeps a scan at once, holds the answers until Done, then saves and accepts", async () => {
+    await renderUnits();
+    await scanGraded(BARCODE, "A");
+    // The scan is the arrival record: in the store straight away.
+    expect(stored()).toBeDefined();
+    await describe_(0, "Mulus");
+    expect(stored().description).toBe("");
+    expect(doneButton()).toHaveTextContent("Done & accept 1 units");
+    await userEvent.click(doneButton());
+    await settle();
+    expect(stored()).toMatchObject({
+      description: "Mulus",
+      status: "TERSEDIA",
+    });
+  });
+
+  it("offers Done & accept for the units that are complete, and accepts them", async () => {
+    await described();
+    expect(doneButton()).toHaveTextContent("Done & accept 1 units");
+    await userEvent.click(doneButton());
+    await settle();
+    expect(stored().status).toBe("TERSEDIA");
+  });
+
+  it("keeps the held answers on this device across a reload", async () => {
+    const first = await renderUnits();
+    await scanGraded(BARCODE, "A");
+    await describe_(0, "Mulus");
+    first.unmount();
+    await renderUnits();
+    expect(doneButton()).toHaveTextContent("Done & accept 1 units");
+    await userEvent.click(doneButton());
+    await settle();
+    expect(stored()).toMatchObject({
+      description: "Mulus",
+      status: "TERSEDIA",
+    });
+  });
+
+  it("asks before throwing answers away, and keeps the scan", async () => {
+    await renderUnits();
+    await scanGraded(BARCODE, "A");
+    await describe_(0, "Mulus");
+    await userEvent.click(
+      within(unitsDialog()).getByRole("button", { name: "Close" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Discard" }),
+    );
+    await settle();
+    expect(stored()).toMatchObject({ description: "", status: "QC" });
+  });
 });

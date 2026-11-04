@@ -2015,7 +2015,7 @@ export function CustomerReturnPanel({
                   lookupMiss
                     ? t(
                         "returnCustomer.noSuchSale",
-                        "{{text}} is not a transaction with anything still out.",
+                        "No sale found for {{text}} that still has units out. Check the number, or search by serial.",
                         { text: lookupMiss },
                       )
                     : undefined
