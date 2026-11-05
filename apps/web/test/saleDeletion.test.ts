@@ -86,6 +86,73 @@ describe("deleting a sale", () => {
     );
   });
 
+  /**
+   * Owner report 2026-11-05: a serial's history kept "Naik harga di
+   * SI-…000004 … (transaksi ini saja)" for sales it was no longer on. The till
+   * writes that price note just BEFORE the sold row, and the delete took only
+   * the sold row and what came after it.
+   */
+  function withPriceNote(
+    db: MockDb,
+    sale: Order,
+    note: string,
+    refCode?: string,
+  ): string {
+    const serial = sale.serials[0]!;
+    const sold = historyOf(db, serial).find(
+      (e) => e.type === "TERJUAL" && e.refCode === sale.code,
+    )!;
+    db.events.push({
+      ...sold,
+      id: `ev-price-${serial}`,
+      seq: sold.seq - 0.5,
+      type: "DICATAT",
+      toStatus: sold.fromStatus ?? "TERSEDIA",
+      note,
+      ...(refCode ? { refCode } : { refCode: undefined }),
+    } as MockDb["events"][number]);
+    return serial;
+  }
+
+  it("takes the sale's price note with it (2026-11-05)", () => {
+    const db = copy();
+    const sale = plainSale(db);
+    const serial = withPriceNote(
+      db,
+      sale,
+      `Naik harga di ${sale.code}: Rp 12.900.000 → Rp 17.500.000 (transaksi ini saja)`,
+      sale.code,
+    );
+    expect(deleteSale(db, sale.id, opts())).toBe(true);
+    expect(
+      historyOf(db, serial).some((e) => e.id === `ev-price-${serial}`),
+    ).toBe(false);
+  });
+
+  it("takes a price note written before notes carried the sale's code", () => {
+    const db = copy();
+    const sale = plainSale(db);
+    const serial = withPriceNote(
+      db,
+      sale,
+      `Nego di ${sale.code}: Rp 12.900.000 → Rp 12.000.000 (transaksi ini saja)`,
+    );
+    expect(deleteSale(db, sale.id, opts())).toBe(true);
+    expect(
+      historyOf(db, serial).some((e) => e.id === `ev-price-${serial}`),
+    ).toBe(false);
+  });
+
+  it("leaves a note before the sale that is not its price note", () => {
+    const db = copy();
+    const sale = plainSale(db);
+    const serial = withPriceNote(db, sale, "Graded A");
+    expect(deleteSale(db, sale.id, opts())).toBe(true);
+    expect(
+      historyOf(db, serial).some((e) => e.id === `ev-price-${serial}`),
+    ).toBe(true);
+  });
+
   it("refuses when another document wrote on the unit after the sale", () => {
     const db = copy();
     const sale = plainSale(db);

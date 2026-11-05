@@ -1563,6 +1563,9 @@ export function StockOutPage() {
            */
           appendEvent(d, l.serial!, {
             type: "DICATAT",
+            // Names the sale, so deleting it or swapping this unit off it
+            // takes the note too (owner report 2026-11-05).
+            refCode: code,
             note:
               price < asking
                 ? t(

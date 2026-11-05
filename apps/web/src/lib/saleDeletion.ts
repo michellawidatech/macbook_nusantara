@@ -109,7 +109,31 @@ export function saleRowsOf(
   }
   if (sold < 0) return null;
   if (mine.slice(sold + 1).some((e) => e.refCode !== code)) return null;
-  return mine.filter((e, i) => i === sold || (i > sold && e.refCode === code));
+  return mine.filter(
+    (e, i) =>
+      i === sold ||
+      (i > sold && e.refCode === code) ||
+      (i < sold && isPriceNoteOf(e, code)),
+  );
+}
+
+/**
+ * The till's "Nego / Naik harga di {code} … (transaksi ini saja)" note, which
+ * it writes just BEFORE the sold row (owner report 2026-11-05: deleting the
+ * sale, or swapping the unit off it, left the note on a serial the sale no
+ * longer carried). Since 2026-11-05 it carries the sale's `refCode`; one
+ * written before that is known by its wording, in either language.
+ */
+function isPriceNoteOf(e: MockDb["events"][number], code: string): boolean {
+  if (e.type !== "DICATAT") return false;
+  if (e.refCode !== undefined) return e.refCode === code;
+  const note = e.note ?? "";
+  return [
+    `Naik harga di ${code}:`,
+    `Nego di ${code}:`,
+    `Upsell on ${code}:`,
+    `Bargain on ${code}:`,
+  ].some((head) => note.startsWith(head));
 }
 
 /**
