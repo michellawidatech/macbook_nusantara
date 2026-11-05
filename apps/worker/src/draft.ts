@@ -98,6 +98,7 @@ import {
   matchesNote,
   renderStoreFacts,
   routeMessage,
+  carriesMedia,
   effectiveCapabilities,
   keepRequestNote,
   loadCapabilities,
@@ -1083,7 +1084,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       // whether it must go to a person whatever the model thinks (policy.ts),
       // and which of the owner's answers it most looks like (retrieval.ts).
       const route = routeMessage(current, {
-        hasMedia: batch.some((m) => m.msgType !== "text"),
+        hasMedia: carriesMedia(batch),
         capabilities,
         shown: lastShown.length > 0,
       });

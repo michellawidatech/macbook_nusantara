@@ -164,6 +164,7 @@ export {
   mentionsProduct,
   offersPhotos,
   routeMessage,
+  carriesMedia,
   withoutPhotoOffer,
   type AgentCapabilities,
   type HandoffTopic,

@@ -513,6 +513,26 @@ export interface Route {
   readonly rule: string;
 }
 
+/** The message kinds a person must look at: what `hasMedia` means. */
+const MEDIA_TYPES: ReadonlySet<string> = new Set([
+  "image",
+  "video",
+  "audio",
+  "document",
+]);
+
+/**
+ * Did the batch carry a photo, video, voice note or document? Not a reaction,
+ * a sticker, a location or a contact (2026-11-05: counting every non-text
+ * message as media handed a customer's plain questions over as "Photo or
+ * file"; the gateway forwards all of those kinds).
+ */
+export function carriesMedia(
+  batch: readonly { readonly msgType: string }[],
+): boolean {
+  return batch.some((m) => MEDIA_TYPES.has(m.msgType));
+}
+
 /**
  * The hand-over the message itself demands, or null when the model may try.
  *
