@@ -30,12 +30,15 @@ describe("inboundTabs", () => {
     const u = d.units.find((x) => x.status === "QC" && x.poId)!;
     u.grade = "A";
     u.description = "Mulus";
-    const at = "2026-11-03T03:00:00.000Z";
+    // After every seeded event: the demo seed dates its rows from the real
+    // clock, so a fixed instant stops being the unit's newest row as the
+    // calendar moves on (this test broke on 2026-11-05 for exactly that).
+    const at = new Date(Date.now() + 60_000).toISOString();
     d.services.push({
       id: "v-back",
       serial: u.serial,
       fromLocationId: u.locationId,
-      openedAt: "2026-11-01T03:00:00.000Z",
+      openedAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
       closedAt: at,
       toLocationId: u.locationId,
       fees: [{ id: "f1", kind: "LABOUR", amount: 250_000, at, staff: "x" }],
@@ -50,7 +53,7 @@ describe("inboundTabs", () => {
       at,
       toStatus: "QC",
     } as never);
-    const tabs = inboundTabs(d, NOW);
+    const tabs = inboundTabs(d, Date.now() + 3_600_000);
     const row = tabs.BACK_FROM_SERVICE.find((r) => r.serial === u.serial)!;
     expect(row.visit).toMatchObject({
       id: "v-back",
