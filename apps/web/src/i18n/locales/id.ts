@@ -3459,6 +3459,8 @@ export const id: Record<string, string> = {
   "snTracking.checkHistoryAria": "Cek riwayat {{serial}}",
   "snTracking.clearFilters": "Bersihkan filter",
   "snTracking.findInTree": "Cari kategori, produk atau unit",
+  "snTracking.unitPrice": "Harga satuan",
+  "snTracking.sellPrice": "Harga jual",
   "snTracking.lastMovement": "Pergerakan terakhir",
   "snTracking.movedBetween": "Pergerakan terakhir antara",
   "snTracking.movedSince": "Bergerak sejak",

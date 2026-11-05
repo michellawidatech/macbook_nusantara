@@ -460,3 +460,34 @@ describe("a unit's QC photographs (owner ask 2026-09-29)", () => {
     expect(screen.getAllByAltText(`Photo of ${SERIAL}`)).toHaveLength(1);
   });
 });
+
+/**
+ * Owner ask 2026-11-05: the list shows the unit price (what it cost) and the
+ * sell price once a unit is in inventory, and neither while it is in QC.
+ */
+describe("the S/N list's prices", () => {
+  const historyButtons = () =>
+    screen.getAllByRole("button", { name: /^Check history of / });
+
+  it("shows a unit in stock's unit price and sell price", async () => {
+    addUnit(SERIAL, { buy: 9_400_000, price: 12_750_000 });
+    renderPage(null);
+    await settle();
+    await userEvent.type(screen.getByLabelText(SEARCH), SERIAL);
+    await settle();
+    expect(historyButtons()).toHaveLength(1);
+    expect(screen.getByText(fmtRp(9_400_000))).toBeInTheDocument();
+    expect(screen.getByText(fmtRp(12_750_000))).toBeInTheDocument();
+  });
+
+  it("shows neither while the unit is still in QC", async () => {
+    addUnit(SERIAL, { status: "QC", buy: 9_400_000, price: 12_750_000 });
+    renderPage(null);
+    await settle();
+    await userEvent.type(screen.getByLabelText(SEARCH), SERIAL);
+    await settle();
+    expect(historyButtons()).toHaveLength(1);
+    expect(screen.queryByText(fmtRp(9_400_000))).toBeNull();
+    expect(screen.queryByText(fmtRp(12_750_000))).toBeNull();
+  });
+});

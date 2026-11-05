@@ -282,3 +282,46 @@ describe("the category → product → unit tree", () => {
     expect(skusUnder(tree, [])).toEqual([]);
   });
 });
+
+/**
+ * Owner ask 2026-11-05: S/N Tracking shows the unit price (what it cost,
+ * `Unit.buy`) and the sell price (its own `Unit.price`) once the unit has
+ * reached inventory — never while it is still in QC.
+ */
+describe("the prices on a tracker row", () => {
+  const row = (status: "QC" | "TERSEDIA" | "TERJUAL", price?: number) =>
+    trackerRows({
+      ...SOURCE,
+      units: [
+        {
+          serial: "PRICE1",
+          skuId: "s-air-8",
+          status,
+          locationId: "wh-1",
+          buy: 11_000_000,
+          description: "",
+          poId: null,
+          ...(price === undefined ? {} : { price }),
+        },
+      ],
+      events: [],
+    })[0]!;
+
+  it("shows the unit price and sell price once the unit is in inventory", () => {
+    expect(row("TERSEDIA", 13_500_000)).toMatchObject({
+      unitPrice: 11_000_000,
+      sellPrice: 13_500_000,
+    });
+  });
+  it("keeps showing them after the sale", () => {
+    expect(row("TERJUAL", 13_500_000).unitPrice).toBe(11_000_000);
+  });
+  it("shows neither while the unit is still in QC", () => {
+    const r = row("QC", 13_500_000);
+    expect(r.unitPrice).toBeUndefined();
+    expect(r.sellPrice).toBeUndefined();
+  });
+  it("never shows the variant's price as the unit's sell price", () => {
+    expect(row("TERSEDIA").sellPrice).toBeUndefined();
+  });
+});

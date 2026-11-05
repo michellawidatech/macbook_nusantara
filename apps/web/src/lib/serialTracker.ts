@@ -69,6 +69,14 @@ export interface TrackerRow {
    * the ledger existed might.
    */
   readonly last?: TrackerMovement;
+  /**
+   * What the unit cost (`Unit.buy`, Inventory's "Unit price") and what it
+   * asks (its own `Unit.price`, never the variant's) — both only once the
+   * unit has reached inventory, never while it is still in QC (owner ask
+   * 2026-11-05).
+   */
+  readonly unitPrice?: number;
+  readonly sellPrice?: number;
 }
 
 /** What the list is built from — the store, narrowed to what it reads. */
@@ -120,6 +128,12 @@ export function trackerRows(db: TrackerSource): TrackerRow[] {
       ...(e === undefined
         ? {}
         : { last: { type: e.type, at: e.at, seq: e.seq } }),
+      ...(u.status === "QC"
+        ? {}
+        : {
+            unitPrice: u.buy,
+            ...(u.price === undefined ? {} : { sellPrice: u.price }),
+          }),
     };
   });
 }

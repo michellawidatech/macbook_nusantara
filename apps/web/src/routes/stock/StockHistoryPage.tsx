@@ -70,7 +70,7 @@ import {
   CatalogueFilterPanel,
   CatalogueFilterSelect,
 } from "../../components/CatalogueFilter";
-import { fmtDateTime, fmtNone } from "../../lib/format.js";
+import { fmtDateTime, fmtNone, fmtRp } from "../../lib/format.js";
 import { PAGE_SEARCH_ATTR } from "../../lib/keyboardNav";
 import { qcPhotosOf, useDb } from "../../mock/store.js";
 import { UnitPhotos } from "../../components/UnitPhotos";
@@ -371,6 +371,26 @@ function SerialList({
             title: t("snTracking.warehouse", "Warehouse"),
             dataIndex: "warehouse",
             render: (v: string) => v || fmtNone(),
+          },
+          {
+            // What the unit cost and what it asks, once it is in inventory
+            // (owner ask 2026-11-05); blank while it is still in QC.
+            title: t("snTracking.unitPrice", "Unit price"),
+            key: "unitPrice",
+            align: "right",
+            width: COLUMN.money,
+            sortValue: (r) => r.unitPrice,
+            render: (_, r) =>
+              r.unitPrice === undefined ? fmtNone() : fmtRp(r.unitPrice),
+          },
+          {
+            title: t("snTracking.sellPrice", "Sell price"),
+            key: "sellPrice",
+            align: "right",
+            width: COLUMN.money,
+            sortValue: (r) => r.sellPrice,
+            render: (_, r) =>
+              r.sellPrice === undefined ? fmtNone() : fmtRp(r.sellPrice),
           },
           {
             title: t("snTracking.lastMovement", "Last movement"),
