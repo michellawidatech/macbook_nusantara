@@ -4,7 +4,7 @@
  * pernah servis".
  */
 import { App as AntdApp } from "antd";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -81,5 +81,45 @@ describe("Edit unit", () => {
         getDb().units.find((u) => u.serial === unit.serial)?.neverServiced,
       ).toBe(true),
     );
+  });
+});
+
+/**
+ * Owner, 2026-11-05: the unit price / COGS is never edited directly — it comes
+ * from the invoice and the service or other fees, and editing it by hand
+ * broke the COGS breakdown. Edit unit shows it and offers no box for it.
+ */
+describe("Edit unit's COGS", () => {
+  it("shows the COGS read-only, and saving leaves Unit.buy alone", async () => {
+    const unit = getDb().units.find((u) => u.status === "TERSEDIA")!;
+    const buy = unit.buy;
+    render(
+      <AntdApp>
+        <UnitEditModal open unit={unit} onClose={() => undefined} />
+      </AntdApp>,
+    );
+    const dialog = (
+      await screen.findByText("Edit unit", {
+        selector: ".ant-modal-title",
+      })
+    ).closest(".ant-modal") as HTMLElement;
+    expect(within(dialog).getByText("COGS")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Unit price")).toBeNull();
+    expect(within(dialog).queryByLabelText("COGS")).toBeNull();
+    await userEvent.click(
+      await screen.findByRole("combobox", { name: "Never serviced / opened" }),
+    );
+    await userEvent.click(
+      (await screen.findAllByText("Never")).find((n) =>
+        n.closest(".ant-select-item-option"),
+      )!,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(
+        getDb().units.find((u) => u.serial === unit.serial)?.neverServiced,
+      ).toBe(true),
+    );
+    expect(getDb().units.find((u) => u.serial === unit.serial)!.buy).toBe(buy);
   });
 });

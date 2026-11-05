@@ -373,15 +373,15 @@ function SerialList({
             render: (v: string) => v || fmtNone(),
           },
           {
-            // What the unit cost and what it asks, once it is in inventory
-            // (owner ask 2026-11-05); blank while it is still in QC.
-            title: t("snTracking.unitPrice", "Unit price"),
-            key: "unitPrice",
+            // The COGS / harga modal and the sell price, once the unit is in
+            // inventory (owner ask 2026-11-05); blank while it is in QC.
+            title: t("snTracking.cogs", "COGS"),
+            key: "cogs",
             align: "right",
             width: COLUMN.money,
-            sortValue: (r) => r.unitPrice,
+            sortValue: (r) => r.cogs,
             render: (_, r) =>
-              r.unitPrice === undefined ? fmtNone() : fmtRp(r.unitPrice),
+              r.cogs === undefined ? fmtNone() : fmtRp(r.cogs),
           },
           {
             title: t("snTracking.sellPrice", "Sell price"),

@@ -34,6 +34,7 @@
  *
  * Pure: no React, no store. `test/serialTracker.test.ts` is the spec.
  */
+import { costIndex } from "./service.js";
 import type { MockDb, UnitEvent, UnitStatus } from "../mock/seed.js";
 import { resolveSerialQuery } from "./serialInput.js";
 import { warehouseLabel } from "./warehouses.js";
@@ -70,12 +71,13 @@ export interface TrackerRow {
    */
   readonly last?: TrackerMovement;
   /**
-   * What the unit cost (`Unit.buy`, Inventory's "Unit price") and what it
-   * asks (its own `Unit.price`, never the variant's) — both only once the
-   * unit has reached inventory, never while it is still in QC (owner ask
-   * 2026-11-05).
+   * The COGS / harga modal — the invoice price plus the unit's share of the
+   * invoice's fees plus its service charges (`costIndex`, as Inventory reads
+   * it) — and what it asks (its own `Unit.price`, never the variant's). Both
+   * only once the unit has reached inventory, never while it is in QC (owner
+   * ask 2026-11-05).
    */
-  readonly unitPrice?: number;
+  readonly cogs?: number;
   readonly sellPrice?: number;
 }
 
@@ -83,7 +85,8 @@ export interface TrackerRow {
 export type TrackerSource = Pick<
   MockDb,
   "units" | "skus" | "models" | "warehouses" | "events"
->;
+> &
+  Partial<Pick<MockDb, "pos" | "services">>;
 
 /** Each serial's newest event, by ledger order. */
 export function latestEvents(
@@ -110,6 +113,12 @@ export function trackerRows(db: TrackerSource): TrackerRow[] {
   const models = new Map(db.models.map((m) => [m.id, m]));
   const warehouses = new Map(db.warehouses.map((w) => [w.id, w]));
   const last = latestEvents(db.events);
+  const costOf = costIndex({
+    pos: db.pos ?? [],
+    units: db.units,
+    events: db.events,
+    services: db.services ?? [],
+  });
   return db.units.map((u) => {
     const sku = skus.get(u.skuId);
     const model = sku === undefined ? undefined : models.get(sku.modelId);
@@ -131,7 +140,7 @@ export function trackerRows(db: TrackerSource): TrackerRow[] {
       ...(u.status === "QC"
         ? {}
         : {
-            unitPrice: u.buy,
+            cogs: costOf(u).total,
             ...(u.price === undefined ? {} : { sellPrice: u.price }),
           }),
     };

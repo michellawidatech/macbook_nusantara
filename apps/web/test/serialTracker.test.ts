@@ -284,9 +284,10 @@ describe("the category → product → unit tree", () => {
 });
 
 /**
- * Owner ask 2026-11-05: S/N Tracking shows the unit price (what it cost,
- * `Unit.buy`) and the sell price (its own `Unit.price`) once the unit has
- * reached inventory — never while it is still in QC.
+ * Owner ask 2026-11-05: S/N Tracking shows the COGS / harga modal (what the
+ * unit cost: invoice price + its share of the invoice's fees + service) and
+ * the sell price (its own `Unit.price`) once the unit has reached inventory —
+ * never while it is still in QC.
  */
 describe("the prices on a tracker row", () => {
   const row = (status: "QC" | "TERSEDIA" | "TERJUAL", price?: number) =>
@@ -307,18 +308,57 @@ describe("the prices on a tracker row", () => {
       events: [],
     })[0]!;
 
-  it("shows the unit price and sell price once the unit is in inventory", () => {
+  it("shows the COGS and sell price once the unit is in inventory", () => {
     expect(row("TERSEDIA", 13_500_000)).toMatchObject({
-      unitPrice: 11_000_000,
+      cogs: 11_000_000,
       sellPrice: 13_500_000,
     });
   });
   it("keeps showing them after the sale", () => {
-    expect(row("TERJUAL", 13_500_000).unitPrice).toBe(11_000_000);
+    expect(row("TERJUAL", 13_500_000).cogs).toBe(11_000_000);
+  });
+  it("counts the unit's service charges into its COGS", () => {
+    const r = trackerRows({
+      ...SOURCE,
+      units: [
+        {
+          serial: "PRICE2",
+          skuId: "s-air-8",
+          status: "TERSEDIA",
+          locationId: "wh-1",
+          buy: 11_000_000,
+          description: "",
+          poId: null,
+        },
+      ],
+      events: [],
+      pos: [],
+      services: [
+        {
+          id: "v1",
+          serial: "PRICE2",
+          fromLocationId: "wh-1",
+          openedAt: "2026-11-01T03:00:00.000Z",
+          closedAt: "2026-11-02T03:00:00.000Z",
+          fees: [
+            {
+              id: "f1",
+              kind: "LABOUR",
+              amount: 400_000,
+              at: "2026-11-02T03:00:00.000Z",
+              staff: "x",
+            },
+          ],
+          raisedBy: "QC",
+          staff: "x",
+        },
+      ],
+    } as never)[0]!;
+    expect(r.cogs).toBe(11_400_000);
   });
   it("shows neither while the unit is still in QC", () => {
     const r = row("QC", 13_500_000);
-    expect(r.unitPrice).toBeUndefined();
+    expect(r.cogs).toBeUndefined();
     expect(r.sellPrice).toBeUndefined();
   });
   it("never shows the variant's price as the unit's sell price", () => {

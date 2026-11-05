@@ -2178,7 +2178,9 @@ export const id: Record<string, string> = {
   "unitEdit.warehouse": "Gudang",
   "unitEdit.rack": "Rak",
   "unitEdit.description": "Deskripsi",
-  "unitEdit.unitPrice": "Harga unit",
+  "unitEdit.cogs": "Harga modal",
+  "unitEdit.cogsHint":
+    "Berasal dari invoice serta biaya servis atau biaya lainnya.",
   "unitEdit.movedNote": "Dipindahkan dari Inventaris",
   // The combined return history (owner ask 2026-09-23).
   "returns.type": "Jenis",
@@ -3459,7 +3461,7 @@ export const id: Record<string, string> = {
   "snTracking.checkHistoryAria": "Cek riwayat {{serial}}",
   "snTracking.clearFilters": "Bersihkan filter",
   "snTracking.findInTree": "Cari kategori, produk atau unit",
-  "snTracking.unitPrice": "Harga satuan",
+  "snTracking.cogs": "Harga modal",
   "snTracking.sellPrice": "Harga jual",
   "snTracking.lastMovement": "Pergerakan terakhir",
   "snTracking.movedBetween": "Pergerakan terakhir antara",
@@ -3622,7 +3624,7 @@ export const id: Record<string, string> = {
   // Inventory, flat since 2026-09-19.
   "inventory.unitAndSku": "Unit & SKU",
   "inventory.anyGrade": "Semua grade",
-  "inventory.unitPrice": "Harga satuan",
+  "inventory.cogs": "Harga modal",
   "inventory.sellPrice": "Harga jual",
   "inventory.cogsOne": "HPP {{amount}}",
   "inventory.action": "Aksi",

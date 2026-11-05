@@ -462,15 +462,16 @@ describe("a unit's QC photographs (owner ask 2026-09-29)", () => {
 });
 
 /**
- * Owner ask 2026-11-05: the list shows the unit price (what it cost) and the
- * sell price once a unit is in inventory, and neither while it is in QC.
+ * Owner ask 2026-11-05: the list shows the COGS / harga modal and the sell
+ * price / harga jual once a unit is in inventory, and neither while in QC.
  */
 describe("the S/N list's prices", () => {
   const historyButtons = () =>
     screen.getAllByRole("button", { name: /^Check history of / });
 
-  it("shows a unit in stock's unit price and sell price", async () => {
-    addUnit(SERIAL, { buy: 9_400_000, price: 12_750_000 });
+  it("shows a unit in stock's COGS and sell price", async () => {
+    // On no invoice, so its COGS is its price alone.
+    addUnit(SERIAL, { buy: 9_400_000, price: 12_750_000, poId: null });
     renderPage(null);
     await settle();
     await userEvent.type(screen.getByLabelText(SEARCH), SERIAL);

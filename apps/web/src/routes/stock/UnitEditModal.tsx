@@ -16,10 +16,11 @@
 import { useOpenedWith } from "../../hooks/useUnchanged";
 import { useEffect, useState } from "react";
 import { NeverServicedField } from "../../components/NeverServicedField";
-import { App, Flex, Form, Input, Modal, Select } from "antd";
+import { App, Flex, Form, Input, Modal, Select, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { BatteryFields } from "../../components/BatteryFields";
-import { MoneyInput } from "../../components/MoneyInput";
+import { fmtNone, fmtRp } from "../../lib/format.js";
+import { costIndex } from "../../lib/service.js";
 import {
   batteryModeOfUnit,
   batteryDraftOf,
@@ -49,7 +50,6 @@ export function UnitEditModal({ open, unit, onClose }: UnitEditModalProps) {
   const [locationId, setLocationId] = useState("");
   const [rackId, setRackId] = useState<string | undefined>(undefined);
   const [description, setDescription] = useState("");
-  const [buy, setBuy] = useState<number>(0);
   const [neverServiced, setNeverServiced] = useState<boolean | undefined>(
     undefined,
   );
@@ -62,7 +62,6 @@ export function UnitEditModal({ open, unit, onClose }: UnitEditModalProps) {
     setLocationId(unit.locationId);
     setRackId(unit.rackId);
     setDescription(unit.description ?? "");
-    setBuy(unit.buy ?? 0);
     setNeverServiced(unit.neverServiced);
   }, [open, unit?.serial]);
   /** Grey until something changes (2026-11-04). */
@@ -74,7 +73,6 @@ export function UnitEditModal({ open, unit, onClose }: UnitEditModalProps) {
       locationId,
       rackId,
       description,
-      buy,
       neverServiced,
     },
     open ? (unit?.serial ?? null) : null,
@@ -122,7 +120,6 @@ export function UnitEditModal({ open, unit, onClose }: UnitEditModalProps) {
       u.description = description.trim();
       if (neverServiced === undefined) delete u.neverServiced;
       else u.neverServiced = neverServiced;
-      u.buy = buy;
       u.rackId = rackId;
       if (where !== "" && where !== u.locationId) {
         // A unit that moves shelf says so in its own timeline — the rule every
@@ -249,12 +246,22 @@ export function UnitEditModal({ open, unit, onClose }: UnitEditModalProps) {
           />
         </Form.Item>
 
-        <Form.Item label={t("unitEdit.unitPrice", "Unit price")}>
-          <MoneyInput
-            style={{ width: "100%" }}
-            value={buy}
-            onChange={(v) => setBuy(v ?? 0)}
-          />
+        {/*
+         * Read-only (owner, 2026-11-05): the COGS comes from the unit's
+         * invoice and its service or other fees, never from a box here —
+         * editing it by hand broke the COGS breakdown. Correct the invoice
+         * while it is open, or add a charge on the Service page.
+         */}
+        <Form.Item
+          label={t("unitEdit.cogs", "COGS")}
+          extra={t(
+            "unitEdit.cogsHint",
+            "Comes from the invoice and the service or other fees.",
+          )}
+        >
+          <Typography.Text strong>
+            {unit === null ? fmtNone() : fmtRp(costIndex(db)(unit).total)}
+          </Typography.Text>
         </Form.Item>
       </Form>
     </Modal>

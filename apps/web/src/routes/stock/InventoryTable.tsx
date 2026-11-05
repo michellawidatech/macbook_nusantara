@@ -669,7 +669,10 @@ export function InventoryTable({ extra }: InventoryTableProps) {
        * its share of the invoice's shipping, tax and other expenses, and its
        * repairs (owner ask 2026-09-19).
        */
-      title: t("inventory.unitPrice", "Unit price"),
+      // The COGS / harga modal (owner copy 2026-11-05): the invoice price,
+      // its share of the invoice's fees and its repairs; the "i" takes it
+      // apart.
+      title: t("inventory.cogs", "COGS"),
       key: "buy",
       // The figure and its "i" on one line: at the bare money width the
       // button pushed "Rp" onto a line of its own (owner report 2026-10-21).
@@ -679,21 +682,9 @@ export function InventoryTable({ extra }: InventoryTableProps) {
         const cost = costOf(u);
         return (
           <Flex align="center" justify="flex-end" gap={SPACE.xs}>
-            <Flex vertical align="flex-end" gap={0}>
-              <Typography.Text style={{ whiteSpace: "nowrap" }}>
-                {fmtRp(cost.buy)}
-              </Typography.Text>
-              {cost.total !== cost.buy && (
-                <Typography.Text
-                  type="secondary"
-                  style={{ fontSize: TYPE.sm, whiteSpace: "nowrap" }}
-                >
-                  {t("inventory.cogsOne", "COGS {{amount}}", {
-                    amount: fmtRp(cost.total),
-                  })}
-                </Typography.Text>
-              )}
-            </Flex>
+            <Typography.Text style={{ whiteSpace: "nowrap" }}>
+              {fmtRp(cost.total)}
+            </Typography.Text>
             <CostInfoButton serial={u.serial} cost={cost} />
           </Flex>
         );
@@ -972,28 +963,16 @@ export function InventoryTable({ extra }: InventoryTableProps) {
                * COGS under it adds the invoice's expenses and any repairs, and
                * is drawn only when those make it a different number.
                */
-              title: t("inventory.unitPrice", "Unit price"),
+              title: t("inventory.cogs", "COGS"),
               key: "buy",
               width: COLUMN.money,
               align: "right",
-              sortValue: (l) => (l.buy.count === 0 ? undefined : l.buy.min),
+              sortValue: (l) => (l.cost.count === 0 ? undefined : l.cost.min),
               render: (_, l) =>
-                l.buy.count === 0 ? (
+                l.cost.count === 0 ? (
                   <Typography.Text type="secondary">{fmtRp(0)}</Typography.Text>
                 ) : (
-                  <Flex vertical align="flex-end" gap={0}>
-                    <Typography.Text>{rangeText(l.buy)}</Typography.Text>
-                    {(l.cost.min !== l.buy.min || l.cost.max !== l.buy.max) && (
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: TYPE.sm }}
-                      >
-                        {t("inventory.cogsOne", "COGS {{amount}}", {
-                          amount: rangeText(l.cost),
-                        })}
-                      </Typography.Text>
-                    )}
-                  </Flex>
+                  <Typography.Text>{rangeText(l.cost)}</Typography.Text>
                 ),
             },
             {
