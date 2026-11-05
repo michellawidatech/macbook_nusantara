@@ -121,6 +121,8 @@ beforeEach(async () => {
       buy: 28_000_000n,
       landed: 28_000_000n,
       grade: "A",
+      // Its own sell price — the bot never reads the variant's (2026-11-05).
+      price: 32_500_000n,
       intakeAt: NOW,
       version: 1,
     },

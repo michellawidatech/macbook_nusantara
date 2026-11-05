@@ -1225,17 +1225,19 @@ const label = (u: {
 });
 
 /**
- * What THIS unit asks: its own price, else its variant's (owner revision
- * 2026-09-08 — price is per unit, `Sku.price` is only where one starts). Null
- * when the POS holds no price, or holds 0: the bot must never quote a unit the
- * shop has not priced, and 0 is a price nobody set (owner ask 2026-09-29).
+ * What THIS unit asks: its own SELL PRICE (`Unit.price`) and nothing else.
+ * Owner, 2026-11-05: the bot quoted the unit price instead of the sell price
+ * — it fell back to the variant's `Sku.price` when a unit had none of its
+ * own, and that box is not a sell price the shop stands behind. No fallback:
+ * an unpriced unit is "no price — hand over". Null too for 0, a price nobody
+ * set (owner ask 2026-09-29). `sku` is accepted and deliberately unread.
  */
 export function askingPrice(u: {
   readonly price: bigint | null;
-  readonly sku: { readonly price: bigint };
+  readonly sku?: unknown;
 }): bigint | null {
-  const p = u.price ?? u.sku.price;
-  return p > 0n ? p : null;
+  const p = u.price;
+  return p !== null && p > 0n ? p : null;
 }
 
 const NO_PRICE_NOTE =

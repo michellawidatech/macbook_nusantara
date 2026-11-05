@@ -103,6 +103,9 @@ async function unit(opts: {
       buy: 12_000_000n,
       landed: 12_000_000n,
       grade: "A",
+      // Its own sell price, as QC gives it (owner, 2026-11-05: the bot reads
+      // this and never the variant's).
+      price: 15_500_000n,
       intakeAt: NOW,
       version: 1,
       archivedAt: opts.archivedAt ?? null,
@@ -136,14 +139,18 @@ describe("what counts as sellable", () => {
     expect(JSON.stringify(out)).not.toContain("HELD");
   });
 
-  it("quotes the variant's price for a unit that has none of its own", async () => {
+  it("quotes no price for a unit with no sell price of its own, never the variant's (2026-11-05)", async () => {
     await unit({ id: "s5", serial: "PRICED", status: "TERSEDIA" });
+    await db.unit.update({ where: { id: "s5" }, data: { price: null } });
 
-    const out = (await search()) as { units: Array<{ price?: string }> };
+    const out = (await search()) as {
+      units: Array<{ price?: string | null }>;
+    };
 
     expect(out.units).toHaveLength(1);
-    // Not an exact string: formatRupiah separates with a non-breaking space.
-    expect(out.units[0]!.price).toMatch(/^Rp\s15\.500\.000$/);
+    // The variant's Rp 15.500.000 must not reach the model.
+    expect(JSON.stringify(out)).not.toMatch(/15\.500\.000/);
+    expect(out.units[0]!.price ?? null).toBeNull();
   });
 
   it("quotes each unit's own price over its variant's (2026-09-08)", async () => {

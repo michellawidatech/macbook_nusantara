@@ -174,6 +174,8 @@ async function seedUnit(serial = "SERX") {
       buy: 12_000_000n,
       landed: 12_000_000n,
       grade: "A",
+      // Its own sell price — the bot never reads the variant's (2026-11-05).
+      price: 15_500_000n,
       intakeAt: NOW,
       version: 1,
     },

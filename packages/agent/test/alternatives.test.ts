@@ -95,6 +95,13 @@ async function unit(
 ) {
   n += 1;
   const serial = `ALT${String(n).padStart(4, "0")}`;
+  // A unit carries its own sell price, as QC gives it — the bot reads that
+  // and never the variant's (owner, 2026-11-05). Defaults to the variant's
+  // figure so each fixture keeps its price; `null` is a unit nobody priced.
+  const sellPrice =
+    opts.price !== undefined
+      ? opts.price
+      : ((await db.sku.findUnique({ where: { id: skuId } }))?.price ?? null);
   await db.unit.create({
     data: {
       id: `u_${serial}`,
@@ -105,7 +112,7 @@ async function unit(
       buy: 1n,
       landed: 1n,
       grade: opts.grade ?? "A",
-      price: opts.price ?? null,
+      price: sellPrice,
       intakeAt: new Date(NOW.getTime() - n * 60_000),
       version: 1,
     },

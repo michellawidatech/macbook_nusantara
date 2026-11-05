@@ -443,7 +443,8 @@ async function nudgeText(
     })) > 0;
   if (ready) return followUps.leadNudge(label);
   // Gone: the closest priced unit of the same kind that is on the shelf.
-  const reference = asked.price ?? asked.sku.price;
+  // The unit's own sell price only — never the variant's (owner, 2026-11-05).
+  const reference = asked.price ?? 0n;
   const shelf = await db.unit.findMany({
     where: {
       status: "TERSEDIA",
@@ -460,7 +461,7 @@ async function nudgeText(
     take: 200,
   });
   const priced = shelf
-    .map((u) => ({ u, p: u.price ?? u.sku.price }))
+    .map((u) => ({ u, p: u.price ?? 0n }))
     .filter((x) => x.p > 0n);
   if (priced.length === 0) return null;
   const gap = (p: bigint) => (p > reference ? p - reference : reference - p);
