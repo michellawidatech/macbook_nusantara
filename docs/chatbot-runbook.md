@@ -193,3 +193,18 @@ determine intent, and upselling a product"*:
 What did not come back is the closing pressure of the pre-2026-09-18 voice.
 "Mau aku pegangin dulu?" on every machine is a shop that feels like a funnel,
 and the owner's own approved answers do not sound like that.
+
+## Is the data the bot quotes right?
+
+The bot quotes a unit's own sell price and its battery reading, so a mispriced
+or ungraded unit is a wrong answer waiting for a customer. Before go-live and
+once a month, on the Mac mini (read-only; nothing is written):
+
+```
+psql "$DATABASE_URL" -f tools/chatbot-data-check.sql
+```
+
+It lists units on sale with no sell price or one that is not a round 10.000
+(an averaged cost), variants whose grades all ask one price, units with no
+grade, a cycle count of 2 or less, and a price at or below cost. Fix each in
+Inventory (Set price, Edit unit).
