@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  claimPhrase,
   HANDOFF_TOPICS,
   checkHoldingMessage,
   checkReply,
@@ -446,5 +447,79 @@ describe("the DP (2026-10-27)", () => {
     expect(holdingMessage("order_payment", true, "dp_proof")).toContain(
       "bukti DP-nya aku cek dulu",
     );
+  });
+});
+
+describe("checkReply refuses what the shop never said (2026-11-06, F3/F4/F5)", () => {
+  const check = (message: string, sourceTexts: readonly string[] = ["Garansi toko 1 bulan ya kak"]) =>
+    checkReply({ message, sourceCount: 1, unknownSources: 0, sourceTexts });
+
+  it.each([
+    "DP kakak sudah kami terima ya, unitnya sudah aku tahan",
+    "sudah aku keep-in sampai Sabtu ya kak",
+    "Booking kakak sudah terkonfirmasi",
+    "Pesanan dikirim hari ini ya kak",
+    "Unitnya udah diamankan kak",
+  ])("a commitment: %s", (m) => {
+    expect(check(m)).toBe("COMMITMENT_CLAIMED");
+  });
+
+  it.each([
+    "Unitnya belum bisa aku tahan ya kak, kalau mau diamankan bisa DP dulu",
+    "DP-nya belum masuk ya kak",
+    "Kalau DP sudah masuk, unitnya aku tahan ya kak",
+    "Siap kak, aku catat ya 😊",
+  ])("not a commitment: %s", (m) => {
+    expect(check(m)).toBeNull();
+  });
+
+  it.each(["stoknya terbatas, buruan kak", "ini unit terakhir lho kak", "lagi laris kak", "nanti kehabisan kak"])(
+    "invented urgency: %s",
+    (m) => {
+      expect(check(m)).toBe("URGENCY_INVENTED");
+    },
+  );
+
+  it("urgency the owner's answer itself says is not invented", () => {
+    expect(check("Untuk Intel updatenya terbatas kak", ["Intel: update terbatas"])).toBeNull();
+    expect(check("gak perlu buru-buru kak 😊")).toBeNull();
+  });
+
+  it.each([
+    "baterainya original, belum diganti kak",
+    "tahan 15 jam kak",
+    "kira-kira 8-10 jam kak",
+    "unit ex iBox kak",
+    "Layarnya mulus, gak ada whitespot",
+    "garansi 3 bulan kak",
+    "alamatnya di Jl. Sudirman kak",
+  ])("an invented fact: %s", (m) => {
+    expect(check(m)).toBe("FACT_NOT_IN_SOURCE");
+  });
+
+  it("a fact a source gives passes", () => {
+    expect(check("garansi 1 bulan kak", ["Garansi dari kami 1 bulan ya kak"])).toBeNull();
+    expect(check("garansi 7 hari kak", ["garansi 7 hari"])).toBeNull();
+  });
+});
+
+describe("claimPhrase names what a refused draft said (2026-11-06)", () => {
+  it("quotes the commitment, the urgency or the fact", () => {
+    expect(claimPhrase("COMMITMENT_CLAIMED", "Siap kak, sudah aku tahan ya", [])).toMatch(/sudah aku tahan/);
+    expect(claimPhrase("URGENCY_INVENTED", "Ada kak, buruan ya", [])).toBe("buruan");
+    expect(claimPhrase("FACT_NOT_IN_SOURCE", "tahan 15 jam kak", [])).toBe("15 jam");
+    expect(claimPhrase("AMOUNT_NOT_IN_SOURCE", "9jt kak", [])).toBeNull();
+  });
+});
+
+describe("the shelf's own words vouch for a fact, not for a figure (2026-11-06)", () => {
+  it("a QC phrase from this turn's stock lookup passes", () => {
+    const stock = JSON.stringify({ units: [{ condition: { marks: ["Charger original"] } }] });
+    expect(
+      checkReply({ message: "Lengkap sama charger original kak", sourceCount: 1, unknownSources: 0, sourceTexts: [], factTexts: [stock] }),
+    ).toBeNull();
+    expect(
+      checkReply({ message: "Lengkap sama charger original kak", sourceCount: 1, unknownSources: 0, sourceTexts: [] }),
+    ).toBe("FACT_NOT_IN_SOURCE");
   });
 });

@@ -159,6 +159,7 @@ export {
   asksBattery,
   asksForPerson,
   checkReply,
+  claimPhrase,
   linksIn,
   dpKeepLine,
   holdingMessage,

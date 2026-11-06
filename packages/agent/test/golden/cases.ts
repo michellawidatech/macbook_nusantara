@@ -96,19 +96,16 @@ export const CASES: readonly GoldenCase[] = [
   // --- F3 / F5: commitments and urgency the shop never made ---------------
   {
     id: "sim-50",
-    finding: "F3",
     turns: one("udah transfer kak", "DP kakak sudah kami terima ya, unitnya sudah aku tahan"),
     expect: { kind: "checked", problem: "COMMITMENT_CLAIMED", sources: ["Garansi toko 1 bulan"] },
   },
   {
     id: "sim-50b",
-    finding: "F3",
     turns: one("bisa keep?", "sudah aku keep-in sampai Sabtu ya kak"),
     expect: { kind: "checked", problem: "COMMITMENT_CLAIMED", sources: ["Garansi toko 1 bulan"] },
   },
   {
     id: "sim-51",
-    finding: "F5",
     turns: one("ada air m2?", "Ada kak, stoknya terbatas, buruan ya"),
     expect: { kind: "checked", problem: "URGENCY_INVENTED", sources: ["stock"], facts: [AIR_M2] },
   },

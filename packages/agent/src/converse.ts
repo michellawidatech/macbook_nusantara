@@ -64,6 +64,7 @@ import type { ToolDispatch } from "./agentApi.js";
 import {
   checkHoldingMessage,
   checkReply,
+  claimPhrase,
   dpKeepLine,
   holdingMessage,
   isHandoffTopic,
@@ -695,6 +696,8 @@ export async function converse(
   const model = input.model ?? AGENT_MODEL;
   const forcedToolUse = input.forcedToolUse ?? true;
   const catalogResults: string[] = [];
+  /** This turn's stock lookups as text: they vouch for a QC word, never a figure. */
+  const stockResults: string[] = [];
   /*
    * What the shelf said this turn, so a price the bot quotes can be checked
    * against it exactly as a price from an approved answer is. Without this,
@@ -854,8 +857,11 @@ export async function converse(
     problem: ReplyProblem | "PHOTOS",
     message: string,
     cited: readonly string[],
+    sourceTexts: readonly string[] = [],
   ): string => {
     const head = "Your reply was NOT sent.";
+    const phrase =
+      problem === "PHOTOS" ? null : claimPhrase(problem, message, sourceTexts);
     switch (problem) {
       case "AMOUNT_NOT_IN_SOURCE":
         return `${head} It states a figure no source gives for that unit. ${shelfLine()} Quote only those prices, beside the unit each belongs to; never quote one for a unit with no price in the POS — leave the price out. Cite stock. Send the corrected reply.`;
@@ -863,6 +869,12 @@ export async function converse(
         return `${head} It says a unit is ready, or how many are left, where this turn's lookups do not. ${shelfLine()} Only those are on the shelf; anything else is not in stock right now (never say why). Say "tinggal 1 unit" only where left is 1. Cite stock. Send the corrected reply.`;
       case "DISCOUNT_OFFERED":
         return `${head} It offers a discount or invites a bargain ("bisa kurang", "bisa nego", "diskon", "harga khusus", "best price"). You never negotiate, never offer, promise or hint at a lower price: a discount is the owner's to give. Quote the POS price as it is; if the customer is asking for a lower price, hand over with handoff_to_staff, topic negotiation. Send the corrected reply or the hand-over.`;
+      case "COMMITMENT_CLAIMED":
+        return `${head} It says "${phrase ?? "that it is done"}", but nothing has been received, held, confirmed or sent: only a person does those, and the shop tells the customer itself when one happens. Say what will happen next instead (a colleague confirms; a DP holds a unit). Send the corrected reply.`;
+      case "URGENCY_INVENTED":
+        return `${head} It presses the customer ("${phrase ?? "buruan"}"). Never invent urgency; say "tinggal 1 unit" only where left is 1. Send the corrected reply.`;
+      case "FACT_NOT_IN_SOURCE":
+        return `${head} It states "${phrase ?? "a fact"}", which no source this turn gives. Leave it out, or say you will check. Send the corrected reply.`;
       case "LINK_INVENTED":
         return `${head} It sends a link no lookup returned. Send only a link from a unit's links in this turn's stock results; when the unit has none, say they can order straight through this WhatsApp chat. Send the corrected reply.`;
       case "TOO_LONG":
@@ -967,10 +979,15 @@ export async function converse(
       sourceCount: sources.length,
       unknownSources: unknown,
       sourceTexts: texts,
-      ...(sources.includes("stock") ? { stockFacts } : {}),
+      ...(sources.includes("stock") ? { stockFacts, factTexts: stockResults } : {}),
     });
     if (problem !== null && canRetry)
-      return { retry: retryNote(problem, message, cited) };
+      return {
+        retry: retryNote(problem, message, cited, [
+          ...texts,
+          ...(sources.includes("stock") ? stockResults : []),
+        ]),
+      };
     if (problem !== null) {
       // A figure nothing vouched for is a price somebody has to check, a
       // "ready" nothing vouched for is stock — and the task says so in one
@@ -1186,6 +1203,12 @@ export async function converse(
             typeof v === "bigint" ? v.toString() : v,
           );
           if (use.name === "lookup_catalog") catalogResults.push(content);
+          if (
+            use.name === "search_stock" ||
+            use.name === "check_serial" ||
+            use.name === "find_unit_photos"
+          )
+            stockResults.push(content);
           if (
             use.name === "search_stock" ||
             use.name === "check_serial" ||

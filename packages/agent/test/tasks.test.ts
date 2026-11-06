@@ -209,3 +209,13 @@ describe("the DP tasks (2026-10-27)", () => {
     );
   });
 });
+
+describe("a draft refused for a claim the shop never made (2026-11-06)", () => {
+  it("files a task naming why, never as a price or stock check", () => {
+    for (const p of ["COMMITMENT_CLAIMED", "URGENCY_INVENTED", "FACT_NOT_IN_SOURCE"] as const) {
+      const t = heldReplyTask(p, "sudah aku tahan ya kak", "bisa keep?");
+      expect(t.topic, p).toBe("other");
+      expect(t.summary, p).toContain("sudah aku tahan ya kak");
+    }
+  });
+});

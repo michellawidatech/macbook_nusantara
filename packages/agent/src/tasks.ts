@@ -76,6 +76,12 @@ export const TASK_REASON = {
   discount: "draf menawarkan diskon",
   /** A draft sent a link no lookup returned (2026-10-28). */
   link: "link di draf tidak ada sumbernya",
+  /** A draft said a DP was received, a unit held, a booking confirmed (2026-11-06). */
+  commitment: "draf menjanjikan sesuatu yang belum terjadi",
+  /** A draft pressed the customer ("buruan", "terbatas") with no source (2026-11-06). */
+  urgency: "draf mendesak pelanggan tanpa dasar",
+  /** A draft stated a fact (battery hours, ex iBox, garansi) no source gives (2026-11-06). */
+  fact: "fakta di draf tidak ada sumbernya",
   noAnswer: "bot tidak punya jawabannya",
   windowClosed: "jendela 24 jam sudah tutup",
   noText: "pesan tanpa teks",
@@ -215,6 +221,21 @@ export function heldReplyTask(
       return {
         topic: "other",
         summary: taskNote("reply", TASK_REASON.link, draft),
+      };
+    case "COMMITMENT_CLAIMED":
+      return {
+        topic: "other",
+        summary: taskNote("reply", TASK_REASON.commitment, draft),
+      };
+    case "URGENCY_INVENTED":
+      return {
+        topic: "other",
+        summary: taskNote("reply", TASK_REASON.urgency, draft),
+      };
+    case "FACT_NOT_IN_SOURCE":
+      return {
+        topic: "other",
+        summary: taskNote("reply", TASK_REASON.fact, draft),
       };
     case "TOO_LONG":
       return {

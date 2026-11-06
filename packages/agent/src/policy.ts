@@ -869,6 +869,9 @@ export type ReplyProblem =
   | "AVAILABILITY_NOT_IN_SOURCE"
   | "DISCOUNT_OFFERED"
   | "LINK_INVENTED"
+  | "COMMITMENT_CLAIMED"
+  | "URGENCY_INVENTED"
+  | "FACT_NOT_IN_SOURCE"
   | "TOO_LONG";
 
 /**
@@ -890,6 +893,98 @@ const DISCOUNT_OFFER =
 /** "tidak", "belum", "gak" … just before an offer word turns it into a no. */
 const NEGATED_BEFORE =
   /\b(?:tidak|tdk|gak|ga|gk|nggak|ngga|enggak|engga|ndak|belum|blm|bukan|tanpa)\b[^.?!\n]{0,12}$/i;
+
+/**
+ * The shop has done something for the customer (2026-11-06, audit A1): a DP
+ * received, a unit held, a booking confirmed, an order sent. Only a person
+ * does those, so a draft saying one happened is refused whatever it cites —
+ * the real ones are sent by code (the booking line, the approval message).
+ */
+const COMMITMENT =
+  /\b(?:dp|pembayaran|bayaran|transfer|tf|uang|dana)\w*\s+(?:\w+\s+){0,2}?(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,1}?(?:di|ter)?(?:terima|masuk)\b|\b(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,2}?(?:di|ter)?(?:terima|masuk)\s+(?:\w+\s+){0,1}?(?:dp|pembayaran|transfer|tf|uang|dana)\w*|\b(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,2}?(?:di|ter)?(?:tahan|keep\w*|amankan|konfirmasi\w*|kirim|booking|book|reservasi|lunas)\b|\bterkonfirmasi\b|\b(?:dikirim|terkirim)\s+hari\s+ini\b/gi;
+
+/** "kalau", "nanti", "setelah" … before a commitment: a condition, not a claim. */
+const CONDITIONAL_BEFORE =
+  /\b(?:kalau|kalo|klo|kl|jika|bila|nanti|setelah|sesudah|begitu|habis|abis|once|after|if)\b[^.?!\n]{0,30}$/i;
+
+function claimsCommitment(message: string): boolean {
+  return claimPhrase("COMMITMENT_CLAIMED", message, []) !== null;
+}
+
+/**
+ * Pressure the shelf never vouched for (2026-11-06, audit A7): "buruan",
+ * "terbatas", "unit terakhir", "laris". The one honest form is "tinggal 1
+ * unit", checked against the count below. An approved answer that uses the
+ * word itself ("Intel: update terbatas") vouches for it.
+ */
+const URGENCY =
+  /\b(?:buruan|buru-buru|terbatas|laris(?:\s+manis)?|kehabisan|keburu\s+habis|cepat\s+habis|cepet\s+abis|(?:unit|stok|stock)\s+(?:yang\s+)?terakhir)\b/gi;
+
+/**
+ * Facts the bot said from its own memory in the 27–29 Oct chats (audit A8,
+ * production review §2): battery life in hours, "original / belum
+ * diganti", ex-iBox or international, screen defects, a warranty term, a
+ * street address. Each must appear in a source the turn cites; negation does
+ * not excuse one — "gak ada whitespot" was as invented as the opposite.
+ */
+const UNVOUCHED_FACTS: readonly RegExp[] = [
+  // A warranty term is vouched by a source naming the warranty and the term:
+  // "Garansi dari kami 1 bulan" vouches for "garansi 1 bulan".
+  /\bgaransi\s+(\d+\s*(?:hari|minggu|bulan|tahun))\b/gi,
+  /\b\d+(?:\s*[-–]\s*\d+)?\s*jam\b/gi,
+  /\bjl\.?\s+\w+/gi,
+  /\b(?:original|ori)\b/gi,
+  /\bbelum\s+(?:pernah\s+)?(?:di)?ganti\b/gi,
+  /\b(?:ex[\s-]*)?ibox\b|\binter\b/gi,
+  /\bwhite\s*spot\b|\bdead\s*pixel\b/gi,
+];
+
+const squash = (t: string) => t.toLowerCase().replace(/\s+/g, " ").trim();
+
+/** The first word of `re` in the reply that no source contains, if any. */
+function unvouched(
+  message: string,
+  re: RegExp,
+  sources: readonly string[],
+): string | null {
+  const known = sources.map(squash);
+  for (const m of message.matchAll(re)) {
+    // A pattern with a group names the part a source must hold, beside the
+    // pattern's first word ("garansi" … "1 bulan").
+    const said = squash(m[1] ?? m[0]);
+    const lead = m[1] ? squash(m[0]).split(" ")[0]! : null;
+    if (!known.some((k) => k.includes(said) && (lead === null || k.includes(lead))))
+      return m[0];
+  }
+  return null;
+}
+
+/**
+ * The words a refused draft used, for the retry note and the staff task
+ * ("you wrote 'sudah aku tahan'"), or null when the problem has none.
+ */
+export function claimPhrase(
+  problem: ReplyProblem,
+  message: string,
+  sourceTexts: readonly string[],
+): string | null {
+  if (problem === "COMMITMENT_CLAIMED") {
+    for (const m of message.matchAll(COMMITMENT)) {
+      const before = message.slice(Math.max(0, (m.index ?? 0) - 36), m.index);
+      if (!NEGATED_BEFORE.test(before) && !CONDITIONAL_BEFORE.test(before))
+        return m[0];
+    }
+    return null;
+  }
+  if (problem === "URGENCY_INVENTED") return unvouched(message, URGENCY, sourceTexts);
+  if (problem === "FACT_NOT_IN_SOURCE") {
+    for (const re of UNVOUCHED_FACTS) {
+      const hit = unvouched(message, re, sourceTexts);
+      if (hit !== null) return hit;
+    }
+  }
+  return null;
+}
 
 /** Does the reply offer a discount or invite a bargain? */
 export function offersDiscount(message: string): boolean {
@@ -992,6 +1087,12 @@ export function checkReply(input: {
   readonly unknownSources: number;
   readonly sourceTexts: readonly string[];
   readonly stockFacts?: readonly StockFact[];
+  /**
+   * This turn's stock lookups as text. They vouch for a WORD — a QC phrase
+   * such as "charger original" — and never for a figure: prices are checked
+   * per unit through `stockFacts`.
+   */
+  readonly factTexts?: readonly string[];
 }): ReplyProblem | null {
   const raw = input.message.trim();
   if (raw === "") return "EMPTY";
@@ -1000,6 +1101,7 @@ export function checkReply(input: {
   if (input.sourceCount === 0) return "NO_SOURCE";
   if (offersDiscount(raw)) return "DISCOUNT_OFFERED";
   if (inventsLink(raw, input)) return "LINK_INVENTED";
+  if (claimsCommitment(raw)) return "COMMITMENT_CLAIMED";
   // A link is vouched for above; its digits (".../976133661/…") are not a
   // price and its words are not a claim, so the rest reads the reply without it.
   const message = raw.replace(LINK_RE, " ");
@@ -1076,6 +1178,18 @@ export function checkReply(input: {
         return "AVAILABILITY_NOT_IN_SOURCE";
     }
   }
+
+  // Checked after the shelf's own figures, so a wrong price or count is
+  // still reported as what it is.
+  const wordSources = [...input.sourceTexts, ...(input.factTexts ?? [])];
+  for (const m of message.matchAll(URGENCY)) {
+    const before = message.slice(Math.max(0, (m.index ?? 0) - 24), m.index);
+    if (NEGATED_BEFORE.test(before)) continue;
+    if (unvouched(m[0], URGENCY, wordSources) !== null)
+      return "URGENCY_INVENTED";
+  }
+  if (UNVOUCHED_FACTS.some((re) => unvouched(message, re, wordSources) !== null))
+    return "FACT_NOT_IN_SOURCE";
   return null;
 }
 
