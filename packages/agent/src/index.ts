@@ -70,10 +70,13 @@ export {
 export {
   MAX_EMOJI,
   MAX_REPLY_EMOJI,
+  customerText,
   detectLanguage,
   hasForbiddenFormatting,
+  photoLineHandles,
   sanitiseReply,
   stripFormatting,
+  withoutShopTags,
   type Language,
 } from "./sanitise.js";
 export {

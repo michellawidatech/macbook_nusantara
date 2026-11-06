@@ -309,6 +309,28 @@ export const MAX_REPLY_EMOJI = 4;
  * markdown links — and caps a run of emoji. Ranges, brackets, full stops and
  * line breaks are the owner's and stay.
  */
+/**
+ * A customer's words with every `<shop_note>` tag taken out (2026-11-06): the
+ * shop's per-turn guidance is fenced in those tags, and a customer who typed
+ * one could otherwise write an owner's instruction into their own message.
+ * The words between the tags stay — they are what the customer said.
+ */
+export function withoutShopTags(text: string): string {
+  return (text ?? "")
+    .replace(/<\s*\/?\s*shop_note\b[^>]*>/gi, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+/**
+ * A customer's words as one line, for a transcript the bot reads back as
+ * "pelanggan: … / toko: …" (the summary, the memory chunks): a newline in a
+ * message would otherwise start a line that reads as the shop's.
+ */
+export function customerText(text: string): string {
+  return withoutShopTags(text).replace(/\s*\n\s*/g, " / ");
+}
+
 const PHOTO_LINE = /^[ \t]*photos?[ \t]*:(.*)$/gim;
 
 /**

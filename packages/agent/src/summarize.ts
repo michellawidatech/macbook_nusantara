@@ -43,7 +43,7 @@
  */
 
 import { SUMMARY_NEXT_LABEL, SUMMARY_WANTS_LABEL } from "@nusantara/domain";
-import { stripFormatting } from "./sanitise.js";
+import { customerText, stripFormatting } from "./sanitise.js";
 import { AGENT_MODEL, effortConfig, type AgentClient } from "./converse.js";
 
 /**
@@ -146,7 +146,7 @@ export interface SummaryTurn {
 export function renderTranscript(turns: readonly SummaryTurn[]): string {
   return turns
     .flatMap((t) => {
-      const q = t.text?.trim();
+      const q = t.text ? customerText(t.text) : undefined;
       const a = t.replyText?.trim();
       return [q ? `pelanggan: ${q}` : null, a ? `toko: ${a}` : null].filter(
         (l): l is string => l !== null,

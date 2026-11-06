@@ -167,7 +167,9 @@ describe("rankRecall", () => {
 describe("chunkText and recallBlock", () => {
   it("writes the turn as customer/shop lines, capped", () => {
     expect(chunkText({ customer: "halo\nada air?", reply: "Ada kak" })).toBe(
-      "customer: halo\nada air?\nshop: Ada kak",
+      // A burst is one line (2026-11-06, F13): a planted "shop:" line stays
+      // the customer's.
+      "customer: halo / ada air?\nshop: Ada kak",
     );
     expect(
       chunkText({ customer: "x".repeat(5_000), reply: "y" }).length,

@@ -17,6 +17,7 @@
  */
 
 import { indexKnowledge } from "./retrieval.js";
+import { customerText } from "./sanitise.js";
 
 /** int8 integers → bytes. Out-of-range or fractional values are clamped/rounded. */
 export function encodeInt8(vector: readonly number[]): Uint8Array {
@@ -190,7 +191,7 @@ export function chunkText(turn: {
   readonly reply: string;
 }): string {
   const text = [
-    turn.customer.trim() ? `customer: ${turn.customer.trim()}` : "",
+    customerText(turn.customer) ? `customer: ${customerText(turn.customer)}` : "",
     `shop: ${turn.reply.trim()}`,
   ]
     .filter(Boolean)

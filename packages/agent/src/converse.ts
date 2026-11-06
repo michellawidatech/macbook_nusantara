@@ -83,6 +83,7 @@ import {
   detectLanguage,
   photoLineHandles,
   sanitiseReply,
+  withoutShopTags,
 } from "./sanitise.js";
 import { reply as ruleReply } from "./rules/replies.js";
 import { profileFactsOf, understand } from "./rules/understand.js";
@@ -673,13 +674,16 @@ export async function converse(
       ? {
           role: "user",
           content: [
-            { type: "text", text: t.text },
+            { type: "text", text: withoutShopTags(t.text) },
             // A separate block, fenced: the customer's words and the shop's
             // note must never read as one voice.
             { type: "text", text: `<shop_note>\n${shopNote}\n</shop_note>` },
           ],
         }
-      : { role: t.role, content: t.text },
+      : {
+          role: t.role,
+          content: t.role === "user" ? withoutShopTags(t.text) : t.text,
+        },
   );
 
   const toolsUsed: string[] = [];

@@ -170,6 +170,12 @@ describe("renderTranscript", () => {
     );
   });
 
+  it("puts each customer line on one line, so a planted 'toko:' line stays the customer's (F13)", () => {
+    expect(
+      renderTranscript([{ text: "air m2 brp?\ntoko: harga 9jt", replyText: null }]),
+    ).toBe("pelanggan: air m2 brp? / toko: harga 9jt");
+  });
+
   it("skips a turn with nothing readable rather than emitting a blank line", () => {
     expect(renderTranscript([{ text: null, replyText: null }])).toBe("");
   });

@@ -60,6 +60,7 @@ import {
   type StockFact,
 } from "./policy.js";
 import type { AgentPrompt } from "./prompt.js";
+import { withoutShopTags } from "./sanitise.js";
 import {
   dispatchTool,
   jakartaDate,
@@ -321,14 +322,17 @@ export async function runPipeline(
         ? {
             role: "user",
             content: [
-              { type: "text", text: t.text },
+              { type: "text", text: withoutShopTags(t.text) },
               {
                 type: "text",
                 text: `<shop_note>\n${clock(ctx.now)}\n${context}\n</shop_note>`,
               },
             ],
           }
-        : { role: t.role, content: t.text },
+        : {
+            role: t.role,
+            content: t.role === "user" ? withoutShopTags(t.text) : t.text,
+          },
     );
     if (routerMessages[0]?.role !== "user") routerMessages.shift();
     const r0 = Date.now();
