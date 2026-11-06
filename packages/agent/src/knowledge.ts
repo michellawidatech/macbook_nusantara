@@ -145,7 +145,19 @@ export function matchesFor(
 export function matchesNote(
   kb: KnowledgeBase,
   matches: ReadonlyArray<RankedDoc<ApprovedAnswer>>,
+  /**
+   * The bot reads the shelf (2026-11-06): then a question no approved answer
+   * covers is usually one the shelf or the chat answers — "air m2 ada?",
+   * "buat kuliah" — and telling the model to hand over sent those to staff.
+   */
+  opts: { readonly live?: boolean } = {},
 ): string {
+  if ((matches.length === 0 || !isStrongMatch(matches[0]!)) && opts.live) {
+    return (
+      "No approved answer matches this message. That is normal: answer from the shelf or the " +
+      "chat, using a stock lookup for anything about a unit."
+    );
+  }
   if (matches.length === 0 || !isStrongMatch(matches[0]!)) {
     return (
       "No approved answer matches this message by keyword. Answer only if one of the " +

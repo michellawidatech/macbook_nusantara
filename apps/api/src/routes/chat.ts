@@ -509,7 +509,9 @@ export function chatRouter({
           ? routeMessage(customerText, { capabilities })
           : null,
         hint: customerText
-          ? matchesNote(knowledge, matchesFor(knowledge, customerText))
+          ? matchesNote(knowledge, matchesFor(knowledge, customerText), {
+              live: effectiveCapabilities(capabilities).stock,
+            })
           : undefined,
         onError: (err) => {
           failure = err;

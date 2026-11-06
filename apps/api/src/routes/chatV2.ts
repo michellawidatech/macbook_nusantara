@@ -22,6 +22,7 @@ import {
   loadAgentPersonas,
   loadCapabilities,
   chatbotSettings,
+  effectiveCapabilities,
   leadScoreOf,
   loadKnowledgeBase,
   loadStoreFacts,
@@ -1013,7 +1014,9 @@ export function registerChatV2(router: Router, deps: ChatV2Deps): void {
         capabilities,
         shown: (body.data.lastShown ?? []).length > 0,
       });
-      const hint = matchesNote(knowledge, matchesFor(knowledge, customerText));
+      const hint = matchesNote(knowledge, matchesFor(knowledge, customerText), {
+        live: effectiveCapabilities(capabilities).stock,
+      });
       const singleAgent = async () => {
         const calls: CallUsage[] = [];
         const result = await converse({

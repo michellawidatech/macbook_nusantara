@@ -1088,7 +1088,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         capabilities,
         shown: lastShown.length > 0,
       });
-      const hint = matchesNote(knowledge, matchesFor(knowledge, current));
+      const hint = matchesNote(knowledge, matchesFor(knowledge, current), {
+        live: effectiveCapabilities(capabilities).stock,
+      });
       // "Keep it for me" with bookings on is a reservation REQUEST the bot
       // files and a person approves (2026-10-27), not a closing hand-over.
       // The rules bot reads the keep off `route` itself; the AI is told.

@@ -408,8 +408,8 @@ const SEARCH_KNOWLEDGE: Anthropic.Tool = {
   description:
     "Search the answers the shop's owner has written and approved, for anything about how the " +
     "shop works: instalments, delivery, warranty, what comes in the box, trade-in, service. " +
-    "Returns the best matches with their handles (K7). If nothing matches, the shop has not " +
-    "answered it and a colleague must: use handoff_to_staff rather than working it out.",
+    "Returns the best matches with their handles (K7). If nothing matches, answer from a stock " +
+    "lookup or the chat when they can; never state a policy no answer gives.",
   input_schema: {
     type: "object",
     properties: {
@@ -458,8 +458,8 @@ const REPLY: Anthropic.Tool = {
     "answer (cite its handle, like K7), the shop facts ('store'), a catalogue lookup " +
     "('catalog') or a stock lookup ('stock'). A greeting or a thank-you that states no fact " +
     "cites 'greeting'; small talk, or what the customer told you in this chat (their name, what " +
-    "they need), cites 'chat' and may carry no price and no stock claim. If you cannot name a " +
-    "source for a fact they asked about, use handoff_to_staff instead.",
+    "they need), cites 'chat' and may carry no price and no stock claim. A fact you cannot " +
+    "name a source for is left out, never guessed.",
   input_schema: {
     type: "object",
     properties: {
