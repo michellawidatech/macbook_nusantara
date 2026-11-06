@@ -260,10 +260,11 @@ describe("approving a request", () => {
     expect((await owner.chatAction.findFirstOrThrow()).status).toBe("DONE");
     const out = await owner.outbox.findFirstOrThrow();
     expect(out.kind).toBe("WA_REPLY");
-    // The owner's template (2026-10-28), with the name the request is under.
+    // The owner's template (2026-10-28), with the name the request is under —
+    // and, with no DP, a visit to look rather than a unit "prepared" (2026-11-06).
     expect((out.payload as { body: string }).body).toMatch(
       // No shop address recorded here: the owner's own (SHOP_ADDRESS) is said.
-      /^Okeyy kak noted, kak Budi nanti akan kita siapkan MacBook Air M2 8\/256 nya yaa untuk .+ jam \d\d\.\d\d\. Toko kita ada di Ruko Sorrento Place, .+, buka setiap hari 10\.00–20\.00 WIB\.$/,
+      /^Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa untuk lihat MacBook Air M2 8\/256 di .+ jam \d\d\.\d\d\. Unitnya belum kami tahan ya kak, kalau mau diamankan bisa DP Rp\S+ 😊 Toko kita ada di Ruko Sorrento Place, .+, buka setiap hari 10\.00–20\.00 WIB\.$/,
     );
     expect(
       await owner.auditLog.count({

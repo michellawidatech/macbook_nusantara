@@ -460,6 +460,7 @@ describe("checkReply refuses what the shop never said (2026-11-06, F3/F4/F5)", (
     "Booking kakak sudah terkonfirmasi",
     "Pesanan dikirim hari ini ya kak",
     "Unitnya udah diamankan kak",
+    "Siap kak, sudah di-keep ya",
   ])("a commitment: %s", (m) => {
     expect(check(m)).toBe("COMMITMENT_CLAIMED");
   });

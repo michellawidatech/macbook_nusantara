@@ -144,13 +144,25 @@ export function approvalMessage(input: {
     readonly address: string;
     readonly hours: string | null;
   } | null;
+  /**
+   * Whether a DP holds the unit (2026-11-06). Without one the unit stays on
+   * sale, so "nanti akan kita siapkan" would promise what the till can undo
+   * with "Sell anyway": the customer is told it is a visit to look, and how
+   * to hold it.
+   */
+  readonly held: boolean;
+  /** The shop's DP, whole rupiah, for the "kalau mau diamankan" line. */
+  readonly dpAmount?: number | null;
 }): string {
   const at = `${jakartaDay(input.when)} jam ${jakartaClock(input.when)}`;
   const name = input.name?.trim();
   const who = name ? `kak ${name} ` : "";
-  const head = input.unit
-    ? `Okeyy kak noted, ${who}nanti akan kita siapkan ${input.unit} nya yaa untuk ${at}.`
-    : `Okeyy kak noted, ${who}nanti kita tunggu kedatangannya yaa di ${at}.`;
+  const dp = input.dpAmount ? `DP ${chatRupiah(input.dpAmount)}` : "DP dulu";
+  const head = !input.unit
+    ? `Okeyy kak noted, ${who}nanti kita tunggu kedatangannya yaa di ${at}.`
+    : input.held
+      ? `Okeyy kak noted, ${who}nanti akan kita siapkan ${input.unit} nya yaa untuk ${at}.`
+      : `Okeyy kak noted, ${who}nanti kita tunggu kedatangannya yaa untuk lihat ${input.unit} di ${at}. Unitnya belum kami tahan ya kak, kalau mau diamankan bisa ${dp} 😊`;
   if (!input.place) return head;
   const hours = input.place.hours ? `, buka ${input.place.hours}` : "";
   return `${head} Toko kita ada di ${input.place.address}${hours}.`;

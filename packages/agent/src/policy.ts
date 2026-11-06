@@ -940,7 +940,7 @@ const NEGATED_BEFORE =
  * the real ones are sent by code (the booking line, the approval message).
  */
 const COMMITMENT =
-  /\b(?:dp|pembayaran|bayaran|transfer|tf|uang|dana)\w*\s+(?:\w+\s+){0,2}?(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,1}?(?:di|ter)?(?:terima|masuk)\b|\b(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,2}?(?:di|ter)?(?:terima|masuk)\s+(?:\w+\s+){0,1}?(?:dp|pembayaran|transfer|tf|uang|dana)\w*|\b(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,2}?(?:di|ter)?(?:tahan|keep\w*|amankan|konfirmasi\w*|kirim|booking|book|reservasi|lunas)\b|\bterkonfirmasi\b|\b(?:dikirim|terkirim)\s+hari\s+ini\b/gi;
+  /\b(?:dp|pembayaran|bayaran|transfer|tf|uang|dana)\w*\s+(?:\w+\s+){0,2}?(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,1}?(?:di|ter)?-?(?:terima|masuk)\b|\b(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,2}?(?:di|ter)?-?(?:terima|masuk)\s+(?:\w+\s+){0,1}?(?:dp|pembayaran|transfer|tf|uang|dana)\w*|\b(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,2}?(?:di|ter)?-?(?:tahan|keep\w*|amankan|konfirmasi\w*|kirim|booking|book|reservasi|lunas)\b|\bterkonfirmasi\b|\b(?:dikirim|terkirim)\s+hari\s+ini\b/gi;
 
 /** "kalau", "nanti", "setelah" … before a commitment: a condition, not a claim. */
 const CONDITIONAL_BEFORE =
@@ -1140,7 +1140,6 @@ export function checkReply(input: {
   if (input.sourceCount === 0) return "NO_SOURCE";
   if (offersDiscount(raw)) return "DISCOUNT_OFFERED";
   if (inventsLink(raw, input)) return "LINK_INVENTED";
-  if (claimsCommitment(raw)) return "COMMITMENT_CLAIMED";
   // A link is vouched for above; its digits (".../976133661/…") are not a
   // price and its words are not a claim, so the rest reads the reply without it.
   const message = raw.replace(LINK_RE, " ");
@@ -1220,6 +1219,7 @@ export function checkReply(input: {
 
   // Checked after the shelf's own figures, so a wrong price or count is
   // still reported as what it is.
+  if (claimsCommitment(message)) return "COMMITMENT_CLAIMED";
   const wordSources = [...input.sourceTexts, ...(input.factTexts ?? [])];
   for (const m of message.matchAll(URGENCY)) {
     const before = message.slice(Math.max(0, (m.index ?? 0) - 24), m.index);

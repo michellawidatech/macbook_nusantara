@@ -589,9 +589,12 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
         reply.askForVisit({ unit: false, name: true, when: false }, lang),
         { ask: false },
       );
-    if (out["unavailable"] && r.serial)
-      // The unit they named has gone; the visit can still be to look.
-      return fileRequest({ ...r, serial: null, keep: false });
+    if (out["unavailable"] && r.serial) {
+      // The unit they named has gone; the visit can still be to look — but
+      // they are told it went (2026-11-06), or "aku catat" reads as a hold.
+      const visit = await fileRequest({ ...r, serial: null, keep: false });
+      return { ...visit, reply: `${reply.justSold(lang)}\n\n${visit.reply}` };
+    }
     return handOver(
       "reservation",
       taskNote("booking", TASK_REASON.notAutomatic, input.text),

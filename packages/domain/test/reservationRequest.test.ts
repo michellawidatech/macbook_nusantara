@@ -81,19 +81,19 @@ describe("what the customer is told", () => {
   const when = new Date("2026-10-28T07:00:00Z"); // 14.00 in Jakarta
   it("names the unit and the time, and the DP when one came in", () => {
     expect(
-      approvalMessage({ unit: "MacBook Air M2", when, name: "Budi" }),
+      approvalMessage({ unit: "MacBook Air M2", when, name: "Budi", held: true }),
     ).toBe(
       "Okeyy kak noted, kak Budi nanti akan kita siapkan MacBook Air M2 nya yaa untuk 28 Oktober 2026 jam 14.00.",
     );
   });
   it("leaves the name out cleanly when there is none", () => {
     for (const name of [null, undefined, "  "])
-      expect(approvalMessage({ unit: "MacBook Air M2", when, name })).toBe(
+      expect(approvalMessage({ unit: "MacBook Air M2", when, name, held: true })).toBe(
         "Okeyy kak noted, nanti akan kita siapkan MacBook Air M2 nya yaa untuk 28 Oktober 2026 jam 14.00.",
       );
   });
   it("waits for a visit when no unit is to be kept", () => {
-    expect(approvalMessage({ unit: null, when, name: "Budi" })).toBe(
+    expect(approvalMessage({ unit: null, when, name: "Budi", held: false })).toBe(
       "Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa di 28 Oktober 2026 jam 14.00.",
     );
   });
@@ -101,6 +101,7 @@ describe("what the customer is told", () => {
     const text = approvalMessage({
       unit: "MacBook Air M2",
       when,
+      held: true,
       place: {
         address: "Jl. Mangga Dua 12",
         hours: "setiap hari 10.00–20.00 WIB",
@@ -114,9 +115,20 @@ describe("what the customer is told", () => {
       approvalMessage({
         unit: null,
         when,
+        held: false,
         place: { address: "Jl. Mangga Dua 12", hours: null },
       }),
     ).toMatch(/Toko kita ada di Jl\. Mangga Dua 12\.$/);
+  });
+  it("never says a unit is being prepared when no DP holds it (2026-11-06, F8)", () => {
+    const text = approvalMessage({ unit: "MacBook Air M2", when, name: "Budi", held: false });
+    expect(text).not.toMatch(/siapkan/);
+    expect(text).toBe(
+      "Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa untuk lihat MacBook Air M2 di 28 Oktober 2026 jam 14.00. Unitnya belum kami tahan ya kak, kalau mau diamankan bisa DP dulu 😊",
+    );
+    expect(
+      approvalMessage({ unit: "MacBook Air M2", when, held: false, dpAmount: 500_000 }),
+    ).toMatch(/kalau mau diamankan bisa DP Rp500rb 😊$/);
   });
   it("says the DP in millions past a million", () => {
     expect(chatRupiah(1_500_000)).toBe("Rp1,5jt");

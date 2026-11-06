@@ -6,7 +6,21 @@
  * Indonesian unless the customer wrote in English.
  */
 
+import { jakartaClock, jakartaDay } from "@nusantara/domain";
+
 export type Lang = "id" | "en";
+
+/**
+ * A request's time as the approval message will say it: "2026-10-16 14:00"
+ * (Jakarta wall clock, as `propose_reservation` returns it) → "16 Oktober
+ * 2026 jam 14.00". Anything unreadable is passed through as it came.
+ */
+export function readableWhen(when: string): string {
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/.exec(when.trim());
+  if (!m) return when;
+  const at = new Date(`${m[1]}T${m[2]}:00+07:00`);
+  return Number.isNaN(at.getTime()) ? when : `${jakartaDay(at)} jam ${jakartaClock(at)}`;
+}
 
 /** A unit as the stock lookups return it. */
 export interface ShownUnit {
@@ -604,17 +618,26 @@ export const reply = {
     const units = r.units.map((u, i) =>
       unitLine(u, lang, r.units.length > 1 ? i + 1 : undefined),
     );
-    const [date, time] = r.when.split(" ");
     const what = units.length ? `${units.join("\n")}\n` : "";
+    // Said the way the approval will say it (2026-11-06): "16 Oktober 2026
+    // jam 14.00", never the tool's "2026-10-16 14:00".
+    const at = readableWhen(r.when);
     if (lang === "en")
       return (
-        `Noted 😊\n${what}${date} at ${time}, under ${r.custName}.\n` +
+        `Noted 😊\n${what}${at.replace(" jam ", " at ")}, under ${r.custName}.\n` +
         "Our team will confirm it shortly 🙏"
       );
     return (
-      `Siap kak, aku catat ya 😊\n${what}${date} jam ${time} WIB, atas nama ${r.custName}.\n` +
+      `Siap kak, aku catat ya 😊\n${what}${at}, atas nama ${r.custName}.\n` +
       "Nanti tim kami konfirmasi ya 🙏"
     );
+  },
+
+  /** The unit a keep named sold before the request was filed (2026-11-06). */
+  justSold(lang: Lang): string {
+    return lang === "en"
+      ? "Ah, that unit has just been sold 🙏"
+      : "Yah kak, unit itu barusan terjual 🙏";
   },
 
   /** A request is already waiting on the team: nothing to confirm by chat. */

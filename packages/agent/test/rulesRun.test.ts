@@ -906,7 +906,9 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
       custName: "Budi",
       keep: false,
     });
-    expect(out.reply).toContain("2026-10-16 jam 14:00 WIB, atas nama Budi");
+    // Read back the way the approval says it (2026-11-06), not "2026-10-16 14:00".
+    expect(out.reply).toContain("16 Oktober 2026 jam 14.00, atas nama Budi");
+    expect(out.reply).not.toMatch(/\d{4}-\d{2}-\d{2}/);
     expect(out.reply).not.toMatch(/tahan/i);
   });
 
@@ -994,5 +996,33 @@ describe("the reply to a visit reminder (2026-10-27)", () => {
 
   it("leaves anything else to the ordinary turn", async () => {
     expect(await turn("garansinya berapa lama kak?", pos({}))).toBeNull();
+  });
+});
+
+
+describe("a keep on a unit that has just sold (2026-11-06, F9)", () => {
+  it("says it sold before noting the visit", async () => {
+    const answers = [
+      { ok: false, unavailable: true },
+      { ok: true, requested: true, requestId: "req_9", when: "2026-10-16 14:00", custName: "Budi", units: [] },
+    ];
+    const asked: string[] = [];
+    const dispatch = async (name: string) => {
+      asked.push(name);
+      if (name === "propose_reservation") return answers.shift() ?? { error: "x" };
+      return { saved: true };
+    };
+    const out = await runRules(
+      input("mau keep yang ini kak, atas nama Budi besok jam 2", { asked: [], dispatch }, {
+        lastShown: [AIR.serial],
+        route: routeMessage("mau keep yang ini kak, atas nama Budi besok jam 2", {
+          capabilities: LIVE,
+          shown: true,
+        }),
+      }),
+    );
+    expect(out.reply).toMatch(/barusan terjual/);
+    expect(out.reply).toMatch(/aku catat/);
+    expect(out.reply.indexOf("barusan terjual")).toBeLessThan(out.reply.indexOf("aku catat"));
   });
 });

@@ -193,6 +193,9 @@ export function reservationRequestsRouter(deps: RequestsRouterDeps): Router {
               when: body.scheduledFor,
               name: realName(request.custName),
               place: await placeForApproval(db, request.from),
+              // Only a DP holds a unit (2026-10-27), so only then is it "prepared".
+              held: dp !== null,
+              dpAmount: Number(rule.amount),
             }),
           inReplyTo: line.inReplyTo,
         };

@@ -6,7 +6,14 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient, appendUnitEvent, truncateAll } from "@nusantara/db";
-import { dispatchTool, type ToolContext } from "../src/index.js";
+import {
+  LIVE_CAPABILITIES,
+  converse,
+  dispatchTool,
+  knowledgeBase,
+  type ToolContext,
+} from "../src/index.js";
+import { calls, replies, scriptedClient } from "./fixtures.js";
 
 const URL =
   process.env["TEST_DATABASE_URL"] ??
@@ -423,5 +430,37 @@ describe("a reservation request (2026-10-27)", () => {
       ),
     ).toMatchObject({ alreadyRequested: true });
     expect(await db.reservationProposal.count()).toBe(1);
+  });
+});
+
+
+describe("a reservation request the reply already announced (2026-11-06, B3)", () => {
+  it("is said once, not twice", async () => {
+    const result = await converse({
+      client: scriptedClient([
+        calls("propose_reservation", {
+          when: TOMORROW_2PM,
+          serials: "MBP1",
+          custName: "Budi",
+          keep: false,
+        }),
+        replies("Siap kak, aku catat ya 😊 Nanti tim kami konfirmasi.", "chat"),
+      ]).client,
+      db,
+      ctx: {
+        from: FROM,
+        now: NOW,
+        reserve: { write: db, staffId: AGENT_STAFF },
+        profile: { write: db },
+        writesUsed: new Set(),
+      },
+      prompt: { stable: "S", volatile: "V" },
+      turns: [{ role: "user", text: "besok jam 2 ke toko, atas nama Budi" }],
+      knowledge: knowledgeBase([]),
+      storeFacts: "Buka 10.00-20.00",
+      capabilities: LIVE_CAPABILITIES,
+    });
+    expect(result?.bookings?.[0]?.tool).toBe("propose_reservation");
+    expect(result?.reply.match(/aku catat/g)?.length ?? 0).toBe(1);
   });
 });

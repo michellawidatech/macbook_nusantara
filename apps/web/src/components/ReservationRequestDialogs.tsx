@@ -166,6 +166,8 @@ export function ApproveRequestModal({
         when: when.toDate(),
         name: realName(row?.request.custName),
         place: { address: SHOP_ADDRESS, hours: SHOP_HOURS },
+        held: withDp,
+        dpAmount: Number(rule.amount),
       })
     : "";
 

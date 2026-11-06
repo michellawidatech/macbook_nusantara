@@ -217,7 +217,7 @@ describe("the Requests tab", () => {
     expect(dialog).toHaveTextContent(serial);
     // The owner's template (2026-10-28), with the name and where the shop is.
     expect(within(dialog).getByTestId("request-preview")).toHaveTextContent(
-      /^Okeyy kak noted, kak Budi nanti akan kita siapkan .+ nya yaa untuk .+\. Toko kita ada di Ruko Sorrento Place/,
+      /^Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa untuk lihat .+ di .+\. Unitnya belum kami tahan ya kak, kalau mau diamankan bisa DP .+ 😊 Toko kita ada di Ruko Sorrento Place/,
     );
     await user.click(within(dialog).getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(approveRequest).toHaveBeenCalledTimes(1));

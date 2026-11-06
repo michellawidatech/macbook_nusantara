@@ -97,3 +97,4 @@ describe("a booking the bot made", () => {
     expect(result?.reply.match(/RV-2026\/09-000007/g)).toHaveLength(1);
   });
 });
+

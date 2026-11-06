@@ -461,6 +461,15 @@ export function stockFactsOf(tool: string, output: unknown): StockFact[] {
   }
 }
 
+/**
+ * A request has no code the customer sees, so the code test above never
+ * matches it; a reply that already says it was noted has told them
+ * (2026-11-06: "aku catat" went out twice in one message).
+ */
+function announcesRequest(b: BookingWrite, message: string): boolean {
+  return b.tool === "propose_reservation" && /\b(catat|dicatat|noted)\b/i.test(message);
+}
+
 /** The fixed line that tells a customer about a booking the bot made. */
 function bookingLine(b: BookingWrite): string {
   if (b.tool === "propose_reservation")
@@ -819,6 +828,7 @@ export async function converse(
     // the fixed booking line goes first unless it already carries the code.
     const told = bookings
       .filter((b) => !message.includes(b.code))
+      .filter((b) => !announcesRequest(b, message))
       .map(bookingLine);
     return {
       reply: [...told, message].join("\n"),
@@ -1012,6 +1022,7 @@ export async function converse(
       .filter((x) => offeredPhotos.has(x));
     const told = bookings
       .filter((b) => !message.includes(b.code))
+      .filter((b) => !announcesRequest(b, message))
       .map(bookingLine);
     const shown = sources.includes("stock") ? shownIn(message, seen) : [];
     return {
