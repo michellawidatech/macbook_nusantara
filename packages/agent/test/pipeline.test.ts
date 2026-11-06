@@ -134,6 +134,34 @@ function input(
   };
 }
 
+describe("a photos: line the model wrote into its message (2026-11-06, F1)", () => {
+  it("is taken off the reply and read as the photos to send", async () => {
+    const pos = fakePos({
+      search_stock: { units: [MBP] },
+      unit_photos: { serial: MBP.serial, photoIds: ["p1", "p2"] },
+    });
+    const model = scripted({
+      router: verdict(),
+      ops: [
+        [use("search_stock", { query: "macbook pro 16 m3" })],
+        [use("unit_photos", { serial: MBP.serial })],
+        [use("done", { summary: "One MBP 16 M3, two photos." })],
+      ],
+      advisor: [
+        [
+          use("reply", {
+            message: "Ada kak, MacBook Pro 16 M3 Rp 32.500.000 😊\nphotos: p1,p2,p9",
+            sources: "stock",
+          }),
+        ],
+      ],
+    });
+    const out = await runPipeline(input(model.client, pos.dispatch));
+    expect(out!.reply).not.toMatch(/photos:/i);
+    expect(out!.photos).toEqual(["p1", "p2"]);
+  });
+});
+
 describe("a stock question through three agents", () => {
   it("routes, looks the unit up, and lets the Advisor recommend it with its price and photos", async () => {
     const pos = fakePos({

@@ -72,13 +72,11 @@ export const CASES: readonly GoldenCase[] = [
   // --- F1: internal codes reach the customer ------------------------------
   {
     id: "real-97",
-    finding: "F1",
     turns: one("Air 13\" 2018 i5 8/256 kak 😊\nphotos: ph_fgxju9uq,ph_pg8dek5l"),
     expect: { kind: "read", fn: "sanitiseReply", value: 'Air 13" 2018 i5 8/256 kak 😊' },
   },
   {
     id: "real-44b",
-    finding: "F1",
     turns: one("Stoknya terbatas kak (K41) ya (K9)"),
     expect: { kind: "read", fn: "sanitiseReply", value: "Stoknya terbatas kak ya" },
   },

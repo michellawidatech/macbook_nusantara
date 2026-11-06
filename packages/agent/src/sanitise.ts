@@ -309,9 +309,30 @@ export const MAX_REPLY_EMOJI = 4;
  * markdown links — and caps a run of emoji. Ranges, brackets, full stops and
  * line breaks are the owner's and stay.
  */
+const PHOTO_LINE = /^[ \t]*photos?[ \t]*:(.*)$/gim;
+
+/**
+ * The handles of a `photos:` line the model wrote into its message instead of
+ * the reply tool's `photos` field (27–29 Oct: "…photos: ph_fgx…,ph_pg8…" went
+ * to a customer). The caller still filters them by what was offered this turn.
+ */
+export function photoLineHandles(text: string): string[] {
+  return [...(text ?? "").matchAll(PHOTO_LINE)].flatMap((m) =>
+    m[1]!
+      .split(/[\s,;]+/)
+      .map((x) => x.trim())
+      .filter(Boolean),
+  );
+}
+
 export function sanitiseReply(text: string): string {
   if (!text) return "";
   let out = text;
+  // The shop's internal codes are never the customer's to read (2026-11-06):
+  // a photos: line, a photo handle, a knowledge-base handle like "(K41)".
+  out = out.replace(PHOTO_LINE, "");
+  out = out.replace(/\bph_[a-z0-9]+\b/gi, "");
+  out = out.replace(/[ \t]*\(K\d+\)/g, "");
   out = out.replace(/```[\s\S]*?```/g, " ");
   out = out.replace(/`([^`]*)`/g, "$1");
   out = out.replace(/^[ \t]*#{1,6}[ \t]+/gm, "");

@@ -79,7 +79,11 @@ import {
   type StockFact,
 } from "./policy.js";
 import type { AgentPrompt } from "./prompt.js";
-import { detectLanguage, sanitiseReply } from "./sanitise.js";
+import {
+  detectLanguage,
+  photoLineHandles,
+  sanitiseReply,
+} from "./sanitise.js";
 import { reply as ruleReply } from "./rules/replies.js";
 import { profileFactsOf, understand } from "./rules/understand.js";
 import {
@@ -976,8 +980,13 @@ export async function converse(
      * cost of an invented handle is the shop sending a stranger a photograph
      * of a machine nobody asked about.
      */
-    const photos = String(args["photos"] ?? "")
-      .split(/[\s,;]+/)
+    const photos = [
+      ...new Set([
+        ...String(args["photos"] ?? "").split(/[\s,;]+/),
+        // A photos: line written into the message is the same intent.
+        ...photoLineHandles(raw),
+      ]),
+    ]
       .map((x) => x.trim())
       .filter((x) => offeredPhotos.has(x));
     const told = bookings

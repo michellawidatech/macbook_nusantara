@@ -21,7 +21,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { detectLanguage, stripFormatting } from "../src/sanitise.js";
+import {
+  detectLanguage,
+  photoLineHandles,
+  sanitiseReply,
+  stripFormatting,
+} from "../src/sanitise.js";
 
 describe("stripFormatting", () => {
   it("replaces an em-dash with a comma rather than sending one the persona forbids", () => {
@@ -190,5 +195,32 @@ describe("detectLanguage", () => {
     expect(detectLanguage("")).toBe("id");
     expect(detectLanguage("15500000")).toBe("id");
     expect(detectLanguage("ok")).toBe("id");
+  });
+});
+
+describe("sanitiseReply drops the shop's internal codes (2026-11-06, F1)", () => {
+  it("removes a photos: line the model wrote into the message", () => {
+    expect(sanitiseReply("Ada kak 😊\nphotos: ph_fgx,ph_pg8")).toBe("Ada kak 😊");
+    expect(sanitiseReply("Photos: ph_abc123\nAda kak")).toBe("Ada kak");
+  });
+
+  it("removes knowledge-base handles like (K41)", () => {
+    expect(sanitiseReply("terbatas kak (K41) ya (K9)")).toBe("terbatas kak ya");
+  });
+
+  it("removes a bare photo handle", () => {
+    expect(sanitiseReply("kode ph_abc123def lihat")).toBe("kode lihat");
+  });
+
+  it("keeps the owner's own brackets", () => {
+    expect(sanitiseReply("garansi (1–3 hari)")).toBe("garansi (1–3 hari)");
+    expect(sanitiseReply("Air M2 (K) 8/256")).toBe("Air M2 (K) 8/256");
+  });
+});
+
+describe("photoLineHandles", () => {
+  it("reads the handles of a photos: line, and nothing else", () => {
+    expect(photoLineHandles("Ada kak\nphotos: p1, p2 p9")).toEqual(["p1", "p2", "p9"]);
+    expect(photoLineHandles("Ada kak, mau fotonya?")).toEqual([]);
   });
 });
