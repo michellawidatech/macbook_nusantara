@@ -84,6 +84,7 @@ import {
   DEFAULT_WAITS,
   MAX_CORRECTIONS,
   buildAgentPrompt,
+  readableWhen,
   computeWaitMs,
   isResetCommand,
   resetPointFor,
@@ -177,7 +178,11 @@ async function alertOnlyNumbers(db: PrismaClient): Promise<string[]> {
   ]);
   return alerts.filter((n) => !testers.includes(n));
 }
-import { refreshOffers, upsertChatAction } from "./actions.js";
+import {
+  queueStaffAlerts,
+  refreshOffers,
+  upsertChatAction,
+} from "./actions.js";
 import { resetPass } from "./reset.js";
 import { claimThread, inPool, leaseHolder, releaseThread } from "./lease.js";
 
@@ -1467,6 +1472,33 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
             now: answeredAt,
           });
         }
+        // A reservation REQUEST the bot filed is a person's to approve
+        // (2026-11-06): the reply says "nanti tim kami konfirmasi", so the
+        // team is told — a task on /chat and a WhatsApp alert, here in the
+        // reply's own transaction. Not a hand-over: the bot keeps answering.
+        const request = (result.bookings ?? []).find(
+          (b) => b.tool === "propose_reservation",
+        );
+        if (request) {
+          const summary = `Perlu setujui reservasi${
+            request.when ? ` — ${readableWhen(request.when)}` : ""
+          }`;
+          await upsertChatAction(tx, {
+            from,
+            topic: "visit",
+            kind: "RESERVATION",
+            summary,
+            customerText: current,
+            messageId: anchor.id,
+            now: answeredAt,
+          });
+          await queueStaffAlerts(tx, {
+            from,
+            summary,
+            customerText: current,
+            now: answeredAt,
+          });
+        }
         /*
          * The photographs the answer offered, one row each, queued AFTER the
          * reply (owner ask 2026-09-21). Order matters and is cheap to get
@@ -1477,12 +1509,41 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
          * queue that never got them is the split this boundary exists to
          * prevent.
          */
-        for (const photoId of result.photos ?? []) {
+        // Once per chat (2026-11-06): 54 pictures reached one customer in two
+        // days, the same set again for "foto semua sisinya". A photo this
+        // chat already has (and nobody unsent) is not sent again; when that
+        // leaves nothing, one short line says where they are.
+        const wanted = result.photos ?? [];
+        const sentBefore = wanted.length
+          ? new Set(
+              (
+                await tx.outbox.findMany({
+                  where: {
+                    kind: "WA_IMAGE",
+                    retractedAt: null,
+                    payload: { path: ["to"], equals: from },
+                  },
+                  select: { payload: true },
+                })
+              ).map((o) => (o.payload as { photoId?: string }).photoId),
+            )
+          : new Set<string | undefined>();
+        const fresh = wanted.filter((id) => !sentBefore.has(id));
+        for (const photoId of fresh) {
           await enqueueOutbox(tx, {
             kind: "WA_IMAGE",
             payload: { to: from, photoId, inReplyTo: anchor.id },
           });
         }
+        if (wanted.length > 0 && fresh.length === 0)
+          await enqueueOutbox(tx, {
+            kind: "WA_REPLY",
+            payload: {
+              to: from,
+              body: "Fotonya sudah aku kirim di atas ya kak 😊",
+              inReplyTo: anchor.id,
+            },
+          });
         // The turn's trace (Evaluation and Settings read it), and the bot's
         // half of the 🔥 lead — in the transaction that commits the reply,
         // so a reply never exists without the record of how it was made.

@@ -12,7 +12,12 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { PrismaClient, appendUnitEvent, truncateAll } from "@nusantara/db";
+import {
+  PrismaClient,
+  appendUnitEvent,
+  approveRequest,
+  truncateAll,
+} from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
 import {
   dispatchTool,
@@ -1071,6 +1076,106 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
       followUp: "visit_reminder",
       body: "Halo kak 😊 apakah kakak jadi datang ke toko kami untuk lihat MacBook Air M2 256GB 8/256? Kami tunggu ya kedatangannya 🙏",
     });
+  });
+
+  it("reminds a visit staff approved from the bot's request (2026-11-06, B1)", async () => {
+    await seedUnit();
+    await inbound("v.r", "mau lihat air m2 besok jam 3, atas nama Budi", NOW);
+    const asked = (await dispatchTool(
+      agent,
+      "propose_reservation",
+      { when: "2026-08-21T15:00", serials: "SERX", custName: "Budi", keep: false },
+      toolCtx(),
+    )) as { requested?: boolean; requestId?: string };
+    expect(asked.requested).toBe(true);
+    await answeredByBot();
+    // A person approves it in the POS, without a DP: a STAF reservation.
+    await owner.$transaction((tx) =>
+      approveRequest(tx, {
+        id: asked.requestId!,
+        serials: ["SERX"],
+        scheduledFor: new Date("2026-08-21T08:00:00.000Z"),
+        staffId: AGENT_STAFF,
+        at: new Date(NOW.getTime() + 60_000),
+        dp: null,
+        rule: { amount: 500_000, days: 7 },
+        tell: null,
+      }),
+    );
+    const pass = (now: Date) =>
+      followUpPass({ db: agent, logger, transport: "cloud", now: () => now });
+    expect(await pass(VISIT_MORNING)).toMatchObject({ reminded: 1 });
+    expect(await pass(VISIT_MORNING)).toMatchObject({ reminded: 0 });
+  });
+
+  it("expires an approved visit nobody came to (2026-11-06, B1)", async () => {
+    await seedUnit();
+    await inbound("v.x", "besok jam 3 ke toko, atas nama Budi", NOW);
+    const asked = (await dispatchTool(
+      agent,
+      "propose_reservation",
+      { when: "2026-08-21T15:00", custName: "Budi", keep: false },
+      toolCtx(),
+    )) as { requestId?: string };
+    const approved = await owner.$transaction((tx) =>
+      approveRequest(tx, {
+        id: asked.requestId!,
+        serials: [],
+        scheduledFor: new Date("2026-08-21T08:00:00.000Z"),
+        staffId: AGENT_STAFF,
+        at: new Date(NOW.getTime() + 60_000),
+        dp: null,
+        rule: { amount: 500_000, days: 7 },
+        tell: null,
+      }),
+    );
+    const out = await expirePass({
+      db: agent,
+      logger,
+      agentStaffId: AGENT_STAFF,
+      graceMs: 4 * 3_600_000,
+      ttlMs: 48 * 3_600_000,
+      maxPerTick: 10,
+      now: () => new Date("2026-08-21T14:00:00.000Z"),
+    });
+    expect(out.expired).toBe(1);
+    expect(
+      (await owner.reservation.findUniqueOrThrow({ where: { id: approved.reservationId } })).status,
+    ).toBe("BATAL");
+    expect((await owner.unit.findUniqueOrThrow({ where: { serial: "SERX" } })).status).toBe("TERSEDIA");
+  });
+
+  it("leaves an approved request that names a unit to staff (2026-11-06)", async () => {
+    await seedUnit();
+    await inbound("v.y", "mau lihat air m2 besok jam 3, atas nama Budi", NOW);
+    const asked = (await dispatchTool(
+      agent,
+      "propose_reservation",
+      { when: "2026-08-21T15:00", serials: "SERX", custName: "Budi", keep: false },
+      toolCtx(),
+    )) as { requestId?: string };
+    await owner.$transaction((tx) =>
+      approveRequest(tx, {
+        id: asked.requestId!,
+        serials: ["SERX"],
+        scheduledFor: new Date("2026-08-21T08:00:00.000Z"),
+        staffId: AGENT_STAFF,
+        at: new Date(NOW.getTime() + 60_000),
+        dp: null,
+        rule: { amount: 500_000, days: 7 },
+        tell: null,
+      }),
+    );
+    const out = await expirePass({
+      db: agent,
+      logger,
+      agentStaffId: AGENT_STAFF,
+      graceMs: 4 * 3_600_000,
+      ttlMs: 48 * 3_600_000,
+      maxPerTick: 10,
+      now: () => new Date("2026-08-21T14:00:00.000Z"),
+    });
+    expect(out.expired).toBe(0);
   });
 
   it("holds a reminder back while a line of theirs is waiting for a reply", async () => {

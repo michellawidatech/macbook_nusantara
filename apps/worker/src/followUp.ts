@@ -213,10 +213,15 @@ async function remindVisits(
   const { db, logger } = deps;
   const visits = await db.reservation.findMany({
     where: {
-      source: "AGEN",
       status: "TERJADWAL",
-      // A visit holds nothing: no items (2026-10-27).
-      items: { none: {} },
+      OR: [
+        // A visit the bot booked holds nothing: no items (2026-10-27).
+        { source: "AGEN", items: { none: {} } },
+        // Since 2026-10-27 the bot files a request and a person approves it
+        // (2026-11-06): a STAF reservation linked to that proposal. With no
+        // DP it holds nothing either; a DP has its own reminder.
+        { source: "STAF", proposal: { isNot: null }, payments: { none: {} } },
+      ],
       phone: { not: null },
       scheduledFor: {
         gt: now,

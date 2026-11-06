@@ -278,7 +278,12 @@ export {
   type RuleIntent,
   type Understanding,
 } from "./rules/understand.js";
-export { followUps, reply as ruleReplies, unitLine } from "./rules/replies.js";
+export {
+  followUps,
+  readableWhen,
+  reply as ruleReplies,
+  unitLine,
+} from "./rules/replies.js";
 export { asksToBuy, moneyAmounts } from "./policy.js";
 export {
   answeredTurns,

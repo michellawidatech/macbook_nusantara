@@ -69,14 +69,31 @@ export async function expirePass(deps: ExpireDeps): Promise<ExpirePassResult> {
 
   const stale = await db.reservation.findMany({
     where: {
-      // Never a staff booking. See the docblock.
-      source: "AGEN",
-      status: "TERJADWAL",
+      // Never a staff booking (see the docblock) — except a VISIT a person
+      // approved from the bot's own request (2026-11-06): since 2026-10-27
+      // that is how the bot arranges every visit, it holds nothing, and
+      // without this a no-show stayed TERJADWAL for ever. One naming units
+      // is a soft hold staff see tagged "not paid" and close themselves; a
+      // DP's hold ends by its own rule below.
       OR: [
-        { scheduledFor: { lt: new Date(at.getTime() - deps.graceMs) } },
+        { source: "AGEN" },
         {
-          scheduledFor: null,
-          createdAt: { lt: new Date(at.getTime() - deps.ttlMs) },
+          source: "STAF",
+          proposal: { isNot: null },
+          payments: { none: {} },
+          items: { none: {} },
+        },
+      ],
+      status: "TERJADWAL",
+      AND: [
+        {
+          OR: [
+            { scheduledFor: { lt: new Date(at.getTime() - deps.graceMs) } },
+            {
+              scheduledFor: null,
+              createdAt: { lt: new Date(at.getTime() - deps.ttlMs) },
+            },
+          ],
         },
       ],
     },

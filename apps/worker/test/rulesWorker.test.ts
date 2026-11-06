@@ -179,6 +179,52 @@ async function turn(id: string, text: string, step: number): Promise<string> {
   return row.replyText ?? "";
 }
 
+describe("a unit's photos go to a chat once (2026-11-06, W7)", () => {
+  it("does not send the same pictures again, and says they were sent above", async () => {
+    const unit = await owner.unit.findUniqueOrThrow({ where: { serial: "MBP1" } });
+    await owner.unitNote.create({
+      data: {
+        id: "note_mbp1",
+        unitId: unit.id,
+        serial: "MBP1",
+        body: "QC",
+        staffId: AGENT_STAFF,
+        at: NOW,
+        photos: {
+          create: [0, 1].map((i) => ({ id: `ph_mbp1_${i}`, url: `/p/${i}.jpg`, sortOrder: i })),
+        },
+      },
+    });
+    await turn("p1", "kak ada macbook pro 16 m3?", 0);
+    const images = () => owner.outbox.count({ where: { kind: "WA_IMAGE" } });
+    const first = await images();
+    expect(first).toBe(2);
+    await turn("p2", "minta fotonya dong kak", 1);
+    expect(await images()).toBe(first);
+    const lines = await owner.outbox.findMany({ where: { kind: "WA_REPLY" } });
+    expect(lines.some((l) => /sudah aku kirim di atas/.test((l.payload as { body: string }).body))).toBe(true);
+  });
+});
+
+describe("a reservation request reaches a person (2026-11-06, B2)", () => {
+  it("leaves an open RESERVATION task and alerts the staff numbers", async () => {
+    await owner.appSetting.create({
+      data: { key: "chatbot.notifyNumbers", value: "628999000111:Ersen", updatedAt: new Date() },
+    });
+    await turn("q1", "kak ada macbook pro 16 m3?", 0);
+    const noted = await turn("q2", "besok jam 2 saya ke toko, atas nama Budi", 1);
+    expect(noted).toContain("aku catat");
+    const task = await owner.chatAction.findFirstOrThrow({
+      where: { from: FROM, kind: "RESERVATION", status: "OPEN" },
+    });
+    expect(task.summary).toMatch(/^Perlu setujui reservasi/);
+    const alerts = await owner.outbox.findMany({
+      where: { payload: { path: ["staffAlert"], equals: true } },
+    });
+    expect(alerts.map((a) => (a.payload as { to: string }).to)).toEqual(["628999000111"]);
+  });
+});
+
 describe("the rules bot, with no AI credential at all", () => {
   it("greets, finds the unit, prices it, and files a reservation request a person approves", async () => {
     expect(await turn("r1", "halo kak", 0)).toMatch(/^Halo kak/);
