@@ -343,7 +343,10 @@ export function visitTimeOf(text: string, now: Date): string | null {
 const NAME =
   /\b(?:nama(?:ku| saya| aku| gw| gue)?|atas nama|a\.?n\.?|my name is|i am|i'm|saya|aku)\s*:?\s+([a-z][a-z.']{1,20}(?: [a-z][a-z.']{1,20}){0,2})/i;
 const NOT_A_NAME =
-  /^(mau|ingin|pengen|pingin|cari|lagi|sudah|udah|bisa|tanya|ke|di|dari|jam|besok|lusa|hari|yang|nya|ok|oke|iya|ya|tertarik|butuh|perlu|dateng|datang|ambil|mahasiswa|kerja|pakai|pake|transfer|tf|bayar|dp|kirim|beli|order|pesan|nanti|coba)\b/i;
+  /^(mau|ingin|pengen|pingin|cari|lagi|sudah|udah|bisa|tanya|nanya|ke|di|dari|jam|besok|lusa|hari|yang|nya|ok|oke|iya|ya|tertarik|butuh|perlu|dateng|datang|ambil|mahasiswa|kerja|pakai|pake|transfer|tf|bayar|dp|kirim|beli|order|pesan|nanti|coba|harus|kesana|kesitu|kesini|mampir|otw|lg|udh|blm|belum|admin|kuliah|sekolah)\b/i;
+
+/** The bare "saya"/"aku" form of NAME, which is a name only when it is all they wrote. */
+const BARE_SELF = /^(?:saya|aku)\s/i;
 
 export function nameOf(text: string): string | null {
   // Every candidate, not the first: "saya ke toko, atas nama Budi" has a
@@ -354,6 +357,18 @@ export function nameOf(text: string): string | null {
       .split(/\s+(jam|besok|lusa|hari|ya|kak|mau|untuk|buat|ke)\b/i)[0]!
       .trim();
     if (!name || NOT_A_NAME.test(name)) continue;
+    // "saya kuliah kak", "aku kesana besok" (2026-11-06): "saya X" names
+    // someone only at the start of the message and only when X is the
+    // whole of it ("saya Budi", "saya Andi, besok jam 3") — anywhere else
+    // the word after it is a verb, a plan or a use.
+    if (BARE_SELF.test(m[0])) {
+      const at = m.index ?? 0;
+      const rest = text.slice(at + m[0].length - m[1]!.length + name.length);
+      if (text.slice(0, at).trim() !== "") continue;
+      if (!/^\s*(?:$|[,.!?]|kak\b|ya\b|kk\b)/i.test(rest)) continue;
+    }
+    if (collect(name.toLowerCase(), USAGE).length || collect(name.toLowerCase(), OCCUPATION).length)
+      continue;
     return name.replace(/\b\w/g, (c) => c.toUpperCase()).slice(0, 80);
   }
   return null;

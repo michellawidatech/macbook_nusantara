@@ -497,8 +497,43 @@ export function saysDpPaid(text: string): boolean {
   return DP_WORD.test(text) && PAID_WORD.test(text);
 }
 
+/**
+ * Wanting to trade a unit in, or to sell one to the shop (2026-11-06, audit
+ * round 1): read as a price question before, so the customer was quoted the
+ * shop's SELLING price for the laptop they wanted valued.
+ */
+const TRADE_IN_WORD = /\btukar\s*tambah\b|\btt\b|\btrade[\s-]?in\b/i;
+/**
+ * A trade-in goes to a person only as a VALUATION — their unit, a figure
+ * asked for it. "Bisa tukar tambah ga kak?" is the shop's policy, which the
+ * owner's approved answers cover, and stays the bot's.
+ */
+const VALUATION =
+  /\b(?:di)?taksir\w*|\bdihargai\b|\bberapa\b|\bbrp\b|\bnilai(?:nya)?\b|\b(?:saya|aku|sy|gw|gue|punyaku)\b|\b20[12]\d\b|\bm[1-5]\b/i;
+const TRADE_IN = {
+  test: (t: string) =>
+    /\b(?:di)?taksir\w*|\bdihargai\b/i.test(t) ||
+    (TRADE_IN_WORD.test(t) && VALUATION.test(t)),
+};
+const SELL_TO_SHOP =
+  /\b(?:mau|pengen|pingin|ingin|bisa|boleh)\s+(?:jual|jualin|menjual)\s+(?:\S+\s+){0,4}?(?:saya|aku|sy|gw|gue|punyaku|punya\s+saya)\b|\bterima\s+(?:jual|beli)\s+(?:macbook|laptop|unit)\s+(?:bekas|second)\b/i;
+
+/**
+ * Something wrong with a unit the customer already has, or a complaint
+ * about the shop (2026-11-06, audit C1): never routed before — "unit saya
+ * mati total" was answered with a recommendation. A fault word counts only
+ * beside a sign the unit is theirs, so "ada yang layarnya mulus?" stays a
+ * shopper's question.
+ */
+const COMPLAINT_WORD =
+  /\b(?:refund|komplain|complain|kecewa|penipu|nipu|ditipu|tipu|ga\s*sesuai|gak\s*sesuai|nggak\s*sesuai|tidak\s*sesuai|ngga\s*sesuai|klaim\s*garansi|claim\s*garansi|retur(?:n)?\s*(?:unit|barang))\b/i;
+const FAULT =
+  /\b(?:mati(?:\s*total)?|rusak|error|bergaris|garis|pink|kedip|blank|retak|pecah|ga\s*nyala|gak\s*nyala|nggak\s*nyala|tidak\s*nyala|ngga\s*nyala|restart\s*sendiri|panas\s*banget|bunyi|bocor|kembung)\b/i;
+const MINE =
+  /\b(?:unit|laptop|macbook|mac|barang|punya)\s*(?:nya\s+)?(?:saya|aku|sy|gw|gue)\b|\b(?:yang|yg)\s+(?:saya|aku|sy)\s+beli\b|\b(?:saya|aku|sy)\s+beli\s+(?:kemarin|kemaren|minggu|bulan|di\s+sini|disini)\b|\bbaru\s+(?:di)?beli\b|\bbaru\s+(?:seminggu|sehari|dua\s+hari|\d+\s*hari)\b|\bkok\b/i;
+
 const ORDER_PAYMENT =
-  /\b(sudah|udah|udh|sdh)\s*(transfer|tf|bayar|kirim\s*bukti)|\bbukti\s*(transfer|tf|bayar|pembayaran)\b|\b(no\.?\s*)?resi\b|\btracking\b|\blacak\b|\bpesanan\s*(saya|aku|sy)\b|\binvoice\b/i;
+  /\b(sudah|udah|udh|sdh)\s*(?:(?:saya|aku|sy|gw|kami)\s+)?(transfer|tf|bayar|kirim\s*bukti)|\bbukti\s*(transfer|tf|bayar|pembayaran)(?:nya)?\b|\b(no\.?\s*)?resi\b|\btracking\b|\blacak\b|\bpesanan\s*(saya|aku|sy)\b|\binvoice\b/i;
 
 /**
  * A question about what a model IS — its chip, memory, storage, screen, year,
@@ -571,6 +606,10 @@ export function routeMessage(
   // bot could answer — and an alert to staff on WhatsApp with it.
   if (asksForPerson(t)) return { topic: "human", rule: "person" };
   if (opts.hasMedia) return { topic: "media", rule: "media" };
+  if (SELL_TO_SHOP.test(t)) return { topic: "sell_to_shop", rule: "sell" };
+  if (TRADE_IN.test(t)) return { topic: "trade_in", rule: "trade_in" };
+  if (COMPLAINT_WORD.test(t) || (FAULT.test(t) && MINE.test(t)))
+    return { topic: "complaint", rule: "complaint" };
 
   const product = PRODUCT.test(t);
   const money = MONEY.test(t);

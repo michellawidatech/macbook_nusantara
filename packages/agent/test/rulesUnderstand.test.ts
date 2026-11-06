@@ -130,3 +130,25 @@ describe("a name", () => {
     expect(nameOf("aku mahasiswa")).toBeNull();
   });
 });
+
+describe("a name is never a word about them (2026-11-06, F7)", () => {
+  it.each([
+    "saya kuliah kak",
+    "aku kesana besok jam 2",
+    "jadi aku harus ambil apa kak",
+    "saya kerja di kantor",
+    "aku mampir besok",
+    "halo admin",
+  ])("%s → no name", (text) => {
+    expect(nameOf(text)).toBeNull();
+  });
+
+  it.each([
+    ["saya Budi", "Budi"],
+    ["aku Rina kak", "Rina"],
+    ["nama saya Budi", "Budi"],
+    ["atas nama Budi ya kak", "Budi"],
+  ])("%s → %s", (text, name) => {
+    expect(nameOf(text)).toBe(name);
+  });
+});

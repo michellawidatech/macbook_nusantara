@@ -153,3 +153,38 @@ describe("a person takes these", () => {
     ).toBe("media");
   });
 });
+
+describe("trade-ins, complaints and payment proof reach a person (2026-11-06, F6/F14)", () => {
+  const cases: Case[] = [
+    ["kak mau tukar tambah air 2017 saya, dihargai berapa ya?", "trade_in"],
+    ["TT air 2017 saya berapa kak?", "trade_in"],
+    ["kalau trade in pro m1 dihargai brp?", "trade_in"],
+    ["macbook saya ditaksir berapa kak?", "trade_in"],
+    ["mau jual macbook saya kak", "sell_to_shop"],
+    ["mau jual macbook pro 2019 saya kak, berapa?", "sell_to_shop"],
+    ["unit saya mati total kak", "complaint"],
+    ["laptop yg aku beli kemarin layarnya bergaris", "complaint"],
+    ["kok baru seminggu udah mati", "complaint"],
+    ["saya mau refund", "complaint"],
+    ["barangnya ga sesuai deskripsi", "complaint"],
+    ["ini bukti tfnya ya kak", "order_payment"],
+    ["udh aku tf ya kak", "order_payment"],
+    ["sudah saya transfer kak", "order_payment"],
+  ];
+  it.each(rows(cases))("$text → $expected", ({ text, expected, shown }) => {
+    expect(route(text, shown)).toBe(expected);
+  });
+
+  const mine: Case[] = [
+    ["jual charger gak kak?", null],
+    // The shop's policy, which the owner's answers cover.
+    ["bisa TT kak?", null],
+    ["Bisa tukar tambah ga kak?", null],
+    ["ada yang layarnya mulus kak?", null],
+    ["unitnya pernah servis?", null, true],
+    ["mau beli macbook buat kuliah", null],
+  ];
+  it.each(rows(mine))("still the bot's: $text", ({ text, expected, shown }) => {
+    expect(route(text, shown)).toBe(expected);
+  });
+});

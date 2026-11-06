@@ -118,37 +118,31 @@ export const CASES: readonly GoldenCase[] = [
   // --- F6 / F14: what must reach a person ----------------------------------
   {
     id: "sim-1",
-    finding: "F6",
     turns: one("kak mau tukar tambah air 2017 saya, dihargai berapa ya?"),
     expect: { kind: "routed", topic: "trade_in" },
   },
   {
     id: "sim-2",
-    finding: "F6",
     turns: one("mau jual macbook pro 2019 saya kak, berapa?"),
     expect: { kind: "routed", topic: "sell_to_shop" },
   },
   {
     id: "sim-33",
-    finding: "F14",
     turns: one("unit saya mati total kak"),
     expect: { kind: "routed", topic: "complaint" },
   },
   {
     id: "sim-35",
-    finding: "F14",
     turns: one("laptop yg aku beli kemarin layarnya bergaris"),
     expect: { kind: "routed", topic: "complaint" },
   },
   {
     id: "sim-36",
-    finding: "F14",
     turns: one("ini bukti tfnya ya kak"),
     expect: { kind: "routed", topic: "order_payment" },
   },
   {
     id: "sim-36b",
-    finding: "F14",
     turns: one("udh aku tf ya kak"),
     expect: { kind: "routed", topic: "order_payment" },
   },
@@ -166,13 +160,11 @@ export const CASES: readonly GoldenCase[] = [
   // --- F7: words read as a name -------------------------------------------
   {
     id: "sim-3",
-    finding: "F7",
     turns: one("saya kuliah kak"),
     expect: { kind: "read", fn: "nameOf", value: null },
   },
   {
     id: "real-48",
-    finding: "F7",
     turns: one("jadi aku harus ambil apa kak"),
     expect: { kind: "read", fn: "nameOf", value: null },
   },
