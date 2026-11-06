@@ -118,8 +118,9 @@ describe("answered by rules, with no AI at all", () => {
     expect(p.asked.find((a) => a.name === "search_stock")?.args).toMatchObject({
       query: "macbook pro m3 16",
     });
+    // Nothing known about them: the cheapest, said as such (2026-11-06).
     expect(out.reply).toContain(
-      "Yang paling pas buat kakak Pro 16 M3 mulus, 32,5jt 😊",
+      "Yang paling terjangkau Pro 16 M3 mulus, 32,5jt 😊",
     );
     expect(out.shown).toEqual([MBP.serial]);
     expect(out.handoff).toBeUndefined();
@@ -573,7 +574,8 @@ describe("out of stock, and one step up (owner, 2026-10-27)", () => {
     const out = await run("air m3 16/512 ready kak?", p);
     expect(out.reply).toContain("lagi kosong");
     expect(out.reply).toContain("Mau aku kabarin kalau sudah ready kak?");
-    expect(out.watch).toEqual({ query: "air m3 16/512" });
+    // A bare "air" is searched as a MacBook (2026-11-06).
+    expect(out.watch).toEqual({ query: "macbook air m3 16/512" });
   });
 
   it("offers one step up after the main pick, as an option", async () => {
@@ -1024,5 +1026,44 @@ describe("a keep on a unit that has just sold (2026-11-06, F9)", () => {
     expect(out.reply).toMatch(/barusan terjual/);
     expect(out.reply).toMatch(/aku catat/);
     expect(out.reply.indexOf("barusan terjual")).toBeLessThan(out.reply.indexOf("aku catat"));
+  });
+});
+
+describe("what the bot leads with (2026-11-06, W1/F10/W3)", () => {
+  it("searches cheapest first when they gave no budget", async () => {
+    const p = pos({ search_stock: { matched: 1, units: [AIR] } });
+    const out = await run("ada air m2?", p);
+    expect(p.asked.find((a) => a.name === "search_stock")?.args).toMatchObject({ sort: "cheapest" });
+    // Nothing is known about them yet, so nothing is "the best fit for you".
+    expect(out.reply).toMatch(/paling terjangkau/);
+    expect(out.reply).not.toMatch(/paling pas/);
+  });
+
+  it("calls it the best fit only once they said a budget or a use", async () => {
+    const p = pos({ search_stock: { matched: 1, units: [AIR] } });
+    const out = await run("budget 12jt buat kuliah, ada air m2?", p);
+    expect(p.asked.find((a) => a.name === "search_stock")?.args).toMatchObject({ sort: "priciest" });
+    expect(out.reply).toMatch(/paling pas/);
+  });
+});
+
+describe("several models in one question (2026-11-06, W3)", () => {
+  it("searches each one and says which are in and which are not", async () => {
+    const M3 = { ...AIR, serial: "C02AIRM3XX", model: "MacBook Air M3", price: "Rp 16.000.000" };
+    const queries: string[] = [];
+    const dispatch = async (name: string, args: unknown) => {
+      if (name !== "search_stock") return { saved: true };
+      const q = String((args as { query?: string }).query ?? "");
+      queries.push(q);
+      if (q.endsWith("m2")) return { matched: 1, units: [AIR] };
+      if (q.endsWith("m3")) return { matched: 1, units: [M3] };
+      return { matched: 0, units: [] };
+    };
+    const out = await runRules(input("Pengen tau harga macbook air m2, m3, dan m4", { asked: [], dispatch }));
+    expect(queries).toEqual(["macbook air m2", "macbook air m3", "macbook air m4"]);
+    expect(out.reply).toMatch(/Air M2[^\n]*11,9jt/);
+    expect(out.reply).toMatch(/Air M3[^\n]*16jt/);
+    expect(out.reply).toMatch(/M4[^\n]*kosong/);
+    expect(out.shown).toEqual([AIR.serial, M3.serial]);
   });
 });

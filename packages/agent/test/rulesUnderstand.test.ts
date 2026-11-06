@@ -152,3 +152,16 @@ describe("a name is never a word about them (2026-11-06, F7)", () => {
     expect(nameOf(text)).toBe(name);
   });
 });
+
+describe("a bare 'air' or 'pro' is a MacBook unless they say iPad (2026-11-06, W2)", () => {
+  const q = (t: string) => understand(t, NOW, { proposalOpen: false, lastShown: [] }).query;
+  it.each([
+    ["ada air m1?", "macbook air m1"],
+    ["pro m3 ada kak?", "macbook pro m3"],
+    ["ada ipad pro?", "ipad pro"],
+    ["ipad air 5 ready?", "ipad air"],
+    ["ada macbook air m2?", "macbook air m2"],
+  ])("%s → %s", (text, query) => {
+    expect(q(text)).toContain(query);
+  });
+});

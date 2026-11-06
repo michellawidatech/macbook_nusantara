@@ -786,6 +786,36 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     const max = over.max !== undefined ? over.max : u.budgetMax;
     const hasBudget = min !== null || max !== null;
     if (!query && !hasBudget) return done(reply.whichUnit(lang));
+    // "harga air m2, m3, dan m4" (2026-11-06): searched as ONE name it
+    // matched nothing, and two of the three were on the shelf. Each chip is
+    // its own search, and the reply says which are in and which are not.
+    const chips = (query ?? "").split(" ").filter((w) => /^m[1-5]$/.test(w));
+    if (query && chips.length >= 2) {
+      const base = query
+        .split(" ")
+        .filter((w) => !/^m[1-5]$/.test(w))
+        .join(" ");
+      const found: ShownUnit[] = [];
+      const missing: string[] = [];
+      for (const chip of chips) {
+        const best = unitsIn(
+          await call("search_stock", {
+            query: `${base} ${chip}`.trim(),
+            ...(max !== null ? { maxPrice: max } : {}),
+            sort: "cheapest",
+          }),
+        )[0];
+        if (best) found.push(best);
+        else missing.push(chip.toUpperCase());
+      }
+      if (found.length > 0) {
+        shown.push(...found.map((x) => x.serial));
+        return done(reply.perModel(found, missing, lang), {
+          sources: ["stock"],
+          ask: false,
+        });
+      }
+    }
     const out = await call("search_stock", {
       query: query ?? "macbook",
       ...(min !== null && min !== max ? { minPrice: min } : {}),
@@ -793,7 +823,10 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       ...(max !== null
         ? { maxPrice: min === max ? Math.round(max * 1.1) : max }
         : {}),
-      sort: hasBudget ? "priciest" : "newest",
+      // Cheapest first with no budget (2026-11-06: "ada air m2?" led with the
+      // newest 14,25jt unit and hid four cheaper ones); with one, the most
+      // the budget buys.
+      sort: hasBudget ? "priciest" : "cheapest",
     });
     const units = unitsIn(out);
     // One option above the main pick, when the shelf has one (2026-10-27).
@@ -842,7 +875,21 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     const photos = await photosOf(best);
     return done(
       join(
-        reply.recommend({ best, otherGrades, stepUp }, lang),
+        reply.recommend(
+          {
+            best,
+            otherGrades,
+            stepUp,
+            // "Yang paling pas buat kakak" only once there is something to fit.
+            fitted:
+              hasBudget ||
+              u.usage.length > 0 ||
+              u.apps.length > 0 ||
+              input.known.usage ||
+              input.known.budget,
+          },
+          lang,
+        ),
         reply.afterOffer(lang),
       ),
       {

@@ -42,6 +42,7 @@ async function unit(opts: {
   description?: string;
   neverServiced?: boolean;
   photos?: number;
+  sku?: string;
 }) {
   n += 1;
   const serial = `FCT${String(n).padStart(4, "0")}`;
@@ -49,7 +50,7 @@ async function unit(opts: {
     data: {
       id: `u_${serial}`,
       serial,
-      skuId: "air_m2",
+      skuId: opts.sku ?? "air_m2",
       status: "TERSEDIA",
       locationId: "loc_a",
       buy: 1n,
@@ -154,6 +155,30 @@ const run = (tool: string, args: Record<string, unknown>) =>
   dispatchTool(db, tool, args, ctx) as Promise<Record<string, unknown>>;
 
 type Row = Record<string, unknown>;
+
+describe("search_stock with no sort asked for (2026-11-06, W1)", () => {
+  it("leads with the cheapest variant, not the unit taken in last", async () => {
+    await db.sku.create({
+      data: {
+        id: "air_m2_512",
+        modelId: "mdl_air_m2",
+        code: "AIR_M2_512",
+        name: 'MacBook Air 13" M2',
+        variantLabel: "16/512",
+        price: 14_000_000n,
+        landed: 1n,
+        archived: false,
+        createdAt: NOW,
+      },
+    });
+    // n = 1 is the newest intake: the dear 16/512.
+    await unit({ grade: "A", price: 14_250_000n, sku: "air_m2_512" });
+    const cheap = await unit({ grade: "B", price: 10_900_000n });
+    await unit({ grade: "A", price: 12_900_000n });
+    const out = await run("search_stock", { query: "air m2" });
+    expect((out["units"] as Row[])[0]!["serial"]).toBe(cheap);
+  });
+});
 
 describe("search_stock — cheapest grade first, with what to say about each unit", () => {
   it("leads with the cheapest unit of the lowest grade and lists the other grades", async () => {

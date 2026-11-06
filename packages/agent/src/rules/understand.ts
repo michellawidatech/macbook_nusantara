@@ -133,7 +133,10 @@ interface ProductParts {
 
 function productParts(t: string): ProductParts {
   let family = FAMILY.find(([re]) => re.test(t))?.[1] ?? null;
-  if (!family) family = BARE_FAMILY.find(([re]) => re.test(t))?.[1] ?? null;
+  const bare = BARE_FAMILY.find(([re]) => re.test(t))?.[1] ?? null;
+  // "ipad pro" lost its "pro" (2026-11-06): beside iPad it names the line.
+  if (family === "ipad" && bare) family = `ipad ${bare}`;
+  else if (!family) family = bare;
   const chips = [...t.matchAll(CHIP)].map(
     (m) => (m[1] ?? m[4]!) + (m[3] ? ` ${m[3]}` : ""),
   );
@@ -150,8 +153,13 @@ function productParts(t: string): ProductParts {
 
 function productQuery(t: string): string | null {
   const p = productParts(t);
+  // A bare "air" or "pro" is SEARCHED as a MacBook (2026-11-06): "air m1"
+  // matched an iPad Air 5 M1. The colleague's label keeps the shop's short
+  // "Air M1" (productLabelOf).
+  const family =
+    p.family === "air" || p.family === "pro" ? `macbook ${p.family}` : p.family;
   const parts = [
-    ...(p.family ? [p.family] : []),
+    ...(family ? [family] : []),
     ...p.chips,
     ...p.sizes,
     ...p.specs,
@@ -172,6 +180,8 @@ const FAMILY_LABEL: Record<string, string> = {
   watch: "Apple Watch",
   airpods: "AirPods",
   macbook: "MacBook",
+  "ipad air": "iPad Air",
+  "ipad pro": "iPad Pro",
   air: "Air",
   pro: "Pro",
 };

@@ -51,6 +51,7 @@ describe("a unit, said the way the counter says it", () => {
           { ...AIR, grade: "A", price: "Rp 11.900.000" },
         ],
         stepUp: null,
+        fitted: true,
       },
       "id",
     );

@@ -291,8 +291,8 @@ const SEARCH_STOCK: Anthropic.Tool = {
         type: "string",
         enum: ["newest", "cheapest", "priciest"],
         description:
-          "Which end of the range to show. With a budget, priciest plus maxPrice is the most " +
-          "the customer can get for their money, which is usually what they are asking for.",
+          "Which end of the range to show; cheapest when left out. With a budget, priciest plus " +
+          "maxPrice is the most the customer can get for their money. Without one, leave it out.",
       },
     },
     required: [],
@@ -1387,7 +1387,9 @@ async function searchStock(
   const priced = pricesOn(ctx);
   const minPrice = priced ? num(args["minPrice"]) : undefined;
   const maxPrice = priced ? num(args["maxPrice"]) : undefined;
-  const sort = priced ? String(args["sort"] ?? "newest") : "newest";
+  // Cheapest first unless asked otherwise (2026-11-06): newest-first led a
+  // customer who gave no budget to the dearest, latest intake.
+  const sort = priced ? String(args["sort"] ?? "cheapest") : "newest";
   const where = stockWhere({ query });
 
   const rows = await db.unit.findMany({

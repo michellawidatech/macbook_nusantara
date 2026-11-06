@@ -177,7 +177,6 @@ export const CASES: readonly GoldenCase[] = [
   // --- F10 / W1 / W2 / W3: the right unit ---------------------------------
   {
     id: "sim-10",
-    finding: "W1",
     turns: one("ada air m2?"),
     expect: {
       kind: "answered",
@@ -188,27 +187,25 @@ export const CASES: readonly GoldenCase[] = [
   },
   {
     id: "sim-18",
-    finding: "F10",
     turns: one("ada air m2?"),
     expect: { kind: "answered", mustNotSay: [/paling pas/i] },
   },
   {
     id: "sim-7",
-    finding: "W2",
     turns: one("ada air m1?"),
     expect: { kind: "read", fn: "queryOf", value: "macbook air m1" },
   },
   {
     id: "sim-8",
-    finding: "W2",
     turns: one("ada ipad pro?"),
     expect: { kind: "read", fn: "queryOf", value: "ipad pro" },
   },
   {
     id: "sim-11",
-    finding: "W3",
     turns: one("Pengen tau harga macbook air m2, m3, dan m4"),
-    expect: { kind: "answered", mustSay: [/M2/, /M3/], mustNotSay: [/kosong/i] },
+    // Each model answered on its own: the two on the shelf quoted, the M4 said
+    // to be out — never "yang itu lagi kosong" for all three.
+    expect: { kind: "answered", mustSay: [/M2/, /M3/, /M4[^\n]*kosong/], mustNotSay: [/yang itu lagi kosong/i] },
   },
 
   // --- H1: "Otherwise hand over" is checked in knowledge.test.ts ----------

@@ -259,6 +259,8 @@ export const reply = {
       readonly best: ShownUnit;
       readonly otherGrades: readonly ShownUnit[];
       readonly stepUp: ShownUnit | null;
+      /** They told the bot a budget or a use, so the pick is matched to them. */
+      readonly fitted?: boolean;
     },
     lang: Lang,
   ): string {
@@ -279,7 +281,9 @@ export const reply = {
     const lines =
       lang === "en"
         ? [
-            `The most affordable fit is the ${unitLine(r.best, lang, undefined, v)} 😊`,
+            r.fitted
+              ? `The best fit for you is the ${unitLine(r.best, lang, undefined, v)} 😊`
+              : `The most affordable is the ${unitLine(r.best, lang, undefined, v)} 😊`,
             others.length
               ? `In other conditions there's also ${list(others, "and")}.`
               : null,
@@ -288,7 +292,9 @@ export const reply = {
               : null,
           ]
         : [
-            `Yang paling pas buat kakak ${unitLine(r.best, lang, undefined, v)} 😊`,
+            r.fitted
+              ? `Yang paling pas buat kakak ${unitLine(r.best, lang, undefined, v)} 😊`
+              : `Yang paling terjangkau ${unitLine(r.best, lang, undefined, v)} 😊`,
             others.length
               ? `Kalau mau kondisi lain, ada juga yang ${list(others, "dan yang")} kak.`
               : null,
@@ -631,6 +637,22 @@ export const reply = {
       `Siap kak, aku catat ya 😊\n${what}${at}, atas nama ${r.custName}.\n` +
       "Nanti tim kami konfirmasi ya 🙏"
     );
+  },
+
+  /**
+   * One question naming several models (2026-11-06): the cheapest of each
+   * that is in, one per line, then the ones that are not.
+   */
+  perModel(found: readonly ShownUnit[], missing: readonly string[], lang: Lang): string {
+    const lines = found.map((u) => unitLine(u, lang));
+    const gone = missing.length
+      ? lang === "en"
+        ? `The ${missing.join(", ")} is out of stock right now 🙏`
+        : `Yang ${missing.join(", ")} lagi kosong kak 🙏`
+      : null;
+    return [lang === "en" ? "We have these 😊" : "Ada kak 😊", ...lines, gone]
+      .filter(Boolean)
+      .join("\n");
   },
 
   /** The unit a keep named sold before the request was filed (2026-11-06). */
