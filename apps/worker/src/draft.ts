@@ -1483,15 +1483,23 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           const summary = `Perlu setujui reservasi${
             request.when ? ` — ${readableWhen(request.when)}` : ""
           }`;
-          await upsertChatAction(tx, {
-            from,
-            topic: "visit",
-            kind: "RESERVATION",
-            summary,
-            customerText: current,
-            messageId: anchor.id,
-            now: answeredAt,
+          // One OPEN task per (thread, kind): an open RESERVATION task — a
+          // DP to decide, a visit to welcome — is not overwritten by the
+          // request (final review, 2026-11-06); the alert still goes.
+          const openTask = await tx.chatAction.findFirst({
+            where: { from, kind: "RESERVATION", status: "OPEN" },
+            select: { id: true },
           });
+          if (!openTask)
+            await upsertChatAction(tx, {
+              from,
+              topic: "visit",
+              kind: "RESERVATION",
+              summary,
+              customerText: current,
+              messageId: anchor.id,
+              now: answeredAt,
+            });
           await queueStaffAlerts(tx, {
             from,
             summary,

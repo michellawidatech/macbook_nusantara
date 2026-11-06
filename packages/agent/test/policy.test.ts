@@ -524,3 +524,27 @@ describe("the shelf's own words vouch for a fact, not for a figure (2026-11-06)"
     ).toBe("FACT_NOT_IN_SOURCE");
   });
 });
+
+describe("the review's false refusals and misses (2026-11-06, final review)", () => {
+  const check = (message: string) =>
+    checkReply({ message, sourceCount: 1, unknownSources: 0, sourceTexts: ["Garansi toko 1 bulan ya kak"] });
+
+  it.each([
+    "Siap kak, aku catat ya 😊 7 November 2026 jam 14.00 atas nama Budi",
+    "tanggal 7 jam 2 siang ya kak",
+    "Fotonya sudah aku kirim di atas ya kak 😊",
+    "Alamat tokonya sudah aku kirim ya kak",
+    "sudah dikirim fotonya kak",
+    "Transfernya sudah masuk kak?",
+  ])("passes: %s", (m) => {
+    expect(check(m)).toBeNull();
+  });
+
+  it.each([
+    "DP-nya sudah masuk ya kak",
+    "Pesanan kakak sudah dikirim ya",
+    "Unitnya udah aku kirim kak",
+  ])("refused as a commitment: %s", (m) => {
+    expect(check(m)).toBe("COMMITMENT_CLAIMED");
+  });
+});

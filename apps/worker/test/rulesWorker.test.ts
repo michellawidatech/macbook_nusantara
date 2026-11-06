@@ -223,6 +223,25 @@ describe("a reservation request reaches a person (2026-11-06, B2)", () => {
     });
     expect(alerts.map((a) => (a.payload as { to: string }).to)).toEqual(["628999000111"]);
   });
+
+  it("never overwrites an open DP decision with the request (final review)", async () => {
+    await owner.chatAction.create({
+      data: {
+        from: FROM,
+        kind: "RESERVATION",
+        topic: "dp",
+        summary: "Perlu putuskan DP — Air M2",
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    });
+    await turn("q3", "kak ada macbook pro 16 m3?", 0);
+    await turn("q4", "besok jam 2 saya ke toko, atas nama Budi", 1);
+    const open = await owner.chatAction.findMany({
+      where: { from: FROM, kind: "RESERVATION", status: "OPEN" },
+    });
+    expect(open.map((a) => a.summary)).toEqual(["Perlu putuskan DP — Air M2"]);
+  });
 });
 
 describe("the rules bot, with no AI credential at all", () => {

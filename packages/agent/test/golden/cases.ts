@@ -211,6 +211,50 @@ export const CASES: readonly GoldenCase[] = [
   // --- H1: "Otherwise hand over" is checked in knowledge.test.ts ----------
   // (matchesNote takes a knowledge base, not a customer line.)
 
+  // --- left for Phases 3–4 (final review, 2026-11-06): the baseline they
+  //     are measured against -----------------------------------------------
+  {
+    id: "audit-A4",
+    finding: "F11",
+    turns: one("air m1 ready?", "Air M1 ready kak 😊"),
+    expect: {
+      kind: "checked",
+      problem: "AVAILABILITY_NOT_IN_SOURCE",
+      sources: ["stock"],
+      facts: [AIR_M2, { label: 'MacBook Pro 14" M1 Pro 16/512', available: true, prices: ["17500000"], count: 1 }],
+    },
+  },
+  {
+    id: "audit-A6-budget",
+    finding: "H3",
+    turns: one("budget 15jt ada?", "Untuk budget 15jt ada Air M2 10,9jt kak 😊"),
+    expect: { kind: "checked", problem: null, sources: ["stock"], facts: [AIR_M2] },
+  },
+  {
+    id: "audit-A6-cycles",
+    finding: "H3",
+    turns: one("siklusnya berapa?", "Siklus baterainya 1.024 kak"),
+    expect: { kind: "checked", problem: null, sources: ["stock"], facts: [AIR_M2] },
+  },
+  {
+    id: "sim-52",
+    finding: "H4",
+    turns: one("biar baterai awet gimana?", "Kurangi brightness biar baterainya awet ya kak 😊"),
+    expect: { kind: "checked", problem: null, sources: ["chat"] },
+  },
+  {
+    id: "sim-9",
+    finding: "W5",
+    turns: one("ada charger macbook air kak?"),
+    expect: { kind: "read", fn: "queryOf", value: "charger macbook air" },
+  },
+  {
+    id: "sim-21",
+    finding: "W6",
+    turns: one("cari macbook 12-15jt buat edit video"),
+    expect: { kind: "read", fn: "queryOf", value: "macbook" },
+  },
+
   // --- regressions the rules bot gets right today -------------------------
   {
     id: "greets",

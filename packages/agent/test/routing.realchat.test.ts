@@ -188,3 +188,23 @@ describe("trade-ins, complaints and payment proof reach a person (2026-11-06, F6
     expect(route(text, shown)).toBe(expected);
   });
 });
+
+describe("shopping lines the review found routed to a person (2026-11-06, final review)", () => {
+  const mine: Case[] = [
+    ["macbook saya rusak, mau cari yang baru budget 10jt", null],
+    ["laptop saya yg lama udah mati, cari pengganti", null],
+    ["tt-nya berapa lama garansinya?", null],
+    ["bisa tt kak? saya mau yang m2", null],
+    ["tukar tambah bisa berapa persen potongannya?", null],
+  ];
+  it.each(rows(mine))("still the bot's: $text", ({ text, expected, shown }) => {
+    expect(route(text, shown)).toBe(expected);
+  });
+  const theirs: Case[] = [
+    ["macbook saya yang beli disini kemarin rusak, mau ganti", "complaint"],
+    ["TT air 2017 saya berapa kak?", "trade_in"],
+  ];
+  it.each(rows(theirs))("a person's: $text", ({ text, expected, shown }) => {
+    expect(route(text, shown)).toBe(expected);
+  });
+});

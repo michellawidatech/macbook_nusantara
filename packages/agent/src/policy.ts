@@ -508,12 +508,14 @@ const TRADE_IN_WORD = /\btukar\s*tambah\b|\btt\b|\btrade[\s-]?in\b/i;
  * asked for it. "Bisa tukar tambah ga kak?" is the shop's policy, which the
  * owner's approved answers cover, and stays the bot's.
  */
-const VALUATION =
-  /\b(?:di)?taksir\w*|\bdihargai\b|\bberapa\b|\bbrp\b|\bnilai(?:nya)?\b|\b(?:saya|aku|sy|gw|gue|punyaku)\b|\b20[12]\d\b|\bm[1-5]\b/i;
+const VALUATION_WORD = /\b(?:di)?taksir\w*|\bdihargai\b|\bnilai(?:nya)?\b/i;
+const ASKS_VALUE = /\b(?:berapa|brp|brapa)\b(?!\s+(?:lama|hari|bulan|persen))/i;
+const THEIR_UNIT =
+  /\b(?:punya\s+)?(?:saya|aku|sy|gw|gue|punyaku)\b|\b20[12]\d\b|\bm[1-5]\b/i;
 const TRADE_IN = {
   test: (t: string) =>
-    /\b(?:di)?taksir\w*|\bdihargai\b/i.test(t) ||
-    (TRADE_IN_WORD.test(t) && VALUATION.test(t)),
+    VALUATION_WORD.test(t) ||
+    (TRADE_IN_WORD.test(t) && ASKS_VALUE.test(t) && THEIR_UNIT.test(t)),
 };
 const SELL_TO_SHOP =
   /\b(?:mau|pengen|pingin|ingin|bisa|boleh)\s+(?:jual|jualin|menjual)\s+(?:\S+\s+){0,4}?(?:saya|aku|sy|gw|gue|punyaku|punya\s+saya)\b|\bterima\s+(?:jual|beli)\s+(?:macbook|laptop|unit)\s+(?:bekas|second)\b/i;
@@ -531,6 +533,16 @@ const FAULT =
   /\b(?:mati(?:\s*total)?|rusak|error|bergaris|garis|pink|kedip|blank|retak|pecah|ga\s*nyala|gak\s*nyala|nggak\s*nyala|tidak\s*nyala|ngga\s*nyala|restart\s*sendiri|panas\s*banget|bunyi|bocor|kembung)\b/i;
 const MINE =
   /\b(?:unit|laptop|macbook|mac|barang|punya)\s*(?:nya\s+)?(?:saya|aku|sy|gw|gue)\b|\b(?:yang|yg)\s+(?:saya|aku|sy)\s+beli\b|\b(?:saya|aku|sy)\s+beli\s+(?:kemarin|kemaren|minggu|bulan|di\s+sini|disini)\b|\bbaru\s+(?:di)?beli\b|\bbaru\s+(?:seminggu|sehari|dua\s+hari|\d+\s*hari)\b|\bkok\b/i;
+
+/**
+ * "macbook saya rusak, mau cari yang baru" is a customer explaining why they
+ * are shopping (final review, 2026-11-06), not a complaint — unless the unit
+ * that broke came from this shop.
+ */
+const SHOPPING =
+  /\b(?:mau|pengen|pingin|ingin)\s+(?:beli|cari|ganti)\b|\bcari(?:in)?\b|\bpengganti\b|\bbudget\b|\bbajet\b|\brekomendasi\b|\bupgrade\b/i;
+const FROM_THIS_SHOP =
+  /\bbeli\s+(?:di\s*sini|disini|di\s+(?:toko\s+)?(?:kakak|kalian|sini))|\bkemarin\b|\bkemaren\b|\bkok\b|\bbaru\s+(?:di)?beli\b|\b(?:yang|yg)\s+(?:saya|aku|sy)\s+beli\b/i;
 
 const ORDER_PAYMENT =
   /\b(sudah|udah|udh|sdh)\s*(?:(?:saya|aku|sy|gw|kami)\s+)?(transfer|tf|bayar|kirim\s*bukti)|\bbukti\s*(transfer|tf|bayar|pembayaran)(?:nya)?\b|\b(no\.?\s*)?resi\b|\btracking\b|\blacak\b|\bpesanan\s*(saya|aku|sy)\b|\binvoice\b/i;
@@ -608,7 +620,10 @@ export function routeMessage(
   if (opts.hasMedia) return { topic: "media", rule: "media" };
   if (SELL_TO_SHOP.test(t)) return { topic: "sell_to_shop", rule: "sell" };
   if (TRADE_IN.test(t)) return { topic: "trade_in", rule: "trade_in" };
-  if (COMPLAINT_WORD.test(t) || (FAULT.test(t) && MINE.test(t)))
+  if (
+    COMPLAINT_WORD.test(t) ||
+    (FAULT.test(t) && MINE.test(t) && !(SHOPPING.test(t) && !FROM_THIS_SHOP.test(t)))
+  )
     return { topic: "complaint", rule: "complaint" };
 
   const product = PRODUCT.test(t);
@@ -940,7 +955,7 @@ const NEGATED_BEFORE =
  * the real ones are sent by code (the booking line, the approval message).
  */
 const COMMITMENT =
-  /\b(?:dp|pembayaran|bayaran|transfer|tf|uang|dana)\w*\s+(?:\w+\s+){0,2}?(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,1}?(?:di|ter)?-?(?:terima|masuk)\b|\b(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,2}?(?:di|ter)?-?(?:terima|masuk)\s+(?:\w+\s+){0,1}?(?:dp|pembayaran|transfer|tf|uang|dana)\w*|\b(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,2}?(?:di|ter)?-?(?:tahan|keep\w*|amankan|konfirmasi\w*|kirim|booking|book|reservasi|lunas)\b|\bterkonfirmasi\b|\b(?:dikirim|terkirim)\s+hari\s+ini\b/gi;
+  /\b(?:dp|pembayaran|bayaran|transfer|tf|uang|dana)(?:-?\w+)?\s+(?:\w+\s+){0,2}?(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,1}?(?:di|ter)?-?(?:terima|masuk)\b|\b(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,2}?(?:di|ter)?-?(?:terima|masuk)\s+(?:\w+\s+){0,1}?(?:dp|pembayaran|transfer|tf|uang|dana)\w*|\b(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,2}?(?:di|ter)?-?(?:tahan|keep\w*|amankan|konfirmasi\w*|booking|book|reservasi|lunas)\b|\b(?:pesanan|order|unit|barang|paket)\w*\s+(?:\w+\s+){0,2}?(?:sudah|udah|udh|sdh|telah)\s+(?:\w+\s+){0,1}?(?:di|ter)?-?kirim\b|\bterkonfirmasi\b|\b(?:dikirim|terkirim)\s+hari\s+ini\b/gi;
 
 /** "kalau", "nanti", "setelah" … before a commitment: a condition, not a claim. */
 const CONDITIONAL_BEFORE =
@@ -970,7 +985,8 @@ const UNVOUCHED_FACTS: readonly RegExp[] = [
   // A warranty term is vouched by a source naming the warranty and the term:
   // "Garansi dari kami 1 bulan" vouches for "garansi 1 bulan".
   /\bgaransi\s+(\d+\s*(?:hari|minggu|bulan|tahun))\b/gi,
-  /\b\d+(?:\s*[-–]\s*\d+)?\s*jam\b/gi,
+  // Hours of battery life — not a date or a time ("2026 jam 14.00", "tanggal 7 jam 2").
+  /\b\d+(?:\s*[-–]\s*\d+)?\s*jam\b(?!\s*\d)/gi,
   /\bjl\.?\s+\w+/gi,
   /\b(?:original|ori)\b/gi,
   /\bbelum\s+(?:pernah\s+)?(?:di)?ganti\b/gi,
@@ -1009,7 +1025,11 @@ export function claimPhrase(
 ): string | null {
   if (problem === "COMMITMENT_CLAIMED") {
     for (const m of message.matchAll(COMMITMENT)) {
-      const before = message.slice(Math.max(0, (m.index ?? 0) - 36), m.index);
+      const start = m.index ?? 0;
+      const before = message.slice(Math.max(0, start - 36), start);
+      // "Transfernya sudah masuk kak?" asks; it claims nothing.
+      const end = message.slice(start + m[0].length).match(/[.!?\n]/)?.[0];
+      if (end === "?") continue;
       if (!NEGATED_BEFORE.test(before) && !CONDITIONAL_BEFORE.test(before))
         return m[0];
     }
