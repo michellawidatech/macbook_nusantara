@@ -96,7 +96,16 @@ export function looksLikePhoto(file: { type: string; name: string }): boolean {
 /** The photo to store, or why it cannot be. */
 export async function readPhoto(file: File): Promise<PhotoRead> {
   if (!looksLikePhoto(file)) return { ok: false, problem: "not-image" };
-  const shrunk = await shrinkPhoto(file);
+  let shrunk: Awaited<ReturnType<typeof shrinkPhoto>>;
+  try {
+    shrunk = await shrinkPhoto(file);
+  } catch {
+    // The file could not even be read off the disk — an iCloud photo not
+    // downloaded to this Mac yet, a file moved away mid-pick. One file's
+    // failure, not the pick's: it used to reject the whole `choose`, every
+    // tile spun for ever and none of the others were saved.
+    return { ok: false, problem: "unreadable" };
+  }
   if (shrunk === "unreadable") return { ok: false, problem: "unreadable" };
   if (shrunk.bytes > PHOTO_MAX_BYTES) return { ok: false, problem: "too-big" };
   return { ok: true, ...shrunk };

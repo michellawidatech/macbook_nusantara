@@ -126,6 +126,18 @@ describe("reading one photo", () => {
     expect(heicTo).not.toHaveBeenCalled();
   });
 
+  it("calls a file it cannot read off the disk unreadable, rather than throwing", async () => {
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(
+      function (this: FileReader) {
+        this.onerror?.(new ProgressEvent("error") as ProgressEvent<FileReader>);
+      },
+    );
+    expect(await readPhoto(file("IMG_0412.jpg", "image/jpeg"))).toEqual({
+      ok: false,
+      problem: "unreadable",
+    });
+  });
+
   it("refuses one still over the limit", async () => {
     expect(
       await readPhoto(file("huge.jpg", "image/jpeg", PHOTO_MAX_BYTES + 1)),
