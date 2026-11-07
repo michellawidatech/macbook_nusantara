@@ -3275,6 +3275,7 @@ export function InboundDetailPage({
           <Tooltip title={t("inbound.photosTip", "Photos")}>
             <PhotoStackButton
               urls={photoUrls(r)}
+              issueKey={r.unit ? r.unit.serial : `draft:${r.key}`}
               ariaLabel={t("inbound.photosAria", "Photos of {{name}}", {
                 name,
               })}
@@ -4332,6 +4333,7 @@ export function InboundDetailPage({
                   />
                 )}
               <UnitPhotos
+                issueKey={`draft:${photosRowData.key}`}
                 draft={{
                   photos: qcDrafts[photosRowData.key]?.photos ?? [],
                   onAdd: (urls) =>

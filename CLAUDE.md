@@ -3745,6 +3745,27 @@ Decisions that outlived those documents:
   they were made) and carry a *Where* (from → to). An event within 5 s of the
   unit's adjustment is that adjustment's and is not listed twice. QC
   acceptance and holds are not movements and stay out.
+- **A photo says how it went, and nothing stops the bench — 2026-11-07.**
+  Client report: *"dr 10x ada 1x yang gak ke simpan"*. The server had stored
+  every photo it was sent (924 photos, no gaps, no refused save since
+  2026-10-21); the missing one was skipped in the browser with a toast gone in
+  four seconds. Owner: *"they cannot wait"* — so no dialog. `UnitPhotos`
+  draws a tile per photo: a spinner while it is read and saved, a green tick
+  and a toast once the server has it, and a RED tile with the file's name and
+  reason (retry for a refused save, ✕ to dismiss) that stays. The count reads
+  "9 photo(s) · 1 not added"; in a table cell only the red count, opening the
+  list. What did not go in is kept by unit in `lib/photoIssues.ts` (memory
+  only), so the Units row's `PhotoStackButton` carries a red badge after the
+  popup closes. The camera is never disabled while a pick is in flight.
+  - **An iPhone HEIC is converted** (`isHeicFile`, `decodeHeic` in
+    `lib/photoShrink.ts`): Chrome cannot open one (checked in Chrome
+    2026-11-07), Safari can and never loads the converter. `heic-to` (libheif
+    in WebAssembly, LGPL-3.0, owner-approved dependency) is a separate ~790 KB
+    gzipped chunk fetched the first time a HEIC is picked. A file that cannot
+    be opened even so is refused, never stored as a broken thumbnail.
+  - The serial history shows EVERY photo, in its own full-width row — it was
+    the third column of the details grid, which wrapped the other values and
+    drew 8 of 13 with "+5".
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

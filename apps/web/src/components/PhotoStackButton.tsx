@@ -9,8 +9,10 @@
  * was, because the button is also how the first photo gets added.
  */
 import type { ReactNode } from "react";
-import { Button, theme } from "antd";
+import { Badge, Button, theme } from "antd";
 import { CameraOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
+import { usePhotoIssues } from "../lib/photoIssues.js";
 
 export interface PhotoStackButtonProps {
   readonly urls: readonly string[];
@@ -18,14 +20,38 @@ export interface PhotoStackButtonProps {
   readonly onClick: () => void;
   /** Thumbnail side in px. */
   readonly size?: number;
+  /**
+   * Whose photos these are in `lib/photoIssues.ts`. A photo picked for this
+   * row that did not go in puts a red count on the button, which outlives the
+   * dialog that showed it (client report 2026-11-07).
+   */
+  readonly issueKey?: string;
 }
 
-export function PhotoStackButton({
+export function PhotoStackButton(props: PhotoStackButtonProps): ReactNode {
+  const { t } = useTranslation();
+  const issues = usePhotoIssues(props.issueKey ?? "");
+  const button = <PhotoStack {...props} />;
+  if (props.issueKey === undefined || issues.length === 0) return button;
+  return (
+    <Badge
+      count={issues.length}
+      size="small"
+      title={t("photos.notAddedCount", "{{count}} not added", {
+        count: issues.length,
+      })}
+    >
+      {button}
+    </Badge>
+  );
+}
+
+function PhotoStack({
   urls,
   ariaLabel,
   onClick,
   size = 26,
-}: PhotoStackButtonProps): ReactNode {
+}: Omit<PhotoStackButtonProps, "issueKey">): ReactNode {
   const {
     token: {
       colorBorder,

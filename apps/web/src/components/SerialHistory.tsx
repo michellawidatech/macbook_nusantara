@@ -427,28 +427,40 @@ export function SerialHistory({
               label: t("snTracking.fromPo", "From PO"),
               children: po?.code ?? fmtNone(),
             },
-            {
-              // Every QC photograph, larger than a list's thumbnails: this is
-              // the one screen that shows a single unit in full (owner ask
-              // 2026-09-29). Purged at the sale, so a sold unit says None.
-              // A unit the shop still holds can be photographed here too
-              // (owner ask 2026-10-21) — not a sold one, whose photos the
-              // sale purged on purpose.
-              key: "ph",
-              label: t("snTracking.photos", "Photos"),
-              span: "filled",
-              children: ["QC", "TERSEDIA", "DIRESERVASI", "SERVIS"].includes(
-                unit.status,
-              ) ? (
-                <UnitPhotos serial={unit.serial} size={72} max={8} editable />
-              ) : qcPhotosOf(db, unit.serial).length === 0 ? (
-                fmtNone()
-              ) : (
-                <UnitPhotos serial={unit.serial} size={72} max={8} />
-              ),
-            },
           ]}
         />
+        {/*
+         * Every QC photograph, larger than a list's thumbnails: this is the one
+         * screen that shows a single unit in full (owner ask 2026-09-29). Its
+         * own full-width row, ALL of them (owner report 2026-11-07): inside
+         * the grid it was the third column of a table, which squeezed the
+         * other two into wrapped two-line values, and it drew 8 of 13 with
+         * the rest behind "+5". Purged at the sale, so a sold unit says None.
+         * A unit the shop still holds can be photographed here too (owner ask
+         * 2026-10-21) — not a sold one, whose photos the sale purged on
+         * purpose.
+         */}
+        <Flex vertical gap={8} style={{ marginTop: 16 }}>
+          <Typography.Text type="secondary">
+            {t("snTracking.photos", "Photos")}
+          </Typography.Text>
+          {["QC", "TERSEDIA", "DIRESERVASI", "SERVIS"].includes(unit.status) ? (
+            <UnitPhotos
+              serial={unit.serial}
+              size={96}
+              max={Number.MAX_SAFE_INTEGER}
+              editable
+            />
+          ) : qcPhotosOf(db, unit.serial).length === 0 ? (
+            <Typography.Text>{fmtNone()}</Typography.Text>
+          ) : (
+            <UnitPhotos
+              serial={unit.serial}
+              size={96}
+              max={Number.MAX_SAFE_INTEGER}
+            />
+          )}
+        </Flex>
       </Card>
       <Card title={t("snTracking.lifecycle", "Lifecycle")}>
         <Timeline

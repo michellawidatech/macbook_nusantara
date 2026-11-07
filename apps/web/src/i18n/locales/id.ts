@@ -2395,10 +2395,23 @@ export const id: Record<string, string> = {
   "photos.alt": "Foto {{serial}}",
   "photos.more": "{{count}} lagi",
   "photos.none": "Tidak ada foto",
-  "photos.notAnImage": "{{name}} bukan gambar.",
+  "photos.count": "{{count}} foto",
+  "photos.dismiss": "Tutup {{name}}",
+  "photos.notAddedCount": "{{count}} tidak masuk",
+  "photos.notAddedTile": "{{name}} tidak masuk",
+  "photos.notAnImage":
+    "Bukan foto — ini video atau jenis file lain. Pilih file fotonya.",
+  "photos.notSaved": "Gagal disimpan. Tekan coba lagi.",
+  "photos.reading": "Membaca {{name}}",
+  "photos.retry": "Coba lagi {{name}}",
+  "photos.savedTick": "Tersimpan",
+  "photos.saving": "Menyimpan…",
   "photos.remove": "Hapus foto ini",
   "photos.removed": "Foto dihapus.",
-  "photos.tooBig": "{{name}} terlalu besar — batasnya 6MB.",
+  "photos.tooBig":
+    "Lebih dari 6MB walau sudah diperkecil. Simpan sebagai JPG lalu tambahkan lagi.",
+  "photos.unreadable":
+    "File foto ini tidak bisa dibuka. Foto ulang, atau simpan sebagai JPG lalu tambahkan.",
 
   // Kasir: saldo marketplace, dan daftar diskon lengkap dengan syaratnya.
   "pos.allProducts": "Semua produk",
