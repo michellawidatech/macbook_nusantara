@@ -548,3 +548,46 @@ describe("the review's false refusals and misses (2026-11-06, final review)", ()
     expect(check(m)).toBe("COMMITMENT_CLAIMED");
   });
 });
+
+describe("each claim is checked against ONE unit (2026-11-09, Task 10)", () => {
+  const AIR = { label: 'MacBook Air 13" M2 8/256', available: true, prices: ["10900000"], count: 4, serial: "GAIRM2A01" };
+  const PRO = { label: 'MacBook Pro 14" M1 Pro 16/512', available: true, prices: ["17500000"], count: 1, serial: "GPROMPA01" };
+  const check = (message: string, more: Partial<Parameters<typeof checkReply>[0]> = {}) =>
+    checkReply({ message, sourceCount: 1, unknownSources: 0, sourceTexts: [], stockFacts: [AIR, PRO], ...more });
+
+  it("refuses 'ready' for a unit no single shelf unit is", () => {
+    expect(check("Air M1 ready kak")).toBe("AVAILABILITY_NOT_IN_SOURCE");
+    expect(check("Air M2 16/512 ready kak")).toBe("AVAILABILITY_NOT_IN_SOURCE");
+    expect(check("Air M2 8/256 ready kak")).toBeNull();
+  });
+
+  it("refuses a serial the turn never looked up", () => {
+    expect(check("Air M2 10,9jt kak", { citedUnits: ["NOPE123"] })).toBe("UNKNOWN_UNIT");
+    expect(check("Air M2 10,9jt kak", { citedUnits: ["GAIRM2A01"] })).toBeNull();
+  });
+
+  it("checks figures against the units the reply names", () => {
+    expect(check("Pro 14 M1 Pro 17,5jt kak", { citedUnits: ["GAIRM2A01"] })).toBe("AMOUNT_NOT_IN_SOURCE");
+  });
+
+  it("lets the customer's own figures through", () => {
+    expect(check("Untuk budget 15jt ada Air M2 10,9jt kak", { customerTexts: ["budget 15jt ada?"] })).toBeNull();
+  });
+
+  it("does not read a battery figure as a price", () => {
+    expect(check("Siklus baterainya 1.024 kak")).toBeNull();
+    expect(check("Kapasitasnya 4.382 mAh kak")).toBeNull();
+  });
+
+  it("general product talk naming no unit on the shelf passes", () => {
+    expect(check("Air M1 vs M2 bedanya di chip kak, M2 lebih kencang")).toBeNull();
+  });
+
+  it("battery advice is not a discount; a soft bargain is", () => {
+    expect(check("Kurangi brightness biar baterainya awet ya kak")).toBeNull();
+    expect(check("Baterainya bisa kurang awet kalau dipakai gaming kak")).toBeNull();
+    expect(check("Harganya bisa dibantu kak")).toBe("DISCOUNT_OFFERED");
+    expect(check("Bisa disesuaikan sama budget kakak")).toBe("DISCOUNT_OFFERED");
+    expect(check("Boleh nawar kok kak")).toBe("DISCOUNT_OFFERED");
+  });
+});

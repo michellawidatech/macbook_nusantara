@@ -94,6 +94,8 @@ async function check(c: GoldenCase): Promise<void> {
         unknownSources: 0,
         sourceTexts: e.sources ?? [],
         ...(e.facts ? { stockFacts: e.facts } : {}),
+        // What the customer wrote, as converse passes it (2026-11-09).
+        customerTexts: c.turns.map((t) => t.customer),
       });
       expect(problem).toBe(e.problem);
       return;

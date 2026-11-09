@@ -411,6 +411,7 @@ export function stockFactsOf(tool: string, output: unknown): StockFact[] {
       ? [
           {
             label: name,
+            ...(str(r["serial"]) ? { serial: r["serial"] } : {}),
             available,
             prices: digitsOf(r["price"]),
             // "Tinggal 1 unit" may rest on this and on nothing else.
@@ -863,6 +864,8 @@ export async function converse(
       )
       .join("; ")}.`;
   };
+  /** The serials the last refused draft named, for its retry note. */
+  let lastUnits: string[] = [];
   const retryNote = (
     problem: ReplyProblem | "PHOTOS",
     message: string,
@@ -885,6 +888,8 @@ export async function converse(
         return `${head} It presses the customer ("${phrase ?? "buruan"}"). Never invent urgency; say "tinggal 1 unit" only where left is 1. Send the corrected reply.`;
       case "FACT_NOT_IN_SOURCE":
         return `${head} It states "${phrase ?? "a fact"}", which no source this turn gives. Leave it out, or say you will check. Send the corrected reply.`;
+      case "UNKNOWN_UNIT":
+        return `${head} Its units name a serial this turn's lookups did not return (${String(lastUnits.join(", ") || "none")}). ${shelfLine()} Name only those serials, or leave units out for general talk. Send the corrected reply.`;
       case "LINK_INVENTED":
         return `${head} It sends a link no lookup returned. Send only a link from a unit's links in this turn's stock results; when the unit has none, say they can order straight through this WhatsApp chat. Send the corrected reply.`;
       case "TOO_LONG":
@@ -984,13 +989,20 @@ export async function converse(
         ),
       );
     }
+    const units = String(args["units"] ?? "")
+      .split(/[\s,;]+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
     const problem = checkReply({
       message,
       sourceCount: sources.length,
       unknownSources: unknown,
       sourceTexts: texts,
       ...(sources.includes("stock") ? { stockFacts, factTexts: stockResults } : {}),
+      ...(units.length > 0 ? { citedUnits: units } : {}),
+      customerTexts: turns.filter((t) => t.role === "user").map((t) => t.text),
     });
+    lastUnits = units;
     if (problem !== null && canRetry)
       return {
         retry: retryNote(problem, message, cited, [

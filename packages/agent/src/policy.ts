@@ -848,6 +848,8 @@ function claimStart(sentence: string): number {
 export interface StockFact {
   /** How the shop names it: "MacBook Air M1 8/256". */
   readonly label: string;
+  /** The unit's serial, when the lookup returned one unit (2026-11-09). */
+  readonly serial?: string;
   /** Sellable right now. */
   readonly available: boolean;
   /** Whole rupiah, digits only — the unit's price, or a model's range ends. */
@@ -926,6 +928,7 @@ export type ReplyProblem =
   | "COMMITMENT_CLAIMED"
   | "URGENCY_INVENTED"
   | "FACT_NOT_IN_SOURCE"
+  | "UNKNOWN_UNIT"
   | "TOO_LONG";
 
 /**
@@ -1045,11 +1048,34 @@ export function claimPhrase(
   return null;
 }
 
+/** Softer ways of inviting a bargain (audit A5, 2026-11-09). */
+const SOFT_OFFER =
+  /\bharga(?:nya)?\s+bisa\s+dibantu\b|\bbisa\s+disesuaikan\s+(?:sama|dengan|dgn)\s+budget|\bboleh\s+nawar\b|\bbisa\s+lebih\s+murah\s+kalau\b/gi;
+
+/** Words after "kurang"/"turun" that make it about the price, or nothing at all. */
+const PRICE_AFTER =
+  /^\s*(?:$|[.,!?]|kak\b|ya\b|dikit\b|sedikit\b|lagi\b|kok\b|sih\b|nih\b|deh\b|harga|hrg|price|rp\b|\d)/i;
+
+/**
+ * "Kurangi brightness", "baterainya bisa kurang awet" are advice about the
+ * unit, not a price (audit A5): a reduce-word counts only when nothing but
+ * the price can be what is reduced. "Cashback dari bank" is the bank's.
+ */
+function aboutPrice(message: string, m: RegExpMatchArray): boolean {
+  const word = m[0].toLowerCase();
+  const after = message.slice((m.index ?? 0) + m[0].length);
+  if (/cashback/.test(word)) return !/^\w*\s+(?:dari\s+)?(?:bank|kartu)/i.test(after);
+  if (!/kurang|turun/.test(word)) return true;
+  return PRICE_AFTER.test(after);
+}
+
 /** Does the reply offer a discount or invite a bargain? */
 export function offersDiscount(message: string): boolean {
-  for (const m of message.matchAll(DISCOUNT_OFFER)) {
-    const before = message.slice(Math.max(0, (m.index ?? 0) - 24), m.index);
-    if (!NEGATED_BEFORE.test(before)) return true;
+  for (const re of [DISCOUNT_OFFER, SOFT_OFFER]) {
+    for (const m of message.matchAll(re)) {
+      const before = message.slice(Math.max(0, (m.index ?? 0) - 24), m.index);
+      if (!NEGATED_BEFORE.test(before) && aboutPrice(message, m)) return true;
+    }
   }
   return false;
 }
@@ -1087,6 +1113,26 @@ function clauseStart(text: string, pos: number): number {
     if (c === "." && /\s/.test(text[i + 1] ?? "")) return i + 1;
   }
   return 0;
+}
+
+/** "16/512" in a sentence must be the unit's own configuration. */
+function specFits(fact: StockFact, sentence: string): boolean {
+  const specs = [...sentence.matchAll(/\b(\d{1,2})\s*\/\s*(\d{3,4}|[12]\s*tb)\b/gi)].map(
+    (x) => `${x[1]}/${x[2]!.replace(/\s/g, "").toLowerCase()}`,
+  );
+  if (specs.length === 0) return true;
+  const own = fact.label.replace(/\s+/g, "").replace(/gb/gi, "").toLowerCase();
+  return specs.every((sp) => own.includes(sp));
+}
+
+/** "Siklus 1.024", "4.382 mAh", "90%": a battery reading, not a price. */
+function isBatteryFigure(text: string, start: number, end: number): boolean {
+  const before = text.slice(Math.max(0, start - 24), start);
+  const after = text.slice(end, end + 10);
+  return (
+    /(?:siklus|cycle|cc|kapasitas|baterai|battery|health|bh)\w*\s*:?\s*$/i.test(before) ||
+    /^\s*(?:mah|siklus|cycles?|%|gb|tb)\b/i.test(after)
+  );
 }
 
 const covers = (fact: StockFact, tokens: readonly string[]) => {
@@ -1152,6 +1198,17 @@ export function checkReply(input: {
    * per unit through `stockFacts`.
    */
   readonly factTexts?: readonly string[];
+  /**
+   * The serials the reply says it is about (the reply tool's `units`,
+   * 2026-11-09). Its prices and claims are checked against those units only,
+   * and one this turn never looked up is refused.
+   */
+  readonly citedUnits?: readonly string[];
+  /**
+   * What the customer wrote in the conversation: their own figures ("budget
+   * 15jt") may be said back to them.
+   */
+  readonly customerTexts?: readonly string[];
 }): ReplyProblem | null {
   const raw = input.message.trim();
   if (raw === "") return "EMPTY";
@@ -1164,13 +1221,27 @@ export function checkReply(input: {
   // price and its words are not a claim, so the rest reads the reply without it.
   const message = raw.replace(LINK_RE, " ");
 
-  const available = (input.stockFacts ?? []).filter((f) => f.available);
-  const allowed = new Set(input.sourceTexts.flatMap(amounts));
+  const facts = input.stockFacts ?? [];
+  const cited = (input.citedUnits ?? []).filter(Boolean);
+  if (cited.length > 0) {
+    const known = new Set(facts.flatMap((f) => (f.serial ? [f.serial] : [])));
+    if (cited.some((s) => !known.has(s))) return "UNKNOWN_UNIT";
+  }
+  const scoped =
+    cited.length > 0
+      ? facts.filter((f) => f.serial !== undefined && cited.includes(f.serial))
+      : facts;
+  const available = scoped.filter((f) => f.available);
+  const allowed = new Set([
+    ...input.sourceTexts.flatMap(amounts),
+    ...(input.customerTexts ?? []).flatMap(amounts),
+  ]);
 
   const spans = amountSpans(message);
   for (let i = 0; i < spans.length; i += 1) {
     const a = spans[i]!;
     if (allowed.has(a.value)) continue;
+    if (isBatteryFigure(message, a.start, a.end)) continue;
     const priced = available.filter((f) => f.prices.includes(a.value));
     if (priced.length === 0) return "AMOUNT_NOT_IN_SOURCE";
     // Which unit the words beside the figure name: the clause before it, or
@@ -1190,7 +1261,6 @@ export function checkReply(input: {
   }
 
   const vouched = input.sourceTexts.some((s) => AVAILABILITY.test(s));
-  const onShelf = new Set(available.flatMap((f) => modelTokens(f.label)));
   for (const sentence of sentences(message)) {
     if (!claimsAvailability(sentence)) continue;
     const tokens = modelTokens(
@@ -1202,8 +1272,9 @@ export function checkReply(input: {
       if (vouched || available.length > 0) continue;
       return "AVAILABILITY_NOT_IN_SOURCE";
     }
-    // A named unit: only the shelf can say it is there.
-    if (available.length === 0 || !tokens.every((t) => onShelf.has(t)))
+    // A named unit: only the shelf can say it is there — and ONE unit must be
+    // all of it (2026-11-09: "Air M1 ready" passed on an Air M2 and an M1 Pro).
+    if (!available.some((f) => covers(f, tokens) && specFits(f, sentence)))
       return "AVAILABILITY_NOT_IN_SOURCE";
   }
 

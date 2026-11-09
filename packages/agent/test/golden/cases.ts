@@ -215,7 +215,6 @@ export const CASES: readonly GoldenCase[] = [
   //     are measured against -----------------------------------------------
   {
     id: "audit-A4",
-    finding: "F11",
     turns: one("air m1 ready?", "Air M1 ready kak 😊"),
     expect: {
       kind: "checked",
@@ -226,19 +225,16 @@ export const CASES: readonly GoldenCase[] = [
   },
   {
     id: "audit-A6-budget",
-    finding: "H3",
     turns: one("budget 15jt ada?", "Untuk budget 15jt ada Air M2 10,9jt kak 😊"),
     expect: { kind: "checked", problem: null, sources: ["stock"], facts: [AIR_M2] },
   },
   {
     id: "audit-A6-cycles",
-    finding: "H3",
     turns: one("siklusnya berapa?", "Siklus baterainya 1.024 kak"),
     expect: { kind: "checked", problem: null, sources: ["stock"], facts: [AIR_M2] },
   },
   {
     id: "sim-52",
-    finding: "H4",
     turns: one("biar baterai awet gimana?", "Kurangi brightness biar baterainya awet ya kak 😊"),
     expect: { kind: "checked", problem: null, sources: ["chat"] },
   },

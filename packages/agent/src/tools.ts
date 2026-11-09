@@ -482,6 +482,14 @@ const REPLY: Anthropic.Tool = {
           "Comma-separated photo handles from unit_photos, when the customer asked to see the " +
           "unit. They are sent after your message. Leave it out otherwise.",
       },
+      units: {
+        type: "string",
+        maxLength: 200,
+        description:
+          "Comma-separated serials of the units your message talks about, from this turn's stock " +
+          "lookups. Every price and 'ready' in the message is checked against these units. " +
+          "Leave it out for general talk that is about no particular unit.",
+      },
     },
     required: ["message", "sources"],
     additionalProperties: false,

@@ -222,3 +222,32 @@ describe("a hand-over is the exception", () => {
     expect(r?.handoff?.topic).toBe("price");
   });
 });
+
+describe("the reply names its units (2026-11-09, Task 10)", () => {
+  const unitReply = (message: string, units: string): ScriptStep => ({
+    kind: "tools",
+    uses: [{ name: "reply", input: { message, sources: "stock", units } }],
+  });
+
+  it("a serial this turn never looked up is sent back, then handed over", async () => {
+    const t = talk(
+      [search, unitReply("Air M2 11,9jt kak", "NOPE1"), unitReply("Air M2 11,9jt kak", "NOPE1")],
+      "air m2 berapa kak?",
+      shelf,
+    );
+    const r = await t.result;
+    expect(r?.handoff?.forcedBy).toBe("UNKNOWN_UNIT");
+    expect(JSON.stringify(t.calls[2]!.messages.at(-1))).toContain("NOPE1");
+  });
+
+  it("the customer's own budget may be said back", async () => {
+    const t = talk(
+      [search, replies("Untuk budget 15jt ada Air M2 11,9jt kak", "stock")],
+      "budget 15jt ada air m2?",
+      shelf,
+    );
+    const r = await t.result;
+    expect(r?.handoff).toBeUndefined();
+    expect(r?.reply).toBe("Untuk budget 15jt ada Air M2 11,9jt kak");
+  });
+});

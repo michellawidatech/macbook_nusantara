@@ -237,6 +237,11 @@ export function heldReplyTask(
         topic: "other",
         summary: taskNote("reply", TASK_REASON.fact, draft),
       };
+    case "UNKNOWN_UNIT":
+      return {
+        topic: "stock",
+        summary: taskNote("stock", unit ?? TASK_REASON.availability, draft),
+      };
     case "TOO_LONG":
       return {
         topic: "other",
