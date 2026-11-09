@@ -191,7 +191,7 @@ function Label({
           fontFamily: "Arial, Helvetica, sans-serif",
           fontWeight: 700,
           // Smaller for a long second-hand serial, so it stays under the QR.
-          fontSize: `${Math.min(2.6, QR_MM / Math.max(1, datum.serial.length * 0.62))}mm`,
+          fontSize: `${Math.min(3.2, QR_MM / Math.max(1, datum.serial.length * 0.62))}mm`,
         }}
       >
         {datum.serial}
@@ -210,11 +210,11 @@ function Label({
           fontFamily: "Arial, Helvetica, sans-serif",
         }}
       >
-        <div className="label-name" style={clamp(2.6, 700)}>
+        <div className="label-name" style={clamp(3.2, 700)}>
           {datum.name}
         </div>
         {datum.code !== "" && (
-          <div className="label-code" style={clamp(2.3, 400)}>
+          <div className="label-code" style={clamp(2.8, 400)}>
             {datum.code}
           </div>
         )}

@@ -327,6 +327,24 @@ describe("the units behind a line", () => {
   });
 });
 
+describe("a unit's ⋯ prints its own sticker (2026-11-09)", () => {
+  it("opens the label dialog with that one serial", async () => {
+    renderPage();
+    await settle();
+    const line = expectedLines().find(
+      (l) => l.tracksSerial && l.units.length > 1,
+    )!;
+    const unit = line.units[0]!;
+    const row = await rowFor(line);
+    await userEvent.click(within(row).getByText(line.code));
+    const nested = await unitsUnder(row);
+    await userEvent.click(labelled(nested, `More for ${unit.serial}`));
+    await userEvent.click(await screen.findByText("Print barcode"));
+    const dialog = await topModal();
+    expect(within(dialog).getByText(/^1 label\(s\)/)).toBeInTheDocument();
+  });
+});
+
 describe("a unit's ⋯ (2026-10-26)", () => {
   /*
    * Send to service is on the unit's row now — Stock out keeps only

@@ -519,6 +519,13 @@ export function InventoryTable({ extra }: InventoryTableProps) {
     const returnLabel = t("inbound.rejectOk", "Return to supplier");
     return {
       items: [
+        // One unit's sticker (owner ask 2026-11-09): a relabel is one serial,
+        // not the whole line the line's ⋯ prints.
+        {
+          key: "print",
+          icon: <PrinterOutlined aria-hidden />,
+          label: t("inventory.printBarcode", "Print barcode"),
+        },
         {
           key: "service",
           icon: <ToolOutlined aria-hidden />,
@@ -547,6 +554,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
         },
       ],
       onClick: ({ key }) => {
+        if (key === "print") setPrinting(labelsFor([u], db.skus, db.models));
         if (key === "service") setServicing(u.serial);
         if (key === "return") setReturning(u.serial);
       },
