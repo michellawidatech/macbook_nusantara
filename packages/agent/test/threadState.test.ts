@@ -19,7 +19,7 @@ describe("readState", () => {
   it("reads back what was written", () => {
     const state = {
       v: 1,
-      booking: { serial: "S1", when: "2026-11-14T14:00", name: null, keep: true },
+      booking: { serial: "S1", when: "2026-11-14T14:00", name: null, keep: true, age: 0 },
       pendingSearch: "macbook air m3",
     };
     expect(readState({ units: ["S1"], state })).toEqual(state);
@@ -28,6 +28,6 @@ describe("readState", () => {
   it("drops a field of the wrong type rather than trusting it", () => {
     expect(
       readState({ state: { v: 1, booking: { serial: 7, when: "x", name: null, keep: "yes" }, pendingSearch: 3 } }),
-    ).toEqual({ v: 1, booking: { serial: null, when: null, name: null, keep: false }, pendingSearch: null });
+    ).toEqual({ v: 1, booking: { serial: null, when: null, name: null, keep: false, age: 0 }, pendingSearch: null });
   });
 });

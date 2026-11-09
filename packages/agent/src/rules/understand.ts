@@ -364,15 +364,29 @@ const BARE_SELF = /^(?:saya|aku)\s/i;
  * name was asked for; this only says whether the words can be one.
  */
 export function bareName(text: string): string | null {
-  const m = /^\s*(?:kak\s+|atas\s+nama\s+|a\.?n\.?\s+)?([a-z][a-z.']{1,20}(?:\s+[a-z][a-z.']{1,20}){0,2})\s*(?:kak)?\s*[.!]?\s*$/i.exec(text);
+  const t = text
+    .trim()
+    .replace(/[.!,]+$/, "")
+    .replace(/\s+kak$/i, "")
+    .replace(/^(?:kak|atas\s+nama|a\.?n\.?)\s+/i, "")
+    .trim();
+  const m = /^([a-z][a-z']{1,20}(?:\s+[a-z][a-z']{1,20}){0,2})$/i.exec(t);
   if (!m) return null;
   const name = m[1]!.trim();
-  if (NOT_A_NAME.test(name) || /^(ok|oke|okay|siap|sip|iya|ya|ga|gak|nggak|tidak|nanti|halo|hai|makasih|thanks|terima kasih)\b/i.test(name))
+  if (
+    NOT_A_NAME.test(name) ||
+    NOT_A_BARE_NAME.test(name) ||
+    /\b(air|pro|max|mini|macbook|ipad|imac|iphone|mac|m[1-5])\b/i.test(name)
+  )
     return null;
   if (collect(name.toLowerCase(), USAGE).length || collect(name.toLowerCase(), OCCUPATION).length)
     return null;
   return name.replace(/\b\w/g, (c) => c.toUpperCase()).slice(0, 80);
 }
+
+/** Words a one-word message often is, and a name never is (final review). */
+const NOT_A_BARE_NAME =
+  /^(ok|oke|okay|okee|okey|siap|siapp|sip|mantap|mantul|boleh|gimana|bentar|sebentar|jadi|deal|cash|tunai|buat|untuk|iya|ya|yaa|ga|gak|nggak|tidak|nanti|halo|hai|makasih|thanks|terima|wkwk|hmm|noted|senin|selasa|rabu|kamis|jumat|sabtu|minggu|pagi|siang|sore|malam|baik|betul|bener|sudah|udah|belum|kok|lho|sih|deh|dong)\b/i;
 
 export function nameOf(text: string): string | null {
   // Every candidate, not the first: "saya ke toko, atas nama Budi" has a

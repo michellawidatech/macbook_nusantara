@@ -597,3 +597,27 @@ describe("each claim is checked against ONE unit (2026-11-09, Task 10)", () => {
     expect(check("Boleh nawar kok kak")).toBe("DISCOUNT_OFFERED");
   });
 });
+
+describe("final review, Phase 3–4 (2026-11-09)", () => {
+  const AIR8 = { label: 'MacBook Air 13" M2 8/256', available: true, prices: ["10900000"], serial: "A8" };
+  const AIR16 = { label: 'MacBook Air 13" M2 16/512', available: true, prices: ["14250000"], serial: "A16" };
+  const check = (message: string) =>
+    checkReply({ message, sourceCount: 1, unknownSources: 0, sourceTexts: [], stockFacts: [AIR8, AIR16] });
+
+  it("two variants of one model, in one line, both on the shelf", () => {
+    expect(check("Air M2 ready kak, ada 8/256 dan 16/512")).toBeNull();
+    expect(check("Air M2 8/256 atau 16/512 ready kak")).toBeNull();
+    expect(check("Air M2 32/1tb ready kak")).toBe("AVAILABILITY_NOT_IN_SOURCE");
+  });
+
+  it.each(["bisa turun ke 10jt kak", "bisa diturunin jadi 11jt", "Harganya bisa turun kalau ambil 2"])(
+    "a lower price offered is refused: %s",
+    (m) => {
+      expect(check(m)).toBe("DISCOUNT_OFFERED");
+    },
+  );
+
+  it("a battery that drops is not a price", () => {
+    expect(check("Baterainya bisa turun ke 80% kalau sering gaming kak")).toBeNull();
+  });
+});

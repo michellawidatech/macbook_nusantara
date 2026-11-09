@@ -14,7 +14,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient, truncateAll } from "@nusantara/db";
 import { createLogger } from "@nusantara/logging";
 import type { AgentClient, CreateArgs } from "@nusantara/agent";
-import { draftPass, MAX_DRAFT_FAILURES, type DraftDeps } from "../src/draft.js";
+import { draftPass, holdTheLine, MAX_DRAFT_FAILURES, type DraftDeps } from "../src/draft.js";
 import { stalePass, type StaleDeps } from "../src/stale.js";
 import { sendPass } from "../src/send.js";
 import { claimThread } from "../src/lease.js";
@@ -322,6 +322,24 @@ describe("one thread cannot stop the others", () => {
       where: { from: STUCK },
     });
     expect(memory?.leasedBy ?? null).toBeNull();
+  });
+});
+
+describe("a holding line after the first reply (final review, 2026-11-09)", () => {
+  it("is sent without emoji, and the copy kept with the hand-over is the text sent", async () => {
+    const FROM = "628111000709";
+    await inbound("h.0", FROM, "halo", ago(10 * 60_000), {
+      status: "DIJAWAB_AGEN",
+      answeredByAgent: true,
+      replyText: "Halo kak 😊 Ada yang bisa aku bantu kak?",
+      answeredAt: ago(9 * 60_000),
+    });
+    await inbound("h.1", FROM, "kalau garansi internasional apple masih bisa diklaim di sini nggak?", ago(20_000));
+    // The watchdog's path: the holding line through escalate.
+    expect(await holdTheLine(agent, FROM, "stale", { now: NOW })).toBe("sent");
+    const row = await owner.waMessage.findFirstOrThrow({ where: { waMessageId: "h.1" } });
+    expect(row.replyText).not.toMatch(/\p{Extended_Pictographic}/u);
+    expect((row.entities as { handoff?: { reply?: string } }).handoff?.reply).toBe(row.replyText);
   });
 });
 

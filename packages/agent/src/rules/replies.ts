@@ -7,6 +7,7 @@
  */
 
 import { jakartaClock, jakartaDay } from "@nusantara/domain";
+import { plainText } from "../sanitise.js";
 
 export type Lang = "id" | "en";
 
@@ -203,7 +204,7 @@ export const reply = {
       lang === "en"
         ? "Hi again 😊 Anything I can help you find?"
         : "Iya kak, ada yang mau ditanyain? 😊";
-    return (lastReply ?? "").includes(first) ? second : first;
+    return plainText(lastReply).includes(plainText(first)) ? second : first;
   },
 
   thanks(lang: Lang): string {
@@ -736,7 +737,7 @@ export const reply = {
     const key = (["usage", "budget"] as const).find((k) => lacks[k]);
     if (!key) return null;
     const [first, second] = QUESTIONS[key][lang];
-    return lastReply?.includes(first) ? second : first;
+    return plainText(lastReply).includes(plainText(first)) ? second : first;
   },
 
   /**
@@ -869,6 +870,8 @@ const QUESTIONS: Record<
 export function askedAboutNeeds(text: string | null | undefined): boolean {
   if (!text) return false;
   return Object.values(QUESTIONS).some((byLang) =>
-    Object.values(byLang).some((ways) => ways.some((q) => text.includes(q))),
+    Object.values(byLang).some((ways) =>
+      ways.some((q) => plainText(text).includes(plainText(q))),
+    ),
   );
 }

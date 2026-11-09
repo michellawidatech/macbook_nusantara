@@ -28,6 +28,8 @@
  * test/policy.test.ts with the kind of message customers actually send.
  */
 
+import { plainText } from "./sanitise.js";
+
 /**
  * What the bot is allowed to do for itself — the switch between the 2026-09-18
  * design and the 2026-09-21 one.
@@ -1066,8 +1068,19 @@ function aboutPrice(message: string, m: RegExpMatchArray): boolean {
   const after = message.slice((m.index ?? 0) + m[0].length);
   if (/cashback/.test(word)) return !/^\w*\s+(?:dari\s+)?(?:bank|kartu)/i.test(after);
   if (!/kurang|turun/.test(word)) return true;
-  return PRICE_AFTER.test(after);
+  if (PRICE_AFTER.test(after)) return true;
+  // "bisa turun ke 10jt", "Harganya bisa turun kalau ambil 2": a figure or
+  // the word harga in the same clause makes it a price (final review).
+  const start = m.index ?? 0;
+  const from = Math.max(0, ...[".", "!", "?", "\n"].map((c) => message.lastIndexOf(c, start) + 1));
+  const rest = message.slice(start);
+  const stop = rest.search(/[.!?\n]/);
+  const clause = message.slice(from, stop < 0 ? message.length : start + stop);
+  return PRICE_CONTEXT.test(clause);
 }
+
+const PRICE_CONTEXT =
+  /harga|hrg|price|\brp\s*\d|\d+(?:[.,]\d+)?\s*(?:jt|juta|rb|ribu|k)\b|\d{1,3}(?:[.,]\d{3}){2,}/i;
 
 /** Does the reply offer a discount or invite a bargain? */
 export function offersDiscount(message: string): boolean {
@@ -1447,10 +1460,12 @@ export function isHoldingLine(text: string | null | undefined): boolean {
     "Siap kak, yang ini sekalian aku tanyain ya 🙏",
     "Noted, I'll check that one too 🙏",
   ]);
-  const base = t.replace(CLOSED_SUFFIX, "").trim();
+  // Read without emoji: a reply is stored with them stripped (2026-11-09).
+  const plain = new Set([...lines].map((l) => plainText(l)));
+  const base = plainText(t.replace(CLOSED_SUFFIX, "").trim());
   return (
-    lines.has(base) ||
-    /^Untuk amankan unitnya bisa DP Rp .+ tim kami cek dulu 🙏$/.test(base)
+    plain.has(base) ||
+    /^Untuk amankan unitnya bisa DP Rp .+ tim kami cek dulu\.?$/.test(base)
   );
 }
 

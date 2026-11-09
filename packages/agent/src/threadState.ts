@@ -22,7 +22,15 @@ export interface BookingDraft {
   readonly name: string | null;
   /** A keep (a unit they want held) rather than a visit to look. */
   readonly keep: boolean;
+  /**
+   * Messages this draft has been carried past without progress. It is
+   * dropped at BOOKING_MAX_AGE so a half-filled booking from earlier cannot
+   * be completed by an unrelated line days later (final review, 2026-11-09).
+   */
+  readonly age?: number;
 }
+
+export const BOOKING_MAX_AGE = 4;
 
 export interface ThreadState {
   readonly v: 1;
@@ -59,6 +67,10 @@ export function readState(entities: unknown): ThreadState {
           when: whenOf((b as Record<string, unknown>)["when"]),
           name: text((b as Record<string, unknown>)["name"]),
           keep: (b as Record<string, unknown>)["keep"] === true,
+          age:
+            typeof (b as Record<string, unknown>)["age"] === "number"
+              ? ((b as Record<string, unknown>)["age"] as number)
+              : 0,
         }
       : null;
   return { v: 1, booking, pendingSearch: text(s["pendingSearch"]) };

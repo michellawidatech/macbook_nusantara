@@ -374,6 +374,15 @@ export function applyEmojiRule(text: string, first: boolean): string {
     .trim();
 }
 
+/**
+ * A reply read without its emoji, for comparing what the bot stored with a
+ * template that still carries one (final review, 2026-11-09). Both sides go
+ * through it, so "Iya kak 😊 Ada…" and the stored "Iya kak. Ada…" agree.
+ */
+export function plainText(text: string | null | undefined): string {
+  return applyEmojiRule(text ?? "", false);
+}
+
 export function sanitiseReply(text: string): string {
   if (!text) return "";
   let out = text;

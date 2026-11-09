@@ -1982,6 +1982,8 @@ async function escalate(
         : taskNote("reply", TASK_REASON.botFailed);
   const at = new Date();
   return db.$transaction(async (tx) => {
+    /** The holding line as sent, once the emoji rule has been applied. */
+    let line: string | null = null;
     const { count } = await tx.waMessage.updateMany({
       where: { id: { in: batchIds }, status: "BARU" },
       data: {
@@ -2003,7 +2005,7 @@ async function escalate(
           id: { notIn: batchIds },
         },
       });
-      const line = applyEmojiRule(reply, earlier === 0);
+      line = applyEmojiRule(reply, earlier === 0);
       await tx.waMessage.update({
         where: { id: anchorId },
         data: { replyText: line },
@@ -2040,9 +2042,9 @@ async function escalate(
             summary,
             forcedBy: why,
             at: at.toISOString(),
-            // The line the BOT sent, so /chat labels it Bot even after a
-            // colleague closes the row.
-            ...(reply ? { reply } : {}),
+            // The line the BOT sent — as sent, emoji rule applied — so /chat
+            // labels it Bot even after a colleague closes the row.
+            ...(line ? { reply: line } : reply ? { reply } : {}),
           },
         },
       },

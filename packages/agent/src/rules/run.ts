@@ -53,8 +53,13 @@ import {
 } from "../policy.js";
 import type { AgentStep, PipelineResult } from "../pipeline.js";
 import { isStrongMatch, sameQuestion } from "../retrieval.js";
-import { sanitiseReply } from "../sanitise.js";
-import { hasState, type BookingDraft, type ThreadState } from "../threadState.js";
+import { plainText, sanitiseReply } from "../sanitise.js";
+import {
+  BOOKING_MAX_AGE,
+  hasState,
+  type BookingDraft,
+  type ThreadState,
+} from "../threadState.js";
 import { dispatchTool, storeOpenAt, type ToolContext } from "../tools.js";
 import {
   askedAboutNeeds,
@@ -439,9 +444,14 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
   // What this reply leaves the conversation in the middle of (2026-11-09):
   // an unfinished booking carries over until it is filed or dropped; an
   // offered search lasts one message.
-  let nextBooking: BookingDraft | null = input.state?.booking ?? null;
+  // A draft carried past this message without progress grows older, and an
+  // old one is dropped (final review, 2026-11-09).
+  const carried = input.state?.booking
+    ? { ...input.state.booking, age: (input.state.booking.age ?? 0) + 1 }
+    : null;
+  const prevBooking = carried && carried.age < BOOKING_MAX_AGE ? carried : null;
+  let nextBooking: BookingDraft | null = prevBooking;
   let nextSearch: string | null = null;
-  const prevBooking = input.state?.booking ?? null;
 
   const verdict = (escalate: string | null, ops: boolean): RouterVerdict => ({
     language: lang,
@@ -621,8 +631,8 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
   /** The bot's last line was the DP rule: a time now completes a keep. */
   const keepAsked =
     (input.lastReply ?? "").includes("amankan unitnya") ||
-    (input.lastReply ?? "").includes(
-      reply.keepWhen({ name: false, unit: false }, lang),
+    plainText(input.lastReply).includes(
+      plainText(reply.keepWhen({ name: false, unit: false }, lang)),
     ) ||
     (input.lastReply ?? "").includes("rencananya mau ke toko kapan");
 
@@ -638,7 +648,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
         // Carried as "shown", so "besok jam 2" next files it for this unit,
         // and in the state, so the time and the name can come one at a time.
         if (serial) shown.push(serial);
-        nextBooking = { serial, when, name, keep: true };
+        nextBooking = { serial, when, name, keep: true, age: 0 };
         // The time first (owner, 2026-10-28: keep → when → DP → verify);
         // the DP rule comes once the request is filed.
         return done(
@@ -1017,14 +1027,35 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
   // --- a conversation in the middle of something (threadState, 2026-11-09) --
   // A booking given one detail per message: this one may be the time or the
   // name that was missing — a bare "Rina" answers "atas nama siapa?".
-  if (prevBooking && caps.reserve && ctx.reserve && !input.route) {
-    const name = u.name ?? (prevBooking.name ? null : bareName(input.text));
+  // Only from a message about the booking: a stock or price question that
+  // happens to carry a time is answered as what it is (final review). A
+  // bare word is a name only right after the bot asked for one.
+  const aboutBooking = ["ack", "confirm", "tell", "other", "reserve"].includes(u.intent);
+  // "besok jam 2 aku ke toko, air m2 masih ada?" asks about stock first: the
+  // time goes on the draft, the question is answered, nothing is filed.
+  const stockQuestion = Boolean(u.query) && isQuestion(input.text);
+  if (prevBooking && stockQuestion && u.when)
+    nextBooking = { ...prevBooking, when: u.when, age: 0 };
+  const askedName = /\b(atas nama|nama(nya)?|whose name|under (whose|what) name)\b/i.test(
+    plainText(input.lastReply),
+  );
+  if (
+    prevBooking &&
+    caps.reserve &&
+    ctx.reserve &&
+    !input.route &&
+    aboutBooking &&
+    !stockQuestion
+  ) {
+    const name =
+      u.name ?? (prevBooking.name || !askedName ? null : bareName(input.text));
     if (u.when || name) {
       const merged: BookingDraft = {
         serial: prevBooking.serial,
         when: u.when ?? prevBooking.when,
         name: name ?? prevBooking.name ?? input.known.name ?? null,
         keep: prevBooking.keep,
+        age: 0,
       };
       if (merged.when && merged.name)
         return fileRequest({
@@ -1071,7 +1102,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       // what the profile already says.
       if (
         caps.stock &&
-        (input.lastReply ?? "").includes(reply.offerSearch(lang)) &&
+        plainText(input.lastReply).includes(plainText(reply.offerSearch(lang))) &&
         (input.known.budgetMax || input.known.budgetMin)
       )
         return search({
@@ -1150,6 +1181,8 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
 
     case "reserve": {
       if (!caps.reserve || !ctx.reserve) break;
+      // A time beside a stock question is the stock question (final review).
+      if (stockQuestion && caps.stock) return search();
       // A REQUEST (2026-10-27): the units are what they want to see — or,
       // right after the DP rule was given, to keep — and a person approves.
       const serial = pickSerial() ?? input.lastShown[0] ?? prevBooking?.serial ?? null;
@@ -1158,7 +1191,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       const keep = (keepAsked || prevBooking?.keep === true) && serial !== null;
       const missing = { unit: false, name: !name, when: !when };
       if (missing.name || missing.when) {
-        nextBooking = { serial, when, name, keep };
+        nextBooking = { serial, when, name, keep, age: 0 };
         return done(reply.askForVisit(missing, lang), { ask: false });
       }
       return fileRequest({ serial, name: name!, when: when!, keep });

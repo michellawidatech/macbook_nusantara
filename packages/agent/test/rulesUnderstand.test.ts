@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { understand, visitTimeOf, nameOf } from "../src/rules/understand.js";
+import { bareName, understand, visitTimeOf, nameOf } from "../src/rules/understand.js";
 
 /** Thursday 15 October 2026, 10:00 in Jakarta. */
 const NOW = new Date("2026-10-15T03:00:00.000Z");
@@ -163,5 +163,17 @@ describe("a bare 'air' or 'pro' is a MacBook unless they say iPad (2026-11-06, W
     ["ada macbook air m2?", "macbook air m2"],
   ])("%s → %s", (text, query) => {
     expect(q(text)).toContain(query);
+  });
+});
+
+describe("bareName refuses ordinary words (final review, 2026-11-09)", () => {
+  it.each(["Mantap", "Boleh", "Gimana", "Bentar", "Sabtu", "Jadi", "Deal", "Cash", "Buat bisnis online", "Oke deh", "Siap kak", "Air M2"])(
+    "%s → no name",
+    (t) => {
+      expect(bareName(t)).toBeNull();
+    },
+  );
+  it.each([["Rina kak", "Rina"], ["Rina.", "Rina"], ["budi santoso", "Budi Santoso"]])("%s → %s", (t, n) => {
+    expect(bareName(t)).toBe(n);
   });
 });

@@ -1114,3 +1114,28 @@ describe("a booking given one detail per message (2026-11-09, Task 12)", () => {
     expect(p.asked.find((x) => x.name === "search_stock")?.args).toMatchObject({ query: "macbook air m3" });
   });
 });
+
+describe("a booking draft is not filled by an unrelated message (final review, 2026-11-09)", () => {
+  const request = { ok: true, requested: true, requestId: "req_x", when: "2026-10-16 14:00", custName: "Rina", units: [AIR] };
+
+  it("a stock question with a time in it answers the stock question, files nothing", async () => {
+    const p = pos({ propose_reservation: request, search_stock: { matched: 1, units: [AIR] } });
+    const state = { v: 1 as const, booking: { serial: AIR.serial, when: null, name: "Rina", keep: false, age: 0 }, pendingSearch: null };
+    await run("besok jam 2 aku ke toko, air m2 masih ada?", p, { state });
+    expect(p.asked.some((x) => x.name === "propose_reservation")).toBe(false);
+    expect(p.asked.some((x) => x.name === "search_stock")).toBe(true);
+  });
+
+  it("a bare word counts as the name only right after the bot asked for one", async () => {
+    const p = pos({ propose_reservation: request });
+    const state = { v: 1 as const, booking: { serial: AIR.serial, when: "2026-10-16T14:00", name: null, keep: false, age: 0 }, pendingSearch: null };
+    await run("Rina", p, { state, lastReply: "Air M2 masih ada kak, 11,9jt." });
+    expect(p.asked.some((x) => x.name === "propose_reservation")).toBe(false);
+  });
+
+  it("a draft nobody finished is dropped after a few messages", async () => {
+    const state = { v: 1 as const, booking: { serial: AIR.serial, when: null, name: null, keep: false, age: 3 }, pendingSearch: null };
+    const out = await run("garansinya berapa lama kak?", pos({}), { state });
+    expect(out.state?.booking ?? null).toBeNull();
+  });
+});
