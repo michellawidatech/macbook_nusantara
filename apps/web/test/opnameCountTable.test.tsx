@@ -456,3 +456,71 @@ describe("posting, after the table changed", () => {
     }
   });
 });
+
+/**
+ * A unit on service is on the shelf of the warehouse it is serviced in
+ * (owner report 2026-11-09: a count of warehouses 02, 03 and 05 filed every
+ * unit on service in 02 and 05 as "Belongs elsewhere").
+ */
+describe("a unit on service", () => {
+  /** Put the third shelf unit on service, on its own rack, in an open visit. */
+  function sendToService(serial: string) {
+    mutate((d) => {
+      // By id as well: an earlier test's visit may name a different serial.
+      d.services = d.services.filter(
+        (r) => r.serial !== serial && r.id !== "svc-opname-test",
+      );
+      const u = d.units.find((x) => x.serial === serial)!;
+      u.status = "SERVIS";
+      d.services.push({
+        id: "svc-opname-test",
+        serial,
+        fromLocationId: u.locationId,
+        openedAt: "2026-11-01T10:00:00.000Z",
+        arrivedAt: "2026-11-01T10:00:00.000Z",
+        fees: [],
+        raisedBy: "ADJUSTMENT",
+        staff: "Michella",
+      });
+    });
+  }
+
+  it("is expected in its warehouse, and counted when scanned", async () => {
+    const serial = shelf[2]!;
+    sendToService(serial);
+    renderSession();
+
+    expect(rowOrder()).toContain(serial);
+    await scan(serial);
+    expect(within(row(serial)).getByText("Found")).toBeVisible();
+    expect(within(row(serial)).queryByText("Belongs elsewhere")).toBeNull();
+  });
+
+  it("leaves its service visit when it is marked lost", async () => {
+    const gone = shelf[2]!;
+    sendToService(gone);
+    renderSession();
+    await scan(shelf[0]!);
+    await scan(shelf[1]!);
+    await userEvent.click(
+      screen.getByRole("button", { name: /Review & finish/i }),
+    );
+    await userEvent.type(
+      screen.getByPlaceholderText(/Required — say what happened/i),
+      "Not at the bench",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Post count/i }));
+    const confirm = await screen.findByRole("dialog");
+    await userEvent.click(
+      within(confirm).getByRole("button", { name: /Post count/i }),
+    );
+
+    await waitFor(() =>
+      expect(getDb().units.find((u) => u.serial === gone)?.status).toBe(
+        "HILANG",
+      ),
+    );
+    const visit = getDb().services.find((r) => r.id === "svc-opname-test");
+    expect(visit?.closedAt).toBeDefined();
+  });
+});

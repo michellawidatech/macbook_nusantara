@@ -164,8 +164,15 @@ import type { OpnameSurplus, Unit } from "../../mock/seed.js";
 import { COLUMN } from "../../theme/tokens";
 import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
-/** Statuses that mean the warehouse should physically be holding the unit. */
-const IN_STOCK = ["TERSEDIA", "DIRESERVASI", "QC"];
+/**
+ * Statuses that mean the warehouse should physically be holding the unit.
+ *
+ * `SERVIS` is one of them (owner report 2026-11-09): since 2026-09-25 a unit
+ * sent to service MOVES to the warehouse it is serviced in, so it is on that
+ * shelf to be counted. Leaving it out filed every unit on service as
+ * "Belongs elsewhere" in the very warehouse the system says it is in.
+ */
+const IN_STOCK = ["TERSEDIA", "DIRESERVASI", "QC", "SERVIS"];
 
 /**
  * How long after the last change the draft writes itself.
@@ -1014,6 +1021,17 @@ export function OpnameSessionPage() {
         persist("POSTED");
         mutate((d) => {
           for (const s of missing) {
+            // A unit lost while on service leaves its visit too, or the
+            // Service page keeps waiting for a unit nobody can find.
+            const visit = d.services.findIndex(
+              (r) => r.serial === s && r.closedAt === undefined,
+            );
+            if (visit >= 0) {
+              d.services[visit] = {
+                ...d.services[visit]!,
+                closedAt: new Date().toISOString(),
+              };
+            }
             appendEvent(d, s, {
               type: "OPNAME_HILANG",
               toStatus: "HILANG",
