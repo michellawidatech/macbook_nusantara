@@ -3453,6 +3453,7 @@ export const id: Record<string, string> = {
   "inboundForm.unitCount": "{{count}} unit",
   // Stock Opname — the counting table (owner brief 2026-09-19).
   "opname.unitsTitle": "Unit dalam hitungan ini",
+  "opname.colNo": "No.",
   "opname.colUnit": "Unit",
   "opname.description": "Deskripsi",
   "opname.action": "Aksi",

@@ -304,6 +304,8 @@ describe("on a desktop", () => {
         .getAllByRole("columnheader")
         .map((h) => h.textContent),
     ).toEqual([
+      // A running number first (owner ask, 2026-11-09).
+      "No.",
       "Unit",
       "Serial",
       "Warehouse",

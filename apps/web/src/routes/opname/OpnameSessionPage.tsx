@@ -1673,6 +1673,14 @@ export function OpnameSessionPage() {
             })}
             columns={[
               {
+                // A running number, so the counter sees the list move as
+                // each scan lands (owner ask, 2026-11-09).
+                title: t("opname.colNo", "No."),
+                key: "no",
+                width: 56,
+                render: (_: unknown, __: LiveRow, i: number) => i + 1,
+              },
+              {
                 title: t("opname.colUnit", "Unit"),
                 key: "unit",
                 render: (_: unknown, r: LiveRow) => {
