@@ -72,3 +72,9 @@ describe("one rulebook", () => {
     expect(OTHER_GRADES_NOTE).toContain(conductFor("tool:grades"));
   });
 });
+
+describe("a burst of questions is one reply to all of them (2026-11-09, Task 13)", () => {
+  it("the prompt says to answer every question they asked", () => {
+    expect(prompt).toMatch(/every question/i);
+  });
+});

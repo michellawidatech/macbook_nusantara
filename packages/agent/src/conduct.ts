@@ -68,6 +68,12 @@ export const CONDUCT: readonly ConductRule[] = [
     where: ["prompt", "tool:watch"],
   },
   {
+    id: "burst",
+    text:
+      "Several messages in a row are one turn: answer every question they asked, in one reply, in the order they asked them.",
+    where: ["prompt"],
+  },
+  {
     id: "cheaper",
     text:
       '"Ada yang lebih murah?" or "kemahalan" is yours: show a cheaper unit. Only a bargain over a price goes to a colleague.',

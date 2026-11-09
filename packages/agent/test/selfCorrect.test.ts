@@ -251,3 +251,28 @@ describe("the reply names its units (2026-11-09, Task 10)", () => {
     expect(r?.reply).toBe("Untuk budget 15jt ada Air M2 11,9jt kak");
   });
 });
+
+describe("a burst where one line needs a person (2026-11-09, Task 13 / Review Focus 5)", () => {
+  it("still looks up and answers the other line, then hands over the proof", async () => {
+    const t = talk(
+      [
+        search,
+        handsOver(
+          "order_payment",
+          "Perlu verifikasi DP — bukti transfer",
+          "Air M2 ready kak, 11,9jt. Bukti transfernya aku cek dulu ya kak",
+        ),
+      ],
+      "ini bukti tf ya kak\nsama air m2 masih ada?",
+      shelf,
+      { route: { topic: "order_payment", rule: "order_payment" } },
+    );
+    const r = await t.result;
+    expect(t.calls[0]!.tools!.map((x) => x.name)).toContain("search_stock");
+    expect(t.calls[0]!.tools!.map((x) => x.name)).not.toContain("reply");
+    expect(r?.handoff?.topic).toBe("order_payment");
+    expect(r?.reply).toContain("11,9jt");
+    // The routed turn's instruction carries no emoji to copy (owner, 2026-11-09).
+    expect(JSON.stringify(t.calls[0]!.messages)).not.toMatch(/\p{Extended_Pictographic}/u);
+  });
+});

@@ -650,7 +650,9 @@ export async function converse(
     ? `This message must go to a colleague (${route.topic.replace("_", " ")}). ` +
       "Do not answer it with reply. Use handoff_to_staff: first answer anything an approved " +
       "answer covers, then say in one short line what you are checking and with whom, as " +
-      '"aku" (for an offer: "Untuk nego harganya aku tanyain ke owner dulu ya kak 🙏"). ' +
+      '"aku" (for an offer: "Untuk nego harganya aku tanyain ke owner dulu ya kak"). ' +
+      "If their message also asks something you can look up, look it up and answer that first, " +
+      "in the same message. " +
       'Never a generic "admin kami akan membalas".' +
       (route.topic === "closing"
         ? ' They are ready to buy: write the summary as "Perlu closing — <name> siap ambil ' +
@@ -810,8 +812,26 @@ export async function converse(
         ? args["customer_message"]
         : "";
     const message = sanitiseReply(raw);
+    // A hand-over that first answers the rest of the burst — "Air M2 ready,
+    // 11,9jt. Bukti transfernya aku cek dulu" (2026-11-09, Task 13) — carries
+    // a figure and a "ready" a holding line may not; it is sent as written
+    // when this turn's lookups vouch for every one, as a reply would be.
+    const answersTheRest =
+      stockLooked &&
+      checkReply({
+        message,
+        sourceCount: 1,
+        unknownSources: 0,
+        sourceTexts: [dpKeepLine(input.dp), ...catalogResults],
+        stockFacts,
+        factTexts: stockResults,
+        customerTexts: turns.filter((t) => t.role === "user").map((t) => t.text),
+      }) === null;
     // The DP rule is the shop's own setting: a vouched figure (2026-10-27).
-    if (checkHoldingMessage(message, [dpKeepLine(input.dp)]) !== null) {
+    if (
+      checkHoldingMessage(message, [dpKeepLine(input.dp)]) !== null &&
+      !answersTheRest
+    ) {
       // An empty line, or one carrying a figure or a stock promise: the
       // customer gets the shop's fixed words instead of the model's.
       const line = [...bookings.map(bookingLine), fixedLine(topic)].join("\n");
