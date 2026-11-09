@@ -624,7 +624,9 @@ export function routeMessage(
   if (TRADE_IN.test(t)) return { topic: "trade_in", rule: "trade_in" };
   if (
     COMPLAINT_WORD.test(t) ||
-    (FAULT.test(t) && MINE.test(t) && !(SHOPPING.test(t) && !FROM_THIS_SHOP.test(t)))
+    (FAULT.test(t) &&
+      MINE.test(t) &&
+      !(SHOPPING.test(t) && !FROM_THIS_SHOP.test(t)))
   )
     return { topic: "complaint", rule: "complaint" };
 
@@ -1013,7 +1015,11 @@ function unvouched(
     // pattern's first word ("garansi" … "1 bulan").
     const said = squash(m[1] ?? m[0]);
     const lead = m[1] ? squash(m[0]).split(" ")[0]! : null;
-    if (!known.some((k) => k.includes(said) && (lead === null || k.includes(lead))))
+    if (
+      !known.some(
+        (k) => k.includes(said) && (lead === null || k.includes(lead)),
+      )
+    )
       return m[0];
   }
   return null;
@@ -1040,7 +1046,8 @@ export function claimPhrase(
     }
     return null;
   }
-  if (problem === "URGENCY_INVENTED") return unvouched(message, URGENCY, sourceTexts);
+  if (problem === "URGENCY_INVENTED")
+    return unvouched(message, URGENCY, sourceTexts);
   if (problem === "FACT_NOT_IN_SOURCE") {
     for (const re of UNVOUCHED_FACTS) {
       const hit = unvouched(message, re, sourceTexts);
@@ -1066,13 +1073,17 @@ const PRICE_AFTER =
 function aboutPrice(message: string, m: RegExpMatchArray): boolean {
   const word = m[0].toLowerCase();
   const after = message.slice((m.index ?? 0) + m[0].length);
-  if (/cashback/.test(word)) return !/^\w*\s+(?:dari\s+)?(?:bank|kartu)/i.test(after);
+  if (/cashback/.test(word))
+    return !/^\w*\s+(?:dari\s+)?(?:bank|kartu)/i.test(after);
   if (!/kurang|turun/.test(word)) return true;
   if (PRICE_AFTER.test(after)) return true;
   // "bisa turun ke 10jt", "Harganya bisa turun kalau ambil 2": a figure or
   // the word harga in the same clause makes it a price (final review).
   const start = m.index ?? 0;
-  const from = Math.max(0, ...[".", "!", "?", "\n"].map((c) => message.lastIndexOf(c, start) + 1));
+  const from = Math.max(
+    0,
+    ...[".", "!", "?", "\n"].map((c) => message.lastIndexOf(c, start) + 1),
+  );
   const rest = message.slice(start);
   const stop = rest.search(/[.!?\n]/);
   const clause = message.slice(from, stop < 0 ? message.length : start + stop);
@@ -1130,9 +1141,9 @@ function clauseStart(text: string, pos: number): number {
 
 /** "16/512" in a sentence must be the unit's own configuration. */
 function specFits(fact: StockFact, sentence: string): boolean {
-  const specs = [...sentence.matchAll(/\b(\d{1,2})\s*\/\s*(\d{3,4}|[12]\s*tb)\b/gi)].map(
-    (x) => `${x[1]}/${x[2]!.replace(/\s/g, "").toLowerCase()}`,
-  );
+  const specs = [
+    ...sentence.matchAll(/\b(\d{1,2})\s*\/\s*(\d{3,4}|[12]\s*tb)\b/gi),
+  ].map((x) => `${x[1]}/${x[2]!.replace(/\s/g, "").toLowerCase()}`);
   if (specs.length === 0) return true;
   const own = fact.label.replace(/\s+/g, "").replace(/gb/gi, "").toLowerCase();
   return specs.every((sp) => own.includes(sp));
@@ -1143,8 +1154,9 @@ function isBatteryFigure(text: string, start: number, end: number): boolean {
   const before = text.slice(Math.max(0, start - 24), start);
   const after = text.slice(end, end + 10);
   return (
-    /(?:siklus|cycle|cc|kapasitas|baterai|battery|health|bh)\w*\s*:?\s*$/i.test(before) ||
-    /^\s*(?:mah|siklus|cycles?|%|gb|tb)\b/i.test(after)
+    /(?:siklus|cycle|cc|kapasitas|baterai|battery|health|bh)\w*\s*:?\s*$/i.test(
+      before,
+    ) || /^\s*(?:mah|siklus|cycles?|%|gb|tb)\b/i.test(after)
   );
 }
 
@@ -1291,7 +1303,9 @@ export function checkReply(input: {
     const claim = OUT_OF_STOCK.test(sentence)
       ? sentence.slice(claimStart(sentence))
       : sentence;
-    for (const part of claim.split(/\s+(?:dan|atau|sama|serta|&)\s+|[,;]\s*/i)) {
+    for (const part of claim.split(
+      /\s+(?:dan|atau|sama|serta|&)\s+|[,;]\s*/i,
+    )) {
       const named = modelTokens(part);
       if (named.length === 0) continue;
       if (!available.some((f) => covers(f, named) && specFits(f, part)))
@@ -1339,7 +1353,9 @@ export function checkReply(input: {
     if (unvouched(m[0], URGENCY, wordSources) !== null)
       return "URGENCY_INVENTED";
   }
-  if (UNVOUCHED_FACTS.some((re) => unvouched(message, re, wordSources) !== null))
+  if (
+    UNVOUCHED_FACTS.some((re) => unvouched(message, re, wordSources) !== null)
+  )
     return "FACT_NOT_IN_SOURCE";
   return null;
 }

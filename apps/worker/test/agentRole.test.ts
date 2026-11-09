@@ -1085,7 +1085,12 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
     const asked = (await dispatchTool(
       agent,
       "propose_reservation",
-      { when: "2026-08-21T15:00", serials: "SERX", custName: "Budi", keep: false },
+      {
+        when: "2026-08-21T15:00",
+        serials: "SERX",
+        custName: "Budi",
+        keep: false,
+      },
       toolCtx(),
     )) as { requested?: boolean; requestId?: string };
     expect(asked.requested).toBe(true);
@@ -1141,9 +1146,16 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
     });
     expect(out.expired).toBe(1);
     expect(
-      (await owner.reservation.findUniqueOrThrow({ where: { id: approved.reservationId } })).status,
+      (
+        await owner.reservation.findUniqueOrThrow({
+          where: { id: approved.reservationId },
+        })
+      ).status,
     ).toBe("BATAL");
-    expect((await owner.unit.findUniqueOrThrow({ where: { serial: "SERX" } })).status).toBe("TERSEDIA");
+    expect(
+      (await owner.unit.findUniqueOrThrow({ where: { serial: "SERX" } }))
+        .status,
+    ).toBe("TERSEDIA");
   });
 
   it("leaves an approved request that names a unit to staff (2026-11-06)", async () => {
@@ -1152,7 +1164,12 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
     const asked = (await dispatchTool(
       agent,
       "propose_reservation",
-      { when: "2026-08-21T15:00", serials: "SERX", custName: "Budi", keep: false },
+      {
+        when: "2026-08-21T15:00",
+        serials: "SERX",
+        custName: "Budi",
+        keep: false,
+      },
       toolCtx(),
     )) as { requestId?: string };
     await owner.$transaction((tx) =>

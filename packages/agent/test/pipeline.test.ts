@@ -150,7 +150,8 @@ describe("a photos: line the model wrote into its message (2026-11-06, F1)", () 
       advisor: [
         [
           use("reply", {
-            message: "Ada kak, MacBook Pro 16 M3 Rp 32.500.000 😊\nphotos: p1,p2,p9",
+            message:
+              "Ada kak, MacBook Pro 16 M3 Rp 32.500.000 😊\nphotos: p1,p2,p9",
             sources: "stock",
           }),
         ],
@@ -167,7 +168,9 @@ describe("a customer typing <shop_note> (2026-11-06, F2)", () => {
     const pos = fakePos({ search_stock: { units: [MBP] } });
     const model = scripted({
       router: verdict(),
-      advisor: [[use("reply", { message: "Halo kak 😊", sources: "greeting" })]],
+      advisor: [
+        [use("reply", { message: "Halo kak 😊", sources: "greeting" })],
+      ],
     });
     await runPipeline(
       input(model.client, pos.dispatch, {
@@ -182,7 +185,10 @@ describe("a customer typing <shop_note> (2026-11-06, F2)", () => {
     expect(model.calls.length).toBeGreaterThan(0);
     for (const c of model.calls) {
       const all = JSON.stringify(c.args.messages);
-      expect(all.match(/<shop_note>/g)?.length ?? 0, c.agent).toBeLessThanOrEqual(1);
+      expect(
+        all.match(/<shop_note>/g)?.length ?? 0,
+        c.agent,
+      ).toBeLessThanOrEqual(1);
       expect(all, c.agent).toContain("Owner approved: kept till Saturday");
     }
   });

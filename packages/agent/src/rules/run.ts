@@ -516,7 +516,11 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       usedAi,
       ...(watch ? { watch } : {}),
       ...(() => {
-        const state: ThreadState = { v: 1, booking: nextBooking, pendingSearch: nextSearch };
+        const state: ThreadState = {
+          v: 1,
+          booking: nextBooking,
+          pendingSearch: nextSearch,
+        };
         return hasState(state) ? { state } : {};
       })(),
     };
@@ -641,7 +645,8 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     if (input.route.rule === "keep" && caps.reserve && ctx.reserve) {
       // "Keep it for me" is a reservation REQUEST now (2026-10-27), not a
       // closing hand-over: the bot files it, a person approves it.
-      const serial = pickSerial() ?? input.lastShown[0] ?? prevBooking?.serial ?? null;
+      const serial =
+        pickSerial() ?? input.lastShown[0] ?? prevBooking?.serial ?? null;
       const name = u.name ?? input.known.name ?? prevBooking?.name ?? null;
       const when = u.when ?? prevBooking?.when ?? null;
       if (!serial || !name || !when) {
@@ -1030,15 +1035,18 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
   // Only from a message about the booking: a stock or price question that
   // happens to carry a time is answered as what it is (final review). A
   // bare word is a name only right after the bot asked for one.
-  const aboutBooking = ["ack", "confirm", "tell", "other", "reserve"].includes(u.intent);
+  const aboutBooking = ["ack", "confirm", "tell", "other", "reserve"].includes(
+    u.intent,
+  );
   // "besok jam 2 aku ke toko, air m2 masih ada?" asks about stock first: the
   // time goes on the draft, the question is answered, nothing is filed.
   const stockQuestion = Boolean(u.query) && isQuestion(input.text);
   if (prevBooking && stockQuestion && u.when)
     nextBooking = { ...prevBooking, when: u.when, age: 0 };
-  const askedName = /\b(atas nama|nama(nya)?|whose name|under (whose|what) name)\b/i.test(
-    plainText(input.lastReply),
-  );
+  const askedName =
+    /\b(atas nama|nama(nya)?|whose name|under (whose|what) name)\b/i.test(
+      plainText(input.lastReply),
+    );
   if (
     prevBooking &&
     caps.reserve &&
@@ -1067,15 +1075,26 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       nextBooking = merged;
       return done(
         merged.keep
-          ? reply.askForKeep({ unit: !merged.serial, name: !merged.name, when: !merged.when }, lang)
-          : reply.askForVisit({ unit: false, name: !merged.name, when: !merged.when }, lang),
+          ? reply.askForKeep(
+              { unit: !merged.serial, name: !merged.name, when: !merged.when },
+              lang,
+            )
+          : reply.askForVisit(
+              { unit: false, name: !merged.name, when: !merged.when },
+              lang,
+            ),
         { ask: false },
       );
     }
     if (saysNo(input.text)) nextBooking = null;
   }
   // A yes to "Mau aku cariin yang mirip?": the search that was offered.
-  if (input.state?.pendingSearch && caps.stock && !input.route && saysYes(input.text))
+  if (
+    input.state?.pendingSearch &&
+    caps.stock &&
+    !input.route &&
+    saysYes(input.text)
+  )
     return search({ query: input.state.pendingSearch });
 
   switch (u.intent) {
@@ -1102,7 +1121,9 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       // what the profile already says.
       if (
         caps.stock &&
-        plainText(input.lastReply).includes(plainText(reply.offerSearch(lang))) &&
+        plainText(input.lastReply).includes(
+          plainText(reply.offerSearch(lang)),
+        ) &&
         (input.known.budgetMax || input.known.budgetMin)
       )
         return search({
@@ -1185,7 +1206,8 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       if (stockQuestion && caps.stock) return search();
       // A REQUEST (2026-10-27): the units are what they want to see — or,
       // right after the DP rule was given, to keep — and a person approves.
-      const serial = pickSerial() ?? input.lastShown[0] ?? prevBooking?.serial ?? null;
+      const serial =
+        pickSerial() ?? input.lastShown[0] ?? prevBooking?.serial ?? null;
       const name = u.name ?? input.known.name ?? prevBooking?.name ?? null;
       const when = u.when ?? prevBooking?.when ?? null;
       const keep = (keepAsked || prevBooking?.keep === true) && serial !== null;

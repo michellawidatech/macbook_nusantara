@@ -187,7 +187,9 @@ describe("a keep given one detail per message, across worker turns (2026-11-09, 
     expect(await owner.reservationProposal.count()).toBe(0);
     const noted = await turn("k4", "atas nama Rina", 3);
     expect(noted).toContain("aku catat");
-    const req = await owner.reservationProposal.findFirstOrThrow({ include: { items: true } });
+    const req = await owner.reservationProposal.findFirstOrThrow({
+      include: { items: true },
+    });
     expect(req.custName).toBe("Rina");
     expect(req.items).toHaveLength(1);
   });
@@ -197,16 +199,23 @@ describe("emoji only at the beginning of the chat (owner, 2026-11-09)", () => {
   it("the first reply may carry one, every later reply carries none", async () => {
     const first = await turn("e1", "halo kak", 0);
     const second = await turn("e2", "kak ada macbook pro 16 m3?", 1);
-    expect([...first.matchAll(/\p{Extended_Pictographic}/gu)].length).toBeLessThanOrEqual(1);
+    expect(
+      [...first.matchAll(/\p{Extended_Pictographic}/gu)].length,
+    ).toBeLessThanOrEqual(1);
     expect(second).not.toMatch(/\p{Extended_Pictographic}/u);
-    const sent = await owner.outbox.findMany({ where: { kind: "WA_REPLY" }, orderBy: { createdAt: "asc" } });
+    const sent = await owner.outbox.findMany({
+      where: { kind: "WA_REPLY" },
+      orderBy: { createdAt: "asc" },
+    });
     expect((sent.at(-1)!.payload as { body: string }).body).toBe(second);
   });
 });
 
 describe("a unit's photos go to a chat once (2026-11-06, W7)", () => {
   it("does not send the same pictures again, and says they were sent above", async () => {
-    const unit = await owner.unit.findUniqueOrThrow({ where: { serial: "MBP1" } });
+    const unit = await owner.unit.findUniqueOrThrow({
+      where: { serial: "MBP1" },
+    });
     await owner.unitNote.create({
       data: {
         id: "note_mbp1",
@@ -216,7 +225,11 @@ describe("a unit's photos go to a chat once (2026-11-06, W7)", () => {
         staffId: AGENT_STAFF,
         at: NOW,
         photos: {
-          create: [0, 1].map((i) => ({ id: `ph_mbp1_${i}`, url: `/p/${i}.jpg`, sortOrder: i })),
+          create: [0, 1].map((i) => ({
+            id: `ph_mbp1_${i}`,
+            url: `/p/${i}.jpg`,
+            sortOrder: i,
+          })),
         },
       },
     });
@@ -227,17 +240,29 @@ describe("a unit's photos go to a chat once (2026-11-06, W7)", () => {
     await turn("p2", "minta fotonya dong kak", 1);
     expect(await images()).toBe(first);
     const lines = await owner.outbox.findMany({ where: { kind: "WA_REPLY" } });
-    expect(lines.some((l) => /sudah aku kirim di atas/.test((l.payload as { body: string }).body))).toBe(true);
+    expect(
+      lines.some((l) =>
+        /sudah aku kirim di atas/.test((l.payload as { body: string }).body),
+      ),
+    ).toBe(true);
   });
 });
 
 describe("a reservation request reaches a person (2026-11-06, B2)", () => {
   it("leaves an open RESERVATION task and alerts the staff numbers", async () => {
     await owner.appSetting.create({
-      data: { key: "chatbot.notifyNumbers", value: "628999000111:Ersen", updatedAt: new Date() },
+      data: {
+        key: "chatbot.notifyNumbers",
+        value: "628999000111:Ersen",
+        updatedAt: new Date(),
+      },
     });
     await turn("q1", "kak ada macbook pro 16 m3?", 0);
-    const noted = await turn("q2", "besok jam 2 saya ke toko, atas nama Budi", 1);
+    const noted = await turn(
+      "q2",
+      "besok jam 2 saya ke toko, atas nama Budi",
+      1,
+    );
     expect(noted).toContain("aku catat");
     const task = await owner.chatAction.findFirstOrThrow({
       where: { from: FROM, kind: "RESERVATION", status: "OPEN" },
@@ -246,7 +271,9 @@ describe("a reservation request reaches a person (2026-11-06, B2)", () => {
     const alerts = await owner.outbox.findMany({
       where: { payload: { path: ["staffAlert"], equals: true } },
     });
-    expect(alerts.map((a) => (a.payload as { to: string }).to)).toEqual(["628999000111"]);
+    expect(alerts.map((a) => (a.payload as { to: string }).to)).toEqual([
+      "628999000111",
+    ]);
   });
 
   it("never overwrites an open DP decision with the request (final review)", async () => {

@@ -468,7 +468,10 @@ export function stockFactsOf(tool: string, output: unknown): StockFact[] {
  * (2026-11-06: "aku catat" went out twice in one message).
  */
 function announcesRequest(b: BookingWrite, message: string): boolean {
-  return b.tool === "propose_reservation" && /\b(catat|dicatat|noted)\b/i.test(message);
+  return (
+    b.tool === "propose_reservation" &&
+    /\b(catat|dicatat|noted)\b/i.test(message)
+  );
 }
 
 /** The fixed line that tells a customer about a booking the bot made. */
@@ -825,7 +828,9 @@ export async function converse(
         sourceTexts: [dpKeepLine(input.dp), ...catalogResults],
         stockFacts,
         factTexts: stockResults,
-        customerTexts: turns.filter((t) => t.role === "user").map((t) => t.text),
+        customerTexts: turns
+          .filter((t) => t.role === "user")
+          .map((t) => t.text),
       }) === null;
     // The DP rule is the shop's own setting: a vouched figure (2026-10-27).
     if (
@@ -1018,7 +1023,9 @@ export async function converse(
       sourceCount: sources.length,
       unknownSources: unknown,
       sourceTexts: texts,
-      ...(sources.includes("stock") ? { stockFacts, factTexts: stockResults } : {}),
+      ...(sources.includes("stock")
+        ? { stockFacts, factTexts: stockResults }
+        : {}),
       ...(units.length > 0 ? { citedUnits: units } : {}),
       customerTexts: turns.filter((t) => t.role === "user").map((t) => t.text),
     });

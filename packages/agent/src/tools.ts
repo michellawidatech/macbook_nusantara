@@ -1614,7 +1614,8 @@ const LEFT_NOTE =
   'say so ("tinggal 1 unit kak"), once, beside that unit. Never say a unit is the last one, ' +
   "or that stock is running out, unless left says so.";
 export const PHOTOS_NOTE =
-  "photos is how many of the shop's own photos a unit has. " + conductFor("tool:photos");
+  "photos is how many of the shop's own photos a unit has. " +
+  conductFor("tool:photos");
 export const WATCH_NOTE =
   "Nothing they asked for is on the shelf. After any alternatives: " +
   conductFor("tool:watch") +

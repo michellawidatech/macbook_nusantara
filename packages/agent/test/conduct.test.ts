@@ -10,10 +10,7 @@
  * chat. A model copies what it reads, so the rules carry no emoji either.
  */
 import { describe, expect, it } from "vitest";
-import {
-  CONDUCT,
-  conductFor,
-} from "../src/conduct.js";
+import { CONDUCT, conductFor } from "../src/conduct.js";
 import {
   DEFAULT_PERSONA,
   SHOP_CAPABILITIES,
@@ -42,8 +39,16 @@ const prompt = buildAgentPrompt({
   now: new Date("2026-11-09T04:00:00.000Z"),
   openNow: true,
 }).stable;
-const ctx = { from: "62811", now: new Date(), capabilities: SHOP_CAPABILITIES, profile: { write: {} } } as unknown as ToolContext;
-const tools = toolsFor(ctx, { capabilities: { ...SHOP_CAPABILITIES, reserve: true }, proposals: true })
+const ctx = {
+  from: "62811",
+  now: new Date(),
+  capabilities: SHOP_CAPABILITIES,
+  profile: { write: {} },
+} as unknown as ToolContext;
+const tools = toolsFor(ctx, {
+  capabilities: { ...SHOP_CAPABILITIES, reserve: true },
+  proposals: true,
+})
   .map((t) => `${t.name}: ${t.description}`)
   .join("\n");
 const notes = [OTHER_GRADES_NOTE, PHOTOS_NOTE, WATCH_NOTE].join("\n");
@@ -55,11 +60,14 @@ describe("one rulebook", () => {
       expect(prompt, rule.id).toContain(rule.text);
   });
 
-  it.each(OLD_WORDING.map((re) => [re]))("nothing the model reads still says %s", (re) => {
-    expect(prompt).not.toMatch(re);
-    expect(tools).not.toMatch(re);
-    expect(notes).not.toMatch(re);
-  });
+  it.each(OLD_WORDING.map((re) => [re]))(
+    "nothing the model reads still says %s",
+    (re) => {
+      expect(prompt).not.toMatch(re);
+      expect(tools).not.toMatch(re);
+      expect(notes).not.toMatch(re);
+    },
+  );
 
   it("the rules and the notes carry no emoji for the model to copy", () => {
     expect(prompt).not.toMatch(EMOJI);

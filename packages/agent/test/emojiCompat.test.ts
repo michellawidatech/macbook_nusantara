@@ -6,14 +6,21 @@
  * (final review, 2026-11-09).
  */
 import { describe, expect, it } from "vitest";
-import { applyEmojiRule, holdingMessage, isHoldingLine, ruleReplies as reply } from "../src/index.js";
+import {
+  applyEmojiRule,
+  holdingMessage,
+  isHoldingLine,
+  ruleReplies as reply,
+} from "../src/index.js";
 import { askedAboutNeeds } from "../src/rules/replies.js";
 
 const stored = (s: string) => applyEmojiRule(s, false);
 
 describe("a stripped reply is still recognised as the template it came from", () => {
   it("a holding line", () => {
-    expect(isHoldingLine(stored(holdingMessage("negotiation", true)))).toBe(true);
+    expect(isHoldingLine(stored(holdingMessage("negotiation", true)))).toBe(
+      true,
+    );
     expect(isHoldingLine(stored(holdingMessage("other", true)))).toBe(true);
   });
 

@@ -4,7 +4,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { bareName, understand, visitTimeOf, nameOf } from "../src/rules/understand.js";
+import {
+  bareName,
+  understand,
+  visitTimeOf,
+  nameOf,
+} from "../src/rules/understand.js";
 
 /** Thursday 15 October 2026, 10:00 in Jakarta. */
 const NOW = new Date("2026-10-15T03:00:00.000Z");
@@ -154,7 +159,8 @@ describe("a name is never a word about them (2026-11-06, F7)", () => {
 });
 
 describe("a bare 'air' or 'pro' is a MacBook unless they say iPad (2026-11-06, W2)", () => {
-  const q = (t: string) => understand(t, NOW, { proposalOpen: false, lastShown: [] }).query;
+  const q = (t: string) =>
+    understand(t, NOW, { proposalOpen: false, lastShown: [] }).query;
   it.each([
     ["ada air m1?", "macbook air m1"],
     ["pro m3 ada kak?", "macbook pro m3"],
@@ -167,13 +173,27 @@ describe("a bare 'air' or 'pro' is a MacBook unless they say iPad (2026-11-06, W
 });
 
 describe("bareName refuses ordinary words (final review, 2026-11-09)", () => {
-  it.each(["Mantap", "Boleh", "Gimana", "Bentar", "Sabtu", "Jadi", "Deal", "Cash", "Buat bisnis online", "Oke deh", "Siap kak", "Air M2"])(
-    "%s → no name",
-    (t) => {
-      expect(bareName(t)).toBeNull();
-    },
-  );
-  it.each([["Rina kak", "Rina"], ["Rina.", "Rina"], ["budi santoso", "Budi Santoso"]])("%s → %s", (t, n) => {
+  it.each([
+    "Mantap",
+    "Boleh",
+    "Gimana",
+    "Bentar",
+    "Sabtu",
+    "Jadi",
+    "Deal",
+    "Cash",
+    "Buat bisnis online",
+    "Oke deh",
+    "Siap kak",
+    "Air M2",
+  ])("%s → no name", (t) => {
+    expect(bareName(t)).toBeNull();
+  });
+  it.each([
+    ["Rina kak", "Rina"],
+    ["Rina.", "Rina"],
+    ["budi santoso", "Budi Santoso"],
+  ])("%s → %s", (t, n) => {
     expect(bareName(t)).toBe(n);
   });
 });

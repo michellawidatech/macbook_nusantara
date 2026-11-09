@@ -27,20 +27,129 @@ export interface ShelfUnit {
 }
 
 export const SHELF: readonly ShelfUnit[] = [
-  { serial: "GAIRM2A01", category: "MacBook Air", model: 'MacBook Air 13" M2', variant: "8/256", grade: "B", price: 10_900_000, intake: 1, batteryHealth: 86 },
-  { serial: "GAIRM2A02", category: "MacBook Air", model: 'MacBook Air 13" M2', variant: "8/256", grade: "A", price: 11_500_000, intake: 2, batteryHealth: 90 },
-  { serial: "GAIRM2A03", category: "MacBook Air", model: 'MacBook Air 13" M2', variant: "8/256", grade: "A", price: 12_000_000, intake: 3, batteryHealth: 92 },
-  { serial: "GAIRM2A04", category: "MacBook Air", model: 'MacBook Air 13" M2', variant: "8/256", grade: "A", price: 12_900_000, intake: 4, batteryHealth: 95 },
-  { serial: "GAIRM2B01", category: "MacBook Air", model: 'MacBook Air 13" M2', variant: "16/512", grade: "A", price: 14_250_000, intake: 9, batteryHealth: 97 },
-  { serial: "GAIRM1A01", category: "MacBook Air", model: 'MacBook Air 13" M1', variant: "8/256", grade: "B", price: 8_800_000, intake: 5, batteryHealth: 84 },
-  { serial: "GAIRM3A01", category: "MacBook Air", model: 'MacBook Air 13" M3', variant: "8/256", grade: "A", price: 16_000_000, intake: 6, batteryHealth: 98 },
-  { serial: "GPROM1A01", category: "MacBook Pro", model: 'MacBook Pro 13" M1', variant: "8/256", grade: "A", price: 12_500_000, intake: 7, batteryHealth: 88 },
-  { serial: "GPROMPA01", category: "MacBook Pro", model: 'MacBook Pro 14" M1 Pro', variant: "16/512", grade: "A", price: 17_500_000, intake: 8, batteryHealth: 91 },
-  { serial: "GPROI5A01", category: "MacBook Pro", model: 'MacBook Pro 13" 2020', variant: "i5 8/256", grade: "B", price: 9_500_000, intake: 3, cycleCount: 471 },
-  { serial: "GIPADA01", category: "iPad", model: "iPad Air 5 M1", variant: "64GB", grade: "A", price: 7_000_000, intake: 10, batteryHealth: 93 },
+  {
+    serial: "GAIRM2A01",
+    category: "MacBook Air",
+    model: 'MacBook Air 13" M2',
+    variant: "8/256",
+    grade: "B",
+    price: 10_900_000,
+    intake: 1,
+    batteryHealth: 86,
+  },
+  {
+    serial: "GAIRM2A02",
+    category: "MacBook Air",
+    model: 'MacBook Air 13" M2',
+    variant: "8/256",
+    grade: "A",
+    price: 11_500_000,
+    intake: 2,
+    batteryHealth: 90,
+  },
+  {
+    serial: "GAIRM2A03",
+    category: "MacBook Air",
+    model: 'MacBook Air 13" M2',
+    variant: "8/256",
+    grade: "A",
+    price: 12_000_000,
+    intake: 3,
+    batteryHealth: 92,
+  },
+  {
+    serial: "GAIRM2A04",
+    category: "MacBook Air",
+    model: 'MacBook Air 13" M2',
+    variant: "8/256",
+    grade: "A",
+    price: 12_900_000,
+    intake: 4,
+    batteryHealth: 95,
+  },
+  {
+    serial: "GAIRM2B01",
+    category: "MacBook Air",
+    model: 'MacBook Air 13" M2',
+    variant: "16/512",
+    grade: "A",
+    price: 14_250_000,
+    intake: 9,
+    batteryHealth: 97,
+  },
+  {
+    serial: "GAIRM1A01",
+    category: "MacBook Air",
+    model: 'MacBook Air 13" M1',
+    variant: "8/256",
+    grade: "B",
+    price: 8_800_000,
+    intake: 5,
+    batteryHealth: 84,
+  },
+  {
+    serial: "GAIRM3A01",
+    category: "MacBook Air",
+    model: 'MacBook Air 13" M3',
+    variant: "8/256",
+    grade: "A",
+    price: 16_000_000,
+    intake: 6,
+    batteryHealth: 98,
+  },
+  {
+    serial: "GPROM1A01",
+    category: "MacBook Pro",
+    model: 'MacBook Pro 13" M1',
+    variant: "8/256",
+    grade: "A",
+    price: 12_500_000,
+    intake: 7,
+    batteryHealth: 88,
+  },
+  {
+    serial: "GPROMPA01",
+    category: "MacBook Pro",
+    model: 'MacBook Pro 14" M1 Pro',
+    variant: "16/512",
+    grade: "A",
+    price: 17_500_000,
+    intake: 8,
+    batteryHealth: 91,
+  },
+  {
+    serial: "GPROI5A01",
+    category: "MacBook Pro",
+    model: 'MacBook Pro 13" 2020',
+    variant: "i5 8/256",
+    grade: "B",
+    price: 9_500_000,
+    intake: 3,
+    cycleCount: 471,
+  },
+  {
+    serial: "GIPADA01",
+    category: "iPad",
+    model: "iPad Air 5 M1",
+    variant: "64GB",
+    grade: "A",
+    price: 7_000_000,
+    intake: 10,
+    batteryHealth: 93,
+  },
 ];
 
-const STOP = new Set(["inch", "inci", "ram", "ssd", "unit", "dan", "yang", "ada", "kak"]);
+const STOP = new Set([
+  "inch",
+  "inci",
+  "ram",
+  "ssd",
+  "unit",
+  "dan",
+  "yang",
+  "ada",
+  "kak",
+]);
 
 const rupiah = (n: number) => `Rp ${n.toLocaleString("id-ID")}`;
 
@@ -59,9 +168,12 @@ function shown(u: ShelfUnit, all: readonly ShelfUnit[]) {
     variant: u.variant,
     grade: u.grade,
     price: rupiah(u.price),
-    ...(u.batteryHealth !== undefined ? { batteryHealth: u.batteryHealth } : {}),
+    ...(u.batteryHealth !== undefined
+      ? { batteryHealth: u.batteryHealth }
+      : {}),
     ...(u.cycleCount !== undefined ? { cycleCount: u.cycleCount } : {}),
-    left: all.filter((x) => x.model === u.model && x.variant === u.variant).length,
+    left: all.filter((x) => x.model === u.model && x.variant === u.variant)
+      .length,
     photos: 0,
   };
 }
@@ -71,8 +183,10 @@ export function searchShelf(
   shelf: readonly ShelfUnit[] = SHELF,
 ) {
   const words = tokens(String(args["query"] ?? ""));
-  const min = typeof args["minPrice"] === "number" ? args["minPrice"] : undefined;
-  const max = typeof args["maxPrice"] === "number" ? args["maxPrice"] : undefined;
+  const min =
+    typeof args["minPrice"] === "number" ? args["minPrice"] : undefined;
+  const max =
+    typeof args["maxPrice"] === "number" ? args["maxPrice"] : undefined;
   const sort = String(args["sort"] ?? "newest");
   let units = shelf.filter((u) => {
     const hay = `${u.category} ${u.model} ${u.variant}`.toLowerCase();
@@ -116,7 +230,9 @@ export function shelfDispatch(shelf: readonly ShelfUnit[] = SHELF) {
         return { found: false };
       if (name === "check_serial") {
         const u = shelf.find((x) => x.serial === args["serial"]);
-        return u ? { found: true, available: true, ...shown(u, shelf) } : { found: false };
+        return u
+          ? { found: true, available: true, ...shown(u, shelf) }
+          : { found: false };
       }
       return { error: "not on the fake shelf" };
     },

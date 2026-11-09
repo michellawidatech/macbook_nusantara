@@ -15,11 +15,7 @@
  */
 
 export type ConductPlace =
-  | "prompt"
-  | "tool:photos"
-  | "tool:watch"
-  | "tool:grades"
-  | "tool:find_photos";
+  "prompt" | "tool:photos" | "tool:watch" | "tool:grades" | "tool:find_photos";
 
 export interface ConductRule {
   readonly id: string;
@@ -47,14 +43,12 @@ export const CONDUCT: readonly ConductRule[] = [
   },
   {
     id: "grades",
-    text:
-      'A unit\'s condition is said in words, never a grade letter: other grades go in one short line, like "kalau mau yang lebih mulus juga ada, 12,5jt".',
+    text: 'A unit\'s condition is said in words, never a grade letter: other grades go in one short line, like "kalau mau yang lebih mulus juga ada, 12,5jt".',
     where: ["prompt", "tool:grades"],
   },
   {
     id: "photos",
-    text:
-      'Never ask "Mau lihat fotonya?": when a unit you recommend has photos (photos above 0), send them with the recommendation. When none has any, do not mention photos.',
+    text: 'Never ask "Mau lihat fotonya?": when a unit you recommend has photos (photos above 0), send them with the recommendation. When none has any, do not mention photos.',
     where: ["prompt", "tool:photos"],
   },
   {
@@ -69,14 +63,12 @@ export const CONDUCT: readonly ConductRule[] = [
   },
   {
     id: "burst",
-    text:
-      "Several messages in a row are one turn: answer every question they asked, in one reply, in the order they asked them.",
+    text: "Several messages in a row are one turn: answer every question they asked, in one reply, in the order they asked them.",
     where: ["prompt"],
   },
   {
     id: "cheaper",
-    text:
-      '"Ada yang lebih murah?" or "kemahalan" is yours: show a cheaper unit. Only a bargain over a price goes to a colleague.',
+    text: '"Ada yang lebih murah?" or "kemahalan" is yours: show a cheaper unit. Only a bargain over a price goes to a colleague.',
     where: ["prompt"],
   },
 ];
@@ -92,6 +84,8 @@ export function conductFor(place: ConductPlace): string {
 export function conductBlock(): string {
   return [
     "HOW YOU SPEAK (these outrank any example above):",
-    ...CONDUCT.filter((r) => r.where.includes("prompt")).map((r) => `- ${r.text}`),
+    ...CONDUCT.filter((r) => r.where.includes("prompt")).map(
+      (r) => `- ${r.text}`,
+    ),
   ].join("\n");
 }

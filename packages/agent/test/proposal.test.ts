@@ -432,7 +432,6 @@ describe("a reservation request (2026-10-27)", () => {
   });
 });
 
-
 describe("a reservation request the reply already announced (2026-11-06, B3)", () => {
   it("is said once, not twice", async () => {
     const result = await converse({

@@ -191,7 +191,9 @@ export function chunkText(turn: {
   readonly reply: string;
 }): string {
   const text = [
-    customerText(turn.customer) ? `customer: ${customerText(turn.customer)}` : "",
+    customerText(turn.customer)
+      ? `customer: ${customerText(turn.customer)}`
+      : "",
     `shop: ${turn.reply.trim()}`,
   ]
     .filter(Boolean)

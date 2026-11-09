@@ -322,7 +322,6 @@ export async function lastShownUnits(
     : [];
 }
 
-
 /**
  * What the conversation is in the middle of (threadState.ts, 2026-11-09):
  * the state the newest bot-answered row carries, after the thread's reset

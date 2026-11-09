@@ -20,7 +20,9 @@ export function readableWhen(when: string): string {
   const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/.exec(when.trim());
   if (!m) return when;
   const at = new Date(`${m[1]}T${m[2]}:00+07:00`);
-  return Number.isNaN(at.getTime()) ? when : `${jakartaDay(at)} jam ${jakartaClock(at)}`;
+  return Number.isNaN(at.getTime())
+    ? when
+    : `${jakartaDay(at)} jam ${jakartaClock(at)}`;
 }
 
 /** A unit as the stock lookups return it. */
@@ -644,7 +646,11 @@ export const reply = {
    * One question naming several models (2026-11-06): the cheapest of each
    * that is in, one per line, then the ones that are not.
    */
-  perModel(found: readonly ShownUnit[], missing: readonly string[], lang: Lang): string {
+  perModel(
+    found: readonly ShownUnit[],
+    missing: readonly string[],
+    lang: Lang,
+  ): string {
     const lines = found.map((u) => unitLine(u, lang));
     const gone = missing.length
       ? lang === "en"

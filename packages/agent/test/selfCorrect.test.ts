@@ -231,7 +231,11 @@ describe("the reply names its units (2026-11-09, Task 10)", () => {
 
   it("a serial this turn never looked up is sent back, then handed over", async () => {
     const t = talk(
-      [search, unitReply("Air M2 11,9jt kak", "NOPE1"), unitReply("Air M2 11,9jt kak", "NOPE1")],
+      [
+        search,
+        unitReply("Air M2 11,9jt kak", "NOPE1"),
+        unitReply("Air M2 11,9jt kak", "NOPE1"),
+      ],
       "air m2 berapa kak?",
       shelf,
     );
@@ -273,6 +277,8 @@ describe("a burst where one line needs a person (2026-11-09, Task 13 / Review Fo
     expect(r?.handoff?.topic).toBe("order_payment");
     expect(r?.reply).toContain("11,9jt");
     // The routed turn's instruction carries no emoji to copy (owner, 2026-11-09).
-    expect(JSON.stringify(t.calls[0]!.messages)).not.toMatch(/\p{Extended_Pictographic}/u);
+    expect(JSON.stringify(t.calls[0]!.messages)).not.toMatch(
+      /\p{Extended_Pictographic}/u,
+    );
   });
 });

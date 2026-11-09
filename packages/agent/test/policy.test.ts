@@ -451,8 +451,10 @@ describe("the DP (2026-10-27)", () => {
 });
 
 describe("checkReply refuses what the shop never said (2026-11-06, F3/F4/F5)", () => {
-  const check = (message: string, sourceTexts: readonly string[] = ["Garansi toko 1 bulan ya kak"]) =>
-    checkReply({ message, sourceCount: 1, unknownSources: 0, sourceTexts });
+  const check = (
+    message: string,
+    sourceTexts: readonly string[] = ["Garansi toko 1 bulan ya kak"],
+  ) => checkReply({ message, sourceCount: 1, unknownSources: 0, sourceTexts });
 
   it.each([
     "DP kakak sudah kami terima ya, unitnya sudah aku tahan",
@@ -474,15 +476,19 @@ describe("checkReply refuses what the shop never said (2026-11-06, F3/F4/F5)", (
     expect(check(m)).toBeNull();
   });
 
-  it.each(["stoknya terbatas, buruan kak", "ini unit terakhir lho kak", "lagi laris kak", "nanti kehabisan kak"])(
-    "invented urgency: %s",
-    (m) => {
-      expect(check(m)).toBe("URGENCY_INVENTED");
-    },
-  );
+  it.each([
+    "stoknya terbatas, buruan kak",
+    "ini unit terakhir lho kak",
+    "lagi laris kak",
+    "nanti kehabisan kak",
+  ])("invented urgency: %s", (m) => {
+    expect(check(m)).toBe("URGENCY_INVENTED");
+  });
 
   it("urgency the owner's answer itself says is not invented", () => {
-    expect(check("Untuk Intel updatenya terbatas kak", ["Intel: update terbatas"])).toBeNull();
+    expect(
+      check("Untuk Intel updatenya terbatas kak", ["Intel: update terbatas"]),
+    ).toBeNull();
     expect(check("gak perlu buru-buru kak 😊")).toBeNull();
   });
 
@@ -499,35 +505,61 @@ describe("checkReply refuses what the shop never said (2026-11-06, F3/F4/F5)", (
   });
 
   it("a fact a source gives passes", () => {
-    expect(check("garansi 1 bulan kak", ["Garansi dari kami 1 bulan ya kak"])).toBeNull();
+    expect(
+      check("garansi 1 bulan kak", ["Garansi dari kami 1 bulan ya kak"]),
+    ).toBeNull();
     expect(check("garansi 7 hari kak", ["garansi 7 hari"])).toBeNull();
   });
 });
 
 describe("claimPhrase names what a refused draft said (2026-11-06)", () => {
   it("quotes the commitment, the urgency or the fact", () => {
-    expect(claimPhrase("COMMITMENT_CLAIMED", "Siap kak, sudah aku tahan ya", [])).toMatch(/sudah aku tahan/);
-    expect(claimPhrase("URGENCY_INVENTED", "Ada kak, buruan ya", [])).toBe("buruan");
-    expect(claimPhrase("FACT_NOT_IN_SOURCE", "tahan 15 jam kak", [])).toBe("15 jam");
+    expect(
+      claimPhrase("COMMITMENT_CLAIMED", "Siap kak, sudah aku tahan ya", []),
+    ).toMatch(/sudah aku tahan/);
+    expect(claimPhrase("URGENCY_INVENTED", "Ada kak, buruan ya", [])).toBe(
+      "buruan",
+    );
+    expect(claimPhrase("FACT_NOT_IN_SOURCE", "tahan 15 jam kak", [])).toBe(
+      "15 jam",
+    );
     expect(claimPhrase("AMOUNT_NOT_IN_SOURCE", "9jt kak", [])).toBeNull();
   });
 });
 
 describe("the shelf's own words vouch for a fact, not for a figure (2026-11-06)", () => {
   it("a QC phrase from this turn's stock lookup passes", () => {
-    const stock = JSON.stringify({ units: [{ condition: { marks: ["Charger original"] } }] });
+    const stock = JSON.stringify({
+      units: [{ condition: { marks: ["Charger original"] } }],
+    });
     expect(
-      checkReply({ message: "Lengkap sama charger original kak", sourceCount: 1, unknownSources: 0, sourceTexts: [], factTexts: [stock] }),
+      checkReply({
+        message: "Lengkap sama charger original kak",
+        sourceCount: 1,
+        unknownSources: 0,
+        sourceTexts: [],
+        factTexts: [stock],
+      }),
     ).toBeNull();
     expect(
-      checkReply({ message: "Lengkap sama charger original kak", sourceCount: 1, unknownSources: 0, sourceTexts: [] }),
+      checkReply({
+        message: "Lengkap sama charger original kak",
+        sourceCount: 1,
+        unknownSources: 0,
+        sourceTexts: [],
+      }),
     ).toBe("FACT_NOT_IN_SOURCE");
   });
 });
 
 describe("the review's false refusals and misses (2026-11-06, final review)", () => {
   const check = (message: string) =>
-    checkReply({ message, sourceCount: 1, unknownSources: 0, sourceTexts: ["Garansi toko 1 bulan ya kak"] });
+    checkReply({
+      message,
+      sourceCount: 1,
+      unknownSources: 0,
+      sourceTexts: ["Garansi toko 1 bulan ya kak"],
+    });
 
   it.each([
     "Siap kak, aku catat ya 😊 7 November 2026 jam 14.00 atas nama Budi",
@@ -550,10 +582,32 @@ describe("the review's false refusals and misses (2026-11-06, final review)", ()
 });
 
 describe("each claim is checked against ONE unit (2026-11-09, Task 10)", () => {
-  const AIR = { label: 'MacBook Air 13" M2 8/256', available: true, prices: ["10900000"], count: 4, serial: "GAIRM2A01" };
-  const PRO = { label: 'MacBook Pro 14" M1 Pro 16/512', available: true, prices: ["17500000"], count: 1, serial: "GPROMPA01" };
-  const check = (message: string, more: Partial<Parameters<typeof checkReply>[0]> = {}) =>
-    checkReply({ message, sourceCount: 1, unknownSources: 0, sourceTexts: [], stockFacts: [AIR, PRO], ...more });
+  const AIR = {
+    label: 'MacBook Air 13" M2 8/256',
+    available: true,
+    prices: ["10900000"],
+    count: 4,
+    serial: "GAIRM2A01",
+  };
+  const PRO = {
+    label: 'MacBook Pro 14" M1 Pro 16/512',
+    available: true,
+    prices: ["17500000"],
+    count: 1,
+    serial: "GPROMPA01",
+  };
+  const check = (
+    message: string,
+    more: Partial<Parameters<typeof checkReply>[0]> = {},
+  ) =>
+    checkReply({
+      message,
+      sourceCount: 1,
+      unknownSources: 0,
+      sourceTexts: [],
+      stockFacts: [AIR, PRO],
+      ...more,
+    });
 
   it("refuses 'ready' for a unit no single shelf unit is", () => {
     expect(check("Air M1 ready kak")).toBe("AVAILABILITY_NOT_IN_SOURCE");
@@ -564,20 +618,32 @@ describe("each claim is checked against ONE unit (2026-11-09, Task 10)", () => {
   it("a sentence naming two units on the shelf is two claims, each its own unit", () => {
     expect(check("Ada Air M2 10,9jt dan Pro 14 M1 Pro 17,5jt kak")).toBeNull();
     expect(check("Air M2 ready kak, ada juga Pro 14 M1 Pro")).toBeNull();
-    expect(check("Ada Air M2 dan Air M1 kak")).toBe("AVAILABILITY_NOT_IN_SOURCE");
+    expect(check("Ada Air M2 dan Air M1 kak")).toBe(
+      "AVAILABILITY_NOT_IN_SOURCE",
+    );
   });
 
   it("refuses a serial the turn never looked up", () => {
-    expect(check("Air M2 10,9jt kak", { citedUnits: ["NOPE123"] })).toBe("UNKNOWN_UNIT");
-    expect(check("Air M2 10,9jt kak", { citedUnits: ["GAIRM2A01"] })).toBeNull();
+    expect(check("Air M2 10,9jt kak", { citedUnits: ["NOPE123"] })).toBe(
+      "UNKNOWN_UNIT",
+    );
+    expect(
+      check("Air M2 10,9jt kak", { citedUnits: ["GAIRM2A01"] }),
+    ).toBeNull();
   });
 
   it("checks figures against the units the reply names", () => {
-    expect(check("Pro 14 M1 Pro 17,5jt kak", { citedUnits: ["GAIRM2A01"] })).toBe("AMOUNT_NOT_IN_SOURCE");
+    expect(
+      check("Pro 14 M1 Pro 17,5jt kak", { citedUnits: ["GAIRM2A01"] }),
+    ).toBe("AMOUNT_NOT_IN_SOURCE");
   });
 
   it("lets the customer's own figures through", () => {
-    expect(check("Untuk budget 15jt ada Air M2 10,9jt kak", { customerTexts: ["budget 15jt ada?"] })).toBeNull();
+    expect(
+      check("Untuk budget 15jt ada Air M2 10,9jt kak", {
+        customerTexts: ["budget 15jt ada?"],
+      }),
+    ).toBeNull();
   });
 
   it("does not read a battery figure as a price", () => {
@@ -586,23 +652,45 @@ describe("each claim is checked against ONE unit (2026-11-09, Task 10)", () => {
   });
 
   it("general product talk naming no unit on the shelf passes", () => {
-    expect(check("Air M1 vs M2 bedanya di chip kak, M2 lebih kencang")).toBeNull();
+    expect(
+      check("Air M1 vs M2 bedanya di chip kak, M2 lebih kencang"),
+    ).toBeNull();
   });
 
   it("battery advice is not a discount; a soft bargain is", () => {
     expect(check("Kurangi brightness biar baterainya awet ya kak")).toBeNull();
-    expect(check("Baterainya bisa kurang awet kalau dipakai gaming kak")).toBeNull();
+    expect(
+      check("Baterainya bisa kurang awet kalau dipakai gaming kak"),
+    ).toBeNull();
     expect(check("Harganya bisa dibantu kak")).toBe("DISCOUNT_OFFERED");
-    expect(check("Bisa disesuaikan sama budget kakak")).toBe("DISCOUNT_OFFERED");
+    expect(check("Bisa disesuaikan sama budget kakak")).toBe(
+      "DISCOUNT_OFFERED",
+    );
     expect(check("Boleh nawar kok kak")).toBe("DISCOUNT_OFFERED");
   });
 });
 
 describe("final review, Phase 3–4 (2026-11-09)", () => {
-  const AIR8 = { label: 'MacBook Air 13" M2 8/256', available: true, prices: ["10900000"], serial: "A8" };
-  const AIR16 = { label: 'MacBook Air 13" M2 16/512', available: true, prices: ["14250000"], serial: "A16" };
+  const AIR8 = {
+    label: 'MacBook Air 13" M2 8/256',
+    available: true,
+    prices: ["10900000"],
+    serial: "A8",
+  };
+  const AIR16 = {
+    label: 'MacBook Air 13" M2 16/512',
+    available: true,
+    prices: ["14250000"],
+    serial: "A16",
+  };
   const check = (message: string) =>
-    checkReply({ message, sourceCount: 1, unknownSources: 0, sourceTexts: [], stockFacts: [AIR8, AIR16] });
+    checkReply({
+      message,
+      sourceCount: 1,
+      unknownSources: 0,
+      sourceTexts: [],
+      stockFacts: [AIR8, AIR16],
+    });
 
   it("two variants of one model, in one line, both on the shelf", () => {
     expect(check("Air M2 ready kak, ada 8/256 dan 16/512")).toBeNull();
@@ -610,14 +698,17 @@ describe("final review, Phase 3–4 (2026-11-09)", () => {
     expect(check("Air M2 32/1tb ready kak")).toBe("AVAILABILITY_NOT_IN_SOURCE");
   });
 
-  it.each(["bisa turun ke 10jt kak", "bisa diturunin jadi 11jt", "Harganya bisa turun kalau ambil 2"])(
-    "a lower price offered is refused: %s",
-    (m) => {
-      expect(check(m)).toBe("DISCOUNT_OFFERED");
-    },
-  );
+  it.each([
+    "bisa turun ke 10jt kak",
+    "bisa diturunin jadi 11jt",
+    "Harganya bisa turun kalau ambil 2",
+  ])("a lower price offered is refused: %s", (m) => {
+    expect(check(m)).toBe("DISCOUNT_OFFERED");
+  });
 
   it("a battery that drops is not a price", () => {
-    expect(check("Baterainya bisa turun ke 80% kalau sering gaming kak")).toBeNull();
+    expect(
+      check("Baterainya bisa turun ke 80% kalau sering gaming kak"),
+    ).toBeNull();
   });
 });

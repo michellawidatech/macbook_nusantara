@@ -30,11 +30,24 @@ const NOW = new Date("2026-10-29T04:00:00.000Z");
 const LIVE: AgentCapabilities = { ...SHOP_CAPABILITIES, reserve: true };
 
 const KB = knowledgeBase([
-  { id: "k1", question: "Garansi berapa lama kak?", answer: "Garansi dari kami 1 bulan ya kak 😊 Terhitung sejak unit diterima." },
-  { id: "k2", question: "Jam operasional kak?", answer: "Jam operasional: 10.00 – 20.00 WIB" },
+  {
+    id: "k1",
+    question: "Garansi berapa lama kak?",
+    answer:
+      "Garansi dari kami 1 bulan ya kak 😊 Terhitung sejak unit diterima.",
+  },
+  {
+    id: "k2",
+    question: "Jam operasional kak?",
+    answer: "Jam operasional: 10.00 – 20.00 WIB",
+  },
 ]);
 
-function rulesInput(text: string, dispatch: RulesInput["dispatch"], over: Partial<RulesInput>): RulesInput {
+function rulesInput(
+  text: string,
+  dispatch: RulesInput["dispatch"],
+  over: Partial<RulesInput>,
+): RulesInput {
   const ctx: ToolContext = {
     from: "628111000999",
     now: NOW,
@@ -51,7 +64,13 @@ function rulesInput(text: string, dispatch: RulesInput["dispatch"], over: Partia
     capabilities: LIVE,
     dispatch,
     route: routeMessage(text, { capabilities: LIVE }),
-    known: { name: null, usage: false, preferences: false, budget: false, apps: false },
+    known: {
+      name: null,
+      usage: false,
+      preferences: false,
+      budget: false,
+      apps: false,
+    },
     proposalOpen: false,
     lastShown: [],
     leadThreshold: 60,
@@ -82,7 +101,10 @@ async function check(c: GoldenCase): Promise<void> {
   const line = last(c);
   switch (e.kind) {
     case "routed": {
-      const r = routeMessage(line.customer, { capabilities: SHOP_CAPABILITIES, shown: e.shown ?? false });
+      const r = routeMessage(line.customer, {
+        capabilities: SHOP_CAPABILITIES,
+        shown: e.shown ?? false,
+      });
       expect(r?.topic ?? null).toBe(e.topic);
       return;
     }
@@ -103,8 +125,11 @@ async function check(c: GoldenCase): Promise<void> {
     case "read": {
       const fn =
         e.fn === "queryOf"
-          ? (t: string) => reader.understand(t, NOW, { proposalOpen: false, lastShown: [] }).query
-          : ((agent as Record<string, unknown>)[e.fn] ?? (reader as Record<string, unknown>)[e.fn]);
+          ? (t: string) =>
+              reader.understand(t, NOW, { proposalOpen: false, lastShown: [] })
+                .query
+          : ((agent as Record<string, unknown>)[e.fn] ??
+            (reader as Record<string, unknown>)[e.fn]);
       expect(typeof fn, `${e.fn} is exported`).toBe("function");
       expect((fn as (s: string) => string | null)(line.customer)).toBe(e.value);
       return;
@@ -144,6 +169,8 @@ describe("replay: the rated 27–29 Oct chats", () => {
     }
   }
   afterAll(() => {
-    console.log(`golden: ${tally.pass} right, ${tally.knownWrong} known wrong, of ${CASES.length}`);
+    console.log(
+      `golden: ${tally.pass} right, ${tally.knownWrong} known wrong, of ${CASES.length}`,
+    );
   });
 });

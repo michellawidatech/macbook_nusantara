@@ -379,7 +379,10 @@ export function bareName(text: string): string | null {
     /\b(air|pro|max|mini|macbook|ipad|imac|iphone|mac|m[1-5])\b/i.test(name)
   )
     return null;
-  if (collect(name.toLowerCase(), USAGE).length || collect(name.toLowerCase(), OCCUPATION).length)
+  if (
+    collect(name.toLowerCase(), USAGE).length ||
+    collect(name.toLowerCase(), OCCUPATION).length
+  )
     return null;
   return name.replace(/\b\w/g, (c) => c.toUpperCase()).slice(0, 80);
 }
@@ -407,7 +410,10 @@ export function nameOf(text: string): string | null {
       if (text.slice(0, at).trim() !== "") continue;
       if (!/^\s*(?:$|[,.!?]|kak\b|ya\b|kk\b)/i.test(rest)) continue;
     }
-    if (collect(name.toLowerCase(), USAGE).length || collect(name.toLowerCase(), OCCUPATION).length)
+    if (
+      collect(name.toLowerCase(), USAGE).length ||
+      collect(name.toLowerCase(), OCCUPATION).length
+    )
       continue;
     return name.replace(/\b\w/g, (c) => c.toUpperCase()).slice(0, 80);
   }
