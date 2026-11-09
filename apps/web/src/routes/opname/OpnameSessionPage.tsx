@@ -155,6 +155,7 @@ import {
   type CountStatus,
 } from "../../lib/opnameCount.js";
 import { ScopeFields } from "./ScopeFields.js";
+import { OPNAME_ON_HAND } from "../../lib/opnameDraft.js";
 import {
   CONDITIONS,
   gradeForCondition,
@@ -164,15 +165,8 @@ import type { OpnameSurplus, Unit } from "../../mock/seed.js";
 import { COLUMN } from "../../theme/tokens";
 import { warehouseLabel, warehouseLabelOf } from "../../lib/warehouses.js";
 
-/**
- * Statuses that mean the warehouse should physically be holding the unit.
- *
- * `SERVIS` is one of them (owner report 2026-11-09): since 2026-09-25 a unit
- * sent to service MOVES to the warehouse it is serviced in, so it is on that
- * shelf to be counted. Leaving it out filed every unit on service as
- * "Belongs elsewhere" in the very warehouse the system says it is in.
- */
-const IN_STOCK = ["TERSEDIA", "DIRESERVASI", "QC", "SERVIS"];
+/** What a count expects to find on a shelf — one list, shared with the list page. */
+const IN_STOCK = OPNAME_ON_HAND;
 
 /**
  * How long after the last change the draft writes itself.

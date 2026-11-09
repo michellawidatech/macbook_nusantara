@@ -41,6 +41,7 @@ import { fmtDate, fmtNone } from "../../lib/format.js";
 import { useDb, mutate, nextId, docCode } from "../../mock/store.js";
 import type { OpnameScope } from "../../lib/opnameScope.js";
 import { restoreScans } from "../../lib/opnameCount.js";
+import { draftFigures } from "../../lib/opnameDraft.js";
 import { ScopeFields, useConditionWord } from "./ScopeFields.js";
 import type { OpnameRec } from "../../mock/seed.js";
 import { useTranslation } from "react-i18next";
@@ -92,32 +93,42 @@ export function OpnamePage() {
     () =>
       [...db.opnames]
         .sort((a, b) => b.at.localeCompare(a.at))
-        .map((o) => ({
-          ...o,
-          // Joined into one string rather than kept as a list, because this is
-          // what the column facets and searches on — and "every warehouse" is
-          // a value staff will want to filter by as much as any single one.
-          warehouse:
-            o.locationIds.length === 0
-              ? t("opnameList.allWarehouses", "All warehouses")
-              : o.locationIds
-                  .map((id) => warehouseLabelOf(db.warehouses, id) ?? fmtNone())
-                  .join(", "),
-          /** The other three axes, as words, for the line under the warehouse. */
-          narrowing: [
-            ...o.rackIds.map(
-              (id) => db.racks.find((r) => r.id === id)?.name ?? fmtNone(),
-            ),
-            ...o.categories,
-            ...o.conditions.map(conditionWord),
-          ],
-          countedN: o.counted.length,
-          missingN: o.missing.length,
-          unknownN: o.unknown.length,
-        })),
+        .map((o) => {
+          // A draft is re-judged against the store as it is now, as its own
+          // page does; a posted count reads what it stored (2026-11-09).
+          const f =
+            o.status === "POSTED"
+              ? { counted: o.counted, missing: o.missing, unknown: o.unknown }
+              : draftFigures(db, o);
+          return {
+            ...o,
+            // Joined into one string rather than kept as a list, because this is
+            // what the column facets and searches on — and "every warehouse" is
+            // a value staff will want to filter by as much as any single one.
+            warehouse:
+              o.locationIds.length === 0
+                ? t("opnameList.allWarehouses", "All warehouses")
+                : o.locationIds
+                    .map(
+                      (id) => warehouseLabelOf(db.warehouses, id) ?? fmtNone(),
+                    )
+                    .join(", "),
+            /** The other three axes, as words, for the line under the warehouse. */
+            narrowing: [
+              ...o.rackIds.map(
+                (id) => db.racks.find((r) => r.id === id)?.name ?? fmtNone(),
+              ),
+              ...o.categories,
+              ...o.conditions.map(conditionWord),
+            ],
+            countedN: f.counted.length,
+            missingN: f.missing.length,
+            unknownN: f.unknown.length,
+          };
+        }),
     // `t` is stable across renders in this app's i18n setup, but listing it
     // keeps the memo honest if that ever stops being true.
-    [db.opnames, db.warehouses, db.racks, t],
+    [db, t],
   );
 
   const start = () => {
