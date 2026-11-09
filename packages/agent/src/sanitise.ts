@@ -357,10 +357,12 @@ export function photoLineHandles(text: string): string[] {
 export function applyEmojiRule(text: string, first: boolean): string {
   let kept = 0;
   const out = (text ?? "").replace(
-    /\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier}|\u200D\p{Extended_Pictographic})*/gu,
-    (m) => {
+    /\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier}|\u200D\p{Extended_Pictographic})*(?=([ \t]+\p{Lu})?)/gu,
+    (m, nextSentence: string | undefined) => {
       kept += 1;
-      return first && kept === 1 ? m : "";
+      if (first && kept === 1) return m;
+      // "Oke kak 😊 Budgetnya…": the emoji ended a sentence; keep the stop.
+      return nextSentence ? "." : "";
     },
   );
   return out

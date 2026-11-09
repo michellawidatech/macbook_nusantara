@@ -411,9 +411,10 @@ describe("the grounding check vouches for what the lookup offered", () => {
       },
       accessory: { model: "Charger MacBook Air 30W", price: "Rp 450.000" },
     });
+    // Each fact carries its unit's serial since 2026-11-09 (Task 10).
     expect(facts).toEqual([
-      { label: "MacBook Air M2", available: true, prices: ["11000000"] },
-      { label: "MacBook Air M2 16/512", available: true, prices: ["14000000"] },
+      { label: "MacBook Air M2", serial: "A", available: true, prices: ["11000000"] },
+      { label: "MacBook Air M2 16/512", serial: "B", available: true, prices: ["14000000"] },
       { label: "Charger MacBook Air 30W", available: true, prices: ["450000"] },
     ]);
   });

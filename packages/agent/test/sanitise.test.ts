@@ -246,5 +246,7 @@ describe("emoji only at the beginning of the chat (owner, 2026-11-09)", () => {
     expect(applyEmojiRule("Halo kak 😊 Ada yang bisa aku bantu? 🙏", true)).toBe("Halo kak 😊 Ada yang bisa aku bantu?");
     expect(applyEmojiRule("Siap kak 😊\nAir M2 11,9jt 🙏", false)).toBe("Siap kak\nAir M2 11,9jt");
     expect(applyEmojiRule("Oke kak 👍🏻, noted ❤️", false)).toBe("Oke kak, noted");
+    // An emoji that ended a sentence leaves its full stop behind.
+    expect(applyEmojiRule("Oke kak 😊 Budgetnya berapa kak?", false)).toBe("Oke kak. Budgetnya berapa kak?");
   });
 });

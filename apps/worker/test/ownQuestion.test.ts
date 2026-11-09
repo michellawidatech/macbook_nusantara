@@ -239,7 +239,8 @@ describe("an answer to the bot's own question is never a hand-over (2026-10-27)"
         where: { waMessageId: "q.1" },
       });
       expect(row.status).toBe("DIJAWAB_AGEN");
-      expect(row.replyText).toBe("Oke kak 😊 Budgetnya kira-kira berapa kak?");
+      // Not the first reply: no emoji (owner, 2026-11-09).
+      expect(row.replyText).toBe("Oke kak. Budgetnya kira-kira berapa kak?");
       expect(await db.chatAction.count()).toBe(0);
       const profile = await db.customerProfile.findUniqueOrThrow({
         where: { from: SENDER },

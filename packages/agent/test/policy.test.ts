@@ -561,6 +561,12 @@ describe("each claim is checked against ONE unit (2026-11-09, Task 10)", () => {
     expect(check("Air M2 8/256 ready kak")).toBeNull();
   });
 
+  it("a sentence naming two units on the shelf is two claims, each its own unit", () => {
+    expect(check("Ada Air M2 10,9jt dan Pro 14 M1 Pro 17,5jt kak")).toBeNull();
+    expect(check("Air M2 ready kak, ada juga Pro 14 M1 Pro")).toBeNull();
+    expect(check("Ada Air M2 dan Air M1 kak")).toBe("AVAILABILITY_NOT_IN_SOURCE");
+  });
+
   it("refuses a serial the turn never looked up", () => {
     expect(check("Air M2 10,9jt kak", { citedUnits: ["NOPE123"] })).toBe("UNKNOWN_UNIT");
     expect(check("Air M2 10,9jt kak", { citedUnits: ["GAIRM2A01"] })).toBeNull();

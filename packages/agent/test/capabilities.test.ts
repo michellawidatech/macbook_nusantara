@@ -173,7 +173,8 @@ describe("the prompt follows the capability", () => {
     // Photos go with the recommendation; no photo question, no visit
     // time pushed, a link only when asked (2026-10-28).
     expect(stable).toContain(
-      "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita 😊",
+      // No emoji in the rules (owner, 2026-11-09).
+      "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita",
     );
     expect(stable).toContain('Never ask "Mau lihat fotonya?"');
     expect(stable).toContain("rencananya mau ke toko kapan kak?");

@@ -1273,9 +1273,17 @@ export function checkReply(input: {
       return "AVAILABILITY_NOT_IN_SOURCE";
     }
     // A named unit: only the shelf can say it is there — and ONE unit must be
-    // all of it (2026-11-09: "Air M1 ready" passed on an Air M2 and an M1 Pro).
-    if (!available.some((f) => covers(f, tokens) && specFits(f, sentence)))
-      return "AVAILABILITY_NOT_IN_SOURCE";
+    // all of each claim (2026-11-09: "Air M1 ready" passed on an Air M2 and
+    // an M1 Pro). "Air M1 … dan Air M2 …" is two claims, split at the joins.
+    const claim = OUT_OF_STOCK.test(sentence)
+      ? sentence.slice(claimStart(sentence))
+      : sentence;
+    for (const part of claim.split(/\s+(?:dan|atau|sama|serta|&)\s+|[,;]\s*/i)) {
+      const named = modelTokens(part);
+      if (named.length === 0) continue;
+      if (!available.some((f) => covers(f, named) && specFits(f, part)))
+        return "AVAILABILITY_NOT_IN_SOURCE";
+    }
   }
 
   // "Tinggal 1 unit kak" — urgency, and only ever the shelf's own count

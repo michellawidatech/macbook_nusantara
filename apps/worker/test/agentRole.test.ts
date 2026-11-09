@@ -1330,7 +1330,7 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
       ((await owner.outbox.findFirstOrThrow()).payload as { body: string })
         .body,
     ).toBe(
-      "Halo kak MacBook Air M2 256GB 8/256 yang kemarin kakak tanyakan masih ready ya. Kalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak",
+      "Halo kak. MacBook Air M2 256GB 8/256 yang kemarin kakak tanyakan masih ready ya. Kalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak",
     );
   });
 

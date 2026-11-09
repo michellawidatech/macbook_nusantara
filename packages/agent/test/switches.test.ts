@@ -192,7 +192,7 @@ describe("reading the shelf's answers as facts", () => {
       available: false,
       note: "This unit is not available.",
     });
-    expect(facts).toEqual([
+    expect(facts).toMatchObject([
       { label: "MacBook Air M1", available: false, prices: [] },
     ]);
   });
@@ -209,7 +209,7 @@ describe("reading the shelf's answers as facts", () => {
         { serial: "B", model: "MacBook Air M2", price: null },
       ],
     });
-    expect(facts).toEqual([
+    expect(facts).toMatchObject([
       { label: "MacBook Air M1 8/256", available: true, prices: ["7500000"] },
       { label: "MacBook Air M2", available: true, prices: [] },
     ]);
