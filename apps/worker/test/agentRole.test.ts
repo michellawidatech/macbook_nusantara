@@ -1074,7 +1074,8 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
     expect(rows[0]!.payload).toMatchObject({
       to: FROM,
       followUp: "visit_reminder",
-      body: "Halo kak 😊 apakah kakak jadi datang ke toko kami untuk lihat MacBook Air M2 256GB 8/256? Kami tunggu ya kedatangannya 🙏",
+      // No emoji after the beginning of the chat (owner, 2026-11-09).
+      body: "Halo kak apakah kakak jadi datang ke toko kami untuk lihat MacBook Air M2 256GB 8/256? Kami tunggu ya kedatangannya",
     });
   });
 
@@ -1329,7 +1330,7 @@ describe("selling, as nusantara_agent (2026-10-27)", () => {
       ((await owner.outbox.findFirstOrThrow()).payload as { body: string })
         .body,
     ).toBe(
-      "Halo kak 😊 MacBook Air M2 256GB 8/256 yang kemarin kakak tanyakan masih ready ya. Kalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak 🙏",
+      "Halo kak MacBook Air M2 256GB 8/256 yang kemarin kakak tanyakan masih ready ya. Kalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak",
     );
   });
 
@@ -1503,7 +1504,7 @@ describe("a DP hold, as nusantara_agent (2026-10-27)", () => {
       to: FROM,
       followUp: "dp_reminder",
       reservationId: "rv_dp",
-      body: "Halo kak 😊 unit MacBook Air M2 256GB 8/256 masih kami tahan sampai Kamis, 27 Agu ya. Kalau mau dilunasi atau datang ambil, kabari kami aja kak 🙏",
+      body: "Halo kak unit MacBook Air M2 256GB 8/256 masih kami tahan sampai Kamis, 27 Agu ya. Kalau mau dilunasi atau datang ambil, kabari kami aja kak",
     });
   });
 

@@ -45,6 +45,7 @@
  *   through the context window.
  */
 
+import { conductFor } from "./conduct.js";
 import { resetPointFor } from "./reset.js";
 import {
   TXN_TIMEOUTS,
@@ -625,7 +626,7 @@ const WATCH_STOCK: Anthropic.Tool = {
   name: "watch_stock",
   description:
     "Remember that this customer wants to be told when something that is not in stock arrives. " +
-    "Call it only after they said yes to 'Mau saya kabari kalau sudah ready kak?'. A colleague " +
+    "Call it only after they said yes to 'Mau aku kabarin kalau sudah ready kak?'. A colleague " +
     "will tell them; do not promise a date.",
   input_schema: {
     type: "object",
@@ -676,8 +677,9 @@ const CANCEL_RESERVATION: Anthropic.Tool = {
 const FIND_UNIT_PHOTOS: Anthropic.Tool = {
   name: "find_unit_photos",
   description:
-    "Photos of a unit for a customer who asked to see one by model rather than by serial. Picks " +
-    "the most expensive matching unit that has photos and returns its photo handles, which you " +
+    "Photos of a unit for a customer who asked to see one by model rather than by serial. " +
+    conductFor("tool:find_photos") +
+    " It returns that unit's photo handles, which you " +
     "pass to reply as 'photos'. You never see the pictures, so describe nothing about them. " +
     "Follow the guidance in the result about offering another unit.",
   input_schema: {
@@ -1582,11 +1584,11 @@ const STEP_UP_CEILING = [13n, 10n] as const;
 /** Past a stated ceiling, a step up may go this much over it: 12/10 is 20%. */
 const STEP_UP_OVER_BUDGET = [12n, 10n] as const;
 
-const OTHER_GRADES_NOTE =
+export const OTHER_GRADES_NOTE =
   "units[0] is the cheapest unit of the lowest grade of this variant: recommend it first. " +
   "otherGrades lists the other grades of the SAME variant on the shelf, each with its cheapest " +
-  "unit and how many there are. After the first pick, offer them in one short line (for example " +
-  '"kalau mau yang lebih mulus ada grade A juga, 12,5jt"), never as a list.';
+  "unit and how many there are. After the first pick, offer them. " +
+  conductFor("tool:grades");
 
 /**
  * How to speak about a unit's facts (owner, 2026-10-28). The words are the
@@ -1611,15 +1613,12 @@ const LEFT_NOTE =
   "left is how many units of that exact variant are on the shelf. Only when left is 1 may you " +
   'say so ("tinggal 1 unit kak"), once, beside that unit. Never say a unit is the last one, ' +
   "or that stock is running out, unless left says so.";
-const PHOTOS_NOTE =
-  "photos is how many of the shop's own photos a unit has. Offer to show photos (\"Mau lihat " +
-  'fotonya kak?") only for a unit you named whose photos is above 0. When none of the units ' +
-  "you named has any, do not mention photos: ask whether they would like to come and see it " +
-  '("Mau datang lihat langsung kak, kapan enaknya?") instead.';
-const WATCH_NOTE =
-  "Nothing they asked for is on the shelf. After any alternatives, offer to tell them when it " +
-  'is in: "Mau saya kabari kalau sudah ready kak?". If they say yes, call watch_stock with ' +
-  "what they asked for.";
+export const PHOTOS_NOTE =
+  "photos is how many of the shop's own photos a unit has. " + conductFor("tool:photos");
+export const WATCH_NOTE =
+  "Nothing they asked for is on the shelf. After any alternatives: " +
+  conductFor("tool:watch") +
+  " Watch what they asked for.";
 const ACCESSORY_NOTE =
   "One accessory in stock that fits what they asked about. Mention it at most once, in one line, " +
   "after the units, and only if it fits the conversation.";

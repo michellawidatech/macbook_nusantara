@@ -70,6 +70,7 @@ export {
 export {
   MAX_EMOJI,
   MAX_REPLY_EMOJI,
+  applyEmojiRule,
   customerText,
   detectLanguage,
   hasForbiddenFormatting,

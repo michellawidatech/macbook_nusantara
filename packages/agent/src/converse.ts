@@ -474,7 +474,7 @@ function announcesRequest(b: BookingWrite, message: string): boolean {
 /** The fixed line that tells a customer about a booking the bot made. */
 function bookingLine(b: BookingWrite): string {
   if (b.tool === "propose_reservation")
-    return "Siap kak, aku catat ya 😊 Nanti tim kami konfirmasi.";
+    return "Siap kak, aku catat ya. Nanti tim kami konfirmasi.";
   if (b.tool === "cancel_reservation")
     return `Booking ${b.code} sudah kami batalkan ya kak.`;
   const when = b.when ? ` untuk ${b.when} WIB` : "";
@@ -881,7 +881,7 @@ export async function converse(
       case "AVAILABILITY_NOT_IN_SOURCE":
         return `${head} It says a unit is ready, or how many are left, where this turn's lookups do not. ${shelfLine()} Only those are on the shelf; anything else is not in stock right now (never say why). Say "tinggal 1 unit" only where left is 1. Cite stock. Send the corrected reply.`;
       case "DISCOUNT_OFFERED":
-        return `${head} It offers a discount or invites a bargain ("bisa kurang", "bisa nego", "diskon", "harga khusus", "best price"). You never negotiate, never offer, promise or hint at a lower price: a discount is the owner's to give. Quote the POS price as it is; if the customer is asking for a lower price, hand over with handoff_to_staff, topic negotiation. Send the corrected reply or the hand-over.`;
+        return `${head} It offers a discount or invites a bargain ("bisa kurang", "bisa nego", "diskon", "harga khusus", "best price"). You never negotiate, never offer, promise or hint at a lower price: a discount is the owner's to give. Quote the POS price as it is; if the customer is bargaining over a price, hand over with handoff_to_staff, topic negotiation. "Ada yang lebih murah?" is not a bargain: show a cheaper unit. Send the corrected reply or the hand-over.`;
       case "COMMITMENT_CLAIMED":
         return `${head} It says "${phrase ?? "that it is done"}", but nothing has been received, held, confirmed or sent: only a person does those, and the shop tells the customer itself when one happens. Say what will happen next instead (a colleague confirms; a DP holds a unit). Send the corrected reply.`;
       case "URGENCY_INVENTED":
@@ -893,7 +893,7 @@ export async function converse(
       case "LINK_INVENTED":
         return `${head} It sends a link no lookup returned. Send only a link from a unit's links in this turn's stock results; when the unit has none, say they can order straight through this WhatsApp chat. Send the corrected reply.`;
       case "TOO_LONG":
-        return `${head} It is too long (${message.length} characters). Three short WhatsApp sentences at most. Send the shorter reply.`;
+        return `${head} It is too long (${message.length} characters). Short WhatsApp lines: say what must be said, once. Send the shorter reply.`;
       case "EMPTY":
         return `${head} It was empty. Send what the customer should read.`;
       case "PHOTOS":

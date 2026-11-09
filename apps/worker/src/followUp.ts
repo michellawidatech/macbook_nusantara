@@ -48,6 +48,7 @@
  */
 
 import {
+  applyEmojiRule,
   followUps,
   isLead,
   jakartaDayLabel,
@@ -180,7 +181,8 @@ async function queueOnce(
       kind: "WA_REPLY",
       payload: {
         to: input.to,
-        body: input.body,
+        // A follow-up never opens a chat: no emoji (owner, 2026-11-09).
+        body: applyEmojiRule(input.body, false),
         followUp: input.followUp,
         ...(input.reservationId ? { reservationId: input.reservationId } : {}),
       } satisfies Prisma.InputJsonValue,

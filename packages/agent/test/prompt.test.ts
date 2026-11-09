@@ -51,7 +51,9 @@ describe("the built-in persona", () => {
     // lines have to sound like the person who wrote them — "kak", 😊, 🙏.
     expect(DEFAULT_PERSONA).toMatch(/approved answers/i);
     expect(DEFAULT_PERSONA).toMatch(/kak/);
-    expect(DEFAULT_PERSONA).toMatch(/never a row of them/i);
+    // Emoji only at the beginning of the chat (owner, 2026-11-09).
+    expect(DEFAULT_PERSONA).toMatch(/emoji only in your first reply/i);
+    expect(DEFAULT_PERSONA).not.toMatch(/\p{Extended_Pictographic}/u);
   });
 
   it("no longer sells from a shelf it cannot see", () => {

@@ -179,6 +179,17 @@ async function turn(id: string, text: string, step: number): Promise<string> {
   return row.replyText ?? "";
 }
 
+describe("emoji only at the beginning of the chat (owner, 2026-11-09)", () => {
+  it("the first reply may carry one, every later reply carries none", async () => {
+    const first = await turn("e1", "halo kak", 0);
+    const second = await turn("e2", "kak ada macbook pro 16 m3?", 1);
+    expect([...first.matchAll(/\p{Extended_Pictographic}/gu)].length).toBeLessThanOrEqual(1);
+    expect(second).not.toMatch(/\p{Extended_Pictographic}/u);
+    const sent = await owner.outbox.findMany({ where: { kind: "WA_REPLY" }, orderBy: { createdAt: "asc" } });
+    expect((sent.at(-1)!.payload as { body: string }).body).toBe(second);
+  });
+});
+
 describe("a unit's photos go to a chat once (2026-11-06, W7)", () => {
   it("does not send the same pictures again, and says they were sent above", async () => {
     const unit = await owner.unit.findUniqueOrThrow({ where: { serial: "MBP1" } });

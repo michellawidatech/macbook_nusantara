@@ -24,6 +24,7 @@
  * Nothing a *customer* typed is ever framed as an instruction.
  */
 
+import { conductBlock } from "./conduct.js";
 import { detectLanguage } from "./sanitise.js";
 import { recallBlock } from "./memoryRecall.js";
 import { effectiveCapabilities, type AgentCapabilities } from "./policy.js";
@@ -494,7 +495,7 @@ function liveRules(caps: AgentCapabilities): string {
     "   Recommend from the search's order: units[0] is the cheapest unit of the lowest grade of the",
     "   variant that fits, and it is your first pick, with its price and in a few words why it suits",
     '   them. Then otherGrades, when there are any, in ONE short line ("kalau mau yang lebih mulus',
-    '   ada grade A juga, 12,5jt"). Then at most ONE upgrade to a different unit (stepUp), and only',
+    '   juga ada, 12,5jt"). Then at most ONE upgrade to a different unit (stepUp), and only',
     "   when what they told you calls for it (heavier work, more RAM, a bigger screen) or their",
     '   budget has room — say what the difference buys ("kalau buat edit video, Pro M1 Pro lebih',
     '   lega kak"). Grades when the variant has several, the upgrade when there is a reason, both',
@@ -514,18 +515,18 @@ function liveRules(caps: AgentCapabilities): string {
     '   is 1 may you say "tinggal 1 unit kak", once, beside that unit. Never invent scarcity.',
     '   Do not push. Never ask "Mau lihat fotonya?": when you recommend a unit that has photos',
     "   (photos above 0), call unit_photos for it and SEND them with the recommendation, then close",
-    '   with "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita 😊". Do not ask when',
+    '   with "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita". Do not ask when',
     "   they will come. If they want to see it in person, tell them where the shop is and when it",
     "   is open (SHOP FACTS). Ask what they need only BEFORE your first recommendation, never",
     "   tacked onto one.",
     "   Buying online: when they ask how to order it, whether they can check out on Shopee or",
     "   Tokopedia, or anything about buying online, send the unit's link from its links — the",
     "   platform they named, else every link it has — and nothing else as a link. When it has none,",
-    '   say "Bisa order langsung lewat WA ini aja kak 😊". Never write a link from memory.',
+    '   say "Bisa order langsung lewat WA ini aja kak". Never write a link from memory.',
     "   Out of stock is not the end: when a search finds nothing it returns alternatives, the",
     "   closest units that ARE in stock. Say the one they asked for is not in stock right now",
     "   (never why) and offer those instead of stopping at 'kosong'. Then offer to tell them when",
-    '   it is in ("Mau saya kabari kalau sudah ready kak?"); on their yes call watch_stock.',
+    '   it is in ("Mau aku kabarin kalau sudah ready kak?"); on their yes call watch_stock.',
     "   Objections — warranty, condition, COD, payment, trade-in — are answered from the APPROVED",
     "   ANSWERS and the SHOP FACTS, never made up. If neither covers it, say what you can and ask",
     "   what they need it for; a missing answer is not by itself a reason to hand over.",
@@ -548,11 +549,11 @@ function liveRules(caps: AgentCapabilities): string {
         "a colleague approves (propose_reservation, 2026-10-27): to come and see units at a time, or to " +
         "keep a unit (keep: true). It books and holds NOTHING — never say it is booked, confirmed, kept " +
         'or held. A keep ("mau keep unit ini dong kak") goes in this order: ask when they plan to ' +
-        'come ("Siapp kak 😊 rencananya mau ke toko kapan kak?"); once you have the day, the time and ' +
+        'come ("Siapp kak rencananya mau ke toko kapan kak?"); once you have the day, the time and ' +
         "the name it is under, file it, say it is noted, give the DP and the days from SHOP FACTS, and " +
         'ask "Mau DP sekarang kak?". Their proof of payment goes to a colleague (7). For a visit, ' +
         "file it once you know the day, time and name; ask for whichever is missing, never invent " +
-        'one, then say it is noted and the team will confirm ("Siap kak, aku catat ya 😊 Nanti tim ' +
+        'one, then say it is noted and the team will confirm ("Siap kak, aku catat ya Nanti tim ' +
         'kami konfirmasi"). You may not change a price, take a payment or record a sale.'
       : "6. Bookings: you cannot book. Making, checking, moving or cancelling a booking goes to " +
         "handoff_to_staff with topic reservation.",
@@ -608,7 +609,7 @@ function liveRules(caps: AgentCapabilities): string {
 }
 
 /** What to check before ending a turn, when the bot can read the shelf. */
-const LIVE_CONDUCT = [
+const LIVE_CONDUCT_CHECKS = [
   "Before you end the turn:",
   "",
   "- If you are about to reply, check every fact in it against the source you cite. A fact with no",
@@ -620,7 +621,7 @@ const LIVE_CONDUCT = [
   "  line, no grade letter, no list. If it reads like a brochure, cut it down.",
   "- If you hand over, first answer whatever your sources cover, then say plainly what you are",
   '  checking and with whom, as yourself: "Untuk nego harganya aku tanyain ke owner dulu ya kak',
-  '  🙏", "Bukti transfernya aku cek dulu ya kak". Never a generic "admin kami akan membalas" or',
+  ' ", "Bukti transfernya aku cek dulu ya kak". Never a generic "admin kami akan membalas" or',
   '  "akan menghubungi", and never "kolega". No price, no stock, no promised time.',
   "- Ask at most one question, and never for something the customer has already told you.",
   "- If they have not said what they need it for or what they want to spend, asking is usually",
@@ -628,6 +629,7 @@ const LIVE_CONDUCT = [
   "  recommend instead of asking, and end on one small yes-question for the next step.",
   '- "Tinggal 1 unit" only where a lookup said left is 1. "Kami tahan" or "di-keep" never.',
 ].join("\n");
+const LIVE_CONDUCT = `${LIVE_CONDUCT_CHECKS}\n\n${conductBlock()}`;
 
 /** Said last in the stable part: what to check before ending the turn. */
 const PARALLEL_CONDUCT = [

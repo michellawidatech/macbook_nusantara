@@ -124,11 +124,11 @@ describe("what the customer is told", () => {
     const text = approvalMessage({ unit: "MacBook Air M2", when, name: "Budi", held: false });
     expect(text).not.toMatch(/siapkan/);
     expect(text).toBe(
-      "Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa untuk lihat MacBook Air M2 di 28 Oktober 2026 jam 14.00. Unitnya belum kami tahan ya kak, kalau mau diamankan bisa DP dulu 😊",
+      "Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa untuk lihat MacBook Air M2 di 28 Oktober 2026 jam 14.00. Unitnya belum kami tahan ya kak, kalau mau diamankan bisa DP dulu.",
     );
     expect(
       approvalMessage({ unit: "MacBook Air M2", when, held: false, dpAmount: 500_000 }),
-    ).toMatch(/kalau mau diamankan bisa DP Rp500rb 😊$/);
+    ).toMatch(/kalau mau diamankan bisa DP Rp500rb\.$/);
   });
   it("says the DP in millions past a million", () => {
     expect(chatRupiah(1_500_000)).toBe("Rp1,5jt");
@@ -136,10 +136,10 @@ describe("what the customer is told", () => {
   });
   it("carries the reason on a rejection, or nothing", () => {
     expect(rejectionMessage(" Unitnya sudah terjual. ")).toBe(
-      "Maaf kak, untuk reservasinya belum bisa kami proses ya 🙏 Unitnya sudah terjual.",
+      "Maaf kak, untuk reservasinya belum bisa kami proses ya. Unitnya sudah terjual.",
     );
     expect(rejectionMessage("  ")).toBe(
-      "Maaf kak, untuk reservasinya belum bisa kami proses ya 🙏",
+      "Maaf kak, untuk reservasinya belum bisa kami proses ya.",
     );
   });
 });

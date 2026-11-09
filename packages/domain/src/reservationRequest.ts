@@ -162,7 +162,7 @@ export function approvalMessage(input: {
     ? `Okeyy kak noted, ${who}nanti kita tunggu kedatangannya yaa di ${at}.`
     : input.held
       ? `Okeyy kak noted, ${who}nanti akan kita siapkan ${input.unit} nya yaa untuk ${at}.`
-      : `Okeyy kak noted, ${who}nanti kita tunggu kedatangannya yaa untuk lihat ${input.unit} di ${at}. Unitnya belum kami tahan ya kak, kalau mau diamankan bisa ${dp} 😊`;
+      : `Okeyy kak noted, ${who}nanti kita tunggu kedatangannya yaa untuk lihat ${input.unit} di ${at}. Unitnya belum kami tahan ya kak, kalau mau diamankan bisa ${dp}.`;
   if (!input.place) return head;
   const hours = input.place.hours ? `, buka ${input.place.hours}` : "";
   return `${head} Toko kita ada di ${input.place.address}${hours}.`;
@@ -171,5 +171,5 @@ export function approvalMessage(input: {
 /** The line a rejection sends, with the reason staff gave. */
 export function rejectionMessage(reason: string): string {
   const why = reason.trim();
-  return `Maaf kak, untuk reservasinya belum bisa kami proses ya 🙏${why ? ` ${why}` : ""}`;
+  return `Maaf kak, untuk reservasinya belum bisa kami proses ya.${why ? ` ${why}` : ""}`;
 }

@@ -83,6 +83,7 @@
 import {
   DEFAULT_WAITS,
   MAX_CORRECTIONS,
+  applyEmojiRule,
   buildAgentPrompt,
   readableWhen,
   computeWaitMs,
@@ -1381,6 +1382,12 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
             : announces
               ? "booking"
               : null;
+      // Emoji only at the beginning of the chat (owner, 2026-11-09): the
+      // first reply of this conversation keeps one, every later one none.
+      const outgoing = applyEmojiRule(
+        result.reply,
+        !history.some((t) => Boolean(t.reply)),
+      );
       let arrivedMeanwhile = 0;
       // Past the deadline the holding line has gone out instead; the claim
       // below would fail anyway, this saves the transaction.
@@ -1402,7 +1409,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         await tx.waMessage.update({
           where: { id: anchor.id },
           data: {
-            replyText: result.reply,
+            replyText: outgoing,
             // What the inbox shows the colleague picking the thread up: why,
             // and the bot's one-line note. `entities` is the JSON column
             // reserved for what the agent extracts (schema.prisma).
@@ -1418,7 +1425,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                       at: answeredAt.toISOString(),
                       // The line the BOT sent with it, so /chat labels it Bot
                       // even after a colleague closes the row (2026-10-27).
-                      reply: result.reply,
+                      reply: outgoing,
                     },
                   },
                 }
@@ -1444,7 +1451,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         });
         await enqueueOutbox(tx, {
           kind: "WA_REPLY",
-          payload: { to: from, body: result.reply, inReplyTo: anchor.id },
+          payload: { to: from, body: outgoing, inReplyTo: anchor.id },
         });
         // The task the hand-over leaves, in the same transaction as the
         // hand-over itself, so the inbox never shows one without the other.
@@ -1971,13 +1978,22 @@ async function escalate(
         where: { id: anchorId },
         select: { from: true },
       });
+      // Emoji only at the beginning of the chat (owner, 2026-11-09).
+      const earlier = await tx.waMessage.count({
+        where: {
+          from: anchor!.from,
+          replyText: { not: null },
+          id: { notIn: batchIds },
+        },
+      });
+      const line = applyEmojiRule(reply, earlier === 0);
       await tx.waMessage.update({
         where: { id: anchorId },
-        data: { replyText: reply },
+        data: { replyText: line },
       });
       await enqueueOutbox(tx, {
         kind: "WA_REPLY",
-        payload: { to: anchor!.from, body: reply, inReplyTo: anchorId },
+        payload: { to: anchor!.from, body: line, inReplyTo: anchorId },
       });
     }
     if (count > 0) {

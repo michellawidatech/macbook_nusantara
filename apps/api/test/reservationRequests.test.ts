@@ -264,7 +264,7 @@ describe("approving a request", () => {
     // and, with no DP, a visit to look rather than a unit "prepared" (2026-11-06).
     expect((out.payload as { body: string }).body).toMatch(
       // No shop address recorded here: the owner's own (SHOP_ADDRESS) is said.
-      /^Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa untuk lihat MacBook Air M2 8\/256 di .+ jam \d\d\.\d\d\. Unitnya belum kami tahan ya kak, kalau mau diamankan bisa DP Rp\S+ 😊 Toko kita ada di Ruko Sorrento Place, .+, buka setiap hari 10\.00–20\.00 WIB\.$/,
+      /^Okeyy kak noted, kak Budi nanti kita tunggu kedatangannya yaa untuk lihat MacBook Air M2 8\/256 di .+ jam \d\d\.\d\d\. Unitnya belum kami tahan ya kak, kalau mau diamankan bisa DP Rp\S+\. Toko kita ada di Ruko Sorrento Place, .+, buka setiap hari 10\.00–20\.00 WIB\.$/,
     );
     expect(
       await owner.auditLog.count({
@@ -467,7 +467,7 @@ describe("rejecting a request", () => {
     expect(after.reservationId).toBeNull();
     const out = await owner.outbox.findFirstOrThrow();
     expect((out.payload as { body: string }).body).toBe(
-      "Maaf kak, untuk reservasinya belum bisa kami proses ya 🙏 Unitnya sudah terjual.",
+      "Maaf kak, untuk reservasinya belum bisa kami proses ya. Unitnya sudah terjual.",
     );
     const audit = await owner.auditLog.findFirstOrThrow({
       where: { entity: "ReservationProposal" },

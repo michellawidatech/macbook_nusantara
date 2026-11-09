@@ -347,6 +347,31 @@ export function photoLineHandles(text: string): string[] {
   );
 }
 
+/**
+ * Emoji only at the beginning of the chat (owner, 2026-11-09: "do not use
+ * emoji too much, only use it in the beginning of the chat"). The bot's first
+ * reply of a conversation keeps its first emoji and nothing more; every later
+ * reply keeps none. Applied where a reply is written, so what is sent and
+ * what /chat shows are the same text.
+ */
+export function applyEmojiRule(text: string, first: boolean): string {
+  let kept = 0;
+  const out = (text ?? "").replace(
+    /\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier}|\u200D\p{Extended_Pictographic})*/gu,
+    (m) => {
+      kept += 1;
+      return first && kept === 1 ? m : "";
+    },
+  );
+  return out
+    .replace(/[ \t]+([,.!?])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .join("\n")
+    .trim();
+}
+
 export function sanitiseReply(text: string): string {
   if (!text) return "";
   let out = text;
