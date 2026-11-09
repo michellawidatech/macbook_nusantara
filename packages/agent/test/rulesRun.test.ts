@@ -1067,3 +1067,50 @@ describe("several models in one question (2026-11-06, W3)", () => {
     expect(out.shown).toEqual([AIR.serial, M3.serial]);
   });
 });
+
+describe("a booking given one detail per message (2026-11-09, Task 12)", () => {
+  const request = {
+    ok: true,
+    requested: true,
+    requestId: "req_s",
+    when: "2026-10-17 14:00",
+    custName: "Rina",
+    units: [AIR],
+  };
+
+  it("keeps the unit, then the time, then the name, and files it when complete", async () => {
+    const p = pos({ propose_reservation: request, remember_customer: { saved: true } });
+    const keep = "mau keep yang ini kak";
+    const a = await run(keep, p, {
+      lastShown: [AIR.serial],
+      route: routeMessage(keep, { capabilities: LIVE, shown: true }),
+    });
+    expect(a.state?.booking).toMatchObject({ serial: AIR.serial, keep: true, when: null });
+    const b = await run("sabtu jam 2", p, { lastReply: a.reply, state: a.state! });
+    expect(b.state?.booking?.when).toBe("2026-10-17T14:00");
+    expect(p.asked.some((x) => x.name === "propose_reservation")).toBe(false);
+    const c = await run("atas nama Rina", p, { lastReply: b.reply, state: b.state! });
+    expect(p.asked.find((x) => x.name === "propose_reservation")?.args).toMatchObject({
+      serials: AIR.serial,
+      when: "2026-10-17T14:00",
+      custName: "Rina",
+      keep: true,
+    });
+    expect(c.reply).toContain("aku catat");
+    expect(c.state?.booking ?? null).toBeNull();
+  });
+
+  it("takes a bare name as the answer when only the name is missing", async () => {
+    const p = pos({ propose_reservation: request });
+    const state = { v: 1 as const, booking: { serial: AIR.serial, when: "2026-10-17T14:00", name: null, keep: false }, pendingSearch: null };
+    await run("Rina", p, { state, lastReply: "Boleh atas nama siapa kak?" });
+    expect(p.asked.find((x) => x.name === "propose_reservation")?.args).toMatchObject({ custName: "Rina" });
+  });
+
+  it("a yes to 'cariin yang mirip?' runs the search that was offered", async () => {
+    const p = pos({ search_stock: { matched: 1, units: [AIR] } });
+    const state = { v: 1 as const, booking: null, pendingSearch: "macbook air m3" };
+    await run("iya kak boleh", p, { state, lastReply: "Yah, yang itu lagi kosong kak. Mau aku cariin yang mirip?" });
+    expect(p.asked.find((x) => x.name === "search_stock")?.args).toMatchObject({ query: "macbook air m3" });
+  });
+});

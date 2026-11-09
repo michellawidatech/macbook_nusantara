@@ -4,6 +4,7 @@
  * cannot disagree.
  */
 
+import { readState, type ThreadState } from "./threadState.js";
 import type { PrismaClient } from "@nusantara/db";
 import { formatRupiah, realName } from "@nusantara/domain";
 import type { AgentRole } from "./agents.js";
@@ -319,4 +320,29 @@ export async function lastShownUnits(
   return Array.isArray(units)
     ? units.filter((u): u is string => typeof u === "string").slice(0, 12)
     : [];
+}
+
+
+/**
+ * What the conversation is in the middle of (threadState.ts, 2026-11-09):
+ * the state the newest bot-answered row carries, after the thread's reset
+ * point. A row from before this release reads as empty.
+ */
+export async function lastThreadState(
+  db: PrismaClient,
+  from: string,
+  after: Date | null,
+): Promise<ThreadState> {
+  const row = await db.waMessage.findFirst({
+    where: {
+      from,
+      direction: "IN",
+      replyText: { not: null },
+      answeredByAgent: true,
+      ...(after ? { answeredAt: { gt: after } } : {}),
+    },
+    orderBy: [{ answeredAt: "desc" }, { ts: "desc" }],
+    select: { entities: true },
+  });
+  return readState(row?.entities ?? null);
 }

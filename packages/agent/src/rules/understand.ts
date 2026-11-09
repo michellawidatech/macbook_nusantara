@@ -358,6 +358,22 @@ const NOT_A_NAME =
 /** The bare "saya"/"aku" form of NAME, which is a name only when it is all they wrote. */
 const BARE_SELF = /^(?:saya|aku)\s/i;
 
+/**
+ * A message that is nothing but a name — "Rina", "kak Budi Santoso" — read as
+ * the answer to "atas nama siapa kak?" (2026-11-09). Only the caller knows a
+ * name was asked for; this only says whether the words can be one.
+ */
+export function bareName(text: string): string | null {
+  const m = /^\s*(?:kak\s+|atas\s+nama\s+|a\.?n\.?\s+)?([a-z][a-z.']{1,20}(?:\s+[a-z][a-z.']{1,20}){0,2})\s*(?:kak)?\s*[.!]?\s*$/i.exec(text);
+  if (!m) return null;
+  const name = m[1]!.trim();
+  if (NOT_A_NAME.test(name) || /^(ok|oke|okay|siap|sip|iya|ya|ga|gak|nggak|tidak|nanti|halo|hai|makasih|thanks|terima kasih)\b/i.test(name))
+    return null;
+  if (collect(name.toLowerCase(), USAGE).length || collect(name.toLowerCase(), OCCUPATION).length)
+    return null;
+  return name.replace(/\b\w/g, (c) => c.toUpperCase()).slice(0, 80);
+}
+
 export function nameOf(text: string): string | null {
   // Every candidate, not the first: "saya ke toko, atas nama Budi" has a
   // "saya" that introduces a verb before the "atas nama" that names someone.

@@ -179,6 +179,20 @@ async function turn(id: string, text: string, step: number): Promise<string> {
   return row.replyText ?? "";
 }
 
+describe("a keep given one detail per message, across worker turns (2026-11-09, Task 12)", () => {
+  it("files the request once the time and the name have both come", async () => {
+    await turn("k1", "kak ada macbook pro 16 m3?", 0);
+    await turn("k2", "mau keep yang itu kak", 1);
+    await turn("k3", "besok jam 2", 2);
+    expect(await owner.reservationProposal.count()).toBe(0);
+    const noted = await turn("k4", "atas nama Rina", 3);
+    expect(noted).toContain("aku catat");
+    const req = await owner.reservationProposal.findFirstOrThrow({ include: { items: true } });
+    expect(req.custName).toBe("Rina");
+    expect(req.items).toHaveLength(1);
+  });
+});
+
 describe("emoji only at the beginning of the chat (owner, 2026-11-09)", () => {
   it("the first reply may carry one, every later reply carries none", async () => {
     const first = await turn("e1", "halo kak", 0);

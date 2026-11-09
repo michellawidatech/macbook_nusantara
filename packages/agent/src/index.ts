@@ -247,6 +247,7 @@ export {
   PIPELINES,
   isLead,
   lastShownUnits,
+  lastThreadState,
   lastWatchOffer,
   profileKnown,
   loadAgentPersonas,
@@ -369,3 +370,10 @@ export {
   loadChatbotModel,
   type ChatbotModel,
 } from "./chatModel.js";
+export {
+  EMPTY_STATE,
+  hasState,
+  readState,
+  type BookingDraft,
+  type ThreadState,
+} from "./threadState.js";

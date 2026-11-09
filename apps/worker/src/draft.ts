@@ -85,6 +85,7 @@ import {
   MAX_CORRECTIONS,
   applyEmojiRule,
   buildAgentPrompt,
+  lastThreadState,
   readableWhen,
   computeWaitMs,
   isResetCommand,
@@ -984,6 +985,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         reminded,
         visitBooked,
         lastShown,
+        threadState,
       ] = await Promise.all([
         db.waThreadMemory.findUnique({
           where: { from },
@@ -1004,6 +1006,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // The units the bot's last reply showed: "bisa nego?" and "mau ambil
         // yang M2" are about those, and go to a person (routeMessage).
         lastShownUnits(db, from, resetAt),
+        // What the conversation is in the middle of (threadState.ts): a
+        // booking given one detail per message, a search offered.
+        lastThreadState(db, from, resetAt),
       ]);
 
       // Turns older than the window, when the window is full: the few that
@@ -1184,6 +1189,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           lastReply: newestFirst[0]?.reply ?? null,
           proposalOpen: openProposal !== null,
           lastShown,
+          state: threadState,
           waiting,
           leadThreshold: settings.leadThreshold,
           dp,
@@ -1434,6 +1440,17 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                     sources: result.sources,
                     // What this reply showed, for the next message's "yang
                     // kedua" (rules/run.ts, v2context `lastShownUnits`).
+                    ...("state" in result && result.state
+                      ? {
+                          state: {
+                            v: 1,
+                            booking: result.state.booking
+                              ? { ...result.state.booking }
+                              : null,
+                            pendingSearch: result.state.pendingSearch,
+                          },
+                        }
+                      : {}),
                     ...("shown" in result &&
                     result.shown &&
                     result.shown.length > 0
