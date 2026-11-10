@@ -84,7 +84,9 @@ function rowOf(serial: string): HTMLElement {
     ),
   ).find(
     (tr) =>
-      tr.closest(".ant-table-expanded-row") === null &&
+      // The unit rows sit inside their batch's row since 2026-11-10; the
+      // unit's own row is the one holding no table of its own.
+      tr.querySelector(".ant-table") === null &&
       (tr.textContent ?? "").includes(serial),
   );
   expect(row, serial).toBeDefined();
@@ -360,5 +362,60 @@ describe("the service bench", () => {
     const unit = getDb().units.find((u) => u.serial === serial)!;
     // Back to QC for a re-check, not onto the shelf (2026-11-04).
     expect(unit).toMatchObject({ status: "QC", locationId: bench.id });
+  });
+});
+
+describe("Add to service (2026-11-10)", () => {
+  it("picks units from the list, sends them as one batch, and groups them on the bench", async () => {
+    renderPage();
+    await settle();
+    const db = getDb();
+    const free = db.units.filter(
+      (u) =>
+        u.status === "TERSEDIA" &&
+        skuTracksSerial(db, u.skuId) &&
+        !db.services.some((r) => r.serial === u.serial),
+    );
+    // Two from ONE warehouse, so they are one batch.
+    const home = free.find((u) =>
+      free.some((v) => v !== u && v.locationId === u.locationId),
+    )!.locationId;
+    const picks = free.filter((u) => u.locationId === home).slice(0, 2);
+    await userEvent.click(
+      screen.getByRole("button", { name: /Add to service/ }),
+    );
+    const send = await topModal();
+    await userEvent.click(
+      within(send).getByRole("button", { name: /Choose from list/ }),
+    );
+    const picker = await topModal();
+    for (const u of picks) {
+      const search = within(picker).getByLabelText(
+        "Search serial, product or invoice",
+      );
+      await userEvent.clear(search);
+      await userEvent.type(search, u.serial);
+      await userEvent.click(within(picker).getByText(u.serial));
+    }
+    await userEvent.click(
+      within(picker).getByRole("button", { name: "Add 2 unit(s)" }),
+    );
+    await waitFor(() => {
+      for (const u of picks)
+        expect(within(send).getByText(u.serial)).toBeInTheDocument();
+    });
+    await userEvent.click(
+      within(send).getByRole("button", { name: "Send to service" }),
+    );
+    await settle();
+    const visits = picks.map((u) => visitOf(u.serial)!);
+    expect(visits.every(Boolean)).toBe(true);
+    expect(visits[0]!.openedAt).toBe(visits[1]!.openedAt);
+    // One batch row with both units under it.
+    const [a, b] = picks.map((u) =>
+      rowOf(u.serial).closest("tr.ant-table-expanded-row"),
+    );
+    expect(a).not.toBeNull();
+    expect(a).toBe(b);
   });
 });

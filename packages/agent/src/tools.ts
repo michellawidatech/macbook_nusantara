@@ -71,6 +71,7 @@ import {
   REQUEST_TTL_MS,
   servicedState,
   splitCondition,
+  priceListLines,
 } from "@nusantara/domain";
 import { loadKnowledgeBase, type KnowledgeBase } from "./knowledge.js";
 import { isStrongMatch } from "./retrieval.js";
@@ -1381,6 +1382,79 @@ const UNIT_SELECT = {
 
 /** How many rows a price-aware search reads before filtering in code. */
 const PRICE_SCAN_LIMIT = 500;
+
+/**
+ * The day's price list (owner ask 2026-11-10): every variant on the shelf the
+ * query admits, with the lowest and highest of its units' OWN sell prices —
+ * the same lines Inventory's *Export stock* hands staff to paste
+ * (`priceListLines`, packages/domain). Called by code (`priceListTurn`), never
+ * offered to a model: a list of figures is sent as the lookup returned it, so
+ * nothing has to vouch for a sentence about them.
+ *
+ * Without a query it lists nothing and names the categories on sale instead,
+ * so the customer is asked which line they want rather than sent the shop.
+ */
+export const PRICE_LIST_TOOL = "price_list";
+
+async function priceList(
+  db: PrismaClient,
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+) {
+  if (!pricesOn(ctx)) return { priceOff: true, lines: [], categories: [] };
+  const query = String(args["query"] ?? "").trim();
+  const rawMax = Number(args["maxPrice"]);
+  const maxPrice =
+    Number.isFinite(rawMax) && rawMax > 0 ? BigInt(Math.floor(rawMax)) : null;
+  const rows = await db.unit.findMany({
+    where: stockWhere({ query }),
+    select: {
+      price: true,
+      sku: {
+        select: {
+          name: true,
+          variantLabel: true,
+          model: { select: { category: { select: { name: true } } } },
+        },
+      },
+    },
+    take: 3000,
+  });
+  const priced = rows.filter((u) => {
+    const p = askingPrice(u);
+    return p !== null && (maxPrice === null || p <= maxPrice);
+  });
+  if (!query) {
+    const counts = new Map<string, number>();
+    for (const u of priced) {
+      const c = u.sku.model.category.name;
+      counts.set(c, (counts.get(c) ?? 0) + 1);
+    }
+    return {
+      query,
+      lines: [],
+      categories: [...counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([name]) => name),
+    };
+  }
+  return {
+    query,
+    lines: priceListLines(
+      priced.map((u) => ({
+        product: u.sku.name,
+        variant: u.sku.variantLabel ?? "",
+        price: u.price,
+      })),
+    ).map((l) => ({
+      product: l.product,
+      variant: l.variant,
+      min: l.min.toString(),
+      max: l.max.toString(),
+    })),
+    categories: [],
+  };
+}
 
 async function searchStock(
   db: PrismaClient,
@@ -3580,6 +3654,7 @@ export async function dispatchTool(
     let out: unknown;
     if (name === "store_info") out = await storeInfo(db, args, ctx);
     else if (name === "search_stock") out = await searchStock(db, args, ctx);
+    else if (name === PRICE_LIST_TOOL) out = await priceList(db, args, ctx);
     else if (name === "check_serial") out = await checkSerial(db, args, ctx);
     else if (name === "unit_photos") out = await unitPhotos(db, args);
     else if (name === "find_unit_photos")

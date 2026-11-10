@@ -402,6 +402,100 @@ export function asksBuyOnline(text: string): boolean {
 }
 
 /**
+ * Asking for the day's price list (owner ask 2026-11-10): "boleh lihat
+ * pricelist hari ini gak", "minta list harga macbook air", "daftar harga
+ * ipad", "price list MBP". The bot answers it from the shelf by code
+ * (`priceListTurn`), filtered to what was asked for.
+ */
+const PRICE_LIST = new RegExp(
+  [
+    String.raw`\bprice\s*-?\s*list(nya)?\b`,
+    String.raw`\bpl\s+(hari\s+ini|terbaru|update|terupdate)\b`,
+    String.raw`\b(list|daftar|katalog)\s+(harga|price)(nya)?\b`,
+    String.raw`\bharga\s*-?\s*list(nya)?\b`,
+    String.raw`\b(list|daftar)\s+(unit|stok|stock)\s+(dan|&|\+|sama|beserta)\s+harga(nya)?\b`,
+  ].join("|"),
+  "i",
+);
+
+/** Does this message ask for the price list? */
+export function asksPriceList(text: string): boolean {
+  return PRICE_LIST.test(text);
+}
+
+/** What a price list ask narrows to: the stock search words, and a label. */
+export interface PriceListAsk {
+  /** Words for the stock search (`stockWhere`); empty = nothing named. */
+  readonly query: string;
+  /** How the reply names it: "MacBook Air M2". */
+  readonly label: string;
+}
+
+const PRICE_LIST_FAMILIES: readonly {
+  readonly re: RegExp;
+  readonly query: string;
+  readonly label: string;
+}[] = [
+  {
+    re: /\bmac\s*book\s*air\b|\bmba\b/i,
+    query: "macbook air",
+    label: "MacBook Air",
+  },
+  {
+    re: /\bmac\s*book\s*pro\b|\bmbp\b/i,
+    query: "macbook pro",
+    label: "MacBook Pro",
+  },
+  { re: /\bipad\s*pro\b/i, query: "ipad pro", label: "iPad Pro" },
+  { re: /\bipad\s*air\b/i, query: "ipad air", label: "iPad Air" },
+  { re: /\bipad\s*mini\b/i, query: "ipad mini", label: "iPad mini" },
+  { re: /\bipad\b/i, query: "ipad", label: "iPad" },
+  { re: /\bmac\s*mini\b/i, query: "mac mini", label: "Mac mini" },
+  { re: /\bimac\b/i, query: "imac", label: "iMac" },
+  { re: /\bmac\s*studio\b/i, query: "mac studio", label: "Mac Studio" },
+  { re: /\biphone\b/i, query: "iphone", label: "iPhone" },
+  { re: /\bapple\s*watch\b/i, query: "watch", label: "Apple Watch" },
+  { re: /\bair\b/i, query: "air", label: "Air" },
+  { re: /\bpro\b/i, query: "pro", label: "Pro" },
+  { re: /\bmac\s*book\b|\bmacbook\b/i, query: "macbook", label: "MacBook" },
+];
+
+/**
+ * Which line the customer asked the list for — a family, then a chip and a
+ * screen size when they named one ("pricelist macbook air m2 13 inch" →
+ * `macbook air m2 13`). Nothing named is an empty query: the bot asks which
+ * line rather than sending the whole shop (owner: *"don't send all items"*).
+ */
+export function priceListAsk(text: string): PriceListAsk {
+  const family = PRICE_LIST_FAMILIES.find((f) => f.re.test(text));
+  const chip = /\bm([1-5])(\s*(pro|max|ultra))?\b/i.exec(text);
+  // A size, never a budget: "15 juta" is money.
+  const size =
+    /\b(11|12|13|14|15|16|24|27)(?:\s*(?:inch|inchi|in)\b|\s*["”])?(?!\s*(?:jt|juta|jutaan|jtan|rb|ribu|k)\b)(?=\s|$|[,.?!])/i.exec(
+      text,
+    );
+  const chipWords = chip
+    ? [`m${chip[1]}`, ...(chip[3] ? [chip[3].toLowerCase()] : [])]
+    : [];
+  if (!family && chipWords.length === 0) return { query: "", label: "" };
+  const query = [
+    family?.query ?? "macbook",
+    ...chipWords,
+    ...(size ? [size[1]!] : []),
+  ].join(" ");
+  const label = [
+    family?.label ?? "MacBook",
+    ...(size ? [`${size[1]}"`] : []),
+    ...(chip
+      ? [
+          `M${chip[1]}${chip[3] ? ` ${chip[3][0]!.toUpperCase()}${chip[3].slice(1).toLowerCase()}` : ""}`,
+        ]
+      : []),
+  ].join(" ");
+  return { query, label };
+}
+
+/**
  * Asking to talk to a person (owner, 2026-10-28): "mau chat sama admin",
  * "bisa ngobrol sama CS?", "sama orang aja", "bukan bot kan?", "can I talk
  * to a human". Not "admin" in passing ("adminnya ramah ya").

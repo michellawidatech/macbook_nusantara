@@ -88,6 +88,7 @@ describe("the routes", () => {
       "confirm_reservation",
       "find_unit_photos",
       "lookup_customer",
+      "price_list",
       "propose_reservation",
       "remember_customer",
       "reschedule_reservation",

@@ -124,6 +124,7 @@ import {
   profileKnown,
   runRules,
   visitReplyTurn,
+  priceListTurn,
   type RemindedVisit,
   costMicros,
   dispatchTool,
@@ -1238,6 +1239,17 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           ...(dispatch ? { dispatch } : {}),
           reminded,
           name: known.name,
+        });
+      // "Boleh lihat pricelist hari ini?" (2026-11-10): the shelf's list for
+      // what was asked for, by code, whichever bot is on. Not when the message
+      // must go to a person anyway.
+      if (!result && !route)
+        result = await priceListTurn({
+          db,
+          ctx,
+          text: current,
+          capabilities,
+          ...(dispatch ? { dispatch } : {}),
         });
       if (result) {
         // Answered above.

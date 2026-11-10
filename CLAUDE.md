@@ -3766,6 +3766,27 @@ Decisions that outlived those documents:
   - The serial history shows EVERY photo, in its own full-width row — it was
     the third column of the details grid, which wrapped the other values and
     drew 8 of 13 with "+5".
+- **Labels, service batches and the price list — 2026-11-09/10.**
+  - Inventory's unit ⋯ has *Print barcode* for that one serial. The sticker's
+    name is 3.2 mm, the SKU code 2.8 mm, the serial under the QR up to 3.2 mm.
+  - **Service has *Add to service*** — the send dialog opened empty; its
+    *Choose from list* (`components/ServiceUnitPicker`) offers every unit on a
+    shelf or in QC on an invoice, with search, a warehouse filter and
+    select-all. It writes through the store like every send.
+  - **The bench is grouped into batches** (`lib/serviceBatches.ts`): the same
+    minute sent, from one warehouse, to one warehouse. Nothing is stored — the
+    "to" is the warehouse the visit's SERVIS event put the unit in. A batch
+    with more than one open unit has *Back in stock (n)*.
+  - **Export stock has a price list to copy**: units on sale with their OWN
+    sell price, lowest – highest per variant, under the dialog's filters.
+    `priceListLines` / `priceListText` (packages/domain) are the one format.
+  - **The bot sends the day's price list** (`asksPriceList`, `priceListAsk`,
+    `priceListTurn` in rules/run.ts) by code, before the AI, whichever bot is
+    on — the same lines through the `price_list` tool (`GET
+    /api/agent/v1/price-list`, never offered to a model; allowed on the price
+    switch). Filtered to the line asked for (MacBook Air / Pro, iPad…, chip,
+    size, a budget); nothing named → it asks which line, naming those on sale,
+    never the whole shop. Over 40 lines it asks for a chip or size.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

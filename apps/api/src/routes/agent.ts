@@ -25,6 +25,7 @@ import type { Logger } from "@nusantara/logging";
 import {
   AGENT_API_ROUTES,
   CODE_ONLY_TOOLS,
+  PRICE_LIST_TOOL,
   argsFromRequest,
   dispatchTool,
   effectiveCapabilities,
@@ -137,6 +138,13 @@ export function agentRouter(deps: AgentRouterDeps): Router {
           claims.writes &&
           effectiveCapabilities(claims.caps).reserve &&
           (CODE_ONLY_TOOLS as readonly string[]).includes(route.tool)
+        )
+          allowed.add(route.tool);
+        // The price list is code's own call (priceListTurn), allowed on the
+        // terms a quoted price is: stock and price both switched on.
+        if (
+          route.tool === PRICE_LIST_TOOL &&
+          effectiveCapabilities(claims.caps).price
         )
           allowed.add(route.tool);
         if (!allowed.has(route.tool)) {

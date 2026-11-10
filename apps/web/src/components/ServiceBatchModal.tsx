@@ -40,7 +40,8 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { DeleteOutlined } from "@ant-design/icons";
+import { DeleteOutlined, UnorderedListOutlined } from "@ant-design/icons";
+import { ServiceUnitPicker } from "./ServiceUnitPicker";
 import { useTranslation } from "react-i18next";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "./money";
 import { usePaidWithLabel } from "./SendToServiceModal";
@@ -130,6 +131,8 @@ export function ServiceBatchModal({
   const [fee, setFee] = useState<number | null>(null);
   const [paid, setPaid] = useState<PaidWith>("UNPAID");
   const [split, setSplit] = useState(true);
+  /** The list picker (2026-11-10): any unit on a shelf or in QC. */
+  const [picking, setPicking] = useState(false);
 
   // A fresh batch each time it opens, from the serials it was handed. The ones
   // that cannot go are left off and named, rather than refused at the end.
@@ -200,6 +203,15 @@ export function ServiceBatchModal({
     );
     setAdding("");
   };
+
+  /** Units chosen from the list; ones that cannot go are skipped. */
+  const addMany = (serials: readonly string[]) =>
+    setRows((rs) => [
+      ...rs,
+      ...serials
+        .filter((s) => eligible(db, mode, s) && !rs.some((r) => r.serial === s))
+        .map((serial) => ({ serial, description: "" })),
+    ]);
 
   const candidates = db.units
     .filter(
@@ -422,54 +434,65 @@ export function ServiceBatchModal({
       <Form layout="vertical">
         {
           <Flex vertical gap={SPACE.xs} style={{ marginBottom: SPACE.md }}>
-            <AutoComplete
-              value={adding}
-              options={candidates}
-              defaultActiveFirstOption={false}
-              optionRender={(opt) => (
-                <Flex vertical>
-                  <span>{String(opt.value)}</span>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: TYPE.sm }}
-                  >
-                    {String(opt.data.product ?? "")}
-                  </Typography.Text>
-                </Flex>
-              )}
-              filterOption={(input, opt) =>
-                `${opt?.value ?? ""} ${opt?.product ?? ""}`
-                  .toLowerCase()
-                  .includes(input.trim().toLowerCase())
-              }
-              onChange={(v: string) => {
-                const text = normaliseSerial(v);
-                setAddMiss(null);
-                // A whole serial, and not the head of a longer one, goes in at
-                // once — the till's rule (`serialNamedBy`): a scan lands
-                // without anybody reaching for Enter.
-                const whole = candidates.some((c) => c.value === text);
-                const longer = candidates.some(
-                  (c) => c.value !== text && c.value.startsWith(text),
-                );
-                if (whole && !longer) addSerial(text);
-                else setAdding(v.toUpperCase());
-              }}
-              onSelect={(v: string) => addSerial(v)}
-            >
-              <Input
-                aria-label={t("serviceBatch.addSerial", "Add a unit")}
-                placeholder={t(
-                  "serviceBatch.addSerialHint",
-                  "Scan or type a serial, then Enter",
+            <Flex gap={SPACE.xs}>
+              <AutoComplete
+                style={{ flex: 1 }}
+                value={adding}
+                options={candidates}
+                defaultActiveFirstOption={false}
+                optionRender={(opt) => (
+                  <Flex vertical>
+                    <span>{String(opt.value)}</span>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: TYPE.sm }}
+                    >
+                      {String(opt.data.product ?? "")}
+                    </Typography.Text>
+                  </Flex>
                 )}
-                onPressEnter={(e) => {
-                  e.preventDefault();
-                  addSerial(adding);
+                filterOption={(input, opt) =>
+                  `${opt?.value ?? ""} ${opt?.product ?? ""}`
+                    .toLowerCase()
+                    .includes(input.trim().toLowerCase())
+                }
+                onChange={(v: string) => {
+                  const text = normaliseSerial(v);
+                  setAddMiss(null);
+                  // A whole serial, and not the head of a longer one, goes in at
+                  // once — the till's rule (`serialNamedBy`): a scan lands
+                  // without anybody reaching for Enter.
+                  const whole = candidates.some((c) => c.value === text);
+                  const longer = candidates.some(
+                    (c) => c.value !== text && c.value.startsWith(text),
+                  );
+                  if (whole && !longer) addSerial(text);
+                  else setAdding(v.toUpperCase());
                 }}
-                data-scan-target=""
-              />
-            </AutoComplete>
+                onSelect={(v: string) => addSerial(v)}
+              >
+                <Input
+                  aria-label={t("serviceBatch.addSerial", "Add a unit")}
+                  placeholder={t(
+                    "serviceBatch.addSerialHint",
+                    "Scan or type a serial, then Enter",
+                  )}
+                  onPressEnter={(e) => {
+                    e.preventDefault();
+                    addSerial(adding);
+                  }}
+                  data-scan-target=""
+                />
+              </AutoComplete>
+              {mode === "SEND" && (
+                <Button
+                  icon={<UnorderedListOutlined />}
+                  onClick={() => setPicking(true)}
+                >
+                  {t("servicePicker.open", "Choose from list")}
+                </Button>
+              )}
+            </Flex>
             {addMiss !== null && (
               <Typography.Text type="danger" style={{ fontSize: TYPE.sm }}>
                 {mode === "SEND"
@@ -698,6 +721,13 @@ export function ServiceBatchModal({
           </Form.Item>
         )}
       </Form>
+      <ServiceUnitPicker
+        open={picking}
+        exclude={rows.map((r) => r.serial)}
+        onPick={addMany}
+        onClose={() => setPicking(false)}
+        zIndex={(zIndex ?? 1000) + 10}
+      />
     </Modal>
   );
 }

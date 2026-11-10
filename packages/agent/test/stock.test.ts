@@ -329,3 +329,58 @@ describe("what crosses to the model", () => {
     expect((await search())["note"]).toBeUndefined();
   });
 });
+
+describe("the day's price list (2026-11-10)", () => {
+  const list = (
+    args: Record<string, unknown>,
+    over: Partial<ToolContext> = {},
+  ) =>
+    dispatchTool(db, "price_list", args, { ...ctx, ...over }) as Promise<{
+      lines: { product: string; variant: string; min: string; max: string }[];
+      categories: string[];
+      priceOff?: boolean;
+    }>;
+
+  it("lists the variant once with the lowest and highest of its units' own prices", async () => {
+    await unit({ id: "p1", serial: "PL1", status: "TERSEDIA" });
+    await unit({ id: "p2", serial: "PL2", status: "TERSEDIA" });
+    await unit({ id: "p3", serial: "PL3", status: "TERSEDIA" });
+    await unit({ id: "p4", serial: "PL4", status: "TERJUAL" });
+    await db.unit.update({ where: { id: "p2" }, data: { price: 14_000_000n } });
+    await db.unit.update({ where: { id: "p3" }, data: { price: null } });
+    await db.unit.update({ where: { id: "p4" }, data: { price: 1n } });
+
+    const out = await list({ query: "macbook air" });
+    expect(out.lines).toEqual([
+      {
+        product: "MacBook Air M2 256GB",
+        variant: "8/256",
+        min: "14000000",
+        max: "15500000",
+      },
+    ]);
+    expect((await list({ query: "ipad" })).lines).toEqual([]);
+    expect(
+      (await list({ query: "air", maxPrice: "14500000" })).lines[0],
+    ).toMatchObject({
+      min: "14000000",
+      max: "14000000",
+    });
+  });
+
+  it("names the categories instead of listing when nothing was asked for", async () => {
+    await unit({ id: "p5", serial: "PL5", status: "TERSEDIA" });
+    const out = await list({});
+    expect(out.lines).toEqual([]);
+    expect(out.categories).toEqual(["MacBook"]);
+  });
+
+  it("quotes nothing with the price switch off", async () => {
+    await unit({ id: "p6", serial: "PL6", status: "TERSEDIA" });
+    const out = await list(
+      { query: "air" },
+      { capabilities: { ...LIVE_CAPABILITIES, price: false } },
+    );
+    expect(out).toMatchObject({ priceOff: true, lines: [] });
+  });
+});

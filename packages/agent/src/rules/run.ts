@@ -40,8 +40,16 @@ import {
 import { costMicros } from "../agents.js";
 import { matchesFor, type KnowledgeBase } from "../knowledge.js";
 import {
+  chatRupiah,
+  jakartaDay,
+  priceListText,
+  type PriceListLine,
+} from "@nusantara/domain";
+import {
   asksBattery,
   asksBuyOnline,
+  asksPriceList,
+  priceListAsk,
   asksToBuy,
   dpKeepLine,
   effectiveCapabilities,
@@ -60,7 +68,12 @@ import {
   type BookingDraft,
   type ThreadState,
 } from "../threadState.js";
-import { dispatchTool, storeOpenAt, type ToolContext } from "../tools.js";
+import {
+  PRICE_LIST_TOOL,
+  dispatchTool,
+  storeOpenAt,
+  type ToolContext,
+} from "../tools.js";
 import {
   askedAboutNeeds,
   reply,
@@ -418,6 +431,149 @@ export async function visitReplyTurn(input: {
       }),
     },
   });
+}
+
+/** More lines than this and the list asks to be narrowed instead of growing. */
+export const PRICE_LIST_MAX_LINES = 40;
+
+/**
+ * "Boleh lihat pricelist hari ini gak?" (owner ask 2026-11-10) — answered by
+ * code, whichever bot is on: the shelf's price list for what was asked for
+ * (MacBook Air, MacBook Pro, iPad… with a chip or size when named), lowest –
+ * highest sell price per variant, the same lines staff paste from Export
+ * stock. Nothing named → the bot asks which line, naming the ones on sale,
+ * rather than sending the whole shop. A budget in the same message narrows
+ * the list. With the price switch off this returns null and the ordinary
+ * turn answers (which hands a price question over).
+ */
+export async function priceListTurn(input: {
+  readonly db: PrismaClient;
+  readonly ctx: ToolContext;
+  readonly text: string;
+  readonly capabilities: AgentCapabilities;
+  readonly dispatch?: ToolDispatch;
+}): Promise<RulesResult | null> {
+  if (!asksPriceList(input.text)) return null;
+  if (!effectiveCapabilities(input.capabilities).price) return null;
+  const started = Date.now();
+  const u = understand(input.text, input.ctx.now, {
+    proposalOpen: false,
+    lastShown: [],
+  });
+  const lang: Lang = u.language;
+  const kit = turnKit({
+    db: input.db,
+    ctx: input.ctx,
+    capabilities: input.capabilities,
+    dispatch: input.dispatch,
+    u,
+    started,
+  });
+  const ask = priceListAsk(input.text);
+  const out = await kit.call(PRICE_LIST_TOOL, {
+    query: ask.query,
+    ...(u.budgetMax ? { maxPrice: u.budgetMax } : {}),
+  });
+  if (!out || "error" in out || out["priceOff"] === true) return null;
+  const rows = Array.isArray(out["lines"])
+    ? (out["lines"] as {
+        product: string;
+        variant: string;
+        min: string;
+        max: string;
+      }[])
+    : [];
+  const categories = Array.isArray(out["categories"])
+    ? (out["categories"] as string[])
+    : [];
+  const day = jakartaDay(input.ctx.now);
+  const budget = u.budgetMax
+    ? ` ${lang === "en" ? "up to" : "sampai"} ${chatRupiah(u.budgetMax)}`
+    : "";
+
+  let text: string;
+  if (!ask.query) {
+    text =
+      categories.length > 0
+        ? lang === "en"
+          ? `Sure kak, which one would you like the price list for? We have ${listWords(categories, "or")} today, and I'll send that one`
+          : `Siap kak, mau pricelist yang mana nih? Hari ini ada ${listWords(categories, "atau")}, nanti aku kirimin yang itu ya`
+        : lang === "en"
+          ? "Sorry kak, there is nothing on sale with a price right now. What are you looking for? I'll check for you"
+          : "Maaf kak, lagi belum ada unit dengan harga yang bisa aku kirim sekarang. Kakak lagi cari yang seperti apa? Nanti aku bantu cek ya";
+  } else if (rows.length === 0) {
+    text =
+      lang === "en"
+        ? `Sorry kak, we have no ${ask.label}${budget} on sale today. What are you looking for? I'll help find an alternative`
+        : `Maaf kak, ${ask.label}${budget} lagi kosong hari ini. Kakak lagi cari yang seperti apa? Nanti aku bantu cariin alternatifnya ya`;
+  } else {
+    const lines: PriceListLine[] = rows.map((r) => ({
+      product: r.product,
+      variant: r.variant,
+      min: BigInt(r.min),
+      max: BigInt(r.max),
+    }));
+    const cut = lines.length > PRICE_LIST_MAX_LINES;
+    const list = priceListText(lines.slice(0, PRICE_LIST_MAX_LINES));
+    text =
+      lang === "en"
+        ? [
+            `Sure kak, here is today's ${ask.label}${budget} price list (${day}):`,
+            list,
+            ...(cut
+              ? ["There are more, tell me the chip or size and I'll send those"]
+              : []),
+            "Prices depend on each unit's grade, condition and battery. Want me to help pick the one that suits you best?",
+          ].join("\n\n")
+        : [
+            `Siap kak, ini pricelist ${ask.label}${budget} hari ini (${day}) ya:`,
+            list,
+            ...(cut
+              ? [
+                  "Masih ada lagi kak, sebutin chip atau ukurannya ya biar aku kirim yang itu",
+                ]
+              : []),
+            "Harganya beda-beda tergantung grade, kondisi dan baterai unitnya kak. Mau aku bantu pilihin yang paling pas buat kebutuhan kakak?",
+          ].join("\n\n");
+  }
+
+  kit.trace.push({
+    agent: "ADVISOR",
+    model: "template",
+    tool: null,
+    ok: true,
+    ms: 0,
+    inputTokens: 0,
+    cachedTokens: 0,
+    outputTokens: 0,
+  });
+  return {
+    reply: sanitiseReply(text),
+    rawReply: text,
+    toolsUsed: kit.toolsUsed,
+    steps: 1,
+    sources: ["stock"],
+    verdict: {
+      language: lang,
+      tone: "casual",
+      intent: "ask_price",
+      leadScore: leadScoreOf(u),
+      needsOperations: true,
+      operationsBrief: "",
+      escalate: null,
+    },
+    trace: kit.trace,
+    costMicros: 0,
+    latencyMs: Date.now() - started,
+    shown: [],
+    usedAi: false,
+  };
+}
+
+/** "MacBook Air, MacBook Pro atau iPad". */
+function listWords(items: readonly string[], or: string): string {
+  if (items.length <= 1) return items.join("");
+  return `${items.slice(0, -1).join(", ")} ${or} ${items[items.length - 1]}`;
 }
 
 export async function runRules(input: RulesInput): Promise<RulesResult> {

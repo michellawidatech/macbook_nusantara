@@ -20,8 +20,19 @@
  * first one's columns.
  */
 import { useMemo, useState } from "react";
-import { App, Checkbox, Flex, Form, Modal, Select, Typography } from "antd";
-import { DownloadOutlined } from "@ant-design/icons";
+import {
+  App,
+  Button,
+  Checkbox,
+  Collapse,
+  Flex,
+  Form,
+  Input,
+  Modal,
+  Select,
+  Typography,
+} from "antd";
+import { CopyOutlined, DownloadOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useDb } from "../../mock/store.js";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
@@ -32,6 +43,7 @@ import {
   stockReportFor,
   stockReportPdf,
   stockReportSheet,
+  stockPriceListText,
   type StockExportColumn,
   type StockExportFilter,
   type StockExportFormat,
@@ -82,6 +94,42 @@ export function StockExportModal({
       columns,
     ],
   );
+
+  /*
+   * The price list to paste into a chat (owner ask 2026-11-10): the same
+   * filters, the units on sale, lowest – highest sell price per variant.
+   */
+  const priceList = useMemo(
+    () =>
+      stockPriceListText(db, filter, {
+        shopName: db.settings.shopName ?? "Macbook Nusantara",
+        now: new Date(),
+      }),
+    [
+      db.units,
+      db.skus,
+      db.models,
+      db.settings.shopName,
+      warehouseIds,
+      categories,
+      modelIds,
+    ],
+  );
+  const copyPriceList = () => {
+    void navigator.clipboard
+      ?.writeText(priceList)
+      .then(() =>
+        message.success(t("stockExport.priceListCopied", "Price list copied.")),
+      )
+      .catch(() =>
+        message.error(
+          t(
+            "stockExport.priceListCopyFailed",
+            "Could not copy — select the text and copy it by hand.",
+          ),
+        ),
+      );
+  };
 
   const categoryNames = [
     ...new Set([
@@ -287,6 +335,52 @@ export function StockExportModal({
             </Flex>
           </Checkbox.Group>
         </Form.Item>
+        <Collapse
+          size="small"
+          items={[
+            {
+              key: "pricelist",
+              label: t("stockExport.priceList", "Price list to copy"),
+              children: (
+                <Flex vertical gap={SPACE.xs}>
+                  <Input.TextArea
+                    readOnly
+                    aria-label={t(
+                      "stockExport.priceList",
+                      "Price list to copy",
+                    )}
+                    value={
+                      priceList ||
+                      t(
+                        "stockExport.priceListEmpty",
+                        "No unit on sale with a sell price matches these filters.",
+                      )
+                    }
+                    autoSize={{ minRows: 4, maxRows: 14 }}
+                  />
+                  <Flex justify="space-between" align="center" gap={SPACE.sm}>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: TYPE.sm }}
+                    >
+                      {t(
+                        "stockExport.priceListHint",
+                        "Units on sale only, lowest – highest sell price per variant. The chatbot sends the same list.",
+                      )}
+                    </Typography.Text>
+                    <Button
+                      icon={<CopyOutlined />}
+                      disabled={priceList === ""}
+                      onClick={copyPriceList}
+                    >
+                      {t("stockExport.copyPriceList", "Copy")}
+                    </Button>
+                  </Flex>
+                </Flex>
+              ),
+            },
+          ]}
+        />
       </Form>
       <Typography.Text
         type={

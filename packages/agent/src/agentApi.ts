@@ -38,6 +38,8 @@ export interface AgentRoute {
  */
 export const AGENT_API_ROUTES: readonly AgentRoute[] = [
   { tool: "search_stock", method: "GET", path: "/stock" },
+  // The day's price list (2026-11-10), called by code, never by a model.
+  { tool: "price_list", method: "GET", path: "/price-list" },
   { tool: "check_serial", method: "GET", path: "/units/:serial" },
   { tool: "unit_photos", method: "GET", path: "/units/:serial/photos" },
   { tool: "find_unit_photos", method: "GET", path: "/photos" },

@@ -18,6 +18,7 @@ import {
   stockReport,
   stockReportFor,
   stockReportSheet,
+  stockPriceListText,
   type StockExportColumn,
 } from "../src/lib/stockExport.js";
 import {
@@ -389,5 +390,43 @@ describe("dates", () => {
     expect(fmtReportDateTime(new Date(2026, 0, 5, 9, 3))).toBe(
       "05/01/2026 09:03",
     );
+  });
+});
+
+describe("stockPriceListText — the list to paste into a chat (2026-11-10)", () => {
+  it("lists each variant on sale once, lowest – highest of its units' own prices", () => {
+    const text = stockPriceListText(db, EVERYTHING, {
+      shopName: "Macbook Nusantara",
+      now,
+    });
+    expect(text.split("\n")[0]).toBe(
+      "Pricelist Macbook Nusantara · 19/09/2026",
+    );
+    const sellable = db.units.filter(
+      (u) => isSellable(u) && (u.price ?? 0) > 0,
+    );
+    expect(sellable.length).toBeGreaterThan(0);
+    const sku = db.skus.find((k) => k.id === sellable[0]!.skuId)!;
+    const prices = sellable
+      .filter((u) => u.skuId === sku.id)
+      .map((u) => u.price!);
+    const fmt = (n: number) => `Rp\u00a0${n.toLocaleString("de-DE")}`;
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    const expected = min === max ? fmt(min) : `${fmt(min)} – ${fmt(max)}`;
+    expect(text).toContain(`*${sku.name}*`);
+    expect(text).toContain(
+      sku.variantLabel ? `• ${sku.variantLabel}: ${expected}` : `• ${expected}`,
+    );
+  });
+
+  it("follows the filters, and is empty when nothing on sale matches", () => {
+    expect(
+      stockPriceListText(
+        db,
+        { ...EVERYTHING, warehouseIds: ["no-such-warehouse"] },
+        { shopName: "X", now },
+      ),
+    ).toBe("");
   });
 });

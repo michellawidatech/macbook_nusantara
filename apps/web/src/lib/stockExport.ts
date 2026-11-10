@@ -64,6 +64,7 @@
 import type { CatalogModel, Sku, Unit, Warehouse } from "../mock/seed.js";
 import { gradeRank, gradeText } from "./condition.js";
 import { HELD_STATUSES, isSellable } from "./inventory.js";
+import { priceListLines, priceListText } from "@nusantara/domain";
 import { priceOf, priceRange, type PriceRange } from "./unitPrice.js";
 import type { XlsxCell, XlsxRow, XlsxSheet, XlsxStyle } from "./xlsxWrite.js";
 import {
@@ -294,6 +295,43 @@ export function stockReport(
     qty: out.reduce((n, g) => n + g.qty, 0),
     lineCount: out.reduce((n, g) => n + g.lines.length, 0),
   };
+}
+
+/**
+ * The price list to paste into a chat (owner ask 2026-11-10): every variant
+ * the filters admit with a unit ON SALE, its specs, and the lowest and highest
+ * sell price among those units. A unit counts only with its own sell price —
+ * the same rule the chatbot quotes by, and the same text it sends
+ * (`priceListText` in packages/domain).
+ */
+export function stockPriceListText(
+  src: StockExportSources,
+  filter: StockExportFilter,
+  opts: { readonly shopName: string; readonly now: Date },
+): string {
+  const skuById = new Map(src.skus.map((s) => [s.id, s]));
+  const modelById = new Map(src.models.map((m) => [m.id, m]));
+  const modelOf = (skuId: string) => {
+    const sku = skuById.get(skuId);
+    return sku && modelById.get(sku.modelId);
+  };
+  const lines = priceListLines(
+    src.units
+      .filter((u) => isSellable(u) && inStockExport(u, filter, modelOf))
+      .map((u) => {
+        const sku = skuById.get(u.skuId);
+        return {
+          product: sku?.name ?? u.skuId,
+          variant: sku?.variantLabel ?? "",
+          price: u.price ?? null,
+        };
+      }),
+  );
+  if (lines.length === 0) return "";
+  return priceListText(lines, {
+    title: `Pricelist ${opts.shopName} · ${fmtReportDate(opts.now)}`,
+    bold: true,
+  });
 }
 
 /** The report for a set of chosen columns — the columns decide the rows. */
