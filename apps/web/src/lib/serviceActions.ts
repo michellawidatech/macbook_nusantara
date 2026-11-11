@@ -198,6 +198,8 @@ export interface SendInput {
   readonly quote?: number;
   readonly quotePaid?: PaidWith;
   readonly note?: string;
+  /** The batch's name, the same on every visit of one send (2026-11-11). */
+  readonly title?: string;
   readonly raisedBy: ServiceRec["raisedBy"];
   readonly poId?: string;
   /** The one instant the send event, the visit and its charges share. */
@@ -290,6 +292,7 @@ export function planSendToService(input: SendInput): SendPlan {
     "svcf",
   );
   const note = input.note?.trim();
+  const title = input.title?.trim();
   return {
     travelling,
     event: {
@@ -307,6 +310,7 @@ export function planSendToService(input: SendInput): SendPlan {
       arrivedAt: input.at,
       fees,
       ...(note ? { note } : {}),
+      ...(title ? { title } : {}),
       raisedBy: input.raisedBy,
       ...(input.poId ? { poId: input.poId } : {}),
       staff: input.staff,

@@ -5299,4 +5299,14 @@ export const id: Record<string, string> = {
   "stockReason.transfer": "Transfer stok",
   "supplierReturn.titleOf":
     "Retur {{serial}} ke supplier ({{n}} dari {{count}})",
+  "service.batchTitle": "Judul",
+  "service.batchUntitled": "Batch servis",
+  "service.batchClose": "Tutup",
+  "service.repairLabel": "Perbaikan",
+  "serviceBatch.title": "Judul",
+  "serviceBatch.titleHint": "mis. Layar ke Pak Budi",
+  "serviceBatch.repairCost": "Biaya perbaikan",
+  "serviceBatch.repairCostOf": "Biaya perbaikan {{serial}}",
+  "serviceBatch.repairCostHint": "0 kalau gratis",
+  "serviceBatch.repairPaidWith": "Perbaikan dibayar dengan",
 };

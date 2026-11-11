@@ -3787,6 +3787,27 @@ Decisions that outlived those documents:
     switch). Filtered to the line asked for (MacBook Air / Pro, iPad…, chip,
     size, a budget); nothing named → it asks which line, naming those on sale,
     never the whole shop. Over 40 lines it asks for a chip or size.
+- **A service batch has a title and opens in a popup — 2026-11-11.** *"Add
+  title / description per service so it's more identifiable … it's not a
+  drop down, it's a popup modal … click Back in stock and it will ask the
+  costs per unit … Back in stock (x) … they can also fill down the rows."*
+  - **`ServiceVisit.title`** (migration `20261111090000_service_visit_title`,
+    additive, nullable; asked for by the owner). *Add to service* asks a
+    Title once and writes it on every visit of the send; it is a fourth
+    batch axis in `serviceBatches` (minute, from, to, title) and the bench's
+    first column. Renamed in the popup — written on every visit of it.
+    `note` stays each unit's own description.
+  - **A batch row opens a popup** with all its units (the old nested table:
+    charges, per-unit Charge / Back in stock / delete) and a footer *Back in
+    stock (n)* for the open ones. Nothing on the bench expands any more.
+    `data-serials` on a batch row is how tests find it.
+  - **Back in stock asks each unit's Repair cost** (`ServiceBatchModal`
+    BACK, every door — the popup, a row, Inventory's Stock in → Back from
+    service): a box per row with *Fill down*, and only rows with a cost typed
+    go back — the button reads *Back in stock (x)*. 0 is a cost (a free
+    repair); empty is "not back yet". A cost above 0 is a LABOUR charge
+    "Repair" on the visit (COGS) plus its SERVIS → SERVIS timeline line, paid
+    per *Repair paid with* (Not paid yet by default, else a UNIT expense).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

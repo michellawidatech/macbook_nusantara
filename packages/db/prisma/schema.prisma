@@ -2992,6 +2992,10 @@ model ServiceVisit {
   arrivedAt       DateTime?
   closedAt        DateTime?
   toLocationId    String?
+  /// A name for the trip, shared by every visit of one batch (owner ask
+  /// 2026-11-11: "add title / description per service so it's more
+  /// identifiable"). `note` stays the unit's own "what is wrong".
+  title           String?
   note            String?
   raisedBy        ServiceRaisedBy
   purchaseOrderId String?

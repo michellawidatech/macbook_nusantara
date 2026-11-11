@@ -40,9 +40,12 @@ export interface ChargeTarget {
 export function ServiceChargeModal({
   target,
   onClose,
+  zIndex,
 }: {
   readonly target: ChargeTarget | null;
   readonly onClose: () => void;
+  /** Above a popup it opens from (the Service page's batch, 2026-11-11). */
+  readonly zIndex?: number;
 }) {
   const { t } = useTranslation();
   const { message } = App.useApp();
@@ -203,6 +206,7 @@ export function ServiceChargeModal({
   return (
     <Modal
       open={target !== null}
+      zIndex={zIndex}
       title={
         target?.fee
           ? t("service.editChargeOn", "Change a charge on {{serial}}", {

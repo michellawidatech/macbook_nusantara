@@ -9,6 +9,10 @@
  * at a time in the same minute, between the same two warehouses, read as one
  * batch too — which is what they were on the bench.
  *
+ * A batch's TITLE (2026-11-11) is written on every visit of the send, so it
+ * is a fourth axis: two sends in one minute under different names are two
+ * batches. Renaming a batch rewrites the title on all of its visits.
+ *
  * Where a visit was SENT TO is not a column on the visit: it is the
  * warehouse its send event put the unit in (the event at `openedAt` that
  * moved it to SERVIS), and failing that, where the unit is while the visit
@@ -37,6 +41,8 @@ export interface ServiceBatch {
   readonly openedAt: string;
   readonly fromLocationId: string;
   readonly toLocationId: string;
+  /** The name it was sent under; absent when nobody gave one. */
+  readonly title?: string;
   readonly rows: readonly BenchRow[];
   /** Every visit in it is finished. */
   readonly closed: boolean;
@@ -84,15 +90,16 @@ export function serviceBatches(
 ): ServiceBatch[] {
   const groups = new Map<
     string,
-    { from: string; to: string; rows: BenchRow[] }
+    { from: string; to: string; title?: string; rows: BenchRow[] }
   >();
   for (const r of rows) {
     const to = serviceLocationOf(r.rec, sources.events, sources.units);
     const from = r.rec.fromLocationId;
-    const key = `${minuteOf(r.rec.openedAt)}|${from}|${to}`;
+    const title = r.rec.title?.trim() || undefined;
+    const key = `${minuteOf(r.rec.openedAt)}|${from}|${to}|${title ?? ""}`;
     const g = groups.get(key);
     if (g) g.rows.push(r);
-    else groups.set(key, { from, to, rows: [r] });
+    else groups.set(key, { from, to, title, rows: [r] });
   }
   return [...groups.entries()].map(([key, g]) => ({
     key,
@@ -101,6 +108,7 @@ export function serviceBatches(
       .reduce((a, b) => (b < a ? b : a)),
     fromLocationId: g.from,
     toLocationId: g.to,
+    ...(g.title ? { title: g.title } : {}),
     rows: g.rows,
     closed: g.rows.every((r) => r.closed),
     cost: g.rows.reduce((n, r) => n + r.cost, 0),

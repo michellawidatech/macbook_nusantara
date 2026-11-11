@@ -1141,6 +1141,8 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
         paid: z.literal(true).optional(),
       }),
     ),
+    /** The batch's name (2026-11-11), the same on every visit of one send. */
+    title: text.optional(),
     note: text.optional(),
     raisedBy: z.enum(SERVICE_RAISED_BY),
     poId: id.optional(),

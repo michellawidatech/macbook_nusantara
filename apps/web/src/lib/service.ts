@@ -149,6 +149,11 @@ export interface ServiceRec {
   readonly fees: readonly ServiceFee[];
   /** What is wrong with it, in words. */
   readonly note?: string;
+  /**
+   * The batch's name (owner ask 2026-11-11) — written on every visit of one
+   * send, so the bench can say "Screens to Pak Budi" instead of a time.
+   */
+  readonly title?: string;
   /** Which desk sent it: QC, an adjustment, or the returns desk. */
   readonly raisedBy: "QC" | "ADJUSTMENT" | "RETURN";
   /** The invoice it came off, when QC raised it. */

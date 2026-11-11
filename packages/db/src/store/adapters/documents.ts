@@ -2799,6 +2799,7 @@ export const services: Adapter<"services"> = {
         // Derived from the expense, never written: see the contract.
         ...(f.expense === null ? {} : { paid: true as const }),
       })),
+      title: v.title ?? undefined,
       note: v.note ?? undefined,
       raisedBy: v.raisedBy,
       poId: v.purchaseOrderId ?? undefined,
@@ -2821,6 +2822,7 @@ export const services: Adapter<"services"> = {
         arrivedAt: n.arrivedAt === undefined ? null : instantOf(n.arrivedAt),
         closedAt: n.closedAt === undefined ? null : instantOf(n.closedAt),
         toLocationId: n.toLocationId ?? null,
+        title: blankToNull(n.title),
         note: blankToNull(n.note),
         raisedBy: n.raisedBy,
         purchaseOrderId: n.poId ?? null,

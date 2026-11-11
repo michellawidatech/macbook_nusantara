@@ -19,6 +19,16 @@
  * is added later on the Service page with *+ Charge*, which puts it in the
  * unit's COGS; the send asks only where, the courier, and a description.
  *
+ * **A title for the batch** (owner ask 2026-11-11), asked on a send and
+ * written on every visit of it, so the bench can tell two trips apart by
+ * name rather than by the minute they left.
+ *
+ * **Back in stock asks what each unit's repair cost** (owner ask
+ * 2026-11-11): a Repair cost box per row, with Fill down, and only the rows
+ * with a cost typed go back — the button says how many. 0 is a cost (a free
+ * repair); an empty box is "not back yet". Each cost is a LABOUR charge on
+ * the unit's visit, so it reaches the unit's COGS like any *+ Charge*.
+ *
  * Everything is read again INSIDE the mutation: a unit can be reserved, sold
  * or brought back in another tab between the render and the press, and such a
  * unit is skipped and named rather than written.
@@ -88,6 +98,8 @@ export interface ServiceBatchModalProps {
 interface Row {
   readonly serial: string;
   description: string;
+  /** BACK only: what the repair cost. Null = not filled = not going back. */
+  cost: number | null;
 }
 
 const MONEY_INPUT = {
@@ -131,6 +143,10 @@ export function ServiceBatchModal({
   const [fee, setFee] = useState<number | null>(null);
   const [paid, setPaid] = useState<PaidWith>("UNPAID");
   const [split, setSplit] = useState(true);
+  /** SEND: the batch's name. */
+  const [batchTitle, setBatchTitle] = useState("");
+  /** BACK: how the repair costs were paid. */
+  const [repairPaid, setRepairPaid] = useState<PaidWith>("UNPAID");
   /** The list picker (2026-11-10): any unit on a shelf or in QC. */
   const [picking, setPicking] = useState(false);
 
@@ -140,12 +156,14 @@ export function ServiceBatchModal({
     if (serials === null) return;
     const ok = serials.filter((s) => eligible(db, mode, s));
     const skipped = serials.filter((s) => !ok.includes(s));
-    setRows(ok.map((serial) => ({ serial, description: "" })));
+    setRows(ok.map((serial) => ({ serial, description: "", cost: null })));
     setAdding("");
     setAddMiss(null);
     setFee(null);
     setPaid("UNPAID");
     setSplit(true);
+    setBatchTitle("");
+    setRepairPaid("UNPAID");
     const first = ok[0] ? db.units.find((u) => u.serial === ok[0]) : undefined;
     setDest(
       mode === "SEND"
@@ -175,8 +193,14 @@ export function ServiceBatchModal({
     const k = db.skus.find((s) => s.id === unitOf(serial)?.skuId);
     return k ? `${k.name} · ${k.variantLabel}` : "";
   };
+  /**
+   * The rows this press records: every row on a send; on Back in stock only
+   * the ones with a repair cost typed (owner ask 2026-11-11).
+   */
+  const active = mode === "BACK" ? rows.filter((r) => r.cost !== null) : rows;
+  const repairTotal = active.reduce((n, r) => n + (r.cost ?? 0), 0);
   /** The units that change warehouse — the ones a courier carried. */
-  const travellers = rows.filter(
+  const travellers = active.filter(
     (r) => dest !== undefined && unitOf(r.serial)?.locationId !== dest,
   );
   const feeAsked = travellers.length > 0;
@@ -199,7 +223,7 @@ export function ServiceBatchModal({
     setRows((rs) =>
       rs.some((r) => r.serial === serial)
         ? rs
-        : [...rs, { serial, description: "" }],
+        : [...rs, { serial, description: "", cost: null }],
     );
     setAdding("");
   };
@@ -210,7 +234,7 @@ export function ServiceBatchModal({
       ...rs,
       ...serials
         .filter((s) => eligible(db, mode, s) && !rs.some((r) => r.serial === s))
-        .map((serial) => ({ serial, description: "" })),
+        .map((serial) => ({ serial, description: "", cost: null })),
     ]);
 
   const candidates = db.units
@@ -229,6 +253,18 @@ export function ServiceBatchModal({
     setRows((rs) =>
       rs.map((r) => (r.serial === serial ? { ...r, description } : r)),
     );
+  const setCost = (serial: string, cost: number | null) =>
+    setRows((rs) => rs.map((r) => (r.serial === serial ? { ...r, cost } : r)));
+  /** The first cost typed, copied into every empty box below it. */
+  const fillDownCost = () =>
+    setRows((rs) => {
+      const i = rs.findIndex((r) => r.cost !== null);
+      if (i < 0) return rs;
+      const first = rs[i]!.cost;
+      return rs.map((r, j) =>
+        j > i && r.cost === null ? { ...r, cost: first } : r,
+      );
+    });
   const fillDown = () =>
     setRows((rs) => {
       const first = rs.find((r) => r.description.trim() !== "")?.description;
@@ -247,15 +283,18 @@ export function ServiceBatchModal({
   };
 
   const submit = () => {
-    if (rows.length === 0 || dest === undefined) return;
+    if (active.length === 0 || dest === undefined) return;
+    const picked = active;
     const at = new Date().toISOString();
     const day = localDay(at);
     const staff = currentStaffName();
     const out = { done: [] as string[], refused: [] as string[] };
     const courier = hasFee ? (fee ?? 0) : 0;
     void mutate((d) => {
-      const going = rows.filter((r) => eligible(d, mode, r.serial));
-      out.refused = rows.filter((r) => !going.includes(r)).map((r) => r.serial);
+      const going = picked.filter((r) => eligible(d, mode, r.serial));
+      out.refused = picked
+        .filter((r) => !going.includes(r))
+        .map((r) => r.serial);
       const moving = going.filter(
         (r) => d.units.find((u) => u.serial === r.serial)?.locationId !== dest,
       );
@@ -274,6 +313,7 @@ export function ServiceBatchModal({
             shippingFee: share > 0 ? share : undefined,
             shippingPaid: paid,
             note: r.description,
+            title: batchTitle,
             raisedBy,
             poId,
             at,
@@ -300,6 +340,38 @@ export function ServiceBatchModal({
             (v) => v.serial === r.serial && v.closedAt === undefined,
           );
           let closed = i >= 0 ? d.services[i]! : undefined;
+          // The repair, as a LABOUR charge on the visit, with its own line
+          // on the unit's timeline (the *+ Charge* shape, SERVIS → SERVIS at
+          // the same instant, which is how deleting the charge finds it).
+          const cost = r.cost ?? 0;
+          if (closed && cost > 0) {
+            const repair = {
+              id: nextId("svcf"),
+              kind: "LABOUR" as const,
+              label: t("service.repairLabel", "Repair"),
+              amount: cost,
+              at,
+              staff,
+              ...(repairPaid !== "UNPAID" ? { paid: true as const } : {}),
+            };
+            closed = { ...closed, fees: [...closed.fees, repair] };
+            if (repairPaid !== "UNPAID")
+              d.expenses.unshift(
+                chargeExpense({
+                  id: nextId("exp"),
+                  serial: r.serial,
+                  fee: repair,
+                  method: repairPaid,
+                  day,
+                  createdAt: at,
+                }),
+              );
+            appendEvent(d, r.serial, {
+              type: "DICATAT",
+              at,
+              note: `Service charge ${fmtRp(cost)} — ${repair.label}`,
+            });
+          }
           if (closed) {
             const transfer =
               share > 0
@@ -424,14 +496,32 @@ export function ServiceBatchModal({
       okText={
         mode === "SEND"
           ? t("inbound.serviceOk", "Send to service")
-          : t("service.backOk", "Back in stock")
+          : asOne
+            ? t("service.backOk", "Back in stock")
+            : t("service.batchBack", "Back in stock ({{count}})", {
+                count: active.length,
+              })
       }
-      okButtonProps={{ disabled: rows.length === 0 || dest === undefined }}
+      okButtonProps={{ disabled: active.length === 0 || dest === undefined }}
       onCancel={onClose}
       onOk={submit}
       destroyOnHidden
     >
       <Form layout="vertical">
+        {mode === "SEND" && (
+          <Form.Item label={t("serviceBatch.title", "Title")}>
+            <Input
+              aria-label={t("serviceBatch.title", "Title")}
+              placeholder={t(
+                "serviceBatch.titleHint",
+                "e.g. Screens to Pak Budi",
+              )}
+              maxLength={80}
+              value={batchTitle}
+              onChange={(e) => setBatchTitle(e.target.value)}
+            />
+          </Form.Item>
+        )}
         {
           <Flex vertical gap={SPACE.xs} style={{ marginBottom: SPACE.md }}>
             <Flex gap={SPACE.xs}>
@@ -535,6 +625,51 @@ export function ServiceBatchModal({
                       </Flex>
                     ),
                   },
+                  ...(mode === "BACK"
+                    ? [
+                        {
+                          title: (
+                            <Flex align="center" gap={SPACE.xs}>
+                              <span>
+                                {t("serviceBatch.repairCost", "Repair cost")}
+                              </span>
+                              {rows.length > 1 && (
+                                <Button
+                                  size="small"
+                                  type="link"
+                                  onClick={fillDownCost}
+                                >
+                                  {t("serviceBatch.fillDown", "Fill down")}
+                                </Button>
+                              )}
+                            </Flex>
+                          ),
+                          key: "cost",
+                          width: 200,
+                          render: (_: unknown, r: Row) => (
+                            <InputNumber
+                              {...MONEY_INPUT}
+                              aria-label={t(
+                                "serviceBatch.repairCostOf",
+                                "Repair cost of {{serial}}",
+                                { serial: r.serial },
+                              )}
+                              placeholder={t(
+                                "serviceBatch.repairCostHint",
+                                "0 if free",
+                              )}
+                              value={r.cost}
+                              onChange={(v) =>
+                                setCost(
+                                  r.serial,
+                                  typeof v === "number" ? v : null,
+                                )
+                              }
+                            />
+                          ),
+                        },
+                      ]
+                    : []),
                   {
                     title: (
                       <Flex align="center" gap={SPACE.xs}>
@@ -547,7 +682,7 @@ export function ServiceBatchModal({
                       </Flex>
                     ),
                     key: "description",
-                    width: 360,
+                    width: mode === "BACK" ? 280 : 360,
                     render: (_, r) => (
                       <Input
                         aria-label={t(
@@ -710,6 +845,36 @@ export function ServiceBatchModal({
           </>
         )}
 
+        {mode === "BACK" && asOne && rows[0] && (
+          <Form.Item
+            label={t("serviceBatch.repairCost", "Repair cost")}
+            required
+          >
+            <InputNumber
+              {...MONEY_INPUT}
+              aria-label={t("serviceBatch.repairCost", "Repair cost")}
+              placeholder={t("serviceBatch.repairCostHint", "0 if free")}
+              value={rows[0].cost}
+              onChange={(v) =>
+                setCost(rows[0]!.serial, typeof v === "number" ? v : null)
+              }
+            />
+          </Form.Item>
+        )}
+        {mode === "BACK" && repairTotal > 0 && (
+          <Form.Item
+            label={t("serviceBatch.repairPaidWith", "Repair paid with")}
+          >
+            <Radio.Group
+              aria-label={t("serviceBatch.repairPaidWith", "Repair paid with")}
+              optionType="button"
+              size="small"
+              value={repairPaid}
+              onChange={(e) => setRepairPaid(e.target.value as PaidWith)}
+              options={PAID_WITH.map((p) => ({ value: p, label: paidWord(p) }))}
+            />
+          </Form.Item>
+        )}
         {asOne && rows[0] && (
           <Form.Item label={descriptionLabel}>
             <Input.TextArea

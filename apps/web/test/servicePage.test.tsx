@@ -93,6 +93,19 @@ function rowOf(serial: string): HTMLElement {
   return row!;
 }
 
+/** Open the popup of the batch holding a serial (2026-11-11). */
+async function openBatch(serial: string): Promise<HTMLElement> {
+  const row = await waitFor(() => {
+    const tr = document.querySelector<HTMLElement>(
+      `tr[data-serials~="${serial}"]`,
+    );
+    expect(tr, serial).not.toBeNull();
+    return tr!;
+  });
+  fireEvent.click(row);
+  return topModal();
+}
+
 /** Open the row's charges. */
 async function openCharges(serial: string): Promise<HTMLElement> {
   const row = rowOf(serial);
@@ -154,6 +167,7 @@ describe("the service bench", () => {
     const { serial } = sendOne();
     renderPage();
     await settle();
+    await openBatch(serial);
     await charge(serial, "800000", "Bank");
     await charge(serial, "50000");
 
@@ -197,6 +211,7 @@ describe("the service bench", () => {
     const { serial } = sendOne();
     renderPage();
     await settle();
+    await openBatch(serial);
     await charge(serial, "800000", "Cash");
     const fee = visitOf(serial)!.fees[0]!;
 
@@ -240,6 +255,7 @@ describe("the service bench", () => {
     const { serial } = sendOne();
     renderPage();
     await settle();
+    await openBatch(serial);
     await charge(serial, "300000", "Other bank");
     const fee = visitOf(serial)!.fees[0]!;
     const note = getDb().events.find(
@@ -274,6 +290,7 @@ describe("the service bench", () => {
     const { serial, before, events } = sendOne(other.id);
     renderPage();
     await settle();
+    await openBatch(serial);
     await charge(serial, "200000", "Bank");
     const fee = visitOf(serial)!.fees[0]!;
 
@@ -310,6 +327,7 @@ describe("the service bench", () => {
     });
     renderPage();
     await settle();
+    await openBatch(serial);
     await userEvent.click(
       screen.getByLabelText(`Delete the service visit of ${serial}`),
     );
@@ -338,6 +356,7 @@ describe("the service bench", () => {
     });
     renderPage();
     await settle();
+    await openBatch(serial);
     await userEvent.click(screen.getByLabelText(`Put ${serial} back in stock`));
     const dialog = await topModal();
     const label = bench.code ? `${bench.code} · ${bench.name}` : bench.name;
@@ -355,10 +374,13 @@ describe("the service bench", () => {
     expect(offered).toHaveLength(
       getDb().warehouses.filter((w) => w.active).length,
     );
-    await userEvent.click(
-      within(dialog).getByRole("button", { name: "Back in stock" }),
-    );
+    // Nothing goes back until its repair cost is typed — 0 for a free one.
+    const ok = within(dialog).getByRole("button", { name: "Back in stock" });
+    expect(ok).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText("Repair cost"), "0");
+    await userEvent.click(ok);
     await settle();
+    expect(getDb().services.find((r) => r.serial === serial)!.fees).toEqual([]);
     const unit = getDb().units.find((u) => u.serial === serial)!;
     // Back to QC for a re-check, not onto the shelf (2026-11-04).
     expect(unit).toMatchObject({ status: "QC", locationId: bench.id });
@@ -411,11 +433,114 @@ describe("Add to service (2026-11-10)", () => {
     const visits = picks.map((u) => visitOf(u.serial)!);
     expect(visits.every(Boolean)).toBe(true);
     expect(visits[0]!.openedAt).toBe(visits[1]!.openedAt);
-    // One batch row with both units under it.
-    const [a, b] = picks.map((u) =>
-      rowOf(u.serial).closest("tr.ant-table-expanded-row"),
+    // One batch row, and its popup lists both units.
+    const popup = await openBatch(picks[0]!.serial);
+    for (const u of picks)
+      expect(within(popup).getByText(u.serial)).toBeInTheDocument();
+  });
+
+  it("names the batch when it is sent, shows it on the bench, and renames every visit from the popup", async () => {
+    const db = getDb();
+    const u = db.units.find(
+      (x) =>
+        x.status === "TERSEDIA" &&
+        skuTracksSerial(db, x.skuId) &&
+        !db.services.some((r) => r.serial === x.serial),
+    )!;
+    renderPage();
+    await settle();
+    await userEvent.click(
+      screen.getByRole("button", { name: /Add to service/ }),
     );
-    expect(a).not.toBeNull();
-    expect(a).toBe(b);
+    const send = await topModal();
+    await userEvent.type(
+      within(send).getByLabelText("Title"),
+      "Screens to Budi",
+    );
+    await userEvent.type(
+      within(send).getByLabelText("Add a unit"),
+      `${u.serial}{Enter}`,
+    );
+    await userEvent.click(
+      within(send).getByRole("button", { name: "Send to service" }),
+    );
+    await settle();
+    expect(visitOf(u.serial)!.title).toBe("Screens to Budi");
+    expect(screen.getByText("Screens to Budi")).toBeInTheDocument();
+
+    const popup = await openBatch(u.serial);
+    const title = within(popup).getByLabelText("Title");
+    await userEvent.clear(title);
+    await userEvent.type(title, "Keyboards{Enter}");
+    await settle();
+    expect(visitOf(u.serial)!.title).toBe("Keyboards");
+  });
+});
+
+describe("Back in stock from a batch (2026-11-11)", () => {
+  it("asks each unit's repair cost, fills down, and brings back only the costed rows", async () => {
+    const db = getDb();
+    const free = db.units.filter(
+      (u) =>
+        u.status === "TERSEDIA" &&
+        skuTracksSerial(db, u.skuId) &&
+        !db.services.some((r) => r.serial === u.serial),
+    );
+    const home = free.find(
+      (u) => free.filter((v) => v.locationId === u.locationId).length >= 3,
+    )!.locationId;
+    const picks = free.filter((u) => u.locationId === home).slice(0, 3);
+    const at = new Date().toISOString();
+    mutate((d) => {
+      for (const p of picks) {
+        const plan = planSendToService({
+          unit: { serial: p.serial, locationId: p.locationId },
+          dest: p.locationId,
+          raisedBy: "ADJUSTMENT",
+          at,
+          staff: currentStaffName(),
+          title: "Repair run",
+          words: { shipLabel: "c", quoteLabel: "q", eventNote: "Sent" },
+          nextId,
+        });
+        appendEvent(d, p.serial, plan.event);
+        d.services.push(plan.visit);
+      }
+    });
+    renderPage();
+    await settle();
+    const popup = await openBatch(picks[0]!.serial);
+    await userEvent.click(
+      within(popup).getByText("Back in stock (3)").closest("button")!,
+    );
+    const back = await topModal();
+    const ok = within(back).getByText("Back in stock (0)").closest("button")!;
+    expect(ok).toBeDisabled();
+    // Only the second and third get a cost: the second typed, then filled down.
+    await userEvent.type(
+      within(back).getByLabelText(`Repair cost of ${picks[1]!.serial}`),
+      "150000",
+    );
+    expect(ok).toHaveTextContent("Back in stock (1)");
+    await userEvent.click(
+      within(back).getAllByRole("button", { name: "Fill down" })[0]!,
+    );
+    expect(ok).toHaveTextContent("Back in stock (2)");
+    await userEvent.click(ok);
+    await settle();
+
+    const after = getDb();
+    const status = (s: string) =>
+      after.units.find((u) => u.serial === s)!.status;
+    expect(status(picks[0]!.serial)).toBe("SERVIS");
+    expect(status(picks[1]!.serial)).toBe("QC");
+    expect(status(picks[2]!.serial)).toBe("QC");
+    for (const p of picks.slice(1)) {
+      const visit = after.services.find((r) => r.serial === p.serial)!;
+      expect(visit.closedAt).toBeDefined();
+      expect(visit.fees).toEqual([
+        expect.objectContaining({ kind: "LABOUR", amount: 150_000 }),
+      ]);
+    }
   });
 });

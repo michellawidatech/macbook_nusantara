@@ -164,8 +164,8 @@ export function ServicePage() {
   const [returningBatch, setReturningBatch] = useState<string[] | null>(null);
   /** *Add to service*: the send dialog opened empty, with its list picker. */
   const [adding, setAdding] = useState<string[] | null>(null);
-  /** Batches somebody folded shut; every other batch is open. */
-  const [folded, setFolded] = useState<string[]>([]);
+  /** The visits of the batch whose popup is open (ids survive a rename). */
+  const [showing, setShowing] = useState<string[] | null>(null);
   /** The visit whose deletion is being confirmed, and what has been typed. */
   const [deleting, setDeleting] = useState<BenchRow | null>(null);
   const [deleteTyped, setDeleteTyped] = useState("");
@@ -197,6 +197,45 @@ export function ServicePage() {
     () => serviceBatches(listed, { events: db.events, units: db.units }),
     [listed, db.events, db.units],
   );
+
+  /*
+   * The open popup's batch, re-read from every visit (open or finished) so a
+   * unit brought back while it is open stays listed, as finished.
+   */
+  const shown = useMemo(() => {
+    if (showing === null) return undefined;
+    const mine = allRows.filter((r) => showing.includes(r.rec.id));
+    return serviceBatches(mine, { events: db.events, units: db.units }).reduce<
+      ServiceBatch | undefined
+    >(
+      (acc, b) =>
+        acc === undefined
+          ? b
+          : {
+              ...acc,
+              rows: [...acc.rows, ...b.rows],
+              closed: acc.closed && b.closed,
+              cost: acc.cost + b.cost,
+            },
+      undefined,
+    );
+  }, [showing, allRows, db.events, db.units]);
+  const shownOpen = shown ? shown.rows.filter((r) => !r.closed) : [];
+
+  /** The batch's title, written on every one of its visits. */
+  const renameBatch = (raw: string) => {
+    if (!shown) return;
+    const title = raw.trim();
+    if (title === (shown.title ?? "")) return;
+    const ids = shown.rows.map((r) => r.rec.id);
+    void mutate((d) => {
+      d.services = d.services.map((v) => {
+        if (!ids.includes(v.id)) return v;
+        const { title: _old, ...rest } = v;
+        return title ? { ...rest, title } : rest;
+      });
+    });
+  };
 
   const unitOf = (serial: string) => db.units.find((u) => u.serial === serial);
   const skuOf = (serial: string) => {
@@ -564,156 +603,28 @@ export function ServicePage() {
                   ? t("service.nothingAway", "Nothing is away at a repairer.")
                   : t("service.noHistory", "No finished service visits yet."),
             }}
-            expandable={{
-              expandedRowKeys: batches
-                .map((b) => b.key)
-                .filter((k) => !folded.includes(k)),
-              onExpand: (open, b) =>
-                setFolded((f) =>
-                  open ? f.filter((k) => k !== b.key) : [...f, b.key],
-                ),
-              expandedRowRender: (b) => (
-                <Table<BenchRow>
-                  size="small"
-                  rowKey={(r) => r.rec.id}
-                  dataSource={[...b.rows]}
-                  // A finished visit is listed to be deleted, and reads as history.
-                  onRow={(r) => (r.closed ? { style: { opacity: 0.55 } } : {})}
-                  pagination={false}
-                  expandable={{
-                    rowExpandable: (r) => r.rec.fees.length > 0,
-                    expandedRowRender: (r) => (
-                      <Table<ServiceFee>
-                        size="small"
-                        rowKey="id"
-                        dataSource={[...r.rec.fees]}
-                        pagination={false}
-                        columns={feeCells(r)}
-                      />
-                    ),
-                  }}
-                  columns={[
-                    {
-                      title: t("service.serial", "Serial"),
-                      key: "serial",
-                      render: (_, r) => {
-                        const sku = skuOf(r.serial);
-                        return (
-                          <Flex vertical gap={0} align="flex-start">
-                            <SerialLink serial={r.serial} />
-                            <Typography.Text
-                              type="secondary"
-                              style={{ fontSize: TYPE.sm }}
-                            >
-                              {sku
-                                ? `${sku.name} ${sku.variantLabel}`
-                                : t(
-                                    "service.unknownProduct",
-                                    "Unknown product",
-                                  )}
-                            </Typography.Text>
-                          </Flex>
-                        );
-                      },
-                    },
-                    {
-                      title: t("service.problem", "Problem"),
-                      key: "note",
-                      render: (_, r) => r.rec.note ?? fmtNone(),
-                    },
-                    {
-                      /*
-                       * What the repair has cost so far — the fees on THIS visit,
-                       * paid or owed. The lines behind the row say what it is made
-                       * of, and are where one of them is corrected.
-                       */
-                      title: t("service.quoted", "Quoted"),
-                      key: "cost",
-                      width: COLUMN.money,
-                      align: "right",
-                      render: (_, r) => fmtRp(r.cost),
-                    },
-                    {
-                      /*
-                       * Two labelled buttons (owner ask 2026-09-25) — everything a
-                       * bench does to a unit at a repairer is one of them — and the
-                       * visit's own delete beside them (2026-10-26).
-                       */
-                      title: "",
-                      key: "actions",
-                      width: COLUMN.actionsWide + COLUMN.action,
-                      render: (_, r) => (
-                        <Flex gap={SPACE.xs} justify="end" align="center">
-                          {r.closed && (
-                            <Tag style={{ marginInlineEnd: 0 }}>
-                              {t("service.finished", "Finished {{when}}", {
-                                when: fmtDate(r.rec.closedAt!),
-                              })}
-                            </Tag>
-                          )}
-                          {!r.closed && (
-                            <Button
-                              size="small"
-                              type="primary"
-                              icon={<PlusOutlined />}
-                              aria-label={t(
-                                "service.addFeeAria",
-                                "Add a charge to {{serial}}",
-                                { serial: r.serial },
-                              )}
-                              onClick={() => {
-                                setAddingTo(r);
-                              }}
-                            >
-                              {t("service.charge", "Charge")}
-                            </Button>
-                          )}
-                          {!r.closed && (
-                            <Button
-                              size="small"
-                              type="primary"
-                              icon={<InboxOutlined />}
-                              aria-label={t(
-                                "service.sendBackAria",
-                                "Put {{serial}} back in stock",
-                                { serial: r.serial },
-                              )}
-                              onClick={() => {
-                                setReturning(r);
-                              }}
-                            >
-                              {t("service.backInStockShort", "Back in stock")}
-                            </Button>
-                          )}
-                          <Tooltip
-                            title={t(
-                              "service.deleteVisit",
-                              "Delete this visit",
-                            )}
-                          >
-                            <Button
-                              size="small"
-                              danger
-                              icon={<DeleteOutlined />}
-                              aria-label={t(
-                                "service.deleteVisitAria",
-                                "Delete the service visit of {{serial}}",
-                                { serial: r.serial },
-                              )}
-                              onClick={() => {
-                                setDeleteTyped("");
-                                setDeleting(r);
-                              }}
-                            />
-                          </Tooltip>
-                        </Flex>
-                      ),
-                    },
-                  ]}
-                />
-              ),
-            }}
+            /*
+             * A batch opens in a popup with all its units (owner ask
+             * 2026-11-11: "it's not a drop down, it's a popup modal").
+             */
+            onRow={(b) => ({
+              onClick: () => setShowing(b.rows.map((r) => r.rec.id)),
+              "data-serials": b.rows.map((r) => r.serial).join(" "),
+              style: { cursor: "pointer" },
+            })}
             columns={[
+              {
+                title: t("service.batchTitle", "Title"),
+                key: "title",
+                render: (_, b) =>
+                  b.title ? (
+                    <Typography.Text strong>{b.title}</Typography.Text>
+                  ) : (
+                    <Typography.Text type="secondary">
+                      {fmtNone()}
+                    </Typography.Text>
+                  ),
+              },
               {
                 title: t("service.batchSent", "Sent"),
                 key: "at",
@@ -744,35 +655,216 @@ export function ServicePage() {
                 align: "right",
                 render: (_, b) => fmtRp(b.cost),
               },
-              {
-                title: "",
-                key: "actions",
-                width: COLUMN.actionsWide + COLUMN.action,
-                render: (_, b) => {
-                  const open = b.rows.filter((r) => !r.closed);
-                  return open.length > 1 ? (
-                    <Flex justify="end">
-                      <Button
-                        size="small"
-                        icon={<InboxOutlined />}
-                        onClick={() =>
-                          setReturningBatch(open.map((r) => r.serial))
-                        }
-                      >
-                        {t("service.batchBack", "Back in stock ({{count}})", {
-                          count: open.length,
-                        })}
-                      </Button>
-                    </Flex>
-                  ) : null;
-                },
-              },
             ]}
           />
         </Card>
       </Flex>
 
+      {/*
+       * One batch, every unit in it (owner ask 2026-11-11). Its title is
+       * edited here and written on every visit of the batch; *Back in stock*
+       * opens the back dialog with all of the batch's open units, which asks
+       * each one's repair cost and brings back the ones that have one.
+       */}
+      <Modal
+        open={shown !== undefined}
+        width={1100}
+        centered
+        title={
+          shown
+            ? `${shown.title ?? t("service.batchUntitled", "Service batch")} · ${fmtDateTime(shown.openedAt)}`
+            : ""
+        }
+        onCancel={() => setShowing(null)}
+        footer={
+          <Flex justify="end" gap={SPACE.xs}>
+            <Button onClick={() => setShowing(null)}>
+              {t("service.batchClose", "Close")}
+            </Button>
+            {shownOpen.length > 0 && (
+              <Button
+                type="primary"
+                icon={<InboxOutlined />}
+                onClick={() =>
+                  setReturningBatch(shownOpen.map((r) => r.serial))
+                }
+              >
+                {t("service.batchBack", "Back in stock ({{count}})", {
+                  count: shownOpen.length,
+                })}
+              </Button>
+            )}
+          </Flex>
+        }
+        destroyOnHidden
+      >
+        {shown && (
+          <Flex vertical gap={SPACE.md}>
+            <Flex gap={SPACE.md} wrap align="end">
+              <Form.Item
+                label={t("service.batchTitle", "Title")}
+                style={{ marginBottom: 0, flex: "1 1 320px" }}
+                layout="vertical"
+              >
+                <Input
+                  key={shown.rows[0]?.rec.id}
+                  aria-label={t("service.batchTitle", "Title")}
+                  defaultValue={shown.title ?? ""}
+                  placeholder={t(
+                    "serviceBatch.titleHint",
+                    "e.g. Screens to Pak Budi",
+                  )}
+                  maxLength={80}
+                  onBlur={(e) => renameBatch(e.target.value)}
+                  onPressEnter={(e) => renameBatch(e.currentTarget.value)}
+                />
+              </Form.Item>
+              <Typography.Text type="secondary">
+                {shown.fromLocationId === shown.toLocationId
+                  ? t("service.batchStays", "{{name}} (serviced there)", {
+                      name: warehouseName(shown.fromLocationId),
+                    })
+                  : `${warehouseName(shown.fromLocationId)} → ${warehouseName(shown.toLocationId)}`}
+              </Typography.Text>
+            </Flex>
+            <Table<BenchRow>
+              size="small"
+              rowKey={(r) => r.rec.id}
+              dataSource={[...shown.rows]}
+              // A finished visit is listed to be deleted, and reads as history.
+              onRow={(r) => (r.closed ? { style: { opacity: 0.55 } } : {})}
+              pagination={false}
+              expandable={{
+                rowExpandable: (r) => r.rec.fees.length > 0,
+                expandedRowRender: (r) => (
+                  <Table<ServiceFee>
+                    size="small"
+                    rowKey="id"
+                    dataSource={[...r.rec.fees]}
+                    pagination={false}
+                    columns={feeCells(r)}
+                  />
+                ),
+              }}
+              columns={[
+                {
+                  title: t("service.serial", "Serial"),
+                  key: "serial",
+                  render: (_, r) => {
+                    const sku = skuOf(r.serial);
+                    return (
+                      <Flex vertical gap={0} align="flex-start">
+                        <SerialLink serial={r.serial} />
+                        <Typography.Text
+                          type="secondary"
+                          style={{ fontSize: TYPE.sm }}
+                        >
+                          {sku
+                            ? `${sku.name} ${sku.variantLabel}`
+                            : t("service.unknownProduct", "Unknown product")}
+                        </Typography.Text>
+                      </Flex>
+                    );
+                  },
+                },
+                {
+                  title: t("service.problem", "Problem"),
+                  key: "note",
+                  render: (_, r) => r.rec.note ?? fmtNone(),
+                },
+                {
+                  /*
+                   * What the repair has cost so far — the fees on THIS visit,
+                   * paid or owed. The lines behind the row say what it is made
+                   * of, and are where one of them is corrected.
+                   */
+                  title: t("service.quoted", "Quoted"),
+                  key: "cost",
+                  width: COLUMN.money,
+                  align: "right",
+                  render: (_, r) => fmtRp(r.cost),
+                },
+                {
+                  /*
+                   * Two labelled buttons (owner ask 2026-09-25) — everything a
+                   * bench does to a unit at a repairer is one of them — and the
+                   * visit's own delete beside them (2026-10-26).
+                   */
+                  title: "",
+                  key: "actions",
+                  width: COLUMN.actionsWide + COLUMN.action,
+                  render: (_, r) => (
+                    <Flex gap={SPACE.xs} justify="end" align="center">
+                      {r.closed && (
+                        <Tag style={{ marginInlineEnd: 0 }}>
+                          {t("service.finished", "Finished {{when}}", {
+                            when: fmtDate(r.rec.closedAt!),
+                          })}
+                        </Tag>
+                      )}
+                      {!r.closed && (
+                        <Button
+                          size="small"
+                          type="primary"
+                          icon={<PlusOutlined />}
+                          aria-label={t(
+                            "service.addFeeAria",
+                            "Add a charge to {{serial}}",
+                            { serial: r.serial },
+                          )}
+                          onClick={() => {
+                            setAddingTo(r);
+                          }}
+                        >
+                          {t("service.charge", "Charge")}
+                        </Button>
+                      )}
+                      {!r.closed && (
+                        <Button
+                          size="small"
+                          type="primary"
+                          icon={<InboxOutlined />}
+                          aria-label={t(
+                            "service.sendBackAria",
+                            "Put {{serial}} back in stock",
+                            { serial: r.serial },
+                          )}
+                          onClick={() => {
+                            setReturning(r);
+                          }}
+                        >
+                          {t("service.backInStockShort", "Back in stock")}
+                        </Button>
+                      )}
+                      <Tooltip
+                        title={t("service.deleteVisit", "Delete this visit")}
+                      >
+                        <Button
+                          size="small"
+                          danger
+                          icon={<DeleteOutlined />}
+                          aria-label={t(
+                            "service.deleteVisitAria",
+                            "Delete the service visit of {{serial}}",
+                            { serial: r.serial },
+                          )}
+                          onClick={() => {
+                            setDeleteTyped("");
+                            setDeleting(r);
+                          }}
+                        />
+                      </Tooltip>
+                    </Flex>
+                  ),
+                },
+              ]}
+            />
+          </Flex>
+        )}
+      </Modal>
+
       <ServiceChargeModal
+        zIndex={1100}
         target={
           editingFee
             ? {
@@ -792,6 +884,7 @@ export function ServicePage() {
 
       <Modal
         open={payingFee !== null}
+        zIndex={1100}
         title={t(
           "service.markPaidTitle",
           "Mark {{amount}} on {{serial}} paid",
@@ -837,11 +930,13 @@ export function ServicePage() {
       <ServiceBatchModal
         mode="BACK"
         single
+        zIndex={1100}
         serials={returning === null ? null : [returning.serial]}
         onClose={() => setReturning(null)}
       />
       <ServiceBatchModal
         mode="BACK"
+        zIndex={1100}
         serials={returningBatch}
         onClose={() => setReturningBatch(null)}
       />
@@ -860,6 +955,7 @@ export function ServicePage() {
        */}
       <Modal
         open={deleting !== null}
+        zIndex={1100}
         title={t(
           "service.deleteVisitTitle",
           "Delete the service visit of {{serial}}?",

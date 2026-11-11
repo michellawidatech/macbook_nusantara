@@ -3348,6 +3348,7 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
         at,
         staff: "Store Test",
       })),
+      title: "Screens to Budi",
       raisedBy: "ADJUSTMENT",
       staff: "Store Test",
     });
@@ -3377,6 +3378,8 @@ describe("as nusantara_app, the role the API commits as (2026-10-21)", () => {
       let svc = decodeRow("services", (created.rows.services as Row[])[0]!);
       const exp = decodeRow("expenses", (created.rows.expenses as Row[])[0]!);
       expect(exp).toMatchObject({ kind: "UNIT", serviceFeeId: "sf-app-1" });
+      // The batch's name round-trips (2026-11-11).
+      expect(svc["title"]).toBe("Screens to Budi");
       // The visit says which charge is paid — derived from the expense, for
       // the tills that are sent no expenses.
       expect((svc["fees"] as Row[]).map((f) => f["paid"])).toEqual([
