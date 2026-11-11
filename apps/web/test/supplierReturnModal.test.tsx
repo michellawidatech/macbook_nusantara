@@ -496,6 +496,15 @@ describe("the service bench's finished visits", () => {
     ).toBeNull();
     // The finished visits are their own tab since 2026-11-03.
     await userEvent.click(screen.getByRole("tab", { name: "Service history" }));
+    // A batch opens in a popup with its units (2026-11-11).
+    const batch = await waitFor(() => {
+      const tr = document.querySelector<HTMLElement>(
+        `tr[data-serials~="${unit.serial}"]`,
+      );
+      expect(tr).not.toBeNull();
+      return tr!;
+    });
+    await userEvent.click(batch);
     expect(
       screen.queryByLabelText(`Add a charge to ${unit.serial}`),
     ).toBeNull();
