@@ -509,9 +509,9 @@ export function ServiceBatchModal({
     >
       <Form layout="vertical">
         {mode === "SEND" && (
-          <Form.Item label={t("serviceBatch.title", "Title")}>
+          <Form.Item label={t("serviceBatch.title", "Batch name")}>
             <Input
-              aria-label={t("serviceBatch.title", "Title")}
+              aria-label={t("serviceBatch.title", "Batch name")}
               placeholder={t(
                 "serviceBatch.titleHint",
                 "e.g. Screens to Pak Budi",

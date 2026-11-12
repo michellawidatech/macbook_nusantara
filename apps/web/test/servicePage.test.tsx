@@ -454,7 +454,7 @@ describe("Add to service (2026-11-10)", () => {
     );
     const send = await topModal();
     await userEvent.type(
-      within(send).getByLabelText("Title"),
+      within(send).getByLabelText("Batch name"),
       "Screens to Budi",
     );
     await userEvent.type(
@@ -469,7 +469,7 @@ describe("Add to service (2026-11-10)", () => {
     expect(screen.getByText("Screens to Budi")).toBeInTheDocument();
 
     const popup = await openBatch(u.serial);
-    const title = within(popup).getByLabelText("Title");
+    const title = within(popup).getByLabelText("Batch name");
     await userEvent.clear(title);
     await userEvent.type(title, "Keyboards{Enter}");
     await settle();

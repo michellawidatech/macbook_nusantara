@@ -614,7 +614,7 @@ export function ServicePage() {
             })}
             columns={[
               {
-                title: t("service.batchTitle", "Title"),
+                title: t("service.batchTitle", "Batch name"),
                 key: "title",
                 render: (_, b) =>
                   b.title ? (
@@ -702,13 +702,13 @@ export function ServicePage() {
           <Flex vertical gap={SPACE.md}>
             <Flex gap={SPACE.md} wrap align="end">
               <Form.Item
-                label={t("service.batchTitle", "Title")}
+                label={t("service.batchTitle", "Batch name")}
                 style={{ marginBottom: 0, flex: "1 1 320px" }}
                 layout="vertical"
               >
                 <Input
                   key={shown.rows[0]?.rec.id}
-                  aria-label={t("service.batchTitle", "Title")}
+                  aria-label={t("service.batchTitle", "Batch name")}
                   defaultValue={shown.title ?? ""}
                   placeholder={t(
                     "serviceBatch.titleHint",

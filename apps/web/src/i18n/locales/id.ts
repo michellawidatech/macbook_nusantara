@@ -5299,11 +5299,11 @@ export const id: Record<string, string> = {
   "stockReason.transfer": "Transfer stok",
   "supplierReturn.titleOf":
     "Retur {{serial}} ke supplier ({{n}} dari {{count}})",
-  "service.batchTitle": "Judul",
+  "service.batchTitle": "Nama batch",
   "service.batchUntitled": "Batch servis",
   "service.batchClose": "Tutup",
   "service.repairLabel": "Perbaikan",
-  "serviceBatch.title": "Judul",
+  "serviceBatch.title": "Nama batch",
   "serviceBatch.titleHint": "mis. Layar ke Pak Budi",
   "serviceBatch.repairCost": "Biaya perbaikan",
   "serviceBatch.repairCostOf": "Biaya perbaikan {{serial}}",
