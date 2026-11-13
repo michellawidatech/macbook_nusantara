@@ -3,19 +3,20 @@
  * page on 2026-11-04 so Inbound's *Back from service* tab can open it too).
  * The writes are the Service page's own: a `ServiceFee` on the visit, its
  * `UNIT` expense when paid, and a line on the unit's timeline.
+ *
+ * **Two questions: how much, and paid with what** (owner ask 2026-11-13:
+ * *"no need these bunch of things just the amount and paid with what"*). The
+ * kind dropdown (Labour / Part / Shipping / Other) and the "What for" box are
+ * gone; a new charge is filed the way *Back in stock* files its repair cost —
+ * LABOUR, "Repair" — and correcting one keeps the kind and label it had.
  */
 import { useEffect } from "react";
-import { App, Form, Input, InputNumber, Modal, Select, Typography } from "antd";
+import { App, Form, InputNumber, Modal, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "./money";
 import { PaidWithField } from "./SendToServiceModal";
 import { fmtRp } from "../lib/format.js";
-import {
-  SERVICE_FEE_KINDS,
-  editFee,
-  type ServiceFee,
-  type ServiceFeeKind,
-} from "../lib/service.js";
+import { editFee, type ServiceFee } from "../lib/service.js";
 import {
   chargeExpense,
   feePayment,
@@ -51,8 +52,6 @@ export function ServiceChargeModal({
   const { message } = App.useApp();
   const db = useDb();
   const [feeForm] = Form.useForm<{
-    kind: ServiceFeeKind;
-    label?: string;
     amount: number;
     paidWith?: PaidWith;
   }>();
@@ -61,13 +60,11 @@ export function ServiceChargeModal({
   useEffect(() => {
     if (!target) return;
     if (!target.fee) {
-      feeForm.setFieldsValue({ kind: "LABOUR", paidWith: "UNPAID" });
+      feeForm.setFieldsValue({ paidWith: "UNPAID" });
       return;
     }
     const pay = feePayment(target.fee, db.expenses);
     feeForm.setFieldsValue({
-      kind: target.fee.kind,
-      label: target.fee.label ?? "",
       amount: target.fee.amount,
       paidWith: pay.expense
         ? (pay.expense.method as PaidWith)
@@ -100,6 +97,12 @@ export function ServiceChargeModal({
       const row = { rec: { id: target.visitId }, serial: target.serial };
       const before = target.fee;
       const at = new Date().toISOString();
+      // A new charge is a repair, as Back in stock files one; a corrected
+      // one keeps what it was.
+      const kind = before?.kind ?? "LABOUR";
+      const label = before
+        ? (before.label ?? "")
+        : t("service.repairLabel", "Repair");
       void mutate((d) => {
         const i = d.services.findIndex((r) => r.id === row.rec.id);
         if (i < 0) return;
@@ -116,19 +119,15 @@ export function ServiceChargeModal({
           !existing &&
           !(before?.paid === true);
         let next = before
-          ? editFee(rec, before.id, {
-              kind: v.kind,
-              label: v.label ?? "",
-              amount: v.amount,
-            })
+          ? editFee(rec, before.id, { amount: v.amount })
           : {
               ...rec,
               fees: [
                 ...rec.fees,
                 {
                   id: feeId,
-                  kind: v.kind,
-                  ...(v.label ? { label: v.label } : {}),
+                  kind,
+                  ...(label ? { label } : {}),
                   amount: v.amount,
                   at,
                   staff: currentStaffName(),
@@ -178,8 +177,8 @@ export function ServiceChargeModal({
               // that somebody has to be able to see what it replaced.
               `Service charge corrected ${fmtRp(before.amount)} → ${fmtRp(
                 v.amount,
-              )} — ${v.label || v.kind}`
-            : `Service charge ${fmtRp(v.amount)} — ${v.label || v.kind}`,
+              )} — ${label || kind}`
+            : `Service charge ${fmtRp(v.amount)} — ${label || kind}`,
         });
       });
       onClose();
@@ -227,43 +226,14 @@ export function ServiceChargeModal({
       }}
       onOk={saveFee}
     >
-      {target?.fee && (
-        <Typography.Paragraph type="secondary">
-          {t(
-            "service.editChargeHint",
-            "It was {{amount}}. The old figure stays on the unit's timeline.",
-            { amount: fmtRp(target.fee.amount) },
-          )}
-        </Typography.Paragraph>
-      )}
       <Form form={feeForm} layout="vertical">
-        <Form.Item
-          name="kind"
-          label={t("service.feeKind", "Charge")}
-          rules={[{ required: true }]}
-        >
-          <Select
-            options={SERVICE_FEE_KINDS.map((k) => ({
-              value: k.value,
-              label: k.label,
-              title: k.guide,
-            }))}
-          />
-        </Form.Item>
-        <Form.Item name="label" label={t("service.feeLabel", "What for")}>
-          <Input
-            placeholder={t(
-              "service.feeLabelPlaceholder",
-              "Ganti keyboard, ongkir ke Bandung…",
-            )}
-          />
-        </Form.Item>
         <Form.Item
           name="amount"
           label={t("service.feeAmount", "Amount")}
           rules={[{ required: true }]}
         >
           <InputNumber
+            autoFocus
             min={0}
             precision={0}
             prefix={RP_SYMBOL}

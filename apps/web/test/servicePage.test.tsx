@@ -93,7 +93,11 @@ function rowOf(serial: string): HTMLElement {
   return row!;
 }
 
-/** Open the popup of the batch holding a serial (2026-11-11). */
+/**
+ * Open the popup of the batch holding a serial (2026-11-11) — through the
+ * row's Details since 2026-11-13, when a click on the row itself went
+ * straight to Back in stock.
+ */
 async function openBatch(serial: string): Promise<HTMLElement> {
   const row = await waitFor(() => {
     const tr = document.querySelector<HTMLElement>(
@@ -102,7 +106,9 @@ async function openBatch(serial: string): Promise<HTMLElement> {
     expect(tr, serial).not.toBeNull();
     return tr!;
   });
-  fireEvent.click(row);
+  fireEvent.click(
+    within(row).queryByRole("button", { name: /^Details of the batch/ }) ?? row,
+  );
   return topModal();
 }
 
@@ -183,7 +189,9 @@ describe("the service bench", () => {
         amount: 800_000,
         method: "TRANSFER",
         serviceFeeId: paid!.id,
-        note: `${serial} · Labour`,
+        // Filed as Back in stock files a repair (2026-11-13): the dialog
+        // asks only the amount and how it was paid.
+        note: `${serial} · Repair`,
       }),
     ]);
 
@@ -356,7 +364,7 @@ describe("the service bench", () => {
     });
     renderPage();
     await settle();
-    await openBatch(serial);
+    // Straight from the bench's row, without opening the batch (2026-11-13).
     await userEvent.click(screen.getByLabelText(`Put ${serial} back in stock`));
     const dialog = await topModal();
     const label = bench.code ? `${bench.code} · ${bench.name}` : bench.name;
@@ -510,10 +518,20 @@ describe("Back in stock from a batch (2026-11-11)", () => {
     renderPage();
     await settle();
     const popup = await openBatch(picks[0]!.serial);
+    // The popup's one green button; a unit's row carries no Back in stock.
+    expect(
+      within(popup).queryByLabelText(`Put ${picks[0]!.serial} back in stock`),
+    ).toBeNull();
     await userEvent.click(
       within(popup).getByText("Back in stock (3)").closest("button")!,
     );
     const back = await topModal();
+    // The batch's units and nothing to edit about the list: no add box, no
+    // per-unit description (2026-11-13).
+    expect(within(back).queryByLabelText("Add a unit")).toBeNull();
+    expect(
+      within(back).queryByLabelText(`Description of ${picks[0]!.serial}`),
+    ).toBeNull();
     const ok = within(back).getByText("Back in stock (0)").closest("button")!;
     expect(ok).toBeDisabled();
     // Only the second and third get a cost: the second typed, then filled down.
@@ -542,5 +560,102 @@ describe("Back in stock from a batch (2026-11-11)", () => {
         expect.objectContaining({ kind: "LABOUR", amount: 150_000 }),
       ]);
     }
+  });
+});
+
+describe("one button per job (2026-11-13)", () => {
+  it("asks a charge only its amount and how it was paid", async () => {
+    const { serial } = sendOne();
+    renderPage();
+    await settle();
+    await openBatch(serial);
+    await userEvent.click(screen.getByLabelText(`Add a charge to ${serial}`));
+    const dialog = await topModal();
+    expect(within(dialog).getByLabelText("Amount")).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("radiogroup", { name: "Paid with" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText("What for")).toBeNull();
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+  });
+
+  it("brings a whole batch back from its row on the bench", async () => {
+    const db = getDb();
+    const free = db.units.filter(
+      (u) =>
+        u.status === "TERSEDIA" &&
+        skuTracksSerial(db, u.skuId) &&
+        !db.services.some((r) => r.serial === u.serial),
+    );
+    const home = free.find(
+      (u) => free.filter((v) => v.locationId === u.locationId).length >= 2,
+    )!.locationId;
+    const picks = free.filter((u) => u.locationId === home).slice(0, 2);
+    const at = new Date().toISOString();
+    mutate((d) => {
+      for (const p of picks) {
+        const plan = planSendToService({
+          unit: { serial: p.serial, locationId: p.locationId },
+          dest: p.locationId,
+          raisedBy: "ADJUSTMENT",
+          at,
+          staff: currentStaffName(),
+          words: { shipLabel: "c", quoteLabel: "q", eventNote: "Sent" },
+          nextId,
+        });
+        appendEvent(d, p.serial, plan.event);
+        d.services.push(plan.visit);
+      }
+    });
+    renderPage();
+    await settle();
+    const row = await waitFor(() => {
+      const tr = document.querySelector<HTMLElement>(
+        `tr[data-serials~="${picks[0]!.serial}"]`,
+      );
+      expect(tr).not.toBeNull();
+      return tr!;
+    });
+    // The store is shared across this file, so the batch may hold an
+    // earlier test's unit too: count what the row says it holds.
+    const n = row.getAttribute("data-serials")!.split(" ").length;
+    // The unnamed batch reads as its units, not "None".
+    expect(row).toHaveTextContent(`+${n - 1} more`);
+    // Every Back in stock on the bench is one width, whatever its count.
+    expect(
+      within(row).getByText(`Back in stock (${n})`).closest("button")!.style
+        .width,
+    ).toBe("168px");
+    await userEvent.click(
+      within(row).getByText(`Back in stock (${n})`).closest("button")!,
+    );
+    const back = await topModal();
+    expect(back).toHaveTextContent("Bring units back from service");
+    for (const p of picks)
+      expect(
+        within(back).getByLabelText(`Repair cost of ${p.serial}`),
+      ).toBeInTheDocument();
+  });
+});
+
+describe("a batch row opens typing (2026-11-13)", () => {
+  it("opens Back in stock with the caret in the first unit's cost", async () => {
+    const { serial } = sendOne();
+    renderPage();
+    await settle();
+    const row = await waitFor(() => {
+      const tr = document.querySelector<HTMLElement>(
+        `tr[data-serials~="${serial}"]`,
+      );
+      expect(tr).not.toBeNull();
+      return tr!;
+    });
+    fireEvent.click(row);
+    const back = await topModal();
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        within(back).getAllByPlaceholderText("0 if free")[0],
+      );
+    });
   });
 });

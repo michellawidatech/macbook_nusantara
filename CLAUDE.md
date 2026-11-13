@@ -3808,6 +3808,23 @@ Decisions that outlived those documents:
     repair); empty is "not back yet". A cost above 0 is a LABOUR charge
     "Repair" on the visit (COGS) plus its SERVIS → SERVIS timeline line, paid
     per *Repair paid with* (Not paid yet by default, else a UNIT expense).
+- **The service bench, one button per job — 2026-11-13.** *"Per row should
+  have a back in stock button … now it is confusing, redundant, and unclear on
+  which one to click."* Every batch row on `/stock/service` carries **Back in
+  stock (n)** (one width, 168px, whatever the count) and a **Details**;
+  **a click on the row opens Back in stock with the caret in the first cost
+  box** (owner: *"they can open that, immediately start typing, done"*), and
+  Details is the popup below; an unnamed batch reads as its units ("MacBook Air 13 2015 … +1
+  more"), not "None"; Quoted is **Charges**. The popup has ONE green button —
+  *Back in stock (n)* in its foot, no Close — and a unit's row is *Add charge*
+  (plain) plus a bin; the row's own Back in stock is gone. The batch name is
+  the popup's heading, typed into in place, with sent · route · units under
+  it. **Back in stock asks only each unit's cost (Fill down) and Paid with**,
+  then the warehouse and the courier when it travels; the "What was done" box
+  is gone, and from the bench (`fixed`) there is no add box or remove — a
+  blank cost stays at service. **The charge dialog is Amount + Paid with**:
+  no kind dropdown, no "What for"; a new charge is LABOUR "Repair", as Back in
+  stock files one, and a corrected one keeps its kind and label.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

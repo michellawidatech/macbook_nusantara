@@ -29,11 +29,18 @@
  * repair); an empty box is "not back yet". Each cost is a LABOUR charge on
  * the unit's visit, so it reaches the unit's COGS like any *+ Charge*.
  *
+ * **Back in stock is the cost and how it was paid, nothing more** (owner ask
+ * 2026-11-13: *"they are expecting just to input the charge per unit and they
+ * can fill down"*). The "What was done" box per unit is gone, Paid with sits
+ * right under the costs, and the warehouse and courier follow. Opened on a
+ * batch from the Service page (`fixed`) it lists that batch and nothing else:
+ * no add box and no remove — a unit left blank simply stays at service.
+ *
  * Everything is read again INSIDE the mutation: a unit can be reserved, sold
  * or brought back in another tab between the render and the press, and such a
  * unit is skipped and named rather than written.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   App,
   AutoComplete,
@@ -91,6 +98,11 @@ export interface ServiceBatchModalProps {
   readonly refCode?: string;
   /** One unit and no list — the single-unit door (`SendToServiceModal`). */
   readonly single?: boolean;
+  /**
+   * The units are a batch's and the list is not edited: no add box, no
+   * remove (BACK from the Service page, 2026-11-13).
+   */
+  readonly fixed?: boolean;
   readonly onClose: () => void;
   readonly zIndex?: number;
 }
@@ -127,6 +139,7 @@ export function ServiceBatchModal({
   poId,
   refCode,
   single = false,
+  fixed = false,
   onClose,
   zIndex,
 }: ServiceBatchModalProps) {
@@ -147,6 +160,8 @@ export function ServiceBatchModal({
   const [batchTitle, setBatchTitle] = useState("");
   /** BACK: how the repair costs were paid. */
   const [repairPaid, setRepairPaid] = useState<PaidWith>("UNPAID");
+  /** The dialog's body, for putting the caret in the first cost box. */
+  const bodyRef = useRef<HTMLDivElement>(null);
   /** The list picker (2026-11-10): any unit on a shelf or in QC. */
   const [picking, setPicking] = useState(false);
 
@@ -188,6 +203,22 @@ export function ServiceBatchModal({
     // Opening is the event; the store moving under an open dialog is not.
   }, [serials]);
 
+  /*
+   * Back in stock opens typing (owner 2026-11-13: "they can open that,
+   * immediately start typing, done"): the caret goes to the first unit's
+   * cost box, and Enter walks down them (KeyboardNav). After the open, not
+   * `autoFocus` — the Modal's focus trap takes the caret to its first button.
+   */
+  useEffect(() => {
+    if (serials === null || mode !== "BACK") return;
+    const timer = setTimeout(() => {
+      bodyRef.current
+        ?.querySelector<HTMLInputElement>("input[data-repair-cost]")
+        ?.focus();
+    }, 60);
+    return () => clearTimeout(timer);
+  }, [serials, mode]);
+
   const unitOf = (serial: string) => db.units.find((u) => u.serial === serial);
   const skuName = (serial: string) => {
     const k = db.skus.find((s) => s.id === unitOf(serial)?.skuId);
@@ -198,7 +229,6 @@ export function ServiceBatchModal({
    * the ones with a repair cost typed (owner ask 2026-11-11).
    */
   const active = mode === "BACK" ? rows.filter((r) => r.cost !== null) : rows;
-  const repairTotal = active.reduce((n, r) => n + (r.cost ?? 0), 0);
   /** The units that change warehouse — the ones a courier carried. */
   const travellers = active.filter(
     (r) => dest !== undefined && unitOf(r.serial)?.locationId !== dest,
@@ -507,272 +537,315 @@ export function ServiceBatchModal({
       onOk={submit}
       destroyOnHidden
     >
-      <Form layout="vertical">
-        {mode === "SEND" && (
-          <Form.Item label={t("serviceBatch.title", "Batch name")}>
-            <Input
-              aria-label={t("serviceBatch.title", "Batch name")}
-              placeholder={t(
-                "serviceBatch.titleHint",
-                "e.g. Screens to Pak Budi",
-              )}
-              maxLength={80}
-              value={batchTitle}
-              onChange={(e) => setBatchTitle(e.target.value)}
-            />
-          </Form.Item>
-        )}
-        {
-          <Flex vertical gap={SPACE.xs} style={{ marginBottom: SPACE.md }}>
-            <Flex gap={SPACE.xs}>
-              <AutoComplete
-                style={{ flex: 1 }}
-                value={adding}
-                options={candidates}
-                defaultActiveFirstOption={false}
-                optionRender={(opt) => (
-                  <Flex vertical>
-                    <span>{String(opt.value)}</span>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: TYPE.sm }}
-                    >
-                      {String(opt.data.product ?? "")}
-                    </Typography.Text>
-                  </Flex>
+      <div ref={bodyRef}>
+        <Form layout="vertical">
+          {mode === "SEND" && (
+            <Form.Item label={t("serviceBatch.title", "Batch name")}>
+              <Input
+                aria-label={t("serviceBatch.title", "Batch name")}
+                placeholder={t(
+                  "serviceBatch.titleHint",
+                  "e.g. Screens to Pak Budi",
                 )}
-                filterOption={(input, opt) =>
-                  `${opt?.value ?? ""} ${opt?.product ?? ""}`
-                    .toLowerCase()
-                    .includes(input.trim().toLowerCase())
-                }
-                onChange={(v: string) => {
-                  const text = normaliseSerial(v);
-                  setAddMiss(null);
-                  // A whole serial, and not the head of a longer one, goes in at
-                  // once — the till's rule (`serialNamedBy`): a scan lands
-                  // without anybody reaching for Enter.
-                  const whole = candidates.some((c) => c.value === text);
-                  const longer = candidates.some(
-                    (c) => c.value !== text && c.value.startsWith(text),
-                  );
-                  if (whole && !longer) addSerial(text);
-                  else setAdding(v.toUpperCase());
-                }}
-                onSelect={(v: string) => addSerial(v)}
-              >
-                <Input
-                  aria-label={t("serviceBatch.addSerial", "Add a unit")}
-                  placeholder={t(
-                    "serviceBatch.addSerialHint",
-                    "Scan or type a serial, then Enter",
-                  )}
-                  onPressEnter={(e) => {
-                    e.preventDefault();
-                    addSerial(adding);
-                  }}
-                  data-scan-target=""
-                />
-              </AutoComplete>
-              {mode === "SEND" && (
-                <Button
-                  icon={<UnorderedListOutlined />}
-                  onClick={() => setPicking(true)}
-                >
-                  {t("servicePicker.open", "Choose from list")}
-                </Button>
-              )}
-            </Flex>
-            {addMiss !== null && (
-              <Typography.Text type="danger" style={{ fontSize: TYPE.sm }}>
-                {mode === "SEND"
-                  ? t(
-                      "serviceBatch.cannotSend",
-                      "{{serial}} cannot go to service — it is not in QC or on the shelf.",
-                      { serial: addMiss },
-                    )
-                  : t(
-                      "serviceBatch.cannotBack",
-                      "{{serial}} is not at service.",
-                      { serial: addMiss },
-                    )}
-              </Typography.Text>
-            )}
-            {!asOne && (
-              <Table<Row>
-                size="small"
-                rowKey="serial"
-                pagination={false}
-                dataSource={rows}
-                locale={{
-                  emptyText: t("serviceBatch.noUnits", "No units yet."),
-                }}
-                columns={[
-                  {
-                    title: t("serviceBatch.unit", "Unit"),
-                    key: "unit",
-                    render: (_, r) => (
+                maxLength={80}
+                value={batchTitle}
+                onChange={(e) => setBatchTitle(e.target.value)}
+              />
+            </Form.Item>
+          )}
+          {
+            <Flex vertical gap={SPACE.xs} style={{ marginBottom: SPACE.md }}>
+              {!fixed && (
+                <Flex gap={SPACE.xs}>
+                  <AutoComplete
+                    style={{ flex: 1 }}
+                    value={adding}
+                    options={candidates}
+                    defaultActiveFirstOption={false}
+                    optionRender={(opt) => (
                       <Flex vertical>
-                        <span style={{ fontFamily: "monospace" }}>
-                          {r.serial}
-                        </span>
+                        <span>{String(opt.value)}</span>
                         <Typography.Text
                           type="secondary"
                           style={{ fontSize: TYPE.sm }}
                         >
-                          {skuName(r.serial)}
+                          {String(opt.data.product ?? "")}
                         </Typography.Text>
                       </Flex>
-                    ),
-                  },
-                  ...(mode === "BACK"
-                    ? [
-                        {
-                          title: (
-                            <Flex align="center" gap={SPACE.xs}>
-                              <span>
-                                {t("serviceBatch.repairCost", "Repair cost")}
-                              </span>
-                              {rows.length > 1 && (
+                    )}
+                    filterOption={(input, opt) =>
+                      `${opt?.value ?? ""} ${opt?.product ?? ""}`
+                        .toLowerCase()
+                        .includes(input.trim().toLowerCase())
+                    }
+                    onChange={(v: string) => {
+                      const text = normaliseSerial(v);
+                      setAddMiss(null);
+                      // A whole serial, and not the head of a longer one, goes in at
+                      // once — the till's rule (`serialNamedBy`): a scan lands
+                      // without anybody reaching for Enter.
+                      const whole = candidates.some((c) => c.value === text);
+                      const longer = candidates.some(
+                        (c) => c.value !== text && c.value.startsWith(text),
+                      );
+                      if (whole && !longer) addSerial(text);
+                      else setAdding(v.toUpperCase());
+                    }}
+                    onSelect={(v: string) => addSerial(v)}
+                  >
+                    <Input
+                      aria-label={t("serviceBatch.addSerial", "Add a unit")}
+                      placeholder={t(
+                        "serviceBatch.addSerialHint",
+                        "Scan or type a serial, then Enter",
+                      )}
+                      onPressEnter={(e) => {
+                        e.preventDefault();
+                        addSerial(adding);
+                      }}
+                      data-scan-target=""
+                    />
+                  </AutoComplete>
+                  {mode === "SEND" && (
+                    <Button
+                      icon={<UnorderedListOutlined />}
+                      onClick={() => setPicking(true)}
+                    >
+                      {t("servicePicker.open", "Choose from list")}
+                    </Button>
+                  )}
+                </Flex>
+              )}
+              {addMiss !== null && (
+                <Typography.Text type="danger" style={{ fontSize: TYPE.sm }}>
+                  {mode === "SEND"
+                    ? t(
+                        "serviceBatch.cannotSend",
+                        "{{serial}} cannot go to service — it is not in QC or on the shelf.",
+                        { serial: addMiss },
+                      )
+                    : t(
+                        "serviceBatch.cannotBack",
+                        "{{serial}} is not at service.",
+                        { serial: addMiss },
+                      )}
+                </Typography.Text>
+              )}
+              {!asOne && (
+                <Table<Row>
+                  size="small"
+                  rowKey="serial"
+                  pagination={false}
+                  dataSource={rows}
+                  locale={{
+                    emptyText: t("serviceBatch.noUnits", "No units yet."),
+                  }}
+                  columns={[
+                    {
+                      title: t("serviceBatch.unit", "Unit"),
+                      key: "unit",
+                      render: (_, r) => (
+                        <Flex vertical>
+                          <span style={{ fontFamily: "monospace" }}>
+                            {r.serial}
+                          </span>
+                          <Typography.Text
+                            type="secondary"
+                            style={{ fontSize: TYPE.sm }}
+                          >
+                            {skuName(r.serial)}
+                          </Typography.Text>
+                        </Flex>
+                      ),
+                    },
+                    ...(mode === "BACK"
+                      ? [
+                          {
+                            title: (
+                              <Flex align="center" gap={SPACE.xs}>
+                                <span>
+                                  {t("serviceBatch.repairCost", "Repair cost")}
+                                </span>
+                                {rows.length > 1 && (
+                                  <Button
+                                    size="small"
+                                    type="link"
+                                    onClick={fillDownCost}
+                                  >
+                                    {t("serviceBatch.fillDown", "Fill down")}
+                                  </Button>
+                                )}
+                              </Flex>
+                            ),
+                            key: "cost",
+                            width: 200,
+                            render: (_: unknown, r: Row) => (
+                              <InputNumber
+                                {...MONEY_INPUT}
+                                aria-label={t(
+                                  "serviceBatch.repairCostOf",
+                                  "Repair cost of {{serial}}",
+                                  { serial: r.serial },
+                                )}
+                                data-repair-cost=""
+                                placeholder={t(
+                                  "serviceBatch.repairCostHint",
+                                  "0 if free",
+                                )}
+                                value={r.cost}
+                                onChange={(v) =>
+                                  setCost(
+                                    r.serial,
+                                    typeof v === "number" ? v : null,
+                                  )
+                                }
+                              />
+                            ),
+                          },
+                        ]
+                      : []),
+                    ...(mode === "SEND"
+                      ? [
+                          {
+                            title: (
+                              <Flex align="center" gap={SPACE.xs}>
+                                <span>{descriptionLabel}</span>
+                                {rows.length > 1 && (
+                                  <Button
+                                    size="small"
+                                    type="link"
+                                    onClick={fillDown}
+                                  >
+                                    {t("serviceBatch.fillDown", "Fill down")}
+                                  </Button>
+                                )}
+                              </Flex>
+                            ),
+                            key: "description",
+                            width: 360,
+                            render: (_: unknown, r: Row) => (
+                              <Input
+                                aria-label={t(
+                                  "serviceBatch.descriptionOf",
+                                  "Description of {{serial}}",
+                                  { serial: r.serial },
+                                )}
+                                value={r.description}
+                                onChange={(e) =>
+                                  setDescription(r.serial, e.target.value)
+                                }
+                              />
+                            ),
+                          },
+                        ]
+                      : []),
+                    ...(fixed
+                      ? []
+                      : [
+                          {
+                            title: "",
+                            key: "remove",
+                            width: COLUMN.action,
+                            render: (_: unknown, r: Row) => (
+                              <Tooltip
+                                title={t(
+                                  "stock.removeThisLine",
+                                  "Remove this line",
+                                )}
+                              >
                                 <Button
-                                  size="small"
-                                  type="link"
-                                  onClick={fillDownCost}
-                                >
-                                  {t("serviceBatch.fillDown", "Fill down")}
-                                </Button>
-                              )}
-                            </Flex>
-                          ),
-                          key: "cost",
-                          width: 200,
-                          render: (_: unknown, r: Row) => (
-                            <InputNumber
-                              {...MONEY_INPUT}
-                              aria-label={t(
-                                "serviceBatch.repairCostOf",
-                                "Repair cost of {{serial}}",
-                                { serial: r.serial },
-                              )}
-                              placeholder={t(
-                                "serviceBatch.repairCostHint",
-                                "0 if free",
-                              )}
-                              value={r.cost}
-                              onChange={(v) =>
-                                setCost(
-                                  r.serial,
-                                  typeof v === "number" ? v : null,
-                                )
-                              }
-                            />
-                          ),
-                        },
-                      ]
-                    : []),
-                  {
-                    title: (
-                      <Flex align="center" gap={SPACE.xs}>
-                        <span>{descriptionLabel}</span>
-                        {rows.length > 1 && (
-                          <Button size="small" type="link" onClick={fillDown}>
-                            {t("serviceBatch.fillDown", "Fill down")}
-                          </Button>
-                        )}
-                      </Flex>
-                    ),
-                    key: "description",
-                    width: mode === "BACK" ? 280 : 360,
-                    render: (_, r) => (
-                      <Input
-                        aria-label={t(
-                          "serviceBatch.descriptionOf",
-                          "Description of {{serial}}",
-                          { serial: r.serial },
-                        )}
-                        value={r.description}
-                        onChange={(e) =>
-                          setDescription(r.serial, e.target.value)
-                        }
-                      />
-                    ),
-                  },
-                  {
-                    title: "",
-                    key: "remove",
-                    width: COLUMN.action,
-                    render: (_, r) => (
-                      <Tooltip
-                        title={t("stock.removeThisLine", "Remove this line")}
-                      >
-                        <Button
-                          type="text"
-                          aria-label={t(
-                            "stock.removeThisLine",
-                            "Remove this line",
-                          )}
-                          icon={<DeleteOutlined />}
-                          onClick={() =>
-                            setRows((rs) =>
-                              rs.filter((x) => x.serial !== r.serial),
-                            )
-                          }
-                        />
-                      </Tooltip>
-                    ),
-                  },
-                ]}
-              />
-            )}
-          </Flex>
-        }
-
-        <Form.Item
-          label={
-            mode === "SEND"
-              ? t("service.whereServiced", "Where is it serviced?")
-              : t("service.backTo", "Which warehouse")
+                                  type="text"
+                                  aria-label={t(
+                                    "stock.removeThisLine",
+                                    "Remove this line",
+                                  )}
+                                  icon={<DeleteOutlined />}
+                                  onClick={() =>
+                                    setRows((rs) =>
+                                      rs.filter((x) => x.serial !== r.serial),
+                                    )
+                                  }
+                                />
+                              </Tooltip>
+                            ),
+                          },
+                        ]),
+                  ]}
+                />
+              )}
+            </Flex>
           }
-          required
-        >
-          <Select
-            aria-label={
+
+          {mode === "BACK" && asOne && rows[0] && (
+            <Form.Item
+              label={t("serviceBatch.repairCost", "Repair cost")}
+              required
+            >
+              <InputNumber
+                {...MONEY_INPUT}
+                aria-label={t("serviceBatch.repairCost", "Repair cost")}
+                data-repair-cost=""
+                placeholder={t("serviceBatch.repairCostHint", "0 if free")}
+                value={rows[0].cost}
+                onChange={(v) =>
+                  setCost(rows[0]!.serial, typeof v === "number" ? v : null)
+                }
+              />
+            </Form.Item>
+          )}
+          {mode === "BACK" && rows.length > 0 && (
+            <Form.Item label={t("service.paidWith", "Paid with")}>
+              <Radio.Group
+                aria-label={t("service.paidWith", "Paid with")}
+                optionType="button"
+                size="small"
+                value={repairPaid}
+                onChange={(e) => setRepairPaid(e.target.value as PaidWith)}
+                options={PAID_WITH.map((p) => ({
+                  value: p,
+                  label: paidWord(p),
+                }))}
+              />
+            </Form.Item>
+          )}
+          <Form.Item
+            label={
               mode === "SEND"
                 ? t("service.whereServiced", "Where is it serviced?")
                 : t("service.backTo", "Which warehouse")
             }
-            style={{ width: "100%" }}
-            value={dest}
-            options={destOptions.map((o) =>
-              mode === "SEND" &&
-              asOne &&
-              o.value === unitOf(oneSerial)?.locationId
-                ? {
-                    ...o,
-                    label: t(
-                      "inbound.serviceStaysHere",
-                      "{{name}} (stays here)",
-                      { name: o.label },
-                    ),
-                  }
-                : o,
-            )}
-            onChange={setDest}
-          />
-        </Form.Item>
-
-        {feeAsked && (
-          <>
-            <Form.Item
-              label={
+            required
+          >
+            <Select
+              aria-label={
                 mode === "SEND"
-                  ? t("inbound.serviceShippingFee", "Cost of getting it there")
-                  : t("service.transferFee", "Cost of moving it back")
+                  ? t("service.whereServiced", "Where is it serviced?")
+                  : t("service.backTo", "Which warehouse")
               }
-            >
-              <InputNumber
-                {...MONEY_INPUT}
-                aria-label={
+              style={{ width: "100%" }}
+              value={dest}
+              options={destOptions.map((o) =>
+                mode === "SEND" &&
+                asOne &&
+                o.value === unitOf(oneSerial)?.locationId
+                  ? {
+                      ...o,
+                      label: t(
+                        "inbound.serviceStaysHere",
+                        "{{name}} (stays here)",
+                        { name: o.label },
+                      ),
+                    }
+                  : o,
+              )}
+              onChange={setDest}
+            />
+          </Form.Item>
+
+          {feeAsked && (
+            <>
+              <Form.Item
+                label={
                   mode === "SEND"
                     ? t(
                         "inbound.serviceShippingFee",
@@ -780,112 +853,96 @@ export function ServiceBatchModal({
                       )
                     : t("service.transferFee", "Cost of moving it back")
                 }
-                value={fee}
-                onChange={(v) => setFee(v ?? null)}
+              >
+                <InputNumber
+                  {...MONEY_INPUT}
+                  aria-label={
+                    mode === "SEND"
+                      ? t(
+                          "inbound.serviceShippingFee",
+                          "Cost of getting it there",
+                        )
+                      : t("service.transferFee", "Cost of moving it back")
+                  }
+                  value={fee}
+                  onChange={(v) => setFee(v ?? null)}
+                />
+              </Form.Item>
+              {hasFee && (
+                <>
+                  <Form.Item style={{ marginBottom: SPACE.md }}>
+                    <Flex align="center" gap={SPACE.sm}>
+                      <Switch
+                        checked={split}
+                        onChange={toggleSplit}
+                        aria-label={t(
+                          "serviceBatch.splitFee",
+                          "Split the courier fee into each unit's cost",
+                        )}
+                      />
+                      <span>
+                        {t(
+                          "serviceBatch.splitFee",
+                          "Split the courier fee into each unit's cost",
+                        )}
+                      </span>
+                    </Flex>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: TYPE.sm }}
+                    >
+                      {split
+                        ? t(
+                            "serviceBatch.splitOn",
+                            "{{amount}} per unit, added to each unit's COGS.",
+                            {
+                              amount: fmtRp(
+                                Math.floor((fee ?? 0) / travellers.length),
+                              ),
+                            },
+                          )
+                        : t(
+                            "serviceBatch.splitOff",
+                            "Recorded once as a shop expense (Shipping / ongkir). No unit's cost changes.",
+                          )}
+                    </Typography.Text>
+                  </Form.Item>
+                  <Form.Item
+                    label={t("service.courierPaidWith", "Courier paid with")}
+                  >
+                    <Radio.Group
+                      aria-label={t(
+                        "service.courierPaidWith",
+                        "Courier paid with",
+                      )}
+                      optionType="button"
+                      size="small"
+                      value={paid}
+                      onChange={(e) => setPaid(e.target.value as PaidWith)}
+                      options={PAID_WITH.filter(
+                        (p) => split || p !== "UNPAID",
+                      ).map((p) => ({ value: p, label: paidWord(p) }))}
+                    />
+                  </Form.Item>
+                </>
+              )}
+            </>
+          )}
+
+          {mode === "SEND" && asOne && rows[0] && (
+            <Form.Item label={descriptionLabel}>
+              <Input.TextArea
+                rows={2}
+                aria-label={descriptionLabel}
+                value={rows[0].description}
+                onChange={(e) =>
+                  setDescription(rows[0]!.serial, e.target.value)
+                }
               />
             </Form.Item>
-            {hasFee && (
-              <>
-                <Form.Item style={{ marginBottom: SPACE.md }}>
-                  <Flex align="center" gap={SPACE.sm}>
-                    <Switch
-                      checked={split}
-                      onChange={toggleSplit}
-                      aria-label={t(
-                        "serviceBatch.splitFee",
-                        "Split the courier fee into each unit's cost",
-                      )}
-                    />
-                    <span>
-                      {t(
-                        "serviceBatch.splitFee",
-                        "Split the courier fee into each unit's cost",
-                      )}
-                    </span>
-                  </Flex>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: TYPE.sm }}
-                  >
-                    {split
-                      ? t(
-                          "serviceBatch.splitOn",
-                          "{{amount}} per unit, added to each unit's COGS.",
-                          {
-                            amount: fmtRp(
-                              Math.floor((fee ?? 0) / travellers.length),
-                            ),
-                          },
-                        )
-                      : t(
-                          "serviceBatch.splitOff",
-                          "Recorded once as a shop expense (Shipping / ongkir). No unit's cost changes.",
-                        )}
-                  </Typography.Text>
-                </Form.Item>
-                <Form.Item
-                  label={t("service.courierPaidWith", "Courier paid with")}
-                >
-                  <Radio.Group
-                    aria-label={t(
-                      "service.courierPaidWith",
-                      "Courier paid with",
-                    )}
-                    optionType="button"
-                    size="small"
-                    value={paid}
-                    onChange={(e) => setPaid(e.target.value as PaidWith)}
-                    options={PAID_WITH.filter(
-                      (p) => split || p !== "UNPAID",
-                    ).map((p) => ({ value: p, label: paidWord(p) }))}
-                  />
-                </Form.Item>
-              </>
-            )}
-          </>
-        )}
-
-        {mode === "BACK" && asOne && rows[0] && (
-          <Form.Item
-            label={t("serviceBatch.repairCost", "Repair cost")}
-            required
-          >
-            <InputNumber
-              {...MONEY_INPUT}
-              aria-label={t("serviceBatch.repairCost", "Repair cost")}
-              placeholder={t("serviceBatch.repairCostHint", "0 if free")}
-              value={rows[0].cost}
-              onChange={(v) =>
-                setCost(rows[0]!.serial, typeof v === "number" ? v : null)
-              }
-            />
-          </Form.Item>
-        )}
-        {mode === "BACK" && repairTotal > 0 && (
-          <Form.Item
-            label={t("serviceBatch.repairPaidWith", "Repair paid with")}
-          >
-            <Radio.Group
-              aria-label={t("serviceBatch.repairPaidWith", "Repair paid with")}
-              optionType="button"
-              size="small"
-              value={repairPaid}
-              onChange={(e) => setRepairPaid(e.target.value as PaidWith)}
-              options={PAID_WITH.map((p) => ({ value: p, label: paidWord(p) }))}
-            />
-          </Form.Item>
-        )}
-        {asOne && rows[0] && (
-          <Form.Item label={descriptionLabel}>
-            <Input.TextArea
-              rows={2}
-              aria-label={descriptionLabel}
-              value={rows[0].description}
-              onChange={(e) => setDescription(rows[0]!.serial, e.target.value)}
-            />
-          </Form.Item>
-        )}
-      </Form>
+          )}
+        </Form>
+      </div>
       <ServiceUnitPicker
         open={picking}
         exclude={rows.map((r) => r.serial)}
