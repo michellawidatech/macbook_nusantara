@@ -45,9 +45,12 @@ export interface NavLeaf {
    * what the nav holds.
    */
   readonly badge?: NavBadgeKind;
+  /** Drawn only for an account with `canApprove` (2026-11-13). */
+  readonly approverOnly?: boolean;
 }
 /** What a leaf's count counts. */
-export type NavBadgeKind = "qcWaiting" | "reservationRequests" | "chatWaiting";
+export type NavBadgeKind =
+  "qcWaiting" | "reservationRequests" | "chatWaiting" | "changeRequests";
 export interface NavSection {
   readonly key: string;
   readonly label: string;
@@ -143,6 +146,14 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       { path: "/finance/reconciliation", label: "Reconciliation" },
       // Laba Rugi, after Olsera's template (owner ask 2026-10-23).
       { path: "/finance/profit-loss", label: "Profit & Loss" },
+      // Edit and delete requests waiting on an approver (2026-11-13), for
+      // the account that decides them and nobody else.
+      {
+        path: "/finance/approvals",
+        label: "Approvals",
+        badge: "changeRequests",
+        approverOnly: true,
+      },
     ],
   },
   {
@@ -205,10 +216,16 @@ export function navSectionsFor(staff: {
   readonly canViewFinance: boolean;
   readonly canApprove?: boolean;
 }): readonly NavSection[] {
-  return NAV_SECTIONS.filter(
+  const sections = NAV_SECTIONS.filter(
     (s) =>
       (s.key !== FINANCE_SECTION_KEY || staff.canViewFinance) &&
       (s.key !== TODAY_SECTION_KEY || staff.canApprove === true),
+  );
+  if (staff.canApprove === true) return sections;
+  return sections.map((s) =>
+    s.children?.some((c) => c.approverOnly === true)
+      ? { ...s, children: s.children.filter((c) => c.approverOnly !== true) }
+      : s,
   );
 }
 

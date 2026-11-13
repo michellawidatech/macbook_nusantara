@@ -73,6 +73,19 @@ import {
 } from "../../lib/inbound.js";
 import { useTranslation } from "react-i18next";
 import { COLUMN } from "../../theme/tokens";
+import { useCanApprove } from "../../hooks/useCanApprove.js";
+import {
+  pendingFor,
+  usePendingChangeRequests,
+} from "../../hooks/useChangeRequests.js";
+import {
+  ChangeRequestedTag,
+  RequestDeleteModal,
+} from "../../components/ChangeRequestParts";
+import {
+  invoiceChangeSummary,
+  sendChangeRequest,
+} from "../../lib/changeRequests.js";
 
 interface Row {
   readonly id: string;
@@ -97,6 +110,17 @@ export function InboundPage() {
   const db = useDb();
   const navigate = useNavigate();
   const { message, modal } = App.useApp();
+  /*
+   * Deleting an invoice is an approver's (2026-11-13), except a draft, which
+   * nothing has been paid against. Anybody else asks, with why.
+   */
+  const canApprove = useCanApprove();
+  const pending = usePendingChangeRequests();
+  const [askingDelete, setAskingDelete] = useState<{
+    readonly id: string;
+    readonly code: string;
+    readonly takes: readonly string[];
+  } | null>(null);
   /**
    * The row a right-click landed on, and where the pointer was (owner ask
    * 2026-09-15: *"Make the inbound deletable. with right click and add modal
@@ -137,6 +161,10 @@ export function InboundPage() {
           { count: blockers.length, serials: blockers.join(", ") },
         ),
       });
+      return;
+    }
+    if (!canApprove && po.status !== "DRAFT") {
+      setAskingDelete({ id, code: po.code, takes });
       return;
     }
     modal.confirm({
@@ -317,6 +345,11 @@ export function InboundPage() {
                 >
                   {r.invoice}
                 </Typography.Text>
+                <ChangeRequestedTag
+                  requests={pendingFor(pending.requests, {
+                    purchaseOrderId: r.id,
+                  })}
+                />
               </>
             ),
           },
@@ -487,7 +520,14 @@ export function InboundPage() {
                   </span>
                 </Tooltip>
                 <Tooltip
-                  title={t("inboundList.deleteOrder", "Delete this order")}
+                  title={
+                    canApprove
+                      ? t("inboundList.deleteOrder", "Delete this order")
+                      : t(
+                          "inboundList.requestDelete",
+                          "Ask to delete this order",
+                        )
+                  }
                 >
                   <Button
                     size="small"
@@ -544,7 +584,9 @@ export function InboundPage() {
               key: "delete",
               danger: true,
               icon: <DeleteOutlined />,
-              label: t("inboundList.deleteOrder", "Delete this order"),
+              label: canApprove
+                ? t("inboundList.deleteOrder", "Delete this order")
+                : t("inboundList.requestDelete", "Ask to delete this order"),
             },
           ],
           onClick: () => {
@@ -565,6 +607,44 @@ export function InboundPage() {
           }}
         />
       </Dropdown>
+      <RequestDeleteModal
+        open={askingDelete !== null}
+        title={t("inboundList.requestDeleteTitle", "Ask to delete {{code}}", {
+          code: askingDelete?.code ?? "",
+        })}
+        description={
+          (askingDelete?.takes.length ?? 0) === 0
+            ? t(
+                "inboundList.deleteBody",
+                "Its lines and its payments stop counting. Money already paid stays on the supplier's account.",
+              )
+            : t(
+                "inboundList.deleteBodyWithUnits",
+                "Its lines and its payments stop counting, and {{count}} unit(s) still waiting in QC go with it. Money already paid stays on the supplier's account.",
+                { count: askingDelete?.takes.length ?? 0 },
+              )
+        }
+        onClose={() => setAskingDelete(null)}
+        onSend={(note) => {
+          const asked = askingDelete;
+          if (asked === null) return Promise.resolve();
+          const going = new Set(asked.takes);
+          return sendChangeRequest(
+            {
+              kind: "DELETE",
+              target: { purchaseOrderId: asked.id },
+              label: asked.code,
+              note,
+              summarise: (c) =>
+                invoiceChangeSummary(t, c.before, c.after, asked.id),
+            },
+            (d) => {
+              d.units = d.units.filter((u) => !going.has(u.serial));
+              d.pos = d.pos.filter((p) => p.id !== asked.id);
+            },
+          );
+        }}
+      />
       {/*
        * Invoices, and the units bought across the counter on a sale (owner
        * ask 2026-10-31). A trade-in is on no invoice and its QC is taken at

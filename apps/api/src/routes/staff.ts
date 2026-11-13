@@ -20,6 +20,12 @@
  *  - **Touch a service account** (the chat agent, the system row, the B2Soft
  *    import's author). A password on one of those would be a login carrying the
  *    agent's authority; they are not even listed.
+ *  - **Let anybody but `widatech` change who approves** (2026-11-13: "make a
+ *    toggle where only I have access to change the access"). `canApprove` is
+ *    who may commit an edit or a delete of money, and who decides everybody
+ *    else's requests (routes/changeRequests.ts). An owner is no longer
+ *    forced to approve, and an owner who is not that account cannot switch
+ *    it on for themselves.
  *  - **Lock the shop out of itself.** The last active owner cannot be demoted
  *    or deactivated, and nobody can demote or deactivate themselves — the
  *    classic way a one-owner shop loses its only admin is one mis-tap.
@@ -33,7 +39,11 @@ import {
   UNUSABLE_PASSWORD_HASH,
   type PrismaClient,
 } from "@nusantara/db";
-import { INITIAL_PASSWORD, USERNAME_PATTERN } from "@nusantara/domain";
+import {
+  APPROVAL_ADMIN_USERNAME,
+  INITIAL_PASSWORD,
+  USERNAME_PATTERN,
+} from "@nusantara/domain";
 import type { Logger } from "@nusantara/logging";
 import { ApiError, notFound } from "../errors.js";
 import { hashPassword } from "../auth/credentials.js";
@@ -125,6 +135,13 @@ export function staffRouter(deps: StaffRouterDeps): Router {
 
   const reject = (message: string, field?: string) =>
     new ApiError(400, "VALIDASI", message, field ? { field } : {});
+  const approvalAdminOnly = () =>
+    new ApiError(
+      403,
+      "AKSES_DITOLAK",
+      "Hanya akun widatech yang bisa mengubah siapa yang boleh menyetujui.",
+      { field: "canApprove" },
+    );
 
   router.get("/", (_req, res, next) => {
     void (async () => {
@@ -176,6 +193,13 @@ export function staffRouter(deps: StaffRouterDeps): Router {
         }
 
         const me = req.staff as AuthenticatedStaff;
+        if (
+          parsed.data.canApprove === true &&
+          me.username !== APPROVAL_ADMIN_USERNAME
+        ) {
+          next(approvalAdminOnly());
+          return;
+        }
         const passwordHash = await hashPassword(INITIAL_PASSWORD);
         const now = new Date();
         const created = await db.$transaction(async (tx) => {
@@ -184,9 +208,9 @@ export function staffRouter(deps: StaffRouterDeps): Router {
               username,
               name,
               role,
-              // An owner who cannot approve is a contradiction (03 §Settings,
-              // and the staff CLI has always forced it the same way).
-              canApprove: role === "OWNER" || (parsed.data.canApprove ?? false),
+              // Not implied by OWNER since 2026-11-13, and only widatech may
+              // set it (checked above).
+              canApprove: parsed.data.canApprove ?? false,
               // Not implied by OWNER: the money is per person (2026-10-16).
               canViewFinance: parsed.data.canViewFinance ?? false,
               active: true,
@@ -243,6 +267,15 @@ export function staffRouter(deps: StaffRouterDeps): Router {
           return;
         }
 
+        if (
+          patch.canApprove !== undefined &&
+          patch.canApprove !== target.canApprove &&
+          me.username !== APPROVAL_ADMIN_USERNAME
+        ) {
+          next(approvalAdminOnly());
+          return;
+        }
+
         const demotes = patch.role === "STAFF" && target.role === "OWNER";
         const deactivates = patch.active === false && target.active;
         if (id === me.id && (demotes || deactivates)) {
@@ -269,7 +302,6 @@ export function staffRouter(deps: StaffRouterDeps): Router {
           }
         }
 
-        const role = patch.role ?? target.role;
         const data = {
           ...(patch.name !== undefined ? { name: patch.name } : {}),
           ...(patch.role !== undefined ? { role: patch.role } : {}),
@@ -277,11 +309,9 @@ export function staffRouter(deps: StaffRouterDeps): Router {
           ...(patch.canViewFinance !== undefined
             ? { canViewFinance: patch.canViewFinance }
             : {}),
-          ...(patch.canApprove !== undefined || patch.role !== undefined
-            ? {
-                canApprove:
-                  role === "OWNER" || (patch.canApprove ?? target.canApprove),
-              }
+          // A role change no longer touches it (2026-11-13).
+          ...(patch.canApprove !== undefined
+            ? { canApprove: patch.canApprove }
             : {}),
         };
 

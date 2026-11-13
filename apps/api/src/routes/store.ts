@@ -11,6 +11,8 @@
  *
  * What only Financial & Report reads is scoped by `auth/financeScope.ts`: an
  * account without `canViewFinance` is sent none of it and may only add to it.
+ * An edit or a delete of money needs `canApprove` (`auth/approvalScope.ts`);
+ * everybody else sends it as a change request.
  *
  * `requireAuth` and `idempotency` are mounted above every business router in
  * app.ts, so a commit needs a live session and a retried commit with the same
@@ -33,6 +35,7 @@ import {
   scopeDelta,
   scopeSnapshot,
 } from "../auth/financeScope.js";
+import { assertApprovalNotNeeded } from "../auth/approvalScope.js";
 
 function toApiError(e: unknown): unknown {
   if (e instanceof StoreValidationError) {
@@ -90,6 +93,9 @@ export function storeRouter(db: PrismaClient): Router {
       const staff = req.staff;
       if (!staff) throw unauthenticated();
       assertFinanceWritable(staff, req.body);
+      // An edit or a delete of money is a REQUEST for anybody who cannot
+      // approve (2026-11-13) — `routes/changeRequests.ts` takes those.
+      assertApprovalNotNeeded(staff, req.body);
       const result = await commitStore(db, {
         staffId: staff.id,
         changes: req.body,

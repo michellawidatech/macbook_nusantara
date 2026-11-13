@@ -49,6 +49,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { matchLeaf, navSectionsFor } from "./navigation.js";
 import { NavBadge } from "./NavBadge.js";
+import { CanApproveContext } from "../hooks/useCanApprove.js";
 import { ChatWaitingBell } from "./ChatWaitingBell.js";
 import { ChatHealthNotice } from "./ChatHealthNotice.js";
 import { useLayoutMode } from "./useLayoutMode.js";
@@ -874,7 +875,10 @@ export function AppLayout({ staff }: { staff: Staff }) {
               {/* Every clickable serial's history dialog, once, over the
                   page (2026-09-21) — `SerialLink` says why it lives here. */}
               <SerialHistoryHost>
-                <Outlet />
+                {/* Who may edit money directly, for every page (2026-11-13). */}
+                <CanApproveContext.Provider value={staff.canApprove}>
+                  <Outlet />
+                </CanApproveContext.Provider>
               </SerialHistoryHost>
             </StoreGate>
           </ErrorBoundary>

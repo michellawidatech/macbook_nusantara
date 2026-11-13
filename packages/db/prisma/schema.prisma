@@ -125,6 +125,7 @@ model PurchaseOrder {
   stockIns        StockIn[]
   serviceVisits   ServiceVisit[]
   allocations     DepositAllocation[]
+  changeRequests  ChangeRequest[]
 }
 
 model PurchaseOrderItem {
@@ -905,17 +906,18 @@ model Order {
   payMethod      PaymentMethod?  @relation(fields: [payMethodId], references: [id], onDelete: Restrict)
   reservation    Reservation?    @relation(fields: [reservationId], references: [id], onDelete: Restrict)
 
-  items       OrderItem[]
-  tradeIns    TradeIn[]
-  payments    Payment[]
-  adjustments OrderAdjustment[]
-  expenses    Expense[]
-  incomes     ManualIncome[]
-  shipments   Shipment[]
-  unitEvents  UnitEvent[]
-  fees        OrderFee[]
-  settlements Settlement[]
-  stockMoves  StockMove[]
+  items          OrderItem[]
+  tradeIns       TradeIn[]
+  payments       Payment[]
+  adjustments    OrderAdjustment[]
+  expenses       Expense[]
+  incomes        ManualIncome[]
+  shipments      Shipment[]
+  unitEvents     UnitEvent[]
+  fees           OrderFee[]
+  settlements    Settlement[]
+  stockMoves     StockMove[]
+  changeRequests ChangeRequest[]
 }
 
 model OrderItem {
@@ -1248,6 +1250,8 @@ model Staff {
   reconciliationEdits      ReconciliationEdit[]
   reconciliationAsides     ReconciliationAside[]
   customerPurchases        CustomerPurchase[]
+  changeRequestsMade       ChangeRequest[]       @relation("ChangeRequestRequestedBy")
+  changeRequestsDecided    ChangeRequest[]       @relation("ChangeRequestDecidedBy")
 }
 
 model StaffSession {
@@ -2839,6 +2843,7 @@ model Expense {
   reconciliationEdits  ReconciliationEdit[]
   statementMatches     BankStatementMatch[]
   reconciliationAsides ReconciliationAside[]
+  changeRequests       ChangeRequest[]
 }
 
 /// A unit bought from a customer with no sale (owner 2026-10-31) — the
@@ -2912,6 +2917,7 @@ model ManualIncome {
   reconciliationEdits  ReconciliationEdit[]
   statementMatches     BankStatementMatch[]
   reconciliationAsides ReconciliationAside[]
+  changeRequests       ChangeRequest[]
 
   @@index([unitReturnId])
 }
@@ -3488,4 +3494,77 @@ model ReconciliationAside {
   @@index([incomeId])
   @@index([depositId])
   @@index([staffId])
+}
+
+/// An edit or a delete of money a person without `Staff.canApprove` ASKED for
+/// (owner/user 2026-11-13: "others can only send request … they can add a note
+/// of why"). Past sales, a purchase invoice's money and Income & Expense's
+/// typed adjustments are corrected this way; the approver decides on
+/// Financial & Report → Approvals.
+///
+/// `changeset` is the store changeset the edit WOULD commit (wire form, the
+/// shape `POST /api/store/commit` takes), computed in the requester's browser
+/// by running the dialog's own mutation on a copy. ⚠️ It is the SEVENTH JSON
+/// exception (user go-ahead 2026-11-13): a changeset's shape is the whole
+/// store contract, and a table per collection would be a second copy of
+/// `@nusantara/store` that drifts. Nothing reads inside it but `commitStore`.
+///
+/// Approving commits it AS THE APPROVER. Its rows carry the versions the
+/// requester started from, so a record that changed since answers 409 and the
+/// request becomes STALE; a request is never rewritten to fit.
+///
+/// At most ONE target (CHECK in the migration). Expense and income can be
+/// hard-deleted (2026-10-24), so those two links are SET NULL and `label`
+/// still says what it was about; a sale and an invoice never are.
+/// `code` CR-YYYY/MM-NNNNNN. No DELETE for the app role.
+model ChangeRequest {
+  id              String              @id @default(cuid())
+  code            String              @unique @default(dbgenerated("next_doc_code('CR'::text)"))
+  kind            ChangeRequestKind
+  status          ChangeRequestStatus @default(PENDING)
+  orderId         String?
+  purchaseOrderId String?
+  expenseId       String?
+  manualIncomeId  String?
+  /// What it is about, as the requester's screen named it ("SI-2026/11-000012").
+  label           String
+  /// The change in words, before → after.
+  summary         String
+  /// Why — required.
+  note            String
+  changeset       Json
+  requestedById   String
+  requestedAt     DateTime
+  decidedById     String?
+  decidedAt       DateTime?
+  /// A rejection's reason, or why the commit refused a STALE one.
+  decisionNote    String?
+
+  order         Order?         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  expense       Expense?       @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+  manualIncome  ManualIncome?  @relation(fields: [manualIncomeId], references: [id], onDelete: SetNull)
+  requestedBy   Staff          @relation("ChangeRequestRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  decidedBy     Staff?         @relation("ChangeRequestDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
+
+  @@index([status, requestedAt])
+  @@index([requestedById, requestedAt])
+  @@index([orderId])
+  @@index([purchaseOrderId])
+  @@index([expenseId])
+  @@index([manualIncomeId])
+}
+
+enum ChangeRequestKind {
+  EDIT
+  DELETE
+}
+
+enum ChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  /// The record changed after the request was made, or the change no longer
+  /// fits; the requester asks again.
+  STALE
 }

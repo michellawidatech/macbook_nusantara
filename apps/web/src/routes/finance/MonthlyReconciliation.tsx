@@ -104,7 +104,13 @@ import {
   type AdjustmentPreset,
   type RecordedAdjustment,
 } from "./AdjustmentPanel";
-import { EditLog, editBlockText, itemsOfOrder } from "./DailyReconcileModal";
+import {
+  EditLog,
+  editBlockText,
+  itemsOfOrder,
+  needsApprover,
+} from "./DailyReconcileModal";
+import { useCanApprove } from "../../hooks/useCanApprove.js";
 
 /** A suggestion's name, as literal `t()` calls. */
 export function reasonLabel(reason: string, t: TFunction): string {
@@ -220,6 +226,7 @@ export function MonthlyReconciliation({
   const { t } = useTranslation();
   const { message } = App.useApp();
   const db = useDb();
+  const canApprove = useCanApprove();
   const { compact } = useLayoutMode();
   const rec = db.reconciliations.find((r) => r.id === recId);
   const rows = useMemo(() => cashflowRows(db, t), [db, t]);
@@ -339,6 +346,17 @@ export function MonthlyReconciliation({
     const move = byKey.get(s.movementKeys[0]!);
     if (s.reason === "TYPO") {
       if (move?.source === undefined) return;
+      // Correcting an expense, an income or a supplier payment is an
+      // approver's (2026-11-13).
+      if (!canApprove && needsApprover(move.source)) {
+        message.error(
+          t(
+            "recon.askApprover",
+            "Only an approver can correct this amount — ask one, or send a request from its own screen.",
+          ),
+        );
+        return;
+      }
       const block = editBlock(db, move.source, Math.abs(line.amount));
       if (block !== undefined) {
         message.error(editBlockText(block, t));

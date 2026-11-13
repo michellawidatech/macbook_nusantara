@@ -5,3 +5,4 @@ export * from "./collections.js";
 export * from "./diff.js";
 export * from "./schemas.js";
 export * from "./wire.js";
+export * from "./approval.js";

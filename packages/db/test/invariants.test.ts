@@ -827,6 +827,34 @@ describe("a service charge or visit can be deleted (2026-10-26)", () => {
   });
 });
 
+describe("a change request is the record of a decision (2026-11-13)", () => {
+  it("the app may file and decide one, never delete one; the agent cannot reach it", async () => {
+    const { rows } = await owner.query(
+      `SELECT has_table_privilege('nusantara_app','"ChangeRequest"','INSERT')   AS app_insert,
+              has_table_privilege('nusantara_app','"ChangeRequest"','UPDATE')   AS app_update,
+              has_table_privilege('nusantara_app','"ChangeRequest"','DELETE')   AS app_delete,
+              has_table_privilege('nusantara_app','"ChangeRequest"','TRUNCATE') AS app_truncate,
+              has_table_privilege('nusantara_agent','"ChangeRequest"','SELECT') AS agent_select`,
+    );
+    expect(rows[0]).toEqual({
+      app_insert: true,
+      app_update: true,
+      app_delete: false,
+      app_truncate: false,
+      agent_select: false,
+    });
+  });
+
+  it("names at most one record", async () => {
+    await expect(
+      owner.query(
+        `INSERT INTO "ChangeRequest" ("id","kind","orderId","purchaseOrderId","label","summary","note","changeset","requestedById","requestedAt")
+         VALUES ('cr-two','EDIT','o-x','po-x','x','','x','{}'::jsonb,'s-x',now())`,
+      ),
+    ).rejects.toThrow(/ChangeRequest_one_target_check|violates/);
+  });
+});
+
 // ---------------------------------------------------------------------------
 
 describe("the ledger's two admitted edits (2026-09-23, in the database 2026-09-24)", () => {

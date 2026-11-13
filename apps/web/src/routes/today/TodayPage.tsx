@@ -39,6 +39,7 @@ import { GradeTag } from "../../components/GradeTag";
 import { EnumTag } from "../../components/EnumTag";
 import { SerialLink } from "../../components/SerialLink";
 import { useDb } from "../../mock/store.js";
+import { usePendingChangeRequests } from "../../hooks/useChangeRequests.js";
 import { useSession } from "../../lib/session.js";
 import { fmtNone, fmtRp } from "../../lib/format.js";
 import { needsRestock } from "../../lib/restock.js";
@@ -111,9 +112,18 @@ function TodayBody({ canViewFinance }: { readonly canViewFinance: boolean }) {
     dayjs().format("YYYY-MM-DD"),
   ).includes("BANK");
 
-  // TODO(approvals): wire usePendingChangeRequests() — Part B ships the hook
-  // (pending ChangeRequests for this approver); until then nothing is listed.
-  const approvals: readonly TodayApprovalRequest[] = [];
+  // Pending ChangeRequests — the same poll the Approvals page and its nav
+  // badge read.
+  const { requests: pending } = usePendingChangeRequests();
+  const approvals: readonly TodayApprovalRequest[] = pending.map((r) => ({
+    id: r.id,
+    code: r.code,
+    kind: r.kind,
+    label: r.label,
+    note: r.note,
+    requestedByName: r.requestedBy.name,
+    requestedAt: r.requestedAt,
+  }));
 
   const warehouse = (id: string) =>
     warehouseLabelOf(db.warehouses, id) ?? fmtNone();

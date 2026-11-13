@@ -32,6 +32,7 @@ import {
 import { KeyOutlined, PlusOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import {
+  APPROVAL_ADMIN_USERNAME,
   INITIAL_PASSWORD,
   USERNAME_PATTERN,
   usernameFor,
@@ -241,23 +242,39 @@ export function StaffAccountsSettings({ me }: { me: Staff }) {
             ),
           },
           {
-            title: t("staff.canApprove", "Can approve"),
+            /*
+             * Who may edit or delete money directly and decide everybody
+             * else's requests (2026-11-13). Not implied by Owner any more,
+             * and only one account may flip it — the API refuses anybody
+             * else, so the switch is drawn read-only for them.
+             */
+            title: t("staff.canApproveEdits", "Can approve edits"),
             key: "canApprove",
             render: (_, a) => (
               <Tooltip
                 title={
-                  a.role === "OWNER"
-                    ? t("staff.ownerApproves", "An owner always approves.")
+                  me.username !== APPROVAL_ADMIN_USERNAME
+                    ? t(
+                        "staff.canApproveLocked",
+                        "Edits and deletes of money by everybody else wait for this account's approval. Only the system administrator changes who approves.",
+                      )
                     : t(
-                        "staff.canApproveHint",
-                        "Approves prices below cost and other decisions that need a second person.",
+                        "staff.canApproveEditsHint",
+                        "Edits and deletes past transactions, invoice money and income & expense directly, and approves everybody else's requests.",
                       )
                 }
               >
                 <Switch
                   size="small"
                   checked={a.canApprove}
-                  disabled={a.role === "OWNER" || !a.active}
+                  aria-label={t(
+                    "staff.canApproveAria",
+                    "{{name}} can approve edits",
+                    { name: a.name },
+                  )}
+                  disabled={
+                    me.username !== APPROVAL_ADMIN_USERNAME || !a.active
+                  }
                   onChange={(canApprove) =>
                     update
                       .mutateAsync({ id: a.id, canApprove })
@@ -378,7 +395,9 @@ export function StaffAccountsSettings({ me }: { me: Staff }) {
                 name: values.name.trim(),
                 username: values.username.trim().toLowerCase(),
                 role: values.role,
-                canApprove: values.role === "OWNER",
+                // Only widatech hands this out, on the account's row
+                // (2026-11-13) — never by role.
+                canApprove: false,
                 canViewFinance: values.canViewFinance,
               })
               .then(

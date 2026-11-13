@@ -232,6 +232,23 @@ import {
 import { InboxSlashOutlined } from "../../components/InboxSlashIcon";
 import { UnitDetailsModal } from "../../components/UnitDetailsModal";
 import { ExpenseModal } from "./ExpenseModal.js";
+import {
+  InvoiceMoneyRequestModal,
+  type InvoiceMoneyEdits,
+} from "./InvoiceMoneyRequestModal.js";
+import { useCanApprove } from "../../hooks/useCanApprove.js";
+import {
+  pendingFor,
+  usePendingChangeRequests,
+} from "../../hooks/useChangeRequests.js";
+import {
+  ChangeRequestMenu,
+  ChangeRequestedTag,
+} from "../../components/ChangeRequestParts";
+import {
+  invoiceChangeSummary,
+  sendChangeRequest,
+} from "../../lib/changeRequests.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
 import { isRecord } from "../../lib/draftGuards.js";
 import { isPickableMethod } from "../../lib/accounts.js";
@@ -552,6 +569,10 @@ export function InboundDetailPage({
 
   const po = db.pos.find((p) => p.id === poId);
   const units = useMemo(() => (po ? unitsOfPo(db, po.id) : []), [db, po]);
+  /** Approvals (2026-11-13) — see `askApprover`. Above the early return. */
+  const canApprove = useCanApprove();
+  const pendingRequests = usePendingChangeRequests();
+  const [askingMoney, setAskingMoney] = useState(false);
 
   /**
    * Arriving from the list's *Add payment* (owner brief 2026-09-19): the
@@ -1617,6 +1638,14 @@ export function InboundDetailPage({
    */
   const moneyLocked = closed || !editing;
   const qcLocked = !editing;
+  /*
+   * The money that has gone out is an approver's (2026-11-13: "QC can still
+   * work for everyone. Just that they cannot change the buy price"). For
+   * anybody else a priced line's price and discount, an expense's amount and
+   * a payment are read-only, and *Request edit* asks for the change. A draft
+   * is still being typed and stays open.
+   */
+  const askApprover = !canApprove && po.status !== "DRAFT";
 
   /** An expense's name as the page shows it: its label, else its kind. */
   const feeName = (fee: PoFee) =>
@@ -2241,6 +2270,66 @@ export function InboundDetailPage({
       writeUnitCosts(d, mine);
     });
   };
+
+  /** What the invoice bills for the piece behind a row; 0 when unpriced. */
+  const pieceCost = (r: ReceivingRow) =>
+    po.items.find((i) => i.id === r.itemId)?.unitCost ?? 0;
+
+  /**
+   * *Request edit* on the money (2026-11-13): the writes the page's own boxes
+   * and dialogs would make, as ONE mutation for `sendChangeRequest` to run on
+   * a copy — `normaliseLines` first, as `editOrder` does, then each line's
+   * price and discount through `spread`, each expense the way `ExpenseModal`
+   * changes or removes it, each payment as the payment dialog does.
+   */
+  const moneyEditsOf =
+    (edits: InvoiceMoneyEdits) =>
+    (d: MockDb): void => {
+      const order = d.pos.find((p) => p.id === poId);
+      if (!order) return;
+      normaliseLines(order, d.units, () => nextId("poi"), countedIn(d));
+      for (const e of edits.lines) {
+        const l = lines.find((x) => x.key === e.key);
+        if (!l) continue;
+        const mine = spread(
+          order,
+          l,
+          e.unitCost,
+          Math.min(e.discount, e.unitCost * l.qty),
+        );
+        writeUnitCosts(d, mine);
+      }
+      for (const f of edits.fees) {
+        if (f.amount === null) {
+          order.fees = order.fees.filter((x) => x.id !== f.id);
+          order.payments = order.payments.filter((p) => p.feeId !== f.id);
+          continue;
+        }
+        const fee = order.fees.find((x) => x.id === f.id);
+        if (!fee) continue;
+        fee.amount = f.amount;
+        // Lowered below what was paid for it: its own payments come down
+        // with it, newest first — as ExpenseModal does.
+        const mine = order.payments.filter((p) => p.feeId === f.id);
+        let over = mine.reduce((n, p) => n + p.amount, 0) - f.amount;
+        for (const p of [...mine].reverse()) {
+          if (over <= 0) break;
+          const cut = Math.min(p.amount, over);
+          over -= cut;
+          if (cut === p.amount)
+            order.payments = order.payments.filter((x) => x.id !== p.id);
+          else p.amount -= cut;
+        }
+      }
+      for (const p of edits.payments) {
+        if (p.amount === null) {
+          order.payments = order.payments.filter((x) => x.id !== p.id);
+          continue;
+        }
+        const pay = order.payments.find((x) => x.id === p.id);
+        if (pay) pay.amount = p.amount;
+      }
+    };
 
   /** Each identified unit's `buy`, from the piece it stands on. */
   const writeUnitCosts = (d: MockDb, pieces: readonly PoItem[]) => {
@@ -3135,6 +3224,15 @@ export function InboundDetailPage({
         aria: t("inbound.deleteUnitRowAria", "Delete unit {{n}}", { n }),
         icon: <DeleteOutlined aria-hidden />,
         danger: true,
+        // A billed piece coming off the invoice is the invoice's money
+        // (2026-11-13); an unpriced one was never billed.
+        disabledWhy:
+          askApprover && pieceCost(r2) > 0
+            ? t(
+                "inbound.deleteRowNeedsApprover",
+                "Taking a billed unit off the invoice needs an approver.",
+              )
+            : null,
         onClick: () => deleteUnitRow(r2),
       });
 
@@ -3621,6 +3719,7 @@ export function InboundDetailPage({
           lines={lines}
           skus={db.skus}
           closed={moneyLocked}
+          pricesLocked={askApprover}
           cogsOf={lineCogs}
           onSetProduct={setLineProduct}
           onSetQty={setLineQty}
@@ -3699,15 +3798,23 @@ export function InboundDetailPage({
                         />
                       </Tooltip>
                       <Tooltip
-                        title={t(
-                          "inbound.invoiceRemove",
-                          "Remove from the invoice",
-                        )}
+                        title={
+                          askApprover && l.unitCost > 0
+                            ? t(
+                                "inbound.deleteRowNeedsApprover",
+                                "Taking a billed unit off the invoice needs an approver.",
+                              )
+                            : t(
+                                "inbound.invoiceRemove",
+                                "Remove from the invoice",
+                              )
+                        }
                       >
                         <Button
                           size="small"
                           type="text"
                           danger
+                          disabled={askApprover && l.unitCost > 0}
                           icon={<DeleteOutlined aria-hidden />}
                           aria-label={t(
                             "inbound.invoiceRemoveAria",
@@ -3796,7 +3903,7 @@ export function InboundDetailPage({
         <Typography.Text style={{ whiteSpace: "nowrap" }}>
           {fmtRp(s.due)}
         </Typography.Text>
-        {!moneyLocked && (
+        {!moneyLocked && !(askApprover && s.fee.amount > 0) && (
           <Button
             size="small"
             type="text"
@@ -3824,9 +3931,25 @@ export function InboundDetailPage({
     <Card
       // "Purchase", matching the order form's review step (owner decision
       // 2026-08-26).
-      title={t("inbound.purchase", "Purchase")}
+      title={
+        <Flex gap={8} align="center">
+          {t("inbound.purchase", "Purchase")}
+          <ChangeRequestedTag
+            requests={pendingFor(pendingRequests.requests, {
+              purchaseOrderId: po.id,
+            })}
+          />
+        </Flex>
+      }
       extra={
         <Flex gap={8} wrap justify="end">
+          {askApprover && !closed && (
+            <ChangeRequestMenu
+              size="middle"
+              label={po.code}
+              onRequestEdit={() => setAskingMoney(true)}
+            />
+          )}
           <Button
             type="primary"
             icon={<PlusOutlined aria-hidden />}
@@ -4013,7 +4136,12 @@ export function InboundDetailPage({
                         "inbound.returnCreditLocked",
                         "The credit of a supplier return — withdraw the return to take it off.",
                       )
-                    : undefined;
+                    : askApprover
+                      ? t(
+                          "inbound.paymentNeedsApprover",
+                          "Correcting a payment needs an approver — use Request edit on the Purchase card.",
+                        )
+                      : undefined;
                 return (
                   <Flex gap={4} justify="end">
                     <Tooltip
@@ -4652,6 +4780,34 @@ export function InboundDetailPage({
         po={po}
         editing={expense}
         onClose={() => setExpense(null)}
+      />
+
+      <InvoiceMoneyRequestModal
+        open={askingMoney}
+        po={po}
+        lines={lines}
+        skus={db.skus}
+        feeName={feeName}
+        payments={po.payments.filter(
+          (p) =>
+            p.fromDepositId === undefined &&
+            p.returnId === undefined &&
+            p.method !== "RETUR_SUPPLIER",
+        )}
+        onClose={() => setAskingMoney(false)}
+        onSend={(edits, note) =>
+          sendChangeRequest(
+            {
+              kind: "EDIT",
+              target: { purchaseOrderId: po.id },
+              label: po.invoice ? `${po.code} · ${po.invoice}` : po.code,
+              note,
+              summarise: (c) =>
+                invoiceChangeSummary(t, c.before, c.after, po.id),
+            },
+            moneyEditsOf(edits),
+          )
+        }
       />
 
       <PrintLabelsModal
