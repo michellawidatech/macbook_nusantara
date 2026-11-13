@@ -61,6 +61,22 @@ import { COLUMN, SPACE } from "../../theme/tokens";
 import { useLayoutMode } from "../../layouts/useLayoutMode";
 import { AdjustmentPanel, type RecordedAdjustment } from "./AdjustmentPanel";
 import type { TFunction } from "../../i18n/translate.js";
+import { useCanApprove } from "../../hooks/useCanApprove.js";
+import type { MovementSource } from "../../lib/cashflowRows.js";
+
+/**
+ * An expense, an income and a supplier payment are corrected by an approver
+ * alone (2026-11-13) — the commit refuses anybody else. A sale's payment
+ * stays open to all, as it is everywhere.
+ */
+export function needsApprover(source: MovementSource | undefined): boolean {
+  return (
+    source !== undefined &&
+    (source.kind === "expense" ||
+      source.kind === "income" ||
+      source.kind === "poPayment")
+  );
+}
 
 /** A pot's name, as literal `t()` calls so `test/i18n.test.ts` sees them. */
 export function potLabel(pot: Pot, t: TFunction): string {
@@ -300,6 +316,7 @@ function PotDialog({
   const { t } = useTranslation();
   const { message } = App.useApp();
   const db = useDb();
+  const canApprove = useCanApprove();
   const { compact } = useLayoutMode();
   const { pot, day } = count;
   const [actual, setActual] = useState<number>(count.actual);
@@ -357,6 +374,7 @@ function PotDialog({
       const edits: MoneyEdit[] = [];
       for (const r of movements) {
         if (!changed(r) || r.source === undefined) continue;
+        if (!canApprove && needsApprover(r.source)) continue;
         if (editBlock(d, r.source, amounts[r.key]) !== undefined) continue;
         edits.push(...applyAmountEdit(d, r.source, amounts[r.key]!, ctx));
       }
@@ -539,6 +557,17 @@ function PotDialog({
               if (block !== undefined)
                 return (
                   <Tooltip title={editBlockText(block, t)}>
+                    <span>{fmtRp(r.amount)}</span>
+                  </Tooltip>
+                );
+              if (!canApprove && needsApprover(r.source))
+                return (
+                  <Tooltip
+                    title={t(
+                      "recon.askApprover",
+                      "Only an approver can correct this amount — ask one, or send a request from its own screen.",
+                    )}
+                  >
                     <span>{fmtRp(r.amount)}</span>
                   </Tooltip>
                 );

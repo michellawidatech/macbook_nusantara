@@ -33,6 +33,7 @@ import { reservationsRouter } from "./routes/reservations.js";
 import { reservationRequestsRouter } from "./routes/reservationRequests.js";
 import { kontrolRouter } from "./routes/kontrol.js";
 import { storeRouter } from "./routes/store.js";
+import { changeRequestsRouter } from "./routes/changeRequests.js";
 import { staffRouter } from "./routes/staff.js";
 import { agentRouter } from "./routes/agent.js";
 import { whatsappRouter } from "./routes/whatsapp.js";
@@ -91,7 +92,9 @@ export function createApp(deps: CreateAppDeps): Express {
   // reader's 413, not an unhandled 500.
   const pictureJson = express.json({ limit: PICTURE_BODY_LIMIT });
   app.use((req, res, next) => {
-    if (req.path === "/api/store/commit") return storeJson(req, res, next);
+    // A change request carries the changeset its edit would commit.
+    if (req.path === "/api/store/commit" || req.path === "/api/change-requests")
+      return storeJson(req, res, next);
     if (PICTURE_PATH.test(req.path))
       return pictureJson(req, res, (err?: unknown) =>
         next(
@@ -176,6 +179,8 @@ export function createApp(deps: CreateAppDeps): Express {
   api.use("/reservations", reservationsRouter(db));
   api.use("/inbound", inboundRouter(db));
   api.use("/store", storeRouter(db));
+  // Edit / delete approvals (2026-11-13): anybody files, an approver decides.
+  api.use("/change-requests", changeRequestsRouter(db));
 
   // Owner-only, and the guard is passed in rather than applied here so the
   // mount keeps saying who may reach it. Wired since S6 for the rejection; the

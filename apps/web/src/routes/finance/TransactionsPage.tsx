@@ -102,6 +102,20 @@ import {
 } from "../../lib/saleStatus.js";
 import { labelOf, ORDER_SOURCE } from "../../i18n/enumLabels.js";
 import { deleteSale, saleDeletionBlock } from "../../lib/saleDeletion.js";
+import { useCanApprove } from "../../hooks/useCanApprove.js";
+import {
+  pendingFor,
+  usePendingChangeRequests,
+} from "../../hooks/useChangeRequests.js";
+import {
+  ChangeRequestMenu,
+  ChangeRequestedTag,
+  RequestDeleteModal,
+} from "../../components/ChangeRequestParts";
+import {
+  saleChangeSummary,
+  sendChangeRequest,
+} from "../../lib/changeRequests.js";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 import { useTranslation } from "react-i18next";
 import { channelOf } from "../../lib/channels.js";
@@ -220,6 +234,14 @@ export function TransactionsPage() {
   const [reprint, setReprint] = useState<Order | null>(null);
   /** Null when the editor is shut; the sale it is about when open. */
   const [editing, setEditing] = useState<Order | null>(null);
+  /*
+   * Edit and Delete are an approver's (2026-11-13). Anybody else gets a ⋯
+   * with Request edit — the same dialog, sending a request — and Request
+   * delete, which asks why.
+   */
+  const canApprove = useCanApprove();
+  const pending = usePendingChangeRequests();
+  const [askingDelete, setAskingDelete] = useState<Order | null>(null);
   /**
    * The Shopee seller-balance upload (2026-09-21), here since Pending Payment
    * was folded into this page (owner ask 2026-10-22: *"it should just be
@@ -662,7 +684,14 @@ export function TransactionsPage() {
                 searchable: true,
                 searchValue: (r) => `${r.code} ${r.salesperson ?? ""}`,
                 render: (_, r) => (
-                  <Typography.Text strong>{r.code}</Typography.Text>
+                  <Flex vertical gap={2} align="flex-start">
+                    <Typography.Text strong>{r.code}</Typography.Text>
+                    <ChangeRequestedTag
+                      requests={pendingFor(pending.requests, {
+                        orderId: r.order.id,
+                      })}
+                    />
+                  </Flex>
                 ),
               },
               {
@@ -901,43 +930,54 @@ export function TransactionsPage() {
                         onClick={() => setReprint(r.order)}
                       />
                     </Tooltip>
-                    <Tooltip
-                      title={t("transactions.editSale", "Edit transaction")}
-                    >
-                      <span>
-                        <Button
-                          size="small"
-                          aria-label={t(
-                            "transactions.editSaleAria",
-                            "Edit {{code}}",
-                            { code: r.code },
-                          )}
-                          icon={<EditOutlined />}
-                          onClick={() => setEditing(r.order)}
-                        />
-                      </span>
-                    </Tooltip>
-                    <Tooltip
-                      title={
-                        deleteBlockText(r.order) ??
-                        t("transactions.deleteSale", "Delete transaction")
-                      }
-                    >
-                      <span>
-                        <Button
-                          size="small"
-                          danger
-                          disabled={deleteBlockText(r.order) !== undefined}
-                          aria-label={t(
-                            "transactions.deleteSaleAria",
-                            "Delete {{code}}",
-                            { code: r.code },
-                          )}
-                          icon={<DeleteOutlined />}
-                          onClick={() => removeSale(r.order)}
-                        />
-                      </span>
-                    </Tooltip>
+                    {!canApprove ? (
+                      <ChangeRequestMenu
+                        label={r.code}
+                        onRequestEdit={() => setEditing(r.order)}
+                        onRequestDelete={() => setAskingDelete(r.order)}
+                        deleteBlocked={deleteBlockText(r.order)}
+                      />
+                    ) : (
+                      <>
+                        <Tooltip
+                          title={t("transactions.editSale", "Edit transaction")}
+                        >
+                          <span>
+                            <Button
+                              size="small"
+                              aria-label={t(
+                                "transactions.editSaleAria",
+                                "Edit {{code}}",
+                                { code: r.code },
+                              )}
+                              icon={<EditOutlined />}
+                              onClick={() => setEditing(r.order)}
+                            />
+                          </span>
+                        </Tooltip>
+                        <Tooltip
+                          title={
+                            deleteBlockText(r.order) ??
+                            t("transactions.deleteSale", "Delete transaction")
+                          }
+                        >
+                          <span>
+                            <Button
+                              size="small"
+                              danger
+                              disabled={deleteBlockText(r.order) !== undefined}
+                              aria-label={t(
+                                "transactions.deleteSaleAria",
+                                "Delete {{code}}",
+                                { code: r.code },
+                              )}
+                              icon={<DeleteOutlined />}
+                              onClick={() => removeSale(r.order)}
+                            />
+                          </span>
+                        </Tooltip>
+                      </>
+                    )}
                   </Flex>
                 ),
               },
@@ -950,6 +990,46 @@ export function TransactionsPage() {
         open={editing !== null}
         order={editing}
         onClose={() => setEditing(null)}
+        requestMode={!canApprove}
+      />
+
+      <RequestDeleteModal
+        open={askingDelete !== null}
+        title={t("transactions.requestDeleteTitle", "Ask to delete {{code}}", {
+          code: askingDelete?.code ?? "",
+        })}
+        description={t(
+          "transactions.requestDeleteBody",
+          "If an approver agrees, the sale and its payments are removed and its {{count}} unit(s) go back on the shelf as they were before it.",
+          {
+            count:
+              (askingDelete?.serials.length ?? 0) +
+              (askingDelete?.lines?.length ?? 0),
+          },
+        )}
+        onClose={() => setAskingDelete(null)}
+        onSend={(note) => {
+          const order = askingDelete;
+          if (order === null) return Promise.resolve();
+          const staff = currentStaffName();
+          return sendChangeRequest(
+            {
+              kind: "DELETE",
+              target: { orderId: order.id },
+              label: order.code,
+              note,
+              summarise: (c) =>
+                saleChangeSummary(t, c.before, c.after, order.id),
+            },
+            (d) => {
+              deleteSale(d, order.id, {
+                staff,
+                now: new Date().toISOString(),
+                nextMoveId: () => nextId("sm"),
+              });
+            },
+          );
+        }}
       />
 
       <ShopeeSettlementImport

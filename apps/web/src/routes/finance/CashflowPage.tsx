@@ -85,6 +85,17 @@ import {
   transferPartner,
 } from "../../lib/adjustmentDeletion.js";
 import { unreconciledPots } from "../../lib/reconciliation.js";
+import { useCanApprove } from "../../hooks/useCanApprove.js";
+import {
+  pendingFor,
+  usePendingChangeRequests,
+} from "../../hooks/useChangeRequests.js";
+import {
+  ChangeRequestMenu,
+  ChangeRequestedTag,
+  RequestDeleteModal,
+} from "../../components/ChangeRequestParts";
+import { sendChangeRequest } from "../../lib/changeRequests.js";
 import { labelOf } from "../../i18n/enumLabels.js";
 import { useTranslation } from "react-i18next";
 import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
@@ -100,6 +111,22 @@ export function IncomeExpensePage() {
   const { t } = useTranslation();
   const { message, modal } = App.useApp();
   const db = useDb();
+  /*
+   * Deleting a typed adjustment is an approver's (2026-11-13); anybody else
+   * asks, with why. Adding one stays open to all.
+   */
+  const canApprove = useCanApprove();
+  const pending = usePendingChangeRequests();
+  const [askingDelete, setAskingDelete] = useState<Row | null>(null);
+  const pendingOfRow = (r: Row) =>
+    r.adjustment === undefined
+      ? []
+      : pendingFor(
+          pending.requests,
+          r.adjustment.kind === "expense"
+            ? { expenseId: r.adjustment.id }
+            : { manualIncomeId: r.adjustment.id },
+        );
   const [addAdjustment, setAddAdjustment] = useState(false);
   const [openingOpen, setOpeningOpen] = useState(false);
   const [basis, setBasis] = useState<"CASH" | "ACCRUAL">("CASH");
@@ -518,7 +545,12 @@ export function IncomeExpensePage() {
               title: t("finance.description", "Description"),
               dataIndex: "description",
               searchable: true,
-              render: (v: string) => v || fmtNone(),
+              render: (v: string, r: Row) => (
+                <Flex vertical gap={2} align="flex-start">
+                  <span>{v || fmtNone()}</span>
+                  <ChangeRequestedTag requests={pendingOfRow(r)} />
+                </Flex>
+              ),
             },
             {
               title: t("finance.transactionId", "Transaction ID"),
@@ -588,7 +620,13 @@ export function IncomeExpensePage() {
               width: COLUMN.action,
               align: "center",
               render: (_: unknown, r: Row) =>
-                r.adjustment ? (
+                r.adjustment && !canApprove ? (
+                  <ChangeRequestMenu
+                    label={r.description}
+                    onRequestDelete={() => setAskingDelete(r)}
+                    deleteBlocked={deleteBlockText(r)}
+                  />
+                ) : r.adjustment ? (
                   <Tooltip
                     title={
                       deleteBlockText(r) ??
@@ -615,6 +653,57 @@ export function IncomeExpensePage() {
           ]}
         />
       </Card>
+
+      <RequestDeleteModal
+        open={askingDelete !== null}
+        title={t(
+          "cashflow.requestDeleteTitle",
+          "Ask to delete this adjustment",
+        )}
+        description={
+          askingDelete === null
+            ? ""
+            : t(
+                "cashflow.requestDeleteBody",
+                "{{description}} — {{amount}}. If an approver agrees, it is removed for good and the balances are worked out again without it.",
+                {
+                  description: askingDelete.description,
+                  amount: fmtRp(askingDelete.amount),
+                },
+              )
+        }
+        onClose={() => setAskingDelete(null)}
+        onSend={(note) => {
+          const r = askingDelete;
+          const ref = r?.adjustment;
+          if (r === null || ref === undefined) return Promise.resolve();
+          const label = `${r.description || fmtNone()} — ${fmtRp(r.amount)}`;
+          return sendChangeRequest(
+            {
+              kind: "DELETE",
+              target:
+                ref.kind === "expense"
+                  ? { expenseId: ref.id }
+                  : { manualIncomeId: ref.id },
+              label,
+              note,
+              summarise: () =>
+                transferPartner(db, ref) !== undefined
+                  ? t(
+                      "cashflow.requestDeleteMove",
+                      "Delete both halves of this cash ↔ bank move: {{label}}",
+                      { label },
+                    )
+                  : t("cashflow.requestDeleteOne", "Delete {{label}}", {
+                      label,
+                    }),
+            },
+            (d) => {
+              deleteAdjustment(d, ref);
+            },
+          );
+        }}
+      />
 
       <AdjustmentPanel
         addOpen={addAdjustment}

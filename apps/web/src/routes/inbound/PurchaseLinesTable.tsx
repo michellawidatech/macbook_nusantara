@@ -103,6 +103,13 @@ export interface PurchaseLinesTableProps {
   readonly skus: readonly Sku[];
   /** A closed invoice shows its lines and takes no edits. */
   readonly closed?: boolean;
+  /**
+   * For a person who cannot approve (2026-11-13): a priced line's unit price
+   * and discount are read-only and its quantity cannot go down — they ask
+   * for that with Request edit. A line nobody has priced yet stays open:
+   * pricing it is entering the invoice, not correcting it.
+   */
+  readonly pricesLocked?: boolean;
   /** What one line's units cost all in — price, discount and its share of
    *  the invoice's expenses. Whole-line figure, not per piece. */
   readonly cogsOf: (line: PurchaseLine) => number;
@@ -159,6 +166,7 @@ export function PurchaseLinesTable({
   lines,
   skus,
   closed = false,
+  pricesLocked = false,
   cogsOf,
   onSetProduct,
   onSetQty,
@@ -296,7 +304,7 @@ export function PurchaseLinesTable({
             <Typography.Text>{l.qty}</Typography.Text>
           ) : (
             <CountInput
-              min={1}
+              min={pricesLocked && l.unitCost > 0 ? l.qty : 1}
               precision={0}
               style={{ width: "100%" }}
               aria-label={t("inbound.qty", "Qty")}
@@ -336,7 +344,8 @@ export function PurchaseLinesTable({
       key: "cost",
       width: INPUT_COLUMN_WIDTH,
       render: (_: unknown, l: PurchaseLine) => {
-        if (closed) return fmtRp(l.unitCost);
+        if (closed || (pricesLocked && l.unitCost > 0))
+          return fmtRp(l.unitCost);
         const typed = costDraft[l.key];
         const value = typed !== undefined ? typed : l.unitCost;
         return (
@@ -361,7 +370,7 @@ export function PurchaseLinesTable({
       key: "discount",
       width: INPUT_COLUMN_WIDTH,
       render: (_: unknown, l: PurchaseLine) => {
-        if (closed)
+        if (closed || (pricesLocked && l.unitCost > 0))
           return l.discount === 0 ? (
             <Typography.Text type="secondary">{fmtRp(0)}</Typography.Text>
           ) : (

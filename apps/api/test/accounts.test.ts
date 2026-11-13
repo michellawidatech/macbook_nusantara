@@ -375,14 +375,62 @@ describe("the owner's account screen", () => {
     }
   });
 
-  it("makes an owner an approver, always", async () => {
+  it("no longer makes an owner an approver, and lets only widatech switch it", async () => {
+    // 2026-11-13: "make a toggle where only I have access to change the
+    // access (widatech)". A role change leaves it alone.
     const owner = await login("ersen", CHOSEN);
-    const res = await request(app)
+    const promoted = await request(app)
       .patch("/api/staff/s_kasir")
       .set("Cookie", owner)
-      .send({ role: "OWNER", canApprove: false });
-    expect(res.status).toBe(200);
-    expect(res.body.account).toMatchObject({ role: "OWNER", canApprove: true });
+      .send({ role: "OWNER" });
+    expect(promoted.status).toBe(200);
+    expect(promoted.body.account).toMatchObject({
+      role: "OWNER",
+      canApprove: false,
+    });
+    const refused = await request(app)
+      .patch("/api/staff/s_kasir")
+      .set("Cookie", owner)
+      .send({ canApprove: true });
+    expect(refused.status).toBe(403);
+    expect(refused.body.error.field).toBe("canApprove");
+    const createRefused = await request(app)
+      .post("/api/staff")
+      .set("Cookie", owner)
+      .send({ name: "Approver", username: "approver", canApprove: true });
+    expect(createRefused.status).toBe(403);
+
+    await db.staff.create({
+      data: {
+        id: "s_widatech",
+        username: "widatech",
+        name: "Widatech",
+        role: "OWNER",
+        canApprove: false,
+        active: true,
+        passwordHash: chosenHash,
+        createdAt: new Date(),
+      },
+    });
+    const admin = await login("widatech", CHOSEN);
+    const granted = await request(app)
+      .patch("/api/staff/s_kasir")
+      .set("Cookie", admin)
+      .send({ canApprove: true });
+    expect(granted.status).toBe(200);
+    expect(granted.body.account.canApprove).toBe(true);
+    const audit = await db.auditLog.findFirst({
+      where: { entity: "Staff", entityId: "s_kasir", field: "canApprove" },
+    });
+    expect(audit).toMatchObject({ staffId: "s_widatech", after: "true" });
+    const revoked = await request(app)
+      .patch("/api/staff/s_ersen")
+      .set("Cookie", admin)
+      .send({ canApprove: false });
+    expect(revoked.body.account).toMatchObject({
+      role: "OWNER",
+      canApprove: false,
+    });
   });
 
   it("switches finance access per person, not with the role, and audits it", async () => {

@@ -331,6 +331,39 @@ export function mutate(fn: (draft: MockDb) => void): Promise<boolean> {
   });
 }
 
+/** What an edit would do, without doing it — see `proposeChange`. */
+export interface ProposedChange {
+  /** Wire form, ready to send as a change request. */
+  readonly changeset: Changeset;
+  /** The store as it is on screen. */
+  readonly before: MockDb;
+  /** The store as the edit would leave it — for saying what it changes. */
+  readonly after: MockDb;
+}
+
+/**
+ * The changeset `fn` WOULD commit, without committing it or showing it
+ * (2026-11-13). A person who cannot approve an edit of money sends this as a
+ * change request: the same dialog, the same mutation, run on a copy of what
+ * is on screen, diffed and encoded exactly as `mutate` would send it. The
+ * approver's Approve commits it on the server; until then nothing here moves.
+ *
+ * Null when `fn` changes nothing. Works the same under the test runner, where
+ * nothing is ever sent — which is what lets the web suite read a request.
+ */
+export function proposeChange(
+  fn: (draft: MockDb) => void,
+): ProposedChange | null {
+  const before = db;
+  const after = produce(before, (draft) => {
+    fn(draft as MockDb);
+  });
+  if (after === before) return null;
+  const change = diffStore(asShape(before), asShape(after));
+  if (isEmptyChangeset(change)) return null;
+  return { changeset: encodeChangeset(change), before, after };
+}
+
 async function pump(): Promise<void> {
   if (inFlight) return;
   const head = queue[0];

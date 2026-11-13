@@ -31,6 +31,7 @@ import { IncomeExpensePage } from "./routes/finance/CashflowPage.js";
 import { TransactionsPage } from "./routes/finance/TransactionsPage.js";
 import { ProfitLossPage } from "./routes/finance/ProfitLossPage.js";
 import { ReconciliationPage } from "./routes/finance/ReconciliationPage.js";
+import { ApprovalsPage } from "./routes/finance/ApprovalsPage.js";
 import {
   PayablePage,
   ReceivablePage,
@@ -65,6 +66,7 @@ export const PAGE_ROUTES: readonly PageRoute[] = [
   { path: "/finance/income-expense", element: <IncomeExpensePage /> },
   { path: "/finance/profit-loss", element: <ProfitLossPage /> },
   { path: "/finance/reconciliation", element: <ReconciliationPage /> },
+  { path: "/finance/approvals", element: <ApprovalsPage /> },
   { path: "/finance/transactions", element: <TransactionsPage /> },
   { path: "/finance/receivable", element: <ReceivablePage /> },
   { path: "/finance/payable", element: <PayablePage /> },

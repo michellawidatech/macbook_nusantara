@@ -90,7 +90,15 @@ import {
   nextId,
   useDb,
 } from "../../mock/store.js";
-import type { Order, OrderFee } from "../../mock/seed.js";
+import type { MockDb, Order, OrderFee } from "../../mock/seed.js";
+import {
+  RequestNoteField,
+  requestFailedText,
+} from "../../components/ChangeRequestParts";
+import {
+  saleChangeSummary,
+  sendChangeRequest,
+} from "../../lib/changeRequests.js";
 import { totalAfterTradeIn, type TradeInLine } from "../../lib/pos.js";
 import {
   bookTradeIn,
@@ -178,16 +186,27 @@ export interface EditTransactionModalProps {
   readonly open: boolean;
   readonly order: Order | null;
   readonly onClose: () => void;
+  /**
+   * For a person who cannot approve (2026-11-13): the same dialog, whose Save
+   * reads *Send request* and asks why, and sends the edit as a change request
+   * instead of committing it.
+   */
+  readonly requestMode?: boolean;
 }
 
 export function EditTransactionModal({
   open,
   order,
   onClose,
+  requestMode = false,
 }: EditTransactionModalProps) {
   const { t } = useTranslation();
   const db = useDb();
   const { message } = App.useApp();
+  /** Why — asked only in request mode. */
+  const [requestNote, setRequestNote] = useState("");
+  const [requestTried, setRequestTried] = useState(false);
+  const [sending, setSending] = useState(false);
 
   const [ref, setRef] = useState("");
   const [at, setAt] = useState(() => dayjs());
@@ -518,6 +537,10 @@ export function EditTransactionModal({
 
   const save = () => {
     if (order === null) return;
+    if (requestMode && requestNote.trim() === "") {
+      setRequestTried(true);
+      return;
+    }
     // The book, closed over this date (owner ask 2026-09-24). Transaction
     // History already disables the button; this is the writer refusing, so no
     // other door into this dialog can get around it.
@@ -673,7 +696,7 @@ export function EditTransactionModal({
     const before = paymentsOf(order);
     const refText = ref.trim();
     const stamp = new Date().toISOString();
-    mutate((d) => {
+    const apply = (d: MockDb) => {
       const o = d.orders.find((x) => x.id === order.id);
       if (!o) return;
       o.ts = at.toISOString();
@@ -935,7 +958,32 @@ export function EditTransactionModal({
       })) {
         d.paymentLog.push({ id: nextId("plog"), ...row });
       }
-    });
+    };
+    if (requestMode) {
+      setSending(true);
+      void sendChangeRequest(
+        {
+          kind: "EDIT",
+          target: { orderId: order.id },
+          label: order.code,
+          note: requestNote,
+          summarise: (c) => saleChangeSummary(t, c.before, c.after, order.id),
+        },
+        apply,
+      )
+        .then(() => {
+          message.success(
+            t("changeReq.sent", "Request sent. An approver will decide."),
+          );
+          setRequestNote("");
+          setRequestTried(false);
+          onClose();
+        })
+        .catch((e: unknown) => message.error(requestFailedText(e, t)))
+        .finally(() => setSending(false));
+      return;
+    }
+    mutate(apply);
     message.success(t("editSale.saved", "Transaction updated."));
     onClose();
   };
@@ -948,10 +996,14 @@ export function EditTransactionModal({
       title={t("editSale.title", "Edit transaction — {{code}}", {
         code: order?.code ?? "",
       })}
-      okText={t("editSale.save", "Save")}
+      okText={
+        requestMode
+          ? t("changeReq.send", "Send request")
+          : t("editSale.save", "Save")
+      }
       // A leftover reference on a sale that no longer shows the box is one
       // thing Save corrects by itself, so it stays pressable.
-      okButtonProps={{ disabled: unchanged && !staleRef }}
+      okButtonProps={{ disabled: unchanged && !staleRef, loading: sending }}
       onOk={save}
       destroyOnHidden
     >
@@ -1472,6 +1524,16 @@ export function EditTransactionModal({
         deductions={deductions}
         onDeductionsChange={setDeductionsOf}
       />
+
+      {requestMode && (
+        <Form layout="vertical" style={{ marginTop: SPACE.md }}>
+          <RequestNoteField
+            value={requestNote}
+            onChange={setRequestNote}
+            showError={requestTried}
+          />
+        </Form>
+      )}
     </Modal>
   );
 }

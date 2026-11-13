@@ -18,11 +18,34 @@ import { useDb } from "../mock/store.js";
 import { qcWaitingCount } from "../lib/qcWaiting.js";
 import { pendingRequestCount } from "../lib/reservationRequests.js";
 import { useChatWaiting } from "../hooks/useChatWaiting.js";
+import { usePendingChangeRequests } from "../hooks/useChangeRequests.js";
 import { NAV } from "../theme/tokens";
 import type { NavBadgeKind } from "./navigation.js";
 
 export function NavBadge({ kind }: { readonly kind: NavBadgeKind }) {
-  return kind === "chatWaiting" ? <ChatBadge /> : <StoreBadge kind={kind} />;
+  return kind === "chatWaiting" ? (
+    <ChatBadge />
+  ) : kind === "changeRequests" ? (
+    <ChangeRequestBadge />
+  ) : (
+    <StoreBadge kind={kind} />
+  );
+}
+
+/** Edit / delete requests waiting on an approver (2026-11-13). */
+function ChangeRequestBadge() {
+  const { t } = useTranslation();
+  const { count } = usePendingChangeRequests();
+  if (count === 0) return null;
+  return (
+    <Count
+      kind="changeRequests"
+      count={count}
+      label={t("nav.changeRequests", "{{count}} request(s) to approve", {
+        count,
+      })}
+    />
+  );
 }
 
 /** Chats waiting for a person — from the server, not the store (2026-10-28). */

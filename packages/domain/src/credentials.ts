@@ -119,6 +119,14 @@ export function passwordProblem(
 export const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]{1,31}$/;
 
 /**
+ * The one account that may change who approves edits (`Staff.canApprove`) —
+ * the user's own (2026-11-13: "make a toggle where only I have access to
+ * change the access (widatech)"). Not a role: an owner who is not this
+ * account cannot hand themselves the right to approve their own edits.
+ */
+export const APPROVAL_ADMIN_USERNAME = "widatech";
+
+/**
  * A username for a person, from their name: the first word, lower-cased and
  * stripped to `USERNAME_PATTERN`, numbered until it is free. "Ersen" becomes
  * `ersen`; a second "Rini" becomes `rini2`; a name with nothing usable in it
