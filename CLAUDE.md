@@ -3825,6 +3825,96 @@ Decisions that outlived those documents:
   blank cost stays at service. **The charge dialog is Amount + Paid with**:
   no kind dropdown, no "What for"; a new charge is LABOUR "Repair", as Back in
   stock files one, and a corrected one keeps its kind and label.
+- **Edits and deletes of money need an approver — 2026-11-13** (design
+  `docs/superpowers/specs/2026-11-13-approvals-today-marketplace-design.md`,
+  Part B; migration `20261113100000_change_requests`). `Staff.canApprove` is
+  no longer implied by OWNER and only the account `widatech` may flip it
+  (`APPROVAL_ADMIN_USERNAME`, routes/staff.ts; Settings → Staff accounts →
+  *Can approve edits*). For anybody else `/api/store/commit` answers 403 to
+  what `approvalNeeded` (packages/store `approval.ts` — one copy, read by the
+  browser too) names: a sale removed, or its date/channel/customer/discount/
+  charges/trade-ins changed, or a unit or line on it repriced or taken off;
+  an invoice cancelled, its pieces at a price fewer or their discount moved
+  (compared per unit price, never by id — `normaliseLines` re-ids), an
+  expense's amount or a payment changed/removed; an `expenses`/`incomes` row
+  edited or removed. Payments, refunds, returns, exchanges ADDING units, QC,
+  a DRAFT invoice, pricing an unpriced piece, deposit/return payments and
+  service-charge expenses pass (`test/approvalGateFlows.test.tsx` reruns the
+  return desk and debt payments through the rule).
+  - In their place a ⋯ with *Request edit* / *Request delete*: the SAME
+    dialog, Save reads *Send request* and asks *Why?*; `proposeChange(fn)`
+    (mock/store.ts) runs the mutation on a copy and `sendChangeRequest` posts
+    the changeset. **`ChangeRequest`** (CR-…, the seventh JSON exception:
+    `changeset`, wire form, taken under the user's go-ahead) — at most one
+    target, expense/income SET NULL; app SELECT/INSERT/UPDATE, no DELETE.
+    Approve commits it AS THE APPROVER (`approveChangeRequest`); a 409 or a
+    refusal makes it STALE. One AuditLog row per decision.
+  - Financial & Report → **Approvals** (`/finance/approvals`, approver-only,
+    nav badge): *To approve* / *History*. `usePendingChangeRequests()` is the
+    one poll (Today's card, the badge and the "Change requested" tags; mock it
+    in tests and call `__pollChangeRequestsInTests()`). `useCanApprove()`
+    defaults TRUE without a provider, so page suites stay on the approver's
+    flow.
+  - ⚠️ The CLIs (`staff`, `accounts`) still set canApprove with OWNER — the
+    bootstrap door. ⚠️ Income & Expense has no edit dialog, so only *Request
+    delete* there; the inbound list offers *Request delete*, the invoice page
+    *Request edit* on its Purchase card (`InvoiceMoneyRequestModal`).
+- **A marketplace is a balance of its own — 2026-11-13** (Part A of the same
+  design; migration `20261113090000_marketplace_withdrawal`). *"The status is
+  no longer 'Held by marketplace' or 'Received', but only save the total amount
+  and the deduction … each transaction goes to the Shopee balance"* — because
+  the shop withdraws in bulk from Shopee's site and no withdrawal names a sale.
+  A Shopee or Tokopedia payment is in that channel's balance FROM THE SALE
+  (`marketplacePotOf` → `CashflowRow.marketplace`, always SETTLED on Income &
+  Expense); `movesBalance` / `potOfRow` keep it out of the Cash and Bank cards,
+  Latest balance and both reconciliations. Balance = Σ(amount − deductions) −
+  withdrawals (`marketplacePots`), one *Shopee balance* / *Tokopedia balance*
+  card each. A withdrawal is Add adjustment → Income → *Shopee/Tokopedia
+  withdrawal* (`IncomeReason` `PENARIKAN_SHOPEE` / `PENARIKAN_TOKOPEDIA`):
+  bank up, balance down, never revenue (P&L and charts skip it). No screen
+  offers or reads Pending/Received for marketplace money: PaymentsPanel has no
+  Status column, the Shopee upload writes deductions only (payment state and
+  date untouched), Transaction History reads such a sale "Paid · Shopee
+  balance" and counts it as received, *Mark as settled* is gone. ⚠️ The till
+  still STORES a marketplace part as PENDING — `applyReturnCredit` cuts it on a
+  return, which is what shrinks the balance — so `Order.settled` stays false
+  for these sales. ⚠️ `AppSettings.marketplacePotFrom` (`finance.marketplacePotFrom`,
+  written once by the migration): a payment stored SETTLED before it stays
+  bank; absent = no exception. ⚠️ Money already in the Shopee balance at the
+  cutoff has no opening figure, so withdrawing it double-counts the bank — an
+  owner decision. Same day: Transaction History exports what its filters show
+  (`ProTable` `extra`'s second argument), P&L has *Profit per invoice*
+  (`invoiceProfits`, number → faktur), and the faktur prints A4 landscape.
+- **Add back in stock, staff reserve a product, and Today — 2026-11-13
+  (Part C of `docs/superpowers/specs/2026-11-13-approvals-today-marketplace-design.md`).**
+  No schema change.
+  - **Service → *Add back in stock*** opens `ServiceBatchModal` BACK empty with
+    `bringAll`: a serial scanned or typed is checked (`backInStockBlock`,
+    lib/service.ts) and one that cannot come back says why on its OWN row;
+    every listed unit that can goes back in one press, a blank cost is no
+    charge (the bench's own Back in stock keeps "only costed rows"). The bench
+    is Batch name (sent date under it) · Total units · Warehouse (where it is
+    serviced) · Cost · actions.
+  - **Add reservation** asks name OR phone (`hasContact`), date + time, a
+    PRODUCT (each live variant's name and "n in stock", no serial; *A specific
+    unit* is a switch away) and the DP, prefilled from `dpRule` and written by
+    `recordDp` in the same save (0 = no DP). A product line is
+    `ReservationItem.skuId` with no unit — store contract `items[].skuId`, the
+    adapter projects and writes it and refuses neither/both. It holds nothing:
+    `unitItems` / `productItems` (lib/reservations.ts), `isVisit` = no unit
+    lines, so the till loads it like a visit (customer + DP, pick off the
+    shelf) and its DP holds until `heldUntil`. ⚠️ `expire.ts` finds only holds
+    with DIRESERVASI units, so a product-only DP gets no "Perlu putuskan DP"
+    task — the page shows Decide DP once `heldUntil` passes.
+  - **Today (`/today`)** is the first nav item, for `canApprove` only
+    (`navSectionsFor`, `TODAY_SECTION_KEY`; the page refuses anybody else
+    itself). Cards: *Needs restock* (`lib/restock.ts`: sold in 30 days, shelf
+    TERSEDIA + counted pieces below what sold), *Bank balance today*
+    (`balancesOfRows`, dotted until the eye; reconciled = `unreconciledPots`;
+    finance access only) and *Waiting for your approval* (`TodayApprovalsCard`,
+    from `usePendingChangeRequests()`). Below, every held unit
+    (`lib/todayStock.ts`) as a ProTable — warehouse, category, status facets —
+    with counted products as quantity rows.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

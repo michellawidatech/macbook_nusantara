@@ -18,6 +18,12 @@ order), and a handful of screen fixes.
 withdrawals of any amount the staff choose on Shopee's site — no withdrawal
 names an order. So matching payouts to orders cannot work.
 
+> **Revised the same day (user):** a marketplace sale has no Pending /
+> Received any more — only its amount and its deductions. It is in the
+> channel's **Shopee balance** / **Tokopedia balance** from the sale; items 1–3
+> below are superseded by that (no "awaiting release" split, no status flip).
+> The withdrawal (item 4) and the cutoff (item 5) stand.
+
 1. **Adding a deduction releases the payment.** In Edit transaction, adding a
    deduction row under a marketplace payment flips that payment's Status from
    Pending to Settled *in the form*; nothing is written until Save. The Shopee
