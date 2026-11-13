@@ -55,7 +55,6 @@ import {
   Typography,
 } from "antd";
 import {
-  CheckCircleOutlined,
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
@@ -82,15 +81,12 @@ import {
   pendingShopeePayments,
 } from "./ShopeeSettlementImport.js";
 import { recordPayouts } from "../../lib/payouts.js";
-import { diffPayments } from "../../lib/paymentEdits.js";
 import {
-  billAfterReturns,
-  isSettled,
   orderBalance,
   paymentsOf,
-  refundedOf,
   type SaleBalance,
 } from "../../lib/salePayments.js";
+import { marketplacePotOf } from "../../lib/marketplacePot.js";
 import {
   paymentRefOf,
   returnedDebts,
@@ -161,6 +157,22 @@ interface SaleRow {
     readonly channel: string;
     readonly amount: number;
   }[];
+  /**
+   * What went into a marketplace's balance, per channel, before deductions
+   * (2026-11-13: a Shopee or Tokopedia payment is the shop's money from the
+   * sale, in that balance — `lib/marketplacePot.ts`).
+   */
+  readonly market: readonly {
+    readonly channel: string;
+    readonly amount: number;
+  }[];
+  /**
+   * The part of `market` still stored PENDING — the shop's money all the
+   * same, which `balance.settled` does not count.
+   */
+  readonly marketStored: number;
+  /** Paid into a marketplace balance, so the status reads "Paid · …". */
+  readonly paidToMarket: boolean;
   /** Σ the sale's trade-ins — what the customer was allowed for them. */
   readonly tradeCredit: number;
   /**
@@ -175,12 +187,14 @@ interface SaleRow {
 }
 
 /**
- * What reached the shop: what was settled, less what a marketplace kept,
- * less a trade-in the shop paid the customer for. Below zero when the shop
- * paid out more than it took (owner ask 2026-10-31).
+ * What reached the shop: what was settled — a marketplace balance included
+ * (2026-11-13) — less what a marketplace kept, less a trade-in the shop paid
+ * the customer for. Below zero when the shop paid out more than it took
+ * (owner ask 2026-10-31).
  */
 const netReceived = (r: SaleRow): number =>
-  r.balance.settled -
+  r.balance.settled +
+  r.marketStored -
   r.kept.reduce((n, k) => n + k.amount, 0) -
   r.tradePaid -
   r.tradeBought;
@@ -189,9 +203,8 @@ const netReceived = (r: SaleRow): number =>
 const fmtSigned = (n: number): string => (n < 0 ? `−${fmtRp(-n)}` : fmtRp(n));
 
 /**
- * Amber for money a marketplace is holding, red for money a customer owes —
- * the shop acts differently on each: press a button on Shopee, or telephone a
- * person. Partly paid is the customer's too, a shade short of Owed. A debt a
+ * Amber for a sale paid into a marketplace balance, red for money a customer
+ * owes. Partly paid is the customer's too, a shade short of Owed. A debt a
  * return cancelled is the purple a returned unit's tag already wears on this
  * screen: nobody has anything left to chase, and it is not money that came in.
  */
@@ -224,7 +237,7 @@ export function TransactionsPage() {
    * The Shopee seller-balance upload (2026-09-21), here since Pending Payment
    * was folded into this page (owner ask 2026-10-22: *"it should just be
    * transaction history + upload the shopee balance"*). A sale still waiting
-   * on its payout is the "With a marketplace" payment status of this list.
+   * on its payout reads "Paid · Shopee balance" in this list (2026-11-13).
    */
   const [importing, setImporting] = useState(false);
 
@@ -309,11 +322,20 @@ export function TransactionsPage() {
       : s === "PARTLY_RETURNED"
         ? t("transactions.stPartlyReturned", "Partly returned")
         : t("transactions.stCompleted", "Completed");
+  /** "Paid · Shopee balance" — a sale paid into a marketplace's balance. */
+  const paidToLabel = (r: SaleRow) =>
+    t("transactions.stPaidToBalance", "Paid · {{channel}} balance", {
+      channel: r.market
+        .map((m) => channelOf(m.channel)?.label ?? m.channel)
+        .join(" + "),
+    });
+  const rowPayLabel = (r: SaleRow) =>
+    r.paidToMarket ? paidToLabel(r) : payLabel(r.payStatus);
   const payLabel = (s: SalePaymentStatus) =>
     s === "SETTLED"
       ? t("transactions.stSettled", "Settled")
       : s === "WITH_MARKETPLACE"
-        ? t("transactions.stPending", "With a marketplace")
+        ? t("transactions.stWithChannel", "Paid · marketplace balance")
         : s === "PARTLY_PAID"
           ? t("transactions.stPartPaid", "Partly paid")
           : s === "UNPAID_RETURNED"
@@ -321,45 +343,6 @@ export function TransactionsPage() {
             : s === "PARTLY_PAID_RETURNED"
               ? t("transactions.stPartPaidReturned", "Partly paid, returned")
               : t("transactions.stOwed", "Owed");
-
-  /**
-   * Turn what a marketplace was holding into money the shop has.
-   *
-   * One `mutate` over every sale ticked: the payments, the `settled`
-   * projection over them and the log rows go together, the rule every writer
-   * in this app follows.
-   */
-  const settlePending = (orders: readonly Order[]) => {
-    const stamp = new Date().toISOString();
-    let moved = 0;
-    mutate((d) => {
-      for (const order of orders) {
-        const o = d.orders.find((x) => x.id === order.id);
-        if (!o) continue;
-        const before = paymentsOf(o);
-        if (!before.some((p) => p.state === "PENDING")) continue;
-        const next = before.map((p) =>
-          p.state === "PENDING"
-            ? { ...p, state: "SETTLED" as const, at: stamp }
-            : p,
-        );
-        o.payments = next;
-        o.settled = isSettled(billAfterReturns(o), next, refundedOf(o));
-        for (const row of diffPayments(before, next, {
-          at: stamp,
-          staff: currentStaffName(),
-        })) {
-          d.paymentLog.push({ id: nextId("plog"), ...row });
-        }
-        moved += 1;
-      }
-    });
-    message.success(
-      t("transactions.settledCount", "{{count}} sale(s) marked as settled.", {
-        count: moved,
-      }),
-    );
-  };
 
   const sales = useMemo<SaleRow[]>(() => {
     const back = returnedSerials(db.orders, db.events);
@@ -414,6 +397,28 @@ export function TransactionsPage() {
             (keptBy.get(st.channel) ?? 0) + st.gross - st.received,
           );
         const ref = paymentRefOf(payments);
+        /*
+         * A Shopee or Tokopedia part is the shop's money from the sale, in
+         * that channel's balance (2026-11-13) — whatever state it is stored
+         * in. So the status reads it as paid, and Received counts it.
+         */
+        const marketBy = new Map<string, number>();
+        let marketStored = 0;
+        for (const p of payments) {
+          if (p.state === "DUE") continue;
+          const pot = marketplacePotOf(p, db.settings.marketplacePotFrom);
+          if (pot === undefined) continue;
+          marketBy.set(pot, (marketBy.get(pot) ?? 0) + p.amount);
+          if (p.state === "PENDING") marketStored += p.amount;
+        }
+        const paidStatus = salePaymentStatus(
+          {
+            ...balance,
+            settled: balance.settled + marketStored,
+            pending: balance.pending - marketStored,
+          },
+          debts.get(o.id),
+        );
         return {
           key: o.id,
           order: o,
@@ -436,7 +441,13 @@ export function TransactionsPage() {
             .map((l) => (l.product ? `${l.product} (${l.serial})` : l.serial))
             .join("; "),
           status: saleReturnStatus(o.serials, returned, o.lines),
-          payStatus: salePaymentStatus(balance, debts.get(o.id)),
+          payStatus: paidStatus,
+          market: [...marketBy].map(([channel, amount]) => ({
+            channel,
+            amount,
+          })),
+          marketStored,
+          paidToMarket: marketBy.size > 0 && paidStatus === "SETTLED",
           balance,
           kept: [...keptBy]
             .filter(([, amount]) => amount !== 0)
@@ -462,6 +473,7 @@ export function TransactionsPage() {
     db.salesmen,
     db.settlements,
     db.expenses,
+    db.settings.marketplacePotFrom,
     t,
   ]);
 
@@ -477,14 +489,17 @@ export function TransactionsPage() {
    */
   const money = useMemo(() => {
     let settled = 0;
-    let pending = 0;
+    let market = 0;
     let owed = 0;
     for (const s of sales) {
-      settled += s.balance.settled;
-      pending += s.balance.pending;
+      const inMarket = s.market.reduce((n, m) => n + m.amount, 0);
+      // Cash and bank: what settled, less the marketplace parts of it.
+      settled += s.balance.settled + s.marketStored - inMarket;
+      // A marketplace's balance: what went in, less what it kept.
+      market += inMarket - s.kept.reduce((n, k) => n + k.amount, 0);
       owed += s.balance.customerOwes;
     }
-    return { settled, pending, owed };
+    return { settled, market, owed };
   }, [sales]);
 
   const exportCsv = (rows: readonly SaleRow[]) => {
@@ -518,7 +533,7 @@ export function TransactionsPage() {
           )
           .join("; "),
         statusLabel(r.status),
-        payLabel(r.payStatus),
+        rowPayLabel(r),
         netReceived(r),
         r.balance.total,
       ]),
@@ -554,7 +569,7 @@ export function TransactionsPage() {
           </Card>
           <Card style={{ flex: 1, minWidth: 200 }}>
             <Statistic
-              title={t("transactions.moneyInSettled", "Money in (settled)")}
+              title={t("transactions.moneyInCashBank", "Paid in cash & bank")}
               value={fmtRp(money.settled)}
             />
           </Card>
@@ -563,8 +578,11 @@ export function TransactionsPage() {
               In/Out columns it summed left with the new layout. */}
           <Card style={{ flex: 1, minWidth: 200 }}>
             <Statistic
-              title={t("transactions.stillPending", "With a marketplace")}
-              value={fmtRp(money.pending)}
+              title={t(
+                "transactions.inMarketBalances",
+                "Paid into Shopee & Tokopedia balance",
+              )}
+              value={fmtRp(money.market)}
               styles={{ content: { color: "#d48806" } }}
             />
           </Card>
@@ -637,23 +655,6 @@ export function TransactionsPage() {
                   >
                     {t("transactions.exportSelected", "Export selected")}
                   </Button>
-                  {/* Money a marketplace was holding that has landed (owner
-                      ask 2026-09-23). It records the payout arriving and
-                      nothing else — a withdrawal whose fees somebody wants
-                      itemised is `Receive` on Pending Payment, which keeps a
-                      settlement document. */}
-                  {selected.some((r) => r.balance.pending > 0) && (
-                    <Button
-                      size="small"
-                      icon={<CheckCircleOutlined />}
-                      onClick={() => {
-                        settlePending(selected.map((r) => r.order));
-                        clear();
-                      }}
-                    >
-                      {t("transactions.markSettled", "Mark as settled")}
-                    </Button>
-                  )}
                 </>
               );
             }}
@@ -782,8 +783,8 @@ export function TransactionsPage() {
                 width: COLUMN.status,
                 facet: true,
                 facetLabel: t("transactions.paymentStatus", "Payment status"),
-                facetValue: (r) => payLabel(r.payStatus),
-                sortValue: (r) => payLabel(r.payStatus),
+                facetValue: (r) => rowPayLabel(r),
+                sortValue: (r) => rowPayLabel(r),
                 render: (_, r) => {
                   // The promise date, where the customer owes and made one.
                   const due =
@@ -794,8 +795,10 @@ export function TransactionsPage() {
                     due !== undefined && Date.parse(due) < Date.now();
                   return (
                     <Flex vertical gap={SPACE.xs} align="flex-start">
-                      <Tag color={PAY_COLOR[r.payStatus]}>
-                        {payLabel(r.payStatus)}
+                      <Tag
+                        color={r.paidToMarket ? "gold" : PAY_COLOR[r.payStatus]}
+                      >
+                        {rowPayLabel(r)}
                       </Tag>
                       {due !== undefined && (
                         <Typography.Text
@@ -855,7 +858,25 @@ export function TransactionsPage() {
                             )}
                       </Typography.Text>
                     )}
-                    {r.tradeBought > 0 ? null : r.kept.length === 0 ? (
+                    {r.tradeBought > 0 ? null : r.kept.length === 0 &&
+                      r.market.length > 0 ? (
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: TYPE.sm }}
+                      >
+                        {t(
+                          "transactions.toBalance",
+                          "To the {{channel}} balance",
+                          {
+                            channel: r.market
+                              .map(
+                                (m) => channelOf(m.channel)?.label ?? m.channel,
+                              )
+                              .join(" + "),
+                          },
+                        )}
+                      </Typography.Text>
+                    ) : r.kept.length === 0 ? (
                       <Typography.Text
                         type="secondary"
                         style={{ fontSize: TYPE.sm }}
@@ -962,14 +983,9 @@ export function TransactionsPage() {
       <ShopeeSettlementImport
         open={importing}
         pending={pendingShopeePayments(db, paymentsOf)}
+        // A sale whose deductions are already recorded (2026-11-13: that is
+        // all the upload records — no payment is "received" any more).
         settledRefs={db.settlements
-          .filter((s) =>
-            db.orders
-              .find((o) => o.id === s.orderId)
-              ?.payments?.some(
-                (p) => p.id === s.paymentId && p.state === "SETTLED",
-              ),
-          )
           .map(
             (s) =>
               db.orders
@@ -992,7 +1008,7 @@ export function TransactionsPage() {
           message.success(
             t(
               "piutang.deductionsRecorded",
-              "Deductions recorded on {{count}} sale(s) — {{amount}} into the Shopee seller balance.",
+              "Deductions recorded on {{count}} sale(s) — {{amount}} in the Shopee balance after deductions.",
               { count: done.written, amount: fmtRp(done.landed) },
             ),
           );

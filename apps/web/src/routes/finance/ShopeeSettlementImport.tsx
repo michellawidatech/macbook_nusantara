@@ -60,10 +60,12 @@
  * > only know the deduction of the transaction, but for getting it into bank
  * > account, they cannot know which transaction."* — owner, 2026-11-13
  *
- * Recording a row writes that sale's deductions and RELEASES its payment:
- * the net is in the Shopee seller balance (`lib/marketplacePot.ts`), not the
- * bank. Money reaches the bank when somebody records a Shopee withdrawal on
- * Income & Expense, because that is the only thing the bank statement shows.
+ * Recording a row writes that sale's deductions and nothing else (revised the
+ * same day: no Pending, no Received). The sale was in the Shopee balance from
+ * the moment it was made (`lib/marketplacePot.ts`); its deductions take that
+ * balance down. Money reaches the bank when somebody records a Shopee
+ * withdrawal on Income & Expense, because that is the only thing the bank
+ * statement shows.
  *
  * `payoutRows` (lib/shopeeIncome.ts) does the deciding. On a stated payout the
  * deduction lines always close on Shopee's figure, so the pencil on the
@@ -299,7 +301,7 @@ export function ShopeeSettlementImport({
             ? {
                 reason: t(
                   "shopeeImport.estimatedReason",
-                  "Estimated from Shopee's published rates — correct it when the payout lands.",
+                  "Estimated from Shopee's published rates — correct it once Shopee states the deduction.",
                 ),
               }
             : {}),
@@ -661,8 +663,8 @@ export function ShopeeSettlementImport({
 
         <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
           {t(
-            "shopeeImport.releaseNote",
-            "Recording a sale's deductions releases it into the Shopee seller balance. Money reaches the bank when you record a Shopee withdrawal on Income & Expense.",
+            "shopeeImport.deductionsNote",
+            "This records each sale's deductions, which come off the Shopee balance. Money reaches the bank when you record a Shopee withdrawal on Income & Expense.",
           )}
         </Typography.Text>
 
@@ -822,8 +824,8 @@ export function ShopeeSettlementImport({
         {rows.length > 0 && (
           <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
             {t(
-              "shopeeImport.summaryReleased",
-              "{{count}} of {{total}} selected · {{amount}} goes into the Shopee seller balance.",
+              "shopeeImport.summaryNet",
+              "{{count}} of {{total}} selected · {{amount}} in the Shopee balance after deductions.",
               {
                 count: chosenRows.length,
                 total: rows.filter((r) => r.worked?.recordable).length,
@@ -897,7 +899,11 @@ export function ShopeeSettlementImport({
   );
 }
 
-/** Every Shopee payment still waiting, as this dialog wants them. */
+/**
+ * Every Shopee payment whose deductions are not recorded yet, as this dialog
+ * wants them (2026-11-13: whatever its stored state — a Shopee payment is in
+ * the Shopee balance from the sale, and the upload only adds deductions).
+ */
 export function pendingShopeePayments(
   db: MockDb,
   paymentsOf: (o: Order) => readonly {
@@ -909,9 +915,10 @@ export function pendingShopeePayments(
   }[],
 ): PendingShopeePayment[] {
   const out: PendingShopeePayment[] = [];
+  const recorded = new Set(db.settlements.map((s) => s.paymentId));
   for (const o of db.orders) {
     for (const p of paymentsOf(o)) {
-      if (p.state !== "PENDING") continue;
+      if (p.state === "DUE" || recorded.has(p.id)) continue;
       if ((p.channel ?? o.source) !== "SHOPEE") continue;
       out.push({
         key: `${o.id}-${p.id}`,

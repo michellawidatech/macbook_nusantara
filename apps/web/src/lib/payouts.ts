@@ -12,14 +12,11 @@
  *
  * ## The payment's state is the one switch
  *
- * A payment is PENDING while the platform has not released it and SETTLED
- * once it has (2026-11-13: released into the SELLER BALANCE, not the bank —
- * `lib/marketplacePot.ts`; the bank moves when a withdrawal is recorded).
- * Knowing an order's deduction is knowing it was released, so adding one in
- * Edit transaction settles the payment in the form, and the Shopee upload
- * settles every payment it records.
- *
- * Mutation bodies: call inside `mutate`.
+ * ⚠️ Not any more (owner, 2026-11-13): a Shopee or Tokopedia payment is in
+ * that marketplace's BALANCE from the sale (`lib/marketplacePot.ts`) and
+ * nothing marks it received — the bank moves when a withdrawal is recorded.
+ * What this writes is the deductions, and the payment's stored state and date
+ * are left exactly as the sale wrote them, so the sale stays on its own day.
  */
 import type { MockDb } from "../mock/seed.js";
 import { channelOf } from "./channels.js";
@@ -43,10 +40,10 @@ export interface PayoutDeps {
 }
 
 /**
- * Record what Shopee RELEASED (the upload): each payment PENDING → SETTLED,
- * i.e. into the seller balance, with one settlement holding its deductions
- * and its RECORDED log row. A payment already settled
- * by the time this runs is skipped, and the caller is told how many were.
+ * Record each sale's deductions from a Shopee upload: one settlement per
+ * payment and its RECORDED log row. A payment whose deductions are already
+ * recorded is skipped; the caller is told how many were written and what
+ * they net to.
  */
 export function recordPayouts(
   d: MockDb,
@@ -59,15 +56,9 @@ export function recordPayouts(
   for (const s of drafts) {
     const o = d.orders.find((x) => x.id === s.orderId);
     if (!o) continue;
-    const parts = paymentsOf(o);
-    const target = parts.find((p) => p.id === s.paymentId);
-    if (target === undefined || target.state !== "PENDING") continue;
-    o.payments = parts.map((p) =>
-      p.id === s.paymentId
-        ? { ...p, state: "SETTLED" as const, at: deps.at }
-        : p,
-    );
-    o.settled = o.payments.every((p) => p.state === "SETTLED");
+    const target = paymentsOf(o).find((p) => p.id === s.paymentId);
+    if (target === undefined) continue;
+    if (d.settlements.some((x) => x.paymentId === s.paymentId)) continue;
     upsertSettlement(
       d,
       {
@@ -85,7 +76,7 @@ export function recordPayouts(
       deps.appendEvent(d, serial, {
         type: "DICATAT",
         refCode: o.code,
-        note: `Released into the ${channelOf(channel)?.label ?? channel} balance: ${fmtRp(s.received)}`,
+        note: `${channelOf(channel)?.label ?? channel} deductions recorded: ${fmtRp(s.received)} after deductions`,
       });
     }
     written += 1;

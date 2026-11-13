@@ -252,7 +252,9 @@ export function CustomersPage() {
               width: 190,
               render: (_, c) => {
                 const b = balanceOf(c);
-                if (b.owed === 0 && b.pending === 0) {
+                // Money in a Shopee or Tokopedia balance is the shop's, not a
+                // debt (2026-11-13), so it is not shown here at all.
+                if (b.owed === 0) {
                   return (
                     <Typography.Text type="secondary">
                       {fmtRp(0)}
@@ -264,20 +266,6 @@ export function CustomersPage() {
                     {b.owed > 0 && (
                       <Typography.Text type="danger" strong>
                         {fmtRp(b.owed)}
-                      </Typography.Text>
-                    )}
-                    {b.pending > 0 && (
-                      <Typography.Text
-                        type="warning"
-                        style={{ fontSize: TYPE.sm }}
-                      >
-                        {t(
-                          "customers.pendingWith",
-                          "{{amount}} at a marketplace",
-                          {
-                            amount: fmtRp(b.pending),
-                          },
-                        )}
                       </Typography.Text>
                     )}
                     {b.nextDueAt && (
@@ -439,7 +427,9 @@ export function CustomersPage() {
                   title: t("customers.money", "Money"),
                   render: (_, o) => {
                     const b = orderBalance(o);
-                    if (b.fullySettled) {
+                    // A sale paid into a Shopee or Tokopedia balance is paid
+                    // (2026-11-13): only a debt is anything else.
+                    if (b.fullySettled || b.customerOwes === 0) {
                       return (
                         <Tag color="green">
                           {t("customers.moneySettled", "Settled")}
@@ -453,17 +443,6 @@ export function CustomersPage() {
                             {t("customers.moneyOwed", "Owes {{amount}}", {
                               amount: fmtRp(b.customerOwes),
                             })}
-                          </Tag>
-                        )}
-                        {b.pending > 0 && (
-                          <Tag color="orange">
-                            {t(
-                              "customers.moneyPending",
-                              "{{amount}} at a marketplace",
-                              {
-                                amount: fmtRp(b.pending),
-                              },
-                            )}
                           </Tag>
                         )}
                         {/*

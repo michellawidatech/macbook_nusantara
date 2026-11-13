@@ -1,10 +1,10 @@
 /**
- * Two owner asks of 2026-11-13 on the sale screens:
+ * Owner asks of 2026-11-13 on the sale screens:
  *
- * - *"When adding deduction, the original 'held by marketplace' units are
- *   automatically changed, but only count it when the staff press save
- *   button."* — Edit transaction's "−" settles that payment in the form, and
- *   nothing is written before Save.
+ * - *"For the Shopee transaction, the status is no longer 'Held by
+ *   marketplace' or 'Received', but only save the total amount and the
+ *   deduction."* — Edit transaction offers no Status for a marketplace
+ *   payment; a deduction is written on Save and the Shopee balance follows.
  * - *"When exporting the transaction history, it should follow the filter in
  *   the page; now it still downloads all transactions."*
  */
@@ -36,8 +36,8 @@ function addSale(id: string, over: Partial<Order>): Order {
   return getDb().orders.find((o) => o.id === id)!;
 }
 
-describe("a deduction releases the marketplace payment", () => {
-  it("reads Settled in the form at once, and is written only by Save", async () => {
+describe("a Shopee payment in Edit transaction", () => {
+  it("asks for no status, and its deduction is written only by Save", async () => {
     const base = getDb().orders.find(
       (o) => o.serials.length > 0 && !o.adjustments && !o.tradeIns,
     )!;
@@ -62,16 +62,13 @@ describe("a deduction releases the marketplace payment", () => {
         <EditTransactionModal open order={sale} onClose={() => {}} />
       </AntdApp>,
     );
-    const state = () =>
-      screen
-        .getAllByRole("combobox", { name: "State of this payment" })[0]!
-        .closest(".ant-select")!.textContent;
-    expect(state()).toBe("Pending");
+    expect(
+      screen.queryAllByRole("combobox", { name: "State of this payment" }),
+    ).toHaveLength(0);
 
     await userEvent.click(
       screen.getByRole("button", { name: "Add a deduction" }),
     );
-    expect(state()).toBe("Settled");
     // Nothing is written yet.
     const stored = () =>
       getDb()
@@ -89,9 +86,12 @@ describe("a deduction releases the marketplace payment", () => {
     const amount = screen.getByRole("spinbutton", { name: "Deduction amount" });
     await userEvent.type(amount, "300000");
     fireEvent.blur(amount);
+    expect(screen.getByText(/= Rp .* to the Shopee balance$/)).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(stored().state).toBe("SETTLED");
+    // The deduction is all that is written; the payment keeps its day.
+    expect(stored().state).toBe("PENDING");
+    expect(stored().at).toBe("2026-10-20T03:00:00.000Z");
     const s = getDb().settlements.find((x) => x.paymentId === "pay-o-release")!;
     expect(s.received).toBe(base.total - 300_000);
   });
@@ -166,7 +166,8 @@ describe("the seller balance on Income & Expense", () => {
           id: "pay-o-pot",
           method: "MARKETPLACE",
           amount: base.total,
-          state: "SETTLED",
+          // As the till writes one: no status is read, it is in the balance.
+          state: "PENDING",
           channel: "SHOPEE",
           at: now,
         },
@@ -183,7 +184,7 @@ describe("the seller balance on Income & Expense", () => {
     );
     const card = screen.getByTestId("seller-pot-SHOPEE");
     await userEvent.click(
-      screen.getByRole("button", { name: "Show Pending in Shopee" }),
+      screen.getByRole("button", { name: "Show Shopee balance" }),
     );
     await userEvent.click(screen.getByRole("button", { name: "Show Bank" }));
     const potBefore = rupiah(screen.getByTestId("pot-market-SHOPEE"));

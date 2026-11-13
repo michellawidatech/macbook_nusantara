@@ -40,7 +40,7 @@ const renderEdit = (order: Order) =>
   );
 
 describe("a Shopee payment's payout, in the Edit transaction dialog", () => {
-  it("takes deductions and the payout received, in one save", async () => {
+  it("takes deductions, in one save, and asks for no Received", async () => {
     const draft = getDb().orders.find(
       (o) => o.serials.length > 0 && !o.adjustments && !o.tradeIns,
     )!;
@@ -73,23 +73,17 @@ describe("a Shopee payment's payout, in the Edit transaction dialog", () => {
     const amount = screen.getByRole("spinbutton", { name: "Deduction amount" });
     await userEvent.type(amount, "250000");
     fireEvent.blur(amount);
-    // The row's own status is the payout: Settled = it landed.
-    fireEvent.mouseDown(
-      screen.getAllByRole("combobox", { name: "State of this payment" })[0]!,
-    );
-    const settled = await vi.waitFor(() => {
-      const el = Array.from(
-        document.querySelectorAll<HTMLElement>(".ant-select-item-option"),
-      ).find((o) => o.getAttribute("title") === "Settled");
-      if (!el) throw new Error("no Settled option");
-      return el;
-    });
-    fireEvent.click(settled);
+    // No Pending / Settled to pick for a Shopee payment (2026-11-13): it is
+    // in the Shopee balance from the sale.
+    expect(
+      screen.queryAllByRole("combobox", { name: "State of this payment" }),
+    ).toHaveLength(0);
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
     const after = getDb().orders.find((o) => o.id === "o-payout")!;
     const pay = after.payments!.find((p) => p.id === "pay-o-payout")!;
-    expect(pay.state).toBe("SETTLED");
+    // Left as the sale stored it — nothing reads it any more.
+    expect(pay.state).toBe("PENDING");
     expect(pay.ref).toBe("2610SHP001");
     const s = getDb().settlements.find((x) => x.paymentId === "pay-o-payout")!;
     expect(s).toBeDefined();

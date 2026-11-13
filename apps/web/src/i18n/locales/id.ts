@@ -3870,7 +3870,7 @@ export const id: Record<string, string> = {
   "shopeeImport.mismatchLegend":
     "{{count}} ditandai di atas: yang dibayarkan Shopee tidak cocok dengan tarif resminya, atau barisnya perlu dicek. Tombol ⓘ di samping nominal diterima menampilkan potongannya.",
   "shopeeImport.estimatedReason":
-    "Diestimasi dari tarif resmi Shopee — koreksi saat pencairan masuk.",
+    "Diestimasi dari tarif resmi Shopee — koreksi setelah Shopee menyebutkan potongannya.",
   "shopeeImport.record": "Catat {{count}} pencairan",
   "shopeeImport.summary":
     "{{count}} dari {{total}} dipilih · {{amount}} akan dicatat sebagai diterima.",
@@ -5322,13 +5322,7 @@ export const id: Record<string, string> = {
 
   // ── 2026-11-13: the marketplace pot, the per-invoice profit, the export
   //    that follows the filters (Part A). ──
-  "cashflow.pendingIn": "Tertahan di {{channel}}",
   "cashflow.recordWithdrawal": "Catat penarikan",
-  "cashflow.potSplit":
-    "Menunggu dilepas {{awaiting}} · Di saldo penjual {{held}}",
-  "cashflow.inSellerBalance": "Di saldo {{channel}}",
-  "adjust.sellerBalanceNow":
-    "Di saldo penjual {{channel}} sekarang: {{amount}}.",
   "Shopee withdrawal": "Penarikan Shopee",
   "Tokopedia withdrawal": "Penarikan Tokopedia",
   "Money moved from the Shopee seller balance to the bank. Not revenue — the sales were.":
@@ -5336,13 +5330,7 @@ export const id: Record<string, string> = {
   "Money moved from the Tokopedia seller balance to the bank. Not revenue — the sales were.":
     "Uang yang dipindahkan dari saldo penjual Tokopedia ke bank. Bukan pendapatan — penjualannya yang pendapatan.",
   "shopeeImport.recordDeductions": "Catat potongan untuk {{count}} penjualan",
-  "shopeeImport.releaseNote":
-    "Mencatat potongan sebuah penjualan berarti dananya sudah dilepas ke saldo penjual Shopee. Uang baru masuk bank saat Anda mencatat penarikan Shopee di Pemasukan & Pengeluaran.",
   "shopeeImport.afterDeductions": "Setelah potongan",
-  "shopeeImport.summaryReleased":
-    "{{count}} dari {{total}} dipilih · {{amount}} masuk ke saldo penjual Shopee.",
-  "piutang.deductionsRecorded":
-    "Potongan dicatat pada {{count}} penjualan — {{amount}} masuk ke saldo penjual Shopee.",
   "transactions.exportShown": "Ekspor {{count}} yang tampil",
   "pnl.tabInvoices": "Laba per invoice",
   "pnl.searchInvoice": "Cari nomor transaksi atau pelanggan",
@@ -5351,4 +5339,26 @@ export const id: Record<string, string> = {
   "pnl.customer": "Pelanggan",
   "pnl.walkIn": "Pelanggan umum",
   "pnl.cogsShort": "HPP",
+
+  // ── 2026-11-13 (revised): a marketplace's money is its balance from the
+  //    sale — no Pending, no Received. ──
+  "cashflow.marketBalance": "Saldo {{channel}}",
+  "adjust.marketBalanceNow": "Saldo {{channel}} sekarang: {{amount}}.",
+  "shopeeImport.deductionsNote":
+    "Ini mencatat potongan tiap penjualan, yang mengurangi saldo Shopee. Uang baru masuk bank saat Anda mencatat penarikan Shopee di Pemasukan & Pengeluaran.",
+  "shopeeImport.summaryNet":
+    "{{count}} dari {{total}} dipilih · {{amount}} di saldo Shopee setelah potongan.",
+  "piutang.deductionsRecorded":
+    "Potongan dicatat pada {{count}} penjualan — {{amount}} di saldo Shopee setelah potongan.",
+  "pay.netToBalance":
+    "{{amount}} − potongan {{kept}} = {{net}} ke saldo {{channel}}",
+  "transactions.moneyInCashBank": "Dibayar tunai & bank",
+  "transactions.inMarketBalances": "Dibayar ke saldo Shopee & Tokopedia",
+  "transactions.stPaidToBalance": "Lunas · saldo {{channel}}",
+  "transactions.stWithChannel": "Lunas · saldo marketplace",
+  "transactions.toBalance": "Ke saldo {{channel}}",
+  "pos.marketplaceBalancePart":
+    "Bagian Shopee atau Tokopedia masuk ke saldo marketplace tersebut. Uang baru masuk bank saat penarikan dicatat di Pemasukan & Pengeluaran.",
+  "pos.marketplaceBalanceToast":
+    "Bagian marketplace-nya ada di saldo marketplace tersebut sampai penarikan dicatat.",
 };
