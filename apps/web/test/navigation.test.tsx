@@ -10,7 +10,7 @@ const leaves = NAV_SECTIONS.flatMap((s) =>
 );
 
 describe("navigation", () => {
-  it("has seven top-level sections, in the owner's order", () => {
+  it("has eight top-level sections, in the owner's order", () => {
     // The 2026-08-26 flattening: Reservation, Return and Discount stopped
     // being top-level and went back under the section whose job they are part
     // of. Nine sections was more than the sidebar could show without
@@ -20,7 +20,9 @@ describe("navigation", () => {
     // Supplier joined on 2026-09-08, beside Customer, because it is Customer's
     // mirror: money out against money in. Seven is inside the budget the
     // flattening bought.
+    // Today joined on 2026-11-13, first, for the approver alone.
     expect(NAV_SECTIONS.map((s) => s.label)).toEqual([
+      "Today",
       "Stock",
       "Product",
       "Financial & Report",

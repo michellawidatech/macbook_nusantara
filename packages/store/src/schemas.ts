@@ -846,7 +846,19 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
     when: instant,
     note: text,
     sourceId: id.optional(),
-    items: z.array(z.strictObject({ id, serial: z.string().min(1) })),
+    /**
+     * A unit by its serial, or — staff's *Add reservation* since 2026-11-13 —
+     * a PRODUCT by its variant (`ReservationItem.skuId` with no `unitId`),
+     * which holds no unit: which one goes out is picked at the till. Exactly
+     * one of the two; the adapter refuses neither or both.
+     */
+    items: z.array(
+      z.strictObject({
+        id,
+        serial: z.string().min(1).optional(),
+        skuId: id.optional(),
+      }),
+    ),
     status: z.enum(RESERVATION_STATUSES),
     /**
      * The end of a FIRM hold — `Reservation.heldUntil`, the DP's moment plus

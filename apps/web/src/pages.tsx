@@ -39,6 +39,7 @@ import { ChatbotPage } from "./routes/chatbot/ChatbotPage.js";
 import { CustomersPage } from "./routes/customers/CustomersPage.js";
 import { SuppliersPage } from "./routes/suppliers/SuppliersPage.js";
 import { SettingsPage } from "./routes/settings/SettingsPage.js";
+import { TodayPage } from "./routes/today/TodayPage.js";
 
 /** One screen, at the path the router matches it on. */
 export interface PageRoute {
@@ -47,6 +48,8 @@ export interface PageRoute {
 }
 
 export const PAGE_ROUTES: readonly PageRoute[] = [
+  // The approver's morning screen (2026-11-13); refuses anybody else itself.
+  { path: "/today", element: <TodayPage /> },
   { path: "/stock/inventory", element: <InventoryPage /> },
   { path: "/inbound", element: <InboundPage /> },
   { path: "/inbound/new", element: <InboundFormPage /> },

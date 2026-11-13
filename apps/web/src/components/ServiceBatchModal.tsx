@@ -36,6 +36,15 @@
  * batch from the Service page (`fixed`) it lists that batch and nothing else:
  * no add box and no remove — a unit left blank simply stays at service.
  *
+ * **Add back in stock** (owner ask 2026-11-13: *"I just need a button that
+ * says 'Add back in stock'; when they scan, it will check if that unit is in
+ * Service, they can add fee, and put all back in stock. That's it."*) is this
+ * dialog opened empty from the Service page with `bringAll`: a serial scanned
+ * or typed is checked at once, one that cannot come back is listed on its OWN
+ * row with the reason (`backInStockBlock`) and counts for nothing, and every
+ * unit that can come back does — a blank cost is no charge, because scanning
+ * it in was the decision.
+ *
  * Everything is read again INSIDE the mutation: a unit can be reserved, sold
  * or brought back in another tab between the render and the press, and such a
  * unit is skipped and named rather than written.
@@ -70,7 +79,15 @@ import {
   sendToServiceBlock,
   type PaidWith,
 } from "../lib/serviceActions.js";
-import { openVisit, visitCost, type ServiceRec } from "../lib/service.js";
+import {
+  backInStockBlock,
+  openVisit,
+  visitCost,
+  type BackBlock,
+  type ServiceRec,
+} from "../lib/service.js";
+import { resolveSerialQuery } from "../lib/serialInput.js";
+import { UNIT_STATUS, tagOf } from "../i18n/enumLabels.js";
 import { splitEvenly } from "../lib/stockReasons.js";
 import { normaliseSerial } from "../lib/adjustmentBatch.js";
 import { fmtRp } from "../lib/format.js";
@@ -103,6 +120,12 @@ export interface ServiceBatchModalProps {
    * remove (BACK from the Service page, 2026-11-13).
    */
   readonly fixed?: boolean;
+  /**
+   * BACK, opened empty from the Service page's *Add back in stock*
+   * (2026-11-13): every unit listed goes back, a blank cost is no charge, and
+   * a serial that cannot come back stays on its own row with the reason.
+   */
+  readonly bringAll?: boolean;
   readonly onClose: () => void;
   readonly zIndex?: number;
 }
@@ -112,6 +135,8 @@ interface Row {
   description: string;
   /** BACK only: what the repair cost. Null = not filled = not going back. */
   cost: number | null;
+  /** `bringAll` only: why this serial cannot come back. Never recorded. */
+  block?: BackBlock;
 }
 
 const MONEY_INPUT = {
@@ -129,7 +154,7 @@ function eligible(db: MockDb, mode: "SEND" | "BACK", serial: string): boolean {
   if (!u) return false;
   return mode === "SEND"
     ? sendToServiceBlock(u.status) === undefined
-    : u.status === "SERVIS" && openVisit(serial, db.services) !== undefined;
+    : backInStockBlock(db, serial) === undefined;
 }
 
 export function ServiceBatchModal({
@@ -140,6 +165,7 @@ export function ServiceBatchModal({
   refCode,
   single = false,
   fixed = false,
+  bringAll = false,
   onClose,
   zIndex,
 }: ServiceBatchModalProps) {
@@ -164,6 +190,8 @@ export function ServiceBatchModal({
   const bodyRef = useRef<HTMLDivElement>(null);
   /** The list picker (2026-11-10): any unit on a shelf or in QC. */
   const [picking, setPicking] = useState(false);
+  /** Somebody chose the warehouse; the first unit scanned must not move it. */
+  const [destTouched, setDestTouched] = useState(false);
 
   // A fresh batch each time it opens, from the serials it was handed. The ones
   // that cannot go are left off and named, rather than refused at the end.
@@ -179,6 +207,7 @@ export function ServiceBatchModal({
     setSplit(true);
     setBatchTitle("");
     setRepairPaid("UNPAID");
+    setDestTouched(false);
     const first = ok[0] ? db.units.find((u) => u.serial === ok[0]) : undefined;
     setDest(
       mode === "SEND"
@@ -212,8 +241,13 @@ export function ServiceBatchModal({
   useEffect(() => {
     if (serials === null || mode !== "BACK") return;
     const timer = setTimeout(() => {
+      // Opened empty to scan into (`bringAll`): the caret waits in the box.
       bodyRef.current
-        ?.querySelector<HTMLInputElement>("input[data-repair-cost]")
+        ?.querySelector<HTMLInputElement>(
+          serials.length === 0 && bringAll
+            ? "input[data-scan-target]"
+            : "input[data-repair-cost]",
+        )
         ?.focus();
     }, 60);
     return () => clearTimeout(timer);
@@ -224,11 +258,40 @@ export function ServiceBatchModal({
     const k = db.skus.find((s) => s.id === unitOf(serial)?.skuId);
     return k ? `${k.name} · ${k.variantLabel}` : "";
   };
+  /** Why a listed serial cannot come back, said on its row. */
+  const blockReason = (r: Row): string => {
+    switch (r.block) {
+      case "UNKNOWN":
+        return t("serviceBatch.blockUnknown", "No unit has this serial.");
+      case "NOT_AT_SERVICE":
+        return t(
+          "serviceBatch.blockNotAtService",
+          "Not at service — it is {{status}}.",
+          {
+            status: tagOf(
+              UNIT_STATUS,
+              unitOf(r.serial)?.status,
+              t,
+            ).label.toLowerCase(),
+          },
+        );
+      case "NO_VISIT":
+        return t(
+          "serviceBatch.blockNoVisit",
+          "No open service visit names it.",
+        );
+      default:
+        return "";
+    }
+  };
   /**
    * The rows this press records: every row on a send; on Back in stock only
    * the ones with a repair cost typed (owner ask 2026-11-11).
    */
-  const active = mode === "BACK" ? rows.filter((r) => r.cost !== null) : rows;
+  const active =
+    mode === "BACK"
+      ? rows.filter((r) => (bringAll ? r.block === undefined : r.cost !== null))
+      : rows;
   /** The units that change warehouse — the ones a courier carried. */
   const travellers = active.filter(
     (r) => dest !== undefined && unitOf(r.serial)?.locationId !== dest,
@@ -237,9 +300,46 @@ export function ServiceBatchModal({
   const hasFee = feeAsked && (fee ?? 0) > 0;
 
   const addSerial = (raw: string) => {
-    const serial = normaliseSerial(raw);
+    const typed = normaliseSerial(raw);
+    // A scan of a new unit's barcode carries the `S` its serial was filed
+    // without: read it back to the stored serial, inventing nothing.
+    const serial = bringAll
+      ? resolveSerialQuery(
+          typed,
+          db.units.map((u) => u.serial),
+        )
+      : typed;
     if (!serial) return;
     if (rows.some((r) => r.serial === serial)) {
+      setAdding("");
+      return;
+    }
+    if (bringAll) {
+      const block = backInStockBlock(db, serial);
+      setAddMiss(null);
+      // The warehouse it set out from, for the first unit that can come back
+      // — unless somebody already chose one.
+      if (
+        block === undefined &&
+        !destTouched &&
+        !rows.some((r) => r.block === undefined)
+      ) {
+        const from = openVisit(serial, db.services)?.fromLocationId;
+        if (from) setDest(from);
+      }
+      setRows((rs) =>
+        rs.some((r) => r.serial === serial)
+          ? rs
+          : [
+              ...rs,
+              {
+                serial,
+                description: "",
+                cost: null,
+                ...(block ? { block } : {}),
+              },
+            ],
+      );
       setAdding("");
       return;
     }
@@ -509,7 +609,9 @@ export function ServiceBatchModal({
         ? t("service.backTitle", "Put {{serial}} back in stock", {
             serial: oneSerial,
           })
-        : t("serviceBatch.backTitle", "Bring units back from service");
+        : bringAll
+          ? t("serviceBatch.addBackTitle", "Add back in stock")
+          : t("serviceBatch.backTitle", "Bring units back from service");
 
   const descriptionLabel =
     mode === "SEND"
@@ -679,28 +781,41 @@ export function ServiceBatchModal({
                             ),
                             key: "cost",
                             width: 200,
-                            render: (_: unknown, r: Row) => (
-                              <InputNumber
-                                {...MONEY_INPUT}
-                                aria-label={t(
-                                  "serviceBatch.repairCostOf",
-                                  "Repair cost of {{serial}}",
-                                  { serial: r.serial },
-                                )}
-                                data-repair-cost=""
-                                placeholder={t(
-                                  "serviceBatch.repairCostHint",
-                                  "0 if free",
-                                )}
-                                value={r.cost}
-                                onChange={(v) =>
-                                  setCost(
-                                    r.serial,
-                                    typeof v === "number" ? v : null,
-                                  )
-                                }
-                              />
-                            ),
+                            render: (_: unknown, r: Row) =>
+                              r.block ? (
+                                <Typography.Text
+                                  type="danger"
+                                  data-refused={r.serial}
+                                  style={{ fontSize: TYPE.sm }}
+                                >
+                                  {blockReason(r)}
+                                </Typography.Text>
+                              ) : (
+                                <InputNumber
+                                  {...MONEY_INPUT}
+                                  aria-label={t(
+                                    "serviceBatch.repairCostOf",
+                                    "Repair cost of {{serial}}",
+                                    { serial: r.serial },
+                                  )}
+                                  data-repair-cost=""
+                                  placeholder={
+                                    bringAll
+                                      ? t("serviceBatch.noCharge", "No charge")
+                                      : t(
+                                          "serviceBatch.repairCostHint",
+                                          "0 if free",
+                                        )
+                                  }
+                                  value={r.cost}
+                                  onChange={(v) =>
+                                    setCost(
+                                      r.serial,
+                                      typeof v === "number" ? v : null,
+                                    )
+                                  }
+                                />
+                              ),
                           },
                         ]
                       : []),
@@ -793,7 +908,7 @@ export function ServiceBatchModal({
               />
             </Form.Item>
           )}
-          {mode === "BACK" && rows.length > 0 && (
+          {mode === "BACK" && (bringAll ? active : rows).length > 0 && (
             <Form.Item label={t("service.paidWith", "Paid with")}>
               <Radio.Group
                 aria-label={t("service.paidWith", "Paid with")}
@@ -838,7 +953,10 @@ export function ServiceBatchModal({
                     }
                   : o,
               )}
-              onChange={setDest}
+              onChange={(v: string) => {
+                setDest(v);
+                setDestTouched(true);
+              }}
             />
           </Form.Item>
 

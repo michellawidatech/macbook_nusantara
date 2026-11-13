@@ -274,6 +274,35 @@ export function openVisit(
   return records.find((r) => r.serial === serial && r.closedAt === undefined);
 }
 
+/**
+ * Why a serial cannot be brought back in stock from service; undefined when
+ * it can (2026-11-13, the Service page's *Add back in stock*: a scanned
+ * serial is checked, and one that cannot come back says why on its own row).
+ *
+ * - `UNKNOWN` — no unit holds this serial.
+ * - `NOT_AT_SERVICE` — the unit is somewhere else (on the shelf, sold, in QC).
+ * - `NO_VISIT` — it reads SERVIS but no open visit names it, so there is no
+ *   repair to close and nothing for a cost to land on.
+ */
+export type BackBlock = "UNKNOWN" | "NOT_AT_SERVICE" | "NO_VISIT";
+
+export function backInStockBlock(
+  store: {
+    readonly units: readonly {
+      readonly serial: string;
+      readonly status: string;
+    }[];
+    readonly services: readonly ServiceRec[];
+  },
+  serial: string,
+): BackBlock | undefined {
+  const unit = store.units.find((u) => u.serial === serial);
+  if (!unit) return "UNKNOWN";
+  if (unit.status !== "SERVIS") return "NOT_AT_SERVICE";
+  if (openVisit(serial, store.services) === undefined) return "NO_VISIT";
+  return undefined;
+}
+
 /** What a bench row shows. */
 export interface BenchRow {
   readonly rec: ServiceRec;

@@ -30,8 +30,32 @@
  * three needs no new state anywhere: the two sold units go to `TERJUAL`, the
  * third stays at `DIRESERVASI`, and the hold reads as part-collected because
  * that is what its machines say.
+ *
+ * ## Products, not units (owner ask 2026-11-13)
+ *
+ * Staff's *Add reservation* names a PRODUCT — *"unit (can be just name)"* —
+ * and a product line (`ReservationItem.skuId`, no serial) holds nothing:
+ * which unit goes out is picked at the till. So every unit rule below reads
+ * the UNIT lines alone (`unitItems`), and a reservation with none of them is
+ * a visit to all of them (`isVisit`): a time, a customer, maybe a DP, and the
+ * shelf is untouched. Its status is a person's decision, like a visit's.
  */
 import type { MockDb, Reservation, ReservationItem } from "../mock/seed.js";
+
+/** A line naming a unit. */
+export type UnitItem = ReservationItem & { readonly serial: string };
+
+/** The lines that name a unit — the only ones any unit rule reads. */
+export function unitItems(r: Pick<Reservation, "items">): readonly UnitItem[] {
+  return r.items.filter((i): i is UnitItem => i.serial !== undefined);
+}
+
+/** The lines that name a product and hold no unit (2026-11-13). */
+export function productItems(
+  r: Pick<Reservation, "items">,
+): readonly ReservationItem[] {
+  return r.items.filter((i) => i.serial === undefined && i.skuId !== undefined);
+}
 
 /**
  * Where one machine on a hold has got to.
@@ -75,6 +99,14 @@ export function itemState(
   item: ReservationItem,
   r: Reservation,
 ): HoldState {
+  // A product line holds nothing: it is wanted while the reservation is
+  // open, taken when it closed as bought, and let go otherwise.
+  if (item.serial === undefined)
+    return r.status === "ACTIVE"
+      ? "SOFT"
+      : r.status === "DONE"
+        ? "BOUGHT"
+        : "RELEASED";
   const unit = db.units.find((u) => u.serial === item.serial);
   if (!unit) return "RELEASED";
   if (unit.status === "DIRESERVASI") return "HELD";
@@ -98,7 +130,7 @@ export function softHolds(db: MockDb): Map<string, Reservation> {
   const out = new Map<string, Reservation>();
   for (const r of db.reservations) {
     if (r.status !== "ACTIVE" || !isUnpaidHold(r)) continue;
-    for (const i of r.items)
+    for (const i of unitItems(r))
       if (!out.has(i.serial) && itemState(db, i, r) === "SOFT")
         out.set(i.serial, r);
   }
@@ -116,10 +148,11 @@ export function dpOpen(r: Pick<Reservation, "dp">): boolean {
 
 /**
  * A visit: a reservation that holds nothing — the bot's "janji datang"
- * (2026-10-27). It has a time and a customer and no units.
+ * (2026-10-27). It has a time and a customer and no units. A reservation of
+ * products only (2026-11-13) is one too, as far as any unit is concerned.
  */
 export function isVisit(r: Pick<Reservation, "items">): boolean {
-  return r.items.length === 0;
+  return unitItems(r).length === 0;
 }
 
 /** Every visit still open — the customer has not come, nor cancelled. */
@@ -128,11 +161,8 @@ export function openVisits(db: MockDb): Reservation[] {
 }
 
 /** The items still waiting to be collected. */
-export function heldItems(
-  db: MockDb,
-  r: Reservation,
-): readonly ReservationItem[] {
-  return r.items.filter((i) => {
+export function heldItems(db: MockDb, r: Reservation): readonly UnitItem[] {
+  return unitItems(r).filter((i) => {
     const state = itemState(db, i, r);
     return state === "HELD" || state === "SOFT";
   });
@@ -185,7 +215,7 @@ export function reprojectHolds(
 ): void {
   const touched = serials ? new Set(serials) : null;
   for (const r of draft.reservations) {
-    if (touched && !r.items.some((i) => touched.has(i.serial))) continue;
+    if (touched && !unitItems(r).some((i) => touched.has(i.serial))) continue;
     r.status = headerState(draft, r);
   }
 }

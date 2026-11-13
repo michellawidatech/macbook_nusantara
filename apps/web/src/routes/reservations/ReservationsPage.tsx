@@ -38,6 +38,27 @@
  * machines. That is a job with a beginning and an end, and nothing in the
  * table behind it feeds a single field — the definition of a modal rather than
  * an inline form the whole page has to scroll past.
+ *
+ * ## Staff reserve a PRODUCT, and take the DP there (owner ask 2026-11-13)
+ *
+ * > *"Make the staff able to add the reservation and the fee: Name / phone
+ * > number, date, unit (can be just name), and the DP amount (set to
+ * > 500.000, pretyped, adjustable)."* — *"in reservation just need to show
+ * > the unit name and the stock."*
+ *
+ * - **Name or phone** — either is enough (`hasContact`); a phone already on
+ *   file attaches to that customer.
+ * - **The date and time** they come (`Reservation.scheduledFor`).
+ * - **A product**, by default: the picker lists each live variant's name and
+ *   how many are on the shelf, no serial. A product line
+ *   (`ReservationItem.skuId`, no unit) holds nothing — which unit goes out is
+ *   picked at the till — so the row reads as the product and *Any unit*, and
+ *   *Sell* loads the customer and the DP into the till the way a visit does.
+ *   *A specific unit* is still a switch away, the old serial picker.
+ * - **The DP**, prefilled from Settings → DP (Rp 500.000) and editable. Above
+ *   zero it is recorded in the same mutation exactly as *Record DP* records
+ *   one (`recordDp`: the payment on the reservation, `heldUntil`, and — for
+ *   specific units — their `DIRESERVASI` rows). Zero reserves without one.
  */
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -76,16 +97,22 @@ import { EnumTag } from "../../components/EnumTag";
 import { GradeTag } from "../../components/GradeTag";
 import { LongText } from "../../components/LongText";
 import { fmtDate, fmtDateTime, fmtNone, fmtRp } from "../../lib/format.js";
-import { customerLabel } from "../../lib/customers.js";
+import { customerLabel, hasContact } from "../../lib/customers.js";
+import { isLiveSku } from "../../lib/skuCode.js";
+import { onHand } from "../../lib/stock.js";
+import { MoneyInput } from "../../components/MoneyInput";
 import {
+  isVisit,
   itemState,
   reprojectHolds,
   softHolds,
 } from "../../lib/reservations.js";
 import {
   DP_METHODS,
+  dpRule,
   dpStage,
   keepDp,
+  recordDp,
   recordDpBlock,
   refundDp,
   type DpMethod,
@@ -131,6 +158,14 @@ const heldOf = (r: Hold): readonly HoldItem[] =>
  */
 const isVisitRow = (r: Hold) => r.items.length === 0;
 
+/**
+ * A reservation of PRODUCTS (2026-11-13): items, none naming a unit. Like a
+ * visit it holds nothing, so it is sold from the till by picking a unit off
+ * the shelf, and closed by a person.
+ */
+const isProductRow = (r: Hold) =>
+  r.items.length > 0 && r.items.every((i) => i.serial === null);
+
 /** How far along a hold is, for the one line a table cell can afford. */
 const holdProgress = (r: Hold) => ({
   held: r.items.filter((i) => i.state === "HELD" || i.state === "SOFT").length,
@@ -159,18 +194,23 @@ const ITEM_STATE: Record<HoldState, string> = {
 /** The shape the modal collects. `serials` is the multi-select. */
 interface HoldForm {
   /**
-   * The customer, by number and name.
+   * The customer, by number and name — either is enough (2026-11-13).
    *
-   * Not a picker over an existing list: there is no customers endpoint yet, and
-   * the create service already accepts a phone and a name and upserts on the
-   * number — create-only, so a bot or a cashier may add somebody the shop has
-   * never met and neither may rewrite a customer staff maintain.
+   * Not a picker over an existing list: the number is the customer's identity
+   * and a hold upserts on it — create-only, so a cashier may add somebody the
+   * shop has never met and may not rewrite a customer staff maintain.
    */
-  phone: string;
-  name: string;
-  serials: string[];
+  phone?: string;
+  name?: string;
+  /** A product (the default since 2026-11-13) or a specific unit. */
+  pick: "PRODUCT" | "UNIT";
+  skuIds?: string[];
+  serials?: string[];
   when: dayjs.Dayjs;
-  sourceId: string;
+  sourceId?: string;
+  /** Prefilled from Settings → DP; 0 reserves without one. */
+  dp?: number | null;
+  dpMethod: DpMethod;
   note?: string;
 }
 
@@ -261,12 +301,16 @@ export function ReservationsPage() {
         channelName: channel?.name ?? null,
         createdAt: r.when,
         items: r.items.map((i): HoldItem => {
-          const unit = db.units.find((u) => u.serial === i.serial);
-          const sku = db.skus.find((s) => s.id === unit?.skuId);
+          const unit =
+            i.serial === undefined
+              ? undefined
+              : db.units.find((u) => u.serial === i.serial);
+          // A product line names its variant itself (2026-11-13).
+          const sku = db.skus.find((s) => s.id === (unit?.skuId ?? i.skuId));
           return {
             id: i.id,
-            serial: i.serial,
-            productName: sku?.name ?? i.serial,
+            serial: i.serial ?? null,
+            productName: sku?.name ?? i.serial ?? fmtNone(),
             variantLabel: sku?.variantLabel ?? null,
             grade: unit?.grade ?? null,
             unitStatus: unit?.status ?? null,
@@ -354,45 +398,92 @@ export function ReservationsPage() {
    * the transfer (`RecordDpModal`), which writes the `DIRESERVASI` rows then.
    */
   const [saving, setSaving] = useState(false);
+  const dpDefault = dpRule(db.settings);
   const addHold = (v: HoldForm) => {
     setSaving(true);
     try {
       const code = docCode("RV");
+      const byProduct = v.pick === "PRODUCT";
+      const skuIds = byProduct ? (v.skuIds ?? []) : [];
+      const serials = byProduct ? [] : (v.serials ?? []);
+      const dp = Math.max(0, Math.round(v.dp ?? 0));
+      let held: readonly string[] = [];
       mutate((d) => {
-        const phone = v.phone.trim();
-        const name = v.name.trim();
+        const phone = (v.phone ?? "").trim();
+        const name = (v.name ?? "").trim();
         // Upsert on the number, matching what the create service does: a
-        // cashier may put aside a machine for somebody the shop has never met.
-        let customer = d.customers.find((c) => c.phone === phone);
+        // cashier may put aside a unit for somebody the shop has never met.
+        // With no number, the name alone is the customer (2026-11-13).
+        let customer =
+          phone === "" ? undefined : d.customers.find((c) => c.phone === phone);
         if (!customer) {
           customer = {
             id: nextId("c"),
-            name: name === "" ? phone : name,
+            name,
             phone,
             createdAt: new Date().toISOString(),
           };
           d.customers.push(customer);
         }
+        const id = nextId("rsv");
         d.reservations.push({
-          id: nextId("rsv"),
+          id,
           code,
           customerId: customer.id,
           when: v.when.toISOString(),
           note: v.note?.trim() ?? "",
-          sourceId: v.sourceId,
-          items: v.serials.map((serial) => ({
-            id: nextId("rsvi"),
-            serial,
-          })),
+          ...(v.sourceId ? { sourceId: v.sourceId } : {}),
+          items: [
+            ...skuIds.map((skuId) => ({ id: nextId("rsvi"), skuId })),
+            ...serials.map((serial) => ({ id: nextId("rsvi"), serial })),
+          ],
           status: "ACTIVE",
         });
+        // The DP, exactly as Record DP records one, in the same mutation.
+        if (dp > 0)
+          held = recordDp(
+            d,
+            id,
+            {
+              id: nextId("pay"),
+              amount: dp,
+              method: v.dpMethod,
+              at: new Date().toISOString(),
+            },
+            dpDefault,
+            appendEvent,
+          );
       });
       message.success(
-        t(
-          "reservations.reservedN",
-          "{{count}} unit(s) reserved — still on sale until a DP is recorded.",
-          { count: v.serials.length },
-        ),
+        dp > 0
+          ? t(
+              "reservations.reservedWithDp",
+              "Reserved, DP {{amount}} recorded{{held}}.",
+              {
+                amount: fmtRp(dp),
+                held:
+                  held.length > 0
+                    ? t(
+                        "reservations.reservedHeld",
+                        " — {{count}} unit(s) held",
+                        {
+                          count: held.length,
+                        },
+                      )
+                    : "",
+              },
+            )
+          : byProduct
+            ? t(
+                "reservations.reservedProducts",
+                "{{count}} product(s) reserved — no unit is held until one is picked at the till.",
+                { count: skuIds.length },
+              )
+            : t(
+                "reservations.reservedN",
+                "{{count}} unit(s) reserved — still on sale until a DP is recorded.",
+                { count: serials.length },
+              ),
       );
       form.resetFields();
       setAdding(false);
@@ -400,6 +491,38 @@ export function ReservationsPage() {
       setSaving(false);
     }
   };
+
+  /**
+   * Every live variant, its name and how many are on the shelf (owner ask
+   * 2026-11-13: *"just need to show the unit name and the stock"*) — units
+   * on sale and not promised to somebody else, plus a counted product's
+   * pieces. In stock first, then by name; one with none can still be
+   * reserved, for a customer waiting on the next delivery.
+   */
+  const productOptions = useMemo(() => {
+    const reserved = softHolds(db);
+    const shelf = new Map<string, number>();
+    for (const u of db.units)
+      if (u.status === "TERSEDIA" && !reserved.has(u.serial))
+        shelf.set(u.skuId, (shelf.get(u.skuId) ?? 0) + 1);
+    return db.skus
+      .filter((k) => isLiveSku(k))
+      .map((k) => {
+        const n =
+          (shelf.get(k.id) ?? 0) + Math.max(0, onHand(db.stockMoves, k.id));
+        const name = `${k.name} ${k.variantLabel}`.trim();
+        return { value: k.id, name, n };
+      })
+      .sort(
+        (a, b) =>
+          Number(b.n > 0) - Number(a.n > 0) || a.name.localeCompare(b.name),
+      )
+      .map((o) => ({
+        value: o.value,
+        label: o.name,
+        stock: o.n,
+      }));
+  }, [db.skus, db.units, db.stockMoves, db.reservations, db.events]);
 
   /**
    * Let machines go.
@@ -431,7 +554,12 @@ export function ReservationsPage() {
         if (everything && hold.dp === undefined) hold.status = "CANCELLED";
         else
           hold.items = hold.items.filter(
-            (i) => !(soft.has(i.serial) && serials.includes(i.serial)),
+            (i) =>
+              !(
+                i.serial !== undefined &&
+                soft.has(i.serial) &&
+                serials.includes(i.serial)
+              ),
           );
       }
       reprojectHolds(d, serials);
@@ -504,7 +632,8 @@ export function ReservationsPage() {
   const closeVisit = (r: Hold, status: "DONE" | "CANCELLED") => {
     mutate((d) => {
       const visit = d.reservations.find((x) => x.id === r.id);
-      if (visit && visit.items.length === 0) visit.status = status;
+      // A visit, or a reservation of products — neither holds a unit.
+      if (visit && isVisit(visit)) visit.status = status;
     });
     message.success(
       status === "DONE"
@@ -515,13 +644,17 @@ export function ReservationsPage() {
 
   const cancelVisit = (r: Hold) =>
     modal.confirm({
-      title: t("reservations.cancelVisit", "Cancel this visit?"),
+      title: isProductRow(r)
+        ? t("reservations.cancelProduct", "Cancel this reservation?")
+        : t("reservations.cancelVisit", "Cancel this visit?"),
       content: t(
         "reservations.cancelVisitBody",
         "{{name}} is no longer expected. Nothing was held, so no unit moves.",
         { name: r.customerName },
       ),
-      okText: t("reservations.cancelVisitOk", "Cancel the visit"),
+      okText: isProductRow(r)
+        ? t("reservations.cancelProductOk", "Cancel the reservation")
+        : t("reservations.cancelVisitOk", "Cancel the visit"),
       okButtonProps: { danger: true },
       cancelText: t("reservations.keepVisit", "Keep it"),
       onOk: () => closeVisit(r, "CANCELLED"),
@@ -801,7 +934,13 @@ export function ReservationsPage() {
               ) : (
                 <Flex vertical gap={2}>
                   {r.items.map((i) => (
-                    <span key={i.id}>{i.productName}</span>
+                    <span key={i.id}>
+                      {/* A product line has no serial to tell it apart, so it
+                          carries its variant here (2026-11-13). */}
+                      {i.serial === null && i.variantLabel
+                        ? `${i.productName} ${i.variantLabel}`
+                        : i.productName}
+                    </span>
                   ))}
                 </Flex>
               ),
@@ -820,7 +959,7 @@ export function ReservationsPage() {
               <Flex vertical gap={2}>
                 {r.items.map((i) => (
                   <Typography.Text key={i.id} type="secondary">
-                    {i.serial}
+                    {i.serial ?? t("reservations.anyUnit", "Any unit")}
                   </Typography.Text>
                 ))}
               </Flex>
@@ -912,6 +1051,69 @@ export function ReservationsPage() {
                     </Button>
                   </Flex>
                 ) : null;
+              // A reservation of products (2026-11-13): nothing held, so
+              // Sell loads the customer and the DP into the till, where a
+              // unit is picked off the shelf; Cancel with a DP is the DP's
+              // decision (refund or keep).
+              if (isProductRow(r)) {
+                const reservation = db.reservations.find((x) => x.id === r.id);
+                const open = r.status === "TERJADWAL";
+                const canRecord =
+                  reservation !== undefined &&
+                  recordDpBlock(db, reservation) === undefined;
+                if (!open) return null;
+                return (
+                  <Flex gap={8} wrap>
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<ShoppingCartOutlined />}
+                      aria-label={t(
+                        "reservations.sellAria",
+                        "Sell {{code}} at the till",
+                        { code: r.code },
+                      )}
+                      onClick={() => navigate(`/stock/out?reservation=${r.id}`)}
+                    >
+                      {t("reservations.sell", "Sell")}
+                    </Button>
+                    {canRecord && (
+                      <Button
+                        size="small"
+                        aria-label={t(
+                          "dp.recordAria",
+                          "Record a DP on {{code}}",
+                          { code: r.code },
+                        )}
+                        onClick={() => setRecording(r)}
+                      >
+                        {t("dp.record", "Record DP")}
+                      </Button>
+                    )}
+                    <Button
+                      size="small"
+                      danger={r.dpStage !== "DECIDE"}
+                      type={r.dpStage === "DECIDE" ? "primary" : "default"}
+                      aria-label={
+                        r.dp
+                          ? t("dp.decideAria", "Decide the DP on {{code}}", {
+                              code: r.code,
+                            })
+                          : t(
+                              "reservations.cancelProductAria",
+                              "Cancel the reservation {{code}}",
+                              { code: r.code },
+                            )
+                      }
+                      onClick={() => (r.dp ? openDecide(r) : cancelVisit(r))}
+                    >
+                      {r.dp
+                        ? t("dp.decide", "Decide DP")
+                        : t("reservations.cancel", "Cancel")}
+                    </Button>
+                  </Flex>
+                );
+              }
               const held = heldOf(r).flatMap((i) =>
                 i.serial ? [i.serial] : [],
               );
@@ -1231,122 +1433,226 @@ export function ReservationsPage() {
         <Form<HoldForm>
           form={form}
           layout="vertical"
-          initialValues={{ when: dayjs().add(1, "day") }}
+          initialValues={{
+            when: dayjs().add(1, "day"),
+            pick: "PRODUCT",
+            dp: dpDefault.amount,
+            dpMethod: "TRANSFER",
+          }}
           onFinish={addHold}
         >
-          {/* The number is the customer's identity: `Customer.phone` is unique,
-              and the service upserts on it — create-only, so a hold made at the
-              counter for somebody the shop already knows attaches to the
-              existing row and never rewrites their name. */}
+          {/* Name OR number (2026-11-13) — either is a customer. The number is
+              the identity: a hold made for somebody the shop already knows
+              attaches to that customer and never rewrites their name. */}
           <Flex gap={16} wrap>
-            <Form.Item
-              name="phone"
-              label={t("customers.phone", "Phone")}
-              rules={[
-                {
-                  required: true,
-                  message: t("form.pickCustomer", "Pick a customer"),
-                },
-              ]}
-              style={{ flex: "1 1 220px" }}
-            >
-              <Input placeholder="+62812..." maxLength={20} />
-            </Form.Item>
             <Form.Item
               name="name"
               label={t("customers.name", "Name")}
+              dependencies={["phone"]}
               rules={[
-                {
-                  required: true,
-                  message: t("form.pickCustomer", "Pick a customer"),
-                },
+                ({ getFieldValue }) => ({
+                  validator: (_, value: string | undefined) =>
+                    hasContact({ name: value, phone: getFieldValue("phone") })
+                      ? Promise.resolve()
+                      : Promise.reject(
+                          new Error(
+                            t(
+                              "reservations.nameOrPhone",
+                              "Type a name or a phone number.",
+                            ),
+                          ),
+                        ),
+                }),
               ]}
               style={{ flex: "1 1 220px" }}
             >
-              <Input maxLength={120} />
+              <Input maxLength={120} aria-label={t("customers.name", "Name")} />
+            </Form.Item>
+            <Form.Item
+              name="phone"
+              label={t("customers.phone", "Phone")}
+              style={{ flex: "1 1 220px" }}
+            >
+              <Input
+                placeholder="+62812..."
+                maxLength={20}
+                aria-label={t("customers.phone", "Phone")}
+              />
             </Form.Item>
           </Flex>
-          {/* The multi-select is the whole point of the modal: one hold, as
-              many machines as the conversation covered. Only sellable units
-              are offered — a machine already on hold for somebody else is not
-              the shop's to promise twice. */}
           <Form.Item
-            name="serials"
-            label={t("reservations.units", "Units")}
+            name="when"
+            label={t("reservations.dateTime", "Date and time")}
             rules={[
-              {
-                required: true,
-                message: t("form.pickUnit", "Pick at least one unit"),
-              },
+              { required: true, message: t("form.pickTime", "Pick a time") },
             ]}
           >
-            <Select
-              mode="multiple"
-              showSearch
-              // Filtered before the cap — see `availableMatches`. antd must
-              // not filter as well, or it would narrow a list that has already
-              // been narrowed and hide rows that genuinely matched.
-              filterOption={false}
-              onSearch={setUnitQuery}
-              placeholder={t("reservations.availableUnit", "Available unit")}
-              options={unitOptions}
-              notFoundContent={t(
-                "reservations.noUnitMatch",
-                "No unit matches that.",
-              )}
-              popupRender={(menu) => (
-                <>
-                  {menu}
-                  {unitsBeyondPage > 0 && (
-                    <Typography.Text
-                      type="secondary"
-                      style={{ display: "block", padding: "4px 12px" }}
-                    >
-                      {t(
-                        "reservations.moreUnits",
-                        "{{count}} more match — keep typing to narrow it.",
-                        { count: unitsBeyondPage },
-                      )}
-                    </Typography.Text>
-                  )}
-                </>
-              )}
+            <DatePicker
+              showTime
+              format="DD MMM YYYY HH:mm"
+              style={{ width: "100%" }}
+              aria-label={t("reservations.dateTime", "Date and time")}
             />
+          </Form.Item>
+          <Form.Item name="pick" style={{ marginBottom: 8 }}>
+            <Segmented<HoldForm["pick"]>
+              options={[
+                {
+                  value: "PRODUCT",
+                  label: t("reservations.byProduct", "Product"),
+                },
+                {
+                  value: "UNIT",
+                  label: t("reservations.bySerial", "A specific unit"),
+                },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item noStyle dependencies={["pick"]}>
+            {({ getFieldValue }) =>
+              getFieldValue("pick") === "UNIT" ? (
+                /* The serial picker, kept for the customer who chose one
+                   unit off a photo. Only sellable units are offered — one
+                   already promised to somebody else is not the shop's to
+                   promise twice. */
+                <Form.Item
+                  name="serials"
+                  label={t("reservations.units", "Units")}
+                  rules={[
+                    {
+                      required: true,
+                      message: t("form.pickUnit", "Pick at least one unit"),
+                    },
+                  ]}
+                >
+                  <Select
+                    mode="multiple"
+                    showSearch
+                    // Filtered before the cap — see `availableMatches`.
+                    filterOption={false}
+                    onSearch={setUnitQuery}
+                    placeholder={t(
+                      "reservations.availableUnit",
+                      "Available unit",
+                    )}
+                    options={unitOptions}
+                    notFoundContent={t(
+                      "reservations.noUnitMatch",
+                      "No unit matches that.",
+                    )}
+                    popupRender={(menu) => (
+                      <>
+                        {menu}
+                        {unitsBeyondPage > 0 && (
+                          <Typography.Text
+                            type="secondary"
+                            style={{ display: "block", padding: "4px 12px" }}
+                          >
+                            {t(
+                              "reservations.moreUnits",
+                              "{{count}} more match — keep typing to narrow it.",
+                              { count: unitsBeyondPage },
+                            )}
+                          </Typography.Text>
+                        )}
+                      </>
+                    )}
+                  />
+                </Form.Item>
+              ) : (
+                /* A product and its stock, no serial (owner ask 2026-11-13:
+                   "just need to show the unit name and the stock"). */
+                <Form.Item
+                  name="skuIds"
+                  label={t("reservations.product", "Product")}
+                  rules={[
+                    {
+                      required: true,
+                      message: t(
+                        "reservations.pickProduct",
+                        "Pick at least one product",
+                      ),
+                    },
+                  ]}
+                >
+                  <Select
+                    mode="multiple"
+                    showSearch
+                    optionFilterProp="label"
+                    aria-label={t("reservations.product", "Product")}
+                    placeholder={t(
+                      "reservations.productHint",
+                      "Search a product",
+                    )}
+                    options={productOptions}
+                    optionRender={(opt) => (
+                      <Flex justify="space-between" gap={8}>
+                        <span>{String(opt.data.label)}</span>
+                        <Typography.Text
+                          type={opt.data.stock > 0 ? "secondary" : "danger"}
+                          style={{ whiteSpace: "nowrap" }}
+                        >
+                          {t("reservations.inStock", "{{count}} in stock", {
+                            count: opt.data.stock,
+                          })}
+                        </Typography.Text>
+                      </Flex>
+                    )}
+                    notFoundContent={t(
+                      "reservations.noProductMatch",
+                      "No product matches that.",
+                    )}
+                  />
+                </Form.Item>
+              )
+            }
           </Form.Item>
           <Flex gap={16} wrap>
             <Form.Item
-              name="sourceId"
-              label={t("reservations.cameFrom", "Came from")}
-              rules={[
-                {
-                  required: true,
-                  message: t("form.pickSource", "Where did this come from?"),
-                },
-              ]}
+              name="dp"
+              label={t("dp.amount", "DP amount")}
+              extra={t(
+                "reservations.dpHint",
+                "Recorded as paid now. 0 reserves without a DP.",
+              )}
               style={{ flex: "1 1 220px" }}
             >
-              <Select
-                showSearch
-                optionFilterProp="label"
-                placeholder={t("reservations.cameFrom", "Came from")}
-                options={sourceOptions}
-              />
+              <MoneyInput min={0} aria-label={t("dp.amount", "DP amount")} />
             </Form.Item>
-            <Form.Item
-              name="when"
-              label={t("reservations.expectedOn", "Expected on")}
-              rules={[
-                { required: true, message: t("form.pickTime", "Pick a time") },
-              ]}
-              style={{ flex: "1 1 220px" }}
-            >
-              <DatePicker
-                showTime
-                format="DD MMM YYYY HH:mm"
-                style={{ width: "100%" }}
-              />
+            <Form.Item noStyle dependencies={["dp"]}>
+              {({ getFieldValue }) =>
+                (getFieldValue("dp") ?? 0) > 0 && (
+                  <Form.Item
+                    name="dpMethod"
+                    label={t("dp.method", "Paid by")}
+                    style={{ flex: "1 1 220px" }}
+                  >
+                    <Segmented<DpMethod>
+                      options={DP_METHODS.map((m) => ({
+                        value: m,
+                        label:
+                          m === "TRANSFER"
+                            ? t("pos.methodTransfer", "Transfer")
+                            : t("pos.methodCash", "Cash"),
+                      }))}
+                    />
+                  </Form.Item>
+                )
+              }
             </Form.Item>
           </Flex>
+          <Form.Item
+            name="sourceId"
+            label={t("reservations.cameFrom", "Came from")}
+          >
+            <Select
+              showSearch
+              allowClear
+              optionFilterProp="label"
+              placeholder={t("reservations.cameFrom", "Came from")}
+              options={sourceOptions}
+            />
+          </Form.Item>
           <Form.Item name="note" label={t("reservations.note", "Note")}>
             {/* Two rows, not one line: what staff write here is "collecting
                 Saturday, wants the charger checked first", and a single-line

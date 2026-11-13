@@ -26,6 +26,7 @@ import {
 } from "../src/mock/store.js";
 import { planSendToService } from "../src/lib/serviceActions.js";
 import { skuTracksSerial } from "../src/lib/serialTracking.js";
+import { pressPageAction } from "./pageActions.js";
 
 vi.setConfig({ testTimeout: 90_000 });
 
@@ -411,9 +412,7 @@ describe("Add to service (2026-11-10)", () => {
       free.some((v) => v !== u && v.locationId === u.locationId),
     )!.locationId;
     const picks = free.filter((u) => u.locationId === home).slice(0, 2);
-    await userEvent.click(
-      screen.getByRole("button", { name: /Add to service/ }),
-    );
+    pressPageAction("Add to service");
     const send = await topModal();
     await userEvent.click(
       within(send).getByRole("button", { name: /Choose from list/ }),
@@ -457,9 +456,7 @@ describe("Add to service (2026-11-10)", () => {
     )!;
     renderPage();
     await settle();
-    await userEvent.click(
-      screen.getByRole("button", { name: /Add to service/ }),
-    );
+    pressPageAction("Add to service");
     const send = await topModal();
     await userEvent.type(
       within(send).getByLabelText("Batch name"),
@@ -657,5 +654,111 @@ describe("a batch row opens typing (2026-11-13)", () => {
         within(back).getAllByPlaceholderText("0 if free")[0],
       );
     });
+  });
+});
+
+describe("Add back in stock (2026-11-13)", () => {
+  /** Send units from one warehouse to service in one press, as the dialog does. */
+  function sendMany(n: number): string[] {
+    const db = getDb();
+    const free = db.units.filter(
+      (u) =>
+        u.status === "TERSEDIA" &&
+        skuTracksSerial(db, u.skuId) &&
+        !db.services.some((r) => r.serial === u.serial),
+    );
+    const home = free.find(
+      (u) => free.filter((v) => v.locationId === u.locationId).length >= n,
+    )!.locationId;
+    const picks = free.filter((u) => u.locationId === home).slice(0, n);
+    const at = new Date().toISOString();
+    mutate((d) => {
+      for (const p of picks) {
+        const plan = planSendToService({
+          unit: { serial: p.serial, locationId: p.locationId },
+          dest: p.locationId,
+          raisedBy: "ADJUSTMENT",
+          at,
+          staff: currentStaffName(),
+          words: { shipLabel: "c", quoteLabel: "q", eventNote: "Sent" },
+          nextId,
+        });
+        appendEvent(d, p.serial, plan.event);
+        d.services.push(plan.visit);
+      }
+    });
+    return picks.map((p) => p.serial);
+  }
+
+  it("shows the bench as batch name, total units, warehouse, cost and actions", async () => {
+    sendOne();
+    renderPage();
+    await settle();
+    const headers = Array.from(
+      document.querySelectorAll<HTMLElement>(".ant-table-thead th"),
+    ).map((th) => (th.textContent ?? "").trim());
+    expect(headers.filter(Boolean)).toEqual([
+      "Batch name",
+      "Total units",
+      "Warehouse",
+      "Cost",
+    ]);
+  });
+
+  it("checks each scanned serial, refuses the ones not at service on their row, and brings the rest back with their fees", async () => {
+    const [first, second] = sendMany(2);
+    const db = getDb();
+    const shelf = db.units.find(
+      (u) =>
+        u.status === "TERSEDIA" &&
+        skuTracksSerial(db, u.skuId) &&
+        !db.services.some((r) => r.serial === u.serial),
+    )!.serial;
+    renderPage();
+    await settle();
+    pressPageAction("Add back in stock");
+    const dialog = await topModal();
+    expect(dialog).toHaveTextContent("Add back in stock");
+    const box = within(dialog).getByLabelText("Add a unit");
+    await waitFor(() => expect(document.activeElement).toBe(box));
+    for (const serial of [first!, second!, shelf, "ZZNOSUCHSERIAL"])
+      await userEvent.type(box, `${serial}{Enter}`);
+
+    // The two that cannot come back say why, each on its own row.
+    expect(dialog.querySelector(`[data-refused="${shelf}"]`)).toHaveTextContent(
+      "Not at service — it is in stock.",
+    );
+    expect(
+      dialog.querySelector('[data-refused="ZZNOSUCHSERIAL"]'),
+    ).toHaveTextContent("No unit has this serial.");
+    expect(
+      within(dialog).queryByLabelText(`Repair cost of ${shelf}`),
+    ).toBeNull();
+
+    // A fee on one; the other goes back with none.
+    await userEvent.type(
+      within(dialog).getByLabelText(`Repair cost of ${first}`),
+      "125000",
+    );
+    const ok = within(dialog).getByText("Back in stock (2)").closest("button")!;
+    expect(ok).toBeEnabled();
+    await userEvent.click(ok);
+    await settle();
+
+    const after = getDb();
+    const unit = (s: string) => after.units.find((u) => u.serial === s)!;
+    expect(unit(first!).status).toBe("QC");
+    expect(unit(second!).status).toBe("QC");
+    expect(unit(shelf).status).toBe("TERSEDIA");
+    const visit = (s: string) =>
+      after.services
+        .filter((r) => r.serial === s)
+        .sort((a, b) => b.openedAt.localeCompare(a.openedAt))[0]!;
+    expect(visit(first!).closedAt).toBeDefined();
+    expect(visit(first!).fees).toEqual([
+      expect.objectContaining({ kind: "LABOUR", amount: 125_000 }),
+    ]);
+    expect(visit(second!).closedAt).toBeDefined();
+    expect(visit(second!).fees).toEqual([]);
   });
 });
