@@ -64,6 +64,12 @@ import {
 } from "../../mock/seed.js";
 import { labelOf } from "../../i18n/enumLabels.js";
 import { ADJUSTMENT_METHOD_CODES } from "../../lib/accounts.js";
+import { cashflowRows } from "../../lib/cashflowRows.js";
+import {
+  marketplacePots,
+  withdrawalChannel,
+} from "../../lib/marketplacePot.js";
+import { channelOf } from "../../lib/channels.js";
 import { COLUMN } from "../../theme/tokens";
 
 /** Derived, not duplicated: `seed.ts` stays the one list of categories. */
@@ -411,6 +417,23 @@ export function AdjustmentPanel({
     categories.find((c) => c.value === reason)?.needsTransaction === true;
 
   /**
+   * A withdrawal from a seller balance (2026-11-13): the channel it empties
+   * and what that balance holds now, said under the reason so nobody has to
+   * leave the dialog to see how much there is to withdraw.
+   */
+  const withdrawing =
+    direction === "INCOME" ? withdrawalChannel(reason) : undefined;
+  const sellerBalance = useMemo(
+    () =>
+      withdrawing === undefined || !addOpen
+        ? undefined
+        : marketplacePots(cashflowRows(db, t)).find(
+            (p) => p.channel === withdrawing,
+          )?.inSellerBalance,
+    [withdrawing, addOpen, db, t],
+  );
+
+  /**
    * The receipts the transaction picker offers.
    *
    * Searched by the shop's code, the marketplace's reference, the customer and
@@ -626,8 +649,33 @@ export function AdjustmentPanel({
               ) : undefined
             }
           >
-            <Select options={reasonOptions} onChange={setReason} />
+            <Select
+              options={reasonOptions}
+              onChange={(v: string) => {
+                setReason(v);
+                // A withdrawal lands in the bank by transfer — the one
+                // answer it nearly always has, so it is the default.
+                if (direction === "INCOME" && withdrawalChannel(v))
+                  form.setFieldsValue({ method: "TRANSFER" });
+              }}
+            />
           </Form.Item>
+
+          {withdrawing !== undefined && sellerBalance !== undefined && (
+            <Typography.Paragraph
+              type="secondary"
+              data-testid="seller-balance-hint"
+            >
+              {t(
+                "adjust.sellerBalanceNow",
+                "In the {{channel}} seller balance now: {{amount}}.",
+                {
+                  channel: channelOf(withdrawing)?.label ?? withdrawing,
+                  amount: fmtRp(sellerBalance),
+                },
+              )}
+            </Typography.Paragraph>
+          )}
 
           {needsTransaction && (
             <Form.Item
@@ -714,8 +762,8 @@ export function AdjustmentPanel({
            * are exactly this answer added up, so an adjustment that will not
            * say how the money moved is one neither balance can count. There
            * are three, they are the owner's three, and a marketplace is not
-           * among them — money still with Shopee is not an adjustment, it is
-           * the pending table.
+           * among them — money still with Shopee is in its seller balance, and
+           * only a withdrawal (2026-11-13) is an adjustment.
            */}
           {/* A move names both pots by its reason, so it asks no method. */}
           {direction !== "MOVE" && (

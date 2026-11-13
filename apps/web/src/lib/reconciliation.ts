@@ -63,11 +63,11 @@ import {
   type PosMovement,
   type SuggestionReason,
 } from "./bankMatch.js";
-import { accountOfMethod } from "./accounts.js";
 import { isBookClosed, isSaleLocked } from "./bookClose.js";
 import {
   balancesOfRows,
   movesBalance,
+  potOfRow,
   type CashflowRow,
   type MovementSource,
   type OpeningSettings,
@@ -116,9 +116,12 @@ export function monthRange(month: string): { start: string; end: string } {
 // The POS side
 // ---------------------------------------------------------------------------
 
-/** Which pot a row's money is in, if any. */
-export const potOf = (r: CashflowRow): Pot | undefined =>
-  accountOfMethod(r.methodCode);
+/**
+ * Which pot a row's money is in, if any — none for money a marketplace's
+ * seller balance holds (2026-11-13): the bank statement shows the withdrawal,
+ * never the sale.
+ */
+export const potOf = (r: CashflowRow): Pot | undefined => potOfRow(r);
 
 /**
  * A row's amount with its sign: money in positive, out negative — and a

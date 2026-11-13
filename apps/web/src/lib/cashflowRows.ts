@@ -21,7 +21,13 @@ import type { MockDb, Order } from "../mock/seed.js";
 import { EXPENSE_CATEGORIES, INCOME_REASONS } from "../mock/seed.js";
 import type { TFunction } from "../i18n/translate.js";
 import { labelOf } from "../i18n/enumLabels.js";
-import { balancesOf, type Balances } from "./accounts.js";
+import {
+  accountOfMethod,
+  balancesOf,
+  type AccountKind,
+  type Balances,
+} from "./accounts.js";
+import { marketplacePotOf } from "./marketplacePot.js";
 import { customerLabel } from "./customers.js";
 import { fmtNone } from "./format.js";
 import { channelOf } from "./channels.js";
@@ -128,6 +134,13 @@ export interface CashflowRow {
    * Derived from the settlement — corrected in Edit transaction, never here.
    */
   readonly feeOf?: string;
+  /**
+   * On a marketplace payment and its deduction row: the channel whose seller
+   * balance holds the money (2026-11-13, `lib/marketplacePot.ts`). Such a row
+   * is in no cash or bank pot — `movesBalance` leaves it out — until a
+   * withdrawal moves it to the bank.
+   */
+  readonly marketplace?: string;
 }
 
 /** A debt a return cancelled: listed in Accrual, never counted anywhere. */
@@ -198,7 +211,7 @@ type CashflowDb = Pick<
   | "customers"
   | "paymentMethods"
 > &
-  Partial<Pick<MockDb, "reservations" | "settlements">>;
+  Partial<Pick<MockDb, "reservations" | "settlements" | "settings">>;
 
 /** How far apart one save's two writes can be stamped. */
 const SAME_SAVE_MS = 2 * 60_000;
@@ -305,6 +318,8 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
       const kept =
         settlement === undefined ? 0 : settlement.gross - settlement.received;
       const off = kept + (p.id === boughtWith?.id ? bought : 0);
+      // In a seller balance rather than the bank (2026-11-13).
+      const pot = marketplacePotOf(p, db.settings?.marketplacePotFrom);
       out.push({
         key: `p-${o.id}-${p.id}`,
         at: p.at,
@@ -322,6 +337,7 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
         tie: "",
         source: { kind: "salePayment", orderId: o.id, paymentId: p.id },
         ...(off !== 0 ? { deducted: off } : {}),
+        ...(pot !== undefined ? { marketplace: pot } : {}),
       });
       /*
        * What the marketplace kept, as an expense beside the sale rather than
@@ -355,6 +371,7 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
           status: p.state,
           tie: "",
           feeOf: `p-${o.id}-${p.id}`,
+          ...(pot !== undefined ? { marketplace: pot } : {}),
         });
       }
     }
@@ -650,7 +667,8 @@ export interface OpeningSettings {
  * Does this row move a pot's real balance? Cash basis — what Income &
  * Expense's Cash and Bank cards count, and what Reconciliation calls the POS
  * balance: settled, not voided, through the shop's own cash or bank, and on
- * or after the opening balance.
+ * or after the opening balance. Money in a marketplace's seller balance
+ * (`marketplace`, 2026-11-13) is in neither pot until it is withdrawn.
  */
 export function movesBalance(
   r: CashflowRow,
@@ -659,6 +677,7 @@ export function movesBalance(
 ): boolean {
   return (
     r.inBalance &&
+    r.marketplace === undefined &&
     !isVoided(r) &&
     r.at >= (settings.openingBalanceAt ?? "") &&
     (accrual || r.status === "SETTLED")
@@ -666,10 +685,21 @@ export function movesBalance(
 }
 
 /**
+ * The cash or bank pot a row's money is in — undefined for a method that
+ * belongs to no pot and for money a marketplace's seller balance holds.
+ */
+export function potOfRow(r: CashflowRow): AccountKind | undefined {
+  return r.marketplace !== undefined
+    ? undefined
+    : accountOfMethod(r.methodCode);
+}
+
+/**
  * What is in the drawer and in the bank (owner ask 2026-10-22), from the
  * opening balance on — `balancesOf` over the rows that move a balance.
- * `accrual` adds what is promised: a marketplace payout still pending counts
- * toward the bank, a customer's debt toward the pot its method names. `until`
+ * `accrual` adds what is promised — a customer's debt toward the pot its
+ * method names. Marketplace money is in neither, settled or not (2026-11-13:
+ * it is in the seller balance until withdrawn, `lib/marketplacePot.ts`). `until`
  * (an instant, exclusive) stops the walk — a reconciliation's end of day.
  */
 export function balancesOfRows(

@@ -21,12 +21,12 @@
  * from the first answer is how the two end up disagreeing. Cash is the drawer;
  * a transfer, a card and a QRIS scan all land in the bank.
  *
- * Marketplace money is a bank movement — but only once it has been withdrawn,
- * and that is a fact about the payment's STATE rather than about its method.
- * A balance is built from settled movements alone, so escrow never reaches
- * one; when the withdrawal is confirmed the money arrives the way every
- * payout does, by transfer, and lands in the bank. `lib/marketplace.ts` owns
- * everything before that moment.
+ * Marketplace money is a bank movement — but only once it has been withdrawn.
+ * Since 2026-11-13 a released Shopee or Tokopedia payment sits in that
+ * channel's SELLER BALANCE (`lib/marketplacePot.ts`), which is neither pot:
+ * `cashflowRows` marks such a row `marketplace` and every balance leaves it
+ * out, whatever its method maps to here. The money reaches the bank when a
+ * withdrawal is recorded — an income adjustment, by transfer.
  *
  * ## Deposit is not a method (owner, 2026-09-09)
  *
@@ -63,9 +63,9 @@ export function accountOfMethod(code: string): AccountKind | undefined {
     case "QRIS":
     case "DEBIT":
     case "MARKETPLACE":
-      // MARKETPLACE is a payout, once it is a payout: escrow is kept out of
-      // the balance by only settled movements reaching this, and what a
-      // marketplace finally sends arrives in the bank like any other transfer.
+      // MARKETPLACE maps to the bank for a payment released before the
+      // seller-balance cutoff (2026-11-13); one after it is in the channel's
+      // pot and never reaches this mapping (`potOfRow` in cashflowRows.ts).
       return "BANK";
     case "TRANSFER_LUAR":
       /*

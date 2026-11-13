@@ -156,9 +156,11 @@ describe("what a marketplace kept (owner 2026-10-30: keep it as an expense)", ()
     expect(fee.description).toBe("Kept by Shopee · Komisi, Biaya layanan");
   });
 
-  it("moves the bank by what landed, and matches the statement's net credit exactly", () => {
+  it("moves the bank by what landed, and matches the statement's net credit exactly — when released before the seller-balance cutoff", () => {
     const db = shop();
     shopeeSale(db);
+    // Released before 2026-11-13's rule: still the bank's, as it always was.
+    db.settings.marketplacePotFrom = "2026-10-01T00:00:00.000Z";
     const rows = rowsOf(db);
     expect(posBalanceAt(rows, db.settings, "BANK", "2026-09-04")).toBe(
       18_850_000,
@@ -175,6 +177,19 @@ describe("what a marketplace kept (owner 2026-10-30: keep it as an expense)", ()
     expect(moves).toEqual([
       { key: "p:sp-p1", date: "2026-09-04", amount: 8_850_000 },
     ]);
+  });
+
+  it("leaves a payout released after the cutoff in the Shopee seller balance — not the bank's (2026-11-13)", () => {
+    const db = shop();
+    shopeeSale(db);
+    db.settings.marketplacePotFrom = "2026-09-01T00:00:00.000Z";
+    const rows = rowsOf(db);
+    expect(posBalanceAt(rows, db.settings, "BANK", "2026-09-04")).toBe(
+      10_000_000,
+    );
+    expect(
+      potMovements(rows, db.settings, "BANK", "2026-09-04", "2026-09-04"),
+    ).toEqual([]);
   });
 
   it("drops the deduction once the payment is corrected off the marketplace", () => {

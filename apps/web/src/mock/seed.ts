@@ -1305,6 +1305,29 @@ export const INCOME_REASONS = [
     label: "Balance mismatch",
     guide: "The counted balance is above the books.",
   },
+  /*
+   * Money withdrawn from a marketplace's seller balance into the bank (owner
+   * 2026-11-13). Shopee pays each sale into the seller balance and staff move
+   * lumps of any size to the bank from Shopee's site; no withdrawal names an
+   * order. So the withdrawal is its own row: into the pot its method names,
+   * out of that channel's marketplace pot (`marketplacePots`). Not revenue —
+   * Profit & Loss counted the sale — and left out of the charts like a
+   * transfer between the shop's own accounts.
+   */
+  {
+    value: "PENARIKAN_SHOPEE",
+    label: "Shopee withdrawal",
+    guide:
+      "Money moved from the Shopee seller balance to the bank. Not revenue — the sales were.",
+    marketplace: "SHOPEE",
+  },
+  {
+    value: "PENARIKAN_TOKOPEDIA",
+    label: "Tokopedia withdrawal",
+    guide:
+      "Money moved from the Tokopedia seller balance to the bank. Not revenue — the sales were.",
+    marketplace: "TOKOPEDIA",
+  },
 ] as const;
 export type IncomeReason = (typeof INCOME_REASONS)[number]["value"];
 
@@ -1749,6 +1772,14 @@ export interface AppSettings {
    * `AppSetting` row (`finance.booksClosedAt`).
    */
   booksClosedAt?: string;
+  /**
+   * From when a released marketplace payment sits in that channel's seller
+   * balance instead of the bank (owner 2026-11-13) — `AppSetting`
+   * `finance.marketplacePotFrom`, written once by the migration that brought
+   * the rule. A payment settled before it stays bank money, as it always was;
+   * absent, the rule applies to every payment (`lib/marketplacePot.ts`).
+   */
+  marketplacePotFrom?: string;
   /**
    * Who the shop is, as printed at the top of every faktur.
    *

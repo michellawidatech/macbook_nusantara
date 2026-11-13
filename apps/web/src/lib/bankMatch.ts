@@ -172,6 +172,12 @@ export function guessCategory(
     return { direction: "MOVE", reason: "CASH_TO_BANK" };
   if (/TARIK\s+TUNAI/.test(d) && !credit)
     return { direction: "MOVE", reason: "BANK_TO_CASH" };
+  // A seller-balance withdrawal landing (2026-11-13): the credit names the
+  // platform, and the sale it came from is already the revenue.
+  if (credit && d.includes("SHOPEE"))
+    return { direction: "INCOME", reason: "PENARIKAN_SHOPEE" };
+  if (credit && /TOKOPEDIA|TOKPED/.test(d))
+    return { direction: "INCOME", reason: "PENARIKAN_TOKOPEDIA" };
   return undefined;
 }
 

@@ -334,8 +334,8 @@ export function PaymentsPanel({
                         ]
                       : []),
                   ]}
-                  // Settling is the payout landing: dated now, which is the
-                  // day it reaches the bank's balance.
+                  // Settling is the release into the seller balance: dated
+                  // now (2026-11-13 — the bank moves on a withdrawal).
                   onChange={(v) =>
                     set(p.id, {
                       state: v,
@@ -385,7 +385,7 @@ export function PaymentsPanel({
                           icon={<MinusCircleOutlined />}
                           aria-label={t("pay.addDeduction", "Add a deduction")}
                           title={t("pay.addDeduction", "Add a deduction")}
-                          onClick={() =>
+                          onClick={() => {
                             setFees(p.id, [
                               ...feesOf(p.id),
                               {
@@ -393,8 +393,20 @@ export function PaymentsPanel({
                                 kind: "OTHER",
                                 amount: 0,
                               },
-                            ])
-                          }
+                            ]);
+                            /*
+                             * Knowing the deduction IS the release (owner ask
+                             * 2026-11-13): the platform states what it kept
+                             * when it pays the order into the seller balance.
+                             * So the row reads Settled at once — in this form
+                             * only; nothing is written until Save.
+                             */
+                            if (p.state === "PENDING")
+                              set(p.id, {
+                                state: "SETTLED",
+                                at: new Date().toISOString(),
+                              });
+                          }}
                         />
                       )}
                       <Button

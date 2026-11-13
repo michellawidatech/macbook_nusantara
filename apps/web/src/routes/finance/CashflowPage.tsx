@@ -31,6 +31,16 @@
  * Cash and Bank cards or the two charts. It is a record that the income was
  * voided, not money. Cash basis does not list it, as it lists no DUE row.
  *
+ * ## A marketplace's seller balance (owner ask 2026-11-13)
+ *
+ * A released Shopee or Tokopedia payment is not bank money: it sits in that
+ * channel's seller balance, net of what the platform kept, until staff
+ * withdraw a lump from the platform's site. So those rows move neither the
+ * Cash and Bank cards nor the Latest balance; a *Pending in marketplace* card
+ * per channel holds them, split into awaiting release and in the seller
+ * balance, and a withdrawal (Add adjustment → Income → Shopee withdrawal) is
+ * what moves money into the bank. `lib/marketplacePot.ts` is the rule.
+ *
  * `AdjustmentPanel` still owns the write path: an expense goes into
  * `db.expenses`, an income into `db.incomes`.
  */
@@ -54,6 +64,7 @@ import {
   EyeInvisibleOutlined,
   EyeOutlined,
   PlusOutlined,
+  ShopOutlined,
   WalletOutlined,
 } from "@ant-design/icons";
 import { OpeningBalanceModal } from "./OpeningBalanceModal";
@@ -67,16 +78,24 @@ import {
   fmtNone,
   fmtTime,
 } from "../../lib/format.js";
-import { accountOfMethod } from "../../lib/accounts.js";
 import {
   EXPENSE_KIND_LABEL,
   INCOME_REASON_LABEL,
   balancesOfRows,
   cashflowRows,
   isVoided,
+  movesBalance,
+  potOfRow,
   type CashflowRow,
   type Direction,
 } from "../../lib/cashflowRows.js";
+import {
+  WITHDRAWAL_REASON,
+  marketplacePots,
+  type MarketplacePot,
+} from "../../lib/marketplacePot.js";
+import { channelOf } from "../../lib/channels.js";
+import type { AdjustmentPreset } from "./AdjustmentPanel";
 import { mutate, useDb } from "../../mock/store.js";
 import {
   adjustmentDeletionBlock,
@@ -101,6 +120,8 @@ export function IncomeExpensePage() {
   const { message, modal } = App.useApp();
   const db = useDb();
   const [addAdjustment, setAddAdjustment] = useState(false);
+  /** What Add adjustment opens with — a withdrawal from a pot's card. */
+  const [preset, setPreset] = useState<AdjustmentPreset | undefined>();
   const [openingOpen, setOpeningOpen] = useState(false);
   const [basis, setBasis] = useState<"CASH" | "ACCRUAL">("CASH");
   /** How far back the two charts look (owner ask 2026-10-23). */
@@ -111,10 +132,7 @@ export function IncomeExpensePage() {
    * can open the eye button"*) — the screen is often in view of a customer.
    * Per visit, never remembered.
    */
-  const [reveal, setReveal] = useState<{ cash: boolean; bank: boolean }>({
-    cash: false,
-    bank: false,
-  });
+  const [reveal, setReveal] = useState<Record<string, boolean>>({});
 
   /**
    * Every movement, from every source, reduced to `Row` — the projection
@@ -134,6 +152,9 @@ export function IncomeExpensePage() {
       db.suppliers,
       db.customers,
       db.paymentMethods,
+      db.settlements,
+      db.reservations,
+      db.settings,
       t,
     ],
   );
@@ -238,39 +259,65 @@ export function IncomeExpensePage() {
     const opening =
       (db.settings.openingCash ?? 0) + (db.settings.openingBank ?? 0);
     let running = opening;
-    // The opening figure already holds everything settled before its date.
-    const from = db.settings.openingBalanceAt ?? "";
     const at = new Map<string, number>();
     // `rows` is newest first in the one total order; walk it backwards.
+    // The cards' own rule, so the top row and the two cards agree: settled,
+    // in cash or bank (never a seller balance), from the opening date on.
     for (const r of [...rows].reverse()) {
-      if (
-        r.status === "SETTLED" &&
-        !isVoided(r) &&
-        r.inBalance &&
-        accountOfMethod(r.methodCode) &&
-        r.at >= from
-      )
+      if (movesBalance(r, db.settings) && potOfRow(r) !== undefined)
         running += r.direction === "INCOME" ? r.amount : -r.amount;
       at.set(r.key, running);
     }
     return at;
-  }, [
-    rows,
-    db.settings.openingCash,
-    db.settings.openingBank,
-    db.settings.openingBalanceAt,
-  ]);
+  }, [rows, db.settings]);
 
   /**
    * What is in the drawer and in the bank (owner ask 2026-10-22: *"why can't I
    * see the total cash in bank and the petty cash"*), on the basis the switch
    * says: cash basis is money that moved; accrual adds what is promised — a
-   * marketplace payout still pending counts toward the bank, a customer's
-   * debt toward the pot its method names. From the opening balance on.
+   * customer's debt toward the pot its method names. A marketplace's money is
+   * in neither, pending or released: it is the seller-balance cards' until
+   * a withdrawal moves it (2026-11-13). From the opening balance on.
    */
   const pots = useMemo(
     () => balancesOfRows(rows, db.settings, { accrual: basis === "ACCRUAL" }),
     [rows, basis, db.settings],
+  );
+
+  /**
+   * Each marketplace's seller balance (2026-11-13). Shown only for a channel
+   * the shop has used — an empty Tokopedia card on a shop that never sold
+   * there is a card to read past every morning.
+   */
+  const sellerPots = useMemo(
+    () =>
+      marketplacePots(rows).filter(
+        (p) => p.total !== 0 || p.withdrawn !== 0 || p.awaitingRelease !== 0,
+      ),
+    [rows],
+  );
+
+  /** The hidden-until-asked figure and its eye, shared by every pot card. */
+  const hidden = (which: string, title: string, amount: number) => (
+    <Flex justify="space-between" align="center" gap={SPACE.sm}>
+      <Typography.Text
+        strong
+        style={{ fontSize: TYPE.lg }}
+        data-testid={`pot-${which}`}
+      >
+        {reveal[which] ? fmtRp(amount) : "Rp ••••••"}
+      </Typography.Text>
+      <Button
+        type="text"
+        icon={reveal[which] ? <EyeInvisibleOutlined /> : <EyeOutlined />}
+        aria-label={
+          reveal[which]
+            ? t("cashflow.hideBalance", "Hide {{what}}", { what: title })
+            : t("cashflow.showBalance", "Show {{what}}", { what: title })
+        }
+        onClick={() => setReveal((r) => ({ ...r, [which]: !r[which] }))}
+      />
+    </Flex>
   );
 
   const potCard = (
@@ -279,32 +326,66 @@ export function IncomeExpensePage() {
     icon: React.ReactNode,
   ) => (
     <Card size="small" style={{ flex: "1 1 240px" }}>
-      <Flex justify="space-between" align="center" gap={SPACE.sm}>
-        <Flex vertical gap={0}>
-          <Typography.Text type="secondary">
-            {icon} {title}
-          </Typography.Text>
-          <Typography.Text
-            strong
-            style={{ fontSize: TYPE.lg }}
-            data-testid={`pot-${which}`}
-          >
-            {reveal[which] ? fmtRp(pots[which]) : "Rp ••••••"}
-          </Typography.Text>
-        </Flex>
-        <Button
-          type="text"
-          icon={reveal[which] ? <EyeInvisibleOutlined /> : <EyeOutlined />}
-          aria-label={
-            reveal[which]
-              ? t("cashflow.hideBalance", "Hide {{what}}", { what: title })
-              : t("cashflow.showBalance", "Show {{what}}", { what: title })
-          }
-          onClick={() => setReveal((r) => ({ ...r, [which]: !r[which] }))}
-        />
+      <Flex vertical gap={0}>
+        <Typography.Text type="secondary">
+          {icon} {title}
+        </Typography.Text>
+        {hidden(which, title, pots[which])}
       </Flex>
     </Card>
   );
+
+  const channelName = (c: string) => channelOf(c)?.label ?? c;
+
+  /** One marketplace's seller balance, with the way to withdraw from it. */
+  const sellerCard = (p: MarketplacePot) => {
+    const title = t("cashflow.pendingIn", "Pending in {{channel}}", {
+      channel: channelName(p.channel),
+    });
+    const which = `market-${p.channel}`;
+    return (
+      <Card
+        key={p.channel}
+        size="small"
+        style={{ flex: "1 1 280px" }}
+        data-testid={`seller-pot-${p.channel}`}
+      >
+        <Flex vertical gap={0}>
+          <Flex justify="space-between" align="center" gap={SPACE.sm}>
+            <Typography.Text type="secondary">
+              <ShopOutlined /> {title}
+            </Typography.Text>
+            <Button
+              size="small"
+              onClick={() => {
+                setPreset({
+                  direction: "INCOME",
+                  reason: WITHDRAWAL_REASON[p.channel],
+                  method: "TRANSFER",
+                });
+                setAddAdjustment(true);
+              }}
+            >
+              {t("cashflow.recordWithdrawal", "Record withdrawal")}
+            </Button>
+          </Flex>
+          {hidden(which, title, p.total)}
+          {reveal[which] && (
+            <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+              {t(
+                "cashflow.potSplit",
+                "Awaiting release {{awaiting}} · In seller balance {{held}}",
+                {
+                  awaiting: fmtRp(p.awaitingRelease),
+                  held: fmtRp(p.inSellerBalance),
+                },
+              )}
+            </Typography.Text>
+          )}
+        </Flex>
+      </Card>
+    );
+  };
 
   /*
    * The two charts (owner ask 2026-10-23), off the rows the table shows — so
@@ -349,7 +430,10 @@ export function IncomeExpensePage() {
           label: t("finance.addAdjustment", "Add adjustment"),
           icon: <PlusOutlined />,
           type: "primary",
-          onClick: () => setAddAdjustment(true),
+          onClick: () => {
+            setPreset(undefined);
+            setAddAdjustment(true);
+          },
         },
       ]}
     >
@@ -373,6 +457,7 @@ export function IncomeExpensePage() {
       <Flex gap={SPACE.md} wrap style={{ marginBottom: SPACE.md }}>
         {potCard("cash", t("cashflow.cashPot", "Cash"), <WalletOutlined />)}
         {potCard("bank", t("cashflow.bankPot", "Bank"), <BankOutlined />)}
+        {sellerPots.map(sellerCard)}
       </Flex>
       <Flex gap={SPACE.md} wrap style={{ marginBottom: SPACE.md }}>
         <Card
@@ -566,10 +651,19 @@ export function IncomeExpensePage() {
                       the method belongs to no pot — a transfer from an account
                       this app does not keep. Both mean the same thing on this
                       row, so they say the same word. */}
-                  {!isVoided(r) &&
-                    (!r.inBalance || !accountOfMethod(r.methodCode)) && (
+                  {/* Held by a marketplace, not the bank (2026-11-13). */}
+                  {r.marketplace !== undefined && r.inBalance ? (
+                    <Tag color="gold">
+                      {t("cashflow.inSellerBalance", "In {{channel}} balance", {
+                        channel: channelName(r.marketplace),
+                      })}
+                    </Tag>
+                  ) : (
+                    !isVoided(r) &&
+                    (!r.inBalance || potOfRow(r) === undefined) && (
                       <Tag>{t("cashflow.notInBalance", "Not in balance")}</Tag>
-                    )}
+                    )
+                  )}
                 </span>
               ),
             },
@@ -620,6 +714,7 @@ export function IncomeExpensePage() {
         addOpen={addAdjustment}
         onCloseAdd={() => setAddAdjustment(false)}
         showHistory={false}
+        {...(preset ? { preset } : {})}
       />
       <OpeningBalanceModal
         open={openingOpen}

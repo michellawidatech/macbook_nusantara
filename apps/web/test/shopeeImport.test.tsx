@@ -218,7 +218,9 @@ describe("uploading the seller balance report", () => {
   it("records Shopee's figure, with lines that close on it", async () => {
     const dialog = await upload();
     await userEvent.click(
-      within(dialog).getByRole("button", { name: "Record 2 payout(s)" }),
+      within(dialog).getByRole("button", {
+        name: "Record deductions for 2 sale(s)",
+      }),
     );
     await settle();
 

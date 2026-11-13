@@ -5379,3 +5379,60 @@ describe("a trade-in recorded gross, as nusantara_app (2026-10-31)", () => {
     }
   }, 180_000);
 });
+
+describe("a marketplace's seller balance (2026-11-13)", () => {
+  it("projects the cutoff from AppSetting and commits a withdrawal", async () => {
+    // The demo brings the payment methods a withdrawal names.
+    await loadDemo();
+    // The migration writes the cutoff; `truncateAll` took it, so put it back
+    // the way the migration does.
+    await db.appSetting.upsert({
+      where: { key: "finance.marketplacePotFrom" },
+      update: { value: "2026-11-13T02:00:00.000Z" },
+      create: {
+        key: "finance.marketplacePotFrom",
+        value: "2026-11-13T02:00:00.000Z",
+        updatedAt: NOW,
+      },
+    });
+    const before = decodeStore(
+      (await snapshotStore(db, { staffId: ACTOR })).db as unknown as StoreShape,
+    ) as unknown as { settings: Record<string, unknown> };
+    expect(before.settings["marketplacePotFrom"]).toBe(
+      "2026-11-13T02:00:00.000Z",
+    );
+
+    const withdrawal = {
+      id: "inc-penarikan-shopee",
+      reason: "PENARIKAN_SHOPEE",
+      amount: 5_000_000,
+      date: "2026-11-13",
+      method: "TRANSFER",
+      note: "Tarik dana Shopee",
+    };
+    await commitStore(db, {
+      staffId: ACTOR,
+      changes: encodeChangeset(
+        diffStore(
+          { incomes: [] } as unknown as StoreShape,
+          { incomes: [withdrawal] } as unknown as StoreShape,
+        ),
+      ),
+    });
+    const row = await db.manualIncome.findUniqueOrThrow({
+      where: { id: withdrawal.id },
+      select: { reason: true, amount: true },
+    });
+    expect(row).toEqual({ reason: "PENARIKAN_SHOPEE", amount: 5_000_000n });
+    const after = decodeStore(
+      (await snapshotStore(db, { staffId: ACTOR })).db as unknown as StoreShape,
+    ) as unknown as {
+      settings: Record<string, unknown>;
+      incomes: Record<string, unknown>[];
+    };
+    expect(after.incomes.find((i) => i["id"] === withdrawal.id)).toMatchObject({
+      reason: "PENARIKAN_SHOPEE",
+      amount: 5_000_000,
+    });
+  }, 180_000);
+});

@@ -70,6 +70,17 @@ describe("guessCategory", () => {
       reason: "BANK_TO_CASH",
     });
   });
+  it("reads a marketplace's credit as a seller-balance withdrawal (2026-11-13)", () => {
+    expect(
+      guessCategory("TRSF E-BANKING CR SHOPEE INTERNATIONAL", 5_000_000),
+    ).toEqual({ direction: "INCOME", reason: "PENARIKAN_SHOPEE" });
+    expect(guessCategory("KR OTOMATIS TOKOPEDIA", 2_000_000)).toEqual({
+      direction: "INCOME",
+      reason: "PENARIKAN_TOKOPEDIA",
+    });
+    // Money OUT to Shopee is an ad top-up, not a withdrawal.
+    expect(guessCategory("TRSF DB SHOPEE ADS", -500_000)).toBeUndefined();
+  });
   it("leaves anything else unset", () => {
     expect(guessCategory("TRSF E-BANKING CR BUDI", 750_000)).toBeUndefined();
   });

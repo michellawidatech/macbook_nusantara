@@ -3237,6 +3237,10 @@ enum IncomeReason {
   REFUND
   BUNGA
   SELISIH
+  // Money withdrawn from a marketplace's seller balance into the bank
+  // (2026-11-13). A move between pots, never revenue.
+  PENARIKAN_SHOPEE
+  PENARIKAN_TOKOPEDIA
 }
 
 enum PaymentLogAction {

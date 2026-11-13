@@ -54,7 +54,16 @@
  * in this file is not a mismatch: Shopee has not released it yet, and it sits
  * at the bottom, dimmed.
  *
- * ## What gets recorded
+ * ## What gets recorded — deductions, not money in the bank (2026-11-13)
+ *
+ * > *"When uploading report from shopee, just need to add deduction. They
+ * > only know the deduction of the transaction, but for getting it into bank
+ * > account, they cannot know which transaction."* — owner, 2026-11-13
+ *
+ * Recording a row writes that sale's deductions and RELEASES its payment:
+ * the net is in the Shopee seller balance (`lib/marketplacePot.ts`), not the
+ * bank. Money reaches the bank when somebody records a Shopee withdrawal on
+ * Income & Expense, because that is the only thing the bank statement shows.
  *
  * `payoutRows` (lib/shopeeIncome.ts) does the deciding. On a stated payout the
  * deduction lines always close on Shopee's figure, so the pencil on the
@@ -614,9 +623,11 @@ export function ShopeeSettlementImport({
         reset();
         onClose();
       }}
-      okText={t("shopeeImport.record", "Record {{count}} payout(s)", {
-        count: chosenRows.length,
-      })}
+      okText={t(
+        "shopeeImport.recordDeductions",
+        "Record deductions for {{count}} sale(s)",
+        { count: chosenRows.length },
+      )}
       okButtonProps={{ disabled: chosenRows.length === 0 }}
       onOk={apply}
     >
@@ -647,6 +658,13 @@ export function ShopeeSettlementImport({
             )}
           </p>
         </Upload.Dragger>
+
+        <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
+          {t(
+            "shopeeImport.releaseNote",
+            "Recording a sale's deductions releases it into the Shopee seller balance. Money reaches the bank when you record a Shopee withdrawal on Income & Expense.",
+          )}
+        </Typography.Text>
 
         {error !== null && <Alert type="error" showIcon title={error} />}
 
@@ -791,7 +809,7 @@ export function ShopeeSettlementImport({
                 render: (_: unknown, r: PreviewRow) => arrowCell(r),
               },
               {
-                title: t("shopeeImport.receivable", "Receivable"),
+                title: t("shopeeImport.afterDeductions", "After deductions"),
                 key: "receivable",
                 width: 250,
                 align: "right" as const,
@@ -804,8 +822,8 @@ export function ShopeeSettlementImport({
         {rows.length > 0 && (
           <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
             {t(
-              "shopeeImport.summary",
-              "{{count}} of {{total}} selected · {{amount}} will be recorded as received.",
+              "shopeeImport.summaryReleased",
+              "{{count}} of {{total}} selected · {{amount}} goes into the Shopee seller balance.",
               {
                 count: chosenRows.length,
                 total: rows.filter((r) => r.worked?.recordable).length,

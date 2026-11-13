@@ -12,11 +12,12 @@
  *
  * ## The payment's state is the one switch
  *
- * A payment is PENDING while the platform holds the money and SETTLED once it
- * has landed; that is what the balance reads (`lib/accounts.ts`). Deductions
- * may be typed before the payout arrives (owner answer 2026-10-22: "a
- * Received switch per payment") — the settlement then records what WILL land
- * and the payment stays PENDING until somebody says it landed.
+ * A payment is PENDING while the platform has not released it and SETTLED
+ * once it has (2026-11-13: released into the SELLER BALANCE, not the bank —
+ * `lib/marketplacePot.ts`; the bank moves when a withdrawal is recorded).
+ * Knowing an order's deduction is knowing it was released, so adding one in
+ * Edit transaction settles the payment in the form, and the Shopee upload
+ * settles every payment it records.
  *
  * Mutation bodies: call inside `mutate`.
  */
@@ -42,8 +43,9 @@ export interface PayoutDeps {
 }
 
 /**
- * Record payouts that LANDED (the Shopee upload): each payment PENDING →
- * SETTLED, one settlement and its RECORDED log row. A payment already settled
+ * Record what Shopee RELEASED (the upload): each payment PENDING → SETTLED,
+ * i.e. into the seller balance, with one settlement holding its deductions
+ * and its RECORDED log row. A payment already settled
  * by the time this runs is skipped, and the caller is told how many were.
  */
 export function recordPayouts(
@@ -83,7 +85,7 @@ export function recordPayouts(
       deps.appendEvent(d, serial, {
         type: "DICATAT",
         refCode: o.code,
-        note: `Withdrawal from ${channelOf(channel)?.label ?? channel}: ${fmtRp(s.received)}`,
+        note: `Released into the ${channelOf(channel)?.label ?? channel} balance: ${fmtRp(s.received)}`,
       });
     }
     written += 1;

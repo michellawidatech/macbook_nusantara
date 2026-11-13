@@ -40,6 +40,9 @@ const SETTING_KEYS = {
   // Ignored since 2026-10-27 (the book close is retired); still carried so an
   // existing row loads. `booksClosedUntil` in ../context.ts has why.
   booksClosedAt: "finance.booksClosedAt",
+  // From when a released marketplace payment is in the seller balance, not
+  // the bank (2026-11-13). Written once, by migration 20261113090000.
+  marketplacePotFrom: "finance.marketplacePotFrom",
   shopName: "shop.name",
   shopTagline: "shop.tagline",
   shopAddress: "shop.address",
@@ -87,6 +90,7 @@ export async function projectSettings(tx: Tx): Promise<Settings> {
     openingBank: money(SETTING_KEYS.openingBank),
     openingBalanceAt: text(SETTING_KEYS.openingBalanceAt),
     booksClosedAt: text(SETTING_KEYS.booksClosedAt),
+    marketplacePotFrom: text(SETTING_KEYS.marketplacePotFrom),
     shopName: text(SETTING_KEYS.shopName),
     shopTagline: text(SETTING_KEYS.shopTagline),
     shopAddress: text(SETTING_KEYS.shopAddress),

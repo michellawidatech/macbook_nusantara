@@ -6,11 +6,13 @@
  *
  * Left out of both: money moved between the shop's own pots (`TRANSFER`,
  * either way — counting it would show a cash ↔ bank move as income AND
- * expense) and a row that never passed through the shop's cash or bank
- * (`inBalance` false).
+ * expense), a withdrawal from a marketplace's seller balance (2026-11-13:
+ * the sale it came from is already the income), and a row that never passed
+ * through the shop's cash or bank (`inBalance` false).
  *
  * Pure — the page decides which rows (cash basis or accrual) come in.
  */
+import { isWithdrawalReason } from "./marketplacePot.js";
 
 /** What a chart needs of one of the page's rows. */
 export interface FlowRow {
@@ -21,7 +23,10 @@ export interface FlowRow {
   readonly inBalance: boolean;
 }
 
-const counts = (r: FlowRow) => r.inBalance && r.category !== "TRANSFER";
+const counts = (r: FlowRow) =>
+  r.inBalance &&
+  r.category !== "TRANSFER" &&
+  !(r.direction === "INCOME" && isWithdrawalReason(r.category));
 
 /** One month of the trend. */
 export interface FlowMonth {

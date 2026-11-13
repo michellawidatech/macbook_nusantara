@@ -156,6 +156,10 @@ export const INCOME_REASONS = [
   "REFUND",
   "BUNGA",
   "SELISIH",
+  // Money withdrawn from a marketplace's seller balance into the bank
+  // (2026-11-13). Not revenue — the sale was — only a move between pots.
+  "PENARIKAN_SHOPEE",
+  "PENARIKAN_TOKOPEDIA",
 ] as const;
 export const PAYMENT_LOG_ACTIONS = ["ADDED", "AMENDED", "REMOVED"] as const;
 /**
@@ -299,6 +303,13 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
      * still loads. Nothing writes it and nothing locks by it.
      */
     booksClosedAt: instant.optional(),
+    /**
+     * From when a released marketplace payment sits in that channel's seller
+     * balance rather than the bank (`AppSetting` `finance.marketplacePotFrom`,
+     * 2026-11-13). One settled before it stays bank, as it always was; absent,
+     * the rule applies to every payment.
+     */
+    marketplacePotFrom: instant.optional(),
     shopName: text.optional(),
     shopTagline: text.optional(),
     shopAddress: text.optional(),
