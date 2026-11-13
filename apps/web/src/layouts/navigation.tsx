@@ -27,6 +27,7 @@
 import type { ReactNode } from "react";
 import {
   AppstoreOutlined,
+  CalendarOutlined,
   CommentOutlined,
   DollarOutlined,
   SettingOutlined,
@@ -59,6 +60,15 @@ export interface NavSection {
 }
 
 export const NAV_SECTIONS: readonly NavSection[] = [
+  {
+    // The approver's morning screen (owner ask 2026-11-13): restock, the bank
+    // and whether it is reconciled, requests waiting, and every unit. First,
+    // because it is the first thing read; offered only to `canApprove`.
+    key: "today",
+    label: "Today",
+    icon: <CalendarOutlined />,
+    path: "/today",
+  },
   {
     key: "stock",
     label: "Stock",
@@ -184,13 +194,22 @@ export function isFinancePath(pathname: string): boolean {
   return pathname === "/finance" || pathname.startsWith("/finance/");
 }
 
+/**
+ * Today is the approver's (`Staff.canApprove`, owner ask 2026-11-13). Nobody
+ * else is offered it, and the page refuses anybody else itself.
+ */
+export const TODAY_SECTION_KEY = "today";
+
 /** The sections this person may see. */
 export function navSectionsFor(staff: {
   readonly canViewFinance: boolean;
+  readonly canApprove?: boolean;
 }): readonly NavSection[] {
-  return staff.canViewFinance
-    ? NAV_SECTIONS
-    : NAV_SECTIONS.filter((s) => s.key !== FINANCE_SECTION_KEY);
+  return NAV_SECTIONS.filter(
+    (s) =>
+      (s.key !== FINANCE_SECTION_KEY || staff.canViewFinance) &&
+      (s.key !== TODAY_SECTION_KEY || staff.canApprove === true),
+  );
 }
 
 /**

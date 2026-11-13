@@ -124,6 +124,7 @@ import {
   heldItems,
   isVisit,
   openVisits,
+  productItems,
   reprojectHolds,
   softHolds,
 } from "../../lib/reservations.js";
@@ -809,6 +810,11 @@ export function StockOutPage() {
       (s) => s.id === db.units.find((u) => u.serial === serial)?.skuId,
     );
   const customer = db.customers.find((c) => c.id === customerId);
+  /** A reserved product's name (2026-11-13: a reservation can name one). */
+  const productLine = (skuId: string | undefined) => {
+    const sku = db.skus.find((s) => s.id === skuId);
+    return sku ? `${sku.name} ${sku.variantLabel}`.trim() : fmtNone();
+  };
 
   /**
    * Fill the form from one or more reservations: the units become the lines,
@@ -848,25 +854,43 @@ export function StockOutPage() {
       setReservationPickerOpen(false);
       const who = db.customers.find((c) => c.id === visit.customerId);
       const dp = dpToApply(visit);
+      const wantedProducts = productItems(visit).map((i) =>
+        productLine(i.skuId),
+      );
       message.success(
-        dp
+        wantedProducts.length > 0
           ? t(
-              "pos.loadedDp",
-              "Loaded {{name}} and the DP of {{amount}} from {{code}} — pick the unit(s) off the shelf.",
+              "pos.loadedProducts",
+              "Loaded {{name}} from {{code}} — reserved {{products}}{{dp}}. Pick the unit off the shelf.",
               {
                 name: who ? customerLabel(who) : fmtNone(),
-                amount: fmtRp(dp.amount),
                 code: visit.code,
+                products: wantedProducts.join(", "),
+                dp: dp
+                  ? t("pos.loadedProductsDp", ", DP {{amount}}", {
+                      amount: fmtRp(dp.amount),
+                    })
+                  : "",
               },
             )
-          : t(
-              "pos.loadedFromVisit",
-              "Loaded {{name}} from the visit {{code}}.",
-              {
-                name: who ? customerLabel(who) : fmtNone(),
-                code: visit.code,
-              },
-            ),
+          : dp
+            ? t(
+                "pos.loadedDp",
+                "Loaded {{name}} and the DP of {{amount}} from {{code}} — pick the unit(s) off the shelf.",
+                {
+                  name: who ? customerLabel(who) : fmtNone(),
+                  amount: fmtRp(dp.amount),
+                  code: visit.code,
+                },
+              )
+            : t(
+                "pos.loadedFromVisit",
+                "Loaded {{name}} from the visit {{code}}.",
+                {
+                  name: who ? customerLabel(who) : fmtNone(),
+                  code: visit.code,
+                },
+              ),
       );
       return;
     }
@@ -4625,14 +4649,28 @@ export function StockOutPage() {
               key: "units",
               searchable: true,
               searchValue: (r) =>
-                heldItems(db, r)
-                  .map(
+                [
+                  ...heldItems(db, r).map(
                     (i) =>
                       `${i.serial} ${skuOf(i.serial)?.name ?? ""} ${skuOf(i.serial)?.variantLabel ?? ""}`,
-                  )
-                  .join(" "),
+                  ),
+                  ...productItems(r).map((i) => productLine(i.skuId)),
+                ].join(" "),
               render: (_, r) =>
-                isVisit(r) ? (
+                isVisit(r) && productItems(r).length > 0 ? (
+                  // A reservation of products (2026-11-13): which unit goes
+                  // out is picked off the shelf here.
+                  <Flex vertical gap={2}>
+                    {productItems(r).map((i) => (
+                      <span key={i.id}>
+                        {productLine(i.skuId)}{" "}
+                        <Typography.Text type="secondary">
+                          {t("reservations.anyUnit", "Any unit")}
+                        </Typography.Text>
+                      </span>
+                    ))}
+                  </Flex>
+                ) : isVisit(r) ? (
                   <Tag color="cyan" style={{ marginInline: 0 }}>
                     {t("pos.visit", "Visit")}
                   </Tag>
@@ -4675,7 +4713,7 @@ export function StockOutPage() {
               title: t("pos.dp", "DP"),
               key: "dp",
               render: (_, r) =>
-                isVisit(r) ? (
+                isVisit(r) && !r.dp && productItems(r).length === 0 ? (
                   fmtNone()
                 ) : r.dp ? (
                   <Typography.Text>

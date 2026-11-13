@@ -182,7 +182,7 @@ describe("the switch in the account menu", () => {
 
     expect(screen.getByText("Stok")).toBeInTheDocument();
     // The nav data itself is untouched — it is the catalogue key.
-    expect(NAV_SECTIONS[0]?.label).toBe("Stock");
+    expect(NAV_SECTIONS.find((n) => n.key === "stock")?.label).toBe("Stock");
     // ...and the hamburger's own label followed too.
     expect(
       screen.getByRole("button", { name: "Buka navigasi" }),

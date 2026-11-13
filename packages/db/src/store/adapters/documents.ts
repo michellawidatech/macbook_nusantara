@@ -930,6 +930,51 @@ async function tellSoldOver(
   }
 }
 
+/**
+ * What one reservation item points at: a unit by its serial, or a product by
+ * its variant with no unit (staff's *Add reservation*, 2026-11-13 — the shop
+ * promises "an Air M2 8/256", and which one goes out is picked at the till).
+ */
+async function reservationLine(
+  tx: WriteContext["tx"],
+  reservationId: string,
+  item: { readonly serial?: string; readonly skuId?: string },
+): Promise<{ unitId: string | null; skuId: string }> {
+  if ((item.serial === undefined) === (item.skuId === undefined)) {
+    throw new StoreValidationError(
+      "Item reservasi harus menyebut satu unit atau satu produk.",
+      "reservations",
+      reservationId,
+    );
+  }
+  if (item.serial !== undefined) {
+    const unit = await tx.unit.findFirst({
+      where: { serial: item.serial, archivedAt: null },
+      select: { id: true, skuId: true },
+    });
+    if (unit === null) {
+      throw new StoreValidationError(
+        `Unit ${item.serial} tidak ditemukan.`,
+        "reservations",
+        reservationId,
+      );
+    }
+    return { unitId: unit.id, skuId: unit.skuId };
+  }
+  const sku = await tx.sku.findUnique({
+    where: { id: item.skuId },
+    select: { id: true, archived: true },
+  });
+  if (sku === null || sku.archived) {
+    throw new StoreValidationError(
+      `Produk ${item.skuId} tidak ditemukan.`,
+      "reservations",
+      reservationId,
+    );
+  }
+  return { unitId: null, skuId: sku.id };
+}
+
 export const reservations: Adapter<"reservations"> = {
   collection: "reservations",
   async project(tx, _ctx, keys) {
@@ -938,7 +983,15 @@ export const reservations: Adapter<"reservations"> = {
       orderBy: [{ createdAt: "desc" }, { code: "desc" }],
       include: {
         items: {
-          where: { removedAt: null, unit: { archivedAt: null } },
+          // A product line (no unit, 2026-11-13) is listed beside the units;
+          // an archived unit's line is not.
+          where: {
+            removedAt: null,
+            OR: [
+              { unitId: null, skuId: { not: null } },
+              { unit: { archivedAt: null } },
+            ],
+          },
           orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
           include: { unit: { select: { serial: true } } },
         },
@@ -961,8 +1014,13 @@ export const reservations: Adapter<"reservations"> = {
         when: isoOf(h.scheduledFor ?? h.createdAt),
         note: h.note ?? "",
         sourceId: h.reservationSourceId ?? undefined,
-        items: h.items.flatMap((i) =>
-          i.unit === null ? [] : [{ id: i.id, serial: i.unit.serial }],
+        items: h.items.flatMap(
+          (i): { id: string; serial?: string; skuId?: string }[] =>
+            i.unit !== null
+              ? [{ id: i.id, serial: i.unit.serial }]
+              : i.skuId !== null
+                ? [{ id: i.id, skuId: i.skuId }]
+                : [],
         ),
         status: RESERVATION_STATUS_FROM[h.status],
         heldUntil: optionalIso(h.heldUntil),
@@ -1031,20 +1089,8 @@ export const reservations: Adapter<"reservations"> = {
         });
         const left = new Map(existing.map((i) => [i.id, i]));
         for (const [sortOrder, item] of n.items.entries()) {
-          const unit = await tx.unit.findFirst({
-            where: { serial: item.serial, archivedAt: null },
-            select: { id: true, skuId: true },
-          });
-          if (unit === null) {
-            throw new StoreValidationError(
-              `Unit ${item.serial} tidak ditemukan.`,
-              "reservations",
-              n.id,
-            );
-          }
           const line = {
-            unitId: unit.id,
-            skuId: unit.skuId,
+            ...(await reservationLine(tx, n.id, item)),
             qty: 1,
             sortOrder,
             removedAt: null,

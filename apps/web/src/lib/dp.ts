@@ -30,7 +30,14 @@ import {
 } from "@nusantara/domain";
 import type { AppSettings, MockDb, Reservation } from "../mock/seed.js";
 import type { SalePayment } from "./salePayments.js";
-import { heldItems, itemState, reprojectHolds } from "./reservations.js";
+import {
+  heldItems,
+  isVisit,
+  itemState,
+  productItems,
+  reprojectHolds,
+  unitItems,
+} from "./reservations.js";
 
 /** The rule from Settings, each half defaulting (Rp500.000, 7 days). */
 export function dpRule(
@@ -70,7 +77,10 @@ export function dpStage(
   if (dp.orderId !== undefined) return "APPLIED";
   if (dp.refund !== undefined) return "REFUNDED";
   if (r.status === "CANCELLED") return "KEPT";
-  const held = r.items.some((i) => itemState(db, i, r) === "HELD");
+  // A reservation of products (2026-11-13) holds no unit: its DP holds the
+  // promise until `heldUntil`, and the decision waits past it.
+  const held =
+    isVisit(r) || unitItems(r).some((i) => itemState(db, i, r) === "HELD");
   return held &&
     r.heldUntil !== undefined &&
     new Date(r.heldUntil).getTime() > now.getTime()
@@ -91,8 +101,8 @@ export function dpHeldSerials(
   const out = new Map<string, string>();
   for (const r of db.reservations) {
     if (dpStage(db, r, now) !== "HOLDING") continue;
-    for (const i of r.items) {
-      if (i.serial && itemState(db, i, r) === "HELD") out.set(i.serial, r.id);
+    for (const i of unitItems(r)) {
+      if (itemState(db, i, r) === "HELD") out.set(i.serial, r.id);
     }
   }
   return out;
@@ -124,8 +134,10 @@ export function recordDpBlock(
 ): RecordDpBlock | undefined {
   if (r.status !== "ACTIVE") return "NOT_OPEN";
   if (r.dp !== undefined) return "HAS_DP";
+  // A DP on products (2026-11-13) holds the promise, not a unit.
+  if (productItems(r).length > 0) return undefined;
   if (
-    !r.items.some((i) => {
+    !unitItems(r).some((i) => {
       const s = itemState(db, i, r);
       return s === "SOFT" || s === "HELD";
     })
@@ -162,7 +174,7 @@ export function recordDp(
 ): readonly string[] {
   const r = draft.reservations.find((x) => x.id === reservationId);
   if (r === undefined || recordDpBlock(draft, r) !== undefined) return [];
-  const firm = r.items
+  const firm = unitItems(r)
     .filter((i) => itemState(draft, i, r) === "SOFT")
     .map((i) => i.serial);
   r.dp = {

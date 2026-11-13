@@ -90,6 +90,23 @@
  *   date, the route and the unit count under it — the date was in the title
  *   AND the route beside a full-width box.
  * - A batch nobody named shows its units, not "None".
+ *
+ * ## Add back in stock, and a shorter bench (owner ask 2026-11-13, later)
+ *
+ * > *"I just need a button that says 'Add back in stock'; when they scan, it
+ * > will check if that unit is in Service, they can add fee, and put all back
+ * > in stock. That's it."* — and: *"The table should just be: the batch name,
+ * > total unit, warehouse, cost, and action button."*
+ *
+ * - **Add back in stock** is a page button beside *Add to service*. It opens
+ *   the back dialog EMPTY (`ServiceBatchModal` `bringAll`): every serial
+ *   scanned or typed is checked against the bench, one that is not at service
+ *   says why on its own row, and every unit that is goes back in one press —
+ *   to QC, as every back-from-service does (2026-11-04).
+ * - **The bench is five columns**: Batch name (with when it was sent under
+ *   it — it is what tells two unnamed batches apart), Total units, Warehouse
+ *   (where it is being serviced), Cost and the actions. *From → to* went;
+ *   the popup's heading still says the route.
  */
 import { ServiceBatchModal } from "../../components/ServiceBatchModal";
 import { ServiceChargeModal } from "../../components/ServiceChargeModal";
@@ -189,6 +206,8 @@ export function ServicePage() {
    * unit it lays out as that unit's).
    */
   const [returningBatch, setReturningBatch] = useState<string[] | null>(null);
+  /** *Add back in stock*: the back dialog opened empty, to scan into. */
+  const [addingBack, setAddingBack] = useState<string[] | null>(null);
   /** *Add to service*: the send dialog opened empty, with its list picker. */
   const [adding, setAdding] = useState<string[] | null>(null);
   /** The visits of the batch whose popup is open (ids survive a rename). */
@@ -602,6 +621,12 @@ export function ServicePage() {
           type: "primary",
           onClick: () => setAdding([]),
         },
+        {
+          key: "back",
+          label: t("service.addBackInStock", "Add back in stock"),
+          icon: <InboxOutlined />,
+          onClick: () => setAddingBack([]),
+        },
       ]}
     >
       <Flex vertical gap={SPACE.md}>
@@ -675,7 +700,9 @@ export function ServicePage() {
                 title: t("service.batchTitle", "Batch name"),
                 key: "title",
                 // The name when somebody gave one, and always what is in it —
-                // a column of "None" told nobody which batch was which.
+                // a column of "None" told nobody which batch was which. The
+                // minute it was sent sits under it: it is what tells two
+                // unnamed batches of the same product apart.
                 render: (_, b) => (
                   <Flex vertical gap={0}>
                     {b.title && (
@@ -687,29 +714,33 @@ export function ServicePage() {
                     >
                       {unitsLine(b)}
                     </Typography.Text>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: TYPE.sm }}
+                    >
+                      {t("service.batchSentOn", "Sent {{when}}", {
+                        when: fmtDateTime(b.openedAt),
+                      })}
+                    </Typography.Text>
                   </Flex>
                 ),
               },
               {
-                title: t("service.batchSent", "Sent"),
-                key: "at",
-                width: 170,
-                render: (_, b) => fmtDateTime(b.openedAt),
-              },
-              {
-                title: t("service.batchRoute", "From → to"),
-                key: "route",
-                render: (_, b) => routeOf(b),
-              },
-              {
-                title: t("service.batchUnits", "Units"),
+                title: t("service.batchTotalUnits", "Total units"),
                 key: "n",
                 width: COLUMN.qty,
                 align: "right",
                 render: (_, b) => b.rows.length,
               },
               {
-                title: t("service.charges", "Charges"),
+                // Where the batch is being serviced — where its units are.
+                title: t("service.batchWarehouse", "Warehouse"),
+                key: "warehouse",
+                width: COLUMN.choice,
+                render: (_, b) => warehouseName(b.toLocationId),
+              },
+              {
+                title: t("service.batchCost", "Cost"),
                 key: "cost",
                 width: COLUMN.money,
                 align: "right",
@@ -1074,6 +1105,15 @@ export function ServicePage() {
         zIndex={1100}
         serials={returningBatch}
         onClose={() => setReturningBatch(null)}
+      />
+      {/* Add back in stock (2026-11-13): opened empty, a serial scanned in is
+          checked against the bench and refused on its row when it is not at
+          service; every unit that is goes back with one press. */}
+      <ServiceBatchModal
+        mode="BACK"
+        bringAll
+        serials={addingBack}
+        onClose={() => setAddingBack(null)}
       />
       {/* Add to service (2026-11-10): any unit on a shelf or in QC, typed,
           scanned or chosen from the list, sent as one batch. */}

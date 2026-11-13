@@ -1030,8 +1030,19 @@ export interface ReturnRec {
  */
 export interface ReservationItem {
   id: string;
-  /** `ReservationItem.unitId` in the schema; the serial is how the mock names a unit. */
-  serial: string;
+  /**
+   * `ReservationItem.unitId` in the schema; the serial is how the mock names a
+   * unit. Absent on a PRODUCT line (below).
+   */
+  serial?: string;
+  /**
+   * A product, not a unit (staff's *Add reservation*, owner ask 2026-11-13:
+   * *"unit (can be just name)"*): `ReservationItem.skuId` with no `unitId`.
+   * It holds nothing — which unit goes out is picked at the till — so a
+   * reservation of products only reads as a visit to every unit rule
+   * (`isVisit`, lib/reservations.ts). Exactly one of `serial` and `skuId`.
+   */
+  skuId?: string;
   // No note. A hold's note belongs to the hold and not to one machine on it
   // (owner revision 2026-08-27) — `Reservation.note` above is the one place it
   // is written and the one place it is read. `ReservationItem.note` still

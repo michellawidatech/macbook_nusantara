@@ -4771,6 +4771,73 @@ describe("a DP on a reservation, as nusantara_app (2026-10-27)", () => {
     return { firm, dp };
   }
 
+  it("keeps a PRODUCT line (a variant, no unit) and its DP, and refuses a line naming neither (2026-11-13)", async () => {
+    const shop = await loadDemo();
+    const app = new PrismaClient({ datasourceUrl: asApp() });
+    try {
+      const customer = (shop["customers"] as Row[]).find(
+        (c) => typeof c["phone"] === "string" && c["phone"] !== "",
+      )!;
+      const sku = (shop["skus"] as Row[])[0]!;
+      const hold: Row = {
+        id: "rv_prod_a",
+        code: "RV-2026/11-Tpra1234",
+        customerId: customer["id"],
+        when: NOW.toISOString(),
+        note: "",
+        items: [{ id: "rvi_prod_a", skuId: sku["id"] }],
+        status: "ACTIVE",
+        heldUntil: "2026-09-20T04:00:00.000Z",
+        dp: {
+          id: "dp_prod_a",
+          method: "TRANSFER",
+          amount: 500_000,
+          at: "2026-09-13T04:00:00.000Z",
+        },
+      };
+      const made = await commitAs(
+        app,
+        { reservations: [] },
+        { reservations: [hold] },
+      );
+      expect(made.codes[hold["code"] as string]).toBeDefined();
+      const line = await db.reservationItem.findUniqueOrThrow({
+        where: { id: "rvi_prod_a" },
+      });
+      expect(line).toMatchObject({ unitId: null, skuId: sku["id"], qty: 1 });
+      const pay = await db.payment.findUniqueOrThrow({
+        where: { id: "dp_prod_a" },
+      });
+      expect(pay).toMatchObject({
+        reservationId: "rv_prod_a",
+        orderId: null,
+        amount: 500_000n,
+        direction: "MASUK",
+      });
+      const projected = (
+        (await snapshotStore(db, { staffId: ACTOR })).db[
+          "reservations"
+        ] as Row[]
+      ).find((r) => r["id"] === "rv_prod_a")!;
+      expect(projected["items"]).toEqual([
+        { id: "rvi_prod_a", skuId: sku["id"] },
+      ]);
+
+      const { dp: _dp, heldUntil: _until, ...unpaid } = hold;
+      const bad: Row = {
+        ...unpaid,
+        id: "rv_prod_bad",
+        code: "RV-2026/11-Tprb9999",
+        items: [{ id: "rvi_prod_bad" }],
+      };
+      await expect(
+        commitAs(app, { reservations: [] }, { reservations: [bad] }),
+      ).rejects.toBeInstanceOf(StoreValidationError);
+    } finally {
+      await app.$disconnect();
+    }
+  }, 180_000);
+
   it("is written against the reservation alone, holds the unit, and the sale takes the same payment", async () => {
     const shop = await loadDemo();
     const app = new PrismaClient({ datasourceUrl: asApp() });
