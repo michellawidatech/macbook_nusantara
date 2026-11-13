@@ -8,6 +8,8 @@
  * - **Statement** — click a line and the transactions behind it are listed on
  *   the right.
  * - **Profit per unit** — per product, what one piece made on average.
+ * - **Profit per invoice** (2026-11-13) — each sale's revenue, cost, profit
+ *   and margin; its number opens the faktur (`InvoiceModal`).
  * - **By month** — twelve months of revenue, gross and net profit, as a graph
  *   and a table.
  *
@@ -27,18 +29,21 @@ import {
   Segmented,
   Table,
   Tabs,
+  Button,
   Typography,
   theme,
 } from "antd";
 import { DownloadOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 import { useTranslation } from "react-i18next";
+import { InvoiceModal } from "../../components/Invoice";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { TimeSeriesChart } from "../../components/TimeSeriesChart";
 import { useDb } from "../../mock/store.js";
 import { fmtDate, fmtRp } from "../../lib/format.js";
 import {
+  invoiceProfits,
   monthPeriod,
   monthlyProfitLoss,
   profitLoss,
@@ -47,6 +52,7 @@ import {
   type PnlItem,
   type PnlLine,
   type ProfitLoss,
+  type InvoiceProfitRow,
   type UnitProfitRow,
 } from "../../lib/profitLoss.js";
 import {
@@ -67,7 +73,7 @@ const fmtShort = (n: number): string =>
     : fmtRp(n);
 
 type Mode = "month" | "range";
-type Tab = "statement" | "units" | "months";
+type Tab = "statement" | "units" | "invoices" | "months";
 
 /** One printed row of the statement — on screen and in the export alike. */
 interface Row {
@@ -88,6 +94,8 @@ export function ProfitLossPage() {
   const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  /** The sale whose faktur is open, from the per-invoice tab. */
+  const [invoiceOf, setInvoiceOf] = useState<string | null>(null);
 
   const period: Period = useMemo(() => {
     if (mode === "range" && range !== null)
@@ -100,6 +108,9 @@ export function ProfitLossPage() {
 
   const report = useMemo(() => profitLoss(db, period), [db, period]);
   const perUnit = useMemo(() => unitProfits(db, period), [db, period]);
+  const perInvoice = useMemo(() => invoiceProfits(db, period), [db, period]);
+  const invoiceOrder =
+    invoiceOf === null ? undefined : db.orders.find((o) => o.id === invoiceOf);
   // Twelve months ending with the one the period ends in.
   const months = useMemo(
     () => monthlyProfitLoss(db, new Date(period.until.getTime() - 1), 12),
@@ -451,6 +462,93 @@ export function ProfitLossPage() {
     />
   );
 
+  const invoicesTab = (
+    <ProTable<InvoiceProfitRow>
+      lazy
+      persistKey="pnl.perInvoice"
+      rowKey="orderId"
+      dataSource={perInvoice}
+      searchPlaceholder={t(
+        "pnl.searchInvoice",
+        "Search a transaction number or a customer",
+      )}
+      locale={{
+        emptyText: t("pnl.noSales", "No sale was recorded in this period."),
+      }}
+      columns={[
+        {
+          title: t("pnl.transactionNumber", "Transaction number"),
+          key: "code",
+          width: COLUMN.code,
+          searchable: true,
+          searchValue: (r) => r.code,
+          sortValue: (r) => r.code,
+          render: (_, r) => (
+            <Button
+              type="link"
+              size="small"
+              style={{ paddingInline: 0 }}
+              aria-label={t("pnl.openInvoice", "Open the invoice {{code}}", {
+                code: r.code,
+              })}
+              onClick={() => setInvoiceOf(r.orderId)}
+            >
+              {r.code}
+            </Button>
+          ),
+        },
+        {
+          title: t("pnl.date", "Date"),
+          key: "at",
+          width: COLUMN.date,
+          defaultSortOrder: "descend",
+          sortValue: (r) => Date.parse(r.at),
+          render: (_, r) => fmtDate(r.at),
+        },
+        {
+          title: t("pnl.customer", "Customer"),
+          key: "customer",
+          searchable: true,
+          searchValue: (r) => r.customer,
+          sortValue: (r) => r.customer,
+          render: (_, r) => r.customer || t("pnl.walkIn", "Walk-in customer"),
+        },
+        {
+          title: t("pnl.revenue", "Revenue"),
+          key: "revenue",
+          align: "right",
+          width: COLUMN.money,
+          sortValue: (r) => r.revenue,
+          render: (_, r) => fmtRp(r.revenue),
+        },
+        {
+          title: t("pnl.cogsShort", "COGS"),
+          key: "cost",
+          align: "right",
+          width: COLUMN.money,
+          sortValue: (r) => r.cost,
+          render: (_, r) => fmtRp(r.cost),
+        },
+        {
+          title: t("pnl.profit", "Profit"),
+          key: "profit",
+          align: "right",
+          width: COLUMN.money,
+          sortValue: (r) => r.profit,
+          render: (_, r) => <strong>{fmtPnl(r.profit)}</strong>,
+        },
+        {
+          title: t("pnl.margin", "Margin"),
+          key: "margin",
+          align: "right",
+          width: COLUMN.qty,
+          sortValue: (r) => r.margin,
+          render: (_, r) => `${(r.margin * 100).toFixed(1)}%`,
+        },
+      ]}
+    />
+  );
+
   const monthsTab = (
     <Flex vertical gap={SPACE.md}>
       <Card>
@@ -541,6 +639,11 @@ export function ProfitLossPage() {
               children: unitsTab,
             },
             {
+              key: "invoices",
+              label: t("pnl.tabInvoices", "Profit per invoice"),
+              children: invoicesTab,
+            },
+            {
               key: "months",
               label: t("pnl.tabMonths", "By month"),
               children: monthsTab,
@@ -548,6 +651,12 @@ export function ProfitLossPage() {
           ]}
         />
       </Flex>
+      <InvoiceModal
+        db={db}
+        {...(invoiceOrder ? { order: invoiceOrder } : {})}
+        open={invoiceOrder !== undefined}
+        onClose={() => setInvoiceOf(null)}
+      />
       <ExportDialog
         open={exporting}
         onClose={() => setExporting(false)}

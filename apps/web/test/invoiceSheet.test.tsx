@@ -3,6 +3,8 @@
  * carries no text the shop has not written: no warranty paragraph, no
  * payment-method lines, no unit description.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import {
@@ -84,5 +86,19 @@ describe("InvoiceSheet", () => {
     expect(text).not.toContain(db.settings.shopContact!);
     expect(text).not.toContain(unit.description);
     expect(text).toContain(unit.serial);
+  });
+});
+
+describe("the faktur's paper", () => {
+  it("is A4 turned on its side (owner ask 2026-11-13)", () => {
+    const css = readFileSync(
+      join(import.meta.dirname, "..", "src", "styles", "global.css"),
+      "utf8",
+    );
+    // The one page rule the faktur prints under — the labels print from a
+    // frame of their own and never read it.
+    const pages = [...css.matchAll(/@page\s*\{([^}]*)\}/g)].map((m) => m[1]!);
+    expect(pages).toHaveLength(1);
+    expect(pages[0]).toMatch(/size:\s*A4 landscape/);
   });
 });

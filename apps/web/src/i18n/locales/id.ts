@@ -5319,4 +5319,36 @@ export const id: Record<string, string> = {
   "serviceBatch.repairCostOf": "Biaya perbaikan {{serial}}",
   "serviceBatch.repairCostHint": "0 kalau gratis",
   "serviceBatch.repairPaidWith": "Perbaikan dibayar dengan",
+
+  // ── 2026-11-13: the marketplace pot, the per-invoice profit, the export
+  //    that follows the filters (Part A). ──
+  "cashflow.pendingIn": "Tertahan di {{channel}}",
+  "cashflow.recordWithdrawal": "Catat penarikan",
+  "cashflow.potSplit":
+    "Menunggu dilepas {{awaiting}} · Di saldo penjual {{held}}",
+  "cashflow.inSellerBalance": "Di saldo {{channel}}",
+  "adjust.sellerBalanceNow":
+    "Di saldo penjual {{channel}} sekarang: {{amount}}.",
+  "Shopee withdrawal": "Penarikan Shopee",
+  "Tokopedia withdrawal": "Penarikan Tokopedia",
+  "Money moved from the Shopee seller balance to the bank. Not revenue — the sales were.":
+    "Uang yang dipindahkan dari saldo penjual Shopee ke bank. Bukan pendapatan — penjualannya yang pendapatan.",
+  "Money moved from the Tokopedia seller balance to the bank. Not revenue — the sales were.":
+    "Uang yang dipindahkan dari saldo penjual Tokopedia ke bank. Bukan pendapatan — penjualannya yang pendapatan.",
+  "shopeeImport.recordDeductions": "Catat potongan untuk {{count}} penjualan",
+  "shopeeImport.releaseNote":
+    "Mencatat potongan sebuah penjualan berarti dananya sudah dilepas ke saldo penjual Shopee. Uang baru masuk bank saat Anda mencatat penarikan Shopee di Pemasukan & Pengeluaran.",
+  "shopeeImport.afterDeductions": "Setelah potongan",
+  "shopeeImport.summaryReleased":
+    "{{count}} dari {{total}} dipilih · {{amount}} masuk ke saldo penjual Shopee.",
+  "piutang.deductionsRecorded":
+    "Potongan dicatat pada {{count}} penjualan — {{amount}} masuk ke saldo penjual Shopee.",
+  "transactions.exportShown": "Ekspor {{count}} yang tampil",
+  "pnl.tabInvoices": "Laba per invoice",
+  "pnl.searchInvoice": "Cari nomor transaksi atau pelanggan",
+  "pnl.transactionNumber": "Nomor transaksi",
+  "pnl.openInvoice": "Buka invoice {{code}}",
+  "pnl.customer": "Pelanggan",
+  "pnl.walkIn": "Pelanggan umum",
+  "pnl.cogsShort": "HPP",
 };

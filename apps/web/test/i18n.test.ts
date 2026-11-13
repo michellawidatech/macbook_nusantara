@@ -129,6 +129,11 @@ describe("catalogue", () => {
       // The bank / marketplace fee category and its guide (2026-10-27).
       "Bank / marketplace fee",
       "Admin charges, transfer fees and what a marketplace kept.",
+      // mock/seed.ts INCOME_REASONS — a marketplace withdrawal (2026-11-13).
+      "Shopee withdrawal",
+      "Tokopedia withdrawal",
+      "Money moved from the Shopee seller balance to the bank. Not revenue — the sales were.",
+      "Money moved from the Tokopedia seller balance to the bank. Not revenue — the sales were.",
     ];
     const untranslated = englishKeyed.filter(
       (key) => typeof CATALOGUES.id[key] !== "string",

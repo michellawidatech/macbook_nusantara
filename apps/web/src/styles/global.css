@@ -142,9 +142,15 @@ body {
     page-break-inside: avoid;
   }
 
+  /*
+   * The faktur prints LANDSCAPE (owner ask 2026-11-13: "the invoice needs to
+   * be rotated 90 degrees"). The sheet is a wide table — No · Perincian · Qty
+   * · Harga · Diskon · Jumlah — and the extra width goes to Perincian, so a
+   * product name and its serial sit on one line instead of wrapping.
+   */
   @page {
-    size: A4 portrait;
-    margin: 12mm;
+    size: A4 landscape;
+    margin: 10mm;
   }
 
   /*

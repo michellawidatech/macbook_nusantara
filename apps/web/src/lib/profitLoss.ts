@@ -29,12 +29,18 @@
  *   would take it off twice.
  * - The trade-in allowance: it buys a unit, it is not a discount.
  * - Opening balances and debt payments.
+ * - A withdrawal from a marketplace's seller balance (`PENARIKAN_SHOPEE`,
+ *   `PENARIKAN_TOKOPEDIA`, 2026-11-13): money moving from Shopee's pot to the
+ *   bank — the sale it came from is the revenue. No line below reads those
+ *   reasons, and `test/marketplacePot.test.ts` holds that.
  *
  * Pure: no React, no store — a test reads the arithmetic.
  */
 import type { MockDb } from "../mock/seed.js";
 import { customerLabel } from "./customers.js";
 import { keptDps } from "./dp.js";
+import { billAfterReturns } from "./salePayments.js";
+import { returnedSerials } from "./saleStatus.js";
 import { costIndex } from "./service.js";
 import { lineCost } from "./stock.js";
 
@@ -549,4 +555,70 @@ export function unitProfits(db: MockDb, p: Period): UnitProfitRow[] {
       };
     })
     .sort((a, b) => b.profit - a.profit);
+}
+
+/** What one sale made (owner ask 2026-11-13: profit per invoice). */
+export interface InvoiceProfitRow {
+  readonly orderId: string;
+  readonly code: string;
+  /** When it was sold, ISO. */
+  readonly at: string;
+  /** The customer's label, or "" for a walk-in. */
+  readonly customer: string;
+  /** What the sale is worth now: its bill after returns (`billAfterReturns`). */
+  readonly revenue: number;
+  /** What the pieces still sold cost (`costOfUnit`, `lineCost`). */
+  readonly cost: number;
+  readonly profit: number;
+  /** `profit / revenue`, 0–1; 0 when the sale is worth nothing now. */
+  readonly margin: number;
+}
+
+/**
+ * Profit per invoice, for the sales made in a period — the Statement's
+ * Revenue less its Cost of units sold, one sale at a time.
+ *
+ * Revenue is the bill: the goods at what they sold for, less the discount
+ * code, plus the sale's charges — less what a return took off it (the RETUR
+ * adjustments, `billAfterReturns`). Cost is what every piece cost, less the
+ * pieces a customer brought back on THIS receipt (a unit sold, returned and
+ * sold again costs the second sale, not the first). What a marketplace kept
+ * stays an operating cost on the Statement and is not taken off here, as it
+ * is not taken off the gross profit there.
+ */
+export function invoiceProfits(db: MockDb, p: Period): InvoiceProfitRow[] {
+  const cost = costIndex(db);
+  const unitOf = new Map(db.units.map((u) => [u.serial, u]));
+  const customers = new Map(db.customers.map((c) => [c.id, c]));
+  const sales = db.orders.filter((o) => within(o.ts, p));
+  const back = returnedSerials(sales, db.events);
+  return sales
+    .map((o) => {
+      const returned = back.get(o.id);
+      let spent = 0;
+      for (const s of o.serials) {
+        if (returned?.has(s) === true) continue;
+        const u = unitOf.get(s);
+        spent += u === undefined ? 0 : cost(u).total;
+      }
+      for (const l of o.lines ?? []) {
+        const whole = lineCost(db.stockMoves, l.id);
+        const kept = Math.max(0, l.qty - (l.returnedQty ?? 0));
+        spent += l.qty === 0 ? 0 : Math.round((whole * kept) / l.qty);
+      }
+      const revenue = billAfterReturns(o);
+      const profit = revenue - spent;
+      const who = o.customerId ? customers.get(o.customerId) : undefined;
+      return {
+        orderId: o.id,
+        code: o.code,
+        at: o.ts,
+        customer: who ? customerLabel(who) : "",
+        revenue,
+        cost: spent,
+        profit,
+        margin: revenue === 0 ? 0 : profit / revenue,
+      };
+    })
+    .sort((a, b) => b.at.localeCompare(a.at));
 }

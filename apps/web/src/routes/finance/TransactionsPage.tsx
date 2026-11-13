@@ -592,7 +592,7 @@ export function TransactionsPage() {
               "Search an order, reference, serial, product or customer",
             )}
             selectable
-            extra={
+            extra={(_, shown) => (
               <Flex gap={SPACE.sm} wrap>
                 <Button
                   icon={<UploadOutlined />}
@@ -600,14 +600,21 @@ export function TransactionsPage() {
                 >
                   {t("piutang.uploadShopee", "Upload a Shopee report")}
                 </Button>
+                {/* What the list shows — its search, filters and sort — not
+                    every sale ever made (owner ask 2026-11-13). */}
                 <Button
                   icon={<DownloadOutlined />}
-                  onClick={() => exportCsv(sales)}
+                  disabled={shown.length === 0}
+                  onClick={() => exportCsv(shown)}
                 >
-                  {t("transactions.exportAll", "Export all")}
+                  {shown.length === sales.length
+                    ? t("transactions.exportAll", "Export all")
+                    : t("transactions.exportShown", "Export {{count}} shown", {
+                        count: shown.length,
+                      })}
                 </Button>
               </Flex>
-            }
+            )}
             bulkActions={(selected, clear) => {
               const received = selected.reduce((n, r) => n + netReceived(r), 0);
               const billed = selected.reduce((n, r) => n + r.balance.total, 0);
@@ -984,8 +991,8 @@ export function TransactionsPage() {
           });
           message.success(
             t(
-              "piutang.imported",
-              "{{count}} payout(s) recorded — {{amount}}.",
+              "piutang.deductionsRecorded",
+              "Deductions recorded on {{count}} sale(s) — {{amount}} into the Shopee seller balance.",
               { count: done.written, amount: fmtRp(done.landed) },
             ),
           );

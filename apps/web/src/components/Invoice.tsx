@@ -40,6 +40,16 @@
  * is that exactly one `.invoice-print-root` may be mounted at a time — which is
  * why this lives inside a modal that only ever shows one sale.
  *
+ * ## A4 landscape (owner ask 2026-11-13)
+ *
+ * The sheet prints on A4 turned 90° (`@page` in global.css). B2Soft's own
+ * layout is a wide one — the items table spans the page and the foot's six
+ * figures sit under its right-hand columns — so the landscape page widens
+ * Perincian, which keeps a product name and its serial on one line, and the
+ * shop and *Kepada Yth.* blocks get the room a long address needs. The
+ * preview below is drawn at the page's width, so what is on screen is what
+ * comes off the printer, near enough.
+ *
  * Money is read from the ORDER, never recomputed from today's prices: a unit's
  * price can be edited after the sale, and a receipt that changes retroactively
  * is not a receipt.
@@ -267,7 +277,7 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
             </div>
           ))}
         </div>
-        <div style={{ minWidth: 260 }}>
+        <div style={{ minWidth: 340 }}>
           <div>
             {new Date(order.ts).toLocaleDateString("id-ID", {
               day: "numeric",
@@ -277,7 +287,7 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
           </div>
           <div>Kepada Yth,</div>
           <div style={{ fontSize: 14, fontWeight: 700 }}>{to.name}</div>
-          {to.address && <div style={{ maxWidth: 300 }}>{to.address}</div>}
+          {to.address && <div style={{ maxWidth: 460 }}>{to.address}</div>}
         </div>
       </div>
 
@@ -303,10 +313,10 @@ export function InvoiceSheet({ db, order }: InvoiceProps) {
           <tr style={{ borderTop: rule, borderBottom: rule }}>
             <th style={{ ...cell, width: 28, textAlign: "left" }}>No</th>
             <th style={{ ...cell, textAlign: "left" }}>Perincian</th>
-            <th style={{ ...cell, ...num, width: 48 }}>Qty</th>
-            <th style={{ ...cell, ...num, width: 110 }}>Harga</th>
-            <th style={{ ...cell, ...num, width: 90 }}>Diskon</th>
-            <th style={{ ...cell, ...num, width: 110 }}>Jumlah</th>
+            <th style={{ ...cell, ...num, width: 56 }}>Qty</th>
+            <th style={{ ...cell, ...num, width: 140 }}>Harga</th>
+            <th style={{ ...cell, ...num, width: 120 }}>Diskon</th>
+            <th style={{ ...cell, ...num, width: 140 }}>Jumlah</th>
           </tr>
         </thead>
         <tbody>
@@ -420,7 +430,8 @@ export function InvoiceModal({
       title={order ? `Invoice ${order.code}` : "Invoice"}
       open={open && Boolean(db && order)}
       onCancel={onClose}
-      width={820}
+      // An A4 page on its side — 297 × 210 — so the preview is the paper.
+      width={1120}
       // `.no-print` so the buttons do not appear as a grey strip on the paper.
       classNames={{ footer: "no-print", header: "no-print" }}
       footer={[
@@ -444,6 +455,7 @@ export function InvoiceModal({
       )}
       {db && order && (
         <div
+          data-testid="invoice-preview"
           style={{
             border: "1px solid #d9d9d9",
             borderRadius: 4,

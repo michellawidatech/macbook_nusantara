@@ -138,9 +138,12 @@ export interface ProTableProps<T> extends Omit<
    * Right-hand side of the toolbar — a primary action, a count, a segmented
    * view switch. A function is handed what is currently ticked, which is how
    * Payable and Receivable put the SELECTED total beside *Add payment*
-   * (owner ask 2026-09-24) rather than always the whole page's.
+   * (owner ask 2026-09-24) rather than always the whole page's. Its second
+   * argument is what the list shows after the search, filters and sort — the
+   * rows an export of "this page" writes (owner ask 2026-11-13: *"it should
+   * follow the filter in the page"*).
    */
-  extra?: ReactNode | ((selected: T[]) => ReactNode);
+  extra?: ReactNode | ((selected: T[], shown: readonly T[]) => ReactNode);
   /** Turn on row selection. Wide viewports only; see this file's docblock. */
   selectable?: boolean;
   /**
@@ -757,7 +760,7 @@ export function ProTable<T extends object>({
               gap={SPACE.sm}
               style={compact ? undefined : { marginLeft: "auto" }}
             >
-              {typeof extra === "function" ? extra(selected) : extra}
+              {typeof extra === "function" ? extra(selected, rows) : extra}
             </Flex>
           )}
         </Flex>
