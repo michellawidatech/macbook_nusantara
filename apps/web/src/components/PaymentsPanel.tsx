@@ -16,6 +16,15 @@
  * The due date is the one thing the shortfall cannot work out for itself, so
  * it is asked for below the table and only while something is owed.
  *
+ * ## No status column (owner, 2026-11-13)
+ *
+ * The Status column (Pending / Settled) went: a Shopee or Tokopedia payment is
+ * in that marketplace's BALANCE from the sale (`lib/marketplacePot.ts`), so
+ * there is nothing to mark received, and every other method was only ever
+ * Settled. A marketplace row is its method, its reference, its amount and its
+ * deductions. The stored state is left as the till writes it (PENDING for a
+ * marketplace part) and no screen reads it.
+ *
  * The methods are the till's four, and a marketplace row carries the
  * marketplace's own order number beneath it — that is the key a payout is
  * matched on. A row recorded through anything else keeps its own label rather
@@ -52,7 +61,6 @@ import {
   enteredPayments,
   owedDueAt,
   withOwed,
-  type PaymentState,
   type SalePayment,
 } from "../lib/salePayments.js";
 import { COLUMN, SPACE, TYPE } from "../theme/tokens";
@@ -144,9 +152,10 @@ export function PaymentsPanel({
     set(p.id, {
       method: def.code,
       channel: def.channel,
-      // Only a marketplace can be holding money. Cash in a drawer is either
-      // there or it is not.
-      state: def.channel === undefined ? "SETTLED" : p.state,
+      // A marketplace part is stored as the till writes one; cash or a
+      // transfer is simply settled. No screen shows the difference
+      // (2026-11-13) — the method and its channel decide where money is.
+      state: def.channel === undefined ? "SETTLED" : "PENDING",
       ...(def.channel === undefined ? { ref: undefined } : {}),
     });
   };
@@ -245,12 +254,15 @@ export function PaymentsPanel({
                         style={{ fontSize: TYPE.sm }}
                       >
                         {t(
-                          "pay.payoutLands",
-                          "{{amount}} − {{kept}} deducted = {{received}} received",
+                          "pay.netToBalance",
+                          "{{amount}} − {{kept}} deducted = {{net}} to the {{channel}} balance",
                           {
                             amount: fmtRp(p.amount),
                             kept: fmtRp(kept),
-                            received: fmtRp(p.amount - kept),
+                            net: fmtRp(p.amount - kept),
+                            channel: methodLabel(
+                              tillMethodOfPayment(p) ?? "SHOPEE",
+                            ),
                           },
                         )}
                       </Typography.Text>
@@ -311,44 +323,6 @@ export function PaymentsPanel({
             },
           },
           {
-            title: t("pay.status", "Status"),
-            key: "status",
-            width: COLUMN.choice,
-            render: (_, p) => {
-              const marketplace = p.channel !== undefined;
-              return (
-                <Select<PaymentState>
-                  size="small"
-                  style={{ width: "100%" }}
-                  disabled={disabled || readOnly || !marketplace}
-                  value={p.state === "DUE" ? "SETTLED" : p.state}
-                  aria-label={t("pay.stateFor", "State of this payment")}
-                  options={[
-                    { value: "SETTLED", label: t("pay.settled", "Settled") },
-                    ...(marketplace
-                      ? [
-                          {
-                            value: "PENDING" as PaymentState,
-                            label: t("pay.pending", "Pending"),
-                          },
-                        ]
-                      : []),
-                  ]}
-                  // Settling is the release into the seller balance: dated
-                  // now (2026-11-13 — the bank moves on a withdrawal).
-                  onChange={(v) =>
-                    set(p.id, {
-                      state: v,
-                      ...(v === "SETTLED" && p.state === "PENDING"
-                        ? { at: new Date().toISOString() }
-                        : {}),
-                    })
-                  }
-                />
-              );
-            },
-          },
-          {
             title: t("pay.amount", "Amount"),
             key: "amount",
             width: COLUMN.money,
@@ -385,7 +359,7 @@ export function PaymentsPanel({
                           icon={<MinusCircleOutlined />}
                           aria-label={t("pay.addDeduction", "Add a deduction")}
                           title={t("pay.addDeduction", "Add a deduction")}
-                          onClick={() => {
+                          onClick={() =>
                             setFees(p.id, [
                               ...feesOf(p.id),
                               {
@@ -393,20 +367,8 @@ export function PaymentsPanel({
                                 kind: "OTHER",
                                 amount: 0,
                               },
-                            ]);
-                            /*
-                             * Knowing the deduction IS the release (owner ask
-                             * 2026-11-13): the platform states what it kept
-                             * when it pays the order into the seller balance.
-                             * So the row reads Settled at once — in this form
-                             * only; nothing is written until Save.
-                             */
-                            if (p.state === "PENDING")
-                              set(p.id, {
-                                state: "SETTLED",
-                                at: new Date().toISOString(),
-                              });
-                          }}
+                            ])
+                          }
                         />
                       )}
                       <Button

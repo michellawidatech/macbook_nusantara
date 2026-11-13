@@ -97,7 +97,8 @@ describe("the order column", () => {
     expect(screen.queryByText(/OFFLINE|WHATSAPP|INSTAGRAM|SHOPEE/)).toBeNull();
     expect(screen.getAllByText(/In store/).length).toBeGreaterThan(0);
     expect(
-      within(saleCard(seedCode("000204"))).getByText(/Shopee/),
+      // Exactly the label: the payment status names the Shopee balance too.
+      within(saleCard(seedCode("000204"))).getByText("Shopee"),
     ).toBeInTheDocument();
   });
 
@@ -126,7 +127,10 @@ describe("the order column", () => {
     // under the SI code.
     const card = saleCard("SI-TEST-REF");
     expect(within(card).getByText("INV/20260918/MPL/4411")).toBeInTheDocument();
-    expect(within(card).getByText(/Tokopedia/)).toBeInTheDocument();
+    expect(within(card).getByText("Tokopedia")).toBeInTheDocument();
+    expect(
+      within(card).getByText("Paid · Tokopedia balance"),
+    ).toBeInTheDocument();
   });
 });
 
@@ -162,14 +166,21 @@ describe("the payment status", () => {
     expect(within(owed).getByText(fmtRp(0))).toBeInTheDocument();
   });
 
-  it("says a marketplace holds the money when the customer has paid it all", async () => {
+  it("reads a sale paid into the Shopee balance as paid (2026-11-13)", async () => {
     renderPage();
     await settle();
 
-    // Rp5jt cash and the rest on Shopee PayLater: paid, not all received.
+    // Rp5jt cash and the rest on Shopee PayLater: paid in full, the Shopee
+    // part in the Shopee balance — and counted as received.
     const split = saleCard(seedCode("000203"));
-    expect(within(split).getByText("With a marketplace")).toBeInTheDocument();
-    expect(within(split).getByText(fmtRp(5_000_000))).toBeInTheDocument();
+    const order = getDb().orders.find((o) => o.code === seedCode("000203"))!;
+    expect(
+      within(split).getByText("Paid · Shopee balance"),
+    ).toBeInTheDocument();
+    expect(within(split).getByText(fmtRp(order.total))).toBeInTheDocument();
+    expect(
+      within(split).getByText("To the Shopee balance"),
+    ).toBeInTheDocument();
 
     const settled = saleCard(seedCode("000201"));
     expect(within(settled).getByText("Settled")).toBeInTheDocument();

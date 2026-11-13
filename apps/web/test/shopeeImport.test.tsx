@@ -77,9 +77,9 @@ beforeEach(() => {
     d.orders = d.orders.filter(
       (o) =>
         !SALES.some((s) => s.id === o.id) &&
-        !paymentsOf(o).some(
-          (p) => p.state === "PENDING" && (p.channel ?? o.source) === "SHOPEE",
-        ),
+        // Every Shopee payment with no deductions recorded is offered
+        // (2026-11-13), whatever state it is stored in.
+        !paymentsOf(o).some((p) => (p.channel ?? o.source) === "SHOPEE"),
     );
     d.settlements = [];
     d.settlementLog = [];
@@ -248,10 +248,12 @@ describe("uploading the seller balance report", () => {
       written.find((s) => s.orderId === "o-shp-3")!.fees.map((f) => f.label),
     ).not.toContain("Biaya Lainnya");
 
-    // The payments moved; the compensated sale is still waiting.
-    const state = (id: string) =>
-      paymentsOf(getDb().orders.find((o) => o.id === id)!)[0]!.state;
-    expect(state("o-shp-1")).toBe("SETTLED");
-    expect(state("o-shp-2")).toBe("PENDING");
+    // Only deductions are recorded (2026-11-13): no payment is marked
+    // received, and each keeps the state and the day its sale wrote.
+    const pay = (id: string) =>
+      paymentsOf(getDb().orders.find((o) => o.id === id)!)[0]!;
+    expect(pay("o-shp-1").state).toBe("PENDING");
+    expect(pay("o-shp-1").at).toBe("2026-09-15T03:00:00.000Z");
+    expect(written.some((s) => s.orderId === "o-shp-2")).toBe(false);
   });
 });

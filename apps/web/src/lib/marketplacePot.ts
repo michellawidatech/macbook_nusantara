@@ -10,18 +10,26 @@
  * > transaction, can add income from shopee, which will minus the 'Pending in
  * > Marketplace' balance."*
  *
- * Shopee releases each order into the shop's SELLER BALANCE, net of what it
- * kept, and nothing reaches the bank until somebody withdraws a lump of their
- * own choosing on Shopee's site. No withdrawal names an order, so matching
+ * Shopee pays each order into the shop's SELLER BALANCE, net of what it kept,
+ * and nothing reaches the bank until somebody withdraws a lump of their own
+ * choosing on Shopee's site. No withdrawal names an order, so matching
  * payouts to sales — what this app tried since 2026-09-08 — cannot work. What
  * can: each channel is a pot.
  *
- * - A marketplace payment still PENDING is *awaiting release* — at what the
- *   customer paid, less any deduction already typed against it.
- * - Once released (SETTLED: a deduction recorded, the Shopee upload, *Mark as
- *   settled*) its net is *in the seller balance*. Not the bank: the Cash and
- *   Bank cards, the running balance and both reconciliations leave it out
- *   (`movesBalance` reads `CashflowRow.marketplace`).
+ * ## Revised the same day (owner): no Pending, no Received
+ *
+ * > *"For the Shopee transaction, the status is no longer 'Held by
+ * > marketplace' or 'Received', but only save the total amount and the
+ * > deduction … when they add a transaction from Shopee it gets counted to …
+ * > 'Shopee balance'."*
+ *
+ * - A Shopee or Tokopedia payment is in that channel's balance FROM THE SALE,
+ *   at what the customer paid less any deduction recorded against it. Its
+ *   stored state (the till still writes PENDING, an older upload wrote
+ *   SETTLED) is not read for this — no screen offers the choice any more.
+ *   Not the bank: the Cash and Bank cards, the running balance and both
+ *   reconciliations leave it out (`movesBalance` reads
+ *   `CashflowRow.marketplace`).
  * - A withdrawal is an income adjustment of reason `PENARIKAN_SHOPEE` /
  *   `PENARIKAN_TOKOPEDIA`: into the pot its method names, out of this one.
  *   Not revenue (Profit & Loss counted the sale) and kept out of the charts.
@@ -32,8 +40,9 @@
  * always did: the bank balance the shop has reconciled since 2026-10-27 must
  * not move by itself the morning after a deploy. The migration that brought
  * the rule wrote the instant; absent (tests, the demo seed) the rule applies
- * to everything. A payment still pending is always the pot's — when it is
- * released it is released after the cutoff.
+ * to everything. Only a payment stored SETTLED before it is the bank's — that
+ * is the one a person said had landed; one still stored PENDING never reached
+ * the bank and is the pot's whatever its date.
  *
  * Pure: no React, no store. `test/marketplacePot.test.ts` is the spec.
  */
@@ -65,9 +74,9 @@ export const isWithdrawalReason = (reason: string): boolean =>
  * Which seller balance a sale's payment is in, or undefined when it is the
  * shop's cash or bank money as before.
  *
- * Only a payment a marketplace holds (`channel` Shopee or Tokopedia — a part
- * corrected to cash drops its channel). Pending is always the pot's; a
- * settled one is the pot's from the cutoff on.
+ * Only a payment a marketplace takes (`channel` Shopee or Tokopedia — a part
+ * corrected to cash drops its channel). Every one is the pot's, except one
+ * stored SETTLED before the cutoff, which stays where it was counted: bank.
  */
 export function marketplacePotOf(
   p: {
@@ -82,17 +91,15 @@ export function marketplacePotOf(
   return potFrom === undefined || p.at >= potFrom ? p.channel : undefined;
 }
 
-/** One channel's seller balance, as the Income & Expense card shows it. */
+/** One channel's balance, as the Income & Expense card shows it. */
 export interface MarketplacePot {
   readonly channel: PotChannel;
-  /** Paid by customers, not yet released: amount less any typed deduction. */
-  readonly awaitingRelease: number;
-  /** Released, net of deductions, less what has been withdrawn. */
-  readonly inSellerBalance: number;
+  /** Σ (amount − deductions) of every payment in this pot. */
+  readonly paidIn: number;
   /** What withdrawals have taken out, altogether. */
   readonly withdrawn: number;
-  /** `awaitingRelease + inSellerBalance` — the money the platform holds. */
-  readonly total: number;
+  /** `paidIn − withdrawn` — what the platform holds for the shop now. */
+  readonly balance: number;
 }
 
 /**
@@ -108,14 +115,11 @@ export function marketplacePots(
   rows: readonly CashflowRow[],
 ): MarketplacePot[] {
   return POT_CHANNELS.map((channel) => {
-    let awaitingRelease = 0;
-    let released = 0;
+    let paidIn = 0;
     let withdrawn = 0;
     for (const r of rows) {
       if (r.marketplace === channel && r.inBalance) {
-        const signed = r.direction === "INCOME" ? r.amount : -r.amount;
-        if (r.status === "SETTLED") released += signed;
-        else if (r.status === "PENDING") awaitingRelease += signed;
+        paidIn += r.direction === "INCOME" ? r.amount : -r.amount;
       } else if (
         r.direction === "INCOME" &&
         r.category === WITHDRAWAL_REASON[channel] &&
@@ -124,13 +128,6 @@ export function marketplacePots(
         withdrawn += r.amount;
       }
     }
-    const inSellerBalance = released - withdrawn;
-    return {
-      channel,
-      awaitingRelease,
-      inSellerBalance,
-      withdrawn,
-      total: awaitingRelease + inSellerBalance,
-    };
+    return { channel, paidIn, withdrawn, balance: paidIn - withdrawn };
   });
 }

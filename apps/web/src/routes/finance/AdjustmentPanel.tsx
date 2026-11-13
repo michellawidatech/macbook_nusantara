@@ -429,7 +429,7 @@ export function AdjustmentPanel({
         ? undefined
         : marketplacePots(cashflowRows(db, t)).find(
             (p) => p.channel === withdrawing,
-          )?.inSellerBalance,
+          )?.balance,
     [withdrawing, addOpen, db, t],
   );
 
@@ -667,8 +667,8 @@ export function AdjustmentPanel({
               data-testid="seller-balance-hint"
             >
               {t(
-                "adjust.sellerBalanceNow",
-                "In the {{channel}} seller balance now: {{amount}}.",
+                "adjust.marketBalanceNow",
+                "{{channel}} balance now: {{amount}}.",
                 {
                   channel: channelOf(withdrawing)?.label ?? withdrawing,
                   amount: fmtRp(sellerBalance),

@@ -31,15 +31,16 @@
  * Cash and Bank cards or the two charts. It is a record that the income was
  * voided, not money. Cash basis does not list it, as it lists no DUE row.
  *
- * ## A marketplace's seller balance (owner ask 2026-11-13)
+ * ## A marketplace's balance (owner ask 2026-11-13)
  *
- * A released Shopee or Tokopedia payment is not bank money: it sits in that
- * channel's seller balance, net of what the platform kept, until staff
+ * A Shopee or Tokopedia payment is not bank money: from the sale it sits in
+ * that channel's balance, net of what the platform kept, until staff
  * withdraw a lump from the platform's site. So those rows move neither the
- * Cash and Bank cards nor the Latest balance; a *Pending in marketplace* card
- * per channel holds them, split into awaiting release and in the seller
- * balance, and a withdrawal (Add adjustment → Income → Shopee withdrawal) is
- * what moves money into the bank. `lib/marketplacePot.ts` is the rule.
+ * Cash and Bank cards nor the Latest balance; a *Shopee balance* /
+ * *Tokopedia balance* card holds them, and a withdrawal (Add adjustment →
+ * Income → Shopee withdrawal) is what moves money into the bank. There is no
+ * Pending or Received for that money any more (owner, the same day).
+ * `lib/marketplacePot.ts` is the rule.
  *
  * `AdjustmentPanel` still owns the write path: an expense goes into
  * `db.expenses`, an income into `db.incomes`.
@@ -303,8 +304,8 @@ export function IncomeExpensePage() {
    * see the total cash in bank and the petty cash"*), on the basis the switch
    * says: cash basis is money that moved; accrual adds what is promised — a
    * customer's debt toward the pot its method names. A marketplace's money is
-   * in neither, pending or released: it is the seller-balance cards' until
-   * a withdrawal moves it (2026-11-13). From the opening balance on.
+   * in neither: it is the Shopee / Tokopedia balance cards' until a
+   * withdrawal moves it (2026-11-13). From the opening balance on.
    */
   const pots = useMemo(
     () => balancesOfRows(rows, db.settings, { accrual: basis === "ACCRUAL" }),
@@ -312,15 +313,13 @@ export function IncomeExpensePage() {
   );
 
   /**
-   * Each marketplace's seller balance (2026-11-13). Shown only for a channel
-   * the shop has used — an empty Tokopedia card on a shop that never sold
-   * there is a card to read past every morning.
+   * Each marketplace's balance (2026-11-13). Shown only for a channel the
+   * shop has used — an empty Tokopedia card on a shop that never sold there
+   * is a card to read past every morning.
    */
   const sellerPots = useMemo(
     () =>
-      marketplacePots(rows).filter(
-        (p) => p.total !== 0 || p.withdrawn !== 0 || p.awaitingRelease !== 0,
-      ),
+      marketplacePots(rows).filter((p) => p.paidIn !== 0 || p.withdrawn !== 0),
     [rows],
   );
 
@@ -364,9 +363,9 @@ export function IncomeExpensePage() {
 
   const channelName = (c: string) => channelOf(c)?.label ?? c;
 
-  /** One marketplace's seller balance, with the way to withdraw from it. */
+  /** One marketplace's balance, with the way to withdraw from it. */
   const sellerCard = (p: MarketplacePot) => {
-    const title = t("cashflow.pendingIn", "Pending in {{channel}}", {
+    const title = t("cashflow.marketBalance", "{{channel}} balance", {
       channel: channelName(p.channel),
     });
     const which = `market-${p.channel}`;
@@ -396,19 +395,7 @@ export function IncomeExpensePage() {
               {t("cashflow.recordWithdrawal", "Record withdrawal")}
             </Button>
           </Flex>
-          {hidden(which, title, p.total)}
-          {reveal[which] && (
-            <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
-              {t(
-                "cashflow.potSplit",
-                "Awaiting release {{awaiting}} · In seller balance {{held}}",
-                {
-                  awaiting: fmtRp(p.awaitingRelease),
-                  held: fmtRp(p.inSellerBalance),
-                },
-              )}
-            </Typography.Text>
-          )}
+          {hidden(which, title, p.balance)}
         </Flex>
       </Card>
     );
@@ -686,7 +673,7 @@ export function IncomeExpensePage() {
                   {/* Held by a marketplace, not the bank (2026-11-13). */}
                   {r.marketplace !== undefined && r.inBalance ? (
                     <Tag color="gold">
-                      {t("cashflow.inSellerBalance", "In {{channel}} balance", {
+                      {t("cashflow.marketBalance", "{{channel}} balance", {
                         channel: channelName(r.marketplace),
                       })}
                     </Tag>

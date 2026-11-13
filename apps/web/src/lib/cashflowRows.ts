@@ -135,10 +135,11 @@ export interface CashflowRow {
    */
   readonly feeOf?: string;
   /**
-   * On a marketplace payment and its deduction row: the channel whose seller
-   * balance holds the money (2026-11-13, `lib/marketplacePot.ts`). Such a row
-   * is in no cash or bank pot — `movesBalance` leaves it out — until a
-   * withdrawal moves it to the bank.
+   * On a marketplace payment and its deduction row: the channel whose balance
+   * holds the money (2026-11-13, `lib/marketplacePot.ts`). Such a row is in
+   * no cash or bank pot — `movesBalance` leaves it out — until a withdrawal
+   * moves it to the bank. Always SETTLED: the money is the shop's from the
+   * sale.
    */
   readonly marketplace?: string;
 }
@@ -318,8 +319,11 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
       const kept =
         settlement === undefined ? 0 : settlement.gross - settlement.received;
       const off = kept + (p.id === boughtWith?.id ? bought : 0);
-      // In a seller balance rather than the bank (2026-11-13).
+      // In a marketplace's balance rather than the bank (2026-11-13). Such a
+      // payment is the shop's money from the sale — its stored PENDING is
+      // not read, so the row reads Settled with the balance named beside it.
       const pot = marketplacePotOf(p, db.settings?.marketplacePotFrom);
+      const state = pot !== undefined ? ("SETTLED" as const) : p.state;
       out.push({
         key: `p-${o.id}-${p.id}`,
         at: p.at,
@@ -333,7 +337,7 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
         description: saleDescription(o, t),
         orderCode: o.code,
         amount: p.amount,
-        status: p.state,
+        status: state,
         tie: "",
         source: { kind: "salePayment", orderId: o.id, paymentId: p.id },
         ...(off !== 0 ? { deducted: off } : {}),
@@ -368,7 +372,7 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
             }) + (names ? ` · ${names}` : ""),
           orderCode: o.code,
           amount: Math.abs(kept),
-          status: p.state,
+          status: state,
           tie: "",
           feeOf: `p-${o.id}-${p.id}`,
           ...(pot !== undefined ? { marketplace: pot } : {}),

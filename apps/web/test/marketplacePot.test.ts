@@ -1,8 +1,8 @@
 /**
- * A marketplace's seller balance (owner ask 2026-11-13) — `lib/marketplacePot.ts`
- * is the rule. A released Shopee payment is in Shopee's pot, net of what it
- * kept, until a withdrawal moves money to the bank; the cutoff keeps what was
- * released before the rule in the bank, where it always was.
+ * A marketplace's balance (owner ask 2026-11-13) — `lib/marketplacePot.ts` is
+ * the rule. A Shopee payment is in the Shopee balance from the sale, net of
+ * what it kept, until a withdrawal moves money to the bank; the cutoff keeps
+ * what was settled before the rule in the bank, where it always was.
  */
 import { describe, expect, it } from "vitest";
 import { balancesOfRows, cashflowRows } from "../src/lib/cashflowRows.js";
@@ -168,9 +168,8 @@ describe("the seller balance", () => {
     deduct(db, "o-1", "p-1", 1_150_000);
 
     const pot = shopeePot(db);
-    expect(pot.inSellerBalance).toBe(8_850_000);
-    expect(pot.awaitingRelease).toBe(0);
-    expect(pot.total).toBe(8_850_000);
+    expect(pot.paidIn).toBe(8_850_000);
+    expect(pot.balance).toBe(8_850_000);
     expect(bank(db)).toBe(0);
 
     // The rows say where they are, and are not counted in either reconciliation.
@@ -182,12 +181,18 @@ describe("the seller balance", () => {
     expect(posBalanceAt(cashflowRows(db, t), db.settings, "BANK", DAY)).toBe(0);
   });
 
-  it("counts a pending payment as awaiting release, at what the customer paid", () => {
+  it("counts a payment stored PENDING the same — it is in the balance from the sale", () => {
     const db = empty();
     sale(db, "o-2", [shopee("p-2", 4_000_000, "PENDING")]);
+    deduct(db, "o-2", "p-2", 400_000);
     const pot = shopeePot(db);
-    expect(pot.awaitingRelease).toBe(4_000_000);
-    expect(pot.inSellerBalance).toBe(0);
+    expect(pot.balance).toBe(3_600_000);
+    // And it reads Settled on Income & Expense, with the balance named.
+    const rows = cashflowRows(db, t).filter((r) => r.orderCode === "SI-o-2");
+    expect(rows.map((r) => [r.status, r.marketplace])).toEqual([
+      ["SETTLED", "SHOPEE"],
+      ["SETTLED", "SHOPEE"],
+    ]);
     // Not in the bank on either basis.
     expect(
       balancesOfRows(cashflowRows(db, t), db.settings, { accrual: true }).bank,
@@ -203,8 +208,7 @@ describe("the seller balance", () => {
 
     const pot = shopeePot(db);
     expect(pot.withdrawn).toBe(5_000_000);
-    expect(pot.inSellerBalance).toBe(3_850_000);
-    expect(pot.total).toBe(3_850_000 + 4_000_000);
+    expect(pot.balance).toBe(8_850_000 + 4_000_000 - 5_000_000);
     expect(bank(db)).toBe(5_000_000);
 
     // The withdrawal is the one bank movement the statement can show.
@@ -232,10 +236,10 @@ describe("the seller balance", () => {
     ]);
     withdraw(db, "i-w2", 500_000, "PENARIKAN_TOKOPEDIA");
     const pots = marketplacePots(cashflowRows(db, t));
-    expect(pots.find((p) => p.channel === "TOKOPEDIA")!.inSellerBalance).toBe(
+    expect(pots.find((p) => p.channel === "TOKOPEDIA")!.balance).toBe(
       1_500_000,
     );
-    expect(pots.find((p) => p.channel === "SHOPEE")!.total).toBe(0);
+    expect(pots.find((p) => p.channel === "SHOPEE")!.balance).toBe(0);
   });
 
   it("leaves a payment released before the cutoff in the bank, as it always was", () => {
@@ -245,7 +249,7 @@ describe("the seller balance", () => {
     sale(db, "o-new", [shopee("p-new", 7_000_000, "SETTLED", LATER)]);
 
     expect(bank(db)).toBe(3_000_000);
-    expect(shopeePot(db).inSellerBalance).toBe(7_000_000);
+    expect(shopeePot(db).balance).toBe(7_000_000);
   });
 
   it("does not count a withdrawal as revenue in the charts or in Profit & Loss", () => {

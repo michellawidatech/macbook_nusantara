@@ -1759,10 +1759,10 @@ export function StockOutPage() {
           t("pos.holdsCollected", "{{count}} held unit(s) collected.", {
             count: closed,
           }),
-        parts.some((p) => p.state === "PENDING") &&
+        parts.some((p) => p.channel !== undefined) &&
           t(
-            "pos.marketplacePendingToast",
-            "The marketplace has not paid this out yet — mark it received under Pending & Receivables once it lands.",
+            "pos.marketplaceBalanceToast",
+            "Its marketplace part is in that marketplace's balance until a withdrawal is recorded.",
           ),
       ]
         .filter(Boolean)
@@ -3528,8 +3528,8 @@ export function StockOutPage() {
           {payParts.some((p) => isMarketplaceMethod(p.method)) && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {t(
-                "pos.marketplaceHoldsPart",
-                "The marketplace holds its part until it pays out — mark it received under Pending & Receivables.",
+                "pos.marketplaceBalancePart",
+                "A Shopee or Tokopedia part goes into that marketplace's balance. It reaches the bank when a withdrawal is recorded on Income & Expense.",
               )}
             </Typography.Text>
           )}
@@ -4535,8 +4535,8 @@ export function StockOutPage() {
           {payParts.some((p) => isMarketplaceMethod(p.method)) && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {t(
-                "pos.marketplaceHoldsPart",
-                "The marketplace holds its part until it pays out — mark it received under Pending & Receivables.",
+                "pos.marketplaceBalancePart",
+                "A Shopee or Tokopedia part goes into that marketplace's balance. It reaches the bank when a withdrawal is recorded on Income & Expense.",
               )}
             </Typography.Text>
           )}
