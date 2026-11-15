@@ -124,9 +124,10 @@ describe("answered by rules, with no AI at all", () => {
     );
     expect(out.shown).toEqual([MBP.serial]);
     expect(out.handoff).toBeUndefined();
-    // Photos go WITH the recommendation, and it leaves room rather than
-    // asking (owner, 2026-10-28: "too forcing").
-    expect(out.photos).toEqual(["p1", "p2"]);
+    // No photos with a recommendation (owner, 2026-11-16 — this REVERSES
+    // 2026-10-28's "send them"); it leaves room rather than asking.
+    expect(out.photos).toBeUndefined();
+    expect(p.asked.map((a) => a.name)).not.toContain("unit_photos");
     expect(out.reply).not.toContain("Mau lihat fotonya");
     expect(
       out.reply.endsWith(
@@ -234,9 +235,20 @@ describe("answered by rules, with no AI at all", () => {
   });
 
   it("answers from the owner's sheet, word for word", async () => {
-    const out = await run("kak garansinya berapa lama ya?");
+    // Not warranty — a person's since 2026-11-16 — so the sheet's own COD line.
+    const out = await run("kak cod bisa ga ya?", pos({}), {
+      knowledge: knowledgeBase([
+        {
+          id: "k1",
+          question: "COD bisa ga?",
+          answer: "Bisa kak, COD area Jabodetabek ya kak 😊",
+        },
+      ]),
+    });
     // Word for word — then the bot's question about what they need.
-    expect(out.reply.startsWith("Garansi toko 1 bulan ya kak 😊")).toBe(true);
+    expect(
+      out.reply.startsWith("Bisa kak, COD area Jabodetabek ya kak 😊"),
+    ).toBe(true);
     expect(out.sources).toEqual(["K1"]);
   });
 
@@ -527,7 +539,8 @@ describe("the battery of a unit, and asking for a person (owner's chats, 2026-10
   ])("hands %j to a person", async (text) => {
     const out = await run(text);
     expect(out.handoff?.topic).toBe("human");
-    expect(out.reply).toBe("Siap kak, aku sambungin ke admin ya 🙏");
+    // The owner's words (2026-11-16).
+    expect(out.reply).toBe("Oke kak, aku sambungkan ke admin ya 🙏");
   });
 });
 
@@ -723,7 +736,7 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
     expect(p.asked.map((a) => a.name)).not.toContain("unit_photos");
   });
 
-  it("says what QC wrote when they ask about the condition (2026-10-28)", async () => {
+  it("hands a question about the unit's minus to a person (2026-11-16)", async () => {
     const C = {
       ...AIR,
       condition: { faults: [], marks: ["Dent di sudut", "Charger original"] },
@@ -734,10 +747,12 @@ describe("selling, not holding (owner, 2026-10-27)", () => {
       known: budi,
       lastShown: [AIR.serial],
     });
-    expect(out.handoff).toBeUndefined();
+    // Until 2026-11-16 the bot read QC's marks out; a person answers now.
+    expect(out.handoff?.topic).toBe("unit_details");
     expect(out.reply).toBe(
-      "Air M2 ada lecet tipis, 11,9jt: dent di sudut, charger original, sudah pernah servis kak 😊",
+      "Bentar ya kak, kondisi unitnya aku cekin langsung dulu 🙏",
     );
+    expect(p.asked).toHaveLength(0);
   });
 
   it("sends the variant's own link when they ask to buy online (2026-10-28)", async () => {

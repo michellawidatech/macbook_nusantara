@@ -48,7 +48,9 @@ export const CONDUCT: readonly ConductRule[] = [
   },
   {
     id: "photos",
-    text: 'Never ask "Mau lihat fotonya?": when a unit you recommend has photos (photos above 0), send them with the recommendation. When none has any, do not mention photos.',
+    // Owner, 2026-11-16: photos only on request. This REVERSES 2026-10-28's
+    // "send them with the recommendation".
+    text: 'Send a unit\'s photos ONLY when the customer asks for photos ("minta foto", "ada fotonya?", "pic nya"). Never send them with a recommendation on your own, and never ask "Mau lihat fotonya?". When none has any, do not mention photos.',
     where: ["prompt", "tool:photos"],
   },
   {
@@ -64,6 +66,18 @@ export const CONDUCT: readonly ConductRule[] = [
   {
     id: "burst",
     text: "Several messages in a row are one turn: answer every question they asked, in one reply, in the order they asked them.",
+    where: ["prompt"],
+  },
+  {
+    id: "admin",
+    // Owner, 2026-11-16.
+    text: 'Never mention or offer an admin, CS or customer service on your own. Only when the customer asks for a person, hand over (topic human) and say "Oke kak, aku sambungkan ke admin ya".',
+    where: ["prompt"],
+  },
+  {
+    id: "list",
+    // Owner, 2026-11-16.
+    text: "A numbered list of questions is answered per question: the question repeated after its number, its answer on the next line, a blank line between them. One that needs a colleague gets a short line under it saying you are checking.",
     where: ["prompt"],
   },
   {

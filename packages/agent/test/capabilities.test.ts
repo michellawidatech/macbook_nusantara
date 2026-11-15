@@ -36,7 +36,8 @@ describe("what the bot may answer once it can read the shelf", () => {
     for (const text of [
       "air m1 ready ga kak?",
       "macbook pro 13 2020 harganya berapa?",
-      "kondisi air m2 gimana kak, ada lecet?",
+      // "ada lecet?" is a defect question, a person's since 2026-11-16.
+      "kondisi air m2 gimana kak?",
       "minta foto air m1 dong",
       "battery health nya berapa persen?",
       "budget 10 juta dapat apa ya?",
@@ -170,13 +171,15 @@ describe("the prompt follows the capability", () => {
     expect(stable).toContain("Wanting to buy is NOT closing");
     expect(stable).toContain('cites "greeting". Small talk');
     expect(stable).toContain('"tinggal 1 unit kak"');
-    // Photos go with the recommendation; no photo question, no visit
-    // time pushed, a link only when asked (2026-10-28).
+    // Photos only when asked (2026-11-16, reversing 2026-10-28's "send
+    // them with the recommendation"); no photo question, no visit time
+    // pushed, a link only when asked.
     expect(stable).toContain(
       // No emoji in the rules (owner, 2026-11-09).
       "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita",
     );
-    expect(stable).toContain('Never ask "Mau lihat fotonya?"');
+    expect(stable).toContain("Photos go ONLY when the customer asks for them");
+    expect(stable).toContain('never ask "Mau lihat fotonya?"');
     expect(stable).toContain("rencananya mau ke toko kapan kak?");
     expect(stable).toContain("Mau DP sekarang kak?");
     expect(stable).toContain("Bisa order langsung lewat WA ini aja kak");

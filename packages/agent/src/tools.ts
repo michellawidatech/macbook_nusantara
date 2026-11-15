@@ -1081,9 +1081,10 @@ const STORE_FACTS: Record<string, string> = {
   // The owner's warranty is in the approved answers (1 month, 2026-09-18). It
   // said 90 days here, which nobody at the shop ever offered; a policy written
   // twice is two policies.
+  // Owner, 2026-11-16: every warranty question goes to a colleague.
   warranty:
-    "The warranty terms are in the shop's approved answers. Use search_knowledge for 'garansi' " +
-    "and do not state a term from here.",
+    "Warranty questions go to a colleague: hand over with topic warranty_claim and state no " +
+    "term yourself.",
   grade:
     "Grade A is near mint with only faint marks. Grade B has visible wear but nothing that " +
     "affects use. Grade C is well used and looks it. Every grade is tested and works.",
@@ -1670,10 +1671,10 @@ export const OTHER_GRADES_NOTE =
  */
 const UNIT_FACTS_NOTE =
   "condition.faults (a functional fault or a missing item) are said whenever you describe that " +
-  "unit. condition.marks (scratches, dents, what is in the box) only when the customer asks about " +
-  'the condition, minus, dents or completeness. serviced "never" means say "belum pernah servis" ' +
-  'when you describe it; serviced "yes" only when they ask about servicing; no serviced means ' +
-  "say nothing about it. links are the variant's own marketplace listings: send one only when the " +
+  "unit. condition.marks are never listed: a question about minus, dents or scratches goes to a " +
+  'colleague (topic unit_details), and so does servicing (topic service). serviced "never" means ' +
+  'say "belum pernah servis" when you describe it; otherwise say nothing about it. ' +
+  "links are the variant's own marketplace listings: send one only when the " +
   "customer asks how to order it, about checking out on Shopee or Tokopedia, or about ordering " +
   "online.";
 

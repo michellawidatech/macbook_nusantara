@@ -76,8 +76,7 @@ describe("routeMessage — the generic questions the owner answered stay with th
     "cara bayarnya gimana kak?",
     "Kenapa harga di shopee/tokped lebih mahal ka?",
     "Cod bisa ga kak?",
-    "bisa ganti baterai di toko?",
-    "Garansi berapa lama kak?",
+    // Servicing and warranty are a person's since 2026-11-16 (escalations.test.ts).
     "Bisa tukar tambah ga kak?",
     "jam operasional kak",
     "air m1 ram nya berapa?",

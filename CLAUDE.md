@@ -3977,6 +3977,51 @@ Decisions that outlived those documents:
   opens its faktur, and an **Invoice profit** column (profit, margin under
   it, from `invoiceProfits`) spans each sale's lines once — so the list
   keeps an invoice's lines together and has no pages (one 560px scroll).
+- **Photos on request, a short list of hand-overs, and lists answered per
+  question — 2026-11-16** (owner). Three changes, both bots.
+  - **Photos go only when the customer asks** (`asksForPhotos`, policy.ts).
+    This REVERSES 2026-10-28's "photos are SENT with a recommendation": the
+    rules bot no longer fetches them for a recommendation, the conduct rule
+    and prompt say "only when asked", `converse` sends a draft that attaches
+    photos unasked back once (`PHOTOS_UNASKED`) and then drops them, and
+    draft.ts queues no WA_IMAGE unless the burst asked — whichever bot wrote it.
+  - **A person takes exactly these** (`routeMessage` → `handoverCase`, before
+    any model): asking for an admin (`asksForPerson`, now also "Chat admin",
+    "hubungi admin", "sambung ke admin", "minta nomor admin", "cs nya
+    mana"); negotiation and closing (unchanged); a video call, a video of
+    the unit or a phone call (new topic `video_call`); a unit's defects —
+    minus, lecet, dent, whitespot — (`unit_details`, rule `defect`) and, once
+    this chat has had photos (`photosSent`, an unretracted WA_IMAGE since the
+    reset point), more detailed photos (`photo_detail`); a delivery or COD
+    COST (`shipping_quote` — "bisa cod?" alone stays the approved answer);
+    and servicing (new topic `service`), a past purchase (`service`, rule
+    `past_purchase`), complaints and **every warranty question**
+    (`warranty_claim`, rule `warranty`). ⚠️ Warranty REVERSES "answered from
+    the approved answers", and defects REVERSE 2026-10-28's "marks only when
+    asked" — the bot never lists QC's marks now (faults are still said
+    upfront, and "belum pernah servis" still is). Each has its own holding
+    line (`RULE_LINE`) and task head (`Perlu atur video call`, `Perlu urus
+    servis`, `Perlu cek pembelian lalu`, `Perlu kirim foto detail`).
+  - **The bot never brings up an admin.** The admin line is the owner's
+    "Oke kak, aku sambungkan ke admin ya", and only the `human` topic says
+    it; a reply naming an admin/CS is sent back once (`ADMIN`) and then loses
+    the sentence, and a hand-over line naming one is replaced by the topic's
+    fixed line (`mentionsAdmin`).
+  - **A numbered list is answered per question** (`questionList.ts`): "1." /
+    "1)" / "1 -" lines, bullets, or "1. … 2. …" inline, 2–6 items. Each item
+    is routed and answered ALONE — the AI with the list in its note
+    (`itemFocusNote`), the rules by `runRules` itself — and put back as the
+    question, its answer, a blank line (`formatItemAnswers`; a closing line
+    two answers share is said once). An item a person takes gets its holding
+    line under it. The first hand-over is the row's; the rest are
+    `extraHandoffs`: each its own `ChatAction` (one OPEN per kind still
+    holds) and listed on the row as `entities.handoff.also`. A failed AI item
+    fails the turn and the rules answer the whole list. The rules bot also
+    answers the other questions of a non-list burst before the holding line
+    (`answerBesideHandover`).
+  - ⚠️ Open owner questions: the approved COD answer still quotes a fixed
+    Rp180.000 Jabodetabek; "pernah diservis?" about a shelf unit now goes to
+    a person although QC recorded the answer.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

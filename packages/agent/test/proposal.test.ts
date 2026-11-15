@@ -367,8 +367,8 @@ describe("how many photos each unit has (2026-10-27)", () => {
     const by = new Map(out.units.map((u) => [u.serial, u.photos]));
     expect(by.get("MBP1")).toBe(2);
     expect(by.get("MBP2")).toBe(0);
-    // The rulebook's words (conduct.ts, 2026-11-09): send, never offer.
-    expect(out.photosNote).toMatch(/photos above 0\), send them/);
+    // The rulebook's words (conduct.ts): only when asked (2026-11-16).
+    expect(out.photosNote).toMatch(/ONLY when the customer asks for photos/);
     expect(
       await dispatchTool(db, "check_serial", { serial: "MBP2" }, live),
     ).toMatchObject({ photos: 0 });

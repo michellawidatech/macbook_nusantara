@@ -54,6 +54,7 @@ import {
   dpKeepLine,
   effectiveCapabilities,
   holdingMessage,
+  routeMessage,
   type AgentCapabilities,
   type DpTerms,
   type HandoffTopic,
@@ -61,6 +62,13 @@ import {
 } from "../policy.js";
 import type { AgentStep, PipelineResult } from "../pipeline.js";
 import { isStrongMatch, sameQuestion } from "../retrieval.js";
+import {
+  combineResults,
+  itemFocusNote,
+  mergeItemResults,
+  questionItems,
+  type QuestionList,
+} from "../questionList.js";
 import { plainText, sanitiseReply } from "../sanitise.js";
 import {
   BOOKING_MAX_AGE,
@@ -153,13 +161,30 @@ export interface RulesInput {
    */
   readonly dp?: DpTerms;
   /**
-   * The AI fallback — only for what no rule covers. Absent (no credential,
-   * or the owner wants none), that turn goes to a person.
+   * Answering ONE question of a list, or the rest of a burst beside a
+   * hand-over (2026-11-16): no follow-up question is tacked on, and the list
+   * is not split again.
    */
-  readonly ai?: () => Promise<{
+  readonly inList?: boolean;
+  /** What the AI fallback is to answer instead of the whole message. */
+  readonly focus?: AiFocus;
+  /** This chat has had photos already (`routeMessage`'s `photosSent`). */
+  readonly photosSent?: boolean;
+  /**
+   * The AI fallback — only for what no rule covers. Absent (no credential,
+   * or the owner wants none), that turn goes to a person. `focus`, when set,
+   * is the one question it answers.
+   */
+  readonly ai?: (focus?: AiFocus) => Promise<{
     readonly result: ConverseResult | null;
     readonly calls: readonly CallUsage[];
   }>;
+}
+
+/** One question of a list (or the rest of a burst) for the AI to answer. */
+export interface AiFocus {
+  readonly text: string;
+  readonly note: string;
 }
 
 /** What an out-of-stock reply offered to watch for. */
@@ -577,6 +602,86 @@ function listWords(items: readonly string[], or: string): string {
 }
 
 export async function runRules(input: RulesInput): Promise<RulesResult> {
+  // A list of questions in one bubble is answered per question (owner,
+  // 2026-11-16) — each routed on its own, so the one a person takes gets the
+  // holding line under it and the others are still answered.
+  if (!input.inList && input.route?.topic !== "media") {
+    const list = questionItems(input.text);
+    if (list) return answerList(input, list);
+    if (input.route) {
+      const both = await answerBesideHandover(input);
+      if (both) return both;
+    }
+  }
+  return runOne(input);
+}
+
+/** The questions of a list, each answered alone, put back under their numbers. */
+async function answerList(
+  input: RulesInput,
+  list: QuestionList,
+): Promise<RulesResult> {
+  const results: RulesResult[] = [];
+  for (const [k, item] of list.items.entries()) {
+    results.push(
+      await runOne({
+        ...input,
+        text: item.text,
+        route: routeMessage(item.text, {
+          capabilities: input.capabilities,
+          shown: input.lastShown.length > 0,
+          photosSent: input.photosSent === true,
+        }),
+        inList: true,
+        focus: { text: item.text, note: itemFocusNote(list, k) },
+      }),
+    );
+  }
+  return mergeItemResults(list, results);
+}
+
+/**
+ * A burst where one line needs a person: the lines that do not are answered
+ * first, then the holding line (the AI path's "a burst is answered whole",
+ * 2026-11-09, for the rules bot). Null when nothing else in it asks anything.
+ */
+async function answerBesideHandover(
+  input: RulesInput,
+): Promise<RulesResult | null> {
+  const lines = input.text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length < 2) return null;
+  const opts = {
+    capabilities: input.capabilities,
+    shown: input.lastShown.length > 0,
+    photosSent: input.photosSent === true,
+  };
+  const rest = lines.filter(
+    (l) => routeMessage(l, opts) === null && isQuestion(l),
+  );
+  if (rest.length === 0) return null;
+  const restText = rest.join("\n");
+  const answered = await runOne({
+    ...input,
+    text: restText,
+    route: null,
+    inList: true,
+    focus: {
+      text: restText,
+      note:
+        `Answer only this part of their message: "${restText}". The rest is with a colleague, ` +
+        "and the customer is told so in the next line.",
+    },
+  });
+  // Nothing the rules could answer either: one hand-over says it all.
+  if (answered.handoff) return null;
+  const held = await runOne({ ...input, inList: true });
+  return combineResults([answered, held], `${answered.reply}\n\n${held.reply}`);
+}
+
+async function runOne(input: RulesInput): Promise<RulesResult> {
   const started = Date.now();
   const { ctx, capabilities } = input;
   const caps = effectiveCapabilities(capabilities);
@@ -641,7 +746,12 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     // (owner, 2026-10-15, narrowed 2026-10-27). An AI reply that already
     // asks something is left alone: two questions in a row reads as a form.
     let body = text;
-    if (ask && !rest.handoff && !(usedAi && text.includes("?"))) {
+    if (
+      ask &&
+      !input.inList &&
+      !rest.handoff &&
+      !(usedAi && text.includes("?"))
+    ) {
       const q = followUp();
       if (q && !text.includes(q)) body = `${text}\n\n${q}`;
     }
@@ -944,20 +1054,8 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
       ? null
       : reply.nextQuestion(lacks, lang, input.lastReply ?? null);
 
-  /**
-   * The photos of the unit a reply leads with, when the shop has some and
-   * the switch allows (owner, 2026-10-28: send them, never ask "mau lihat
-   * fotonya?"). Empty when there are none.
-   */
-  const photosOf = async (u: ShownUnit | null): Promise<string[]> => {
-    if (!u || !caps.photos || (u.photos ?? 0) === 0) return [];
-    const out = await call("unit_photos", { serial: u.serial });
-    return Array.isArray(out["photoIds"])
-      ? (out["photoIds"] as unknown[]).filter(
-          (x): x is string => typeof x === "string",
-        )
-      : [];
-  };
+  // A recommendation sends no photos (owner, 2026-11-16: photos only on
+  // request — `ask_photo` below). This REVERSES 2026-10-28's "send them".
   const join = (...parts: Array<string | null>) =>
     parts.filter((p): p is string => Boolean(p)).join("\n\n");
 
@@ -1071,7 +1169,6 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
     shown.push(best.serial);
     shown.push(...otherGrades.map((x) => x.serial));
     if (stepUp) shown.push(stepUp.serial);
-    const photos = await photosOf(best);
     return done(
       join(
         reply.recommend(
@@ -1091,11 +1188,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
         ),
         reply.afterOffer(lang),
       ),
-      {
-        sources: ["stock"],
-        ask: false,
-        ...(photos.length > 0 ? { photos } : {}),
-      },
+      { sources: ["stock"], ask: false },
     );
   };
 
@@ -1452,7 +1545,7 @@ export async function runRules(input: RulesInput): Promise<RulesResult> {
 
   // --- 5. What no rule covers: AI if configured, else a person --------------
   if (input.ai) {
-    const { result, calls } = await input.ai();
+    const { result, calls } = await input.ai(input.focus);
     for (const c of calls) {
       cost += costMicros(c);
       trace.push({

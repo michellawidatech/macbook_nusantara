@@ -337,9 +337,11 @@ export const CASES: readonly GoldenCase[] = [
     expect: { kind: "answered", mustSay: [/^Halo kak/], answeredItself: true },
   },
   {
-    id: "warranty-from-the-answers",
+    // Owner, 2026-11-16: warranty goes to a person — this REVERSES the
+    // rated chat's "answered from the approved answers".
+    id: "warranty-to-a-person",
     turns: one("Garansi berapa lama kak?"),
-    expect: { kind: "answered", mustSay: [/1 bulan/], answeredItself: true },
+    expect: { kind: "routed", topic: "warranty_claim" },
   },
   {
     id: "budget-search",

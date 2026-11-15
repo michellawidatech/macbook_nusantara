@@ -163,6 +163,8 @@ export {
   type PriceListAsk,
   asksBattery,
   asksForPerson,
+  asksForPhotos,
+  mentionsAdmin,
   checkReply,
   claimPhrase,
   linksIn,
@@ -268,6 +270,7 @@ export {
   priceListTurn,
   PRICE_LIST_MAX_LINES,
   type RemindedVisit,
+  type AiFocus,
   type RulesInput,
   type RulesResult,
   type RulesTask,
@@ -383,3 +386,14 @@ export {
   type BookingDraft,
   type ThreadState,
 } from "./threadState.js";
+export {
+  MAX_LIST_ITEMS,
+  combineResults,
+  formatItemAnswers,
+  itemFocusNote,
+  mergeItemResults,
+  questionItems,
+  type MergedResult,
+  type QuestionItem,
+  type QuestionList,
+} from "./questionList.js";

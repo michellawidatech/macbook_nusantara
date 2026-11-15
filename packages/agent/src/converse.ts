@@ -62,8 +62,11 @@ import { formatRupiah } from "@nusantara/domain";
 import type { KnowledgeBase } from "./knowledge.js";
 import type { ToolDispatch } from "./agentApi.js";
 import {
+  asksForPhotos,
   checkHoldingMessage,
   checkReply,
+  mentionsAdmin,
+  withoutAdminMention,
   claimPhrase,
   dpKeepLine,
   holdingMessage,
@@ -520,13 +523,22 @@ const HANDOVER_CASES = new Set<string>([
   "warranty_claim",
   "media",
   "human",
+  // The owner's list of 2026-11-16: a video or phone call, a delivery cost,
+  // servicing and past purchases, and a unit's defects or more detailed
+  // photos than the ones sent.
+  "video_call",
+  "shipping_quote",
+  "service",
+  "unit_details",
 ]);
 
 /** What a hand-over outside those cases is told, once. */
 const NOT_THESE_CASES =
   "Not handed over: a person takes only a payment or DP proof, a real offer or bargain on a " +
-  "unit, committing to buy or keep a unit, a complaint, a photo or file the customer sent, or " +
-  "a customer who asks for a person. Answer this yourself from the shelf, the approved " +
+  "unit, committing to buy or keep a unit, a complaint, warranty, servicing or a past purchase, " +
+  "a video or phone call, a delivery cost, a unit's defects or more detailed photos, a photo " +
+  "or file the customer sent, or a customer who asks for a person. Answer this yourself from " +
+  "the shelf, the approved " +
   "answers, the shop facts or the conversation; if their meaning is unclear, reply with ONE " +
   "short question to find out. Hand over again only if it truly is one of those cases.";
 
@@ -833,9 +845,11 @@ export async function converse(
           .map((t) => t.text),
       }) === null;
     // The DP rule is the shop's own setting: a vouched figure (2026-10-27).
+    // An admin is named only to a customer who asked for one (2026-11-16).
     if (
-      checkHoldingMessage(message, [dpKeepLine(input.dp)]) !== null &&
-      !answersTheRest
+      (checkHoldingMessage(message, [dpKeepLine(input.dp)]) !== null &&
+        !answersTheRest) ||
+      (topic !== "human" && mentionsAdmin(message))
     ) {
       // An empty line, or one carrying a figure or a stock promise: the
       // customer gets the shop's fixed words instead of the model's.
@@ -892,14 +906,18 @@ export async function converse(
   /** The serials the last refused draft named, for its retry note. */
   let lastUnits: string[] = [];
   const retryNote = (
-    problem: ReplyProblem | "PHOTOS",
+    problem: ReplyProblem | "PHOTOS" | "PHOTOS_UNASKED" | "ADMIN",
     message: string,
     cited: readonly string[],
     sourceTexts: readonly string[] = [],
   ): string => {
     const head = "Your reply was NOT sent.";
     const phrase =
-      problem === "PHOTOS" ? null : claimPhrase(problem, message, sourceTexts);
+      problem === "PHOTOS" ||
+      problem === "PHOTOS_UNASKED" ||
+      problem === "ADMIN"
+        ? null
+        : claimPhrase(problem, message, sourceTexts);
     switch (problem) {
       case "AMOUNT_NOT_IN_SOURCE":
         return `${head} It states a figure no source gives for that unit. ${shelfLine()} Quote only those prices, beside the unit each belongs to; never quote one for a unit with no price in the POS — leave the price out. Cite stock. Send the corrected reply.`;
@@ -921,6 +939,10 @@ export async function converse(
         return `${head} It is too long (${message.length} characters). Short WhatsApp lines: say what must be said, once. Send the shorter reply.`;
       case "EMPTY":
         return `${head} It was empty. Send what the customer should read.`;
+      case "PHOTOS_UNASKED":
+        return `${head} It sends photos, but the customer did not ask for photos. Photos go only when they ask for them (owner, 2026-11-16). Send the same reply with no photos, and nothing saying you sent any. Send the corrected reply.`;
+      case "ADMIN":
+        return `${head} It brings up an admin or CS. You never mention or offer an admin on your own; only a customer who asks for a person is told "Oke kak, aku sambungkan ke admin ya" (handoff_to_staff, topic human). Leave the admin out. Send the corrected reply.`;
       case "PHOTOS":
         return `${head} It offers photos, but none of the units you found has any (photos 0). Do not mention photos; ask whether they would like to come and see it instead. Send the corrected reply.`;
       default:
@@ -1014,6 +1036,21 @@ export async function converse(
         ),
       );
     }
+    // An admin, named on the bot's own initiative (owner, 2026-11-16): told
+    // once, then the sentence goes.
+    if (mentionsAdmin(message)) {
+      if (canRetry) return { retry: retryNote("ADMIN", message, cited) };
+      message =
+        sanitiseReply(withoutAdminMention(message)) ||
+        ruleReply.offerHelp(lang);
+    }
+    // Photos only when the customer asked for them (owner, 2026-11-16).
+    const photosAsked = asksForPhotos(customerText);
+    const wantsPhotos =
+      String(args["photos"] ?? "").trim() !== "" ||
+      photoLineHandles(raw).length > 0;
+    if (wantsPhotos && !photosAsked && canRetry)
+      return { retry: retryNote("PHOTOS_UNASKED", message, cited) };
     const units = String(args["units"] ?? "")
       .split(/[\s,;]+/)
       .map((x) => x.trim())
@@ -1058,7 +1095,7 @@ export async function converse(
       ]),
     ]
       .map((x) => x.trim())
-      .filter((x) => offeredPhotos.has(x));
+      .filter((x) => photosAsked && offeredPhotos.has(x));
     const told = bookings
       .filter((b) => !message.includes(b.code))
       .filter((b) => !announcesRequest(b, message))

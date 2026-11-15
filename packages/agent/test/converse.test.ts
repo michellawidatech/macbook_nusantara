@@ -157,10 +157,11 @@ describe("an answer", () => {
   it("becomes a hand-over when it carries a figure the source does not", async () => {
     const r = await run(
       [
-        replies("Garansi 1 bulan kak, perpanjang 3 bulan tambah 500rb", "K3"),
-        replies("Garansi 1 bulan kak, perpanjang 3 bulan tambah 500rb", "K3"),
+        // Not warranty: that is a person's since 2026-11-16.
+        replies("Bisa kak, COD Jabodetabek biayanya Rp250.000", "K1"),
+        replies("Bisa kak, COD Jabodetabek biayanya Rp250.000", "K1"),
       ],
-      "garansi berapa lama",
+      "cod bisa ga kak",
     ).result;
     expect(r?.handoff).toMatchObject({ forcedBy: "AMOUNT_NOT_IN_SOURCE" });
   });
@@ -217,14 +218,17 @@ describe("an answer", () => {
   it("searches the pass's own knowledge base without touching the database", async () => {
     const { result, calls: made } = run(
       [
-        calls("search_knowledge", { query: "garansi" }),
-        replies("Garansi dari kami 1 bulan ya kak 😊", "K3"),
+        calls("search_knowledge", { query: "cod" }),
+        replies(
+          "Bisa kak 😊 COD Jabodetabek ada biaya transportasi Rp180.000 ya kak",
+          "K1",
+        ),
       ],
-      "garansinya brp lama",
+      "cod bisa ga kak",
     );
-    expect((await result)?.sources).toEqual(["K3"]);
+    expect((await result)?.sources).toEqual(["K1"]);
     const toolResult = JSON.stringify(made[1]!.messages.at(-1));
-    expect(toolResult).toContain("K3");
+    expect(toolResult).toContain("K1");
   });
 });
 
@@ -235,7 +239,9 @@ describe("a message the code has already given to a person", () => {
         handsOver(
           "stock",
           "Tanya stok MacBook Air M1",
-          "Siap kak 😊 untuk Air M1 kami cekkan stok dan kondisinya dulu ya, admin kami segera balas 🙏",
+          // No admin: the bot names one only to a customer who asked for one
+          // (2026-11-16), and a line that does is replaced.
+          "Siap kak 😊 untuk Air M1 kami cekkan stok dan kondisinya dulu ya 🙏",
         ),
       ],
       "kak air m1 ready?",

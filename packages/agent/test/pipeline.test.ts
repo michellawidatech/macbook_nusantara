@@ -105,6 +105,14 @@ const KB: KnowledgeBase = {
   byHandle: new Map(),
 } as unknown as KnowledgeBase;
 
+/** A customer who asks for photos — the only kind who gets them (2026-11-16). */
+const ASKS_PHOTOS = [
+  {
+    role: "user" as const,
+    text: "kak ada macbook pro 16 m3? minta fotonya ya",
+  },
+];
+
 function input(
   client: AgentClient,
   dispatch: (n: string, i: unknown) => Promise<unknown>,
@@ -157,7 +165,10 @@ describe("a photos: line the model wrote into its message (2026-11-06, F1)", () 
         ],
       ],
     });
-    const out = await runPipeline(input(model.client, pos.dispatch));
+    // Photos go only when asked (owner, 2026-11-16), so this customer asks.
+    const out = await runPipeline(
+      input(model.client, pos.dispatch, { turns: ASKS_PHOTOS }),
+    );
     expect(out!.reply).not.toMatch(/photos:/i);
     expect(out!.photos).toEqual(["p1", "p2"]);
   });
@@ -219,7 +230,9 @@ describe("a stock question through three agents", () => {
       ],
     });
 
-    const out = await runPipeline(input(model.client, pos.dispatch));
+    const out = await runPipeline(
+      input(model.client, pos.dispatch, { turns: ASKS_PHOTOS }),
+    );
 
     expect(out).not.toBeNull();
     expect(out!.handoff).toBeUndefined();

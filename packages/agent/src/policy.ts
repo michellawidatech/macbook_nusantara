@@ -204,6 +204,16 @@ export const HANDOFF_TOPICS = [
   "shipping_quote",
   "warranty_claim",
   "complaint",
+  /**
+   * A video call, a video of the unit or a phone call (owner, 2026-11-16):
+   * the shop does those by hand.
+   */
+  "video_call",
+  /**
+   * Servicing a unit, its price, and a past purchase (owner, 2026-11-16).
+   * Not a complaint: "ganti baterai berapa?" is a question, not a grievance.
+   */
+  "service",
   "media",
   "photos",
   /**
@@ -502,9 +512,15 @@ export function priceListAsk(text: string): PriceListAsk {
  */
 const ASKS_PERSON = new RegExp(
   [
-    String.raw`\b(mau|pengen|pingin|ingin|boleh|bisa|minta|tolong)\s+(chat|ngechat|ngobrol|bicara|ngomong|telpon|telepon|call|dihubungi|hubungi|dibantu|langsung)\s+(sama|dengan|dgn|ke|sm|ama)?\s*(admin|cs|customer\s*service|orang|manusia|staff|staf|owner|pemilik|mimin|kakak\s*admin)\b`,
+    String.raw`\b(mau|pengen|pingin|ingin|boleh|bisa|minta|tolong)\s+(chat|ngechat|ngobrol|bicara|ngomong|telpon|telepon|call|dihubungi|hubungi|dibantu|langsung)\s+(sama|dengan|dgn|ke|sm|ama)?\s*(admin|cs|customer\s*service|orang|manusia|staff|staf|owner|pemilik|mimin|kakak\s*admin)(nya)?\b`,
     String.raw`\b(sama|dengan|dgn|ama|sm)\s+(admin|cs|orang|manusia|staff|staf|owner)\s+(aja|saja|langsung|dong|please)\b`,
-    String.raw`\b(admin|cs|mimin)(nya)?\s+(dong|please|tolong|mana|ada\s*(gak|ga|nggak)?|bisa\s+bales|online)\b`,
+    String.raw`\b(admin|cs|mimin)\s*(nya)?\s+(dong|please|tolong|mana|ada\s*(gak|ga|nggak)?|bisa\s+bales|online)\b`,
+    // 2026-11-16: "bisa sambung ke admin?", "minta nomor admin", "Chat admin"
+    // (the exact message of the owner's evaluation sheet), "hubungi admin".
+    String.raw`^\W*(chat|hubungi|kontak|panggil|panggilin|panggilkan)\s+(admin|cs|owner|mimin|staff|staf)(nya)?\b`,
+    String.raw`\b(hubungi|hubungin|kontak|panggil|panggilin|panggilkan)\s+(admin|cs|owner|mimin)(nya)?\b`,
+    String.raw`\b(sambung|sambungin|sambungkan|disambung|disambungkan|disambungin|hubungin|hubungkan|terusin|teruskan|oper)\s+(ke|sama|dengan|dgn|sm)\s+(admin|cs|customer\s*service|orang|manusia|staff|staf|owner|pemilik|mimin)\b`,
+    String.raw`\b(minta|bagi|kirim|kirimin|share|ada)\s+(no|nomor|nomer|kontak|contact|wa|whatsapp|hp)\.?\s+(admin|cs|owner|pemilik|staff|staf|mimin|sales)\b`,
     String.raw`\b(orang|manusia)\s+(beneran|asli)\b|\bbukan\s+(bot|robot)\b|\b(ini|kamu)\s+(bot|robot)\s*(ya|kah|bukan)?\b`,
     String.raw`\b(talk|speak|chat)\s+(to|with)\s+(a\s+)?(human|person|admin|staff|someone|real\s+person)\b`,
   ].join("|"),
@@ -640,6 +656,116 @@ const SHOPPING =
 const FROM_THIS_SHOP =
   /\bbeli\s+(?:di\s*sini|disini|di\s+(?:toko\s+)?(?:kakak|kalian|sini))|\bkemarin\b|\bkemaren\b|\bkok\b|\bbaru\s+(?:di)?beli\b|\b(?:yang|yg)\s+(?:saya|aku|sy)\s+beli\b/i;
 
+// --- what a person takes (owner, 2026-11-16) -------------------------------
+
+/**
+ * A video call, a phone call, or a video of the unit. The shop does these by
+ * hand, so the bot never promises one. "Video" as what the laptop is FOR —
+ * "buat edit video", "video editing", "render video" — is not one.
+ */
+const VIDEO_CALL =
+  /\bvideo\s*call\b|\bvideocall\b|\bvid\s*call\b|\bvc\b|\bvcall\b/i;
+const PHONE_CALL = new RegExp(
+  [
+    String.raw`\bvoice\s*call\b`,
+    String.raw`\b(bisa|boleh|mau|minta|tolong)\s+(di\s*)?(telp|telpon|telepon|tlp|telfon|nelpon|nelfon|ditelpon|ditelepon|call)\b`,
+    String.raw`\b(call|telpon|telepon|telp|tlp|telfon)\s+(aja|saja|dong|donk|ya|yuk)\b`,
+  ].join("|"),
+  "i",
+);
+const VIDEO_OF_UNIT =
+  /\b(minta|kirim|kirimin|kirimkan|ada|share|bagi|boleh|bisa)\s+(lihat\s+|liat\s+)?(video|vidio|vid)(nya)?\b(?!\s+(edit|editing|render|rendering|grading|call))|\b(video|vidio)nya\s+(dong|donk|ada|bisa|kak)\b|\b(video|vidio)\s+(unit|kondisi)(nya)?\b|\bvideoin\b/i;
+
+/**
+ * A unit's defects — "minus nya apa aja?", "ada lecet?", "kekurangannya
+ * apa?" — which a person answers with the unit in their hands (owner,
+ * 2026-11-16; until then the bot read QC's marks out when asked). Shopping
+ * for a clean one ("yang tanpa minus ada?", "ada yang mulus?") stays the bot's.
+ */
+const DEFECT =
+  /\bminus\s*(nya)?\b|\bkekurangan(nya)?\b|\bcacat(nya)?\b|\b(lecet|baret|gores|goresan|dent|penyok|peyok|bopeng|bekas\s+jatuh|white\s*spot|pink\s*spot|dead\s*pixel|shadow|ghosting)(nya|an)?\b/i;
+const NOT_A_DEFECT =
+  /\b(tanpa|no|bebas|zero|nol)\s+(minus|lecet|dent|baret|gores|goresan|cacat)\b/gi;
+
+/**
+ * More detailed photos than the ones already sent — "fotonya kurang jelas",
+ * "foto detail bagian keyboard", "zoom", "foto lagi". Only once this chat has
+ * had photos (`photosSent`): before that the bot sends what QC took.
+ */
+const PHOTO_DETAIL =
+  /\b(foto|fotoin|poto|potoin|gambar|pic|pict|photo)(nya)?\b[^.?!\n]{0,30}\b(detail|detil|lebih\s+(jelas|detail|dekat|deket|banyak)|kurang\s+jelas|ga\s+jelas|gak\s+jelas|blur|buram|close\s*-?\s*up|dari\s+dekat|bagian|sisi|sisinya|semua\s+sisi|kiri|kanan|depan|belakang|bawah|lain|lainnya|tambahan|lagi|screenshot|ss)\b|\bzoom\b|\bdetail(nya)?\s+(bagian|keyboard|layar|body|engsel|bawah|atas|samping)\b|\bkurang\s+jelas\b/i;
+
+/**
+ * What a delivery costs — "ongkir ke surabaya brp?", "kirim ke medan
+ * berapa?", "COD biayanya berapa?". How delivery or COD works, with no cost
+ * asked, is in the approved answers and stays the bot's.
+ */
+const SHIPPING =
+  /\bongkir(nya)?\b|\bongkos\s*(kirim|kurir)(nya)?\b|\bbiaya\s+(kirim|pengiriman|ongkir|kurir|cod)(nya)?\b|\b(kirim|dikirim|pengiriman|ngirim|kurir)(nya)?\b[^.?!\n]{0,30}\b(berapa|brp|brapa|biaya(nya)?|harga(nya)?)\b|\bcod\b[^.!\n]{0,24}\b(berapa|brp|brapa|biaya(nya)?|ongkos)\b|\b(berapa|brp|brapa)\b[^.?!\n]{0,20}\b(ongkir|kirim(nya)?|pengiriman(nya)?)\b/i;
+/** "Berapa lama", "berapa hari": a delivery TIME, not a cost. */
+const NOT_A_COST = /\b(berapa|brp|brapa)\s+(lama|hari|jam|minggu)\b/gi;
+
+/**
+ * Warranty, guarantee, "kalau rusak gimana?" (owner, 2026-11-16 — this
+ * REVERSES answering warranty from the approved answers: a person does now).
+ */
+const WARRANTY =
+  /\b(garansi|garansinya|garansian|bergaransi|warranty|guarantee|human\s*error)\b|\b(kalau|kalo|klo|kl|jika|misal|seandainya)\s+(nanti\s+)?(rusak|error|bermasalah|mati|kenapa[-\s]?kenapa)\b/i;
+
+/**
+ * Servicing a unit and what it costs (owner, 2026-11-16): "ganti baterai
+ * berapa?", "bisa servis di sini?", "pernah diservis?". Not "customer
+ * service", which is asking for a person.
+ */
+const SERVICE =
+  /(?<!customer\s)\b(servis|servisan|service|diservis|diservice|reparasi|perbaikan|benerin|dibenerin|betulin|perbaiki|diperbaiki)\b|\bganti\s+(baterai|batre|battery|layar|lcd|keyboard|keycap|keycaps|ssd|engsel|charger|port|speaker|trackpad|casing|body)\b|\b(upgrade|tambah)\s+(ram|ssd|storage)\b/i;
+
+/**
+ * Something the customer already bought here (owner, 2026-11-16): "unit
+ * yang saya beli kemarin …", "pembelian saya". A fault in it is a complaint
+ * (above); anything else is a person's too. "Aku beli disini aja" is a buyer.
+ */
+const PAST_PURCHASE =
+  /\b(yang|yg|unit|laptop|macbook|barang)\s+(yang\s+|yg\s+)?(saya|aku|sy|gw|gue)\s+beli\b|\b(saya|aku|sy|gw|gue)\s+(udah|sudah|udh|sdh|pernah)\s+beli\s+(di\s*sini|disini|di\s+(toko\s+)?(kakak|kalian|sini))\b|\b(saya|aku|sy|gw|gue)\s+beli\s+(kemarin|kemaren|minggu\s+lalu|bulan\s+lalu|tahun\s+lalu|waktu\s+itu|sebelumnya)\b|\b(kemarin|kemaren|minggu\s+lalu|bulan\s+lalu|tahun\s+lalu)\s+(saya|aku|sy|gw|gue)\s+(udah\s+|sudah\s+)?beli\b|\bpembelian(ku|\s+(saya|aku|sebelumnya|kemarin|kemaren))\b|\bbeli\s+di\s*sini\s+(kemarin|kemaren|minggu|bulan|tahun)\b/i;
+
+/**
+ * Does the customer ask to SEE photos (owner, 2026-11-16: photos go only
+ * when asked)? "minta foto", "ada fotonya?", "pic nya", "real pic". Not a
+ * video — that is a call for a person — and not "lihat langsung", a visit.
+ */
+const ASKS_PHOTOS =
+  /\b(foto|fotonya|poto|potonya|photo|photos|gambar|gambarnya|pic|pics|pict|picture|pictures|real\s*pic)\b/i;
+
+export function asksForPhotos(text: string): boolean {
+  return ASKS_PHOTOS.test(text);
+}
+
+/**
+ * A reply that brings up an admin, CS or customer service (owner,
+ * 2026-11-16: the bot never offers or mentions one on its own; only when the
+ * customer asks for a person does it say it will connect them).
+ */
+const ADMIN_WORD = /\b(admin|adminnya|mimin|cs|customer\s*service)\b/i;
+
+export function mentionsAdmin(text: string): boolean {
+  return ADMIN_WORD.test(text);
+}
+
+/** The reply with every sentence that names an admin taken out. */
+export function withoutAdminMention(text: string): string {
+  return text
+    .split("\n")
+    .map((line) =>
+      line
+        .split(/(?<=[.!?…])\s+/)
+        .filter((sentence) => !mentionsAdmin(sentence))
+        .join(" "),
+    )
+    .filter((line) => line.trim() !== "")
+    .join("\n")
+    .trim();
+}
+
 const ORDER_PAYMENT =
   /\b(sudah|udah|udh|sdh)\s*(?:(?:saya|aku|sy|gw|kami)\s+)?(transfer|tf|bayar|kirim\s*bukti)|\bbukti\s*(transfer|tf|bayar|pembayaran)(?:nya)?\b|\b(no\.?\s*)?resi\b|\btracking\b|\blacak\b|\bpesanan\s*(saya|aku|sy)\b|\binvoice\b/i;
 
@@ -696,6 +822,11 @@ export function routeMessage(
      * starting out, and the bot answers (2026-10-27).
      */
     shown?: boolean;
+    /**
+     * This chat has already been sent photos (2026-11-16). Asking for more
+     * detail than those is a person's; before any, it is a photo request.
+     */
+    photosSent?: boolean;
   } = {},
 ): Route | null {
   const can = opts.capabilities ?? PARALLEL_CAPABILITIES;
@@ -729,6 +860,9 @@ export function routeMessage(
 
   if (ORDER_PAYMENT.test(t))
     return { topic: "order_payment", rule: "order_payment" };
+  // What a person takes, whatever the bot could read (owner, 2026-11-16).
+  const handover = handoverCase(t, opts.photosSent === true);
+  if (handover) return handover;
   /*
    * Negotiation goes to a person whatever the bot can read, and that is a
    * decision rather than an oversight: a discount is the owner's to give, and
@@ -788,6 +922,27 @@ export function routeMessage(
   // shelf. With `stock` the bot can do exactly that, and it is the most
   // useful thing it does.
   if (money) return { topic: "recommendation", rule: "budget" };
+  return null;
+}
+
+/**
+ * The cases the owner listed on 2026-11-16 that a person takes: servicing and
+ * past purchases, warranty, a video or phone call, a unit's defects and more
+ * detailed photos once photos were sent, and a delivery cost. Lower-case text.
+ */
+function handoverCase(t: string, photosSent: boolean): Route | null {
+  if (PAST_PURCHASE.test(t)) return { topic: "service", rule: "past_purchase" };
+  if (SERVICE.test(t)) return { topic: "service", rule: "service" };
+  if (WARRANTY.test(t)) return { topic: "warranty_claim", rule: "warranty" };
+  if (VIDEO_CALL.test(t)) return { topic: "video_call", rule: "video_call" };
+  if (PHONE_CALL.test(t)) return { topic: "video_call", rule: "phone" };
+  if (VIDEO_OF_UNIT.test(t)) return { topic: "video_call", rule: "video" };
+  if (photosSent && PHOTO_DETAIL.test(t))
+    return { topic: "unit_details", rule: "photo_detail" };
+  if (DEFECT.test(t.replace(NOT_A_DEFECT, " ")))
+    return { topic: "unit_details", rule: "defect" };
+  if (SHIPPING.test(t.replace(NOT_A_COST, " ")))
+    return { topic: "shipping_quote", rule: "shipping" };
   return null;
 }
 
@@ -1527,7 +1682,8 @@ export function holdingMessage(
   const line =
     topic === "order_payment" && rule === "dp_proof"
       ? "Makasih kak, bukti DP-nya aku cek dulu ya 🙏"
-      : HOLDING_LINE[topic];
+      : ((rule ? RULE_LINE[`${topic}:${rule}`] : undefined) ??
+        HOLDING_LINE[topic]);
   return open
     ? line
     : `${line} Toko lagi tutup, nanti aku kabari pas buka jam 10.00 ya.`;
@@ -1550,8 +1706,27 @@ const HOLDING_LINE: Readonly<Record<HandoffTopic, string>> = {
   media: "Sudah aku terima ya kak, aku lihat dulu 🙏",
   photos: "Fotonya aku siapin dulu ya kak 🙏",
   closing: "Siap kak, aku bantu prosesnya ya 🙏",
-  human: "Siap kak, aku sambungin ke admin ya 🙏",
+  // The owner's words (2026-11-16) — and the ONLY line that names an admin:
+  // the bot never brings one up unless the customer asked for one.
+  human: "Oke kak, aku sambungkan ke admin ya 🙏",
+  video_call: "Siap kak, untuk video call-nya aku atur dulu ya 🙏",
+  service: "Untuk servisnya aku tanyain ke teknisi dulu ya kak 🙏",
   other: "Bentar ya kak, aku cek dulu 🙏",
+};
+
+/**
+ * Where one topic covers several asks, the line for the rule that fired
+ * (owner, 2026-11-16): a warranty QUESTION is not a grievance to apologise
+ * for, and a phone call is not a video call.
+ */
+const RULE_LINE: Readonly<Record<string, string>> = {
+  "video_call:phone": "Siap kak, untuk telponnya aku atur dulu ya 🙏",
+  "video_call:video": "Siap kak, videonya aku siapin dulu ya 🙏",
+  "unit_details:defect":
+    "Bentar ya kak, kondisi unitnya aku cekin langsung dulu 🙏",
+  "unit_details:photo_detail": "Siap kak, foto detailnya aku siapin dulu ya 🙏",
+  "warranty_claim:warranty": "Untuk garansinya aku tanyain dulu ya kak 🙏",
+  "service:past_purchase": "Siap kak, pembeliannya aku cek dulu ya 🙏",
 };
 
 /**
@@ -1565,7 +1740,10 @@ export function isHoldingLine(text: string | null | undefined): boolean {
   if (t === "") return false;
   const lines = new Set<string>([
     ...Object.values(HOLDING_LINE),
+    ...Object.values(RULE_LINE),
     "Makasih kak, bukti DP-nya aku cek dulu ya 🙏",
+    // The admin line before 2026-11-16, still on older rows.
+    "Siap kak, aku sambungin ke admin ya 🙏",
     // rules/replies.ts `passedOnToo` — the short line once a customer was told.
     "Siap kak, yang ini sekalian aku tanyain ya 🙏",
     "Noted, I'll check that one too 🙏",

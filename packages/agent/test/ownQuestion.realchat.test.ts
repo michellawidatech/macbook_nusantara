@@ -339,11 +339,10 @@ describe("photos are offered only where there are some (owner's chat, 2026-10-27
       openNow: true,
       capabilities: SHOP_CAPABILITIES,
     });
-    // Since 2026-10-28 photos are SENT with a recommendation, never offered,
-    // and only for a unit whose photos is above 0.
-    expect(stable).toContain(
-      "(photos above 0), call unit_photos for it and SEND them",
-    );
+    // Since 2026-11-16 photos go only when the customer asks (this
+    // REVERSES 2026-10-28's "SEND them with a recommendation").
+    expect(stable).toContain("Photos go ONLY when the customer asks for them");
+    expect(stable).not.toContain("SEND them with the recommendation");
     expect(stable).toContain("is never a hand-over");
   });
 });
@@ -409,7 +408,7 @@ describe("the rules bot (no credential)", () => {
     expect(out.handoff?.topic).toBe("other");
   });
 
-  it("sends the photos with a recommendation when there are some, and never asks (2026-10-28)", async () => {
+  it("sends no photos with a recommendation, even when there are some, and never asks (2026-11-16)", async () => {
     const after =
       "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita 😊";
     const p = pos({ search_stock: { matched: 1, units: [IPAD] } });
@@ -422,7 +421,9 @@ describe("the rules bot (no credential)", () => {
       unit_photos: { found: true, ...IPAD, photoIds: ["q1", "q2"] },
     });
     const out2 = await runRules(base("ada ipad mini 2021?", pictured));
-    expect(out2.photos).toEqual(["q1", "q2"]);
+    // Photos only on request (owner, 2026-11-16): none fetched, none sent.
+    expect(out2.photos).toBeUndefined();
+    expect(pictured.asked.map((a) => a.name)).not.toContain("unit_photos");
     expect(out2.reply).not.toMatch(/mau lihat foto/i);
     expect(out2.reply.endsWith(after)).toBe(true);
   });

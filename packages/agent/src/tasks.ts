@@ -61,6 +61,14 @@ export const TASK_NEED = {
   verifyDp: "Perlu verifikasi DP",
   /** A DP hold ran out unpaid: refund the DP or keep it (hangus). */
   decideDp: "Perlu putuskan DP",
+  /** A video call, a video of the unit or a phone call (2026-11-16). */
+  videoCall: "Perlu atur video call",
+  /** Servicing a unit, or what a repair costs (2026-11-16). */
+  service: "Perlu urus servis",
+  /** Something the customer bought here before (2026-11-16). */
+  pastPurchase: "Perlu cek pembelian lalu",
+  /** More detailed photos than the ones already sent (2026-11-16). */
+  photoDetail: "Perlu kirim foto detail",
 } as const;
 export type TaskNeed = keyof typeof TASK_NEED;
 
@@ -128,9 +136,20 @@ export function needOfTopic(topic: HandoffTopic): TaskNeed {
       return "photos";
     case "closing":
       return "closing";
+    case "video_call":
+      return "videoCall";
+    case "service":
+      return "service";
     default:
       return "reply";
   }
+}
+
+/** Where one topic covers several asks, the job the rule names (2026-11-16). */
+function needOfRoute(route: Pick<Route, "topic" | "rule">): TaskNeed {
+  if (route.rule === "past_purchase") return "pastPurchase";
+  if (route.rule === "photo_detail") return "photoDetail";
+  return needOfTopic(route.topic);
 }
 
 /** Longest quote kept under the head. A reminder, not the transcript. */
@@ -187,7 +206,7 @@ export function routeSummary(
       unit: unitSubject(customerText),
       text: customerText,
     });
-  return routedTask(route.topic, customerText);
+  return taskNote(needOfRoute(route), unitSubject(customerText), customerText);
 }
 
 /**

@@ -1006,7 +1006,8 @@ describe("handing a customer to a person", () => {
       handsOver(
         "stock",
         "Tanya stok MacBook Air M1",
-        "Siap kak 😊 untuk Air M1 kami cekkan dulu ya, admin kami segera balas 🙏",
+        // No admin: named only to a customer who asked for one (2026-11-16).
+        "Siap kak 😊 untuk Air M1 kami cekkan dulu ya 🙏",
       ),
     ]);
     // The 2026-09-18 design, where a named unit's stock is a person's: since
@@ -1059,10 +1060,11 @@ describe("handing a customer to a person", () => {
     await inbound({
       id: "hold.2",
       from: SENDER,
-      text: "oh iya, garansinya berapa lama?",
+      // Not warranty: that is a person's too since 2026-11-16.
+      text: "oh iya, tokonya buka tiap hari?",
       ts: ago(20_000),
     });
-    const next = scripted(["Garansi toko 1 bulan ya kak 😊"]);
+    const next = scripted(["Iya kak, buka tiap hari 😊"]);
     expect((await pass(next.client)).drafted).toBe(1);
     expect(next.calls).toHaveLength(1);
     // Told what is waiting, so it neither answers nor contradicts it.
@@ -1339,8 +1341,9 @@ describe("the prompt", () => {
     await db.agentKnowledge.deleteMany({});
     await db.agentKnowledge.create({
       data: {
-        question: "Garansi berapa lama kak?",
-        answer: "Garansi dari kami 1 bulan ya kak 😊",
+        // Not warranty, a person's since 2026-11-16: the COD answer.
+        question: "Cod bisa ga kak?",
+        answer: "Bisa kak 😊 COD area Jabodetabek ya kak",
         createdById: "staff_kb_worker",
         createdAt: NOW,
         updatedAt: NOW,
@@ -1349,7 +1352,7 @@ describe("the prompt", () => {
     await inbound({
       id: "pr.1",
       from: SENDER,
-      text: "garansinya brp lama?",
+      text: "cod bisa ga?",
       ts: ago(20_000),
     });
 
@@ -1357,7 +1360,7 @@ describe("the prompt", () => {
       {
         tool: "reply",
         input: {
-          message: "Garansi dari kami 1 bulan ya kak 😊",
+          message: "Bisa kak 😊 COD area Jabodetabek ya kak",
           sources: "K1",
         },
       },
@@ -1369,7 +1372,7 @@ describe("the prompt", () => {
       cache_control?: unknown;
     }>;
     expect(stable!.cache_control).toEqual({ type: "ephemeral" });
-    expect(stable!.text).toContain("[K1] Q: Garansi berapa lama kak?");
+    expect(stable!.text).toContain("[K1] Q: Cod bisa ga kak?");
     expect(stable!.text).not.toContain("It is now");
     expect(volatile!.text).toContain("It is now");
     // The likeliest answer rides beside the message.

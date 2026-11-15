@@ -101,6 +101,11 @@ import {
   matchesNote,
   renderStoreFacts,
   routeMessage,
+  asksForPhotos,
+  questionItems,
+  mergeItemResults,
+  itemFocusNote,
+  type AiFocus,
   carriesMedia,
   effectiveCapabilities,
   keepRequestNote,
@@ -598,6 +603,27 @@ function ready(
 }
 
 /**
+ * Has this chat been sent any of the shop's photos since its reset point
+ * (2026-11-16)? An unsent one does not count.
+ */
+export async function photosSentTo(
+  db: PrismaClient,
+  from: string,
+  after: Date | null,
+): Promise<boolean> {
+  const row = await db.outbox.findFirst({
+    where: {
+      kind: "WA_IMAGE",
+      retractedAt: null,
+      payload: { path: ["to"], equals: from },
+      ...(after ? { createdAt: { gt: after } } : {}),
+    },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
+/**
  * The whole burst as one customer turn.
  *
  * Emitting one `user` turn per row would spend tokens telling the model the
@@ -987,6 +1013,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         visitBooked,
         lastShown,
         threadState,
+        photosSent,
       ] = await Promise.all([
         db.waThreadMemory.findUnique({
           where: { from },
@@ -1010,6 +1037,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // What the conversation is in the middle of (threadState.ts): a
         // booking given one detail per message, a search offered.
         lastThreadState(db, from, resetAt),
+        // Whether this chat has had photos (2026-11-16): asking for more
+        // detail than those is a person's.
+        photosSentTo(db, from, resetAt),
       ]);
 
       // Turns older than the window, when the window is full: the few that
@@ -1095,11 +1125,19 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       // The two reads of the customer's message that do not ask the model:
       // whether it must go to a person whatever the model thinks (policy.ts),
       // and which of the owner's answers it most looks like (retrieval.ts).
-      const route = routeMessage(current, {
-        hasMedia: carriesMedia(batch),
+      const routeOpts = {
         capabilities,
         shown: lastShown.length > 0,
+        photosSent,
+      };
+      const route = routeMessage(current, {
+        hasMedia: carriesMedia(batch),
+        ...routeOpts,
       });
+      // A list of questions in one bubble is answered per question (owner,
+      // 2026-11-16). Not a photo or file the customer sent: that is one
+      // hand-over whatever the caption lists.
+      const list = route?.topic === "media" ? null : questionItems(current);
       const hint = matchesNote(knowledge, matchesFor(knowledge, current), {
         live: effectiveCapabilities(capabilities).stock,
       });
@@ -1194,9 +1232,10 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           waiting,
           leadThreshold: settings.leadThreshold,
           dp,
+          photosSent,
           ...(withAi && turnClient
             ? {
-                ai: async () => {
+                ai: async (focus?: AiFocus) => {
                   const calls: CallUsage[] = [];
                   const r = await converse({
                     client: turnClient,
@@ -1204,12 +1243,16 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                     db,
                     ctx,
                     prompt,
-                    turns,
+                    // One question of a list: that question is the turn,
+                    // the whole list is in the note.
+                    turns: focus ? toTurns(history, focus.text) : turns,
                     knowledge,
                     storeFacts,
                     dp,
                     route: null,
-                    hint,
+                    hint: focus
+                      ? [hint, focus.note].filter(Boolean).join("\n\n")
+                      : hint,
                     capabilities,
                     alreadyTold,
                     selfAnswer,
@@ -1243,7 +1286,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       // "Boleh lihat pricelist hari ini?" (2026-11-10): the shelf's list for
       // what was asked for, by code, whichever bot is on. Not when the message
       // must go to a person anyway.
-      if (!result && !route)
+      if (!result && !route && !list)
         result = await priceListTurn({
           db,
           ctx,
@@ -1283,6 +1326,53 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
             failure = err;
           },
         });
+      } else if (list) {
+        // Each question answered on its own, with its own routing, then put
+        // back under its number (packages/agent questionList.ts). One failed
+        // answer fails the turn, and the rules answer it instead — they split
+        // the list the same way.
+        const parts = await Promise.all(
+          list.items.map(async (item, k) => {
+            const itemRoute = routeMessage(item.text, routeOpts);
+            const keep =
+              itemRoute?.rule === "keep" &&
+              effectiveCapabilities(capabilities).reserve &&
+              deps.agentStaffId !== undefined;
+            return converse({
+              client: turnClient!,
+              ...(agentModel ? { model: agentModel } : {}),
+              db,
+              ctx,
+              prompt,
+              turns: toTurns(history, item.text),
+              knowledge,
+              storeFacts,
+              dp,
+              route: keep ? null : itemRoute,
+              hint: [
+                matchesNote(knowledge, matchesFor(knowledge, item.text), {
+                  live: effectiveCapabilities(capabilities).stock,
+                }),
+                keep ? keepRequestNote(dp) : "",
+                itemFocusNote(list, k),
+              ]
+                .filter(Boolean)
+                .join("\n\n"),
+              capabilities,
+              alreadyTold,
+              selfAnswer: false,
+              lastReply,
+              onError: (err) => {
+                failure = err;
+              },
+              onCall: (u) => v1Calls.push(u),
+              ...(dispatch ? { dispatch } : {}),
+            });
+          }),
+        );
+        result = parts.every((p): p is ConverseResult => p !== null)
+          ? mergeItemResults(list, parts)
+          : null;
       } else {
         result = await converse({
           client: turnClient!,
@@ -1373,6 +1463,14 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
       // answer; the single agent does not, so its turn is scored the way the
       // rules score one — from what the customer said, by code, no model
       // (owner, 2026-10-21: the bot decides the lead, nobody else).
+      // A list's other hand-overs (2026-11-16): their topics ride on the
+      // row's note too, so the inbox files the chat under every category.
+      const extraHandoffs = (
+        "extraHandoffs" in result
+          ? ((result as { extraHandoffs?: ConverseResult["handoff"][] })
+              .extraHandoffs ?? [])
+          : []
+      ).filter((h): h is NonNullable<ConverseResult["handoff"]> => !!h);
       const leadScore =
         "verdict" in result
           ? result.verdict.leadScore
@@ -1441,6 +1539,13 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
                         ? { forcedBy: result.handoff.forcedBy }
                         : {}),
                       at: answeredAt.toISOString(),
+                      ...(extraHandoffs.length > 0
+                        ? {
+                            also: [
+                              ...new Set(extraHandoffs.map((h) => h.topic)),
+                            ],
+                          }
+                        : {}),
                       // The line the BOT sent with it, so /chat labels it Bot
                       // even after a colleague closes the row (2026-10-27).
                       reply: outgoing,
@@ -1491,6 +1596,20 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
             summary: result.handoff.summary,
             customerText: current,
             ...(result.handoff.serial ? { serial: result.handoff.serial } : {}),
+            messageId: anchor.id,
+            now: answeredAt,
+          });
+        }
+        // A list with two questions for a person (2026-11-16): each its own
+        // task, so the inbox can file it under its own category. One OPEN
+        // task per kind still holds — two of one kind are one task.
+        for (const extra of extraHandoffs) {
+          await upsertChatAction(tx, {
+            from,
+            topic: extra.topic,
+            summary: extra.summary,
+            customerText: current,
+            ...(extra.serial ? { serial: extra.serial } : {}),
             messageId: anchor.id,
             now: answeredAt,
           });
@@ -1557,7 +1676,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // days, the same set again for "foto semua sisinya". A photo this
         // chat already has (and nobody unsent) is not sent again; when that
         // leaves nothing, one short line says where they are.
-        const wanted = result.photos ?? [];
+        // Photos only when the customer asked for them (owner, 2026-11-16):
+        // whichever bot answered, none go out otherwise.
+        const wanted = asksForPhotos(current) ? (result.photos ?? []) : [];
         const sentBefore = wanted.length
           ? new Set(
               (

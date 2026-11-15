@@ -70,7 +70,7 @@ describe("the bot answers these itself (the 2026-10-27 false hand-overs)", () =>
     // Ordinary questions.
     ["halo kak", null],
     ["air m1 ready?", null],
-    ["garansinya berapa lama?", null],
+    // "garansinya berapa lama?" is a person's since 2026-11-16 (escalations.test.ts).
     ["bisa cod ga?", null],
     ["toko buka jam berapa?", null],
     ["m1 vs m2 bedanya apa?", null],
@@ -181,7 +181,7 @@ describe("trade-ins, complaints and payment proof reach a person (2026-11-06, F6
     ["bisa TT kak?", null],
     ["Bisa tukar tambah ga kak?", null],
     ["ada yang layarnya mulus kak?", null],
-    ["unitnya pernah servis?", null, true],
+    // "unitnya pernah servis?" is a person's since 2026-11-16 (escalations.test.ts).
     ["mau beli macbook buat kuliah", null],
   ];
   it.each(rows(mine))("still the bot's: $text", ({ text, expected, shown }) => {
@@ -193,7 +193,7 @@ describe("shopping lines the review found routed to a person (2026-11-06, final 
   const mine: Case[] = [
     ["macbook saya rusak, mau cari yang baru budget 10jt", null],
     ["laptop saya yg lama udah mati, cari pengganti", null],
-    ["tt-nya berapa lama garansinya?", null],
+    // "tt-nya berapa lama garansinya?" is warranty: a person's since 2026-11-16.
     ["bisa tt kak? saya mau yang m2", null],
     ["tukar tambah bisa berapa persen potongannya?", null],
   ];

@@ -280,3 +280,57 @@ describe("an answer to the bot's own question is never a hand-over (2026-10-27)"
     ).toBe(row.replyText);
   });
 });
+
+describe("a numbered list through the AI agent (owner, 2026-11-16)", () => {
+  it("answers each question on its own and puts the answers under their numbers", async () => {
+    await inbound({
+      id: "l.1",
+      from: SENDER,
+      text: "Hi, aku mau tanya ya:\n1. tokonya buka tiap hari?\n2. bisa nego kak?",
+      ts: ago(20_000),
+    });
+    const calls: CreateArgs[] = [];
+    // Answers by what it was offered, not by call order: the questions are
+    // asked side by side.
+    const create = async (args: CreateArgs) => {
+      calls.push(args);
+      const routed = !(args.tools ?? []).some((t) => t.name === "reply");
+      return {
+        content: [
+          {
+            type: "tool_use" as const,
+            id: `toolu_${calls.length}`,
+            name: routed ? "handoff_to_staff" : "reply",
+            input: routed
+              ? {
+                  topic: "negotiation",
+                  summary: "Perlu jawab tawaran",
+                  customer_message:
+                    "Untuk nego harganya aku tanyain ke owner dulu ya kak",
+                }
+              : { message: "Iya kak, buka tiap hari", sources: "greeting" },
+          },
+        ],
+        stop_reason: "tool_use" as const,
+      };
+    };
+    await pass({ messages: { create } } as unknown as AgentClient);
+
+    const row = await db.waMessage.findFirstOrThrow({
+      where: { waMessageId: "l.1" },
+    });
+    expect(row.replyText).toBe(
+      "1. tokonya buka tiap hari?\nIya kak, buka tiap hari\n\n" +
+        "2. bisa nego kak?\nUntuk nego harganya aku tanyain ke owner dulu ya kak",
+    );
+    expect(row.status).toBe("PERLU_STAF");
+    expect(calls).toHaveLength(2);
+    // Each call is one question, with the list beside it.
+    const asked = calls.map((c) => JSON.stringify(c.messages.at(-1)));
+    expect(asked.some((m) => m.includes("tokonya buka tiap hari?"))).toBe(true);
+    expect(asked.every((m) => m.includes("Answer ONLY"))).toBe(true);
+    expect(
+      await db.chatAction.findFirstOrThrow({ where: { from: SENDER } }),
+    ).toMatchObject({ topic: "negotiation", kind: "NEGOTIATION" });
+  });
+});

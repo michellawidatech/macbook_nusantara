@@ -233,11 +233,15 @@ describe("a unit's photos go to a chat once (2026-11-06, W7)", () => {
         },
       },
     });
-    await turn("p1", "kak ada macbook pro 16 m3?", 0);
+    // Photos only when asked (owner, 2026-11-16): the recommendation sends
+    // none, the first ask sends them.
+    await turn("p0", "kak ada macbook pro 16 m3?", 0);
     const images = () => owner.outbox.count({ where: { kind: "WA_IMAGE" } });
+    expect(await images()).toBe(0);
+    await turn("p1", "minta foto macbook pro 16 m3 dong", 1);
     const first = await images();
     expect(first).toBe(2);
-    await turn("p2", "minta fotonya dong kak", 1);
+    await turn("p2", "minta fotonya dong kak", 2);
     expect(await images()).toBe(first);
     const lines = await owner.outbox.findMany({ where: { kind: "WA_REPLY" } });
     expect(
@@ -245,6 +249,91 @@ describe("a unit's photos go to a chat once (2026-11-06, W7)", () => {
         /sudah aku kirim di atas/.test((l.payload as { body: string }).body),
       ),
     ).toBe(true);
+  });
+});
+
+describe("the owner's asks of 2026-11-16, through the worker", () => {
+  async function photograph() {
+    const unit = await owner.unit.findUniqueOrThrow({
+      where: { serial: "MBP1" },
+    });
+    await owner.unitNote.create({
+      data: {
+        id: "note_mbp1_b",
+        unitId: unit.id,
+        serial: "MBP1",
+        body: "QC",
+        staffId: AGENT_STAFF,
+        at: NOW,
+        photos: {
+          create: [0, 1].map((i) => ({
+            id: `ph_mbp1_b${i}`,
+            url: `/p/b${i}.jpg`,
+            sortOrder: i,
+          })),
+        },
+      },
+    });
+  }
+  const images = () => owner.outbox.count({ where: { kind: "WA_IMAGE" } });
+
+  it("sends photos only when asked, and hands more detail to a person once they were sent", async () => {
+    await photograph();
+    await turn("s1", "kak ada macbook pro 16 m3?", 0);
+    expect(await images()).toBe(0);
+    await turn("s2", "minta fotonya dong", 1);
+    expect(await images()).toBe(2);
+    const more = await turn("s3", "fotonya kurang jelas kak", 2);
+    expect(more).toBe("Siap kak, foto detailnya aku siapin dulu ya");
+    expect(await images()).toBe(2);
+    const row = await owner.waMessage.findFirstOrThrow({
+      where: { waMessageId: "s3" },
+    });
+    expect(row.status).toBe("PERLU_STAF");
+    expect(
+      await owner.chatAction.findFirstOrThrow({
+        where: { from: FROM, status: "OPEN" },
+      }),
+    ).toMatchObject({ topic: "unit_details" });
+  });
+
+  it("answers a numbered list per question, with the warranty question handed over under its own number", async () => {
+    const reply = await turn(
+      "l1",
+      "Hi, aku mau tanya ya:\n1. ada macbook pro 16 m3?\n2. garansinya berapa lama?",
+      0,
+    );
+    const [first, second] = reply.split("\n\n");
+    expect(first).toMatch(/^1\. ada macbook pro 16 m3\?\n/);
+    expect(first).toContain("32,5jt");
+    expect(second).toMatch(
+      /^2\. garansinya berapa lama\?\nUntuk garansinya aku tanyain dulu ya kak/,
+    );
+    const row = await owner.waMessage.findFirstOrThrow({
+      where: { waMessageId: "l1" },
+    });
+    expect(row.status).toBe("PERLU_STAF");
+    expect(
+      await owner.chatAction.findFirstOrThrow({
+        where: { from: FROM, status: "OPEN" },
+      }),
+    ).toMatchObject({ topic: "warranty_claim" });
+  });
+
+  it("files a second hand-over of a list beside the first", async () => {
+    await turn("l2", "1. bisa nego kak?\n2. ongkir ke medan brp?", 0);
+    const row = await owner.waMessage.findFirstOrThrow({
+      where: { waMessageId: "l2" },
+    });
+    expect(row.entities).toMatchObject({
+      handoff: { topic: "negotiation", also: ["shipping_quote"] },
+    });
+    const topics = (
+      await owner.chatAction.findMany({ where: { from: FROM, status: "OPEN" } })
+    )
+      .map((a) => a.topic)
+      .sort();
+    expect(topics).toEqual(["negotiation", "shipping_quote"]);
   });
 });
 
