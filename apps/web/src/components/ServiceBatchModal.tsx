@@ -49,6 +49,7 @@
  * or brought back in another tab between the render and the press, and such a
  * unit is skipped and named rather than written.
  */
+import { ScanButton } from "./ScanButton";
 import { useEffect, useRef, useState } from "react";
 import {
   App,
@@ -698,7 +699,7 @@ function ServiceBatch({
         {
           <Flex vertical gap={SPACE.xs} style={{ marginBottom: SPACE.md }}>
             {!fixed && (
-              <Flex gap={SPACE.xs}>
+              <Flex gap={SPACE.xs} wrap>
                 <AutoComplete
                   style={{ flex: 1 }}
                   value={adding}
@@ -748,6 +749,8 @@ function ServiceBatch({
                     data-scan-target=""
                   />
                 </AutoComplete>
+                {/* Phone only (2026-11-16): the camera, or the handheld. */}
+                <ScanButton onScan={(v) => addSerial(normaliseSerial(v))} />
                 {mode === "SEND" && (
                   <Button
                     icon={<UnorderedListOutlined />}

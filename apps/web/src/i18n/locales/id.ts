@@ -5590,4 +5590,16 @@ export const id: Record<string, string> = {
   "scan.title": "Pindai barcode",
   "scan.noCamera":
     "Kamera tidak bisa dibuka. Izinkan di browser, atau ketik serialnya.",
+  "gradeTile.pcs": "pcs",
+  "gradeTile.countedAria": "Produk hitungan",
+  "gradeTile.aria": "Grade {{grade}}",
+  "gradeTile.grade": "Grade",
+  "inventory.unitsInLine": "Unit di baris ini",
+  "inventory.setPriceForAll": "Atur harga semua",
+  "inventory.rackName": "Rak {{rack}}",
+  "inventory.nPhotos": "{{count}} foto",
+  "inventory.batteryIs": "Baterai {{reading}}",
+  "inventory.neverServicedTag": "Belum pernah servis",
+  "inventory.printLabel": "Cetak label",
+  "inventory.unitCount": "{{count}} unit",
 };

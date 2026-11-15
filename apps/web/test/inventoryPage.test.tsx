@@ -660,9 +660,8 @@ describe("on a phone", () => {
     });
   });
 
-  it("is a card per line, and a tap on a line opens the same units inside it", async () => {
-    // No sideways grid on a phone (2026-11-16): the line is a card and its
-    // units open inside it.
+  it("is a card per line, and a tap opens the line full screen with a card per serial", async () => {
+    // No sideways grid on a phone (mockup a1/a3, 2026-11-16).
     renderPage();
     await settle();
     const line = expectedLines().find((l) => l.tracksSerial)!;
@@ -673,15 +672,30 @@ describe("on a phone", () => {
       { target: { value: line.code } },
     );
     await settle();
-    expect(document.querySelector(".inventory-lines table")).toBeNull();
-    const card = (await screen.findAllByText(line.code))[0]!.closest(
+    // Stock In and Stock Out are words under the app bar.
+    expect(screen.getByRole("button", { name: "Stock In" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Stock Out" })).toBeVisible();
+    const card = (await screen.findAllByText(line.specs))[0]!.closest(
       ".ant-card",
     ) as HTMLElement;
-    await userEvent.click(within(card).getAllByText(line.code)[0]!);
+    expect(card.closest("table")).toBeNull();
+    fireEvent.click(card);
+    const detail = await screen.findByRole("dialog");
     await waitFor(() => {
       for (const u of line.units)
-        expect(within(card).getByText(u.serial)).toBeInTheDocument();
+        expect(within(detail).getByText(u.serial)).toBeInTheDocument();
     });
+    // Three labelled actions per unit.
+    expect(
+      within(detail).getAllByRole("button", { name: "Set price" }),
+    ).toHaveLength(line.units.length);
+    expect(
+      within(detail).getAllByRole("button", { name: "Print label" }),
+    ).toHaveLength(line.units.length);
+    fireEvent.click(
+      within(detail).getAllByRole("button", { name: "Edit unit" })[0]!,
+    );
+    expect(await screen.findAllByRole("dialog")).not.toHaveLength(1);
   });
 });
 

@@ -1117,3 +1117,35 @@ body {
 .nusantara-sheet-full.ant-drawer .ant-drawer-footer {
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
 }
+
+/* Stock In / Stock Out's type, as tiles on a phone (mockup b1). */
+.nusantara-type-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.nusantara-type-tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: var(--nusantara-surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  text-align: start;
+  cursor: pointer;
+}
+.nusantara-type-tile.is-on {
+  border: 2px solid var(--nusantara-primary);
+  background: var(--nusantara-primary-bg);
+  color: var(--nusantara-primary-text, var(--nusantara-primary));
+}
+.nusantara-type-tile-icon {
+  font-size: 20px;
+  display: inline-flex;
+}

@@ -81,10 +81,15 @@ import {
   DownloadOutlined,
   UndoOutlined,
   EditOutlined,
+  InboxOutlined,
   LoginOutlined,
   LogoutOutlined,
+  RollbackOutlined,
+  SwapOutlined,
+  ToolOutlined,
 } from "@ant-design/icons";
 import { PageContainer } from "../../components/PageContainer";
+import { ScanButton } from "../../components/ScanButton";
 import { ProTable } from "../../components/ProTable";
 import { EditableTable } from "../../components/EditableTable";
 import { InventoryTable } from "./InventoryTable";
@@ -144,7 +149,6 @@ import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
 import { ServiceBatchForm } from "../../components/ServiceBatchModal";
 import { SupplierReturnForm } from "../../components/SupplierReturnModal";
 import { CustomerReturnForm } from "../returns/CustomerReturnPage";
-import { FooterToolbar } from "../../components/FooterToolbar";
 import { rendered } from "../../lib/rendered.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
@@ -283,6 +287,15 @@ const touched = (r: BatchRow) =>
   r.grade !== undefined ||
   r.price != null ||
   r.buy != null;
+
+/** Each movement type's glyph on a phone's type tiles (2026-11-16). */
+const TYPE_ICON: Record<StockReason, React.ReactNode> = {
+  INTERNAL: <InboxOutlined />,
+  SERVICE: <ToolOutlined />,
+  SUPPLIER_RETURN: <RollbackOutlined />,
+  CUSTOMER_RETURN: <RollbackOutlined />,
+  TRANSFER: <SwapOutlined />,
+};
 
 export function InventoryPage() {
   const db = useDb();
@@ -1365,12 +1378,40 @@ export function InventoryPage() {
   return (
     <PageContainer
       title={t("stock.inventory", "Inventory")}
-      // No page actions on any viewport. On a desktop the buttons live at
-      // the top right of the table itself (see PageContainer's docblock on
-      // the ListToolbar arrangement); on a phone a page action is an icon in
-      // a float fan, and Stock In / Stock Out read as words on every screen
-      // (owner ask 2026-11-16) — so there they are the bar at the foot.
+      // No page actions on a desktop: the buttons live at the top right of
+      // the table itself. On a phone (mockup a1, 2026-11-16) Stock In and
+      // Stock Out are two labelled buttons under the app bar, and Export
+      // stock is a row behind More.
+      phoneMenu={[
+        {
+          key: "export",
+          label: t("stockExport.button", "Export stock"),
+          icon: <DownloadOutlined />,
+          onClick: () => setExporting(true),
+        },
+      ]}
     >
+      {compact && (
+        <Flex gap={SPACE.sm}>
+          <Button
+            type="primary"
+            size="large"
+            icon={<LoginOutlined aria-hidden />}
+            onClick={() => openAdd("IN")}
+            style={{ flex: 1 }}
+          >
+            {t("stock.stockIn", "Stock In")}
+          </Button>
+          <Button
+            size="large"
+            icon={<LogoutOutlined aria-hidden />}
+            onClick={() => openAdd("OUT")}
+            style={{ flex: 1 }}
+          >
+            {t("stock.stockOut", "Stock Out")}
+          </Button>
+        </Flex>
+      )}
       <Tabs
         items={[
           {
@@ -1421,19 +1462,49 @@ export function InventoryPage() {
             required
             style={{ marginBottom: SPACE.md }}
           >
-            <Radio.Group
-              aria-label={t("stock.movementType", "Type")}
-              optionType="button"
-              buttonStyle="solid"
-              size="large"
-              value={picked === "" ? undefined : picked}
-              onChange={(e) => pickReason(e.target.value as StockReason)}
-              options={reasonsFor(kind).map((r) => ({
-                value: r,
-                label: typeWord(r),
-              }))}
-              style={{ display: "flex", flexWrap: "wrap", rowGap: SPACE.xs }}
-            />
+            {compact ? (
+              // Labelled tiles on a phone (mockup b1, 2026-11-16): every type
+              // visible at once, an icon and a word, two to a row — and they
+              // scroll with the form (owner).
+              <div
+                role="radiogroup"
+                aria-label={t("stock.movementType", "Type")}
+                className="nusantara-type-tiles"
+              >
+                {reasonsFor(kind).map((r) => {
+                  const on = picked === r;
+                  return (
+                    <button
+                      key={r}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      className={`nusantara-type-tile${on ? " is-on" : ""}`}
+                      onClick={() => pickReason(r)}
+                    >
+                      <span aria-hidden className="nusantara-type-tile-icon">
+                        {TYPE_ICON[r]}
+                      </span>
+                      <span>{typeWord(r)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <Radio.Group
+                aria-label={t("stock.movementType", "Type")}
+                optionType="button"
+                buttonStyle="solid"
+                size="large"
+                value={picked === "" ? undefined : picked}
+                onChange={(e) => pickReason(e.target.value as StockReason)}
+                options={reasonsFor(kind).map((r) => ({
+                  value: r,
+                  label: typeWord(r),
+                }))}
+                style={{ display: "flex", flexWrap: "wrap", rowGap: SPACE.xs }}
+              />
+            )}
           </Form.Item>
 
           {picked === "" ? (
@@ -1471,9 +1542,13 @@ export function InventoryPage() {
               {/* A heading, not a paragraph (owner ask 2026-09-23). The sentence
               that was here explained what "stock in" means to somebody who had
               just pressed Stock in. */}
-              <Typography.Text strong style={{ display: "block" }}>
-                {t("stock.serialisedProducts", "Serialised products")}
-              </Typography.Text>
+              <Flex justify="space-between" align="center" gap={SPACE.sm}>
+                <Typography.Text strong style={{ display: "block" }}>
+                  {t("stock.serialisedProducts", "Serialised products")}
+                </Typography.Text>
+                {/* Phone only: the camera, or the handheld (2026-11-16). */}
+                <ScanButton />
+              </Flex>
 
               <EditableTable<BatchRow>
                 rowKey="key"
@@ -2052,21 +2127,6 @@ export function InventoryPage() {
           <CustomerReturnForm onDone={closeDialog} scanRef={customerScan} />,
         )}
       </Modal>
-
-      {compact && (
-        // Words, not a float fan (owner ask 2026-11-16): the two doors stay
-        // in reach of a thumb at the foot of the screen, and say what they are.
-        <FooterToolbar>
-          <Tooltip title={t("stockExport.button", "Export stock")}>
-            <Button
-              icon={<DownloadOutlined />}
-              aria-label={t("stockExport.button", "Export stock")}
-              onClick={() => setExporting(true)}
-            />
-          </Tooltip>
-          {addAction}
-        </FooterToolbar>
-      )}
 
       <StockExportModal open={exporting} onClose={() => setExporting(false)} />
       <StockMovementEditModal

@@ -56,15 +56,20 @@ import { SerialLink } from "../../components/SerialLink";
 import {
   App,
   Button,
+  Card,
   Dropdown,
   Flex,
+  Modal,
   Segmented,
   Select,
+  Tag,
   Tooltip,
   Typography,
 } from "antd";
 import {
+  DownOutlined,
   EditOutlined,
+  EnvironmentOutlined,
   MoreOutlined,
   PrinterOutlined,
   RollbackOutlined,
@@ -82,6 +87,7 @@ import { DataTable } from "../../components/DataTable";
 import { EnumTag } from "../../components/EnumTag";
 import { LongText } from "../../components/LongText";
 import { GradeTag } from "../../components/GradeTag";
+import { GradeTile } from "../../components/GradeTile";
 import { UnitPhotos } from "../../components/UnitPhotos";
 import { CostInfoButton } from "../../components/CostBreakdown";
 import { PrintLabelsModal } from "../../components/LabelSheet";
@@ -198,6 +204,11 @@ export function InventoryTable({ extra }: InventoryTableProps) {
    * thing a popup could never do.
    */
   const [expanded, setExpanded] = useState<readonly string[]>([]);
+  /**
+   * The line open full screen on a phone (2026-11-16, mockup a3): its
+   * summary and one card per serial, in place of units nested under a row.
+   */
+  const [opened, setOpened] = useState<string | null>(null);
   const toggle = (key: string) =>
     setExpanded((prev) =>
       prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
@@ -816,16 +827,41 @@ export function InventoryTable({ extra }: InventoryTableProps) {
           onRow={(l) => ({
             onClick: (e: MouseEvent<HTMLElement>) => {
               if (l.onHand === 0 || onAControl(e)) return;
-              toggle(l.key);
+              // On a phone the line opens full screen (2026-11-16).
+              if (compact) setOpened(l.key);
+              else toggle(l.key);
             },
             style: l.onHand > 0 ? { cursor: "pointer" } : undefined,
           })}
-          expandable={{
-            expandedRowKeys: [...expanded],
-            rowExpandable: (l) => l.onHand > 0,
-            onExpand: (_, l) => toggle(l.key),
-            expandedRowRender: (l) => unitsOf(l),
-          }}
+          // The phone's card (mockup a1): the grade tile, the product, its
+          // warehouse and units, and the sell price.
+          card={(l) => ({
+            lead: <GradeTile grade={l.grade} counted={!l.tracksSerial} />,
+            title: l.product,
+            subtitle: l.specs,
+            facts: [
+              <span key="wh">
+                <EnvironmentOutlined aria-hidden />{" "}
+                {warehouseName(l.locationId) ?? fmtNone()}
+              </span>,
+              <Tag key="n" bordered={false} style={{ marginInlineEnd: 0 }}>
+                {t("inventory.unitCount", "{{count}} units", {
+                  count: l.onHand,
+                })}
+              </Tag>,
+            ],
+            amount: l.store.count === 0 ? fmtRp(0) : rangeText(l.store),
+          })}
+          expandable={
+            compact
+              ? undefined
+              : {
+                  expandedRowKeys: [...expanded],
+                  rowExpandable: (l) => l.onHand > 0,
+                  onExpand: (_, l) => toggle(l.key),
+                  expandedRowRender: (l) => unitsOf(l),
+                }
+          }
           keyboardRows={(l) =>
             t("inventory.openLineAria", "Show the units of {{what}}", {
               what: lineTitle(l),
@@ -1096,6 +1132,31 @@ export function InventoryTable({ extra }: InventoryTableProps) {
         />
       </div>
 
+      {compact && (
+        <LineDetail
+          line={lines.find((l) => l.key === opened) ?? null}
+          onClose={() => setOpened(null)}
+          counted={(l) => unitsOf(l)}
+          warehouse={warehouseName}
+          rack={rackName}
+          range={rangeText}
+          priceOf={(u) => priceOf(u, skuPriceOf(u.skuId))}
+          holdOf={(u) => {
+            const r = softHeld.get(u.serial);
+            if (!r) return undefined;
+            const who = db.customers.find((c) => c.id === r.customerId);
+            return who ? customerLabel(who) : r.code;
+          }}
+          battery={(u) => readUnitBattery(u, db, batterySettings).text}
+          photos={(u) => qcPhotosOf(db, u.serial).length}
+          unitMenu={unitMenu}
+          onSetPrice={(title, units) => setRepricing({ title, units })}
+          onPrint={(units) => setPrinting(labelsFor(units, db.skus, db.models))}
+          onEdit={(u) => setEditingUnit(u)}
+          title={lineTitle}
+        />
+      )}
+
       <SendToServiceModal
         serial={servicing}
         raisedBy="ADJUSTMENT"
@@ -1144,5 +1205,214 @@ export function InventoryTable({ extra }: InventoryTableProps) {
         }}
       />
     </>
+  );
+}
+
+/**
+ * A line, full screen on a phone (owner-approved mockup a3, 2026-11-16): what
+ * the line is, once, then one card per serial with its price and battery —
+ * the two facts read most often — and Set price · Print label · Edit unit in
+ * words. The unit's rarer doors (service, back to the supplier) are behind
+ * its More, the same menu the desktop's ⋯ opens.
+ */
+function LineDetail({
+  line,
+  onClose,
+  counted,
+  warehouse,
+  rack,
+  range,
+  priceOf: unitPrice,
+  holdOf,
+  battery,
+  photos,
+  unitMenu,
+  onSetPrice,
+  onPrint,
+  onEdit,
+  title,
+}: {
+  readonly line: InventoryLine | null;
+  readonly onClose: () => void;
+  readonly counted: (l: InventoryLine) => React.ReactNode;
+  readonly warehouse: (id: string | undefined) => string | undefined;
+  readonly rack: (id?: string) => string | undefined;
+  readonly range: (r: PriceRange) => string;
+  readonly priceOf: (u: Unit) => number;
+  readonly holdOf: (u: Unit) => string | undefined;
+  readonly battery: (u: Unit) => string;
+  readonly photos: (u: Unit) => number;
+  readonly unitMenu: (u: Unit) => MenuProps;
+  readonly onSetPrice: (title: string, units: readonly Unit[]) => void;
+  readonly onPrint: (units: readonly Unit[]) => void;
+  readonly onEdit: (u: Unit) => void;
+  readonly title: (l: InventoryLine) => string;
+}) {
+  const { t } = useTranslation();
+  if (line === null) return null;
+  const row = (label: string, value: React.ReactNode) => (
+    <Flex
+      justify="space-between"
+      gap={SPACE.md}
+      style={{
+        paddingBlock: SPACE.sm,
+        borderTop: "1px solid rgba(0,0,0,0.06)",
+      }}
+    >
+      <Typography.Text type="secondary">{label}</Typography.Text>
+      <Typography.Text strong>{value}</Typography.Text>
+    </Flex>
+  );
+  return (
+    <Modal
+      open
+      title={line.product}
+      onCancel={onClose}
+      footer={null}
+      destroyOnHidden
+    >
+      <Flex vertical gap={SPACE.md}>
+        <Card size="small">
+          <Flex gap={SPACE.md} align="center">
+            <GradeTile grade={line.grade} counted={!line.tracksSerial} />
+            <Flex vertical style={{ minWidth: 0 }}>
+              <Typography.Text strong>{line.specs}</Typography.Text>
+              <Typography.Text type="secondary" code>
+                {line.code}
+              </Typography.Text>
+              <Typography.Text type="secondary">
+                <EnvironmentOutlined aria-hidden />{" "}
+                {warehouse(line.locationId) ?? fmtNone()}
+              </Typography.Text>
+            </Flex>
+          </Flex>
+          <div style={{ marginTop: SPACE.sm }}>
+            {row(t("inventory.unitsInLine", "Units in this line"), line.onHand)}
+            {row(
+              t("inventory.sellPrice", "Sell price"),
+              line.store.count === 0 ? fmtRp(0) : range(line.store),
+            )}
+          </div>
+        </Card>
+
+        {!line.tracksSerial ? (
+          counted(line)
+        ) : (
+          <>
+            <Flex justify="space-between" align="center">
+              <Typography.Text strong>
+                {t("inventory.unitCount", "{{count}} units", {
+                  count: line.units.length,
+                })}
+              </Typography.Text>
+              <Button
+                type="link"
+                icon={<TagsOutlined aria-hidden />}
+                onClick={() => onSetPrice(title(line), line.units)}
+              >
+                {t("inventory.setPriceForAll", "Set price for all")}
+              </Button>
+            </Flex>
+            {line.units.map((u) => {
+              const hold = holdOf(u);
+              const n = photos(u);
+              return (
+                <Card size="small" key={u.serial}>
+                  <Flex vertical gap={SPACE.xs}>
+                    <Flex
+                      justify="space-between"
+                      align="baseline"
+                      gap={SPACE.sm}
+                    >
+                      <SerialLink serial={u.serial} />
+                      <Typography.Text strong style={{ fontSize: TYPE.lg }}>
+                        {fmtRp(unitPrice(u))}
+                      </Typography.Text>
+                    </Flex>
+                    <Typography.Text type="secondary">
+                      {[
+                        rack(u.rackId) &&
+                          t("inventory.rackName", "Rack {{rack}}", {
+                            rack: rack(u.rackId),
+                          }),
+                        t("inventory.nPhotos", "{{count}} photos", {
+                          count: n,
+                        }),
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </Typography.Text>
+                    <Flex wrap gap={SPACE.xs}>
+                      <Tag color="green" bordered={false}>
+                        {t("inventory.batteryIs", "Battery {{reading}}", {
+                          reading: battery(u),
+                        })}
+                      </Tag>
+                      {u.neverServiced === true && (
+                        <Tag bordered={false}>
+                          {t("inventory.neverServicedTag", "Never serviced")}
+                        </Tag>
+                      )}
+                      {u.status !== "TERSEDIA" && (
+                        <EnumTag map={UNIT_STATUS} value={u.status} />
+                      )}
+                    </Flex>
+                    {hold !== undefined && (
+                      <Typography.Text type="warning">
+                        {t(
+                          "pos.reservedNotPaid",
+                          "Reserved for {{name}}, not paid",
+                          { name: hold },
+                        )}
+                      </Typography.Text>
+                    )}
+                    {u.description && (
+                      <Typography.Text>{u.description}</Typography.Text>
+                    )}
+                    <Flex gap={SPACE.xs} wrap style={{ marginTop: SPACE.xs }}>
+                      <Button
+                        icon={<TagsOutlined aria-hidden />}
+                        onClick={() => onSetPrice(u.serial, [u])}
+                        style={{ flex: 1 }}
+                      >
+                        {t("inventory.setPrice", "Set price")}
+                      </Button>
+                      <Button
+                        icon={<PrinterOutlined aria-hidden />}
+                        onClick={() => onPrint([u])}
+                        style={{ flex: 1 }}
+                      >
+                        {t("inventory.printLabel", "Print label")}
+                      </Button>
+                      <Button
+                        icon={<EditOutlined aria-hidden />}
+                        onClick={() => onEdit(u)}
+                        style={{ flex: 1 }}
+                      >
+                        {t("inventory.editUnit", "Edit unit")}
+                      </Button>
+                      <Dropdown trigger={["click"]} menu={unitMenu(u)}>
+                        <Button
+                          type="text"
+                          icon={<DownOutlined aria-hidden />}
+                          iconPlacement="end"
+                          aria-label={t(
+                            "inventory.unitMoreAria",
+                            "More for {{serial}}",
+                            { serial: u.serial },
+                          )}
+                        >
+                          {t("page.more", "More")}
+                        </Button>
+                      </Dropdown>
+                    </Flex>
+                  </Flex>
+                </Card>
+              );
+            })}
+          </>
+        )}
+      </Flex>
+    </Modal>
   );
 }
