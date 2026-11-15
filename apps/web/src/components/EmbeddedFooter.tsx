@@ -17,6 +17,9 @@ export function EmbeddedFooter({ children }: { children: ReactNode }) {
   } = theme.useToken();
   return (
     <Flex
+      // Pinned to the foot of a phone's full-screen dialog (global.css,
+      // 2026-11-16), like the footer antd draws itself.
+      className="nusantara-embedded-footer"
       justify="end"
       gap={SPACE.sm}
       wrap

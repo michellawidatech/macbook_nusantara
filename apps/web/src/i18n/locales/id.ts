@@ -5584,4 +5584,10 @@ export const id: Record<string, string> = {
   "dataTable.hideDetails": "Sembunyikan",
   "dataTable.showChildren": "Tampilkan {{count}}",
   "dataTable.showDetails": "Lihat detail",
+  "scan.nowhere": "Terbaca {{serial}}, tapi tidak ada kolom serial di sini.",
+  "scan.useHandheld": "Silakan pindai dengan scanner genggam sekarang.",
+  "scan.button": "Pindai",
+  "scan.title": "Pindai barcode",
+  "scan.noCamera":
+    "Kamera tidak bisa dibuka. Izinkan di browser, atau ketik serialnya.",
 };

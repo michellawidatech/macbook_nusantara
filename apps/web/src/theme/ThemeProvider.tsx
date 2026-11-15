@@ -5,7 +5,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { App as AntdApp, ConfigProvider, theme as antdTheme } from "antd";
+import {
+  App as AntdApp,
+  ConfigProvider,
+  Grid,
+  theme as antdTheme,
+  type ThemeConfig,
+} from "antd";
 import { useAntdLocale } from "../i18n/antdLocale";
 import { ColorSchemeContext, type ColorSchemeContextValue } from "./context";
 import { renderRequiredMark } from "./requiredMark";
@@ -14,6 +20,9 @@ import { ACCENT, BRAND_DEEP, NAV } from "./tokens";
 import type { ColorSchemePreference, ResolvedColorScheme } from "./tokens";
 
 const STORAGE_KEY = "xinchuan-cms.color-scheme";
+
+/** The class a phone's dialogs and side drawers carry (global.css). */
+export const FULL_SCREEN = "nusantara-sheet-full";
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
 function isPreference(value: string | null): value is ColorSchemePreference {
@@ -131,7 +140,27 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     root.style.setProperty("--nusantara-brand-deep", BRAND_DEEP);
   }, []);
 
-  const themeConfig = useMemo(() => buildTheme(resolved), [resolved]);
+  /**
+   * The phone (2026-11-16), decided where `useLayoutMode` decides it — below
+   * `md`. Read here because two things only the root provider can set follow
+   * it: thumb-sized controls, and full-screen dialogs.
+   */
+  const compact = !Grid.useBreakpoint().md;
+  const themeConfig = useMemo<ThemeConfig>(() => {
+    const base = buildTheme(resolved);
+    if (!compact) return base;
+    // 44px is the smallest target a thumb hits reliably (Apple's HIG); the
+    // small size keeps 32 for the dense rows that ask for it.
+    return {
+      ...base,
+      token: {
+        ...base.token,
+        controlHeight: 44,
+        controlHeightLG: 48,
+        controlHeightSM: 32,
+      },
+    };
+  }, [resolved, compact]);
 
   /**
    * The two colours `global.css` mixes the "over quota" row tint from.
@@ -161,6 +190,9 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     // which tint with the brand colour rather than picking a green of their
     // own — see `.pos-total` and `.pos-shelf-row` in global.css.
     root.style.setProperty("--nusantara-primary", t.colorPrimary);
+    // The phone's selected chip (2026-11-16).
+    root.style.setProperty("--nusantara-primary-bg", t.colorPrimaryBg);
+    root.style.setProperty("--nusantara-primary-text", t.colorPrimaryText);
   }, [themeConfig]);
 
   const value = useMemo<ColorSchemeContextValue>(
@@ -193,6 +225,20 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
         // renderer is the only way to say "* after the label" once — see
         // `requiredMark.tsx` for what it renders and which forms opt out.
         form={{ requiredMark: renderRequiredMark }}
+        // On a phone every dialog is the whole screen (owner-approved
+        // mockup, 2026-11-16): ✕ and the title on top, the body scrolling,
+        // the main button pinned where the thumb is. One class, laid out in
+        // global.css; a confirmation (`.ant-modal-confirm`) stays small. A
+        // bottom sheet is a Drawer from the bottom and stays a sheet.
+        modal={compact ? { classNames: { root: FULL_SCREEN } } : undefined}
+        drawer={
+          compact
+            ? {
+                classNames: ({ props }) =>
+                  props.placement === "bottom" ? {} : { root: FULL_SCREEN },
+              }
+            : undefined
+        }
       >
         <AntdApp>{children}</AntdApp>
       </ConfigProvider>

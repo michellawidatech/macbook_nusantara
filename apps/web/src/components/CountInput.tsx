@@ -85,6 +85,8 @@ export interface CountInputProps {
 export function CountInput({ className, ...rest }: CountInputProps) {
   return (
     <InputNumber<number>
+      // The number pad on a phone (2026-11-16), not the full keyboard.
+      inputMode="numeric"
       {...rest}
       // `value` is `number | null` here and antd wants `number | undefined`;
       // the two mean the same thing to a stepper, and null is what a cleared

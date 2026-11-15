@@ -98,6 +98,8 @@ export function MoneyInput({
     <Space.Compact block style={style}>
       <MoneyAddon disabled={disabled} />
       <InputNumber<number>
+        // The number pad on a phone (2026-11-16), not the full keyboard.
+        inputMode="numeric"
         id={id}
         value={value}
         onChange={onChange}

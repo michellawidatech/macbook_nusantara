@@ -39,6 +39,8 @@ export function CommitMoneyInput({
   const bad = !isPriceInRange(value);
   return (
     <InputNumber<number>
+      // The number pad on a phone (2026-11-16), not the full keyboard.
+      inputMode="numeric"
       id={id}
       size="small"
       style={{ width: "100%" }}
