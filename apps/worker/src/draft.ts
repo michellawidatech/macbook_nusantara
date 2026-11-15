@@ -101,6 +101,7 @@ import {
   matchesNote,
   renderStoreFacts,
   routeMessage,
+  askedForAddress,
   asksForPhotos,
   questionItems,
   mergeItemResults,
@@ -1129,9 +1130,13 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         capabilities,
         shown: lastShown.length > 0,
         photosSent,
+        // The bot asked where to send it: an address now is a delivery
+        // address, which a person estimates (2026-11-16 follow-up).
+        deliveryContext: askedForAddress(newestFirst[0]?.reply),
       };
       const route = routeMessage(current, {
         hasMedia: carriesMedia(batch),
+        hasLocation: batch.some((m) => m.msgType === "location"),
         ...routeOpts,
       });
       // A list of questions in one bubble is answered per question (owner,

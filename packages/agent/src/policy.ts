@@ -697,13 +697,77 @@ const PHOTO_DETAIL =
 
 /**
  * What a delivery costs — "ongkir ke surabaya brp?", "kirim ke medan
- * berapa?", "COD biayanya berapa?". How delivery or COD works, with no cost
- * asked, is in the approved answers and stays the bot's.
+ * berapa?", "COD biayanya berapa?". The bot's (owner follow-up, 2026-11-16):
+ * brief general info, "the team estimates it", and a request for the
+ * address — the ADDRESS is what goes to a person (`ADDRESS`).
  */
 const SHIPPING =
   /\bongkir(nya)?\b|\bongkos\s*(kirim|kurir)(nya)?\b|\bbiaya\s+(kirim|pengiriman|ongkir|kurir|cod)(nya)?\b|\b(kirim|dikirim|pengiriman|ngirim|kurir)(nya)?\b[^.?!\n]{0,30}\b(berapa|brp|brapa|biaya(nya)?|harga(nya)?)\b|\bcod\b[^.!\n]{0,24}\b(berapa|brp|brapa|biaya(nya)?|ongkos)\b|\b(berapa|brp|brapa)\b[^.?!\n]{0,20}\b(ongkir|kirim(nya)?|pengiriman(nya)?)\b/i;
 /** "Berapa lama", "berapa hari": a delivery TIME, not a cost. */
 const NOT_A_COST = /\b(berapa|brp|brapa)\s+(lama|hari|jam|minggu)\b/gi;
+
+/** Does the customer ask what delivery or COD costs? */
+export function asksDeliveryCost(text: string): boolean {
+  return SHIPPING.test(text.toLowerCase().replace(NOT_A_COST, " "));
+}
+
+/** Talk about sending something somewhere: the context an address needs. */
+const DELIVERY_TALK =
+  /\b(kirim|dikirim|ngirim|pengiriman|antar|diantar|anter|dianter)\s+(ke|ke\s+alamat|ke\s+daerah)\b|\b(ongkir|ongkos\s*kirim|kurir|ekspedisi|cod|jne|jnt|sicepat|gosend|grabexpress|lalamove)\b/i;
+
+/**
+ * A real delivery address (owner follow-up, 2026-11-16: *"the moment the
+ * customer gives a real address it should be escalated"*): a street, a
+ * kelurahan / kecamatan / kota with a name, a postal code, a maps link, a
+ * shared location, "alamatku: …", a district ("Bekasi Timur", "Jaksel").
+ * A bare city in a cost question ("kirim ke medan berapa?") is not one: the
+ * bot asks for the address. Counted only in a delivery context.
+ */
+const ADDRESS = new RegExp(
+  [
+    String.raw`\b(jl|jln|jalan|gg|gang|komplek|komp|kompleks|perum|perumahan|apartemen|apartment|apt|blok|cluster|rt|rw|dusun|desa)\b\.?\s*[a-z0-9]`,
+    // Not "luar kota" / "dalam kota": a kind of delivery, not a place.
+    String.raw`(?<!\b(luar|dalam|antar|beda)\s)\b(kel|kelurahan|kec|kecamatan|kab|kabupaten|kota|kotamadya|prov|provinsi)\b\.?\s+(?!(apa|mana|aja|saja|lain|mana\s+aja|pakai|pake|bisa|gak|ga|nggak)\b)[a-z]`,
+    String.raw`\b(kode\s*pos|kodepos|zip)\b\s*:?\s*\d{5}\b`,
+    String.raw`\bmaps\.app\.goo\.gl\b|\bgoo\.gl\/maps\b|\bgoogle\.[a-z.]+\/maps\b|\bmaps\.google\.`,
+    String.raw`\b(share\s*lo[ck]|sharelo[ck]|share\s*lokasi|lokasi\s*(ku|saya|aku))\b`,
+    String.raw`\balamat(ku|nya)?(\s+(saya|aku|rumah|kantor|pengiriman|kirim))?\s*(:|di\s+(?!mana\b))\s*\S{3,}`,
+    String.raw`\b(kirim|dikirim|ngirim|pengiriman|antar|diantar|cod)\s+(ke\s+)?[a-z]+\s+(timur|barat|utara|selatan|pusat|tengah)\b`,
+    String.raw`\b(jaksel|jakbar|jaktim|jakut|jakpus)\b`,
+  ].join("|"),
+  "i",
+);
+
+/**
+ * Did the bot's own last reply ask where to send it ("Boleh kirim alamat
+ * lengkapnya kak?")? An address in the answer is then a delivery address.
+ */
+const ADDRESS_ASK =
+  /\b(kirim(in)?|minta|boleh|share|info(in)?)\b[^.!\n]{0,30}\balamat\w*\b[^.!\n]{0,60}\?|\balamat\w*\b[^.!\n]{0,30}\b(pengiriman|lengkap\w*|kakak)\b[^.!\n]{0,40}\?|\bdikirim\s+ke\s+mana\b[^.!\n]{0,20}\?/i;
+
+export function askedForAddress(reply: string | null | undefined): boolean {
+  return ADDRESS_ASK.test(reply ?? "");
+}
+
+/**
+ * A delivery figure the bot made up (owner follow-up, 2026-11-16: the real
+ * estimate comes from a person): a sentence about delivery carrying an
+ * amount no approved answer it cites states — "ongkir ke Bandung sekitar
+ * 50rb". The COD answer's own Rp180.000 is vouched by that answer.
+ */
+const DELIVERY_WORD =
+  /\b(ongkir\w*|ongkos|kirim\w*|dikirim|pengiriman\w*|cod|kurir|ekspedisi|transport\w*|antar\w*)\b/i;
+
+export function deliveryFigureUnvouched(
+  message: string,
+  approvedTexts: readonly string[],
+): boolean {
+  const vouched = new Set(moneyAmounts(approvedTexts.join("\n")));
+  return message
+    .split(/(?<=[.!?])\s+|\n/)
+    .filter((sentence) => DELIVERY_WORD.test(sentence))
+    .some((sentence) => moneyAmounts(sentence).some((v) => !vouched.has(v)));
+}
 
 /**
  * Warranty, guarantee, "kalau rusak gimana?" (owner, 2026-11-16 — this
@@ -827,6 +891,13 @@ export function routeMessage(
      * detail than those is a person's; before any, it is a photo request.
      */
     photosSent?: boolean;
+    /**
+     * The bot's last reply asked for the delivery address (`askedForAddress`,
+     * 2026-11-16 follow-up). A message about sending is its own context.
+     */
+    deliveryContext?: boolean;
+    /** The batch carried a WhatsApp location. */
+    hasLocation?: boolean;
   } = {},
 ): Route | null {
   const can = opts.capabilities ?? PARALLEL_CAPABILITIES;
@@ -893,6 +964,14 @@ export function routeMessage(
     return { topic: "closing", rule: "keep" };
   if (CLOSE.test(t) || (shown && COMMIT_SHOWN.test(t)))
     return { topic: "closing", rule: "buy" };
+  // A real address, once delivery is what is being talked about: a person
+  // estimates the ongkir (owner follow-up, 2026-11-16). The cost QUESTION
+  // before it is the bot's.
+  if (
+    (opts.deliveryContext === true || DELIVERY_TALK.test(t)) &&
+    (ADDRESS.test(t) || opts.hasLocation === true)
+  )
+    return { topic: "shipping_quote", rule: "address" };
   if (can.stock) {
     // The shelf is readable; each of the other switches still decides its
     // own kind of question (owner ask 2026-09-29).
@@ -941,8 +1020,6 @@ function handoverCase(t: string, photosSent: boolean): Route | null {
     return { topic: "unit_details", rule: "photo_detail" };
   if (DEFECT.test(t.replace(NOT_A_DEFECT, " ")))
     return { topic: "unit_details", rule: "defect" };
-  if (SHIPPING.test(t.replace(NOT_A_COST, " ")))
-    return { topic: "shipping_quote", rule: "shipping" };
   return null;
 }
 
@@ -1727,6 +1804,8 @@ const RULE_LINE: Readonly<Record<string, string>> = {
   "unit_details:photo_detail": "Siap kak, foto detailnya aku siapin dulu ya 🙏",
   "warranty_claim:warranty": "Untuk garansinya aku tanyain dulu ya kak 🙏",
   "service:past_purchase": "Siap kak, pembeliannya aku cek dulu ya 🙏",
+  "shipping_quote:address":
+    "Siap kak, alamatnya aku teruskan ke tim untuk dihitung ongkirnya ya 🙏",
 };
 
 /**

@@ -64,6 +64,7 @@ import type { ToolDispatch } from "./agentApi.js";
 import {
   asksForPhotos,
   checkHoldingMessage,
+  deliveryFigureUnvouched,
   checkReply,
   mentionsAdmin,
   withoutAdminMention,
@@ -523,11 +524,12 @@ const HANDOVER_CASES = new Set<string>([
   "warranty_claim",
   "media",
   "human",
-  // The owner's list of 2026-11-16: a video or phone call, a delivery cost,
-  // servicing and past purchases, and a unit's defects or more detailed
-  // photos than the ones sent.
+  // The owner's list of 2026-11-16: a video or phone call, servicing and
+  // past purchases, and a unit's defects or more detailed photos than the
+  // ones sent. Not shipping_quote (follow-up the same day): the cost question
+  // is the bot's, and the ADDRESS is routed by code; a model hand-over of
+  // one the code missed is sent back once, and stands if it insists.
   "video_call",
-  "shipping_quote",
   "service",
   "unit_details",
 ]);
@@ -536,7 +538,9 @@ const HANDOVER_CASES = new Set<string>([
 const NOT_THESE_CASES =
   "Not handed over: a person takes only a payment or DP proof, a real offer or bargain on a " +
   "unit, committing to buy or keep a unit, a complaint, warranty, servicing or a past purchase, " +
-  "a video or phone call, a delivery cost, a unit's defects or more detailed photos, a photo " +
+  "a video or phone call, a delivery address they gave (a delivery cost QUESTION is yours: " +
+  "general info, the team estimates it, ask for the address), a unit's defects or more " +
+  "detailed photos, a photo " +
   "or file the customer sent, or a customer who asks for a person. Answer this yourself from " +
   "the shelf, the approved " +
   "answers, the shop facts or the conversation; if their meaning is unclear, reply with ONE " +
@@ -906,7 +910,7 @@ export async function converse(
   /** The serials the last refused draft named, for its retry note. */
   let lastUnits: string[] = [];
   const retryNote = (
-    problem: ReplyProblem | "PHOTOS" | "PHOTOS_UNASKED" | "ADMIN",
+    problem: ReplyProblem | "PHOTOS" | "PHOTOS_UNASKED" | "ADMIN" | "DELIVERY",
     message: string,
     cited: readonly string[],
     sourceTexts: readonly string[] = [],
@@ -915,7 +919,8 @@ export async function converse(
     const phrase =
       problem === "PHOTOS" ||
       problem === "PHOTOS_UNASKED" ||
-      problem === "ADMIN"
+      problem === "ADMIN" ||
+      problem === "DELIVERY"
         ? null
         : claimPhrase(problem, message, sourceTexts);
     switch (problem) {
@@ -941,6 +946,8 @@ export async function converse(
         return `${head} It was empty. Send what the customer should read.`;
       case "PHOTOS_UNASKED":
         return `${head} It sends photos, but the customer did not ask for photos. Photos go only when they ask for them (owner, 2026-11-16). Send the same reply with no photos, and nothing saying you sent any. Send the corrected reply.`;
+      case "DELIVERY":
+        return `${head} It states a delivery cost no approved answer gives. You never estimate or guess what delivery or COD costs: give the general information from the APPROVED ANSWERS only, say the team will work out the exact cost, and ask for their address (kecamatan/kota or the full address). Send the corrected reply.`;
       case "ADMIN":
         return `${head} It brings up an admin or CS. You never mention or offer an admin on your own; only a customer who asks for a person is told "Oke kak, aku sambungkan ke admin ya" (handoff_to_staff, topic human). Leave the admin out. Send the corrected reply.`;
       case "PHOTOS":
@@ -967,6 +974,8 @@ export async function converse(
       .map((s) => s.trim())
       .filter(Boolean);
     const texts: string[] = [];
+    /** The approved answers cited — what may vouch for a delivery figure. */
+    const approved: string[] = [];
     let unknown = 0;
     const sources: string[] = [];
     for (const c of cited) {
@@ -974,6 +983,7 @@ export async function converse(
       const entry = knowledge.byHandle.get(handle);
       if (entry) {
         texts.push(`${entry.question}\n${entry.answer}`);
+        approved.push(`${entry.question}\n${entry.answer}`);
         sources.push(handle);
       } else if (c.toLowerCase() === "store") {
         texts.push(input.storeFacts);
@@ -1043,6 +1053,23 @@ export async function converse(
       message =
         sanitiseReply(withoutAdminMention(message)) ||
         ruleReply.offerHelp(lang);
+    }
+    // A delivery figure is a person's to estimate (owner follow-up,
+    // 2026-11-16): only one an approved answer states may be said.
+    // A unit's own price beside "bisa dikirim" is not a delivery figure.
+    const vouchedFigures = [
+      ...approved,
+      ...stockFacts.flatMap((f) => f.prices),
+    ];
+    if (deliveryFigureUnvouched(message, vouchedFigures)) {
+      if (canRetry) return { retry: retryNote("DELIVERY", message, cited) };
+      message =
+        sanitiseReply(
+          message
+            .split("\n")
+            .filter((line) => !deliveryFigureUnvouched(line, vouchedFigures))
+            .join("\n"),
+        ) || ruleReply.deliveryInfo(lang);
     }
     // Photos only when the customer asked for them (owner, 2026-11-16).
     const photosAsked = asksForPhotos(customerText);

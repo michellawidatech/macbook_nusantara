@@ -3992,9 +3992,8 @@ Decisions that outlived those documents:
     the unit or a phone call (new topic `video_call`); a unit's defects —
     minus, lecet, dent, whitespot — (`unit_details`, rule `defect`) and, once
     this chat has had photos (`photosSent`, an unretracted WA_IMAGE since the
-    reset point), more detailed photos (`photo_detail`); a delivery or COD
-    COST (`shipping_quote` — "bisa cod?" alone stays the approved answer);
-    and servicing (new topic `service`), a past purchase (`service`, rule
+    reset point), more detailed photos (`photo_detail`); a delivery ADDRESS
+    (`shipping_quote`, rule `address` — see the follow-up below); and servicing (new topic `service`), a past purchase (`service`, rule
     `past_purchase`), complaints and **every warranty question**
     (`warranty_claim`, rule `warranty`). ⚠️ Warranty REVERSES "answered from
     the approved answers", and defects REVERSE 2026-10-28's "marks only when
@@ -4022,6 +4021,25 @@ Decisions that outlived those documents:
   - ⚠️ Open owner questions: the approved COD answer still quotes a fixed
     Rp180.000 Jabodetabek; "pernah diservis?" about a shelf unit now goes to
     a person although QC recorded the answer.
+  - **Delivery: the bot gives general info, a person estimates — follow-up
+    the same day** (owner: *"they can offer the estimation, and ask for the
+    address, but the moment the customer gives a real address it should be
+    escalated"*). A cost question (`asksDeliveryCost`: "ongkir ke surabaya
+    brp?", "cod ke bekasi biayanya brp?") is the BOT's: the owner's
+    delivery/COD answer when one shares the customer's word, then
+    `reply.deliveryInfo` — the team works out the exact cost, send the full
+    address (kecamatan/kota). An ADDRESS is a hand-over (`ADDRESS` in
+    policy.ts: a street, kel/kec/kota with a name, "kode pos 40115", a maps
+    link, sharelok, "alamatku: …", a district like "Bekasi Timur" or
+    "Jaksel", or a WhatsApp location message) but only in a delivery context
+    — the bot's last reply asked for it (`askedForAddress`) or the message
+    itself is about sending (`DELIVERY_TALK`); "aku tinggal di Bekasi Timur"
+    is small talk and "luar kota" is not a place. Its line is "Siap kak,
+    alamatnya aku teruskan ke tim untuk dihitung ongkirnya ya". The AI is
+    told the same, `shipping_quote` left `HANDOVER_CASES`, and
+    `deliveryFigureUnvouched` sends back a draft whose delivery sentence
+    carries a figure no cited approved answer (or shelf price) states, then
+    drops that line. "Bisa cod?" alone is unchanged.
   - **/chat files waiting chats by category** (same day): Photo / defect
     detail, Complaint / service, Video call request, Delivery fee estimate,
     then Negotiation, Ready to buy, Admin request, Booking, Price / stock,

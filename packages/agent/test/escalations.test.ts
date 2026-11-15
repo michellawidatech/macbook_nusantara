@@ -16,7 +16,10 @@ import { converse, type ConverseInput } from "../src/converse.js";
 import { knowledgeBase } from "../src/knowledge.js";
 import {
   SHOP_CAPABILITIES,
+  askedForAddress,
+  asksDeliveryCost,
   asksForPhotos,
+  deliveryFigureUnvouched,
   holdingMessage,
   isHoldingLine,
   routeMessage,
@@ -43,14 +46,15 @@ import {
   type ScriptStep,
 } from "./fixtures.js";
 
-const route = (
-  text: string,
-  opts: { photosSent?: boolean; shown?: boolean } = {},
-) => routeMessage(text, { capabilities: SHOP_CAPABILITIES, ...opts });
-const topic = (
-  text: string,
-  opts: { photosSent?: boolean; shown?: boolean } = {},
-) => route(text, opts)?.topic ?? null;
+type RouteOpts = {
+  photosSent?: boolean;
+  shown?: boolean;
+  deliveryContext?: boolean;
+};
+const route = (text: string, opts: RouteOpts = {}) =>
+  routeMessage(text, { capabilities: SHOP_CAPABILITIES, ...opts });
+const topic = (text: string, opts: RouteOpts = {}) =>
+  route(text, opts)?.topic ?? null;
 
 describe("who a person takes (owner, 2026-11-16)", () => {
   it.each([
@@ -146,6 +150,9 @@ describe("who a person takes (owner, 2026-11-16)", () => {
     expect(topic("ada fotonya?")).toBeNull();
   });
 
+  // Owner, 2026-11-16 (follow-up): a delivery cost is the bot's — general
+  // info, "the team estimates it", and a request for the address. The
+  // address itself is what goes to a person.
   it.each([
     "ongkir ke surabaya brp?",
     "kirim ke medan berapa?",
@@ -156,8 +163,95 @@ describe("who a person takes (owner, 2026-11-16)", () => {
     "kirim ke surabaya kena berapa?",
     "kalo cod ke bekasi biayanya brp?",
     "Kalo cod ke bandung berapa kak?",
-  ])("a delivery cost: %j", (text) => {
-    expect(topic(text)).toBe("shipping_quote");
+  ])("a delivery cost question is the bot's: %j", (text) => {
+    expect(topic(text)).toBeNull();
+    expect(asksDeliveryCost(text)).toBe(true);
+  });
+
+  it.each([
+    "Jl. Melati No 12, Kebayoran Baru, Jaksel",
+    "kirim ke Bekasi Timur",
+    "ini alamatku: Perum Griya Asri Blok C3 no 7, Cibinong",
+    "https://maps.app.goo.gl/AbCdEf123",
+    "kode pos 40115",
+    "Kec. Coblong, Kota Bandung",
+    "Jalan Kaliurang km 5, Sleman",
+    "aku sharelok ya kak",
+  ])("an address once delivery is the subject goes to a person: %j", (text) => {
+    expect(route(text, { deliveryContext: true })).toEqual({
+      topic: "shipping_quote",
+      rule: "address",
+    });
+  });
+
+  it("a message that asks about sending carries its own context", () => {
+    expect(topic("kirim ke Bekasi Timur bisa kak?")).toBe("shipping_quote");
+    expect(topic("ongkir ke Jl. Melati No 12 Jaksel brp?")).toBe(
+      "shipping_quote",
+    );
+  });
+
+  it("a WhatsApp location after the bot asked for the address goes to a person", () => {
+    expect(
+      routeMessage("(the customer sent a location)", {
+        capabilities: SHOP_CAPABILITIES,
+        hasLocation: true,
+        deliveryContext: true,
+      })?.rule,
+    ).toBe("address");
+  });
+
+  it.each([
+    "aku tinggal di Bekasi Timur kak",
+    "kantorku di Jl. Sudirman",
+    "kak lokasi toko dimana?",
+    "Bisa sharelok kak?",
+    "bisa kirim ke luar kota pakai kurir apa aja?",
+  ])("a place in small talk is not an escalation: %j", (text) => {
+    expect(topic(text)).toBeNull();
+  });
+
+  it.each([
+    "kak lokasi toko dimana?",
+    "alamatnya di mana kak?",
+    "ok kak",
+    "besok aja",
+  ])("not an address even after the bot asked: %j", (text) => {
+    expect(topic(text, { deliveryContext: true })).toBeNull();
+  });
+
+  it("knows when its own last reply asked for the address", () => {
+    expect(
+      askedForAddress(
+        "Untuk ongkirnya nanti tim kami yang hitungkan ya kak. Boleh kirim alamat lengkapnya kak (kecamatan/kota)?",
+      ),
+    ).toBe(true);
+    expect(
+      askedForAddress(
+        "Alamat toko kami di Jl. Kemang Raya no 5. Ada yang bisa aku bantu?",
+      ),
+    ).toBe(false);
+    expect(askedForAddress(null)).toBe(false);
+  });
+
+  it("refuses a delivery figure no approved answer gives", () => {
+    const kb = [
+      "Cod bisa ga kak?\nBisa kak, COD Jabodetabek ada biaya Rp180.000",
+    ];
+    expect(
+      deliveryFigureUnvouched("Ongkir ke Bandung sekitar 50rb kak", kb),
+    ).toBe(true);
+    expect(
+      deliveryFigureUnvouched("COD Jabodetabek biayanya Rp180.000 ya kak", kb),
+    ).toBe(false);
+    // A shelf price beside "bisa dikirim" is vouched by the shelf.
+    expect(
+      deliveryFigureUnvouched("Air M1 8,9jt, bisa dikirim juga kak", [
+        "8900000",
+      ]),
+    ).toBe(false);
+    // A unit's price beside no delivery word is not a delivery figure.
+    expect(deliveryFigureUnvouched("Air M1 mulus 8,9jt kak", kb)).toBe(false);
   });
 
   it.each([
@@ -231,7 +325,7 @@ describe("what the customer hears, and the task it leaves", () => {
       holdingMessage("warranty_claim", true, "warranty"),
       holdingMessage("service", true, "service"),
       holdingMessage("service", true, "past_purchase"),
-      holdingMessage("shipping_quote", true, "shipping"),
+      holdingMessage("shipping_quote", true, "address"),
     ];
     expect(new Set(lines).size).toBe(lines.length);
     for (const l of lines) {
@@ -258,7 +352,7 @@ describe("what the customer hears, and the task it leaves", () => {
       "Perlu kirim foto detail",
     );
     expect(sum("garansinya berapa lama?")).toBe("Perlu urus garansi");
-    expect(sum("ongkir ke surabaya brp?")).toMatch(/^Perlu cek ongkir/);
+    expect(sum("kirim ke Bekasi Timur")).toMatch(/^Perlu cek ongkir/);
   });
 });
 
@@ -417,11 +511,58 @@ describe("the rules bot", () => {
 
   it("answers the rest of a burst before handing over the part a person takes", async () => {
     const p = pos({ search_stock: { matched: 1, units: [AIR] } });
-    const text = "ada air m1?\nongkir ke surabaya brp?";
+    const text = "ada air m1?\nbisa vc kak?";
     const out = await runRules(rulesInput(text, p));
-    expect(out.handoff?.topic).toBe("shipping_quote");
+    expect(out.handoff?.topic).toBe("video_call");
     expect(out.reply).toContain("8,9jt");
-    expect(out.reply).toContain("Ongkirnya aku cekin dulu ya kak 🙏");
+    expect(out.reply).toContain(
+      "Siap kak, untuk video call-nya aku atur dulu ya 🙏",
+    );
+  });
+
+  it("answers a delivery cost generally, says the team estimates it, and asks the address", async () => {
+    const out = await runRules(rulesInput("ongkir ke surabaya brp?", pos({})));
+    expect(out.handoff).toBeUndefined();
+    expect(out.reply).toMatch(/tim kami yang hitung/);
+    expect(out.reply).toMatch(/alamat/);
+    expect(out.reply).not.toMatch(/\d+\s*(rb|ribu|k|jt)|rp/i);
+    expect(askedForAddress(out.reply)).toBe(true);
+  });
+
+  it("gives the approved COD answer as the general part", async () => {
+    const out = await runRules(
+      rulesInput("kalo cod ke bekasi biayanya brp?", pos({}), {
+        knowledge: knowledgeBase([
+          {
+            id: "k1",
+            question: "COD bisa ga kak?",
+            answer: "Bisa kak, COD area Jabodetabek ada biaya Rp180.000 ya kak",
+          },
+        ]),
+      }),
+    );
+    expect(out.handoff).toBeUndefined();
+    expect(out.reply).toContain("COD area Jabodetabek ada biaya Rp180.000");
+    expect(out.reply).toMatch(/alamat/);
+  });
+
+  it("hands the address over once the bot asked for it", async () => {
+    const asked =
+      "Untuk ongkirnya nanti tim kami yang hitungkan ya kak. Boleh kirim alamat lengkapnya kak (kecamatan/kota)?";
+    const text = "Jl. Melati No 12, Kebayoran Baru, Jaksel";
+    const out = await runRules(
+      rulesInput(text, pos({}), {
+        lastReply: asked,
+        route: routeMessage(text, {
+          capabilities: LIVE,
+          deliveryContext: true,
+        }),
+      }),
+    );
+    expect(out.handoff?.topic).toBe("shipping_quote");
+    expect(out.reply).toBe(
+      "Siap kak, alamatnya aku teruskan ke tim untuk dihitung ongkirnya ya 🙏",
+    );
   });
 });
 
@@ -628,21 +769,38 @@ describe("the AI agent", () => {
     const r = await talk(
       [
         handsOver(
-          "shipping_quote",
-          "Perlu cek ongkir",
-          "Nanti admin kami cek ongkirnya ya kak",
+          "video_call",
+          "Perlu atur video call",
+          "Nanti admin kami atur video call-nya ya kak",
         ),
       ],
-      "ongkir ke surabaya brp?",
+      "bisa vc kak?",
       {},
       {
-        route: routeMessage("ongkir ke surabaya brp?", {
+        route: routeMessage("bisa vc kak?", {
           capabilities: SHOP_CAPABILITIES,
         }),
       },
     ).result;
-    expect(r?.handoff?.topic).toBe("shipping_quote");
-    expect(r?.reply).toBe("Ongkirnya aku cekin dulu ya kak 🙏");
+    expect(r?.handoff?.topic).toBe("video_call");
+    expect(r?.reply).toBe("Siap kak, untuk video call-nya aku atur dulu ya 🙏");
+  });
+
+  it("sends back a delivery figure it made up, and drops it on the second try", async () => {
+    const t = talk(
+      [
+        replies("Ongkir ke Bandung sekitar 50rb kak", "chat"),
+        replies(
+          "Untuk ongkirnya nanti tim kami yang hitungkan ya kak. Boleh kirim alamat lengkapnya kak?",
+          "chat",
+        ),
+      ],
+      "ongkir ke bandung brp kak?",
+    );
+    const r = await t.result;
+    expect(r?.handoff).toBeUndefined();
+    expect(r?.reply).not.toMatch(/50rb/);
+    expect(JSON.stringify(t.calls[1]!.messages.at(-1))).toContain("delivery");
   });
 
   it("accepts the new hand-overs without pushing them back", async () => {

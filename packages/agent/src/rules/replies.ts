@@ -539,6 +539,17 @@ export const reply = {
   },
 
   /** No reading on record: a person checks it. */
+  /**
+   * A delivery or COD cost (owner follow-up, 2026-11-16): never a figure of
+   * the bot's own — the team estimates it from the address, which this asks
+   * for. The address, when it comes, goes to a person.
+   */
+  deliveryInfo(lang: Lang): string {
+    return lang === "en"
+      ? "The delivery cost depends on the address and the courier, so our team will work it out for you. Could you send your full address (district/city)?"
+      : "Untuk ongkirnya tergantung alamat dan ekspedisinya kak, nanti tim kami yang hitungkan ya. Boleh kirim alamat lengkapnya kak (kecamatan/kota)?";
+  },
+
   batteryCheck(lang: Lang): string {
     return lang === "en"
       ? "Let me check that battery for you 🙏"

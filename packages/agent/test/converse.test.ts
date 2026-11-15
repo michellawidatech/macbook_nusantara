@@ -157,11 +157,12 @@ describe("an answer", () => {
   it("becomes a hand-over when it carries a figure the source does not", async () => {
     const r = await run(
       [
-        // Not warranty: that is a person's since 2026-11-16.
-        replies("Bisa kak, COD Jabodetabek biayanya Rp250.000", "K1"),
-        replies("Bisa kak, COD Jabodetabek biayanya Rp250.000", "K1"),
+        // Not warranty (a person's) nor a delivery figure (its own check,
+        // 2026-11-16): a price the approved answer never gave.
+        replies("Ready kak, unitnya 9jt ya", "K2"),
+        replies("Ready kak, unitnya 9jt ya", "K2"),
       ],
-      "cod bisa ga kak",
+      "apakah unitnya ready?",
     ).result;
     expect(r?.handoff).toMatchObject({ forcedBy: "AMOUNT_NOT_IN_SOURCE" });
   });
