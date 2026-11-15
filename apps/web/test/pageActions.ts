@@ -2,16 +2,12 @@
  * Press a `PageContainer` action, whichever viewport the test is in.
  *
  * `test/setup.ts` stubs `matchMedia` to answer "no" to everything, so unless a
- * test says otherwise `compact` is TRUE and the page's actions are NOT buttons
- * in the header — they are a `FloatButton` fan behind a neutral glyph, and its
- * members are not in the DOM until the fan is opened.
- *
- * Until 2026-09-25 the inbound suites did not have to know that: the page
- * carried a read-only banner with its own *Edit invoice* button, drawn on
- * every viewport. The owner asked for the banner to go, so the header action
- * is the only one and this is how a test reaches it.
+ * test says otherwise `compact` is TRUE and the page's actions are in the
+ * phone's app bar (2026-11-16): ONE of them as a labelled button, the rest as
+ * text rows in the sheet behind "More actions" — not in the DOM until it is
+ * opened. On a desktop every action is a button in the header.
  */
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 
 export function pressPageAction(name: RegExp | string) {
   const found = screen.queryAllByRole("button", { name });
@@ -19,8 +15,11 @@ export function pressPageAction(name: RegExp | string) {
     fireEvent.click(found[0]!);
     return;
   }
-  // Compact: open the fan, then press the member. A single action renders as
-  // the float button itself and is caught by the branch above.
-  fireEvent.click(screen.getByRole("button", { name: "Page actions" }));
-  fireEvent.click(screen.getAllByRole("button", { name })[0]!);
+  // Compact: open the sheet, then press the row inside it.
+  fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+  const sheet = screen
+    .getAllByRole("dialog")
+    .find((d) => within(d).queryAllByRole("button", { name }).length > 0);
+  if (!sheet) throw new Error(`No page action named ${String(name)}`);
+  fireEvent.click(within(sheet).getAllByRole("button", { name })[0]!);
 }

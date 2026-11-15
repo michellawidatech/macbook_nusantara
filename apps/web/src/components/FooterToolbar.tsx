@@ -71,15 +71,16 @@ export function FooterToolbar({ info, children }: FooterToolbarProps) {
         wrap={compact}
         style={{
           position: "fixed",
-          bottom: 0,
+          // Above the phone's bottom tabs (2026-11-16), 0 everywhere else —
+          // published by AppLayout like the left edge below.
+          bottom: "var(--nusantara-content-bottom, 0px)",
           // The sider's width on a desktop, 0 on a phone — see the docblock.
           // The fallback keeps the bar full-width if the variable is ever
           // missing, which is the harmless failure of the two.
           left: "var(--nusantara-content-left, 0px)",
           right: 0,
           paddingInline: gutter,
-          // Clears the home indicator rather than sitting under it.
-          paddingBottom: "env(safe-area-inset-bottom)",
+          // On a phone the tab bar below already clears the home indicator.
           paddingBlock: compact ? SPACE.sm : 0,
           minHeight: LAYOUT.footerToolbarHeight,
           background: colorBgElevated,

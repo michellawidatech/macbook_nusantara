@@ -41,6 +41,7 @@ import { CustomersPage } from "./routes/customers/CustomersPage.js";
 import { SuppliersPage } from "./routes/suppliers/SuppliersPage.js";
 import { SettingsPage } from "./routes/settings/SettingsPage.js";
 import { TodayPage } from "./routes/today/TodayPage.js";
+import { MorePage } from "./routes/MorePage.js";
 
 /** One screen, at the path the router matches it on. */
 export interface PageRoute {
@@ -77,4 +78,6 @@ export const PAGE_ROUTES: readonly PageRoute[] = [
   { path: "/customers", element: <CustomersPage /> },
   { path: "/suppliers", element: <SuppliersPage /> },
   { path: "/settings", element: <SettingsPage /> },
+  // The phone's fifth tab (2026-11-16): every place that is not a tab.
+  { path: "/more", element: <MorePage /> },
 ];

@@ -1,25 +1,27 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { Button, FloatButton, Flex, Space, Typography, theme } from "antd";
-import { ArrowLeftOutlined, MoreOutlined } from "@ant-design/icons";
+import { Button, Flex, Space, Typography, theme } from "antd";
+import { ArrowLeftOutlined, DownOutlined } from "@ant-design/icons";
 import type { ButtonProps } from "antd";
 import { useTranslation } from "react-i18next";
 import { LAYOUT, SPACE, TYPE, WEIGHT, Z } from "../theme/tokens";
 import { useLayoutMode } from "../layouts/useLayoutMode";
+import { ActionSheet, type SheetAction } from "./ActionSheet";
 
 /**
  * A page-level action.
  *
  * Declared as data rather than passed as rendered buttons, because where it
- * renders depends on the viewport: the header on a desktop, a float button
- * bottom-right on a phone. A caller handing over `<Button>`s could not be
- * moved between the two.
+ * renders depends on the viewport: the header on a desktop; on a phone the
+ * app bar (2026-11-16) — the primary as a labelled button, the rest as text
+ * rows behind "More ▾". A caller handing over `<Button>`s could not be moved
+ * between the two.
  */
 export interface PageAction {
   key: string;
   label: string;
-  /** From `@ant-design/icons`. Required — a float button is icon-only. */
-  icon: ReactNode;
+  /** From `@ant-design/icons`. Drawn beside the label, never instead of it. */
+  icon?: ReactNode;
   onClick: () => void;
   type?: ButtonProps["type"];
   danger?: boolean;
@@ -33,28 +35,24 @@ export interface PageContainerProps {
   /**
    * Primary page actions.
    *
-   * Rendered in the header on a wide viewport and as a bottom-right
-   * `FloatButton` when compact, where a thumb can reach them.
+   * Rendered in the header on a wide viewport. On a phone (2026-11-16) the
+   * app bar shows ONE of them as a labelled button — the first `primary`, or
+   * the only action — and the rest as text rows in the "More ▾" sheet. The
+   * float-button fan this replaced was icon-only on a device with no hover.
    *
-   * ⚠️ Do NOT pass these on a page that also renders a `FooterToolbar`. antd
-   * puts FloatButton at `zIndexPopupBase` (1000) and the toolbar sits at
-   * `Z.footerToolbar` (10), so the two would overlap on a phone. A form's
-   * primary action belongs in its footer toolbar, which is already the
-   * mobile-correct place for it — this prop is for list and detail pages.
-   *
-   * ⚠️ On a page built from `ResourceList`/`ListToolbar`, the desktop half of
-   * this has moved: `ListToolbar` has its own `primaryAction` prop, grouped
-   * with its refresh/full-screen/columns controls, and a list page passes
-   * the SAME `PageAction` there unconditionally. Passing it here too on a
-   * wide viewport would render the button twice. The fix such a page uses is
-   * to gate what reaches this prop to compact only —
-   * `actions={compact ? [action] : undefined}` — so this component's own
-   * `hasActions && !compact` branch below never has anything to render, and
-   * only the `hasActions && compact` `FloatButton` branch ever fires. Pages
-   * that do not use `ListToolbar` are unaffected and keep passing `actions`
-   * unconditionally, exactly as this doc already describes.
+   * ⚠️ A page that draws its own buttons beside a table on a desktop and
+   * wants them in the app bar on a phone passes them here on compact only —
+   * `actions={compact ? [action] : undefined}` — or the desktop renders them
+   * twice.
    */
   actions?: PageAction[];
+  /**
+   * More rows for the phone's "More ▾" sheet, after the actions that did not
+   * fit the app bar (2026-11-16). Phone only: on a desktop the page draws
+   * these controls itself — Export beside its table, the movement history as
+   * a tab — so a page passes here exactly what it hides on a phone.
+   */
+  phoneMenu?: SheetAction[];
   /**
    * Escape hatch for anything `actions` cannot express. Header only.
    *
@@ -151,12 +149,19 @@ export function PageContainer({
   children,
   fill = false,
   stickyHeader = false,
+  phoneMenu,
 }: PageContainerProps) {
   const navigate = useNavigate();
   const { compact } = useLayoutMode();
   const { t } = useTranslation();
+  const [sheetOpen, setSheetOpen] = useState(false);
   const {
-    token: { lineHeightHeading3, colorBgLayout },
+    token: {
+      lineHeightHeading3,
+      colorBgLayout,
+      colorBgContainer,
+      colorBorderSecondary,
+    },
   } = theme.useToken();
   const gutter = compact
     ? LAYOUT.contentPadding.compact
@@ -188,6 +193,134 @@ export function PageContainer({
       : undefined;
 
   const hasActions = actions !== undefined && actions.length > 0;
+
+  if (compact) {
+    /**
+     * The phone's app bar (owner-approved mockup, 2026-11-16): back, the
+     * title, ONE labelled action, and "More ▾" for the rest as words.
+     */
+    const list = actions ?? [];
+    const primary =
+      list.length === 1 ? list[0] : list.find((a) => a.type === "primary");
+    const rows: SheetAction[] = [
+      ...list
+        .filter((a) => a !== primary)
+        .map(({ key, label, icon, onClick, danger, disabled }) => ({
+          key,
+          label,
+          icon,
+          onClick,
+          danger,
+          disabled,
+        })),
+      ...(phoneMenu ?? []),
+    ];
+    // Pinned to the top of the scroll area, bleeding over the gutter so a
+    // card scrolling under it never shows at the sides. A `fill` page does
+    // not scroll this column, so there it simply sits at the top.
+    const barStyle: CSSProperties = fill
+      ? {
+          background: colorBgContainer,
+          borderBottom: `1px solid ${colorBorderSecondary}`,
+          marginInline: -gutter,
+          marginBlockStart: -gutter,
+          paddingInline: gutter,
+        }
+      : {
+          position: "sticky",
+          top: -gutter,
+          zIndex: Z.footerToolbar,
+          background: colorBgContainer,
+          borderBottom: `1px solid ${colorBorderSecondary}`,
+          marginInline: -gutter,
+          marginBlockStart: -gutter,
+          paddingInline: gutter,
+        };
+    return (
+      <Flex
+        vertical
+        gap={SPACE.md}
+        flex={1}
+        style={fill ? { minHeight: 0, overflow: "hidden" } : undefined}
+      >
+        <Flex
+          vertical
+          gap={SPACE.sm}
+          className="nusantara-app-bar"
+          style={barStyle}
+        >
+          <Flex
+            align="center"
+            gap={SPACE.xs}
+            style={{ minHeight: LAYOUT.appBarHeight }}
+          >
+            {backTo !== undefined && (
+              <Button
+                type="text"
+                icon={<ArrowLeftOutlined />}
+                aria-label={t("page.back", "Back")}
+                onClick={() => navigate(backTo)}
+                style={{ marginInlineStart: -SPACE.sm, flexShrink: 0 }}
+              />
+            )}
+            <Typography.Title
+              level={4}
+              ellipsis
+              style={{
+                margin: 0,
+                flex: 1,
+                minWidth: 0,
+                fontSize: TYPE.xl,
+                fontWeight: WEIGHT.strong,
+              }}
+            >
+              {t(title)}
+            </Typography.Title>
+            {primary && (
+              <Button
+                type={primary.type === "primary" ? "primary" : "default"}
+                icon={primary.icon}
+                danger={primary.danger}
+                disabled={primary.disabled}
+                loading={primary.loading}
+                onClick={primary.onClick}
+                style={{ flexShrink: 0 }}
+              >
+                {primary.label}
+              </Button>
+            )}
+            {rows.length > 0 && (
+              <Button
+                type="text"
+                aria-label={t("page.moreActions", "More actions")}
+                aria-haspopup="dialog"
+                icon={<DownOutlined />}
+                iconPlacement="end"
+                onClick={() => setSheetOpen(true)}
+                style={{ flexShrink: 0, marginInlineEnd: -SPACE.sm }}
+              >
+                {t("page.more", "More")}
+              </Button>
+            )}
+          </Flex>
+          {extra !== undefined && extra !== null && extra !== false && (
+            <Flex wrap gap={SPACE.sm} style={{ paddingBottom: SPACE.sm }}>
+              {extra}
+            </Flex>
+          )}
+          {banner !== undefined && banner !== null && banner !== false && (
+            <div style={{ paddingBottom: SPACE.sm }}>{banner}</div>
+          )}
+        </Flex>
+        {children}
+        <ActionSheet
+          open={sheetOpen}
+          onClose={() => setSheetOpen(false)}
+          actions={rows}
+        />
+      </Flex>
+    );
+  }
 
   return (
     <Flex
@@ -253,9 +386,9 @@ export function PageContainer({
             </Typography.Title>
           </Flex>
 
-          {(extra || (hasActions && !compact)) && (
+          {(extra || hasActions) && (
             <Flex gap={SPACE.sm}>
-              {hasActions && !compact && (
+              {hasActions && (
                 <Space>
                   {actions.map(({ key, label, icon, ...rest }) => (
                     <Button key={key} icon={icon} {...rest}>
@@ -272,66 +405,6 @@ export function PageContainer({
       </Flex>
 
       {children}
-
-      {/* The float button is `position: fixed`, so it sits OVER the end of the
-          content rather than after it. Without this the last row of a list —
-          which on a phone is a card with its own action buttons — is under the
-          thumb target. 88px is antd's 48px inset plus a 40px button. */}
-      {hasActions && compact && (
-        <div style={{ height: 88, flexShrink: 0 }} aria-hidden />
-      )}
-
-      {/* Position, inset and stacking are all antd component tokens — nothing
-          here picks a pixel or a z-index. */}
-      {hasActions &&
-        compact &&
-        (actions.length === 1 && actions[0] ? (
-          <FloatButton
-            type={actions[0].type === "primary" ? "primary" : "default"}
-            icon={actions[0].icon}
-            tooltip={actions[0].label}
-            // The tooltip is not a NAME — it appears on hover, which a phone
-            // does not have, and a screen reader reads the icon's glyph
-            // instead. Every page action is icon-only here, so each one has
-            // to say what it is.
-            aria-label={actions[0].label}
-            // FloatButton has no `disabled`, so a disabled action is shown
-            // greyed and made inert rather than vanishing — a control that
-            // disappears when it cannot be used is a control the user hunts
-            // for.
-            style={
-              actions[0].disabled
-                ? { opacity: 0.5, pointerEvents: "none" }
-                : undefined
-            }
-            aria-disabled={actions[0].disabled}
-            onClick={actions[0].disabled ? undefined : actions[0].onClick}
-          />
-        ) : (
-          // A neutral glyph, not the first action's: the group's trigger opens
-          // a fan of several, and wearing one member's icon claims it does
-          // that one thing.
-          <FloatButton.Group
-            trigger="click"
-            type="primary"
-            icon={<MoreOutlined />}
-            aria-label={t("page.actions", "Page actions")}
-          >
-            {actions.map(({ key, label, icon, onClick, disabled }) => (
-              <FloatButton
-                key={key}
-                icon={icon}
-                tooltip={label}
-                aria-label={label}
-                style={
-                  disabled ? { opacity: 0.5, pointerEvents: "none" } : undefined
-                }
-                aria-disabled={disabled}
-                onClick={disabled ? undefined : onClick}
-              />
-            ))}
-          </FloatButton.Group>
-        ))}
     </Flex>
   );
 }

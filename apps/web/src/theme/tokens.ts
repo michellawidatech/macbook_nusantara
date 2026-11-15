@@ -107,6 +107,14 @@ export const LAYOUT = {
   /** The sticky submit bar on long forms. */
   footerToolbarHeight: 64,
   /**
+   * The phone's bottom tab bar (2026-11-16), before the home-indicator inset.
+   * `AppLayout` publishes it as `--nusantara-content-bottom` so a fixed
+   * `FooterToolbar` sits above the tabs rather than under them.
+   */
+  tabBarHeight: 64,
+  /** The phone's app bar — title, one action, More (2026-11-16). */
+  appBarHeight: 56,
+  /**
    * Content gutter, and the value FooterToolbar bleeds by to span the column.
    *
    * ONE constant for both. They have to agree — the toolbar's negative inline

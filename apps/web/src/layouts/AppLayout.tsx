@@ -50,6 +50,8 @@ import { useTranslation } from "react-i18next";
 import { matchLeaf, navSectionsFor } from "./navigation.js";
 import { NavBadge } from "./NavBadge.js";
 import { CanApproveContext } from "../hooks/useCanApprove.js";
+import { StaffContext } from "../hooks/useStaff.js";
+import { BottomTabBar } from "./BottomTabBar.js";
 import { ChatWaitingBell } from "./ChatWaitingBell.js";
 import { ChatHealthNotice } from "./ChatHealthNotice.js";
 import { useLayoutMode } from "./useLayoutMode.js";
@@ -558,6 +560,14 @@ export function AppLayout({ staff }: { staff: Staff }) {
             nav === "sider"
               ? `${railed ? LAYOUT.siderCollapsedWidth : LAYOUT.siderWidth}px`
               : "0px",
+          /**
+           * What the phone's bottom tabs take from the foot of the screen
+           * (2026-11-16), for the same reader: a fixed `FooterToolbar` sits
+           * above the tabs instead of under them.
+           */
+          "--nusantara-content-bottom": compact
+            ? `calc(${LAYOUT.tabBarHeight}px + env(safe-area-inset-bottom))`
+            : "0px",
         } as CSSProperties
       }
     >
@@ -787,7 +797,11 @@ export function AppLayout({ staff }: { staff: Staff }) {
          * load-bearing. On a phone it stays: there is no sider to hold the
          * hamburger or the brand.
          */}
-        {nav === "drawer" && (
+        {/* Not on a phone (2026-11-16): the bottom tabs are its nav, the Chat
+            tab carries the waiting count and More holds the rest — a bar
+            holding a hamburger and a brand is height the page wants. The
+            tablet between md and lg keeps it. */}
+        {nav === "drawer" && !compact && (
           <Layout.Header
             style={{
               // Same reasoning as the sider above: `headerBg` comes from the
@@ -841,11 +855,10 @@ export function AppLayout({ staff }: { staff: Staff }) {
               : LAYOUT.contentPadding.comfortable,
             // Room for the bottom-right float button to clear the last row of
             // content, and for the home indicator on a notched phone.
-            paddingBottom: `calc(${
-              compact
-                ? LAYOUT.contentPadding.compact
-                : LAYOUT.contentPadding.comfortable
-            }px + env(safe-area-inset-bottom))`,
+            // On a phone the tab bar below clears the home indicator itself.
+            paddingBottom: compact
+              ? LAYOUT.contentPadding.compact
+              : `calc(${LAYOUT.contentPadding.comfortable}px + env(safe-area-inset-bottom))`,
             // No max width: content fills the screen however far it is zoomed
             // out (owner, 2026-10-14). It used to stop at 1600px and leave
             // the right of a wide monitor empty.
@@ -877,12 +890,16 @@ export function AppLayout({ staff }: { staff: Staff }) {
               <SerialHistoryHost>
                 {/* Who may edit money directly, for every page (2026-11-13). */}
                 <CanApproveContext.Provider value={staff.canApprove}>
-                  <Outlet />
+                  <StaffContext.Provider value={staff}>
+                    <Outlet />
+                  </StaffContext.Provider>
                 </CanApproveContext.Provider>
               </SerialHistoryHost>
             </StoreGate>
           </ErrorBoundary>
         </Layout.Content>
+        {/* The phone's nav (owner-approved mockup, 2026-11-16). */}
+        {compact && <BottomTabBar staff={staff} />}
       </Layout>
     </Layout>
   );

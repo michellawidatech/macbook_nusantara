@@ -5553,4 +5553,14 @@ export const id: Record<string, string> = {
     "Bagian Shopee atau Tokopedia masuk ke saldo marketplace tersebut. Uang baru masuk bank saat penarikan dicatat di Pemasukan & Pengeluaran.",
   "pos.marketplaceBalanceToast":
     "Bagian marketplace-nya ada di saldo marketplace tersebut sampai penarikan dicatat.",
+  // ── Phone layout (2026-11-16) ──
+  "tabs.sell": "Jual",
+  "tabs.stock": "Stok",
+  "tabs.sales": "Penjualan",
+  "tabs.chat": "Chat",
+  "tabs.more": "Lainnya",
+  "tabs.label": "Utama",
+  "page.moreActions": "Aksi lainnya",
+  "page.more": "Lainnya",
+  "more.preferences": "Preferensi",
 };
