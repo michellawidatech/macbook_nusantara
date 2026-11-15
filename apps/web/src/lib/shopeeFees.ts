@@ -15,10 +15,11 @@
  * ## What it is for, and what it is not for
  *
  * It **estimates**. `docs/shopee-settlement-import.md` sets out at length why
- * a payout cannot be *computed* from an order export: two of the seven fee
- * lines — SPayLater XTRA and Komisi AMS — depend on facts no order export
- * carries, and both sampled orders read `Metode Pembayaran: SPayLater` while
- * only one paid the instalment fee. The honest spread is 6,9%–12,0%.
+ * a payout cannot be *computed* from an order export: Komisi AMS and Biaya
+ * Transaksi depend on facts no order export carries (an affiliate, the
+ * buyer's payment method). So this holds the FIXED lines only — admin,
+ * proses, ongkir XTRA, Promo XTRA, premi and PPh 22 — and whatever else a
+ * stated payout shows is one line, `OTHER_FEES_LABEL`.
  *
  * So an estimate is a **starting point somebody edits**, never a settlement in
  * its own right:
@@ -66,39 +67,32 @@ export const PROMO_XTRA_PCT = 4.5;
 export const PROMO_XTRA_CAP_PER_UNIT = 60_000;
 
 /**
- * Premi (asuransi). Observed on both sampled orders, published nowhere read so
- * far — which is a reason to keep it a named constant rather than a magic
- * number, so the day it is confirmed or disproved there is one place to say so.
+ * Premi (asuransi), filed by Shopee under its own "Biaya Lainnya" group. 0,5%
+ * of the price on every order sampled, September and November 2026 alike.
  */
 export const PREMI_PCT = 0.5;
 
 /**
- * Gratis Ongkir XTRA. Published at 1% capped Rp40.000 for Kategori A / Ukuran
- * Biasa; **observed at 0,5% uncapped**, three weeks apart, in the shop's
- * favour and unexplained (docs/shopee-fees.md, "Two anomalies worth money").
- * The observed rate is the default because it is what the shop is actually
- * charged; `PUBLISHED` is kept beside it so the day the anomaly ends the
- * change is one word.
+ * PPh 22, the income tax Shopee withholds from the seller (its "Pajak"
+ * group). 0,5% of the price. New: none of the September 2026 orders carried
+ * it, and every November one does (261104DUGE3658, 261105FKC901NR,
+ * 261105GSHFNT9H, 261106JAT13UX9 — docs/shopee-fees.md).
  */
-export const FREE_SHIPPING_PCT = { OBSERVED: 0.5, PUBLISHED: 1 } as const;
-export const FREE_SHIPPING_CAP = 40_000;
-
-/** SPayLater XTRA 0%, on the FINANCED amount — not on the list price. */
-export const SPAYLATER_PCT = { NONE: 0, THREE_MONTHS: 2.5, SIX_MONTHS: 4 };
-export type SpayLaterTenor = keyof typeof SPAYLATER_PCT;
+export const PPH22_PCT = 0.5;
 
 /**
- * Komisi AMS: the affiliate's commission, only when an affiliate made the
- * sale, charged on the FINANCED amount with PPN on top. The seller balance
- * report of 1–21 Sep 2026 has five affiliate sales and every one is exactly
- * the rate × 1,11 — at 1% (81.197 on 7.315.000; 69.930 on 6.300.000) and at 2%
- * (110.600 on 4.982.000, and two more). The rate is the campaign's; 1% is
- * the one the switch assumes.
+ * Gratis Ongkir XTRA, Kategori A / Ukuran Biasa: the published 1% capped at
+ * Rp40.000, so a flat Rp40.000 on anything above Rp4jt.
+ *
+ * ⚠️ September 2026 orders paid 0,5% uncapped — "the half-rate anomaly" in
+ * docs/shopee-fees.md — and that is what this used to charge. By November it
+ * had ended: Rp40.000 on Rp6,8jt, Rp10,45jt and Rp39,6jt alike.
  */
-export const AMS_PCT = 1;
+export const FREE_SHIPPING_PCT = 1;
+export const FREE_SHIPPING_CAP = 40_000;
 
-/** PPN, on the lines Shopee charges it on top of — so far, Komisi AMS. */
-export const PPN_PCT = 11;
+/** "Rp60.000", for the sentences `feeWarnings` writes. */
+const fmtRupiah = (n: number) => `Rp${rp(n).toLocaleString("id-ID")}`;
 
 /** Whole rupiah. Shopee rounds to the rupiah and so does every figure here. */
 const rp = (n: number) => Math.round(n);
@@ -112,22 +106,6 @@ export interface ShopeeSaleFacts {
   readonly qty: number;
   /** Which admin band the goods fall in. */
   readonly category: ShopeeCategory;
-  /**
-   * Shopee's own voucher subsidy, when it is known.
-   *
-   * It matters for one reason: SPayLater and the affiliate commission are
-   * charged on what the BUYER owes, which is the subtotal less this. Unknown
-   * is treated as zero, which over-states both lines slightly — an estimate
-   * that errs towards a bigger deduction is the safer direction, because it
-   * under-states what the shop is owed.
-   */
-  readonly shopeeVoucher?: number;
-  /** Did the buyer take 0% instalments, and over how long? */
-  readonly spayLater?: SpayLaterTenor;
-  /** Did an affiliate sell it? */
-  readonly affiliate?: boolean;
-  /** Use Shopee's published ongkir rate instead of the one the shop pays. */
-  readonly publishedShipping?: boolean;
 }
 
 /** One estimated deduction, ready to become a `SettlementFee`. */
@@ -142,10 +120,10 @@ export interface EstimatedFee {
   /**
    * How much of this the shop actually knows.
    *
-   * `rate` is a published or observed rate applied to a known base — the four
-   * lines every completed order pays. `conditional` is a line that only exists
-   * because somebody said the sale had that property, which no export states.
-   * `stated` is a line Shopee's own report printed.
+   * `rate` is a published rate applied to a known base — the lines every
+   * completed order pays. `conditional` is the remainder a stated payout
+   * leaves once those are taken (`OTHER_FEES_LABEL`). `stated` is a line
+   * Shopee's own report printed.
    */
   readonly basis: "rate" | "conditional" | "stated";
   /**
@@ -157,7 +135,14 @@ export interface EstimatedFee {
 }
 
 /**
- * The fee lines the published rates predict for one sale.
+ * The fee lines every Shopee order pays — the FIXED ones.
+ *
+ * > *"Record what's fixed and add the other as Others."* — owner, 2026-11-15
+ *
+ * Komisi AMS (an affiliate sold it) and Biaya Transaksi (how the buyer paid)
+ * are not here: neither can be read off the price, and both turn up on a
+ * stated payout as `OTHER_FEES_LABEL`. The SPayLater and affiliate switches
+ * that used to guess them went with that decision.
  *
  * In the order Shopee's own order-detail screen lists them, which is the order
  * somebody checking the estimate against a screenshot will read them in.
@@ -165,21 +150,9 @@ export interface EstimatedFee {
 export function estimateShopeeFees(facts: ShopeeSaleFacts): EstimatedFee[] {
   const gross = Math.max(0, rp(facts.gross));
   const qty = Math.max(1, Math.floor(facts.qty));
-  const voucher = Math.max(0, rp(facts.shopeeVoucher ?? 0));
-  /*
-   * What the BUYER owes, which is what Shopee finances and what an affiliate's
-   * commission is charged on. The worked example in docs/shopee-fees.md turns
-   * on this: 2,5% of the list price would be Rp192.500 and the order would not
-   * reconcile; 2,5% of the financed 7.315.000 is Rp182.875, which it does.
-   */
-  const financed = Math.max(0, gross - voucher);
-  const published = facts.publishedShipping === true;
-  const shipping = freeShippingFee(gross, published);
-  const shippingPct = published
-    ? FREE_SHIPPING_PCT.PUBLISHED
-    : FREE_SHIPPING_PCT.OBSERVED;
+  const shipping = freeShippingFee(gross);
   const promo = promoXtraFee(gross, qty);
-  const out: EstimatedFee[] = [
+  return [
     {
       kind: "COMMISSION",
       label: "Biaya Administrasi",
@@ -199,7 +172,9 @@ export function estimateShopeeFees(facts: ShopeeSaleFacts): EstimatedFee[] {
       amount: shipping,
       basis: "rate",
       // A capped line is not that percentage of anything any more.
-      ...(shipping === pct(gross, shippingPct) ? { rate: shippingPct } : {}),
+      ...(shipping === pct(gross, FREE_SHIPPING_PCT)
+        ? { rate: FREE_SHIPPING_PCT }
+        : {}),
     },
     {
       kind: "PROMOTION",
@@ -208,37 +183,21 @@ export function estimateShopeeFees(facts: ShopeeSaleFacts): EstimatedFee[] {
       basis: "rate",
       ...(promo === pct(gross, PROMO_XTRA_PCT) ? { rate: PROMO_XTRA_PCT } : {}),
     },
+    {
+      kind: "OTHER",
+      label: "Premi",
+      amount: pct(gross, PREMI_PCT),
+      basis: "rate",
+      rate: PREMI_PCT,
+    },
+    {
+      kind: "OTHER",
+      label: "PPh 22",
+      amount: pct(gross, PPH22_PCT),
+      basis: "rate",
+      rate: PPH22_PCT,
+    },
   ];
-  const tenor = facts.spayLater ?? "NONE";
-  if (SPAYLATER_PCT[tenor] > 0) {
-    out.push({
-      kind: "SERVICE",
-      label: "Biaya SPayLater XTRA 0%",
-      amount: pct(financed, SPAYLATER_PCT[tenor]),
-      basis: "conditional",
-      rate: SPAYLATER_PCT[tenor],
-    });
-  }
-  if (facts.affiliate === true) {
-    out.push({
-      kind: "PROMOTION",
-      label: "Komisi AMS",
-      // In whole hundredths, so 1% × 1,11 of 7.315.000 is exactly 81.196,5
-      // and rounds to Shopee's 81.197 rather than wherever floating point
-      // happens to land.
-      amount: rp((financed * AMS_PCT * (100 + PPN_PCT)) / 10_000),
-      basis: "conditional",
-      rate: (AMS_PCT * (100 + PPN_PCT)) / 100,
-    });
-  }
-  out.push({
-    kind: "OTHER",
-    label: "Premi",
-    amount: pct(gross, PREMI_PCT),
-    basis: "rate",
-    rate: PREMI_PCT,
-  });
-  return out;
 }
 
 /**
@@ -256,15 +215,9 @@ export function promoXtraFee(base: number, qty: number): number {
   );
 }
 
-/** Gratis Ongkir XTRA, at the observed half-rate unless told otherwise. */
-export function freeShippingFee(base: number, published: boolean): number {
-  const raw = pct(
-    Math.max(0, base),
-    published ? FREE_SHIPPING_PCT.PUBLISHED : FREE_SHIPPING_PCT.OBSERVED,
-  );
-  // The cap belongs to the published rate; the observed one has never been
-  // seen to cap, which is the whole anomaly.
-  return published ? Math.min(raw, FREE_SHIPPING_CAP) : raw;
+/** Gratis Ongkir XTRA: 1% of the price, capped at Rp40.000. */
+export function freeShippingFee(base: number): number {
+  return Math.min(pct(Math.max(0, base), FREE_SHIPPING_PCT), FREE_SHIPPING_CAP);
 }
 
 /** What the rates say Shopee will pay out for this sale. */
@@ -285,14 +238,15 @@ export function effectiveCostPct(facts: ShopeeSaleFacts): number {
  *
  * > *"If there is discrepancies that are not mentioned in the rule just add
  * > like Biaya lainnya / additional payment."* — owner, 2026-09-21
+ * > *"Record what's fixed and add the other as Others."* — owner, 2026-11-15
  *
- * Measured against the seller balance report of 1–21 Sep 2026, this is almost
- * always a programme the order export cannot see: SPayLater XTRA, an
- * affiliate's commission, or the Ukuran Khusus ongkir band a 5 kg listing
- * falls into (docs/shopee-fees.md, "What the balance report settled").
- * Title case, as Shopee writes its own lines, because it sits among them.
+ * Almost always a line that depends on the sale rather than its price: an
+ * affiliate's Komisi AMS, a Biaya Transaksi for how the buyer paid, or the
+ * Ukuran Khusus ongkir band a 5 kg listing falls into (docs/shopee-fees.md).
+ * ⚠️ It was "Biaya Lainnya" until 2026-11-15 — which is also the name of
+ * Shopee's own group that holds Premi, so one word meant two things.
  */
-export const OTHER_FEES_LABEL = "Biaya Lainnya";
+export const OTHER_FEES_LABEL = "Others";
 
 /**
  * The other direction: Shopee paid MORE than its own published fees leave
@@ -375,7 +329,7 @@ export function statedFee(label: string, amount: number): EstimatedFee {
     ? "COMMISSION"
     : /promo|ams|komisi/.test(key)
       ? "PROMOTION"
-      : /proses|ongkir|layanan|spaylater/.test(key)
+      : /proses|ongkir|layanan|spaylater|transaksi/.test(key)
         ? "SERVICE"
         : "OTHER";
   return { kind, label, amount, basis: "stated" };
@@ -430,17 +384,12 @@ export function feeWarnings(
     out.push("No Promo XTRA line — the programme may have lapsed.");
   }
   const ongkir = find(/gratis ongkir/);
-  if (ongkir !== undefined) {
-    const rate = (ongkir.amount / gross) * 100;
-    if (rate > 1.5) {
-      out.push(
-        `Gratis Ongkir XTRA is ${rate.toFixed(2)}% — that is the Ukuran Khusus band. Check the listing's declared weight (5 kg and over is the expensive band).`,
-      );
-    } else if (rate > 0.75) {
-      out.push(
-        "Gratis Ongkir XTRA is at the full published rate — the half-rate the shop has been paying has ended.",
-      );
-    }
+  // Ukuran Biasa never charges more than its Rp40.000 cap; anything above it
+  // is the Ukuran Khusus band (2,5% capped Rp60.000).
+  if (ongkir !== undefined && ongkir.amount > FREE_SHIPPING_CAP) {
+    out.push(
+      `Gratis Ongkir XTRA is ${fmtRupiah(ongkir.amount)} — that is the Ukuran Khusus band. Check the listing's declared weight (5 kg and over is the expensive band).`,
+    );
   }
   return out;
 }

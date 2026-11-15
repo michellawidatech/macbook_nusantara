@@ -955,7 +955,7 @@ export interface PayoutRow<P> {
  * So for a stated payout the lines are, in order of preference: the fee lines
  * the report itself printed, or else the published rates for the sale's
  * category — and either way closed on Shopee's figure by `closeOnPayout`,
- * which is where "Biaya Lainnya" and "Pembayaran Tambahan" come from.
+ * which is where "Others" and "Pembayaran Tambahan" come from.
  *
  * `facts(p, estimating)` describes the sale; `estimating` is true only for a
  * row with no stated payout, which is the one place the conditional

@@ -1,10 +1,10 @@
 /**
- * The Shopee cost structure (owner ask 2026-09-21).
+ * The Shopee cost structure (owner ask 2026-09-21, revised 2026-11-15).
  *
- * The two worked examples in `docs/shopee-fees.md` are the spec: each was
- * reconciled to the rupiah against a `Rincian Pesanan` screenshot the owner
- * supplied, so if either of these stops matching, either a rate has changed or
- * this file has a bug — and the document says which figures came from where.
+ * The four November orders the owner sent as screenshots are the spec: each
+ * is reconciled to the rupiah against its own `Rincian Penghasilan`. If one
+ * stops matching, either a rate has changed or this file has a bug —
+ * docs/shopee-fees.md says which figures came from where.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -36,45 +36,58 @@ const amount = (
   re: RegExp,
 ) => fees.find((f) => re.test(f.label))?.amount;
 
-describe("the worked examples from docs/shopee-fees.md", () => {
-  it("reconciles order 260913W27KJ6EP to the rupiah", () => {
-    // Subtotal 7.700.000, Shopee's voucher 385.000, SPayLater over 3 months,
-    // an affiliate sale. Stated payout: 6.893.428.
-    const facts = laptop({
-      shopeeVoucher: 385_000,
-      spayLater: "THREE_MONTHS",
-      affiliate: true,
-    });
-    const fees = estimateShopeeFees(facts);
-    expect(amount(fees, /Administrasi/)).toBe(404_250);
-    expect(amount(fees, /Proses Pesanan/)).toBe(1_250);
-    expect(amount(fees, /Gratis Ongkir/)).toBe(38_500);
-    expect(amount(fees, /Promo XTRA/)).toBe(60_000);
-    // 2,5% of the FINANCED amount (7.700.000 − 385.000), not of the list
-    // price: 2,5% of the list would be 192.500 and nothing would reconcile.
-    expect(amount(fees, /SPayLater/)).toBe(182_875);
-    expect(amount(fees, /Premi/)).toBe(38_500);
-    // 1% of the financed amount plus 11% PPN: 7.315.000 × 1,11% = 81.196,5.
-    // Until 2026-09-21 the PPN was missing and this read 73.150; the seller
-    // balance report has four more affiliate sales that all fit × 1,11.
-    expect(amount(fees, /AMS/)).toBe(81_197);
-    // Every one of the seven lines now traces to a rate, and the estimate IS
-    // Shopee's own 6.893.428.
-    expect(estimatedPayout(facts)).toBe(6_893_428);
+describe("the owner's November 2026 orders", () => {
+  it("reconciles 261106JAT13UX9 exactly with the fixed lines alone", () => {
+    // 6.800.000 − 358.250 − 40.000 − 60.000 − 34.000 − 34.000 = 6.273.750
+    const facts = laptop({ gross: 6_800_000 });
+    expect(estimateShopeeFees(facts).map((f) => [f.label, f.amount])).toEqual([
+      ["Biaya Administrasi", 357_000], // 5,25%
+      ["Biaya Proses Pesanan", 1_250],
+      ["Biaya Gratis Ongkir XTRA", 40_000], // 1%, at its Rp40.000 cap
+      ["Biaya Promo XTRA", 60_000], // 4,5%, at its Rp60.000 cap
+      ["Premi", 34_000], // 0,5%
+      ["PPh 22", 34_000], // 0,5%
+    ]);
+    expect(estimatedPayout(facts)).toBe(6_273_750);
   });
 
-  it("reconciles order 2609166VUDCU4M exactly — no instalment, no affiliate", () => {
-    // 6.800.000 − 357.000 − 1.250 − 34.000 − 60.000 − 34.000 = 6.313.750
-    const facts = laptop({ gross: 6_800_000 });
-    const fees = estimateShopeeFees(facts);
-    expect(fees.map((f) => f.amount)).toEqual([
-      357_000, // Biaya Administrasi, 5,25%
-      1_250, // Biaya Proses Pesanan
-      34_000, // Gratis Ongkir XTRA, the observed 0,5%
-      60_000, // Promo XTRA, at its cap
-      34_000, // Premi, 0,5%
-    ]);
-    expect(estimatedPayout(facts)).toBe(6_313_750);
+  it("reconciles 261104DUGE3658, an affiliate sale, with AMS as Others", () => {
+    // Rp10.450.000 paid out 9.588.910; the Rp106.715 Komisi AMS is the one
+    // line the price cannot predict.
+    const { fees, unexplained } = reconcileEstimate(
+      laptop({ gross: 10_450_000 }),
+      9_588_910,
+    );
+    expect(amount(fees, /Administrasi/)).toBe(548_625);
+    expect(amount(fees, /Gratis Ongkir/)).toBe(40_000);
+    expect(amount(fees, /Premi/)).toBe(52_250);
+    expect(amount(fees, /PPh 22/)).toBe(52_250);
+    expect(unexplained).toBe(106_715);
+    expect(fees.at(-1)).toMatchObject({
+      label: OTHER_FEES_LABEL,
+      amount: 106_715,
+    });
+  });
+
+  it("reconciles 261105GSHFNT9H: the ongkir cap holds at Rp39,6jt", () => {
+    // The old 0,5% uncapped rate would have charged 198.000 here.
+    const { fees, unexplained } = reconcileEstimate(
+      laptop({ gross: 39_600_000 }),
+      36_595_290,
+    );
+    expect(amount(fees, /Administrasi/)).toBe(2_079_000);
+    expect(amount(fees, /Gratis Ongkir/)).toBe(40_000);
+    expect(amount(fees, /PPh 22/)).toBe(198_000);
+    expect(unexplained).toBe(428_460); // Komisi AMS
+  });
+
+  it("puts 261105FKC901NR's Biaya Transaksi in Others", () => {
+    // 6.800.000 with a Rp157.500 Biaya Transaksi on top of the fixed lines.
+    const { unexplained } = reconcileEstimate(
+      laptop({ gross: 6_800_000 }),
+      6_116_250,
+    );
+    expect(unexplained).toBe(157_500);
   });
 });
 
@@ -99,39 +112,26 @@ describe("the rules behind the rates", () => {
     expect(promoXtraFee(500_000, 1)).toBe(22_500);
   });
 
-  it("uses the half-rate the shop actually pays, and the published one on request", () => {
-    expect(freeShippingFee(7_700_000, false)).toBe(38_500);
-    expect(freeShippingFee(7_700_000, true)).toBe(40_000); // capped
+  it("charges Gratis Ongkir XTRA at 1%, capped at Rp40.000", () => {
+    expect(freeShippingFee(2_000_000)).toBe(20_000);
+    expect(freeShippingFee(7_700_000)).toBe(40_000);
+    expect(freeShippingFee(39_600_000)).toBe(40_000);
   });
 
-  it("leaves out the two conditional lines unless told they apply", () => {
+  it("estimates the fixed lines only — no affiliate, no payment-method fee", () => {
     const fees = estimateShopeeFees(laptop());
-    expect(fees.some((f) => /SPayLater/.test(f.label))).toBe(false);
-    expect(fees.some((f) => /AMS/.test(f.label))).toBe(false);
+    expect(fees.some((f) => /AMS|SPayLater|Transaksi/.test(f.label))).toBe(
+      false,
+    );
     expect(fees.every((f) => f.basis === "rate")).toBe(true);
   });
 
-  it("marks the conditional lines as conditional", () => {
-    const fees = estimateShopeeFees(
-      laptop({ spayLater: "SIX_MONTHS", affiliate: true }),
+  it("costs a laptop sale 6,25% + Rp101.250", () => {
+    // At Rp10jt: 625.000 + 101.250 = 726.250, 7,26%.
+    expect(effectiveCostPct(laptop({ gross: 10_000_000 }))).toBeCloseTo(
+      7.26,
+      2,
     );
-    expect(
-      fees.filter((f) => f.basis === "conditional").map((f) => f.label),
-    ).toEqual(["Biaya SPayLater XTRA 0%", "Komisi AMS"]);
-  });
-
-  it("lands inside the band the document states", () => {
-    // 6,9% with nothing conditional, about 12% with six months and an
-    // affiliate. That spread is the whole argument for reading the payout.
-    expect(effectiveCostPct(laptop({ gross: 10_290_556 }))).toBeCloseTo(
-      6.86,
-      1,
-    );
-    expect(
-      effectiveCostPct(
-        laptop({ gross: 10_290_556, spayLater: "SIX_MONTHS", affiliate: true }),
-      ),
-    ).toBeCloseTo(11.96, 1);
   });
 });
 
@@ -139,16 +139,17 @@ describe("fitting an estimate to what Shopee actually paid", () => {
   it("adds nothing when the rates explain the payout exactly", () => {
     const { fees, unexplained } = reconcileEstimate(
       laptop({ gross: 6_800_000 }),
-      6_313_750,
+      6_273_750,
     );
     expect(unexplained).toBe(0);
     expect(fees.some((f) => f.label === OTHER_FEES_LABEL)).toBe(false);
   });
 
-  it("names what the rates cannot explain Biaya Lainnya, instead of spreading it", () => {
+  it("names what the rates cannot explain Others, instead of spreading it", () => {
     /*
      * The owner's rule (2026-09-21): "if there is discrepancies that are not
-     * mentioned in the rule just add like Biaya lainnya". Spreading would be
+     * mentioned in the rule just add like Biaya lainnya" — Others since
+     * 2026-11-15. Spreading would be
      * the tempting version and it would hide exactly what the rates exist to
      * catch: the admin line must stay 5,25% of the subtotal so somebody can
      * see when it is not.
@@ -157,12 +158,12 @@ describe("fitting an estimate to what Shopee actually paid", () => {
       laptop({ gross: 6_800_000 }),
       6_200_000,
     );
-    expect(unexplained).toBe(113_750);
+    expect(unexplained).toBe(73_750);
     expect(amount(fees, /Administrasi/)).toBe(357_000);
     expect(fees.at(-1)).toMatchObject({
       kind: "OTHER",
       label: OTHER_FEES_LABEL,
-      amount: 113_750,
+      amount: 73_750,
     });
     // And the lines now add up to exactly what Shopee kept.
     const deducted = fees.reduce((n, f) => n + f.amount, 0);
@@ -170,37 +171,19 @@ describe("fitting an estimate to what Shopee actually paid", () => {
   });
 
   it("writes a payout ABOVE the rates as an additional payment below zero", () => {
-    // Shopee paid 86.250 more than its own fees leave room for — a
+    // Shopee paid 126.250 more than its own fees leave room for — a
     // compensation, or a sale recorded below its Shopee price. The line is
     // money ADDED, so the lines still close on what landed.
     const { fees, unexplained } = reconcileEstimate(
       laptop({ gross: 6_800_000 }),
       6_400_000,
     );
-    expect(unexplained).toBe(-86_250);
+    expect(unexplained).toBe(-126_250);
     expect(fees.at(-1)).toMatchObject({
       label: EXTRA_PAYMENT_LABEL,
-      amount: -86_250,
+      amount: -126_250,
     });
     expect(6_800_000 - fees.reduce((n, f) => n + f.amount, 0)).toBe(6_400_000);
-  });
-
-  it("reproduces the seller balance report of 1–21 Sep 2026", () => {
-    /*
-     * Real orders: the balance report's `Jumlah` against the order export's
-     * subtotal for the same order number.
-     *
-     * - 2609069FJ48B50 is fully explained by the rates.
-     * - 2609142KT5WTXR was declared at 5.000 gr: its 42.000 is exactly the
-     *   Ukuran Khusus ongkir (Rp60.000 at the cap) less the 0,5% the rates
-     *   charge — which no export can know, so it is Biaya Lainnya.
-     */
-    expect(
-      reconcileEstimate(laptop({ gross: 5_300_000 }), 4_907_500).unexplained,
-    ).toBe(0);
-    const khusus = reconcileEstimate(laptop({ gross: 3_600_000 }), 3_271_750);
-    expect(khusus.unexplained).toBe(42_000);
-    expect(amount(khusus.fees, /Gratis Ongkir/)! + 42_000).toBe(60_000);
   });
 
   it("closes a report's OWN fee lines on its payout too", () => {
@@ -226,6 +209,8 @@ describe("fitting an estimate to what Shopee actually paid", () => {
     expect(statedFee("Biaya Administrasi", 1).kind).toBe("COMMISSION");
     expect(statedFee("Biaya Gratis Ongkir XTRA", 1).kind).toBe("SERVICE");
     expect(statedFee("Komisi AMS", 1).kind).toBe("PROMOTION");
+    expect(statedFee("Biaya Transaksi", 1).kind).toBe("SERVICE");
+    expect(statedFee("PPh 22", 1).kind).toBe("OTHER");
     expect(statedFee("Premi", 1)).toMatchObject({
       kind: "OTHER",
       label: "Premi",
@@ -238,9 +223,10 @@ describe("fitting an estimate to what Shopee actually paid", () => {
     expect(fees.map((f) => f.rate)).toEqual([
       5.25, // Biaya Administrasi
       undefined, // Biaya Proses Pesanan — flat
-      0.5, // Gratis Ongkir XTRA
+      undefined, // Gratis Ongkir XTRA — the Rp40.000 cap, not 1%
       undefined, // Promo XTRA — the Rp60.000 cap, not 4,5%
       0.5, // Premi
+      0.5, // PPh 22
     ]);
     // Below the cap the 4,5% is the rule, and says so.
     const charger = estimateShopeeFees({
@@ -249,6 +235,7 @@ describe("fitting an estimate to what Shopee actually paid", () => {
       category: "ACCESSORY",
     });
     expect(charger.find((f) => /Promo/.test(f.label))?.rate).toBe(4.5);
+    expect(charger.find((f) => /Ongkir/.test(f.label))?.rate).toBe(1);
   });
 });
 
@@ -258,7 +245,7 @@ describe("the rates as a validator", () => {
       feeWarnings(laptop({ gross: 6_800_000 }), [
         { label: "Biaya Administrasi", amount: 357_000 },
         { label: "Biaya Promo XTRA", amount: 60_000 },
-        { label: "Biaya Gratis Ongkir XTRA", amount: 34_000 },
+        { label: "Biaya Gratis Ongkir XTRA", amount: 40_000 },
       ]),
     ).toEqual([]);
   });
@@ -283,18 +270,9 @@ describe("the rates as a validator", () => {
     const warnings = feeWarnings(laptop({ gross: 6_800_000 }), [
       { label: "Biaya Administrasi", amount: 357_000 },
       { label: "Biaya Promo XTRA", amount: 60_000 },
-      { label: "Biaya Gratis Ongkir XTRA", amount: 170_000 }, // 2,5%
+      { label: "Biaya Gratis Ongkir XTRA", amount: 60_000 }, // 2,5%, capped
     ]);
-    expect(warnings.some((w) => /Ukuran Khusus/.test(w))).toBe(true);
-  });
-
-  it("notices the half-rate anomaly ending", () => {
-    const warnings = feeWarnings(laptop({ gross: 6_800_000 }), [
-      { label: "Biaya Administrasi", amount: 357_000 },
-      { label: "Biaya Promo XTRA", amount: 60_000 },
-      { label: "Biaya Gratis Ongkir XTRA", amount: 68_000 }, // 1%
-    ]);
-    expect(warnings.some((w) => /half-rate/.test(w))).toBe(true);
+    expect(warnings.some((w) => /Rp60\.000.*Ukuran Khusus/.test(w))).toBe(true);
   });
 });
 

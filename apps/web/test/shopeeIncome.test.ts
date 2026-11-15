@@ -505,39 +505,40 @@ describe("payoutRows", () => {
       facts,
     );
 
-  it("breaks a stated payout down by the rates and names the rest Biaya Lainnya", () => {
-    // 2609153FVWW6NY: a Rp5.300.000 sale that paid 4.796.900. The rates
-    // explain 392.500 of the 503.100 Shopee kept; the 110.600 left is an
-    // affiliate's commission no export can see.
+  it("breaks a stated payout down by the fixed rates and names the rest Others", () => {
+    // 261104DUGE3658: a Rp10.450.000 sale that paid 9.588.910. The fixed
+    // lines explain 754.375 of the 861.090 Shopee kept; the 106.715 left is
+    // an affiliate's commission no export can see.
     const [row] = rows([
       {
-        line: plain("2609153FVWW6NY", 4_796_900),
-        pending: { code: "SI-1", gross: 5_300_000 },
+        line: plain("261104DUGE3658", 9_588_910),
+        pending: { code: "SI-1", gross: 10_450_000 },
       },
     ]);
     expect(row).toMatchObject({
       status: "STATED",
-      received: 4_796_900,
+      received: 9_588_910,
       recordable: true,
       preselect: true,
       review: [],
     });
     expect(row!.fees.map((f) => [f.label, f.amount])).toEqual([
-      ["Biaya Administrasi", 278_250],
+      ["Biaya Administrasi", 548_625],
       ["Biaya Proses Pesanan", 1_250],
-      ["Biaya Gratis Ongkir XTRA", 26_500],
+      ["Biaya Gratis Ongkir XTRA", 40_000],
       ["Biaya Promo XTRA", 60_000],
-      ["Premi", 26_500],
-      [OTHER_FEES_LABEL, 110_600],
+      ["Premi", 52_250],
+      ["PPh 22", 52_250],
+      [OTHER_FEES_LABEL, 106_715],
     ]);
     // The lines close on Shopee's figure, which is what the deductions dialog
     // computes what landed from.
     expect(
       settlementTotals({
-        gross: 5_300_000,
+        gross: 10_450_000,
         fees: row!.fees.map((f, i) => ({ id: `${i}`, ...f })),
       }).expected,
-    ).toBe(4_796_900);
+    ).toBe(9_588_910);
   });
 
   it("leaves an order with a compensation beside its payout for a person", () => {
@@ -574,11 +575,11 @@ describe("payoutRows", () => {
         pending: { code: "SI-3", gross: 6_800_000 },
       },
     ]);
-    expect(row!.review).toEqual([{ kind: "ABOVE_RATES", amount: 86_250 }]);
+    expect(row!.review).toEqual([{ kind: "ABOVE_RATES", amount: 126_250 }]);
     expect(row!.preselect).toBe(false);
     expect(row!.fees.at(-1)).toMatchObject({
       label: EXTRA_PAYMENT_LABEL,
-      amount: -86_250,
+      amount: -126_250,
     });
   });
 
@@ -625,18 +626,17 @@ describe("payoutRows", () => {
     expect(asked).toBe(true);
     expect(row).toMatchObject({
       status: "ESTIMATED",
-      received: 6_313_750,
+      received: 6_273_750,
       preselect: true,
     });
   });
 
-  it("keeps the conditional switches off a payout Shopee stated", () => {
-    // They would only cut the Biaya Lainnya remainder into a guess.
+  it("tells the facts callback a payout Shopee stated is not an estimate", () => {
     let asked: boolean | undefined;
     payoutRows(
       [
         {
-          line: plain("2609166VUDCU4M", 6_313_750),
+          line: plain("2609166VUDCU4M", 6_273_750),
           pending: { code: "SI-7", gross: 6_800_000 },
         },
       ],

@@ -3915,6 +3915,18 @@ Decisions that outlived those documents:
     from `usePendingChangeRequests()`). Below, every held unit
     (`lib/todayStock.ts`) as a ProTable — warehouse, category, status facets —
     with counted products as quantity rows.
+- **Shopee's deduction: the fixed lines, and the rest is Others —
+  2026-11-15.** *"Record what's fixed and add the other as Others."* Four
+  November Rincian Penghasilan (docs/shopee-fees.md) reconcile to the rupiah
+  with `lib/shopeeFees.ts`: admin 5,25%, proses Rp1.250, Gratis Ongkir XTRA
+  **1% capped Rp40.000** (the September 0,5% uncapped "half-rate" has ended),
+  Promo XTRA 4,5% capped Rp60.000/unit, Premi 0,5% and **PPh 22 0,5%** (new).
+  Komisi AMS and Biaya Transaksi are not estimated: on a stated payout they
+  are the remainder, `OTHER_FEES_LABEL` = **"Others"** (was "Biaya Lainnya",
+  which is also Shopee's own group holding Premi). The SPayLater and
+  affiliate switches on the upload are gone, and `ShopeeSaleFacts` lost
+  `shopeeVoucher`/`spayLater`/`affiliate`/`publishedShipping`. A stated
+  Gratis Ongkir above Rp40.000 warns Ukuran Khusus.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

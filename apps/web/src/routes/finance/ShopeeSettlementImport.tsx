@@ -48,7 +48,7 @@
  * line.
  *
  * **Yellow means "does not match"**: what Shopee paid is not what its published
- * fees predict — the difference is a Biaya Lainnya or a Pembayaran Tambahan —
+ * fees predict — the difference is an "Others" line or a Pembayaran Tambahan —
  * or the row is not plain (a compensation beside the payout, nothing paid, a
  * number two sales share). Those rows go to the top. A sale that is simply not
  * in this file is not a mismatch: Shopee has not released it yet, and it sits
@@ -73,25 +73,22 @@
  * `SettlementLog` records any later correction exactly as it always has.
  *
  * Nothing unusual is ticked for the person — a compensation beside a payout, a
- * payout above what the rates allow for. A Biaya Lainnya on its own IS ticked:
+ * payout above what the rates allow for. An "Others" line on its own IS ticked:
  * the owner's rule is to name the difference and record it, and it is yellow so
  * that it is seen.
  *
- * The two conditional programmes — SPayLater XTRA and an affiliate's
- * commission — are switches only for ESTIMATED rows, the one case with no
- * figure of Shopee's to close on. That is the owner's 2026-09-20 rule kept
- * intact — *"the user should be the one adding the deduction"* — with the
- * shop's own published rates doing the typing.
+ * An ESTIMATED row — a file with no payout of Shopee's to close on — carries
+ * the fixed lines only. The SPayLater and affiliate switches that used to
+ * guess the rest are gone (owner, 2026-11-15: *"record what's fixed and add
+ * the other as Others"*); a person adds a line the payout later shows.
  */
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Alert,
   Button,
-  Checkbox,
   Flex,
   Modal,
   Popover,
-  Select,
   Tag,
   theme,
   Typography,
@@ -125,7 +122,6 @@ import {
   toSettlementFees,
   type EstimatedFee,
   type ShopeeSaleFacts,
-  type SpayLaterTenor,
 } from "../../lib/shopeeFees.js";
 import type { SettlementDraft } from "../../lib/marketplace.js";
 import { skuTracksSerial } from "../../lib/serialTracking.js";
@@ -191,8 +187,6 @@ export function ShopeeSettlementImport({
   const [sheets, setSheets] = useState<XlsxSheet[] | null>(null);
   const [fileName, setFileName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [spayLater, setSpayLater] = useState<SpayLaterTenor>("NONE");
-  const [affiliate, setAffiliate] = useState(false);
   const [picked, setPicked] = useState<string[] | null>(null);
   /** Guards a second upload landing while the first is still being read. */
   const reading = useRef(false);
@@ -243,7 +237,7 @@ export function ShopeeSettlementImport({
         reconciliation.matched,
         layout ?? {},
         (p) => p.gross,
-        (p, estimating) => ({
+        (p) => ({
           gross: p.gross,
           qty: Math.max(
             1,
@@ -251,10 +245,6 @@ export function ShopeeSettlementImport({
               (p.order.lines ?? []).reduce((n, l) => n + l.qty, 0),
           ),
           category: categoryOf(p.order),
-          // The switches describe a sale nobody has a payout for yet. On a
-          // stated payout they would only cut Biaya Lainnya into a guess.
-          ...(estimating && spayLater !== "NONE" ? { spayLater } : {}),
-          ...(estimating && affiliate ? { affiliate: true } : {}),
         }),
       ).map((w) => [w.pending.key, w]),
     );
@@ -321,8 +311,6 @@ export function ShopeeSettlementImport({
     reconciliation,
     pending,
     layout,
-    spayLater,
-    affiliate,
     db.units,
     db.skus,
     db.models,
@@ -335,9 +323,6 @@ export function ShopeeSettlementImport({
   const chosenRows = rows.filter(
     (r) => r.worked?.recordable === true && chosen.includes(r.key),
   );
-  const estimatedCount = rows.filter(
-    (r) => r.worked?.status === "ESTIMATED",
-  ).length;
   const mismatchCount = rows.filter((r) => r.mismatch).length;
 
   const reset = () => {
@@ -694,54 +679,6 @@ export function ShopeeSettlementImport({
               "No order numbers were found in that file.",
             )}
           />
-        )}
-
-        {sheets !== null && estimatedCount > 0 && (
-          <Flex vertical gap={SPACE.xs}>
-            <Typography.Text type="secondary" style={{ fontSize: TYPE.sm }}>
-              {t(
-                "shopeeImport.conditionalHint",
-                "Two fee lines cannot be read from any export — whether the buyer took 0% instalments, and whether an affiliate sold it. They are the difference between a sale costing 6,9% and 12,0%, so they are asked rather than guessed.",
-              )}
-            </Typography.Text>
-            <Flex gap={SPACE.md} wrap align="center">
-              <Select<SpayLaterTenor>
-                size="small"
-                style={{ minWidth: 220 }}
-                value={spayLater}
-                onChange={setSpayLater}
-                options={[
-                  {
-                    value: "NONE",
-                    label: t("shopeeImport.noInstalment", "No 0% instalment"),
-                  },
-                  {
-                    value: "THREE_MONTHS",
-                    label: t(
-                      "shopeeImport.spay3",
-                      "SPayLater XTRA 0%, 3 months (2,5%)",
-                    ),
-                  },
-                  {
-                    value: "SIX_MONTHS",
-                    label: t(
-                      "shopeeImport.spay6",
-                      "SPayLater XTRA 0%, 6 months (4,0%)",
-                    ),
-                  },
-                ]}
-              />
-              <Checkbox
-                checked={affiliate}
-                onChange={(e) => setAffiliate(e.target.checked)}
-              >
-                {t(
-                  "shopeeImport.affiliate",
-                  "Sold through an affiliate (1% + PPN)",
-                )}
-              </Checkbox>
-            </Flex>
-          </Flex>
         )}
 
         {sheets !== null && mismatchCount > 0 && (

@@ -25,8 +25,8 @@ vi.setConfig({ testTimeout: 90_000 });
 
 /** Three Shopee sales waiting, carrying real order numbers from the report. */
 const SALES = [
-  // Paid 4.796.900: the rates explain 392.500 of what Shopee kept, and the
-  // 110.600 left over is Biaya Lainnya.
+  // Paid 4.796.900: the fixed rates explain 432.500 of what Shopee kept, and
+  // the 70.600 left over is Others.
   {
     id: "o-shp-1",
     code: "SI-SHP-001",
@@ -67,7 +67,7 @@ const REPORT = balanceReport([
   payoutRow(
     "2026-09-19 03:22:34",
     "2609166VUDCU4M",
-    "6313750.00",
+    "6273750.00",
     "34697044.00",
   ),
 ]);
@@ -176,7 +176,7 @@ describe("uploading the seller balance report", () => {
     expect(within(plain).getByText("Rp 5.300.000")).toBeTruthy();
     expect(within(plain).getByText("−Rp 503.100")).toBeTruthy();
     expect(within(plain).getByText("Rp 4.796.900")).toBeTruthy();
-    expect(within(plain).getByText("Biaya Lainnya Rp 110.600")).toBeTruthy();
+    expect(within(plain).getByText("Others Rp 70.600")).toBeTruthy();
 
     // The compensation is in the list, explained, and NOT ticked.
     const odd = rowOf(dialog, "SI-SHP-002");
@@ -211,7 +211,7 @@ describe("uploading the seller balance report", () => {
     const pop = detail.closest(".ant-popover")! as HTMLElement;
     expect(within(pop).getByText("· 5.25%")).toBeTruthy();
     expect(within(pop).getByText("Rp 278.250")).toBeTruthy();
-    expect(within(pop).getByText("Biaya Lainnya")).toBeTruthy();
+    expect(within(pop).getByText("Others")).toBeTruthy();
     expect(within(pop).getByText("Rp 503.100")).toBeTruthy();
   });
 
@@ -234,10 +234,11 @@ describe("uploading the seller balance report", () => {
     expect(plain.fees.map((f) => [f.label, f.amount])).toEqual([
       ["Biaya Administrasi", 278_250],
       ["Biaya Proses Pesanan", 1_250],
-      ["Biaya Gratis Ongkir XTRA", 26_500],
+      ["Biaya Gratis Ongkir XTRA", 40_000],
       ["Biaya Promo XTRA", 60_000],
       ["Premi", 26_500],
-      ["Biaya Lainnya", 110_600],
+      ["PPh 22", 26_500],
+      ["Others", 70_600],
     ]);
     // The deductions dialog computes what landed from the lines, so they
     // must agree with Shopee's figure or the first correction rewrites it.
@@ -246,7 +247,7 @@ describe("uploading the seller balance report", () => {
     ).toBe(plain.received);
     expect(
       written.find((s) => s.orderId === "o-shp-3")!.fees.map((f) => f.label),
-    ).not.toContain("Biaya Lainnya");
+    ).not.toContain("Others");
 
     // Only deductions are recorded (2026-11-13): no payment is marked
     // received, and each keeps the state and the day its sale wrote.

@@ -52,7 +52,43 @@ termasuk Biaya Proses Pesanan, Biaya Administrasi Star/Star+, dan Biaya Layanan
 program lain."* Both samples sum to their stated payout to the rupiah, which is
 the check that the model is complete.
 
-## The rates
+## The rates — revised 2026-11-15
+
+> *"Record what's fixed and add the other as Others."* — owner, 2026-11-15
+
+Four November orders, each from its own Rincian Penghasilan, reconcile to the
+rupiah with these. `price` is Harga Produk.
+
+| Line | Rule | Fixed? |
+|---|---|---|
+| Biaya Administrasi | **5,25%** of price (6,75% for an accessory) | fixed |
+| Biaya Proses Pesanan | **Rp1.250** per order | fixed |
+| Biaya Gratis Ongkir XTRA (Kategori A) | **1%, capped Rp40.000** — flat Rp40.000 on any laptop | fixed |
+| Biaya Layanan Promo XTRA | **4,5%, capped Rp60.000** per unit | fixed |
+| Premi (Shopee's "Biaya Lainnya" group) | **0,5%** of price | fixed |
+| **PPh 22** (Shopee's "Pajak" group) | **0,5%** of price — new since September | fixed |
+| Komisi AMS | affiliate sales only; ≈ 1% × (price − Shopee voucher) × 1,11 | → **Others** |
+| Biaya Transaksi | depends on how the buyer paid | → **Others** |
+| Ongkos kirim | buyer's ongkir + Shopee's subsidy = courier's charge; nets to 0 | not a deduction |
+
+So a laptop sale costs **6,25% of the price + Rp101.250**, plus whatever
+lands in Others. `lib/shopeeFees.ts` estimates the fixed lines; on a payout
+Shopee stated, the remainder is one line named **Others** (it was "Biaya
+Lainnya" — the same name as Shopee's own group holding Premi).
+
+| Order | Price | Fixed lines | Others | Paid out |
+|---|---|---|---|---|
+| `261106JAT13UX9` | 6.800.000 | 526.250 | 0 | 6.273.750 ✓ |
+| `261104DUGE3658` | 10.450.000 | 754.375 | 106.715 (AMS) | 9.588.910 ✓ |
+| `261105GSHFNT9H` | 39.600.000 | 2.576.250 | 428.460 (AMS) | 36.595.290 ✓ |
+| `261105FKC901NR` | 6.800.000 | 526.250 | 157.500 (Biaya Transaksi) | 6.116.250 |
+
+⚠️ Two September rules no longer hold: Gratis Ongkir XTRA was **0,5%
+uncapped** (the "half-rate anomaly" below — it ended, and on a Rp39,6jt order
+the old rule over-charged 158.000), and there was **no PPh 22**. The SPayLater
+and affiliate switches on the upload are gone with this revision.
+
+## The rates as of 2026-09-21 (superseded)
 
 | Line | Rate | Basis |
 |---|---|---|

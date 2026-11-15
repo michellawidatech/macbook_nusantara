@@ -3847,12 +3847,6 @@ export const id: Record<string, string> = {
     "Satu-satunya kolom uang di dalamnya adalah tagihan pembeli, bukan yang dibayarkan Shopee ke toko. Semua angka di bawah DIESTIMASI dari tarif resmi. Koreksi satu per satu saat pencairan benar-benar masuk.",
   "shopeeImport.noOrders":
     "Tidak ada nomor pesanan yang ditemukan di berkas itu.",
-  "shopeeImport.conditionalHint":
-    "Dua komponen biaya tidak bisa dibaca dari export mana pun — apakah pembeli mengambil cicilan 0%, dan apakah penjualan lewat afiliasi. Keduanya membuat biaya satu penjualan berkisar 6,9% sampai 12,0%, jadi ditanyakan, bukan ditebak.",
-  "shopeeImport.noInstalment": "Tanpa cicilan 0%",
-  "shopeeImport.spay3": "SPayLater XTRA 0%, 3 bulan (2,5%)",
-  "shopeeImport.spay6": "SPayLater XTRA 0%, 6 bulan (4,0%)",
-  "shopeeImport.affiliate": "Terjual lewat afiliasi (1% + PPN)",
   "shopeeImport.estimated": "Estimasi",
   // The upload's table (owner revision 2026-09-21).
   "shopeeImport.refCol": "Nomor referensi",
