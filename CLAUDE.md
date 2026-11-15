@@ -3969,6 +3969,14 @@ Decisions that outlived those documents:
   - **The Opening balance dialog is gone** (owner ask): `OpeningBalanceModal`
     and its header button. The stored `openingCash`/`openingBank`/
     `openingBalanceAt` still start the Cash and Bank cards.
+- **Profit per invoice is on the Statement — 2026-11-16.** *"Statement and
+  Profit per invoice should be combined (widen this and make the transaction
+  number clickable, add a column to see the profit per invoice)."* The
+  *Profit per invoice* tab is gone. On the Statement the transactions panel
+  is the wider column (xl 14 of 24); a transaction number that is a sale
+  opens its faktur, and an **Invoice profit** column (profit, margin under
+  it, from `invoiceProfits`) spans each sale's lines once — so the list
+  keeps an invoice's lines together and has no pages (one 560px scroll).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

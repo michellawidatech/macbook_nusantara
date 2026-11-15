@@ -1,7 +1,7 @@
 /**
- * Profit & Loss's per-invoice tab (owner ask 2026-11-13: *"add a profit per
- * invoice transaction in the sales transaction in PnL; when the transaction
- * number is clicked, it will show the invoice"*).
+ * Profit per invoice, on the statement (owner ask 2026-11-13, combined into
+ * the Statement tab 2026-11-16): the Sales line's transactions carry each
+ * invoice's profit, and a transaction number opens its faktur.
  */
 import { App as AntdApp } from "antd";
 import { render, screen } from "@testing-library/react";
@@ -15,7 +15,7 @@ import type { Order } from "../src/mock/seed.js";
 vi.setConfig({ testTimeout: 90_000 });
 
 describe("profit per invoice", () => {
-  it("lists this month's sales and opens a sale's faktur from its number", async () => {
+  it("shows a sale's profit beside its lines and opens its faktur from its number", async () => {
     // A sale of today, so the month the page opens on always has one.
     const base = getDb().orders.find((o) => o.serials.length > 0)!;
     const sale = {
@@ -34,14 +34,23 @@ describe("profit per invoice", () => {
         </MemoryRouter>
       </AntdApp>,
     );
-    await userEvent.click(
-      screen.getByRole("tab", { name: "Profit per invoice" }),
+    // The tab is gone; the statement's Sales line is where it lives.
+    expect(
+      screen.queryByRole("tab", { name: "Profit per invoice" }),
+    ).toBeNull();
+    await userEvent.click(screen.getByText("Sales"));
+    // A scrolling table draws its header twice; one is enough.
+    expect(
+      (await screen.findAllByText("Invoice profit")).length,
+    ).toBeGreaterThan(0);
+    // By its text, not a role query: the transactions list has no pages,
+    // and a role query over every row of the month takes minutes in jsdom.
+    const [number] = await screen.findAllByText(sale.code);
+    const button = number!.closest("button")!;
+    expect(button.getAttribute("aria-label")).toBe(
+      `Open the invoice ${sale.code}`,
     );
-    await userEvent.click(
-      await screen.findByRole("button", {
-        name: `Open the invoice ${sale.code}`,
-      }),
-    );
+    await userEvent.click(button);
     expect(await screen.findByText("FAKTUR PENJUALAN")).toBeTruthy();
   });
 });

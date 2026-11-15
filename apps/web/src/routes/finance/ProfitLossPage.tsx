@@ -52,7 +52,6 @@ import {
   type PnlItem,
   type PnlLine,
   type ProfitLoss,
-  type InvoiceProfitRow,
   type UnitProfitRow,
 } from "../../lib/profitLoss.js";
 import {
@@ -60,7 +59,7 @@ import {
   exportXlsx,
   type TableExportOptions,
 } from "../../lib/tableExport.js";
-import { COLUMN, SPACE } from "../../theme/tokens";
+import { COLUMN, SPACE, TYPE } from "../../theme/tokens";
 
 /** What is taken off prints in brackets, as on Olsera's report. */
 export const fmtPnl = (n: number): string =>
@@ -73,7 +72,7 @@ const fmtShort = (n: number): string =>
     : fmtRp(n);
 
 type Mode = "month" | "range";
-type Tab = "statement" | "units" | "invoices" | "months";
+type Tab = "statement" | "units" | "months";
 
 /** One printed row of the statement — on screen and in the export alike. */
 interface Row {
@@ -94,7 +93,7 @@ export function ProfitLossPage() {
   const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
-  /** The sale whose faktur is open, from the per-invoice tab. */
+  /** The sale whose faktur is open — a transaction number pressed. */
   const [invoiceOf, setInvoiceOf] = useState<string | null>(null);
 
   const period: Period = useMemo(() => {
@@ -108,7 +107,16 @@ export function ProfitLossPage() {
 
   const report = useMemo(() => profitLoss(db, period), [db, period]);
   const perUnit = useMemo(() => unitProfits(db, period), [db, period]);
-  const perInvoice = useMemo(() => invoiceProfits(db, period), [db, period]);
+  /**
+   * Each sale's profit, by its number (owner ask 2026-11-16: *"Statement and
+   * Profit per invoice should be combined … make the transaction number
+   * clickable, add a column to see the profit per invoice"*). The per-invoice
+   * tab is gone; the statement's transactions carry the figure instead.
+   */
+  const perInvoice = useMemo(
+    () => new Map(invoiceProfits(db, period).map((r) => [r.code, r])),
+    [db, period],
+  );
   const invoiceOrder =
     invoiceOf === null ? undefined : db.orders.find((o) => o.id === invoiceOf);
   // Twelve months ending with the one the period ends in.
@@ -172,6 +180,46 @@ export function ProfitLossPage() {
   // A few dozen rows: cheap to rebuild, and rebuilt with the language.
   const rows = statementRows(report, lineLabel, t);
   const pickedRow = rows.find((r) => r.kind === "line" && r.key === picked);
+  /*
+   * The picked line's transactions, each invoice's lines together (newest
+   * invoice first) so its profit cell can span them, and the span of each
+   * row: the first line of an invoice spans all of them, the rest 0.
+   */
+  const pickedItems = useMemo(() => {
+    const items = [...(pickedRow?.items ?? [])];
+    const first = new Map<string, number>();
+    items.forEach((it, i) => {
+      if (!first.has(it.ref)) first.set(it.ref, i);
+    });
+    return items
+      .map((it, i) => ({ it, i }))
+      .sort(
+        (a, b) =>
+          (perInvoice.has(a.it.ref) ? first.get(a.it.ref)! : a.i) -
+            (perInvoice.has(b.it.ref) ? first.get(b.it.ref)! : b.i) ||
+          a.i - b.i,
+      )
+      .map(({ it }) => it);
+  }, [pickedRow, perInvoice]);
+  const pickedSales = pickedItems.some((it) => perInvoice.has(it.ref));
+  const invoiceSpans = useMemo(() => {
+    const spans: number[] = [];
+    for (let i = 0; i < pickedItems.length; i++) {
+      const ref = pickedItems[i]!.ref;
+      if (!perInvoice.has(ref)) {
+        spans.push(1);
+        continue;
+      }
+      if (i > 0 && pickedItems[i - 1]!.ref === ref) {
+        spans.push(0);
+        continue;
+      }
+      let n = 1;
+      while (pickedItems[i + n]?.ref === ref) n++;
+      spans.push(n);
+    }
+    return spans;
+  }, [pickedItems, perInvoice]);
 
   const periodText =
     mode === "range" && range !== null
@@ -302,7 +350,7 @@ export function ProfitLossPage() {
 
   const statement = (
     <AntRow gutter={[SPACE.md, SPACE.md]}>
-      <Col xs={24} xl={13}>
+      <Col xs={24} xl={10}>
         <Card>
           <Flex vertical align="center" style={{ marginBottom: SPACE.md }}>
             <Typography.Text strong>{shopName}</Typography.Text>
@@ -335,7 +383,7 @@ export function ProfitLossPage() {
           )}
         </Card>
       </Col>
-      <Col xs={24} xl={11}>
+      <Col xs={24} xl={14}>
         <Card
           title={
             pickedRow
@@ -355,8 +403,10 @@ export function ProfitLossPage() {
             <Table<PnlItem>
               size="small"
               rowKey={(r) => `${r.ref}-${r.date}-${r.description}-${r.amount}`}
-              dataSource={[...(pickedRow.items ?? [])]}
-              pagination={{ pageSize: 50, hideOnSinglePage: true }}
+              dataSource={pickedItems}
+              // One scroll, no pages: the invoice's profit cell spans that
+              // invoice's lines, and a page break would cut it in two.
+              pagination={false}
               scroll={{ y: 560 }}
               locale={{
                 emptyText: t("pnl.noItems", "Nothing in this line."),
@@ -372,6 +422,26 @@ export function ProfitLossPage() {
                   title: t("pnl.ref", "Transaction"),
                   dataIndex: "ref",
                   width: COLUMN.code,
+                  render: (ref: string) => {
+                    const sale = perInvoice.get(ref);
+                    return sale === undefined ? (
+                      ref
+                    ) : (
+                      <Button
+                        type="link"
+                        size="small"
+                        style={{ paddingInline: 0 }}
+                        aria-label={t(
+                          "pnl.openInvoice",
+                          "Open the invoice {{code}}",
+                          { code: ref },
+                        )}
+                        onClick={() => setInvoiceOf(sale.orderId)}
+                      >
+                        {ref}
+                      </Button>
+                    );
+                  },
                 },
                 {
                   title: t("pnl.description", "Description"),
@@ -384,6 +454,37 @@ export function ProfitLossPage() {
                   width: COLUMN.money,
                   render: (v: number) => fmtPnl(v),
                 },
+                ...(pickedSales
+                  ? [
+                      {
+                        title: t("pnl.invoiceProfit", "Invoice profit"),
+                        key: "invoiceProfit",
+                        align: "right" as const,
+                        width: COLUMN.money,
+                        // Once per invoice: the cell spans that sale's lines.
+                        onCell: (_: PnlItem, i?: number) => ({
+                          rowSpan: invoiceSpans[i ?? 0] ?? 1,
+                        }),
+                        render: (_: unknown, r: PnlItem) => {
+                          const sale = perInvoice.get(r.ref);
+                          if (sale === undefined) return null;
+                          return (
+                            <Flex vertical align="flex-end" gap={0}>
+                              <Typography.Text strong>
+                                {fmtPnl(sale.profit)}
+                              </Typography.Text>
+                              <Typography.Text
+                                type="secondary"
+                                style={{ fontSize: TYPE.sm }}
+                              >
+                                {`${(sale.margin * 100).toFixed(1)}%`}
+                              </Typography.Text>
+                            </Flex>
+                          );
+                        },
+                      },
+                    ]
+                  : []),
               ]}
             />
           )}
@@ -449,93 +550,6 @@ export function ProfitLossPage() {
           width: COLUMN.money + 40,
           sortValue: (r) => r.perUnit,
           render: (_, r) => <strong>{fmtPnl(r.perUnit)}</strong>,
-        },
-        {
-          title: t("pnl.margin", "Margin"),
-          key: "margin",
-          align: "right",
-          width: COLUMN.qty,
-          sortValue: (r) => r.margin,
-          render: (_, r) => `${(r.margin * 100).toFixed(1)}%`,
-        },
-      ]}
-    />
-  );
-
-  const invoicesTab = (
-    <ProTable<InvoiceProfitRow>
-      lazy
-      persistKey="pnl.perInvoice"
-      rowKey="orderId"
-      dataSource={perInvoice}
-      searchPlaceholder={t(
-        "pnl.searchInvoice",
-        "Search a transaction number or a customer",
-      )}
-      locale={{
-        emptyText: t("pnl.noSales", "No sale was recorded in this period."),
-      }}
-      columns={[
-        {
-          title: t("pnl.transactionNumber", "Transaction number"),
-          key: "code",
-          width: COLUMN.code,
-          searchable: true,
-          searchValue: (r) => r.code,
-          sortValue: (r) => r.code,
-          render: (_, r) => (
-            <Button
-              type="link"
-              size="small"
-              style={{ paddingInline: 0 }}
-              aria-label={t("pnl.openInvoice", "Open the invoice {{code}}", {
-                code: r.code,
-              })}
-              onClick={() => setInvoiceOf(r.orderId)}
-            >
-              {r.code}
-            </Button>
-          ),
-        },
-        {
-          title: t("pnl.date", "Date"),
-          key: "at",
-          width: COLUMN.date,
-          defaultSortOrder: "descend",
-          sortValue: (r) => Date.parse(r.at),
-          render: (_, r) => fmtDate(r.at),
-        },
-        {
-          title: t("pnl.customer", "Customer"),
-          key: "customer",
-          searchable: true,
-          searchValue: (r) => r.customer,
-          sortValue: (r) => r.customer,
-          render: (_, r) => r.customer || t("pnl.walkIn", "Walk-in customer"),
-        },
-        {
-          title: t("pnl.revenue", "Revenue"),
-          key: "revenue",
-          align: "right",
-          width: COLUMN.money,
-          sortValue: (r) => r.revenue,
-          render: (_, r) => fmtRp(r.revenue),
-        },
-        {
-          title: t("pnl.cogsShort", "COGS"),
-          key: "cost",
-          align: "right",
-          width: COLUMN.money,
-          sortValue: (r) => r.cost,
-          render: (_, r) => fmtRp(r.cost),
-        },
-        {
-          title: t("pnl.profit", "Profit"),
-          key: "profit",
-          align: "right",
-          width: COLUMN.money,
-          sortValue: (r) => r.profit,
-          render: (_, r) => <strong>{fmtPnl(r.profit)}</strong>,
         },
         {
           title: t("pnl.margin", "Margin"),
@@ -637,11 +651,6 @@ export function ProfitLossPage() {
               key: "units",
               label: t("pnl.tabUnits", "Profit per unit"),
               children: unitsTab,
-            },
-            {
-              key: "invoices",
-              label: t("pnl.tabInvoices", "Profit per invoice"),
-              children: invoicesTab,
             },
             {
               key: "months",
