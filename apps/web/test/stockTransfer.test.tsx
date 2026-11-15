@@ -1,21 +1,15 @@
 /**
- * Stock in / Stock out by reason (owner ask 2026-10-30). The reason is a
- * fixed list, and each one does its own job: Internal use writes off (or
- * brings back), Stock transfer moves units keeping their status, Service
- * hands the serials to the batch service dialog, and the two returns to the
- * Returns forms.
+ * Stock In / Stock Out by type (owner asks 2026-10-30 and 2026-11-16). The
+ * type is a fixed list, and each one does its own job: Internal use writes
+ * off, Stock transfer moves units keeping their status, Service is the batch
+ * service form and the two returns the Returns forms — all drawn in the SAME
+ * dialog since 2026-11-16, swapped in place by the type picked at the top.
  *
  * The transfer cases are the 2026-10-29 owner report (C02CK4Y2ML7J in 03
  * could not be stocked into 05), now under their own reason.
  */
 import { App as AntdApp } from "antd";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { InventoryPage } from "../src/routes/stock/InventoryPage.js";
@@ -31,13 +25,13 @@ async function openStock(direction: "IN" | "OUT") {
       </MemoryRouter>
     </AntdApp>,
   );
-  const title = direction === "IN" ? "Stock in" : "Stock out";
+  const title = direction === "IN" ? "Stock In" : "Stock Out";
   return (
     await screen.findByText(title, { selector: ".ant-modal-title" })
   ).closest(".ant-modal") as HTMLElement;
 }
 
-/** Press a reason, then the serial box is the last combobox on the grid. */
+/** Press a type, then the serial box is the last combobox on the grid. */
 function pickReason(dialog: HTMLElement, name: string) {
   fireEvent.click(within(dialog).getByRole("radio", { name }));
 }
@@ -47,7 +41,7 @@ function serialBox(dialog: HTMLElement) {
   return dialog.querySelector<HTMLElement>(".ant-select-auto-complete input")!;
 }
 
-/** Wait for a serial to be a row of the batch dialog's table. */
+/** Wait for a serial to be a row of a table in the dialog. */
 async function inTable(batch: HTMLElement, serial: string) {
   await vi.waitFor(() =>
     expect(
@@ -57,6 +51,12 @@ async function inTable(batch: HTMLElement, serial: string) {
     ).toBeGreaterThan(0),
   );
 }
+
+/** The dialogs on screen — one, whatever type is picked (2026-11-16). */
+const openDialogs = () =>
+  Array.from(document.querySelectorAll<HTMLElement>(".ant-modal-wrap")).filter(
+    (w) => w.style.display !== "none",
+  );
 
 async function pickOption(control: HTMLElement, title: string) {
   fireEvent.mouseDown(control);
@@ -182,54 +182,34 @@ describe("Stock transfer", () => {
 });
 
 describe("Internal use", () => {
-  it("writes a unit off from Stock out, and brings it back from Stock in", async () => {
+  it("writes a unit off from Stock Out", async () => {
     const unit = getDb().units.find((u) => u.status === "TERSEDIA")!;
     const out = await openStock("OUT");
     pickReason(out, "Internal use");
     fireEvent.change(serialBox(out), { target: { value: unit.serial } });
-    fireEvent.click(within(out).getByRole("button", { name: /Log 1/ }));
+    fireEvent.click(
+      within(out).getByRole("button", { name: /Log 1 write-off/ }),
+    );
     await vi.waitFor(() =>
       expect(getDb().units.find((u) => u.serial === unit.serial)!.status).toBe(
         "HILANG",
       ),
     );
-    cleanup();
-
-    const back = await openStock("IN");
-    pickReason(back, "Internal use");
-    fireEvent.change(serialBox(back), { target: { value: unit.serial } });
-    fireEvent.click(within(back).getByRole("button", { name: /Log 1/ }));
-    await vi.waitFor(() => {
-      const after = getDb().units.find((u) => u.serial === unit.serial)!;
-      expect(after.status).toBe("TERSEDIA");
-      expect(after.locationId).toBe(getDb().myWarehouseId);
-    });
   });
 
-  it("refuses a unit already on a shelf — that is a transfer", async () => {
-    const unit = getDb().units.find((u) => u.status === "TERSEDIA")!;
+  it("is not a way into stock any more (owner, 2026-11-16)", async () => {
     const dialog = await openStock("IN");
-    pickReason(dialog, "Internal use");
-    fireEvent.change(serialBox(dialog), { target: { value: unit.serial } });
-    // Said on the row the moment the serial is in (2026-11-04), before Log.
-    expect(
-      await within(dialog).findByText(/moving it is a Stock transfer/),
-    ).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: /Log 1/ }));
-    expect(
-      (await screen.findAllByText(/moving it is a Stock transfer/)).length,
-    ).toBe(2);
-    expect(getDb().units.find((u) => u.serial === unit.serial)!.status).toBe(
-      "TERSEDIA",
+    expect(within(dialog).queryByRole("radio", { name: "Internal use" })).toBe(
+      null,
     );
   });
 });
 
 describe("an unknown serial", () => {
   /**
-   * Stock in → Internal use with a serial nothing carries: the row asks what
-   * QC asks. Comboboxes in order: Into warehouse, the serial, product, specs,
-   * grade.
+   * Stock In → Stock transfer with a serial nothing carries: the row asks
+   * what QC asks. Comboboxes in order: To warehouse, the serial, product,
+   * specs, grade. (It was Stock In → Internal use until 2026-11-16.)
    */
   async function bringIn(serial: string, grade: string | undefined) {
     const db = getDb();
@@ -238,7 +218,7 @@ describe("an unknown serial", () => {
     )!;
     const model = db.models.find((m) => m.id === sku.modelId)!;
     const dialog = await openStock("IN");
-    pickReason(dialog, "Internal use");
+    pickReason(dialog, "Stock transfer");
     fireEvent.change(serialBox(dialog), { target: { value: serial } });
     await pickOption(within(dialog).getAllByRole("combobox")[2]!, model.name);
     await pickOption(
@@ -282,7 +262,7 @@ describe("an unknown serial", () => {
 });
 
 describe("Service", () => {
-  it("hands the scanned units to the batch dialog and splits the courier into their cost", async () => {
+  it("is the batch service form in the same dialog, and splits the courier into their cost", async () => {
     const db = getDb();
     const into = db.warehouses.find(
       (w) => w.active && w.id !== db.myWarehouseId,
@@ -291,13 +271,10 @@ describe("Service", () => {
       (u) => u.status === "TERSEDIA" && u.locationId !== into.id,
     );
     const dialog = await openStock("OUT");
-    // Reason first, then scan — the batch dialog takes over.
-    pickReason(dialog, "Service");
-    const batch = (
-      await screen.findByText("Send units to service", {
-        selector: ".ant-modal-title",
-      })
-    ).closest(".ant-modal") as HTMLElement;
+    // Type first, then scan — the form below swaps, the dialog stays.
+    pickReason(dialog, "Send to service");
+    const batch = dialog;
+    expect(openDialogs()).toHaveLength(1);
     for (const u of [a!, b!]) {
       const add = within(batch).getByRole("combobox", { name: "Add a unit" });
       fireEvent.change(add, { target: { value: u.serial } });
@@ -362,12 +339,8 @@ describe("Service", () => {
       (u) => u.status === "TERSEDIA" && u.locationId !== into.id,
     );
     const dialog = await openStock("OUT");
-    pickReason(dialog, "Service");
-    const batch = (
-      await screen.findByText("Send units to service", {
-        selector: ".ant-modal-title",
-      })
-    ).closest(".ant-modal") as HTMLElement;
+    pickReason(dialog, "Send to service");
+    const batch = dialog;
     for (const u of [a!, b!]) {
       const add = within(batch).getByRole("combobox", { name: "Add a unit" });
       fireEvent.change(add, { target: { value: u.serial } });
@@ -406,15 +379,15 @@ describe("Service", () => {
 });
 
 describe("Return to supplier", () => {
-  it("hands over to the supplier return form", async () => {
+  it("is the supplier return form, in the same dialog", async () => {
     const dialog = await openStock("OUT");
     pickReason(dialog, "Return to supplier");
     expect(
-      await screen.findByText("To supplier", { selector: ".ant-modal-title" }),
+      await within(dialog).findByRole("button", {
+        name: "Record supplier return",
+      }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Record supplier return" }),
-    ).toBeInTheDocument();
+    expect(openDialogs()).toHaveLength(1);
   });
 });
 

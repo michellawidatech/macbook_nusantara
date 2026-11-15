@@ -10,15 +10,23 @@
  *
  * | | Stock out | Stock in |
  * |---|---|---|
- * | Internal use | written off (HILANG) | a written-off unit comes back |
+ * | Internal use | written off (HILANG) | not offered since 2026-11-16 |
  * | Stock transfer | moved to the warehouse picked | the same |
- * | Service | the batch send (`ServiceBatchModal`) | the batch back |
- * | Return | to the supplier (`SupplierReturnModal`) | from a customer |
+ * | Service | the batch send (`ServiceBatchForm`) | the batch back |
+ * | Return | to the supplier (`SupplierReturnForm`) | from a customer (`CustomerReturnForm`) |
  *
  * Internal use and Stock transfer are written by the adjustment batch itself,
  * under an `ADJUSTMENT` reason of that name (`ensureReason`), so the history
- * and the schema's `reasonId` are unchanged. Service and the two returns hand
- * the serials over to the dialog that already does that job.
+ * and the schema's `reasonId` are unchanged. Service and the two returns are
+ * the forms that already do that job, drawn inside the same dialog since
+ * 2026-11-16 (they used to be a second dialog the first one handed over to).
+ *
+ * **What each button offers, 2026-11-16 (owner):** Stock Out — Internal use,
+ * Service, Return to supplier, Stock transfer; Stock In — Stock transfer,
+ * Return from customer, Back from service. Stock In's Internal use (a
+ * written-off unit found again) is no longer offered; the batch still knows
+ * how to write it (`batchProblems` with kind IN and mode INTERNAL), so
+ * nothing else that reads that path changes.
  *
  * Pure: `test/stockReasons.test.ts`.
  */
@@ -27,11 +35,11 @@ import type { AdjustmentKind } from "../mock/seed.js";
 export type StockReason =
   "INTERNAL" | "TRANSFER" | "SERVICE" | "SUPPLIER_RETURN" | "CUSTOMER_RETURN";
 
-/** The reasons each button offers, in the order they are drawn. */
+/** The types each button offers, in the order they are drawn (2026-11-16). */
 export function reasonsFor(kind: AdjustmentKind): readonly StockReason[] {
   return kind === "OUT"
-    ? ["INTERNAL", "TRANSFER", "SERVICE", "SUPPLIER_RETURN"]
-    : ["INTERNAL", "TRANSFER", "SERVICE", "CUSTOMER_RETURN"];
+    ? ["INTERNAL", "SERVICE", "SUPPLIER_RETURN", "TRANSFER"]
+    : ["TRANSFER", "CUSTOMER_RETURN", "SERVICE"];
 }
 
 /** Written by the adjustment batch, rather than handed to another dialog. */

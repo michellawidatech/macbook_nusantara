@@ -24,6 +24,16 @@
  * chosen once, and a grid of units below them. The scanner fills that grid the
  * way it fills Inbound's.
  *
+ * **One dialog per direction** (owner ask 2026-11-16). *Stock In* and *Stock
+ * Out* each open ONE dialog whose type is picked at the top, and the form
+ * under it changes in place: Internal use and Stock transfer are the batch
+ * grid below, while Send / Back from service, Return to supplier and Return
+ * from customer are those screens' own forms drawn inside this dialog
+ * (`ServiceBatchForm`, `SupplierReturnForm`, `CustomerReturnForm`) — the
+ * hand-off to a second dialog of 2026-10-30 is gone. A form once opened stays
+ * mounted (hidden) while the dialog is open, so switching type and back keeps
+ * what was typed in it.
+ *
  * **What a direction does to a unit**, because the log has to mean something:
  *
  * - **In** makes the unit sellable in the chosen warehouse. If nothing in the
@@ -42,7 +52,7 @@
  * is no instant at which an adjustment points at a reason the settings page has
  * never heard of. That is why an adjustment stores a `reasonId` and not text.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { isLiveSku } from "../../lib/skuCode.js";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -131,9 +141,10 @@ import {
 } from "../../lib/stockReasons.js";
 import { qcReady } from "../../lib/inboundQc.js";
 import { RP_SYMBOL, moneyFormatter, moneyParser } from "../../components/money";
-import { ServiceBatchModal } from "../../components/ServiceBatchModal";
-import { SupplierReturnModal } from "../../components/SupplierReturnModal";
-import { CustomerReturnPanel } from "../returns/CustomerReturnPage";
+import { ServiceBatchForm } from "../../components/ServiceBatchModal";
+import { SupplierReturnForm } from "../../components/SupplierReturnModal";
+import { CustomerReturnForm } from "../returns/CustomerReturnPage";
+import { FooterToolbar } from "../../components/FooterToolbar";
 import { rendered } from "../../lib/rendered.js";
 import { useScanTarget } from "../../hooks/useScanTarget.js";
 import { draftKey, usePersistentState } from "../../hooks/usePersistentState";
@@ -299,20 +310,42 @@ export function InventoryPage() {
     asOneOf<AdjustmentKind>(["IN", "OUT"]),
   );
   /**
-   * The batch's reason — one of a fixed list since 2026-10-30, and what the
-   * dialog asks next depends on it. Only Internal use and Stock transfer are
-   * written here; the other reasons hand the serials to their own dialog.
+   * The dialog's type — one of a fixed list per direction since 2026-10-30,
+   * and what the form below it is depends on it (2026-11-16: in place, one
+   * dialog). Only Internal use and Stock transfer are the batch grid written
+   * here; the others are another screen's form drawn inside this dialog.
    */
-  const [reasonCode, setReasonCode] = usePersistentState<
-    "INTERNAL" | "TRANSFER" | ""
-  >(BATCH_DRAFT("reasonCode"), "", asOneOf(["INTERNAL", "TRANSFER", ""]));
-  const mode = reasonCode === "" ? undefined : reasonCode;
+  const [reasonCode, setReasonCode] = usePersistentState<StockReason | "">(
+    BATCH_DRAFT("reasonCode"),
+    "",
+    asOneOf<StockReason | "">([
+      "INTERNAL",
+      "TRANSFER",
+      "SERVICE",
+      "SUPPLIER_RETURN",
+      "CUSTOMER_RETURN",
+      "",
+    ]),
+  );
+  /*
+   * A type this direction does not offer (Stock In's Internal use, kept by a
+   * build before 2026-11-16) reads as none picked.
+   */
+  const picked: StockReason | "" =
+    reasonCode !== "" && reasonsFor(kind).includes(reasonCode)
+      ? reasonCode
+      : "";
+  /** The batch grid's own mode — Internal use or Stock transfer. */
+  const mode = picked !== "" && isBatchReason(picked) ? picked : undefined;
   const reason = mode ? STORED_REASON[mode] : "";
-  /** Where the serials typed so far go, when the reason is another dialog's. */
-  const [serviceSend, setServiceSend] = useState<string[] | null>(null);
-  const [serviceBack, setServiceBack] = useState<string[] | null>(null);
-  const [supplierQueue, setSupplierQueue] = useState<string[] | null>(null);
-  const [customerLookup, setCustomerLookup] = useState<string | null>(null);
+  /**
+   * The embedded forms opened since the dialog opened. Each stays mounted —
+   * hidden while another type is picked — so its draft survives a switch.
+   */
+  const [visited, setVisited] = useState<StockReason[]>([]);
+  /** Where a stray scan goes while an embedded form is the one showing. */
+  const serviceScan = useRef<((serial: string) => void) | null>(null);
+  const customerScan = useRef<((serial: string) => void) | null>(null);
   const [locationId, setLocationId] = usePersistentState<string>(
     BATCH_DRAFT("location"),
     db.myWarehouseId,
@@ -431,6 +464,21 @@ export function InventoryPage() {
     db.units.find((u) => u.serial === normalise(serial));
   const statusLabel = (s: string) => tagOf(UNIT_STATUS, s, t).label;
 
+  /**
+   * A type's words on the dialog's picker, per direction — Service is a send
+   * on Stock Out and a return on Stock In. Literal `t()` calls.
+   */
+  const typeWord = (r: StockReason): string => {
+    switch (r) {
+      case "SERVICE":
+        return kind === "OUT"
+          ? t("stockType.sendToService", "Send to service")
+          : t("stockType.backFromService", "Back from service");
+      default:
+        return reasonWord(r);
+    }
+  };
+
   /** A reason's words, as literal `t()` calls — the i18n test reads them. */
   const reasonWord = (r: StockReason): string => {
     switch (r) {
@@ -454,6 +502,7 @@ export function InventoryPage() {
     submitted.current = false;
     setKind(direction);
     setReasonCode("");
+    setVisited([]);
     setLocationId(db.myWarehouseId);
     setRows(blankRows());
     setCountedRows([]);
@@ -473,6 +522,31 @@ export function InventoryPage() {
     if (!serial) return;
     if (!adding) {
       message.info('Open "Add adjustment" first — scans fill the batch.');
+      return;
+    }
+    // An embedded form is showing: the scan is its, as though typed into its
+    // own serial box. Return to supplier picks its unit from a list.
+    if (picked === "SERVICE") {
+      serviceScan.current?.(serial);
+      return;
+    }
+    if (picked === "CUSTOMER_RETURN") {
+      customerScan.current?.(serial);
+      return;
+    }
+    if (picked === "SUPPLIER_RETURN") {
+      message.info(
+        t(
+          "stock.scanSupplierReturn",
+          "Return to supplier: search the unit in its box.",
+        ),
+      );
+      return;
+    }
+    if (mode === undefined) {
+      message.info(
+        t("stock.pickATypeBeforeScan", "Pick a type first, then scan."),
+      );
       return;
     }
     if (rows.some((r) => normalise(r.serial) === serial)) {
@@ -871,14 +945,14 @@ export function InventoryPage() {
         icon={<LoginOutlined />}
         onClick={() => openAdd("IN")}
       >
-        {t("stock.stockIn", "Stock in")}
+        {t("stock.stockIn", "Stock In")}
       </Button>
       <Button
         type="primary"
         icon={<LogoutOutlined />}
         onClick={() => openAdd("OUT")}
       >
-        {t("stock.stockOut", "Stock out")}
+        {t("stock.stockOut", "Stock Out")}
       </Button>
     </Flex>
   );
@@ -1221,28 +1295,61 @@ export function InventoryPage() {
   }, [params]);
 
   const activeRows = rows.filter(touched).length;
+  /** The batch's button, in the words of the type it logs (2026-11-16). */
+  const batchOkText = (): string => {
+    if (mode === "TRANSFER")
+      return activeRows === 0
+        ? t("stock.logTransfer", "Log transfer")
+        : activeRows === 1
+          ? t("stock.logOneTransfer", "Log 1 transfer")
+          : t("stock.logNTransfers", "Log {{count}} transfers", {
+              count: activeRows,
+            });
+    if (mode === "INTERNAL" && kind === "OUT")
+      return activeRows === 0
+        ? t("stock.logWriteOff", "Log write-off")
+        : activeRows === 1
+          ? t("stock.logOneWriteOff", "Log 1 write-off")
+          : t("stock.logNWriteOffs", "Log {{count}} write-offs", {
+              count: activeRows,
+            });
+    return activeRows === 0
+      ? t("stock.logAdjustments", "Log adjustments")
+      : activeRows === 1
+        ? t("stock.logOneAdjustment", "Log 1 adjustment")
+        : t("stock.logNAdjustments", "Log {{count}} adjustments", {
+            count: activeRows,
+          });
+  };
 
   /**
-   * Picking a reason. Internal use and Stock transfer are this dialog's; the
-   * other three are a dialog of their own, which takes the serials typed so
-   * far — nothing already scanned is asked for twice.
+   * Picking a type swaps the form below in place (2026-11-16). Nothing is
+   * handed over and nothing is thrown away: the batch grid keeps its rows on
+   * this device, and an embedded form, once opened, stays mounted while the
+   * dialog is open — so going to Service and back finds the grid as it was.
    */
   const pickReason = (r: StockReason) => {
-    if (isBatchReason(r)) {
-      setReasonCode(r);
-      return;
-    }
-    const serials = rows
-      .filter(touched)
-      .map((x) => normalise(x.serial))
-      .filter((x) => x !== "");
-    setAdding(false);
-    if (r === "SERVICE") {
-      if (kind === "OUT") setServiceSend(serials);
-      else setServiceBack(serials);
-    } else if (r === "SUPPLIER_RETURN") setSupplierQueue(serials);
-    else setCustomerLookup(serials[0] ?? "");
+    setReasonCode(r);
+    if (!isBatchReason(r)) setVisited((v) => (v.includes(r) ? v : [...v, r]));
   };
+  /** Close the dialog — what an embedded form's Cancel and its save do. */
+  const closeDialog = () => setAdding(false);
+  /*
+   * The forms a type embeds. Drawn once visited and HIDDEN, not unmounted,
+   * while another type is showing: `hidden` takes them out of sight and
+   * `inert` out of the tab order and away from the scanner's box lookup.
+   */
+  const embeddedPane = (r: StockReason, body: ReactNode) =>
+    visited.includes(r) || picked === r ? (
+      <div
+        key={r}
+        data-stock-type={r}
+        hidden={picked !== r}
+        inert={picked !== r}
+      >
+        {body}
+      </div>
+    ) : null;
 
   /** The serials a row's box offers, by what the reason can take. */
   const offerable = (status: UnitStatus): boolean => {
@@ -1258,37 +1365,11 @@ export function InventoryPage() {
   return (
     <PageContainer
       title={t("stock.inventory", "Inventory")}
-      // Compact only — the desktop button lives at the top right of the table
-      // itself. See PageContainer's docblock on the ListToolbar arrangement.
-      actions={
-        compact
-          ? [
-              {
-                key: "export",
-                label: t("stockExport.button", "Export stock"),
-                icon: <DownloadOutlined />,
-                onClick: () => setExporting(true),
-              },
-              {
-                key: "in",
-                label: t("stock.stockIn", "Stock in"),
-                icon: <LoginOutlined />,
-                // A peer of Stock out, so it is green too (owner ask
-                // 2026-09-25) — one green and one white beside it said one of
-                // the two doors was the lesser one, which it is not.
-                type: "primary",
-                onClick: () => openAdd("IN"),
-              },
-              {
-                key: "out",
-                label: t("stock.stockOut", "Stock out"),
-                icon: <LogoutOutlined />,
-                type: "primary",
-                onClick: () => openAdd("OUT"),
-              },
-            ]
-          : undefined
-      }
+      // No page actions on any viewport. On a desktop the buttons live at
+      // the top right of the table itself (see PageContainer's docblock on
+      // the ListToolbar arrangement); on a phone a page action is an icon in
+      // a float fan, and Stock In / Stock Out read as words on every screen
+      // (owner ask 2026-11-16) — so there they are the bar at the foot.
     >
       <Tabs
         items={[
@@ -1308,58 +1389,58 @@ export function InventoryPage() {
       <Modal
         title={
           kind === "IN"
-            ? t("stock.stockIn", "Stock in")
-            : t("stock.stockOut", "Stock out")
+            ? t("stock.stockIn", "Stock In")
+            : t("stock.stockOut", "Stock Out")
         }
         open={adding}
-        onCancel={() => setAdding(false)}
+        onCancel={closeDialog}
         onOk={submitBatch}
         okButtonProps={{ disabled: mode === undefined }}
-        okText={
-          activeRows === 0
-            ? t("stock.logAdjustments", "Log adjustments")
-            : activeRows === 1
-              ? t("stock.logOneAdjustment", "Log 1 adjustment")
-              : t("stock.logNAdjustments", "Log {{count}} adjustments", {
-                  count: activeRows,
-                })
-        }
+        okText={batchOkText()}
+        // An embedded form ends in its own buttons — the footer belongs to
+        // the type that is showing.
+        footer={picked !== "" && mode === undefined ? null : undefined}
         // Wide enough for a serial, a product, a count and a sentence on one
         // line. A batch editor in a 520px dialog is four columns of ellipsis.
+        // One width for every type, so switching does not resize the dialog.
         width={compact ? "100%" : 1080}
         destroyOnHidden
       >
         <Form layout="vertical" className="responsive-controls">
           {/*
            * No direction control (owner ask 2026-09-23). Inventory opens this
-           * from *Stock in* or *Stock out*, so it is already answered — and a
+           * from *Stock In* or *Stock Out*, so it is already answered — and a
            * toggle that repeats the button somebody just pressed is a second
            * chance to get it wrong. The title says which one this is.
+           *
+           * The type IS a control, in words (2026-11-16): picking one swaps
+           * the form below it, in this dialog, and never opens another.
            */}
           <Form.Item
-            label={t("stock.reason", "Reason")}
+            label={t("stock.movementType", "Type")}
             required
             style={{ marginBottom: SPACE.md }}
           >
             <Radio.Group
-              aria-label={t("stock.reason", "Reason")}
+              aria-label={t("stock.movementType", "Type")}
               optionType="button"
               buttonStyle="solid"
               size="large"
-              value={reasonCode === "" ? undefined : reasonCode}
+              value={picked === "" ? undefined : picked}
               onChange={(e) => pickReason(e.target.value as StockReason)}
               options={reasonsFor(kind).map((r) => ({
                 value: r,
-                label: reasonWord(r),
+                label: typeWord(r),
               }))}
+              style={{ display: "flex", flexWrap: "wrap", rowGap: SPACE.xs }}
             />
           </Form.Item>
 
-          {mode === undefined ? (
+          {picked === "" ? (
             <Typography.Text type="secondary">
-              {t("stock.pickAReasonFirst", "Pick a reason to start.")}
+              {t("stock.pickATypeFirst", "Pick a type to start.")}
             </Typography.Text>
-          ) : (
+          ) : mode === undefined ? null : (
             <>
               {(kind === "IN" || mode === "TRANSFER") && (
                 <Form.Item
@@ -1948,29 +2029,44 @@ export function InventoryPage() {
             </>
           )}
         </Form>
+
+        {/*
+         * Outside the batch's <Form>: each embedded form is a form of its
+         * own, and a <form> inside a <form> is not valid HTML.
+         */}
+        {embeddedPane(
+          "SERVICE",
+          <ServiceBatchForm
+            mode={kind === "OUT" ? "SEND" : "BACK"}
+            raisedBy="ADJUSTMENT"
+            onClose={closeDialog}
+            scanRef={serviceScan}
+          />,
+        )}
+        {embeddedPane(
+          "SUPPLIER_RETURN",
+          <SupplierReturnForm onDone={closeDialog} onCancel={closeDialog} />,
+        )}
+        {embeddedPane(
+          "CUSTOMER_RETURN",
+          <CustomerReturnForm onDone={closeDialog} scanRef={customerScan} />,
+        )}
       </Modal>
 
-      <ServiceBatchModal
-        mode="SEND"
-        serials={serviceSend}
-        raisedBy="ADJUSTMENT"
-        onClose={() => setServiceSend(null)}
-      />
-      <ServiceBatchModal
-        mode="BACK"
-        serials={serviceBack}
-        onClose={() => setServiceBack(null)}
-      />
-      <SupplierReturnModal
-        serials={supplierQueue}
-        onClose={() => setSupplierQueue(null)}
-      />
-      <CustomerReturnPanel
-        addOpen={customerLookup !== null}
-        prefillLookup={customerLookup ?? undefined}
-        onCloseAdd={() => setCustomerLookup(null)}
-        onOpenAdd={() => setCustomerLookup((v) => v ?? "")}
-      />
+      {compact && (
+        // Words, not a float fan (owner ask 2026-11-16): the two doors stay
+        // in reach of a thumb at the foot of the screen, and say what they are.
+        <FooterToolbar>
+          <Tooltip title={t("stockExport.button", "Export stock")}>
+            <Button
+              icon={<DownloadOutlined />}
+              aria-label={t("stockExport.button", "Export stock")}
+              onClick={() => setExporting(true)}
+            />
+          </Tooltip>
+          {addAction}
+        </FooterToolbar>
+      )}
 
       <StockExportModal open={exporting} onClose={() => setExporting(false)} />
       <StockMovementEditModal

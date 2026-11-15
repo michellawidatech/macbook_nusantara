@@ -12,18 +12,18 @@ import { batchProblems } from "../src/lib/adjustmentBatch.js";
 import type { Unit } from "../src/mock/seed.js";
 
 describe("reasons", () => {
-  it("offers four per button, the return by direction", () => {
+  it("offers the owner's types per button, in his order (2026-11-16)", () => {
     expect(reasonsFor("OUT")).toEqual([
       "INTERNAL",
-      "TRANSFER",
       "SERVICE",
       "SUPPLIER_RETURN",
-    ]);
-    expect(reasonsFor("IN")).toEqual([
-      "INTERNAL",
       "TRANSFER",
-      "SERVICE",
+    ]);
+    // Internal use is not a way IN any more.
+    expect(reasonsFor("IN")).toEqual([
+      "TRANSFER",
       "CUSTOMER_RETURN",
+      "SERVICE",
     ]);
   });
 

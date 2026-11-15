@@ -4035,6 +4035,38 @@ Decisions that outlived those documents:
     thread list draws a coloured `CategoryTag` (always with words) per
     waiting chat and a row of chips above it, "All" first, with counts; the
     waiting bubble's caption is "Needs your reply ·" plus the same tag.
+- **Stock In / Stock Out are one form each — 2026-11-16.** *"Switching
+  between modals is confusing."* This SUPERSEDES the 2026-10-30 hand-off
+  (Service and the two returns closing the batch and opening a dialog of their
+  own). Each button opens ONE dialog, titled **Stock In** / **Stock Out**, with
+  the type picked by a labelled radio row at the top; picking one swaps the
+  form below **in place**, and no second dialog opens for it.
+  - **Out:** Internal use (write-off) · Send to service · Return to supplier ·
+    Stock transfer. **In:** Stock transfer · Return from customer · Back from
+    service (`reasonsFor`). ⚠️ Stock In's *Internal use* (a written-off unit
+    found again, or counted pieces from nowhere) is no longer offered; the
+    batch's IN/INTERNAL path and `batchProblems` are kept, unreachable from
+    here. A written-off unit comes back through a stock count's
+    `OPNAME_DITEMUKAN`.
+  - **The bodies are the screens' own forms, embedded**: `ServiceBatchForm`
+    (`ServiceBatchModal` is the same component in its own dialog),
+    `SupplierReturnForm` (gained `onCancel` for a dialog-style footer) and
+    `CustomerReturnForm` (`CustomerReturnPanel` with `embedded`). Every other
+    door — the Service page, the QC row, Returns — opens exactly what it did.
+    `components/EmbeddedFooter` draws an embedded form's buttons where a Modal
+    would, and the dialog's own footer is drawn only for the batch types,
+    whose button now names the type (*Log 1 transfer*, *Log 1 write-off*).
+  - **A switch keeps each type's draft**: an embedded form, once opened, stays
+    MOUNTED (`hidden` + `inert`) while the dialog is open, and the batch grid
+    keeps its rows on this device as before. Closing the dialog drops the
+    service and supplier drafts (they were never kept); the customer return
+    keeps its draft under the Returns page's keys, as it always did.
+  - A scan with no field focused goes to the type showing: the service form's
+    add box, the customer return's lookup (`scanRef`); Return to supplier says
+    to search its box. `focusScanTarget` skips a box inside `[hidden]` /
+    `[inert]`, or the kept-but-hidden forms would claim the re-arm.
+  - **On a phone the two buttons are words**, in a `FooterToolbar` at the foot
+    with an icon Export beside them — no float fan on Inventory any more.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

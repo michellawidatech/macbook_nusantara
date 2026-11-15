@@ -4,8 +4,8 @@
  * *Send to* left the batch editor: a unit goes to a repairer through *Send to
  * service* on its row, the one dialog every door opens (inventoryPage.test.tsx
  * and inboundQcPage.test.tsx cover it). And Stock out's counted-products
- * picker offers only what the shop has pieces of — Stock in still offers every
- * variant.
+ * picker offers only what the shop has pieces of. Stock In used to offer
+ * every variant under Internal use; that type left Stock In on 2026-11-16.
  */
 import { App as AntdApp } from "antd";
 import { fireEvent, render, screen, within } from "@testing-library/react";
@@ -28,7 +28,9 @@ async function openBatch(direction: "IN" | "OUT") {
     </AntdApp>,
   );
   return (
-    await screen.findByText(direction === "OUT" ? /^Stock out/ : /^Stock in/)
+    await screen.findByText(direction === "OUT" ? /^Stock Out/ : /^Stock In/, {
+      selector: ".ant-modal-title",
+    })
   ).closest(".ant-modal") as HTMLElement;
 }
 
@@ -52,7 +54,7 @@ async function optionsOf(control: HTMLElement): Promise<string[]> {
 }
 
 describe("Stock out", () => {
-  it("asks for a reason from a fixed list (2026-10-30)", async () => {
+  it("asks for a type from a fixed list (2026-10-30, reordered 2026-11-16)", async () => {
     const dialog = await openBatch("OUT");
     expect(
       within(dialog)
@@ -60,9 +62,9 @@ describe("Stock out", () => {
         .map((r) => r.closest("label")?.textContent),
     ).toEqual([
       "Internal use",
-      "Stock transfer",
-      "Service",
+      "Send to service",
       "Return to supplier",
+      "Stock transfer",
     ]);
     expect(within(dialog).queryByLabelText("Send to")).toBeNull();
   });
@@ -118,16 +120,13 @@ describe("Stock out", () => {
     }
   });
 
-  it("leaves Stock in offering every counted product", async () => {
-    const db = getDb();
-    const counted = db.skus.filter(
-      (s) => isLiveSku(s) && !skuTracksSerial(db, s.id),
-    );
+  it("offers Stock In's three types, and no Internal use (2026-11-16)", async () => {
     const dialog = await openBatch("IN");
-    fireEvent.click(
-      within(dialog).getByRole("radio", { name: "Internal use" }),
-    );
-    expect(await countedOffered(dialog)).toHaveLength(counted.length);
+    expect(
+      within(dialog)
+        .getAllByRole("radio")
+        .map((r) => r.closest("label")?.textContent),
+    ).toEqual(["Stock transfer", "Return from customer", "Back from service"]);
   });
 });
 
