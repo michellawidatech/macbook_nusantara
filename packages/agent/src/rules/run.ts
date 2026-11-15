@@ -46,8 +46,10 @@ import {
   type PriceListLine,
 } from "@nusantara/domain";
 import {
+  askedForAddress,
   asksBattery,
   asksBuyOnline,
+  asksDeliveryCost,
   asksForPhotos,
   asksPriceList,
   priceListAsk,
@@ -285,6 +287,10 @@ function asksCondition(text: string): boolean {
     text,
   );
 }
+
+/** The words a delivery question and the owner's delivery answer share. */
+const DELIVERY_WORDS =
+  /\b(cod|ongkir(nya)?|ongkos|kirim|pengiriman|ekspedisi|kurir)\b/g;
 
 const unitsIn = (o: unknown, key = "units"): ShownUnit[] => {
   const list = (o as Record<string, unknown> | null)?.[key];
@@ -632,6 +638,7 @@ async function answerList(
           capabilities: input.capabilities,
           shown: input.lastShown.length > 0,
           photosSent: input.photosSent === true,
+          deliveryContext: askedForAddress(input.lastReply),
         }),
         inList: true,
         focus: { text: item.text, note: itemFocusNote(list, k) },
@@ -658,6 +665,7 @@ async function answerBesideHandover(
     capabilities: input.capabilities,
     shown: input.lastShown.length > 0,
     photosSent: input.photosSent === true,
+    deliveryContext: askedForAddress(input.lastReply),
   };
   const rest = lines.filter(
     (l) => routeMessage(l, opts) === null && isQuestion(l),
@@ -1240,6 +1248,29 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
       return unitsIn(await call("search_stock", { query: u.query }))[0] ?? null;
     return null;
   };
+
+  // --- 2a. What delivery costs (owner follow-up, 2026-11-16) ------------------
+  // General info — the approved delivery/COD answer when one fits — "the team
+  // estimates it", and the address asked for. Never a figure of its own.
+  if (asksDeliveryCost(input.text)) {
+    // The owner's own answer about the SAME delivery word the customer used
+    // ("cod", "ongkir", "kirim"…), from the closest few.
+    const words = (input.text.toLowerCase().match(DELIVERY_WORDS) ?? []).map(
+      (w) => w.replace(/nya$/, ""),
+    );
+    const kb = matchesFor(input.knowledge, input.text)
+      .slice(0, 3)
+      .find((m) =>
+        (m.doc.question.toLowerCase().match(DELIVERY_WORDS) ?? []).some((w) =>
+          words.includes(w.replace(/nya$/, "")),
+        ),
+      );
+    const general = kb ? kb.doc.answer : null;
+    return done(join(general, reply.deliveryInfo(lang)), {
+      ask: false,
+      sources: general && kb ? [kb.doc.handle] : ["rules"],
+    });
+  }
 
   // --- 2b'. The battery of a unit (owner's chat, 2026-10-28) -----------------
   // "Boleh minta cc battery health untuk unit air m1 yg diatas?" — its own

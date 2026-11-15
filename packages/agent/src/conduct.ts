@@ -75,6 +75,12 @@ export const CONDUCT: readonly ConductRule[] = [
     where: ["prompt"],
   },
   {
+    id: "delivery",
+    // Owner follow-up, 2026-11-16.
+    text: "What delivery or COD costs: brief general info from the approved answers only, never a figure you worked out or guessed; say the team will work out the exact cost and ask for their address (kecamatan/kota or the full address). The address goes to a colleague.",
+    where: ["prompt"],
+  },
+  {
     id: "list",
     // Owner, 2026-11-16.
     text: "A numbered list of questions is answered per question: the question repeated after its number, its answer on the next line, a blank line between them. One that needs a colleague gets a short line under it saying you are checking.",

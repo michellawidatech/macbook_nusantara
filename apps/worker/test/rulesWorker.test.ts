@@ -321,19 +321,78 @@ describe("the owner's asks of 2026-11-16, through the worker", () => {
   });
 
   it("files a second hand-over of a list beside the first", async () => {
-    await turn("l2", "1. bisa nego kak?\n2. ongkir ke medan brp?", 0);
+    await turn("l2", "1. bisa nego kak?\n2. bisa vc kak?", 0);
     const row = await owner.waMessage.findFirstOrThrow({
       where: { waMessageId: "l2" },
     });
     expect(row.entities).toMatchObject({
-      handoff: { topic: "negotiation", also: ["shipping_quote"] },
+      handoff: { topic: "negotiation", also: ["video_call"] },
     });
     const topics = (
       await owner.chatAction.findMany({ where: { from: FROM, status: "OPEN" } })
     )
       .map((a) => a.topic)
       .sort();
-    expect(topics).toEqual(["negotiation", "shipping_quote"]);
+    expect(topics).toEqual(["negotiation", "video_call"]);
+  });
+
+  it("answers a delivery cost itself and asks the address, then hands the address over", async () => {
+    const asked = await turn("d1", "ongkir ke bekasi brp kak?", 0);
+    expect(asked).toMatch(/tim kami yang hitungkan/);
+    expect(asked).toMatch(/alamat lengkapnya/);
+    expect(
+      (await owner.waMessage.findFirstOrThrow({ where: { waMessageId: "d1" } }))
+        .status,
+    ).toBe("DIJAWAB_AGEN");
+    const held = await turn(
+      "d2",
+      "Jl. Melati No 12, Kebayoran Baru, Jaksel",
+      1,
+    );
+    expect(held).toBe(
+      "Siap kak, alamatnya aku teruskan ke tim untuk dihitung ongkirnya ya",
+    );
+    expect(
+      await owner.chatAction.findFirstOrThrow({
+        where: { from: FROM, status: "OPEN" },
+      }),
+    ).toMatchObject({ topic: "shipping_quote" });
+  });
+
+  it("hands a shared location over once the bot asked for the address", async () => {
+    await turn("d3", "kirim ke surabaya berapa?", 0);
+    const at = new Date(NOW.getTime() + 60_000);
+    await owner.waMessage.create({
+      data: {
+        waMessageId: "d4",
+        from: FROM,
+        name: "Budi",
+        text: null,
+        msgType: "location",
+        ts: new Date(at.getTime() - 20_000),
+        direction: "IN",
+        status: "BARU",
+        entities: {},
+        answeredByAgent: false,
+      },
+    });
+    await draftPass({
+      db: agent,
+      logger,
+      anthropic: {},
+      debounceMs: 8_000,
+      maxDraftsPerTick: 5,
+      capabilities: LIVE,
+      agentStaffId: AGENT_STAFF,
+      now: () => at,
+    });
+    const row = await owner.waMessage.findFirstOrThrow({
+      where: { waMessageId: "d4" },
+    });
+    expect(row.status).toBe("PERLU_STAF");
+    expect(row.entities).toMatchObject({
+      handoff: { topic: "shipping_quote" },
+    });
   });
 });
 
