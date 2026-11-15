@@ -394,6 +394,11 @@ export interface SettlementDraft extends PayoutPart {
   readonly received: number;
   /** Present only when THIS sale's figures disagree with its fees. */
   readonly reason?: string;
+  /**
+   * When the marketplace released the payout, as an ISO instant — the Shopee
+   * report's own time (`releasedInstant`). Absent, the moment it is recorded.
+   */
+  readonly at?: string;
 }
 
 /**

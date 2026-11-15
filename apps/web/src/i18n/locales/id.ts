@@ -4243,13 +4243,6 @@ export const id: Record<string, string> = {
   "products.skuCode": "Kode SKU",
   "products.skuCodeRequired": "Isi kode SKU",
   "products.skuCodeTaken": "Kode ini sudah dipakai varian lain",
-  "opening.at": "Per tanggal",
-  "opening.atHint":
-    "Uang yang lunas sebelum tanggal ini sudah termasuk dalam angka ini dan tidak menggerakkan saldo lagi.",
-  "opening.bank": "Saldo bank",
-  "opening.cash": "Uang tunai di laci",
-  "opening.saved": "Saldo awal disimpan.",
-  "opening.title": "Saldo awal",
   "priceImport.apply": "Perbarui {{n}} unit",
   "priceImport.button": "Impor harga jual",
   "priceImport.conflict": "Dua harga untuk unit yang sama",
@@ -5526,6 +5519,9 @@ export const id: Record<string, string> = {
   "transactions.moneyInCashBank": "Dibayar tunai & bank",
   "transactions.inMarketBalances": "Dibayar ke saldo Shopee & Tokopedia",
   "transactions.stPaidToBalance": "Lunas · saldo {{channel}}",
+  "transactions.stWaitingFor": "Menunggu {{channel}}",
+  "transactions.markReceived": "Tandai sudah diterima",
+  "transactions.markedReceived": "{{code}} sudah masuk saldo {{channel}}.",
   "transactions.stWithChannel": "Lunas · saldo marketplace",
   "transactions.toBalance": "Ke saldo {{channel}}",
   "pos.marketplaceBalancePart":

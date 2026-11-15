@@ -3927,6 +3927,35 @@ Decisions that outlived those documents:
   affiliate switches on the upload are gone, and `ShopeeSaleFacts` lost
   `shopeeVoucher`/`spayLater`/`affiliate`/`publishedShipping`. A stated
   Gratis Ongkir above Rp40.000 warns Ukuran Khusus.
+- **A Shopee sale is in the Shopee balance once its payout is recorded —
+  2026-11-15.** *"At first when they make a transaction from Shopee, it is not
+  even in their Shopee account. But when they add a deduction or mark as
+  received or import an excel file, it will be added to the Shopee
+  balance."* This REVISES 2026-11-13's "in the balance from the sale".
+  - `marketplacePotOf(p, potFrom, released)`: a Shopee/Tokopedia payment is
+    the pot's when it has a `Settlement` (or is stored SETTLED); otherwise
+    `awaitingChannelOf` — `CashflowRow.awaiting`, PENDING, in no balance, not
+    the bank even on Accrual. Transaction History reads **Waiting for
+    Shopee** with a *Mark as received* link: a settlement with no
+    deductions, dated now. A first deduction typed in Edit transaction is
+    dated now too (it was the sale's day); a correction keeps its date. The
+    upload dates each payout at Shopee's own release time
+    (`releasedInstant`, Jakarta wall clock → UTC, `SettlementDraft.at`).
+  - **The Shopee balance starts from Shopee's own figure**:
+    `AppSetting` `finance.shopeeBalanceBase` = 99287458 at
+    `finance.shopeeBalanceBaseAt` = 2026-11-15T14:50:37Z (21:50:37 WIB, the
+    last row of the owner's 15 Aug–15 Nov seller-balance report), written by
+    data migration `20261115090000_shopee_balance_base`. `marketplacePots(rows,
+    potBasesOf(settings))` = base + payouts RELEASED after it
+    (`CashflowRow.releasedAt` = the settlement's instant; the row itself stays
+    on the sale's day) − withdrawals after it. So re-uploading that report
+    counts nothing twice. ⚠️ A sale Shopee released before the base but
+    marked received BY HAND after it is counted twice — record those through
+    the upload. Ad top-ups (Isi Ulang Saldo Iklan) are still recorded nowhere
+    (owner: ignore), so the balance drifts by them.
+  - **The Opening balance dialog is gone** (owner ask): `OpeningBalanceModal`
+    and its header button. The stored `openingCash`/`openingBank`/
+    `openingBalanceAt` still start the Cash and Bank cards.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

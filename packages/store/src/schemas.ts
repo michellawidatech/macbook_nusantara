@@ -310,6 +310,15 @@ export function storeSchemas<M extends MoneyCodec>(money: M) {
      * the rule applies to every payment.
      */
     marketplacePotFrom: instant.optional(),
+    /**
+     * What the Shopee seller balance held at `shopeeBalanceBaseAt`, read off
+     * Shopee's own report (`AppSetting` `finance.shopeeBalanceBase` /
+     * `…BaseAt`, 2026-11-15). The balance is this plus every payout released
+     * after the instant, less every withdrawal after it; absent, it starts
+     * from zero and counts everything.
+     */
+    shopeeBalanceBase: z.optional(money),
+    shopeeBalanceBaseAt: instant.optional(),
     shopName: text.optional(),
     shopTagline: text.optional(),
     shopAddress: text.optional(),

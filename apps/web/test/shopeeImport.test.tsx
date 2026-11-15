@@ -231,6 +231,8 @@ describe("uploading the seller balance report", () => {
     ]);
     const plain = written.find((s) => s.orderId === "o-shp-1")!;
     expect(plain.received).toBe(4_796_900);
+    // Dated when Shopee released it (2026-11-15), its Jakarta wall clock.
+    expect(plain.at).toBe("2026-09-18T18:55:24.000Z");
     expect(plain.fees.map((f) => [f.label, f.amount])).toEqual([
       ["Biaya Administrasi", 278_250],
       ["Biaya Proses Pesanan", 1_250],

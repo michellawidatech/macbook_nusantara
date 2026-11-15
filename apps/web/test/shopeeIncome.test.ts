@@ -22,6 +22,7 @@ import {
   parseAmount,
   payoutRows,
   reconcileIncome,
+  releasedInstant,
   recordable,
   releasedText,
   type IncomeLine,
@@ -648,5 +649,23 @@ describe("payoutRows", () => {
       },
     );
     expect(asked).toBe(false);
+  });
+});
+
+describe("releasedInstant", () => {
+  it("reads Shopee's Jakarta wall clock as an instant", () => {
+    expect(releasedInstant("2026-11-15 21:50:37")).toBe(
+      "2026-11-15T14:50:37.000Z",
+    );
+    expect(releasedInstant("2026-11-15 21:50")).toBe(
+      "2026-11-15T14:50:00.000Z",
+    );
+    expect(releasedInstant("2026-11-15")).toBe("2026-11-14T17:00:00.000Z");
+  });
+
+  it("refuses to guess at anything else", () => {
+    expect(releasedInstant(undefined)).toBeUndefined();
+    expect(releasedInstant("15/11/2026")).toBeUndefined();
+    expect(releasedInstant("2026-13-45 99:99:99")).toBeUndefined();
   });
 });

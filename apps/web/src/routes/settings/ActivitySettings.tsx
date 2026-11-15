@@ -64,6 +64,7 @@ const MONEY_FIELDS = new Set([
   "openingBalance",
   "openingCash",
   "openingBank",
+  "shopeeBalanceBase",
 ]);
 
 const ACTIONS: readonly ActivityAction[] = [

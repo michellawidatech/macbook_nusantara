@@ -5502,4 +5502,25 @@ describe("a marketplace's seller balance (2026-11-13)", () => {
       amount: 5_000_000,
     });
   }, 180_000);
+
+  it("projects the Shopee balance's starting point (2026-11-15)", async () => {
+    // Migration 20261115090000 writes both rows; `truncateAll` took them.
+    for (const [key, value] of [
+      ["finance.shopeeBalanceBase", "99287458"],
+      ["finance.shopeeBalanceBaseAt", "2026-11-15T14:50:37.000Z"],
+    ] as const) {
+      await db.appSetting.upsert({
+        where: { key },
+        update: { value },
+        create: { key, value, updatedAt: NOW },
+      });
+    }
+    const snap = decodeStore(
+      (await snapshotStore(db, { staffId: ACTOR })).db as unknown as StoreShape,
+    ) as unknown as { settings: Record<string, unknown> };
+    expect(snap.settings["shopeeBalanceBase"]).toBe(99_287_458);
+    expect(snap.settings["shopeeBalanceBaseAt"]).toBe(
+      "2026-11-15T14:50:37.000Z",
+    );
+  }, 180_000);
 });

@@ -1792,6 +1792,15 @@ export interface AppSettings {
    */
   marketplacePotFrom?: string;
   /**
+   * The Shopee seller balance as Shopee's own report stated it at
+   * `shopeeBalanceBaseAt` (owner 2026-11-15) — `AppSetting`
+   * `finance.shopeeBalanceBase` / `…BaseAt`, written once by migration
+   * 20261115090000. Payouts released and withdrawals made after the instant
+   * move it; everything before is inside the figure (`marketplacePots`).
+   */
+  shopeeBalanceBase?: number;
+  shopeeBalanceBaseAt?: string;
+  /**
    * Who the shop is, as printed at the top of every faktur.
    *
    * These four were a `const SHOP` in `components/Invoice.tsx` until

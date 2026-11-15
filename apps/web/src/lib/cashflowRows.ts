@@ -27,7 +27,7 @@ import {
   type AccountKind,
   type Balances,
 } from "./accounts.js";
-import { marketplacePotOf } from "./marketplacePot.js";
+import { awaitingChannelOf, marketplacePotOf } from "./marketplacePot.js";
 import { customerLabel } from "./customers.js";
 import { fmtNone } from "./format.js";
 import { channelOf } from "./channels.js";
@@ -142,6 +142,19 @@ export interface CashflowRow {
    * sale.
    */
   readonly marketplace?: string;
+  /**
+   * On a marketplace payment in a seller balance: when its payout was
+   * released — its settlement's instant. What a balance's starting point
+   * (`marketplacePots`) is compared with; the row itself stays on the sale's
+   * day, which is when the revenue was earned.
+   */
+  readonly releasedAt?: string;
+  /**
+   * On a marketplace payment nobody has recorded a payout for (2026-11-15):
+   * the channel it is waiting on. Stored PENDING, in no balance — not the
+   * seller balance, and not the bank even on Accrual.
+   */
+  readonly awaiting?: string;
 }
 
 /** A debt a return cancelled: listed in Accrual, never counted anywhere. */
@@ -322,8 +335,12 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
       // In a marketplace's balance rather than the bank (2026-11-13). Such a
       // payment is the shop's money from the sale — its stored PENDING is
       // not read, so the row reads Settled with the balance named beside it.
-      const pot = marketplacePotOf(p, db.settings?.marketplacePotFrom);
+      const potFrom = db.settings?.marketplacePotFrom;
+      const pot = marketplacePotOf(p, potFrom, settlement !== undefined);
+      const awaiting = awaitingChannelOf(p, potFrom, settlement !== undefined);
       const state = pot !== undefined ? ("SETTLED" as const) : p.state;
+      const releasedAt =
+        pot === undefined ? undefined : (settlement?.at ?? p.at);
       out.push({
         key: `p-${o.id}-${p.id}`,
         at: p.at,
@@ -342,6 +359,8 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
         source: { kind: "salePayment", orderId: o.id, paymentId: p.id },
         ...(off !== 0 ? { deducted: off } : {}),
         ...(pot !== undefined ? { marketplace: pot } : {}),
+        ...(releasedAt !== undefined ? { releasedAt } : {}),
+        ...(awaiting !== undefined ? { awaiting } : {}),
       });
       /*
        * What the marketplace kept, as an expense beside the sale rather than
@@ -376,6 +395,8 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
           tie: "",
           feeOf: `p-${o.id}-${p.id}`,
           ...(pot !== undefined ? { marketplace: pot } : {}),
+          ...(releasedAt !== undefined ? { releasedAt } : {}),
+          ...(awaiting !== undefined ? { awaiting } : {}),
         });
       }
     }
@@ -682,6 +703,7 @@ export function movesBalance(
   return (
     r.inBalance &&
     r.marketplace === undefined &&
+    r.awaiting === undefined &&
     !isVoided(r) &&
     r.at >= (settings.openingBalanceAt ?? "") &&
     (accrual || r.status === "SETTLED")
@@ -693,7 +715,7 @@ export function movesBalance(
  * belongs to no pot and for money a marketplace's seller balance holds.
  */
 export function potOfRow(r: CashflowRow): AccountKind | undefined {
-  return r.marketplace !== undefined
+  return r.marketplace !== undefined || r.awaiting !== undefined
     ? undefined
     : accountOfMethod(r.methodCode);
 }

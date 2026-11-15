@@ -937,7 +937,7 @@ export function EditTransactionModal({
       for (const p of next) {
         if (p.channel === undefined) continue;
         const fees = (deductions[p.id] ?? []).filter((f) => f.amount !== 0);
-        const had = d.settlements.some((s) => s.paymentId === p.id);
+        const had = d.settlements.find((s) => s.paymentId === p.id);
         if (fees.length === 0 && !had && p.state !== "SETTLED") continue;
         upsertSettlement(
           d,
@@ -947,7 +947,9 @@ export function EditTransactionModal({
             channel: p.channel,
             gross: p.amount,
             fees,
-            at: p.at,
+            // When the payout reached the seller balance (2026-11-15): a
+            // first deduction typed is that moment; a correction keeps it.
+            at: had?.at ?? stamp,
           },
           { staff: currentStaffName(), nextId },
         );

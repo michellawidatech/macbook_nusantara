@@ -43,6 +43,10 @@ const SETTING_KEYS = {
   // From when a released marketplace payment is in the seller balance, not
   // the bank (2026-11-13). Written once, by migration 20261113090000.
   marketplacePotFrom: "finance.marketplacePotFrom",
+  // Shopee's own seller balance at an instant, the starting point of the
+  // Shopee balance card (2026-11-15). Written once, by migration 20261115090000.
+  shopeeBalanceBase: "finance.shopeeBalanceBase",
+  shopeeBalanceBaseAt: "finance.shopeeBalanceBaseAt",
   shopName: "shop.name",
   shopTagline: "shop.tagline",
   shopAddress: "shop.address",
@@ -91,6 +95,8 @@ export async function projectSettings(tx: Tx): Promise<Settings> {
     openingBalanceAt: text(SETTING_KEYS.openingBalanceAt),
     booksClosedAt: text(SETTING_KEYS.booksClosedAt),
     marketplacePotFrom: text(SETTING_KEYS.marketplacePotFrom),
+    shopeeBalanceBase: money(SETTING_KEYS.shopeeBalanceBase),
+    shopeeBalanceBaseAt: text(SETTING_KEYS.shopeeBalanceBaseAt),
     shopName: text(SETTING_KEYS.shopName),
     shopTagline: text(SETTING_KEYS.shopTagline),
     shopAddress: text(SETTING_KEYS.shopAddress),

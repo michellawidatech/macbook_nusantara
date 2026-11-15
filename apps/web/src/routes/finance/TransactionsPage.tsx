@@ -80,13 +80,16 @@ import {
   ShopeeSettlementImport,
   pendingShopeePayments,
 } from "./ShopeeSettlementImport.js";
-import { recordPayouts } from "../../lib/payouts.js";
+import { recordPayouts, upsertSettlement } from "../../lib/payouts.js";
 import {
   orderBalance,
   paymentsOf,
   type SaleBalance,
 } from "../../lib/salePayments.js";
-import { marketplacePotOf } from "../../lib/marketplacePot.js";
+import {
+  awaitingChannelOf,
+  marketplacePotOf,
+} from "../../lib/marketplacePot.js";
 import {
   paymentRefOf,
   returnedDebts,
@@ -187,6 +190,16 @@ interface SaleRow {
   readonly marketStored: number;
   /** Paid into a marketplace balance, so the status reads "Paid · …". */
   readonly paidToMarket: boolean;
+  /**
+   * Marketplace payments nobody has recorded a payout for (2026-11-15): not
+   * in any balance yet. The status reads "Waiting for Shopee" and offers
+   * *Mark as received*.
+   */
+  readonly waiting: readonly {
+    readonly channel: string;
+    readonly paymentId: string;
+    readonly amount: number;
+  }[];
   /** Σ the sale's trade-ins — what the customer was allowed for them. */
   readonly tradeCredit: number;
   /**
@@ -351,8 +364,19 @@ export function TransactionsPage() {
         .map((m) => channelOf(m.channel)?.label ?? m.channel)
         .join(" + "),
     });
+  /** "Waiting for Shopee" — a payout nobody has recorded yet (2026-11-15). */
+  const waitingLabel = (r: SaleRow) =>
+    t("transactions.stWaitingFor", "Waiting for {{channel}}", {
+      channel: [...new Set(r.waiting.map((w) => w.channel))]
+        .map((c) => channelOf(c)?.label ?? c)
+        .join(" + "),
+    });
   const rowPayLabel = (r: SaleRow) =>
-    r.paidToMarket ? paidToLabel(r) : payLabel(r.payStatus);
+    r.waiting.length > 0 && r.balance.customerOwes <= 0
+      ? waitingLabel(r)
+      : r.paidToMarket
+        ? paidToLabel(r)
+        : payLabel(r.payStatus);
   const payLabel = (s: SalePaymentStatus) =>
     s === "SETTLED"
       ? t("transactions.stSettled", "Settled")
@@ -365,6 +389,45 @@ export function TransactionsPage() {
             : s === "PARTLY_PAID_RETURNED"
               ? t("transactions.stPartPaidReturned", "Partly paid, returned")
               : t("transactions.stOwed", "Owed");
+
+  /**
+   * *Mark as received* (owner, 2026-11-15): the payout landed in the seller
+   * balance and nobody is typing its deductions — a settlement with none,
+   * dated now, which is what puts the payment in the balance. A deduction
+   * found later is typed in Edit transaction, against the same settlement.
+   */
+  const markReceived = (r: SaleRow) => {
+    const staff = currentStaffName();
+    const at = new Date().toISOString();
+    mutate((d) => {
+      for (const w of r.waiting) {
+        upsertSettlement(
+          d,
+          {
+            paymentId: w.paymentId,
+            orderId: r.order.id,
+            channel: w.channel,
+            gross: w.amount,
+            fees: [],
+            at,
+          },
+          { staff, nextId },
+        );
+      }
+    });
+    message.success(
+      t(
+        "transactions.markedReceived",
+        "{{code}} is in the {{channel}} balance.",
+        {
+          code: r.code,
+          channel: [...new Set(r.waiting.map((w) => w.channel))]
+            .map((c) => channelOf(c)?.label ?? c)
+            .join(" + "),
+        },
+      ),
+    );
+  };
 
   const sales = useMemo<SaleRow[]>(() => {
     const back = returnedSerials(db.orders, db.events);
@@ -420,15 +483,30 @@ export function TransactionsPage() {
           );
         const ref = paymentRefOf(payments);
         /*
-         * A Shopee or Tokopedia part is the shop's money from the sale, in
-         * that channel's balance (2026-11-13) — whatever state it is stored
-         * in. So the status reads it as paid, and Received counts it.
+         * A Shopee or Tokopedia part is the shop's money once its payout is
+         * recorded (2026-11-15), in that channel's balance — whatever state
+         * it is stored in. So the status reads it as paid, and Received
+         * counts it. Before that it is waiting on the marketplace.
          */
         const marketBy = new Map<string, number>();
         let marketStored = 0;
+        const released = new Set(
+          (settlementsOf.get(o.id) ?? []).map((st) => st.paymentId),
+        );
+        const waiting: {
+          channel: string;
+          paymentId: string;
+          amount: number;
+        }[] = [];
         for (const p of payments) {
           if (p.state === "DUE") continue;
-          const pot = marketplacePotOf(p, db.settings.marketplacePotFrom);
+          const potFrom = db.settings.marketplacePotFrom;
+          const on = awaitingChannelOf(p, potFrom, released.has(p.id));
+          if (on !== undefined) {
+            waiting.push({ channel: on, paymentId: p.id, amount: p.amount });
+            continue;
+          }
+          const pot = marketplacePotOf(p, potFrom, released.has(p.id));
           if (pot === undefined) continue;
           marketBy.set(pot, (marketBy.get(pot) ?? 0) + p.amount);
           if (p.state === "PENDING") marketStored += p.amount;
@@ -470,6 +548,7 @@ export function TransactionsPage() {
           })),
           marketStored,
           paidToMarket: marketBy.size > 0 && paidStatus === "SETTLED",
+          waiting,
           balance,
           kept: [...keptBy]
             .filter(([, amount]) => amount !== 0)
@@ -825,10 +904,29 @@ export function TransactionsPage() {
                   return (
                     <Flex vertical gap={SPACE.xs} align="flex-start">
                       <Tag
-                        color={r.paidToMarket ? "gold" : PAY_COLOR[r.payStatus]}
+                        color={
+                          r.waiting.length > 0 && r.balance.customerOwes <= 0
+                            ? "orange"
+                            : r.paidToMarket
+                              ? "gold"
+                              : PAY_COLOR[r.payStatus]
+                        }
                       >
                         {rowPayLabel(r)}
                       </Tag>
+                      {r.waiting.length > 0 && (
+                        <Button
+                          size="small"
+                          type="link"
+                          style={{ padding: 0, height: "auto" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            markReceived(r);
+                          }}
+                        >
+                          {t("transactions.markReceived", "Mark as received")}
+                        </Button>
+                      )}
                       {due !== undefined && (
                         <Typography.Text
                           type={late ? "danger" : "secondary"}

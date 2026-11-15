@@ -18,6 +18,7 @@
  */
 import { App as AntdApp } from "antd";
 import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TransactionsPage } from "../src/routes/finance/TransactionsPage.js";
@@ -128,9 +129,8 @@ describe("the order column", () => {
     const card = saleCard("SI-TEST-REF");
     expect(within(card).getByText("INV/20260918/MPL/4411")).toBeInTheDocument();
     expect(within(card).getByText("Tokopedia")).toBeInTheDocument();
-    expect(
-      within(card).getByText("Paid · Tokopedia balance"),
-    ).toBeInTheDocument();
+    // No payout recorded yet (2026-11-15): not in the Tokopedia balance.
+    expect(within(card).getByText("Waiting for Tokopedia")).toBeInTheDocument();
   });
 });
 
@@ -166,14 +166,30 @@ describe("the payment status", () => {
     expect(within(owed).getByText(fmtRp(0))).toBeInTheDocument();
   });
 
-  it("reads a sale paid into the Shopee balance as paid (2026-11-13)", async () => {
+  it("waits on Shopee until the payout is marked received (2026-11-15)", async () => {
     renderPage();
     await settle();
 
-    // Rp5jt cash and the rest on Shopee PayLater: paid in full, the Shopee
-    // part in the Shopee balance — and counted as received.
-    const split = saleCard(seedCode("000203"));
+    // Rp5jt cash and the rest on Shopee PayLater. Nobody has recorded the
+    // Shopee payout, so that part is in no balance yet.
     const order = getDb().orders.find((o) => o.code === seedCode("000203"))!;
+    const shopeePart = order.payments!.find((p) => p.channel === "SHOPEE")!;
+    let split = saleCard(seedCode("000203"));
+    expect(within(split).getByText("Waiting for Shopee")).toBeInTheDocument();
+    expect(
+      within(split).getByText(fmtRp(order.total - shopeePart.amount)),
+    ).toBeInTheDocument();
+
+    // Mark as received: a settlement with no deduction, and the part is in
+    // the Shopee balance — paid, and counted as received.
+    await userEvent.click(
+      within(split).getByRole("button", { name: "Mark as received" }),
+    );
+    await settle();
+    expect(
+      getDb().settlements.find((x) => x.paymentId === shopeePart.id),
+    ).toMatchObject({ gross: shopeePart.amount, received: shopeePart.amount });
+    split = saleCard(seedCode("000203"));
     expect(
       within(split).getByText("Paid · Shopee balance"),
     ).toBeInTheDocument();
@@ -183,7 +199,12 @@ describe("the payment status", () => {
     ).toBeInTheDocument();
 
     const settled = saleCard(seedCode("000201"));
-    expect(within(settled).getByText("Settled")).toBeInTheDocument();
+    expect(within(settled).getByText("Settled")).toBeInTheDocument(); // The seed sale is shared with the rest of the file: take it back.
+    mutate((d) => {
+      d.settlements = d.settlements.filter(
+        (x) => x.paymentId !== shopeePart.id,
+      );
+    });
   });
 
   it("warns once a promise date has passed", async () => {

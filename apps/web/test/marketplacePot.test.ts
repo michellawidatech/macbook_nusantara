@@ -8,9 +8,11 @@ import { describe, expect, it } from "vitest";
 import { balancesOfRows, cashflowRows } from "../src/lib/cashflowRows.js";
 import { monthlyFlow } from "../src/lib/cashflowCharts.js";
 import {
+  awaitingChannelOf,
   isWithdrawalReason,
   marketplacePotOf,
   marketplacePots,
+  potBasesOf,
   withdrawalChannel,
 } from "../src/lib/marketplacePot.js";
 import {
@@ -49,6 +51,8 @@ function empty(): MockDb {
   db.reservations = [];
   db.settings = { ...db.settings, ...NO_OPENING };
   delete db.settings.marketplacePotFrom;
+  delete db.settings.shopeeBalanceBase;
+  delete db.settings.shopeeBalanceBaseAt;
   return db;
 }
 
@@ -125,32 +129,50 @@ const bank = (db: MockDb) =>
   balancesOfRows(cashflowRows(db, t), db.settings).bank;
 
 describe("which pot a marketplace payment is in", () => {
-  it("is the channel's while pending, and from the cutoff on once settled", () => {
+  it("is the channel's once released, and from the cutoff on once settled", () => {
     const from = "2030-01-01T00:00:00.000Z";
     const p = (state: string, at: string) => ({
       channel: "SHOPEE",
       state,
       at,
     });
-    expect(marketplacePotOf(p("PENDING", "2029-01-01T00:00:00Z"), from)).toBe(
-      "SHOPEE",
-    );
-    expect(marketplacePotOf(p("SETTLED", "2029-12-31T23:00:00Z"), from)).toBe(
-      undefined,
-    );
-    expect(marketplacePotOf(p("SETTLED", "2030-01-02T00:00:00Z"), from)).toBe(
-      "SHOPEE",
-    );
+    const old = "2029-01-01T00:00:00Z";
+    // 2026-11-15: a PENDING payment is the pot's only once its payout is
+    // recorded; until then it is waiting on Shopee.
+    expect(marketplacePotOf(p("PENDING", old), from, true)).toBe("SHOPEE");
+    expect(marketplacePotOf(p("PENDING", old), from, false)).toBeUndefined();
+    expect(awaitingChannelOf(p("PENDING", old), from, false)).toBe("SHOPEE");
+    expect(awaitingChannelOf(p("PENDING", old), from, true)).toBeUndefined();
+    expect(
+      marketplacePotOf(p("SETTLED", "2029-12-31T23:00:00Z"), from, true),
+    ).toBe(undefined);
+    expect(
+      awaitingChannelOf(p("SETTLED", "2029-12-31T23:00:00Z"), from, false),
+    ).toBe(undefined);
+    expect(
+      marketplacePotOf(p("SETTLED", "2030-01-02T00:00:00Z"), from, false),
+    ).toBe("SHOPEE");
     // No cutoff: the rule applies to everything.
     expect(
-      marketplacePotOf(p("SETTLED", "2001-01-01T00:00:00Z"), undefined),
+      marketplacePotOf(p("SETTLED", "2001-01-01T00:00:00Z"), undefined, false),
     ).toBe("SHOPEE");
     // Cash, or a channel that holds no seller balance, is not a pot.
     expect(
-      marketplacePotOf({ state: "SETTLED", at: AT }, undefined),
+      marketplacePotOf({ state: "SETTLED", at: AT }, undefined, true),
     ).toBeUndefined();
     expect(
-      marketplacePotOf({ channel: "TIKTOK", state: "PENDING", at: AT }, from),
+      marketplacePotOf(
+        { channel: "TIKTOK", state: "PENDING", at: AT },
+        from,
+        true,
+      ),
+    ).toBeUndefined();
+    expect(
+      awaitingChannelOf(
+        { channel: "TIKTOK", state: "PENDING", at: AT },
+        from,
+        false,
+      ),
     ).toBeUndefined();
   });
 
@@ -181,7 +203,7 @@ describe("the seller balance", () => {
     expect(posBalanceAt(cashflowRows(db, t), db.settings, "BANK", DAY)).toBe(0);
   });
 
-  it("counts a payment stored PENDING the same — it is in the balance from the sale", () => {
+  it("counts a payment stored PENDING once its payout is recorded", () => {
     const db = empty();
     sale(db, "o-2", [shopee("p-2", 4_000_000, "PENDING")]);
     deduct(db, "o-2", "p-2", 400_000);
@@ -208,7 +230,8 @@ describe("the seller balance", () => {
 
     const pot = shopeePot(db);
     expect(pot.withdrawn).toBe(5_000_000);
-    expect(pot.balance).toBe(8_850_000 + 4_000_000 - 5_000_000);
+    // o-2 has no payout recorded yet, so it is not in the balance.
+    expect(pot.balance).toBe(8_850_000 - 5_000_000);
     expect(bank(db)).toBe(5_000_000);
 
     // The withdrawal is the one bank movement the statement can show.
@@ -220,6 +243,78 @@ describe("the seller balance", () => {
       DAY,
     );
     expect(moved.map((r) => r.key)).toEqual(["i-i-w1"]);
+  });
+
+  it("leaves a sale out until its payout is recorded — and out of the bank too", () => {
+    // Owner, 2026-11-15: "at first when they make a transaction from Shopee,
+    // it is not even in their Shopee account".
+    const db = empty();
+    sale(db, "o-w", [shopee("p-w", 6_800_000, "PENDING")]);
+    expect(shopeePot(db).balance).toBe(0);
+    const row = cashflowRows(db, t).find((r) => r.orderCode === "SI-o-w")!;
+    expect(row).toMatchObject({ status: "PENDING", awaiting: "SHOPEE" });
+    expect(row.marketplace).toBeUndefined();
+    expect(
+      balancesOfRows(cashflowRows(db, t), db.settings, { accrual: true }).bank,
+    ).toBe(0);
+
+    // Recorded — here with no deduction, as Mark as received writes it.
+    db.settlements.push({
+      id: "stl-w",
+      paymentId: "p-w",
+      orderId: "o-w",
+      channel: "SHOPEE",
+      gross: 6_800_000,
+      fees: [],
+      received: 6_800_000,
+      at: LATER,
+      staff: "t",
+    } as MockDb["settlements"][number]);
+    expect(shopeePot(db).balance).toBe(6_800_000);
+    const released = cashflowRows(db, t).find((r) => r.orderCode === "SI-o-w")!;
+    // The row stays on the sale's day; the release is what the base reads.
+    expect(released).toMatchObject({
+      at: AT,
+      releasedAt: LATER,
+      marketplace: "SHOPEE",
+    });
+  });
+
+  it("starts from Shopee's own figure and counts only what came after it", () => {
+    const db = empty();
+    const BASE_AT = new Date(2030, 0, 13).toISOString();
+    db.settings.shopeeBalanceBase = 99_287_458;
+    db.settings.shopeeBalanceBaseAt = BASE_AT;
+    // Released before the base: already inside Shopee's figure.
+    sale(db, "o-in", [shopee("p-in", 6_800_000, "PENDING")]);
+    deduct(db, "o-in", "p-in", 526_250);
+    // Released after it: moves the balance.
+    sale(db, "o-after", [shopee("p-after", 10_450_000, "PENDING")]);
+    db.settlements.push({
+      id: "stl-after",
+      paymentId: "p-after",
+      orderId: "o-after",
+      channel: "SHOPEE",
+      gross: 10_450_000,
+      fees: [{ id: "f", kind: "OTHER", label: "Others", amount: 861_090 }],
+      received: 9_588_910,
+      at: LATER,
+      staff: "t",
+    } as MockDb["settlements"][number]);
+    // A withdrawal after the base comes off it.
+    withdraw(db, "i-w", 20_000_000);
+    db.incomes[0] = { ...db.incomes[0]!, date: "2030-01-14" };
+
+    const pot = marketplacePots(
+      cashflowRows(db, t),
+      potBasesOf(db.settings),
+    ).find((p) => p.channel === "SHOPEE")!;
+    expect(pot.base).toBe(99_287_458);
+    expect(pot.paidIn).toBe(9_588_910);
+    expect(pot.withdrawn).toBe(20_000_000);
+    expect(pot.balance).toBe(99_287_458 + 9_588_910 - 20_000_000);
+    // Tokopedia has no base and counts as before.
+    expect(potBasesOf(db.settings).TOKOPEDIA).toBeUndefined();
   });
 
   it("keeps Tokopedia's pot apart from Shopee's", () => {

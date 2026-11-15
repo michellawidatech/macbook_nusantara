@@ -166,12 +166,28 @@ describe("the seller balance on Income & Expense", () => {
           id: "pay-o-pot",
           method: "MARKETPLACE",
           amount: base.total,
-          // As the till writes one: no status is read, it is in the balance.
+          // As the till writes one: no status is read.
           state: "PENDING",
           channel: "SHOPEE",
           at: now,
         },
       ],
+    });
+    // In the balance once its payout is recorded (2026-11-15) — here as
+    // Mark as received writes it, with no deduction.
+    mutate((d) => {
+      d.settlements = d.settlements.filter((x) => x.paymentId !== "pay-o-pot");
+      d.settlements.push({
+        id: "stl-o-pot",
+        paymentId: "pay-o-pot",
+        orderId: "o-pot",
+        channel: "SHOPEE",
+        gross: base.total,
+        fees: [],
+        received: base.total,
+        at: now,
+        staff: "test",
+      });
     });
     const rupiah = (el: HTMLElement) =>
       Number((el.textContent ?? "").replace(/[^\d-]/g, ""));

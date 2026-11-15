@@ -68,7 +68,6 @@ import {
   ShopOutlined,
   WalletOutlined,
 } from "@ant-design/icons";
-import { OpeningBalanceModal } from "./OpeningBalanceModal";
 import { PageContainer } from "../../components/PageContainer";
 import { ProTable } from "../../components/ProTable";
 import { AdjustmentPanel } from "./AdjustmentPanel";
@@ -93,6 +92,7 @@ import {
 import {
   WITHDRAWAL_REASON,
   marketplacePots,
+  potBasesOf,
   type MarketplacePot,
 } from "../../lib/marketplacePot.js";
 import { channelOf } from "../../lib/channels.js";
@@ -150,7 +150,6 @@ export function IncomeExpensePage() {
   const [addAdjustment, setAddAdjustment] = useState(false);
   /** What Add adjustment opens with — a withdrawal from a pot's card. */
   const [preset, setPreset] = useState<AdjustmentPreset | undefined>();
-  const [openingOpen, setOpeningOpen] = useState(false);
   const [basis, setBasis] = useState<"CASH" | "ACCRUAL">("CASH");
   /** How far back the two charts look (owner ask 2026-10-23). */
   const [chartMonths, setChartMonths] = useState<3 | 6 | 12>(6);
@@ -319,8 +318,10 @@ export function IncomeExpensePage() {
    */
   const sellerPots = useMemo(
     () =>
-      marketplacePots(rows).filter((p) => p.paidIn !== 0 || p.withdrawn !== 0),
-    [rows],
+      marketplacePots(rows, potBasesOf(db.settings)).filter(
+        (p) => p.base !== 0 || p.paidIn !== 0 || p.withdrawn !== 0,
+      ),
+    [rows, db.settings],
   );
 
   /** The hidden-until-asked figure and its eye, shared by every pot card. */
@@ -433,12 +434,6 @@ export function IncomeExpensePage() {
       title={t("finance.incomeExpense", "Income & Expense")}
       stickyHeader
       actions={[
-        {
-          key: "opening",
-          label: t("opening.title", "Opening balance"),
-          icon: <BankOutlined />,
-          onClick: () => setOpeningOpen(true),
-        },
         {
           key: "add",
           label: t("finance.addAdjustment", "Add adjustment"),
@@ -791,10 +786,6 @@ export function IncomeExpensePage() {
         onCloseAdd={() => setAddAdjustment(false)}
         showHistory={false}
         {...(preset ? { preset } : {})}
-      />
-      <OpeningBalanceModal
-        open={openingOpen}
-        onClose={() => setOpeningOpen(false)}
       />
     </PageContainer>
   );

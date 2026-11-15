@@ -67,7 +67,7 @@ export function recordPayouts(
         channel,
         gross: s.gross,
         fees: s.fees,
-        at: deps.at,
+        at: s.at ?? deps.at,
         ...(s.reason ? { reason: s.reason } : {}),
       },
       deps,

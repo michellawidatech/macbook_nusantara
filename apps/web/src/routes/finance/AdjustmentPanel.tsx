@@ -67,6 +67,7 @@ import { ADJUSTMENT_METHOD_CODES } from "../../lib/accounts.js";
 import { cashflowRows } from "../../lib/cashflowRows.js";
 import {
   marketplacePots,
+  potBasesOf,
   withdrawalChannel,
 } from "../../lib/marketplacePot.js";
 import { channelOf } from "../../lib/channels.js";
@@ -427,7 +428,7 @@ export function AdjustmentPanel({
     () =>
       withdrawing === undefined || !addOpen
         ? undefined
-        : marketplacePots(cashflowRows(db, t)).find(
+        : marketplacePots(cashflowRows(db, t), potBasesOf(db.settings)).find(
             (p) => p.channel === withdrawing,
           )?.balance,
     [withdrawing, addOpen, db, t],

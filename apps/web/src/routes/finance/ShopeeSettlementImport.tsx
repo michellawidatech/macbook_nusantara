@@ -110,6 +110,7 @@ import {
   normaliseOrderNo,
   payoutRows,
   reconcileIncome,
+  releasedInstant,
   type IncomeLayout,
   type IncomeLine,
   type IncomePart,
@@ -264,6 +265,9 @@ export function ShopeeSettlementImport({
         return { ...base, mismatch: ambiguous, warnings: [] };
       }
       const fees = toSettlementFees(w.fees, () => nextId("fee"));
+      // Dated when Shopee released it, so a payout already inside the Shopee
+      // balance's starting figure is not counted again (2026-11-15).
+      const releasedAt = releasedInstant(w.line.released);
       return {
         ...base,
         worked: w,
@@ -287,6 +291,7 @@ export function ShopeeSettlementImport({
           gross: w.gross,
           fees,
           received: w.received,
+          ...(releasedAt !== undefined ? { at: releasedAt } : {}),
           ...(w.status === "ESTIMATED"
             ? {
                 reason: t(

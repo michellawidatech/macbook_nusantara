@@ -573,6 +573,22 @@ export function releasedText(v: Cell | undefined): string | undefined {
   return undefined;
 }
 
+/**
+ * A report's release time as an ISO instant. Shopee writes the shop's own
+ * wall clock — "2026-11-15 21:50:37", Asia/Jakarta, no zone — or a bare date.
+ * Undefined for anything else rather than a guess: the instant decides whether
+ * a payout is already inside the Shopee balance's starting figure.
+ */
+export function releasedInstant(text: string | undefined): string | undefined {
+  const m = /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}(?::\d{2})?))?$/.exec(
+    (text ?? "").trim(),
+  );
+  if (m === null) return undefined;
+  const time = m[2] === undefined ? "00:00:00" : m[2].padEnd(8, ":00");
+  const ms = Date.parse(`${m[1]}T${time}+07:00`);
+  return Number.isNaN(ms) ? undefined : new Date(ms).toISOString();
+}
+
 /** One order in the report — every row it has, added up. */
 export interface IncomeLine {
   /** Normalised — see `normaliseOrderNo`. */
