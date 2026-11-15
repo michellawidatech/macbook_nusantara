@@ -3953,6 +3953,14 @@ Decisions that outlived those documents:
     marked received BY HAND after it is counted twice — record those through
     the upload. Ad top-ups (Isi Ulang Saldo Iklan) are still recorded nowhere
     (owner: ignore), so the balance drifts by them.
+  - **Pembayaran Tambahan is hidden on the upload** (owner, same day). It
+    appears because the till records a Shopee sale at the STORE price and
+    Shopee sold it at its own (261109TXYB12A2: about Rp6.243.750 in the POS,
+    Rp6.800.000 on Shopee, Rp6.273.750 paid out). The negative line is still
+    WRITTEN — it is what lands the real payout in the balance — but the
+    preview neither names nor flags it, and the row is ticked
+    (`PayoutReview` lost `ABOVE_RATES`; `shownFees`). Only an "Others" line
+    makes a row yellow now.
   - **The Opening balance dialog is gone** (owner ask): `OpeningBalanceModal`
     and its header button. The stored `openingCash`/`openingBank`/
     `openingBalanceAt` still start the Cash and Bank cards.

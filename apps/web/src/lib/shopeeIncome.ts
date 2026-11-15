@@ -935,9 +935,9 @@ export type PayoutStatus =
 /** Why a recordable row is not ticked when the preview opens. */
 export type PayoutReview =
   /** More than a plain payout: a compensation, a refund, a correction. */
-  | { readonly kind: "PARTS" }
-  /** Shopee paid this much more than its own published fees leave room for. */
-  | { readonly kind: "ABOVE_RATES"; readonly amount: number };
+  {
+    readonly kind: "PARTS";
+  };
 
 /** One waiting sale with what the file says it paid out. */
 export interface PayoutRow<P> {
@@ -1026,7 +1026,7 @@ export function payoutRows<P>(
       };
     }
     const stated = (line.fees ?? []).map((f) => statedFee(f.label, f.amount));
-    const { fees, unexplained } =
+    const { fees } =
       stated.length > 0
         ? closeOnPayout(stated, g, line.payout)
         : reconcileEstimate(facts(pending, false), line.payout);
@@ -1035,8 +1035,13 @@ export function payoutRows<P>(
     if (parts.length > 1 || parts.some((x) => !x.payout || x.amount <= 0)) {
       review.push({ kind: "PARTS" });
     }
-    if (unexplained < 0)
-      review.push({ kind: "ABOVE_RATES", amount: -unexplained });
+    /*
+     * Shopee paying MORE than the fees leave room for (`unexplained < 0`) is
+     * not a question for a person (owner, 2026-11-15): the till records a
+     * Shopee sale at the store price and Shopee sold it at its own. The
+     * Pembayaran Tambahan line is still written — it is what lands the real
+     * payout in the Shopee balance — but the row is ticked and not flagged.
+     */
     return {
       ...base,
       status: "STATED" as const,

@@ -162,9 +162,15 @@ const UNMATCHED_SHOWN = 8;
 
 /** The line no rule accounted for, when there is one. */
 const leftoverOf = (fees: readonly EstimatedFee[]) =>
-  fees.find(
-    (f) => f.label === OTHER_FEES_LABEL || f.label === EXTRA_PAYMENT_LABEL,
-  );
+  fees.find((f) => f.label === OTHER_FEES_LABEL);
+
+/**
+ * The lines the preview shows. Pembayaran Tambahan — Shopee paying more than
+ * the POS price less its fees — is recorded, so the Shopee balance gets the
+ * real payout, but never shown or named here (owner, 2026-11-15).
+ */
+const shownFees = (fees: readonly EstimatedFee[]) =>
+  fees.filter((f) => f.label !== EXTRA_PAYMENT_LABEL);
 
 export function ShopeeSettlementImport({
   open,
@@ -434,18 +440,12 @@ export function ShopeeSettlementImport({
       ];
     }
     return [
-      ...w.review.map((x) =>
-        x.kind === "PARTS"
-          ? t(
-              "shopeeImport.reviewParts",
-              "More than a plain payout: {{parts}}. Check the sale, then tick it.",
-              { parts: partsText(w.line.parts ?? []) },
-            )
-          : t(
-              "shopeeImport.reviewAbove",
-              "Shopee paid {{amount}} more than its fees leave room for. Check the sale's amount, then tick it.",
-              { amount: fmtRp(x.amount) },
-            ),
+      ...w.review.map(() =>
+        t(
+          "shopeeImport.reviewParts",
+          "More than a plain payout: {{parts}}. Check the sale, then tick it.",
+          { parts: partsText(w.line.parts ?? []) },
+        ),
       ),
       ...r.warnings,
     ];
@@ -454,11 +454,12 @@ export function ShopeeSettlementImport({
   /** The deduction, line by line — what the ⓘ opens. */
   const detail = (r: PreviewRow): ReactNode => {
     const w = r.worked!;
-    const deducted = w.gross - w.received;
+    const lines = shownFees(w.fees);
+    const deducted = lines.reduce((n, f) => n + f.amount, 0);
     const notes = notesOf(r);
     return (
       <Flex vertical gap={SPACE.xs} style={{ width: 340, maxWidth: "80vw" }}>
-        {w.fees.map((f, i) => (
+        {lines.map((f, i) => (
           <Flex key={`${i}-${f.label}`} justify="space-between" gap={SPACE.md}>
             <Typography.Text
               type={leftoverOf([f]) !== undefined ? "warning" : undefined}
@@ -475,7 +476,7 @@ export function ShopeeSettlementImport({
             </Typography.Text>
           </Flex>
         ))}
-        {w.fees.length > 0 && (
+        {lines.length > 0 && (
           <Flex
             justify="space-between"
             gap={SPACE.md}

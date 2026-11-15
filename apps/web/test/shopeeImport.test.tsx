@@ -47,6 +47,15 @@ const SALES = [
     amount: 6_800_000,
     ref: "2609166VUDCU4M",
   },
+  // Recorded at the store price, below Shopee's: Shopee paid MORE than the
+  // fees leave room for. Ordinary (owner, 2026-11-15) — ticked, not yellow,
+  // and the Pembayaran Tambahan that lands the payout is never shown.
+  {
+    id: "o-shp-5",
+    code: "SI-SHP-005",
+    amount: 6_243_750,
+    ref: "261109TXYB12A2",
+  },
   // Waiting, and not in this file: Shopee has not released it yet.
   {
     id: "o-shp-4",
@@ -69,6 +78,12 @@ const REPORT = balanceReport([
     "2609166VUDCU4M",
     "6273750.00",
     "34697044.00",
+  ),
+  payoutRow(
+    "2026-11-15 15:46:28",
+    "261109TXYB12A2",
+    "6273750.00",
+    "40970794.00",
   ),
 ]);
 
@@ -165,10 +180,24 @@ describe("uploading the seller balance report", () => {
       .filter((r) => r.querySelector("td") !== null);
     expect(
       rows.map((r) => within(r).getByText(/^SI-SHP-/).textContent),
-    ).toEqual(["SI-SHP-001", "SI-SHP-002", "SI-SHP-003", "SI-SHP-004"]);
+    ).toEqual([
+      "SI-SHP-001",
+      "SI-SHP-002",
+      "SI-SHP-003",
+      "SI-SHP-005",
+      "SI-SHP-004",
+    ]);
     expect(
       rows.map((r) => r.classList.contains("shopee-row-mismatch")),
-    ).toEqual([true, true, false, false]);
+    ).toEqual([true, true, false, false, false]);
+
+    // Shopee paid more than the POS price less its fees: ticked, and the
+    // line that lands the payout is not named anywhere in the dialog.
+    const above = rowOf(dialog, "SI-SHP-005");
+    expect(
+      (within(above).getByRole("checkbox") as HTMLInputElement).checked,
+    ).toBe(true);
+    expect(within(dialog).queryByText(/Pembayaran Tambahan/)).toBeNull();
 
     // Order nominal → receivable, the arrow carrying what Shopee kept, and
     // the leftover named under the receivable.
@@ -219,7 +248,7 @@ describe("uploading the seller balance report", () => {
     const dialog = await upload();
     await userEvent.click(
       within(dialog).getByRole("button", {
-        name: "Record deductions for 2 sale(s)",
+        name: "Record deductions for 3 sale(s)",
       }),
     );
     await settle();
@@ -228,7 +257,12 @@ describe("uploading the seller balance report", () => {
     expect(written.map((s) => s.orderId).sort()).toEqual([
       "o-shp-1",
       "o-shp-3",
+      "o-shp-5",
     ]);
+    // Still recorded, so the Shopee balance gets what Shopee really paid.
+    expect(written.find((s) => s.orderId === "o-shp-5")!.received).toBe(
+      6_273_750,
+    );
     const plain = written.find((s) => s.orderId === "o-shp-1")!;
     expect(plain.received).toBe(4_796_900);
     // Dated when Shopee released it (2026-11-15), its Jakarta wall clock.

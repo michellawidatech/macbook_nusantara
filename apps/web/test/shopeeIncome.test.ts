@@ -569,15 +569,18 @@ describe("payoutRows", () => {
     });
   });
 
-  it("writes a payout above the rates as Pembayaran Tambahan, unticked", () => {
+  it("writes a payout above the rates as Pembayaran Tambahan, ticked and unflagged", () => {
+    // Owner, 2026-11-15: the till records a Shopee sale at the store price,
+    // so Shopee paying more is ordinary. The line still lands the real payout.
     const [row] = rows([
       {
         line: plain("2609990000AAAA", 6_400_000),
         pending: { code: "SI-3", gross: 6_800_000 },
       },
     ]);
-    expect(row!.review).toEqual([{ kind: "ABOVE_RATES", amount: 126_250 }]);
-    expect(row!.preselect).toBe(false);
+    expect(row!.review).toEqual([]);
+    expect(row!.preselect).toBe(true);
+    expect(row!.received).toBe(6_400_000);
     expect(row!.fees.at(-1)).toMatchObject({
       label: EXTRA_PAYMENT_LABEL,
       amount: -126_250,

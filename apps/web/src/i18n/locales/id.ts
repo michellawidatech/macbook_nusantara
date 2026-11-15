@@ -3877,8 +3877,6 @@ export const id: Record<string, string> = {
     "Angka Shopee untuk pesanan ini tidak bisa dibaca. Catat secara manual.",
   "shopeeImport.reviewParts":
     "Bukan pencairan biasa: {{parts}}. Periksa penjualannya, lalu centang.",
-  "shopeeImport.reviewAbove":
-    "Shopee membayar {{amount}} lebih banyak daripada yang dimungkinkan tarifnya. Periksa nominal penjualannya, lalu centang.",
   "shopeeImport.totalDeducted": "Potongan",
   "shopeeImport.inTheBalance": "Di saldo: {{parts}}",
   "shopeeImport.unmatchedList":
