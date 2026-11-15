@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@nusantara/db": "workspace:^",
+    "@nusantara/domain": "workspace:*",
     "@nusantara/logging": "workspace:^",
     "express": "^5.2.1"
   }

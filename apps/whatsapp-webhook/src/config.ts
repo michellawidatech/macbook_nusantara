@@ -39,8 +39,7 @@ export const WEBHOOK_ENV_KEYS = [
   "WHATSAPP_TOKEN",
   "PHONE_NUMBER_ID",
   "GRAPH_API_VERSION",
-  "IG_ACCESS_TOKEN",
-  "IG_BUSINESS_ACCOUNT_ID",
+  "IG_APP_SECRET",
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
 ] as const;
@@ -55,8 +54,14 @@ export interface WebhookConfig {
   readonly phoneNumberId: string;
   /** One constant for both channels — never two env fallbacks (CLAUDE.md). */
   readonly graphVersion: string;
-  readonly igAccessToken: string;
-  readonly igBusinessAccountId: string;
+  /**
+   * The Instagram app secret (2026-11-16), a SECOND key for Instagram
+   * deliveries only. Meta's Instagram Login setup shows an "Instagram app
+   * secret" beside the Meta app's own, and its docs do not say which one
+   * signs webhooks; a delivery that fails `appSecret` and passes this one is
+   * accepted only when its body is `object: "instagram"`. Empty = not used.
+   */
+  readonly igAppSecret: string;
 }
 
 /** CLAUDE.md pins the Graph version for both channels. */
@@ -77,18 +82,13 @@ export function loadConfig(
     whatsappToken: env["WHATSAPP_TOKEN"]?.trim() ?? "",
     phoneNumberId: env["PHONE_NUMBER_ID"]?.trim() ?? "",
     graphVersion: env["GRAPH_API_VERSION"]?.trim() || DEFAULT_GRAPH_VERSION,
-    igAccessToken: env["IG_ACCESS_TOKEN"]?.trim() ?? "",
-    igBusinessAccountId: env["IG_BUSINESS_ACCOUNT_ID"]?.trim() ?? "",
+    igAppSecret: env["IG_APP_SECRET"]?.trim() ?? "",
   };
 }
 
 /** Can this process actually deliver a WhatsApp message? */
 export const canSendWhatsApp = (c: WebhookConfig): boolean =>
   Boolean(c.whatsappToken && c.phoneNumberId);
-
-/** Can this process actually reply to an Instagram comment? */
-export const canSendInstagram = (c: WebhookConfig): boolean =>
-  Boolean(c.igAccessToken && c.igBusinessAccountId);
 
 /**
  * Read `KEY=VALUE` lines from a file, keeping only {@link WEBHOOK_ENV_KEYS}.
