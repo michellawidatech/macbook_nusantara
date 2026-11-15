@@ -9,6 +9,7 @@
  * states. The worker (a later session) does the sending.
  */
 
+import { outboxKindFor } from "@nusantara/domain";
 import { Prisma, type PrismaClient, type Tx } from "./client.js";
 
 export type OutboxKind =
@@ -17,7 +18,20 @@ export type OutboxKind =
   | "WA_IMAGE"
   | "IG_REPLY"
   | "IG_DM"
-  | "ALERT";
+  | "ALERT"
+  /** Instagram (2026-11-16): a picture by URL, a comment's private DM, hide. */
+  | "IG_IMAGE"
+  | "IG_PRIVATE_REPLY"
+  | "IG_HIDE";
+
+/** The kinds only the Instagram send pass claims (2026-11-16). */
+export const INSTAGRAM_OUTBOX_KINDS = [
+  "IG_DM",
+  "IG_IMAGE",
+  "IG_REPLY",
+  "IG_PRIVATE_REPLY",
+  "IG_HIDE",
+] as const satisfies readonly OutboxKind[];
 export type OutboxStatus = "PENDING" | "SENDING" | "SENT" | "FAILED";
 
 export interface OutboxRow {
@@ -51,15 +65,25 @@ export interface EnqueueInput {
  * This is the only correct way to trigger an outbound message: if the
  * transaction rolls back, so does the intent, and the customer never receives
  * a reply about an order that does not exist.
+ *
+ * The channel follows the recipient (2026-11-16): a `WA_REPLY` / `WA_IMAGE`
+ * addressed to an Instagram thread (`payload.to` = `ig:<IGSID>`) is stored as
+ * `IG_DM` / `IG_IMAGE`, so every writer that answers "this thread" reaches
+ * Instagram without knowing it exists. A row to a wa_id is stored as given.
  */
 export async function enqueueOutbox(
   tx: Tx,
   input: EnqueueInput,
 ): Promise<{ id: string }> {
   const now = new Date();
+  const p = input.payload;
+  const to =
+    p !== null && typeof p === "object" && !Array.isArray(p)
+      ? (p as { to?: unknown }).to
+      : undefined;
   return tx.outbox.create({
     data: {
-      kind: input.kind,
+      kind: outboxKindFor(input.kind, typeof to === "string" ? to : undefined),
       payload: input.payload,
       status: "PENDING",
       attempts: 0,
@@ -82,11 +106,28 @@ export async function enqueueOutbox(
  *
  * SKIP LOCKED is what lets several workers run without coordinating: each
  * takes a different row instead of queueing behind the same one.
+ *
+ * `only` / `except` split the queue between the WhatsApp and the Instagram
+ * send passes (2026-11-16): each claims only what it can send, so a shop with
+ * one channel configured never burns the other's attempts. Neither given is
+ * every kind — the behaviour before.
  */
+export interface ClaimFilter {
+  readonly only?: readonly OutboxKind[];
+  readonly except?: readonly OutboxKind[];
+}
+
 export async function claimOutbox(
   client: PrismaClient | Tx,
   now: Date = new Date(),
+  filter: ClaimFilter = {},
 ): Promise<OutboxRow | null> {
+  const only = filter.only
+    ? Prisma.sql`AND kind::text = ANY(${[...filter.only]}::text[])`
+    : Prisma.empty;
+  const except = filter.except
+    ? Prisma.sql`AND NOT (kind::text = ANY(${[...filter.except]}::text[]))`
+    : Prisma.empty;
   const rows = await client.$queryRaw<OutboxRow[]>(Prisma.sql`
     UPDATE "Outbox"
        SET status = 'SENDING',
@@ -106,6 +147,8 @@ export async function claimOutbox(
                 -- clock and every row looks due seven hours early. Convert the
                 -- parameter, not the column, so the index still applies.
                 AND "nextAttemptAt" <= (${now}::timestamptz AT TIME ZONE 'UTC')
+                ${only}
+                ${except}
               ORDER BY "nextAttemptAt", "createdAt"
                 FOR UPDATE SKIP LOCKED
               LIMIT 1

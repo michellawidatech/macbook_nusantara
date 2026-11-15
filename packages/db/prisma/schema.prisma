@@ -1672,8 +1672,10 @@ model WaRawEvent {
 
 model WaMessage {
   id              String      @id @default(cuid())
+  /// WhatsApp's message id; an Instagram DM's is `ig:` + its mid (2026-11-16).
   waMessageId     String      @unique
-  /// wa_id
+  /// The thread key: the wa_id, or `ig:<IGSID>` for an Instagram DM thread
+  /// (2026-11-16, packages/domain chatChannel.ts).
   from            String
   customerId      String?
   name            String?
@@ -2202,6 +2204,43 @@ model IgComment {
   dmSentBy  Staff?  @relation("IgCommentDmSentBy", fields: [dmSentById], references: [id], onDelete: Restrict)
 }
 
+/// One Instagram sender (2026-11-16): who `ig:<igsid>` is, as the User
+/// Profile API tells the worker — the @username the inbox and the staff alert
+/// show. Their messages are `WaMessage` rows under the thread key
+/// `ig:<igsid>` (packages/domain chatChannel.ts); this is only the name tag.
+/// Written by the worker (nusantara_agent); the app role reads it.
+model IgContact {
+  id        String    @id @default(cuid())
+  /// The Instagram-scoped user id, digits (CHECK).
+  igsid     String    @unique
+  username  String?
+  name      String?
+  /// Last successful profile fetch; null = never.
+  fetchedAt DateTime?
+  /// Why the last fetch failed, so the sync pass waits before trying again.
+  lastError String?
+  createdAt DateTime
+  updatedAt DateTime
+}
+
+/// The connected Instagram professional account (2026-11-16), as the worker
+/// last saw it. A singleton (`id = 'singleton'`, CHECK). The worker holds the
+/// token (worker.env only) and writes this; the Settings card reads it. The
+/// token itself is never stored here.
+model IgConnection {
+  id               String    @id
+  /// The account's IG user id — `entry[].id` on every webhook delivery.
+  igUserId         String?
+  username         String?
+  name             String?
+  accountType      String?
+  tokenRefreshedAt DateTime?
+  tokenExpiresAt   DateTime?
+  checkedAt        DateTime?
+  lastError        String?
+  updatedAt        DateTime
+}
+
 /// singleton row
 model IgSettings {
   id            String   @id
@@ -2472,9 +2511,19 @@ enum OutboxKind {
   /// bytes and uploads them to Graph at send time, because this deployment has
   /// no public origin for Meta to fetch a link from.
   WA_IMAGE
+  /// A public reply under an Instagram comment.
   IG_REPLY
+  /// A text DM to an Instagram thread. Stored by `enqueueOutbox` for a
+  /// WA_REPLY addressed to an `ig:` key (packages/domain `outboxKindFor`).
   IG_DM
   ALERT
+  /// A picture to an Instagram thread, sent by public URL through the webhook
+  /// (2026-11-16) — Instagram fetches images, it takes no upload.
+  IG_IMAGE
+  /// The one private DM an Instagram comment allows, within 7 days.
+  IG_PRIVATE_REPLY
+  /// Hide or show an Instagram comment (`payload.hidden`).
+  IG_HIDE
 }
 
 enum OutboxStatus {

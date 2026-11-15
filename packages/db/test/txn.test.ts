@@ -665,4 +665,49 @@ describe("outbox — 08 §5", () => {
         .status,
     ).toBe("FAILED");
   });
+
+  it("stores a reply to an Instagram thread as an Instagram kind (2026-11-16)", async () => {
+    await db.$transaction(async (tx) => {
+      await enqueueOutbox(tx, {
+        kind: "WA_REPLY",
+        payload: { to: "ig:17841400000000001", body: "halo" },
+      });
+      await enqueueOutbox(tx, {
+        kind: "WA_IMAGE",
+        payload: { to: "ig:17841400000000001", photoId: "p1" },
+      });
+      await enqueueOutbox(tx, { kind: "WA_REPLY", payload: intent });
+      await enqueueOutbox(tx, {
+        kind: "WA_REPLY",
+        payload: ["not", "an", "object"],
+      });
+    });
+    const kinds = (
+      await db.outbox.findMany({ orderBy: { createdAt: "asc" } })
+    ).map((r) => r.kind);
+    expect(kinds.sort()).toEqual(["IG_DM", "IG_IMAGE", "WA_REPLY", "WA_REPLY"]);
+  });
+
+  it("lets each send pass claim only its own channel's rows", async () => {
+    await db.$transaction(async (tx) => {
+      await enqueueOutbox(tx, {
+        kind: "WA_REPLY",
+        payload: { to: "ig:17841400000000001", body: "ig" },
+      });
+      await enqueueOutbox(tx, { kind: "WA_REPLY", payload: intent });
+    });
+    const ig = [
+      "IG_DM",
+      "IG_IMAGE",
+      "IG_REPLY",
+      "IG_PRIVATE_REPLY",
+      "IG_HIDE",
+    ] as const;
+    const wa = await claimOutbox(db, new Date(), { except: ig });
+    expect(wa?.kind).toBe("WA_REPLY");
+    expect(await claimOutbox(db, new Date(), { except: ig })).toBeNull();
+    const insta = await claimOutbox(db, new Date(), { only: ig });
+    expect(insta?.kind).toBe("IG_DM");
+    expect(await claimOutbox(db, new Date(), { only: ig })).toBeNull();
+  });
 });

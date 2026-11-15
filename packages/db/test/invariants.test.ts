@@ -1116,6 +1116,156 @@ describe("a picture staff sent from their own device (2026-10-27)", () => {
   });
 });
 
+describe("Instagram — DMs on the chat tables, comments, the worker's sync (2026-11-16)", () => {
+  const IG = "ig:17841400000000077";
+  const PNG = "\\x89504e470d0a1a0a";
+
+  it("grants each role exactly its half, and DELETE to neither", async () => {
+    const priv = (role: string, table: string, p: string) =>
+      `has_table_privilege('${role}','"${table}"','${p}')`;
+    const col = (role: string, table: string, c: string) =>
+      `has_column_privilege('${role}','"${table}"','${c}','UPDATE')`;
+    const { rows } = await owner.query(
+      `SELECT ${priv("nusantara_app", "IgContact", "SELECT")}       AS app_contact_select,
+              ${priv("nusantara_app", "IgContact", "INSERT")}       AS app_contact_insert,
+              ${priv("nusantara_agent", "IgContact", "INSERT")}     AS agent_contact_insert,
+              ${priv("nusantara_agent", "IgContact", "UPDATE")}     AS agent_contact_update,
+              ${priv("nusantara_app", "IgConnection", "UPDATE")}    AS app_conn_update,
+              ${priv("nusantara_agent", "IgConnection", "UPDATE")}  AS agent_conn_update,
+              ${priv("nusantara_app", "IgComment", "INSERT")}       AS app_comment_insert,
+              ${priv("nusantara_app", "IgComment", "UPDATE")}       AS app_comment_update,
+              ${priv("nusantara_agent", "IgComment", "UPDATE")}     AS agent_comment_update_table,
+              ${col("nusantara_agent", "IgComment", "replyCommentId")} AS agent_reply_id,
+              ${col("nusantara_agent", "IgComment", "status")}      AS agent_status,
+              ${col("nusantara_agent", "IgMedia", "permalink")}     AS agent_permalink,
+              ${col("nusantara_agent", "IgMedia", "igMediaId")}     AS agent_media_id,
+              ${priv("nusantara_agent", "IgMedia", "INSERT")}       AS agent_media_insert,
+              ${priv("nusantara_agent", "IgSettings", "UPDATE")}    AS agent_settings_update,
+              ${priv("nusantara_app", "IgSettings", "UPDATE")}      AS app_settings_update,
+              ${priv("nusantara_app", "IgComment", "DELETE")}       AS app_comment_delete,
+              ${priv("nusantara_app", "IgContact", "DELETE")}       AS app_contact_delete,
+              ${priv("nusantara_agent", "IgContact", "DELETE")}     AS agent_contact_delete,
+              ${priv("nusantara_agent", "IgConnection", "DELETE")}  AS agent_conn_delete`,
+    );
+    expect(rows[0]).toEqual({
+      app_contact_select: true,
+      app_contact_insert: false,
+      agent_contact_insert: true,
+      agent_contact_update: true,
+      app_conn_update: false,
+      agent_conn_update: true,
+      app_comment_insert: true,
+      app_comment_update: true,
+      agent_comment_update_table: false,
+      agent_reply_id: true,
+      agent_status: false,
+      agent_permalink: true,
+      agent_media_id: false,
+      agent_media_insert: false,
+      agent_settings_update: false,
+      app_settings_update: true,
+      app_comment_delete: false,
+      app_contact_delete: false,
+      agent_contact_delete: false,
+      agent_conn_delete: false,
+    });
+  });
+
+  it("holds a contact to an IGSID and the connection to one row", async () => {
+    await rejectsWith(
+      () =>
+        agent.query(
+          `INSERT INTO "IgContact" (id, igsid, "createdAt", "updatedAt")
+           VALUES ('igc_bad', 'ig:123456', now(), now())`,
+        ),
+      CHECK_VIOLATION,
+    );
+    await agent.query(
+      `INSERT INTO "IgContact" (id, igsid, username, "createdAt", "updatedAt")
+       VALUES ('igc_1', '17841400000000077', 'budi.mac', now(), now())`,
+    );
+    await rejectsWith(
+      () =>
+        agent.query(
+          `INSERT INTO "IgConnection" (id, "updatedAt") VALUES ('other', now())`,
+        ),
+      CHECK_VIOLATION,
+    );
+    await agent.query(
+      `INSERT INTO "IgConnection" (id, username, "updatedAt") VALUES ('singleton', 'toko', now())`,
+    );
+  });
+
+  it("takes a picture for an Instagram thread", async () => {
+    await app.query(
+      `INSERT INTO "ChatMedia" (id, "from", data, "contentType", size, "uploadedById")
+       VALUES ('cm_ig', $1, $2::bytea, 'image/png', 8, $3)`,
+      [IG, PNG, STAFF],
+    );
+    await rejectsWith(
+      () =>
+        app.query(
+          `INSERT INTO "ChatMedia" (id, "from", data, "contentType", size, "uploadedById")
+           VALUES ('cm_ig2', 'ig:abc', $1::bytea, 'image/png', 8, $2)`,
+          [PNG, STAFF],
+        ),
+      CHECK_VIOLATION,
+    );
+  });
+
+  it("deletes an Instagram conversation with its DM envelopes, and nobody else's", async () => {
+    await owner.query(
+      `INSERT INTO "WaMessage" (id, "waMessageId", "from", "msgType", ts, direction, status, entities, "answeredByAgent")
+       VALUES ('wm_ig1','ig:mid.1',$1,'text',now(),'IN','BARU','{}',false)`,
+      [IG],
+    );
+    await owner.query(
+      `INSERT INTO "IgRawEvent" (id, payload, "signatureOk", "receivedAt")
+       VALUES ('raw_mine', $1::jsonb, true, now()), ('raw_theirs', $2::jsonb, true, now())`,
+      [
+        JSON.stringify({
+          object: "instagram",
+          entry: [
+            {
+              id: "1",
+              messaging: [
+                { sender: { id: "17841400000000077" }, recipient: { id: "1" } },
+              ],
+            },
+          ],
+        }),
+        JSON.stringify({
+          object: "instagram",
+          entry: [
+            {
+              id: "1",
+              messaging: [
+                { sender: { id: "17841400000000078" }, recipient: { id: "1" } },
+              ],
+            },
+          ],
+        }),
+      ],
+    );
+    const { rows: n } = await app.query<{ n: number }>(
+      `SELECT wa_thread_delete($1, $2, now()::timestamp) AS n`,
+      [IG, STAFF],
+    );
+    expect(n[0]!.n).toBe(2);
+    const { rows: left } = await owner.query(
+      `SELECT id FROM "IgRawEvent" WHERE id IN ('raw_mine','raw_theirs')`,
+    );
+    expect(left).toEqual([{ id: "raw_theirs" }]);
+    await rejectsWith(
+      () =>
+        app.query(`SELECT wa_thread_delete('ig:', $1, now()::timestamp)`, [
+          STAFF,
+        ]),
+      "P0001",
+    );
+  });
+});
+
 describe("sell, don't hold — stock watches and the closing task (2026-10-27)", () => {
   const FROM = "628111000881";
 
