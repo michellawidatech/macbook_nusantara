@@ -99,6 +99,8 @@ import {
 import { waitReason, type WaitReason } from "../../lib/botWait.js";
 import { SentMenu, SentPhoto } from "./SentItems.js";
 import { handoffTopicLabel } from "../../lib/handoffTopics.js";
+import { categoryOfTopic } from "../../lib/chatCategory.js";
+import { CategoryTag } from "./CategoryTag.js";
 import type { TFunction } from "../../i18n/translate.js";
 import { CustomerProfilePanel } from "./CustomerProfilePanel.js";
 import { ReplyRating } from "./ReplyRating.js";
@@ -946,17 +948,35 @@ export function ChatInbox({ picked, onPick, isOwner = false }: ChatInboxProps) {
                   ) : (
                     <div style={{ whiteSpace: "pre-wrap" }}>{b.text}</div>
                   )}
-                  {b.waiting && (
-                    <Typography.Text
-                      style={{
-                        fontSize: 12,
-                        color: colorWarning,
-                        display: "block",
-                      }}
-                    >
-                      {waitCaption(t, b)}
-                    </Typography.Text>
-                  )}
+                  {b.waiting &&
+                    (b.waitingTopic &&
+                    (b.waitingWhy === null ||
+                      b.waitingWhy.kind === "handed_over") ? (
+                      // What it waits for, as the list's coloured tag
+                      // (2026-11-16); the finer topic on hover.
+                      <Flex
+                        align="center"
+                        gap={6}
+                        wrap
+                        style={{ fontSize: 12, color: colorWarning }}
+                      >
+                        <span>{`${t("chat.needsReply", "Needs your reply")} · `}</span>
+                        <CategoryTag
+                          category={categoryOfTopic(b.waitingTopic)}
+                          title={handoffTopicLabel(t, b.waitingTopic)}
+                        />
+                      </Flex>
+                    ) : (
+                      <Typography.Text
+                        style={{
+                          fontSize: 12,
+                          color: colorWarning,
+                          display: "block",
+                        }}
+                      >
+                        {waitCaption(t, b)}
+                      </Typography.Text>
+                    ))}
                   <Flex justify="space-between" align="center" gap={12}>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       {fmtDateTime(b.at)}

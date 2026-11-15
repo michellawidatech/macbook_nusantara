@@ -397,6 +397,8 @@ describe("action items on a conversation", () => {
       .get("/api/inbox")
       .set("Cookie", staffCookie);
     expect(list.body.threads[0].openActions).toEqual(["NEGOTIATION"]);
+    // And their topics, which /chat files the chat under (2026-11-16).
+    expect(list.body.threads[0].openTopics).toEqual(["negotiation"]);
   });
 
   it("answer a negotiation with the price and the sentence, in one go", async () => {

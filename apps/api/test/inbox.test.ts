@@ -624,6 +624,28 @@ describe("a thread the bot handed to a person", () => {
     expect(res.body.threads[1].handoff).toBeNull();
   });
 
+  it("lists the other topics a list of questions handed over (2026-11-16)", async () => {
+    const row = await handedOver();
+    await db.waMessage.update({
+      where: { id: row.id },
+      data: {
+        entities: {
+          handoff: {
+            topic: "negotiation",
+            summary: "Perlu jawab tawaran",
+            at: new Date().toISOString(),
+            also: ["shipping_quote", 7, ""],
+          },
+        },
+      },
+    });
+    const res = await get("");
+    expect(res.body.threads[0].handoff).toMatchObject({
+      topic: "negotiation",
+      also: ["shipping_quote"],
+    });
+  });
+
   it("says so on the conversation and on the message", async () => {
     await handedOver();
     const res = await get(`/${PHONE}`);

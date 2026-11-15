@@ -43,7 +43,12 @@ export type TaskNeed =
   | "notify"
   /** A DP the customer says they paid; a DP whose hold ran out (2026-10-27). */
   | "verifyDp"
-  | "decideDp";
+  | "decideDp"
+  /** 2026-11-16: a video/phone call, servicing, a past purchase, detailed photos. */
+  | "videoCall"
+  | "service"
+  | "pastPurchase"
+  | "photoDetail";
 
 export type TaskReason =
   | "noSource"
@@ -89,6 +94,10 @@ const NEED_OF_HEAD: Record<string, TaskNeed> = {
   "Perlu kabari": "notify",
   "Perlu verifikasi DP": "verifyDp",
   "Perlu putuskan DP": "decideDp",
+  "Perlu atur video call": "videoCall",
+  "Perlu urus servis": "service",
+  "Perlu cek pembelian lalu": "pastPurchase",
+  "Perlu kirim foto detail": "photoDetail",
 };
 
 /** The stored Indonesian reason, back to its key. */
@@ -155,6 +164,14 @@ export function taskNeedLabel(t: TFunction, need: TaskNeed): string {
       return t("task.need.verifyDp", "Need to verify a DP");
     case "decideDp":
       return t("task.need.decideDp", "Need to decide a DP");
+    case "videoCall":
+      return t("task.need.videoCall", "Need a video call arranged");
+    case "service":
+      return t("task.need.service", "Need service handled");
+    case "pastPurchase":
+      return t("task.need.pastPurchase", "Need a past purchase checked");
+    case "photoDetail":
+      return t("task.need.photoDetail", "Need detailed photos sent");
     default:
       return t("task.need.reply", "Need reply");
   }
@@ -236,6 +253,10 @@ export function needOfTopic(topic: string): TaskNeed {
       return "photos";
     case "closing":
       return "closing";
+    case "video_call":
+      return "videoCall";
+    case "service":
+      return "service";
     case "visit":
       return "welcome";
     case "restock":

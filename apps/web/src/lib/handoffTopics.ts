@@ -31,7 +31,7 @@ export function handoffTopicLabel(t: TFunction, topic: string): string {
     case "shipping_quote":
       return t("handoff.shippingQuote", "Shipping cost");
     case "warranty_claim":
-      return t("handoff.warrantyClaim", "Warranty claim");
+      return t("handoff.warrantyClaim", "Warranty");
     case "complaint":
       return t("handoff.complaint", "Complaint");
     case "media":
@@ -40,6 +40,10 @@ export function handoffTopicLabel(t: TFunction, topic: string): string {
       return t("handoff.photos", "Wants photos");
     case "human":
       return t("handoff.human", "Wants a person");
+    case "video_call":
+      return t("handoff.videoCall", "Video or phone call");
+    case "service":
+      return t("handoff.service", "Service or past purchase");
     case "closing":
       return t("handoff.closing", "Ready to buy");
     case "visit":

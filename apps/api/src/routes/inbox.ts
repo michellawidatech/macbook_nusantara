@@ -258,6 +258,11 @@ export interface Handoff {
   /** Set when the code, not the model, decided — `route`, a refusal, a failure. */
   readonly forcedBy: string | null;
   readonly at: string | null;
+  /**
+   * The other topics a list of questions handed over in the same turn
+   * (2026-11-16, `entities.handoff.also`), so /chat files the chat under each.
+   */
+  readonly also: string[];
 }
 
 /**
@@ -312,11 +317,18 @@ export function readHandoff(
   };
   const topic =
     field("topic") ?? (intent?.startsWith("staf:") ? intent.slice(5) : "other");
+  const also =
+    h && typeof h === "object" && Array.isArray((h as { also?: unknown }).also)
+      ? ((h as { also: unknown[] }).also.filter(
+          (x): x is string => typeof x === "string" && x !== "",
+        ) as string[])
+      : [];
   return {
     topic,
     summary: field("summary"),
     forcedBy: field("forcedBy"),
     at: field("at") ?? at?.toISOString() ?? null,
+    also,
   };
 }
 
@@ -458,12 +470,19 @@ export function inboxRouter(
       const now = new Date();
       // Open action items per thread, so the list can say what is waiting.
       const open = await db.chatAction.groupBy({
-        by: ["from", "kind"],
+        by: ["from", "kind", "topic"],
         where: { status: "OPEN" },
       });
       const kindsOf = new Map<string, string[]>();
-      for (const o of open)
-        kindsOf.set(o.from, [...(kindsOf.get(o.from) ?? []), o.kind]);
+      // And their topics, which /chat files the chat under (2026-11-16).
+      const topicsOf = new Map<string, string[]>();
+      for (const o of open) {
+        const kinds = kindsOf.get(o.from) ?? [];
+        if (!kinds.includes(o.kind)) kindsOf.set(o.from, [...kinds, o.kind]);
+        const topics = topicsOf.get(o.from) ?? [];
+        if (o.topic && !topics.includes(o.topic))
+          topicsOf.set(o.from, [...topics, o.topic]);
+      }
       // Chatbot v2: unread, the three tags and the best name (inboxV2.ts).
       const extras = await listExtras(
         db,
@@ -499,6 +518,8 @@ export function inboxRouter(
           autoReply: r.autoReply,
           /** The kinds of the thread's open action items (NEGOTIATION, PRICE…). */
           openActions: kindsOf.get(r.phone) ?? [],
+          /** The topics of those action items ("video_call", "warranty_claim"…). */
+          openTopics: topicsOf.get(r.phone) ?? [],
           /**
            * Set while the bot has handed this thread to a person and nobody
            * has answered — the one list a colleague needs to work through.

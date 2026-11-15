@@ -4022,6 +4022,19 @@ Decisions that outlived those documents:
   - ⚠️ Open owner questions: the approved COD answer still quotes a fixed
     Rp180.000 Jabodetabek; "pernah diservis?" about a shelf unit now goes to
     a person although QC recorded the answer.
+  - **/chat files waiting chats by category** (same day): Photo / defect
+    detail, Complaint / service, Video call request, Delivery fee estimate,
+    then Negotiation, Ready to buy, Admin request, Booking, Price / stock,
+    Payment / DP proof, Trade-in, Customer sent a file, Other.
+    `lib/chatCategory.ts` reads them off the hand-over topic, its `also`,
+    and each open task's topic (`openTopics`, new on `GET /api/inbox`), a
+    task's kind only when no topic says anything; an unknown topic is Other.
+    No schema: `ChatActionKind` is unchanged, so `video_call`, `service`,
+    `shipping_quote` and warranty are all kind OTHER and share ONE open
+    task per chat — the categories come from the topics, not the kinds. The
+    thread list draws a coloured `CategoryTag` (always with words) per
+    waiting chat and a row of chips above it, "All" first, with counts; the
+    waiting bubble's caption is "Needs your reply ·" plus the same tag.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

@@ -7,13 +7,37 @@
  * a blue calendar for an open reservation, an orange person for a hand-over —
  * and the unread count on the right. Ten to twenty-five customers at once is
  * a list somebody scans, not one they read.
+ *
+ * A chat waiting for a person carries what it waits FOR as a coloured tag,
+ * and a row of chips above the list filters by it, "All" first (owner,
+ * 2026-11-16: *"categorize chats waiting for a person so staff know which
+ * to answer"*) — lib/chatCategory.ts is the reading.
  */
-import { Badge, Empty, Flex, Skeleton, Tooltip, Typography, theme } from "antd";
+import { useState } from "react";
+import {
+  Badge,
+  Empty,
+  Flex,
+  Skeleton,
+  Tag,
+  Tooltip,
+  Typography,
+  theme,
+} from "antd";
 import { CalendarFilled, FireFilled, UserOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { realName } from "@nusantara/domain";
 import { fmtDateTime } from "../../lib/format.js";
 import type { InboxThread } from "../../lib/inboxApi.js";
+import {
+  CATEGORY_ORDER,
+  categoryColor,
+  categoryCounts,
+  categoryLabel,
+  threadCategories,
+  type ChatCategory,
+} from "../../lib/chatCategory.js";
+import { CategoryTag } from "./CategoryTag.js";
 
 /** What the list calls a thread: the best name the server has, else the number. */
 export function threadName(
@@ -37,6 +61,7 @@ export function ThreadList({
   onPick,
 }: ThreadListProps) {
   const { t } = useTranslation();
+  const [filter, setFilter] = useState<ChatCategory | null>(null);
   const {
     token: {
       colorPrimaryBg,
@@ -64,10 +89,61 @@ export function ThreadList({
       />
     );
 
+  const counts = categoryCounts(threads);
+  // A chosen category stays offered while it is chosen, even emptied by a
+  // refresh, or there would be no chip to press to undo it.
+  const chips = CATEGORY_ORDER.filter(
+    (c) => (counts.get(c) ?? 0) > 0 || c === filter,
+  );
+  const shown = filter
+    ? threads.filter((c) => threadCategories(c).includes(filter))
+    : threads;
+
   return (
     <nav aria-label={t("chat.recentChats", "Recent chats")}>
-      {threads.map((c) => {
+      {chips.length > 0 && (
+        <Flex
+          wrap
+          gap={6}
+          role="group"
+          aria-label={t("chat.category.filter", "Filter chats by category")}
+          style={{
+            padding: "8px 14px",
+            borderBottom: `1px solid ${colorBorderSecondary}`,
+          }}
+        >
+          <Tag.CheckableTag
+            checked={filter === null}
+            onChange={() => setFilter(null)}
+            data-filter="all"
+          >
+            {t("chat.category.all", "All")} ({threads.length})
+          </Tag.CheckableTag>
+          {chips.map((c) => (
+            <Tag.CheckableTag
+              key={c}
+              checked={filter === c}
+              onChange={() => setFilter(filter === c ? null : c)}
+              data-filter={c}
+            >
+              <Badge color={categoryColor(c) ?? "default"} />{" "}
+              {categoryLabel(t, c)} ({counts.get(c) ?? 0})
+            </Tag.CheckableTag>
+          ))}
+        </Flex>
+      )}
+      {shown.length === 0 && (
+        <Empty
+          style={{ padding: 24 }}
+          description={t(
+            "chat.category.noneInFilter",
+            "No chats in this category.",
+          )}
+        />
+      )}
+      {shown.map((c) => {
         const name = threadName(c);
+        const categories = threadCategories(c);
         const tags = c.tags ?? {
           lead: false,
           reservation: false,
@@ -156,6 +232,13 @@ export function ThreadList({
                 </span>
               )}
             </Flex>
+            {categories.length > 0 && (
+              <Flex wrap gap={4} style={{ marginTop: 4 }}>
+                {categories.map((cat) => (
+                  <CategoryTag key={cat} category={cat} />
+                ))}
+              </Flex>
+            )}
           </button>
         );
       })}

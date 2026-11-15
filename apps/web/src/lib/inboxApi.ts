@@ -22,6 +22,8 @@ export interface Handoff {
   /** Set when the code rather than the model decided. */
   forcedBy: string | null;
   at: string | null;
+  /** Other topics a list of questions handed over in the same turn (2026-11-16). */
+  also?: string[];
 }
 
 export interface InboxThread {
@@ -45,6 +47,8 @@ export interface InboxThread {
   handoff: Handoff | null;
   /** The kinds of this thread's open action items. */
   openActions: ChatActionKind[];
+  /** Their topics ("video_call", "warranty_claim"…), for the categories (2026-11-16). */
+  openTopics?: string[];
   /**
    * ISO, or null once the 24-hour window has closed.
    *
