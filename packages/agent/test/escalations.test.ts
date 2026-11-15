@@ -377,6 +377,17 @@ describe("the rules bot", () => {
     expect(out.photos).toEqual(["p1", "p2"]);
   });
 
+  it("sends no photos for words that do not ask for photos", async () => {
+    const p = pos({
+      unit_photos: { found: true, ...AIR, photoIds: ["p1", "p2"] },
+    });
+    const out = await runRules(
+      rulesInput("boleh liat unitnya kak?", p, { lastShown: [AIR.serial] }),
+    );
+    expect(out.photos).toBeUndefined();
+    expect(p.asked.map((a) => a.name)).not.toContain("unit_photos");
+  });
+
   it("hands a warranty question to a person instead of the approved answer", async () => {
     const out = await runRules(
       rulesInput("garansinya berapa lama kak?", pos({})),

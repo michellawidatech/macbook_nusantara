@@ -48,6 +48,7 @@ import {
 import {
   asksBattery,
   asksBuyOnline,
+  asksForPhotos,
   asksPriceList,
   priceListAsk,
   asksToBuy,
@@ -1411,7 +1412,9 @@ async function runOne(input: RulesInput): Promise<RulesResult> {
       return done(reply.declined(lang));
 
     case "ask_photo": {
-      if (!caps.photos) break;
+      // Only words that ask for PHOTOS send them (2026-11-16): "liat
+      // unitnya" may be a visit, and the worker sends no photo otherwise.
+      if (!caps.photos || !asksForPhotos(input.text)) break;
       const serial = pickSerial();
       const out = serial
         ? await call("unit_photos", { serial })
