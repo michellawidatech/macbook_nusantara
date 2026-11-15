@@ -80,7 +80,7 @@ import {
   ShopeeSettlementImport,
   pendingShopeePayments,
 } from "./ShopeeSettlementImport.js";
-import { recordPayouts, upsertSettlement } from "../../lib/payouts.js";
+import { recordPayouts } from "../../lib/payouts.js";
 import {
   orderBalance,
   paymentsOf,
@@ -88,6 +88,7 @@ import {
 } from "../../lib/salePayments.js";
 import {
   awaitingChannelOf,
+  isRecordedPayout,
   marketplacePotOf,
 } from "../../lib/marketplacePot.js";
 import {
@@ -192,8 +193,8 @@ interface SaleRow {
   readonly paidToMarket: boolean;
   /**
    * Marketplace payments nobody has recorded a payout for (2026-11-15): not
-   * in any balance yet. The status reads "Waiting for Shopee" and offers
-   * *Mark as received*.
+   * in any balance yet. The status reads "Waiting for Shopee" until the
+   * Shopee upload records it.
    */
   readonly waiting: readonly {
     readonly channel: string;
@@ -390,45 +391,6 @@ export function TransactionsPage() {
               ? t("transactions.stPartPaidReturned", "Partly paid, returned")
               : t("transactions.stOwed", "Owed");
 
-  /**
-   * *Mark as received* (owner, 2026-11-15): the payout landed in the seller
-   * balance and nobody is typing its deductions — a settlement with none,
-   * dated now, which is what puts the payment in the balance. A deduction
-   * found later is typed in Edit transaction, against the same settlement.
-   */
-  const markReceived = (r: SaleRow) => {
-    const staff = currentStaffName();
-    const at = new Date().toISOString();
-    mutate((d) => {
-      for (const w of r.waiting) {
-        upsertSettlement(
-          d,
-          {
-            paymentId: w.paymentId,
-            orderId: r.order.id,
-            channel: w.channel,
-            gross: w.amount,
-            fees: [],
-            at,
-          },
-          { staff, nextId },
-        );
-      }
-    });
-    message.success(
-      t(
-        "transactions.markedReceived",
-        "{{code}} is in the {{channel}} balance.",
-        {
-          code: r.code,
-          channel: [...new Set(r.waiting.map((w) => w.channel))]
-            .map((c) => channelOf(c)?.label ?? c)
-            .join(" + "),
-        },
-      ),
-    );
-  };
-
   const sales = useMemo<SaleRow[]>(() => {
     const back = returnedSerials(db.orders, db.events);
     // What a return cancelled of each sale's debt — "Unpaid, returned".
@@ -491,7 +453,9 @@ export function TransactionsPage() {
         const marketBy = new Map<string, number>();
         let marketStored = 0;
         const released = new Set(
-          (settlementsOf.get(o.id) ?? []).map((st) => st.paymentId),
+          (settlementsOf.get(o.id) ?? [])
+            .filter(isRecordedPayout)
+            .map((st) => st.paymentId),
         );
         const waiting: {
           channel: string;
@@ -914,19 +878,7 @@ export function TransactionsPage() {
                       >
                         {rowPayLabel(r)}
                       </Tag>
-                      {r.waiting.length > 0 && (
-                        <Button
-                          size="small"
-                          type="link"
-                          style={{ padding: 0, height: "auto" }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            markReceived(r);
-                          }}
-                        >
-                          {t("transactions.markReceived", "Mark as received")}
-                        </Button>
-                      )}
+
                       {due !== undefined && (
                         <Typography.Text
                           type={late ? "danger" : "secondary"}
@@ -1164,6 +1116,7 @@ export function TransactionsPage() {
         // A sale whose deductions are already recorded (2026-11-13: that is
         // all the upload records — no payment is "received" any more).
         settledRefs={db.settlements
+          .filter(isRecordedPayout)
           .map(
             (s) =>
               db.orders

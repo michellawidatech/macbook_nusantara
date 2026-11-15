@@ -69,6 +69,7 @@ import {
   holdsFunds,
   type SaleSource,
 } from "../../lib/channels.js";
+import { isRecordedPayout } from "../../lib/marketplacePot.js";
 import { upsertSettlement } from "../../lib/payouts.js";
 import type { SettlementFee } from "../../lib/marketplace.js";
 import { customerLine } from "../../lib/customers.js";
@@ -306,6 +307,20 @@ export function EditTransactionModal({
       ),
     );
   }, [open, order?.id]);
+  /**
+   * The marketplace payments whose payout the Shopee upload recorded — the
+   * only ones whose deductions may be corrected here (owner, 2026-11-15: the
+   * upload records a payout; nobody starts one by hand).
+   */
+  const uploadedPayouts = useMemo(
+    () =>
+      new Set(
+        db.settlements
+          .filter((s) => s.orderId === order?.id && isRecordedPayout(s))
+          .map((s) => s.paymentId),
+      ),
+    [db.settlements, order?.id],
+  );
   /** Grey until something changes (2026-11-04). */
   const unchanged = useOpenedWith(
     {
@@ -1525,6 +1540,7 @@ export function EditTransactionModal({
         onChange={setPayments}
         deductions={deductions}
         onDeductionsChange={setDeductionsOf}
+        canDeduct={(id) => uploadedPayouts.has(id)}
       />
 
       {requestMode && (

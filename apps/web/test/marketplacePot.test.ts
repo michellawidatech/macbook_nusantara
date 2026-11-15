@@ -258,7 +258,8 @@ describe("the seller balance", () => {
       balancesOfRows(cashflowRows(db, t), db.settings, { accrual: true }).bank,
     ).toBe(0);
 
-    // Recorded — here with no deduction, as Mark as received writes it.
+    // A settlement with no deduction — what the retired Mark as received
+    // wrote — releases nothing (`isRecordedPayout`).
     db.settlements.push({
       id: "stl-w",
       paymentId: "p-w",
@@ -270,7 +271,15 @@ describe("the seller balance", () => {
       at: LATER,
       staff: "t",
     } as MockDb["settlements"][number]);
-    expect(shopeePot(db).balance).toBe(6_800_000);
+    expect(shopeePot(db).balance).toBe(0);
+
+    // Recorded by the upload: the fixed lines, so it is in the balance.
+    db.settlements[0] = {
+      ...db.settlements[0]!,
+      fees: [{ id: "f", kind: "OTHER", label: "Fixed", amount: 526_250 }],
+      received: 6_273_750,
+    };
+    expect(shopeePot(db).balance).toBe(6_273_750);
     const released = cashflowRows(db, t).find((r) => r.orderCode === "SI-o-w")!;
     // The row stays on the sale's day; the release is what the base reads.
     expect(released).toMatchObject({

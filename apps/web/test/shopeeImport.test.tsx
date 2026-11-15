@@ -245,6 +245,22 @@ describe("uploading the seller balance report", () => {
   });
 
   it("records Shopee's figure, with lines that close on it", async () => {
+    // o-shp-3 was marked received by hand while that button existed: a
+    // settlement with no deduction. It recorded nothing, so the upload offers
+    // the sale again and replaces it, dated when Shopee released it.
+    mutate((d) => {
+      d.settlements.push({
+        id: "stl-marked",
+        paymentId: "pay-o-shp-3",
+        orderId: "o-shp-3",
+        channel: "SHOPEE",
+        gross: 6_800_000,
+        fees: [],
+        received: 6_800_000,
+        at: "2026-11-15T15:00:00.000Z",
+        staff: "test",
+      });
+    });
     const dialog = await upload();
     await userEvent.click(
       within(dialog).getByRole("button", {
@@ -259,6 +275,10 @@ describe("uploading the seller balance report", () => {
       "o-shp-3",
       "o-shp-5",
     ]);
+    const marked = written.find((s) => s.orderId === "o-shp-3")!;
+    expect(marked.id).toBe("stl-marked");
+    expect(marked.fees.length).toBeGreaterThan(0);
+    expect(marked.at).toBe("2026-09-18T20:22:34.000Z");
     // Still recorded, so the Shopee balance gets what Shopee really paid.
     expect(written.find((s) => s.orderId === "o-shp-5")!.received).toBe(
       6_273_750,

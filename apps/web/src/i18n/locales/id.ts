@@ -5518,8 +5518,6 @@ export const id: Record<string, string> = {
   "transactions.inMarketBalances": "Dibayar ke saldo Shopee & Tokopedia",
   "transactions.stPaidToBalance": "Lunas · saldo {{channel}}",
   "transactions.stWaitingFor": "Menunggu {{channel}}",
-  "transactions.markReceived": "Tandai sudah diterima",
-  "transactions.markedReceived": "{{code}} sudah masuk saldo {{channel}}.",
   "transactions.stWithChannel": "Lunas · saldo marketplace",
   "transactions.toBalance": "Ke saldo {{channel}}",
   "pos.marketplaceBalancePart":

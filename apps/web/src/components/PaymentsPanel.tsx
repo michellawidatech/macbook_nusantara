@@ -87,6 +87,12 @@ export interface PaymentsPanelProps {
     paymentId: string,
     fees: SettlementFee[],
   ) => void;
+  /**
+   * Which marketplace payments may take a deduction here (owner,
+   * 2026-11-15): only one whose payout the Shopee upload has recorded — a
+   * deduction is corrected by hand, never started by hand. Absent, all may.
+   */
+  readonly canDeduct?: (paymentId: string) => boolean;
 }
 
 let seq = 0;
@@ -104,6 +110,7 @@ export function PaymentsPanel({
   readOnly,
   deductions,
   onDeductionsChange,
+  canDeduct,
 }: PaymentsPanelProps) {
   const withDeductions = onDeductionsChange !== undefined;
   const feesOf = (id: string) => deductions?.[id] ?? [];
@@ -352,25 +359,30 @@ export function PaymentsPanel({
                   width: withDeductions ? COLUMN.actions : COLUMN.action,
                   render: (_: unknown, p: SalePayment) => (
                     <Flex gap={2}>
-                      {withDeductions && p.channel !== undefined && (
-                        <Button
-                          type="text"
-                          disabled={disabled}
-                          icon={<MinusCircleOutlined />}
-                          aria-label={t("pay.addDeduction", "Add a deduction")}
-                          title={t("pay.addDeduction", "Add a deduction")}
-                          onClick={() =>
-                            setFees(p.id, [
-                              ...feesOf(p.id),
-                              {
-                                id: `fee-${Date.now()}-${++seq}`,
-                                kind: "OTHER",
-                                amount: 0,
-                              },
-                            ])
-                          }
-                        />
-                      )}
+                      {withDeductions &&
+                        p.channel !== undefined &&
+                        (canDeduct?.(p.id) ?? true) && (
+                          <Button
+                            type="text"
+                            disabled={disabled}
+                            icon={<MinusCircleOutlined />}
+                            aria-label={t(
+                              "pay.addDeduction",
+                              "Add a deduction",
+                            )}
+                            title={t("pay.addDeduction", "Add a deduction")}
+                            onClick={() =>
+                              setFees(p.id, [
+                                ...feesOf(p.id),
+                                {
+                                  id: `fee-${Date.now()}-${++seq}`,
+                                  kind: "OTHER",
+                                  amount: 0,
+                                },
+                              ])
+                            }
+                          />
+                        )}
                       <Button
                         type="text"
                         disabled={disabled || isDp(p)}

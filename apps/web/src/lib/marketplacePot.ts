@@ -85,9 +85,9 @@ export const isWithdrawalReason = (reason: string): boolean =>
  * > or import an excel file, it will be added to the Shopee balance."*
  *
  * So a payment a marketplace takes (`channel` Shopee or Tokopedia — a part
- * corrected to cash drops its channel) is in the pot once it is RELEASED: it
- * has a settlement (a deduction typed, *Mark as received*, or the upload), or
- * it is stored SETTLED. One stored SETTLED before the cutoff stays where it was
+ * corrected to cash drops its channel) is in the pot once it is RELEASED: its
+ * payout is recorded (`isRecordedPayout` — the Shopee upload; *Mark as
+ * received* was removed the same day), or it is stored SETTLED. One stored SETTLED before the cutoff stays where it was
  * counted: bank.
  */
 export function marketplacePotOf(
@@ -129,6 +129,18 @@ const isBankBeforeCutoff = (
   p: { readonly state: string; readonly at: string },
   potFrom: string | undefined,
 ) => p.state === "SETTLED" && potFrom !== undefined && p.at < potFrom;
+
+/**
+ * Has this payment's payout been recorded? Only a settlement that carries a
+ * deduction counts (owner, 2026-11-15: *"remove Mark as received … the best
+ * way is to upload an export, and not to add the deduction manually"*). A
+ * payout comes from the Shopee upload, which always writes the fixed lines;
+ * a settlement with none is what the short-lived *Mark as received* wrote,
+ * and it releases nothing — the upload takes that payment again.
+ */
+export const isRecordedPayout = (
+  s: { readonly fees: readonly { readonly amount: number }[] } | undefined,
+): boolean => s !== undefined && s.fees.some((f) => f.amount !== 0);
 
 /** Where a channel's balance starts: Shopee's own figure at an instant. */
 export interface PotBase {

@@ -26,6 +26,7 @@ import {
   type SettlementDraft,
   type SettlementFee,
 } from "./marketplace.js";
+import { isRecordedPayout } from "./marketplacePot.js";
 import { paymentsOf } from "./salePayments.js";
 
 export interface PayoutDeps {
@@ -58,7 +59,13 @@ export function recordPayouts(
     if (!o) continue;
     const target = paymentsOf(o).find((p) => p.id === s.paymentId);
     if (target === undefined) continue;
-    if (d.settlements.some((x) => x.paymentId === s.paymentId)) continue;
+    // Already recorded — a re-upload never overwrites a deduction somebody
+    // has since corrected. One with no deduction (the short-lived Mark as
+    // received) recorded nothing, and the upload replaces it.
+    if (
+      isRecordedPayout(d.settlements.find((x) => x.paymentId === s.paymentId))
+    )
+      continue;
     upsertSettlement(
       d,
       {

@@ -27,7 +27,11 @@ import {
   type AccountKind,
   type Balances,
 } from "./accounts.js";
-import { awaitingChannelOf, marketplacePotOf } from "./marketplacePot.js";
+import {
+  awaitingChannelOf,
+  isRecordedPayout,
+  marketplacePotOf,
+} from "./marketplacePot.js";
 import { customerLabel } from "./customers.js";
 import { fmtNone } from "./format.js";
 import { channelOf } from "./channels.js";
@@ -336,8 +340,9 @@ export function cashflowRows(db: CashflowDb, t: TFunction): CashflowRow[] {
       // payment is the shop's money from the sale — its stored PENDING is
       // not read, so the row reads Settled with the balance named beside it.
       const potFrom = db.settings?.marketplacePotFrom;
-      const pot = marketplacePotOf(p, potFrom, settlement !== undefined);
-      const awaiting = awaitingChannelOf(p, potFrom, settlement !== undefined);
+      const released = isRecordedPayout(settlement);
+      const pot = marketplacePotOf(p, potFrom, released);
+      const awaiting = awaitingChannelOf(p, potFrom, released);
       const state = pot !== undefined ? ("SETTLED" as const) : p.state;
       const releasedAt =
         pot === undefined ? undefined : (settlement?.at ?? p.at);

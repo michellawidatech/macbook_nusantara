@@ -60,17 +60,39 @@ describe("a Shopee payment's payout, in the Edit transaction dialog", () => {
         },
       ],
     });
+    // The Shopee upload recorded its payout (2026-11-15: the only way one
+    // starts); Edit transaction corrects it.
+    mutate((d) => {
+      d.settlements.push({
+        id: "stl-payout",
+        paymentId: "pay-o-payout",
+        orderId: "o-payout",
+        channel: "SHOPEE",
+        gross: draft.total,
+        fees: [
+          {
+            id: "f-adm",
+            kind: "COMMISSION",
+            label: "Biaya Administrasi",
+            amount: 100_000,
+          },
+        ],
+        received: draft.total - 100_000,
+        at: "2026-10-21T03:00:00.000Z",
+        staff: "test",
+      });
+    });
     renderEdit(sale);
 
     // The "−" at the end of the Shopee row opens a deduction nested under it.
     await userEvent.click(
       screen.getByRole("button", { name: "Add a deduction" }),
     );
-    await userEvent.type(
-      screen.getByRole("textbox", { name: "Deduction name" }),
-      "Komisi",
-    );
-    const amount = screen.getByRole("spinbutton", { name: "Deduction amount" });
+    const names = screen.getAllByRole("textbox", { name: "Deduction name" });
+    await userEvent.type(names.at(-1)!, "Komisi");
+    const amount = screen
+      .getAllByRole("spinbutton", { name: "Deduction amount" })
+      .at(-1)!;
     await userEvent.type(amount, "250000");
     fireEvent.blur(amount);
     // No Pending / Settled to pick for a Shopee payment (2026-11-13): it is
@@ -88,10 +110,40 @@ describe("a Shopee payment's payout, in the Edit transaction dialog", () => {
     const s = getDb().settlements.find((x) => x.paymentId === "pay-o-payout")!;
     expect(s).toBeDefined();
     expect(s.fees.map((f) => [f.label, f.amount])).toEqual([
+      ["Biaya Administrasi", 100_000],
       ["Komisi", 250_000],
     ]);
-    expect(s.received).toBe(draft.total - 250_000);
-    expect(after.netReceived).toBe(after.total - 250_000);
+    expect(s.received).toBe(draft.total - 350_000);
+    expect(after.netReceived).toBe(after.total - 350_000);
+    // A correction keeps the day the payout was recorded.
+    expect(s.at).toBe("2026-10-21T03:00:00.000Z");
+  });
+
+  it("offers no deduction on a payment the upload has not recorded", () => {
+    // Owner, 2026-11-15: deductions come from the Shopee upload; nobody
+    // starts one by hand.
+    const draft = getDb().orders.find(
+      (o) => o.serials.length > 0 && !o.adjustments && !o.tradeIns,
+    )!;
+    const sale = addSale("o-nopayout", {
+      source: "SHOPEE",
+      payMethod: "MARKETPLACE",
+      settled: false,
+      payments: [
+        {
+          id: "pay-o-nopayout",
+          method: "MARKETPLACE",
+          amount: draft.total,
+          state: "PENDING",
+          channel: "SHOPEE",
+          at: "2026-10-20T03:00:00.000Z",
+        },
+      ],
+    });
+    renderEdit(sale);
+    expect(
+      screen.queryByRole("button", { name: "Add a deduction" }),
+    ).toBeNull();
   });
 });
 

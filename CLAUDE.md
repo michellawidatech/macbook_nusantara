@@ -3936,11 +3936,18 @@ Decisions that outlived those documents:
     the pot's when it has a `Settlement` (or is stored SETTLED); otherwise
     `awaitingChannelOf` — `CashflowRow.awaiting`, PENDING, in no balance, not
     the bank even on Accrual. Transaction History reads **Waiting for
-    Shopee** with a *Mark as received* link: a settlement with no
-    deductions, dated now. A first deduction typed in Edit transaction is
-    dated now too (it was the sale's day); a correction keeps its date. The
-    upload dates each payout at Shopee's own release time
+    Shopee**. The upload dates each payout at Shopee's own release time
     (`releasedInstant`, Jakarta wall clock → UTC, `SettlementDraft.at`).
+  - ⚠️ **Only the upload records a payout** (owner, later the same day:
+    *"remove the Mark received … the best way is to upload an export, and
+    not to add the deduction manually, but can edit"*). *Mark as received*
+    shipped in v2026.11.15.2 and is gone; Edit transaction's "−" is drawn
+    only on a payment the upload recorded (`PaymentsPanel.canDeduct`), so a
+    deduction is corrected by hand and never started. "Recorded" is
+    `isRecordedPayout` — a settlement WITH a non-zero deduction. A zero-fee
+    settlement (what Mark as received wrote; there is no settlement delete)
+    releases nothing, the upload offers that sale again and replaces it.
+    ⚠️ Editing every deduction of a payout to zero sends it back to waiting.
   - **The Shopee balance starts from Shopee's own figure**:
     `AppSetting` `finance.shopeeBalanceBase` = 99287458 at
     `finance.shopeeBalanceBaseAt` = 2026-11-15T14:50:37Z (21:50:37 WIB, the
@@ -3949,9 +3956,7 @@ Decisions that outlived those documents:
     potBasesOf(settings))` = base + payouts RELEASED after it
     (`CashflowRow.releasedAt` = the settlement's instant; the row itself stays
     on the sale's day) − withdrawals after it. So re-uploading that report
-    counts nothing twice. ⚠️ A sale Shopee released before the base but
-    marked received BY HAND after it is counted twice — record those through
-    the upload. Ad top-ups (Isi Ulang Saldo Iklan) are still recorded nowhere
+    counts nothing twice. Ad top-ups (Isi Ulang Saldo Iklan) are still recorded nowhere
     (owner: ignore), so the balance drifts by them.
   - **Pembayaran Tambahan is hidden on the upload** (owner, same day). It
     appears because the till records a Shopee sale at the STORE price and

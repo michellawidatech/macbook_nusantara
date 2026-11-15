@@ -124,6 +124,7 @@ import {
   type EstimatedFee,
   type ShopeeSaleFacts,
 } from "../../lib/shopeeFees.js";
+import { isRecordedPayout } from "../../lib/marketplacePot.js";
 import type { SettlementDraft } from "../../lib/marketplace.js";
 import { skuTracksSerial } from "../../lib/serialTracking.js";
 import { nextId, useDb } from "../../mock/store.js";
@@ -858,7 +859,11 @@ export function pendingShopeePayments(
   }[],
 ): PendingShopeePayment[] {
   const out: PendingShopeePayment[] = [];
-  const recorded = new Set(db.settlements.map((s) => s.paymentId));
+  // A settlement with no deduction released nothing (`isRecordedPayout`):
+  // that payment is still waiting, and the upload takes it.
+  const recorded = new Set(
+    db.settlements.filter(isRecordedPayout).map((s) => s.paymentId),
+  );
   for (const o of db.orders) {
     for (const p of paymentsOf(o)) {
       if (p.state === "DUE" || recorded.has(p.id)) continue;

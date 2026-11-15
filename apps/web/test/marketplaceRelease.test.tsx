@@ -57,6 +57,28 @@ describe("a Shopee payment in Edit transaction", () => {
         },
       ],
     });
+    // The Shopee upload recorded its payout (2026-11-15: the only way one
+    // starts); Edit transaction corrects it.
+    mutate((d) => {
+      d.settlements.push({
+        id: "stl-release",
+        paymentId: "pay-o-release",
+        orderId: "o-release",
+        channel: "SHOPEE",
+        gross: base.total,
+        fees: [
+          {
+            id: "f-adm",
+            kind: "COMMISSION",
+            label: "Biaya Administrasi",
+            amount: 100_000,
+          },
+        ],
+        received: base.total - 100_000,
+        at: "2026-10-21T03:00:00.000Z",
+        staff: "test",
+      });
+    });
     render(
       <AntdApp>
         <EditTransactionModal open order={sale} onClose={() => {}} />
@@ -76,14 +98,14 @@ describe("a Shopee payment in Edit transaction", () => {
         .payments!.find((p) => p.id === "pay-o-release")!;
     expect(stored().state).toBe("PENDING");
     expect(
-      getDb().settlements.some((s) => s.paymentId === "pay-o-release"),
-    ).toBe(false);
+      getDb().settlements.find((s) => s.paymentId === "pay-o-release")!.fees,
+    ).toHaveLength(1);
 
-    await userEvent.type(
-      screen.getByRole("textbox", { name: "Deduction name" }),
-      "Komisi",
-    );
-    const amount = screen.getByRole("spinbutton", { name: "Deduction amount" });
+    const names = screen.getAllByRole("textbox", { name: "Deduction name" });
+    await userEvent.type(names.at(-1)!, "Komisi");
+    const amount = screen
+      .getAllByRole("spinbutton", { name: "Deduction amount" })
+      .at(-1)!;
     await userEvent.type(amount, "300000");
     fireEvent.blur(amount);
     expect(screen.getByText(/= Rp .* to the Shopee balance$/)).toBeTruthy();
@@ -93,7 +115,7 @@ describe("a Shopee payment in Edit transaction", () => {
     expect(stored().state).toBe("PENDING");
     expect(stored().at).toBe("2026-10-20T03:00:00.000Z");
     const s = getDb().settlements.find((x) => x.paymentId === "pay-o-release")!;
-    expect(s.received).toBe(base.total - 300_000);
+    expect(s.received).toBe(base.total - 400_000);
   });
 });
 
@@ -173,8 +195,7 @@ describe("the seller balance on Income & Expense", () => {
         },
       ],
     });
-    // In the balance once its payout is recorded (2026-11-15) — here as
-    // Mark as received writes it, with no deduction.
+    // In the balance once the Shopee upload records its payout (2026-11-15).
     mutate((d) => {
       d.settlements = d.settlements.filter((x) => x.paymentId !== "pay-o-pot");
       d.settlements.push({
@@ -183,8 +204,15 @@ describe("the seller balance on Income & Expense", () => {
         orderId: "o-pot",
         channel: "SHOPEE",
         gross: base.total,
-        fees: [],
-        received: base.total,
+        fees: [
+          {
+            id: "f-pot",
+            kind: "COMMISSION",
+            label: "Biaya Administrasi",
+            amount: 100_000,
+          },
+        ],
+        received: base.total - 100_000,
         at: now,
         staff: "test",
       });
@@ -205,7 +233,7 @@ describe("the seller balance on Income & Expense", () => {
     await userEvent.click(screen.getByRole("button", { name: "Show Bank" }));
     const potBefore = rupiah(screen.getByTestId("pot-market-SHOPEE"));
     const bankBefore = rupiah(screen.getByTestId("pot-bank"));
-    expect(potBefore).toBeGreaterThanOrEqual(base.total);
+    expect(potBefore).toBeGreaterThanOrEqual(base.total - 100_000);
 
     await userEvent.click(
       within(card).getByRole("button", { name: "Record withdrawal" }),
