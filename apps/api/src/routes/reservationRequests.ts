@@ -28,8 +28,11 @@ import {
   approvalMessage,
   DP_SETTING_KEYS,
   dpRuleOf,
+  IMAGE_KINDS,
+  isIgThread,
   realName,
   rejectionMessage,
+  REPLY_KINDS,
   SHOP_ADDRESS,
 } from "@nusantara/domain";
 import { loadStoreFacts, STORE_HOURS } from "@nusantara/agent";
@@ -92,7 +95,7 @@ export async function placeForApproval(
   const [sent, latest] = await Promise.all([
     db.outbox.findMany({
       where: {
-        kind: { in: ["WA_REPLY", "WA_IMAGE"] },
+        kind: { in: [...REPLY_KINDS, ...IMAGE_KINDS] },
         payload: { path: ["to"], equals: from },
       },
       select: { payload: true },
@@ -129,7 +132,11 @@ export function reservationRequestsRouter(deps: RequestsRouterDeps): Router {
       orderBy: { ts: "desc" },
       select: { id: true, ts: true },
     });
-    const open = deps.linkedDevice || isWithinWindow(latest?.ts ?? null, now);
+    // A linked WhatsApp device has no window; Instagram always does
+    // (2026-11-16) — the linked device says nothing about it.
+    const open =
+      (deps.linkedDevice && !isIgThread(from)) ||
+      isWithinWindow(latest?.ts ?? null, now);
     return { open, inReplyTo: latest?.id ?? null };
   }
 

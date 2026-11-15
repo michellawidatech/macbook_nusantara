@@ -66,6 +66,7 @@ import {
 import type Anthropic from "@anthropic-ai/sdk";
 import {
   formatRupiah,
+  isIgThread,
   offerLadder,
   realName,
   REQUEST_TTL_MS,
@@ -259,8 +260,25 @@ export function storeOpenAt(at: Date): boolean {
  * finds nothing rather than finding whatever happens to be blank.
  */
 export const phoneForms = (waId: string): string[] =>
-  waId.trim() === "" ? [] : [waId, `+${waId}`];
-export const toE164 = (waId: string): string => `+${waId}`;
+  // An Instagram thread (`ig:<IGSID>`, 2026-11-16) is not a phone: the same
+  // "we do not know who this is" as an empty one, so no customer, order or
+  // booking is ever read by it.
+  waId.trim() === "" || isIgThread(waId) ? [] : [waId, `+${waId}`];
+/** Throws for an Instagram thread, which has no phone to write. */
+export const toE164 = (waId: string): string => {
+  if (isIgThread(waId)) throw new Error("an Instagram thread has no phone");
+  return `+${waId}`;
+};
+
+/**
+ * What a phone-keyed booking tool answers on Instagram (2026-11-16): a hold or
+ * a visit is filed against a phone, and an Instagram sender has none — the
+ * request (`propose_reservation`, keyed by the thread) is how they book.
+ */
+const NO_PHONE_BOOKING = {
+  error:
+    "Bookings over Instagram are made by the team. File a request with propose_reservation instead.",
+} as const;
 
 // --- the whitelist ---------------------------------------------------------
 
@@ -2718,6 +2736,7 @@ const visitNote = (subject: string): string =>
  * a proposal is exactly a visit's details once the customer has agreed.
  */
 async function bookVisit(args: Record<string, unknown>, ctx: ToolContext) {
+  if (isIgThread(ctx.from)) return NO_PHONE_BOOKING;
   if (!ctx.reserve)
     return { error: "Booking is not available on this channel." };
 
@@ -2944,6 +2963,7 @@ async function cancelReservation(
   args: Record<string, unknown>,
   ctx: ToolContext,
 ) {
+  if (isIgThread(ctx.from)) return NO_PHONE_BOOKING;
   if (!ctx.reserve)
     return { error: "Booking is not available on this channel." };
   const { write, staffId } = ctx.reserve;
@@ -3137,6 +3157,7 @@ async function rescheduleReservation(
   args: Record<string, unknown>,
   ctx: ToolContext,
 ) {
+  if (isIgThread(ctx.from)) return NO_PHONE_BOOKING;
   if (!ctx.reserve)
     return { error: "Booking is not available on this channel." };
   const at = parseJakarta(String(args["when"] ?? ""));
@@ -3290,7 +3311,9 @@ async function rememberCustomer(
       where: { phone: { in: phones } },
       select: { id: true },
     });
-    if (!customer && name) {
+    // An Instagram sender gets no Customer row (2026-11-16): one keyed by
+    // nothing could never be found again. The profile carries the name.
+    if (!customer && name && !isIgThread(ctx.from)) {
       customer = await tx.customer.create({
         data: { phone: toE164(ctx.from), name, createdAt: ctx.now },
         select: { id: true },
@@ -3532,6 +3555,7 @@ async function proposeReservation(
  * offered to a model.
  */
 async function confirmReservation(ctx: ToolContext) {
+  if (isIgThread(ctx.from)) return NO_PHONE_BOOKING;
   if (!ctx.reserve)
     return { error: "Booking is not available on this channel." };
   const guard = ctx.writesUsed;

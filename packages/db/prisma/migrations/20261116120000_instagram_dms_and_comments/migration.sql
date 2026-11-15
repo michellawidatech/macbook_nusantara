@@ -14,7 +14,9 @@
 --    refreshed and when it expires, the last check. The Settings card reads it.
 -- 3. "OutboxKind" gains IG_IMAGE, IG_PRIVATE_REPLY and IG_HIDE. IG_DM and
 --    IG_REPLY have existed since the start and are first used now.
--- 4. "ChatMedia_shape" accepts an Instagram thread key as well as a wa_id.
+-- 4. "ChatMedia_shape" and "ReservationProposal_from_waid" accept an
+--    Instagram thread key as well as a wa_id (a picture staff send to an
+--    Instagram thread; a reservation request the bot files for one).
 -- 5. wa_thread_delete accepts an Instagram thread key and also removes that
 --    sender's DM envelopes from "IgRawEvent"; otherwise it is 20261027150000's
 --    function, unchanged. Same signature, so its EXECUTE grant carries over
@@ -93,6 +95,11 @@ ALTER TABLE "ChatMedia" ADD CONSTRAINT "ChatMedia_shape" CHECK (
   AND "size" > 0
   AND "size" <= 5242880
   AND octet_length("data") = "size"
+);
+
+ALTER TABLE "ReservationProposal" DROP CONSTRAINT "ReservationProposal_from_waid";
+ALTER TABLE "ReservationProposal" ADD CONSTRAINT "ReservationProposal_from_waid" CHECK (
+  "from" ~ '^([0-9]{8,15}|ig:[0-9]{5,32})$'
 );
 
 -- ---------------------------------------------------------------------------

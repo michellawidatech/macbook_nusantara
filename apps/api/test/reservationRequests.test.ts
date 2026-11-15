@@ -427,6 +427,54 @@ describe("approving a request", () => {
     expect(await owner.reservation.count()).toBe(1);
   });
 
+  it("books an Instagram request with no phone and no Customer, and tells the thread on Instagram (2026-11-16)", async () => {
+    const IG = "ig:17841400000000555";
+    await owner.waMessage.create({
+      data: {
+        waMessageId: `ig:mid.REQ.${Math.random()}`,
+        from: IG,
+        text: "tolong di keep ya kak",
+        msgType: "text",
+        ts: new Date(Date.now() - 60_000),
+        direction: "IN",
+        status: "DIJAWAB_AGEN",
+        entities: {},
+        answeredByAgent: true,
+      },
+    });
+    const unit = await owner.unit.findUniqueOrThrow({
+      where: { serial: "SREQ1" },
+    });
+    const now = new Date();
+    const p = await owner.reservationProposal.create({
+      data: {
+        from: IG,
+        custName: "Sari",
+        scheduledFor: new Date(now.getTime() + DAY),
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + 3 * DAY),
+        items: { create: [{ unitId: unit.id, sortOrder: 0 }] },
+      },
+    });
+    const res = await approve(p.id, {
+      serials: ["SREQ1"],
+      scheduledFor: new Date(Date.now() + DAY).toISOString(),
+      tell: true,
+    }).expect(201);
+    expect(res.body.told).toBe(true);
+    const r = await owner.reservation.findFirstOrThrow();
+    expect(r).toMatchObject({
+      phone: null,
+      customerId: null,
+      custName: "Sari",
+      note: "Dari Instagram — permintaan reservasi",
+    });
+    expect(await owner.customer.count()).toBe(0);
+    const out = await owner.outbox.findFirstOrThrow();
+    expect(out.kind).toBe("IG_DM");
+    expect((out.payload as { to: string }).to).toBe(IG);
+  });
+
   it("refuses a request that has lapsed", async () => {
     const p = await filed({ expiresAt: new Date(Date.now() - 60_000) });
     const res = await approve(p.id, {

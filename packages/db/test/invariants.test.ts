@@ -1196,6 +1196,18 @@ describe("Instagram — DMs on the chat tables, comments, the worker's sync (202
     );
   });
 
+  it("lets the bot file a reservation request for an Instagram thread, and nothing malformed", async () => {
+    const insert = (from: string) =>
+      owner.query(
+        `INSERT INTO "ReservationProposal" (id, "from", "custName", "scheduledFor", "createdAt", "expiresAt")
+         VALUES ('rp_' || md5(random()::text), $1, 'Sari', now() + interval '1 day', now(), now() + interval '3 days')`,
+        [from],
+      );
+    await insert(IG);
+    await insert("6281234567890");
+    await rejectsWith(() => insert("ig:abc"), CHECK_VIOLATION);
+  });
+
   it("takes a picture for an Instagram thread", async () => {
     await app.query(
       `INSERT INTO "ChatMedia" (id, "from", data, "contentType", size, "uploadedById")
