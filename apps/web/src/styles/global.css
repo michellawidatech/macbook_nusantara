@@ -946,3 +946,67 @@ body {
 .request-row-expired > td {
   opacity: 0.55;
 }
+
+/*
+ * ── The phone layout (owner-approved mockup, 2026-11-16) ──────────────────
+ *
+ * Every class below is put on an element only while `compact`, so none of
+ * these rules can reach a desktop screen.
+ */
+
+/* A bottom sheet: rounded top, never taller than most of the screen, the
+   body scrolling between a fixed title and a pinned footer. */
+.nusantara-bottom-sheet .ant-drawer-content-wrapper {
+  max-height: 88vh;
+}
+.nusantara-bottom-sheet .ant-drawer-section {
+  border-radius: 16px 16px 0 0;
+  max-height: 88vh;
+}
+.nusantara-bottom-sheet .ant-drawer-footer {
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+/* Tap-to-select chips in the Filters sheet. */
+.nusantara-chip.ant-btn {
+  height: 40px;
+  padding-inline: 16px;
+}
+.nusantara-chip.is-on.ant-btn {
+  border-color: var(--ant-color-primary);
+  background: var(--ant-color-primary-bg);
+  color: var(--ant-color-primary-text, var(--ant-color-primary));
+  font-weight: 600;
+}
+
+/* What is filtered, as a row of removable pills that scrolls sideways rather
+   than wrapping into a wall above the list. */
+.nusantara-chip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+.nusantara-chip-row::-webkit-scrollbar {
+  display: none;
+}
+.nusantara-filter-chip.ant-tag {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding-inline: 14px 10px;
+  border-radius: 18px;
+  font-size: 14px;
+  margin: 0;
+  background: var(--ant-color-primary);
+  border-color: var(--ant-color-primary);
+  color: #fff;
+}
+.nusantara-filter-chip.ant-tag .ant-tag-close-icon {
+  color: rgba(255, 255, 255, 0.85);
+  margin-inline-start: 8px;
+  font-size: 12px;
+}

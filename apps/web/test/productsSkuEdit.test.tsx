@@ -66,10 +66,11 @@ async function openEdit(code: string) {
   );
   // Role queries walk the whole catalogue table and are far too slow here;
   // the model is seeded first in the list, so its row is on page one.
-  const row = (await screen.findByText('ZZTEST 13" 2026 A18 PRO')).closest(
-    "tr",
-  )!;
-  await user.click(row.querySelector(".ant-table-row-expand-icon")!);
+  // A card on a phone (2026-11-16): its variants open inside it.
+  const card = (await screen.findByText('ZZTEST 13" 2026 A18 PRO')).closest(
+    ".ant-card",
+  ) as HTMLElement;
+  await user.click(within(card).getByRole("button", { name: /Show details/ }));
   await user.click(await screen.findByLabelText(`Edit ${code}`));
   const title = await screen.findByText("Edit SKU");
   const dialog = title.closest(".ant-modal") as HTMLElement;

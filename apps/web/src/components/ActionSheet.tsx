@@ -58,7 +58,11 @@ export function ActionSheet({
             type="text"
             block
             size="large"
-            icon={a.icon}
+            icon={
+              a.icon === undefined ? undefined : (
+                <span aria-hidden>{a.icon}</span>
+              )
+            }
             danger={a.danger}
             disabled={a.disabled}
             onClick={() => {

@@ -9,7 +9,7 @@
  */
 import type { ReactNode } from "react";
 import { App as AntdApp } from "antd";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -51,9 +51,10 @@ describe("a debt from before this app", () => {
     // and the chevron is what a person opens to see which document it is.
     const name = await screen.findAllByText(customer.name);
     expect(name.length).toBeGreaterThan(0);
-    const rowOf = name[0]!.closest("tr")!;
+    // A card on a phone (2026-11-16): its documents open under it.
+    const card = name[0]!.closest(".ant-card") as HTMLElement;
     await userEvent.click(
-      rowOf.querySelector<HTMLElement>(".ant-table-row-expand-icon")!,
+      within(card).getByRole("button", { name: /^Show \d+/ }),
     );
     expect(await screen.findByText("From before this app")).toBeTruthy();
     expect(

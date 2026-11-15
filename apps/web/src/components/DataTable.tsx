@@ -50,10 +50,13 @@
  * cards.
  */
 import {
+  Fragment,
   useEffect,
   useMemo,
   useState,
+  type Key,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from "react";
 import {
   Button,
@@ -66,7 +69,8 @@ import {
   theme,
 } from "antd";
 import type { TableProps } from "antd";
-import { COLUMN, SPACE, TYPE, WEIGHT } from "../theme/tokens";
+import { DownOutlined, RightOutlined, UpOutlined } from "@ant-design/icons";
+import { COLUMN, LAYOUT, SPACE, TYPE, WEIGHT } from "../theme/tokens";
 import { useLayoutMode } from "../layouts/useLayoutMode";
 import {
   gridMinWidth,
@@ -97,6 +101,45 @@ export const PAGE_SIZES = [10, 20, 50, 100] as const;
 
 /** Rows a `lazy` list draws at a time. */
 export const LAZY_BATCH = 50;
+
+/**
+ * One phone card, in the anatomy every list shares (owner-approved mockup,
+ * 2026-11-16):
+ *
+ * ```
+ * [lead]  title                       [tag]
+ *         subtitle
+ *         fact · fact · fact
+ *         meta                    amount  ›
+ *                            amountNote
+ * ```
+ *
+ * Each slot is optional; a list fills the ones it has. `actions` are buttons
+ * drawn in words across the foot of the card.
+ */
+export interface CardModel {
+  readonly title: ReactNode;
+  readonly subtitle?: ReactNode;
+  /** A tile on the left — the grade, a channel, an avatar. */
+  readonly lead?: ReactNode;
+  /** A status, in words, at the top right. */
+  readonly tag?: ReactNode;
+  readonly facts?: readonly ReactNode[];
+  /** Bottom left: a time, a date, a reference. */
+  readonly meta?: ReactNode;
+  /** Bottom right, bold: the figure the list is read for. */
+  readonly amount?: ReactNode;
+  readonly amountNote?: ReactNode;
+  readonly actions?: ReactNode;
+}
+
+/** A heading the phone's cards are grouped under — a day, say. */
+export interface CardGroup {
+  readonly key: string;
+  readonly label: ReactNode;
+  /** Right-hand side of the heading — the day's total. */
+  readonly aside?: ReactNode;
+}
 
 export interface DataTableProps<T> extends Omit<
   TableProps<T>,
@@ -151,6 +194,18 @@ export interface DataTableProps<T> extends Omit<
    * cells is a sentence nobody can act on.
    */
   keyboardRows?: (record: T, index: number) => string;
+  /**
+   * How a row reads as a phone card (2026-11-16). Without it the card is
+   * built from the columns: the first titled one is the heading and the rest
+   * label/value lines.
+   */
+  card?: (record: T, index: number) => CardModel;
+  /**
+   * Group the phone's cards under headings that stay on screen while the
+   * list scrolls (Transaction History's days). Rows arrive in the order the
+   * list is sorted; a new heading starts whenever the key changes.
+   */
+  cardGroup?: (record: T) => CardGroup;
 }
 
 export function DataTable<T extends object>({
@@ -165,13 +220,22 @@ export function DataTable<T extends object>({
   size,
   scroll,
   keyboardRows,
+  card,
+  cardGroup,
   ...rest
 }: DataTableProps<T>) {
   const { compact } = useLayoutMode();
   const { t } = useTranslation();
   const {
-    token: { colorTextSecondary, colorBorderSecondary },
+    token: {
+      colorTextSecondary,
+      colorTextTertiary,
+      colorBorderSecondary,
+      colorBgLayout,
+    },
   } = theme.useToken();
+  /** Which rows' details are open inside their cards, when nobody controls it. */
+  const [openCards, setOpenCards] = useState<readonly Key[]>([]);
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(initialPageSize);
@@ -297,11 +361,6 @@ export function DataTable<T extends object>({
     </Flex>
   ) : null;
 
-  // An expandable table's detail row has nowhere to go in a card — there is no
-  // second level to expand INTO — so a table that uses one keeps its grid and
-  // scrolls sideways on a phone. Detected rather than configured: a caller who
-  // adds `expandable` later would otherwise silently lose the expansion on
-  // mobile and never see it, because they were testing on a laptop.
   /**
    * What a keyboard-reachable row needs, merged over whatever the caller's own
    * `onRow` returns.
@@ -342,73 +401,291 @@ export function DataTable<T extends object>({
     };
   };
 
-  if (compact && cards && rest.expandable === undefined) {
+  /**
+   * The phone's list (2026-11-16): nothing scrolls sideways at 390px. An
+   * `expandable` table opens its detail INSIDE the card — until now such a
+   * table kept its grid on a phone — and a tree's children are cards under
+   * their group's card behind a "Show n" toggle.
+   */
+  if (compact && cards) {
+    const expandable = rest.expandable;
+    const expandedKeys: readonly Key[] =
+      expandable?.expandedRowKeys ?? openCards;
+    const toggle = (record: T, key: Key) => {
+      const open = !expandedKeys.includes(key);
+      if (expandable?.expandedRowKeys === undefined)
+        setOpenCards((ks) =>
+          open ? [...ks, key] : ks.filter((k) => k !== key),
+        );
+      expandable?.onExpand?.(open, record);
+      expandable?.onExpandedRowsChange?.(
+        open ? [...expandedKeys, key] : expandedKeys.filter((k) => k !== key),
+      );
+    };
+
+    const renderCard = (record: T, index: number, depth: number): ReactNode => {
+      const key = keyOf(record, index, rowKey);
+      const rowProps = rest.onRow?.(record, index) ?? {};
+      const opens = typeof rowProps.onClick === "function";
+      const kids = (record as { children?: readonly T[] }).children;
+      const hasKids = Array.isArray(kids) && kids.length > 0;
+      const canExpand =
+        expandable?.expandedRowRender !== undefined &&
+        (expandable.rowExpandable?.(record) ?? true);
+      const expanded = expandedKeys.includes(key);
+      const model = card?.(record, index);
+      const chevron = opens && !canExpand && (
+        <RightOutlined
+          aria-hidden
+          style={{ color: colorTextTertiary, alignSelf: "center" }}
+        />
+      );
+      const body = model ? (
+        <Flex gap={SPACE.md} align="stretch">
+          {model.lead !== undefined && (
+            <div style={{ flexShrink: 0 }}>{model.lead}</div>
+          )}
+          <Flex vertical gap={2} style={{ flex: 1, minWidth: 0 }}>
+            <Flex justify="space-between" align="flex-start" gap={SPACE.sm}>
+              <div
+                style={{
+                  fontWeight: WEIGHT.strong,
+                  fontSize: TYPE.lg,
+                  minWidth: 0,
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {model.title}
+              </div>
+              {model.tag !== undefined && (
+                <div style={{ flexShrink: 0 }}>{model.tag}</div>
+              )}
+            </Flex>
+            {model.subtitle !== undefined && (
+              <div style={{ color: colorTextSecondary }}>{model.subtitle}</div>
+            )}
+            {model.facts && model.facts.length > 0 && (
+              <Flex
+                wrap
+                gap={SPACE.xs}
+                style={{ color: colorTextSecondary, fontSize: TYPE.md }}
+              >
+                {model.facts.map((f, i) => (
+                  <span key={i}>
+                    {i > 0 && <span aria-hidden> · </span>}
+                    {f}
+                  </span>
+                ))}
+              </Flex>
+            )}
+            {(model.meta !== undefined || model.amount !== undefined) && (
+              <Flex
+                justify="space-between"
+                align="flex-end"
+                gap={SPACE.sm}
+                style={{ marginTop: SPACE.xs }}
+              >
+                <div style={{ color: colorTextSecondary }}>{model.meta}</div>
+                {model.amount !== undefined && (
+                  <Flex vertical align="flex-end" style={{ minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontWeight: WEIGHT.strong,
+                        fontSize: TYPE.lg,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {model.amount}
+                    </div>
+                    {model.amountNote !== undefined && (
+                      <div
+                        style={{
+                          color: colorTextSecondary,
+                          fontSize: TYPE.sm,
+                          textAlign: "right",
+                        }}
+                      >
+                        {model.amountNote}
+                      </div>
+                    )}
+                  </Flex>
+                )}
+              </Flex>
+            )}
+          </Flex>
+          {chevron}
+        </Flex>
+      ) : (
+        <Flex gap={SPACE.sm}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {heading && (
+              <div
+                style={{ fontWeight: WEIGHT.strong, marginBottom: SPACE.sm }}
+              >
+                {cellContent(heading, record, index)}
+              </div>
+            )}
+            <Flex vertical gap={SPACE.xs}>
+              {fields.map((col, i) => (
+                <Flex
+                  key={String(col.key ?? i)}
+                  justify="space-between"
+                  align="baseline"
+                  gap={SPACE.md}
+                >
+                  <Typography.Text
+                    style={{
+                      fontSize: TYPE.sm,
+                      color: colorTextSecondary,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {titleText(col)}
+                  </Typography.Text>
+                  {/* minWidth: 0 lets a long description shrink and wrap
+                      instead of pushing its own label off the card. */}
+                  <div style={{ textAlign: "right", minWidth: 0 }}>
+                    {cellContent(col, record, index)}
+                  </div>
+                </Flex>
+              ))}
+            </Flex>
+          </div>
+          {chevron}
+        </Flex>
+      );
+      const actions = model
+        ? model.actions
+        : untitled.length > 0 && (
+            <>
+              {untitled.map((col, i) => (
+                <div key={String(col.key ?? i)}>
+                  {cellContent(col, record, index)}
+                </div>
+              ))}
+            </>
+          );
+      return (
+        <Card
+          key={key}
+          size="small"
+          /* The row props the caller wrote for a `<tr>` land on the card
+             instead (2026-09-15). Without them a list whose rows open
+             something opened nothing at all on a phone — the click was on
+             the `<tr>` this layout does not render. */
+          {...rowProps}
+          {...keyboardRow(record, index)}
+          style={{
+            ...(rowProps.style ?? {}),
+            ...(depth > 0 ? { boxShadow: "none" } : {}),
+          }}
+        >
+          {body}
+          {actions && (
+            <Flex
+              justify="flex-end"
+              wrap
+              gap={SPACE.sm}
+              style={{
+                marginTop: SPACE.sm,
+                paddingTop: SPACE.sm,
+                borderTop: `1px solid ${colorBorderSecondary}`,
+              }}
+              // A button in the foot is its own action, not the card's.
+              onClick={(e) => e.stopPropagation()}
+            >
+              {actions}
+            </Flex>
+          )}
+          {(canExpand || hasKids) && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                marginTop: SPACE.sm,
+                paddingTop: SPACE.xs,
+                borderTop: `1px solid ${colorBorderSecondary}`,
+              }}
+            >
+              <Button
+                type="link"
+                aria-expanded={expanded}
+                icon={
+                  expanded ? (
+                    <UpOutlined aria-hidden />
+                  ) : (
+                    <DownOutlined aria-hidden />
+                  )
+                }
+                iconPlacement="end"
+                onClick={() => toggle(record, key)}
+                style={{ paddingInline: 0 }}
+              >
+                {expanded
+                  ? t("dataTable.hideDetails", "Hide")
+                  : hasKids
+                    ? t("dataTable.showChildren", "Show {{count}}", {
+                        count: kids!.length,
+                      })
+                    : t("dataTable.showDetails", "Show details")}
+              </Button>
+              {expanded && canExpand && (
+                <div style={{ marginTop: SPACE.sm }}>
+                  {expandable!.expandedRowRender!(record, index, 0, expanded)}
+                </div>
+              )}
+              {expanded && hasKids && (
+                <Flex vertical gap={SPACE.sm} style={{ marginTop: SPACE.sm }}>
+                  {kids!.map((k, i) => renderCard(k, i, depth + 1))}
+                </Flex>
+              )}
+            </div>
+          )}
+        </Card>
+      );
+    };
+
+    // Grouped under sticky headings (a day), when the list asks for it.
+    let lastGroup: string | undefined;
     return (
       <>
         <Flex vertical gap={SPACE.sm}>
           {rows.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />}
-          {rows.map((record, index) => (
-            <Card
-              key={keyOf(record, index, rowKey)}
-              size="small"
-              /* The row props the caller wrote for a `<tr>` land on the card
-                 instead (2026-09-15). Without them a list whose rows open
-                 something opened nothing at all on a phone — the click was on
-                 the `<tr>` this layout does not render. */
-              {...(rest.onRow?.(record, index) ?? {})}
-              {...keyboardRow(record, index)}
-            >
-              {heading && (
-                <div
-                  style={{ fontWeight: WEIGHT.strong, marginBottom: SPACE.sm }}
-                >
-                  {cellContent(heading, record, index)}
-                </div>
-              )}
-              <Flex vertical gap={SPACE.xs}>
-                {fields.map((col, i) => (
+          {rows.map((record, index) => {
+            const group = cardGroup?.(record);
+            const head =
+              group !== undefined && group.key !== lastGroup
+                ? group
+                : undefined;
+            if (group) lastGroup = group.key;
+            return (
+              <Fragment key={keyOf(record, index, rowKey)}>
+                {head && (
                   <Flex
-                    key={String(col.key ?? i)}
                     justify="space-between"
                     align="baseline"
-                    gap={SPACE.md}
+                    gap={SPACE.sm}
+                    className="nusantara-card-group"
+                    style={{
+                      position: "sticky",
+                      // Under the phone's app bar, which sticks at -gutter.
+                      top:
+                        LAYOUT.appBarHeight + 1 - LAYOUT.contentPadding.compact,
+                      zIndex: 1,
+                      background: colorBgLayout,
+                      paddingBlock: SPACE.xs,
+                      marginTop: index === 0 ? 0 : SPACE.sm,
+                      fontWeight: WEIGHT.strong,
+                      color: colorTextSecondary,
+                    }}
                   >
-                    <Typography.Text
-                      style={{
-                        fontSize: TYPE.sm,
-                        color: colorTextSecondary,
-                        flexShrink: 0,
-                      }}
-                    >
-                      {titleText(col)}
-                    </Typography.Text>
-                    {/* minWidth: 0 lets a long description shrink and wrap
-                        instead of pushing its own label off the card. */}
-                    <div style={{ textAlign: "right", minWidth: 0 }}>
-                      {cellContent(col, record, index)}
-                    </div>
+                    <span>{head.label}</span>
+                    {head.aside !== undefined && <span>{head.aside}</span>}
                   </Flex>
-                ))}
-              </Flex>
-              {untitled.length > 0 && (
-                <Flex
-                  justify="flex-end"
-                  gap={SPACE.sm}
-                  style={{
-                    marginTop: SPACE.sm,
-                    paddingTop: SPACE.sm,
-                    borderTop: `1px solid ${colorBorderSecondary}`,
-                  }}
-                >
-                  {untitled.map((col, i) => (
-                    <div key={String(col.key ?? i)}>
-                      {cellContent(col, record, index)}
-                    </div>
-                  ))}
-                </Flex>
-              )}
-            </Card>
-          ))}
+                )}
+                {renderCard(record, index, 0)}
+              </Fragment>
+            );
+          })}
         </Flex>
         {pager}
       </>

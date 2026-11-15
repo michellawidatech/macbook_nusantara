@@ -660,18 +660,28 @@ describe("on a phone", () => {
     });
   });
 
-  it("keeps its grid, and a tap on a line opens the same units under it", async () => {
-    // An expanding table keeps its grid on a phone — a card has no second
-    // level to open into (DataTable's docblock). Nested since 2026-10-02.
+  it("is a card per line, and a tap on a line opens the same units inside it", async () => {
+    // No sideways grid on a phone (2026-11-16): the line is a card and its
+    // units open inside it.
     renderPage();
     await settle();
     const line = expectedLines().find((l) => l.tracksSerial)!;
-    const row = await rowFor(line);
-    await userEvent.click(within(row).getByText(line.code));
-    const nested = await unitsUnder(row);
-    for (const u of line.units) {
-      expect(within(nested).getByText(u.serial)).toBeInTheDocument();
-    }
+    fireEvent.change(
+      screen.getByPlaceholderText(
+        "Search product, specs, code or a serial number",
+      ),
+      { target: { value: line.code } },
+    );
+    await settle();
+    expect(document.querySelector(".inventory-lines table")).toBeNull();
+    const card = (await screen.findAllByText(line.code))[0]!.closest(
+      ".ant-card",
+    ) as HTMLElement;
+    await userEvent.click(within(card).getAllByText(line.code)[0]!);
+    await waitFor(() => {
+      for (const u of line.units)
+        expect(within(card).getByText(u.serial)).toBeInTheDocument();
+    });
   });
 });
 

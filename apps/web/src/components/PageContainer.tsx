@@ -279,7 +279,13 @@ export function PageContainer({
             {primary && (
               <Button
                 type={primary.type === "primary" ? "primary" : "default"}
-                icon={primary.icon}
+                // The glyph is decoration beside the word: hidden, so the
+                // button's name is its label alone.
+                icon={
+                  primary.icon === undefined ? undefined : (
+                    <span aria-hidden>{primary.icon}</span>
+                  )
+                }
                 danger={primary.danger}
                 disabled={primary.disabled}
                 loading={primary.loading}

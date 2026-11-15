@@ -29,7 +29,8 @@
  *   would apply the same predicate twice;
  * - `onChange` reports what the user picked and the state lands here.
  *
- * On a phone the same state is driven by selects in the toolbar instead. One
+ * On a phone the same state is driven by the Filters and Sort sheets
+ * instead (2026-11-16; they were a stack of selects above the list). One
  * filter state, two controls — so a filter picked on a desktop survives a
  * tablet rotating into card mode.
  *
@@ -43,20 +44,30 @@
  * appears on a wide viewport, and a page whose primary flow is a bulk action
  * needs a per-card button too.
  */
-import { useMemo, useState, type Key, type ReactNode } from "react";
+import {
+  useCallback,
+  useMemo,
+  useState,
+  type Key,
+  type ReactNode,
+} from "react";
 import { draftKey, usePersistentState } from "../hooks/usePersistentState";
 import { asString, isRecord } from "../lib/draftGuards.js";
 import {
+  Badge,
   Button,
   DatePicker,
   Flex,
   Input,
-  Select,
   Space,
   Tag,
   Typography,
   theme,
 } from "antd";
+import { FilterOutlined, SwapOutlined } from "@ant-design/icons";
+import { FilterSheet } from "./FilterSheet";
+import { SortSheet, sortWords, type SortChoice } from "./SortSheet";
+import { presetOf } from "../lib/datePresets";
 import dayjs, { type Dayjs } from "dayjs";
 import type { TableProps } from "antd";
 import { SPACE, TYPE } from "../theme/tokens";
@@ -124,6 +135,51 @@ export type ProColumn<T> = AntColumn<T> & {
 /** A date filter's bounds as local `YYYY-MM-DD` days; either may be open. */
 type DayRange = readonly [string | null, string | null];
 
+/**
+ * The rows a search, a set of facet filters and a set of date ranges leave —
+ * the one predicate the list, the phone's Filters sheet and its counts share,
+ * so "Show 3 results" is the three the list then shows.
+ */
+function filterRows<T>(
+  dataSource: readonly T[],
+  columns: readonly ProColumn<T>[],
+  facetCols: readonly { col: ProColumn<T>; key: string }[],
+  dateCols: readonly { col: ProColumn<T>; key: string }[],
+  query: string,
+  filters: Record<string, string[]>,
+  ranges: Record<string, DayRange>,
+): T[] {
+  const needle = query.trim().toLowerCase();
+  const searchCols = columns.filter((c) => c.searchable);
+  return dataSource.filter((row) => {
+    for (const [key, picked] of Object.entries(filters)) {
+      if (!picked.length) continue;
+      const col = facetCols.find((c) => c.key === key)?.col;
+      if (!col) continue;
+      const v = facetOf(col, row);
+      if (v === undefined || !picked.includes(v)) return false;
+    }
+    for (const { col, key } of dateCols) {
+      const r = ranges[key];
+      if (!rangeSet(r)) continue;
+      const day = dayOfValue(
+        col.dateValue ? (col.dateValue(row) ?? undefined) : valueOf(col, row),
+      );
+      if (day === undefined) return false;
+      if (r![0] !== null && day < r![0]) return false;
+      if (r![1] !== null && day > r![1]) return false;
+    }
+    if (!needle) return true;
+    // No column opted into search → search everything with a dataIndex,
+    // which is the sane default for a list nobody has tuned yet.
+    const cols = searchCols.length ? searchCols : columns;
+    return cols.some((c) => {
+      const text = c.searchValue ? c.searchValue(row) : valueOf(c, row);
+      return text != null && String(text).toLowerCase().includes(needle);
+    });
+  });
+}
+
 export interface ProTableProps<T> extends Omit<
   DataTableProps<T>,
   "columns" | "rowSelection"
@@ -152,10 +208,9 @@ export interface ProTableProps<T> extends Omit<
    *
    * Two things follow, and neither is worth making a caller remember. Row
    * selection becomes `checkStrictly: false`, so ticking a supplier ticks its
-   * invoices and the page can total the LEAVES; and the phone keeps the grid
-   * instead of becoming cards, for the reason `DataTable` already keeps it for
-   * an expandable table — a child row has nowhere to go in a card, and hiding
-   * it is worse than scrolling sideways.
+   * invoices and the page can total the LEAVES. On a phone the group is a
+   * card and its children are cards under it, behind a "Show n" toggle
+   * (2026-11-16; it kept a sideways-scrolling grid before).
    *
    * Searching, filtering and sorting still run over the TOP level only: a
    * group is what the list is of, and its `searchValue` is what carries its
@@ -313,7 +368,12 @@ export function ProTable<T extends object>({
   const { compact } = useLayoutMode();
   const { t } = useTranslation();
   const {
-    token: { colorTextSecondary, colorFillTertiary, colorBorderSecondary },
+    token: {
+      colorTextSecondary,
+      colorFillTertiary,
+      colorBorderSecondary,
+      colorPrimary,
+    },
   } = theme.useToken();
   const kept = (part: string) =>
     persistKey === undefined ? null : draftKey(`list.${persistKey}.${part}`);
@@ -359,7 +419,6 @@ export function ProTable<T extends object>({
     parseSort,
   );
 
-  const searchCols = columns.filter((c) => c.searchable);
   /**
    * The filterable columns, each keyed by its index in `columns` — NOT by its
    * index among the filterable ones.
@@ -408,34 +467,15 @@ export function ProTable<T extends object>({
    * cuts it into pages.
    */
   const rows = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const kept = dataSource.filter((row) => {
-      for (const [key, picked] of Object.entries(filters)) {
-        if (!picked.length) continue;
-        const col = facetCols.find((c) => c.key === key)?.col;
-        if (!col) continue;
-        const v = facetOf(col, row);
-        if (v === undefined || !picked.includes(v)) return false;
-      }
-      for (const { col, key } of dateCols) {
-        const r = ranges[key];
-        if (!rangeSet(r)) continue;
-        const day = dayOfValue(
-          col.dateValue ? (col.dateValue(row) ?? undefined) : valueOf(col, row),
-        );
-        if (day === undefined) return false;
-        if (r![0] !== null && day < r![0]) return false;
-        if (r![1] !== null && day > r![1]) return false;
-      }
-      if (!needle) return true;
-      // No column opted into search → search everything with a dataIndex,
-      // which is the sane default for a list nobody has tuned yet.
-      const cols = searchCols.length ? searchCols : columns;
-      return cols.some((c) => {
-        const text = c.searchValue ? c.searchValue(row) : valueOf(c, row);
-        return text != null && String(text).toLowerCase().includes(needle);
-      });
-    });
+    const kept = filterRows(
+      dataSource,
+      columns,
+      facetCols,
+      dateCols,
+      query,
+      filters,
+      ranges,
+    );
 
     if (!sort.order) return kept;
     const i = columns.findIndex((c, n) => colKey(c, n) === sort.key);
@@ -623,20 +663,212 @@ export function ProTable<T extends object>({
     }
     return out;
   }, [facetCols, dateCols, filters, ranges]);
-  // The phone layout has no column headers to hang a filter on, so the selects
-  // come back there — driving the very same state. See the docblock.
-  const showToolbarFilters =
-    compact && (facetCols.length > 0 || dateCols.length > 0);
+  const hasFilters = facetCols.length > 0 || dateCols.length > 0;
   const hasToolbar =
     search ||
-    showToolbarFilters ||
     activeFilterCount > 0 ||
     toolbar !== undefined ||
     extra !== undefined;
 
+  /**
+   * The phone's sheets (2026-11-16). The Filters sheet edits a draft and
+   * asks how many rows a draft leaves — `filterRows` again, with this list's
+   * search — and per value of one facet, how many it would leave given the
+   * others.
+   */
+  const [filterSheet, setFilterSheet] = useState(false);
+  const [sortSheet, setSortSheet] = useState(false);
+  const countWith = useCallback(
+    (f: Record<string, string[]>, r: Record<string, DayRange>) =>
+      filterRows(dataSource, columns, facetCols, dateCols, query, f, r).length,
+    [dataSource, columns, query],
+  );
+  const optionCounts = useCallback(
+    (
+      key: string,
+      f: Record<string, string[]>,
+      r: Record<string, DayRange>,
+    ): ReadonlyMap<string, number> => {
+      const col = facetCols.find((c) => c.key === key)?.col;
+      const out = new Map<string, number>();
+      if (!col) return out;
+      const others = { ...f };
+      delete others[key];
+      for (const row of filterRows(
+        dataSource,
+        columns,
+        facetCols,
+        dateCols,
+        query,
+        others,
+        r,
+      )) {
+        const v = facetOf(col, row);
+        if (v !== undefined) out.set(v, (out.get(v) ?? 0) + 1);
+      }
+      return out;
+    },
+    [dataSource, columns, query],
+  );
+  const nameOf = (col: ProColumn<T>) =>
+    col.facetLabel ??
+    (typeof col.title === "string" ? col.title : undefined) ??
+    "";
+  /** Every column the arrows could sort, for the phone's Sort sheet. */
+  const sortChoices: SortChoice[] = columns
+    .map((col, i) => ({ col, key: colKey(col, i) }))
+    .filter(
+      ({ col }) =>
+        (col.sortValue !== undefined ||
+          (col as { dataIndex?: unknown }).dataIndex !== undefined) &&
+        nameOf(col) !== "",
+    )
+    .map(({ col, key }) => ({
+      key,
+      label: nameOf(col),
+      isDate: col.dateRange === true,
+    }));
+  const sortChoice = sortChoices.find((c) => c.key === sort.key);
+  /** A date chip says what preset it is, on a phone, rather than two days. */
+  const chipValue = (f: { key: string; value: string }) => {
+    if (!dateCols.some((d) => d.key === f.key)) return f.value;
+    switch (presetOf(ranges[f.key])) {
+      case "today":
+        return t("filterSheet.today", "Today");
+      case "7d":
+        return t("filterSheet.lastSevenDays", "Last 7 days");
+      case "month":
+        return t("filterSheet.thisMonth", "This month");
+      default:
+        return f.value;
+    }
+  };
+
   return (
     <>
-      {hasToolbar && (
+      {compact && (
+        <Flex vertical gap={SPACE.sm} style={{ marginBottom: SPACE.md }}>
+          {(search || hasFilters || sortChoices.length > 0) && (
+            <Flex gap={SPACE.sm} align="center">
+              {search && (
+                <Input.Search
+                  allowClear
+                  {...{ [PAGE_SEARCH_ATTR]: "" }}
+                  placeholder={
+                    searchPlaceholder ?? t("proTable.search", "Search")
+                  }
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  style={{ flex: 1, minWidth: 0 }}
+                />
+              )}
+              {hasFilters && (
+                <Button
+                  icon={<FilterOutlined />}
+                  aria-haspopup="dialog"
+                  className={activeFilterCount > 0 ? "is-filtered" : undefined}
+                  onClick={() => setFilterSheet(true)}
+                  style={{ flexShrink: 0 }}
+                >
+                  {t("filterSheet.title", "Filters")}
+                  {activeFilterCount > 0 && (
+                    <Badge
+                      count={activeFilterCount}
+                      size="small"
+                      color={colorPrimary}
+                    />
+                  )}
+                </Button>
+              )}
+              {sortChoices.length > 0 && (
+                <Button
+                  icon={<SwapOutlined rotate={90} />}
+                  aria-haspopup="dialog"
+                  onClick={() => setSortSheet(true)}
+                  style={{ flexShrink: 0 }}
+                >
+                  {t("sortSheet.title", "Sort")}
+                </Button>
+              )}
+            </Flex>
+          )}
+          {activeFilterCount > 0 && (
+            <div className="nusantara-chip-row">
+              {activeFilters.map((f) => (
+                <Tag
+                  key={`${f.key}:${f.value}`}
+                  closable
+                  onClose={f.remove}
+                  className="nusantara-filter-chip"
+                  aria-label={t("proTable.removeFilter", "Remove {{filter}}", {
+                    filter: `${f.column} ${f.value}`,
+                  })}
+                >
+                  {chipValue(f)}
+                </Tag>
+              ))}
+              {activeFilterCount > 1 && (
+                <Button
+                  type="link"
+                  onClick={() => {
+                    setFilters({});
+                    setRanges({});
+                  }}
+                  style={{ flexShrink: 0 }}
+                >
+                  {t("proTable.clearFilters", "Clear all")}
+                </Button>
+              )}
+            </div>
+          )}
+          {sort.order && sortChoice && (
+            <Typography.Text
+              style={{
+                fontSize: TYPE.sm,
+                color: colorTextSecondary,
+                alignSelf: "flex-end",
+              }}
+            >
+              {sortWords(t, sortChoice, sort.order)}
+            </Typography.Text>
+          )}
+          {toolbar}
+          {extra !== undefined && extra !== false && (
+            <Flex gap={SPACE.sm} wrap>
+              {typeof extra === "function" ? extra(selected, rows) : extra}
+            </Flex>
+          )}
+          <FilterSheet
+            open={filterSheet}
+            onClose={() => setFilterSheet(false)}
+            facets={facetCols.map(({ col, key }) => ({
+              key,
+              label: nameOf(col) || t("proTable.filter", "Filter"),
+              options: facetOptions[key] ?? [],
+            }))}
+            dates={dateCols.map(({ col, key }) => ({
+              key,
+              label: nameOf(col),
+            }))}
+            filters={filters}
+            ranges={ranges}
+            count={countWith}
+            optionCounts={optionCounts}
+            onApply={(f, r) => {
+              setFilters(f);
+              setRanges(r);
+            }}
+          />
+          <SortSheet
+            open={sortSheet}
+            onClose={() => setSortSheet(false)}
+            choices={sortChoices}
+            current={sort}
+            onPick={(key, order) => setSort({ key, order })}
+          />
+        </Flex>
+      )}
+      {!compact && hasToolbar && (
         <Flex
           className="responsive-controls"
           vertical={compact}
@@ -669,47 +901,6 @@ export function ProTable<T extends object>({
                 style={{ width: compact ? undefined : 320 }}
               />
             )}
-            {showToolbarFilters &&
-              facetCols.map(({ col, key }) => {
-                return (
-                  <Select
-                    key={key}
-                    mode="multiple"
-                    allowClear
-                    maxTagCount="responsive"
-                    value={filters[key] ?? []}
-                    placeholder={
-                      col.facetLabel ??
-                      (typeof col.title === "string" ? col.title : undefined) ??
-                      t("proTable.filter", "Filter")
-                    }
-                    options={(facetOptions[key] ?? []).map((v) => ({
-                      value: v,
-                      label: v,
-                    }))}
-                    onChange={(v) => setFilters((f) => ({ ...f, [key]: v }))}
-                    style={{ minWidth: 200 }}
-                  />
-                );
-              })}
-            {showToolbarFilters &&
-              dateCols.map(({ col, key }) => (
-                <DatePicker.RangePicker
-                  key={key}
-                  value={pickerValue(ranges[key])}
-                  onChange={(v) => setRange(key, v)}
-                  allowEmpty={[true, true]}
-                  format="DD MMM YYYY"
-                  aria-label={
-                    col.facetLabel ??
-                    (typeof col.title === "string" ? col.title : undefined)
-                  }
-                  placeholder={[
-                    t("proTable.dateFrom", "From"),
-                    t("proTable.dateUntil", "Until"),
-                  ]}
-                />
-              ))}
             {/* One chip per picked value, in BOTH layouts (owner ask
                 2026-09-23: *"if there is like filter pls put it down instead
                 of just saying clear 2 filters, so that I can cancel out one
@@ -795,7 +986,6 @@ export function ProTable<T extends object>({
 
       <DataTable
         {...rest}
-        {...(treeData ? { cards: false } : {})}
         rowKey={rowKey}
         columns={tableColumns}
         dataSource={rows}
