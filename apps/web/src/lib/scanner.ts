@@ -262,7 +262,13 @@ function miss(serial: string, reason: ScanMiss["reason"]): void {
  * field was holding it, which is the actual thing standing in the way.
  */
 export function focusScanTarget(): boolean {
-  const host = document.querySelector<HTMLElement>("[data-scan-target]");
+  // The first box ON SCREEN: a form kept mounted but hidden (Inventory's
+  // Stock In / Out keeps every type it has shown, 2026-11-16) has a box that
+  // cannot take the caret, and choosing it would re-arm nothing.
+  const host =
+    Array.from(
+      document.querySelectorAll<HTMLElement>("[data-scan-target]"),
+    ).find((el) => el.closest("[hidden], [inert]") === null) ?? null;
   const input =
     host instanceof HTMLInputElement
       ? host

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __resetScanner,
   __setScannerClock,
+  focusScanTarget,
   getScannerStatus,
   registerScanTarget,
   setScannerSettings,
@@ -256,5 +257,19 @@ describe("useScanTarget", () => {
     await flush();
 
     expect(seen).toEqual(["SM39K90HGPN"]);
+  });
+});
+
+describe("focusScanTarget", () => {
+  it("re-arms the box on screen, not one a hidden form keeps (2026-11-16)", () => {
+    // Inventory's Stock In / Out keeps every form it has shown mounted but
+    // hidden, so the first box in the document may be one nobody can see.
+    document.body.innerHTML = `
+      <div hidden><input data-scan-target="" id="kept" /></div>
+      <div inert><input data-scan-target="" id="inert" /></div>
+      <input data-scan-target="" id="shown" />`;
+    expect(focusScanTarget()).toBe(true);
+    expect(document.activeElement?.id).toBe("shown");
+    document.body.innerHTML = "";
   });
 });

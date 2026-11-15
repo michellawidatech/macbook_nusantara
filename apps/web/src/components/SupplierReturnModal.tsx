@@ -40,6 +40,7 @@ import { PlusOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 import { useTranslation } from "react-i18next";
 import { MoneyInput } from "./MoneyInput";
+import { EmbeddedFooter } from "./EmbeddedFooter";
 import { fmtRp } from "../lib/format.js";
 import { serviceCostOf } from "../lib/service.js";
 import {
@@ -106,12 +107,19 @@ export interface SupplierReturnFormProps {
   /** The reason it opens with — the QC row's "Rejected at QC". */
   readonly defaultReason?: string;
   readonly onDone: (code: string) => void;
+  /**
+   * Drawn inside somebody else's dialog (Inventory's Stock Out, 2026-11-16):
+   * the form ends in a dialog-style footer — Cancel beside the submit —
+   * rather than a lone button under its last field.
+   */
+  readonly onCancel?: () => void;
 }
 
 export function SupplierReturnForm({
   serial: fixedSerial,
   defaultReason,
   onDone,
+  onCancel,
 }: SupplierReturnFormProps) {
   const { t } = useTranslation();
   const db = useDb();
@@ -275,6 +283,16 @@ export function SupplierReturnForm({
     setAddedService(false);
     onDone(out.code!);
   };
+
+  const submitButton = (
+    <Button
+      type="primary"
+      htmlType="submit"
+      disabled={serial === undefined || block !== undefined}
+    >
+      {t("returnSupplier.recordSupplierReturn", "Record supplier return")}
+    </Button>
+  );
 
   return (
     <Form<Values>
@@ -492,13 +510,14 @@ export function SupplierReturnForm({
         </Form.Item>
       )}
 
-      <Button
-        type="primary"
-        htmlType="submit"
-        disabled={serial === undefined || block !== undefined}
-      >
-        {t("returnSupplier.recordSupplierReturn", "Record supplier return")}
-      </Button>
+      {onCancel === undefined ? (
+        submitButton
+      ) : (
+        <EmbeddedFooter>
+          <Button onClick={onCancel}>{t("common.cancel", "Cancel")}</Button>
+          {submitButton}
+        </EmbeddedFooter>
+      )}
     </Form>
   );
 }

@@ -114,6 +114,7 @@ import {
 import dayjs from "dayjs";
 import { MoneyInput } from "../../components/MoneyInput";
 import { GradeTag } from "../../components/GradeTag";
+import { EmbeddedFooter } from "../../components/EmbeddedFooter";
 import { fmtRp, fmtDate, fmtNone } from "../../lib/format.js";
 import { customerLabel } from "../../lib/customers.js";
 import { gradeForCondition } from "../../lib/condition.js";
@@ -362,6 +363,33 @@ function worthOn(order: Order, back: Back): number {
   return line === undefined ? 0 : Math.max(0, line.price * back.qty);
 }
 
+/**
+ * The return form inside somebody else's dialog — Inventory's Stock In, where
+ * *Return from customer* is one of the types picked at the top (owner ask
+ * 2026-11-16) rather than a second dialog opened over the first. The same
+ * fields, the same draft (it is kept on this device under the same keys as
+ * the Returns page's), the same write; only the frame differs.
+ */
+export function CustomerReturnForm({
+  onDone,
+  scanRef,
+}: {
+  /** After a return is recorded, or Cancel. */
+  readonly onDone: () => void;
+  /** Filled with the lookup, so the host can hand it a stray scan. */
+  readonly scanRef?: { current: ((text: string) => void) | null };
+}) {
+  return (
+    <CustomerReturnPanel
+      addOpen
+      onCloseAdd={onDone}
+      onOpenAdd={() => undefined}
+      embedded
+      scanRef={scanRef}
+    />
+  );
+}
+
 export function CustomerReturnPanel({
   addOpen,
   onCloseAdd,
@@ -369,7 +397,13 @@ export function CustomerReturnPanel({
   checkOpen = false,
   onCloseCheck,
   prefillLookup,
+  embedded = false,
+  scanRef,
 }: {
+  /** Draw the form and its buttons with no dialog around them. */
+  embedded?: boolean;
+  /** See `CustomerReturnForm`. */
+  scanRef?: { current: ((text: string) => void) | null };
   addOpen: boolean;
   onCloseAdd: () => void;
   /** Open the Add-return form — what a Shopee refund's *Record return* does. */
@@ -856,6 +890,18 @@ export function CustomerReturnPanel({
     setLookup("");
     openPicker(order);
   };
+
+  // A scan the host dialog caught is looked up as Enter would.
+  useEffect(() => {
+    if (!scanRef) return;
+    scanRef.current = (text: string) => {
+      setLookup(text);
+      find(text);
+    };
+    return () => {
+      scanRef.current = null;
+    };
+  });
 
   // The hand-over from Stock in: look the serial up once, as Enter would.
   useEffect(() => {
@@ -1881,6 +1927,356 @@ export function CustomerReturnPanel({
    * groups a document's lines, since they share one code.
    */
 
+  const addForm = (
+    <Form layout="vertical" component="div">
+      {/* Reason and date first — they are about the whole return. */}
+      <Flex gap={12} wrap>
+        <Form.Item
+          label={t("returnCustomer.reason", "Reason")}
+          required
+          style={{ flex: "1 1 260px", marginBottom: 12 }}
+          validateStatus={tried && !reason ? "error" : undefined}
+        >
+          {/* Pick one, or type a new one — it joins Settings' list. */}
+          <AutoComplete
+            value={reason}
+            placeholder={t(
+              "returnCustomer.searchAReasonOrType",
+              "Search a reason, or type a new one",
+            )}
+            aria-label={t("returnCustomer.reason", "Reason")}
+            options={reasons.map((r) => ({ value: r.label }))}
+            filterOption={(input, opt) =>
+              String(opt?.value ?? "")
+                .toLowerCase()
+                .includes(input.toLowerCase())
+            }
+            onChange={(v: string) => setReason(v.trim() === "" ? undefined : v)}
+          />
+        </Form.Item>
+        {needsDetail && (
+          <Form.Item
+            label={t("returnCustomer.specifyTheReason", "Specify the reason")}
+            required
+            style={{ flex: "2 1 320px", marginBottom: 12 }}
+            validateStatus={
+              tried && reasonDetail.trim() === "" ? "error" : undefined
+            }
+          >
+            <Input
+              value={reasonDetail}
+              onChange={(e) => setReasonDetail(e.target.value)}
+              aria-label={t(
+                "returnCustomer.specifyTheReason",
+                "Specify the reason",
+              )}
+              placeholder={t(
+                "returnCustomer.whatWasWrongWithIt",
+                "What was wrong with it?",
+              )}
+            />
+          </Form.Item>
+        )}
+        <Form.Item
+          label={t("returnCustomer.warehouse", "Back to warehouse")}
+          required
+          style={{ flex: "1 1 220px", marginBottom: 12 }}
+          validateStatus={tried && !returnTo ? "error" : undefined}
+        >
+          <Select
+            value={returnTo}
+            placeholder={t("returnCustomer.pickAWarehouse", "Pick a warehouse")}
+            aria-label={t("returnCustomer.warehouse", "Back to warehouse")}
+            options={shelves.map((w) => ({
+              value: w.id,
+              label: warehouseLabel(w),
+            }))}
+            onChange={setWarehousePicked}
+          />
+        </Form.Item>
+        <Form.Item
+          label={t("returnCustomer.date", "Date")}
+          style={{ flex: "0 0 auto", marginBottom: 12 }}
+        >
+          <DatePicker
+            format="DD MMM YYYY"
+            value={date}
+            allowClear={false}
+            onChange={(d) => d && setDate(d)}
+          />
+        </Form.Item>
+      </Flex>
+
+      {/*
+       * The one thing the form asks for (owner ask 2026-09-25): *"the
+       * user only need to fill: Transaction number (only 1 transaction
+       * at a time)."* Enter opens the picker. An AutoComplete rather
+       * than a plain box so a half-remembered number offers the sales
+       * it could be — and a serial read off the unit in the customer's
+       * hand still resolves to the sale it went out on, which is the
+       * same question asked with the other label.
+       */}
+      <Flex gap={8} wrap align="flex-start">
+        <Form.Item
+          label={t("returnCustomer.transactionNumber", "Transaction number")}
+          required
+          style={{ flex: "1 1 320px", marginBottom: 12 }}
+          validateStatus={
+            lookupMiss || (tried && involved.length === 0) ? "error" : undefined
+          }
+          help={
+            lookupMiss
+              ? t(
+                  "returnCustomer.noSuchSale",
+                  "No sale found for {{text}} that still has units out. Check the number, or search by serial.",
+                  { text: lookupMiss },
+                )
+              : undefined
+          }
+        >
+          <AutoComplete
+            value={lookup}
+            options={saleOptions}
+            /*
+             * Enter belongs to the BOX, not to the list. With the first
+             * option active by default, a serial typed in full — which
+             * matches no sale's label and so leaves the list showing
+             * whatever it was last filtered to — would open the picker
+             * on whichever sale happened to be highlighted.
+             */
+            defaultActiveFirstOption={false}
+            filterOption={(input, option) =>
+              (option?.label ?? "")
+                .toString()
+                .toLowerCase()
+                .includes(input.trim().toLowerCase())
+            }
+            onChange={(value: string) => {
+              setLookup(value.toUpperCase());
+              setLookupMiss(null);
+            }}
+            onSelect={(value: string) => {
+              setLookup("");
+              const order = db.orders.find((o) => o.id === value);
+              if (order) openPicker(order);
+            }}
+          >
+            <Input
+              onPressEnter={(e) => {
+                e.preventDefault();
+                find();
+              }}
+              placeholder={t(
+                "returnCustomer.typeTheTransaction",
+                "Type the transaction number, or scan the serial",
+              )}
+              style={{ fontFamily: "monospace" }}
+              aria-label={t(
+                "returnCustomer.transactionNumber",
+                "Transaction number",
+              )}
+              data-scan-target=""
+            />
+          </AutoComplete>
+        </Form.Item>
+        <Button
+          icon={<SearchOutlined />}
+          onClick={() => find()}
+          style={{ marginTop: 30 }}
+        >
+          {t("returnCustomer.findSale", "Find the sale")}
+        </Button>
+      </Flex>
+
+      {/* What is coming back. */}
+      {views[0] !== undefined && (
+        <Flex
+          gap={8}
+          align="center"
+          wrap
+          style={{ marginBottom: 8 }}
+          justify="space-between"
+        >
+          <Typography.Text type="secondary">
+            {[
+              views[0].sale.code,
+              customerName(views[0].sale),
+              fmtDate(views[0].sale.ts),
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </Typography.Text>
+          <Flex gap={8}>
+            <Button size="small" onClick={() => openPicker(views[0]!.sale)}>
+              {t("returnCustomer.changeUnits", "Change the units")}
+            </Button>
+            <Button size="small" onClick={removeSale}>
+              {t("returnCustomer.startOver", "Start over")}
+            </Button>
+          </Flex>
+        </Flex>
+      )}
+      {returnTable}
+
+      {/*
+       * One charge for the whole return (owner ask 2026-09-26).
+       *
+       * Drawn only while nothing is going out in exchange: with a
+       * replacement on the form the charge is asked for per exchange
+       * unit instead, in the column beside its price, and two boxes
+       * both meaning "and this much on top" is a sale charged twice.
+       */}
+      {backRows.length > 0 && chosen.length === 0 && (
+        <Form.Item
+          style={{ marginTop: 12, marginBottom: 0, maxWidth: 260 }}
+          label={t("returnCustomer.returnFee", "Additional fee")}
+          tooltip={t(
+            "returnCustomer.returnFeeHint",
+            "Charged for taking the return — it comes off what the customer gets back.",
+          )}
+        >
+          <MoneyInput
+            value={returnFee ?? undefined}
+            aria-label={t("returnCustomer.returnFee", "Additional fee")}
+            onChange={(value) => setReturnFee(value)}
+          />
+        </Form.Item>
+      )}
+
+      {/*
+       * The exchange, below (owner ask 2026-09-25). Nothing of it is
+       * drawn until somebody asks for it, and it cannot be asked for
+       * until something is coming back — the 2026-09-19 rule: *"only
+       * then, show the unit for replacement."*
+       */}
+      <div style={{ marginTop: 16 }}>
+        {!exchangeOpen ? (
+          <Button
+            icon={<PlusOutlined />}
+            disabled={backRows.length === 0}
+            onClick={() => setExchangeOpen(true)}
+          >
+            {t("returnCustomer.addExchangeUnit", "Exchange unit")}
+          </Button>
+        ) : (
+          <Flex vertical gap={8}>
+            <Flex gap={8} align="center" justify="space-between" wrap>
+              <Typography.Title level={5} style={{ margin: 0 }}>
+                {t("returnCustomer.exchangeFor", "Exchange for")}
+              </Typography.Title>
+              <Button
+                type="text"
+                size="small"
+                icon={<CloseOutlined />}
+                aria-label={t("returnCustomer.closeExchange", "No exchange")}
+                onClick={() => {
+                  setExchangeOpen(false);
+                  setReplacements([]);
+                }}
+              />
+            </Flex>
+            <Select
+              showSearch
+              value={null}
+              optionFilterProp="label"
+              options={shelfOptions}
+              placeholder={t(
+                "returnCustomer.pickReplacement",
+                "Pick a unit — serial or name",
+              )}
+              aria-label={t(
+                "returnCustomer.searchReplacementAria",
+                "Find a replacement in the inventory",
+              )}
+              onChange={(value: string) => pickReplacement(value)}
+            />
+            {exchangeTable}
+            {stale.length > 0 && (
+              <Alert
+                type="warning"
+                showIcon
+                title={t(
+                  "returnCustomer.staleReplacements",
+                  "No longer on the shelf, so left out: {{list}}",
+                  { list: stale.join(", ") },
+                )}
+              />
+            )}
+          </Flex>
+        )}
+      </div>
+
+      {/* The money — only what somebody has to act on. */}
+      {preview !== undefined && !preview.exchange && preview.refund > 0 && (
+        <Flex gap={12} align="center" wrap style={{ marginTop: 16 }}>
+          <Typography.Text strong>
+            {t("returnCustomer.handBack", "Hand back {{amount}}", {
+              amount: fmtRp(preview.refund),
+            })}
+          </Typography.Text>
+          {methodChips}
+        </Flex>
+      )}
+      {preview !== undefined && preview.exchange && preview.topUp > 0 && (
+        <Flex gap={12} align="center" wrap style={{ marginTop: 16 }}>
+          <Typography.Text strong>
+            {t(
+              "returnCustomer.customerPays",
+              "Customer pays {{amount}} for the exchange",
+              { amount: fmtRp(preview.topUp) },
+            )}
+          </Typography.Text>
+          {methodChips}
+        </Flex>
+      )}
+      {/*
+       * Payment reference (owner ask 2026-09-21, evening).
+       *
+       * Only drawn once money is going to move — a plain return with no
+       * refund does not need one. Whatever is typed becomes the
+       * description of the Refund adjustment written when the form is
+       * saved, so a reconciliation later can key on it. Empty falls
+       * back to the return's SG codes.
+       */}
+      {preview !== undefined &&
+        ((!preview.exchange && preview.refund > 0) ||
+          (preview.exchange && preview.topUp > 0)) && (
+          <Form.Item
+            style={{ marginTop: 12, marginBottom: 0 }}
+            label={t("returnCustomer.paymentRef", "Payment reference")}
+            tooltip={t(
+              "returnCustomer.paymentRefHint",
+              "Written on the Refund adjustment. A bank slip, a courier's receipt, or the message ID the customer sent.",
+            )}
+          >
+            <Input
+              value={paymentRef}
+              onChange={(e) => setPaymentRef(e.target.value)}
+              placeholder={t(
+                "returnCustomer.paymentRefPlaceholder",
+                "e.g. BCA 20260921-4711, or the courier's receipt number",
+              )}
+              aria-label={t("returnCustomer.paymentRef", "Payment reference")}
+            />
+          </Form.Item>
+        )}
+    </Form>
+  );
+
+  if (embedded)
+    return (
+      <>
+        {addForm}
+        <EmbeddedFooter>
+          <Button onClick={close}>{t("common.cancel", "Cancel")}</Button>
+          <Button type="primary" onClick={submit}>
+            {t("returnCustomer.recordReturn", "Record return")}
+          </Button>
+        </EmbeddedFooter>
+        {pickerModal}
+      </>
+    );
+
   return (
     <>
       <Flex vertical gap={16}>
@@ -1899,366 +2295,7 @@ export function CustomerReturnPanel({
           okText={t("returnCustomer.recordReturn", "Record return")}
           onOk={submit}
         >
-          <Form layout="vertical" component="div">
-            {/* Reason and date first — they are about the whole return. */}
-            <Flex gap={12} wrap>
-              <Form.Item
-                label={t("returnCustomer.reason", "Reason")}
-                required
-                style={{ flex: "1 1 260px", marginBottom: 12 }}
-                validateStatus={tried && !reason ? "error" : undefined}
-              >
-                {/* Pick one, or type a new one — it joins Settings' list. */}
-                <AutoComplete
-                  value={reason}
-                  placeholder={t(
-                    "returnCustomer.searchAReasonOrType",
-                    "Search a reason, or type a new one",
-                  )}
-                  aria-label={t("returnCustomer.reason", "Reason")}
-                  options={reasons.map((r) => ({ value: r.label }))}
-                  filterOption={(input, opt) =>
-                    String(opt?.value ?? "")
-                      .toLowerCase()
-                      .includes(input.toLowerCase())
-                  }
-                  onChange={(v: string) =>
-                    setReason(v.trim() === "" ? undefined : v)
-                  }
-                />
-              </Form.Item>
-              {needsDetail && (
-                <Form.Item
-                  label={t(
-                    "returnCustomer.specifyTheReason",
-                    "Specify the reason",
-                  )}
-                  required
-                  style={{ flex: "2 1 320px", marginBottom: 12 }}
-                  validateStatus={
-                    tried && reasonDetail.trim() === "" ? "error" : undefined
-                  }
-                >
-                  <Input
-                    value={reasonDetail}
-                    onChange={(e) => setReasonDetail(e.target.value)}
-                    aria-label={t(
-                      "returnCustomer.specifyTheReason",
-                      "Specify the reason",
-                    )}
-                    placeholder={t(
-                      "returnCustomer.whatWasWrongWithIt",
-                      "What was wrong with it?",
-                    )}
-                  />
-                </Form.Item>
-              )}
-              <Form.Item
-                label={t("returnCustomer.warehouse", "Back to warehouse")}
-                required
-                style={{ flex: "1 1 220px", marginBottom: 12 }}
-                validateStatus={tried && !returnTo ? "error" : undefined}
-              >
-                <Select
-                  value={returnTo}
-                  placeholder={t(
-                    "returnCustomer.pickAWarehouse",
-                    "Pick a warehouse",
-                  )}
-                  aria-label={t(
-                    "returnCustomer.warehouse",
-                    "Back to warehouse",
-                  )}
-                  options={shelves.map((w) => ({
-                    value: w.id,
-                    label: warehouseLabel(w),
-                  }))}
-                  onChange={setWarehousePicked}
-                />
-              </Form.Item>
-              <Form.Item
-                label={t("returnCustomer.date", "Date")}
-                style={{ flex: "0 0 auto", marginBottom: 12 }}
-              >
-                <DatePicker
-                  format="DD MMM YYYY"
-                  value={date}
-                  allowClear={false}
-                  onChange={(d) => d && setDate(d)}
-                />
-              </Form.Item>
-            </Flex>
-
-            {/*
-             * The one thing the form asks for (owner ask 2026-09-25): *"the
-             * user only need to fill: Transaction number (only 1 transaction
-             * at a time)."* Enter opens the picker. An AutoComplete rather
-             * than a plain box so a half-remembered number offers the sales
-             * it could be — and a serial read off the unit in the customer's
-             * hand still resolves to the sale it went out on, which is the
-             * same question asked with the other label.
-             */}
-            <Flex gap={8} wrap align="flex-start">
-              <Form.Item
-                label={t(
-                  "returnCustomer.transactionNumber",
-                  "Transaction number",
-                )}
-                required
-                style={{ flex: "1 1 320px", marginBottom: 12 }}
-                validateStatus={
-                  lookupMiss || (tried && involved.length === 0)
-                    ? "error"
-                    : undefined
-                }
-                help={
-                  lookupMiss
-                    ? t(
-                        "returnCustomer.noSuchSale",
-                        "No sale found for {{text}} that still has units out. Check the number, or search by serial.",
-                        { text: lookupMiss },
-                      )
-                    : undefined
-                }
-              >
-                <AutoComplete
-                  value={lookup}
-                  options={saleOptions}
-                  /*
-                   * Enter belongs to the BOX, not to the list. With the first
-                   * option active by default, a serial typed in full — which
-                   * matches no sale's label and so leaves the list showing
-                   * whatever it was last filtered to — would open the picker
-                   * on whichever sale happened to be highlighted.
-                   */
-                  defaultActiveFirstOption={false}
-                  filterOption={(input, option) =>
-                    (option?.label ?? "")
-                      .toString()
-                      .toLowerCase()
-                      .includes(input.trim().toLowerCase())
-                  }
-                  onChange={(value: string) => {
-                    setLookup(value.toUpperCase());
-                    setLookupMiss(null);
-                  }}
-                  onSelect={(value: string) => {
-                    setLookup("");
-                    const order = db.orders.find((o) => o.id === value);
-                    if (order) openPicker(order);
-                  }}
-                >
-                  <Input
-                    onPressEnter={(e) => {
-                      e.preventDefault();
-                      find();
-                    }}
-                    placeholder={t(
-                      "returnCustomer.typeTheTransaction",
-                      "Type the transaction number, or scan the serial",
-                    )}
-                    style={{ fontFamily: "monospace" }}
-                    aria-label={t(
-                      "returnCustomer.transactionNumber",
-                      "Transaction number",
-                    )}
-                    data-scan-target=""
-                  />
-                </AutoComplete>
-              </Form.Item>
-              <Button
-                icon={<SearchOutlined />}
-                onClick={() => find()}
-                style={{ marginTop: 30 }}
-              >
-                {t("returnCustomer.findSale", "Find the sale")}
-              </Button>
-            </Flex>
-
-            {/* What is coming back. */}
-            {views[0] !== undefined && (
-              <Flex
-                gap={8}
-                align="center"
-                wrap
-                style={{ marginBottom: 8 }}
-                justify="space-between"
-              >
-                <Typography.Text type="secondary">
-                  {[
-                    views[0].sale.code,
-                    customerName(views[0].sale),
-                    fmtDate(views[0].sale.ts),
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </Typography.Text>
-                <Flex gap={8}>
-                  <Button
-                    size="small"
-                    onClick={() => openPicker(views[0]!.sale)}
-                  >
-                    {t("returnCustomer.changeUnits", "Change the units")}
-                  </Button>
-                  <Button size="small" onClick={removeSale}>
-                    {t("returnCustomer.startOver", "Start over")}
-                  </Button>
-                </Flex>
-              </Flex>
-            )}
-            {returnTable}
-
-            {/*
-             * One charge for the whole return (owner ask 2026-09-26).
-             *
-             * Drawn only while nothing is going out in exchange: with a
-             * replacement on the form the charge is asked for per exchange
-             * unit instead, in the column beside its price, and two boxes
-             * both meaning "and this much on top" is a sale charged twice.
-             */}
-            {backRows.length > 0 && chosen.length === 0 && (
-              <Form.Item
-                style={{ marginTop: 12, marginBottom: 0, maxWidth: 260 }}
-                label={t("returnCustomer.returnFee", "Additional fee")}
-                tooltip={t(
-                  "returnCustomer.returnFeeHint",
-                  "Charged for taking the return — it comes off what the customer gets back.",
-                )}
-              >
-                <MoneyInput
-                  value={returnFee ?? undefined}
-                  aria-label={t("returnCustomer.returnFee", "Additional fee")}
-                  onChange={(value) => setReturnFee(value)}
-                />
-              </Form.Item>
-            )}
-
-            {/*
-             * The exchange, below (owner ask 2026-09-25). Nothing of it is
-             * drawn until somebody asks for it, and it cannot be asked for
-             * until something is coming back — the 2026-09-19 rule: *"only
-             * then, show the unit for replacement."*
-             */}
-            <div style={{ marginTop: 16 }}>
-              {!exchangeOpen ? (
-                <Button
-                  icon={<PlusOutlined />}
-                  disabled={backRows.length === 0}
-                  onClick={() => setExchangeOpen(true)}
-                >
-                  {t("returnCustomer.addExchangeUnit", "Exchange unit")}
-                </Button>
-              ) : (
-                <Flex vertical gap={8}>
-                  <Flex gap={8} align="center" justify="space-between" wrap>
-                    <Typography.Title level={5} style={{ margin: 0 }}>
-                      {t("returnCustomer.exchangeFor", "Exchange for")}
-                    </Typography.Title>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<CloseOutlined />}
-                      aria-label={t(
-                        "returnCustomer.closeExchange",
-                        "No exchange",
-                      )}
-                      onClick={() => {
-                        setExchangeOpen(false);
-                        setReplacements([]);
-                      }}
-                    />
-                  </Flex>
-                  <Select
-                    showSearch
-                    value={null}
-                    optionFilterProp="label"
-                    options={shelfOptions}
-                    placeholder={t(
-                      "returnCustomer.pickReplacement",
-                      "Pick a unit — serial or name",
-                    )}
-                    aria-label={t(
-                      "returnCustomer.searchReplacementAria",
-                      "Find a replacement in the inventory",
-                    )}
-                    onChange={(value: string) => pickReplacement(value)}
-                  />
-                  {exchangeTable}
-                  {stale.length > 0 && (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      title={t(
-                        "returnCustomer.staleReplacements",
-                        "No longer on the shelf, so left out: {{list}}",
-                        { list: stale.join(", ") },
-                      )}
-                    />
-                  )}
-                </Flex>
-              )}
-            </div>
-
-            {/* The money — only what somebody has to act on. */}
-            {preview !== undefined &&
-              !preview.exchange &&
-              preview.refund > 0 && (
-                <Flex gap={12} align="center" wrap style={{ marginTop: 16 }}>
-                  <Typography.Text strong>
-                    {t("returnCustomer.handBack", "Hand back {{amount}}", {
-                      amount: fmtRp(preview.refund),
-                    })}
-                  </Typography.Text>
-                  {methodChips}
-                </Flex>
-              )}
-            {preview !== undefined && preview.exchange && preview.topUp > 0 && (
-              <Flex gap={12} align="center" wrap style={{ marginTop: 16 }}>
-                <Typography.Text strong>
-                  {t(
-                    "returnCustomer.customerPays",
-                    "Customer pays {{amount}} for the exchange",
-                    { amount: fmtRp(preview.topUp) },
-                  )}
-                </Typography.Text>
-                {methodChips}
-              </Flex>
-            )}
-            {/*
-             * Payment reference (owner ask 2026-09-21, evening).
-             *
-             * Only drawn once money is going to move — a plain return with no
-             * refund does not need one. Whatever is typed becomes the
-             * description of the Refund adjustment written when the form is
-             * saved, so a reconciliation later can key on it. Empty falls
-             * back to the return's SG codes.
-             */}
-            {preview !== undefined &&
-              ((!preview.exchange && preview.refund > 0) ||
-                (preview.exchange && preview.topUp > 0)) && (
-                <Form.Item
-                  style={{ marginTop: 12, marginBottom: 0 }}
-                  label={t("returnCustomer.paymentRef", "Payment reference")}
-                  tooltip={t(
-                    "returnCustomer.paymentRefHint",
-                    "Written on the Refund adjustment. A bank slip, a courier's receipt, or the message ID the customer sent.",
-                  )}
-                >
-                  <Input
-                    value={paymentRef}
-                    onChange={(e) => setPaymentRef(e.target.value)}
-                    placeholder={t(
-                      "returnCustomer.paymentRefPlaceholder",
-                      "e.g. BCA 20260921-4711, or the courier's receipt number",
-                    )}
-                    aria-label={t(
-                      "returnCustomer.paymentRef",
-                      "Payment reference",
-                    )}
-                  />
-                </Form.Item>
-              )}
-          </Form>
+          {addForm}
         </Modal>
 
         {pickerModal}
