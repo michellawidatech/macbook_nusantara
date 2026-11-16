@@ -4085,6 +4085,93 @@ Decisions that outlived those documents:
     `[inert]`, or the kept-but-hidden forms would claim the re-arm.
   - **On a phone the two buttons are words**, in a `FooterToolbar` at the foot
     with an icon Export beside them — no float fan on Inventory any more.
+- **Instagram — DMs in /chat, a Comments tab, the bot on both — 2026-11-16**
+  (owner-approved, new tables included; spec
+  `docs/superpowers/specs/2026-11-16-instagram-design.md`, owner's guide
+  `docs/instagram-connect.md`, migration
+  `20261116120000_instagram_dms_and_comments`). Straight to Meta with the
+  **Instagram API with Instagram Login** (`graph.instagram.com`, scopes
+  `instagram_business_basic|manage_messages|manage_comments`), same app, same
+  public `/webhook`, Graph **v25.0** — the one shared constant.
+  - **The thread key IS the channel: `ig:<IGSID>`** (`packages/domain`
+    `chatChannel.ts`). An Instagram DM is a `WaMessage` (`waMessageId` =
+    `ig:` + mid) and every chat table keyed by `from` — memory, tasks, profile,
+    runs, recall, watches, proposals, `ChatMedia` — serves it unchanged, so the
+    draft pass, hand-overs, categories and alerts are WhatsApp's code. No
+    channel column (a second truth the key already holds); a wa_id has no colon,
+    so nothing keyed by one can match an Instagram thread.
+    `ChatMedia_shape`, `ReservationProposal_from_waid` and `wa_thread_delete`
+    take the key (the delete also drops that sender's `IgRawEvent` envelopes).
+  - ⚠️ **An `ig:` key is never a phone.** `phoneForms` returns `[]` for one
+    (no customer, order or booking is read through it), `toE164` throws, the
+    bot creates no `Customer` for an Instagram sender (the profile holds the
+    name), phone-keyed booking tools answer `NO_PHONE_BOOKING`, and an approved
+    Instagram request books with `phone` and `customerId` null. The agent API
+    token's `waId` is the thread key — still no route takes one from a request.
+  - **The outbox kind follows the recipient.** `enqueueOutbox` stores a
+    `WA_REPLY` / `WA_IMAGE` addressed to an `ig:` key as **`IG_DM` /
+    `IG_IMAGE`** (`outboxKindFor`), so none of the fifteen writers needed a
+    branch; readers of "what was sent to X" filter `REPLY_KINDS` /
+    `IMAGE_KINDS`. `claimOutbox(…, {only|except})`: the WhatsApp pass claims
+    everything but `INSTAGRAM_OUTBOX_KINDS`, `apps/worker/src/igSend.ts` only
+    those (`IG_DM`, `IG_IMAGE`, `IG_REPLY`, `IG_PRIVATE_REPLY`, `IG_HIDE` — the
+    last three new enum values). A DM is cut into ≤ 1000-UTF-8-byte parts
+    (`splitForInstagram`) and its progress kept on the row, so a retry sends
+    only the rest.
+  - **Instagram's window, everywhere:** 24 h for anybody; a STAFF reply up to
+    7 days tagged `HUMAN_AGENT` only with `IG_HUMAN_AGENT=1` (api.env, once
+    Meta approves the feature); nothing past that (`igReplyMode`,
+    `routes/threadWindow.ts`). The bot hands over past 24 h as on WhatsApp's
+    Cloud API; follow-ups and request approvals never treat an Instagram thread
+    as Baileys. Sent Instagram items are never editable or unsendable.
+  - ⚠️ **Pictures go by URL** — Instagram fetches, it takes no upload — and the
+    only public origin is the funnel, which publishes `/webhook/*`. The worker
+    writes a random `payload.mediaToken` onto the `IG_IMAGE` row and hands Graph
+    `IG_MEDIA_PUBLIC_URL/<row>/<token>`; the webhook serves those bytes only
+    for that row, while queued/sending/sent, not unsent, under 24 h
+    (`apps/whatsapp-webhook/src/media.ts`). JPEG/PNG only.
+  - **Inbound** (`apps/whatsapp-webhook/src/instagram.ts`): raw first, DMs
+    (echoes, deletions and the account's own skipped; a postback reads as its
+    title), comments in BOTH documented shapes with an `IgMedia` stub
+    (`fetchedAt` = the epoch = never fetched). `IgSettings.autoReply` (OFF until
+    the owner switches it) answers a person's FIRST top-level comment on a post,
+    once, with the public template and the private-DM template.
+    ⚠️ `IG_APP_SECRET` is a second signing key accepted for `object:
+    "instagram"` bodies only — Meta does not say which secret signs Instagram
+    Login webhooks; `webhook.ig.signed_with` logs which one did.
+  - **The worker's sync pass** (`igSync.ts`): an `IgContact` per sender (User
+    Profile API; the name also fills the thread's unnamed rows), posts'
+    caption/picture/link (refetched daily while commented on), `/me` hourly into
+    **`IgConnection`** (singleton), a staff WhatsApp alert per NEW comment (once
+    per author per 15 min), and the **token refresh every 7 days**, written back
+    into `IG_TOKEN_FILE` (temp + rename, 600). ⚠️ The token lives in
+    worker.env ONLY — never api.env, the database, a log or a doc; Instagram's
+    Graph calls take `igFetchImpl`, never `fetchImpl` (that one is rewritten to
+    the Baileys gateway). Grants: agent SELECT/INSERT/UPDATE on `IgContact` and
+    `IgConnection`, column UPDATEs on `IgMedia` (the fetched columns) and
+    `IgComment.replyCommentId`; app SELECT/INSERT/UPDATE on comments, media and
+    settings; DELETE for neither.
+  - **API:** `/api/inbox?channel=instagram` (absent is WhatsApp, the list it
+    always was), every `/api/inbox/:phone` route takes an `ig:` key
+    (`threadParam`), threads carry `channel`, `username`, `humanAgentOnly`;
+    `/waiting` adds `instagram` and `comments`. `/api/instagram`: comments
+    (filter, search), reply, the one private reply (7 days), hide/show, done —
+    each its outbox row and `AuditLog` line in one transaction — settings (PUT
+    owner) and the owner's connection card. ⚠️ `/waiting` adds `instagram`
+    and `comments` only when asked `?instagram=1` — an existing test pins the
+    plain answer. Delete conversation on an Instagram thread is confirmed by
+    its @username (or IGSID).
+  - **Web:** Chatbot → Chat has a WhatsApp | Instagram `Segmented` above the
+    thread list (`?channel=`), the same three columns, an Instagram thread
+    named `@username` and never by its key, and reply-box copy for the
+    7-day/closed windows; `/chat?phone=ig%3A…` opens the Instagram inbox.
+    **Comments is a tab** (between Chat and Knowledge Base, `CommentsPanel`;
+    `/chat?tab=comments`), not a nav leaf: the Chatbot leaf is where the badge
+    already sends people. Settings has the owner-only `InstagramCard`. The
+    sidebar notice and the Chatbot badge add NEW comments
+    (`lib/instagramApi.ts`, `hooks/useChatWaiting.ts`).
+  - Not built: edit/unsend on Instagram (no API), reactions, story features,
+    `/new` for Instagram testers, a `Customer` from an Instagram chat.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

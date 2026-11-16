@@ -7,6 +7,11 @@
  *
  * A failed poll keeps the last answer: a notice that vanishes because one
  * request timed out reads as "nothing to answer".
+ *
+ * Instagram (2026-11-16): `count` already holds the Instagram DM threads
+ * waiting on a person (`instagram` is that part of it), and `comments` is the
+ * NEW Instagram comments — counted apart so the notice can say which, and
+ * added together by `waitingTotal` for a badge.
  */
 import { useEffect, useState } from "react";
 import { getWaitingChats } from "../lib/chatApi.js";
@@ -14,20 +19,46 @@ import { getWaitingChats } from "../lib/chatApi.js";
 export const WAITING_POLL_MS = 30_000;
 
 export interface ChatWaiting {
+  /** Chats of both channels waiting on a person. */
   readonly count: number;
+  /** The thread key waiting longest. */
   readonly oldest: string | null;
+  /** The Instagram DM threads among `count`. */
+  readonly instagram: number;
+  /** NEW Instagram comments. */
+  readonly comments: number;
 }
 
-let current: ChatWaiting = { count: 0, oldest: null };
+/** Everything that waits on a person: chats plus comments. */
+export const waitingTotal = (w: ChatWaiting): number => w.count + w.comments;
+
+let current: ChatWaiting = {
+  count: 0,
+  oldest: null,
+  instagram: 0,
+  comments: 0,
+};
 const listeners = new Set<(w: ChatWaiting) => void>();
 let timer: ReturnType<typeof setInterval> | null = null;
 
 async function poll(): Promise<void> {
   if (typeof document !== "undefined" && document.hidden) return;
   try {
-    const next = await getWaitingChats();
-    if (next.count === current.count && next.oldest === current.oldest) return;
-    current = { count: next.count, oldest: next.oldest };
+    const answer = await getWaitingChats();
+    const next: ChatWaiting = {
+      count: answer.count,
+      oldest: answer.oldest,
+      instagram: answer.instagram ?? 0,
+      comments: answer.comments ?? 0,
+    };
+    if (
+      next.count === current.count &&
+      next.oldest === current.oldest &&
+      next.instagram === current.instagram &&
+      next.comments === current.comments
+    )
+      return;
+    current = next;
     for (const l of listeners) l(current);
   } catch {
     // Keep the last answer.

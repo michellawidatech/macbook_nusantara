@@ -1,5 +1,12 @@
 /**
- * The WhatsApp inbox, as the SPA sees it. See apps/api/src/routes/inbox.ts.
+ * The WhatsApp and Instagram inbox, as the SPA sees it. See
+ * apps/api/src/routes/inbox.ts.
+ *
+ * An Instagram DM thread (2026-11-16) is keyed `ig:<IGSID>` where a WhatsApp
+ * one is keyed by the phone, and every `/api/inbox/:phone…` route takes
+ * either — which is why every path below runs the key through
+ * `encodeURIComponent` (the colon). The key is an address, never a number to
+ * show: `isInstagramKey` is how a screen tells the two apart.
  *
  * These are real rows out of `WaMessage`, not the mock store. The Chat page
  * used to render `useDb().chats`, which is why a message the shop genuinely
@@ -26,11 +33,34 @@ export interface Handoff {
   also?: string[];
 }
 
+/** Which inbox a thread is in. */
+export type ThreadChannel = "WHATSAPP" | "INSTAGRAM";
+/** The list's `?channel=` (absent is WhatsApp). */
+export type InboxChannel = "whatsapp" | "instagram";
+
+/** An Instagram DM thread's key (`ig:<IGSID>`), never a phone number. */
+export const isInstagramKey = (key: string | null | undefined): boolean =>
+  typeof key === "string" && key.startsWith("ig:");
+
+/** The inbox a thread key belongs to. */
+export const channelOfKey = (key: string | null | undefined): InboxChannel =>
+  isInstagramKey(key) ? "instagram" : "whatsapp";
+
 export interface InboxThread {
-  /** The customer's wa_id: digits only, country code first. */
+  /**
+   * The thread key: the customer's wa_id (digits only, country code first),
+   * or `ig:<IGSID>` for an Instagram DM thread.
+   */
   phone: string;
   name: string | null;
-  channel: "WHATSAPP";
+  channel: ThreadChannel;
+  /** The Instagram @username (without the @); null for WhatsApp. */
+  username?: string | null;
+  /**
+   * Instagram past 24 hours (2026-11-16): only a person may reply, tagged
+   * HUMAN_AGENT, until `windowClosesAt` — up to 7 days. False for WhatsApp.
+   */
+  humanAgentOnly?: boolean;
   lastText: string | null;
   /** ISO. */
   lastAt: string;
@@ -110,7 +140,10 @@ export interface InboxReply {
  */
 export interface SentItem {
   id: string;
+  /** A text or a picture — an Instagram row reads as the same two kinds. */
   kind: "WA_REPLY" | "WA_IMAGE";
+  /** Which channel it went over (2026-11-16). Instagram never edits or unsends. */
+  channel?: ThreadChannel;
   status: "PENDING" | "SENDING" | "SENT" | "FAILED";
   createdAt: string;
   sentAt: string | null;
@@ -164,8 +197,13 @@ export interface InboxMessage {
 export interface InboxConversation {
   phone: string;
   name: string | null;
-  channel: "WHATSAPP";
+  channel: ThreadChannel;
+  /** The Instagram @username (without the @); null for WhatsApp. */
+  username?: string | null;
+  /** ISO, or null while nobody may reply (the window has closed). */
   windowClosesAt: string | null;
+  /** Instagram past 24 hours: only a person may reply, until `windowClosesAt`. */
+  humanAgentOnly?: boolean;
   messages: InboxMessage[];
   /**
    * The agent's rolling note on this thread, written by the worker's summary
@@ -361,8 +399,18 @@ export interface QueuedReply {
   status: "QUEUED";
 }
 
-export const listThreads = (signal?: AbortSignal) =>
-  api<{ threads: InboxThread[] }>("/api/inbox", signal ? { signal } : {});
+/**
+ * One inbox's threads. WhatsApp is the list without a parameter — the list a
+ * WhatsApp shop always saw; Instagram is `?channel=instagram`.
+ */
+export const listThreads = (
+  channel: InboxChannel = "whatsapp",
+  signal?: AbortSignal,
+) =>
+  api<{ threads: InboxThread[] }>(
+    channel === "instagram" ? "/api/inbox?channel=instagram" : "/api/inbox",
+    signal ? { signal } : {},
+  );
 
 export const getConversation = (phone: string, signal?: AbortSignal) =>
   api<InboxConversation>(
@@ -464,7 +512,8 @@ export const attachMedia = (phone: string, serials: readonly string[]) =>
 /**
  * Send a picture from this device (2026-10-27): a JPG, PNG or WebP of at most
  * 5 MB, as a data URL, with an optional caption. 409 once the 24-hour window
- * has closed, 413 / 415 for a file the server will not take.
+ * has closed, 413 / 415 for a file the server will not take. An Instagram
+ * thread takes JPG or PNG only (400 for a WebP).
  */
 export const sendPicture = (phone: string, image: string, caption?: string) =>
   api<SentItem>(`/api/inbox/${encodeURIComponent(phone)}/picture`, {
