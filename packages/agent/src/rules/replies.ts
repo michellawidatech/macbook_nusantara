@@ -181,8 +181,8 @@ export type NextStep = "photos" | "visit" | "process";
 export const reply = {
   greeting(lang: Lang): string {
     return lang === "en"
-      ? "Hi 😊 Welcome to Macbook Nusantara."
-      : "Halo kak 😊 Selamat datang di Macbook Nusantara.";
+      ? "Hi 😊 Welcome to Macbook Nusantara"
+      : "Halo kak 😊 Selamat datang di Macbook Nusantara";
   },
 
   /**
@@ -218,6 +218,23 @@ export const reply = {
     return lang === "en" ? "Sure 😊" : "Siap kak 😊";
   },
 
+  /**
+   * "Hmm", "emm" — hesitating, not agreeing (owner, 2026-11-16): never "Siap
+   * kak" to a hmm, and no push. Room to ask, said lightly.
+   */
+  hesitant(lang: Lang): string {
+    return lang === "en"
+      ? "Take your time 😊 If anything is holding you back, just ask"
+      : "Santai aja kak 😊 Kalau ada yang masih bikin ragu, tanyain aja ya";
+  },
+
+  /** An "ok" after units were shown and nothing is left to ask. */
+  ackShown(lang: Lang): string {
+    return lang === "en"
+      ? "Sure 😊 If you'd like to know more about any of them, just ask"
+      : "Siap kak 😊 Kalau ada yang mau ditanyain lagi soal unitnya, kabarin aja ya";
+  },
+
   /** They told us about themselves; the next question follows. */
   noted(lang: Lang): string {
     return lang === "en" ? "Got it, thanks 😊" : "Okee kak, noted 😊";
@@ -239,11 +256,11 @@ export const reply = {
     if (lang === "en")
       return (
         `Yes, we have these 😊\n${lines}` +
-        (more > 0 ? `\nAnd ${more} more if none of these fit.` : "")
+        (more > 0 ? `\nAnd ${more} more if none of these fit` : "")
       );
     return (
       `Ada kak 😊\n${lines}` +
-      (more > 0 ? `\nMasih ada ${more} lagi kalau belum ada yang pas.` : "")
+      (more > 0 ? `\nMasih ada ${more} lagi kalau belum ada yang pas` : "")
     );
   },
 
@@ -288,10 +305,10 @@ export const reply = {
               ? `The best fit for you is the ${unitLine(r.best, lang, undefined, v)} 😊`
               : `The most affordable is the ${unitLine(r.best, lang, undefined, v)} 😊`,
             others.length
-              ? `In other conditions there's also ${list(others, "and")}.`
+              ? `In other conditions there's also ${list(others, "and")}`
               : null,
             r.stepUp
-              ? `For a bit more room: ${unitLine(r.stepUp, lang, undefined, v)}.`
+              ? `For a bit more room: ${unitLine(r.stepUp, lang, undefined, v)}`
               : null,
           ]
         : [
@@ -299,10 +316,10 @@ export const reply = {
               ? `Yang paling pas buat kakak ${unitLine(r.best, lang, undefined, v)} 😊`
               : `Yang paling terjangkau ${unitLine(r.best, lang, undefined, v)} 😊`,
             others.length
-              ? `Kalau mau kondisi lain, ada juga yang ${list(others, "dan yang")} kak.`
+              ? `Kalau mau kondisi lain, ada juga yang ${list(others, "dan yang")} kak`
               : null,
             r.stepUp
-              ? `Kalau mau lebih lega, ada juga ${unitLine(r.stepUp, lang, undefined, v)}.`
+              ? `Kalau mau lebih lega, ada juga ${unitLine(r.stepUp, lang, undefined, v)}`
               : null,
           ];
     return lines.filter(Boolean).join("\n");
@@ -311,6 +328,9 @@ export const reply = {
   /**
    * After a recommendation or its photos (owner, 2026-10-28): no "mau lihat
    * fotonya?", no "kapan mau datang?" — leave room, and say the door is open.
+   * Said at most ONCE per conversation (owner, 2026-11-16): voice.ts drops it
+   * from every later reply, which is why it is no longer the fixed end of
+   * every recommendation.
    */
   afterOffer(lang: Lang): string {
     return lang === "en"
@@ -328,8 +348,8 @@ export const reply = {
       );
     return (
       "Siapp kak 😊 rencananya mau ke toko kapan kak?" +
-      (missing.unit ? " Sekalian unit yang mana ya." : "") +
-      (missing.name ? " Sekalian atas nama siapa ya." : "")
+      (missing.unit ? " Sekalian unit yang mana ya" : "") +
+      (missing.name ? " Sekalian atas nama siapa ya" : "")
     );
   },
 
@@ -401,8 +421,8 @@ export const reply = {
     const name = unitLine(u, lang, undefined, { variant: false });
     if (all.length === 0)
       return lang === "en"
-        ? `The ${name} 😊 Nothing else was noted at QC.`
-        : `${name} kak 😊 Gak ada catatan lain dari QC.`;
+        ? `The ${name} 😊 Nothing else was noted at QC`
+        : `${name} kak 😊 Gak ada catatan lain dari QC`;
     return lang === "en"
       ? `The ${name}: ${all.join(", ")} 😊`
       : `${name}: ${all.join(", ")} kak 😊`;
@@ -438,14 +458,14 @@ export const reply = {
 
   watchSaved(lang: Lang): string {
     return lang === "en"
-      ? "Will do 😊 I'll message you here once it's in."
-      : "Siap kak 😊 Nanti aku kabarin di sini kalau sudah ready.";
+      ? "Will do 😊 I'll message you here once it's in"
+      : "Siap kak 😊 Nanti aku kabarin di sini kalau sudah ready";
   },
 
   /** They said yes to the reminder: the visit stands. */
   visitKept(when: string, lang: Lang): string {
     return lang === "en"
-      ? `Great 😊 See you ${when}.`
+      ? `Great 😊 See you ${when}`
       : `Siap kak 😊 Ditunggu ${when} ya 🙏`;
   },
 
@@ -458,7 +478,7 @@ export const reply = {
 
   visitMoved(when: string, lang: Lang): string {
     return lang === "en"
-      ? `Done 😊 Moved to ${when}. See you then.`
+      ? `Done 😊 Moved to ${when}, see you then`
       : `Siap kak 😊 Jadwalnya aku pindah ke ${when} ya, ditunggu 🙏`;
   },
 
@@ -485,10 +505,10 @@ export const reply = {
     const v = { variant: variantsMatter([first ?? null, second ?? null]) };
     if (!first) return reply.outOfStock(lang);
     return lang === "en"
-      ? `That one's not in stock right now 🙏 The closest we have is the ${unitLine(first, lang, undefined, v)}.` +
-          (second ? `\nOr the ${unitLine(second, lang, undefined, v)}.` : "")
-      : `Yang itu lagi kosong kak 🙏 Yang paling mirip ada ${unitLine(first, lang, undefined, v)}.` +
-          (second ? `\nAtau ${unitLine(second, lang, undefined, v)}.` : "");
+      ? `That one's not in stock right now 🙏 The closest we have is the ${unitLine(first, lang, undefined, v)}` +
+          (second ? `\nOr the ${unitLine(second, lang, undefined, v)}` : "")
+      : `Yang itu lagi kosong kak 🙏 Yang paling mirip ada ${unitLine(first, lang, undefined, v)}` +
+          (second ? `\nAtau ${unitLine(second, lang, undefined, v)}` : "");
   },
 
   /** One option above the main pick — offered, never pushed. */
@@ -502,8 +522,8 @@ export const reply = {
   accessory(a: ShownAccessory, lang: Lang): string {
     const what = `${a.model}${a.price ? ` ${shortPrice(a.price)}` : ""}`;
     return lang === "en"
-      ? `We also have a ${what} if you need one.`
-      : `Kalau perlu, ada ${what} juga kak.`;
+      ? `We also have a ${what} if you need one`
+      : `Kalau perlu, ada ${what} juga kak`;
   },
 
   /** "How much are they?" with no model named: the shelf's range (2026-10-28). */
@@ -546,20 +566,32 @@ export const reply = {
    */
   deliveryInfo(lang: Lang): string {
     return lang === "en"
-      ? "The delivery cost depends on the address and the courier, so our team will work it out for you. Could you send your full address (district/city)?"
-      : "Untuk ongkirnya tergantung alamat dan ekspedisinya kak, nanti tim kami yang hitungkan ya. Boleh kirim alamat lengkapnya kak (kecamatan/kota)?";
+      ? "The delivery cost depends on the address and the courier, so our team will work it out for you\nCould you send your full address (district/city)?"
+      : "Untuk ongkirnya tergantung alamat dan ekspedisinya kak, nanti tim kami yang hitungkan ya\nBoleh kirim alamat lengkapnya kak (kecamatan/kota)?";
   },
 
   batteryCheck(lang: Lang): string {
     return lang === "en"
-      ? "Let me check that battery for you 🙏"
-      : "Battery health-nya aku cekin dulu ya kak 🙏";
+      ? "Our team will confirm that battery for you"
+      : "Untuk battery health-nya nanti tim kami konfirmasi ya kak";
   },
 
   whichUnit(lang: Lang): string {
     return lang === "en"
-      ? "Which one do you mean? Just send the model, like Air M2 😊"
-      : "Yang mana kak? Sebutin aja tipenya, misal Air M2 😊";
+      ? "Which one are you thinking of? For example the Air M1 or Air M2 😊"
+      : "Boleh tau kak, lagi kepikiran tipe yang mana? Misalnya Air M1 atau Air M2 😊";
+  },
+
+  /**
+   * "Yg ramah di kantong dong, budgetnya gk banyak" (owner's chat,
+   * 2026-11-16): they have said what they want — the cheapest that is still
+   * good — so the bot shows it, then asks ONE gentle thing that narrows it.
+   * Never "sebutin aja tipenya".
+   */
+  lowBudgetAsk(lang: Lang): string {
+    return lang === "en"
+      ? "If you don't mind me asking, roughly what budget range do you have in mind? Then I can find the best value for you"
+      : "Kalau boleh tau, budgetnya kira-kira di kisaran berapa kak? Biar aku cariin yang paling worth it";
   },
 
   price(u: ShownUnit, lang: Lang): string {
@@ -577,8 +609,8 @@ export const reply = {
 
   noPhotos(lang: Lang): string {
     return lang === "en"
-      ? "No photos of that one yet 🙏 I'll take some and send them."
-      : "Fotonya belum ada kak, aku fotoin dulu ya 🙏";
+      ? "No photos of that one yet, our team will take some for you"
+      : "Untuk fotonya belum ada kak, nanti tim kami fotoin dulu ya";
   },
 
   askForVisit(
@@ -590,13 +622,13 @@ export const reply = {
       if (missing.unit) need.push("which one you'd like to see");
       if (missing.name) need.push("your name");
       if (missing.when) need.push("the day and time (we're open 10.00–20.00)");
-      return `Sure, come and see it 😊 Just send ${need.join(", ")}.`;
+      return `Sure, come and see it 😊 Just send ${need.join(", ")}`;
     }
     if (missing.unit) need.push("unit yang mau dilihat");
     if (missing.name) need.push("atas nama siapa");
     if (missing.when)
       need.push("mau datang hari apa jam berapa (buka 10.00–20.00)");
-    return `Boleh banget kak 😊 Kabarin ${need.join(", ")} ya.`;
+    return `Boleh banget kak 😊 Kabarin ${need.join(", ")} ya`;
   },
 
   proposal(
@@ -614,11 +646,11 @@ export const reply = {
     const see = units.length ? `${units.join("\n")}\n` : "";
     if (lang === "en")
       return (
-        `Let me confirm 😊\n${see}${date} at ${time}, under ${p.custName}.\n` +
-        "Is that right? Reply yes and I'll book it."
+        `Let me confirm 😊\n${see}${date} at ${time}, under ${p.custName}\n` +
+        "Is that right? Reply yes and I'll book it"
       );
     return (
-      `Aku konfirmasi ya kak 😊\n${see}${date} jam ${time} WIB, atas nama ${p.custName}.\n` +
+      `Aku konfirmasi ya kak 😊\n${see}${date} jam ${time} WIB, atas nama ${p.custName}\n` +
       `Sudah betul? Balas "iya" nanti langsung aku catat.`
     );
   },
@@ -644,11 +676,11 @@ export const reply = {
     const at = readableWhen(r.when);
     if (lang === "en")
       return (
-        `Noted 😊\n${what}${at.replace(" jam ", " at ")}, under ${r.custName}.\n` +
+        `Noted 😊\n${what}${at.replace(" jam ", " at ")}, under ${r.custName}\n` +
         "Our team will confirm it shortly 🙏"
       );
     return (
-      `Siap kak, aku catat ya 😊\n${what}${at}, atas nama ${r.custName}.\n` +
+      `Siap kak, aku catat ya 😊\n${what}${at}, atas nama ${r.custName}\n` +
       "Nanti tim kami konfirmasi ya 🙏"
     );
   },
@@ -714,30 +746,34 @@ export const reply = {
     lang: Lang,
   ): string {
     return lang === "en"
-      ? `Booked 😊 Your code is ${b.code}${b.when ? `, ${b.when}` : ""}. See you at the shop.`
-      : `Sip, sudah aku catat ya kak 😊 Kode booking ${b.code}${b.when ? `, ${b.when} WIB` : ""}. ` +
+      ? `Booked 😊 Your code is ${b.code}${b.when ? `, ${b.when}` : ""}\nSee you at the shop`
+      : `Sip, sudah aku catat ya kak 😊 Kode booking ${b.code}${b.when ? `, ${b.when} WIB` : ""}\n` +
           "Sampai ketemu di toko 🙏";
   },
 
   bookingFailed(lang: Lang): string {
     return lang === "en"
-      ? "Sorry, the booking didn't go through 🙏 Let me check it."
-      : "Maaf kak, bookingnya belum masuk 🙏 Aku cek dulu ya.";
+      ? "Sorry, the booking didn't go through 🙏 Our team will check it"
+      : "Maaf kak, bookingnya belum masuk 🙏 Nanti tim kami cek ya";
   },
 
   declined(lang: Lang): string {
     return lang === "en"
-      ? "No problem 😊 Let me know if you'd like to see another."
-      : "Oke kak, gak apa-apa 😊 Kalau mau lihat yang lain, kabarin aja ya.";
+      ? "No problem 😊 Let me know if you'd like to see another"
+      : "Oke kak, gak apa-apa 😊 Kalau mau lihat yang lain, kabarin aja ya";
   },
 
   /**
    * The bot always asks what the customer needs until it knows (owner,
-   * 2026-10-15: "the goal of the bot is to always ask about what the user
-   * wants/needs … if they have not figured out the preferences, usage, they
-   * need to always ask"). The first thing the profile lacks, in this order;
-   * the second phrasing when the last reply already asked it the first way,
-   * so a customer who skipped the question is not sent the same words twice.
+   * 2026-10-15) — briefly (2026-10-27: usage, then budget, and nothing once
+   * there is enough to recommend, which the caller decides).
+   *
+   * Never a re-ask (owner, 2026-11-16: *"too demanding … it keeps repeating
+   * itself"*): a need asked in any of the last three replies is not asked
+   * again — a customer who skipped the question is not chased with it, the
+   * next need is asked instead or nothing — and one asked further back comes
+   * the second way. `recent` is the shop's replies, newest first (a single
+   * reply is read as the newest).
    */
   nextQuestion(
     lacks: {
@@ -747,20 +783,43 @@ export const reply = {
       apps: boolean;
     },
     lang: Lang,
-    lastReply: string | null = null,
+    recent: readonly string[] | string | null = null,
   ): string | null {
-    // Briefly (owner, 2026-10-27): usage, then budget — and nothing once
-    // there is enough to recommend, which the caller decides.
-    const key = (["usage", "budget"] as const).find((k) => lacks[k]);
-    if (!key) return null;
-    const [first, second] = QUESTIONS[key][lang];
-    return plainText(lastReply).includes(plainText(first)) ? second : first;
+    return pickQuestion(["usage", "budget"], lacks, lang, recent, QUESTIONS);
+  },
+
+  /**
+   * The one light question that carries a chat on after a hand-over or an
+   * "ok" (owner, 2026-11-16: *"instead of making the user wait, the chatbot
+   * should be helpful: getting to know the user, what they are looking for,
+   * what they need, their preferences"*). Usage, budget, then preferences —
+   * the first the profile lacks and no recent reply asked. Null when there
+   * is nothing to ask that would not be a re-ask.
+   */
+  keepTalking(
+    lacks: {
+      usage: boolean;
+      preferences: boolean;
+      budget: boolean;
+      apps: boolean;
+    },
+    lang: Lang,
+    recent: readonly string[] | string | null = null,
+  ): string | null {
+    return pickQuestion(
+      ["usage", "budget", "preferences"],
+      lacks,
+      lang,
+      recent,
+      KEEP_TALKING,
+    );
   },
 
   /**
    * The customer nudges ("kak?") while a question of theirs is with a
    * colleague (2026-10-27): say once what is still being checked, then carry
-   * on. Said only when the bot's previous reply did not already promise it.
+   * on. Said only when the bot's previous reply did not already promise it —
+   * and without "nanti aku kabari" (2026-11-16): nobody is asked to wait.
    */
   stillWaiting(topics: readonly string[], lang: Lang): string {
     const what = [
@@ -769,13 +828,15 @@ export const reply = {
       .map((w) => w[lang])
       .join(lang === "en" ? " and " : " sama ");
     return lang === "en"
-      ? `Still checking ${what} — I'll get back to you here 🙏`
-      : `Soal ${what} masih aku cekin ya kak, nanti aku kabari di sini 🙏`;
+      ? `Our team is still checking ${what}`
+      : `Soal ${what} masih dicek tim kami ya kak`;
   },
 
   /**
    * Another question for a colleague while one is already waiting and the
-   * customer has been told so: a short line, not the same promise again.
+   * customer has been told so. ⚠️ Called by nothing since 2026-11-16 — each
+   * topic's own line is said once and voice.ts drops a repeat — and kept
+   * because older rows carry it (`isHoldingLine`).
    */
   passedOnToo(lang: Lang): string {
     return lang === "en"
@@ -799,18 +860,18 @@ export const followUps = {
     return `Halo kak 😊 apakah kakak jadi datang ke toko kami untuk lihat ${unit?.trim() || "unitnya"}? Kami tunggu ya kedatangannya 🙏`;
   },
   leadNudge(unit: string): string {
-    return `Halo kak 😊 ${unit} yang kemarin kakak tanyakan masih ready ya. Kalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak 🙏`;
+    return `Halo kak 😊 ${unit} yang kemarin kakak tanyakan masih ready ya\nKalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak 🙏`;
   },
   /**
    * A day before a DP hold runs out (2026-10-27), once, in the visit
    * reminder's tone. `until` is the day as the shop says it ("Senin, 3 Nov").
    */
   dpReminder(unit: string | null, until: string): string {
-    return `Halo kak 😊 unit ${unit?.trim() || "kakak"} masih kami tahan sampai ${until} ya. Kalau mau dilunasi atau datang ambil, kabari kami aja kak 🙏`;
+    return `Halo kak 😊 unit ${unit?.trim() || "kakak"} masih kami tahan sampai ${until} ya\nKalau mau dilunasi atau datang ambil, kabari kami aja kak 🙏`;
   },
   /** The unit they asked about is gone (never why); the closest in stock, once. */
   leadNudgeAlternative(unit: string, alternative: string): string {
-    return `Halo kak 😊 ${unit} yang kemarin kakak tanyakan sedang kosong, tapi ada ${alternative} yang mirip dan ready ya. Kalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak 🙏`;
+    return `Halo kak 😊 ${unit} yang kemarin kakak tanyakan sedang kosong, tapi ada ${alternative} yang mirip dan ready ya\nKalau mau lihat langsung atau ada yang mau ditanyakan, kabari kami aja kak 🙏`;
   },
 };
 
@@ -881,14 +942,110 @@ const QUESTIONS: Record<
 };
 
 /**
+ * The same needs asked after a hand-over or an "ok" (2026-11-16): a bridge
+ * ("Oh iya kak", "Sambil nunggu") so the question reads as the chat carrying
+ * on rather than a form's next field.
+ */
+const KEEP_TALKING: Record<
+  "usage" | "preferences" | "budget" | "apps",
+  Record<Lang, readonly [string, string]>
+> = {
+  usage: {
+    id: [
+      "Oh iya kak, rencananya laptopnya mau dipakai buat apa?",
+      "Sambil nunggu, biasanya bakal dipakai buat kerja, kuliah atau desain kak?",
+    ],
+    en: [
+      "By the way, what will you mainly use it for?",
+      "Meanwhile, is it mostly for work, study or design?",
+    ],
+  },
+  budget: {
+    id: [
+      "Oh iya kak, budgetnya kira-kira di kisaran berapa?",
+      "Kalau budget maksimalnya kira-kira berapa kak?",
+    ],
+    en: [
+      "By the way, roughly what budget do you have in mind?",
+      "What's the most you'd like to spend?",
+    ],
+  },
+  preferences: {
+    id: [
+      "Oh iya kak, ada ukuran layar yang lebih disukai?",
+      "Lebih suka layar 13 atau yang lebih besar kak?",
+    ],
+    en: [
+      "By the way, any screen size you prefer?",
+      "Would you prefer a 13-inch screen or something bigger?",
+    ],
+  },
+  apps: QUESTIONS.apps,
+};
+
+/** What asking about each need looks like, in a QUESTION the shop sent. */
+const NEED_ASKED: Record<"usage" | "preferences" | "budget" | "apps", RegExp> =
+  {
+    usage:
+      /\b(buat apa|untuk apa|dipakai buat|dipake buat|kebutuhan apa|kerja, kuliah|use it for|work, study)\b/i,
+    budget: /\b(budget\w*|bujet\w*|kisaran berapa|spend)\b/i,
+    preferences:
+      /\b(ukuran layar|layar 13|baru atau second|screen size|13-inch|new or second)\b/i,
+    apps: /\b(aplikasi\w*|apps?)\b/i,
+  };
+
+/** The questions a reply asked — its sentences that end in "?". */
+function questionsIn(text: string): string[] {
+  return plainText(text)
+    .split(/(?<=[?])\s+/)
+    .filter((q) => q.trim().endsWith("?"));
+}
+
+/** Did this reply ask about that need? */
+export function askedNeed(
+  text: string | null | undefined,
+  key: "usage" | "preferences" | "budget" | "apps",
+): boolean {
+  return questionsIn(text ?? "").some((q) => NEED_ASKED[key].test(q));
+}
+
+/** The first need, in order, that is lacking and not a re-ask — see `nextQuestion`. */
+function pickQuestion(
+  order: ReadonlyArray<"usage" | "preferences" | "budget" | "apps">,
+  lacks: Record<"usage" | "preferences" | "budget" | "apps", boolean>,
+  lang: Lang,
+  recent: readonly string[] | string | null,
+  table: Record<
+    "usage" | "preferences" | "budget" | "apps",
+    Record<Lang, readonly [string, string]>
+  >,
+): string | null {
+  const replies =
+    recent === null ? [] : typeof recent === "string" ? [recent] : recent;
+  for (const key of order) {
+    if (!lacks[key]) continue;
+    if (replies.slice(0, 3).some((r) => askedNeed(r, key))) continue;
+    const [first, second] = table[key][lang];
+    const askedBefore = replies.some((r) => askedNeed(r, key));
+    return askedBefore ? second : first;
+  }
+  return null;
+}
+
+/**
  * Did this reply ask about the customer's needs? Then their next "ok" or
  * "hmm" is part of that conversation, and the next question may follow it.
  */
 export function askedAboutNeeds(text: string | null | undefined): boolean {
   if (!text) return false;
-  return Object.values(QUESTIONS).some((byLang) =>
-    Object.values(byLang).some((ways) =>
-      ways.some((q) => plainText(text).includes(plainText(q))),
-    ),
+  return (
+    (["usage", "budget", "preferences", "apps"] as const).some((k) =>
+      askedNeed(text, k),
+    ) ||
+    Object.values(QUESTIONS).some((byLang) =>
+      Object.values(byLang).some((ways) =>
+        ways.some((q) => plainText(text).includes(plainText(q))),
+      ),
+    )
   );
 }

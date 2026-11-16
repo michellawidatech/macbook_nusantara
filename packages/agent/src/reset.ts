@@ -47,7 +47,7 @@ export const MAX_TESTERS = 20;
  * the one line the reset is allowed to say about itself.
  */
 export const RESET_REPLY =
-  "Chat baru dimulai ✅ Percakapan sebelumnya tidak dipakai lagi (mode tes).";
+  "Chat baru dimulai ✅ Percakapan sebelumnya tidak dipakai lagi (mode tes)";
 
 /** Is this message the command, and nothing else? */
 export function isResetCommand(text: string | null | undefined): boolean {

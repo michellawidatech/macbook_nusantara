@@ -83,7 +83,6 @@
 import {
   DEFAULT_WAITS,
   MAX_CORRECTIONS,
-  applyEmojiRule,
   buildAgentPrompt,
   lastThreadState,
   readableWhen,
@@ -159,7 +158,12 @@ import {
   STAFF_ACTIVE_MS,
   TURN_DEADLINE_MS,
   guardClient,
-  holdingMessage,
+  CLOSED_LINE,
+  finishReply,
+  keepsTalking,
+  ruleReplies,
+  safetyLine,
+  type EarlierReply,
   modelErrorReason,
   staffTypedReply,
   type CallGuard,
@@ -302,8 +306,21 @@ export interface DraftPassResult {
  */
 export { STAFF_ACTIVE_MS };
 
-/** Answered turns shown verbatim. Older ones live in the rolling summary. */
-const HISTORY_TURNS = 8;
+/**
+ * Answered turns shown verbatim. Older ones live in the rolling summary and
+ * in recall. 14 since 2026-11-16 (was 8): a customer who asked three things
+ * in a list and then two follow-ups had pushed the bot's own earlier answers
+ * out of the window, which is how it came to repeat them. Roughly 60–150
+ * tokens a turn, uncached, so ~400–900 more input tokens a call.
+ */
+const HISTORY_TURNS = 14;
+
+/**
+ * The shop's earlier replies a new one is checked against (voice.ts): the
+ * last six for any repeated sentence, all of these for the once-per-chat
+ * closer and the team-confirms lines.
+ */
+const EARLIER_REPLIES = 40;
 
 const DEFAULT_MAX_BATCH = 30;
 
@@ -1042,6 +1059,9 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         // detail than those is a person's.
         photosSentTo(db, from, resetAt),
       ]);
+      // What the shop already said in this conversation (2026-11-16): the
+      // reply below may not say it again (voice.ts), and the AI is shown it.
+      const earlier = await earlierReplies(db, from, resetAt);
 
       // Turns older than the window, when the window is full: the few that
       // look related to what the customer just wrote (recall.ts). Bounded —
@@ -1115,7 +1135,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
         openNow: storeOpenAt(at),
         summary: summarySince(memory, resetAt),
         directive: memory?.directive ?? null,
-        recentReplies: newestFirst.map((h) => h.reply).slice(0, 3),
+        recentReplies: earlier.slice(0, 6).map((e) => e.text),
         customerText: current,
         // v2 hands the profile and the proposal to its own agents.
         ...(v2 ? {} : { profile, openProposal }),
@@ -1231,6 +1251,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           visitBooked,
           // Newest first out of the database: the bot's previous reply.
           lastReply: newestFirst[0]?.reply ?? null,
+          recentReplies: earlier.slice(0, 6).map((e) => e.text),
           proposalOpen: openProposal !== null,
           lastShown,
           state: threadState,
@@ -1457,7 +1478,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
           batchIds,
           anchor.id,
           "no_reply",
-          holdingMessage("other", storeOpenAt(now())),
+          neverSilentLine(earlier, now()),
         );
         escalated += 1;
         failures.delete(from);
@@ -1503,12 +1524,42 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
             : announces
               ? "booking"
               : null;
-      // Emoji only at the beginning of the chat (owner, 2026-11-09): the
-      // first reply of this conversation keeps one, every later one none.
-      const outgoing = applyEmojiRule(
-        result.reply,
-        !history.some((t) => Boolean(t.reply)),
-      );
+      // A hand-over the AI wrote with nothing after it: the chat is carried
+      // on with one light question (owner, 2026-11-16: "instead of making
+      // the user wait, the chatbot should be helpful"). The rules bot adds
+      // its own; a reply that already asks something is left alone.
+      const recentTexts = earlier.slice(0, 6).map((e) => e.text);
+      const carried =
+        result.handoff &&
+        keepsTalking(result.handoff.topic) &&
+        !asksSomething(result.reply)
+          ? (() => {
+              const lang = understand(current, at, {
+                proposalOpen: false,
+                lastShown: [],
+              }).language;
+              const q = ruleReplies.keepTalking(
+                {
+                  usage: !known.usage,
+                  budget: !known.budget,
+                  preferences: !known.preferences,
+                  apps: !known.apps,
+                },
+                lang,
+                recentTexts,
+              );
+              return q ? `${result.reply}\n\n${q}` : result.reply;
+            })()
+          : result.reply;
+      // The last step (voice.ts): the emoji rule — only at the beginning of
+      // the chat (owner, 2026-11-09) — no full stop at a line's end, and
+      // nothing the shop already said in this conversation (2026-11-16).
+      const outgoing = finishReply(carried, {
+        first: !history.some((t) => Boolean(t.reply)) && earlier.length === 0,
+        earlier,
+        customerText: current,
+        now: at,
+      });
       let arrivedMeanwhile = 0;
       // Past the deadline the holding line has gone out instead; the claim
       // below would fail anyway, this saves the transaction.
@@ -2135,15 +2186,23 @@ async function escalate(
         where: { id: anchorId },
         select: { from: true },
       });
-      // Emoji only at the beginning of the chat (owner, 2026-11-09).
-      const earlier = await tx.waMessage.count({
+      // The last step every reply takes (voice.ts): the emoji rule (only at
+      // the beginning of the chat, 2026-11-09), no full stop, no repeat.
+      const said = await tx.waMessage.findMany({
         where: {
           from: anchor!.from,
           replyText: { not: null },
           id: { notIn: batchIds },
         },
+        orderBy: [{ answeredAt: "desc" }, { id: "desc" }],
+        take: EARLIER_REPLIES,
+        select: { replyText: true, answeredAt: true },
       });
-      line = applyEmojiRule(reply, earlier === 0);
+      line = finishReply(reply, {
+        first: said.length === 0,
+        earlier: said.map((m) => ({ text: m.replyText!, at: m.answeredAt })),
+        now: at,
+      });
       await tx.waMessage.update({
         where: { id: anchorId },
         data: { replyText: line },
@@ -2222,12 +2281,55 @@ export async function holdTheLine(
     await escalate(db, ids, anchor.id, "window_closed");
     return "window_closed";
   }
+  const resetAt = await resetPointFor(db, from);
   const claimed = await escalate(
     db,
     ids,
     anchor.id,
     why,
-    holdingMessage("other", storeOpenAt(opts.now)),
+    neverSilentLine(await earlierReplies(db, from, resetAt), opts.now),
   );
   return claimed > 0 ? "sent" : "nothing";
+}
+
+/**
+ * The shop's replies in this conversation, newest first (2026-11-16) — what
+ * voice.ts holds a new reply to: no sentence of the last six again, the
+ * closer and each team-confirms line once, the closed line once a night.
+ * Staff replies count: the customer heard them from the same number.
+ */
+async function earlierReplies(
+  db: PrismaClient,
+  from: string,
+  resetAt: Date | null,
+): Promise<EarlierReply[]> {
+  const rows = await db.waMessage.findMany({
+    where: {
+      from,
+      direction: "IN",
+      replyText: { not: null },
+      ...(resetAt ? { answeredAt: { gt: resetAt } } : {}),
+    },
+    orderBy: [{ answeredAt: "desc" }, { id: "desc" }],
+    take: EARLIER_REPLIES,
+    select: { replyText: true, answeredAt: true },
+  });
+  return rows.map((r) => ({ text: r.replyText!, at: r.answeredAt }));
+}
+
+/**
+ * What a customer hears when the bot could not answer (2026-10-27) — never
+ * the same line twice in a row (owner, 2026-11-16), with the closed-shop line
+ * under it at night (said once a night: voice.ts drops a repeat).
+ */
+function neverSilentLine(earlier: readonly EarlierReply[], now: Date): string {
+  const line = safetyLine(earlier);
+  return storeOpenAt(now) ? line : `${line}\n${CLOSED_LINE}`;
+}
+
+/** Does a reply ask the customer something (a "?" outside a list's questions)? */
+function asksSomething(text: string): boolean {
+  return text
+    .split("\n")
+    .some((l) => !/^(\d{1,2}\.|-)\s/.test(l.trim()) && l.includes("?"));
 }

@@ -341,14 +341,17 @@ describe("the memory pass, as nusantara_agent", () => {
   });
 });
 
-/** Ten earlier turns: one about an Air M2 price, then nine of small talk. */
+/**
+ * Sixteen earlier turns: one about an Air M2 price, then fifteen of small talk
+ * — past the 14-turn window (2026-11-16), so the price turn is recall's.
+ */
 async function longThread() {
   await turn(
     ["Air M2 8/256 berapa kak?"],
     "Air M2 8/256 grade A Rp12.500.000 kak",
     600,
   );
-  for (let i = 0; i < 9; i += 1)
+  for (let i = 0; i < 15; i += 1)
     await turn([`oke ${i}`], `siap kak ${i}`, 500 - i * 10);
 }
 
@@ -433,7 +436,7 @@ describe("recall at draft time", () => {
       reply: "Oke, mulai baru",
       intent: RESET_INTENT,
     });
-    for (let i = 0; i < 9; i += 1)
+    for (let i = 0; i < 15; i += 1)
       await turn([`oke ${i}`], `siap kak ${i}`, 500 - i * 10);
     await memoryPass({
       db: agent,

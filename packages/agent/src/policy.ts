@@ -1736,14 +1736,23 @@ export function dpKeepLine(terms: DpTerms = DEFAULT_DP_TERMS): string {
  * The fallback hand-over lines, used when the model's own is refused or the
  * model is not reachable — and the rules bot's every hand-over.
  *
- * Rewritten 2026-10-27 (owner: *"saying that the admin will answer … the
- * reply so bad, not like human"*). The bot IS the shop's admin on WhatsApp,
- * so "Admin kami segera balas di chat ini" was the admin promising that the
- * admin would reply. Each line now says what is being checked and with whom,
- * the way it would be said at the counter — "Untuk nego harganya aku
- * tanyain ke owner dulu ya kak 🙏" — and the bot carries on answering
- * anything else meanwhile (`waitingTasks`). Outside opening hours the line
- * says when, because "bentar ya" at midnight is a promise nobody keeps.
+ * Rewritten 2026-11-16 (owner: *"it always says staff will check and the user
+ * has to wait. Instead of that, ask the user and guide them to keep chatting —
+ * this is the reason why we have a chatbot, someone to answer at night"*).
+ * Each line says ONCE, warmly, that the team confirms one thing — "Untuk
+ * garansinya nanti tim kami konfirmasi ya kak" — and is never the whole reply
+ * by design: the bot answers what it can beside it and carries the chat on
+ * (rules/run.ts `keepTalking`, the worker's `withKeepTalking`). This REVERSES
+ * 2026-10-27's "Bentar ya kak, aku cek dulu" lines, which made the customer
+ * wait and were repeated per item of a list.
+ *
+ * The confirm lines share one shape, `Untuk {subject} nanti tim kami {verb}
+ * ya kak`, which is what lets voice.ts say each subject once per conversation
+ * and merge several into one line ("Untuk garansi dan ongkirnya nanti tim
+ * kami konfirmasi dulu ya kak").
+ *
+ * Outside opening hours the shop's closed line goes on its own line under it;
+ * voice.ts keeps it to once per closed period.
  */
 export function holdingMessage(
   topic: HandoffTopic,
@@ -1758,37 +1767,44 @@ export function holdingMessage(
   if (topic === "closing" && rule === "keep") return dpKeepLine(dp);
   const line =
     topic === "order_payment" && rule === "dp_proof"
-      ? "Makasih kak, bukti DP-nya aku cek dulu ya 🙏"
+      ? DP_PROOF_LINE
       : ((rule ? RULE_LINE[`${topic}:${rule}`] : undefined) ??
         HOLDING_LINE[topic]);
-  return open
-    ? line
-    : `${line} Toko lagi tutup, nanti aku kabari pas buka jam 10.00 ya.`;
+  return open ? line : `${line}\n${CLOSED_LINE}`;
 }
 
-/** One short line per topic, as the shop admin says it (2026-10-27). */
+/**
+ * The shop is closed (owner, 2026-11-16): said at most once per closed period
+ * and only beside a hand-over — never per item of a list (voice.ts).
+ */
+export const CLOSED_LINE =
+  "Tokonya lagi tutup kak, jadi infonya dikabarin pas buka jam 10.00 ya";
+
+const DP_PROOF_LINE = "Makasih kak, bukti DP-nya nanti tim kami cek ya 🙏";
+
+/** One short line per topic (2026-11-16): the team confirms, said once. */
 const HOLDING_LINE: Readonly<Record<HandoffTopic, string>> = {
-  stock: "Bentar ya kak, unitnya aku cekin langsung dulu 🙏",
-  unit_details: "Bentar ya kak, unitnya aku cekin langsung dulu 🙏",
-  recommendation: "Bentar ya kak, aku cariin yang pas dulu 🙏",
-  price: "Untuk harganya aku tanyain dulu ya kak 🙏",
-  negotiation: "Untuk nego harganya aku tanyain ke owner dulu ya kak 🙏",
-  reservation: "Jadwalnya aku bantu atur dulu ya kak 🙏",
-  order_payment: "Makasih kak, buktinya aku cek dulu ya 🙏",
-  trade_in: "Untuk taksiran harganya aku tanyain ke owner dulu ya kak 🙏",
-  sell_to_shop: "Untuk taksiran harganya aku tanyain ke owner dulu ya kak 🙏",
-  shipping_quote: "Ongkirnya aku cekin dulu ya kak 🙏",
-  warranty_claim: "Waduh, maaf ya kak 🙏 Aku bantu cek dulu ya.",
-  complaint: "Waduh, maaf ya kak 🙏 Aku bantu cek dulu ya.",
-  media: "Sudah aku terima ya kak, aku lihat dulu 🙏",
-  photos: "Fotonya aku siapin dulu ya kak 🙏",
-  closing: "Siap kak, aku bantu prosesnya ya 🙏",
+  stock: "Untuk stok unitnya nanti tim kami konfirmasi ya kak",
+  unit_details: "Untuk detail unitnya nanti tim kami konfirmasi ya kak",
+  recommendation: "Untuk pilihan unitnya nanti tim kami bantu cariin ya kak",
+  price: "Untuk harganya nanti tim kami konfirmasi ya kak",
+  negotiation: "Untuk nego harganya nanti aku tanyain ke owner dulu ya kak",
+  reservation: "Untuk jadwalnya nanti tim kami bantu atur ya kak",
+  order_payment: "Makasih kak, buktinya nanti tim kami cek ya 🙏",
+  trade_in: "Untuk taksiran harganya nanti tim kami konfirmasi ya kak",
+  sell_to_shop: "Untuk taksiran harganya nanti tim kami konfirmasi ya kak",
+  shipping_quote: "Untuk ongkirnya nanti tim kami hitungkan ya kak",
+  warranty_claim: "Waduh, maaf ya kak 🙏 Nanti tim kami bantu cek ya",
+  complaint: "Waduh, maaf ya kak 🙏 Nanti tim kami bantu cek ya",
+  media: "Sudah aku terima ya kak, nanti tim kami lihat dulu 🙏",
+  photos: "Untuk fotonya nanti tim kami siapin ya kak",
+  closing: "Siap kak, nanti tim kami bantu prosesnya ya 🙏",
   // The owner's words (2026-11-16) — and the ONLY line that names an admin:
   // the bot never brings one up unless the customer asked for one.
   human: "Oke kak, aku sambungkan ke admin ya 🙏",
-  video_call: "Siap kak, untuk video call-nya aku atur dulu ya 🙏",
-  service: "Untuk servisnya aku tanyain ke teknisi dulu ya kak 🙏",
-  other: "Bentar ya kak, aku cek dulu 🙏",
+  video_call: "Untuk video call-nya nanti tim kami atur ya kak",
+  service: "Untuk servisnya nanti tim kami konfirmasi ya kak",
+  other: "Untuk yang ini nanti tim kami konfirmasi ya kak",
 };
 
 /**
@@ -1797,20 +1813,68 @@ const HOLDING_LINE: Readonly<Record<HandoffTopic, string>> = {
  * for, and a phone call is not a video call.
  */
 const RULE_LINE: Readonly<Record<string, string>> = {
-  "video_call:phone": "Siap kak, untuk telponnya aku atur dulu ya 🙏",
-  "video_call:video": "Siap kak, videonya aku siapin dulu ya 🙏",
+  "video_call:phone": "Untuk telponnya nanti tim kami atur ya kak",
+  "video_call:video": "Untuk videonya nanti tim kami siapin ya kak",
   "unit_details:defect":
-    "Bentar ya kak, kondisi unitnya aku cekin langsung dulu 🙏",
-  "unit_details:photo_detail": "Siap kak, foto detailnya aku siapin dulu ya 🙏",
-  "warranty_claim:warranty": "Untuk garansinya aku tanyain dulu ya kak 🙏",
-  "service:past_purchase": "Siap kak, pembeliannya aku cek dulu ya 🙏",
+    "Untuk detail minus unitnya nanti tim kami konfirmasi ya kak",
+  "unit_details:photo_detail":
+    "Untuk foto detailnya nanti tim kami siapin ya kak",
+  "warranty_claim:warranty":
+    "Untuk garansinya nanti tim kami konfirmasi ya kak",
+  "service:past_purchase": "Untuk pembeliannya nanti tim kami cek ya kak",
   "shipping_quote:address":
     "Siap kak, alamatnya aku teruskan ke tim untuk dihitung ongkirnya ya 🙏",
 };
 
 /**
+ * The hand-over lines before 2026-11-16, still in `replyText` on older rows:
+ * /chat must keep labelling them Bot (`isHoldingLine`).
+ */
+const OLD_HOLDING_LINES: readonly string[] = [
+  "Bentar ya kak, unitnya aku cekin langsung dulu 🙏",
+  "Bentar ya kak, aku cariin yang pas dulu 🙏",
+  "Untuk harganya aku tanyain dulu ya kak 🙏",
+  "Untuk nego harganya aku tanyain ke owner dulu ya kak 🙏",
+  "Jadwalnya aku bantu atur dulu ya kak 🙏",
+  "Makasih kak, buktinya aku cek dulu ya 🙏",
+  "Untuk taksiran harganya aku tanyain ke owner dulu ya kak 🙏",
+  "Ongkirnya aku cekin dulu ya kak 🙏",
+  "Waduh, maaf ya kak 🙏 Aku bantu cek dulu ya.",
+  "Sudah aku terima ya kak, aku lihat dulu 🙏",
+  "Fotonya aku siapin dulu ya kak 🙏",
+  "Siap kak, aku bantu prosesnya ya 🙏",
+  "Siap kak, untuk video call-nya aku atur dulu ya 🙏",
+  "Untuk servisnya aku tanyain ke teknisi dulu ya kak 🙏",
+  "Bentar ya kak, aku cek dulu 🙏",
+  "Siap kak, untuk telponnya aku atur dulu ya 🙏",
+  "Siap kak, videonya aku siapin dulu ya 🙏",
+  "Bentar ya kak, kondisi unitnya aku cekin langsung dulu 🙏",
+  "Siap kak, foto detailnya aku siapin dulu ya 🙏",
+  "Untuk garansinya aku tanyain dulu ya kak 🙏",
+  "Siap kak, pembeliannya aku cek dulu ya 🙏",
+  "Makasih kak, bukti DP-nya aku cek dulu ya 🙏",
+  // The admin line before 2026-11-16.
+  "Siap kak, aku sambungin ke admin ya 🙏",
+  // rules/replies.ts `passedOnToo` — the short line once a customer was told.
+  "Siap kak, yang ini sekalian aku tanyain ya 🙏",
+  "Noted, I'll check that one too 🙏",
+];
+
+/**
+ * The "never silent" lines (worker `holdTheLine`, 2026-10-27): what a
+ * customer hears when the bot could not answer at all — a model timeout, a
+ * turn that kept failing, a message the watchdog found waiting. Rotated, so a
+ * second failure in a row never repeats the first's words (owner, 2026-11-16:
+ * *"don't repeat yourself"*); `safetyLine` in voice.ts picks.
+ */
+export const SAFETY_LINES: readonly string[] = [
+  "Bentar ya kak, aku cek dulu 🙏",
+  "Sebentar ya kak, aku pastiin dulu biar infonya gak salah",
+];
+
+/**
  * Is this one of the bot's own fixed hand-over lines (`holdingMessage`, the
- * DP line, the closed-shop suffix)? /chat labels a reply by who wrote it, and
+ * DP line, the closed-shop line)? /chat labels a reply by who wrote it, and
  * a hand-over row that staff later closed carries a staff id although the bot
  * wrote the line (2026-10-27: "Bentar ya kak, aku cek dulu 🙏" read as Staff).
  */
@@ -1820,22 +1884,49 @@ export function isHoldingLine(text: string | null | undefined): boolean {
   const lines = new Set<string>([
     ...Object.values(HOLDING_LINE),
     ...Object.values(RULE_LINE),
-    "Makasih kak, bukti DP-nya aku cek dulu ya 🙏",
-    // The admin line before 2026-11-16, still on older rows.
-    "Siap kak, aku sambungin ke admin ya 🙏",
-    // rules/replies.ts `passedOnToo` — the short line once a customer was told.
-    "Siap kak, yang ini sekalian aku tanyain ya 🙏",
-    "Noted, I'll check that one too 🙏",
+    DP_PROOF_LINE,
+    ...SAFETY_LINES,
+    ...OLD_HOLDING_LINES,
   ]);
-  // Read without emoji: a reply is stored with them stripped (2026-11-09).
+  // Read without emoji and punctuation: a reply is stored with emoji
+  // stripped (2026-11-09) and with no full stops (2026-11-16).
   const plain = new Set([...lines].map((l) => plainText(l)));
-  const base = plainText(t.replace(CLOSED_SUFFIX, "").trim());
+  const base = plainText(
+    t.replace(CLOSED_SUFFIX, "").replace(`\n${CLOSED_LINE}`, "").trim(),
+  );
+  const closed = plainText(CLOSED_LINE);
+  const rest = base.endsWith(closed)
+    ? base.slice(0, -closed.length).trim()
+    : base;
   return (
-    plain.has(base) ||
-    /^Untuk amankan unitnya bisa DP Rp .+ tim kami cek dulu\.?$/.test(base)
+    plain.has(rest) ||
+    /^Untuk amankan unitnya bisa DP Rp .+ tim kami cek dulu\.?$/.test(rest)
   );
 }
 
+/**
+ * Hand-overs after which the bot carries the chat on in the same reply
+ * (owner, 2026-11-16): a question for the team is no reason to stop getting
+ * to know the customer. Not after a complaint, a payment, a bargain, a buyer
+ * being closed, a file they sent, a delivery address (they are buying) or a
+ * request for a person — a needs question there reads as not listening.
+ */
+export function keepsTalking(topic: HandoffTopic, rule?: string): boolean {
+  if (topic === "warranty_claim") return rule === "warranty";
+  return KEEP_TALKING_TOPICS.has(topic);
+}
+
+const KEEP_TALKING_TOPICS: ReadonlySet<HandoffTopic> = new Set([
+  "stock",
+  "unit_details",
+  "recommendation",
+  "price",
+  "photos",
+  "video_call",
+  "other",
+]);
+
+/** The closed-shop sentence before 2026-11-16, on older rows. */
 const CLOSED_SUFFIX =
   / Toko lagi tutup, nanti aku kabari pas buka jam 10\.00 ya\.$/;
 

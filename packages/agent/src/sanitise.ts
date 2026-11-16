@@ -22,6 +22,8 @@
  * Both are pure. No model call, no database, no clock.
  */
 
+import { casualPunctuation } from "@nusantara/domain";
+
 /** At most this many emoji survive a reply. A person is not a sticker pack. */
 export const MAX_EMOJI = 1;
 
@@ -378,9 +380,16 @@ export function applyEmojiRule(text: string, first: boolean): string {
  * A reply read without its emoji, for comparing what the bot stored with a
  * template that still carries one (final review, 2026-11-09). Both sides go
  * through it, so "Iya kak 😊 Ada…" and the stored "Iya kak. Ada…" agree.
+ *
+ * And without the punctuation the worker takes off on the way out (2026-11-16,
+ * `casualPunctuation`): a stored "Iya kak\nAda…" (no full stop, each sentence
+ * on its line) and a row from before that, "Iya kak. Ada…", read the same.
+ * Whitespace is one space, so a line break and a space compare equal.
  */
 export function plainText(text: string | null | undefined): string {
-  return applyEmojiRule(text ?? "", false);
+  return casualPunctuation(applyEmojiRule(text ?? "", false))
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function sanitiseReply(text: string): string {

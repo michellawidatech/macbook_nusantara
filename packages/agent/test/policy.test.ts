@@ -235,28 +235,33 @@ describe("the holding line", () => {
     expect(holdingMessage("stock", false)).toMatch(/10\.00/);
   });
 
-  it("fits the topic and sounds like the admin, never 'admin kami segera balas' (2026-10-27)", () => {
+  it("fits the topic and says ONCE that the team confirms — nobody is asked to wait (2026-11-16)", () => {
+    // This REVERSES 2026-10-27's "aku tanyain dulu" / "aku cek dulu".
     expect(holdingMessage("price", true)).toBe(
-      "Untuk harganya aku tanyain dulu ya kak 🙏",
+      "Untuk harganya nanti tim kami konfirmasi ya kak",
     );
     expect(holdingMessage("negotiation", true)).toBe(
-      "Untuk nego harganya aku tanyain ke owner dulu ya kak 🙏",
+      "Untuk nego harganya nanti aku tanyain ke owner dulu ya kak",
     );
     expect(holdingMessage("order_payment", true)).toBe(
-      "Makasih kak, buktinya aku cek dulu ya 🙏",
+      "Makasih kak, buktinya nanti tim kami cek ya 🙏",
     );
     expect(holdingMessage("order_payment", true, "dp_proof")).toBe(
-      "Makasih kak, bukti DP-nya aku cek dulu ya 🙏",
+      "Makasih kak, bukti DP-nya nanti tim kami cek ya 🙏",
     );
+    for (const t of HANDOFF_TOPICS)
+      expect(holdingMessage(t, true)).not.toMatch(
+        /bentar|aku cek dulu|nanti aku kabari/i,
+      );
     expect(holdingMessage("closing", true, "buy")).toBe(
-      "Siap kak, aku bantu prosesnya ya 🙏",
+      "Siap kak, nanti tim kami bantu prosesnya ya 🙏",
     );
     expect(holdingMessage("other", true)).toBe(
-      "Bentar ya kak, aku cek dulu 🙏",
+      "Untuk yang ini nanti tim kami konfirmasi ya kak",
     );
     expect(holdingMessage("complaint", true)).toMatch(/^Waduh, maaf ya kak/);
     expect(holdingMessage("photos", true)).toBe(
-      "Fotonya aku siapin dulu ya kak 🙏",
+      "Untuk fotonya nanti tim kami siapin ya kak",
     );
     for (const t of HANDOFF_TOPICS) {
       const line = holdingMessage(t, true);
@@ -266,9 +271,10 @@ describe("the holding line", () => {
       // Short: one breath on WhatsApp.
       expect(line.length, t).toBeLessThan(70);
     }
-    // Shut, the same line says when.
+    // Shut, the closed line goes on its own line — said once a night, by
+    // the worker's last step (voice.ts), never per item of a list.
     expect(holdingMessage("price", false)).toBe(
-      "Untuk harganya aku tanyain dulu ya kak 🙏 Toko lagi tutup, nanti aku kabari pas buka jam 10.00 ya.",
+      "Untuk harganya nanti tim kami konfirmasi ya kak\nTokonya lagi tutup kak, jadi infonya dikabarin pas buka jam 10.00 ya",
     );
   });
 
@@ -402,8 +408,8 @@ describe("the closing task (2026-10-27)", () => {
     ).toBe(
       "Untuk amankan unitnya bisa DP Rp 1jt kak, unit kami tahan 3 hari. Setelah transfer, kirim buktinya ya, tim kami cek dulu 🙏",
     );
-    expect(holdingMessage("closing", false, "buy")).toContain(
-      "Siap kak, aku bantu prosesnya ya 🙏",
+    expect(holdingMessage("closing", false, "buy")).toBe(
+      "Siap kak, nanti tim kami bantu prosesnya ya 🙏\nTokonya lagi tutup kak, jadi infonya dikabarin pas buka jam 10.00 ya",
     );
   });
 });
@@ -444,7 +450,7 @@ describe("the DP (2026-10-27)", () => {
     expect(routeMessage("mau dp, transfer ke mana kak?")?.rule).toBe("keep");
     expect(saysDpPaid("bisa dp ga?")).toBe(false);
     expect(holdingMessage("order_payment", true, "dp_proof")).toContain(
-      "bukti DP-nya aku cek dulu",
+      "bukti DP-nya nanti tim kami cek",
     );
   });
 });

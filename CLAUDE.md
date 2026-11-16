@@ -4085,6 +4085,70 @@ Decisions that outlived those documents:
     `[inert]`, or the kept-but-hidden forms would claim the re-arm.
   - **On a phone the two buttons are words**, in a `FooterToolbar` at the foot
     with an icon Export beside them — no float fan on Inventory any more.
+- **The bot stops making people wait, and stops repeating itself —
+  2026-11-16, later** (owner: *"the shop still answers with full stops which
+  is rude, and it is too demanding. It keeps repeating itself, especially when
+  the store is not open … If we have a bunch of questions and we know nothing,
+  just say ONCE … Don't repeat yourself unless the user asks for it."*). This
+  REVERSES three earlier rules: 2026-10-27's "Bentar ya kak, aku cek dulu"
+  hand-over lines with the closed-shop sentence on every one ("The bot never
+  goes silent" keeps its safety net, not its wording); 2026-10-28's fixed
+  "Gimana kakk? Kakak juga bisa lihat unitnya langsung di toko kita" on every
+  recommendation; and the first cut of 2026-11-16's lists, which put a holding
+  line under every item a person takes.
+  - **One last step for every reply** — `finishReply` (packages/agent
+    `voice.ts`), called by the worker on the AI's and the templates' replies,
+    the never-silent line and the follow-ups: the emoji rule, then
+    `casualPunctuation` (packages/domain — no full stop ends a line; a
+    mid-line sentence end becomes a line break; numbers, "10.00", "Jl.",
+    "a.n.", "..." and URLs keep their dots; the approval and rejection
+    messages use it too), then no repetition against the shop's earlier
+    replies in this conversation (`earlierReplies`, 40, since the reset
+    point): any sentence (3+ words) nearly repeating one of the last SIX
+    replies goes, unless the customer asked to hear it again ("tadi
+    berapa?", "ulang dong") or it is a figure they are asking about; each
+    half of the closer once per conversation; the closed line once per
+    closed period (`closedSince`, from 20:00 Jakarta); empty → a short
+    fallback no recent reply used. Deterministic, `test/voice.test.ts`.
+  - **The team confirms a thing ONCE, and the chat goes on.** Every
+    hand-over line is now `Untuk {X} nanti tim kami {verb} ya kak`
+    (policy.ts `HOLDING_LINE`/`RULE_LINE`; old wordings stay in
+    `OLD_HOLDING_LINES` so /chat still labels them Bot). Said again it
+    becomes "Soal X masih dicek tim kami ya kak", then nothing; several in
+    one reply are ONE line, "Untuk garansi dan ongkirnya nanti tim kami
+    konfirmasi dulu ya kak". The closed-shop line (`CLOSED_LINE`) is its own
+    line. Beside an informational hand-over (stock, unit details, price,
+    photos, video call, other, a warranty QUESTION — `keepsTalking`) the
+    reply ends with one light needs question (`reply.keepTalking`: usage →
+    budget → preferences, "Oh iya kak, …"); the rules add it in `done()`, the
+    worker adds it to an AI hand-over that asks nothing. Never after a
+    complaint, a payment, a bargain, closing, a file, an address or an admin
+    request. `passedOnToo` is called by nothing now. Tasks and categories
+    are filed exactly as before.
+  - **A list names what the team confirms once, at the end**
+    (`formatItemAnswers`): an item whose whole answer was a confirm line is
+    left out, its subject joins the one line under the answered items, and
+    the closed line follows once.
+  - **"Ok", "hmm", "makasih" are never a hand-over** (`isFiller`,
+    `isHesitant` in rules/understand.ts). The rules answer them without the
+    AI and without the "still checking" nudge; `converse` turns a hand-over
+    of one into a brief reply. "Hmm" gets room to ask ("Santai aja kak …"),
+    never "Siap kak".
+  - **The never-silent line rotates** (`safetyLine`): after a holding or
+    confirm line the customer gets a light question instead of a second
+    "bentar ya".
+  - **Less demanding**: at most one question per reply (`done()` adds none to
+    a reply that already asks); a need asked in any of the last three replies
+    is not asked again — the next one is, or nothing (`nextQuestion`
+    `recent`). "Ramah di kantong", "budgetnya gk banyak", "yang murah"
+    (`Understanding.cheap`) show the cheapest units and ask the budget range
+    gently (`reply.lowBudgetAsk`); "Sebutin aja tipenya" is gone. The AI is
+    told all of it (conduct.ts `punctuation`, `repeat`, `questions`,
+    `listen`, `team_confirms`), sees its last six replies (was three) with a
+    stronger "never repeat" rule, and its turn window is 14 turns (was 8):
+    ~400–900 more uncached input tokens a call.
+  - The model is unchanged (`AppSetting chatbot.model`, else
+    `CHATBOT_MODEL`; an OAuth token defaults to Haiku 4.5).
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look

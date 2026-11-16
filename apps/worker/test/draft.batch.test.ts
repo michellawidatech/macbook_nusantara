@@ -1293,7 +1293,8 @@ describe("handing a customer to a person", () => {
     ).body;
     expect(body).not.toMatch(/7\.500\.000/);
     // The admin's own short line for a price (2026-10-27), not "admin kami".
-    expect(body).toMatch(/^Untuk harganya aku tanyain dulu ya kak 🙏/);
+    // Said once, and nobody asked to wait (2026-11-16).
+    expect(body).toMatch(/^Untuk harganya nanti tim kami konfirmasi ya kak/);
   });
 
   it("answers by the rules when the model itself fails — never silent (2026-10-27)", async () => {
