@@ -10,6 +10,7 @@
 
 import { type Router } from "express";
 import { z } from "zod";
+import { threadParam } from "./threadWindow.js";
 import { enqueueOutbox, Prisma, type PrismaClient } from "@nusantara/db";
 import { isWithinWindow } from "@nusantara/whatsapp";
 import {
@@ -36,10 +37,8 @@ export function photoCaption(unit: string): string {
   return `Berikut foto ${unit} nya ya kak, boleh dilihat-lihat dulu 😊`;
 }
 
-const phoneParam = z
-  .string()
-  .trim()
-  .regex(/^\d{6,20}$/, "a wa_id is digits only");
+// A wa_id or an Instagram thread key (2026-11-16).
+const phoneParam = threadParam;
 
 const money = z
   .union([
