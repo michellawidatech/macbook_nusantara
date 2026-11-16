@@ -3628,7 +3628,8 @@ export const id: Record<string, string> = {
   "returnCustomer.noSuchSale":
     "Tidak ada penjualan untuk {{text}} yang unitnya masih di pelanggan. Cek nomornya, atau cari dengan serial.",
   "returnCustomer.pickUnits": "Unit pada {{code}}",
-  "returnCustomer.selectNUnits": "Pilih {{count}} unit",
+  "returnCustomer.addNUnits": "Tambahkan {{count}} unit",
+  "returnCustomer.closePicker": "Bukan transaksi ini",
   "returnCustomer.nothingPicked":
     "Ketik nomor transaksi di atas, lalu pilih unitnya.",
   "returnCustomer.removeBack": "Keluarkan {{item}}",
