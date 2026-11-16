@@ -65,6 +65,7 @@ import {
 } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import { WINDOW_MS } from "@nusantara/whatsapp";
+import { isIgThread, REPLY_KINDS } from "@nusantara/domain";
 
 export type FollowUpKind = "visit_reminder" | "lead_nudge" | "dp_reminder";
 
@@ -155,7 +156,7 @@ async function queueOnce(
     if (waiting > 0) return false;
     const already = await tx.outbox.findFirst({
       where: {
-        kind: "WA_REPLY",
+        kind: { in: [...REPLY_KINDS] },
         AND: [
           { payload: { path: ["to"], equals: input.to } },
           { payload: { path: ["followUp"], equals: input.followUp } },
@@ -271,7 +272,8 @@ async function remindVisits(
     const inWindow =
       last !== null &&
       now.getTime() - last.ts.getTime() < WINDOW_MS - WINDOW_MARGIN_MS;
-    if (!inWindow && deps.transport !== "baileys") {
+    // A linked WhatsApp device has no window; Instagram always does.
+    if (!inWindow && (deps.transport !== "baileys" || isIgThread(to))) {
       if (!skippedOutsideWindow.has(v.id)) {
         skippedOutsideWindow.add(v.id);
         if (skippedOutsideWindow.size > 5_000) skippedOutsideWindow.clear();
@@ -384,7 +386,8 @@ async function remindDpHolds(
     if (last === null) continue;
     const inWindow =
       now.getTime() - last.ts.getTime() < WINDOW_MS - WINDOW_MARGIN_MS;
-    if (!inWindow && deps.transport !== "baileys") {
+    // A linked WhatsApp device has no window; Instagram always does.
+    if (!inWindow && (deps.transport !== "baileys" || isIgThread(to))) {
       if (!skippedOutsideWindow.has(h.id)) {
         skippedOutsideWindow.add(h.id);
         if (skippedOutsideWindow.size > 5_000) skippedOutsideWindow.clear();

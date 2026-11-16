@@ -20,6 +20,8 @@
   "dependencies": {
     "@nusantara/agent": "workspace:^",
     "@nusantara/db": "workspace:^",
+    "@nusantara/domain": "workspace:*",
+    "@nusantara/instagram": "workspace:*",
     "@nusantara/logging": "workspace:^",
     "@nusantara/whatsapp": "workspace:^",
     "zod": "^4.4.3"

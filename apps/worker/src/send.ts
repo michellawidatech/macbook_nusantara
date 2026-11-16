@@ -25,6 +25,7 @@
 import { z } from "zod";
 import {
   claimOutbox,
+  INSTAGRAM_OUTBOX_KINDS,
   markOutboxFailed,
   markOutboxSent,
   recoverStuckOutbox,
@@ -147,7 +148,10 @@ export async function sendPass(deps: SendDeps): Promise<SendPassResult> {
   }
 
   for (let i = 0; i < deps.maxSendsPerTick; i += 1) {
-    const row = await claimOutbox(db, now());
+    // Every kind but Instagram's, which `igSendPass` sends (2026-11-16).
+    const row = await claimOutbox(db, now(), {
+      except: INSTAGRAM_OUTBOX_KINDS,
+    });
     if (!row) break;
 
     try {
@@ -158,7 +162,8 @@ export async function sendPass(deps: SendDeps): Promise<SendPassResult> {
         continue;
       }
       if (row.kind !== "WA_REPLY") {
-        // IG_REPLY, IG_DM and ALERT have no sender yet. This retries with the
+        // ALERT has no sender yet (the IG_* kinds are igSend.ts's and never
+        // reach this pass). This retries with the
         // normal backoff and ends in FAILED, which is the right outcome: the
         // row surfaces in the queue as unsendable rather than being quietly
         // dropped or spinning forever. Implementing those senders is what

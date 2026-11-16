@@ -172,6 +172,7 @@ import {
 } from "@nusantara/db";
 import type { Logger } from "@nusantara/logging";
 import { isWithinWindow } from "@nusantara/whatsapp";
+import { IMAGE_KINDS, REPLY_KINDS } from "@nusantara/domain";
 import {
   DEFAULT_PERSONA,
   loadChatbotModel,
@@ -614,7 +615,8 @@ export async function photosSentTo(
 ): Promise<boolean> {
   const row = await db.outbox.findFirst({
     where: {
-      kind: "WA_IMAGE",
+      // Either channel's pictures (2026-11-16): `to` already names the thread.
+      kind: { in: [...IMAGE_KINDS] },
       retractedAt: null,
       payload: { path: ["to"], equals: from },
       ...(after ? { createdAt: { gt: after } } : {}),
@@ -1689,7 +1691,7 @@ export async function draftPass(deps: DraftDeps): Promise<DraftPassResult> {
               (
                 await tx.outbox.findMany({
                   where: {
-                    kind: "WA_IMAGE",
+                    kind: { in: [...IMAGE_KINDS] },
                     retractedAt: null,
                     payload: { path: ["to"], equals: from },
                   },
@@ -1929,7 +1931,7 @@ async function remindedVisitFor(
 ): Promise<RemindedVisit | null> {
   const sent = await db.outbox.findFirst({
     where: {
-      kind: "WA_REPLY",
+      kind: { in: [...REPLY_KINDS] },
       AND: [
         { payload: { path: ["to"], equals: from } },
         { payload: { path: ["followUp"], equals: "visit_reminder" } },
