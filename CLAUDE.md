@@ -4085,6 +4085,60 @@ Decisions that outlived those documents:
     `[inert]`, or the kept-but-hidden forms would claim the re-arm.
   - **On a phone the two buttons are words**, in a `FooterToolbar` at the foot
     with an icon Export beside them — no float fan on Inventory any more.
+- **The phone, redesigned — 2026-11-16** (owner-approved mockup
+  `.context/mobile-design/`, spec
+  `docs/superpowers/specs/2026-11-16-mobile-redesign-design.md`). Everything is
+  gated on `compact` (below `md`); the desktop and the 768–991 tablet drawer
+  are unchanged.
+  - **Bottom tabs Sell · Stock · Sales · Chat · More** (`layouts/BottomTabBar`,
+    real `<Link>`s, icon + word, the chat waiting count on Chat). Sales is
+    drawn only with `canViewFinance`. **More** is a route, `/more`
+    (`routes/MorePage`): the account card, the sider's own sections from
+    `navSectionsFor` minus the four tab leaves, appearance, language, the
+    scanner chip and Sign out. The phone header with the hamburger is gone;
+    `StaffContext` (`hooks/useStaff`) hands the signed-in staff to pages.
+  - **The app bar** (`PageContainer`, compact): back, title, ONE labelled
+    action (the first `primary`, or the only one) and **More ▾**, an
+    `ActionSheet` of text rows holding the rest plus the page's `phoneMenu`.
+    The FloatButton fan is gone. `test/pageActions.ts` presses the button or
+    opens "More actions". A fixed `FooterToolbar` sits above the tabs via
+    `--nusantara-content-bottom`.
+  - **Lists** (`ProTable`, compact): search · **Filters (n)** · **Sort** on one
+    row; `FilterSheet` (chips with counts given the other filters, date
+    presets from `lib/datePresets.ts`, a draft applied by *Show n results*)
+    and `SortSheet` write the SAME `filters`/`ranges`/`sort` the desktop
+    headers do. A page's own filters ride in the sheet as `phoneFilters`
+    (applied as tapped). The stacked selects are gone.
+  - **Cards** (`DataTable`, compact): a `card` model (lead, title, tag,
+    subtitle, facts, body, meta, amount, amountNote, actions), a chevron on a
+    card that opens something, `cardGroup` sticky headings (+
+    `cardGroupAside` over the whole filtered group). An `expandable` table
+    opens inside its card and a `treeData` one lists its children under a
+    *Show n* toggle — **nothing scrolls sideways**; `cards={false}` is still
+    honoured. ⚠️ A test that clicked `.ant-table-row-expand-icon` on a phone
+    presses *Show details* / *Show n* on the card now.
+  - **Dialogs**: `ThemeProvider` puts `nusantara-sheet-full` on every Modal
+    and side Drawer while compact (full screen: ✕ left, body scrolls, footer
+    pinned, primary widest; `.ant-modal-confirm` and bottom sheets exempt),
+    and sets `controlHeight` 44 (48/32). Money boxes carry
+    `inputMode="numeric"`. `components/ScanButton` (phone only) reads with the
+    camera through `BarcodeDetector` and `deliverScan`, or focuses the scan
+    box for a handheld where there is none (iPhone Safari).
+  - **Screens**: Inventory — Stock In / Stock Out as two labelled buttons,
+    Export behind More, a card per line with `GradeTile`, the line full
+    screen with a card per serial and Set price · Print label · Edit unit.
+    Stock In/Out — the type as 2×2 labelled tiles (`role="radio"`), Scan.
+    Transaction History — cards under day headings with the day's received,
+    the sale full screen with Edit transaction + Print invoice pinned, Delete
+    at its foot; Upload / Export rows behind More (`ShownRows` hands the
+    filtered list up). Chat — auto-reply and *Waiting for you* strips, the
+    composer's tools as labelled chips. QC — grade as four big buttons, Scan
+    in the unit popup. Till — Scan beside the search, the grade tile on the
+    catalogue rows. P&L's tables are DataTables.
+  - ⚠️ Not done (owner decision or follow-up): the QC row's secondary
+    decisions (service, reject, not arrived, delete, photo) are still icon
+    buttons; the chat list keeps its own filter UI; raw antd `<Table>`s inside
+    dialogs (reservations, returns, reconciliation…) still scroll sideways.
 - ⚠️ **The web suite needs room.** `apps/web` has 69 test files of rendered React
   and the till's split-payment test alone takes ~45s (a 180 s budget, for CI's
   2-vCPU runner); at full parallelism on a laptop several time out and look
