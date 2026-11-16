@@ -43,6 +43,7 @@
  * return) wait for the serial, because they are about a particular unit.
  * The first serial read against the order marks it arrived.
  */
+import { useLayoutMode } from "../../layouts/useLayoutMode";
 import {
   applyUnitEdit,
   changedSerials,
@@ -408,6 +409,7 @@ export function InboundDetailPage({
   embedded,
 }: { readonly embedded?: InboundUnitTarget } = {}) {
   const params = useParams();
+  const { compact } = useLayoutMode();
   const poId = embedded?.poId ?? params.poId ?? "";
   const storeDb = useDb();
   /*
@@ -3031,6 +3033,30 @@ export function InboundDetailPage({
     if (r.notArrived) return none;
     const grade = gradeShown(r);
     if (!rowOpen(r)) return <GradeTag grade={grade} plain />;
+    // Four big buttons on a phone (mockup f1, 2026-11-16): a grade is one
+    // tap, and a picked one taps off again.
+    if (compact)
+      return (
+        <div
+          role="radiogroup"
+          aria-label={t("inbound.grade", "Grade")}
+          className="nusantara-grade-buttons"
+        >
+          {GRADE_CHOICES.map((g, i) => (
+            <button
+              key={g}
+              type="button"
+              role="radio"
+              aria-checked={grade === g}
+              id={i === 0 ? gradeFieldId(r.key) : undefined}
+              className={`nusantara-grade-button${grade === g ? " is-on" : ""}`}
+              onClick={() => commitGrade(r, grade === g ? undefined : g)}
+            >
+              {g === NEW_GRADE ? t("inbound.gradeNew", "New") : g}
+            </button>
+          ))}
+        </div>
+      );
     return (
       <Flex gap={2} align="center">
         <Select<string>

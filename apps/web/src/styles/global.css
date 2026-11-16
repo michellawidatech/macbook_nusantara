@@ -1149,3 +1149,27 @@ body {
   font-size: 20px;
   display: inline-flex;
 }
+
+/* QC's grade as four big buttons on a phone (mockup f1). */
+.nusantara-grade-buttons {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  width: 100%;
+}
+.nusantara-grade-button {
+  min-height: 52px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  background: var(--nusantara-surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 20px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.nusantara-grade-button.is-on {
+  border: 2px solid var(--nusantara-primary);
+  background: var(--nusantara-primary-bg);
+  color: var(--nusantara-primary-text, var(--nusantara-primary));
+}

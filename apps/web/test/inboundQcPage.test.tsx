@@ -221,12 +221,21 @@ async function describe_(row: number, phrase: string) {
 
 type Grade = "New" | "A" | "B" | "C";
 
+/** Tap one of a row's four grade buttons — what a phone draws (2026-11-16). */
+function chooseGrade(g: Grade, row = 0) {
+  fireEvent.click(within(inRow("Grade", row)).getByRole("radio", { name: g }));
+}
+
 /**
  * Pick a row's grade — its condition, and so the rule its serial is held to.
  * Focus is handed back to the page, so the scanner can be pointed at it.
  */
 async function grade(g: Grade, row = 0) {
-  await chooseIn(inRow("Grade", row), g);
+  // Four buttons on a phone (2026-11-16), a select on a desktop.
+  const control = inRow("Grade", row);
+  if (control.getAttribute("role") === "radiogroup")
+    fireEvent.click(within(control).getByRole("radio", { name: g }));
+  else await chooseIn(control, g);
   act(() => (document.activeElement as HTMLElement | null)?.blur());
   await settle();
 }
@@ -822,7 +831,7 @@ describe("QC on the row", () => {
     scan(BARCODE);
     await settle();
 
-    await chooseIn(inRow("Grade"), "New");
+    chooseGrade("New");
     // Filed as a new unit's serial: its barcode's S dropped (2026-09-21).
     const sealed = () => snapshot().units.find((u) => u.serial === SEALED)!;
     expect(sealed().grade).toBe("NEW");
@@ -841,9 +850,9 @@ describe("QC on the row", () => {
     scan(BARCODE);
     await settle();
 
-    await chooseIn(inRow("Grade"), "B");
+    chooseGrade("B");
     expect(stored().grade).toBe("B");
-    await chooseIn(inRow("Grade"), "A");
+    chooseGrade("A");
     await saveUnits();
     expect(stored().grade).toBe("A");
 
@@ -881,7 +890,7 @@ describe("QC on the row", () => {
     // input in whatever order I want."
     await renderUnits();
     await describe_(0, "Mulus");
-    await chooseIn(inRow("Grade"), "B");
+    chooseGrade("B");
     await userEvent.click(inRow("Cycle count"));
     await userEvent.keyboard("312");
     await userEvent.tab();

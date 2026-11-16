@@ -5624,4 +5624,5 @@ export const id: Record<string, string> = {
   "saleDetail.discount": "Diskon",
   "saleDetail.total": "Total",
   "saleDetail.payments": "Pembayaran",
+  "pos.searchShort": "Cari produk atau serial",
 };

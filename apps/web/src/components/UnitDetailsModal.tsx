@@ -37,6 +37,7 @@
  * which raises the line's quantity. The caller decides what a unit costs and
  * whether one may still be added.
  */
+import { ScanButton } from "./ScanButton";
 import type { ReactNode } from "react";
 import { Button, Flex, Modal, Typography } from "antd";
 import { useTranslation } from "react-i18next";
@@ -214,6 +215,11 @@ export function UnitDetailsModal<R extends UnitDetailRow>({
       destroyOnHidden
     >
       <Flex vertical gap={SPACE.md}>
+        {/* Phone only (2026-11-16): the camera, or the handheld, into the
+            next unit waiting for a serial — the page's own scan target. */}
+        <Flex justify="flex-end">
+          <ScanButton />
+        </Flex>
         <EditableTable<R>
           size="small"
           rowKey="key"

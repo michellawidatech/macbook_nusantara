@@ -41,6 +41,8 @@
  * the snapshot both figures are derived from, and Settings → Salespeople reads
  * the upsell half.
  */
+import { ScanButton } from "../../components/ScanButton";
+import { GradeTile } from "../../components/GradeTile";
 import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import { useSearchParams } from "react-router-dom";
@@ -2034,18 +2036,27 @@ export function StockOutPage() {
         )
       }
     >
-      <Input.Search
-        allowClear
-        value={shelfQuery}
-        onChange={(e) => typeIntoShelf(e.target.value)}
-        onSearch={enterShelf}
-        placeholder={t(
-          "pos.searchOrScan",
-          "Search a product or variant — or type or scan a serial, which goes straight into the basket",
-        )}
-        aria-label={t("pos.searchShelf", "Search the stock")}
-        style={{ marginBottom: namedButNotSellable ? 4 : 12 }}
-      />
+      <Flex gap={8} style={{ marginBottom: namedButNotSellable ? 4 : 12 }}>
+        <Input.Search
+          allowClear
+          value={shelfQuery}
+          onChange={(e) => typeIntoShelf(e.target.value)}
+          onSearch={enterShelf}
+          placeholder={
+            compact
+              ? t("pos.searchShort", "Search product or serial")
+              : t(
+                  "pos.searchOrScan",
+                  "Search a product or variant — or type or scan a serial, which goes straight into the basket",
+                )
+          }
+          aria-label={t("pos.searchShelf", "Search the stock")}
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        {/* Phone only (mockup e1): a read goes onto the sale exactly as a
+            handheld's scan does. */}
+        <ScanButton onScan={scanOntoSale} />
+      </Flex>
       {namedButNotSellable && (
         <Flex gap={6} align="center" wrap style={{ marginBottom: 12 }}>
           {namedButNotSellable.onSale ? (
@@ -2156,9 +2167,18 @@ export function StockOutPage() {
                  * `plain`: a tooltip on a chip inside a row that is itself
                  * one big button would fire on the way past.
                  */}
-                <span className="pos-shelf-grade">
-                  {row.grade && <GradeTag grade={row.grade} plain />}
-                </span>
+                {compact ? (
+                  // The grade tile on a phone (mockup e1).
+                  <GradeTile
+                    small
+                    grade={row.grade}
+                    counted={row.units.length === 0}
+                  />
+                ) : (
+                  <span className="pos-shelf-grade">
+                    {row.grade && <GradeTag grade={row.grade} plain />}
+                  </span>
+                )}
                 <Flex vertical style={{ flex: 1, minWidth: 0 }}>
                   <Typography.Text strong ellipsis>
                     {row.sku.name}
