@@ -1173,3 +1173,18 @@ body {
   background: var(--nusantara-primary-bg);
   color: var(--nusantara-primary-text, var(--nusantara-primary));
 }
+
+/* Figure cards above a list, two to a row on a phone. */
+.nusantara-stat-grid {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr;
+}
+.nusantara-stat-grid > .ant-card {
+  min-width: 0 !important;
+}
+.nusantara-stat-grid > .ant-card .ant-card-body {
+  padding: 12px;
+}
+.nusantara-stat-grid .ant-statistic-content {
+  font-size: 18px;
+}

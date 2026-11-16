@@ -43,6 +43,24 @@ export interface SheetFacet {
   readonly options: readonly string[];
 }
 
+/**
+ * A filter the PAGE owns rather than the list's columns — Inventory's
+ * category, battery and in-stock scope narrow the units before they become
+ * lines. Its chips apply as they are tapped (the page's state, not this
+ * sheet's draft), and Reset clears them with the rest.
+ */
+export interface LiveGroup {
+  readonly key: string;
+  readonly label: string;
+  readonly options: readonly { value: string; label: string }[];
+  readonly value: readonly string[];
+  readonly onChange: (value: string[]) => void;
+  /** One value at a time, always one picked (a scope). */
+  readonly single?: boolean;
+  /** The value Reset goes back to, for a `single` group. */
+  readonly resetTo?: string;
+}
+
 export interface SheetDate {
   readonly key: string;
   readonly label: string;
@@ -64,7 +82,9 @@ export function FilterSheet({
   count,
   optionCounts,
   onApply,
+  live = [],
 }: {
+  readonly live?: readonly LiveGroup[];
   readonly open: boolean;
   readonly onClose: () => void;
   readonly facets: readonly SheetFacet[];
@@ -201,6 +221,8 @@ export function FilterSheet({
             onClick={() => {
               setDraft({ filters: {}, ranges: {} });
               setCustom({});
+              for (const g of live)
+                g.onChange(g.single && g.resetTo ? [g.resetTo] : []);
             }}
             style={{ flex: "0 0 35%" }}
           >
@@ -221,6 +243,31 @@ export function FilterSheet({
       }
     >
       <Flex vertical gap={SPACE.lg}>
+        {live.map((g) => (
+          <Flex
+            vertical
+            gap={SPACE.sm}
+            key={`live:${g.key}`}
+            role="group"
+            aria-label={g.label}
+          >
+            {heading(g.label, g.single ? 0 : g.value.length)}
+            <Flex wrap gap={SPACE.sm}>
+              {g.options.map((o) => {
+                const on = g.value.includes(o.value);
+                return chip(o.value, on, o.label, () =>
+                  g.onChange(
+                    g.single
+                      ? [o.value]
+                      : on
+                        ? g.value.filter((v) => v !== o.value)
+                        : [...g.value, o.value],
+                  ),
+                );
+              })}
+            </Flex>
+          </Flex>
+        ))}
         {dates.map((d) => {
           const now = presetOf(draft.ranges[d.key]);
           const isCustom = custom[d.key] === true || now === "custom";

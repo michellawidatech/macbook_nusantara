@@ -64,8 +64,12 @@ import {
   Typography,
   theme,
 } from "antd";
-import { FilterOutlined, SwapOutlined } from "@ant-design/icons";
-import { FilterSheet } from "./FilterSheet";
+import {
+  FilterOutlined,
+  SearchOutlined,
+  SwapOutlined,
+} from "@ant-design/icons";
+import { FilterSheet, type LiveGroup } from "./FilterSheet";
 import { SortSheet, sortWords, type SortChoice } from "./SortSheet";
 import { presetOf } from "../lib/datePresets";
 import dayjs, { type Dayjs } from "dayjs";
@@ -234,6 +238,14 @@ export interface ProTableProps<T> extends Omit<
    * Shown as chips like any other filter, so it is one × away from the lot.
    */
   defaultFilters?: Record<string, string[]>;
+  /**
+   * The page's own filters, drawn in the phone's Filters sheet as chip groups
+   * that apply as they are tapped (2026-11-16) — on a desktop the page draws
+   * them in `toolbar` itself. Counted on the Filters button by `phoneActive`.
+   */
+  phoneFilters?: readonly LiveGroup[];
+  /** How many of `phoneFilters` are narrowing the list now. */
+  phoneActive?: number;
 }
 
 /** The filter map as the header writes it: column key → picked values. */
@@ -363,6 +375,8 @@ export function ProTable<T extends object>({
   rowKey,
   persistKey,
   defaultFilters,
+  phoneFilters,
+  phoneActive = 0,
   ...rest
 }: ProTableProps<T>) {
   const { compact } = useLayoutMode();
@@ -663,7 +677,10 @@ export function ProTable<T extends object>({
     }
     return out;
   }, [facetCols, dateCols, filters, ranges]);
-  const hasFilters = facetCols.length > 0 || dateCols.length > 0;
+  const hasFilters =
+    facetCols.length > 0 ||
+    dateCols.length > 0 ||
+    (phoneFilters?.length ?? 0) > 0;
   const hasToolbar =
     search ||
     activeFilterCount > 0 ||
@@ -751,9 +768,13 @@ export function ProTable<T extends object>({
           {(search || hasFilters || sortChoices.length > 0) && (
             <Flex gap={SPACE.sm} align="center">
               {search && (
-                <Input.Search
+                // A plain box with the glyph inside: the search button
+                // beside Input.Search took a third of a phone's row and the
+                // list filters as you type anyway.
+                <Input
                   allowClear
                   {...{ [PAGE_SEARCH_ATTR]: "" }}
+                  prefix={<SearchOutlined aria-hidden />}
                   placeholder={
                     searchPlaceholder ?? t("proTable.search", "Search")
                   }
@@ -771,9 +792,9 @@ export function ProTable<T extends object>({
                   style={{ flexShrink: 0 }}
                 >
                   {t("filterSheet.title", "Filters")}
-                  {activeFilterCount > 0 && (
+                  {activeFilterCount + phoneActive > 0 && (
                     <Badge
-                      count={activeFilterCount}
+                      count={activeFilterCount + phoneActive}
                       size="small"
                       color={colorPrimary}
                     />
@@ -858,6 +879,7 @@ export function ProTable<T extends object>({
               setFilters(f);
               setRanges(r);
             }}
+            live={phoneFilters}
           />
           <SortSheet
             open={sortSheet}

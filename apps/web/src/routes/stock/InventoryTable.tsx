@@ -845,7 +845,7 @@ export function InventoryTable({ extra }: InventoryTableProps) {
                 {warehouseName(l.locationId) ?? fmtNone()}
               </span>,
               <Tag key="n" bordered={false} style={{ marginInlineEnd: 0 }}>
-                {t("inventory.unitCount", "{{count}} units", {
+                {t("inventory.unitCount", "{{count}} unit(s)", {
                   count: l.onHand,
                 })}
               </Tag>,
@@ -874,7 +874,50 @@ export function InventoryTable({ extra }: InventoryTableProps) {
             "inventory.searchPlaceholder",
             "Search product, specs, code or a serial number",
           )}
-          toolbar={filters}
+          // On a phone these three are chip groups in the Filters sheet
+          // (mockup a2, 2026-11-16) rather than stacked selects.
+          toolbar={compact ? undefined : filters}
+          phoneFilters={[
+            {
+              key: "category",
+              label: t("inventory.category", "Category"),
+              options: categoryNames.map((c) => ({ value: c, label: c })),
+              value: categories,
+              onChange: setCategories,
+            },
+            {
+              key: "battery",
+              label: t("inventory.battery", "Battery"),
+              options: [
+                ...(["good", "fair", "bad"] as const).map((g) => ({
+                  value: BATTERY_BAND_LABEL[g],
+                  label: BATTERY_BAND_LABEL[g],
+                })),
+                { value: BATTERY_UNKNOWN, label: BATTERY_UNKNOWN },
+              ],
+              value: bands,
+              onChange: setBands,
+            },
+            {
+              key: "scope",
+              label: t("inventory.show", "Show"),
+              single: true,
+              resetTo: "STOCKED",
+              options: [
+                { value: "STOCKED", label: t("inventory.inStock", "In stock") },
+                {
+                  value: "ALL",
+                  label: t("inventory.allProducts", "All products"),
+                },
+              ],
+              value: [scope],
+              onChange: (v) =>
+                setScope((v[0] as "STOCKED" | "ALL") ?? "STOCKED"),
+            },
+          ]}
+          phoneActive={
+            categories.length + bands.length + (scope === "ALL" ? 1 : 0)
+          }
           extra={extra}
           columns={[
             {
@@ -1301,7 +1344,7 @@ function LineDetail({
           <>
             <Flex justify="space-between" align="center">
               <Typography.Text strong>
-                {t("inventory.unitCount", "{{count}} units", {
+                {t("inventory.unitCount", "{{count}} unit(s)", {
                   count: line.units.length,
                 })}
               </Typography.Text>
@@ -1331,10 +1374,8 @@ function LineDetail({
                     </Flex>
                     <Typography.Text type="secondary">
                       {[
-                        rack(u.rackId) &&
-                          t("inventory.rackName", "Rack {{rack}}", {
-                            rack: rack(u.rackId),
-                          }),
+                        // A rack's name says "Rack" already ("Rack 1").
+                        rack(u.rackId),
                         t("inventory.nPhotos", "{{count}} photos", {
                           count: n,
                         }),
@@ -1343,7 +1384,7 @@ function LineDetail({
                         .join(" · ")}
                     </Typography.Text>
                     <Flex wrap gap={SPACE.xs}>
-                      <Tag color="green" bordered={false}>
+                      <Tag bordered={false}>
                         {t("inventory.batteryIs", "Battery {{reading}}", {
                           reading: battery(u),
                         })}

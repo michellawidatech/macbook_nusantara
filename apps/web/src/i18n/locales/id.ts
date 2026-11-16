@@ -5596,7 +5596,6 @@ export const id: Record<string, string> = {
   "gradeTile.grade": "Grade",
   "inventory.unitsInLine": "Unit di baris ini",
   "inventory.setPriceForAll": "Atur harga semua",
-  "inventory.rackName": "Rak {{rack}}",
   "inventory.nPhotos": "{{count}} foto",
   "inventory.batteryIs": "Baterai {{reading}}",
   "inventory.neverServicedTag": "Belum pernah servis",
@@ -5625,4 +5624,6 @@ export const id: Record<string, string> = {
   "saleDetail.total": "Total",
   "saleDetail.payments": "Pembayaran",
   "pos.searchShort": "Cari produk atau serial",
+  "inventory.category": "Kategori",
+  "inventory.show": "Tampilkan",
 };

@@ -701,7 +701,8 @@ function ServiceBatch({
             {!fixed && (
               <Flex gap={SPACE.xs} wrap>
                 <AutoComplete
-                  style={{ flex: 1 }}
+                  // A row of its own on a phone, beside nothing.
+                  style={{ flex: "1 1 220px" }}
                   value={adding}
                   options={candidates}
                   defaultActiveFirstOption={false}

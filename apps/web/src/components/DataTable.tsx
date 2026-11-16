@@ -476,14 +476,12 @@ export function DataTable<T extends object>({
             {model.facts && model.facts.length > 0 && (
               <Flex
                 wrap
-                gap={SPACE.xs}
+                align="center"
+                gap={`${SPACE.xs}px ${SPACE.md}px`}
                 style={{ color: colorTextSecondary, fontSize: TYPE.md }}
               >
                 {model.facts.map((f, i) => (
-                  <span key={i}>
-                    {i > 0 && <span aria-hidden> · </span>}
-                    {f}
-                  </span>
+                  <span key={i}>{f}</span>
                 ))}
               </Flex>
             )}

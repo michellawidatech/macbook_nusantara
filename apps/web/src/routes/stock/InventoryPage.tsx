@@ -992,7 +992,16 @@ export function InventoryPage() {
    * and edit unit — so nothing about one unit comes back up to this page.
    */
   const stockTab = (
-    <Card>
+    // No frame on a phone (2026-11-16): the lines are cards already, and a
+    // card around cards spends 32px of a 390px screen on nothing.
+    <Card
+      {...(compact
+        ? {
+            styles: { body: { padding: 0 } },
+            style: { background: "transparent", boxShadow: "none" },
+          }
+        : {})}
+    >
       <InventoryTable
         // The buttons sit at the top right of the table itself on a desktop;
         // on a phone PageContainer turns them into the float button instead,

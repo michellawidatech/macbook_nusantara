@@ -59,7 +59,8 @@ describe("Stock out", () => {
     expect(
       within(dialog)
         .getAllByRole("radio")
-        .map((r) => r.closest("label")?.textContent),
+        // A tile on a phone (2026-11-16), a labelled radio on a desktop.
+        .map((r) => (r.closest("label") ?? r).textContent),
     ).toEqual([
       "Internal use",
       "Send to service",
@@ -125,7 +126,8 @@ describe("Stock out", () => {
     expect(
       within(dialog)
         .getAllByRole("radio")
-        .map((r) => r.closest("label")?.textContent),
+        // A tile on a phone (2026-11-16), a labelled radio on a desktop.
+        .map((r) => (r.closest("label") ?? r).textContent),
     ).toEqual(["Stock transfer", "Return from customer", "Back from service"]);
   });
 });

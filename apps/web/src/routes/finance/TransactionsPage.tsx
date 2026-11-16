@@ -49,7 +49,6 @@ import {
   Avatar,
   Button,
   Card,
-  Dropdown,
   Flex,
   Modal,
   Statistic,
@@ -59,7 +58,6 @@ import {
 } from "antd";
 import {
   DeleteOutlined,
-  DownOutlined,
   DownloadOutlined,
   EditOutlined,
   FileTextOutlined,
@@ -776,7 +774,11 @@ export function TransactionsPage() {
       ]}
     >
       <Flex vertical gap={16}>
-        <Flex gap={16} wrap>
+        <Flex
+          gap={compact ? 8 : 16}
+          wrap
+          className={compact ? "nusantara-stat-grid" : undefined}
+        >
           <Card style={{ flex: 1, minWidth: 200 }}>
             <Statistic
               title={t("transactions.transactions", "Transactions")}
@@ -815,7 +817,15 @@ export function TransactionsPage() {
           </Card>
         </Flex>
 
-        <Card>
+        <Card
+          // No frame on a phone (2026-11-16): the sales are cards already.
+          {...(compact
+            ? {
+                styles: { body: { padding: 0 } },
+                style: { background: "transparent", boxShadow: "none" },
+              }
+            : {})}
+        >
           <ProTable<SaleRow>
             lazy
             persistKey="transactions"
@@ -1347,36 +1357,6 @@ export function TransactionsPage() {
               destroyOnHidden
               footer={
                 <>
-                  <Dropdown
-                    trigger={["click"]}
-                    menu={{
-                      items: [
-                        {
-                          key: "delete",
-                          danger: true,
-                          icon: <DeleteOutlined />,
-                          disabled: canApprove && blocked !== undefined,
-                          label: canApprove
-                            ? t("transactions.deleteSale", "Delete transaction")
-                            : t("saleDetail.requestDelete", "Request delete"),
-                        },
-                      ],
-                      onClick: () => {
-                        setOpened(null);
-                        if (canApprove) removeSale(r.order);
-                        else setAskingDelete(r.order);
-                      },
-                    }}
-                  >
-                    <Button
-                      icon={<DownOutlined aria-hidden />}
-                      iconPlacement="end"
-                      aria-label={t("page.moreActions", "More actions")}
-                      style={{ flex: "0 0 auto" }}
-                    >
-                      {t("page.more", "More")}
-                    </Button>
-                  </Dropdown>
                   <Button
                     icon={<EditOutlined aria-hidden />}
                     onClick={() => setEditing(r.order)}
@@ -1529,6 +1509,32 @@ export function TransactionsPage() {
                     ))
                   )}
                 </Card>
+                {/* The rare, destructive door, at the foot of the sale
+                    rather than beside the two buttons people use. */}
+                <Button
+                  danger
+                  type="text"
+                  icon={<DeleteOutlined aria-hidden />}
+                  disabled={canApprove && blocked !== undefined}
+                  onClick={() => {
+                    setOpened(null);
+                    if (canApprove) removeSale(r.order);
+                    else setAskingDelete(r.order);
+                  }}
+                  style={{ alignSelf: "flex-start" }}
+                >
+                  {canApprove
+                    ? t("transactions.deleteSale", "Delete transaction")
+                    : t("saleDetail.requestDelete", "Request delete")}
+                </Button>
+                {canApprove && blocked !== undefined && (
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: TYPE.sm }}
+                  >
+                    {blocked}
+                  </Typography.Text>
+                )}
               </Flex>
             </Modal>
           );
