@@ -16,6 +16,7 @@
  * *Export* asks what to write — the statement, or every transaction behind
  * it — and as .xlsx or .pdf.
  */
+import { DataTable } from "../../components/DataTable";
 import { useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import {
@@ -27,7 +28,6 @@ import {
   Radio,
   Row as AntRow,
   Segmented,
-  Table,
   Tabs,
   Button,
   Typography,
@@ -400,13 +400,14 @@ export function ProfitLossPage() {
               )}
             </Typography.Text>
           ) : (
-            <Table<PnlItem>
+            // A card per line on a phone (2026-11-16): nothing sideways.
+            <DataTable<PnlItem>
               size="small"
               rowKey={(r) => `${r.ref}-${r.date}-${r.description}-${r.amount}`}
               dataSource={pickedItems}
               // One scroll, no pages: the invoice's profit cell spans that
               // invoice's lines, and a page break would cut it in two.
-              pagination={false}
+              paginated={false}
               scroll={{ y: 560 }}
               locale={{
                 emptyText: t("pnl.noItems", "Nothing in this line."),
@@ -590,10 +591,10 @@ export function ProfitLossPage() {
           height={320}
         />
       </Card>
-      <Table
+      <DataTable
         size="small"
         rowKey={(m) => m.month.toISOString()}
-        pagination={false}
+        paginated={false}
         dataSource={[...months].reverse()}
         columns={[
           {
